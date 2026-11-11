@@ -232,13 +232,14 @@ test("after a page stops being watched, a later revert to the canvas's own words
 });
 
 /** A watcher whose file-system events the test sends itself, as `fs.watch` would. */
-function fakeWatcher(t: TestContext, options: { now?: () => number } = {}) {
+function fakeWatcher(t: TestContext, options: { now?: () => number; noting?: () => Promise<void> } = {}) {
   const watched: { emit?: (event: string, filename: string | null) => void } = {};
   const updates: DesignFilesChanged[] = [];
   const instance = new DesignFileWatcher({
     onChange: (update) => updates.push(update),
     debounceMs: 5,
     ...(options.now ? { now: options.now } : {}),
+    ...(options.noting ? { noting: options.noting } : {}),
     watch: (_folder, _options, listener) => {
       watched.emit = listener as (event: string, filename: string | null) => void;
       return Object.assign(new EventEmitter(), { close: () => undefined }) as unknown as fs.FSWatcher;
@@ -337,6 +338,31 @@ test("an event naming no file is put down to the canvas's write only for a few s
   emit(null);
   await eventually(() => updates.length > 0);
   assert.deepEqual(updates.map((update) => update.paths), [["design/hero.html"]]);
+});
+
+test("a stylesheet changed while the canvas notes the files beside its page still reloads the page", async (t) => {
+  const root = await workspace(t, {
+    "design/hero.html": "<link rel=stylesheet href=hero.css><h1>Ship faster</h1>",
+    "design/hero.css": "h1{}",
+  });
+  let changes = 0;
+  const { instance, updates, emit } = fakeWatcher(t, {
+    // Someone else changes the stylesheet after the walk has listed it and
+    // before it reads its times, so the noted files already hold the change.
+    noting: async () => {
+      if ((changes += 1) === 1) await fsp.writeFile(path.join(root, "design/hero.css"), "h1{color:red}");
+    },
+  });
+  await instance.set("chat-1", root, ["design/hero.html"]);
+  const written = "<link rel=stylesheet href=hero.css><h1>Ship sooner</h1>";
+  const settle = instance.ownWrite("chat-1", "design/hero.html", written);
+  await fsp.writeFile(path.join(root, "design/hero.html"), written);
+  settle(true);
+  // The stylesheet's only report names no file, inside the window.
+  emit(null);
+  await eventually(() => updates.length > 0);
+  assert.equal(changes, 1, "the walk ran once for the write");
+  assert.deepEqual(updates.map((update) => update.paths), [["design/hero.html"]], "the stylesheet changed after the write began");
 });
 
 /** One file more than the walk beside a page looks at, under `folder`. */

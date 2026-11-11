@@ -11,7 +11,8 @@
 // An event that names no file could also be a stylesheet or an image beside
 // the page. It is put down to the canvas's write only for a few seconds after
 // that write, and only while the files beside the page are as they were when
-// the write began; otherwise it reports the page. The canvas's write changes
+// the write began and none of them was touched since it began; otherwise it
+// reports the page. The canvas's write changes
 // only the page itself, so a change beside it is usually someone else's. It
 // can also be the canvas editing another page in the same folder within those
 // seconds, which reloads this page once more than needed.
@@ -42,7 +43,18 @@ export const DESIGN_OWN_WRITE_WINDOW_MS = 3000;
  */
 export const DESIGN_NEIGHBOURHOOD_LIMIT = 500;
 
-const NOTHING_NOTED: Promise<string | null> = Promise.resolve(null);
+/**
+ * How far before the canvas's write began a neighbour's modification or
+ * change time still counts as touched since, in milliseconds. It covers file
+ * systems that keep times to the millisecond; one that keeps whole seconds
+ * (HFS+, FAT) can hide a change made in the same second.
+ */
+export const DESIGN_NEIGHBOUR_CLOCK_SLACK_MS = 10;
+
+/** The files beside a page: `rows` to compare, and the latest time any of them was modified or changed. */
+type Neighbours = { rows: string; latest: number };
+
+const NOTHING_NOTED: Promise<Neighbours | null> = Promise.resolve(null);
 
 export const DESIGN_FILES_CHANGED_CHANNEL = "designCanvas:filesChanged";
 
@@ -80,7 +92,14 @@ type Queued = { beside: boolean; unnamedAt: number | null };
  * or the write gave up, at `settledAt`. `beside` is what the files beside the
  * page were as the write began, or null when they couldn't all be read.
  */
-type OwnWrite = { digest: string; settled: Promise<void>; settledAt: number | null; beside: Promise<string | null> };
+type OwnWrite = {
+  digest: string;
+  settled: Promise<void>;
+  settledAt: number | null;
+  /** Wall-clock time the write began, as file times are kept. */
+  startedAt: number;
+  beside: Promise<Neighbours | null>;
+};
 
 export class DesignFileWatcher {
   private readonly chats = new Map<string, ChatWatch>();
@@ -102,6 +121,8 @@ export class DesignFileWatcher {
       ownWriteWindowMs?: number;
       /** A monotonic clock in milliseconds. */
       now?: () => number;
+      /** Runs while the files beside a page are noted for a write, once they are listed. */
+      noting?: () => Promise<void>;
     },
   ) {
     this.watch = deps.watch ?? ((folder, options, listener) => fsWatch(folder, options, listener));
@@ -171,7 +192,8 @@ export class DesignFileWatcher {
       digest: digest(content),
       settled: new Promise<void>((resolve) => (settle = resolve)),
       settledAt: null,
-      beside: root === undefined ? Promise.resolve(null) : besidePage(root, relativePath),
+      startedAt: Date.now(),
+      beside: root === undefined ? NOTHING_NOTED : besidePage(root, relativePath, this.deps.noting),
     };
     writes.set(relativePath, write);
     return (written) => {
@@ -292,9 +314,12 @@ export class DesignFileWatcher {
         const now = await fsp.readFile(path.join(entry.root, relative)).then(digest, () => null);
         if (now !== write.digest) return relative;
         if (unnamedAt === null) return null;
-        // An event naming no file may be a stylesheet or an image beside the page.
+        // An event naming no file may be a stylesheet or an image beside the
+        // page. The canvas never writes those, so one touched since its write
+        // began is someone else's change, even one the noting walk took in.
         const [then, beside] = await Promise.all([write.beside, besidePage(entry.root, relative)]);
-        return then !== null && beside === then ? null : relative;
+        if (then === null || beside === null || beside.rows !== then.rows) return relative;
+        return beside.latest < write.startedAt - DESIGN_NEIGHBOUR_CLOCK_SLACK_MS ? null : relative;
       }),
     ).then((paths) => {
       if (this.chats.get(chatId) !== entry) return;
@@ -322,15 +347,16 @@ export class DesignFileWatcher {
 /**
  * The files beside a page, as the watcher sees them: every file in the page's
  * folder (and below it, unless that is the workspace root) except the page,
- * each with its size, inode and modification time. Hidden entries are counted
- * but never entered: the watcher ignores them. Null when a folder can't be
+ * each with its size, inode, and modification and change times. Hidden
+ * entries are counted but never entered: the watcher ignores them. Null when a folder can't be
  * read or more than `DESIGN_NEIGHBOURHOOD_LIMIT` entries are met, so the walk
  * stops early in a large tree.
  *
  * The walk is not atomic: a file changed while it runs may be noted either
- * way. That only matters for a change racing the canvas's own write.
+ * way, which is why a report also compares the files' times with when the
+ * canvas's write began.
  */
-async function besidePage(root: string, relativePath: string): Promise<string | null> {
+async function besidePage(root: string, relativePath: string, noting?: () => Promise<void>): Promise<Neighbours | null> {
   const folder = path.join(root, path.posix.dirname(relativePath));
   const page = path.join(root, relativePath);
   const recursive = path.posix.dirname(relativePath) !== ".";
@@ -355,13 +381,18 @@ async function besidePage(root: string, relativePath: string): Promise<string | 
   } catch {
     return null;
   }
+  await noting?.();
+  let latest = 0;
   const rows = await Promise.all(
     files.map((file) =>
       fsp.stat(file).then(
-        (stats) => `${path.relative(folder, file)}\0${stats.size}\0${stats.ino}\0${stats.mtimeMs}`,
+        (stats) => {
+          latest = Math.max(latest, stats.mtimeMs, stats.ctimeMs);
+          return `${path.relative(folder, file)}\0${stats.size}\0${stats.ino}\0${stats.mtimeMs}\0${stats.ctimeMs}`;
+        },
         () => `${path.relative(folder, file)}\0gone`,
       ),
     ),
   );
-  return rows.sort().join("\n");
+  return { rows: rows.sort().join("\n"), latest };
 }
