@@ -181,6 +181,32 @@ export class BotCapabilityUnavailableError extends Error {
   }
 }
 
+/**
+ * Whether a revoke must also clear the device's Bot notices. A phone's revoke
+ * fails until they are cleared, so a retry still removes the acceptance. An
+ * outside app's token is already tombstoned, so Bot storage waiting for repair
+ * (no Secret Service on Linux, say) must not keep it listed as connected.
+ */
+export type BotNoticeRevokePolicy = "required" | "when-available";
+
+/**
+ * Runs `revoke` for a revoked device's Bot notice audience. Under
+ * `when-available` a BotCapabilityUnavailableError calls `onUnavailable` and
+ * resolves; every other failure, and any failure under `required`, rejects.
+ */
+export async function revokeBotNoticeAudience(
+  revoke: () => unknown,
+  policy: BotNoticeRevokePolicy,
+  onUnavailable: () => void,
+): Promise<void> {
+  try {
+    await revoke();
+  } catch (error) {
+    if (policy === "required" || !(error instanceof BotCapabilityUnavailableError)) throw error;
+    onUnavailable();
+  }
+}
+
 export class BotCapabilityRevisionConflictError extends Error {
   readonly currentRevision: string;
 
