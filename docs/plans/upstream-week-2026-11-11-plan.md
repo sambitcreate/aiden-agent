@@ -27,9 +27,9 @@ Each row is one thread. Rows in the same workstream stack in the order listed. R
 | W2 | MCP OAuth: refresh early, single-flight under a shared lock (OpenCode #63028, #62827) | W1a | main, CLI | none |
 | W3 | Suspendable approvals, hook asks and hand-offs on pi-durable signals (Pi 473515f9c) | next Pi release | main, CLI, phones | next revision |
 | W4a | Use Aiden from other apps over MCP: core server, `agent` audience, loopback listener (T3 #33196) | — | main, CLI core | none |
-| W4b | Settings → Connections → Other apps, Connect sheet, IPC | W4a | desktop | none |
-| W4c | `aiden serve` hosts `/mcp`, plus `aiden apps list/connect/revoke` | W4a | CLI | none |
-| W4d | Analytics events `mcp_app_connected`, `mcp_chat_started` | W4b | main, CLI | none |
+| W4b | Settings → Connections → Other apps, Connect sheet, IPC, docs and onboarding tour tile | W4a | desktop | none |
+| W4c | `aiden serve` hosts `/mcp`, plus `aiden apps list/connect/revoke`, CLI docs | W4a | CLI | none |
+| W4d | Analytics events `mcp_app_connected`, `mcp_chat_started` | W4b, W4c | main, CLI | none |
 | W5 | Stopped, not failed: a user-stopped step reads "stopped" and is not an issue (T3 #33291) | — | desktop, iOS, Android | none |
 | W6a | Late steer on desktop falls back to the queue instead of throwing (T3 #32899) | — | renderer | none |
 | W6b | Input saved after the run's queue closed is answered by a new run (T3 #32899) | W1a | main | none |
@@ -45,7 +45,7 @@ Each row is one thread. Rows in the same workstream stack in the order listed. R
   - pi-durable `WatchCall` and `WatchEnd` are tagged unions. Call sites are in `aiden-remote-bot-session.ts`, `bot-runtime/live-projection.ts`, `bot-runtime/bot-session-service.ts` and `bot-open-work/stop.ts`.
   - `ConversationView.entries` is now a window of the newest entries. Projections and `bot-intro.ts` must read the full transcript.
   - `onReport` receives a tagged `Report`, `session_failed` became `storage_failed`, and `harness.closed` resolves a tagged `SessionEnd`.
-  - `Conversation.viewState()` is removed. Fix the test harness `kill-harness.mjs`.
+  - `Conversation.viewState()` is removed. Move its callers to `Conversation.watch()`: the test harness `kill-harness.mjs` and `main/services/bot-runtime/tool-adapter.test.ts`.
   - New unanswered reasons (`interrupted`, `turn_limit`, `nothing_to_answer`, `restart_limit`). Review `interruptedBots` and the `reason === "aborted"` checks.
   - `afterTool` now runs on harness-written errors. Bot PostToolUse hooks skip them.
 - **Behavior Aiden keeps from 1.4.0:**
@@ -94,6 +94,7 @@ Each row is one thread. Rows in the same workstream stack in the order listed. R
 - **Out of scope for v1.** Hosted apps such as ChatGPT or claude.ai need a public tunnel, which is a separate posture decision.
 - **Safety.** Per-app turn rate limits and a concurrent-run cap. Revoking an app ends its in-flight streams.
 - **Platforms.** Add a new `mcpServer` capability in `host-platform-capabilities.ts`, on wherever Remote Access is.
+- **Docs and onboarding.** W4b documents the feature (README, PRODUCT, a new `docs/aiden-mcp-server.md` covering local-only scope, the bearer token, capabilities and revocation) and adds a feature-tour tile with its own code-drawn art in `renderer/components/onboarding-art/`, covered by the onboarding gallery and art tests. W4c documents `/mcp` and `aiden apps` in `packages/cli/README.md` and the same guide.
 
 ### W5: stopped, not failed
 
@@ -110,7 +111,7 @@ Steps cancelled by app shutdown or chat deletion keep today's treatment. The dec
 ### W6: late steers
 
 - **W6a.** If the run has already ended, `steerMessage` and `steerQueued` put the message on the document queue instead of throwing.
-- **W6b.** Input that the admission step saved after `agent_end` closed the queue is kept as owed work. The run reports the existing `admitted`/`follow-up` receipt, so phones already show "Queued to run next". `llm-client` then starts the next run when the run completes normally. A Stop or a failure still leaves the input as history.
+- **W6b.** Input that the admission step saved after `agent_end` closed the queue is kept as owed work. The run reports the existing `admitted`/`follow-up` receipt, so phones already show "Queued to run next". `llm-client` then starts the next run when the run completes normally. The receipt must stay true on every terminal path: after a Stop or a failure the owed input is not demoted to history; it stays pending as a paused queued item that runs when the person resumes or sends, and can be removed. Desktop, iOS and Android show it the same way, with tests for the Stop and failure paths.
 
 ### W7: lenient output schemas
 
