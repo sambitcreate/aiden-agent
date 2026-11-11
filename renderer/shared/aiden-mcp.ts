@@ -105,8 +105,17 @@ export function parseAidenMcpChatProvenance(value: unknown): AidenMcpChatProvena
   return { name: provenance.name, startedAt };
 }
 
-/** The environment variable the setup snippets keep the token in. */
-export const AIDEN_MCP_TOKEN_ENV = "AIDEN_MCP_TOKEN";
+/**
+ * The environment variable an app's setup snippets keep its token in, such as
+ * `AIDEN_MCP_TOKEN_CLAUDE_CODE_K3J9QX`. Each app gets its own, from its name
+ * and id, so setting up a second app in the same shell profile never replaces
+ * the first app's token and makes both connect as the second.
+ */
+export function aidenMcpTokenEnvName(app: { id: string; name: string }): string {
+  const words = app.name.toUpperCase().replace(/[^A-Z0-9]+/gu, "_").slice(0, 24).replace(/^_+|_+$/gu, "");
+  const suffix = app.id.replace(/^device_/u, "").replace(/[^A-Za-z0-9]/gu, "").slice(0, 6).toUpperCase();
+  return ["AIDEN_MCP_TOKEN", words, suffix].filter(Boolean).join("_");
+}
 
 export interface AidenMcpClientSnippet {
   id: "claude" | "codex";
@@ -119,23 +128,29 @@ export interface AidenMcpClientSnippet {
 
 /**
  * Ready-to-paste setup for Claude Code and Codex. Both read the token from
- * `AIDEN_MCP_TOKEN` rather than storing it in their config.
+ * the app's own variable (`aidenMcpTokenEnvName`) rather than storing it in
+ * their config.
  */
-export function aidenMcpClientSnippets(url: string, credential: string): AidenMcpClientSnippet[] {
-  const exportLine = `export ${AIDEN_MCP_TOKEN_ENV}='${credential.replace(/'/gu, "'\\''")}'`;
+export function aidenMcpClientSnippets(
+  url: string,
+  credential: string,
+  app: { id: string; name: string },
+): AidenMcpClientSnippet[] {
+  const variable = aidenMcpTokenEnvName(app);
+  const exportLine = `export ${variable}='${credential.replace(/'/gu, "'\\''")}'`;
   return [
     {
       id: "claude",
       client: "Claude Code",
       exportLine,
       // Claude Code stores the header as written and expands ${VAR} each time it connects.
-      command: `claude mcp add --transport http aiden ${url} --header 'Authorization: Bearer \${${AIDEN_MCP_TOKEN_ENV}}'`,
+      command: `claude mcp add --transport http aiden ${url} --header 'Authorization: Bearer \${${variable}}'`,
     },
     {
       id: "codex",
       client: "Codex",
       exportLine,
-      command: `codex mcp add aiden --url ${url} --bearer-token-env-var ${AIDEN_MCP_TOKEN_ENV}`,
+      command: `codex mcp add aiden --url ${url} --bearer-token-env-var ${variable}`,
     },
   ];
 }

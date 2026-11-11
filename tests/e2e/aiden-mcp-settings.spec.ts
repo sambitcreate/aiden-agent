@@ -65,7 +65,7 @@ test("an app added in Settings connects with its copied token and is refused onc
   const readClipboard = () => app.evaluate(({ clipboard }) => clipboard.readText());
   await expect.poll(readClipboard).toMatch(/^[A-Za-z0-9_-]{43}$/u);
   const token = await readClipboard();
-  await expect(sheet.getByText(`export AIDEN_MCP_TOKEN='${token}'`).first()).toBeVisible();
+  await expect(sheet.getByText(new RegExp(`^export AIDEN_MCP_TOKEN_E2E_CLIENT_[A-Z0-9]+='${token}'$`, "u")).first()).toBeVisible();
   await sheet.getByRole("button", { name: "Done", exact: true }).click();
   await expect(sheet).toBeHidden();
 

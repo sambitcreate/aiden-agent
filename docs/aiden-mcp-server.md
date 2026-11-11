@@ -8,9 +8,9 @@ Status (2026-11-11): the server is in the desktop main process, behind the `mcpS
 
 **Settings → Connections → Apps using Aiden** appears only where the `mcpServer` capability is on.
 
-1. Turn on **Let apps use Aiden**. The status beside the switch says **Listening on port N**, **Off**, **Port N is in use** (another program holds the saved port) or **Couldn't start**. For the last two, **Try again** starts the server on the same port once it is free. The **Address** row copies the URL apps connect to.
+1. Turn on **Let apps use Aiden**. **Add app** stays unavailable until the server has an address, because the token is shown only once and its setup commands need that address. The status beside the switch says **Listening on port N**, **Off**, **Port N is in use** (another program holds the saved port) or **Couldn't start**. For the last two, **Try again** starts the server on the same port once it is free. The **Address** row copies the URL apps connect to.
 2. Choose **Add app**, give it a name (up to 80 characters, for example "Claude Code"), and pick **Read only** or **Supervised** ([Access levels](#access-levels)).
-3. The next sheet shows the app's token **once**, with copy buttons for the token and for ready-made Claude Code and Codex commands. Each command reads the token from the `AIDEN_MCP_TOKEN` environment variable, so the client's saved configuration never holds it. Closing the sheet forgets the token; if you lose it, revoke the app and add it again.
+3. The next sheet shows the app's token **once**, with copy buttons for the token and for ready-made Claude Code and Codex commands. Each command reads the token from an environment variable named for that app, such as `AIDEN_MCP_TOKEN_CLAUDE_CODE_K3J9QX` (the app's name plus the start of its id), so the client's saved configuration never holds it, and setting up a second app in the same shell profile never replaces the first app's token. Closing the sheet forgets the token; if you lose it, revoke the app and add it again.
 4. Each added app is listed with its access level, the day it was added and when it last connected ("Not used yet" until it first does; this is updated at most every five minutes). **Revoke** asks first, then disconnects the app at once.
 
 A chat an app started shows **Started by <app>** under its title in Aiden on this computer.
@@ -25,22 +25,22 @@ A chat an app started shows **Started by <app>** under its title in Aiden on thi
   - If another program later holds the saved port, the server reports `port_in_use` rather than moving, because moving would break every configured app silently.
 - **Credential:** each app gets its own bearer token, a 43-character base64url secret shown once when it is issued. Aiden stores only a hash. A token is sent as `Authorization: Bearer <token>`.
 
-Claude Code (the single quotes keep `${AIDEN_MCP_TOKEN}` literal in its saved configuration; Claude Code expands it from the environment when it connects):
+Claude Code (the single quotes keep `${AIDEN_MCP_TOKEN_CLAUDE_CODE_K3J9QX}` literal in its saved configuration; Claude Code expands it from the environment when it connects):
 
 ```sh
-export AIDEN_MCP_TOKEN='<token>'
+export AIDEN_MCP_TOKEN_CLAUDE_CODE_K3J9QX='<token>'
 claude mcp add --transport http aiden http://127.0.0.1:49400/mcp \
-  --header 'Authorization: Bearer ${AIDEN_MCP_TOKEN}'
+  --header 'Authorization: Bearer ${AIDEN_MCP_TOKEN_CLAUDE_CODE_K3J9QX}'
 ```
 
 Codex:
 
 ```sh
-export AIDEN_MCP_TOKEN='<token>'
-codex mcp add aiden --url http://127.0.0.1:49400/mcp --bearer-token-env-var AIDEN_MCP_TOKEN
+export AIDEN_MCP_TOKEN_CODEX_P7QD2M='<token>'
+codex mcp add aiden --url http://127.0.0.1:49400/mcp --bearer-token-env-var AIDEN_MCP_TOKEN_CODEX_P7QD2M
 ```
 
-Use the port your Aiden reports if it is not 49400; the Settings sheet fills in the real address. Set `AIDEN_MCP_TOKEN` wherever the client is started from, for example your shell profile.
+Use the port your Aiden reports if it is not 49400; the Settings sheet fills in the real address. The Settings sheet shows each app's own variable name. Set it wherever the client is started from, for example your shell profile.
 
 ## Access levels
 

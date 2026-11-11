@@ -207,7 +207,7 @@ function CredentialDialog({
   url: string | undefined;
   onClose: () => void;
 }) {
-  const snippets = issued && url ? aidenMcpClientSnippets(url, issued.credential) : [];
+  const snippets = issued && url ? aidenMcpClientSnippets(url, issued.credential, issued.app) : [];
   return (
     <Dialog
       open={issued !== null}
@@ -381,7 +381,8 @@ function AidenMcpSettingsView() {
       <FieldSet
         title="Apps"
         action={(
-          <Button size="small" variant="accent" onClick={() => setAdding(true)}>
+          // An app's token is shown only once, so Add app waits for the address its setup commands need.
+          <Button size="small" variant="accent" disabled={!server.url} onClick={() => setAdding(true)}>
             <Plus /> Add app
           </Button>
         )}
@@ -399,7 +400,9 @@ function AidenMcpSettingsView() {
           <EmptyState
             placement="inline"
             title="No apps yet"
-            description="Add Claude Code, Codex or another MCP app to let it read your chats here."
+            description={server.url
+              ? "Add Claude Code, Codex or another MCP app to let it read your chats here."
+              : "Turn on Let apps use Aiden, then add Claude Code, Codex or another MCP app."}
           />
         ) : (
           appList.map((app) => <AidenMcpAppRow key={app.id} app={app} onRevoke={() => setRevoking(app)} />)
