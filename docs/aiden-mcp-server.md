@@ -109,7 +109,7 @@ The Remote Access threat model has the matching section: [`docs/security/aiden-r
 - **Port:** 49500 and the next seven ports, 100 above the desktop's range, so a desktop and a server on the same computer never take each other's port. Like the desktop, if all eight are busy on first start, the system picks a free loopback port, and the first port that binds is saved, in the server's `remote.json`, and a busy saved port is reported as `port_in_use`.
 - **Administration:** `aiden apps`, sent to the running server over its private control socket:
   - `aiden apps connect <name> [--access read|supervised]` turns the server on if it is off, issues the app (Read unless `--access supervised`) and shows its token once.
-    - On a terminal it also prints the `claude mcp add` and `codex mcp add` commands, which read the token from `AIDEN_MCP_TOKEN` rather than storing it in the app's config.
+    - On a terminal it also prints the `claude mcp add` and `codex mcp add` commands, which read the token from the app's own `AIDEN_MCP_TOKEN_<NAME>_<ID>` variable (the same name Settings prints) rather than storing it in the app's config.
     - Piped, it prints JSON and warns on stderr that the output holds the token.
   - `aiden apps list` shows the server's status and the connected apps, revoked ones with `revokedAt`.
   - `aiden apps revoke <app-id>` disconnects one app through the same revocation path as `aiden remote revoke`. A phone's or Mac's id is refused.
