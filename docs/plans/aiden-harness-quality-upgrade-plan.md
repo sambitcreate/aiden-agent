@@ -146,7 +146,7 @@ Report per-task outcomes and variation, with the baseline always eligible. Keep 
 
 ### H3 — Bring durable Bot sessions to the CLI deliberately
 
-First document the portable-service boundary and profile ownership model. Target reuse of the desktop durable Bot-session core through CLI process, credential, and notification adapters. Audit the bundled dependency graph for Electron imports. If portability requires adding a Pi package, pin it to the audited desktop line (1.4.0 since 2026-10-26) and evaluate the addition separately; do not silently upgrade existing packages.
+First document the portable-service boundary and profile ownership model. Target reuse of the desktop durable Bot-session core through CLI process, credential, and notification adapters. Audit the bundled dependency graph for Electron imports. If portability requires adding a Pi package, pin it to the audited desktop line (1.4.0 since 2026-10-26, 1.5.2 since 2026-11-11) and evaluate the addition separately; do not silently upgrade existing packages.
 
 Preserve Bot homes, grants, schedules, and chats. Define explicit migration with backup/recovery before changing legacy Bot chat handling; never launch unattended work during migration. Negotiate session/routine/preset/memory/proactivity features only when their endpoints are wired and accepted.
 

@@ -56,7 +56,9 @@ export class ActiveTranscript {
     if (through === undefined) {
       this.#entries = [];
     } else {
-      const active = await this.conversation.context(context);
+      // Read as of `through`, so a reset or compaction committed while the read
+      // waits cannot replace the range this frame's documents belong to.
+      const active = await this.conversation.context(context, { at: through });
       this.#entries = active.entries.filter((entry) => entry.id <= through);
     }
     this.#through = through;
