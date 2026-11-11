@@ -150,3 +150,7 @@ Both halves ship together from `feat/chat-fork-mobile`, which also carries the A
 - **Tests.**
   - `AidenRemoteClientTests`: the fixture request and response, summary body shapes, lineage validation, summary actions, lenient decoding, and row stripping. `testForkSummaryStatesDecodeInChatReadsAndChatLists` decodes every `chatFork.summaryStates` entry.
   - `AidenChatTests`: eligibility, feature gating, and the Edit in fork seeding end to end.
+
+## Continue in a new chat (2026-11-11)
+
+- `ChatForkService.fork` takes `continueIn: {workspaceId}` for a chat whose workspace folder is gone: it forks after `continueInNewChatForkPoint` (newest reply answering a prompt) into another workspace. Exclusive with `forkAt`/`summary`; needs the `workspaceFolderMissing` dep (else ineligible). Remote exposes it as the fork body `{continueIn}` behind `chat:continue-in-new-chat` (revision 63). Details in `workspace-folder-presence.md`.

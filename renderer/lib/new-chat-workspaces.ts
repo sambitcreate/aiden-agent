@@ -1,3 +1,5 @@
+import { ASSISTANT_WORKSPACE_ID } from "../shared/assistant";
+import { NO_WORKSPACE_LABEL, isNoWorkspace, noWorkspaceHome } from "./no-workspace";
 import type { ChatMeta, Workspace } from "./types";
 
 export interface NewChatWorkspaceChoice {
@@ -39,4 +41,45 @@ export function newChatWorkspaceChoices(
         right.lastActivityAt - left.lastActivityAt ||
         left.workspace.name.localeCompare(right.workspace.name),
     );
+}
+
+/** Where a chat whose folder is gone can continue: a workspace, or No workspace. */
+export interface ContinueInWorkspaceChoice {
+  workspaceId: string;
+  name: string;
+  noWorkspace?: boolean;
+}
+
+/**
+ * The Continue in a new chat menu for a chat whose workspace folder is gone:
+ * No workspace (when Aiden has one), then every other workspace by name, with
+ * a deleted worktree's main checkout first. The chat's own workspace, the
+ * Assistant and managed worktrees are left out.
+ */
+export function continueInWorkspaceChoices(
+  workspaces: readonly Workspace[],
+  currentWorkspaceId: string,
+  preferredWorkspaceId?: string,
+): ContinueInWorkspaceChoice[] {
+  const home = noWorkspaceHome([...workspaces]);
+  const named = workspaces
+    .filter(
+      (workspace) =>
+        workspace.id !== currentWorkspaceId &&
+        workspace.id !== ASSISTANT_WORKSPACE_ID &&
+        !workspace.managedWorktree &&
+        !isNoWorkspace(workspace),
+    )
+    .sort(
+      (left, right) =>
+        Number(right.id === preferredWorkspaceId) - Number(left.id === preferredWorkspaceId) ||
+        left.name.localeCompare(right.name),
+    )
+    .map((workspace) => ({ workspaceId: workspace.id, name: workspace.name }));
+  return [
+    ...(home && home.id !== currentWorkspaceId
+      ? [{ workspaceId: home.id, name: NO_WORKSPACE_LABEL, noWorkspace: true }]
+      : []),
+    ...named,
+  ];
 }

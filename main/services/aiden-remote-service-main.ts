@@ -660,6 +660,13 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               const workspace = await configStore.getWorkspace(workspaceId);
               return workspace ? workspaceFolderRemoteRefusal(workspace) : undefined;
             },
+            // Revision 63: an opt-in, so it needs no progress-capability handshake.
+            deviceSupportsContinueInNewChat: async (deviceId) => {
+              const device = (await state.snapshot()).devices.find(
+                (candidate) => candidate.id === deviceId && candidate.revokedAt === undefined,
+              );
+              return device?.capabilities.includes("chat:continue-in-new-chat") === true;
+            },
             isFolderWorkspace: async (workspaceId) =>
               analyticsWorkspaceKind(await configStore.getWorkspace(workspaceId)) !== "none",
             deviceIsPeer: async (deviceId) => {

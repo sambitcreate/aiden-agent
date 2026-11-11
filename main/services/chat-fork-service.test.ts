@@ -12,6 +12,7 @@ import {
 import { createChatStore } from "./chat-store-core.js";
 import type { Chat, Workspace } from "./types.js";
 import { createWorkspaceApplicationService, type WorkspaceApplicationDependencies } from "./workspace-application-service.js";
+import { workspaceFolderMissing } from "./workspace-folder-presence.js";
 import { WorkspaceMutationGate } from "./workspace-mutation-gate.js";
 
 async function fixture(t: TestContext) {
@@ -406,4 +407,142 @@ test("a refused private fork releases its unused folder, but a committed one sur
   const copy = await forks.fork({ chatId: source.id }, caller);
   await application.releaseNoWorkspaceAfterChat(copy.workspaceId!);
   assert.equal(records.has(copy.workspaceId!), true);
+});
+
+/** A chat in "workspace-fork" whose folder was moved away outside Aiden, plus two usable destinations. */
+async function missingFolderWorkspaces(t: TestContext, store: ReturnType<typeof createChatStore>) {
+  const { application, records, originalFolder } = await privateForkWorkspaces(t, store, false);
+  records.set("workspace-fork", { ...records.get("workspace-fork")!, permission: "ask" });
+  const root = path.dirname(originalFolder);
+  const elsewhere = path.join(root, "elsewhere");
+  await fs.mkdir(elsewhere);
+  records.set("elsewhere", { id: "elsewhere", name: "Elsewhere", folderPath: elsewhere, permission: "ask", createdAt: 2, updatedAt: 2 });
+  const home = path.join(root, "home");
+  await fs.mkdir(home);
+  records.set("default", {
+    id: "default", name: "No workspace", folderPath: home, permission: "ask", noWorkspace: true, createdAt: 3, updatedAt: 3,
+  });
+  const movedFolder = `${originalFolder}-moved`;
+  await fs.rename(originalFolder, movedFolder);
+  const forks = service(store, {
+    workspaceExists: async (id) => records.has(id),
+    workspaceFolderMissing: async (id) => {
+      const record = records.get(id);
+      return Boolean(record && (await workspaceFolderMissing(record)));
+    },
+    prepareWorkspace: (id) => application.reserveNoWorkspaceChat(id),
+    releaseUnusedWorkspace: (id) => application.releaseNoWorkspaceAfterChat(id),
+  });
+  return { forks, records, originalFolder, movedFolder };
+}
+
+test("a chat whose folder is gone continues in another workspace with its history, and the original is untouched", async (t) => {
+  const { store, source, ids } = await fixture(t);
+  const { forks, movedFolder } = await missingFolderWorkspaces(t, store);
+  const admitted: string[] = [];
+  const continued = await forks.fork(
+    { chatId: source.id, continueIn: { workspaceId: "elsewhere" } },
+    { admitWorkspace: (id) => { admitted.push(id); return caller.admitWorkspace(id); } },
+  );
+
+  assert.equal(continued.workspaceId, "elsewhere");
+  assert.notEqual(continued.id, source.id);
+  assert.deepEqual(continued.messages.map(({ content }) => content), ["Why does it fail?", "A missing token.", "Fix it.", "Fixed."]);
+  assert.equal(continued.forkedFrom?.chatId, source.id);
+  assert.equal(continued.forkedFrom?.messageId, ids.secondReply);
+  // Both workspaces are held still while the copy is made.
+  assert.deepEqual([...admitted].sort(), ["elsewhere", "workspace-fork"]);
+
+  const original = await store.get(source.id);
+  assert.equal(original?.workspaceId, "workspace-fork");
+  assert.deepEqual(original?.messages.map(({ id }) => id), source.messages.map(({ id }) => id));
+  assert.equal(original?.forkedFrom, undefined);
+  // Nothing in the moved folder was touched or copied.
+  assert.deepEqual(await fs.readdir(movedFolder), ["private.txt"]);
+});
+
+test("a destination workspace that refuses its hold releases the source workspace's hold", async (t) => {
+  const { store, source } = await fixture(t);
+  const { forks } = await missingFolderWorkspaces(t, store);
+  const held = new Set<string>();
+  const holdingCaller = (refuse?: string): ChatForkCaller => ({
+    admitWorkspace: (id) => {
+      if (id === refuse) throw new ChatForkError("busy", "That workspace is being changed.");
+      held.add(id);
+      return { isAborted: () => false, release: () => { held.delete(id); } };
+    },
+  });
+
+  await rejectsWith(forks.fork({ chatId: source.id, continueIn: { workspaceId: "elsewhere" } }, holdingCaller("elsewhere")), "busy");
+  assert.deepEqual([...held], []);
+  assert.deepEqual((await store.list()).map(({ id }) => id), [source.id]);
+  // Nothing is left held, so the next attempt goes through.
+  const continued = await forks.fork({ chatId: source.id, continueIn: { workspaceId: "elsewhere" } }, holdingCaller());
+  assert.equal(continued.workspaceId, "elsewhere");
+  assert.deepEqual([...held], []);
+});
+
+test("No workspace as the destination uses its home, then a fresh hidden folder once the home is taken", async (t) => {
+  const { store, source } = await fixture(t);
+  const { forks, records } = await missingFolderWorkspaces(t, store);
+  const first = await forks.fork({ chatId: source.id, continueIn: { workspaceId: "default" } }, caller);
+  assert.equal(first.workspaceId, "default");
+  const second = await forks.fork({ chatId: source.id, continueIn: { workspaceId: "default" } }, caller);
+  assert.notEqual(second.workspaceId, "default");
+  const fresh = records.get(second.workspaceId!);
+  assert.equal(fresh?.noWorkspace, true);
+  assert.deepEqual(await fs.readdir(fresh!.folderPath!), []);
+  assert.equal(second.messages.length, 4);
+});
+
+test("continuing is only for a chat whose folder is gone, into a usable workspace, with the whole conversation", async (t) => {
+  const { store, source, ids } = await fixture(t);
+  const { forks, records, originalFolder, movedFolder } = await missingFolderWorkspaces(t, store);
+  const continueIn = (workspaceId: string) => forks.fork({ chatId: source.id, continueIn: { workspaceId } }, caller);
+
+  await rejectsWith(continueIn("workspace-fork"), "ineligible");
+  await rejectsWith(continueIn("assistant"), "ineligible");
+  await rejectsWith(continueIn("removed-workspace"), "not_found");
+  const elsewhere = records.get("elsewhere")!;
+  records.set("elsewhere", { ...elsewhere, folderPath: path.join(path.dirname(originalFolder), "gone") });
+  await rejectsWith(continueIn("elsewhere"), "unavailable");
+  records.set("elsewhere", elsewhere);
+  await rejectsWith(
+    forks.fork({ chatId: source.id, continueIn: { workspaceId: "elsewhere" }, forkAt: { messageId: ids.firstReply, position: "after" } }, caller),
+    "ineligible",
+  );
+  await rejectsWith(forks.fork({ chatId: source.id, continueIn: { workspaceId: "elsewhere" }, summary: {} }, caller), "ineligible");
+  // Once the folder is back the chat keeps working where it is.
+  await fs.rename(movedFolder, originalFolder);
+  await rejectsWith(continueIn("elsewhere"), "ineligible");
+  assert.deepEqual((await store.list()).map(({ id }) => id), [source.id]);
+});
+
+test("a chat with no reply yet, or a Bot chat, is not continued elsewhere", async (t) => {
+  const { store } = await fixture(t);
+  const { forks } = await missingFolderWorkspaces(t, store);
+  const fresh = await store.create({ title: "Fresh", workspaceId: "workspace-fork" });
+  await store.appendMessage(fresh.id, { role: "user", content: "Hello?" });
+  await rejectsWith(forks.fork({ chatId: fresh.id, continueIn: { workspaceId: "elsewhere" } }, caller), "ineligible");
+
+  const bot = await store.create({ title: "Bot", workspaceId: "workspace-fork", botId: "bot-one" });
+  await store.appendMessage(bot.id, { role: "user", content: "Hello" });
+  await store.appendMessage(bot.id, { role: "assistant", content: "Hi." });
+  let botCopies = 0;
+  await rejectsWith(
+    forks.fork(
+      { chatId: bot.id, continueIn: { workspaceId: "elsewhere" } },
+      { ...caller, copyBotChat: async (chat) => { botCopies += 1; return chat; } },
+    ),
+    "ineligible",
+  );
+  assert.equal(botCopies, 0);
+  assert.equal((await store.list()).length, 3);
+});
+
+test("a host that cannot check folders refuses to continue", async (t) => {
+  const { store, source } = await fixture(t);
+  const forks = service(store);
+  assert.equal(forks.supportsContinue, false);
+  await rejectsWith(forks.fork({ chatId: source.id, continueIn: { workspaceId: "elsewhere" } }, caller), "unavailable");
 });

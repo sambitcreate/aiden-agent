@@ -643,6 +643,14 @@ data class AidenRemoteCapability(val rawValue: String) {
          */
         val CHAT_NEW_WORKTREE = AidenRemoteCapability("chat:new-worktree")
 
+        /**
+         * Revision 63: a turn the Mac refuses because the chat's folder is gone says why in
+         * `details`, and the whole chat may be continued in a new chat in another workspace
+         * (`POST /chats/{chatId}/fork` with `continueIn`, with `chat:write`). The Mac offers it
+         * only in `serverCapabilities`, and it is asked for in a call of its own.
+         */
+        val CHAT_CONTINUE_IN_NEW_CHAT = AidenRemoteCapability("chat:continue-in-new-chat")
+
         val V1_KNOWN = listOf(
             SERVER_READ, CHAT_READ, CHAT_WRITE, APPROVAL_RESPOND,
             WORKSPACE_READ, WORKSPACE_BROWSE, WORKSPACE_MANAGE,
@@ -688,16 +696,19 @@ data class AidenRemoteCapability(val rawValue: String) {
         /** Revision 53: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
         val PHONE_CHAT_NEW_WORKTREE = listOf(CHAT_NEW_WORKTREE)
 
+        /** Revision 63: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
+        val PHONE_CHAT_CONTINUE_IN_NEW_CHAT = listOf(CHAT_CONTINUE_IN_NEW_CHAT)
+
         /** Every grant `POST /device/capabilities` may add. */
         val NEGOTIABLE = PROGRESS + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY +
             PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_IMAGES + PHONE_BOT_ISSUES + PHONE_CHAT_JOBS +
-            PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE + PHONE_BOT_MESSAGING +
+            PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE + PHONE_CHAT_CONTINUE_IN_NEW_CHAT + PHONE_BOT_MESSAGING +
             listOf(BOT_WATCHES, BOT_OPEN_WORK, BOT_ROUTINE_MODELS, BOT_PEERS, BOT_ACCESS_REQUESTS, BOT_PLANS, BOT_ALLOWED)
 
         /** The pairing vocabulary plus the negotiable phone-scoped subsets. */
         val PHONE_KNOWN = V1_KNOWN + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY +
             PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_IMAGES + PHONE_BOT_ISSUES + PHONE_CHAT_JOBS +
-            PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE + PHONE_BOT_MESSAGING +
+            PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE + PHONE_CHAT_CONTINUE_IN_NEW_CHAT + PHONE_BOT_MESSAGING +
             listOf(BOT_WATCHES, BOT_OPEN_WORK, BOT_ROUTINE_MODELS, BOT_PEERS, BOT_ACCESS_REQUESTS, BOT_PLANS, BOT_ALLOWED)
     }
 }

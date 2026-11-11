@@ -1197,6 +1197,36 @@ enum AidenDraftSendReconciliation {
     }
 }
 
+/// Revision 63: the Mac refused a send because this chat's workspace folder
+/// is gone, and said the whole chat can continue in a new chat elsewhere.
+struct AidenContinueInNewChatRefusal: Equatable {
+    /// The Mac's sentence, as the error alert shows it.
+    let message: String
+    let reason: AidenWorkspaceUnavailableReason?
+
+    /// Nil unless the error is a `workspace_unavailable` refusal whose
+    /// details offer to continue. Older Macs send no details, so they never
+    /// offer the action.
+    init?(error: Error) {
+        guard case AidenRemoteClientError.server(let status, let body) = error,
+              status == 409,
+              body.code == AidenRemoteErrorCode(rawValue: "workspace_unavailable"),
+              body.details?.canContinueInNewChat == true else { return nil }
+        message = error.localizedDescription
+        reason = body.details?.reason
+    }
+}
+
+/// One Continue in a new chat request and its `Idempotency-Key`, kept while
+/// the outcome is unknown so a lost response never makes a second chat.
+private struct AidenContinueInNewChatAttempt: Equatable {
+    let context: AidenRemoteRequestContext
+    let chatId: String
+    let revision: String
+    let workspaceId: String
+    let idempotencyKey: UUID
+}
+
 @MainActor
 @Observable
 final class AidenChatViewModel {
@@ -1437,6 +1467,7 @@ final class AidenChatViewModel {
     /// The fork request whose outcome is still unknown, replayed with the
     /// same Idempotency-Key so a lost response never yields a second fork.
     @ObservationIgnored private var forkAttempt: AidenChatForkAttempt?
+    @ObservationIgnored private var continueInNewChatAttempt: AidenContinueInNewChatAttempt?
     @ObservationIgnored private var draftSession: AidenChatDraftStore.Session?
     @ObservationIgnored private var draftPersistenceTask: Task<Void, Never>?
     @ObservationIgnored private var suppressesDraftPersistence = false
@@ -1554,6 +1585,12 @@ final class AidenChatViewModel {
     private(set) var isSubmittingRunInput = false
     private(set) var isForking = false
     private(set) var isSettlingForkSummary = false
+    /// Revision 63: set while the Mac's last answer to a send was that this
+    /// chat's folder is gone and the chat can continue in a new chat.
+    private(set) var continueInNewChatRefusal: AidenContinueInNewChatRefusal?
+    private(set) var isContinuingInNewChat = false
+    /// The Mac's answer when Continue in a new chat failed, for the picker.
+    var continueInNewChatError: String?
     /// The chat this fork came from, once resolved for the lineage row.
     private(set) var forkSource: AidenChatForkSource = .unresolved
     private(set) var runInputReceipt: String?
@@ -2428,6 +2465,109 @@ final class AidenChatViewModel {
                 _ = await refreshForkChat(context: context)
             } else {
                 presentedError = error.localizedDescription
+            }
+            coordinator.haptics.play(.error, scope: hapticScope)
+            return nil
+        }
+    }
+
+    // MARK: - Continue in a new chat (contract revision 63)
+
+    /// The host's other workspaces this chat can continue in: the new-chat
+    /// list without the chat's own workspace, archived ones or hidden records.
+    var continueInNewChatWorkspaces: [AidenWorkspace] {
+        guard !isReadOnlyFixture else { return [] }
+        let archived = coordinator.workspaceArchiveStore.archivedWorkspaceIDs(for: coordinator.activeInstanceId)
+        return AidenNoWorkspace.choices(AidenNoWorkspace.unarchived(coordinator.workspaces, archivedIDs: archived))
+            .filter { $0.id != chat.workspaceId }
+    }
+
+    /// Whether the error alert offers Continue in a new chat: the Mac's
+    /// latest refusal offered it, both sides negotiated it, and there is
+    /// another workspace to continue in.
+    var offersContinueInNewChat: Bool {
+        guard let refusal = continueInNewChatRefusal, presentedError == refusal.message,
+              canContinueInNewChat else { return false }
+        return !continueInNewChatWorkspaces.isEmpty
+    }
+
+    private var canContinueInNewChat: Bool {
+        guard !isReadOnlyPresentation, !isRemoved, !chat.isBotChat, isConnected,
+              coordinator.activeInstanceId == instanceId,
+              let server = coordinator.server,
+              server.serverCapabilities?.contains(.chatContinueInNewChat) == true,
+              server.capabilities.contains(.chatContinueInNewChat),
+              server.capabilities.contains(.chatWrite) else { return false }
+        return true
+    }
+
+    /// Copies the whole chat into a new chat in `workspaceId` and returns it
+    /// to open. This chat stays as it is. A failure leaves the Mac's message
+    /// in `continueInNewChatError`.
+    func continueInNewChat(workspaceId: String) async -> AidenChat? {
+        guard continueInNewChatRefusal != nil, !isContinuingInNewChat, canContinueInNewChat,
+              continueInNewChatWorkspaces.contains(where: { $0.id == workspaceId }),
+              let context = try? coordinator.requestContext(for: instanceId),
+              coordinator.isCurrent(context) else { return nil }
+        isContinuingInNewChat = true
+        defer { isContinuingInNewChat = false }
+        continueInNewChatError = nil
+        let source = chat
+        let attempt: AidenContinueInNewChatAttempt
+        if let existing = continueInNewChatAttempt, existing.context == context, existing.chatId == source.id,
+           existing.revision == source.revision, existing.workspaceId == workspaceId {
+            attempt = existing
+        } else {
+            attempt = AidenContinueInNewChatAttempt(
+                context: context,
+                chatId: source.id,
+                revision: source.revision,
+                workspaceId: workspaceId,
+                idempotencyKey: UUID()
+            )
+        }
+        continueInNewChatAttempt = attempt
+        do {
+            let result = try await coordinator.remoteClient(for: context).continueChatInNewChat(
+                chatId: attempt.chatId,
+                revision: attempt.revision,
+                workspaceId: attempt.workspaceId,
+                idempotencyKey: attempt.idempotencyKey
+            )
+            if continueInNewChatAttempt == attempt { continueInNewChatAttempt = nil }
+            guard !isRemoved, coordinator.isCurrent(context) else { return nil }
+            let continued = result.chat
+            guard !continued.isBotChat else {
+                continueInNewChatError = String(localized: "Aiden returned a conversation that is unavailable in Workspaces.")
+                coordinator.haptics.play(.error, scope: hapticScope)
+                return nil
+            }
+            let writeToken = cache.reserveChatWrite()
+            _ = try? await cache.saveChat(continued, instanceId: context.instanceId, writeToken: writeToken)
+            await cache.admitCreatedWorkspaceChat(
+                chatId: continued.id,
+                instanceId: context.instanceId,
+                workspaceId: continued.workspaceId,
+                writeToken: writeToken
+            )
+            guard coordinator.isCurrent(context) else { return nil }
+            continueInNewChatRefusal = nil
+            coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "chat-continue:\(continued.id)")
+            return continued
+        } catch let error where aidenIsCancellation(error) {
+            // A cancelled request may already have reached the Mac; keep the key.
+            return nil
+        } catch {
+            if continueInNewChatAttempt == attempt, !AidenChatForkAttempt.outcomeIsUnknown(after: error) {
+                continueInNewChatAttempt = nil
+            }
+            if await coordinator.handleCredentialRevocation(error, context: context) { return nil }
+            guard !isRemoved, coordinator.isCurrent(context) else { return nil }
+            if case AidenRemoteClientError.server(_, let body) = error, body.code.rawValue == "revision_conflict" {
+                continueInNewChatError = String(localized: "This chat changed on your Mac. Try again.")
+                _ = await refreshForkChat(context: context)
+            } else {
+                continueInNewChatError = error.localizedDescription
             }
             coordinator.haptics.play(.error, scope: hapticScope)
             return nil
@@ -3346,6 +3486,7 @@ final class AidenChatViewModel {
             isPendingSendRefusedBecauseBusy = false
             turnAttempts.reset()
             rateLimitedSendRetries = 0
+            continueInNewChatRefusal = nil
             if chat.messages.contains(where: { $0.id == optimisticID }) {
                 messageRenderIDs[response.message.id] = optimisticID
             }
@@ -3402,6 +3543,7 @@ final class AidenChatViewModel {
                 turnAttempts.reset()
                 rateLimitedSendRetries = 0
             }
+            continueInNewChatRefusal = AidenContinueInNewChatRefusal(error: error)
             if pendingSend == nil { presentedError = error.localizedDescription }
             coordinator.haptics.play(.error, scope: hapticScope)
         }
@@ -5766,6 +5908,7 @@ struct AidenChatDetailView: View {
     @State private var spending = AidenSpendingNoticeModel()
     @State private var backgroundJobs = AidenBackgroundJobsModel()
     @State private var showsBackgroundJobs = false
+    @State private var isChoosingContinueWorkspace = false
     let autoStartVoice: Bool
     let allowsMutations: Bool
     /// Opens a chat this one was forked into. Nil hides the fork actions,
@@ -5958,9 +6101,27 @@ struct AidenChatDetailView: View {
             get: { model.presentedError != nil || model.readAloud.errorMessage != nil },
             set: { if !$0 { model.presentedError = nil; model.readAloud.errorMessage = nil } }
         )) {
+            if onOpenChat != nil, model.offersContinueInNewChat {
+                Button("Continue in a New Chat") {
+                    model.presentedError = nil
+                    model.continueInNewChatError = nil
+                    isChoosingContinueWorkspace = true
+                }
+            }
             Button("OK", role: .cancel) { model.presentedError = nil; model.readAloud.errorMessage = nil }
         } message: {
             Text(model.presentedError ?? model.readAloud.errorMessage ?? "The operation could not be completed.")
+        }
+        .sheet(isPresented: $isChoosingContinueWorkspace, onDismiss: {
+            model.continueInNewChatError = nil
+        }) {
+            AidenContinueInNewChatSheet(
+                workspaces: model.continueInNewChatWorkspaces,
+                isContinuing: model.isContinuingInNewChat,
+                errorMessage: model.continueInNewChatError,
+                onCancel: { isChoosingContinueWorkspace = false },
+                onChoose: performContinueInNewChat(workspaceID:)
+            )
         }
         .aidenBotDeleteConfirmation(
             isPresented: $isConfirmingBotDelete,
@@ -6173,6 +6334,15 @@ struct AidenChatDetailView: View {
                 summaryFocus: focus
             ) else { return }
             onOpenChat(forked)
+        }
+    }
+
+    private func performContinueInNewChat(workspaceID: String) {
+        guard let onOpenChat else { return }
+        Task { @MainActor in
+            guard let continued = await model.continueInNewChat(workspaceId: workspaceID) else { return }
+            isChoosingContinueWorkspace = false
+            onOpenChat(continued)
         }
     }
 
@@ -11630,5 +11800,67 @@ struct AidenVoiceInputLabel: View {
             .labelStyle(.titleAndIcon)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(Text("Sent by voice"))
+    }
+}
+
+/// Revision 63: choose another workspace to continue a chat whose folder is
+/// gone. Rows name the workspace, its permission and branch, never a path.
+struct AidenContinueInNewChatSheet: View {
+    let workspaces: [AidenWorkspace]
+    let isContinuing: Bool
+    let errorMessage: String?
+    let onCancel: () -> Void
+    let onChoose: (String) -> Void
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    ForEach(workspaces) { workspace in
+                        Button {
+                            onChoose(workspace.id)
+                        } label: {
+                            AidenWorkspaceRow(workspace: workspace)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isContinuing)
+                    }
+                } header: {
+                    Text("Workspaces")
+                } footer: {
+                    Text("Aiden copies this whole chat into a new chat in the workspace you choose. This chat stays as it is.")
+                }
+                if let errorMessage {
+                    Section {
+                        Label {
+                            Text(errorMessage)
+                                .foregroundStyle(.primary)
+                        } icon: {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                        }
+                        .accessibilityElement(children: .combine)
+                    }
+                }
+            }
+            .navigationTitle("Continue in a New Chat")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                }
+                if isContinuing {
+                    ToolbarItem(placement: .confirmationAction) {
+                        ProgressView()
+                            .accessibilityLabel("Continuing in a new chat")
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        .interactiveDismissDisabled(isContinuing)
     }
 }

@@ -1755,6 +1755,12 @@ export const chatsApi = {
       ...(forkAt ? { messageId: forkAt.messageId, position: forkAt.position } : {}),
       ...(summary ? { summary } : {}),
     }),
+  /**
+   * Fork a chat whose workspace folder is gone, through its newest reply, into
+   * another workspace (or No workspace). The original chat is left as it is.
+   */
+  continueInNewChat: (chatId: string, workspaceId: string) =>
+    invokeChatMutation<Chat>("chats:copyVisibleHistory", { chatId, continueInWorkspaceId: workspaceId }),
   retryForkSummary: (chatId: string) => invoke<Chat>("chats:retryForkSummary", { chatId }),
   cancelForkSummary: (chatId: string) => invoke<boolean>("chats:cancelForkSummary", { chatId }),
   skipForkSummary: (chatId: string) => invoke<Chat>("chats:skipForkSummary", { chatId }),

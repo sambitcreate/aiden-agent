@@ -1376,6 +1376,111 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenBackgroundJobs.self, from: twice))
     }
 
+    /// Revision 63: a missing-folder refusal says why and whether the chat can
+    /// continue elsewhere. Older Macs send no details, and a reason this build
+    /// doesn't know reads as nil instead of failing the whole error.
+    func testMissingFolderRefusalDetailsDecodeAndOnlyAnOfferedRefusalCanContinue() throws {
+        func decode(_ data: Data) throws -> (AidenRemoteErrorEnvelope.Body, AidenContinueInNewChatRefusal?) {
+            let body = try AidenRemoteJSONDecoder.decode(AidenRemoteErrorEnvelope.self, from: data).error
+            return (body, AidenContinueInNewChatRefusal(error: AidenRemoteClientError.server(statusCode: 409, body: body)))
+        }
+        let refusedData = try botFixtureData(at: ["continueInNewChat", "refused"])
+        let (refused, offer) = try decode(refusedData)
+        XCTAssertEqual(refused.code.rawValue, "workspace_unavailable")
+        XCTAssertEqual(refused.details?.reason, .folderMissing)
+        XCTAssertEqual(refused.details?.canContinueInNewChat, true)
+        XCTAssertEqual(offer?.reason, .folderMissing)
+        XCTAssertTrue(offer?.message.contains("folder is missing on your Mac") == true, "the Mac's own sentence")
+
+        let (plain, plainOffer) = try decode(botFixtureData(at: ["continueInNewChat", "plainRefusal"]))
+        XCTAssertNil(plain.details)
+        XCTAssertNil(plainOffer, "an older Mac never offers the action")
+
+        var raw = try XCTUnwrap(JSONSerialization.jsonObject(with: refusedData) as? [String: Any])
+        var error = try XCTUnwrap(raw["error"] as? [String: Any])
+        error["details"] = ["reason": "drive_unplugged", "canContinueInNewChat": true]
+        raw["error"] = error
+        let (unknown, unknownOffer) = try decode(JSONSerialization.data(withJSONObject: raw))
+        XCTAssertEqual(unknown.details?.canContinueInNewChat, true)
+        XCTAssertNil(unknown.details?.reason)
+        XCTAssertNotNil(unknownOffer)
+
+        error["details"] = ["reason": "worktree_missing", "canContinueInNewChat": false]
+        raw["error"] = error
+        let (declined, declinedOffer) = try decode(JSONSerialization.data(withJSONObject: raw))
+        XCTAssertEqual(declined.details?.reason, .worktreeMissing)
+        XCTAssertNil(declinedOffer, "a chat the Mac cannot continue is not offered")
+    }
+
+    /// Revision 63: the capability is an opt-in asked for alone, because older
+    /// phones refuse detail keys they don't know.
+    func testContinueInNewChatIsAnOptInNegotiatedAlone() async throws {
+        let section = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: botFixtureData(at: ["continueInNewChat"])) as? [String: Any]
+        )
+        let capability = try XCTUnwrap(section["capability"] as? String)
+        XCTAssertEqual(AidenRemoteCapability(rawValue: capability), .chatContinueInNewChat)
+        XCTAssertFalse(AidenRemoteCapability.v1Known.contains(.chatContinueInNewChat))
+        XCTAssertTrue(AidenRemoteCapability.phoneNegotiable.contains(.chatContinueInNewChat))
+        XCTAssertTrue(AidenRemoteCoordinator.capabilitiesAskedForAlone.contains([.chatContinueInNewChat]))
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/device/capabilities")
+            XCTAssertEqual(try Self.jsonBody(request)["accepts"] as? [String], [capability])
+            return Self.response(for: request, status: 200, json: #"{"capabilities":["chat:read","chat:write","chat:continue-in-new-chat"]}"#)
+        }
+        let grants = try await makeClient().updateDeviceCapabilities(accepts: [.chatContinueInNewChat])
+        XCTAssertTrue(grants.contains(.chatContinueInNewChat))
+    }
+
+    /// Revision 63: Continue in a new chat posts only the destination workspace
+    /// to the fork route, with the chat's revision and a key, and accepts only a
+    /// new chat in that workspace that records this chat as its source.
+    func testContinueInNewChatPostsTheWorkspaceToTheForkRouteAndChecksTheNewChat() async throws {
+        let encoded = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(AidenRemoteClient.ChatContinueInNewChatRequest(workspaceId: "workspace_fixture_02"))
+        ) as? NSDictionary
+        let expected = try JSONSerialization.jsonObject(with: botFixtureData(at: ["continueInNewChat", "request"])) as? NSDictionary
+        XCTAssertEqual(encoded, expected)
+
+        let created = try botFixtureData(at: ["continueInNewChat", "response"])
+        var raw = try XCTUnwrap(JSONSerialization.jsonObject(with: created) as? [String: Any])
+        var chat = try XCTUnwrap(raw["chat"] as? [String: Any])
+        chat["workspaceId"] = "workspace_fixture_01"
+        raw["chat"] = chat
+        let replies: [(Int, Data)] = [(201, created), (201, try JSONSerialization.data(withJSONObject: raw))]
+        let key = UUID()
+        var requests = 0
+        AidenRemoteMockURLProtocol.handler = { request in
+            defer { requests += 1 }
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/chats/chat_fixture_missing_folder_01/fork")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "If-Match"), "chat_revision_missing_1")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key"), key.uuidString.lowercased())
+            XCTAssertEqual(try Self.jsonBody(request) as NSDictionary, ["continueIn": ["workspaceId": "workspace_fixture_02"]])
+            let (status, data) = replies[requests]
+            return Self.response(for: request, status: status, data: data)
+        }
+        let client = makeClient()
+        func continueChat() async throws -> AidenChatForkResult {
+            try await client.continueChatInNewChat(
+                chatId: "chat_fixture_missing_folder_01",
+                revision: "chat_revision_missing_1",
+                workspaceId: "workspace_fixture_02",
+                idempotencyKey: key
+            )
+        }
+        let result = try await continueChat()
+        XCTAssertEqual(result.chat.id, "chat_fixture_continue_01")
+        XCTAssertEqual(result.chat.workspaceId, "workspace_fixture_02")
+        XCTAssertEqual(result.chat.title, "Parser cleanup (fork)")
+        XCTAssertEqual(result.chat.messages.count, 2)
+        XCTAssertEqual(result.chat.forkedFrom?.chatId, "chat_fixture_missing_folder_01")
+        XCTAssertNil(result.prefill)
+        // A chat in any other workspace is not what the phone asked for.
+        await assertInvalidResponse { try await continueChat() }
+        XCTAssertEqual(requests, 2)
+    }
+
     /// Revision 53: New worktree posts the first message's text with the chat's
     /// revision and a key, and accepts only the still-empty chat it asked about.
     func testNewWorktreeMovesTheEmptyChatAndRefusesAnythingElse() async throws {

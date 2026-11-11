@@ -177,6 +177,13 @@ internal fun aidenShouldRequestRawUploads(server: AidenServer, installation: Aid
 internal fun aidenShouldRequestChatNewWorktree(server: AidenServer, installation: AidenInstallation): Boolean =
     aidenShouldRequestSoloCapability(AidenRemoteCapability.CHAT_NEW_WORKTREE, server, installation)
 
+/**
+ * Revision 63: a Mac that offers `chat:continue-in-new-chat` in `serverCapabilities` is asked for
+ * it, in a call of its own after `chat:new-worktree`, unless [installation] already holds it.
+ */
+internal fun aidenShouldRequestChatContinueInNewChat(server: AidenServer, installation: AidenInstallation): Boolean =
+    aidenShouldRequestSoloCapability(AidenRemoteCapability.CHAT_CONTINUE_IN_NEW_CHAT, server, installation)
+
 private fun aidenShouldRequestSoloCapability(
     capability: AidenRemoteCapability,
     server: AidenServer,
@@ -329,6 +336,24 @@ internal suspend fun aidenRequestChatNewWorktree(
 ): AidenSoloCapabilityNegotiation? =
     aidenRequestCapabilitiesAlone(
         if (aidenShouldRequestChatNewWorktree(server, installation)) listOf(AidenRemoteCapability.CHAT_NEW_WORKTREE) else emptyList(),
+        client,
+        stillCurrent
+    )
+
+/**
+ * Revision 63: asks [server] for `chat:continue-in-new-chat` alone. A Mac that refuses it (400 or
+ * 404) leaves the pairing as it was; a chat whose folder is gone then shows only the Mac's reason.
+ */
+internal suspend fun aidenRequestChatContinueInNewChat(
+    client: AidenRemoteClient,
+    server: AidenServer,
+    installation: AidenInstallation,
+    stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? =
+    aidenRequestCapabilitiesAlone(
+        if (aidenShouldRequestChatContinueInNewChat(server, installation)) {
+            listOf(AidenRemoteCapability.CHAT_CONTINUE_IN_NEW_CHAT)
+        } else emptyList(),
         client,
         stillCurrent
     )
@@ -741,10 +766,18 @@ class AidenRemoteCoordinator(
                     server = rawUploadsServer,
                     request = ::aidenRequestChatNewWorktree
                 )
+                // Revision 63: `chat:continue-in-new-chat` goes alone too.
+                val continueServer = negotiateSoloCapability(
+                    generation = generation,
+                    installation = installation,
+                    client = newClient,
+                    server = worktreeServer,
+                    request = ::aidenRequestChatContinueInNewChat
+                )
                 // Revision 59: `bot:watches` goes alone, without another feature token.
                 val watchesServer = negotiateSoloCapability(
                     generation = generation, installation = installation, client = newClient,
-                    server = worktreeServer, request = ::aidenRequestBotWatches
+                    server = continueServer, request = ::aidenRequestBotWatches
                 )
                 val openWorkServer = negotiateSoloCapability(generation = generation, installation = installation,
                     client = newClient, server = watchesServer, request = ::aidenRequestBotOpenWork)

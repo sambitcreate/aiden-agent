@@ -352,6 +352,7 @@ final class AidenInstallationStore {
             .botWatches, .botOpenWork, .botRoutineModels, .botPeers,
             .botMessaging, .botAccessRequests, .botPlans, .botAllowed,
             .appControlsRead, .appControlsRespond, .scheduleCards, .chatJobs, .attachmentsRaw, .chatNewWorktree,
+            .chatContinueInNewChat,
         ])
         let existingNonProgress = Set(installations[index].deviceCapabilities).subtracting(progress)
         guard existingNonProgress == Set(capabilities).subtracting(progress) else {

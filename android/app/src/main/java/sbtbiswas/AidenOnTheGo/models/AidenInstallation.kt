@@ -258,6 +258,15 @@ data class AidenServer(
             capabilities.contains(AidenRemoteCapability.CHAT_WRITE)
 
     /**
+     * Offered and held (revision 63), with `chat:write`: a chat whose folder is gone may be
+     * continued in a new chat in another workspace.
+     */
+    val supportsContinueInNewChat: Boolean
+        get() = serverCapabilities?.contains(AidenRemoteCapability.CHAT_CONTINUE_IN_NEW_CHAT) == true &&
+            capabilities.contains(AidenRemoteCapability.CHAT_CONTINUE_IN_NEW_CHAT) &&
+            capabilities.contains(AidenRemoteCapability.CHAT_WRITE)
+
+    /**
      * Chat messages may carry inline `visuals` (revision 28). Informational:
      * the transcript renders whatever visuals a message carries.
      */

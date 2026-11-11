@@ -680,6 +680,7 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// Contract revision 59 adds `bot:open-work`, asked for alone.
     /// Contract revision 59 adds `bot:routine-models`, asked for alone.
     /// Contract revision 59 adds `bot:peers`, asked for alone.
+    /// Contract revision 63 adds `chat:continue-in-new-chat`, asked for alone.
 
     /// Contract revision 54 adds `bot:messaging`, also asked for alone.
     static let phoneNegotiable: [Self] = v1Known + [
@@ -693,6 +694,7 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
         Self(rawValue: "chat:jobs"),
         Self(rawValue: "attachments:raw"),
         Self(rawValue: "chat:new-worktree"),
+        Self(rawValue: "chat:continue-in-new-chat"),
         Self(rawValue: "bot:watches"),
         Self(rawValue: "bot:open-work"),
         Self(rawValue: "bot:routine-models"),
@@ -763,6 +765,13 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// (`POST /chats/{chatId}/worktree`). A Mac on an earlier revision refuses
     /// the name, so the device asks for it alone.
     static let chatNewWorktree = Self(rawValue: "chat:new-worktree")
+
+    /// Revision 63: a `workspace_unavailable` refusal carries why the chat's
+    /// folder is gone and whether the whole chat can continue in a new chat,
+    /// and `POST /chats/{chatId}/fork` accepts `{"continueIn":{"workspaceId"}}`.
+    /// The Mac sends those details only to a device that holds this, because
+    /// older phones refuse detail keys they don't know, so it is asked for alone.
+    static let chatContinueInNewChat = Self(rawValue: "chat:continue-in-new-chat")
 
     /// Revision 42: the device receives the Bot session `issues` list and
     /// `issues` frames, a summary `issueCount`, and issue items in the routine
@@ -910,6 +919,12 @@ struct AidenRemoteErrorCode: RawRepresentable, Codable, Hashable, Sendable {
     }
 }
 
+/// Why a chat's workspace folder is gone (revision 63).
+enum AidenWorkspaceUnavailableReason: String, Codable, Equatable, Sendable {
+    case folderMissing = "folder_missing"
+    case worktreeMissing = "worktree_missing"
+}
+
 struct AidenRemoteErrorEnvelope: Codable, Equatable, Sendable {
     struct Details: Codable, Equatable, Sendable {
         let currentRevision: String?
@@ -923,6 +938,12 @@ struct AidenRemoteErrorEnvelope: Codable, Equatable, Sendable {
         /// The winning outcome a run-control loser receives with `question_already_resolved`.
         let outcome: String?
         let resolvedAt: Date?
+        /// Revision 63, with `workspace_unavailable`: why the chat's folder is
+        /// gone. A reason this build doesn't know reads as nil.
+        let reason: AidenWorkspaceUnavailableReason?
+        /// Revision 63, with `workspace_unavailable`: whether the Mac can copy
+        /// the whole chat into a new chat in another workspace.
+        let canContinueInNewChat: Bool?
 
         private static let decisions: Set<String> = ["allow", "deny", "expired", "cancelled"]
         private static let outcomes: Set<String> = ["answered", "expired", "cancelled"]
@@ -980,11 +1001,14 @@ struct AidenRemoteErrorEnvelope: Codable, Equatable, Sendable {
                 throw AidenRemoteContractError.unsafePayloadField("outcome")
             }
             resolvedAt = try decodeOptionalNonNull(values, Date.self, forKey: .resolvedAt)
+            reason = try decodeOptionalNonNull(values, String.self, forKey: .reason)
+                .flatMap(AidenWorkspaceUnavailableReason.init(rawValue:))
+            canContinueInNewChat = try decodeOptionalNonNull(values, Bool.self, forKey: .canContinueInNewChat)
         }
 
         private enum CodingKeys: String, CodingKey, CaseIterable {
             case currentRevision, retryAfterSeconds, chatId, minimumClientVersion, limit, field
-            case decision, outcome, resolvedAt
+            case decision, outcome, resolvedAt, reason, canContinueInNewChat
         }
     }
 

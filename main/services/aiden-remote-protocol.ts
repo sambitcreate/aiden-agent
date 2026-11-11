@@ -306,7 +306,20 @@ export const AIDEN_REMOTE_BOT_PEERS_CONTRACT_REVISION = 59 as const;
  * Display-only, no capability; clients show "By voice" and older ones ignore it.
  */
 export const AIDEN_REMOTE_VOICE_INPUT_CONTRACT_REVISION = 60 as const;
-export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_VOICE_INPUT_CONTRACT_REVISION;
+/**
+ * Contract revision 63 (provisional; re-claim the next revision after
+ * `main`'s at merge by changing only this constant): Continue in a new chat
+ * (`chat:continue-in-new-chat`, an opt-in capability rather than a feature
+ * token, because phones already hear the most feature tokens shipped clients
+ * accept). A device holding it hears `details.reason` and
+ * `details.canContinueInNewChat` on a turn's `409 workspace_unavailable` for a
+ * missing folder, never a path, and may send
+ * `POST /chats/{chatId}/fork` with `{ "continueIn": { "workspaceId" } }` to
+ * fork the conversation into another workspace or No workspace. The original
+ * chat stays as it is. Older phones see the plain message, as before.
+ */
+export const AIDEN_REMOTE_CONTINUE_IN_NEW_CHAT_CONTRACT_REVISION = 63 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_CONTINUE_IN_NEW_CHAT_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -594,12 +607,23 @@ export const AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES = ["attachments:raw"] as const
 export const AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES = ["chat:new-worktree"] as const;
 
 /**
+ * Contract revision 63: a device holding `chat:continue-in-new-chat` hears why
+ * a turn was refused for a missing folder (`details.reason`) and may continue
+ * that chat in another workspace through the fork route, which still needs
+ * `chat:write`. It is offered only while the host can continue chats, and
+ * widens nothing that grant does not already allow.
+ */
+export const AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES = ["chat:continue-in-new-chat"] as const;
+
+/**
  * Every opt-in a paired device may persist. Each changes what a device is
  * shown; `chat:jobs` also opens its two routes, which still need the chat
  * grant (`chat:read`, `chat:write`); `attachments:raw` opens a second body
  * type on the upload routes, which still need their own grants; and
  * `chat:new-worktree` opens its route, which still needs the device's chat
- * and Git write grants. None widens anything those grants allow.
+ * and Git write grants; and `chat:continue-in-new-chat` opens a second body
+ * on the fork route, which still needs `chat:write`. None widens anything
+ * those grants allow.
  */
 export const AIDEN_REMOTE_OPT_IN_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES,
@@ -607,6 +631,7 @@ export const AIDEN_REMOTE_OPT_IN_CAPABILITIES = [
   ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
   ...AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES,
+  ...AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES,
 ] as const;
 
 /** Vocabulary a paired device may add after pairing through `POST /device/capabilities`. */
@@ -632,6 +657,7 @@ export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
   ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
   ...AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES,
+  ...AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteNegotiableCapability =
@@ -661,6 +687,7 @@ export const AIDEN_REMOTE_CAPABILITIES = [
   ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
   ...AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES,
+  ...AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteCapability = (typeof AIDEN_REMOTE_CAPABILITIES)[number];
@@ -967,9 +994,20 @@ export interface AidenRemoteErrorEnvelope {
       outcome?: AidenRemoteResolvedQuestionOutcome;
       /** When the winning resolution was committed, on either of the above. */
       resolvedAt?: string;
+      /**
+       * Revision 63, only to a device holding `chat:continue-in-new-chat`: which
+       * folder is gone on a turn's `workspace_unavailable`. Never a path.
+       */
+      reason?: AidenRemoteWorkspaceUnavailableReason;
+      /** Revision 63: whether `POST /chats/{chatId}/fork` with `continueIn` can continue this chat. */
+      canContinueInNewChat?: boolean;
     };
   };
 }
+
+/** Which folder a turn's `workspace_unavailable` found missing. */
+export const AIDEN_REMOTE_WORKSPACE_UNAVAILABLE_REASONS = ["folder_missing", "worktree_missing"] as const;
+export type AidenRemoteWorkspaceUnavailableReason = (typeof AIDEN_REMOTE_WORKSPACE_UNAVAILABLE_REASONS)[number];
 
 export type AidenRemoteResolvedApprovalDecision = "allow" | "deny" | "expired" | "cancelled";
 export type AidenRemoteResolvedQuestionOutcome = "answered" | "expired" | "cancelled";
@@ -2272,6 +2310,8 @@ export interface AidenRemoteContractFixture {
   chatNewWorktree?: AidenRemoteChatNewWorktreeFixture;
   /** Revision 60: a user message Aiden Live sent ("By voice"), and values clients must ignore. */
   voiceInput?: AidenRemoteVoiceInputFixture;
+  /** Revision 63 (`chat:continue-in-new-chat`): a missing-folder refusal with and without details, and the continue fork. */
+  continueInNewChat?: AidenRemoteContinueInNewChatFixture;
   taskProgress: AidenRemoteChatTaskProgress;
   agentRoster: AidenRemoteChatAgentRoster;
   agentInterrupt: AidenRemoteChatAgentInterruptFixture;
@@ -8362,6 +8402,13 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     }
     chatNewWorktree = parseChatNewWorktreeFixture(value.chatNewWorktree);
   }
+  let continueInNewChat: AidenRemoteContinueInNewChatFixture | undefined;
+  if (value.continueInNewChat !== undefined) {
+    if (contractRevision < AIDEN_REMOTE_CONTINUE_IN_NEW_CHAT_CONTRACT_REVISION) {
+      throw new Error(`Continue in a new chat fixtures require contract revision ${AIDEN_REMOTE_CONTINUE_IN_NEW_CHAT_CONTRACT_REVISION}.`);
+    }
+    continueInNewChat = parseContinueInNewChatFixture(value.continueInNewChat);
+  }
   let voiceInput: AidenRemoteVoiceInputFixture | undefined;
   if (value.voiceInput !== undefined) {
     if (contractRevision < AIDEN_REMOTE_VOICE_INPUT_CONTRACT_REVISION) {
@@ -8494,6 +8541,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     ...(rawUploads ? { rawUploads } : {}),
     ...(chatNewWorktree ? { chatNewWorktree } : {}),
     ...(voiceInput ? { voiceInput } : {}),
+    ...(continueInNewChat ? { continueInNewChat } : {}),
   };
 }
 
@@ -8516,6 +8564,64 @@ function parseVoiceInputFixture(value: unknown): AidenRemoteVoiceInputFixture {
     throw new Error("Voice input fixture marks different messages than the parser.");
   }
   return { chat, voiceMessageIds: expected };
+}
+
+export interface AidenRemoteContinueInNewChatFixture {
+  capability: (typeof AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES)[number];
+  /** The refusal a device holding the capability hears. */
+  refused: AidenRemoteErrorEnvelope;
+  /** The same refusal to a device without it: the plain sentence, no details. */
+  plainRefusal: AidenRemoteErrorEnvelope;
+  request: { continueIn: { workspaceId: string } };
+  response: AidenRemoteChatForkResult;
+}
+
+/** An absolute POSIX or Windows path, or a home-relative one. */
+const PATH_LIKE = /(?:^|[\s“"'(:])(?:\/[^\s/]+\/|~\/|[A-Za-z]:\\)/u;
+
+function parseContinueInNewChatFixture(value: unknown): AidenRemoteContinueInNewChatFixture {
+  const section = requiredFixtureRecord(value, "Continue in a new chat fixture", [
+    "capability",
+    "refused",
+    "plainRefusal",
+    "request",
+    "response",
+  ]);
+  if (section.capability !== AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES[0]) {
+    throw new Error("Continue in a new chat fixture must name chat:continue-in-new-chat.");
+  }
+  const refused = parseErrorEnvelopeFixture(section.refused, "Continue in a new chat refused");
+  const plainRefusal = parseErrorEnvelopeFixture(section.plainRefusal, "Continue in a new chat plainRefusal");
+  for (const [label, envelope] of [["refused", refused], ["plainRefusal", plainRefusal]] as const) {
+    if (envelope.error.code !== "workspace_unavailable") throw new Error(`Continue in a new chat ${label} must be workspace_unavailable.`);
+    if (PATH_LIKE.test(envelope.error.message)) throw new Error(`Continue in a new chat ${label} must not name a path.`);
+  }
+  if (!refused.error.details?.reason || refused.error.details.canContinueInNewChat === undefined) {
+    throw new Error("Continue in a new chat refused must carry reason and canContinueInNewChat.");
+  }
+  if (plainRefusal.error.details !== undefined) throw new Error("Continue in a new chat plainRefusal must carry no details.");
+  if (plainRefusal.error.message !== refused.error.message) {
+    throw new Error("Continue in a new chat refusals must say the same sentence with and without details.");
+  }
+  const request = requiredFixtureRecord(section.request, "Continue in a new chat request", ["continueIn"]);
+  const continueIn = requiredFixtureRecord(request.continueIn, "Continue in a new chat request continueIn", ["workspaceId"]);
+  const workspaceId = boundedText(continueIn.workspaceId, "Continue in a new chat request workspaceId", 128);
+  if (!REMOTE_SAFE_ID.test(workspaceId)) throw new Error("Continue in a new chat request workspaceId is invalid.");
+  const response = parseAidenRemoteChatForkResult(section.response, "Continue in a new chat response");
+  if (response.prefill) throw new Error("Continue in a new chat response carries no prefill.");
+  if (response.chat.workspaceId !== workspaceId) throw new Error("Continue in a new chat response must be in the chosen workspace.");
+  const lineage = response.chat.forkedFrom;
+  if (!lineage || lineage.position !== "after" || lineage.summary) {
+    throw new Error("Continue in a new chat response must fork after the newest reply, without a summary.");
+  }
+  if (lineage.chatId === response.chat.id) throw new Error("Continue in a new chat response must be a new chat.");
+  return {
+    capability: AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES[0],
+    refused,
+    plainRefusal,
+    request: { continueIn: { workspaceId } },
+    response,
+  };
 }
 
 const ERROR_DETAIL_DECISIONS = ["allow", "deny", "expired", "cancelled"] as const;
@@ -8905,7 +9011,19 @@ function parseErrorEnvelopeFixture(value: unknown, label: string): AidenRemoteEr
     const details = errorBody.details;
     assertExactKeys(
       details,
-      ["currentRevision", "retryAfterSeconds", "chatId", "minimumClientVersion", "limit", "field", "decision", "outcome", "resolvedAt"],
+      [
+        "currentRevision",
+        "retryAfterSeconds",
+        "chatId",
+        "minimumClientVersion",
+        "limit",
+        "field",
+        "decision",
+        "outcome",
+        "resolvedAt",
+        "reason",
+        "canContinueInNewChat",
+      ],
       "Error details",
     );
     const stringDetailMaxima = {
@@ -8935,6 +9053,15 @@ function parseErrorEnvelopeFixture(value: unknown, label: string): AidenRemoteEr
     if (details.resolvedAt !== undefined) {
       if (typeof details.resolvedAt !== "string") throw new Error("Error detail resolvedAt is invalid.");
       parseStrictRfc3339(details.resolvedAt, "Error detail resolvedAt");
+    }
+    if (details.reason !== undefined && !(AIDEN_REMOTE_WORKSPACE_UNAVAILABLE_REASONS as readonly unknown[]).includes(details.reason)) {
+      throw new Error("Error detail reason is invalid.");
+    }
+    if (details.canContinueInNewChat !== undefined && typeof details.canContinueInNewChat !== "boolean") {
+      throw new Error("Error detail canContinueInNewChat is invalid.");
+    }
+    if ((details.reason !== undefined || details.canContinueInNewChat !== undefined) && code !== "workspace_unavailable") {
+      throw new Error("Error details reason and canContinueInNewChat belong to workspace_unavailable.");
     }
   }
   return value as unknown as AidenRemoteErrorEnvelope;

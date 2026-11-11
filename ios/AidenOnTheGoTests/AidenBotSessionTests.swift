@@ -5858,7 +5858,7 @@ final class AidenBotAccessRequestsTests: XCTestCase {
     private func section() throws -> [String: Any] {
         let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
         let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
-        XCTAssertEqual(root["contractRevision"] as? Int, 60)
+        XCTAssertEqual(root["contractRevision"] as? Int, 63)
         return try XCTUnwrap(root["botAccessRequests"] as? [String: Any])
     }
     private func decode<T: Decodable>(_ type: T.Type, _ object: Any) throws -> T {

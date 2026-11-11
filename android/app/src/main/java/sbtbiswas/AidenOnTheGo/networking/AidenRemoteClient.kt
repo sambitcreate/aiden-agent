@@ -1096,6 +1096,36 @@ class AidenRemoteClient(
         result
     }
 
+    /**
+     * Continues [id], whose workspace folder is gone, in a new chat in [workspaceId] (contract
+     * revision 63, `chat:continue-in-new-chat`). The new chat holds the whole conversation
+     * through its newest reply and carries no prefill; the original chat stays as it is. A
+     * replay with the same [idempotencyKey] and body returns the first new chat.
+     */
+    suspend fun continueChatInNewChat(
+        id: String,
+        revision: String,
+        workspaceId: String,
+        idempotencyKey: UUID = UUID.randomUUID()
+    ): AidenChatForkResult = executeRequest(
+        "/chats/$id/fork",
+        method = "POST",
+        ifMatchRevision = revision,
+        idempotencyKey = idempotencyKey,
+        bodyJson = json.encodeToString(ChatContinueInNewChatRequest(ChatContinueInRequest(workspaceId))),
+        acceptedStatus = setOf(201),
+        botScope = AidenBotPrivateResponseScope.ChatProjection
+    ) { bytes ->
+        val result = json.decodeFromString<AidenChatForkResult>(String(bytes, Charsets.UTF_8))
+        // A new chat in the chosen workspace that records this chat as its source.
+        if (result.chat.id == id || result.chat.workspaceId != workspaceId ||
+            result.chat.forkedFrom?.chatId != id || result.prefill != null
+        ) {
+            throw AidenRemoteClientException.InvalidResponse()
+        }
+        result
+    }
+
     /** Asks for a failed fork summary again with the same focus. */
     suspend fun retryForkSummary(chatId: String): AidenChat = forkSummaryChatAction(chatId, "retry")
 
@@ -3299,6 +3329,13 @@ class AidenRemoteClient(
         val position: AidenChatForkPosition,
         val summary: ChatForkSummaryRequest? = null
     )
+
+    /** `{"continueIn":{"workspaceId":"..."}}`: no message id, position or summary. */
+    @Serializable
+    internal data class ChatContinueInNewChatRequest(val continueIn: ChatContinueInRequest)
+
+    @Serializable
+    internal data class ChatContinueInRequest(val workspaceId: String)
 
     /** Encodes to `{}` for an unfocused summary. */
     @Serializable

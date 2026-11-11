@@ -79,6 +79,7 @@ import {
   AIDEN_REMOTE_RAW_UPLOAD_MIME_TYPES,
   AIDEN_REMOTE_MAX_ENCODED_ATTACHMENT_NAME,
   AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES,
+  AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES,
   AIDEN_REMOTE_CHAT_SUMMARY_MAX_CURSOR_LENGTH,
   AIDEN_REMOTE_CHAT_SUMMARY_MAX_LIMIT,
   AIDEN_REMOTE_CHAT_TASKS_FEATURE,
@@ -239,7 +240,7 @@ export interface AidenRemoteRouterDependencies {
   chats?: Pick<
     AidenRemoteChatService,
     "list" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn"
-  > & Partial<Pick<AidenRemoteChatService, "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent" | "visualDocument" | "supportsVisualViewer" | "browserRecording" | "supportsBrowserRecordings" | "chatSkillCatalog" | "markRead" | "supportsReadMarkers" | "messagesWindow" | "fork" | "supportsForks" | "supportsForkSummaries" | "retryForkSummary" | "skipForkSummary" | "cancelForkSummary" | "contextPressure" | "supportsContextPressure" | "moveToNewWorktree" | "supportsNewWorktrees" | "setTriage" | "supportsTriage">>;
+  > & Partial<Pick<AidenRemoteChatService, "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent" | "visualDocument" | "supportsVisualViewer" | "browserRecording" | "supportsBrowserRecordings" | "chatSkillCatalog" | "markRead" | "supportsReadMarkers" | "messagesWindow" | "fork" | "supportsForks" | "supportsForkSummaries" | "retryForkSummary" | "skipForkSummary" | "cancelForkSummary" | "contextPressure" | "supportsContextPressure" | "moveToNewWorktree" | "supportsNewWorktrees" | "supportsContinueInNewChat" | "setTriage" | "supportsTriage">>;
   /**
    * Chat-scoped task/agent progress projections (Phase 2 runtime). When
    * absent, the contract routes return `not_found` and `/server` omits the
@@ -1694,6 +1695,10 @@ function newWorktreesWired(dependencies: AidenRemoteRouterDependencies): boolean
   return dependencies.chats?.supportsNewWorktrees === true && dependencies.chats.moveToNewWorktree !== undefined;
 }
 
+function continueInNewChatWired(dependencies: AidenRemoteRouterDependencies): boolean {
+  return dependencies.chats?.supportsContinueInNewChat === true && dependencies.chats.fork !== undefined;
+}
+
 function requireDeviceCapabilities(
   device: AidenRemoteRouterAuthenticatedDevice,
   capabilities: readonly AidenRemoteCapability[],
@@ -2264,6 +2269,8 @@ function advertisedServerCapabilities(
     ...(rawUploadsWired(dependencies) ? AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES : []),
     // Revision 53: offered only while the host makes worktrees for phones.
     ...(newWorktreesWired(dependencies) ? AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES : []),
+    // Revision 63: offered only while the host can continue a chat elsewhere.
+    ...(continueInNewChatWired(dependencies) ? AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES : []),
     ...(device.acceptsProgressCapabilities === true
       ? AIDEN_REMOTE_PROGRESS_CAPABILITIES.filter((capability) =>
           progressCapabilitySupported(dependencies, capability),
@@ -2719,6 +2726,11 @@ export function createAidenRemoteRequestHandler(
             // Revision 53: offered only while the host makes worktrees for phones.
             if (!newWorktreesWired(dependencies)) {
               throw new AidenRemoteServiceError("not_found", "New worktrees are unavailable on this Aiden installation.", 404);
+            }
+          } else if ((AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES as readonly string[]).includes(capability)) {
+            // Revision 63: offered only while the host can continue a chat elsewhere.
+            if (!continueInNewChatWired(dependencies)) {
+              throw new AidenRemoteServiceError("not_found", "Continuing in a new chat is unavailable on this Aiden installation.", 404);
             }
           } else if (capability === "simulators:control") {
             // Refuse non-desktops first so they never learn whether this Mac has simulators.

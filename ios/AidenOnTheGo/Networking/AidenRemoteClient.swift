@@ -1237,6 +1237,19 @@ final class AidenRemoteClient: @unchecked Sendable {
         let summary: Summary?
     }
 
+    /// Revision 63: copy the whole chat into a new chat in another workspace.
+    struct ChatContinueInNewChatRequest: Encodable, Equatable {
+        struct ContinueIn: Encodable, Equatable {
+            let workspaceId: String
+        }
+
+        let continueIn: ContinueIn
+
+        init(workspaceId: String) {
+            continueIn = ContinueIn(workspaceId: workspaceId)
+        }
+    }
+
     private struct ChatForkSummaryCancelResponse: Decodable {
         let cancelled: Bool
     }
@@ -1589,6 +1602,7 @@ final class AidenRemoteClient: @unchecked Sendable {
             .botWatches, .botOpenWork, .botRoutineModels, .botPeers,
             .botMessaging, .botAccessRequests, .botPlans, .botAllowed,
             .appControlsRead, .appControlsRespond, .scheduleCards, .chatJobs, .attachmentsRaw, .chatNewWorktree,
+            .chatContinueInNewChat,
         ])
         guard !accepts.isEmpty,
               Set(accepts).count == accepts.count,
@@ -1982,6 +1996,38 @@ final class AidenRemoteClient: @unchecked Sendable {
               lineage.messageId == messageId,
               lineage.position == position,
               position == .before || result.prefill == nil else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        return result
+    }
+
+    /// Continue a chat whose workspace folder is gone in a new chat in
+    /// another workspace (revision 63). The Mac copies the whole transcript,
+    /// leaves the original as it is and returns the new chat with no prefill.
+    func continueChatInNewChat(
+        chatId: String,
+        revision: String,
+        workspaceId: String,
+        idempotencyKey: UUID = UUID()
+    ) async throws -> AidenChatForkResult {
+        try validateRemoteIdentifier(chatId)
+        try validateRemoteIdentifier(workspaceId)
+        try validateRevision(revision)
+        let result: AidenChatForkResult = try await send(
+            method: "POST",
+            path: ["chats", chatId, "fork"],
+            body: ChatContinueInNewChatRequest(workspaceId: workspaceId),
+            headers: [
+                "If-Match": revision,
+                "Idempotency-Key": idempotencyKey.uuidString.lowercased(),
+            ],
+            acceptedStatus: [201]
+        )
+        // A new chat in the chosen workspace that records this chat as its source.
+        guard result.chat.id != chatId,
+              result.chat.workspaceId == workspaceId,
+              result.chat.forkedFrom?.chatId == chatId,
+              result.prefill == nil else {
             throw AidenRemoteClientError.invalidResponse
         }
         return result

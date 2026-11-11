@@ -7,6 +7,7 @@ import type { Message } from "@earendil-works/pi-ai";
 import { parseAttachments, withReadableImages } from "../../../main/services/attachment-contract.js";
 import { createChatForkService } from "../../../main/services/chat-fork-service.js";
 import { withoutHookBlockedPrompts } from "../../../main/services/hook-blocked-prompt.js";
+import { workspaceFolderMissing } from "../../../main/services/workspace-folder-presence.js";
 import type { ChatMessage } from "../../../main/services/types.js";
 import type { createDaemonChats } from "./daemon-chats.ts";
 import type { createCliWorkspaceApplication } from "./workspace-application.ts";
@@ -36,6 +37,11 @@ export function createCliChatForks(daemon: ReturnType<typeof createDaemonChats>,
     // Holding the deletion gate closes turn admission while the source is copied.
     beginChatCopy: (chatId) => daemon.deletion.isDeleting(chatId) || daemon.llmClient.isChatBusy(chatId) ? null : daemon.deletion.begin(chatId),
     workspaceExists: async (workspaceId) => Boolean(await workspace.configStore.getWorkspace(workspaceId)),
+    // Continue in a new chat is for a chat whose folder is gone, as on the desktop.
+    workspaceFolderMissing: async (workspaceId) => {
+      const record = await workspace.configStore.getWorkspace(workspaceId);
+      return Boolean(record && (await workspaceFolderMissing(record)));
+    },
     // Daemon turns read earlier messages only from the journal.
     journalRequired: true,
     journal: {
