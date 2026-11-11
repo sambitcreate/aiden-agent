@@ -8163,6 +8163,33 @@ final class AidenChatTests: XCTestCase {
         XCTAssertNil(reveal.shownID)
     }
 
+    /// Only the footer's own touch keeps its transcript tap from hiding it. A
+    /// separate tap on empty transcript right after Copy, inside `sameTap`,
+    /// still hides the footer.
+    func testATapOnEmptyTranscriptRightAfterCopyStillHidesTheFooter() {
+        let start = Date(timeIntervalSince1970: 3_000)
+        func at(_ seconds: TimeInterval) -> Date { start.addingTimeInterval(seconds) }
+        var reveal = AidenMessageFooterReveal()
+        reveal.tapMessage("a", at: at(0))
+        reveal.tapTranscript(at: at(0.05))
+        XCTAssertTrue(reveal.shows("a"))
+
+        // Copy: the transcript tap from that touch leaves the footer.
+        reveal.touchFooter(at: at(2))
+        reveal.tapTranscript(at: at(2.05))
+        XCTAssertTrue(reveal.shows("a"), "Copy hid the footer")
+        // A second touch, on empty transcript, 150 ms after Copy.
+        reveal.tapTranscript(at: at(2.15))
+        XCTAssertNil(reveal.shownID, "A tap right after Copy was taken for Copy's own")
+
+        // The same after a message tap that shows the footer.
+        reveal.tapMessage("a", at: at(4))
+        reveal.tapTranscript(at: at(4.05))
+        XCTAssertTrue(reveal.shows("a"))
+        reveal.tapTranscript(at: at(4.2))
+        XCTAssertNil(reveal.shownID, "A tap right after showing the footer was taken for the message's own")
+    }
+
     /// A reply being read aloud keeps its footer, so Stop stays in reach.
     func testAMessageReadingAloudKeepsItsFooter() {
         var reveal = AidenMessageFooterReveal()

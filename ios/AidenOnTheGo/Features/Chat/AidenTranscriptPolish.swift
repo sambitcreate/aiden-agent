@@ -150,7 +150,10 @@ struct AidenMessageFooterReveal: Equatable {
     static let sameTouch: TimeInterval = 0.1
 
     private(set) var shownID: String?
-    private var messageTouchedAt = Date.distantPast
+    /// When a message or footer last took a touch whose transcript tap hasn't
+    /// come yet. That one transcript tap uses it up, so the next touch, however
+    /// soon, is its own.
+    private var touchClaimedAt: Date?
     private var footerTouchedAt = Date.distantPast
     private var lastMessageTapAt = Date.distantPast
     private var shownBeforeLastMessageTap: String?
@@ -161,7 +164,7 @@ struct AidenMessageFooterReveal: Equatable {
 
     /// A tap on a message: shows its footer, or hides it if it already shows.
     mutating func tapMessage(_ messageID: String, at now: Date = .now) {
-        messageTouchedAt = now
+        touchClaimedAt = now
         // The footer's own button took this touch.
         guard abs(now.timeIntervalSince(footerTouchedAt)) > Self.sameTouch else { return }
         shownBeforeLastMessageTap = shownID
@@ -172,7 +175,7 @@ struct AidenMessageFooterReveal: Equatable {
     /// A tap on a shown footer, its own buttons included, which leaves it as it was.
     mutating func touchFooter(at now: Date = .now) {
         footerTouchedAt = now
-        messageTouchedAt = now
+        touchClaimedAt = now
         // A message tap from this same touch came first: undo it.
         if abs(now.timeIntervalSince(lastMessageTapAt)) <= Self.sameTouch {
             shownID = shownBeforeLastMessageTap
@@ -181,9 +184,12 @@ struct AidenMessageFooterReveal: Equatable {
     }
 
     /// A tap anywhere in the transcript. Hides the footer unless a message or
-    /// footer took the same tap.
+    /// footer took the same tap. Only that touch's own transcript tap is let
+    /// off: a second touch right after, on empty transcript, still hides it.
     mutating func tapTranscript(at now: Date = .now) {
-        guard abs(now.timeIntervalSince(messageTouchedAt)) > Self.sameTap else { return }
+        let claimed = touchClaimedAt
+        touchClaimedAt = nil
+        if let claimed, abs(now.timeIntervalSince(claimed)) <= Self.sameTap { return }
         shownID = nil
     }
 }
