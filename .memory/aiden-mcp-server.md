@@ -1,6 +1,6 @@
 # Aiden MCP server for outside apps (W4a, 2026-11-11)
 
-Core only: a loopback MCP server that lets Claude Code, Codex or any MCP client use Aiden's chats. Ported in spirit from T3 Code PR #33196 (no code copied). Off by default, with no Settings UI yet (W4b) and no `aiden serve` wiring (W4c). User docs: `docs/aiden-mcp-server.md`; threat model section 10 of `docs/security/aiden-remote-threat-model.md`. README and PRODUCT.md make no claims until W4b ships.
+A loopback MCP server that lets Claude Code, Codex or any MCP client use Aiden's chats. Ported in spirit from T3 Code PR #33196 (no code copied). Off by default. W4a is the core; W4b (2026-11-11, stacked on W4a) adds Settings → Connections → Apps using Aiden, its IPC, the "Started by" label and an onboarding tile; there is no `aiden serve` wiring yet (W4c). User docs: `docs/aiden-mcp-server.md`; threat model section 10 of `docs/security/aiden-remote-threat-model.md`; Settings layout in `docs/settings-design-system.md` (Apps using Aiden). README and PRODUCT.md describe it as macOS and Linux desktop, matching the `mcpServer` capability.
 
 ## Layout
 
@@ -57,7 +57,16 @@ Core only: a loopback MCP server that lets Claude Code, Codex or any MCP client 
   - Its client is `@earendil-works/pi-mcp` `McpClient`. ESLint forbids importing `@modelcontextprotocol/sdk/client*`.
   - A fake generation's finish must check `owner.isDestroyed()` first, because `owner.send` throws after revocation.
 
-## Open for W4b and W4c
+## W4b: Settings, IPC and provenance
 
-- W4b: the Settings UI and IPC over the five main exports, plus a "Started by" label from provenance (nothing reads it yet).
-- W4c: `packages/cli` has no `@modelcontextprotocol/sdk` dependency and no MCP host wiring in `aiden serve`.
+- `main/handlers/aiden-mcp.ts`: `registerAidenMcpHandlers({handle, owner, service})`, injectable so the test registers it over a real `AidenRemoteStateRegistry`. `owner(event)` throws unless the sender is the active window. Channels `remote:mcpStatus`, `remote:mcpSetEnabled` (boolean only), `remote:mcpIssueApp` (the only channel carrying a credential; revokes the new app if the owner window was destroyed before the answer), `remote:mcpListApps`, `remote:mcpRevokeApp`, `remote:mcpChatProvenance` (`{name, startedAt}`, never the app id). `setEnabled(true)` doubles as retry for `port_in_use` / `start_failed`.
+- `renderer/shared/aiden-mcp.ts`: views, parsers, `aidenMcpClientSnippets(url, token)` (export line with single quotes escaped; Claude Code uses `--header 'Authorization: Bearer ${AIDEN_MCP_TOKEN}'`, Codex `--bearer-token-env-var AIDEN_MCP_TOKEN`). `renderer/lib/aiden-mcp.ts`: query keys and `useAidenMcpChatProvenance` (used by `chat-pane.tsx` for the `data-chat-started-by` line).
+- `renderer/components/settings/aiden-mcp-settings.tsx`: section id `otherApps` (Connections tab, gated by `SettingsCapabilities.mcpServer`). The credential lives only in the issued sheet's component state, never React Query.
+- Onboarding: `otherApps` wide tile in the extend group (`apps-using-aiden-art.tsx`, coral tint), shown only when `visibleOnboardingFeatures(..., {mcpServer})` is true.
+- `lastSeenAt` is 0 until the first connect and is updated at most every 5 minutes; a revoked token still authenticates to a device record with `revoked: true`, so the handler test checks `revoked`, not absence.
+- Tests: `main/handlers/aiden-mcp.test.ts`, `renderer/components/settings/aiden-mcp-settings.test.tsx` (in `test:aiden-remote`), the onboarding gallery test, and `tests/e2e/aiden-mcp-settings.spec.ts`.
+- jsdom pitfall: inside `waitFor`, never `assert.equal(queryByX(...), null)`. A failing assert formats the whole jsdom node and can take minutes, which looks like a hang. Use `assert.ok(node === null)`.
+
+## Open for W4c
+
+- `packages/cli` has no `@modelcontextprotocol/sdk` dependency and no MCP host wiring in `aiden serve`.

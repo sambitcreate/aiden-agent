@@ -10,6 +10,7 @@ export const SETTINGS_SECTIONS = [
   "telegram",
   "remoteAccess",
   "peerHosts",
+  "otherApps",
   "approvals",
   "appControls",
   "computerUse",
@@ -133,6 +134,11 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
     id: "peerHosts",
     title: "Control other devices",
     keywords: ["control other computers", "other devices", "multiple computers", "paired computers", "add device", "tailscale", "pairing"],
+  },
+  {
+    id: "otherApps",
+    title: "Apps using Aiden",
+    keywords: ["mcp server", "model context protocol", "claude code", "codex", "other apps", "outside apps", "connect an app", "access token", "localhost"],
   },
   {
     id: "scheduledTasks",
@@ -324,7 +330,7 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
   { id: "computers", title: "Computers & VMs", group: "Autonomy & Devices", tabs: ["computerUse", "botComputers"] },
   { id: "simulator", title: "Simulator", group: "Autonomy & Devices", tabs: ["simulator"] },
   { id: "voiceSpeech", title: "Voice & Speech", group: "Voice & Channels", tabs: ["voice", "tts", "geminiLive"] },
-  { id: "connections", title: "Connections", group: "Voice & Channels", tabs: ["remoteAccess", "peerHosts", "telegram"] },
+  { id: "connections", title: "Connections", group: "Voice & Channels", tabs: ["remoteAccess", "peerHosts", "otherApps", "telegram"] },
   { id: "appearance", title: "Appearance", group: "App", tabs: ["appearance"], anchors: ["links"] },
   { id: "shortcut", title: "Keyboard shortcuts", group: "App", tabs: ["shortcut"] },
   { id: "storage", title: "Storage", group: "App", tabs: ["storage"] },
@@ -337,6 +343,8 @@ export type SettingsCapabilities = {
   devices: boolean;
   botComputers: boolean;
   hooks: boolean;
+  /** Aiden's own MCP server for outside apps (Settings → Connections → Apps using Aiden). */
+  mcpServer: boolean;
 };
 
 function isSettingsSectionAvailable(
@@ -347,7 +355,8 @@ function isSettingsSectionAvailable(
     (section !== "computerUse" || capabilities.computerUse) &&
     (section !== "simulator" || capabilities.devices) &&
     (section !== "botComputers" || capabilities.botComputers) &&
-    (section !== "hooks" || capabilities.hooks)
+    (section !== "hooks" || capabilities.hooks) &&
+    (section !== "otherApps" || capabilities.mcpServer)
   );
 }
 

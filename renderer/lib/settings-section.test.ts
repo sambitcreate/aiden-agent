@@ -18,19 +18,19 @@ import {
   settingsTabLabel,
 } from "./settings-section.js";
 
-const APPLE_SILICON = { computerUse: true, devices: true, botComputers: true, hooks: true };
-const INTEL_MAC = { computerUse: true, devices: true, botComputers: false, hooks: true };
-const LINUX = { computerUse: false, devices: false, botComputers: false, hooks: true };
+const APPLE_SILICON = { computerUse: true, devices: true, botComputers: true, hooks: true, mcpServer: true };
+const INTEL_MAC = { computerUse: true, devices: true, botComputers: false, hooks: true, mcpServer: true };
+const LINUX = { computerUse: false, devices: false, botComputers: false, hooks: true, mcpServer: true };
 
 test("capability-aware settings destinations hide Computer Use everywhere", () => {
   assert.equal(
-    availableSettingsDestinations({ computerUse: false, devices: true, botComputers: true, hooks: true }).some(
+    availableSettingsDestinations({ computerUse: false, devices: true, botComputers: true, hooks: true, mcpServer: true }).some(
       (destination) => destination.id === "computerUse",
     ),
     false,
   );
   assert.equal(
-    availableSettingsDestinations({ computerUse: true, devices: true, botComputers: true, hooks: true }).some(
+    availableSettingsDestinations({ computerUse: true, devices: true, botComputers: true, hooks: true, mcpServer: true }).some(
       (destination) => destination.id === "computerUse",
     ),
     true,
@@ -38,11 +38,11 @@ test("capability-aware settings destinations hide Computer Use everywhere", () =
 });
 
 test("capability-aware settings destinations hide Simulator without the devices capability", () => {
-  const ids = (capabilities: { computerUse: boolean; devices: boolean; botComputers: boolean; hooks: boolean }) =>
+  const ids = (capabilities: Parameters<typeof availableSettingsDestinations>[0]) =>
     availableSettingsDestinations(capabilities).map((destination) => destination.id);
-  assert.equal(ids({ computerUse: true, devices: false, botComputers: true, hooks: true }).includes("simulator"), false);
-  assert.equal(ids({ computerUse: true, devices: true, botComputers: true, hooks: true }).includes("simulator"), true);
-  const linux = ids({ computerUse: false, devices: false, botComputers: false, hooks: true });
+  assert.equal(ids({ computerUse: true, devices: false, botComputers: true, hooks: true, mcpServer: true }).includes("simulator"), false);
+  assert.equal(ids({ computerUse: true, devices: true, botComputers: true, hooks: true, mcpServer: true }).includes("simulator"), true);
+  const linux = ids({ computerUse: false, devices: false, botComputers: false, hooks: true, mcpServer: true });
   assert.equal(linux.includes("simulator"), false);
   assert.equal(linux.includes("computerUse"), false);
   assert.equal(linux.includes("botComputers"), false);
@@ -51,7 +51,7 @@ test("capability-aware settings destinations hide Simulator without the devices 
 
 test("Bot computers appear only on Apple silicon and are found by VM words", () => {
   const ids = (botComputers: boolean) =>
-    availableSettingsDestinations({ computerUse: true, devices: true, botComputers, hooks: true }).map((destination) => destination.id);
+    availableSettingsDestinations({ computerUse: true, devices: true, botComputers, hooks: true, mcpServer: true }).map((destination) => destination.id);
   assert.equal(ids(false).includes("botComputers"), false, "an Intel Mac has Computer Use but no Bot computers");
   assert.equal(ids(true).includes("botComputers"), true);
   const destination = SETTINGS_DESTINATIONS.find((entry) => entry.id === "botComputers");
@@ -67,7 +67,7 @@ test("Bot computers appear only on Apple silicon and are found by VM words", () 
 
 test("Hooks appear only where the host can run them", () => {
   const ids = (hooks: boolean) =>
-    availableSettingsDestinations({ computerUse: true, devices: true, botComputers: true, hooks }).map((destination) => destination.id);
+    availableSettingsDestinations({ computerUse: true, devices: true, botComputers: true, hooks, mcpServer: true }).map((destination) => destination.id);
   assert.equal(ids(false).includes("hooks"), false, "a host without process-group support has no Hooks page");
   assert.equal(ids(true).includes("hooks"), true);
   // Only Hooks goes; every other page stays.
@@ -75,6 +75,31 @@ test("Hooks appear only where the host can run them", () => {
     ids(true).filter((id) => id !== "hooks"),
     ids(false),
   );
+});
+
+test("Apps using Aiden appears only where the host offers the MCP server", () => {
+  const capabilities = (mcpServer: boolean) => ({ ...APPLE_SILICON, mcpServer });
+  const ids = (mcpServer: boolean) =>
+    availableSettingsDestinations(capabilities(mcpServer)).map((destination) => destination.id);
+  assert.equal(ids(false).includes("otherApps"), false);
+  assert.equal(ids(true).includes("otherApps"), true);
+  assert.deepEqual(ids(true).filter((id) => id !== "otherApps"), ids(false), "only Apps using Aiden goes");
+
+  // It is a Connections tab; without the server the page keeps its other tabs.
+  const connections = (mcpServer: boolean) =>
+    availableSettingsPages(capabilities(mcpServer)).find((page) => page.id === "connections");
+  assert.equal(connections(true)?.tabs.includes("otherApps"), true);
+  assert.equal(connections(false)?.tabs.includes("otherApps"), false);
+  assert.equal(connections(false)?.title, "Connections");
+
+  // A deep link on a host without it lands on the page's first tab, not an empty page.
+  assert.equal(resolveSettingsSection("otherApps", capabilities(true)), "otherApps");
+  assert.equal(resolveSettingsSection("otherApps", capabilities(false)), "remoteAccess");
+  for (const term of ["mcp server", "claude code", "codex", "model context protocol"]) {
+    assert.ok(searchIds(term).includes("otherApps"), term);
+  }
+  assert.equal(assistantSettingsPages(capabilities(false)).join().includes("Apps using Aiden"), false);
+  assert.equal(assistantSettingsPages(capabilities(true)).join().includes("Apps using Aiden"), true);
 });
 
 test("accepts known settings deep links and rejects arbitrary search values", () => {
@@ -198,7 +223,7 @@ test("Image Generation is reachable by deep link and model names", () => {
   }
   // Every platform shows it; no capability gates image generation.
   assert.ok(
-    availableSettingsDestinations({ computerUse: false, devices: false, botComputers: false, hooks: false }).some(
+    availableSettingsDestinations({ computerUse: false, devices: false, botComputers: false, hooks: false, mcpServer: false }).some(
       (entry) => entry.id === "imageGeneration",
     ),
   );
@@ -239,6 +264,7 @@ test("Connections names its tabs for what they do", () => {
   assert.deepEqual(pageFor("remoteAccess").tabs.map(settingsTabLabel), [
     "Control this device",
     "Control other devices",
+    "Apps using Aiden",
     "Telegram",
   ]);
 });
@@ -265,7 +291,7 @@ test("a section this host can't show opens the next tab on its page, then Provid
 test("the assistant names pages as people see them, and none this host hides", () => {
   const pages = assistantSettingsPages(APPLE_SILICON);
   assert.ok(pages.includes("Bots & Approvals (Bots, Tool approvals, Controls in chat)"));
-  assert.ok(pages.includes("Connections (Control this device, Control other devices, Telegram)"));
+  assert.ok(pages.includes("Connections (Control this device, Control other devices, Apps using Aiden, Telegram)"));
   assert.ok(pages.includes("Appearance (Links)"));
   assert.ok(pages.includes("Memory"));
   assert.ok(assistantSettingsPages(INTEL_MAC).includes("Computer Use"));

@@ -124,3 +124,27 @@ test("the Design Mode tile shows a canvas with a page, a comment pin and Send, a
     "AIDEN_DESIGN_MODE=0 keeps the tile out",
   );
 });
+
+test("Mac and Linux tours introduce Apps using Aiden with its local-only switch and access levels; other hosts leave it out", () => {
+  for (const platform of ["darwin", "linux", "win32"] as const) {
+    const host = hostPlatformCapabilities(platform, "x64");
+    const features = visibleOnboardingFeatures(onboardingFeatures, host);
+    const { container, unmount } = render(<OnboardingFeatureGallery features={features} platform={host.platform} />);
+    const tile = container.querySelector<HTMLElement>('[data-onboarding-feature="otherApps"]');
+    if (host.mcpServer) {
+      assert.ok(tile, `${platform} can host the MCP server, so the tour shows it`);
+      assert.match(tile.getAttribute("aria-label") ?? "", /^Apps using Aiden\. .*Settings → Connections → Apps using Aiden; nothing listens until you do\./u);
+      const art = within(tile);
+      assert.ok(art.getByText("Let apps use Aiden"), "the drawing shows the real switch label");
+      assert.ok(art.getByText("This computer only"));
+      assert.ok(art.getByText("Supervised"));
+      assert.ok(art.getByText("Read only"));
+      assert.equal(tile.querySelectorAll("img").length, 0, "the settings slice is code-drawn");
+    } else assert.ok(tile === null, `${platform} has no MCP server to point at`);
+    unmount();
+  }
+  assert.equal(
+    visibleOnboardingFeatures(onboardingFeatures, { ...hostPlatformCapabilities("darwin", "arm64"), mcpServer: false }).some((feature) => feature.id === "otherApps"),
+    false,
+  );
+});

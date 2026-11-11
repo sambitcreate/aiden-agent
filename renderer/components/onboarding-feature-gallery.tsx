@@ -1,4 +1,5 @@
 import {
+  AppWindow,
   AudioWaveform,
   Blocks,
   Bot,
@@ -231,6 +232,14 @@ export const onboardingFeatures: OnboardingFeature[] = [
     title: "Connectors",
     description: "Connect apps like Linear, Notion and GitHub, or any MCP server, to use their tools and read the resources they share. Connected services may also provide guidance for using those tools.",
     icon: Plug,
+    size: "wide",
+  },
+  {
+    id: "otherApps",
+    group: "extend",
+    title: "Apps using Aiden",
+    description: "Let apps like Claude Code or Codex on this computer list and read your Aiden chats, or start supervised work you approve in Aiden. Turn it on and add each app in Settings → Connections → Apps using Aiden; nothing listens until you do.",
+    icon: AppWindow,
     size: "wide",
   },
   {

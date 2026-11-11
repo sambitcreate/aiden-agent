@@ -46,6 +46,7 @@ import { ScheduledTasksSettings } from "../components/settings/scheduled-tasks-s
 import { AidenLiveSettings } from "../components/settings/gemini-live-settings";
 import { RemoteAccessSettings } from "../components/settings/remote-access-settings";
 import { PeerHostsSettingsPage } from "../components/settings/peer-hosts-settings";
+import { AidenMcpSettings } from "../components/settings/aiden-mcp-settings";
 import { AppControlSettings } from "../components/settings/app-control-settings";
 import { SimulatorSettingsPage } from "../components/settings/device-workspace-settings";
 import { ToolApprovalSettings } from "../components/settings/tool-approval-settings";
@@ -113,6 +114,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   telegram: TelegramSettings,
   remoteAccess: RemoteAccessSettings,
   peerHosts: PeerHostsSettingsPage,
+  otherApps: AidenMcpSettings,
   mcp: McpSettings,
   hooks: HooksSettings,
   websearch: WebSearchSettings,
@@ -155,6 +157,7 @@ const LIVE_USER_ONLY_SECTIONS = new Set<SettingsSection>([
   "appControls",
   "remoteAccess",
   "peerHosts",
+  "otherApps",
   "telegram",
   "bots",
   "botComputers",
@@ -192,6 +195,7 @@ const DESCRIPTIONS: Record<SettingsSection, string> = {
   telegram: "Connect your Telegram bots and choose how they respond.",
   remoteAccess: "Use Aiden on this computer from your phone or another computer.",
   peerHosts: "Pair the other computers you control from here, and manage them.",
+  otherApps: "Let apps on this computer, such as Claude Code and Codex, read your chats and work in them.",
   websearch: "Choose how Aiden searches and reads the web.",
   imageGeneration: "Connect image providers and choose the models Aiden uses to make images.",
   approvals: "Review the exact actions Aiden may repeat without asking, and revoke them.",

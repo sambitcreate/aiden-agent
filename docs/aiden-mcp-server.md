@@ -2,7 +2,18 @@
 
 Aiden can act as a [Model Context Protocol](https://modelcontextprotocol.io) server, so another app on the same computer (Claude Code, Codex, or any MCP client) can list Aiden's workspaces and chats, read them, and, with permission, start and follow Aiden turns.
 
-Status (2026-11-11): the server core is in the desktop main process, behind the `mcpServer` host capability (macOS and Linux desktop; see `main/services/host-platform-capabilities.ts`). It is **off by default**. The Settings screen for turning it on and connecting apps is still to come (workstream W4b), and so is a headless `aiden serve` counterpart (W4c). Until those ship, the only way to turn the server on or issue an app is through the main-process functions listed under [Main-process API](#main-process-api).
+Status (2026-11-11): the server is in the desktop main process, behind the `mcpServer` host capability (macOS and Linux desktop; see `main/services/host-platform-capabilities.ts`). It is **off by default**. Turn it on and connect apps in **Settings → Connections → Apps using Aiden** ([below](#set-it-up-in-settings)). A headless `aiden serve` counterpart (workstream W4c) is still to come.
+
+## Set it up in Settings
+
+**Settings → Connections → Apps using Aiden** appears only where the `mcpServer` capability is on.
+
+1. Turn on **Let apps use Aiden**. The status beside the switch says **Listening on port N**, **Off**, **Port N is in use** (another program holds the saved port) or **Couldn't start**. For the last two, **Try again** starts the server on the same port once it is free. The **Address** row copies the URL apps connect to.
+2. Choose **Add app**, give it a name (up to 80 characters, for example "Claude Code"), and pick **Read only** or **Supervised** ([Access levels](#access-levels)).
+3. The next sheet shows the app's token **once**, with copy buttons for the token and for ready-made Claude Code and Codex commands. Each command reads the token from the `AIDEN_MCP_TOKEN` environment variable, so the client's saved configuration never holds it. Closing the sheet forgets the token; if you lose it, revoke the app and add it again.
+4. Each added app is listed with its access level, the day it was added and when it last connected ("Not used yet" until it first does; this is updated at most every five minutes). **Revoke** asks first, then disconnects the app at once.
+
+A chat an app started shows **Started by <app>** under its title in Aiden on this computer.
 
 ## How an app connects
 
@@ -14,21 +25,22 @@ Status (2026-11-11): the server core is in the desktop main process, behind the 
   - If another program later holds the saved port, the server reports `port_in_use` rather than moving, because moving would break every configured app silently.
 - **Credential:** each app gets its own bearer token, a 43-character base64url secret shown once when it is issued. Aiden stores only a hash. A token is sent as `Authorization: Bearer <token>`.
 
-Claude Code:
+Claude Code (the single quotes keep `${AIDEN_MCP_TOKEN}` literal in its saved configuration; Claude Code expands it from the environment when it connects):
 
 ```sh
+export AIDEN_MCP_TOKEN='<token>'
 claude mcp add --transport http aiden http://127.0.0.1:49400/mcp \
-  --header "Authorization: Bearer <token>"
+  --header 'Authorization: Bearer ${AIDEN_MCP_TOKEN}'
 ```
 
 Codex:
 
 ```sh
-export AIDEN_MCP_TOKEN=<token>
+export AIDEN_MCP_TOKEN='<token>'
 codex mcp add aiden --url http://127.0.0.1:49400/mcp --bearer-token-env-var AIDEN_MCP_TOKEN
 ```
 
-Use the port your Aiden reports if it is not 49400.
+Use the port your Aiden reports if it is not 49400; the Settings sheet fills in the real address. Set `AIDEN_MCP_TOKEN` wherever the client is started from, for example your shell profile.
 
 ## Access levels
 
@@ -93,21 +105,35 @@ Turning the server off closes the listener and every open connection.
 
 Privacy:
 
-- Aiden keeps a local note of which app started a chat (`startedBy {kind: "app", name}`, in `aiden-mcp-chat-provenance.json`, the newest 1,000 entries). It is never sent to phones, Macs or apps.
+- Aiden keeps a local note of which app started a chat (`startedBy {kind: "app", name}`, in `aiden-mcp-chat-provenance.json`, the newest 1,000 entries). Only this computer's Aiden window reads it, for the **Started by** label; it is never sent to phones, Macs or apps.
 - App ids never appear in tool results.
 - Server logs carry only `started`, `stopped`, `start-failed` (with a problem code) and `request-failed`, never a token, an app name, a path or chat text.
 - No analytics events are sent for the MCP server.
 
 The Remote Access threat model has the matching section: [`docs/security/aiden-remote-threat-model.md`](security/aiden-remote-threat-model.md#10-local-mcp-server-for-outside-apps).
 
-## Main-process API
+## Main-process API and Settings IPC
 
-These are exported from `main/services/aiden-remote-service-main.ts` for the Settings IPC in W4b:
+These are exported from `main/services/aiden-remote-service-main.ts`:
 
 - `aidenMcpServerStatus()` returns `{supported, enabled, running, port?, url?, problem?}`.
-- `setAidenMcpServerEnabled(enabled)` turns the server on or off and saves the choice.
+- `setAidenMcpServerEnabled(enabled)` turns the server on or off and saves the choice. Calling it with `true` while the server is on but not running (`port_in_use`, `start_failed`) tries again.
 - `issueAidenMcpApp({name, access: "read" | "supervised"})` returns `{credential, app}`. The credential is returned only this once.
 - `listAidenMcpApps()` lists the connected apps.
 - `revokeAidenMcpApp(appId)` disconnects one app. A phone's or Mac's id returns `false`.
+- `aidenMcpChatProvenance(chatId)` returns the app that started a chat, if any.
 
-Code: `main/services/aiden-mcp-server.ts` (listener, `AidenMcpHost`), `main/services/aiden-mcp-tools.ts` (tools and limits), `main/services/aiden-mcp-provenance.ts`, and agent-app state in `main/services/aiden-remote-state.ts`. Tests: `main/services/aiden-mcp-server.test.ts` (in `npm run test:aiden-remote`).
+Settings reaches them through `main/handlers/aiden-mcp.ts`, which accepts calls only from the active Aiden window:
+
+| Channel | Returns |
+| --- | --- |
+| `remote:mcpStatus` | The status above. |
+| `remote:mcpSetEnabled` | The new status. Takes only a boolean. |
+| `remote:mcpIssueApp` | `{credential, app}`. The only channel that ever carries a credential. If the asking window closes before the answer arrives, the app is revoked again. |
+| `remote:mcpListApps` | Live apps, newest first, as `{id, name, access, createdAt, lastSeenAt}`. `lastSeenAt` is 0 until the app first connects. |
+| `remote:mcpRevokeApp` | `{revoked}`. |
+| `remote:mcpChatProvenance` | `{name, startedAt}` or `null`. |
+
+The renderer keeps the credential only in the state of the sheet that shows it. It is never put in the React Query cache, logged or saved.
+
+Code: `main/services/aiden-mcp-server.ts` (listener, `AidenMcpHost`), `main/services/aiden-mcp-tools.ts` (tools and limits), `main/services/aiden-mcp-provenance.ts`, and agent-app state in `main/services/aiden-remote-state.ts`. Settings: `renderer/components/settings/aiden-mcp-settings.tsx`, `renderer/shared/aiden-mcp.ts` (views and client commands) and `renderer/lib/aiden-mcp.ts`. Tests: `main/services/aiden-mcp-server.test.ts`, `main/handlers/aiden-mcp.test.ts` and `renderer/components/settings/aiden-mcp-settings.test.tsx` (in `npm run test:aiden-remote`), and `tests/e2e/aiden-mcp-settings.spec.ts`.

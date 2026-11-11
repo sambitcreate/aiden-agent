@@ -248,6 +248,13 @@ import type {
   AidenRemoteBeginPairingResult,
   AidenRemoteSettingsSnapshot,
 } from "../shared/aiden-remote";
+import {
+  parseAidenMcpApps,
+  parseAidenMcpChatProvenance,
+  parseAidenMcpIssuedApp,
+  parseAidenMcpServerStatus,
+  type AidenMcpAccess,
+} from "../shared/aiden-mcp";
 import type { ChatArtifactEventV1 } from "../shared/chat-artifacts";
 import type { ModelCallRetryView } from "../shared/model-call-retry";
 import type {
@@ -987,6 +994,25 @@ export const telegramApi = {
     invoke<{ deleted: boolean }>("telegram:deleteProfile", profile),
   onModelSelectionChanged: (handler: (selection: { providerId: string; model: string }) => void) =>
     onNotification("telegram:model-selection-changed", handler),
+};
+
+/**
+ * Settings → Connections → Apps using Aiden. `issueApp` is the only call that
+ * returns a credential; callers keep it in component state only.
+ */
+export const aidenMcpApi = {
+  status: async () => parseAidenMcpServerStatus(await invoke<unknown>("remote:mcpStatus")),
+  setEnabled: async (enabled: boolean) =>
+    parseAidenMcpServerStatus(await invoke<unknown>("remote:mcpSetEnabled", enabled)),
+  issueApp: async (input: { name: string; access: AidenMcpAccess }) =>
+    parseAidenMcpIssuedApp(await invoke<unknown>("remote:mcpIssueApp", input)),
+  listApps: async () => parseAidenMcpApps(await invoke<unknown>("remote:mcpListApps")),
+  revokeApp: async (appId: string) => {
+    const result = await invoke<{ revoked?: unknown } | undefined>("remote:mcpRevokeApp", appId);
+    return result?.revoked === true;
+  },
+  chatProvenance: async (chatId: string) =>
+    parseAidenMcpChatProvenance(await invoke<unknown>("remote:mcpChatProvenance", chatId)),
 };
 
 export const aidenRemoteApi = {
