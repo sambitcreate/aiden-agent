@@ -41,7 +41,7 @@ export AIDEN_MCP_TOKEN_CODEX_P7QD2M='<token>'
 codex mcp add aiden --url http://127.0.0.1:49400/mcp --bearer-token-env-var AIDEN_MCP_TOKEN_CODEX_P7QD2M
 ```
 
-Use the port your Aiden reports if it is not 49400; the Settings sheet fills in the real address. The Settings sheet shows each app's own variable name. Set it wherever the client is started from, for example your shell profile.
+Use the port your Aiden reports if it is not 49400; the Settings sheet fills in the real address. Each app reads its token from its own variable, `AIDEN_MCP_TOKEN_<NAME>_<ID>` (the app's name and the start of its id, from `aidenMcpTokenEnvName` in `renderer/shared/aiden-mcp-token-env.ts`), so the desktop and `aiden apps connect` print the same name and two apps in one shell profile keep separate tokens. The Settings sheet shows each app's own variable name. Set it wherever the client is started from, for example your shell profile.
 
 ## Access levels
 

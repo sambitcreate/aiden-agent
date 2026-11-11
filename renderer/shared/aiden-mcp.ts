@@ -1,3 +1,5 @@
+import { aidenMcpTokenEnvName } from "./aiden-mcp-token-env.js";
+
 /**
  * Aiden's MCP server as Settings sees it: whether it runs, and the outside
  * apps (Claude Code, Codex and others) that may use it.
@@ -105,17 +107,7 @@ export function parseAidenMcpChatProvenance(value: unknown): AidenMcpChatProvena
   return { name: provenance.name, startedAt };
 }
 
-/**
- * The environment variable an app's setup snippets keep its token in, such as
- * `AIDEN_MCP_TOKEN_CLAUDE_CODE_K3J9QX`. Each app gets its own, from its name
- * and id, so setting up a second app in the same shell profile never replaces
- * the first app's token and makes both connect as the second.
- */
-export function aidenMcpTokenEnvName(app: { id: string; name: string }): string {
-  const words = app.name.toUpperCase().replace(/[^A-Z0-9]+/gu, "_").slice(0, 24).replace(/^_+|_+$/gu, "");
-  const suffix = app.id.replace(/^device_/u, "").replace(/[^A-Za-z0-9]/gu, "").slice(0, 6).toUpperCase();
-  return ["AIDEN_MCP_TOKEN", words, suffix].filter(Boolean).join("_");
-}
+export { aidenMcpTokenEnvName };
 
 export interface AidenMcpClientSnippet {
   id: "claude" | "codex";
