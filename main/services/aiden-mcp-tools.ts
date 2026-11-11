@@ -36,7 +36,7 @@ export interface AidenMcpApp {
 }
 
 export interface AidenMcpServices {
-  chats: Pick<AidenRemoteChatService, "listSummaries" | "messagesWindow" | "classify" | "isListedChat" | "runMutation" | "create" | "startTurn">;
+  chats: Pick<AidenRemoteChatService, "listSummaries" | "messagesWindow" | "classify" | "isListedChat" | "hasRecordedRequest" | "runMutation" | "create" | "startTurn">;
   streams: Pick<AidenRemoteStreamService, "status" | "pendingApproval" | "pendingQuestion" | "cancel" | "watch">;
   workspaces: Pick<AidenRemoteWorkspaceService, "list">;
 }
@@ -382,32 +382,40 @@ export class AidenMcpToolRunner {
     this.waits.set(app.id, appWaits);
     let detach: (() => void) | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    // The first snapshot that showed the run had stopped running. It answers
+    // the wait, so a terminal run evicted afterwards still reads as finished.
+    let observed: Record<string, unknown> | undefined;
     try {
       const outcome = await new Promise<"changed" | "timeout" | "closed" | "aborted">((resolve) => {
         const abort = () => resolve("aborted");
         signal.addEventListener("abort", abort, { once: true });
         controller.signal.addEventListener("abort", () => resolve("closed"), { once: true });
         timer = setTimeout(() => resolve("timeout"), timeoutMs);
+        // Most events (text deltas, tool output) leave the run running; only a
+        // state change answers the wait. The run's status is read before the
+        // snapshot's first await, so it is taken while the event is current.
+        const look = () => {
+          void this.runSnapshot(services, app, chatId, runId)
+            .then((snapshot) => {
+              if (snapshot.state === "running") return;
+              observed ??= snapshot;
+              resolve("changed");
+            })
+            .catch(() => resolve("changed"));
+        };
         try {
-          detach = services.streams.watch(app.id, runId, {
-            onChange: () => {
-              // Most events (text deltas, tool output) leave the run running;
-              // only a state change answers the wait.
-              void this.runSnapshot(services, app, chatId, runId)
-                .then((snapshot) => {
-                  if (snapshot.state !== "running") resolve("changed");
-                })
-                .catch(() => resolve("changed"));
-            },
-            onClose: () => resolve("closed"),
-          });
+          detach = services.streams.watch(app.id, runId, { onChange: look, onClose: () => resolve("closed") });
         } catch {
           resolve("changed");
+          return;
         }
+        // The run may have changed after the first snapshot and before the
+        // watch attached; the watch reports only later events, so look again.
+        look();
       });
       if (outcome === "closed") throw new ToolRefusal("This app was disconnected from Aiden.");
       if (outcome === "aborted") return toolError("The wait ended because the request closed.");
-      return toolResult(await this.runSnapshot(services, app, chatId, runId));
+      return toolResult(observed ?? (await this.runSnapshot(services, app, chatId, runId)));
     } finally {
       if (timer) clearTimeout(timer);
       detach?.();
@@ -425,8 +433,13 @@ export class AidenMcpToolRunner {
     if (!(await offeredWorkspaces(services)).some((workspace) => workspace.id === args.workspaceId)) {
       throw new ToolRefusal("Aiden has no workspace with that id. List them with aiden_workspace_list.");
     }
-    this.admitTurn(services, app);
-    const chat = await services.chats.create(app.id, `mcp-create:${clientRequestId}`, {
+    // A request Aiden already recorded replays its answer and is not counted
+    // again, even after the in-memory request cache forgot it or a restart.
+    const createKey = `mcp-create:${clientRequestId}`;
+    const turnKey = `mcp-turn:${clientRequestId}`;
+    const createRecorded = services.chats.hasRecordedRequest(app.id, { kind: "create" }, createKey);
+    if (!createRecorded) this.admitTurn(services, app);
+    const chat = await services.chats.create(app.id, createKey, {
       workspaceId: args.workspaceId,
       ...(providerId ? { providerId } : {}),
       ...(modelId ? { modelId } : {}),
@@ -439,8 +452,11 @@ export class AidenMcpToolRunner {
     }).catch(() => undefined);
     // The first turn goes through the same mutation fence as any other turn.
     const classification = await requireOrdinaryChat(services, chat.id);
+    if (createRecorded && !services.chats.hasRecordedRequest(app.id, { kind: "turn", chatId: chat.id }, turnKey)) {
+      this.admitTurn(services, app);
+    }
     const turn = await services.chats.runMutation(app.id, chat.id, classification, () =>
-      services.chats.startTurn(app.id, chat.id, `mcp-turn:${clientRequestId}`, { text: args.text }),
+      services.chats.startTurn(app.id, chat.id, turnKey, { text: args.text }),
     );
     this.trackRun(app.id, turn.streamId);
     return toolResult({ chatId: chat.id, turnId: turn.turnId, runId: turn.streamId, state: "running" });
@@ -450,9 +466,10 @@ export class AidenMcpToolRunner {
     const services = await this.dependencies.services();
     const chatId = args.chatId as string;
     const classification = await requireOrdinaryChat(services, chatId);
-    this.admitTurn(services, app);
+    const turnKey = `mcp-turn:${args.clientRequestId as string}`;
+    if (!services.chats.hasRecordedRequest(app.id, { kind: "turn", chatId }, turnKey)) this.admitTurn(services, app);
     const turn = await services.chats.runMutation(app.id, chatId, classification, () =>
-      services.chats.startTurn(app.id, chatId, `mcp-turn:${args.clientRequestId as string}`, { text: args.text }),
+      services.chats.startTurn(app.id, chatId, turnKey, { text: args.text }),
     );
     this.trackRun(app.id, turn.streamId);
     return toolResult({ chatId, turnId: turn.turnId, runId: turn.streamId, state: "running" });

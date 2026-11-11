@@ -707,6 +707,15 @@ export class AidenIdempotencyLedger {
   }
 
   /**
+   * True when this scope already has an operation, in any phase, so `begin`
+   * would replay or join it rather than run a new action.
+   */
+  holds(scope: { deviceId: string; route: string; resourceId: string; key: string }): boolean {
+    this.prune(this.now());
+    return this.entries.has(createHash("sha256").update(canonical(scope)).digest("base64url"));
+  }
+
+  /**
    * `execute`, also saying whether this call owns the operation. Only an owner
    * runs `action`; any other call replays a settled outcome or joins the owner.
    */

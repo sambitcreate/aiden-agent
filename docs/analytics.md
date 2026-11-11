@@ -57,6 +57,8 @@ How the values are limited:
 - `in_workspace` is true only for a real workspace. Messages to a Bot always report false, and report `origin: bot` whichever surface sent them.
 - `trigger` is automatic, manual, catch_up, retry, file_change, webhook or watch. `thinking` is the level chosen for the turn, or other when Aiden doesn't know it, as for a message to a Bot.
 
+Chats and turns an outside MCP app starts through the local MCP server are never counted: no `chat_created` and no `chat_message_sent`.
+
 Bot continuity integration: host-issued watch/routine and approved-peer task/result inputs do not count as a person’s `chat_message_sent`, including routines without display labels. A person’s accepted durable input reports only allowlisted IDs from its admitted execution model; analytics never resolves the Bot’s unrelated current default or changes its saved model/fallback choice. Duplicates and Resume do not add message events.
 
 ## Crash reports
