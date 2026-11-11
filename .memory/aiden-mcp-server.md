@@ -46,7 +46,7 @@ Core only: a loopback MCP server that lets Claude Code, Codex or any MCP client 
   - Waits are at most 55 s and default to 25 s.
 - **Reach:**
   - `aiden_workspace_list` and `aiden_chat_start` exclude `noWorkspace` folders and `ASSISTANT_WORKSPACE_ID`.
-  - Chat list is regular chats only, and `requireOrdinaryChat` refuses Bot chats by id.
+  - Chat list is regular chats only. `requireOrdinaryChat` refuses by id every chat the list hides (Bot, feature, assistant), via `AidenRemoteChatService.isListedChat`, with the unknown-id answer so existence is not leaked.
   - Assistant and feature chats are still readable and sendable by id, as on phones.
 - **No approval tool.** `aiden_chat_wait` returns `waiting_for_approval` or `waiting_for_input` with `approveIn` / `answerIn` set to "Aiden on <computer name>".
 - **Revoke:**

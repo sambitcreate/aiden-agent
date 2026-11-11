@@ -36,7 +36,7 @@ export interface AidenMcpApp {
 }
 
 export interface AidenMcpServices {
-  chats: Pick<AidenRemoteChatService, "listSummaries" | "messagesWindow" | "classify" | "runMutation" | "create" | "startTurn">;
+  chats: Pick<AidenRemoteChatService, "listSummaries" | "messagesWindow" | "classify" | "isListedChat" | "runMutation" | "create" | "startTurn">;
   streams: Pick<AidenRemoteStreamService, "status" | "pendingApproval" | "pendingQuestion" | "cancel" | "watch">;
   workspaces: Pick<AidenRemoteWorkspaceService, "list">;
 }
@@ -584,13 +584,19 @@ async function offeredWorkspaces(services: AidenMcpServices) {
   return workspaces.filter((workspace) => workspace.noWorkspace !== true && workspace.id !== ASSISTANT_WORKSPACE_ID);
 }
 
-/** Bot chats are not offered to outside apps; they read as missing. */
+/**
+ * An app reaches only the chats aiden_chat_list shows it. Bot, assistant and
+ * feature-owned chats read as missing, with the same answer as an unknown id,
+ * so an app cannot tell they exist.
+ */
 async function requireOrdinaryChat(
   services: AidenMcpServices,
   chatId: string,
 ): Promise<Awaited<ReturnType<AidenMcpServices["chats"]["classify"]>>> {
   const classification = await services.chats.classify(chatId);
-  if (classification.botId) throw new ToolRefusal("This Aiden chat no longer exists.");
+  if (classification.botId || !(await services.chats.isListedChat(chatId))) {
+    throw new ToolRefusal("This Aiden chat no longer exists.");
+  }
   return classification;
 }
 

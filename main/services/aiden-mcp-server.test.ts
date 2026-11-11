@@ -893,3 +893,48 @@ test("Bot chats and the folders Aiden makes for one chat are out of an app's rea
     await fixture.close();
   }
 });
+
+test("assistant and design-project chats answer every chat tool exactly as an unknown chat does", async () => {
+  const fixture = await harness();
+  try {
+    await fixture.enable();
+    const hidden: Record<string, Partial<Chat>> = {
+      "assistant-chat-1": { workspaceId: "assistant" },
+      "design-chat-1": { workspaceId: "workspace-1", owner: { kind: "design-project", projectId: "project-1" } },
+    };
+    for (const [id, fields] of Object.entries(hidden)) {
+      fixture.chats.set(id, {
+        id,
+        title: "Private",
+        providerId: "provider-1",
+        model: "model-1",
+        createdAt: 1_000,
+        updatedAt: 9_000,
+        messages: [{ id: `${id}-message`, role: "assistant", content: "Private note", createdAt: 1_500 }],
+        ...fields,
+      } as Chat);
+    }
+    const client = await fixture.connect((await fixture.host.issueApp({ name: "Codex", access: "supervised" })).credential);
+    assert.deepEqual(structured(await client.callTool({ name: "aiden_chat_list", arguments: {} })).chats, []);
+
+    const answers = async (chatId: string) => [
+      refusal(await client.callTool({ name: "aiden_chat_read", arguments: { chatId } })),
+      refusal(await client.callTool({ name: "aiden_chat_wait", arguments: { chatId, runId: "run-1", timeoutSeconds: 1 } })),
+      refusal(
+        await client.callTool({
+          name: "aiden_chat_send",
+          arguments: { clientRequestId: `send-${chatId}`, chatId, text: "Hi" },
+        }),
+      ),
+      refusal(await client.callTool({ name: "aiden_chat_stop", arguments: { chatId, runId: "run-1" } })),
+    ];
+    const unknown = await answers("chat-that-never-existed");
+    assert.deepEqual(unknown, Array(4).fill("This Aiden chat no longer exists."));
+    for (const id of Object.keys(hidden)) assert.deepEqual(await answers(id), unknown, id);
+
+    for (const id of Object.keys(hidden)) assert.equal(fixture.chats.get(id)!.messages.length, 1);
+    assert.equal(fixture.generationStarts(), 0);
+  } finally {
+    await fixture.close();
+  }
+});

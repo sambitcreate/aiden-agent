@@ -183,7 +183,7 @@ Outside app (Claude Code, Codex, any MCP client) on this computer
   - Apps never answer approvals or questions; the person does, in Aiden on the computer.
 - **Browser and rebinding.** `Host` must be the exact loopback host and port, and any `Origin` other than the same loopback origin is refused. No `Access-Control-*` header is ever sent.
 - **Reach.**
-  - Apps see ordinary chats and offered workspaces only. Bot, feature and assistant chats are not listed, Bot chats are refused by id, and new chats cannot be started in one-chat folders or the assistant workspace.
+  - Apps see ordinary chats and offered workspaces only. Bot, feature and assistant chats are not listed, and every chat tool refuses them by id with the same not-found answer as an unknown id, so an app cannot learn they exist. MCP apps are trusted less than paired phones, which can open assistant chats. New chats cannot be started in one-chat folders or the assistant workspace.
   - An app can wait on and stop only runs it started.
 - **Residual risk.** A Supervised app is delegated the person's own authority in the chosen workspace. In a Full-access workspace its turns run tools without approval. Supervised access and Full-access workspaces are the person's informed choices; neither is containment.
 - **Revocation** goes through `revokeAidenRemoteRuntimeDevice`:
@@ -209,5 +209,6 @@ Required evidence: `main/services/aiden-mcp-server.test.ts` covers:
 - revoke ending a wait
 - the rate and concurrency limits
 - Bot chats and hidden workspaces out of reach
+- assistant and feature chats answering every chat tool as an unknown id does
 
 `main/services/aiden-remote-router.test.ts` covers agent tokens on `/api/aiden/v1`. `main/services/aiden-remote-state.test.ts` covers the capability ceiling and the app quota.

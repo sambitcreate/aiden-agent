@@ -1944,6 +1944,17 @@ export class AidenRemoteChatService {
   }
 
   /**
+   * True when `listSummaries` would show this chat: an ordinary chat with a
+   * safe id, workspace and timestamps. Never a Bot, assistant or
+   * feature-owned chat. Transcript-free: one read of the metadata index.
+   */
+  async isListedChat(chatId: string): Promise<boolean> {
+    const id = safeId(chatId, "chat");
+    const metadata = (await this.options.application.list()).find((entry) => entry.id === id);
+    return metadata !== undefined && safeSummaryMetadata(metadata) !== null;
+  }
+
+  /**
    * Resolve only immutable chat classification from the main-owned metadata
    * index. Authorization callers use this before any payload read that could
    * wait on renderer ownership or expose reconciliation state.

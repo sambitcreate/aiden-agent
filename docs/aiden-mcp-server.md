@@ -56,7 +56,7 @@ At most 16 apps can be connected at once, separately from the phone and Mac devi
 | `aiden_chat_send` | Sends a follow-up to an existing ordinary chat (also idempotent by `clientRequestId`). |
 | `aiden_chat_stop` | Stops a run **this app** started. Another app's runs, and the person's own, cannot be stopped or waited on. |
 
-Arguments are validated against each tool's schema, and unknown properties are rejected. A message can be at most 200,000 characters, and messages read back are capped at 20,000 characters each. Bot chats cannot be read or written by id, even when the id is known.
+Arguments are validated against each tool's schema, and unknown properties are rejected. A message can be at most 200,000 characters, and messages read back are capped at 20,000 characters each. A chat `aiden_chat_list` leaves out (Bot, feature or assistant) cannot be read, waited on, sent to or stopped by id, even when the id is known. Every chat tool answers it exactly as it answers an unknown id (`This Aiden chat no longer exists.`), so an app cannot tell such a chat exists. MCP apps are trusted less than paired phones, which can open assistant chats.
 
 There is deliberately no tool for approvals or questions. When a turn needs one, `aiden_chat_wait` says so and where, and the person answers it in Aiden on that computer. A turn runs with the permissions of its workspace. In a Full-access workspace, tools run without asking, exactly as if the person had typed the message.
 
