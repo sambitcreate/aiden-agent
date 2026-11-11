@@ -167,7 +167,7 @@ import { botHandoffs } from "./bot-runtime/bot-handoffs-main.js";
 import { botRunStarts, botTurnIntents } from "./bot-runtime/bot-turn-intents-main.js";
 import { botMutationGate } from "./bot-mutation-gate.js";
 import { botApplicationService } from "./bot-application-service-main.js";
-import { BotCapabilityUnavailableError } from "./bot-capability-store-core.js";
+import { revokeBotNoticeAudience, type BotNoticeRevokePolicy } from "./bot-capability-store-core.js";
 import {
   BOT_DESKTOP_AUDIENCE_ID,
   botRuntimeAuthority,
@@ -485,7 +485,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
   });
   const revokeDevice = async (
     deviceId: string,
-    botNotices: "required" | "when-available" = "required",
+    botNotices: BotNoticeRevokePolicy = "required",
   ): Promise<boolean> => {
     activeReadAloud?.revokeDevice(deviceId);
     activeProgress?.revokeDevice(deviceId);
@@ -511,15 +511,9 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     // Cleanup is intentionally idempotent: a retry after a crash between the
     // device tombstone and notice removal must still remove the acceptance.
     if (hostPlatformCapabilities().bots) {
-      try {
-        await botApplicationService.revokeNoticeAudience(deviceId);
-      } catch (error) {
-        // An outside app's token is already tombstoned above. Bot storage that is
-        // waiting for repair (no Secret Service on Linux, say) must not make
-        // Settings report the app as still connected.
-        if (botNotices === "required" || !(error instanceof BotCapabilityUnavailableError)) throw error;
-        logger.warn("aiden-mcp", "revoke-bot-notices-unavailable", {});
-      }
+      await revokeBotNoticeAudience(() => botApplicationService.revokeNoticeAudience(deviceId), botNotices, () =>
+        logger.warn("aiden-mcp", "revoke-bot-notices-unavailable", {}),
+      );
     }
     return revoked;
   };
