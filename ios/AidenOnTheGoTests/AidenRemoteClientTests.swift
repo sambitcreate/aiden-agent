@@ -2293,7 +2293,7 @@ final class AidenRemoteClientTests: XCTestCase {
         await coordinator.start()
         XCTAssertEqual(coordinator.connectionState, .connected)
 
-        let tools = AidenBotChatToolsModel(chatID: chatID, botID: botID, machine: nil, cache: botCache)
+        let tools = AidenBotChatToolsModel(chatID: chatID, botID: botID, machine: "instance-bot-tools", cache: botCache)
         await tools.load(coordinator: coordinator)
         XCTAssertTrue(tools.hasFiles)
         let cachedAfterRefresh = await botCache.load(

@@ -73,8 +73,9 @@ struct AidenBotConversationFileGrant: Equatable {
 final class AidenBotChatToolsModel {
     let chatID: String
     let botID: String
-    /// The Bot's own machine, which these tools read and write; nil follows the selected one.
-    let machine: String?
+    /// The Bot's own machine, which these tools read and write. There is no
+    /// "follow the selected machine" form.
+    let machine: String
     var bot: AidenBotDetail?
     var catalog: AidenBotCapabilityCatalog?
     var isLoading = false
@@ -84,7 +85,7 @@ final class AidenBotChatToolsModel {
     private var loadToken: UUID?
     private let cache: AidenBotCache
 
-    init(chatID: String, botID: String, machine: String?, cache: AidenBotCache = .shared) {
+    init(chatID: String, botID: String, machine: String, cache: AidenBotCache = .shared) {
         self.chatID = chatID
         self.botID = botID
         self.machine = machine

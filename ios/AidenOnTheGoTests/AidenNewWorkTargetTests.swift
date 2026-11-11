@@ -1078,26 +1078,6 @@ final class AidenNewWorkTargetTests: XCTestCase {
         )
     }
 
-    /// Bot tools opened with no `machine` follow the default, so moving it takes
-    /// Files away. A Bot's chat passes its machine instead
-    /// (`testABotsFilesStayWithItsMachineWhenTheDefaultMoves`).
-    func testBotToolsWithNoMachineFollowTheDefault() async throws {
-        let responder = AidenDemoResponder()
-        self.responder = responder
-        coordinator = AidenDemoHosts.coordinator(.four, responder: responder, machinePreferences: preferences)
-        await connectAll()
-        let home = try XCTUnwrap(coordinator.defaultInstanceId)
-        try replyToBotCapabilities(on: home)
-        let next = try XCTUnwrap(coordinator.hosts.ordered.first { $0.instanceId != home }).instanceId
-        let tools = AidenBotChatToolsModel(chatID: "chat_bot_scout", botID: "bot_scout", machine: nil, cache: AidenBotCache(root: botStoreRoot()))
-        await tools.load(coordinator: coordinator)
-        XCTAssertNotNil(tools.reachableFileGrant(coordinator: coordinator, hostAllowsMutations: true))
-
-        coordinator.setDefaultMachine(next)
-
-        XCTAssertNil(tools.reachableFileGrant(coordinator: coordinator, hostAllowsMutations: true), "A sheet opened now would stay blank")
-    }
-
     /// A Bot's chat keeps its tools on the Bot's own machine, so Files stay
     /// while the default moves away and back, with nothing read again.
     func testABotsFilesStayWithItsMachineWhenTheDefaultMoves() async throws {
