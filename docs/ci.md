@@ -219,11 +219,20 @@ each:
   repeats failed differently: the fixture's first `firstWindow` timed out.
 - `bot-plans.spec.ts:15`: Home not scrolling the plan review back to the top
   (jobs 128235396340 and 128250445861).
-- A first turn that is never answered, in `bots-persistence.spec.ts:10` (jobs
-  128096428982, 128273572690 and 128292737560) and
-  `worktree-folder-deleted.spec.ts:15` (job 130053226128).
+- A first turn that is never answered, in `worktree-folder-deleted.spec.ts:15`
+  (job 130053226128).
 - `testHeldHomeHTTPResponseCannotReplaceSettlementOrNewerHomeOwner` (job
   127814921450).
+
+Later on 2026-11-11, the last two fixed-count polls in `AidenChatTests` (a
+local `waitUntil` and `waitUntil(attempts:)`) took the same 30-second
+wall-clock ceiling as `waitForCondition`. Neither had failed yet, but both
+counted main-actor turns the same way. The `bots-persistence.spec.ts:10`
+failures (jobs 128096428982, 128273572690 and 128292737560, all on
+2026-11-07) predate bb90b9125. That change removed about 6.8 seconds of
+Keychain calls from each Bot turn, which had pushed the first answer past
+the spec's 10-second expectation. It has not failed since, so it is no longer
+listed as open.
 
 Release workflows, signing/notarization, publication and repository protection
 settings remain unchanged. The previous draft's release-admission rewrite has
