@@ -3098,7 +3098,7 @@ final class AidenChatTests: XCTestCase {
         )
 
         await model.load(observeProgress: false)
-        try await waitForCondition("terminal replay settled") { !model.isLookingForForeignRun }
+        await foreignRunLookupsSettled(model)
         XCTAssertEqual(model.chat.messages.map(\.id), ["reply-mac"])
         XCTAssertEqual(fixture.chatReads, 2, "The terminal read accepts the same answer once")
         XCTAssertTrue(model.liveText.isEmpty)
@@ -3119,7 +3119,8 @@ final class AidenChatTests: XCTestCase {
         try await waitForCondition("open progress stream") { AidenChatProgressLifecycleURLProtocol.hasOpenEventStream }
         // The opening lookup, then one for the first roster's turn, whose run
         // could have registered after the opening lookup was answered.
-        try await waitForCondition("attach on load") { fixture.currentRunRequests == 2 && !model.isLookingForForeignRun }
+        await foreignRunLookupsSettled(model)
+        XCTAssertEqual(fixture.currentRunRequests, 2, "The opening lookup and the first roster's turn.")
         XCTAssertEqual(fixture.chatReads, 1, "Finding nothing new reads no transcript.")
         XCTAssertEqual(model.currentAgentTurnId, "turn-old")
         XCTAssertTrue(model.liveText.isEmpty)
@@ -3127,13 +3128,38 @@ final class AidenChatTests: XCTestCase {
         return model
     }
 
+    /// Resumes as soon as `condition` holds, however long a loaded simulator
+    /// takes to get there. A count of short sleeps measured nothing but the
+    /// main actor's own turns: on a stalled CI host the stub and network work
+    /// it waits on fell behind while the count ran out. The ceiling, as in
+    /// `waitForRequests`, is wall-clock time and only bounds a real failure.
     @MainActor
     private func waitForCondition(_ label: String, _ condition: () -> Bool) async throws {
-        for _ in 0..<500 {
-            if condition() { return }
+        let deadline = ContinuousClock.now + .seconds(30)
+        while !condition() {
+            guard ContinuousClock.now < deadline else { return XCTFail("Timed out waiting for \(label)") }
             try await Task.sleep(for: .milliseconds(10))
         }
-        XCTFail("Timed out waiting for \(label)")
+    }
+
+    /// Waits for the model's foreign-run lookups to end, including the one a
+    /// lookup hands over to as it ends (a turn announced while it ran), by
+    /// awaiting the lookups themselves rather than a number of polls.
+    @MainActor
+    private func foreignRunLookupsSettled(
+        _ model: AidenChatViewModel, file: StaticString = #filePath, line: UInt = #line
+    ) async {
+        let settled = expectation(description: "foreign-run lookups settled")
+        Task { @MainActor in
+            var awaited: Task<Void, Never>?
+            while let lookup = model.foreignRunTask, lookup != awaited {
+                awaited = lookup
+                await lookup.value
+            }
+            settled.fulfill()
+        }
+        await fulfillment(of: [settled], timeout: 30)
+        XCTAssertFalse(model.isLookingForForeignRun, "A lookup is still running.", file: file, line: line)
     }
 
     @MainActor
@@ -3177,7 +3203,7 @@ final class AidenChatTests: XCTestCase {
         AidenChatProgressLifecycleURLProtocol.pushEvent(AidenAnnouncedRunFixture.rosterFrame(turnId: "turn-new", revision: 2))
 
         try await waitForCondition("reply in transcript") { model.chat.messages.contains { $0.id == "reply-mac" } }
-        try await waitForCondition("attach finished") { !model.isLookingForForeignRun }
+        await foreignRunLookupsSettled(model)
         // A later roster revision of the same turn neither attaches nor reads again.
         AidenChatProgressLifecycleURLProtocol.pushEvent(AidenAnnouncedRunFixture.rosterFrame(turnId: "turn-new", revision: 3))
         try await waitForCondition("revision applied") { model.agentRoster?.revision == 3 }
@@ -3190,7 +3216,10 @@ final class AidenChatTests: XCTestCase {
         // A newer turn whose run has not registered finds only the run already
         // read: it is looked for once more, then neither replayed nor read again.
         AidenChatProgressLifecycleURLProtocol.pushEvent(AidenAnnouncedRunFixture.rosterFrame(turnId: "turn-newer", revision: 4))
-        try await waitForCondition("newer turn looked up") { fixture.currentRunRequests == 5 && !model.isLookingForForeignRun }
+        // Accepting the roster starts its lookup in the same main-actor turn.
+        try await waitForCondition("newer turn announced") { model.agentRoster?.revision == 4 }
+        await foreignRunLookupsSettled(model)
+        XCTAssertEqual(fixture.currentRunRequests, 5, "The newer turn is looked for once more.")
         XCTAssertEqual(fixture.chatReads, 2)
         XCTAssertTrue(model.liveText.isEmpty)
         XCTAssertFalse(model.isObservingForeignRun)
