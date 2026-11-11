@@ -190,6 +190,45 @@ test("a report waits for the canvas's write in progress rather than reading the 
   assert.deepEqual(updates, [], "the page holds the canvas's own words");
 });
 
+test("after a page stops being watched, a later revert to the canvas's own words is reported", async (t) => {
+  const root = await workspace(t, { "design/hero.html": "<h1>Ship faster</h1>", "design/about.html": "<h1>About</h1>" });
+  const watched: { emit?: (event: string, filename: string | null) => void } = {};
+  const updates: DesignFilesChanged[] = [];
+  const instance = new DesignFileWatcher({
+    onChange: (update) => updates.push(update),
+    debounceMs: 5,
+    watch: (_folder, _options, listener) => {
+      watched.emit = listener as (event: string, filename: string | null) => void;
+      return Object.assign(new EventEmitter(), { close: () => undefined }) as unknown as fs.FSWatcher;
+    },
+  });
+  t.after(() => instance.clearAll());
+  const file = path.join(root, "design/hero.html");
+  const A = "<h1>Ship sooner</h1>";
+  const B = "<h1>Ship today</h1>";
+
+  for (const away of [[], ["design/about.html"]]) {
+    updates.splice(0);
+    await instance.set("chat-1", root, ["design/hero.html", "design/about.html"]);
+    // The person edits the words to A, and the file system reports the write.
+    await fsp.writeFile(file, A);
+    instance.ownWrite("chat-1", "design/hero.html", A)(true);
+    watched.emit!("change", "hero.html");
+    await sleep(50);
+    assert.equal(updates.length, 0, "the canvas already shows its own words");
+
+    // The canvas unmounts, or the page leaves the watched set, and something rewrites it to B.
+    await instance.set("chat-1", root, away);
+    await fsp.writeFile(file, B);
+    // The frame comes back and loads B; then the file is put back to A.
+    await instance.set("chat-1", root, ["design/hero.html", "design/about.html"]);
+    await fsp.writeFile(file, A);
+    watched.emit!("change", "hero.html");
+    await eventually(() => updates.length > 0);
+    assert.deepEqual(updates.map((update) => update.paths), [["design/hero.html"]], `away as ${JSON.stringify(away)}`);
+  }
+});
+
 test("a change beside a page the canvas wrote, or a write that failed, is still reported", async (t) => {
   const root = await workspace(t, {
     "design/hero.html": "<link rel=stylesheet href=hero.css><h1>Ship faster</h1>",

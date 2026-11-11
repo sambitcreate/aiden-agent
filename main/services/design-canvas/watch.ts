@@ -8,6 +8,8 @@
 // the page itself. The file system can report one write more than once, and
 // late, so a report for it could otherwise reload the page under the person's
 // next edit. A change of the page to anything else is reported as usual.
+// The canvas's writes are remembered only for the pages it still watches, so
+// a page that stops being watched and comes back reports any change again.
 
 import { createHash } from "node:crypto";
 import type * as fs from "node:fs";
@@ -74,6 +76,7 @@ export class DesignFileWatcher {
     const generation = (this.generations.get(chatId) ?? 0) + 1;
     this.generations.set(chatId, generation);
     const unique = [...new Set(relativePaths.filter(isDesignRelativePath))].slice(0, DESIGN_WATCH_LIMIT);
+    this.forgetUnwatchedWrites(chatId, unique);
     const byFolder = await this.groupByRealFolder(root, unique);
     // A newer `set` (or a `clear`) ran while we checked the disk.
     if (this.generations.get(chatId) !== generation) return;
@@ -129,6 +132,18 @@ export class DesignFileWatcher {
       }
       settle();
     };
+  }
+
+  /**
+   * Drops the canvas's writes to pages outside `watched`. Nothing reports such
+   * a page while it is not watched, and a frame that shows it again loads it
+   * from disk, so an old write must not hide its next change.
+   */
+  private forgetUnwatchedWrites(chatId: string, watched: readonly string[]): void {
+    const writes = this.ownWrites.get(chatId);
+    if (!writes) return;
+    for (const relative of [...writes.keys()]) if (!watched.includes(relative)) writes.delete(relative);
+    if (writes.size === 0) this.ownWrites.delete(chatId);
   }
 
   /** The canvas's settled latest write to a page, waiting out one in progress. */
