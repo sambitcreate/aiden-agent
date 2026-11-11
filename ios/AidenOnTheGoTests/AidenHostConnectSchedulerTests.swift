@@ -804,7 +804,12 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         XCTAssertNotNil(coordinator.hosts.connection(for: "laptop"), "The chat on screen lost its machine")
 
         coordinator.setOnScreen(false, view: view, instanceId: "laptop")
-        try await waitUntil("the purge") { coordinator.hosts.connection(for: "laptop") == nil }
+        // The machine leaves the registry first; the notice follows once the
+        // purge has run.
+        try await waitUntil("the purge") {
+            coordinator.hosts.connection(for: "laptop") == nil
+                && coordinator.presentedError?.contains("revoked") == true
+        }
         XCTAssertNil(coordinator.installationStore.installations.first { $0.id == "laptop" })
         XCTAssertNotEqual(coordinator.connectionState, .needsPairing)
         XCTAssertTrue(coordinator.presentedError?.contains("revoked") == true)
@@ -837,7 +842,11 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: legacyFile.path), "The chat on screen lost its files")
 
         coordinator.setOnScreen(false, view: view, instanceId: "laptop")
-        try await waitUntil("the purge") { coordinator.hosts.connection(for: "laptop") == nil }
+        // The machine leaves the registry before its files are purged.
+        try await waitUntil("the purge") {
+            coordinator.hosts.connection(for: "laptop") == nil
+                && !FileManager.default.fileExists(atPath: legacyFile.path)
+        }
         XCTAssertFalse(FileManager.default.fileExists(atPath: legacyFile.path))
     }
 
@@ -945,7 +954,11 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: legacyFile.path), "The chat on screen lost its files")
 
         coordinator.setOnScreen(false, view: view, instanceId: "laptop")
-        try await waitUntil("the purge") { coordinator.hosts.connection(for: "laptop") == nil }
+        // The machine leaves the registry before its files are purged.
+        try await waitUntil("the purge") {
+            coordinator.hosts.connection(for: "laptop") == nil
+                && !FileManager.default.fileExists(atPath: legacyFile.path)
+        }
         XCTAssertFalse(FileManager.default.fileExists(atPath: legacyFile.path))
     }
 
