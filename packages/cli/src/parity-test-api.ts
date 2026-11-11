@@ -20,6 +20,8 @@ export * from "./daemon-turn-lifecycle.ts";
 export * from "./daemon-approvals.ts";
 export * from "./speech.ts";
 export * from "./remote.ts";
+export { cliAppsCommand, createCliMcpHost, CLI_MCP_DEFAULT_PORT } from "./apps.ts";
+export { aidenMcpClientSnippets, renderAppConnection } from "./apps-display.ts";
 export { daemonRemoteSummary, showStartupPairing } from "./serve-command.ts";
 export { resolveTailscaleBinary } from "../../../main/services/aiden-remote-tailscale.js";
 export { AidenRemoteSpeechServiceCore } from "../../../main/services/aiden-remote-speech-core.js";

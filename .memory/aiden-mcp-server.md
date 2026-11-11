@@ -1,6 +1,6 @@
 # Aiden MCP server for outside apps (W4a, 2026-11-11)
 
-Core only: a loopback MCP server that lets Claude Code, Codex or any MCP client use Aiden's chats. Ported in spirit from T3 Code PR #33196 (no code copied). Off by default, with no Settings UI yet (W4b) and no `aiden serve` wiring (W4c). User docs: `docs/aiden-mcp-server.md`; threat model section 10 of `docs/security/aiden-remote-threat-model.md`. README and PRODUCT.md make no claims until W4b ships.
+Core only: a loopback MCP server that lets Claude Code, Codex or any MCP client use Aiden's chats. Ported in spirit from T3 Code PR #33196 (no code copied). Off by default, with no Settings UI yet (W4b); `aiden serve` hosts it too (W4c, below). User docs: `docs/aiden-mcp-server.md`; threat model section 10 of `docs/security/aiden-remote-threat-model.md`. README and PRODUCT.md make no claims until W4b ships.
 
 ## Layout
 
@@ -58,7 +58,31 @@ Core only: a loopback MCP server that lets Claude Code, Codex or any MCP client 
   - Its client is `@earendil-works/pi-mcp` `McpClient`. ESLint forbids importing `@modelcontextprotocol/sdk/client*`.
   - A fake generation's finish must check `owner.isDestroyed()` first, because `owner.send` throws after revocation.
 
-## Open for W4b and W4c
+## Headless server (W4c, 2026-11-11)
+
+`aiden serve` hosts the same endpoint, and `aiden apps list|connect|revoke|on|off` manages it.
+
+- **Wiring:**
+  - `packages/cli/src/apps.ts` has `createCliMcpHost` and `cliAppsCommand`.
+  - `packages/cli/src/apps-display.ts` holds the connect rendering, the snippets and `CLI_MCP_DEFAULT_PORT`. It has type-only imports, so the admin client never loads the SDK.
+  - The SDK is pinned at `@modelcontextprotocol/sdk` 1.32.1 in `packages/cli/package.json`, the desktop pin.
+- **Inside the Remote runtime.** `createCliRemote` builds the host:
+  - The chat runtime is shared through a memoized `loadChatApi` (a failed load is retried).
+  - MCP gets its own cached `AidenRemoteWorkspaceService`, so it never rebuilds Remote's host feed.
+  - `revokeDevice` is the one shared path that drains feeds, runs and Bot sessions and calls `revokeAidenRemoteRuntimeDevice`; `remote revoke` uses it too.
+  - `start()` calls `mcp.initialize()` after Remote is up, and a failure only logs. `stop()` stops MCP first.
+  - `--no-remote` means no MCP server: `serve.ts` refuses `apps` with a restart hint.
+- **Port.** 49500–49507 (`CLI_MCP_DEFAULT_PORT`), a +100 shift from the desktop's 49400, mirroring Remote's 49220 → 49320. It is saved in `remote.json`. Tests pass `mcpPort: 0`.
+- **Off by default.** `connect` calls `setEnabled(true)` before `issueApp`, so a failure to enable never loses a just-issued token. An argument error refuses before either step. The default access is Read.
+- **Connect output.** On a TTY, `commands.ts` renders text with the token once and `claude mcp add --scope user --transport http aiden <url> --header 'Authorization: Bearer ${AIDEN_MCP_TOKEN}'` / `codex mcp add aiden --url <url> --bearer-token-env-var AIDEN_MCP_TOKEN`; this matches W4b's choice. Piped output is JSON plus a stderr warning, like pairing.
+- **Analytics.** `remote-chats.ts` passes `deviceReportsAnalytics` (false for `agent` devices), matching the desktop. `aiden apps` sends nothing.
+- **Docker.** Container loopback is unreachable from the host, which is documented. MCP without Remote would be a possible follow-up.
+- **Tests.** `packages/cli/tests/mcp-apps.test.mjs` (in the CLI `test` script; the registry covers it through `test:cli`):
+  - spawned `aiden serve` end to end: off by default, connect, 401s, Read tools, a real chat through a fake provider, provenance, revoke, off/on, and the port across a restart
+  - in-process refusals and a phone id
+  - `--no-remote`
+  - the snippets never carrying the token
+
+## Open
 
 - W4b: the Settings UI and IPC over the five main exports, plus a "Started by" label from provenance (nothing reads it yet).
-- W4c: `packages/cli` has no `@modelcontextprotocol/sdk` dependency and no MCP host wiring in `aiden serve`.

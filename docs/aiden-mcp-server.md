@@ -2,7 +2,7 @@
 
 Aiden can act as a [Model Context Protocol](https://modelcontextprotocol.io) server, so another app on the same computer (Claude Code, Codex, or any MCP client) can list Aiden's workspaces and chats, read them, and, with permission, start and follow Aiden turns.
 
-Status (2026-11-11): the server core is in the desktop main process, behind the `mcpServer` host capability (macOS and Linux desktop; see `main/services/host-platform-capabilities.ts`). It is **off by default**. The Settings screen for turning it on and connecting apps is still to come (workstream W4b), and so is a headless `aiden serve` counterpart (W4c). Until those ship, the only way to turn the server on or issue an app is through the main-process functions listed under [Main-process API](#main-process-api).
+Status (2026-11-11): the server core is in the desktop main process, behind the `mcpServer` host capability (macOS and Linux desktop; see `main/services/host-platform-capabilities.ts`). It is **off by default**. The Settings screen for turning it on and connecting apps is still to come (workstream W4b); until it ships, the desktop server is turned on and apps are issued only through the main-process functions listed under [Main-process API](#main-process-api). The headless server hosts the same endpoint, managed with `aiden apps` (see [Headless server](#headless-server-aiden-serve)).
 
 ## How an app connects
 
@@ -99,6 +99,25 @@ Privacy:
 - No analytics events are sent for the MCP server: a chat an app starts sends no `chat_created`, and its turns send no `chat_message_sent`.
 
 The Remote Access threat model has the matching section: [`docs/security/aiden-remote-threat-model.md`](security/aiden-remote-threat-model.md#10-local-mcp-server-for-outside-apps).
+
+## Headless server (`aiden serve`)
+
+`aiden serve` in `packages/cli` hosts the same server, built from the same `AidenMcpHost` and tool runner, with the same tools, access levels, limits, token handling and request checks. The differences:
+
+- **Port:** 49500 and the next seven ports, 100 above the desktop's range, so a desktop and a server on the same computer never take each other's port. Like the desktop, the first port that binds is saved, in the server's `remote.json`, and a busy saved port is reported as `port_in_use`.
+- **Administration:** `aiden apps`, sent to the running server over its private control socket:
+  - `aiden apps connect <name> [--access read|supervised]` turns the server on if it is off, issues the app (Read unless `--access supervised`) and shows its token once.
+    - On a terminal it also prints the `claude mcp add` and `codex mcp add` commands, which read the token from `AIDEN_MCP_TOKEN` rather than storing it in the app's config.
+    - Piped, it prints JSON and warns on stderr that the output holds the token.
+  - `aiden apps list` shows the server's status and the connected apps, revoked ones with `revokedAt`.
+  - `aiden apps revoke <app-id>` disconnects one app through the same revocation path as `aiden remote revoke`. A phone's or Mac's id is refused.
+  - `aiden apps on|off` opens or closes the listener and saves the choice.
+- **Requires Remote:** the server lives in the CLI's Remote runtime, which holds the device records and chat services. `aiden serve --no-remote` has no MCP server.
+- **Containers:** loopback in a container is the container's own, so apps on the host can't reach it. Run `aiden serve` on the host for outside apps.
+- **Files:** the provenance note is `<agentDir>/aiden-mcp-chat-provenance.json`.
+- **Analytics:** `aiden apps` sends nothing, and app chats and turns send no usage events, as on the desktop.
+
+Code: `packages/cli/src/apps.ts` (host wiring and the `apps` command), `packages/cli/src/apps-display.ts` (the connect output) and `packages/cli/src/remote.ts`. Tests: `packages/cli/tests/mcp-apps.test.mjs`.
 
 ## Main-process API
 
