@@ -380,11 +380,13 @@ export class DesignFileWatcher {
 /**
  * The files beside a page, as the watcher sees them: every file in the page's
  * folder (and below it, unless that is the workspace root) except the page,
- * each with its size, inode, and modification and change times (a symbolic
- * link's own, not its target's). Hidden
- * entries are counted but never entered: the watcher ignores them. Null when a folder can't be
- * read or more than `DESIGN_NEIGHBOURHOOD_LIMIT` entries are met, so the walk
- * stops early in a large tree.
+ * each with its size, inode, and modification and change times. A symbolic
+ * link is never walked into, and is noted by its own times and its target's,
+ * since a page loads what it points at. Hidden entries are counted but never
+ * entered: the watcher ignores them. Null, so nothing beside the page counts
+ * as unchanged, when a folder can't be read, more than
+ * `DESIGN_NEIGHBOURHOOD_LIMIT` entries are met (the walk stops early in a
+ * large tree), or a link's target is missing or outside the workspace.
  *
  * The walk is not atomic: a file changed while it runs may be noted either
  * way, which is why a report also compares the files' times with when the
@@ -416,17 +418,25 @@ async function besidePage(root: string, relativePath: string, noting?: () => Pro
     return null;
   }
   await noting?.();
+  const realRoot = await fsp.realpath(root).catch(() => null);
+  if (realRoot === null) return null;
   let latest = 0;
-  const rows = await Promise.all(
-    files.map((file) =>
-      fsp.lstat(file).then(
-        (stats) => {
-          latest = Math.max(latest, stats.mtimeMs, stats.ctimeMs);
-          return `${path.relative(folder, file)}\0${stats.size}\0${stats.ino}\0${stats.mtimeMs}\0${stats.ctimeMs}`;
-        },
-        () => `${path.relative(folder, file)}\0gone`,
-      ),
-    ),
-  );
+  const times = (stats: { size: number; ino: number; mtimeMs: number; ctimeMs: number }) => {
+    latest = Math.max(latest, stats.mtimeMs, stats.ctimeMs);
+    return `${stats.size}\0${stats.ino}\0${stats.mtimeMs}\0${stats.ctimeMs}`;
+  };
+  /** One neighbour's row; null when its link's target can't be shown unchanged. */
+  const note = async (file: string): Promise<string | null> => {
+    const name = path.relative(folder, file);
+    const own = await fsp.lstat(file).catch(() => null);
+    if (own === null) return `${name}\0gone`;
+    if (!own.isSymbolicLink()) return `${name}\0${times(own)}`;
+    const target = await fsp.realpath(file).catch(() => null);
+    if (target === null || !isPathInside(realRoot, target, { allowRoot: true })) return null;
+    const pointed = await fsp.stat(target).catch(() => null);
+    return pointed === null ? null : `${name}\0${times(own)}\0${target}\0${times(pointed)}`;
+  };
+  const rows = await Promise.all(files.map(note));
+  if (rows.some((row) => row === null)) return null;
   return { rows: rows.sort().join("\n"), latest };
 }

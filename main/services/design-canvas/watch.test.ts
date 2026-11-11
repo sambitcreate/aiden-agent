@@ -417,6 +417,41 @@ test("a stylesheet changed just before the edit and reported late still reloads 
   assert.deepEqual(updates.map((update) => update.paths), [["design/hero.html"]]);
 });
 
+test("a stylesheet beside a page that links elsewhere in the workspace reloads the page when what it points at changes", async (t) => {
+  const root = await workspace(t, { "design/hero.html": "<link rel=stylesheet href=hero.css><h1>Ship faster</h1>", "styles/hero.css": "h1{}" });
+  await fsp.symlink("../styles/hero.css", path.join(root, "design/hero.css"));
+  // Older than the times the watcher counts as touched around a write.
+  await sleep(50);
+  const { instance, updates, emit } = fakeWatcher(t);
+  await instance.set("chat-1", root, ["design/hero.html"]);
+  const written = "<link rel=stylesheet href=hero.css><h1>Ship sooner</h1>";
+  const settle = instance.ownWrite("chat-1", "design/hero.html", written);
+  await fsp.writeFile(path.join(root, "design/hero.html"), written);
+  settle(true);
+  await instance.noted("chat-1", "design/hero.html");
+  // The linked stylesheet changes; the link itself does not.
+  await fsp.writeFile(path.join(root, "styles/hero.css"), "h1{color:red}");
+  emit(null);
+  await eventually(() => updates.length > 0);
+  assert.deepEqual(updates.map((update) => update.paths), [["design/hero.html"]]);
+});
+
+test("a link beside a page whose target is missing counts as changed", async (t) => {
+  const root = await workspace(t, { "design/hero.html": "<h1>Ship faster</h1>" });
+  await fsp.symlink("../styles/gone.css", path.join(root, "design/hero.css"));
+  await sleep(50);
+  const { instance, updates, emit } = fakeWatcher(t);
+  await instance.set("chat-1", root, ["design/hero.html"]);
+  const written = "<h1>Ship sooner</h1>";
+  const settle = instance.ownWrite("chat-1", "design/hero.html", written);
+  await fsp.writeFile(path.join(root, "design/hero.html"), written);
+  settle(true);
+  await instance.noted("chat-1", "design/hero.html");
+  emit(null);
+  await eventually(() => updates.length > 0);
+  assert.deepEqual(updates.map((update) => update.paths), [["design/hero.html"]], "nothing shows the link's stylesheet did not change");
+});
+
 /** One file more than the walk beside a page looks at, under `folder`. */
 function manyFiles(folder: string): Record<string, string> {
   return Object.fromEntries(Array.from({ length: DESIGN_NEIGHBOURHOOD_LIMIT + 1 }, (_, index) => [`${folder}/${index}.js`, "x"]));
