@@ -341,7 +341,7 @@ export class PullRequestFollows {
     if (signal.aborted || this.records.get(id) !== record) return;
     if (read.kind === "unchanged") {
       // GitHub said nothing moved: no logs, no evaluation, no notices.
-      this.records.set(id, followUnchanged(record, this.deps.now()));
+      this.records.set(id, followUnchanged(record, this.deps.now(), probe?.skipIfUnchanged === true));
       this.changed(record.chatId);
       return;
     }

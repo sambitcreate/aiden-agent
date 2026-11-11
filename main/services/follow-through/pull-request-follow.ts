@@ -454,8 +454,10 @@ export function followStayedQuiet(previous: PullRequestFollowRecord, evaluated: 
 /**
  * The probe showed nothing changed: no read, no notice, and the quiet backoff
  * grows, but never past the moment the last full read turns half an hour old.
+ * `probeAdmitted` says the look was sent as a probe that may stand in for the
+ * full read, which `followMayProbe` allows only before that moment.
  */
-export function followUnchanged(previous: PullRequestFollowRecord, now: number): PullRequestFollowRecord {
+export function followUnchanged(previous: PullRequestFollowRecord, now: number, probeAdmitted: boolean): PullRequestFollowRecord {
   const quietReads = (previous.quietReads ?? 0) + 1;
   const backedOff = now + followPollDelay(Boolean(previous.checksPending), quietReads);
   const fullReadDue = previous.etagsAt === undefined ? backedOff : previous.etagsAt + FOLLOW_FULL_READ_MS;
@@ -464,8 +466,10 @@ export function followUnchanged(previous: PullRequestFollowRecord, now: number):
     lastCheckedAt: now,
     readFailures: 0,
     quietReads,
-    // A deadline already passed (that look was the full read) never makes the next look immediate.
-    nextCheckAt: fullReadDue > now ? Math.min(backedOff, fullReadDue) : backedOff,
+    // A deadline that went by while an admitted probe was out makes the full read
+    // it stood in for due at once. A look sent after the deadline was the full
+    // read, so it never makes the next look immediate.
+    nextCheckAt: fullReadDue > now ? Math.min(backedOff, fullReadDue) : probeAdmitted ? now : backedOff,
   };
   delete record.problem;
   delete record.holdUntil;

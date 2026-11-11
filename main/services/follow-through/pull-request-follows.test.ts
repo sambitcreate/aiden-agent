@@ -526,6 +526,37 @@ test("a failing check is never probed, and a full read half an hour old is never
   assert.equal(stale.reads[stale.reads.length - 1]!.probe?.skipIfUnchanged, false);
 });
 
+test("a probe that comes back after the full read fell due is followed by the full read at once", async () => {
+  const h = harness();
+  const etags = { [PR_PATH]: 'W/"pr-1"' };
+  h.setAnswer(() => ({ kind: "ok", observation: quiet(), etags }));
+  h.follows.follow(input());
+  await h.follows.kick();
+  h.setAnswer(() => ({ kind: "unchanged" }));
+  for (let index = 0; index < 2; index += 1) {
+    h.advance(nextCheckIn(h));
+    await h.follows.kick();
+  }
+  // The probe leaves at T+20, inside the half hour, and GitHub answers it 11
+  // minutes later; only a probe may come back unchanged, as with the real reader.
+  h.advance(nextCheckIn(h));
+  const fullReadAt = h.now() - 20 * MINUTE;
+  const before = h.reads.length;
+  h.setAnswer(() => {
+    if (!h.reads[h.reads.length - 1]!.probe?.skipIfUnchanged) return { kind: "ok", observation: quiet(), etags };
+    h.advance(11 * MINUTE);
+    return { kind: "unchanged" };
+  });
+  await h.follows.kick();
+  const looks = h.reads.slice(before);
+  assert.deepEqual(looks.map(({ at, probe }) => ({ after: at - fullReadAt, skip: probe?.skipIfUnchanged })), [
+    { after: 20 * MINUTE, skip: true },
+    // Not another 20-minute backoff: the full read the probe stood in for went
+    // due while it was out, so it runs as soon as the probe returns.
+    { after: 31 * MINUTE, skip: false },
+  ]);
+});
+
 test("a forced full read that found what the probe said, nothing new, keeps backing off", async () => {
   const h = harness();
   h.setAnswer(() => ({ kind: "ok", observation: quiet(), etags: { [PR_PATH]: 'W/"pr-1"' } }));
