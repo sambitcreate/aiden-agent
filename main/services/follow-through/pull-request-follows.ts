@@ -2,17 +2,28 @@
 // polling loop that reads each one when it is due, and turning each read's
 // news into chat notices. Reads run one at a time so a slow GitHub never
 // stacks requests.
+//
+// Besides the timed sweep, a nudge asks for a follow to be read soon because
+// something Aiden did or saw may have changed it: a push, a `gh` command, the
+// person opening the follow, or the app coming back to the foreground or the
+// network. Nudges are debounced and coalesced per follow, so a burst of them
+// costs one read, and they never read a follow more often than its minimum
+// interval or before a rate limit lifts.
 
 import {
   MAX_PULL_REQUEST_FOLLOWS_PER_CHAT,
   type PullRequestFollowView,
 } from "../../../renderer/shared/follow-through.js";
 import {
+  FOLLOW_POLL_SETTLED_MS,
   checksNeedingLogs,
   evaluateFollow,
   followKey,
+  followMayProbe,
   followReadFailed,
+  followStayedQuiet,
   followUnavailable,
+  followUnchanged,
   followView,
   newFollowRecord,
   stopFollow,
@@ -26,6 +37,43 @@ export const MAX_PULL_REQUEST_FOLLOWS = 20;
 /** Ended follows each chat keeps showing. */
 const MAX_ENDED_PER_CHAT = 3;
 const TICK_MS = 30_000;
+/** A nudge waits this long for more to arrive and for GitHub to catch up. */
+export const FOLLOW_NUDGE_DEBOUNCE_MS = 5_000;
+/** A stream of nudges still reads within this long of the first. */
+export const FOLLOW_NUDGE_MAX_WAIT_MS = 30_000;
+/** After Aiden's own push or comment, or the person opening the follow: no sooner than this after the last read. */
+export const FOLLOW_NUDGE_ACTION_INTERVAL_MS = 30_000;
+/**
+ * After the app regains focus, wakes or comes back online: no sooner than
+ * this after the last read, the settled sweep's own cadence, so switching
+ * windows never reads a quiet pull request more often than the sweep did.
+ */
+export const FOLLOW_NUDGE_AMBIENT_INTERVAL_MS = FOLLOW_POLL_SETTLED_MS;
+
+/** Why a follow should be read soon. `ambient` nudges come from focus, wake and network, not from a change Aiden made. */
+export type FollowNudgeKind = "action" | "ambient";
+
+interface PendingNudge {
+  first: number;
+  last: number;
+  interval: number;
+}
+
+export interface FollowTimers {
+  set(run: () => void, ms: number): unknown;
+  clear(handle: unknown): void;
+}
+
+const systemTimers: FollowTimers = {
+  set(run, ms) {
+    const handle = setTimeout(run, ms);
+    handle.unref?.();
+    return handle;
+  },
+  clear(handle) {
+    clearTimeout(handle as ReturnType<typeof setTimeout>);
+  },
+};
 
 export interface PullRequestFollowsDeps {
   reader: Pick<PullRequestFollowReader, "read" | "jobLogTail">;
@@ -36,6 +84,8 @@ export interface PullRequestFollowsDeps {
   chatWasAnswering(chatId: string, at: number): boolean;
   now(): number;
   log?(message: string, error?: unknown): void;
+  /** One-shot timers for nudges; the system's by default. */
+  timers?: FollowTimers;
 }
 
 export interface StartFollowInput {
@@ -55,8 +105,14 @@ export class PullRequestFollows {
   private closed = false;
   private readonly pausedChats = new Set<string>();
   private pollInFlight?: { id: string; controller: AbortController };
+  private readonly nudges = new Map<string, PendingNudge>();
+  private nudgeTimer: { handle: unknown; at: number } | undefined;
 
   constructor(private readonly deps: PullRequestFollowsDeps) {}
+
+  private get timers(): FollowTimers {
+    return this.deps.timers ?? systemTimers;
+  }
 
   private static id(chatId: string, key: string): string {
     return `${chatId}\u0000${key}`;
@@ -108,6 +164,8 @@ export class PullRequestFollows {
     if (!record || record.state !== "following") return false;
     if (this.pollInFlight?.id === id) this.pollInFlight.controller.abort();
     this.records.set(id, stopFollow(record, reason, this.deps.now()));
+    this.nudges.delete(id);
+    this.armNudgeTimer();
     this.changed(chatId);
     return true;
   }
@@ -130,10 +188,13 @@ export class PullRequestFollows {
       if (record.chatId === chatId) {
         if (this.pollInFlight?.id === id) this.pollInFlight.controller.abort();
         this.records.delete(id);
+        this.nudges.delete(id);
         removed = true;
       }
     }
-    if (removed) this.changed(chatId);
+    if (!removed) return;
+    this.armNudgeTimer();
+    this.changed(chatId);
   }
 
   start(): void {
@@ -148,6 +209,82 @@ export class PullRequestFollows {
     this.pollInFlight?.controller.abort();
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
+    this.nudges.clear();
+    this.armNudgeTimer();
+  }
+
+  /**
+   * Read this chat's followed pull requests soon: all of them, or the ones
+   * `which` picks. Returns how many were nudged.
+   */
+  nudge(
+    chatId: string,
+    kind: FollowNudgeKind,
+    which: (follow: Pick<PullRequestFollowRecord, "host" | "repository" | "number">) => boolean = () => true,
+  ): number {
+    return this.nudgeWhere((record) => record.chatId === chatId && which(record), kind);
+  }
+
+  /** Read every followed pull request soon, e.g. when the app is back in front or online. */
+  nudgeAll(kind: FollowNudgeKind): number {
+    return this.nudgeWhere(() => true, kind);
+  }
+
+  private nudgeWhere(match: (record: PullRequestFollowRecord) => boolean, kind: FollowNudgeKind): number {
+    if (this.closed) return 0;
+    const now = this.deps.now();
+    const interval = kind === "action" ? FOLLOW_NUDGE_ACTION_INTERVAL_MS : FOLLOW_NUDGE_AMBIENT_INTERVAL_MS;
+    let count = 0;
+    for (const [id, record] of this.records) {
+      if (record.state !== "following" || !match(record)) continue;
+      const pending = this.nudges.get(id);
+      this.nudges.set(id, pending
+        ? { first: pending.first, last: now, interval: Math.min(pending.interval, interval) }
+        : { first: now, last: now, interval });
+      count += 1;
+    }
+    if (count) this.armNudgeTimer();
+    return count;
+  }
+
+  /** When a nudge reads this follow: after its debounce, its minimum interval and any rate-limit hold. */
+  private nudgeDueAt(record: PullRequestFollowRecord, nudge: PendingNudge): number {
+    return Math.max(
+      Math.min(nudge.last + FOLLOW_NUDGE_DEBOUNCE_MS, nudge.first + FOLLOW_NUDGE_MAX_WAIT_MS),
+      (record.lastCheckedAt ?? Number.NEGATIVE_INFINITY) + nudge.interval,
+      record.holdUntil ?? Number.NEGATIVE_INFINITY,
+    );
+  }
+
+  /** When this follow is next due: its timed read, or a nudge, whichever is first. */
+  private dueAt(id: string, record: PullRequestFollowRecord): number {
+    const nudge = this.nudges.get(id);
+    return nudge ? Math.min(record.nextCheckAt, this.nudgeDueAt(record, nudge)) : record.nextCheckAt;
+  }
+
+  /** One timer for the soonest nudge; nudges for ended or forgotten follows are dropped. */
+  private armNudgeTimer(): void {
+    let soonest = Number.POSITIVE_INFINITY;
+    if (!this.closed) {
+      for (const [id, nudge] of this.nudges) {
+        const record = this.records.get(id);
+        if (record?.state !== "following") {
+          this.nudges.delete(id);
+          continue;
+        }
+        if (this.pausedChats.has(record.chatId)) continue;
+        soonest = Math.min(soonest, this.nudgeDueAt(record, nudge));
+      }
+    }
+    if (this.nudgeTimer && this.nudgeTimer.at === soonest) return;
+    if (this.nudgeTimer) this.timers.clear(this.nudgeTimer.handle);
+    this.nudgeTimer = undefined;
+    if (!Number.isFinite(soonest)) return;
+    const handle = this.timers.set(() => {
+      if (this.nudgeTimer?.handle === handle) this.nudgeTimer = undefined;
+      void this.kick();
+    }, Math.max(0, soonest - this.deps.now()));
+    this.nudgeTimer = { handle, at: soonest };
   }
 
   /** Read every follow that is due, one at a time. */
@@ -155,6 +292,7 @@ export class PullRequestFollows {
     if (this.closed) return Promise.resolve();
     this.ticking ??= this.tick().finally(() => {
       this.ticking = undefined;
+      this.armNudgeTimer();
     });
     return this.ticking;
   }
@@ -163,15 +301,19 @@ export class PullRequestFollows {
     for (;;) {
       const now = this.deps.now();
       const due = [...this.records.entries()]
-        .filter(([, record]) => record.state === "following" && !this.pausedChats.has(record.chatId) && record.nextCheckAt <= now)
-        .sort(([, left], [, right]) => left.nextCheckAt - right.nextCheckAt)[0];
+        .filter(([id, record]) => record.state === "following" && !this.pausedChats.has(record.chatId) && this.dueAt(id, record) <= now)
+        .sort(([leftId, left], [rightId, right]) => this.dueAt(leftId, left) - this.dueAt(rightId, right))[0];
       if (!due || this.closed) return;
       const [id, record] = due;
       const controller = new AbortController();
       this.pollInFlight = { id, controller };
+      // A nudge that arrives while this read runs is not served by it.
+      const served = this.nudges.get(id);
       try {
         await this.poll(id, record, controller.signal);
+        if (this.nudges.get(id) === served) this.nudges.delete(id);
       } catch (error) {
+        if (this.nudges.get(id) === served) this.nudges.delete(id);
         if (controller.signal.aborted) continue;
         this.deps.log?.("A followed pull request could not be read.", error);
         const current = this.records.get(id);
@@ -186,9 +328,20 @@ export class PullRequestFollows {
   }
 
   private async poll(id: string, record: PullRequestFollowRecord, signal: AbortSignal): Promise<void> {
-    const read: FollowReadResult = await this.deps.reader.read(record, signal);
+    // While a check fails, every read must be a full one (the failure clock
+    // decides, not a change), so skip the probe and its requests entirely.
+    const probe = record.failingSince === undefined
+      ? { ...(record.etags ? { etags: record.etags } : {}), skipIfUnchanged: followMayProbe(record, this.deps.now()) }
+      : undefined;
+    const read: FollowReadResult = await this.deps.reader.read(record, signal, probe);
     // Stopped or deleted while the read was in flight.
     if (signal.aborted || this.records.get(id) !== record) return;
+    if (read.kind === "unchanged") {
+      // GitHub said nothing moved: no logs, no evaluation, no notices.
+      this.records.set(id, followUnchanged(record, this.deps.now()));
+      this.changed(record.chatId);
+      return;
+    }
     if (read.kind === "gone") {
       this.records.set(id, followUnavailable(record, read.message, this.deps.now()));
       this.changed(record.chatId);
@@ -214,9 +367,19 @@ export class PullRequestFollows {
       if (tail) logs.set(check.name, tail);
     }
     if (signal.aborted || this.records.get(id) !== record) return;
-    const evaluation = evaluateFollow(record, observation, logs, this.deps.now());
-    this.records.set(id, evaluation.record);
-    if (evaluation.record.state === "ended") this.pruneEnded(record.chatId);
+    const now = this.deps.now();
+    const evaluation = evaluateFollow(record, observation, logs, now);
+    // The probe said nothing moved and the full read agreed: still quiet.
+    let next = (read.probedUnchanged ? followStayedQuiet(record, evaluation, now) : evaluation).record;
+    if (next.state === "following" && read.etags && Object.keys(read.etags).length) {
+      next = { ...next, etags: read.etags, etagsAt: now };
+    } else if (next.etags || next.etagsAt !== undefined) {
+      next = { ...next };
+      delete next.etags;
+      delete next.etagsAt;
+    }
+    this.records.set(id, next);
+    if (next.state === "ended") this.pruneEnded(record.chatId);
     this.changed(record.chatId);
     for (const notice of evaluation.notices) this.deps.post(record.chatId, notice);
   }

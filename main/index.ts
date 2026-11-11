@@ -209,7 +209,13 @@ import { isAuxiliaryWindow } from "./windows/auxiliary-windows.js";
 import { destroyPill } from "./windows/pill-window.js";
 import { hostPlatformCapabilities } from "./services/host-platform-capabilities.js";
 import { installElectronConnectorWatchTransport } from "./services/bot-routine-events/connector-watch-startup.js";
-import { backgroundJobs, reapFollowThroughProcesses, shutdownFollowThrough, startFollowThrough } from "./services/follow-through/follow-through-main.js";
+import {
+  backgroundJobs,
+  pullRequestFollows,
+  reapFollowThroughProcesses,
+  shutdownFollowThrough,
+  startFollowThrough,
+} from "./services/follow-through/follow-through-main.js";
 import { reconcileChatScopedStores } from "./services/startup-chat-reconciliation.js";
 import { removeWorkspaceArtifacts } from "./services/workspace-artifacts/main.js";
 
@@ -2772,6 +2778,13 @@ if (!ownsSingleInstanceLock) {
       await startFollowThrough().catch((error: unknown) => {
         logger.warn("follow-through", "Could not finish restoring checks and pull request follows.", error);
       });
+      // Back in front, awake or unlocked: followed pull requests may have
+      // moved while nobody looked. These nudges are debounced and read a
+      // follow at most every five minutes, so repeated focus costs nothing extra.
+      const nudgeFollows = () => void pullRequestFollows.nudgeAll("ambient");
+      app.on("browser-window-focus", nudgeFollows);
+      powerMonitor.on("resume", nudgeFollows);
+      powerMonitor.on("unlock-screen", nudgeFollows);
       try {
         if (!shutdownHasBegun()) await initializeAidenRemoteService();
       } catch (error) {

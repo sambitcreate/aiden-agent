@@ -3,12 +3,14 @@ import test from "node:test";
 import { MAX_PULL_REQUEST_FOLLOW_NOTICES } from "../../../renderer/shared/follow-through.js";
 import {
   checksNeedingLogs,
+  commandMayChangePullRequest,
   evaluateFollow,
   FOLLOW_EARLY_FAILURE_MS,
   FOLLOW_FAILING_LIMIT_MS,
   FOLLOW_POLL_PENDING_MS,
   FOLLOW_POLL_SETTLED_MS,
   FOLLOW_QUIET_LIMIT_MS,
+  followMayProbe,
   followReadFailed,
   newFollowRecord,
   stopFollow,
@@ -271,4 +273,29 @@ test("failed reads back off and remember why; a stop is final", () => {
   const stopped = stopFollow(record(), "person", START + MINUTE);
   assert.equal(stopped.state, "ended");
   assert.equal(stopFollow(stopped, "agent", START + 2 * MINUTE).endedReason, "person");
+});
+
+test("only commands that can change a pull request nudge its follow", () => {
+  for (const command of [
+    "git push origin topic/export",
+    "git -C app push --force-with-lease",
+    "npm test && git push",
+    'gh pr comment 42 --body "Fixed the empty case"',
+    "gh pr review 42 --approve",
+    "gh api repos/acme/app/issues/42/comments -f body=done",
+    "gh issue comment 42 -b thanks",
+  ]) {
+    assert.equal(commandMayChangePullRequest(command), true, command);
+  }
+  for (const command of ["git status", "git log --oneline", "npm test", "echo push", "ghost pr", "git fetch && echo push"]) {
+    assert.equal(commandMayChangePullRequest(command), false, command);
+  }
+});
+
+test("a probe may stand in for a full read only with fresh tags and no failing check", () => {
+  const tagged = record({ etags: { "/repos/acme/app/pulls/42": 'W/"1"' }, etagsAt: START });
+  assert.equal(followMayProbe(tagged, START + 10 * MINUTE), true);
+  assert.equal(followMayProbe(record(), START), false, "nothing to compare against yet");
+  assert.equal(followMayProbe(tagged, START + 30 * MINUTE), false, "the last full read is half an hour old");
+  assert.equal(followMayProbe({ ...tagged, failingSince: START }, START + MINUTE), false, "a failing check is on a clock");
 });

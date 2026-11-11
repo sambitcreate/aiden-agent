@@ -94,7 +94,7 @@ interface GitDependencies {
   createBranch(folderPath: string, name: string, signal?: AbortSignal): Promise<void>;
   commit(folderPath: string, input: GitCommitInput, signal?: AbortSignal): Promise<{ commit: string; branch: string; subject: string; warning?: string }>;
   pushCapability(folderPath: string, signal?: AbortSignal): Promise<GitPushCapability>;
-  push(folderPath: string, input: GitPushInput, signal?: AbortSignal): Promise<{ branch: string; commit: string; remote: string; warning?: string }>;
+  push(folderPath: string, input: GitPushInput, signal?: AbortSignal): Promise<{ branch: string; commit: string; remote: string; warning?: string; pullRequestRepository?: string }>;
   compare(folderPath: string, targetRef: string, signal?: AbortSignal): Promise<GitComparison>;
   comparisonDiff(folderPath: string, input: GitComparisonDiffInput, signal?: AbortSignal): Promise<{ path: string; patch: string; truncated: boolean }>;
   worktrees(folderPath: string, signal?: AbortSignal): Promise<GitWorktree[]>;
@@ -220,6 +220,8 @@ export class AidenRemoteGitService {
       idempotency?: AidenIdempotencyLedger;
       persistIdempotency?: (snapshot: AidenIdempotencySnapshot) => Promise<void>;
       now?: () => number;
+      /** A push from a paired device landed; `pullRequestRepository` is its credential-free `host/owner/name`. */
+      onPushed?: (result: { pullRequestRepository?: string }) => void;
     },
   ) {
     this.idempotency = options.idempotency ?? new AidenIdempotencyLedger();
@@ -574,6 +576,11 @@ export class AidenRemoteGitService {
             setUpstream: !capability.upstream,
           };
           const result = await this.run(deviceId, workspaceId, (folderPath, signal) => this.options.git.push(folderPath, input, signal));
+          try {
+            this.options.onPushed?.(result);
+          } catch {
+            // Telling a follow about the push never fails the push.
+          }
           return {
             operationId: operationId(),
             status: "succeeded" as const,
