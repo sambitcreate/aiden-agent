@@ -3008,11 +3008,7 @@ final class AidenChatTests: XCTestCase {
         await model.load(observeProgress: false)
 
         func waitUntil(_ label: String, _ condition: () -> Bool) async throws {
-            for _ in 0..<500 {
-                if condition() { return }
-                try await Task.sleep(for: .milliseconds(10))
-            }
-            XCTFail("Timed out waiting for \(label)")
+            try await waitForCondition(label, condition)
         }
         // The attach replay settles and is shown live before the run ends.
         try await waitUntil("live foreign output") { model.liveText == "Visible answer" }
@@ -6202,16 +6198,14 @@ final class AidenChatTests: XCTestCase {
                 session: AidenComposerSession(draftOwner: model, attachmentOwner: model),
                 swap: swap
             ))
-            // These waits are long because this test once timed out here under parallel
-            // testing, partway through its process. The cause is unknown.
-            try await self.waitUntil({ !UIApplication.shared.connectedScenes.isEmpty }, attempts: 3_000)
+            try await self.waitUntil({ !UIApplication.shared.connectedScenes.isEmpty })
             let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
             let window = UIWindow(windowScene: scene)
             window.frame = CGRect(x: 0, y: 0, width: 390, height: 800)
             window.rootViewController = host
             window.makeKeyAndVisible()
             defer { window.isHidden = true; window.rootViewController = nil }
-            try await self.waitUntil({ swap.appearances == 1 }, attempts: 3_000)
+            try await self.waitUntil({ swap.appearances == 1 })
 
             let task = try XCTUnwrap(model.prepareAttachments(.success(["synthetic selection"])) { _ in
                 await preparation.wait { started.fulfill() }
@@ -6220,7 +6214,7 @@ final class AidenChatTests: XCTestCase {
             await self.fulfillment(of: [started], timeout: 30)
 
             swap.showsComposer = false
-            try await self.waitUntil({ swap.disappearances == 1 }, attempts: 3_000)
+            try await self.waitUntil({ swap.disappearances == 1 })
             try await Task.sleep(for: .milliseconds(200))
 
             XCTAssertTrue(model.isPreparingAttachments, "The composer leaving must not cancel preparation")
@@ -6319,18 +6313,21 @@ final class AidenChatTests: XCTestCase {
         model.setAllowsMutations(false)
     }
 
+    /// Like `waitForCondition`: the ceiling is wall-clock time, not a count of
+    /// main-actor turns, and only bounds a real failure.
     @MainActor
     private func waitUntil(
         _ condition: @MainActor () -> Bool,
-        attempts: Int = 500,
         file: StaticString = #filePath,
         line: UInt = #line
     ) async throws {
-        for _ in 0..<attempts {
-            if condition() { return }
+        let deadline = ContinuousClock.now + .seconds(30)
+        while !condition() {
+            guard ContinuousClock.now < deadline else {
+                return XCTFail("Timed out waiting for condition.", file: file, line: line)
+            }
             try await Task.sleep(for: .milliseconds(10))
         }
-        XCTFail("Timed out waiting for condition.", file: file, line: line)
     }
 
     /// Resumes when the stub counts the request, however long a loaded
