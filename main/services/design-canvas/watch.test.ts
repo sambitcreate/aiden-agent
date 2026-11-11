@@ -266,7 +266,7 @@ test("an event naming no file leaves a page that holds the canvas's own write, a
   );
 });
 
-test("an event naming no file reports a page the canvas wrote once it holds other words or can't be read", async (t) => {
+test("an event naming no file reports a page the canvas wrote once it holds other words, can't be read, or a file beside it changed", async (t) => {
   const root = await workspace(t, {
     "design/hero.html": "<h1>Ship faster</h1>",
     "design/about.html": "<h1>About</h1>",
@@ -288,9 +288,31 @@ test("an event naming no file reports a page the canvas wrote once it holds othe
   await sleep(50);
   assert.deepEqual(
     updates.map((update) => update.paths),
-    [["design/hero.html", "design/about.html"]],
-    "only the page still holding the canvas's own words is left alone",
+    [["design/hero.html", "design/about.html", "design/pricing.html"]],
+    "pricing still holds the canvas's words, but the pages beside it changed since",
   );
+});
+
+test("an external change beside a page, reported once by an event naming no file inside the window, reloads the page", async (t) => {
+  const root = await workspace(t, {
+    "design/hero.html": "<link rel=stylesheet href=hero.css><h1>Ship faster</h1>",
+    "design/hero.css": "h1{}",
+  });
+  let clock = 0;
+  const { instance, updates, emit } = fakeWatcher(t, { now: () => clock });
+  await instance.set("chat-1", root, ["design/hero.html"]);
+  const written = "<link rel=stylesheet href=hero.css><h1>Ship sooner</h1>";
+  const settle = instance.ownWrite("chat-1", "design/hero.html", written);
+  await fsp.writeFile(path.join(root, "design/hero.html"), written);
+  settle(true);
+  await instance.noted("chat-1", "design/hero.html");
+
+  // Someone else changes the stylesheet, and the file system's only report of it names no file.
+  await fsp.writeFile(path.join(root, "design/hero.css"), "h1{color:red}");
+  clock = 1;
+  emit(null);
+  await eventually(() => updates.length > 0);
+  assert.deepEqual(updates.map((update) => update.paths), [["design/hero.html"]], "the page holds the canvas's words, but its stylesheet changed");
 });
 
 test("an event naming no file is put down to the canvas's write only for a few seconds after it", async (t) => {

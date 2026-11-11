@@ -9,8 +9,10 @@
 // late, so a report for it could otherwise reload the page under the person's
 // next edit. A change of the page to anything else is reported as usual.
 // An event that names no file could also be a stylesheet or an image beside
-// the page, so it is put down to the canvas's write only for a few seconds
-// after that write; later ones report the page again.
+// the page. It is put down to the canvas's write only for a few seconds after
+// that write, and only while the files beside the page are as they were when
+// the write began (the canvas writes nothing else); otherwise it reports the
+// page.
 // The canvas's writes are remembered only for the pages it still watches, so
 // a page that stops being watched and comes back reports any change again.
 
@@ -32,6 +34,8 @@ export const DESIGN_WATCH_DEBOUNCE_MS = 150;
  * the write arrives well within it; a later unnamed event may be an asset.
  */
 export const DESIGN_OWN_WRITE_WINDOW_MS = 3000;
+/** The most files beside a page whose sizes and times are compared; past it nothing beside the page counts as unchanged. */
+export const DESIGN_NEIGHBOURHOOD_LIMIT = 500;
 
 export const DESIGN_FILES_CHANGED_CHANNEL = "designCanvas:filesChanged";
 
@@ -66,9 +70,10 @@ type Queued = { beside: boolean; unnamedAt: number | null };
 
 /**
  * A write of the canvas to one of its pages; `settled` once the file holds it
- * or the write gave up, at `settledAt`.
+ * or the write gave up, at `settledAt`. `beside` is what the files beside the
+ * page were as the write began, or null when they couldn't all be read.
  */
-type OwnWrite = { digest: string; settled: Promise<void>; settledAt: number | null };
+type OwnWrite = { digest: string; settled: Promise<void>; settledAt: number | null; beside: Promise<string | null> };
 
 export class DesignFileWatcher {
   private readonly chats = new Map<string, ChatWatch>();
@@ -154,10 +159,12 @@ export class DesignFileWatcher {
     this.ownWrites.set(chatId, writes);
     const before = writes.get(relativePath);
     let settle = () => {};
+    const root = this.chats.get(chatId)?.root;
     const write: OwnWrite = {
       digest: digest(content),
       settled: new Promise<void>((resolve) => (settle = resolve)),
       settledAt: null,
+      beside: root === undefined ? Promise.resolve(null) : besidePage(root, relativePath),
     };
     writes.set(relativePath, write);
     return (written) => {
@@ -168,6 +175,11 @@ export class DesignFileWatcher {
       write.settledAt = this.now();
       settle();
     };
+  }
+
+  /** Resolves once the files beside the page of the canvas's latest write to it have been noted. */
+  async noted(chatId: string, relativePath: string): Promise<void> {
+    await this.ownWrites.get(chatId)?.get(relativePath)?.beside;
   }
 
   /**
@@ -266,9 +278,14 @@ export class DesignFileWatcher {
       pending.map(async ([relative, queued]) => {
         const write = queued.beside ? undefined : await this.settledOwnWrite(chatId, relative);
         if (write === undefined) return relative;
-        if (queued.unnamedAt !== null && queued.unnamedAt > (write.settledAt ?? 0) + this.ownWriteWindowMs) return relative;
+        const { unnamedAt } = queued;
+        if (unnamedAt !== null && unnamedAt > (write.settledAt ?? 0) + this.ownWriteWindowMs) return relative;
         const now = await fsp.readFile(path.join(entry.root, relative)).then(digest, () => null);
-        return now === write.digest ? null : relative;
+        if (now !== write.digest) return relative;
+        if (unnamedAt === null) return null;
+        // An event naming no file may be a stylesheet or an image beside the page.
+        const [then, beside] = await Promise.all([write.beside, besidePage(entry.root, relative)]);
+        return then !== null && beside === then ? null : relative;
       }),
     ).then((paths) => {
       if (this.chats.get(chatId) !== entry) return;
@@ -291,4 +308,37 @@ export class DesignFileWatcher {
     if (entry.timer) clearTimeout(entry.timer);
     for (const handle of entry.folders) handle.close();
   }
+}
+
+/**
+ * The files beside a page, as the watcher sees them: every file in the page's
+ * folder (and below it, unless that is the workspace root) except the page and
+ * hidden ones, each with its size, inode and modification time. Null when the
+ * folder can't be read or holds more than `DESIGN_NEIGHBOURHOOD_LIMIT` files.
+ */
+async function besidePage(root: string, relativePath: string): Promise<string | null> {
+  const folder = path.join(root, path.posix.dirname(relativePath));
+  const page = path.join(root, relativePath);
+  const files: string[] = [];
+  try {
+    const listing = await fsp.opendir(folder, { recursive: path.posix.dirname(relativePath) !== "." });
+    for await (const item of listing) {
+      if (!item.isFile()) continue;
+      const file = path.join(item.parentPath, item.name);
+      if (file === page || path.relative(folder, file).split(path.sep).some((segment) => segment.startsWith("."))) continue;
+      if (files.length === DESIGN_NEIGHBOURHOOD_LIMIT) return null;
+      files.push(file);
+    }
+  } catch {
+    return null;
+  }
+  const rows = await Promise.all(
+    files.map((file) =>
+      fsp.stat(file).then(
+        (stats) => `${path.relative(folder, file)}\0${stats.size}\0${stats.ino}\0${stats.mtimeMs}`,
+        () => `${path.relative(folder, file)}\0gone`,
+      ),
+    ),
+  );
+  return rows.sort().join("\n");
 }
