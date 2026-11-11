@@ -51,6 +51,7 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenChatDraftStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
 import sbtbiswas.AidenOnTheGo.protocol.AidenWorkspaceUnavailableReason
 import java.time.Instant
@@ -174,9 +175,19 @@ class AidenContinueInNewChatTest {
         val chatJson = response.getValue("chat").jsonObject
         val elsewhere = JsonObject(response + ("chat" to JsonObject(chatJson + ("workspaceId" to JsonPrimitive("workspace_fixture_03")))))
         val sameChat = JsonObject(response + ("chat" to JsonObject(chatJson + ("id" to JsonPrimitive(sourceChat.id)))))
-        for ((why, body) in listOf("another workspace" to elsewhere, "the source chat" to sameChat)) {
+        val noLineage = JsonObject(response + ("chat" to JsonObject(chatJson - "forkedFrom")))
+        val lineage = chatJson.getValue("forkedFrom").jsonObject
+        val foreignLineage = JsonObject(response + ("chat" to JsonObject(
+            chatJson + ("forkedFrom" to JsonObject(lineage + ("chatId" to JsonPrimitive("chat_someone_else"))))
+        )))
+        for ((why, body, refusal) in listOf(
+            Triple("another workspace", elsewhere, AidenRemoteClientException::class.java),
+            Triple("the source chat", sameChat, AidenRemoteClientException::class.java),
+            Triple("no source recorded", noLineage, AidenRemoteContractException::class.java),
+            Triple("another source recorded", foreignLineage, AidenRemoteClientException::class.java)
+        )) {
             server.enqueue(reply(201, body))
-            assertThrows(why, AidenRemoteClientException::class.java) {
+            assertThrows(why, refusal) {
                 runBlocking { client.continueChatInNewChat(sourceChat.id, sourceChat.revision, "workspace_fixture_02") }
             }
             server.takeRequest(5, TimeUnit.SECONDS)

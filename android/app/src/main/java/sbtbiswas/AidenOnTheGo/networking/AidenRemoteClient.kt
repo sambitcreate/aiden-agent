@@ -1117,7 +1117,10 @@ class AidenRemoteClient(
         botScope = AidenBotPrivateResponseScope.ChatProjection
     ) { bytes ->
         val result = json.decodeFromString<AidenChatForkResult>(String(bytes, Charsets.UTF_8))
-        if (result.chat.id == id || result.chat.workspaceId != workspaceId || result.prefill != null) {
+        // A new chat in the chosen workspace that records this chat as its source.
+        if (result.chat.id == id || result.chat.workspaceId != workspaceId ||
+            result.chat.forkedFrom?.chatId != id || result.prefill != null
+        ) {
             throw AidenRemoteClientException.InvalidResponse()
         }
         result
