@@ -71,7 +71,10 @@ struct AidenBotsTabView: View {
             .onChange(of: coordinator.defaultInstanceId) { _, _ in
                 chatStarter.forgetAttempt()
             }
-            .task(id: machines?.roster.tabMachines.map(\.instanceId)) {
+            // Keyed on connection state too: a hidden machine that comes back
+            // online while Bots stays open is read then, not when the tab is
+            // made again.
+            .task(id: machines.map { _ in store.botsTabReadKey }) {
                 guard machines != nil else { return }
                 await store.readHiddenMachinesBots()
             }

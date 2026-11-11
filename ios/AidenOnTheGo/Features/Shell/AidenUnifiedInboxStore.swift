@@ -169,20 +169,33 @@ final class AidenUnifiedInboxStore {
 
     /// The Inbox doesn't poll a machine hidden from it, but the Bots tab still
     /// lists that machine's Bots. Reads them once for each connected one. The
-    /// Bots tab calls this when it shows and when the machines it lists change;
+    /// Bots tab calls this when it shows and whenever `botsTabReadKey` changes;
     /// the Bots home has no pull to refresh, so nothing else does.
     func readHiddenMachinesBots() async {
         var reads: [Task<Void, Never>] = []
-        for connection in hosts.ordered
-        where !connection.isBlockedFromInbox
-            && connection.connectionState == .connected
-            && preferences.preferences(for: connection.instanceId).isHidden {
+        for connection in hiddenMachinesToRead() {
             guard let machine = machines[connection.instanceId] else { continue }
             reads.append(Task { [weak self] in _ = await self?.learnBots(of: machine, over: connection) })
         }
         guard !reads.isEmpty else { return }
         for read in reads { await read.value }
         settle()
+    }
+
+    /// What the Bots tab keys its read of hidden machines on: the machines it
+    /// lists, and which hidden ones can be read now. A hidden machine has no
+    /// poller, so its coming back online has to change this, or its Bots stay
+    /// as they were until the tab is made again.
+    var botsTabReadKey: [String] {
+        roster.tabMachines.map(\.instanceId) + hiddenMachinesToRead().map { "readable:\($0.instanceId)" }
+    }
+
+    private func hiddenMachinesToRead() -> [AidenHostConnection] {
+        hosts.ordered.filter { connection in
+            !connection.isBlockedFromInbox
+                && connection.connectionState == .connected
+                && preferences.preferences(for: connection.instanceId).isHidden
+        }
     }
 
     /// The Bots tab under `filter`: each listed machine's Bots, newest first, in

@@ -2077,5 +2077,40 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
         XCTAssertTrue(rowIDs(store.inbox, on: "laptop").isEmpty)
         store.stop()
     }
+
+    /// A hidden machine has no poller, so the Bots tab's read is all that lists
+    /// its Bots. It comes back online while Bots stays open: the tab's key
+    /// changes, and the read it starts lists that machine's Bots.
+    func testAHiddenMachineThatComesBackOnlineHasItsBotsRead() async throws {
+        let coordinator = coordinator("studio", "laptop")
+        serveBotWithCards("bot_cards", on: "studio")
+        responder.fail(instanceId: "laptop", path: "*", code: .notConnectedToInternet)
+        await connectAll(coordinator)
+        let laptop = try connection("laptop", in: coordinator)
+        await waitUntil("the hidden machine to be offline") { self.isOffline(laptop) }
+        preferences.update("laptop") { $0.isHidden = true }
+        let store = makeStore(coordinator)
+        await startAndSettle(store, machines: 1)
+        XCTAssertEqual(store.roster.tabMachines.map(\.instanceId), ["studio", "laptop"])
+
+        // The tab shows: its first read skips the offline machine.
+        let offlineKey = store.botsTabReadKey
+        await store.readHiddenMachinesBots()
+        XCTAssertEqual(botReads("laptop"), 0)
+        XCTAssertEqual(store.snapshots["laptop"]?.bots ?? [], [])
+
+        _ = AidenDemoHosts.coordinator(installations: [AidenDemoHosts.installation(instanceId: "laptop", name: "laptop")], responder: responder)
+        serveBotWithCards("bot_cards", on: "laptop")
+        await laptop.connect(over: .probe)
+        XCTAssertEqual(laptop.connectionState, .connected)
+
+        // The tab's `.task(id:)` runs again only when its key changes.
+        XCTAssertNotEqual(store.botsTabReadKey, offlineKey, "Coming back online starts the Bots tab's read")
+        XCTAssertEqual(store.roster.tabMachines.map(\.instanceId), ["studio", "laptop"], "The listed machines didn't change")
+        await store.readHiddenMachinesBots()
+        XCTAssertEqual(botReads("laptop"), 1)
+        XCTAssertEqual(store.botSections().first { $0.instanceId == "laptop" }?.rows.map(\.bot.id), ["bot_cards"])
+        store.stop()
+    }
 }
 #endif
