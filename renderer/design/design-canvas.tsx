@@ -44,6 +44,7 @@ import { canvasFocusFrom, forgetCanvasFocus, takeCanvasFocus, type CanvasFocusRe
 import { DesignCanvasEmpty } from "./design-canvas-empty";
 import { frameIframe, useDesignComments } from "./design-comments";
 import { usePageTextEdits } from "./page-text-edits";
+import { designFrameSnapshots } from "./frame-snapshots";
 import { useDesignDrawing, type DesignDrawTool } from "./design-drawing";
 import { DesignPresentBar, DesignPresentButton, presentationKey, type DesignPresentation } from "./design-present";
 import {
@@ -341,7 +342,16 @@ function LoadedDesignCanvas({
   const nodes = React.useMemo(() => nodesFromCanvas(doc, selection), [doc, selection]);
   const comments = useDesignComments({ chatId, doc, change, flow, wrapper, live, versionOf });
   const pageWindow = React.useCallback((frameId: string) => frameIframe(wrapper.current, frameId)?.contentWindow ?? null, []);
-  const reloadPath = React.useCallback((path: string, keep?: string) => reloadPaths([path], keep), [reloadPaths]);
+  const reloadPath = React.useCallback(
+    (path: string, keep?: string) => {
+      // A kept frame's page now shows words its earlier picture lacks, at the
+      // same version. Once it leaves the live set it must not show that
+      // picture: it is captured again as it leaves, or shows its skeleton.
+      if (keep !== undefined) designFrameSnapshots.forget(keep);
+      reloadPaths([path], keep);
+    },
+    [reloadPaths],
+  );
   const textEdits = usePageTextEdits({ chatId, doc, pageWindow, queueComment: comments.queueOnElement, flush, reload: reloadPath });
   forgetTextEdits.current = textEdits.forget;
   const toggleComments = () => {

@@ -36,6 +36,12 @@ export class FrameSnapshotCache {
     for (const listener of this.listeners) listener();
   }
 
+  /** Drops the frame's picture: what it showed is no longer what its page shows. */
+  forget(frameId: string): void {
+    if (!this.entries.delete(frameId)) return;
+    for (const listener of this.listeners) listener();
+  }
+
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);

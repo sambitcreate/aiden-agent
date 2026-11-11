@@ -11,6 +11,7 @@ import { isMacPlatform } from "../lib/ghostty-terminal/host-platform";
 import { useComposerTypeFocus } from "../lib/use-composer-type-focus";
 import { emptyDesignCanvas, type DesignCanvas, type DesignFrame } from "../shared/design-canvas/schema";
 import { DesignCanvasRegion } from "./design-canvas-region";
+import { designFrameSnapshots } from "./frame-snapshots";
 import { designCommentTray } from "./comment-tray-store";
 
 // The canvas imports React Flow's CSS, which Node cannot load; tests get an empty module.
@@ -314,6 +315,75 @@ test("a text edit written to a file shown twice reloads only the other frame", a
     assert.equal(frame("f1")?.getAttribute("src"), `aiden-design://${GRANT}/design/hero.html?v=2`);
     assert.equal(frame("f2")?.getAttribute("src"), `aiden-design://${GRANT}/design/hero.html?v=2`);
   });
+});
+
+test("a page edited in place does not show its picture from before the edit once it stops being live", async () => {
+  measureCanvasAt1000x800();
+  // A small page and six larger ones: only six frames run a real page, so the
+  // small one shows its snapshot unless it is entered.
+  const edited: DesignFrame = { id: "kept-1", kind: "file", title: "Hero", x: 0, y: 600, w: 100, h: 100, path: "design/hero.html", designWidth: 1280, pageId: "page-1", createdBy: "aiden" };
+  const others = Array.from({ length: 6 }, (_, index): DesignFrame => ({
+    ...edited,
+    id: `other-${index}`,
+    title: `Other ${index}`,
+    path: `design/other-${index}.html`,
+    x: (index % 3) * 320,
+    y: Math.floor(index / 3) * 260,
+    w: 300,
+    h: 240,
+  }));
+  const before = "data:image/png;base64,QkVGT1JF";
+  // Taken when the page last left the live set, before the edit.
+  designFrameSnapshots.set("kept-1", 0, before);
+  const { calls } = setup(canvasWith(edited, ...others), { "designCanvas:editText": () => ({ ok: true }) });
+  const region = await mount();
+  const picture = () => screen.getByRole("group", { name: "Hero" }).querySelector("img")?.getAttribute("src") ?? null;
+  await waitFor(() => assert.equal(picture(), before));
+
+  fireEvent.doubleClick(screen.getByRole("group", { name: "Hero" }));
+  const frame = await waitFor(() => {
+    const element = document.querySelector<HTMLIFrameElement>('iframe[data-frame-id="kept-1"]');
+    assert.ok(element);
+    return element;
+  });
+  const guest = { postMessage: () => undefined } as unknown as Window;
+  Object.defineProperty(frame, "contentWindow", { configurable: true, get: () => guest });
+  act(() => {
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        source: guest,
+        data: {
+          type: "aiden-design:edit-end",
+          cancelled: false,
+          plain: true,
+          changes: [{ before: "Ship faster", after: "Ship sooner" }],
+          beforeHtml: "<h1>Ship faster</h1>",
+          afterHtml: "<h1>Ship sooner</h1>",
+          element: null,
+        },
+      }),
+    );
+  });
+  await waitFor(() => assert.equal(calls.some((call) => call.channel === "designCanvas:editText"), true), SAVE_WAIT);
+  // The rest of the write is promise callbacks, all run before the next task.
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  // Leaving the page and clearing the selection drops it from the live set.
+  region.focus();
+  fireEvent.keyDown(region, { key: "Escape", code: "Escape" });
+  fireEvent.keyDown(region, { key: "Escape", code: "Escape" });
+  // Polled between acts: under happy-dom, waitFor never returned while the
+  // leaving frame's capture settled.
+  const deadline = Date.now() + 3000;
+  while (document.querySelector('iframe[data-frame-id="kept-1"]') !== null && Date.now() < deadline) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+  }
+  assert.equal(document.querySelector('iframe[data-frame-id="kept-1"]'), null, "the page left the live set");
+  assert.notEqual(picture(), before, "the picture from before the edit is gone");
 });
 
 test("a visual Aiden draws again under the same title replaces the one in its frame", async () => {
