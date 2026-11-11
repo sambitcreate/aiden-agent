@@ -967,6 +967,42 @@ test("a start still running when 128 newer requests arrive is joined by its retr
   }
 });
 
+test("an app with 8 starts still unanswered is refused a new one, while a retry of a held start still joins it", async () => {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const fixture = await harness({
+    limits: { turnsPerMinute: 200, concurrentRuns: 200 },
+    // Every start stalls after creating its chat, as a stuck store or a vanished client would leave it.
+    beforeProvenance: () => held,
+  });
+  try {
+    await fixture.enable();
+    const client = await fixture.connect((await fixture.host.issueApp({ name: "Flooder", access: "supervised" })).credential);
+    const start = (id: string) =>
+      client.callTool({ name: "aiden_chat_start", arguments: { clientRequestId: id, workspaceId: "workspace-1", text: "Go" } });
+
+    const stalled = Array.from({ length: 8 }, (_, index) => start(`stalled-start-${index}`));
+    while (fixture.chats.size < 8) await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(
+      refusal(await start("one-too-many")),
+      "This app has 8 requests Aiden is still answering. Wait for one to finish, then try again.",
+    );
+    const retry = start("stalled-start-0");
+    release();
+    const answers = await Promise.all(stalled);
+    assert.deepEqual(structured(await retry), structured(answers[0]));
+    assert.equal(fixture.generationStarts(), 8, "the refused start never ran");
+
+    // Once they are answered the app may start again.
+    structured(await start("after-the-flood"));
+    assert.equal(fixture.generationStarts(), 9);
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("Bot chats and the folders Aiden makes for one chat are out of an app's reach", async () => {
   const fixture = await harness();
   try {

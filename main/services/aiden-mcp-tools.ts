@@ -83,6 +83,11 @@ const LIST_MAX_CHATS = 50;
 const MESSAGE_TEXT_LIMIT = 20_000;
 const TURN_TEXT_LIMIT = 200_000;
 const REQUEST_CACHE_LIMIT = 128;
+/**
+ * Turn requests one app may have unanswered at once; a retry of one of them
+ * always joins it. Below the server's connection cap, so a live client hears it.
+ */
+const PENDING_REQUEST_LIMIT = 8;
 const TERMINAL_STATES: ReadonlySet<AidenRemoteStreamState> = new Set(["done", "error", "cancelled", "interrupted"]);
 
 const ID = { pattern: "^[A-Za-z0-9._:-]{1,128}$", maxLength: 128 } as const;
@@ -509,6 +514,19 @@ export class AidenMcpToolRunner {
     const key = `${app.id}\u0000${args.clientRequestId as string}`;
     const existing = this.requests.get(key);
     if (existing) return existing.promise;
+    // A request is cached before it reaches run admission and keeps running when
+    // its HTTP client goes away, so unanswered ones are capped here: stalled work
+    // or disconnecting callers cannot make the cache grow without bound.
+    const prefix = `${app.id}\u0000`;
+    let pending = 0;
+    for (const [cached, { settled }] of this.requests) if (!settled && cached.startsWith(prefix)) pending += 1;
+    if (pending >= PENDING_REQUEST_LIMIT) {
+      return Promise.reject(
+        new ToolRefusal(
+          `This app has ${PENDING_REQUEST_LIMIT} requests Aiden is still answering. Wait for one to finish, then try again.`,
+        ),
+      );
+    }
     const entry = { promise: undefined as unknown as Promise<CallToolResult>, settled: false };
     entry.promise = run().then(
       (result) => {
@@ -524,7 +542,7 @@ export class AidenMcpToolRunner {
     this.requests.set(key, entry);
     // Only answered requests are forgotten. One still running stays, so a retry
     // joins it rather than starting (and counting) the same turn a second time;
-    // running requests are already bounded by the app's concurrency limit.
+    // unanswered ones are bounded by PENDING_REQUEST_LIMIT above.
     for (const [cached, { settled }] of this.requests) {
       if (this.requests.size <= REQUEST_CACHE_LIMIT) break;
       if (settled) this.requests.delete(cached);
