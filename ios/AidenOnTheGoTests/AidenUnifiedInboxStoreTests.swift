@@ -1282,6 +1282,14 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
         responder.reply(instanceId: "laptop", method: "DELETE", path: "/chats/loose", status: 204, json: Data())
         let store = makeStore(coordinator)
         await startAndSettle(store, machines: 2)
+        // The first poll then saves the newest transcripts in the background, one
+        // at a time (`prefetchRecentTranscripts`). Wait for its last read, so no
+        // prefetch lands among the requests a test makes after this. Under load
+        // it used to arrive after the delete's own requests.
+        await waitUntil("the transcript prefetch") {
+            let requests = responder.requests(instanceId: "laptop")
+            return requests.contains("GET /chats/loose") && requests.contains("GET /chats/kept")
+        }
         let installation = try connection("laptop", in: coordinator).installation
         return (coordinator, store, AidenHostObjectID(instanceId: "laptop", deviceId: installation.deviceId, objectId: "loose"))
     }
@@ -1291,6 +1299,8 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
         let selected = coordinator.defaultInstanceId
         let release = responder.hold(instanceId: "laptop", path: "/chats/loose")
         let studioRequests = responder.requests(instanceId: "studio").count
+        // Only the delete's own requests count.
+        let laptopRequests = responder.requests(instanceId: "laptop").count
 
         let deletion = Task { await store.delete(loose) }
         await waitUntil("the row to leave") { rowIDs(store.inbox, on: "laptop") == ["kept"] }
@@ -1299,7 +1309,7 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
 
         let result = await deletion.value
         XCTAssertEqual(result, .deleted)
-        let requests = responder.requests(instanceId: "laptop")
+        let requests = Array(responder.requests(instanceId: "laptop").dropFirst(laptopRequests))
         let read = try XCTUnwrap(requests.firstIndex(of: "GET /chats/loose"), "The row's revision can lag a rename")
         let removal = try XCTUnwrap(requests.firstIndex(of: "DELETE /chats/loose"))
         XCTAssertLessThan(read, removal)
