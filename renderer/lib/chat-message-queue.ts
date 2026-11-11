@@ -388,12 +388,15 @@ export type SteerQueuedMessageOutcome =
  * admission. A committed receipt always removes the row, because main already
  * holds the message as history. An uncommitted rejection keeps it queued for
  * the normal follow-up path. An unknown outcome keeps it but pauses the queue,
- * so it is never auto-sent as a possible duplicate turn.
+ * so it is never auto-sent as a possible duplicate turn. When `stopping` says
+ * the person pressed Stop while admission waited, an uncommitted rejection is
+ * reported as `cancelled`, as for a composer draft.
  */
 export async function steerQueuedMessage(input: {
   queue: ChatMessageQueue;
   id: string;
   admit: (text: string) => Promise<ChatRunInputAdmissionResult>;
+  stopping?: () => boolean;
 }): Promise<SteerQueuedMessageOutcome> {
   const candidate = input.queue.getSnapshot().messages.find((item) => item.id === input.id);
   if (!candidate || !canSteerQueuedMessage(candidate)) return { kind: "unavailable" };
@@ -411,7 +414,7 @@ export async function steerQueuedMessage(input: {
     return receipt.admitted ? { kind: "admitted" } : { kind: "committed", reason: receipt.reason };
   }
   input.queue.settle(message.id, "deferred");
-  return { kind: "rejected", reason: receipt.reason };
+  return { kind: "rejected", reason: input.stopping?.() ? "cancelled" : receipt.reason };
 }
 
 /** An uncommitted `run_not_active`: the run is not taking input (not started yet, or past its end) and nothing was saved. */

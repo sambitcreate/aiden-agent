@@ -509,10 +509,14 @@ test("a Steer that misses the finishing response is sent once as the next turn",
   await expect(composer).toHaveValue("");
   await expect.poll(() => lmStudio.requests.filter((request) =>
     JSON.stringify(request.body).includes("Late guidance becomes the next turn"),
-  ).length).toBeGreaterThan(0);
+  ).length).toBe(1);
   await expect(page.getByRole("button", { name: "Stop generating" })).toHaveCount(0);
   await expect(page.getByText("Late guidance becomes the next turn", { exact: true })).toHaveCount(1);
   await expect(page.getByRole("button", { name: /queued message/u })).toHaveCount(0);
+  // Settled with an empty queue: still exactly one provider request carried it.
+  expect(lmStudio.requests.filter((request) =>
+    JSON.stringify(request.body).includes("Late guidance becomes the next turn"),
+  ).length).toBe(1);
 });
 
 test("a response finishing while the queue editor is open waits for the saved edit", async ({

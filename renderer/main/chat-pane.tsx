@@ -2504,12 +2504,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
         queue: messageQueue,
         id,
         admit: (text) => admitSteer(streamId, text, queuedSource),
+        stopping,
       });
       if (outcome.kind === "admitted") {
         toast.info("Guidance sent. Aiden will read it at the next step.");
       } else if (outcome.kind === "committed") {
         toast.info(committedRunInputNotice(outcome.reason));
-      } else if (outcome.kind === "rejected" && outcome.reason === "run_not_active" && !stopping()) {
+      } else if (outcome.kind === "rejected" && outcome.reason === "run_not_active") {
         // Nothing was saved and the row stays queued, so the queue sends it
         // as the next turn once the run settles.
         toast.info(lateSteerQueuedNotice(messageQueue.getSnapshot().paused));

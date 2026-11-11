@@ -715,6 +715,23 @@ test("a queued row whose steer misses the run stays queued and sends once as the
   assert.deepEqual((await drain(queue)).sent, ["one"]);
 });
 
+test("a queued row steered while the person presses Stop reports the stop, not a run that ended", async () => {
+  const queue = new ChatMessageQueue();
+  queue.add(message("one"));
+  let stopping = false;
+  const outcome = await steerQueuedMessage({
+    queue,
+    id: "one",
+    stopping: () => stopping,
+    admit: async () => {
+      stopping = true;
+      return unsavedNotActive;
+    },
+  });
+  assert.deepEqual(outcome, { kind: "rejected", reason: "cancelled" });
+  assert.deepEqual(ids(queue), ["one"], "the row stays queued for the person to resend or remove");
+});
+
 test("messages a run cannot take as guidance are never offered to admission", async () => {
   const queue = new ChatMessageQueue();
   const attachment = {
