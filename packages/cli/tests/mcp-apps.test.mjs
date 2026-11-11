@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -218,6 +218,28 @@ test("aiden apps refuses what it cannot do, and never disconnects a phone", asyn
   const app = await remote.apps(["connect", "Codex"]);
   assert.match(app.server.url, /^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
   assert.deepEqual((await remote.apps(["list"])).apps.map(({ id }) => id), [app.app.id]);
+});
+
+test("aiden apps revoke disconnects an app while Bot storage waits for repair", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "aiden-mcp-apps-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const original = process.env.AIDEN_CLI_ENTRY; process.env.AIDEN_CLI_ENTRY = cli;
+  t.after(() => { if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
+  const daemon = api.createDaemonChats(dir), scheduler = api.createCliScheduler(dir);
+  const remote = await api.createCliRemote(dir, daemon, scheduler, { port: 49380, mcpPort: 0, discovery: { async start() {}, stop() {} } });
+  t.after(async () => { await remote.stop(); await scheduler.service.stopAndSettle(); });
+  await remote.start();
+  const app = await remote.apps(["connect", "Codex"]);
+  const tools = await mcp(app.server.url, app.token, "tools/list");
+  assert.equal(tools.status, 200);
+
+  // A damaged rollback checkpoint leaves Bot access unavailable until repaired.
+  writeFileSync(join(dir, "bot-service", "bot-capability-state-head.json"), "{}");
+  await assert.rejects(remote.bots.application.revokeNoticeAudience("dev_probe"), { name: "BotCapabilityUnavailableError" });
+
+  assert.deepEqual(await remote.apps(["revoke", app.app.id]), { revoked: true });
+  assert.equal((await mcp(app.server.url, app.token, "tools/list")).status, 401);
+  assert.ok((await remote.apps(["list"])).apps.find(({ id }) => id === app.app.id).revokedAt);
 });
 
 test("aiden serve --no-remote has no /mcp, and aiden apps says how to get it", async (t) => {

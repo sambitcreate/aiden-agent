@@ -30,6 +30,7 @@ import { createCliSpeech } from "./speech.ts";
 import { createCliRemoteChats } from "./remote-chats.ts";
 import { tailscaleSetupMessage, withTailscaleSetupMessage } from "./tailscale-setup-message.ts";
 import { revokeAidenRemoteRuntimeDevice } from "../../../main/services/aiden-remote-revocation.js";
+import { BotCapabilityUnavailableError } from "../../../main/services/bot-capability-store-core.js";
 import { AidenRemoteScheduleService } from "../../../main/services/aiden-remote-schedules.js";
 import { createScheduledTaskApplicationService } from "../../../main/services/scheduled-task-application-service.js";
 import { listScheduledScripts } from "../../../main/services/schedule-script.js";
@@ -267,18 +268,25 @@ export async function createCliRemote(agentDir: string, chats: ReturnType<typeof
     },
   });
   // As on the desktop: drain host-wide and Bot subscriptions before and after the revocation fence; no run is cancelled.
-  const revokeDevice = async (id: string) => {
+  const revokeDevice = async (id: string, botNotices: "required" | "when-available" = "required") => {
     const drain = () => { hostFeed?.revokeDevice(id); hostRuns?.revokeDevice(id); botSessions?.revokeDevice(id); };
     drain();
     const revoked = await revokeAidenRemoteRuntimeDevice({ state, streams: chatApi?.streams, chats: chatApi?.chats, workspaceOwners: owners }, id);
     drain();
-    await bots.application.revokeNoticeAudience(id);
+    try {
+      await bots.application.revokeNoticeAudience(id);
+    } catch (error) {
+      // As on the desktop: an outside app's token is already tombstoned above, so
+      // Bot storage that is waiting for repair must not report the app as connected.
+      if (botNotices === "required" || !(error instanceof BotCapabilityUnavailableError)) throw error;
+      process.stderr.write("aiden: The app is disconnected, but Bot storage needs repair before its Bot notices can be cleared.\n");
+    }
     return revoked;
   };
   // The loopback `/mcp` endpoint for outside apps. Its own services, built
   // over the shared chat runtime, so an app's request never rebuilds Remote's.
   let mcpWorkspaces: { instanceId: string; service: AidenRemoteWorkspaceService } | undefined;
-  const mcp = createCliMcpHost({ agentDir, state, revokeDevice, appVersion: VERSION, defaultPort: options.mcpPort,
+  const mcp = createCliMcpHost({ agentDir, state, revokeDevice: (id) => revokeDevice(id, "when-available"), appVersion: VERSION, defaultPort: options.mcpPort,
     services: async () => {
       const api = await loadChatApi();
       const { instanceId } = await state.snapshot();
