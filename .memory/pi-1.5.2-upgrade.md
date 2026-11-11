@@ -53,6 +53,15 @@ These were bumped with the pin:
   - Commits are adopted and then stored, so `submission.wait()` can resolve "done" and the store can still fail. The next read then throws `SessionFailed`.
   - `awaitReply` catches `SessionFailed` from `settledOutcome` and reads the answer back from the reopened session, the same as `replyAfterFailedWait`.
   - Test: "a reply whose answer committed just before a storage failure is delivered".
+- **Stored values are frozen and stamped.**
+  - Pi Durable 1.5 freezes memo values, and its generation step stamps `message.thinkingLevel` onto the transcript copy of each answer.
+  - `bot-execution.ts` `remember` therefore hands Pi a `structuredClone` of the receipt, so the saved provider observation stays mutable and unstamped.
+  - The transcript copy and the saved observation now differ only by `thinkingLevel`. `bot-runtime/bot-response-digest.ts` `botResponseDigest()` leaves that field out, and every response digest uses it: the execution receipt, the spending check, the peer receipt in `bot-session-service.ts` and `bot-peers/service.ts` `observeReply`. A message without the field digests as before, so saved evidence stays valid.
+  - Without it a peer exchange ended with "could not provide a verified final result".
+- **A run starts at admission.**
+  - A submission starts its run at once, with the model binding and tool inventory installed at that moment. An input admitted while another turn is still preparing runs with the previous preparation's inventory. For a Bot that has never run, that means an empty system prompt and no tools, or `no_model`.
+  - Sends are serialized per Bot, so the window is narrow. The courier admission-race test in `bot-messages/real-courier.test.ts` warms B up with one turn before it races.
+- **A crash after the response was saved pays again.** Aiden's `operationKey` includes the attempt, so a retry after such a crash re-dispatches. With retry off, the saved answer is lost and the run ends `interrupted`. This is an open issue. The crash tests in `bot-execution.test.ts` expect `interrupted`, and the SIGKILL cost test turns retry on via the consent-boundary fixture's `retry` option.
 - **API renames migrated.**
   - watch listeners take `{ kind: "value", value, ops }`
   - `onReport(report)` with `report.kind` / `report.error`
@@ -95,4 +104,10 @@ Pi 1.5 dropped the other pi mentions upstream. The `build.mjs` cli.md MCP anchor
 - CLI build plus the CLI tests: 309 pass, 3 skipped.
 - `test:ci-policy` 80/80; Bot lifecycle and harness suites 147 pass; `aiden-remote-bot-session.test.ts` 134 pass; `aiden-remote-router.test.ts` 113 pass.
 - Bot Playwright E2E in a Cua Space (`bots-persistence`, `bot-messaging`, `bot-open-work`, `bot-plans`, `bots-starter`): 7 passed, 1 skipped.
+- After the digest and admission fixes: `test:bot-peers` 125/0, `test:bot-messaging` 62/0, `test:bot-routine-models` 98/0, `test:bot-runtime` 524/0.
+- `test:ci:runtime-subagents` under full local load failed 4 tests, and each one passes alone. Treat them as load flakes:
+  - `guest-driver-install.test.ts` "suspending removes the enabled file"
+  - `bot-peers/runtime.test.ts` "real A to B to A delegation" (16 s timeout; 4.4 s alone)
+  - `bot-execution.test.ts` "an accepted cost Resume replay cannot acknowledge a later unknown cost"
+  - `local-device-host.test.ts` "stop kills helpers"
 - Known local environment failure, unrelated to Pi: `scripts/aiden-remote-lan-transport-spike.test.mjs` fails 4 tests on Homebrew OpenSSL 4.1.0, which rejects `x509 -days 0`.

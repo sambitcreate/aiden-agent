@@ -401,7 +401,7 @@ test("a real ConversationBusy admission race remains pending and wakes on the co
   t.after(busy.release);
   const f = await setup(t, {
     A: [fauxAssistantMessage("For person")],
-    B: [async () => {
+    B: [fauxAssistantMessage("Ready"), async () => {
       await busy.response();
       return fauxAssistantMessage([fauxToolCall("person_action", { text: "winning person's action" })], { stopReason: "toolUse" });
     }, fauxAssistantMessage("Person complete"), fauxAssistantMessage("B answer")],
@@ -417,11 +417,11 @@ test("a real ConversationBusy admission race remains pending and wakes on the co
       throw error;
     }
   };
-  let raced = false;
+  let armed = false;
   const tools = f.extension.currentTools;
   f.extension.currentTools = async (bot, turn) => {
-    if (bot.id === "B" && !raced) {
-      raced = true;
+    if (bot.id === "B" && armed) {
+      armed = false;
       // Pi admission races after the service's idle snapshot but before submit.
       // This is the actual whenBusy: reject path, not a fabricated busy error.
       await conversation.submit(
@@ -437,8 +437,14 @@ test("a real ConversationBusy admission race remains pending and wakes on the co
     return turn.requestId?.startsWith("bot:") || turn.requestId?.startsWith("botreply:")
       ? ordinary : [...ordinary, { tool: personTool, replay: "unsafe" as const }];
   };
+  // Pi Durable 1.5 starts a run with the inventory installed when it is admitted.
+  // B has run before, so its earlier preparation installed the attended set the
+  // competing person's run starts with.
+  const warm = await f.runtime.send("B", { text: "warm up", requestId: "warm-up" });
+  assert.equal((await f.runtime.awaitReply("B", warm.submissionId, new AbortController().signal)).kind, "completed");
+  armed = true;
   const sent = await f.post();
-  await waitFor(() => f.models.get("B")!.calls() === 1 && f.activeWaits.size === 1);
+  await waitFor(() => f.models.get("B")!.calls() === 2 && f.activeWaits.size === 1);
   assert.equal((await f.ledger.get(sent.deliveryId))?.status, "delivered");
   assert.equal(f.sends.length, 0);
   busy.release();

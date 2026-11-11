@@ -5,7 +5,8 @@ import { BOT_PERSON_INPUT_KIND, BOT_PEER_INPUT_KIND, BOT_ROUTINE_INPUT_KIND, isI
 import { BOT_EXECUTION_INPUT_KEY, BotExecutionDoc, botExecutionScope, botCostApprovalFacts, createBotExecutionRegistry, reconcileBotExecutionResponses, stampBotExecutionTask, withBotExecutionAdmission, type BotExecutionPort } from "./bot-execution.js";
 import type { BotExecutionClaim } from "../bot-routine-models.js";
 import { botConnectorExecutionRestriction, botConnectorInventoryServer } from "../bot-connector-inventory-scope.js";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
+import { botResponseDigest } from "./bot-response-digest.js";
 import { botCostReceiptScope, consumeBotResumeOperation } from "./bot-resume-operations.js";
 import type { BotExecutionResumeStatus, BotResumeAcknowledgement } from "../../../renderer/shared/bot-execution-resume.js";
 import { reportChatMessageSent } from "../analytics/analytics-feature-reports.js";
@@ -751,7 +752,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
       const base = { submissionId: String(record.id), ...(record.entry === undefined ? {} : { entryId: String(record.entry) }) };
       if (record.status === "queued") return { ...base, state: "queued" };
       if (record.status === "unanswered") return { ...base, state: record.reason === "aborted" ? "cancelled" : "failed" };
-      if (record.status === "done") { const answer = await opened.conversation.commit((tx) => tx.entry(record.answer), ctx), message = answer?.model?.[0]; return { ...base, state: "completed", resultEntryId: String(record.answer), ...(message?.role === "assistant" ? { responseDigest: createHash("sha256").update(JSON.stringify(message)).digest("hex") } : {}) }; }
+      if (record.status === "done") { const answer = await opened.conversation.commit((tx) => tx.entry(record.answer), ctx), message = answer?.model?.[0]; return { ...base, state: "completed", resultEntryId: String(record.answer), ...(message?.role === "assistant" ? { responseDigest: botResponseDigest(message) } : {}) }; }
       const host = await requireHost().open(botId), exact = await inspectLinkedBotWork(host.harness, opened.conversation.id, String(record.id));
       return { ...base, state: exact.kind === "running" ? "running" : exact.kind === "queued" ? "queued" : "interrupted" };
     },
