@@ -34,7 +34,7 @@ import { acquireLease, JsonStore, readJson } from "./state.ts";
 import { deleteCliBotSubagentHistory } from "./bot-subagents.ts";
 import { DaemonGenerationRun, DaemonTurnOwner } from "./daemon-turn-lifecycle.ts";
 import { createDaemonApprovals } from "./daemon-approvals.ts";
-import { workspaceStore, accessFor } from "./workspaces.ts";
+import { workspaceStore, accessFor, assertCliWorkspaceFolderPresent, type CliWorkspace } from "./workspaces.ts";
 import { recordUsage } from "./usage-ledger.ts";
 import { messageText } from "./sessions.ts";
 import { GenerationTimelineProjector } from "../../../main/services/generation-timeline.js";
@@ -228,6 +228,8 @@ export function createDaemonChats(agentDir: string) {
         }
         const workspace = botAdmission ? { id: botAdmission.authority.managedHome.workspaceId, folderPath: botAdmission.authority.workingDirectory } : (await workspaceStore(agentDir).load()).find((workspace) => workspace.id === params.workspaceId);
         if (!workspace) throw new Error("The workspace is unavailable.");
+        // A Bot's home is Aiden's own folder; any other chat's folder may have been moved or deleted.
+        if (!botAdmission) await assertCliWorkspaceFolderPresent(workspace as CliWorkspace, "turn");
         const unattended = !botAdmission && (options.usageSource === "telegram" || options.usageSource === "scheduled");
         if (unattended && (!workspace.folderPath || accessFor(agentDir, workspace.folderPath) !== "full")) throw new Error("Unattended generation requires explicitly granted full workspace access.");
         const cwd = workspace.folderPath || root;

@@ -11,7 +11,7 @@ import { createScheduleStore, nextScheduledRuns } from "../../../main/services/s
 import { createScheduleServiceCore } from "../../../main/services/schedule-service-core.js";
 import type { ScheduledTaskInput, ScheduledRun } from "../../../main/services/types.js";
 import { JsonStore, acquireLease, readJson } from "./state.ts";
-import { workspaceStore, accessFor } from "./workspaces.ts";
+import { workspaceStore, accessFor, assertCliWorkspaceFolderPresent } from "./workspaces.ts";
 import { resolveScheduledScript, runScheduledScript } from "../../../main/services/schedule-script.js";
 import { createCliModelRuntime } from "./providers.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -84,6 +84,7 @@ export function createCliScheduler(agentDir: string) {
           if (task.botId) return await routineExecutor.run(task, { runId, trigger, signal: controller.signal });
           const workspace = (await workspaceStore(agentDir).load()).find((entry) => entry.id === task.workspaceId);
           if (!workspace) throw new Error("Register and select a workspace before running a schedule.");
+          await assertCliWorkspaceFolderPresent(workspace, "scheduled");
           if (accessFor(agentDir, workspace.folderPath) !== "full") throw new Error("Unattended work requires the workspace's explicit full access tier.");
           if (task.mode === "script") {
             if (task.permission !== "full") throw new Error("Script schedules require explicit full permission.");

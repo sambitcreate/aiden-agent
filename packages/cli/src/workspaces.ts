@@ -5,6 +5,8 @@ import { JsonStore, readJson } from "./state.ts";
 import { createCliWorkspaceApplication } from "./workspace-application.ts";
 import { remoteDaemonCommand } from "./daemon-control.ts";
 import { acquireLease } from "./state.ts";
+import { WorkspaceFolderMissingError, workspaceFolderMissing, workspaceFolderRemoteRefusalText } from "../../../main/services/workspace-folder-presence.js";
+import { workspaceFolderMissingMessage } from "../../../renderer/shared/workspace-folder-presence.js";
 
 export type AccessTier = "full" | "ask" | "none";
 export interface CliWorkspace { id: string; name: string; folderPath: string; access: AccessTier; scratch?: true; createdAt?: number; updatedAt?: number; memoryEnabled?: boolean; managedWorktree?: import("../../../main/services/types.js").ManagedWorktree; }
@@ -16,6 +18,18 @@ export function accessFor(agentDir: string, cwd: string): AccessTier {
   const tier = entries.find((entry) => entry.folderPath === canonical)?.access;
   if (tier !== undefined && !["ask", "full", "none"].includes(tier)) throw new Error("Invalid workspace access tier.");
   return tier ?? "ask";
+}
+/**
+ * Refuse work in a workspace whose folder is gone, as the desktop does,
+ * before any provider request or tool runs. Without it a turn would reach
+ * the model and every tool would fail with `spawn ... ENOENT`. A chat turn's
+ * message is the path-free sentence phones show; a scheduled run's names the
+ * workspace, as the desktop's does, without the server's path.
+ */
+export async function assertCliWorkspaceFolderPresent(record: Pick<CliWorkspace, "name" | "folderPath" | "access" | "managedWorktree">, purpose: "turn" | "scheduled"): Promise<void> {
+  const workspace = { name: record.name, folderPath: record.folderPath || undefined, permission: record.access, managedWorktree: record.managedWorktree };
+  if (!(await workspaceFolderMissing(workspace))) return;
+  throw new WorkspaceFolderMissingError(workspace, purpose === "turn" ? workspaceFolderRemoteRefusalText(workspace, "server") : workspaceFolderMissingMessage(record.name));
 }
 export async function workspaceCommand(agentDir: string, args: string[], application?: ReturnType<typeof createCliWorkspaceApplication>["application"]): Promise<unknown> {
   if (!application) {

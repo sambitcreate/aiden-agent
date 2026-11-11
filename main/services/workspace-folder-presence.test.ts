@@ -91,7 +91,12 @@ test("a deleted Aiden-managed worktree is checked at its checkout root and named
   const refusal = await workspaceFolderRemoteRefusal(managed);
   assert.match(refusal ?? "", /worktree folder is missing on your Mac/u);
   assert.ok(!refusal?.includes(root), "a paired device never hears a path");
+  // `aiden serve` may not be a Mac and has no chat window to restore the worktree from.
+  const serverRefusal = await workspaceFolderRemoteRefusal(managed, undefined, "server");
+  assert.match(serverRefusal ?? "", /worktree folder is missing on the server/u);
+  assert.ok(!/Mac/u.test(serverRefusal ?? ""), serverRefusal);
   assert.equal(await workspaceFolderRemoteRefusal({ name: "Here", folderPath: root, permission: "ask" }), undefined);
+  assert.equal(await workspaceFolderRemoteRefusal({ name: "Here", folderPath: root, permission: "ask" }, undefined, "server"), undefined);
 });
 
 test("the home folder is shown as ~ and other paths are left alone", () => {
