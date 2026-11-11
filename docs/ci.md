@@ -194,8 +194,10 @@ One wall-clock ceiling was raised; the iOS item says which.
 - Design-canvas text editing (Electron, job 130172496593) reloaded a page under
   the next edit. FSEvents could report the canvas's own write late. The watcher
   now records the digest of each write the canvas makes and drops a report whose
-  file still holds those bytes. The editor reloads the page itself when no frame
-  shows the change in place.
+  file still holds those bytes. That includes an event that names no file: each
+  page it queues is checked on its own, so the edited page stays and every
+  other page is still reported. The editor reloads the page itself when no
+  frame shows the change in place.
 - Terminal docking (Electron, job 130153055685) lost the order of typed input.
   Each keystroke's access check waits on disk, and `ipcMain.handle` lets those
   handlers finish out of order. Input for one session is now written in the

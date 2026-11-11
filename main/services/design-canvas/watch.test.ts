@@ -229,6 +229,68 @@ test("after a page stops being watched, a later revert to the canvas's own words
   }
 });
 
+/** A watcher whose file-system events the test sends itself, as `fs.watch` would. */
+function fakeWatcher(t: TestContext) {
+  const watched: { emit?: (event: string, filename: string | null) => void } = {};
+  const updates: DesignFilesChanged[] = [];
+  const instance = new DesignFileWatcher({
+    onChange: (update) => updates.push(update),
+    debounceMs: 5,
+    watch: (_folder, _options, listener) => {
+      watched.emit = listener as (event: string, filename: string | null) => void;
+      return Object.assign(new EventEmitter(), { close: () => undefined }) as unknown as fs.FSWatcher;
+    },
+  });
+  t.after(() => instance.clearAll());
+  return { instance, updates, emit: (filename: string | null) => watched.emit!("change", filename) };
+}
+
+test("an event naming no file leaves a page that holds the canvas's own write, and reports the other pages", async (t) => {
+  const root = await workspace(t, { "design/hero.html": "<h1>Ship faster</h1>", "design/about.html": "<h1>About</h1>" });
+  const { instance, updates, emit } = fakeWatcher(t);
+  await instance.set("chat-1", root, ["design/hero.html", "design/about.html"]);
+  const written = "<h1>Ship sooner</h1>";
+  const settle = instance.ownWrite("chat-1", "design/hero.html", written);
+  await fsp.writeFile(path.join(root, "design/hero.html"), written);
+  settle(true);
+  // The file system reports the canvas's write without saying which file changed.
+  emit(null);
+  await eventually(() => updates.length > 0);
+  await sleep(50);
+  assert.deepEqual(
+    updates.map((update) => update.paths),
+    [["design/about.html"]],
+    "the page being edited already shows its words; nothing shows the other page did not change",
+  );
+});
+
+test("an event naming no file reports a page the canvas wrote once it holds other words or can't be read", async (t) => {
+  const root = await workspace(t, {
+    "design/hero.html": "<h1>Ship faster</h1>",
+    "design/about.html": "<h1>About</h1>",
+    "design/pricing.html": "<h1>Pricing</h1>",
+  });
+  const { instance, updates, emit } = fakeWatcher(t);
+  const pages = ["design/hero.html", "design/about.html", "design/pricing.html"];
+  await instance.set("chat-1", root, pages);
+  for (const [page, words] of [["design/hero.html", "<h1>Ship sooner</h1>"], ["design/about.html", "<h1>About us</h1>"], ["design/pricing.html", "<h1>Plans</h1>"]] as const) {
+    const settle = instance.ownWrite("chat-1", page, words);
+    await fsp.writeFile(path.join(root, page), words);
+    settle(true);
+  }
+  // Then something else rewrites one page and removes another.
+  await fsp.writeFile(path.join(root, "design/hero.html"), "<h1>Ship today</h1>");
+  await fsp.rm(path.join(root, "design/about.html"));
+  emit(null);
+  await eventually(() => updates.length > 0);
+  await sleep(50);
+  assert.deepEqual(
+    updates.map((update) => update.paths),
+    [["design/hero.html", "design/about.html"]],
+    "only the page still holding the canvas's own words is left alone",
+  );
+});
+
 test("a change beside a page the canvas wrote, or a write that failed, is still reported", async (t) => {
   const root = await workspace(t, {
     "design/hero.html": "<link rel=stylesheet href=hero.css><h1>Ship faster</h1>",

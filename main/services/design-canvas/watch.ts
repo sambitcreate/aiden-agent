@@ -40,7 +40,11 @@ type ChatWatch = {
   root: string;
   generation: number;
   folders: Array<{ close(): void }>;
-  /** Each queued path → whether only events naming that page queued it. */
+  /**
+   * Each queued path → whether a change of that page alone could explain every
+   * event that queued it: events naming the page, or naming no file at all.
+   * An event naming a file beside the page (a stylesheet, an image) cannot be.
+   */
   pending: Map<string, boolean>;
   timer: ReturnType<typeof setTimeout> | null;
 };
@@ -92,8 +96,10 @@ export class DesignFileWatcher {
           if (name?.split(/[\\/]/u).some((segment) => segment.startsWith("."))) return;
           // A watched page that changed reloads alone; anything else in the folder
           // (a stylesheet, an image, an unnamed event) may feed every page there.
+          // An unnamed event may also be one of the pages changing by itself, so
+          // each page it queues is checked against the canvas's own write.
           const page = name === null ? undefined : paths.find((relative) => path.posix.basename(relative) === name);
-          this.queue(chatId, generation, page ? [page] : paths, page !== undefined);
+          this.queue(chatId, generation, page ? [page] : paths, page !== undefined || name === null);
         });
         // A folder removed while watched errors once; the frame shows its own missing state.
         handle.on("error", () => handle.close());
@@ -193,10 +199,10 @@ export class DesignFileWatcher {
     return byFolder.size > 0 ? byFolder : null;
   }
 
-  private queue(chatId: string, generation: number, paths: readonly string[], named: boolean): void {
+  private queue(chatId: string, generation: number, paths: readonly string[], ownChange: boolean): void {
     const entry = this.chats.get(chatId);
     if (!entry || entry.generation !== generation) return;
-    for (const relative of paths) entry.pending.set(relative, (entry.pending.get(relative) ?? true) && named);
+    for (const relative of paths) entry.pending.set(relative, (entry.pending.get(relative) ?? true) && ownChange);
     if (entry.timer) clearTimeout(entry.timer);
     entry.timer = setTimeout(() => this.flush(chatId, entry), this.debounceMs);
   }
@@ -211,16 +217,18 @@ export class DesignFileWatcher {
     const pending = [...entry.pending];
     entry.pending.clear();
     const writes = this.ownWrites.get(chatId);
-    // Only a page named by its own events can be the canvas's write; a change
-    // beside it (a stylesheet, an image) is reported whatever the page holds.
-    const checks = pending.filter(([relative, named]) => named && writes?.has(relative));
+    // Only a page whose own change could explain its events can be the
+    // canvas's write; a change beside it (a stylesheet, an image) is reported
+    // whatever the page holds. A page the canvas never wrote, one that no
+    // longer holds the canvas's bytes, or one that can't be read is reported.
+    const checks = pending.filter(([relative, ownChange]) => ownChange && writes?.has(relative));
     if (checks.length === 0) {
       this.report(chatId, pending.map(([relative]) => relative));
       return;
     }
     void Promise.all(
-      pending.map(async ([relative, named]) => {
-        const write = named ? await this.settledOwnWrite(chatId, relative) : undefined;
+      pending.map(async ([relative, ownChange]) => {
+        const write = ownChange ? await this.settledOwnWrite(chatId, relative) : undefined;
         if (write === undefined) return relative;
         const now = await fsp.readFile(path.join(entry.root, relative)).then(digest, () => null);
         return now === write.digest ? null : relative;
