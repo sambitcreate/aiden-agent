@@ -8143,6 +8143,34 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(height(revealed: false, readingAloud: true), shown, accuracy: 0.5, "Read Aloud keeps the footer shown")
     }
 
+    /// Main's "By voice" mark (revision 60) sits outside the tap-revealed
+    /// footer: it shows under a message Aiden Live sent without a tap, and
+    /// a typed message, or a reply marked as voice, gets no row for it.
+    @MainActor
+    func testTheByVoiceMarkShowsWithoutATapWhileTheFooterIsHidden() {
+        func height(_ message: AidenChatMessage) -> CGFloat {
+            let view = AidenMessageView(
+                message: message,
+                presentationStyle: .workspace,
+                loadAttachmentImage: { _ in nil },
+                footerRevealed: false
+            )
+            .environment(AidenHapticCenter())
+            return UIHostingController(rootView: view)
+                .sizeThatFits(in: CGSize(width: 390, height: CGFloat.greatestFiniteMagnitude)).height
+        }
+        let sent = Date()
+        let byVoice = AidenChatMessage(id: "v", role: .user, text: "Check the build.", inputSource: "voice", createdAt: sent)
+        let typed = AidenChatMessage(id: "t", role: .user, text: "Check the build.", createdAt: sent)
+        XCTAssertTrue(byVoice.isByVoice)
+        XCTAssertGreaterThan(height(byVoice) - height(typed), 8, "the mark takes its own row with the footer hidden")
+
+        let reply = AidenChatMessage(id: "a", role: .assistant, text: "Done.", inputSource: "voice", createdAt: sent)
+        let plainReply = AidenChatMessage(id: "a", role: .assistant, text: "Done.", createdAt: sent)
+        XCTAssertFalse(reply.isByVoice)
+        XCTAssertEqual(height(reply), height(plainReply), accuracy: 0.5, "a reply never shows the mark")
+    }
+
     /// VoiceOver hears the footer's time and "Worked for" as the message's
     /// value, and reaches Copy and Read Aloud as actions, with no tap.
     func testVoiceOverReachesTheFooterWithoutATap() {
