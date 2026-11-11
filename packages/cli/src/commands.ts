@@ -65,6 +65,19 @@ export async function dispatchCommand(agentDir: string, cwd: string, args: strin
       }
       break;
     }
+    case "apps": {
+      // Outside apps (Claude Code, Codex) that reach this server's loopback `/mcp` endpoint.
+      result = await (await import("./schedules.ts")).remoteDaemonCommand(agentDir, "apps", rest);
+      if (rest[0] === "connect") {
+        if (process.stdout.isTTY) {
+          const { renderAppConnection } = await import("./apps-display.ts");
+          process.stdout.write(renderAppConnection(result as import("./apps-display.ts").CliAppConnection) + "\n");
+          return true;
+        }
+        process.stderr.write("warning: the connection below contains the app's token, shown only once — keep it out of logs.\n");
+      }
+      break;
+    }
     case "serve": await (await import("./serve-command.ts")).serveCommand(agentDir, rest); return true;
     case "service": await (await import("./service.ts")).serviceCommand(agentDir, rest); return true;
     case "telemetry": result = await (await import("./telemetry.ts")).telemetryCommand(agentDir, rest); break;
