@@ -53,6 +53,7 @@ A loopback MCP server that lets Claude Code, Codex or any MCP client use Aiden's
 - **Revoke:**
   - It runs `revokeAidenRemoteRuntimeDevice`, which denies approvals, cancels runs and closes watchers.
   - It then runs `tools.revokeApp`, which aborts that app's waits with "This app was disconnected from Aiden."
+  - The MCP host passes `revokeDevice(appId, "when-available")`: if Bot storage is waiting for repair (`BotCapabilityUnavailableError`, for example no Secret Service on a Linux session), the Bot notice-audience cleanup is skipped with a warning instead of failing the revoke after the tombstone. Phone revocation still uses `"required"`. Found by `tests/e2e/aiden-mcp-settings.spec.ts` in a Cua Space (2026-11-11).
   - A phone or Mac id returns false.
 - **Tests:** `main/services/aiden-mcp-server.test.ts` (13 tests, in `test:aiden-remote` and `scripts/ci-test-registry.json`) runs a real registry, streams and chat service over fakes.
   - Its client is `@earendil-works/pi-mcp` `McpClient`. ESLint forbids importing `@modelcontextprotocol/sdk/client*`.
