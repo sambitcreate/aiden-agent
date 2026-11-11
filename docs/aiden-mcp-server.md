@@ -15,21 +15,22 @@ Status (2026-11-11): the server core is in the desktop main process, behind the 
   - If another program later holds the saved port, the server reports `port_in_use` rather than moving, because moving would break every configured app silently.
 - **Credential:** each app gets its own bearer token, a 43-character base64url secret shown once when it is issued. Aiden stores only a hash. A token is sent as `Authorization: Bearer <token>`.
 
-Claude Code:
+Claude Code (the single quotes keep `${AIDEN_MCP_TOKEN_CLAUDE_CODE_K3J9QX}` literal in its saved configuration; Claude Code expands it from the environment when it connects):
 
 ```sh
+export AIDEN_MCP_TOKEN_CLAUDE_CODE_K3J9QX='<token>'
 claude mcp add --transport http aiden http://127.0.0.1:49400/mcp \
-  --header "Authorization: Bearer <token>"
+  --header 'Authorization: Bearer ${AIDEN_MCP_TOKEN_CLAUDE_CODE_K3J9QX}'
 ```
 
 Codex:
 
 ```sh
-export AIDEN_MCP_TOKEN=<token>
-codex mcp add aiden --url http://127.0.0.1:49400/mcp --bearer-token-env-var AIDEN_MCP_TOKEN
+export AIDEN_MCP_TOKEN_CODEX_P7QD2M='<token>'
+codex mcp add aiden --url http://127.0.0.1:49400/mcp --bearer-token-env-var AIDEN_MCP_TOKEN_CODEX_P7QD2M
 ```
 
-Use the port your Aiden reports if it is not 49400.
+Use the port your Aiden reports if it is not 49400. Each app reads its token from its own variable, `AIDEN_MCP_TOKEN_<NAME>_<ID>` (the app's name and the start of its id, from `aidenMcpTokenEnvName` in `renderer/shared/aiden-mcp-token-env.ts`), so the desktop and `aiden apps connect` print the same name and two apps in one shell profile keep separate tokens.
 
 ## Access levels
 
