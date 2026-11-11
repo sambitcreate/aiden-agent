@@ -1286,9 +1286,13 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
         // at a time (`prefetchRecentTranscripts`). Wait for its last read, so no
         // prefetch lands among the requests a test makes after this. Under load
         // it used to arrive after the delete's own requests.
-        await waitUntil("the transcript prefetch") {
-            let requests = responder.requests(instanceId: "laptop")
-            return requests.contains("GET /chats/loose") && requests.contains("GET /chats/kept")
+        // In Low Data Mode the prefetch is skipped (`AidenHomeModel`), so there is
+        // nothing to wait for.
+        if !AidenNetworkPathMonitor.shared.availability.isConstrained {
+            await waitUntil("the transcript prefetch") {
+                let requests = responder.requests(instanceId: "laptop")
+                return requests.contains("GET /chats/loose") && requests.contains("GET /chats/kept")
+            }
         }
         let installation = try connection("laptop", in: coordinator).installation
         return (coordinator, store, AidenHostObjectID(instanceId: "laptop", deviceId: installation.deviceId, objectId: "loose"))
