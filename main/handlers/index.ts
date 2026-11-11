@@ -55,6 +55,15 @@ import { registerTelegramHandlers } from "./telegram.js";
 import { registerSubagentHandlers } from "./subagents.js";
 import { registerAssistantLiveHandlers } from "./assistant-live.js";
 import { registerAidenRemoteHandlers } from "./aiden-remote.js";
+import { registerAidenMcpHandlers } from "./aiden-mcp.js";
+import {
+  aidenMcpChatProvenance,
+  aidenMcpServerStatus,
+  issueAidenMcpApp,
+  listAidenMcpApps,
+  revokeAidenMcpApp,
+  setAidenMcpServerEnabled,
+} from "../services/aiden-remote-service-main.js";
 import { registerPeerHostHandlers } from "./peer-hosts.js";
 import { registerLocalRunIpc } from "./local-runs-main.js";
 import { registerChatPendingAttentionIpc } from "./chat-pending-attention-main.js";
@@ -183,6 +192,22 @@ export function registerHandlers(isMainWindow: (event: IpcMainInvokeEvent) => bo
   registerSubagentHandlers();
   registerAssistantLiveHandlers();
   registerAidenRemoteHandlers();
+  registerAidenMcpHandlers<IpcMainInvokeEvent>({
+    owner: (event) => {
+      const inactive = () => new Error("Apps using Aiden can be changed only from the active Aiden window.");
+      if (!isMainWindow(event)) throw inactive();
+      return rendererDocumentOwner(event, inactive);
+    },
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    service: {
+      status: aidenMcpServerStatus,
+      setEnabled: setAidenMcpServerEnabled,
+      issueApp: issueAidenMcpApp,
+      listApps: listAidenMcpApps,
+      revokeApp: revokeAidenMcpApp,
+      chatProvenance: aidenMcpChatProvenance,
+    },
+  });
   registerPeerHostHandlers();
   registerLocalRunIpc();
   if (hostPlatformCapabilities().bots) registerBotHandlers();

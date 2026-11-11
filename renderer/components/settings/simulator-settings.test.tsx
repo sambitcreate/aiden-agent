@@ -76,13 +76,13 @@ test("Simulator is a settings destination hidden without the devices capability"
   assert.ok(destination?.keywords.includes("ios"));
   // The settings nav and the command palette both filter through this helper.
   const hasSimulator = (devices: boolean) =>
-    availableSettingsDestinations({ computerUse: true, devices, botComputers: true, hooks: true }).some((entry) => entry.id === "simulator");
+    availableSettingsDestinations({ computerUse: true, devices, botComputers: true, hooks: true, mcpServer: true }).some((entry) => entry.id === "simulator");
   assert.equal(hasSimulator(false), false);
   assert.equal(hasSimulator(true), true);
   assert.match(read("../../main/settings-view.tsx"), /simulator: SimulatorSettings/u);
   // The assistant prompt lists Simulator only when the devices feature is on.
-  assert.equal(assistantSettingsPages({ computerUse: true, devices: false, botComputers: true, hooks: true }).includes("Simulator"), false);
-  assert.equal(assistantSettingsPages({ computerUse: true, devices: true, botComputers: true, hooks: true }).includes("Simulator"), true);
+  assert.equal(assistantSettingsPages({ computerUse: true, devices: false, botComputers: true, hooks: true, mcpServer: true }).includes("Simulator"), false);
+  assert.equal(assistantSettingsPages({ computerUse: true, devices: true, botComputers: true, hooks: true, mcpServer: true }).includes("Simulator"), true);
 });
 
 test("a build without the devices capability reads nothing and says so", () => {

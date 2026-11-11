@@ -105,7 +105,7 @@ import {
   chatReadinessMessage as chatReadinessMessageFor,
   DENIED_APPROVAL_COMPOSER_PLACEHOLDER,
 } from "../lib/composer-placeholder";
-import { GitFork, TerminalSquare } from "lucide-react";
+import { AppWindow, GitFork, TerminalSquare } from "lucide-react";
 import { MessageList } from "../components/message-list";
 import { useReadAloud } from "../lib/tts-client";
 import type { ReadAloudActionProps } from "../components/read-aloud-button";
@@ -286,6 +286,7 @@ import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 import { isLocalProviderDeployment } from "../shared/provider-deployment";
 import type { ChatArtifactV1 } from "../shared/chat-artifacts";
 import { useAppCapabilities } from "../lib/app-capabilities";
+import { useAidenMcpChatProvenance } from "../lib/aiden-mcp";
 import {
   ASK_USER_QUESTION_VERSION,
   askUserQuestionMsUntilExpiry,
@@ -1313,6 +1314,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
       ? "Forked chat"
       : forkedFromLabel(forkSource?.title)
     : undefined;
+  const startedBy = useAidenMcpChatProvenance(
+    chatId,
+    capabilities.mcpServer && !draft && Boolean(persistedChat.data),
+  );
+  const startedByLabel = startedBy ? `Started by ${startedBy.name}` : undefined;
 
   const forkDisabledReason =
     isGenerating || isStartingGeneration || approvals.length > 0
@@ -3659,25 +3665,37 @@ export function ChatPane({ chatId }: { chatId: string }) {
         className="h-full min-h-0"
         alignFooterToScrollContent
         title={
-          forkSourceLabel ? (
-            <span className="block min-w-0" data-chat-fork-lineage>
+          forkSourceLabel || startedByLabel ? (
+            <span
+              className="block min-w-0"
+              data-chat-fork-lineage={forkSourceLabel ? true : undefined}
+              data-chat-started-by={startedByLabel ? true : undefined}
+            >
               {chatTitleMenu}
-              <span className="flex min-w-0 items-center gap-1 text-small font-normal text-secondary">
-                <GitFork aria-hidden="true" className="size-3 shrink-0" />
-                {forkSource ? (
-                  <button
-                    type="button"
-                    className="min-w-0 truncate rounded-control text-left outline-none hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                    onClick={() =>
-                      void navigate({ to: "/chat/$chatId", params: { chatId: forkSource.id } })
-                    }
-                  >
-                    {forkSourceLabel}
-                  </button>
-                ) : (
-                  <span className="min-w-0 truncate">{forkSourceLabel}</span>
-                )}
-              </span>
+              {forkSourceLabel ? (
+                <span className="flex min-w-0 items-center gap-1 text-small font-normal text-secondary">
+                  <GitFork aria-hidden="true" className="size-3 shrink-0" />
+                  {forkSource ? (
+                    <button
+                      type="button"
+                      className="min-w-0 truncate rounded-control text-left outline-none hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                      onClick={() =>
+                        void navigate({ to: "/chat/$chatId", params: { chatId: forkSource.id } })
+                      }
+                    >
+                      {forkSourceLabel}
+                    </button>
+                  ) : (
+                    <span className="min-w-0 truncate">{forkSourceLabel}</span>
+                  )}
+                </span>
+              ) : null}
+              {startedByLabel ? (
+                <span className="flex min-w-0 items-center gap-1 text-small font-normal text-secondary">
+                  <AppWindow aria-hidden="true" className="size-3 shrink-0" />
+                  <span className="min-w-0 truncate">{startedByLabel}</span>
+                </span>
+              ) : null}
             </span>
           ) : (
             chatTitleMenu
