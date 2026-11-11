@@ -11,6 +11,7 @@ import {
 } from "./model-runtime-core.js";
 import { catalogProviderSlug } from "./models-catalog-core.js";
 import { modelsCatalog } from "./models-catalog.js";
+import { withoutMessageThreads } from "./pi-message-threads.js";
 import { withOpenCodeSessionAttribution } from "./opencode-session-attribution.js";
 import { providerRegistry } from "./provider-registry.js";
 import { providerConnectionSnapshot } from "./provider-credential-rotation-core.js";
@@ -147,12 +148,12 @@ export async function resolveCompactionModelMetadata(
   conversationId?: string,
 ) {
   const native = providerRegistry.getBuiltinModel(providerId, modelId);
-  if (native) return withOpenCodeSessionAttribution(native, conversationId);
+  if (native) return withoutMessageThreads(withOpenCodeSessionAttribution(native, conversationId));
   const provider = await configStore.getProvider(providerId);
   if (!provider || !provider.models.includes(modelId))
     throw new Error("Saved model metadata is unavailable.");
-  return withOpenCodeSessionAttribution(
+  return withoutMessageThreads(withOpenCodeSessionAttribution(
     buildModel(provider, modelId, await modelsCatalog.runtimeLimits(provider, modelId)),
     conversationId,
-  );
+  ));
 }

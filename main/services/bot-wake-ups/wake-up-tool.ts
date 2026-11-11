@@ -4,7 +4,7 @@
 // in the chat and a row in the Bot's routines, each with Cancel. Ingress
 // (`botIngressAllowsTool`) keeps it to turns a person started.
 
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import {
   BOT_WAKE_UP_ENTRY_KIND,

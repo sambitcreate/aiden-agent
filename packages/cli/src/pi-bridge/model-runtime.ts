@@ -9,6 +9,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { createModels, type Api, type Model, type Provider } from "@earendil-works/pi-ai";
 import type { ResolvedModelRuntime } from "../../../../main/services/model-runtime-core.js";
 import type { StoredProvider } from "../../../../main/services/types.js";
+import { withoutMessageThreads } from "../../../../main/services/pi-message-threads.js";
 import type { CapturedContext } from "./adapt-aiden-extension.ts";
 
 export interface ModelRuntimeContext extends CapturedContext {
@@ -62,7 +63,7 @@ export async function resolveRuntimeFromContext(
 	if (provider) models.setProvider(provider);
 	return {
 		provider: storedProvider(providerId, modelId, model.baseUrl),
-		model: auth.baseUrl ? { ...model, baseUrl: auth.baseUrl } : model,
+		model: withoutMessageThreads(auth.baseUrl ? { ...model, baseUrl: auth.baseUrl } : model),
 		models,
 		apiKey: auth.apiKey,
 		headers: (auth.headers ?? undefined) as ResolvedModelRuntime["headers"],

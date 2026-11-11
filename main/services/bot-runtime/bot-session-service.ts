@@ -35,7 +35,7 @@ import { BOT_MESSAGE_INPUT_KIND, type BotMessageInputMetadata } from "./bot-inpu
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import { BACKGROUND_CONTEXT, withCancel } from "@earendil-works/chord/context";
 import type { AssistantMessage, ImageContent, Models, TextContent } from "@earendil-works/pi-ai";
 import {
@@ -49,6 +49,7 @@ import {
   HarnessInspection,
   HarnessSettings,
   ModelRef,
+  SessionFailed,
   type SettledSubmissionRecord,
   SubmissionId,
   SubmissionRecord,
@@ -1176,8 +1177,8 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
               if (!task || task.state.status === "completing") resolve(true);
             };
             check(watch.value);
-            watch.start(async (graph) => {
-              check(graph);
+            watch.start(async (call) => {
+              if (call.kind === "value") check(call.value);
             });
             void watch.closed.then(() => resolve(false));
           });
@@ -1218,7 +1219,15 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
       } finally {
         signal.removeEventListener("abort", onAbort);
       }
-      return settledOutcome(opened.conversation, settled);
+      try {
+        return await settledOutcome(opened.conversation, settled);
+      } catch (error) {
+        // Pi Durable 1.5 settles a wait from the adopted commit while it is still
+        // being stored, so the store can fail after the wait returned: read the
+        // answer back from the reopened session, as for a wait the failure ended.
+        if (!(error instanceof SessionFailed)) throw error;
+        return await replyAfterFailedWait(botId, id, opened.harness);
+      }
     },
 
     compact(botId) {
@@ -1232,7 +1241,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
           await conversation.commit(async (tx) => {
             const taskId = await tx.createTask(CompactionTask, { reason: "manual" as const, ...(deps.compactionInstructions ? { instructions: deps.compactionInstructions } : {}) }, { ownership: { kind: "conversation" }, conversationId: conversation.id });
             await stampBotExecutionTask(tx, taskId, execution);
-            const live = await tx.doc(LiveDoc, conversation.id); live.compactions = [...live.compactions ?? [], { taskId, reason: "manual" as const, blocking: false, attempt: 1 }].sort((a, b) => a.taskId - b.taskId);
+            const live = await tx.doc(LiveDoc, conversation.id); live.compactions = [...live.compactions ?? [], { taskId, trigger: "manual" as const, blocking: false, attempt: 1 }].sort((a, b) => a.taskId - b.taskId);
           }, ctx);
           (await requireHost().open(botId)).harness.resume();
         } else {

@@ -164,6 +164,7 @@ import { AidenOperationNotExecutedError, AidenOperationReplaySafeRetryError } fr
 import { BotSessionError, type BotSessionErrorReason, type BotSessionState } from "./bot-runtime/bot-session-service.js";
 import type { BotLiveActivity } from "../../renderer/shared/bot-live.js";
 import { stopWithIntents, type BotTurnIntent, type BotTurnIntents } from "./bot-runtime/bot-turn-intents.js";
+import { watchActiveConversation, type ActiveConversationView } from "./bot-runtime/active-transcript-watch.js";
 import {
   liveBotActivity,
   livePartialText,
@@ -911,7 +912,7 @@ class BotLiveProjector {
   /** The person's messages waiting for the running turn. */
   queued: AidenRemoteBotQueuedMessage[] = [];
   readonly subscribers = new Set<Subscriber>();
-  private view: ConversationView | undefined;
+  private view: ActiveConversationView | undefined;
   private stopWatch: (() => Promise<unknown>) | undefined;
   private lane: Promise<void> = Promise.resolve();
   private idleTimer: ReturnType<typeof setTimeout> | undefined;
@@ -979,7 +980,7 @@ class BotLiveProjector {
   }
 
   async attach(conversation: Conversation): Promise<void> {
-    const watch = await conversation.watch(ctx);
+    const watch = await watchActiveConversation(conversation, ctx);
     this.stopWatch = () => watch.stop();
     this.view = watch.value;
     this.entries = await this.resolveEntries(
@@ -1209,7 +1210,7 @@ class BotLiveProjector {
     return run;
   }
 
-  advance(view: ConversationView): Promise<void> {
+  advance(view: ActiveConversationView): Promise<void> {
     return this.serial(async () => {
       this.view = view;
       await this.publish(view);
@@ -1286,7 +1287,7 @@ class BotLiveProjector {
 
   /** Slice B's derivation from `pi.live`, cut to the wire. A paused Bot keeps `pi.live.run` but is not working. */
   private deriveActivity(
-    view: ConversationView,
+    view: ActiveConversationView,
     state: AidenRemoteBotSessionStateView,
     waiting: boolean,
   ): AidenRemoteBotSessionActivity | null {
@@ -1386,7 +1387,7 @@ class BotLiveProjector {
    * entry event: a refresh can touch an old entry outside a phone's window,
    * which an entry event would append at the bottom of its chat.
    */
-  private async publish(view: ConversationView, { snapshotChanges = false } = {}): Promise<void> {
+  private async publish(view: ActiveConversationView, { snapshotChanges = false } = {}): Promise<void> {
     if (this.closed) return;
     const next = await this.resolveEntries(projectBotSessionEntries(view.entries, await this.submissionsFor(view.entries)));
     const partial = projectBotSessionPartial(view);

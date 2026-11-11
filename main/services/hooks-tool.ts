@@ -22,7 +22,7 @@
 
 import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { fenceAsData } from "../../renderer/shared/agent-notices.js";
 import {
   HOOK_PROPOSAL_APPROVAL_KIND,

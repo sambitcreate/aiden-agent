@@ -27,7 +27,7 @@
 
 import { randomUUID } from "node:crypto";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import {
   BOT_HANDOFF_ACTION_MAX_CHARS,
   BOT_HANDOFF_WHY_MAX_CHARS,

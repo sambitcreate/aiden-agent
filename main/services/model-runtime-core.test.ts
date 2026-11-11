@@ -382,6 +382,49 @@ test("rejects stale legacy model selections before reading provider credentials"
 });
 
 
+test("Anthropic requests through a resolved runtime send the whole conversation, never a message thread", async () => {
+  const { anthropicMessagesApi } = await import("@earendil-works/pi-ai/api/anthropic-messages.lazy");
+  const { getBuiltinModels } = await import("@earendil-works/pi-ai/providers/all");
+  const native = getBuiltinModels("anthropic").find((model) => model.id === "claude-sonnet-4-5") as Model<Api>;
+  assert.ok(native, "the fixture uses Pi's own Anthropic model record");
+  const provider: StoredProvider = {
+    id: "anthropic", kind: "anthropic", label: "Anthropic", baseUrl: native.baseUrl,
+    models: [native.id], needsKey: true, isPreset: true,
+  };
+  /** One request with a session, as a chat turn sends it; the first request body Pi would put on the wire. */
+  const sentBody = async (model: Model<Api>) => {
+    let body: Record<string, unknown> | undefined;
+    let beta: string | null = null;
+    await anthropicMessagesApi().streamSimple(model, normalizeContext({ messages: [
+      { role: "user", content: "Synthetic thread check", timestamp: 1 },
+    ] }), {
+      apiKey: "offline-fixture",
+      sessionId: `thread-check-${model.compat === native.compat ? "pi" : "aiden"}`,
+      fetch: async (_url: unknown, init?: RequestInit) => {
+        body ??= JSON.parse(String(init?.body)) as Record<string, unknown>;
+        beta ??= new Headers(init?.headers).get("anthropic-beta");
+        throw new Error("captured before network");
+      },
+    }).result();
+    assert.ok(body, "Pi built a request");
+    return { body, beta: beta ?? "" };
+  };
+
+  // Pi's own default for this model would open a thread.
+  const piDefault = await sentBody(native);
+  assert.deepEqual(piDefault.body.thread, { type: "create" });
+
+  const runtime = await resolveModelRuntimeWith(
+    dependencies({ provider, nativeProvider: provider, nativeModel: native }),
+    provider.id,
+    native.id,
+  );
+  const sent = await sentBody(runtime.model);
+  assert.equal("thread" in sent.body, false);
+  assert.doesNotMatch(sent.beta, /message-threads/u);
+  assert.equal((sent.body.messages as unknown[]).length, 1);
+});
+
 test("custom effort presets serialize explicit thinking controls through the real Pi transport", async () => {
   const { openAICompletionsApi } = await import("@earendil-works/pi-ai/api/openai-completions.lazy");
   const { piThinkingLevelsForModel } = await import("./pi-model-metadata.js");

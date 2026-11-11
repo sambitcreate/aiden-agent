@@ -20,3 +20,5 @@ Not used by Aiden: `TaskRuntime.sleep` (removed), `defineDoc` (needs `checkpoint
 ## Validation (cloud container)
 
 Root and CLI type-check; replay gate `scripts/pi-upgrade-evaluation.mjs` passed 7/7 (run with a scratch receipt dir and `node` as the executable); `test:bot-runtime` 272/272; `test:compaction` passes; CLI bundle build and CLI tests pass except the two known environment failures (container AWS creds, `/usr/bin/ffmpeg`). Codex and prompt-cache tests moved off the removed Codex models.
+
+2026-11-11: superseded by `pi-1.5.2-upgrade.md`.

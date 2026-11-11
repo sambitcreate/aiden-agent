@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { BOT_MESSAGE_LIMITS as L, BOT_MESSAGE_TOOL_NAME } from "../../../renderer/shared/bot-messages.js";
 import type { BotToolCall } from "../bot-runtime/tool-adapter.js";

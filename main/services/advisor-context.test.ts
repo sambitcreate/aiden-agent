@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Type, type AssistantMessage, type ToolResultMessage } from "@earendil-works/pi-ai";
+import { type AssistantMessage, type ToolResultMessage } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import {
   buildAdvisorInventory,

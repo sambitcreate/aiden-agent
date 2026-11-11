@@ -2,7 +2,7 @@
 // corrected how the Bot did something, keep one how-to lesson for the whole
 // Bot. Applied at once (D5) with a "Learned … · Undo" line.
 
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { BOT_LESSON_LEARNED_ENTRY_KIND, type BotLesson } from "../../../renderer/shared/bot-lessons.js";
 import type { BotLessonStore } from "./store.js";

@@ -1,4 +1,4 @@
-import { Type, type Static } from "@earendil-works/pi-ai";
+import { Type, type Static } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { FormFillService } from "./service.js";
 import type { FormFillBatchResult } from "./batch-core.js";

@@ -1,4 +1,4 @@
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import {
   BOT_MESSAGE_LIMITS as L,
   BOT_MESSAGE_STATUS_ENTRY_KIND,

@@ -3,7 +3,8 @@ import { promises as fs, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import type { ToolCallUpdate } from "@agentclientprotocol/sdk";
-import { getCurrentSystemPrompt, Type, type AssistantMessage, type Message, type ToolResultMessage } from "@earendil-works/pi-ai";
+import { getCurrentSystemPrompt, type AssistantMessage, type Message, type ToolResultMessage } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 
 import { createAgentsInstructionRefresher } from "../agents-instructions.js";
 import { AcpHostRegistry } from "./host.js";

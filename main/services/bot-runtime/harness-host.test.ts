@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { after, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { AssistantEntry, createRegistry } from "@earendil-works/pi-durable";
+import { AssistantEntry, createRegistry, LiveDoc } from "@earendil-works/pi-durable";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import {
   BOT_SESSION_FILE,
@@ -173,26 +173,51 @@ test("(b) after SIGKILL mid-stream the scan reports the Bot without calling the 
   }
 });
 
-test("(b1) a turn cut off by a crash every time it resumed still runs when the person resumes it again", async () => {
+// Since Pi Durable 1.5 a model request cut off by a crash is not resent on
+// open: it counts as a failed attempt under the Bot's retry policy, so a
+// fast backoff keeps these tests quick.
+const QUICK_RETRY = { enabled: true, maxRetries: 5, baseDelayMs: 1, maxAgentDelayMs: 10 };
+
+test("(b1) a turn cut off by a crash runs again when the person resumes it", async () => {
   const profile = tempProfile();
   const first = spawnHarnessChild("stream", [profile, "bot:looping", "req-1"]);
   await first.waitFor("STREAMING");
   await first.kill();
-  // Pi Durable parks a task after five crashes in a row unless the host says otherwise.
-  for (let crash = 2; crash <= 5; crash += 1) {
-    const child = spawnHarnessChild("resume", [profile, "bot:looping"]);
-    await child.waitFor("STREAMING");
-    await child.kill();
-  }
 
   const fauxModels = createFauxModels([fauxAssistantMessage("finally answered")]);
-  const host = await hostFor(profile, fauxModels);
+  const host = await hostFor(profile, fauxModels, { settings: { retry: QUICK_RETRY } });
   try {
-    const { harness } = await host.open("bot:looping");
+    const { harness, conversation } = await host.open("bot:looping");
     assert.equal((await harness.inspect(ctx)).scheduling, "paused");
     harness.resume();
     await waitFor(() => fauxModels.calls() > 0, { what: "the resumed turn to reach the provider" });
     await waitFor(async () => (await harness.inspect(ctx)).submissions.length === 0, { what: "the resumed turn to finish" });
+    const live = await harness.snapshot(LiveDoc, conversation.id, ctx);
+    assert.equal(live?.runFailure, undefined);
+  } finally {
+    await host.shutdown();
+  }
+});
+
+test("(b1b) a turn cut off by a crash with no retry left ends as interrupted, and the Bot takes the next message", async () => {
+  const profile = tempProfile();
+  const first = spawnHarnessChild("stream", [profile, "bot:spent", "req-1"]);
+  await first.waitFor("STREAMING");
+  await first.kill();
+
+  const fauxModels = createFauxModels([fauxAssistantMessage("next answer")]);
+  const host = await hostFor(profile, fauxModels, { settings: { retry: { ...QUICK_RETRY, maxRetries: 0 } } });
+  try {
+    const { harness, conversation } = await host.open("bot:spent");
+    harness.resume();
+    await waitFor(async () => (await harness.inspect(ctx)).submissions.length === 0, { what: "the cut-off turn to end" });
+    assert.equal(fauxModels.calls(), 0, "the cut-off request is not sent again");
+    const live = await harness.snapshot(LiveDoc, conversation.id, ctx);
+    assert.equal(live?.runFailure?.reason, "interrupted");
+
+    const next = await conversation.submit({ type: "input", content: "are you there?" }, ctx);
+    assert.equal((await next.wait(ctx)).status, "done");
+    assert.equal(fauxModels.calls(), 1);
   } finally {
     await host.shutdown();
   }

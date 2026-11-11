@@ -15,7 +15,7 @@ import { resolveRuntimeFromContext } from "./pi-bridge/model-runtime.ts";
 import { createCliModelRuntime } from "./providers.ts";
 import { recordUsageRecord } from "./usage-ledger.ts";
 import { loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { homedir } from "node:os";
 import { open } from "node:fs/promises";
 import { createBotMcpScopeCache, resolveBotMcpInventory } from "../../../main/services/bot-mcp-inventory.js";

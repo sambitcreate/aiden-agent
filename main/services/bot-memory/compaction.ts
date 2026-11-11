@@ -24,7 +24,7 @@
 // authority, held until both finish: its revocation aborts them, and it is
 // revalidated before every provider request and memory write.
 
-import type { Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Message, TextContent } from "@earendil-works/pi-ai";
 import type { Conversation } from "@earendil-works/pi-durable";

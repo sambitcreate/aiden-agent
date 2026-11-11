@@ -38,6 +38,17 @@ const callTool = (name, args) => (response) => {
 /** Streams a first delta and then stays open, as a slow provider does. */
 const hangAfter = (text) => (response) => { response.write(chunk({ role: "assistant", content: text })); };
 
+/** An Anthropic Messages reply, for a fixture whose provider is `anthropic`. */
+const anthropicEvent = (type, data) => `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`;
+const anthropicReply = (text) => (response) => {
+  response.write(anthropicEvent("message_start", { message: { id: `msg_${text}`, type: "message", role: "assistant", model: "test", content: [], stop_reason: null, usage: { input_tokens: 10, output_tokens: 0 } } }));
+  response.write(anthropicEvent("content_block_start", { index: 0, content_block: { type: "text", text: "" } }));
+  response.write(anthropicEvent("content_block_delta", { index: 0, delta: { type: "text_delta", text } }));
+  response.write(anthropicEvent("content_block_stop", { index: 0 }));
+  response.write(anthropicEvent("message_delta", { delta: { stop_reason: "end_turn" }, usage: { output_tokens: 4 } }));
+  response.end(anthropicEvent("message_stop", {}));
+};
+
 /** A refusal the session does not retry. */
 const reject = (response) => { response.writeHead(400, { "content-type": "application/json" }); response.end(JSON.stringify({ error: { message: "Rejected" } })); };
 
@@ -49,19 +60,25 @@ async function startHooks(dir, hooks) {
   return api.startCliHooks(dir);
 }
 
-async function fixture(t, { access = "full", hooks } = {}) {
+async function fixture(t, { access = "full", hooks, anthropic = false } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "aiden-daemon-turns-"));
-  const steps = [], requests = [];
+  const steps = [], requests = [], headers = [];
   const server = createServer(async (request, response) => {
     let body = ""; for await (const part of request) body += part;
-    requests.push(JSON.parse(body));
-    const step = steps.shift() ?? reply("Done");
+    requests.push(JSON.parse(body)); headers.push(request.headers);
+    const step = steps.shift() ?? (anthropic ? anthropicReply("Done") : reply("Done"));
     if (step !== reject) response.writeHead(200, { "content-type": "text/event-stream" });
     step(response);
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only",
-    models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const testModel = { id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+  // The `anthropic` provider at a path naming api.anthropic.com gets every
+  // default Pi gives Anthropic's own endpoint, message threads included.
+  const providerId = anthropic ? "anthropic" : "cli-test";
+  api.atomicJson(join(dir, "models.json"), { providers: { [providerId]: anthropic
+    ? { api: "anthropic-messages", baseUrl: `${base}/api.anthropic.com`, apiKey: "test-only", models: [testModel] }
+    : { api: "openai-completions", baseUrl: `${base}/v1`, apiKey: "test-only", models: [testModel] } } });
   const workspace = await api.workspaceCommand(dir, ["add", dir]);
   await api.workspaceCommand(dir, ["access", workspace.id, access]);
   const hookService = hooks ? await startHooks(dir, hooks) : undefined;
@@ -72,7 +89,7 @@ async function fixture(t, { access = "full", hooks } = {}) {
     server.closeAllConnections(); server.close();
     rmSync(dir, { recursive: true, force: true });
   });
-  return { dir, daemon, workspace, steps, requests };
+  return { dir, daemon, workspace, steps, requests, headers, providerId };
 }
 
 function ownerFor(documentId = "owner") {
@@ -86,12 +103,12 @@ function ownerFor(documentId = "owner") {
 }
 
 /** The ordinary ingress order: reserve, durably append the user message, settle, hand off. */
-async function beginTurn({ daemon, workspace }, chatId, { streamId = `stream-${chatId}`, owner = ownerFor(), usageSource = "chat", text = "Hello", create = true } = {}) {
+async function beginTurn({ daemon, workspace, providerId = "cli-test" }, chatId, { streamId = `stream-${chatId}`, owner = ownerFor(), usageSource = "chat", text = "Hello", create = true } = {}) {
   if (create) await daemon.chatStore.create({ id: chatId, title: chatId, workspaceId: workspace.id });
   const lease = daemon.llmClient.beginChatTurn(chatId, streamId, owner.documentId); assert.ok(lease, "the turn was admitted");
   await daemon.chatStore.appendMessage(chatId, { role: "user", content: text });
   lease.settleAsyncWork();
-  const started = await daemon.llmClient.start(streamId, { chatId, workspaceId: workspace.id, providerId: "cli-test", model: "test", messages: [{ role: "user", content: text }] }, owner, { usageSource });
+  const started = await daemon.llmClient.start(streamId, { chatId, workspaceId: workspace.id, providerId, model: "test", messages: [{ role: "user", content: text }] }, owner, { usageSource });
   return { lease, owner, streamId, started };
 }
 
@@ -814,4 +831,36 @@ test("a stop while a Stop hook runs ends the turn instead of continuing it", pos
   assert.equal(f.requests.length, 1, "the stopped turn never asks the provider again");
   assert.equal(owner.of("chat:error")[0]?.cancelled, true);
   assertSessionReleased(f.daemon, "hook-stop");
+});
+
+test("an Anthropic chat sends its whole conversation on every turn, never a message thread", async (t) => {
+  const f = await fixture(t, { anthropic: true });
+  f.steps.push(anthropicReply("First"), anthropicReply("Second"));
+  await beginTurn(f, "threads", { streamId: "threads-1", text: "One" });
+  await f.daemon.llmClient.waitForChatIdle("threads");
+  await beginTurn(f, "threads", { streamId: "threads-2", text: "Two", create: false });
+  await f.daemon.llmClient.waitForChatIdle("threads");
+  assert.deepEqual((await assistantMessages(f.daemon, "threads")).map((message) => message.content), ["First", "Second"]);
+  assert.equal(f.requests.length, 2);
+  for (const [index, request] of f.requests.entries()) {
+    assert.equal("thread" in request, false, `request ${index + 1} has no thread`);
+    assert.doesNotMatch(String(f.headers[index]["anthropic-beta"] ?? ""), /message-threads/u);
+  }
+  // The second turn carries the first exchange itself, not a pointer to it.
+  assert.deepEqual(f.requests[1].messages.map((message) => message.role), ["user", "assistant", "user"]);
+});
+
+test("a server session keeps 1.4.0's cache warming unless the profile chooses a mode", () => {
+  const dir = mkdtempSync(join(tmpdir(), "aiden-daemon-warming-"));
+  try {
+    // Pi 1.5's own default would keep warming between turns.
+    assert.equal(api.SettingsManager.create(dir, dir).getCacheWarmingMode(), "idle");
+    assert.equal(api.daemonSettingsManager(dir, dir).getCacheWarmingMode(), "streaming");
+    for (const mode of ["off", "streaming", "idle"]) {
+      api.atomicJson(join(dir, "settings.json"), { cacheWarming: mode });
+      assert.equal(api.daemonSettingsManager(dir, dir).getCacheWarmingMode(), mode);
+    }
+    api.atomicJson(join(dir, "settings.json"), { cacheWarming: "always" });
+    assert.equal(api.daemonSettingsManager(dir, dir).getCacheWarmingMode(), "streaming");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

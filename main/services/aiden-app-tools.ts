@@ -1,7 +1,7 @@
 import { AIDEN_APP_DESTINATIONS } from "./aiden-app-navigation.js";
 import { randomUUID } from "node:crypto";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import { readAidenHelp } from "./aiden-app-knowledge.js";
 import type { AppControlsService, AppControlContext } from "./app-controls-core.js";

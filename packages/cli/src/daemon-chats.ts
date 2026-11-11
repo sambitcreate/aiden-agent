@@ -6,6 +6,8 @@ import { createArtifactsExtension } from "./extensions/artifacts.ts";
 import { createMcpExtension } from "./mcp.ts";
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 import { visionAttachmentAlias } from "../../../main/services/vision-attachment-reference.js";
+import { withoutMessageThreads } from "../../../main/services/pi-message-threads.js";
+import { daemonSettingsManager } from "./daemon-session-settings.ts";
 import type { CliBotGenerationRuntime } from "./bots.ts";
 import type { BotRuntimeAuthorityAdmission } from "../../../main/services/bot-runtime-authority.js";
 import { assertBotRuntimeProviderSelection } from "../../../main/services/bot-runtime-authority.js";
@@ -259,8 +261,9 @@ export function createDaemonChats(agentDir: string) {
           if (entry.stopRequested || owner.isDestroyed() || current?.folderPath !== workspace.folderPath || (unattended && accessFor(agentDir, cwd) !== "full")) throw new Error("The unattended workspace authority was revoked.");
         };
         const runtime = await createCliModelRuntime(agentDir);
-        const model = runtime.getModel(params.providerId, params.model);
-        if (!model) throw new Error("The saved provider/model is unavailable.");
+        const found = runtime.getModel(params.providerId, params.model);
+        if (!found) throw new Error("The saved provider/model is unavailable.");
+        const model = withoutMessageThreads(found);
         const botTools = botAdmission ? await bots!.tools(botAdmission) : [];
         const additionalNames: string[] = [];
         const registeredTools: { readonly name: string; readonly label?: string }[] = [];
@@ -359,7 +362,7 @@ export function createDaemonChats(agentDir: string) {
         });
         await loader.reload(); await assertAuthority();
         const manager = SessionManager.open(sessionPath(params.chatId), join(root, "journals"), cwd);
-        const { session } = await createAgentSession({ cwd, agentDir, modelRuntime: runtime, model,
+        const { session } = await createAgentSession({ cwd, agentDir, settingsManager: daemonSettingsManager(cwd, agentDir), modelRuntime: runtime, model,
           thinkingLevel: params.thinkingLevel, resourceLoader: loader, sessionManager: manager,
           tools: botAdmission ? botTools.map((tool) => tool.name) : workspace.folderPath ? ["read", "bash", "edit", "write", "grep", "find", "ls", ...additionalNames] : [],
         });

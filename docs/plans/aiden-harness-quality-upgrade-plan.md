@@ -8,7 +8,7 @@ Improve Aiden's ability to complete work, recover from failures, show what was v
 
 Keep the active Pi packages pinned at **1.3.0** during the initial work. Preserve the frozen `@aiden/pi-legacy-harness` alias at **0.87.1**. The changes belong primarily to Aiden's runtime integration, tools, memory, clients, and evaluation infrastructure. Use existing Pi hooks and Aiden's immutable runtime contribution snapshots. Do not fork Pi, patch installed dependencies, replace the runtime with Harness², or combine a provider upgrade with a harness experiment.
 
-If an upstream defect or missing public API prevents a slice, reproduce it independently and use the separate Pi upgrade gate below. The current dependency record is [Pi 1.4.0 project memory](../../.memory/pi-1.4.0-upgrade.md); the pins moved from 1.3.0 through the separate gate below on 2026-10-26, with no harness policy change.
+If an upstream defect or missing public API prevents a slice, reproduce it independently and use the separate Pi upgrade gate below. The current dependency record is [Pi 1.5.2 project memory](../../.memory/pi-1.5.2-upgrade.md); the pins moved from 1.3.0 to 1.4.0 on 2026-10-26 and to 1.5.2 on 2026-11-11 through the separate gate below, with no harness policy change.
 
 ## Evidence and baseline
 

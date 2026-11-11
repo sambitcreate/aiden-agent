@@ -1,7 +1,6 @@
 import { CLASSIFIER_JSON_BYTES, isClassifierApprovalDetails, type ClassifierApprovalDetails } from "../../renderer/shared/classifier-approval.js";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import {
-  Type,
   type ClassifierQuestion,
   type ClassifierContext,
   type ImageContent,
@@ -9,6 +8,7 @@ import {
   type Models,
   type Usage,
 } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import {
   IMAGE_ASPECT_RATIOS,
   isImageAspectRatio,

@@ -1,5 +1,5 @@
 import { createAgentSession, DefaultResourceLoader, SessionManager, type AgentSession } from "@earendil-works/pi-coding-agent";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { createCliModelRuntime } from "./providers.ts";
 

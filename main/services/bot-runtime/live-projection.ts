@@ -39,7 +39,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { BACKGROUND_CONTEXT, withCancel } from "@earendil-works/chord/context";
 import type { AssistantMessage, ImageContent, Message, TextContent, ToolCall } from "@earendil-works/pi-ai";
-import type { Conversation, ConversationWatch, EntryRecord } from "@earendil-works/pi-durable";
+import type { Conversation, EntryRecord } from "@earendil-works/pi-durable";
 import type { ConnectCardEntry, ConnectCardStatus } from "../../../renderer/shared/bot-connections.js";
 import { ASK_USER_QUESTION_TOOL_NAME } from "../../../renderer/shared/ask-user-question.js";
 import {
@@ -86,6 +86,7 @@ import {
   botIssueStatusOf,
   type BotIssueResolution,
 } from "../../../renderer/shared/bot-issues.js";
+import { watchActiveConversation, type ActiveConversationWatch } from "./active-transcript-watch.js";
 import { botStepDescriptor } from "./bot-activity-detail.js";
 import { BOT_SHARED_IMAGE_ENTRY_KIND } from "./bot-images.js";
 import { BOT_WAKE_UP_ENTRY_KIND } from "../../../renderer/shared/bot-wake-ups.js";
@@ -1107,7 +1108,7 @@ interface Feed {
   runActive: boolean;
   /** Identity of the current run; a follow-up turn replaces the run without a gap. */
   runKey: string | null;
-  watch: ConversationWatch;
+  watch: ActiveConversationWatch;
   cancel: () => void;
   ended: boolean;
   /** Serializes frame handling with refreshes and state changes. */
@@ -1385,7 +1386,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     const promise = (async () => {
       const conversation = await deps.conversation(botId);
       const { context, cancel } = withCancel(BACKGROUND_CONTEXT);
-      const watch = await conversation.watch(context);
+      const watch = await watchActiveConversation(conversation, context);
       const initial = watch.value;
       let opened: Feed | undefined;
       const classifier = createQueuedInputClassifier({

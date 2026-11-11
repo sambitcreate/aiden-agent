@@ -1,5 +1,5 @@
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import {
   ASK_USER_MAX_DESCRIPTION_LENGTH,
   ASK_USER_MAX_HEADER_LENGTH,

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { isBoundedBotText } from "../../../renderer/shared/bot-capabilities.js";
 import { withoutBotHandoffControls } from "../../../renderer/shared/bot-handoffs.js";

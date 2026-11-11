@@ -29,7 +29,7 @@ import {
 import * as fs from "fs/promises";
 import * as path from "path";
 import { assertPathInside } from "../shared/path-containment.js";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { RE2 as RE2Matcher } from "re2-wasm";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";

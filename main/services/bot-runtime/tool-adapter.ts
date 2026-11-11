@@ -14,7 +14,8 @@
 //   snapshots or append entries) is built per call by `bind`, so nothing it
 //   depends on lives in a closure that a restart would lose.
 
-import type { Context, JsonValue } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { EntryRecord, SubmissionRecord, ToolExecutionApi, ToolExecutionResult, ToolRegistration } from "@earendil-works/pi-durable";
 

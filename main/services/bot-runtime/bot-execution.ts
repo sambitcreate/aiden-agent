@@ -1,7 +1,8 @@
 /** Pin-specific Pi 1.4 public RegistryReader adapter. No shared AgentDoc mutation. */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
-import type { Context, JsonValue } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
+import type { JsonValue } from "@earendil-works/chord/json";
 import { createAssistantMessageEventStream, lazyStream, type Api, type AssistantMessage, type Model, type Models } from "@earendil-works/pi-ai";
 import { CompactionTask, GenerationTask, ToolTask, LiveDoc, defineDoc, defineTask, type Harness, type RegistryReader, type RegistrySnapshot, type Task, type TaskId, type TaskRuntime, type Tx, type SubmissionId } from "@earendil-works/pi-durable";
 import { withBotConnectorTaskScope, type BotConnectorExecutionRestriction } from "../bot-connector-inventory-scope.js";

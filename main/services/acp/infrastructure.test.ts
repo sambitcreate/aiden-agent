@@ -7,7 +7,7 @@ import { PassThrough } from "node:stream";
 import test from "node:test";
 import { setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { Value } from "typebox/value";
 
 import { createDeviceAgentTools } from "../devices/device-tools.js";

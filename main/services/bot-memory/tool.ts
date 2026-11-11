@@ -15,7 +15,7 @@ import { isBotMessageRequestId } from "../../../renderer/shared/bot-messages.js"
 // the model reads the live state from its next result.
 
 import { botPeerIngress } from "../bot-peers/ingress.js";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { BOT_MEMORY_LIMITS, type BotMemoryTarget } from "../../../renderer/shared/bot-memory.js";
 import { BOT_INTRO_REQUEST_PREFIX } from "../bot-runtime/bot-intro.js";

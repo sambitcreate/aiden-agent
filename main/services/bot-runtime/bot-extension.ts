@@ -63,7 +63,8 @@ import type { BotApprovalDecision } from "./bot-approval-tallies.js";
 export type { BotApprovalAnswer, BotApprovalDecision } from "./bot-approval-tallies.js";
 import { botApprovalRuleKey } from "../../../renderer/shared/tool-approval-scope.js";
 import { createHash, randomUUID } from "node:crypto";
-import type { Context, JsonValue } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
+import type { JsonValue } from "@earendil-works/chord/json";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
@@ -89,6 +90,7 @@ import {
   type Registry,
   type ToolHookCall,
   type ToolExecutionApi,
+  type ToolExecutionResult,
 } from "@earendil-works/pi-durable";
 import type { BotDefinition } from "../../../renderer/shared/bots.js";
 import type {
@@ -507,6 +509,19 @@ function ordinaryEvidence(value: BotApprovalRequirement, executionId: string, to
     rule: value.rule?.id, target: value.remember?.target });
   return { requirementsFingerprint: fingerprint, authorizationFingerprint: fingerprint };
 }
+/** Diagnostic codes of the error results Pi Durable writes without running the tool. */
+const HARNESS_TOOL_RESULT_CODES: ReadonlySet<string> = new Set([
+  "tool_unavailable", "invalid_arguments", "blocked", "interrupted", "restart_limit", "aborted", "abandoned",
+]);
+
+/** A result the Harness wrote for a call the tool never ran (or never finished). */
+export function harnessWrittenToolResult(result: Pick<ToolExecutionResult, "isError" | "diagnostics">): boolean {
+  return result.isError === true && (result.diagnostics ?? []).some((d) => d.code !== undefined && HARNESS_TOOL_RESULT_CODES.has(d.code));
+}
+
+/** What the tool hooks and the execution fence both hand the policy helpers: a tool task's execution API has no entry reads. */
+type ToolHookApi = Omit<HookApi, "entry" | "entries">;
+
 /** Revocation drops the probe closure and its live HookApi even if a consumer
  * mistakenly keeps the context or its callback after settlement. */
 function publicationValidation(probe: (() => Promise<void>) | undefined) {
@@ -777,7 +792,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
    * Always answers the rule, never the hook. The answer is kept in the call's
    * memo, so a replay or a re-decision doesn't ask again. Returns the block, if any.
    */
-  async function askForHook(summary: string, call: ToolHookCall, api: HookApi, context: Context, executionId: string,
+  async function askForHook(summary: string, call: ToolHookCall, api: ToolHookApi, context: Context, executionId: string,
     owner: BotApprovalOwner, requestIds: readonly (string | undefined)[]): Promise<{ block: string } | undefined> {
     if ((await api.memo<boolean>(HOOK_ASK_ALLOWED_MEMO, context)) === true) return undefined;
     const fingerprint = ordinaryEvidence({ summary }, executionId, call.name, call.arguments, owner, requestIds).authorizationFingerprint;
@@ -797,7 +812,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     return undefined;
   }
 
-  async function authorizeTool(call: ToolHookCall, api: HookApi, context: Context, skipPlanCoverage = false, attempt = 0): Promise<{ block: string } | undefined> {
+  async function authorizeTool(call: ToolHookCall, api: ToolHookApi, context: Context, skipPlanCoverage = false, attempt = 0): Promise<{ block: string } | undefined> {
     if (attempt > 3) return { block: "This action's approval requirements kept changing. Ask again." };
     call = { ...call, arguments: structuredClone(call.arguments) };
     const executionId = await api.memo(EXECUTION_ID_MEMO, randomUUID(), context);
@@ -1068,14 +1083,14 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
   }
 
   /** The remembered-approval hint settled for this call, if it still belongs to it. */
-  async function settledHint(executed: { id: string; authorizationFingerprint: string; cacheKey: string }, api: HookApi, context: Context): Promise<string | undefined> {
+  async function settledHint(executed: { id: string; authorizationFingerprint: string; cacheKey: string }, api: ToolHookApi, context: Context): Promise<string | undefined> {
     const cache = await api.memo<ApprovalSettlementMemo>(executed.cacheKey, context);
     if (!cache || cache.id !== executed.id || cache.authorizationFingerprint !== executed.authorizationFingerprint) return undefined;
     return typeof cache.result.hint === "string" ? cache.result.hint : undefined;
   }
 
   /** Hook context for this call's result: PreToolUse's, kept in its memo, then PostToolUse's. */
-  async function hookAdditions(call: ToolHookCall, result: { output?: unknown; isError?: boolean }, api: HookApi, context: Context): Promise<string | undefined> {
+  async function hookAdditions(call: ToolHookCall, result: { output?: unknown; isError?: boolean }, api: ToolHookApi, context: Context): Promise<string | undefined> {
     if (!Array.isArray(result.output)) return undefined;
     const client = await botHooks();
     if (client === undefined) return undefined;
@@ -1096,7 +1111,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     return additions.length === 0 ? undefined : additions.join("\n\n");
   }
 
-  async function currentExecutionApproval(toolName: string, api: HookApi, args: unknown, context: Context) {
+  async function currentExecutionApproval(toolName: string, api: ToolHookApi, args: unknown, context: Context) {
     const owner = await runOwner(api, context), requestIds = await runRequestIds(api, context);
     const executionId = await api.memo<string>(EXECUTION_ID_MEMO, context);
     if (!executionId || expired(owner) || !owner.inputs.length) return undefined;
@@ -1362,6 +1377,9 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
       afterTool: async (call, result, api, context) => {
         const key = String(api.taskId), executed = executedApprovals.get(key);
         executedApprovals.delete(key); executionApprovals.delete(key); ordinaryExecutions.delete(key);
+        // Pi Durable 1.5 also runs afterTool on the error results it writes
+        // itself; the tool never ran, so PostToolUse stays out of those.
+        if (harnessWrittenToolResult(result)) return undefined;
         const hint = executed && !result.isError ? await settledHint(executed, api, context) : undefined;
         const additions = [await hookAdditions(call, result, api, context), hint === undefined ? undefined : `\n\n${hint}`]
           .filter((text): text is string => text !== undefined);
@@ -1435,7 +1453,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
         const { tool, replay, mcp, bind, admitPlan } = entry;
         // Rebuild call context using the current execution API, including recovery,
         // because an unsafe tool's old HookApi is no longer live after intent.
-        const executionCall = async (api: HookApi & { callId: string }, args: unknown, context: Context): Promise<ToolHookCall> => ({
+        const executionCall = async (api: ToolHookApi & { callId: string }, args: unknown, context: Context): Promise<ToolHookCall> => ({
           type: "toolCall", id: api.callId, name: tool.name, arguments: args as ToolHookCall["arguments"],
           ...(await api.memo<boolean>(NESTED_EXECUTION_MEMO, context) ? { parent: { taskId: api.taskId, callId: api.callId } } : {}),
         });

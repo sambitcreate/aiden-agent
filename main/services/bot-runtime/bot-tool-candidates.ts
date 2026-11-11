@@ -4,7 +4,7 @@
 
 import { createProposeSkillTool } from "../bot-skills/propose-tool.js";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import { createSuggestConnectionTool, type SuggestConnectionDeps } from "../bot-runtime-tools/suggest-connection.js";
 import { createRoutineNotesTool, type BotRoutineNotesStore } from "../bot-routine-notes.js";
