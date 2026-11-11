@@ -1,3 +1,6 @@
+import { withBotConnectorModelEffect } from "../bot-connector-inventory-scope.js";
+import { botExecutionScope } from "./bot-execution.js";
+import { calendarWatchCallAllowed } from "../bot-routine-events/connector-calendar-policy.js";
 // Turns a Bot's current authority into the `aiden-bot` extension's tool,
 // policy and guidance dependencies.
 //
@@ -14,7 +17,7 @@
 //   rule hands the call to the person instead of running it. On a turn nobody
 //   is watching (routine, Telegram) neither waits: the call is blocked with
 //   what the person needs to do.
-// - Routines go ahead (Settings → Bots, off by default): on a run made only of
+// - Routines go ahead (Settings → Bots & Approvals, off by default): on a run made only of
 //   routine inputs, an approval (today's or a rule's Ask first) is granted
 //   without a card. Hand-offs, the locked rules, Computer Use on the person's
 //   Mac and every turn a person or Telegram joined are unchanged.
@@ -133,7 +136,7 @@ export interface BotToolAssemblyPorts {
   rules?(botId: string): Promise<readonly BotRule[]>;
   /** The Bot's name, for the hand-off card's "why". */
   botName?(botId: string): Promise<string | undefined>;
-  /** Settings → Bots, read fresh on every call: routine runs go ahead without asking. Absent: off. */
+  /** Settings → Bots & Approvals, read fresh on every call: routine runs go ahead without asking. Absent: off. */
   routinesGoAhead?(): Promise<boolean>;
   plans?: Pick<BotPlans, "cover" | "admit">;
 }
@@ -236,7 +239,9 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
     const live = await ports.sources.approvalFor?.(botId, toolName, call);
     const summary = live === undefined ? await botToolApprovalSummary(toolName, call.args, facts) : undefined;
     const baseline = live === undefined ? (summary === undefined ? undefined : { summary }) : live.approval ?? undefined;
-    const action = structuredClone(live !== undefined ? live.action : await describeMcpAction(toolName, call.args, facts));
+    const scopedWatch = botExecutionScope(botId)?.claim.connectorRestriction;
+    const calendarRead = scopedWatch?.binding.adapter === "composio-calendar-v1" && calendarWatchCallAllowed(scopedWatch, call.args);
+    const action = structuredClone(live !== undefined ? live.action : calendarRead ? undefined : await describeMcpAction(toolName, call.args, facts));
     let rules: readonly BotRule[] = [];
     if (action !== undefined && (ports.rules || ports.plans || ports.allowList)) {
       try { rules = structuredClone(ports.rules ? await ports.rules(botId) : []); } catch { throw new Error(RULES_UNREADABLE); }
@@ -302,7 +307,7 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
     await admission.revalidateBeforeEffect();
     const freshFacts = await ports.sources.facts(botId, admission);
     const turns = (call.requestIds ?? []).map(botTurnOf);
-    if (!(await botToolVerdict(toolName, freshFacts, { botMessage: turns.some(t => t.botMessage), telegram: turns.some(t => t.telegram), routine: turns.some(t => t.routine) }, call.args)).allowed) return undefined;
+    if (!(await botToolVerdict(toolName, freshFacts, { botMessage: turns.some(t => t.botMessage), telegram: turns.some(t => t.telegram), routine: turns.some(t => t.routine), peer: turns.some(t => t.peer) }, call.args)).allowed) return undefined;
     if (await list.consentRevision(botId, described.target) !== consentRevision) return undefined;
     const fresh = await describePolicy(botId, toolName, call, freshFacts);
     if (await list.consentRevision(botId, described.target) !== consentRevision || !(await fresh.rulesCurrent())) return undefined;
@@ -326,7 +331,7 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
       const facts = await ports.sources.facts(botId, admission);
       const turns = call.requestIds.map(botTurnOf);
       const verdict = await botToolVerdict(toolName, facts, { botMessage: turns.some(t => t.botMessage),
-        telegram: turns.some(t => t.telegram), routine: turns.some(t => t.routine) }, call.args);
+        telegram: turns.some(t => t.telegram), routine: turns.some(t => t.routine), peer: turns.some(t => t.peer) }, call.args);
       if (!verdict.allowed) return undefined;
       const policy = await describePolicy(botId, toolName, call, facts);
       return await requirementsFrom(botId, toolName, call, original, admission, facts, policy);
@@ -383,6 +388,15 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
                 // Plan admission can await disk and revalidation. No await may
                 // separate this last cancellation check from actual invocation.
                 effectSignal.throwIfAborted();
+                const execution = botExecutionScope(botId);
+                if (mcp && execution?.claim.connectorRestriction?.binding.adapter === "composio-calendar-v1") {
+                  return withBotConnectorModelEffect(() => execution.runtime.revalidate(), async () => {
+                    effectSignal.throwIfAborted();
+                    const result = await tool.execute(toolCallId, params, effectSignal, onUpdate);
+                    effectSignal.throwIfAborted();
+                    return result;
+                  });
+                }
                 return tool.execute(toolCallId, params, effectSignal, onUpdate);
               };
               const authorization = executionId ? entryExecutions.get(executionId) : undefined;
@@ -425,11 +439,11 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
       try {
         const facts = await ports.sources.facts(botId, admission);
         const set = await ports.sources.candidates(botId, admission, facts, turn);
-        const { telegram, routine, botMessage } = botTurnOf(turn.requestId);
+        const { telegram, routine, botMessage, peer } = botTurnOf(turn.requestId);
         const entries: BotToolEntry[] = [];
         for (const candidate of set.tools) {
           if (!botIngressAllowsTool(candidate.tool.name, [turn.requestId])) continue;
-          if (!(await botToolVerdict(candidate.tool.name, facts, { telegram, routine, botMessage })).allowed) continue;
+          if (!(await botToolVerdict(candidate.tool.name, facts, { telegram, routine, botMessage, peer })).allowed) continue;
           const bind = candidate.bind;
           const guard = (tool: AgentTool, call?: BotToolCall) => (candidate.interactive ? tool : fenced(botId, tool, candidate.mcp === true, call));
           entries.push({
@@ -468,16 +482,19 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
         // The calling run's own ingress, not whoever refreshed the tools last.
         if (call?.requestIds && !botIngressAllowsTool(toolName, call.requestIds)) return {allowed: false, reason: "This tool is not available on this turn."};
         const turns = (call?.requestIds ?? []).map(botTurnOf);
+        const taskIngress = botTurnOf(undefined);
+        if (taskIngress.peer) turns.push(taskIngress);
         const verdict = await botToolVerdict(toolName, facts, {
           botMessage: turns.some((turn) => turn.botMessage),
           telegram: turns.some((turn) => turn.telegram),
           routine: turns.some((turn) => turn.routine),
+          peer: turns.some((turn) => turn.peer),
         }, call?.args);
         if (!verdict.allowed) return verdict;
         if (call === undefined) return { allowed: true };
         const policy = await describePolicy(botId, toolName, call, facts);
         const { live, baseline, action, rule, matchingAsk, ruled, rulesCurrent } = policy;
-        const unattended = turns.some((turn) => turn.routine || turn.telegram);
+        const unattended = turns.some((turn) => turn.routine || turn.telegram || turn.peer);
         const label = rule ? botRuleLabel(rule) : "";
         const ruleRef = rule ? { id: rule.id, label } : undefined;
         const ownSummary = baseline?.summary ?? live?.summary ?? summarizeToolCall(toolName, call.args);
@@ -488,7 +505,8 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
             ...baseline, summary: `Rule · ${label} — ${callSummary}`, rule: ruleRef,
           };
           if (!approval) return { allowed: true };
-          const routineOnly = turns.length > 0 && turns.every(turn => turn.routine && !turn.telegram);
+          if (turns.some(turn => turn.peer)) return { allowed: false, reason: "Peer work cannot obtain fresh person approval for this action." };
+          const routineOnly = turns.length > 0 && turns.every(turn => turn.routine && !turn.telegram && !turn.peer);
           const goAhead = routineOnly && toolName !== COMPUTER_USE_TOOL_NAME &&
             (await ports.routinesGoAhead?.().catch(() => false)) === true && (await call.hasRoutineInputs?.()) === true;
           if (goAhead) return { allowed: true, approval: { ...approval, preapproved: true } };

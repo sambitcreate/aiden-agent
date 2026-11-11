@@ -1,8 +1,7 @@
-export type StudioFeature = "designStudio" | "createImages";
+export type StudioFeature = "createImages";
 
 /** Root path of each studio surface; nested routes live under the root. */
 export const STUDIO_ROUTE_ROOTS = Object.freeze({
-  designStudio: "/design",
   createImages: "/images",
 } as const satisfies Record<StudioFeature, string>);
 

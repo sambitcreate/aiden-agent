@@ -207,6 +207,26 @@ final class AidenBotImagePlaygroundTests: XCTestCase {
         )
     }
 
+    @MainActor
+    func testAppInitializationRemovesCrashResidueWithoutTouchingUnrelatedFiles() throws {
+        let fileManager = FileManager.default
+        let directory = AidenBotImagePlaygroundCandidateStore().directory
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        let residue = directory.appending(path: "candidate-launch-\(UUID().uuidString).image")
+        let unrelated = directory.appending(path: "unrelated-launch-\(UUID().uuidString).txt")
+        defer {
+            try? fileManager.removeItem(at: residue)
+            try? fileManager.removeItem(at: unrelated)
+        }
+        try Data([0x01]).write(to: residue)
+        try Data([0x02]).write(to: unrelated)
+
+        _ = AidenOnTheGoApp()
+
+        XCTAssertFalse(fileManager.fileExists(atPath: residue.path))
+        XCTAssertEqual(try Data(contentsOf: unrelated), Data([0x02]))
+    }
+
     func testProcessLaunchCleanupRemovesCrashResidueWithoutTouchingUnrelatedFiles() throws {
         let fileManager = FileManager.default
         let root = fileManager.temporaryDirectory

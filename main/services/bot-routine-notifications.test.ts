@@ -13,6 +13,18 @@ import type { ScheduledRun, ScheduledTask } from "./types.js";
 const NOW = Date.parse("2026-08-19T15:01:00.000Z");
 const HOUR = 60 * 60 * 1_000;
 
+test("peer results join only the negotiated feed, retain root dedupe and respect quiet delivery", async (t) => {
+  const h = await harness(); t.after(h.cleanup);
+  await h.log.append(delivery({ class: "peer_result", dedupeKey: "peer-root", requestId: "peer-root", routineId: undefined, status: "info", title: "🗓".repeat(60) + "X".repeat(80), body: "" }));
+  await h.log.append(delivery({ class: "peer_result", dedupeKey: "peer-quiet", requestId: "peer-quiet", routineId: undefined, quiet: true }));
+  assert.equal((await h.feed.list(undefined)).notifications.length, 0);
+  assert.equal((await h.feed.list(undefined, { issues: true })).notifications.length, 0);
+  const shown = (await h.feed.list(undefined, { peers: true })).notifications;
+  assert.equal(shown.length, 1); assert.equal(shown[0].id, "peer-root"); assert.equal(shown[0].kind, "peer");
+  assert.equal([...shown[0].routineName].length, 120); assert.equal(shown[0].preview, "Bot update ready.");
+  assert.equal(Object.prototype.hasOwnProperty.call(shown[0], "routineId"), false); assert.equal(Object.prototype.hasOwnProperty.call(shown[0], "status"), false);
+});
+
 function delivery(overrides: Partial<Omit<BotDeliveryRow, "id">> = {}): Omit<BotDeliveryRow, "id"> {
   return {
     botId: "bot_fixture_01",
@@ -57,6 +69,7 @@ test("the feed serves the shared fixture's notification for a routine's visible 
   t.after(h.cleanup);
   await h.log.append(delivery());
 
+  h.advanceTo(NOW + 1); // The fixture cursor is the last completed millisecond.
   assert.deepEqual(await h.feed.list(undefined), fixture.botRoutineNotifications);
 });
 
@@ -92,8 +105,17 @@ test("lists due rows newest first, at most 100, after since", async (t) => {
   assert.equal(after.notifications[after.notifications.length - 1]!.id, "run-51");
 
   h.advanceTo(NOW + HOUR);
-  const due = await h.feed.list(undefined);
-  assert.deepEqual(due.notifications[0]?.id, "held", "the held row joins once it is due");
+  const funnel = createBotDeliveryFunnel({
+    log: h.log, gate: ALWAYS_NOW_GATE, mac: async () => {}, telegram: async () => {}, now: () => NOW + HOUR,
+  });
+  const beforeRelease = await h.feed.list(NOW);
+  assert.deepEqual(beforeRelease.notifications, []);
+  await funnel.flush(NOW + HOUR);
+  h.advanceTo(NOW + HOUR + 1);
+  const afterRelease = await h.feed.list(Date.parse(beforeRelease.now));
+  assert.deepEqual(afterRelease.notifications.map((row) => row.id), ["held"],
+    "a release in the same millisecond as the preceding poll reaches the next poll");
+  assert.deepEqual((await h.feed.list(Date.parse(afterRelease.now))).notifications, []);
 });
 
 test("never lists silent, skipped or blocked runs", async (t) => {
@@ -190,6 +212,7 @@ test("never lists silent, skipped or blocked runs", async (t) => {
     signal: new AbortController().signal,
     trigger: { kind: "manual", key: "loud" },
   });
+  h.advanceTo(NOW + 1);
   assert.equal((await h.feed.list(undefined)).notifications.length, 1, "a routine with notifications on still alerts");
 });
 
@@ -322,10 +345,40 @@ test("persisted access issue audience survives restart and pruning of the issue 
   const reloadedLog = createBotDeliveryLog({ profileDir: () => h.profile, now: () => NOW });
   const stored = await reloadedLog.find("bot_fixture_01", "issue:retained_access");
   assert.equal(stored?.requiredCapability, "bot:access-requests");
-  const feed = createBotNotificationFeed({ log: reloadedLog, botName: async () => "Scout", now: () => NOW, issueKind: async () => issueExists ? "access_needed" : undefined });
+  const feed = createBotNotificationFeed({ log: reloadedLog, botName: async () => "Scout", now: () => NOW + 1, issueKind: async () => issueExists ? "access_needed" : undefined });
   const legacy = await feed.list(undefined, { issues: true });
   assert.deepEqual(legacy.notifications.map((n) => n.routineName), ["Run stalled"]);
   const holder = await feed.list(undefined, { issues: true, accessRequests: true });
   assert.deepEqual(holder.notifications.map((n) => n.routineName).sort(), ["Allow Reports", "Run stalled"]);
   assert.equal(JSON.stringify(holder).includes("requiredCapability"), false);
+});
+
+test("mixed delivery classes honor independent peer, messaging and access-request audiences", async t => {
+  const h = await harness(); t.after(h.cleanup);
+  const cursor = NOW - 1000;
+  for (const [offset, input] of [
+    { class: "routine_result", dedupeKey: "routine", requestId: "routine" },
+    { class: "peer_result", dedupeKey: "peer", requestId: "peer", routineId: undefined },
+    { class: "bot_message", dedupeKey: "message", requestId: "message", routineId: undefined },
+    { class: "issue", dedupeKey: "issue:ordinary", requestId: "ordinary", routineId: undefined },
+    { class: "issue", dedupeKey: "issue:access", requestId: "access", routineId: undefined, requiredCapability: "bot:access-requests" },
+    { class: "peer_result", dedupeKey: "quiet-peer", requestId: "quiet-peer", quiet: true, routineId: undefined },
+    { class: "bot_message", dedupeKey: "quiet-message", requestId: "quiet-message", quiet: true, routineId: undefined },
+  ].entries()) await h.log.append(delivery({ ...input, createdAt: cursor + 1 + offset, deliverAfter: cursor + 1 + offset } as Partial<BotDeliveryRow>));
+  const ids = async (options: Parameters<typeof h.feed.list>[1]) => (await h.feed.list(cursor, options)).notifications.map(row => row.id).sort();
+  assert.deepEqual(await ids({}), ["routine"]);
+  assert.deepEqual(await ids({ peers: true }), ["peer", "routine"]);
+  assert.deepEqual(await ids({ messaging: true }), ["message", "routine"]);
+  assert.deepEqual(await ids({ issues: true }), ["ordinary", "routine"]);
+  assert.deepEqual(await ids({ accessRequests: true }), ["routine"]);
+  assert.deepEqual(await ids({ issues: true, accessRequests: true }), ["access", "ordinary", "routine"]);
+  const options = { peers: true, messaging: true, issues: true, accessRequests: true };
+  const full = (await h.feed.list(cursor, options)).notifications;
+  assert.deepEqual(full.map(row => row.id).sort(), ["access", "message", "ordinary", "peer", "routine"]);
+  assert.equal(new Set(full.map(row => row.id)).size, 5);
+  for (const row of full.filter(row => row.kind)) {
+    assert.equal("routineId" in row, false); assert.equal("status" in row, false);
+  }
+  assert.deepEqual(full.filter(row => row.kind).map(row => [row.id, row.kind]).sort(), [["access", "issue"], ["message", "message"], ["ordinary", "issue"], ["peer", "peer"]]);
+  assert.deepEqual((await h.feed.list(NOW, options)).notifications, []);
 });

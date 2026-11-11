@@ -1,0 +1,112 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import fs from "node:fs";
+import fsPromises from "node:fs/promises";
+import http from "node:http";
+import https from "node:https";
+import childProcess from "node:child_process";
+import { verifyCalendarContract } from "./composio-calendar-contract.js";
+import { createComposioCalendarTransport } from "./composio-calendar-transport.js";
+import type { ComposioCalendarTransportContext } from "./composio-calendar-host-port.js";
+import { syntheticCalendarExecutor, syntheticCalendarMetadata, syntheticCalendarSchemas } from "./composio-calendar-test-support.js";
+import type { ComposioCalendarRead } from "./connector-watch-composio.js";
+import { installElectronConnectorWatchTransport } from "./connector-watch-startup.js";
+import { composioCalendarHostTransport } from "./composio-calendar-host-port.js";
+
+const request: ComposioCalendarRead = { kind: "listEvents", accountId: "explicit-account", calendarId: "explicit@example.test", timeMin: "2026-11-04T15:00:00Z", timeMax: "2026-11-04T16:00:00Z", timezone: "UTC" };
+function fixture() {
+  let searches = 0, schemas = 0; const executions: ComposioCalendarRead[] = [];
+  const metadata = syntheticCalendarMetadata(); const response = syntheticCalendarSchemas();
+  const context: ComposioCalendarTransportContext = { phase: "background", metadata, signal: new AbortController().signal, async assertCurrent() {}, async getSchemas() { schemas++; return response; }, async execute(read) { executions.push(read); return syntheticCalendarExecutor(read, { items: [] }); }, async currentAccounts() { searches++; throw new Error("Search cannot run in the background"); } };
+  return { context, response, executions, expected: verifyCalendarContract(metadata, response).contract, counts: () => ({ searches, schemas }) };
+}
+test("Electron startup installs one lazy transport without file, credential, network or child-process work", async (t) => {
+  const f = fixture();
+  const io: string[] = [];
+  const forbidden = (name: string) => () => { io.push(name); throw new Error(`Unexpected startup I/O: ${name}`); };
+  let installed: ReturnType<typeof composioCalendarHostTransport>;
+  try {
+    t.mock.method(globalThis, "fetch", forbidden("fetch"));
+    t.mock.method(http, "request", forbidden("http"));
+    t.mock.method(https, "request", forbidden("https"));
+    t.mock.method(childProcess, "spawn", forbidden("spawn"));
+    t.mock.method(fs, "readFileSync", forbidden("readFileSync"));
+    t.mock.method(fs, "writeFileSync", forbidden("writeFileSync"));
+    t.mock.method(fsPromises, "readFile", forbidden("readFile"));
+    t.mock.method(fsPromises, "writeFile", forbidden("writeFile"));
+    t.mock.method(fsPromises, "mkdir", forbidden("mkdir"));
+    installElectronConnectorWatchTransport(false);
+    assert.equal(composioCalendarHostTransport(), undefined, "unsupported hosts install nothing");
+    installElectronConnectorWatchTransport(true);
+    installed = composioCalendarHostTransport();
+    assert.ok(installed);
+    installElectronConnectorWatchTransport(true);
+    assert.equal(composioCalendarHostTransport(), installed, "repeated startup preserves the exact transport");
+    assert.deepEqual(f.counts(), { searches: 0, schemas: 0 });
+    assert.deepEqual(f.executions, []);
+  } finally { t.mock.restoreAll(); }
+  assert.deepEqual(io, []);
+  const ready = await installed!.prepare(f.context, f.expected);
+  await ready.port.read(request, f.context.signal);
+  assert.equal(f.executions.length, 1, "the registered transport still performs the admitted fixed read when requested");
+  assert.deepEqual(f.counts(), { searches: 0, schemas: 2 });
+});
+test("background prepare/read revalidates fixed schemas and never Search", async () => {
+  const f = fixture(), transport = createComposioCalendarTransport();
+  const ready = await transport.prepare(f.context, f.expected);
+  await ready.port.assertCurrent(request, f.context.signal); await ready.port.read(request, f.context.signal);
+  await ready.port.read({ ...request, pageToken: "opaque-exact-next-page" }, f.context.signal);
+  assert.deepEqual(f.counts(), { searches: 0, schemas: 3 }); assert.equal(f.executions.length, 2);
+  assert.equal(f.executions[1]!.kind === "listEvents" && f.executions[1]!.pageToken, "opaque-exact-next-page");
+});
+test("background without accepted contract and schema drift cannot execute", async () => {
+  const f = fixture(), transport = createComposioCalendarTransport();
+  await assert.rejects(transport.prepare(f.context)); assert.equal(f.counts().schemas, 0);
+  const ready = await transport.prepare(f.context, f.expected);
+  f.response.data.tool_schemas.GOOGLECALENDAR_EVENTS_LIST!.output_schema.properties.error = { type: "string", maxLength: 5 } as { type: string };
+  await assert.rejects(ready.port.read(request, f.context.signal)); assert.equal(f.executions.length, 0);
+});
+test("revocation after awaited schema verification stops execution", async () => {
+  const f = fixture(); const ready = await createComposioCalendarTransport().prepare(f.context, f.expected);
+  let active = true; f.context.assertCurrent = async () => { if (!active) throw new Error("revoked"); };
+  f.context.getSchemas = async () => { active = false; return f.response; };
+  await assert.rejects(ready.port.read(request, f.context.signal), /revoked/u); assert.equal(f.executions.length, 0);
+});
+test("page cancellation during a noncooperative schema read cannot later execute", async () => {
+  const f = fixture(); const ready = await createComposioCalendarTransport().prepare(f.context, f.expected);
+  let release!: () => void, started!: () => void; const held = new Promise<void>((resolve) => { release = resolve; }); const entered = new Promise<void>((resolve) => { started = resolve; });
+  f.context.getSchemas = async () => { started(); await held; return f.response; };
+  const controller = new AbortController(); const pending = ready.port.read(request, controller.signal);
+  await entered; controller.abort(); await assert.rejects(pending); release(); await new Promise((resolve) => setImmediate(resolve)); assert.equal(f.executions.length, 0);
+});
+test("foreground prepare still requires current source admission before fixed schema I/O", async () => {
+  const f = fixture(); f.context.phase = "foreground"; f.context.assertCurrent = async () => { throw new Error("no current source admission"); };
+  await assert.rejects(createComposioCalendarTransport().prepare(f.context)); assert.equal(f.counts().schemas, 0); assert.equal(f.executions.length, 0);
+});
+
+test("transport enforces declared upstream output even when the critical Calendar fields are plausible", async () => {
+  const f = fixture(); f.response.data.tool_schemas.GOOGLECALENDAR_EVENTS_LIST!.output_schema.properties.items = { type: "string" } as never;
+  const expected = verifyCalendarContract(f.context.metadata, f.response).contract;
+  const ready = await createComposioCalendarTransport().prepare(f.context, expected);
+  await assert.rejects(ready.port.read(request, f.context.signal)); assert.equal(f.executions.length, 1);
+});
+
+test("unsafe executor output is refused at preparation before any executor call", async () => {
+  const f = fixture(); f.context.phase = "foreground";
+  f.context.metadata[2]!.outputSchema = { type: "object", properties: { data: { type: "string", pattern: "(a+)+$" } } };
+  await assert.rejects(createComposioCalendarTransport().prepare(f.context)); assert.equal(f.executions.length, 0);
+});
+
+test("production output validation rejects an executor root that violates its declared schema", async () => {
+  const f = fixture(); const ready = await createComposioCalendarTransport().prepare(f.context, f.expected);
+  f.context.execute = async (read) => ({ ...syntheticCalendarExecutor(read, { items: [] }), unexpected_output: true });
+  await assert.rejects(ready.port.read(request, f.context.signal));
+});
+
+test("background binding refuses absent-to-declared output source drift before executor I/O", async () => {
+  const f = fixture(); delete f.context.metadata[2]!.outputSchema;
+  const fallback = verifyCalendarContract(f.context.metadata, f.response).contract;
+  const ready = await createComposioCalendarTransport().prepare(f.context, fallback);
+  f.context.metadata[2]!.outputSchema = syntheticCalendarMetadata()[2]!.outputSchema;
+  await assert.rejects(ready.port.read(request, f.context.signal)); assert.equal(f.executions.length, 0);
+});

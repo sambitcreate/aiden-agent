@@ -80,6 +80,7 @@ import { retryUsageLimitNow, useUsageLimitNow, useUsageLimitWait } from "../lib/
 import { useSpendingStatus } from "../lib/use-spending-status";
 import { SpendingLimitNotice } from "../components/spending/spending-limit-notice";
 import { spendingNotice } from "../shared/spending";
+import { hookMessagesNotice } from "../shared/hooks-settings";
 import { useMarkChatRead } from "../lib/use-mark-chat-read";
 import { localHostAdapter } from "../lib/hosts/local-host-adapter";
 import { useObservedLocalRun } from "../lib/hosts/use-observed-local-run";
@@ -110,6 +111,8 @@ import { useReadAloud } from "../lib/tts-client";
 import type { ReadAloudActionProps } from "../components/read-aloud-button";
 import { Composer } from "../components/composer";
 import { AskUserQuestionComposer } from "../components/ask-user-question-composer";
+import { DesignModeConsentCard, useDesignModeConsent } from "../design/design-mode-consent";
+import { useCanvasFocusRequests } from "../design/canvas-focus-requests";
 import {
   AskUserQuestionCountdown,
   AskUserQuestionExpiryNotice,
@@ -129,8 +132,15 @@ import { BtwCard, reduceBtwView, type BtwLiveView } from "../components/btw-card
 import { ModelPicker } from "../components/model-picker";
 import { RemoteMachinePicker } from "../components/remote-new-chat-pickers";
 import { useNewChatMachines } from "../lib/hosts/use-new-chat-machines";
-import { ChatTitleMenu, WorkspaceChip, WorkspaceToolButtons } from "../components/chat-top-bar";
+import {
+  ChatTitleMenu,
+  DesignModeToggle,
+  DesignPaneSwitch,
+  WorkspaceChip,
+  WorkspaceToolButtons,
+} from "../components/chat-top-bar";
 import { OpenInEditorPicker } from "../components/open-in-editor-picker";
+import { DesignModeBannerSlot, useDesignChatBodyHidden } from "../design/design-layout";
 import { useCommandHandler, useCommandSystem, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { useComposerTypeFocus } from "../lib/use-composer-type-focus";
 import {
@@ -149,6 +159,13 @@ import { ContextPressureFeed } from "../lib/context-pressure-feed";
 import type { ChatContextPressureV1 } from "../shared/context-pressure";
 import { ReasoningVisibilityControl } from "../components/reasoning-visibility-control";
 import { ChatApprovalCard } from "../components/chat-approval-card";
+import { liveOpenChat } from "../lib/live-open-chat";
+import {
+  useLiveApprovalVoiceHint,
+  usePublishLiveChatApprovals,
+} from "../components/assistant/use-live-chat-voice-approvals";
+import { liveChatReachable, stopForLive, useLiveChatController } from "./live-chat-controller";
+import type { ChatInputSourceV1 } from "../shared/chat-input-source";
 import { ComputerUseContinueCallout } from "../components/computer-use-access-approval";
 import {
   chatsApi,
@@ -187,6 +204,7 @@ import { useActiveWorkspace } from "../lib/workspace-context";
 import { useWorkspaceTerminal } from "../components/terminal-drawer";
 import {
   EnvironmentPanelToggle,
+  QuickViewIcon,
   QuickViewToggle,
   useEnvironmentPanel,
 } from "../components/environment-panel";
@@ -444,6 +462,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const terminal = useWorkspaceTerminal();
   const git = useGitInfo(effectiveWorkspace?.id);
   const environmentPanel = useEnvironmentPanel();
+  const designChatBodyHidden = useDesignChatBodyHidden();
   const settingsBlockedReason = environmentPanel.gitOperationBusy
     ? "Wait for the current Git operation to finish"
     : environmentPanel.editorState.saving
@@ -796,6 +815,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const [deniedApprovalChatId, setDeniedApprovalChatId] = React.useState<string | null>(null);
   const [questionnaire, setQuestionnaire] = React.useState<(AskUserQuestionPromptV1 & { source?: "remote" }) | null>(null);
   const [questionnaireSubmitting, setQuestionnaireSubmitting] = React.useState(false);
+  // Aiden's "Open design mode?" card for this chat, while one is waiting.
+  const designModeConsent = useDesignModeConsent(capabilities.designMode ? chatId : undefined);
+  // Aiden's canvas_focus can arrive before the canvas loads; keep it until it does.
+  useCanvasFocusRequests(capabilities.designMode);
   // The prompt whose agent deadline passed while its card was still open.
   const [expiredQuestionnaireId, setExpiredQuestionnaireId] = React.useState<string | null>(null);
   // An answer submitted after the deadline, offered as a follow-up message.
@@ -1121,6 +1144,20 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const imageArtifactRecoveryUnavailable = chat.data?.imageArtifactRecoveryUnavailable === true;
   const isGenerating = streamingText !== null && !hasUnpersistedResponse;
   const contextLiveGeneration = isGenerating || isStartingGeneration;
+  // Aiden Live reads which chat is on screen (title, workspace, busy, stream).
+  const liveOpenChatOwner = React.useMemo(() => Symbol("chat-pane"), []);
+  const liveOpenChatTitle = chat.data?.title ?? "New agent";
+  const liveOpenChatStreamId = generationRef.current?.streamId ?? null;
+  React.useEffect(() => {
+    liveOpenChat.publish(liveOpenChatOwner, {
+      chatId,
+      title: liveOpenChatTitle,
+      workspaceId: chatWorkspaceId ?? null,
+      busy: contextLiveGeneration,
+      streamId: liveOpenChatStreamId,
+    });
+  }, [chatId, chatWorkspaceId, contextLiveGeneration, liveOpenChatOwner, liveOpenChatStreamId, liveOpenChatTitle]);
+  React.useEffect(() => () => liveOpenChat.clear(liveOpenChatOwner), [liveOpenChatOwner]);
   // A run this pane did not start (a paired phone's turn) streams in live
   // once main reports the chat busy, and stays until its saved reply lands.
   // A draft or this pane's own turn stops it; an idle chat holds nothing.
@@ -1223,6 +1260,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
         seedComposerAttachments(copied.id, prefill.attachments);
       }
       const copiedWorkspaceId = persistedChatWorkspaceId(copied.workspaceId);
+      if (copiedWorkspaceId !== effectiveWorkspaceIdRef.current) {
+        await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
+      }
       qc.setQueryData(queryKeys.chat(copied.id), copied);
       qc.setQueryData<ChatMeta[]>(queryKeys.chatsIn(copiedWorkspaceId), (current) => [
         {
@@ -1681,6 +1721,21 @@ export function ChatPane({ chatId }: { chatId: string }) {
               toast.info(agentsInstructionNoticeMessage(notice));
             }
           },
+          onHookMessages: (messages) => {
+            if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
+            const notice = hookMessagesNotice(messages);
+            if (!notice) return;
+            const description =
+              notice.lines.length || notice.more ? (
+                <span className="flex flex-col">
+                  {notice.lines.map((line, index) => (
+                    <span key={index}>{line}</span>
+                  ))}
+                  {notice.more ? <span>{`and ${notice.more} more`}</span> : null}
+                </span>
+              ) : undefined;
+            toast.info(notice.title, description ? { description } : undefined);
+          },
           onContextPressure: (pressure) => {
             if (mountedRef.current && generationIntentRef.current === generationIntent) {
               setContextPressure(pressure);
@@ -1944,8 +1999,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
       text: string,
       attachments: Attachment[],
       skillInvocation?: SkillInvocationV1,
-      options?: { visualize?: boolean; btw?: boolean },
+      options?: { visualize?: boolean; btw?: boolean; inputSource?: ChatInputSourceV1 },
     ) => {
+      // Only Aiden Live's chat tools set this; the message shows "By voice".
+      const inputSource = options?.inputSource;
       if (options?.btw) {
         if (getChatDraft(chatId))
           throw new Error("Send the first message before asking a side question.");
@@ -2048,24 +2105,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
       setIsStartingGeneration(true);
       try {
         let updated: Chat;
-        /** Set when this No workspace draft is saved in a fresh hidden folder. */
-        let separateNoWorkspaceId: string | undefined;
         try {
-          if (firstDraft && !worktreeRequest) {
-            const draftWorkspace = workspaces.find((entry) => entry.id === firstDraft.chat.workspaceId);
-            if (isNoWorkspace(draftWorkspace)) {
-              separateNoWorkspaceId = await noWorkspaceFolderForFirstSend(
-                { listChats: chatsApi.list, createNoWorkspace: workspacesApi.createNoWorkspace },
-                draftWorkspace!.id,
-              );
-              if (separateNoWorkspaceId) await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
-            }
-          }
           const firstMessageInput = firstDraft
             ? {
                 draftId: chatId,
                 title: firstDraft.chat.title === "New agent" ? undefined : firstDraft.chat.title,
-                workspaceId: separateNoWorkspaceId ?? firstDraft.chat.workspaceId!,
+                workspaceId: firstDraft.chat.workspaceId!,
                 providerId,
                 model,
                 turnId: messageTurnId,
@@ -2075,6 +2120,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   attachments: attachments.length ? attachments : undefined,
                 },
                 skillInvocation,
+                ...(inputSource ? { inputSource } : {}),
               }
             : undefined;
           if (firstMessageInput && worktreeRequest) {
@@ -2087,7 +2133,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
               },
               input: firstMessageInput,
               worktree: worktreeRequest,
-              message: { text, attachments },
+              message: { text, attachments, ...(inputSource ? { inputSource } : {}) },
             });
             // The progress view holds the message now; a composer that opens
             // on this draft meanwhile starts empty instead of repeating it.
@@ -2135,6 +2181,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     autoTitle: true,
                     turnId: messageTurnId,
                     skillInvocation,
+                    ...(inputSource ? { inputSource } : {}),
                   },
                 );
           }
@@ -2183,7 +2230,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         // A New worktree send saved the chat in the worktree's workspace,
         // which this render has not seen yet.
         // A No workspace draft that needed its own folder was saved in a fresh one.
-        if (worktreeRequest || separateNoWorkspaceId) effectiveWorkspaceIdRef.current = updated.workspaceId;
+        if (firstDraft) effectiveWorkspaceIdRef.current = updated.workspaceId;
         void runGeneration(messageTurnId).then((started) => {
           if (!started.ok && mountedRef.current && chatIdRef.current === chatId) {
             setError(started.error.message);
@@ -2211,7 +2258,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
       model,
       qc,
       runGeneration,
-      workspaces,
     ],
   );
 
@@ -2346,7 +2392,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       text: string,
       attachments: Attachment[],
       skillInvocation?: SkillInvocationV1,
-      options?: { visualize?: boolean; btw?: boolean },
+      options?: { visualize?: boolean; btw?: boolean; inputSource?: ChatInputSourceV1 },
     ) => {
       if (stopRequestedRef.current) {
         throw new Error("Aiden is stopping this response. Send your message after it stops.");
@@ -2356,7 +2402,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
         text,
         attachments,
         skillInvocation,
-        options: options?.visualize ? { visualize: true } : undefined,
+        options:
+          options?.visualize || options?.inputSource
+            ? {
+                ...(options.visualize ? { visualize: true } : {}),
+                ...(options.inputSource ? { inputSource: options.inputSource } : {}),
+              }
+            : undefined,
       });
     },
     [messageQueue],
@@ -2364,14 +2416,20 @@ export function ChatPane({ chatId }: { chatId: string }) {
 
   /** Admit run input and show what main committed without waiting for the run to end. */
   const admitSteer = React.useCallback(
-    async (streamId: string, text: string) => {
+    async (streamId: string, text: string, inputSource?: ChatInputSourceV1) => {
       const receipt = await admitRunInputOnceStarted({
-        admit: () => chatControl.submitInput(streamId, "steer", text),
+        admit: () =>
+          chatControl.submitInput(streamId, "steer", text, inputSource ? { inputSource } : undefined),
         // This pane's own run can still be starting; a detached one is not retried.
         live: () => generationRef.current?.streamId === streamId && !stopRequestedRef.current,
       });
       if (receipt.committed && receipt.messageId) {
-        const committed = { messageId: receipt.messageId, text, createdAt: Date.now() };
+        const committed = {
+          messageId: receipt.messageId,
+          text,
+          createdAt: Date.now(),
+          ...(inputSource ? { inputSource } : {}),
+        };
         qc.setQueryData<Chat | null>(queryKeys.chat(chatId), (current) =>
           current ? withCommittedRunInput(current, committed) : current,
         );
@@ -2427,10 +2485,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
         toast.error("The current response has ended. The message stays queued.");
         return;
       }
+      const queuedSource = messageQueue
+        .getSnapshot()
+        .messages.find((message) => message.id === id)?.options?.inputSource;
       const outcome = await steerQueuedMessage({
         queue: messageQueue,
         id,
-        admit: (text) => admitSteer(streamId, text),
+        admit: (text) => admitSteer(streamId, text, queuedSource),
       });
       if (outcome.kind === "admitted") {
         toast.info("Guidance sent. Aiden will read it at the next step.");
@@ -2446,6 +2507,48 @@ export function ChatPane({ chatId }: { chatId: string }) {
     },
     [admitSteer, isStoppingGeneration, messageQueue, steerableDetachedProjection],
   );
+
+  // Aiden Live's chat tools read, send to and stop this chat through the
+  // composer's own paths; the message they send shows "By voice".
+  useLiveChatController({
+    reachable: liveChatReachable(chat.data),
+    chatId,
+    workspaceId: chatWorkspaceId ?? null,
+    isDraft: Boolean(draft),
+    title: liveOpenChatTitle,
+    messages,
+    busy: isGenerating || isStartingGeneration || Boolean(visibleDetachedProjection),
+    steerAvailable: !draft && !observedRunVisible && canSteerQueued,
+    queueAvailable: !draft,
+    hasQueued: queuedState.messages.length > 0,
+    queuePaused: queuedState.paused,
+    ready: ready && !imageArtifactRecoveryPending && !imageArtifactRecoveryUnavailable,
+    firstSending: draft?.sending === true,
+    waitingForApproval: approvals.length > 0,
+    send: (text) => {
+      setDeniedApprovalChatId(null);
+      return handleSend(text, [], undefined, { inputSource: "voice" });
+    },
+    queue: (text) => {
+      setDeniedApprovalChatId(null);
+      return queueMessage(text, [], undefined, { inputSource: "voice" });
+    },
+    steer: (text) => {
+      const streamId = generationRef.current?.streamId ?? steerableDetachedProjection?.streamId;
+      if (!streamId || isStoppingGeneration || stopRequestedRef.current) return Promise.resolve(null);
+      setDeniedApprovalChatId(null);
+      return admitSteer(streamId, text, "voice");
+    },
+    stop: () =>
+      stopForLive({
+        stop: handleStop,
+        pauseQueue: () => messageQueue.pause(),
+        markStopRequested: () => {
+          stopRequestedRef.current = true;
+        },
+      }),
+    showError: (message) => toast.error(message),
+  });
 
   const cancelAgentForContextChange = React.useCallback(() => {
     generationIntentRef.current += 1;
@@ -2534,6 +2637,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     },
     [chatControl, chatId],
   );
+  // Aiden Live answers the first approval by voice through this same decide.
+  usePublishLiveChatApprovals(chatId, approvals, decideApproval);
 
   React.useEffect(() => {
     if (!questionnaire) return;
@@ -3145,6 +3250,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
 
   const pending = approvals[0];
+  const pendingLiveVoice = useLiveApprovalVoiceHint(pending?.approvalId);
   const showComputerUseContinue =
     computerUsePendingContinue &&
     computerUseContinueHiddenFor !== chatId &&
@@ -3547,7 +3653,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
     <>
       <ScrollArea
         focusRegion="chat"
+        bodyHidden={designChatBodyHidden}
         overlay={findBar}
+        toolbarAccessory={<DesignModeBannerSlot />}
         className="h-full min-h-0"
         alignFooterToScrollContent
         title={
@@ -3597,23 +3705,48 @@ export function ChatPane({ chatId }: { chatId: string }) {
             )}
             // A cached repository read must not outlive access being switched off.
             isRepo={git.data?.isRepo === true && effectiveWorkspace?.permission !== "none"}
-            leading={<QuickViewToggle disabled={!effectiveWorkspace} />}
-            terminalButton={
-              <Button
-                iconOnly
-                variant="bar"
-                size="small"
-                onClick={terminal.toggle}
-                disabled={!effectiveWorkspace?.folderPath || !terminal.canOpen}
-                aria-label={terminal.open ? "Hide terminal" : "Show terminal"}
-                aria-keyshortcuts={ariaKeyShortcut(terminalShortcutBinding)}
-                aria-pressed={terminal.open}
-                title={`Toggle terminal (${terminalShortcut})`}
-                data-terminal-toggle
-              >
-                <TerminalSquare />
-              </Button>
+            leading={
+              <>
+                <DesignModeToggle chatId={chatId} />
+                <DesignPaneSwitch />
+              </>
             }
+            foldable={[
+              {
+                key: "quick-view",
+                placement: "leading",
+                button: <QuickViewToggle disabled={!effectiveWorkspace} />,
+                label: environmentPanel.quickViewOpen ? "Hide Quick View" : "Show Quick View",
+                icon: QuickViewIcon,
+                onSelect: environmentPanel.toggleQuickView,
+                disabled: !effectiveWorkspace || environmentPanel.gitOperationBusy,
+                active: environmentPanel.quickViewOpen,
+              },
+              {
+                key: "terminal",
+                button: (
+                  <Button
+                    iconOnly
+                    variant="bar"
+                    size="small"
+                    onClick={terminal.toggle}
+                    disabled={!effectiveWorkspace?.folderPath || !terminal.canOpen}
+                    aria-label={terminal.open ? "Hide terminal" : "Show terminal"}
+                    aria-keyshortcuts={ariaKeyShortcut(terminalShortcutBinding)}
+                    aria-pressed={terminal.open}
+                    title={`Toggle terminal (${terminalShortcut})`}
+                    data-terminal-toggle
+                  >
+                    <TerminalSquare />
+                  </Button>
+                ),
+                label: terminal.open ? "Hide terminal" : "Show terminal",
+                icon: TerminalSquare,
+                onSelect: terminal.toggle,
+                disabled: !effectiveWorkspace?.folderPath || !terminal.canOpen,
+                active: terminal.open,
+              },
+            ]}
             trailing={
               <OpenInEditorPicker
                 workspaceId={effectiveWorkspace?.id}
@@ -3653,6 +3786,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   denyRef={approvalDenyRef}
                   pendingCount={approvals.length}
                   keyboardShortcuts
+                  liveVoice={pendingLiveVoice}
                 />
               ) : null}
             </EventPresence>
@@ -3741,6 +3875,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
               />
             ) : null}
             {recoveredQuestion ? <AskUserQuestionExpiryNotice state="restarted" /> : null}
+            {designModeConsent && !questionnaire ? (
+              <DesignModeConsentCard key={designModeConsent.requestId} request={designModeConsent} />
+            ) : null}
             {missingWorkspaceFolder && !questionnaire ? (
               <WorkspaceFolderMissingNotice
                 workspaceName={missingWorkspaceFolder.name}
@@ -4047,6 +4184,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           <DraftWorktreeSendView
             text={worktreeSend.text}
             attachments={worktreeSend.attachments}
+            inputSource={worktreeSend.inputSource}
             view={worktreeSend.view}
             onDecide={worktreeSend.decide}
           />

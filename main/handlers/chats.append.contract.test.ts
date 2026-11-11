@@ -155,6 +155,8 @@ async function fixture(
     artifactRecoveryMessage: (message) => message,
     workspaceMutationGate: new WorkspaceMutationGate(),
     skillRegistry: { resolveFresh: async () => assert.fail("no skill is invoked here") },
+    designModeEnabled: () => false,
+    broadcastDesignModeChanged: () => assert.fail("no design mode change is made here"),
   });
   return { chatStore, chatApplicationService, handlers, admission, owner };
 }
@@ -332,6 +334,36 @@ test("the persisted message is the envelope parsed at call time, not the live IP
   const saved = chat?.messages[chat.messages.length - 1];
   assert.deepEqual([saved?.role, saved?.content], ["user", "original"]);
   assert.equal((await f.chatStore.get("chat-2"))?.model, "model-a");
+});
+
+test("an Aiden Live send is saved and read back as By voice; a typed send is not", async (t) => {
+  const f = await fixture(t);
+  const typed = await f.handlers.appendMessage(event, "chat-1", userMessage("typed"), meta("turn-typed"));
+  assert.equal(typed!.messages[typed!.messages.length - 1]?.inputSource, undefined);
+  const spoken = await f.handlers.appendMessage(event, "chat-2", userMessage("spoken"), {
+    ...meta("turn-voice"),
+    inputSource: "voice",
+  });
+  assert.equal(spoken!.messages[spoken!.messages.length - 1]?.inputSource, "voice");
+  const saved = (await f.chatStore.get("chat-2"))!.messages;
+  assert.equal(saved[saved.length - 1]?.inputSource, "voice");
+});
+
+test("the renderer cannot claim any other input source", async (t) => {
+  const f = await fixture(t);
+  const before = await f.chatStore.get("chat-2");
+  for (const inputSource of ["dictation", true, { kind: "voice" }, ""]) {
+    assert.throws(
+      () => f.handlers.appendMessage(event, "chat-2", userMessage(), { ...meta("turn-bad"), inputSource }),
+      /Invalid chat message input source/u,
+    );
+  }
+  assert.throws(
+    () => f.handlers.appendMessage(event, "chat-2", { ...userMessage(), inputSource: "voice" }, meta("turn-bad")),
+    /Invalid chat message field/u,
+    "the marker belongs in the send metadata, never on the message body",
+  );
+  assert.deepEqual(await f.chatStore.get("chat-2"), before);
 });
 
 test("a failed append releases its turn; a second concurrent turn on the chat is refused", async (t) => {

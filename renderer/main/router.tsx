@@ -20,7 +20,7 @@ import { parseSettingsSearch } from "../lib/settings-section";
 import { useAppCapabilities } from "../lib/app-capabilities";
 import { parseBotPageSearch } from "./bots/bot-page-search";
 import { parseImagesHomeSearch } from "./images-home-search";
-import { StudioCapabilityRoute } from "./studio-capability-route";
+import { redirectRetiredRoute, StudioCapabilityRoute } from "./studio-capability-route";
 import { createAppRouter } from "../lib/app-router";
 import { reopenClosedChatDraft } from "../lib/chat-draft";
 
@@ -36,7 +36,6 @@ const ScheduledTasksView = lazyRouteComponent(
 );
 const BotsView = lazyRouteComponent(() => import("./bots-view"), "BotsView");
 const BotChatRouteView = lazyRouteComponent(() => import("./bot-chat-route"), "BotChatRoute");
-const DesignView = lazyRouteComponent(() => import("../design/design-route"), "DesignRoute");
 const ImagesView = lazyRouteComponent(() => import("../images/images-route"), "ImagesRoute");
 
 /** Let the router preload the lazy view a wrapper route component renders. */
@@ -193,35 +192,21 @@ const hostNewChatRoute = createRoute({
   staticData: { title: "New remote chat" },
 });
 
-// Studio surfaces keep the chat shell's sidebar. ChatLayout suppresses the
-// Environment workbench and terminal on these paths (isStudioPath).
-const designRoute = createRoute({
+// Design Studio was removed. A stale `/design` link or restored window goes home.
+const retiredDesignRoute = createRoute({
   getParentRoute: () => chatLayoutRoute,
   path: "/design",
-  component: preloadsWith(function DesignStudioRoute() {
-    return (
-      <StudioCapabilityRoute feature="designStudio">
-        <DesignView />
-      </StudioCapabilityRoute>
-    );
-  }, DesignView),
-  staticData: { title: "Design" },
+  beforeLoad: redirectRetiredRoute,
 });
 
-const designProjectRoute = createRoute({
+const retiredDesignProjectRoute = createRoute({
   getParentRoute: () => chatLayoutRoute,
   path: "/design/$projectId",
-  component: preloadsWith(function DesignStudioProjectRoute() {
-    const { projectId } = designProjectRoute.useParams();
-    return (
-      <StudioCapabilityRoute feature="designStudio">
-        <DesignView projectId={projectId} />
-      </StudioCapabilityRoute>
-    );
-  }, DesignView),
-  staticData: { title: "Design project" },
+  beforeLoad: redirectRetiredRoute,
 });
 
+// Studio surfaces keep the chat shell's sidebar. ChatLayout suppresses the
+// Environment workbench and terminal on these paths (isStudioPath).
 const imagesRoute = createRoute({
   getParentRoute: () => chatLayoutRoute,
   path: "/images",
@@ -275,8 +260,8 @@ const routeTree = rootRoute.addChildren([
     hostChatRoute,
     hostBotChatRoute,
     hostNewChatRoute,
-    designRoute,
-    designProjectRoute,
+    retiredDesignRoute,
+    retiredDesignProjectRoute,
     imagesRoute,
     imagesWorkflowRoute,
   ]),

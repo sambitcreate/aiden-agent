@@ -9,6 +9,8 @@ export interface AppCapabilities {
   computerUse: boolean;
   /** A macOS VM per Bot (Apple silicon only). */
   botComputers: boolean;
+  /** Settings → Hooks (macOS and Linux). */
+  hooks: boolean;
   dockIcon: boolean;
   /** A Needs you count on the app icon (Dock on macOS, launcher on Linux). */
   badgeCount: boolean;
@@ -22,8 +24,9 @@ export interface AppCapabilities {
   appleFoundationModels: boolean;
   geminiLive: boolean;
   devices: boolean;
-  designStudio: boolean;
   createImages: boolean;
+  /** Design mode: a chat column beside a design canvas (on unless `AIDEN_DESIGN_MODE=0`). */
+  designMode: boolean;
 }
 
 export const DISABLED_APP_CAPABILITIES: AppCapabilities = Object.freeze({
@@ -33,6 +36,7 @@ export const DISABLED_APP_CAPABILITIES: AppCapabilities = Object.freeze({
   appUpdates: false,
   computerUse: false,
   botComputers: false,
+  hooks: false,
   dockIcon: false,
   badgeCount: false,
   accessibilityPaste: false,
@@ -44,8 +48,8 @@ export const DISABLED_APP_CAPABILITIES: AppCapabilities = Object.freeze({
   appleFoundationModels: false,
   geminiLive: false,
   devices: false,
-  designStudio: false,
   createImages: false,
+  designMode: false,
 });
 
 export function parseAppCapabilities(value: unknown): AppCapabilities {
@@ -61,6 +65,7 @@ export function parseAppCapabilities(value: unknown): AppCapabilities {
     appUpdates: record.appUpdates === true,
     computerUse: record.computerUse === true,
     botComputers: record.botComputers === true,
+    hooks: record.hooks === true,
     dockIcon: record.dockIcon === true,
     badgeCount: record.badgeCount === true,
     accessibilityPaste: record.accessibilityPaste === true,
@@ -72,8 +77,8 @@ export function parseAppCapabilities(value: unknown): AppCapabilities {
     appleFoundationModels: record.appleFoundationModels === true,
     geminiLive: record.geminiLive === true,
     devices: record.devices === true,
-    designStudio: record.designStudio === true,
     createImages: record.createImages === true,
+    designMode: record.designMode === true,
   };
 }
 

@@ -17,6 +17,7 @@ import {
   terminalGenerationWasAborted,
 } from "../generation-runtime.js";
 import type { ResolvedModelRuntime } from "../model-runtime-core.js";
+import type { SubagentRuntimeTransform } from "./subagent-runtime-authority.js";
 import { piRuntimePrivateFailure } from "../pi-runtime-failure.js";
 import type { WorkspacePermission } from "../types.js";
 import {
@@ -158,6 +159,7 @@ export interface SubagentChildRunnerDependencies {
     groupId: string;
     childId?: string;
     runtime: ResolvedModelRuntime;
+    transformRuntime?: SubagentRuntimeTransform;
     thinkingLevel: ThinkingLevel;
     compactionEngine?: CompactionEngine;
   compactionModelOverrides?: CompactionModelOverrides;
@@ -201,6 +203,7 @@ export interface RunSubagentChildInput {
   childId?: string;
   groupId: string;
   runtime: ResolvedModelRuntime;
+  transformRuntime?: SubagentRuntimeTransform;
   thinkingLevel: ThinkingLevel;
   workspaceRoot: string;
   permission: WorkspacePermission;
@@ -664,6 +667,7 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
       groupId: input.groupId,
       childId: input.childId,
       runtime: input.runtime,
+      transformRuntime: input.transformRuntime,
       thinkingLevel: input.thinkingLevel,
       compactionEngine: input.compactionEngine,
       compactionModelOverrides: input.compactionModelOverrides,

@@ -1,9 +1,9 @@
 # Anonymous Usage Analytics and Crash Reporting (PostHog)
 
-Status: Active (PR 1, core with nothing sending, and PR 2, consent and lifecycle, shipped in 0.64.0; PR 3, feature events, and PR 4, crashes and errors, merged)
+Status: Active (PR 1, core with nothing sending, and PR 2, consent and lifecycle, shipped in 0.64.0; PR 3, feature events, PR 4, crashes and errors, and PR 5, server, merged; release acceptance remains separate)
 Date: 2026-10-28
 Base: `origin/main` at `8504c773c` (0.62.0 + #625–#628)
-Scope: Electron desktop app (macOS and Linux) first, then the `aiden` CLI. iOS and Android are out of scope.
+Scope: Electron desktop app (macOS and Linux) first, then the `aiden serve` headless server. iOS and Android are out of scope.
 Supersedes: the closed PostHog proposal in [PR #197](https://github.com/sambitcreate/aiden-agent/pull/197) (2026-09-30), which never merged.
 
 ## Why
@@ -22,7 +22,7 @@ The answer must stay true to Aiden's privacy posture: no content ever leaves the
 | --- | --- |
 | Service | PostHog (one project) |
 | Consent | **On by default.** Onboarding states it plainly; Settings has a switch to turn it off. |
-| Platforms | Desktop now. CLI as a second phase. Phones later, separately. |
+| Platforms | Desktop now. The headless server as a second phase. Phones later, separately. |
 | Usage events | The list in [Events](#events), including web search and peer Mac pairing. |
 | Crashes | Every crash and every uncaught error, with a stack trace. |
 | Region and retention | PostHog US cloud; PostHog's default retention. |
@@ -69,7 +69,7 @@ The answer must stay true to Aiden's privacy posture: no content ever leaves the
 
 **Errors.** Every exception is rebuilt as a new sanitized error before it reaches the SDK (see [Crashes and errors](#crashes-and-errors)). We build PostHog's `$exception` payload ourselves and send it with a plain `capture()`; we never call the SDK's `captureException`, because its Node stack parser reads source files from disk to attach context lines, and exception autocapture stays off.
 
-**Super properties** (attached to every event): `app_version`, `platform` (`darwin`/`linux`), `arch` (`arm64`/`x64`), `os_major` (e.g. `26`; the kernel major on Linux), `surface` (`desktop`/`cli`), `channel` (`release`/`beta` if applicable). No locale, timezone, hostname or username.
+**Super properties** (attached to every event): `app_version`, `platform` (`darwin`/`linux`), `arch` (`arm64`/`x64`), `os_major` (e.g. `26`; the kernel major on Linux), `surface` (`desktop`/`server`), `channel` (`release`/`beta` if applicable). No locale, timezone, hostname or username.
 
 ## Consent and lifecycle
 
@@ -79,7 +79,7 @@ The answer must stay true to Aiden's privacy posture: no content ever leaves the
 - New installs: the notice is part of onboarding (below). Sending starts once `app:setOnboardingOutcome` records `completed` or `deferred` (`main/index.ts:987`).
 - Existing installs upgrading into this release: a one-time, dismissible notice card appears on first launch. Sending starts when the card has been shown. Events and crashes before that are not sent and are not queued.
 
-**Turning it off** (Settings switch, or `aiden telemetry off` for the CLI):
+**Turning it off** (Settings switch, or `aiden telemetry off` for the server):
 1. Stop capture immediately; drop the in-memory queue without flushing.
 2. Delete `installId` and any pending crash record.
 3. Persist `enabled: false`.
@@ -91,7 +91,7 @@ The answer must stay true to Aiden's privacy posture: no content ever leaves the
 ## Network posture
 
 - One fixed host: the PostHog ingestion host for the chosen region (US cloud: `https://us.i.posthog.com`). No other PostHog endpoints: no `/decide`, flags, remote config or surveys. No personal API key is configured, so the SDK never polls.
-- All sending happens in the Electron **main** process via `posthog-node`. The renderer never talks to PostHog; it reports through existing IPC. This also satisfies `scripts/main-runtime-dependencies.test.mjs`.
+- All sending happens in the Electron **main** process, or the headless server process, via `posthog-node`. The renderer never talks to PostHog; it reports through existing IPC. This also satisfies `scripts/main-runtime-dependencies.test.mjs`.
 - Batched: `flushAt: 20`, `flushInterval: 30_000`, `maxQueueSize: 500`. On quit, `shutdown(1500)` with a hard cap so quitting is never delayed noticeably. There is no on-disk event queue (except the single pending-crash record below); events still queued at quit are lost.
 - Failure handling is the SDK's (`posthog-node` 5.56.1, verified in its source), so we do not write our own retry loop:
   - every event gets a UUIDv7 when captured, so the server de-duplicates a batch that is retried after a lost response;
@@ -207,7 +207,7 @@ Before an error reaches `captureException`, the sink rebuilds it as a new `Error
 
 Rewriting file paths to `app:///…` has a second purpose: `posthog-node` error tracking reads source context lines from disk for frames it can resolve. Virtual paths cannot resolve, so the SDK never reads files from the user's disk. The implementer must confirm this against the pinned SDK version and, if the SDK exposes an option to disable context lines, set it as well. SDK exception autocapture (`enableExceptionAutocapture`) stays **off**; all capture goes through our sanitizing sink.
 
-Extra properties on exceptions: `source` (`main`/`renderer`/`cli`), `level`, `process_type`, `uptime_bucket` (`<1m`, `1-10m`, `10-60m`, `1h+`). No IPC channel arguments, no route, no window title.
+Extra properties on exceptions: `source` (`main`/`renderer`/`server`), `level`, `process_type`, `uptime_bucket` (`<1m`, `1-10m`, `10-60m`, `1h+`). No IPC channel arguments, no route, no window title.
 
 The SDK's `before_send` guard is the last check on every message. It drops every `$`-prefixed property a caller supplies except, on `$exception` only, `$exception_list` (rebuilt from scratch and rejected unless it matches what the sanitizer produces), `$exception_level` and `$exception_fingerprint`; it then forces `$process_person_profile: false`. Turning analytics off revokes the transport's fetch, so a flush or retry already in progress dispatches nothing further; a request already on the wire cannot be recalled.
 
@@ -260,18 +260,22 @@ main/handlers/analytics.ts  IPC: get status, set enabled, mark notice shown, lis
 - Feature call sites use one function: `trackEvent("bot_created", { preset_id, bot_count })`. Type-checked against the registry; unknown event or property is a compile error and also a runtime drop.
 - `trackEvent` is fire-and-forget and must never throw into the caller.
 - Settings keys live in machine-local `settings.json` under `analytics`: `{ enabled, installId, noticeShownAt, lastActiveDay, lastVersion }`.
-- The CLI bundles `main/services` sources directly (see `AGENTS.md`), so it reuses `analytics-events.ts`, `analytics-sanitize.ts` and `analytics-core.ts` unchanged, with its own consent store and client.
+- The server bundles `main/services` sources directly (see `AGENTS.md`), so it reuses `analytics-events.ts`, `analytics-sanitize.ts` and `analytics-core.ts` unchanged, with its own consent store and client.
 
-## CLI (phase 2)
+## Server (phase 2)
 
-- Same PostHog project, `surface: "cli"`, separate install ID stored in its own file, `~/.aiden/agent/aiden-analytics.json` (respects `AIDEN_CODING_AGENT_DIR`). Not in `settings.json`, which is Pi's file and is rewritten by Pi and `app-controls.ts`.
-- **Notice:** one line on stderr the first time an interactive command runs: "Aiden sends anonymous usage and crash data. Turn off: aiden telemetry off". Not shown and nothing sent for `--version`/`help`.
-- **Off by default when not interactive** (my call): if `CI` is set, or stdout is not a TTY and the notice has never been shown, nothing is sent. Scripts and CI should never be counted or surprised.
-- `aiden telemetry status | on | off`. `DO_NOT_TRACK=1` and `AIDEN_ANALYTICS=0` work the same as desktop.
-- Events: `cli_started` (`command`: from the fixed `dispatchCommand` list in `packages/cli/src/commands.ts:9`, else `interactive`/`other`), plus the shared registry events the CLI can trigger (chat message, bot created, routine ran, scheduled task ran, subagent, skill, connector, web search).
-- Crashes: `uncaughtException` / `unhandledRejection` in the CLI process through the same sanitizer; flush with a 1 s cap before exit.
-- `packages/cli/src/cli.ts:29–33` forces `PI_TELEMETRY=0` (Pi's own telemetry). That stays: this plan adds Aiden's analytics, not Pi's.
-- `posthog-node` added to `packages/cli/package.json` at the exact same version as the desktop pin.
+Rewritten 2026-11-04 for the serve-only CLI, which arrived after this section was drafted. `aiden serve` usually runs under a service manager with no terminal, and there is no interactive command left, so the original "first interactive command" and "off when stdout is not a TTY" rules had nothing to anchor to. Rewritten again the same day when the owner chose to treat `aiden serve` as the product: the admin commands no longer report anything, and `cli_started` became `server_started`.
+
+- Same PostHog project, `surface: "server"`, separate install ID stored in its own file, `~/.aiden/agent/aiden-analytics.json` (respects `AIDEN_CODING_AGENT_DIR`). Not in `settings.json`, which is Pi's file and is rewritten by Pi and `app-controls.ts`.
+- **Notice:** one line on stderr: "This Aiden server sends anonymous usage and crash data. Turn off: aiden telemetry off". It appears at `aiden service install` and at the first `aiden serve` on a terminal, and is recorded. `aiden serve --daemon` shows it in the terminal that starts it, before the child starts.
+- **When it may send:** a server whose notice was already shown may send; one that never showed it sends nothing. Only the `aiden serve` process sends: admin commands send nothing, show no notice and never load the analytics client. The sole exceptions are the notice at `aiden service install` and `aiden telemetry` itself, which stays separate so it survives if other admin commands go. `CI` set means nothing is sent, ever. `--version` and help never show the notice or send.
+- `aiden telemetry status | on | off`. `DO_NOT_TRACK=1` and `AIDEN_ANALYTICS=0` work the same as desktop. Turning it off matches the desktop: the queue is dropped, one `analytics_disabled` goes out under the old ID, the ID is forgotten. A running server is another process, so it re-reads the file before every event and every request; `off` stops it, and it stays silent until restarted, even after `on`, because the new ID is not its own.
+- Events: `server_started` (`launch`: `foreground`, `daemon` or `service`), sent once the server is ready so a failed start is not counted, plus the shared registry events the server can trigger, through `main/services/analytics/analytics-report.ts`. Worker processes (subagents, speech) have no reporter.
+- Crashes: `uncaughtException` in the `aiden serve` process through the same sanitizer, flushed with a 1 s cap, then rethrown so Node ends the process exactly as before. The server sends the error's type, frames and a system error code from a fixed list but no message: review showed the shared redactor passes relative file names, hostnames and quoted prompt text, which `AGENTS.md` forbids. A fatal rejection arrives the same way. A rejection `aiden serve` logs and survives is reported as an error from its existing listener, and no new `unhandledRejection` listener is added. At most 25 crashes a day are reported, counted in `aiden-analytics-crashes.json`; past that the server sends nothing until the next day, so a service manager restarting a crash loop cannot flood the project.
+- `packages/cli/src/cli.ts` forces `PI_TELEMETRY=0` (Pi's own telemetry). That stays: this plan adds Aiden's analytics, not Pi's.
+- `posthog-node` added to `packages/cli/package.json` at the exact same version as the desktop pin, with the same `overrides`.
+- **Key:** only `npm run cli:dist` injects it, through the same `analytics-build-config` plugin as the desktop. The server has no release pipeline: it is built from a clone, and those builds and the Docker image are keyless, so they send nothing and show no notice. The manual `Build keyed server bundle` workflow (`.github/workflows/server-bundle.yml`) is the one place a keyed package is produced. It builds on Linux x64, and the bundle carries native helpers for its build host only, so its artifact is a Linux x64 package.
+- A long-running server sends no `app_active`; `server_started` and real actions are its activity signal.
 
 ## Docs and policy changes
 
@@ -296,15 +300,15 @@ Behavioural, per `AGENTS.md` house style; every new file registered in the root 
 - Renderer: Settings group and onboarding row render, toggle calls IPC, environment-disabled state; "What's sent" lists registry entries (assert on a couple of known events, not a full snapshot).
 - Playwright E2E: onboarding shows the row with the switch on; turning it off in Settings persists across relaunch. E2E runs without a key, so no network.
 - A packaged-build check in the release workflow that the key constant is present only in `dist` output, never in the repo.
-- CLI: `aiden telemetry off|on|status`, notice shown once, no send when `CI` is set or non-TTY, shared registry events validated.
+- Server (`packages/cli/tests/analytics.test.mjs`): `aiden telemetry off|on|status`, notice shown once, no send when `CI` is set or with no terminal and no prior notice, kill switches, the no-key path, shared events through a fake transport, `server_started` from a real `aiden serve` for each launch, admin commands silent and never loading the client, and a real process crashing under the flush cap.
 
 ## Delivery (one PR each, stacked)
 
 1. **Core, no sending.** `main/services/analytics/*` (registry, consent, sanitizer, core with fake transport, client wrapper, crash sink), `posthog-node` pinned exactly, tests. No key, no UI, nothing wired. Safe to merge on its own. Because nothing in main imports the client yet, `posthog-node` sits in `devDependencies` (as `scripts/main-runtime-dependencies.test.mjs` requires); PR 2 moves it to `dependencies` when main starts importing it.
-2. **Consent, lifecycle and "who's using it".** (In review, stacked on PR 1.) Settings group, onboarding row, existing-user notice, "What's sent" sheet, IPC, release-key injection, `app_opened` / `app_active` / `onboarding_finished` / `app_updated` / `analytics_disabled`. All docs and policy changes above. Screenshots in the PR.
-3. **Feature events.** (Merged in #734.) Wire the core-use and big-feature tables at service level. Services bundled into the CLI report through `analytics-report.ts`, never `analytics-main.ts`; the desktop registers its reporter when it creates the analytics service. Registry changes from the tables above: `git_commit` lost `pushed`, `trigger` gained `watch` (an event-started run reports its source), `thinking` gained `max`, and `origin` gained `peer`, because a paired Mac sends turns through the same route as a phone. Telegram chats, Design runs and unattended follow-through notices are not `chat_message_sent`; a message to a Bot is, whichever surface it came from. `chat_message_sent` for a Bot always has `in_workspace: false` and `thinking: other`. `bot_computer_set_up` also fires when element control is added later. `worktree_created` fires once the workspace record is saved, because a checkout can still roll back after Git has made it. The Mac composer microphone is not `voice_used`: it shares its transcribers with the dictation pill, so counting it needs its own signal from the renderer. Not hooked yet, for PR 5: the daemon's own chat paths, `aiden auth` and `aiden git worktree`.
+2. **Consent, lifecycle and "who's using it".** (Merged in #669.) Settings group, onboarding row, existing-user notice, "What's sent" sheet, IPC, release-key injection, `app_opened` / `app_active` / `onboarding_finished` / `app_updated` / `analytics_disabled`. All docs and policy changes above. Screenshots in the PR.
+3. **Feature events.** (Merged in #734.) Wire the core-use and big-feature tables at service level. Services bundled into the CLI report through `analytics-report.ts`, never `analytics-main.ts`; the desktop registers its reporter when it creates the analytics service. Registry changes from the tables above: `git_commit` lost `pushed`, `trigger` gained `watch` (an event-started run reports its source), `thinking` gained `max`, and `origin` gained `peer`, because a paired Mac sends turns through the same route as a phone. Telegram chats, Design runs and unattended follow-through notices are not `chat_message_sent`; a message to a Bot is, whichever surface it came from. `chat_message_sent` for a Bot always has `in_workspace: false` and `thinking: other`. `bot_computer_set_up` also fires when element control is added later. `worktree_created` fires once the workspace record is saved, because a checkout can still roll back after Git has made it. The Mac composer microphone is not `voice_used`: it shares its transcribers with the dictation pill, so counting it needs its own signal from the renderer. Not hooked yet: the daemon's own chat paths. `aiden auth` and `aiden git worktree` are admin commands, which send nothing.
 4. **Crashes and errors.** (Merged in #732.) Journal sink (including rejections, through a new listener because the monitor never sees them in Electron), widened renderer IPC with main-side sanitizing, process-gone events, run marker, pending-crash file, flood control.
-5. **CLI.** Consent store, notice, `aiden telemetry`, `cli_started`, shared events, crash capture, `packages/cli/README.md`.
+5. **Server.** (Merged in #733.) Consent store, notice, `aiden telemetry`, `server_started`, shared events, crash capture, `packages/cli/README.md`, keyed bundle workflow.
 
 Each PR runs the narrow suites locally before CI; PR 2 onwards also checks a packaged build sends to a test PostHog project (owner key) and that turning it off stops traffic (verified with a local proxy or the PostHog live events view).
 
@@ -317,6 +321,8 @@ Each PR runs the narrow suites locally before CI; PR 2 onwards also checks a pac
 5. Update the published privacy policy.
 
 Done 2026-10-30: project "aiden" (id 619947) in the US cloud with client IP discarded; session replay, autocapture, heatmaps, surveys, console log capture and performance capture off; the `AIDEN_POSTHOG_PROJECT_KEY` repository secret added. Dashboards and the privacy policy remain.
+
+Before a keyed server package reaches anyone: the policy says "the desktop app" sends analytics and that it turns off "in Settings", so it must also cover the server and `aiden telemetry off`.
 
 Done 2026-11-03: the privacy policy at chatwithaiden.com/privacy describes app analytics ([aiden-website#12](https://github.com/sambitcreate/aiden-website/pull/12)). The keyed packaged check passed on a `npm run package` build of the 0.64.0 release branch with `AIDEN_DISTRIBUTION_BUILD=1` and the project key, in a throwaway profile: nothing was sent before onboarding; `app_opened`, `app_active` and `onboarding_finished` arrived through `posthog-node` with a random install ID, `$process_person_profile: false`, no IP and only registry properties; turning Usage data off sent one `analytics_disabled`, deleted the install ID, and nothing followed after a relaunch.
 
@@ -355,9 +361,9 @@ What we deliberately do not copy: identity derived from other products' account 
 
 - Crash reports go to PostHog Error Tracking rather than Sentry; native minidumps stay local.
 - No events or crashes are sent until the notice has been shown, including for upgrading users.
-- `DO_NOT_TRACK` / `AIDEN_ANALYTICS=0` kill switches on desktop as well as CLI.
+- `DO_NOT_TRACK` / `AIDEN_ANALYTICS=0` kill switches on desktop as well as the server.
 - Daily `app_active` heartbeat for accurate DAU on a long-running desktop app.
-- CLI sends nothing in CI or non-interactive first runs.
+- The server sends nothing in CI, or if it never showed its notice (see [Server](#server-phase-2) for the anchors).
 - Settings control lives in Settings → Diagnostics.
 - Unknown provider/model/preset IDs are reported as `custom`.
 - No on-disk event queue apart from the single pending-crash record.
@@ -365,4 +371,4 @@ What we deliberately do not copy: identity derived from other products' account 
 - Renderer errors gain message and stack only while analytics is on, sanitized in main.
 - `computer_use_enabled` counts only the global switch.
 - Release workflow fails without the key; its own smoke runs never send.
-- CLI analytics state lives in its own file, not Pi's `settings.json`.
+- Server analytics state lives in its own file, not Pi's `settings.json`.

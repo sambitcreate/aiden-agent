@@ -599,7 +599,9 @@ final class AidenHostConnection {
     /// (revision 43) in the same call when the Mac offers them, then
     /// `schedule:cards` (revision 39), then `bot:images` (revision 45), then
     /// `bot:issues` (revision 42), then `chat:jobs` (revision 49), then
-    /// `attachments:raw` (revision 50), then `chat:new-worktree` (revision 53).
+    /// `attachments:raw` (revision 50), then `chat:new-worktree` (revision 53),
+    /// then continuity watches, Open work, routine models and peers (revision 59),
+    /// followed by messaging, access requests, plans and allowed lists (revisions 54–57).
     static let capabilitiesAskedForAlone: [[AidenRemoteCapability]] = [
         [.botHandoffs, .botHandoffNotes, .botHandoffOnMac],
         [.scheduleCards],
@@ -608,6 +610,10 @@ final class AidenHostConnection {
         [.chatJobs],
         [.attachmentsRaw],
         [.chatNewWorktree],
+        [.botWatches],
+        [.botOpenWork],
+        [.botRoutineModels],
+        [.botPeers],
         [.botMessaging],
         [.botAccessRequests],
         [.botPlans],

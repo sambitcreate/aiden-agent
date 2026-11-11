@@ -34,7 +34,8 @@ import { createBotMemoryStore } from "../../../main/services/bot-memory/store.js
 import { renderBotMemorySection } from "../../../main/services/bot-memory/prompt.js";
 import { botMemoryToolEntry, withBotMemoryIngress } from "../../../main/services/bot-memory/tool.js";
 import { botRecallToolEntry } from "../../../main/services/bot-memory/recall.js";
-import { botIngressAllowsTool } from "../../../main/services/bot-runtime/bot-tool-policy.js";
+import { botIngressAllowsTool, botTurnAttended } from "../../../main/services/bot-runtime/bot-tool-policy.js";
+import { composioServiceCallRequiresForeground, isComposioServiceToolDescriptor } from "../../../main/services/composio-service-tool.js";
 import { mcpAgentToolDescriptor } from "../../../main/services/mcp-agent-tool-descriptor.js";
 import type { BotRuntimeAuthorityAdmission } from "../../../main/services/bot-runtime-authority.js";
 import type { createBotApplicationService } from "../../../main/services/bot-application-service.js";
@@ -192,10 +193,12 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
           ...(offer ? [{ ...await messageBotCandidate(bot.id, { roster, descriptionRoster: available, post: (input) => messages.post(input) }), replay: "safe" as const }] : []),
         ];
       },
-      checkPolicy: async (botId, name) => admitted(botId, async (lease) => {
+      checkPolicy: async (botId, name, call) => admitted(botId, async (lease) => {
         if (name === "bot_memory" || name === "bot_recall" || name === "message_bot") return { allowed: true };
         const tool = (await ports.tools(lease, { attachments: [], loadChat: async () => null })).find((candidate) => candidate.name === name);
         if (!tool) return { allowed: false, reason: "This Bot tool is no longer available." };
+        if (composioServiceCallRequiresForeground(call?.args) && isComposioServiceToolDescriptor(mcpAgentToolDescriptor(tool))
+          && !botIngressAllowsTool("sign_in", call?.requestIds ?? [])) return { allowed: false, reason: "Composio connection setup needs the person in the foreground." };
         // An MCP descriptor is treated conservatively: all connection calls
         // ask the person, including providers without effect annotations.
         return { allowed: true, ...(mcpAgentToolDescriptor(tool) ? { approval: { summary: `Allow ${tool.label ?? name}?` } } : {}) };
@@ -211,6 +214,10 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
       },
       codemodeSandbox: botCodemodeSandbox,
       turnAllows: withBotMemoryIngress(botIngressAllowsTool),
+      // The person's global and Bot hooks, run in the Bot's working directory.
+      hooks: { cwd: (botId) => admitted(botId, async (lease) => lease.authority.workingDirectory), attended: botTurnAttended,
+        // A Bot run has no transcript notice row, so hook messages go to the daemon log.
+        report: (botId, lines) => { for (const line of lines) process.stderr.write(`aiden: Bot ${botId} hook: ${line.replace(/[\r\n]+/gu, " ").slice(0, 500)}\n`); } },
       readmit: async (botId) => {
         if (!await ports.botStore.get(botId)) return { ok: false, reason: "bot_missing" };
         try { await admitted(botId, async () => {}); return { ok: true }; }

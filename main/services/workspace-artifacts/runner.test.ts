@@ -14,21 +14,49 @@ import type {
 import { runBoundedShellCommand, type BoundedShellCommandOptions } from "../bounded-shell-command.js";
 import { readWorkspaceArtifactFile, artifactFileAllowed } from "./file-policy.js";
 import { createWorkspaceArtifactRunner } from "./runner.js";
-import { WorkspaceArtifactStore } from "./store.js";
+import { WorkspaceArtifactStore, workspaceArtifactDigest } from "./store.js";
 
 const SHELL: WorkspaceArtifactSourceV1 = { name: "pulls", kind: "shell", command: `printf '[{"number":12}]'`, parse: "json" };
 const FILE: WorkspaceArtifactSourceV1 = { name: "todo", kind: "file", file: "TODO.md", parse: "lines" };
 const ECHO: WorkspaceArtifactActionV1 = { name: "note", label: "Write note", command: "printf '%s' {{text}} > note.txt", params: [{ name: "text", type: "string" }] };
 
-async function setup(t: test.TestContext, options: { sources?: WorkspaceArtifactSourceV1[]; approved?: boolean; readDelayMs?: number } = {}) {
+async function setup(
+  t: test.TestContext,
+  options: {
+    sources?: WorkspaceArtifactSourceV1[];
+    approved?: boolean;
+    readDelayMs?: number;
+    /** Edits the saved page file before the runner opens it, as an older Aiden might have left it. */
+    persisted?: (document: string) => string;
+  } = {},
+) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifact-runner-"));
   t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const folder = path.join(dir, "workspace");
   await fs.mkdir(folder);
   await fs.writeFile(path.join(folder, "TODO.md"), "ship it\n\nreview #12\n");
-  const store = new WorkspaceArtifactStore({ root: () => path.join(dir, "store"), newId: () => "art1" });
+  const openStore = () => new WorkspaceArtifactStore({ root: () => path.join(dir, "store"), newId: () => "art1" });
+  let store = openStore();
   const events: WorkspaceArtifactsChangedEvent[] = [];
   const commands: string[] = [];
+  const compiled = compileAum('<Visual title="PRs"><Text>{len($pulls)}</Text></Visual>');
+  const sources = options.sources ?? [SHELL, FILE];
+  await store.create(
+    "ws1",
+    {
+      title: "PRs",
+      visual: { version: 1, kind: "ui", id: "x", title: "PRs", catalogVersion: AIDEN_UI_CATALOG_VERSION, tree: compiled.tree!, fallbackText: "" },
+      sources,
+      actions: [ECHO],
+      refresh: { onOpen: true },
+    },
+    options.approved ? { approvedDigest: workspaceArtifactDigest(sources, [ECHO]) } : {},
+  );
+  if (options.persisted) {
+    const file = path.join(dir, "store", "ws1.json");
+    await fs.writeFile(file, options.persisted(await fs.readFile(file, "utf8")));
+    store = openStore();
+  }
   const runner = createWorkspaceArtifactRunner({
     runShell: (shell: BoundedShellCommandOptions) => {
       commands.push(shell.command);
@@ -42,18 +70,6 @@ async function setup(t: test.TestContext, options: { sources?: WorkspaceArtifact
     store,
     notify: (event) => events.push(event),
   });
-  const compiled = compileAum('<Visual title="PRs"><Text>{len($pulls)}</Text></Visual>');
-  await store.create(
-    "ws1",
-    {
-      title: "PRs",
-      visual: { version: 1, kind: "ui", id: "x", title: "PRs", catalogVersion: AIDEN_UI_CATALOG_VERSION, tree: compiled.tree!, fallbackText: "" },
-      sources: options.sources ?? [SHELL, FILE],
-      actions: [ECHO],
-      refresh: { onOpen: true },
-    },
-    { approved: options.approved ?? false },
-  );
   const context = (permission: WorkspaceArtifactPermission) => ({ folderPath: folder, permission });
   // What the tab sends with a button press: the page's digest as it was shown.
   const digest = async () => (await store.get("ws1", "art1"))!.digest;
@@ -299,8 +315,13 @@ test("artifact reads deny canonical credential aliases and inode/path replacemen
 });
 
 test("denied file refreshes erase cached good data instead of preserving it as a transient failure", async (t) => {
-  const source: WorkspaceArtifactSourceV1 = { name: "private", kind: "file", file: ".env", parse: "text" };
-  const { store, runner, context } = await setup(t, { sources: [source] });
+  // No save accepts a credential path now, so the page is one an older Aiden saved.
+  const source: WorkspaceArtifactSourceV1 = { name: "private", kind: "file", file: "legacy.txt", parse: "text" };
+  const { store, runner, context } = await setup(t, {
+    sources: [source],
+    persisted: (document) => document.replace('"file":"legacy.txt"', '"file":".env"'),
+  });
+  assert.deepEqual((await store.get("ws1", "art1"))!.artifact.sources, [{ ...source, file: ".env" }], "the older page loads");
   const artifact = (await store.get("ws1", "art1"))!.artifact;
   await store.saveSnapshot("ws1", artifact, { private: { status: "ok", at: 1, dataJson: '"PRIVATE_FIXTURE_VALUE"' } });
   const result = await runner.refresh("ws1", "art1", context("full"));

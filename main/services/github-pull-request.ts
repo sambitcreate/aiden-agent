@@ -280,7 +280,7 @@ export class GitHubPullRequestService {
     cwd: string,
     selector: string | undefined,
     signal?: AbortSignal,
-  ): Promise<{ ok: true; target: RepositoryTarget } | { ok: false; failure: Failure }> {
+  ): Promise<{ ok: true; target: RepositoryTarget; headBranch?: string } | { ok: false; failure: Failure }> {
     if (selector) {
       const target = parseRepositorySelector(selector);
       return target
@@ -289,8 +289,8 @@ export class GitHubPullRequestService {
     }
     const local = await this.local(cwd, signal);
     if (!local.ok) return local;
-    const { host, owner, name } = local.repository;
-    return { ok: true, target: { host, owner, name } };
+    const { host, owner, name, headBranch } = local.repository;
+    return { ok: true, target: { host, owner, name }, ...(headBranch ? { headBranch } : {}) };
   }
 
   private read(
@@ -353,7 +353,13 @@ export class GitHubPullRequestService {
     if (!resolved.ok) return resolved.failure;
     const { target } = resolved;
     const result = await this.read(target, { kind: "repository", owner: target.owner, name: target.name }, "repo.resolve", signal, options);
-    if (result.kind === "ok") return { availability: "ready", repository: result.repository };
+    if (result.kind === "ok") {
+      return {
+        availability: "ready",
+        repository: result.repository,
+        ...(resolved.headBranch ? { headBranch: resolved.headBranch } : {}),
+      };
+    }
     if (result.kind === "not-found") {
       return { availability: "error", message: `GitHub could not find ${target.owner}/${target.name}.` };
     }

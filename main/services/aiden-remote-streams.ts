@@ -17,6 +17,7 @@ import {
   approvalScheduleCard,
   type AidenRemoteApprovalSchedule,
 } from "./aiden-remote-approval-schedule.js";
+import { executeAidenDurableOperation } from "./aiden-remote-durable-operation.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import { openCursorSse, type CursorSseHandle } from "./aiden-remote-sse.js";
 import {
@@ -608,55 +609,17 @@ export class AidenRemoteStreamService {
     if (!/^[\x21-\x7e]{16,128}$/u.test(scope.key)) {
       throw new AidenRemoteServiceError("invalid_request", "Idempotency-Key is invalid.", 400);
     }
-    if (!this.options.persistIdempotency) {
-      try {
-        return await this.idempotency.execute(scope, input, action);
-      } catch (error) {
-        return this.mapIdempotencyError(error);
-      }
-    }
-    let admit!: () => void;
-    let reject!: (error: unknown) => void;
-    const durable = new Promise<void>((resolve, rejectPromise) => {
-      admit = resolve;
-      reject = rejectPromise;
-    });
-    // Replays never invoke the wrapper: keep a sink so a rejected gate cannot
-    // surface as an unhandled rejection.
-    void durable.catch(() => undefined);
-    let actionGated = false;
-    const pending = this.idempotency.execute(scope, input, async () => {
-      actionGated = true;
-      await durable;
-      return action();
-    });
-    try {
-      await this.options.persistIdempotency(this.idempotency.snapshot());
-      admit();
-    } catch (error) {
-      reject(error);
-      await pending.catch(() => undefined);
-      // Only discard when this call created the entry: the wrapper ran but the
-      // action provably never did (admit() was never called), so nothing could
-      // have committed. Replays and concurrent in-flight entries keep their
-      // recorded outcome intact.
-      if (actionGated) this.idempotency.discardUnexecuted(scope);
-      throw new AidenRemoteServiceError("internal_error", "Aiden could not prepare this stream request.", 500);
-    }
-    let result: T | undefined;
-    let failure: unknown;
-    try {
-      result = await pending;
-    } catch (error) {
-      failure = error;
-    }
-    try {
-      await this.options.persistIdempotency(this.idempotency.snapshot());
-    } catch {
-      throw new AidenRemoteServiceError("idempotency_in_flight", "The stream request outcome is unknown.", 409);
-    }
-    if (failure) throw failure;
-    return result!;
+    return executeAidenDurableOperation(
+      {
+        ledger: this.idempotency,
+        persist: this.options.persistIdempotency,
+        notPreparedMessage: "Aiden could not prepare this stream request.",
+        outcomeUnrecordedMessage: "The stream request outcome is unknown.",
+      },
+      scope,
+      input,
+      action,
+    );
   }
 
   private mapIdempotencyError(error: unknown): never {

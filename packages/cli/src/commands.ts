@@ -34,6 +34,7 @@ export async function dispatchCommand(agentDir: string, cwd: string, args: strin
       result = await (await import("./session-import.ts")).exportSessionFile(agentDir, source, rest[1] ?? `${source}.aiden-chat.json`); break;
     }
     case "mcp": result = await (await import("./mcp.ts")).mcpCommand(agentDir, rest); break;
+    case "hooks": result = await (await import("./hooks.ts")).hooksAdminCommand(agentDir, rest); break;
     case "auth": result = await (await import("./auth.ts")).authCommand(agentDir, rest); break;
     case "catalog": result = await (await import("./providers.ts")).catalogCommand(agentDir, rest); break;
     case "insights": result = await (await import("./providers.ts")).insightsCommand(agentDir, rest); break;
@@ -66,6 +67,7 @@ export async function dispatchCommand(agentDir: string, cwd: string, args: strin
     }
     case "serve": await (await import("./serve-command.ts")).serveCommand(agentDir, rest); return true;
     case "service": await (await import("./service.ts")).serviceCommand(agentDir, rest); return true;
+    case "telemetry": result = await (await import("./telemetry.ts")).telemetryCommand(agentDir, rest); break;
     case "provider": {
       if ((rest[0] ?? "list") === "list") { result = (await (await import("./providers.ts")).createCliModelRuntime(agentDir)).getProviders().map(({ id, name }) => ({ id, name })); break; }
       if (rest[0] !== "import" || !rest[1]) throw new Error("Usage: provider list | import <models.json>");

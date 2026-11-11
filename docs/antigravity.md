@@ -4,7 +4,7 @@ Google Antigravity runs Google's own coding agent on your computer, and bills yo
 
 ## Set up
 
-1. Open **Settings → Providers → More → Google Antigravity**.
+1. Open **Settings → Providers → Connect AI → Advanced connection → Other setup methods → Google Antigravity**. If you already have a connection, choose **Connect another AI**.
 2. Choose **Install Google Antigravity**. The dialog states the download size and source (`dl.google.com`) before anything is downloaded.
    - Aiden verifies the download against hashes pinned in this version of Aiden. It then starts the runtime once to confirm what it is.
    - Supported computers: Apple Silicon and Intel Macs, and Linux on x64 or arm64.

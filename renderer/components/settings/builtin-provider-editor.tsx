@@ -21,6 +21,8 @@ interface BuiltinProviderEditorProps {
   onOpenChange: (open: boolean) => void;
   onSaved: () => void | Promise<void>;
   /** Voice-only setup needs a credential but does not require a chat catalog. */
+  returnFocus?: () => HTMLElement | null;
+  method?: PiAuthMethod;
   requireChatModel?: boolean;
   layer?: DialogLayer;
 }
@@ -43,6 +45,8 @@ export function BuiltinProviderEditor({
   open,
   onOpenChange,
   onSaved,
+  returnFocus,
+  method: chosenMethod,
   requireChatModel = true,
   layer,
 }: BuiltinProviderEditorProps) {
@@ -62,7 +66,7 @@ export function BuiltinProviderEditor({
   const harnessReady = !harness || harnessStatus?.runtime.status === "installed";
   const signInHint = harness ? harnessSignInHint(harnessStatus?.runtime) : undefined;
   const interactiveMethods = (provider.authMethods ?? []).filter(
-    (method): method is { type: PiAuthMethod; label: string; canLogin: true } => method.canLogin,
+    (method): method is { type: PiAuthMethod; label: string; canLogin: true } => method.canLogin && (!chosenMethod || method.type === chosenMethod),
   );
 
   const releaseSession = React.useCallback(() => {
@@ -208,6 +212,7 @@ export function BuiltinProviderEditor({
   return (
     <Dialog
       open={open}
+      returnFocus={returnFocus}
       onOpenChange={close}
       layer={layer}
       title={`Set up ${provider.label}`}
@@ -216,7 +221,7 @@ export function BuiltinProviderEditor({
           ? `${provider.label} runs ${harnessStatus?.publisher ? `${harnessStatus.publisher}'s` : "its own"} agent on this computer. It follows each folder's permission setting: in Ask, its changes and commands wait for your approval.`
           : "Pi owns this provider's endpoint, models, credentials, and request transport."
       }
-      confirmLabel="Continue"
+      confirmLabel={chosenMethod === "api_key" && prompt?.type === "secret" ? "Save key" : "Continue"}
       confirmHidden={!needsValue}
       confirmDisabled={responding || !value.trim()}
       busy={responding}
@@ -275,7 +280,7 @@ export function BuiltinProviderEditor({
         ) : interactiveMethods.length > 0 ? (
           <div className="grid gap-2">
             <Text variant="small" color="secondary">
-              Choose a setup method. Aiden asks only for the details this provider requires.
+              {chosenMethod === "oauth" && provider.id === "openai" ? "OpenAI sign-in shares a random installation identifier with OpenAI. Your chats and workspace details are excluded." : chosenMethod === "api_key" ? "Your provider bills API usage." : "Choose how to connect this provider."}
             </Text>
             {interactiveMethods.map((method) => (
               <Button
@@ -311,15 +316,18 @@ export function BuiltinProviderEditor({
             </a>
           </Button>
         ) : null}
-        {requireChatModel ? <ProviderConnectorKeySharing provider={provider} /> : null}
-        {requireChatModel ? (
-          <>
-            <Text variant="small" color="tertiary">
-              {provider.models.length} model
-              {provider.models.length === 1 ? " is" : "s are"} currently available.
-            </Text>
+        {requireChatModel && (
+          <details className="settings-card p-3">
+            <summary className="cursor-pointer text-small-strong">Advanced</summary>
+            <ProviderConnectorKeySharing provider={provider} />
             <ProviderModelVisibility provider={provider} />
-          </>
+          </details>
+        )}
+        {requireChatModel ? (
+          <Text variant="small" color="tertiary">
+            {provider.models.length} model
+            {provider.models.length === 1 ? " is" : "s are"} currently available.
+          </Text>
         ) : (
           <Text variant="small" color="tertiary">
             This setup stores the credential for Gemini voice. Chat-model access follows the choice

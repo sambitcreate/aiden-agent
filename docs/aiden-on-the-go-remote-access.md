@@ -98,7 +98,7 @@ outside a Git repository.
 Environment files may contain secrets. All choices start unchecked. Select only
 files you want on that computer. Aiden offers ignored root-level `.env*` and
 `.dev.vars*` text files, skips symlinks, hard links and files over 128 KiB, and caps
-the transfer at 16 files and 512 KiB. Nothing existing is overwritten. The cloned
+the transfer at 16 files and 512 KiB. Each selected file must also be ignored by the cloned repository with both case-sensitive and case-insensitive Git matching or the clone is discarded. User-level Git excludes do not satisfy this check. Nothing existing is overwritten. The cloned
 project becomes available after the selected files arrive. The new chat opens on
 the destination; a typed prompt and attachments carry over when that computer has
 no saved draft. An existing remote draft is retained, with the local prompt still
@@ -122,19 +122,27 @@ When a desktop host grants `bot:allowed` (contract revision 57), iPhone and Andr
 
 When the paired Mac offers it (contract revision 42, `bot:issues`), a Bot's **Needs you** cards appear in its chat on Aiden On The Go for iPhone and Android. A card says what happened in plain words ("Paused “Morning brief” after 3 failed tries", "Gmail needs reconnecting", "A reply has been quiet for 10 minutes") and offers up to two actions: **Resume routine**, **Stop**, **Keep waiting**, or **Open chat**. A card whose only action opens the Mac's own settings shows "Open on your Mac" instead of a button. The Bots list shows how many open cards a Bot has, and a phone notification says the Bot needs you when the app is not in the foreground. With an older Mac the cards stay on the Mac, and the phone shows nothing for them.
 
+## Bot messaging on the phone
+
+With a host offering revision 59 and `bot:peers`, iPhone and Android can manage a Bot’s routing description and named pair approvals from **Profile → Bot peers**. Pair metadata needs Bot read access; exchange content and source/result evidence also need chat read access. Changes and Stop need Bot write access. Each recipient keeps its own rules and access. The phone retains the exact request after a lost reply; a pending Stop offers acknowledgement status rather than claiming cancellation. Intermediate exchange rows stay quiet, and the initiating Bot’s final update uses the existing notification feed. See [Bot peers](bot-peers.md).
+
+## Messages Aiden Live sent
+
+When Aiden Live on the Mac sends to a chat, that message shows a small "By voice" label on iPhone and Android too (contract revision 60, `inputSource: "voice"`). It is a display label only; phones never send it.
+
 ## Images a Bot shares
 
 When a Bot shares an image (a chart it drew, a screenshot it took), the paired Mac (contract revision 45) sends it to Aiden On The Go for iPhone and Android, which shows it in the Bot's chat like a photo in any other chat: tap it to see it full screen and save it. The phone reads the picture from the Mac when it is shown and keeps a limited number of pictures only while the chat is open; one it let go is read again when you scroll back to it. Another Mac viewing the Bot shows the picture too (see [Use a paired computer](#use-a-paired-computer)). With an older phone or Mac, the chat says "I shared an image: NAME. Open this chat on your Mac to see it."
 
 ## Browser recordings
 
-When the agent records a browser tab, the paired Mac (contract revision 46) lets Aiden On The Go for iPhone and Android show the recording under the "Stopped browser recording" line, with its length and size. Tap **Play** to download it from the Mac and watch it full screen. The phone reads the video only when you tap Play. A recording deleted from the Mac says "This recording is no longer on the Mac." On iPhone, a recording the Mac saved as WebM (only when its H.264 encoder is unavailable) says to watch it on the Mac. Older phones and Macs show the activity line without the card.
+When the agent records a browser tab, the paired Mac (contract revision 46) lets Aiden On The Go for iPhone and Android show the recording under the "Stopped browser recording" line, with its length and size. Tap **Play** to download it from the Mac and watch it full screen. The phone reads the video only when you tap Play. Each Play owns a separate temporary file: another download, a cancellation or a missing recording does not delete an active download or player. Closing the player, replacing its recording card or leaving the chat removes that Play's file, including when the download finishes before the player appears or after the card has gone. Android startup also clears playback files abandoned by the previous process. A recording deleted from the Mac says "This recording is no longer on the Mac." On iPhone, a recording the Mac saved as WebM (only when its H.264 encoder is unavailable) says to watch it on the Mac. Older phones and Macs show the activity line without the card.
 
 ## Values read from a web page
 
-When the agent reads a page in extract mode, the Mac (contract revision 38) sends the values it read with the chat's activity. Aiden On The Go for iPhone and Android shows them as a card under the "Fetched web page" line: each value with the line of the page it came from, a **Guess** label on values the agent isn't sure of, and "Not on the page" for values the page doesn't have. Only the field names, a short form of each value and its page line reach the phone, never the page. Older phones and Macs show the activity line without the card. See [web-fetch-extract.md](web-fetch-extract.md).
+When the agent reads a page in extract mode, the Mac (contract revision 38) sends the values it read with the chat's activity. Aiden On The Go for iPhone and Android shows them as a card under the "Fetched web page" line: each value with supporting page text, a **Guess** label on values the agent isn't sure of, and "Not on the page" for values the page doesn't have. Only the field names, a short form of each value and its page line reach the phone, never the page. Older phones and Macs show the activity line without the card. See [web-fetch-extract.md](web-fetch-extract.md).
 
-When the paired Mac has spending limits on (contract revision 47), Aiden On The Go for iPhone and Android shows a quiet line in a workspace chat or Bot chat once it has used 80% of its limit, and a card with **Allow $X more** once it reaches it. Allowing more from the phone and the Mac at the same moment adds the amount once. The limits themselves are set on the Mac in Settings → Limits & spending; see [usage limits and spending limits](usage-limits-and-spending.md). With an older phone, or from another paired Mac, a send over the limit is refused with the Mac's message, and you allow more on the Mac.
+When the paired Mac has spending limits on (contract revision 47), Aiden On The Go for iPhone and Android shows a quiet line in a workspace chat or Bot chat once it has used 80% of its limit, and a card with **Allow $X more** once it reaches it. Allowing more from the phone and the Mac at the same moment adds the amount once. The limits themselves are set on the Mac in Settings → Context & Limits; see [usage limits and spending limits](usage-limits-and-spending.md). With an older phone, or from another paired Mac, a send over the limit is refused with the Mac's message, and you allow more on the Mac.
 
 ## Background jobs
 

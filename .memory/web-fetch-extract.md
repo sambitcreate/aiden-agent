@@ -47,3 +47,21 @@ The owner asked for pi-web-access v0.45.0's extract mode as a native feature, wi
 - An earlier plan figure of 2,667 left out `web_search` (87 tokens).
 - `advertisedBrowserSchema` strips limits from what the model sees. `execute` re-validates against the strict schema, and the browser-tools test checks both.
 - `web_fetch` adds 51 tokens in read mode and 163 in extract mode.
+
+## 2026-11-02: complete numeric and citation support (backlog 9.1 / 9.2)
+
+Reconfirmed both findings on `9b2875d65f316265323d3d06a73904fbe00e2277` before editing: a high-confidence `1.2` matched `1.2k`, and `New York` split across lines cited only `New`. Three added core regressions and a real WebFetchService → structured output/model text/validated recap test failed before the fix. No paid provider or website calls.
+
+- A scale suffix now determines the only numeric reading; signed, case-insensitive and word scales stay supported. Unit boundaries remain distinct. A later exact decimal no longer borrows an earlier scaled token's citation, and the quoted support includes the suffix.
+- Text matching retains exclusive raw ends for whole normalized characters/combining marks and the entire multiline span. Citation windows flatten whitespace before sizing and retain all support or return none. Lists cover every item's support (separate spans use ` … `); datetime spans include time and offset as well as date.
+- A value whose full support cannot fit the existing 200-character citation becomes `uncertain`, without `sourceLine` and without `notFound` if it exists on the page. The Remote shape/revision and native rendering stay unchanged; iOS/Android tests cover these recaps surviving cache round trips.
+- Local validation: `npm run test:web-fetch` 63/63; protocol + generation-timeline suites 99/99; Android `AidenChatTest` 137/137; iOS three selected recap XCTest methods 3/3 on the isolated iPhone 17 Pro / iOS 26.5 simulator `29A9A9C8-97CD-461C-98FE-28930588DFDC` (not physical-device acceptance). Type-check, scoped ESLint and `git diff --check` pass. Dependencies reused from the existing local install, with Pi 1.4.0 and parse5 7.3.0 checked; no install or paid/live network validation.
+- Branch `feature/web-extraction-evidence`; PR creation is authorized, but merge is not. The coordinator owns hosted CI/review polling.
+
+### PR #715 review: Unicode citation budget
+
+Review `PRRT_kwDOTctvDc6y7A1y` correctly identified that the new overflow guard at `9752d9415fc12edee25ec6f02d0dfe9274b95431` used UTF-16 length while the recap validator and phone clients count code points/scalars. A real extraction/validator matrix reproduced incorrect downgrades for 101/200 emoji, windowed and multiline support; genuine over-budget controls stayed uncertain. Two new core behavioral tests failed before the correction; the overflow control passed.
+
+Citation sizing now translates flattened prefixes at the existing raw UTF-16 offsets to code-point indices, then budgets context/ellipsis markers and slices a code-point array. Whole normalized-character match ends remain unchanged. Tests include one/two required omission markers, mixed astral context, CRLF multiline support, actual 201-code-point overflow and decomposed combining marks (counted as scalars, not visual glyphs). The WebFetchService and both native cache/parser suites exercise the same boundary. No Remote shape or revision change.
+
+Validation: the retained 12-case extraction/validator matrix now has zero mismatches; all returned windows retain full support without unpaired surrogates. `npm run test:web-fetch` 67/67; protocol/timeline 99/99; Android `AidenChatTest` 138/138; iOS four selected recap methods 4/4 on the same isolated iOS 26.5 simulator. Full type-check, scoped ESLint and whitespace checks pass. No live provider/web requests, full Electron E2E or physical-device validation. The substantive correction remains on the established #715 branch, with hosted checks/review follow-up owned by the coordinator.

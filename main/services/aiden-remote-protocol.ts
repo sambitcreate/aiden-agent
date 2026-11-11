@@ -1,5 +1,7 @@
+import { parseChatInputSource } from "../../renderer/shared/chat-input-source.js";
 import { botPendingAccessRequestOf, parseBotAccessChoice, type BotAccessChoice } from "../../renderer/shared/bot-access-requests.js";
 import { parseAppControlPanels } from "../../renderer/shared/app-controls.js";
+import { parseBotPeerId } from "../../renderer/shared/bot-peers.js";
 import {
   parseAidenRemoteApprovalSchedule,
   type AidenRemoteApprovalSchedule,
@@ -292,7 +294,19 @@ export const AIDEN_REMOTE_BOT_MESSAGING_CONTRACT_REVISION = 54 as const;
 export const AIDEN_REMOTE_BOT_ACCESS_REQUESTS_CONTRACT_REVISION = 55 as const;
 export const AIDEN_REMOTE_BOT_PLANS_CONTRACT_REVISION = 56 as const;
 export const AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION = 57 as const;
-export const AIDEN_REMOTE_CONTRACT_REVISION = 58 as const;
+/** Revision59: negotiated connector-watch management; no feature-token expansion. */
+export const AIDEN_REMOTE_BOT_WATCHES_CONTRACT_REVISION = 59 as const;
+export const AIDEN_REMOTE_BOT_OPEN_WORK_CONTRACT_REVISION = 59 as const;
+export const AIDEN_REMOTE_BOT_ROUTINE_MODELS_CONTRACT_REVISION = 59 as const;
+export const AIDEN_REMOTE_BOT_PEERS_CONTRACT_REVISION = 59 as const;
+/**
+ * Contract revision 60 (provisional; re-claim the next revision after
+ * `main`'s at merge by changing only this constant): a user message may carry
+ * `inputSource: "voice"` when Aiden Live sent it for the person on the Mac.
+ * Display-only, no capability; clients show "By voice" and older ones ignore it.
+ */
+export const AIDEN_REMOTE_VOICE_INPUT_CONTRACT_REVISION = 60 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_VOICE_INPUT_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -517,6 +531,10 @@ export const AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES = ["bot:images"] as const;
  * any device type may hold.
  */
 export const AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES = ["bot:issues"] as const;
+export const AIDEN_REMOTE_BOT_WATCH_CAPABILITIES = ["bot:watches"] as const;
+export const AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES = ["bot:open-work"] as const;
+export const AIDEN_REMOTE_BOT_ROUTINE_MODEL_CAPABILITIES = ["bot:routine-models"] as const;
+export const AIDEN_REMOTE_BOT_PEER_CAPABILITIES = ["bot:peers"] as const;
 
 export type AidenRemoteBotIssueCapability = (typeof AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES)[number];
 
@@ -536,6 +554,10 @@ export const AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_ALLOWED_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_WATCH_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_ROUTINE_MODEL_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_PEER_CAPABILITIES,
 ] as const;
 
 /**
@@ -602,6 +624,10 @@ export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_ALLOWED_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_WATCH_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_ROUTINE_MODEL_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_PEER_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
   ...AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
@@ -627,6 +653,10 @@ export const AIDEN_REMOTE_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_ALLOWED_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_WATCH_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_ROUTINE_MODEL_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_PEER_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
   ...AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
@@ -1493,6 +1523,8 @@ export type AidenRemoteBotSessionEntry =
    * `retryText` is omitted when there is nothing to resend.
    */
   | { type: "failed_turn"; id: string; createdAt?: string; retryText?: string }
+  /** Revision 59, only for `bot:peers`: quiet exchange navigation, never message authority. */
+  | { type: "peer"; id: string; exchangeId: string; direction: "sent" | "received"; peerBotId: string; peerName: string; messageKind: "request" | "question" | "status" | "fyi" | "result"; createdAt?: string; final?: true }
   /**
    * Contract revision 27, only for devices holding `bot:cards`: the Bot saved
    * something to its memory. Clients show a quiet "Memory updated" line.
@@ -1628,7 +1660,7 @@ export interface AidenRemoteBotRoutineSuggestionList {
   suggestions: AidenRemoteBotRoutineSuggestion[];
 }
 
-export const AIDEN_REMOTE_BOT_ROUTINE_NOTIFICATION_KINDS = ["routine", "issue", "message"] as const;
+export const AIDEN_REMOTE_BOT_ROUTINE_NOTIFICATION_KINDS = ["routine", "issue", "peer", "message"] as const;
 export type AidenRemoteBotNotificationKind = (typeof AIDEN_REMOTE_BOT_ROUTINE_NOTIFICATION_KINDS)[number];
 
 /**
@@ -2238,6 +2270,8 @@ export interface AidenRemoteContractFixture {
   rawUploads?: AidenRemoteRawUploadsFixture;
   /** Revision 53 (`chat:new-worktree`): an empty chat moved into a new worktree, and a chat with messages refused. */
   chatNewWorktree?: AidenRemoteChatNewWorktreeFixture;
+  /** Revision 60: a user message Aiden Live sent ("By voice"), and values clients must ignore. */
+  voiceInput?: AidenRemoteVoiceInputFixture;
   taskProgress: AidenRemoteChatTaskProgress;
   agentRoster: AidenRemoteChatAgentRoster;
   agentInterrupt: AidenRemoteChatAgentInterruptFixture;
@@ -3823,6 +3857,10 @@ export function parseAidenRemoteChatProjection(
                 `${label} message ${index}`,
               ),
             }
+          : {}),
+        // Revision 60: display-only, user messages only; an unknown value is ignored.
+        ...(entry.role === "user" && parseChatInputSource(entry.inputSource)
+          ? { inputSource: "voice" as const }
           : {}),
       };
       if (hasOwn(entry, "timeline")) {
@@ -6013,6 +6051,12 @@ export function parseAidenRemoteBotSessionEntry(value: unknown): AidenRemoteBotS
           ? { retryText: boundedText(value.retryText, "Bot failed turn retryText", AIDEN_REMOTE_BOT_SESSION_MAX_TEXT_CHARS) }
           : {}),
       };
+    case "peer": {
+      assertExactKeys(value, ["type", "id", "exchangeId", "direction", "peerBotId", "peerName", "messageKind", "createdAt", "final"], "Bot peer entry");
+      const messageKind = enumMember(value.messageKind, ["request", "question", "status", "fyi", "result"] as const, "Peer message kind");
+      if (hasOwn(value, "final") && (value.final !== true || messageKind !== "result")) throw new Error("Only a final peer result may carry the final flag.");
+      return { type: "peer", id, exchangeId: parseBotPeerId(value.exchangeId), direction: enumMember(value.direction, ["sent", "received"] as const, "Peer direction"), peerBotId: parseBotPeerId(value.peerBotId), peerName: boundedText(value.peerName, "Peer name", 160), messageKind, ...(hasOwn(value, "createdAt") ? { createdAt: dateTimeValue(value.createdAt, "Peer entry createdAt") } : {}), ...(value.final === true ? { final: true as const } : {}) };
+    }
     case "memory_update":
       assertExactKeys(value, ["type", "id", "createdAt"], "Bot memory update");
       return {
@@ -6232,9 +6276,9 @@ export function parseAidenRemoteBotRoutineNotificationList(value: unknown): Aide
       : "routine";
     // A routine result says which routine ran and how it ended; an issue card
     // carries neither, and its `routineName` is the card's own title.
-    if (kind === "issue" || kind === "message") {
+    if (kind === "issue" || kind === "peer" || kind === "message") {
       if (hasOwn(notification, "routineId") || hasOwn(notification, "status")) {
-        throw new Error("Bot issue or message notification must not carry routineId or status.");
+        throw new Error("Bot issue, peer and message notifications must not carry routineId or status.");
       }
     } else if (!hasOwn(notification, "routineId") || !hasOwn(notification, "status")) {
       throw new Error("Bot routine notification must carry routineId and status.");
@@ -8318,6 +8362,13 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     }
     chatNewWorktree = parseChatNewWorktreeFixture(value.chatNewWorktree);
   }
+  let voiceInput: AidenRemoteVoiceInputFixture | undefined;
+  if (value.voiceInput !== undefined) {
+    if (contractRevision < AIDEN_REMOTE_VOICE_INPUT_CONTRACT_REVISION) {
+      throw new Error(`Voice input fixtures require contract revision ${AIDEN_REMOTE_VOICE_INPUT_CONTRACT_REVISION}.`);
+    }
+    voiceInput = parseVoiceInputFixture(value.voiceInput);
+  }
   let botAllowed: AidenRemoteBotAllowedFixture | undefined;
   if (value.botAllowed !== undefined) {
     if (contractRevision < AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION) throw new Error("Bot allowed fixtures require revision 57.");
@@ -8442,7 +8493,29 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     ...(backgroundJobs ? { backgroundJobs } : {}),
     ...(rawUploads ? { rawUploads } : {}),
     ...(chatNewWorktree ? { chatNewWorktree } : {}),
+    ...(voiceInput ? { voiceInput } : {}),
   };
+}
+
+/** Revision 60 fixture: the chat as sent, and which of its messages read as "By voice". */
+export interface AidenRemoteVoiceInputFixture {
+  chat: AidenRemoteChatProjection;
+  voiceMessageIds: string[];
+}
+
+function parseVoiceInputFixture(value: unknown): AidenRemoteVoiceInputFixture {
+  if (!isRecord(value)) throw new Error("Voice input fixture must be an object.");
+  assertExactKeys(value, ["chat", "voiceMessageIds"], "Voice input fixture");
+  const chat = parseAidenRemoteChatProjection(value.chat, "Voice input chat");
+  if (!Array.isArray(value.voiceMessageIds) || !value.voiceMessageIds.every((id) => typeof id === "string")) {
+    throw new Error("Voice input fixture voiceMessageIds must be strings.");
+  }
+  const expected = value.voiceMessageIds as string[];
+  const marked = chat.messages.filter((message) => message.inputSource === "voice").map((message) => message.id);
+  if (marked.length !== expected.length || marked.some((id, index) => id !== expected[index])) {
+    throw new Error("Voice input fixture marks different messages than the parser.");
+  }
+  return { chat, voiceMessageIds: expected };
 }
 
 const ERROR_DETAIL_DECISIONS = ["allow", "deny", "expired", "cancelled"] as const;
@@ -9701,3 +9774,8 @@ export function reconcileAidenSseFrames(
   }
   return { events, reconcileRequired: false };
 }
+
+export type { BotConnectorWatchList, BotConnectorWatchView, BotConnectorWatchSourceList, BotConnectorWatchTestResult } from "../../renderer/shared/bot-connector-watches.js";
+
+export type { BotOpenWorkSnapshot, BotOpenWorkItem, BotOpenWorkMutation, BotOpenWorkResult, BotOpenWorkEvidence } from "../../renderer/shared/bot-open-work.js";
+export { parseBotOpenWorkSnapshot, parseBotOpenWorkResult, parseBotOpenWorkMutation, parseBotOpenWorkEvidence } from "../../renderer/shared/bot-open-work.js";

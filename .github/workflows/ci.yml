@@ -100,7 +100,7 @@ jobs:
           retention-days: 1
 
   e2e:
-    name: Electron E2E (${{ matrix.shard }}/3)
+    name: Electron E2E (${{ matrix.shard }}/4)
     needs: [changes, build]
     if: ${{ needs.changes.outputs.desktop == 'true' }}
     runs-on: macos-26
@@ -108,7 +108,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4]
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
@@ -128,7 +128,7 @@ jobs:
       - name: Restore production build
         run: tar -xf "$RUNNER_TEMP/desktop-build/desktop-build.tar"
       - name: Run deterministic Electron E2E shard
-        run: node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/3
+        run: node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/4
       - name: Build sanitized E2E failure receipt
         if: ${{ failure() }}
         run: npm run diagnostics:failure-receipt -- test-results/e2e-safe-receipt.json electron-e2e test-failed test-results/safe-test-details.json
@@ -220,16 +220,24 @@ jobs:
     needs: changes
     # Catalog refreshes run these too: the runtime takes model limits from it.
     if: ${{ needs.changes.outputs.desktop == 'true' || needs.changes.outputs.catalog == 'true' }}
-    runs-on: macos-26
+    # macOS slots are the scarce runner, so pull requests keep only the macos
+    # lane there. Main runs every lane on macOS to catch what Ubuntu cannot see.
+    runs-on: ${{ github.event_name == 'pull_request' && matrix.runner || 'macos-26' }}
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        lane: [core-git, runtime-subagents, renderer-other]
+        lane: [core-git, runtime-subagents, renderer-other, macos]
         include:
           - lane: core-git
+            runner: ubuntu-24.04
             chromium: true
+          - lane: runtime-subagents
+            runner: ubuntu-24.04
           - lane: renderer-other
+            runner: ubuntu-24.04
+          - lane: macos
+            runner: macos-26
             chromium: true
     steps:
       - name: Check out source
@@ -239,11 +247,14 @@ jobs:
         with:
           node-version: 22.23.4
           cache: npm
+      - name: Install Linux test dependencies
+        if: ${{ runner.os == 'Linux' }}
+        run: sudo apt-get update && sudo apt-get install --yes rpm xvfb pkg-config libsecret-1-dev libselinux1-dev gnome-keyring dbus-x11
       - name: Install locked dependencies
         run: npm ci
       - name: Install Playwright Chromium for containment
         if: ${{ matrix.chromium == true }}
-        run: npx playwright install chromium
+        run: npx playwright install --with-deps chromium
       - name: Run assigned regression tests and prerequisites
         env:
           AIDEN_SKIP_VIRTUALIZED_LAUNCH_CONSTRAINT_TESTS: "1"
@@ -662,7 +673,7 @@ jobs:
   linux-required:
     name: Linux ${{ matrix.arch }}
     if: ${{ always() }}
-    needs: [changes, linux]
+    needs: [changes, linux, linux-e2e]
     strategy:
       fail-fast: false
       matrix:
@@ -675,15 +686,16 @@ jobs:
           CHANGES_RESULT: ${{ needs.changes.result }}
           LINUX_SELECTED: ${{ needs.changes.outputs.linux }}
           LINUX_RESULT: ${{ needs.linux.result }}
+          LINUX_E2E_RESULT: ${{ needs.linux-e2e.result }}
         run: |
-          case "$CHANGES_RESULT:$LINUX_SELECTED:$LINUX_RESULT" in
+          case "$CHANGES_RESULT:$LINUX_SELECTED:$LINUX_RESULT:$LINUX_E2E_RESULT" in
             # Unselected, the always-started linux matrix skips its steps and reports success.
-            success:true:success|success:false:success|success:false:skipped) exit 0 ;;
-            *) echo "Linux gate failed: $CHANGES_RESULT:$LINUX_SELECTED:$LINUX_RESULT"; exit 1 ;;
+            success:true:success:success|success:false:success:skipped|success:false:skipped:skipped) exit 0 ;;
+            *) echo "Linux gate failed: $CHANGES_RESULT:$LINUX_SELECTED:$LINUX_RESULT:$LINUX_E2E_RESULT"; exit 1 ;;
           esac
 
-  # Linux packaging and its E2E gate run for Linux-relevant changes and on
-  # every main push. The matrix job always starts and skips its steps
+  # Linux packaging runs for Linux-relevant changes and on every main push,
+  # beside the sharded linux-e2e job. The matrix job always starts and skips its steps
   # otherwise, because a skipped matrix job reports under the unexpanded
   # name and never satisfies the required "Linux x64"/"Linux arm64" checks.
   linux:
@@ -811,8 +823,42 @@ jobs:
             exit 1
           fi
 
+  # Electron specs run on three runners beside packaging, not after it, because
+  # this was the longest step on the path to the required Linux checks.
+  linux-e2e:
+    name: Linux E2E (${{ matrix.shard }}/3)
+    needs: changes
+    if: ${{ needs.changes.outputs.linux == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22.23.4
+          cache: npm
+
+      - name: Install Linux test dependencies
+        run: sudo apt-get update && sudo apt-get install --yes rpm xvfb pkg-config libsecret-1-dev libselinux1-dev gnome-keyring dbus-x11
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Build the app
+        run: npm run build
+
       - name: Run deterministic Electron E2E gate
-        if: ${{ needs.changes.outputs.linux == 'true' && matrix.arch == 'x64' }}
         run: |
           set -euo pipefail
           # Ubuntu 24.04 blocks unprivileged user namespaces through AppArmor,
@@ -829,17 +875,17 @@ jobs:
           echo "previous core_pattern: $(cat /proc/sys/kernel/core_pattern)"
           sudo sysctl -w kernel.core_pattern=core
           ulimit -c 0
-          xvfb-run --auto-servernum npm run test:e2e
+          xvfb-run --auto-servernum node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/3
 
       - name: Build sanitized E2E failure receipt
-        if: ${{ failure() && matrix.arch == 'x64' }}
+        if: ${{ failure() }}
         run: npm run diagnostics:failure-receipt -- test-results/e2e-safe-receipt.json electron-e2e test-failed test-results/safe-test-details.json
 
       - name: Upload sanitized E2E failure receipt
-        if: ${{ failure() && matrix.arch == 'x64' }}
+        if: ${{ failure() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: playwright-e2e-linux-${{ github.run_id }}-${{ github.run_attempt }}
+          name: playwright-e2e-linux-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
           path: test-results/e2e-safe-receipt.json
           if-no-files-found: error
           retention-days: 7

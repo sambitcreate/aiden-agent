@@ -8,7 +8,9 @@ import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
@@ -1354,20 +1356,19 @@ class AidenChatViewModel(
         )
 
     /**
-     * Reads [recording] from the bound Mac into the cache for the player. Any
-     * recording saved for an earlier Play is dropped first, so at most one video
-     * waits on disk. A 404 means the Mac no longer has it.
+     * Reads [recording] from the bound Mac into a file owned by this Play.
+     * Other downloads and players keep their files until they close. A 404
+     * means the Mac no longer has it.
      */
     suspend fun browserRecording(recording: AidenBrowserRecordingRecap): AidenBrowserRecordingLoad {
         val client = activeClient() ?: return AidenBrowserRecordingLoad.Failed
-        withContext(ioDispatcher) { coordinator.purgeBrowserRecordings() }
         return try {
             val saved = client.browserRecording(chatId, recording.id, coordinator.browserRecordingDir)
             if (activeClient() === client) {
                 AidenBrowserRecordingLoad.Ready(saved)
             } else {
                 // The pairing changed while the video downloaded: it is not this chat's to show.
-                withContext(ioDispatcher) { saved.file.delete() }
+                withContext(NonCancellable + ioDispatcher) { saved.file.delete() }
                 AidenBrowserRecordingLoad.Failed
             }
         } catch (error: CancellationException) {
@@ -1380,8 +1381,11 @@ class AidenChatViewModel(
     }
 
     /** The player closed: its video leaves the cache. */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     fun releaseBrowserRecording(recording: AidenBrowserRecordingFile) {
-        viewModelScope.launch(ioDispatcher) { recording.file.delete() }
+        // onDispose can follow ViewModel clearing. This finite, non-suspending
+        // cleanup must start even when that scope has already been cancelled.
+        viewModelScope.launch(ioDispatcher, start = CoroutineStart.ATOMIC) { recording.file.delete() }
     }
 
     /**

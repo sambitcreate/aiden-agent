@@ -478,6 +478,24 @@ test("a follow-up notice reaches phones as one readable line, never the output i
   assert.doesNotMatch(JSON.stringify(projection), /ghp_secret/u);
 });
 
+test("a message Aiden Live sent reaches paired devices as By voice; nothing else does", () => {
+  const projection = projectAidenRemoteChat(chat({
+    messages: [
+      { id: "voice-1", role: "user", content: "Check the reset page too.", inputSource: "voice", createdAt: 2_000 },
+      { id: "typed-1", role: "user", content: "And the login page.", createdAt: 2_001 },
+      { id: "answer-1", role: "assistant", content: "On it.", inputSource: "voice", createdAt: 2_002 } as never,
+    ],
+  }));
+  const messages = parseAidenRemoteChatProjection(projection).messages;
+  assert.deepEqual(messages.map((message) => message.inputSource), ["voice", undefined, undefined]);
+  const wire = JSON.parse(JSON.stringify(projection)) as { messages: Array<Record<string, unknown>> };
+  assert.deepEqual(
+    wire.messages.map((message) => "inputSource" in message),
+    [true, false, false],
+    "only the voice message carries the key on the wire",
+  );
+});
+
 test("chat projection emits only parent state and rejects private child metadata", () => {
   const projection = projectAidenRemoteChat(chat({
     messages: [{
@@ -3324,6 +3342,12 @@ test("context pressure is null when the host cannot project, and Bot chats and u
   await assert.rejects(unwired.service.contextPressure("chat-1"), hasCode("not_found", 404));
 });
 
+test("a chat's desktop design mode stays off the Remote projection", () => {
+  const projection = projectAidenRemoteChat(chat({ designMode: true }));
+  assert.equal(projection.id, "chat-1");
+  assert.equal("designMode" in projection, false);
+});
+
 test("a phone's message counts once for the turn it started, and a turn that never starts counts nothing", async (t) => {
   const sent = captureAnalyticsEvents(t);
   const failed = fixture(chat(), { startThrows: true });
@@ -3395,4 +3419,3 @@ test("a phone's message to a Bot counts as a Bot message, outside any workspace"
   await analyticsSettled();
   assert.deepEqual(sent.map(({ props }) => [props?.origin, props?.in_workspace]), [["bot", false]]);
 });
-

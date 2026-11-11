@@ -38,7 +38,7 @@ async function loadComposer() {
     "../lib/use-voice-recorder":
       "export const useVoiceRecorder=()=>({liveTranscript:{committed:\"\",tentative:\"\"}});",
     "../lib/queries":
-      "export const useSettings=()=>({}); export const useDiscoveredSkills=(scope)=>{ (globalThis.__composerSkillScopes ??= []).push(scope ?? null); return {}; };",
+      "export const useSettings=()=>({ data: globalThis.__composerSettings }); export const useDiscoveredSkills=(scope)=>{ (globalThis.__composerSkillScopes ??= []).push(scope ?? null); return {}; };",
     "../lib/command-system":
       "export const useCommandSystem=()=>({canExecute:()=>false,execute:()=>false,binding:()=>null}); export const useCommandHandler=()=>{};",
     "../lib/ipc":
@@ -53,6 +53,14 @@ async function loadComposer() {
     "./follow-through-chips": "export const FollowThroughChips=()=>null;",
     "./busy-send-button": "export const BusySendButton=()=>null;",
     "./provider-icon": "export const ProviderIcon=()=>null;",
+    "../lib/design-mode": "export const useDesignModeControls=()=>null;",
+    // The tray a design canvas publishes; tests set it on globalThis. The
+    // attachment builder is the real one.
+    "../design/comment-tray-store": `export { designCommentAttachments } from "./renderer/design/comment-tray-store.ts";
+      export const useDesignCommentTray = chatId => globalThis.__composerCommentTray?.chatId === chatId ? globalThis.__composerCommentTray : null;
+      export const commentCrop = (_chatId, id) => globalThis.__composerCommentTray?.crops?.[id];`,
+    "../design/design-comment-tray": `import React from 'react';
+      export const DesignCommentTray = ({ tray, onSend }) => React.createElement('button', { 'aria-label': 'Send ' + tray.comments.length + ' design comments', onClick: onSend });`,
   };
   await build({
     entryPoints: [path.resolve("renderer/components/composer.tsx")],
@@ -715,6 +723,61 @@ test("a blocked Composer shows its readiness message exactly once", async () => 
   }
 });
 
+test("with Let Live use the open chat off, the composer and Send are the user's alone", async () => {
+  const mounted = installDom();
+  Object.assign(globalThis, {
+    __composerAttachmentFixture: {
+      api: {
+        pickAndRead: async () => ({ attachments: [], skipped: 0 }),
+        readDroppedFiles: async () => [],
+        readClipboardImages: async () => [],
+      },
+    },
+  });
+  const loaded = await loadComposer();
+  const { createRoot } = await import("react-dom/client");
+  const root = createRoot(mounted.container);
+  // The guard main reads: the nearest data-live-guard on the element or an ancestor.
+  const guardOf = (element: Element | undefined): string | null => {
+    for (let node: Element | null = element ?? null; node; node = node.parentNode as Element | null) {
+      const guard = node.getAttribute?.("data-live-guard");
+      if (guard) return guard;
+    }
+    return null;
+  };
+  const composer = (chatAccess: boolean | undefined) => {
+    Object.assign(globalThis, { __composerSettings: chatAccess === undefined ? undefined : { aidenLiveChatAccess: chatAccess } });
+    return (
+      <loaded.Composer
+        key={String(chatAccess)}
+        chatId="live-chat"
+        ready
+        hasMessages
+        inputRef={React.createRef<HTMLTextAreaElement>()}
+        isGenerating={false}
+        onStop={() => {}}
+        onSend={async () => {}}
+      />
+    );
+  };
+  try {
+    await React.act(async () => root.render(composer(false)));
+    assert.equal(guardOf(mounted.container.getElementsByTagName("textarea")[0]), "you");
+    assert.equal(guardOf(button(mounted.container, "Send message")), "you");
+    for (const chatAccess of [true, undefined]) {
+      await React.act(async () => root.render(composer(chatAccess)));
+      assert.equal(guardOf(mounted.container.getElementsByTagName("textarea")[0]), null, `chat access ${chatAccess}`);
+      assert.equal(guardOf(button(mounted.container, "Send message")), null, `chat access ${chatAccess}`);
+    }
+  } finally {
+    await React.act(async () => root.unmount());
+    await loaded.cleanup();
+    mounted.restore();
+    Reflect.deleteProperty(globalThis, "__composerAttachmentFixture");
+    Reflect.deleteProperty(globalThis, "__composerSettings");
+  }
+});
+
 test("mounted Composer fills in an argument command when picked and runs it from Send", async () => {
   const mounted = installDom();
   // The slash palette times its exit animation and scrolls its active option into view.
@@ -929,5 +992,138 @@ test("mounted Composer sets a /until check only for a chat with folder access, a
     Reflect.deleteProperty(globalThis, "__composerAttachmentFixture");
     Reflect.deleteProperty(globalThis, "__composerToasts");
     Reflect.deleteProperty(globalThis, "__composerFollowThrough");
+  }
+});
+
+test("queued design comments go with the next send as a text block and their pictures, then leave the tray", async () => {
+  const mounted = installDom();
+  Object.assign(globalThis, {
+    __composerAttachmentFixture: {
+      api: {
+        pickAndRead: async () => ({ attachments: [], skipped: 0 }),
+        readDroppedFiles: async () => [],
+        readClipboardImages: async () => [],
+      },
+    },
+  });
+  const sentIds: string[][] = [];
+  const tray = {
+    chatId: "design-chat",
+    comments: [
+      { id: "c1", label: "Hero › h1", note: "Bigger" },
+      { id: "c2", label: "Canvas", note: "Add a footer" },
+    ],
+    block: "<attached-design-comments>\n[]\n</attached-design-comments>",
+    crops: { c1: { mimeType: "image/png", data: "iVBORw0KGgoAAAA=" } },
+    remove() {},
+    open() {},
+    markSent(ids: string[]) {
+      sentIds.push([...ids]);
+    },
+  };
+  Object.assign(globalThis, { __composerCommentTray: tray });
+  const loaded = await loadComposer();
+  const { createRoot } = await import("react-dom/client");
+  const root = createRoot(mounted.container);
+  const sends: { text: string; attachments: Attachment[] }[] = [];
+  try {
+    for (const visionSupported of [true, false]) {
+      await React.act(async () =>
+        root.render(
+          <loaded.Composer
+            key={String(visionSupported)}
+            chatId="design-chat"
+            ready
+            hasMessages
+            visionSupported={visionSupported}
+            inputRef={React.createRef<HTMLTextAreaElement>()}
+            isGenerating={false}
+            onStop={() => {}}
+            onSend={async (value, attachments) => {
+              sends.push({ text: value, attachments });
+            }}
+          />,
+        ),
+      );
+      await React.act(async () => {
+        await handlers(button(mounted.container, "Send 2 design comments")).onClick();
+      });
+    }
+    assert.equal(sends.length, 2);
+    assert.equal(sends[0]!.text, "Please make the changes in my design comments.", "an empty message still sends the comments");
+    assert.deepEqual(
+      sends[0]!.attachments.map((attachment) => [attachment.name, attachment.kind]),
+      [["Design comments.txt", "text"], ["Design comment 1.png", "image"]],
+    );
+    assert.equal(sends[0]!.attachments[0]!.text, tray.block);
+    assert.deepEqual(
+      sends[1]!.attachments.map((attachment) => attachment.name),
+      ["Design comments.txt"],
+      "a model without images gets the words only",
+    );
+    assert.deepEqual(sentIds, [["c1", "c2"], ["c1", "c2"]], "each send marks its comments sent");
+  } finally {
+    await React.act(async () => root.unmount());
+    await loaded.cleanup();
+    mounted.restore();
+    Reflect.deleteProperty(globalThis, "__composerAttachmentFixture");
+    Reflect.deleteProperty(globalThis, "__composerCommentTray");
+  }
+});
+
+test("a failed send leaves design comments in the tray", async () => {
+  const mounted = installDom();
+  Object.assign(globalThis, {
+    __composerAttachmentFixture: {
+      api: {
+        pickAndRead: async () => ({ attachments: [], skipped: 0 }),
+        readDroppedFiles: async () => [],
+        readClipboardImages: async () => [],
+      },
+    },
+  });
+  const sentIds: string[][] = [];
+  Object.assign(globalThis, {
+    __composerCommentTray: {
+      chatId: "design-chat",
+      comments: [{ id: "c1", label: "Canvas", note: "Bigger" }],
+      block: "<attached-design-comments>\n[]\n</attached-design-comments>",
+      remove() {},
+      open() {},
+      markSent(ids: string[]) {
+        sentIds.push([...ids]);
+      },
+    },
+  });
+  const loaded = await loadComposer();
+  const { createRoot } = await import("react-dom/client");
+  const root = createRoot(mounted.container);
+  try {
+    await React.act(async () =>
+      root.render(
+        <loaded.Composer
+          chatId="design-chat"
+          ready
+          hasMessages
+          initialText="Also tighten the spacing"
+          inputRef={React.createRef<HTMLTextAreaElement>()}
+          isGenerating={false}
+          onStop={() => {}}
+          onSend={async () => {
+            throw new Error("offline");
+          }}
+        />,
+      ),
+    );
+    await React.act(async () => {
+      await handlers(button(mounted.container, "Send message")).onClick();
+    });
+    assert.deepEqual(sentIds, []);
+  } finally {
+    await React.act(async () => root.unmount());
+    await loaded.cleanup();
+    mounted.restore();
+    Reflect.deleteProperty(globalThis, "__composerAttachmentFixture");
+    Reflect.deleteProperty(globalThis, "__composerCommentTray");
   }
 });

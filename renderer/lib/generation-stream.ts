@@ -1,6 +1,6 @@
 // Owner-filtered notifications for one generation stream. ChatPane's
-// startGeneration and Design Studio both subscribe here before invoking main,
-// so no opening tokens are dropped (ADR-DS §5).
+// startGeneration subscribes here before invoking main, so no opening tokens
+// are dropped.
 import { parseAgentsInstructionNotices } from "../shared/agents-instructions-notice";
 import { parseAskUserQuestionPrompt, type AskUserQuestionPromptV1 } from "../shared/ask-user-question";
 import { chatArtifactIdentity, parseChatArtifactEventV1, type ChatArtifactV1 } from "../shared/chat-artifacts";
@@ -35,9 +35,24 @@ interface ChatArtifactNotification {
 }
 interface ChatStatus {
   streamId: string;
-  phase: ChatStatusPhase | "agents_instructions_limited" | "retrying";
+  phase: ChatStatusPhase | "agents_instructions_limited" | "retrying" | "hook_messages";
   notices?: unknown;
   retry?: unknown;
+  messages?: unknown;
+}
+
+/** At most this many hook messages per notification, each at most this long. */
+const MAX_HOOK_MESSAGES = 8;
+const MAX_HOOK_MESSAGE_CHARS = 500;
+
+function parseHookMessages(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((message): message is string => typeof message === "string" && message.trim().length > 0)
+    .slice(0, MAX_HOOK_MESSAGES)
+    .map((message) =>
+      message.length > MAX_HOOK_MESSAGE_CHARS ? `${message.slice(0, MAX_HOOK_MESSAGE_CHARS - 1)}…` : message,
+    );
 }
 interface ChatDone {
   streamId: string;
@@ -112,6 +127,9 @@ export function subscribeGenerationStream(
     for (const u of unsubs) u();
     unsubs.length = 0;
   };
+  // Listeners stay on while an async onDone settles, so the first terminal event
+  // has to close the door itself: a second one would restore guidance twice.
+  let terminalSeen = false;
 
   unsubs.push(
     onNotification<ChatDelta>("chat:delta", (p) => {
@@ -142,6 +160,9 @@ export function subscribeGenerationStream(
       if (p.phase === "agents_instructions_limited") {
         const notices = parseAgentsInstructionNotices(p.notices);
         if (notices) callbacks.onAgentsInstructionNotices?.(notices);
+      } else if (p.phase === "hook_messages") {
+        const messages = parseHookMessages(p.messages);
+        if (messages.length > 0) callbacks.onHookMessages?.(messages);
       } else if (p.phase === "retrying") {
         const retry = parseModelCallRetryView(p.retry);
         if (retry) callbacks.onRetrying?.(retry);
@@ -160,9 +181,12 @@ export function subscribeGenerationStream(
   );
   unsubs.push(
     onNotification<ChatDone>("chat:done", (p) => {
-      if (p.streamId !== streamId) return;
+      if (p.streamId !== streamId || terminalSeen) return;
+      terminalSeen = true;
       restoreUndeliveredGuidance(scope.chatId, undeliveredGuidanceFromTerminal(p));
-      void Promise.resolve(callbacks.onDone(p.content, p.timeline, p.chat, p.reasoning))
+      void new Promise((resolve) => {
+        resolve(callbacks.onDone(p.content, p.timeline, p.chat, p.reasoning));
+      })
         .catch((error: unknown) =>
           callbacks.onError(error instanceof Error ? error.message : String(error)),
         )
@@ -171,10 +195,14 @@ export function subscribeGenerationStream(
   );
   unsubs.push(
     onNotification<ChatError>("chat:error", (p) => {
-      if (p.streamId !== streamId) return;
+      if (p.streamId !== streamId || terminalSeen) return;
+      terminalSeen = true;
       restoreUndeliveredGuidance(scope.chatId, undeliveredGuidanceFromTerminal(p));
-      callbacks.onError(p.message, p.content, p.timeline, p.chat, p.reasoning);
-      dispose();
+      try {
+        callbacks.onError(p.message, p.content, p.timeline, p.chat, p.reasoning);
+      } finally {
+        dispose();
+      }
     }),
   );
   unsubs.push(

@@ -9,12 +9,14 @@ import { mountWithBotRouter } from "./test-providers";
 import { toast } from "../../components/ui";
 import { botFixture } from "./test-fixtures";
 import type { BotLiveSnapshot, BotTranscriptEntry } from "../../shared/bot-live";
+import { pendingBotResumes, recordBotResume } from "./bot-resume-journal";
 import type { BotPlanView } from "../../shared/bot-plans";
 import { BOT_SIDEBAR_PREFERENCES_KEY, parseBotSidebarPreferences } from "../../lib/bot-sidebar-preferences";
 
 afterEach(cleanup);
 beforeEach(() => localStorage.clear());
 
+const COST_RECEIPT = "cost_" + "a".repeat(64);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
 function snapshot(overrides: Partial<BotLiveSnapshot> = {}): BotLiveSnapshot {
@@ -219,6 +221,200 @@ test("an interrupted Bot offers Resume and Dismiss, each sent once with a reques
   assert.notEqual(dismissInput.requestId, resumeInput.requestId);
 });
 
+test("resuming an unconfirmed provider charge requires explicit confirmation and preserves that consent on retry", async () => {
+  let fail = true;
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot({ state: { kind: "interrupted", submissionId: "1" } }),
+    "bots:routineModels:resumeStatus": () => ({ requiresUnknownCostAcknowledgement: true, costReceiptId: COST_RECEIPT, interruptedSubmissionId: "1" }),
+    "bots:resume": () => { if (fail) { fail = false; throw new Error("Lost Resume acknowledgement."); } return { kind: "running", submissionId: "1" }; },
+  });
+  fireEvent.click(within(await screen.findByRole("group", { name: "Planner was interrupted" })).getByRole("button", { name: "Resume" }));
+  const consent = await screen.findByRole("alertdialog", { name: "Resume Planner with an unconfirmed charge?" });
+  assert.ok(within(consent).getByText(/Resuming may incur another charge/u));
+  assert.equal(calls.filter((call) => call.channel === "bots:resume").length, 0);
+  fireEvent.click(within(consent).getByRole("button", { name: "Cancel" }));
+  assert.equal(calls.filter((call) => call.channel === "bots:resume").length, 0);
+  fireEvent.click(within(await screen.findByRole("group", { name: "Planner was interrupted" })).getByRole("button", { name: "Resume" }));
+  fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Resume" }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:resume").length, 1));
+  fireEvent.click(within(await screen.findByRole("group", { name: "Planner was interrupted" })).getByRole("button", { name: "Resume" }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:resume").length, 2));
+  const attempts = calls.filter((call) => call.channel === "bots:resume").map((call) => call.args[0] as { requestId: string; acknowledgeUnknownCost?: boolean });
+  assert.equal(attempts[0].acknowledgeUnknownCost, true);
+  assert.equal(attempts[0].requestId, attempts[1].requestId); assert.equal(attempts[1].acknowledgeUnknownCost, true);
+});
+
+test("a cost confirmation for an older interrupted input cannot resume a newer one", async () => {
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot({ state: { kind: "interrupted", submissionId: "10" } }),
+    "bots:routineModels:resumeStatus": () => ({ requiresUnknownCostAcknowledgement: true, costReceiptId: COST_RECEIPT, interruptedSubmissionId: "10" }),
+    "bots:resume": () => ({ kind: "running", submissionId: "11" }),
+  });
+  fireEvent.click(within(await screen.findByRole("group", { name: "Planner was interrupted" })).getByRole("button", { name: "Resume" }));
+  const consent = await screen.findByRole("alertdialog");
+  await act(async () => emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: 1, type: "state", state: { kind: "interrupted", submissionId: "11" } }));
+  fireEvent.click(within(consent).getByRole("button", { name: "Resume" }));
+  await waitFor(() => assert.ok(!screen.queryByRole("alertdialog")));
+  assert.equal(calls.filter((call) => call.channel === "bots:resume").length, 0);
+});
+
+test("a delayed ordinary Resume preflight cannot resume newer work or survive leaving the chat", async () => {
+  let release!: (value: { requiresUnknownCostAcknowledgement: boolean; interruptedSubmissionId?: string }) => void;
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot({ state: { kind: "interrupted", submissionId: "10" } }),
+    "bots:routineModels:resumeStatus": () => new Promise((resolve) => { release = resolve; }),
+    "bots:resume": () => ({ kind: "running", submissionId: "11" }),
+  });
+  fireEvent.click(within(await screen.findByRole("group", { name: "Planner was interrupted" })).getByRole("button", { name: "Resume" }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:routineModels:resumeStatus").length, 1));
+  await act(async () => emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: 1, type: "state", state: { kind: "interrupted", submissionId: "11" } }));
+  await act(async () => release({ requiresUnknownCostAcknowledgement: false }));
+  assert.equal(calls.filter((call) => call.channel === "bots:resume").length, 0);
+  fireEvent.click(within(await screen.findByRole("group", { name: "Planner was interrupted" })).getByRole("button", { name: "Resume" }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:routineModels:resumeStatus").length, 2));
+  cleanup();
+  await act(async () => release({ requiresUnknownCostAcknowledgement: false, interruptedSubmissionId: "11" }));
+  assert.equal(calls.filter((call) => call.channel === "bots:resume").length, 0);
+});
+
+test("an unknown ordinary Resume survives remount and settles its original body before a new consent", async () => {
+  const first = await mountChat({
+    "bots:live:subscribe": () => snapshot({ state: { kind: "interrupted", submissionId: "10" } }),
+    "bots:resume": () => { throw new Error("Lost ordinary Resume reply."); },
+  });
+  fireEvent.click(within(await screen.findByRole("group", { name: "Planner was interrupted" })).getByRole("button", { name: "Resume" }));
+  await screen.findByRole("button", { name: "Retry saved Resume" });
+  await waitFor(() => assert.equal(first.filter((call) => call.channel === "bots:resume").length, 1));
+  const original = first.find((call) => call.channel === "bots:resume")!.args[0];
+  cleanup();
+  const second = await mountChat({
+    "bots:live:subscribe": () => snapshot({ state: { kind: "interrupted", submissionId: "10" } }),
+    "bots:routineModels:resumeStatus": () => ({ requiresUnknownCostAcknowledgement: true, costReceiptId: COST_RECEIPT, interruptedSubmissionId: "10" }),
+    "bots:resume": () => ({ kind: "interrupted", submissionId: "10" }),
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Retry saved Resume" }));
+  await waitFor(() => assert.equal(pendingBotResumes("bot-1").length, 0));
+  assert.deepEqual(second.find((call) => call.channel === "bots:resume")!.args[0], original);
+  assert.equal(second.filter((call) => call.channel === "bots:routineModels:resumeStatus").length, 0);
+  fireEvent.click(within(await screen.findByRole("group", { name: "Planner was interrupted" })).getByRole("button", { name: "Resume" }));
+  const consent = await screen.findByRole("alertdialog");
+  assert.equal(second.filter((call) => call.channel === "bots:resume").length, 1);
+  fireEvent.click(within(consent).getByRole("button", { name: "Resume" }));
+  await waitFor(() => assert.equal(second.filter((call) => call.channel === "bots:resume").length, 2));
+  const accepted = second.filter((call) => call.channel === "bots:resume")[1].args[0] as { requestId: string; acknowledgeUnknownCost?: boolean };
+  assert.equal(accepted.acknowledgeUnknownCost, true);
+  assert.notEqual(accepted.requestId, (original as { requestId: string }).requestId);
+});
+
+test("an acknowledged Resume survives remount with its exact source, consent and UUID", async () => {
+  const handlers = {
+    "bots:live:subscribe": () => snapshot({ state: { kind: "interrupted", submissionId: "10" } }),
+    "bots:routineModels:resumeStatus": () => ({ requiresUnknownCostAcknowledgement: true, costReceiptId: COST_RECEIPT, interruptedSubmissionId: "10" }),
+    "bots:resume": () => { throw new Error("Lost confirmed Resume reply."); },
+  };
+  const first = await mountChat(handlers);
+  fireEvent.click(within(await screen.findByRole("group", { name: "Planner was interrupted" })).getByRole("button", { name: "Resume" }));
+  fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Resume" }));
+  await screen.findByRole("button", { name: "Retry saved Resume" });
+  await waitFor(() => assert.equal(first.filter((call) => call.channel === "bots:resume").length, 1));
+  const original = first.find((call) => call.channel === "bots:resume")!.args[0];
+  cleanup();
+  const second = await mountChat({ ...handlers, "bots:resume": () => ({ kind: "interrupted", submissionId: "11" }) });
+  fireEvent.click(await screen.findByRole("button", { name: "Retry saved Resume" }));
+  await waitFor(() => assert.equal(pendingBotResumes("bot-1").length, 0));
+  assert.deepEqual(second.find((call) => call.channel === "bots:resume")!.args[0], original);
+  assert.equal(second.filter((call) => call.channel === "bots:routineModels:resumeStatus").length, 0);
+});
+
+test("a consent dialog keeps its original receipt when another request on the same input becomes unknown", async () => {
+  let currentReceipt = COST_RECEIPT, effects = 0, staleRequest: unknown;
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot({ state: { kind: "interrupted", submissionId: "10" } }),
+    "bots:routineModels:resumeStatus": () => ({ requiresUnknownCostAcknowledgement: true, interruptedSubmissionId: "10", costReceiptId: currentReceipt }),
+    "bots:resume": (input) => {
+      if ((input as { expectedCostReceiptId?: string }).expectedCostReceiptId !== currentReceipt) {
+        // The host consumes the stale decision, then refuses it. Its exact
+        // replay settles observationally without applying it to the new cost.
+        if (staleRequest === undefined) { staleRequest = input; throw new Error("The prior cost decision changed."); }
+        assert.deepEqual(input, staleRequest);
+        return { kind: "interrupted", submissionId: "10" };
+      }
+      effects++;
+      return { kind: "interrupted", submissionId: "10" };
+    },
+  });
+  const request = async () => fireEvent.click(within(await screen.findByRole("group", { name: "Planner was interrupted" })).getByRole("button", { name: "Resume" }));
+  await request();
+  const oldDialog = await screen.findByRole("alertdialog");
+  currentReceipt = "cost_" + "b".repeat(64);
+  fireEvent.click(within(oldDialog).getByRole("button", { name: "Resume" }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:resume").length, 1));
+  assert.equal((calls.find((call) => call.channel === "bots:resume")!.args[0] as { expectedCostReceiptId: string }).expectedCostReceiptId, COST_RECEIPT);
+  assert.equal(effects, 0, "confirming A never silently adopts receipt B");
+  assert.equal(pendingBotResumes("bot-1").length, 1);
+  fireEvent.click(await screen.findByRole("button", { name: "Retry saved Resume" }));
+  await waitFor(() => assert.equal(pendingBotResumes("bot-1").length, 0));
+  assert.equal(calls.filter((call) => call.channel === "bots:routineModels:resumeStatus").length, 1, "settling A does not preflight or adopt B");
+  assert.equal(effects, 0);
+  await request();
+  fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Resume" }));
+  await waitFor(() => assert.equal(effects, 1));
+});
+
+test("background visits invalidate held preflight and cost consent without sending Resume", async () => {
+  let release!: (value: { requiresUnknownCostAcknowledgement: boolean; interruptedSubmissionId: string }) => void;
+  let held = true;
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot({ state: { kind: "interrupted", submissionId: "10" } }),
+    "bots:routineModels:resumeStatus": () => held ? new Promise((resolve) => { release = resolve; }) : { requiresUnknownCostAcknowledgement: true, costReceiptId: COST_RECEIPT, interruptedSubmissionId: "10" },
+  });
+  fireEvent.click(within(await screen.findByRole("group", { name: "Planner was interrupted" })).getByRole("button", { name: "Resume" }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:routineModels:resumeStatus").length, 1));
+  fireEvent(window, new Event("blur")); fireEvent(window, new Event("focus"));
+  await act(async () => release({ requiresUnknownCostAcknowledgement: false, interruptedSubmissionId: "10" }));
+  assert.equal(calls.filter((call) => call.channel === "bots:resume").length, 0);
+  held = false;
+  fireEvent.click(within(await screen.findByRole("group", { name: "Planner was interrupted" })).getByRole("button", { name: "Resume" }));
+  await screen.findByRole("alertdialog");
+  fireEvent(window, new Event("blur")); fireEvent(window, new Event("focus"));
+  assert.ok(!screen.queryByRole("alertdialog"));
+  assert.equal(calls.filter((call) => call.channel === "bots:resume").length, 0);
+});
+
+test("an expired saved Resume remains unconfirmed and is never replaced or sent", async () => {
+  const now = Date.now;
+  try {
+    Date.now = () => now() - 24 * 60 * 60 * 1000;
+    recordBotResume({ botId: "bot-1", submissionId: "10", requestId: crypto.randomUUID(), acknowledgement: {} });
+  } finally { Date.now = now; }
+  const original = pendingBotResumes("bot-1")[0];
+  const calls = await mountChat({ "bots:live:subscribe": () => snapshot({ state: { kind: "interrupted", submissionId: "10" } }) });
+  fireEvent.click(await screen.findByRole("button", { name: "Retry saved Resume" }));
+  await waitFor(() => assert.ok(!(screen.getByRole("button", { name: "Retry saved Resume" }) as HTMLButtonElement).disabled));
+  assert.deepEqual(pendingBotResumes("bot-1"), [original]);
+  assert.equal(calls.filter((call) => call.channel === "bots:resume" || call.channel === "bots:routineModels:resumeStatus").length, 0);
+});
+
+test("Resume sends nothing when its exact request cannot be retained on this device", async () => {
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot({ state: { kind: "interrupted", submissionId: "10" } }),
+    "bots:resume": () => ({ kind: "running", submissionId: "10" }),
+  });
+  const storage = localStorage, descriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage")!;
+  try {
+    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
+      get length() { return storage.length; }, key: storage.key.bind(storage), getItem: storage.getItem.bind(storage),
+      removeItem: storage.removeItem.bind(storage), clear: storage.clear.bind(storage), setItem: () => { throw new Error("Device storage is full."); },
+    } });
+    fireEvent.click(within(await screen.findByRole("group", { name: "Planner was interrupted" })).getByRole("button", { name: "Resume" }));
+    await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:routineModels:resumeStatus").length, 1));
+    await screen.findByRole("group", { name: "Planner was interrupted" });
+    assert.equal(calls.filter((call) => call.channel === "bots:resume").length, 0);
+  } finally { Object.defineProperty(globalThis, "localStorage", descriptor); }
+  fireEvent.click(within(await screen.findByRole("group", { name: "Planner was interrupted" })).getByRole("button", { name: "Resume" }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:resume").length, 1));
+});
+
 test("a Resume that fails brings the card back, and the next Resume replays the same request id", async () => {
   let fail = true;
   const calls = await mountChat({
@@ -331,11 +527,15 @@ test("a Bot without an AI model asks for one and sends nothing", async () => {
 
 test("a Bot over its monthly spending limit sends nothing until Allow more", async () => {
   const month = { ownerKind: "bot", ownerId: "bot-1", period: "month", limitUsd: 20, extraUsd: 0 } as const;
+  let extraUsd = 0;
   const calls = await mountChat({
     "bots:live:subscribe": () => snapshot(),
     "bots:send": () => ({ submissionId: "s", deduped: false }),
-    "spending:status": () => ({ ...month, spentUsd: 20.4, state: "reached" }),
-    "spending:allowMore": () => ({ ...month, extraUsd: 20, spentUsd: 20.4, state: "under" }),
+    "spending:status": () => ({ ...month, extraUsd, spentUsd: 20.4, state: extraUsd ? "under" : "reached" }),
+    "spending:allowMore": () => {
+      extraUsd = 20;
+      return { ...month, extraUsd, spentUsd: 20.4, state: "under" };
+    },
   });
   const reached = "Planner reached its $20.00 spending limit this month.";
   // The composer's status line says why it can't send, alongside the notice.
@@ -638,27 +838,46 @@ test("a chat that fails to open says so, and Try again opens it", async () => {
 });
 
 test("a renderer reload mid-reply shows the partial reply from the fresh snapshot", async () => {
+  const opening = "Story opening.\n\n";
+  const fresh = `${opening}A woodland tale.\n\n`;
+  const continued = `${fresh}Once upon a time there was a fox.\n\n`;
+  let finishReload!: (value: BotLiveSnapshot) => void;
+  const reloadSnapshot = new Promise<BotLiveSnapshot>((resolve) => { finishReload = resolve; });
+  let subscribes = 0;
   const calls = await mountChat({
-    "bots:live:subscribe": () =>
-      snapshot({
-        seq: 4,
-        entries: [userEntry("u1", "Tell me a story")],
-        partial: "Once upon a time",
-        state: { kind: "running", submissionId: "s1" },
-      }),
+    "bots:live:subscribe": () => ++subscribes === 1
+      ? snapshot({
+          seq: 3,
+          entries: [userEntry("u1", "Tell me a story")],
+          partial: opening,
+          state: { kind: "running", submissionId: "s1" },
+        })
+      : reloadSnapshot,
   });
+  assert.ok(await screen.findByText("Story opening."));
   cleanup();
-  // The reloaded document mounts the chat again and subscribes once more.
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:live:unsubscribe").length, 1));
   await mountWithBotRouter(<BotChatRoute botId="bot-1" />, { initialPath: "/bots/bot-1/chat" });
-  await screen.findByRole("button", { name: "Planner profile" });
+  // Identity can render from cache before the new live subscription exists.
+  await waitFor(() => assert.equal(subscribes, 2));
   act(() => emitBotTestNotification("bots:live:event", {
-    botId: "bot-1",
-    epoch: "epoch-1",
-    seq: 5,
-    type: "partial",
-    text: "Once upon a time there was a fox.",
+    botId: "bot-1", epoch: "epoch-1", seq: 5, type: "partial", text: continued,
   }));
-  assert.ok(await screen.findByText("Once upon a time there was a fox."));
+  assert.equal(screen.queryByText("A woodland tale."), null, "the pending snapshot has not authorized its buffered update yet");
+  await act(async () => finishReload(snapshot({
+    seq: 4,
+    entries: [userEntry("u1", "Tell me a story")],
+    partial: fresh,
+    state: { kind: "running", submissionId: "s1" },
+  })));
+  // Finished paragraphs exercise reload/replay without racing the separate
+  // one-second reveal-tail deadline against the query's one-second deadline.
+  assert.ok(await screen.findByText("A woodland tale."));
+  assert.ok(screen.getByText("Once upon a time there was a fox."));
+  act(() => emitBotTestNotification("bots:live:event", {
+    botId: "bot-1", epoch: "epoch-1", seq: 6, type: "partial", text: `${continued}An owl joined the tale.\n\n`,
+  }));
+  assert.ok(await screen.findByText("An owl joined the tale."));
   assert.equal(calls.filter((call) => call.channel === "bots:live:subscribe").length, 2);
   assert.equal(calls.filter((call) => call.channel === "bots:live:unsubscribe").length, 1);
 });

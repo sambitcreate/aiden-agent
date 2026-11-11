@@ -1,4 +1,5 @@
 import { GENERATIVE_UI_PROTOCOL_SCHEME } from "../../renderer/shared/generative-ui.js";
+import { DESIGN_SCHEME } from "../../renderer/shared/design-canvas/url.js";
 
 export const STUDIO_ASSET_SCHEME = "aiden-asset";
 /** Stored chat images, loaded by the window instead of base64 over IPC. */
@@ -28,19 +29,22 @@ const LOCAL_CONTENT_PRIVILEGES: CustomSchemeDefinition["privileges"] = Object.fr
 });
 
 /** Every custom scheme Aiden registers. Electron accepts exactly one call, before app ready. */
-export function customSchemePrivileges(options: { studioAssets: boolean }): CustomSchemeDefinition[] {
+export function customSchemePrivileges(options: { studioAssets: boolean; designMode?: boolean }): CustomSchemeDefinition[] {
   return [
     { scheme: GENERATIVE_UI_PROTOCOL_SCHEME, privileges: { ...LOCAL_CONTENT_PRIVILEGES } },
     { scheme: CHAT_ATTACHMENT_SCHEME, privileges: { ...LOCAL_CONTENT_PRIVILEGES } },
     ...(options.studioAssets
       ? [{ scheme: STUDIO_ASSET_SCHEME, privileges: { ...LOCAL_CONTENT_PRIVILEGES } }]
       : []),
+    ...(options.designMode
+      ? [{ scheme: DESIGN_SCHEME, privileges: { ...LOCAL_CONTENT_PRIVILEGES } }]
+      : []),
   ];
 }
 
 export function createCustomSchemeRegistrar(target: {
   registerSchemesAsPrivileged(schemes: CustomSchemeDefinition[]): void;
-}): (options: { studioAssets: boolean }) => boolean {
+}): (options: { studioAssets: boolean; designMode?: boolean }) => boolean {
   let registered = false;
   return (options) => {
     if (registered) return false;
@@ -49,3 +53,5 @@ export function createCustomSchemeRegistrar(target: {
     return true;
   };
 }
+
+export { DESIGN_SCHEME };

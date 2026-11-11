@@ -62,7 +62,10 @@ extension AidenChatViewModel {
             if forkAttempt == attempt { forkAttempt = nil }
             guard !isRemoved, coordinator.isLive(context) else { return nil }
             let forked = result.chat
-            guard !forked.isBotChat, forked.workspaceId == source.workspaceId else {
+            guard !forked.isBotChat,
+                  forked.forkedFrom?.chatId == source.id,
+                  forked.forkedFrom?.messageId == attempt.request.messageId,
+                  forked.forkedFrom?.position == attempt.request.position else {
                 presentedError = String(localized: "Aiden returned a conversation that is unavailable in Workspaces.")
                 coordinator.haptics.play(.error, scope: hapticScope)
                 return nil

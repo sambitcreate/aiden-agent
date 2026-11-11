@@ -1,4 +1,6 @@
+import { commitSubagentFileMutation } from "./subagent-file-mutation-transaction.js";
 import { createHash } from "node:crypto";
+import { join as joinPath } from "node:path";
 import { types as utilTypes } from "node:util";
 import { Type } from "@earendil-works/pi-ai";
 import type {
@@ -44,6 +46,10 @@ import {
   SubagentFileMutatorError,
   type SubagentFileMutatorClient,
 } from "./subagent-file-mutator-io.js";
+import {
+  isProtectedAgentConfigPath,
+  PROTECTED_AGENT_CONFIG_WRITE_MESSAGE,
+} from "../protected-agent-config-paths.js";
 
 export const SUBAGENT_WRITE_FILE_TOOL_NAME = "write_file";
 export const SUBAGENT_EDIT_FILE_TOOL_NAME = "edit_file";
@@ -372,7 +378,19 @@ function approvalDetails(input: {
   return details;
 }
 
+/** The write stands; only its recovery cleanup went wrong. */
+class CommittedCleanupError extends Error {
+  constructor(kind: "recovery_kept" | "cleanup_unknown") {
+    super(
+      kind === "recovery_kept"
+        ? "The approved workspace file change was committed, but its recovery cleanup could not be confirmed. A recovery artifact was preserved."
+        : "The approved workspace file change was committed, but its recovery cleanup outcome is unknown.",
+    );
+  }
+}
+
 function fixedMutationError(error: unknown): Error {
+  if (error instanceof CommittedCleanupError) return error;
   if (error instanceof SubagentFileMutatorError) return new Error(error.message);
   if (error instanceof SubagentFilePreparationError) return new Error(error.message);
   return new Error("The requested workspace operation could not be completed safely.");
@@ -576,6 +594,15 @@ export function createSubagentWorkspaceWriteApprovalBrokerV2(
       reservedToolCallIds.delete(context.toolCall.id);
       return blocked("This subagent workspace-write request is invalid or no longer authorized.");
     }
+    // The native helper refuses symbolic links in every component, so the
+    // canonical relative path is the on-disk target.
+    if (
+      isProtectedAgentConfigPath(args.path) ||
+      isProtectedAgentConfigPath(joinPath(input.workspaceRoot, args.path))
+    ) {
+      reservedToolCallIds.delete(context.toolCall.id);
+      return blocked(PROTECTED_AGENT_CONFIG_WRITE_MESSAGE);
+    }
     const lifecycle = admitLifecycle(context.toolCall.id, callerSignal);
     const { signal } = lifecycle;
     let client: SubagentFileMutatorClient | undefined;
@@ -584,6 +611,9 @@ export function createSubagentWorkspaceWriteApprovalBrokerV2(
     try {
       const workspace = await liveWorkspace(signal);
       const root = await pinSubagentWorkspaceRoot(input.workspaceRoot, signal);
+      if (isProtectedAgentConfigPath(joinPath(root.canonicalPath, args.path))) {
+        return blocked(PROTECTED_AGENT_CONFIG_WRITE_MESSAGE);
+      }
       client = createSubagentFileMutatorClient({ workspaceRoot: root, binary: input.binary });
       lifecycle.client = client;
       const preparer = new SubagentFileMutationPreparer();
@@ -709,8 +739,6 @@ export function createSubagentWorkspaceWriteApprovalBrokerV2(
     if (!pending) {
       throw new Error("This subagent workspace-write call has no live one-shot approval.");
     }
-    let commitConfirmed = false;
-    let cleanupPreserved = false;
     try {
       if (pending.toolName !== effect.toolName) {
         throw new SubagentFilePreparationError("conflict");
@@ -732,34 +760,17 @@ export function createSubagentWorkspaceWriteApprovalBrokerV2(
           pending.signal.aborted ? "cancelled" : "conflict",
         );
       }
-      const commit = await pending.client.commit(
+      const outcome = await commitSubagentFileMutation(
+        pending.client,
         pending.effect.effectId,
         effect.signal ? AbortSignal.any([pending.signal, effect.signal]) : pending.signal,
       );
-      commitConfirmed = true;
-      if (commit.recoveryName) {
-        await pending.client.finalize(pending.effect.effectId);
+      if (outcome.kind === "committed") {
+        return textResult("The approved workspace file change was committed.");
       }
-      return textResult("The approved workspace file change was committed.");
+      if (outcome.kind === "not_committed" || outcome.kind === "unknown") throw outcome.error;
+      throw new CommittedCleanupError(outcome.kind);
     } catch (error) {
-      if (
-        pending.client.currentState === "committed" ||
-        pending.client.currentState === "indeterminate"
-      ) {
-        try {
-          await pending.client.preserve(pending.effect.effectId);
-          cleanupPreserved = true;
-        } catch {
-          // Preserve failure cannot upgrade an unknown outcome to success.
-        }
-      }
-      if (commitConfirmed) {
-        throw new Error(
-          cleanupPreserved
-            ? "The approved workspace file change was committed, but its recovery cleanup could not be confirmed. A recovery artifact was preserved."
-            : "The approved workspace file change was committed, but its recovery cleanup outcome is unknown.",
-        );
-      }
       throw fixedMutationError(error);
     } finally {
       input.ledger.deny(pending.approvalId, input.authority.ownerDocumentId);

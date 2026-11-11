@@ -122,6 +122,16 @@ test("TelegramApiError carries retryAfter from parameters.retry_after", async ()
   );
 });
 
+test("getMe releases its caller on abort even when the transport never settles", async () => {
+  const api = new TelegramBotApi(() => new Promise(() => undefined));
+  const controller = new AbortController();
+
+  const check = api.getMe(controller.signal);
+  controller.abort();
+
+  await assert.rejects(check, /aborted/i);
+});
+
 test("sendChatAction calls transport with chat_id and action", async () => {
   const { api, calls } = harness({ ok: true, result: true });
   await api.sendChatAction(7, "typing");

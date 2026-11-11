@@ -22,6 +22,7 @@ import { toast } from "../components/ui";
 import { RoutedBotPanelProvider, useBotPanelActions } from "./bots/bot-panel-context";
 import { botListLocation, environmentToggleTarget, isBotsPath } from "../lib/bot-routes";
 import { AssistantDock } from "../components/assistant/assistant-dock";
+import { LiveAppControlLayer } from "../components/assistant/live-app-control-layer";
 import { queryKeys } from "../lib/queries";
 import { subscribeGitQuerySync } from "../lib/git-query-sync";
 import { subscribeWorkspaceFilesSync } from "../lib/workspace-files-sync";
@@ -33,6 +34,7 @@ import { CommandSystemProvider, useCommandHandler, useCommandSystem } from "../l
 import { NewChatActionsProvider, type NewChatActions } from "../lib/new-chat-actions";
 import { chatIdFromPath, draftWorkspaceMenu, requestDraftWorkspaceMenu } from "../lib/draft-workspace-menu";
 import { AppCommandPalette } from "../components/command-palette";
+import { LiveChatToolsHost } from "./live-chat-tools-host";
 import { KeyboardRegions } from "../components/keyboard-regions";
 import { KeyboardShortcutsDialog } from "../components/keyboard-shortcuts-dialog";
 import { WorkspaceSettingsDialog } from "../components/workspace-settings-dialog";
@@ -40,6 +42,7 @@ import { OnboardingFlow } from "../components/onboarding-flow";
 import { BotConnectionSetupHost } from "./bots/bot-connection-setup-host";
 import { workspaceCommandVisibility } from "../lib/command-system-core";
 import { useAppCapabilities } from "../lib/app-capabilities";
+import { useDesignModeBroadcasts } from "../lib/design-mode";
 import {
   captureDetachedLifecycleChat,
   clearInactiveDetachedLifecycleChat,
@@ -89,6 +92,7 @@ function RootContent() {
   const { activeId, select: selectWorkspace } = useActiveWorkspace();
   const { palette } = useCommandSystem();
   const appendReconciliationRequired = useAppendReconciliationRequired();
+  useDesignModeBroadcasts();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const workspaceCommands = workspaceCommandVisibility(pathname);
   const navigationBlockedReason = environmentPanel.gitOperationBusy
@@ -204,7 +208,7 @@ function RootContent() {
     void navigate({ to: "/settings" });
   });
   const openStudio = React.useCallback(
-    (to: "/design" | "/images") => {
+    (to: "/images") => {
       if (navigationBlockedReason) {
         toast.info(navigationBlockedReason);
         return;
@@ -213,7 +217,6 @@ function RootContent() {
     },
     [navigate, navigationBlockedReason],
   );
-  useCommandHandler("design.open", () => openStudio("/design"), capabilities.designStudio);
   useCommandHandler("images.open", () => openStudio("/images"), capabilities.createImages);
   const goTo = React.useCallback(
     (to: "/bots" | "/scheduled" | "/profile") => {
@@ -357,7 +360,8 @@ function RootContent() {
             .catch(() => undefined);
           if (git?.isRepo && !git.unborn) gitMode = "worktree";
         }
-        await openNewChatIn(workspaceId, options?.initialText || undefined, gitMode ? { gitMode } : {});
+        // The draft's id, or undefined when nothing opened (navigation blocked).
+        return openNewChatIn(workspaceId, options?.initialText || undefined, gitMode ? { gitMode } : {});
       },
       openFolderForNewChat,
       cloneRepositoryForNewChat,
@@ -636,7 +640,9 @@ function RootContent() {
           onOpenBotChat={(botId) => void navigate({ to: "/bots/$botId/chat", params: { botId } })}
         />
         <AssistantDock rightInset={environmentPanel.dockRightInset} />
+        <LiveAppControlLayer />
         <AppCommandPalette navigationBlockedReason={navigationBlockedReason} />
+        <LiveChatToolsHost navigationBlockedReason={navigationBlockedReason} />
         <WindowControls />
         <KeyboardRegions />
         <KeyboardShortcutsDialog />

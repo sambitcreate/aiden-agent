@@ -4,11 +4,14 @@ export const SETTINGS_SECTIONS = [
   "limits",
   "skills",
   "mcp",
+  "hooks",
   "websearch",
   "imageGeneration",
   "telegram",
   "remoteAccess",
+  "peerHosts",
   "approvals",
+  "appControls",
   "computerUse",
   "bots",
   "botComputers",
@@ -21,6 +24,7 @@ export const SETTINGS_SECTIONS = [
   "links",
   "shortcut",
   "appearance",
+  "storage",
   "about",
 ] as const;
 
@@ -29,14 +33,14 @@ export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 export const SETTINGS_DESTINATIONS: ReadonlyArray<{
   id: SettingsSection;
   title: string;
-  group: "Agent" | "App";
+  /** The tab's label when it differs from the title, which search and the palette keep. */
+  tabLabel?: string;
   keywords: string[];
 }> = [
-  { id: "providers", title: "Providers", group: "Agent", keywords: ["models", "api", "keys", "connect my ai", "chatgpt", "lm studio", "ollama", "custom provider"] },
+  { id: "providers", title: "Providers", keywords: ["models", "api", "keys", "connect my ai", "chatgpt", "lm studio", "ollama", "custom provider"] },
   {
     id: "modelData",
     title: "Model Pad",
-    group: "Agent",
     keywords: [
       "personal",
       "models",
@@ -52,8 +56,7 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
   },
   {
     id: "limits",
-    title: "Limits & spending",
-    group: "Agent",
+    title: "Context & Limits",
     keywords: [
       "rate limit",
       "usage limit",
@@ -67,19 +70,27 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
       "budget",
       "cap",
       "money",
+      "compaction",
+      "compact",
+      "context",
+      "cache",
+      "warm",
     ],
   },
-  { id: "skills", title: "Skills", group: "Agent", keywords: ["instructions", "tools"] },
+  { id: "skills", title: "Skills", keywords: ["instructions", "tools"] },
   {
     id: "mcp",
     title: "Connectors",
-    group: "Agent",
     keywords: ["mcp", "plugins", "apps", "integrations", "tools", "servers", "composio"],
+  },
+  {
+    id: "hooks",
+    title: "Hooks",
+    keywords: ["hooks", "hooks.json", "pretooluse", "posttooluse", "shell command", "scripts", "lint", "format", "block a tool", "claude code hooks", "automation"],
   },
   {
     id: "websearch",
     title: "Web Search",
-    group: "Agent",
     keywords: [
       "web access",
       "search",
@@ -95,7 +106,6 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
   {
     id: "imageGeneration",
     title: "Image Generation",
-    group: "Agent",
     keywords: [
       "images",
       "image generation",
@@ -111,25 +121,27 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
   {
     id: "telegram",
     title: "Telegram",
-    group: "Agent",
     keywords: ["remote", "bot", "phone", "control"],
   },
   {
     id: "remoteAccess",
     title: "Connections",
-    group: "Agent",
-    keywords: ["aiden on the go", "control other computers", "other devices", "multiple computers", "remote access", "iphone", "ipad", "android", "connect my phone", "connect my tablet", "away from home", "tailscale", "local network", "pairing"],
+    tabLabel: "Control this device",
+    keywords: ["aiden on the go", "remote access", "iphone", "ipad", "android", "connect my phone", "connect my tablet", "away from home", "tailscale", "local network", "pairing"],
+  },
+  {
+    id: "peerHosts",
+    title: "Control other devices",
+    keywords: ["control other computers", "other devices", "multiple computers", "paired computers", "add device", "tailscale", "pairing"],
   },
   {
     id: "scheduledTasks",
     title: "Scheduled tasks",
-    group: "Agent",
     keywords: ["automation", "cron", "recurring", "background", "scripts", "notifications", "do this every day", "run later"],
   },
   {
     id: "geminiLive",
     title: "Aiden Live",
-    group: "Agent",
     keywords: [
       "live",
       "voice assistant",
@@ -145,7 +157,6 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
   {
     id: "approvals",
     title: "Tool approvals",
-    group: "Agent",
     keywords: [
       "always allow",
       "allow for this chat",
@@ -157,45 +168,43 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
     ],
   },
   {
+    id: "appControls",
+    title: "Controls in chat",
+    keywords: ["chat controls", "app controls", "agent app actions", "paired-device", "change settings from chat"],
+  },
+  {
     id: "computerUse",
     title: "Computer Use",
-    group: "Agent",
     keywords: ["desktop", "native apps", "accessibility", "screen recording", "beta", "control my computer", "see my screen", "permissions"],
   },
   {
     id: "bots",
     title: "Bots",
-    group: "Agent",
     keywords: ["bot", "routines", "allow", "go ahead", "ask first", "approvals", "permissions", "stop asking me", "unattended"],
   },
   {
     id: "botComputers",
     title: "Bot computers",
-    group: "Agent",
     keywords: ["virtual machine", "vm", "lume", "macos", "bot computer", "disk space", "apple silicon"],
   },
   {
     id: "simulator",
     title: "Simulator",
-    group: "Agent",
     keywords: ["ios", "iphone", "ipad", "simulator", "xcode", "devices", "agent-device", "npm", "paired macs", "floating", "auto-show"],
   },
   {
     id: "memory",
     title: "Memory",
-    group: "Agent",
     keywords: ["remember", "facts", "recall", "workspace", "privacy"],
   },
   {
     id: "voice",
     title: "Voice",
-    group: "App",
     keywords: ["microphone", "audio", "transcription", "dictation", "use my voice", "microphone not working", "talk to aiden"],
   },
   {
     id: "tts",
     title: "Text to Speech",
-    group: "App",
     keywords: [
       "read aloud",
       "speaker",
@@ -210,55 +219,223 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
   {
     id: "links",
     title: "Links",
-    group: "App",
-    keywords: ["browser", "open links", "external", "system browser", "aiden browser", "url"],
+    keywords: ["browser", "open links", "chat links", "external", "system browser", "aiden browser", "url"],
   },
   {
     id: "shortcut",
     title: "Keyboard shortcuts",
-    group: "App",
     keywords: ["hotkey", "command"],
   },
   {
     id: "appearance",
     title: "Appearance",
-    group: "App",
     keywords: ["theme", "light", "dark", "mode", "system", "chat width", "layout", "wide", "narrow"],
+  },
+  {
+    id: "storage",
+    title: "Storage",
+    keywords: [
+      "disk",
+      "disk space",
+      "disk usage",
+      "storage",
+      "gigabytes",
+      "clean up",
+      "cleanup",
+      "worktrees",
+      "unused worktrees",
+      "chats",
+      "delete a chat",
+      "browser cache",
+      "clear cache",
+      "bot computers",
+      "voice models",
+      "logs",
+      "free space",
+      "hard drive",
+    ],
   },
   {
     id: "about",
     title: "About",
-    group: "App",
     keywords: ["version", "build", "github", "repository", "app information", "update", "diagnostics", "logs", "reset", "onboarding", "restart"],
   },
 ];
 
-export function availableSettingsDestinations(capabilities: {
+export type SettingsGroup =
+  | "Models & Context"
+  | "Capabilities"
+  | "Autonomy & Devices"
+  | "Voice & Channels"
+  | "App";
+
+export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
+  "Models & Context",
+  "Capabilities",
+  "Autonomy & Devices",
+  "Voice & Channels",
+  "App",
+];
+
+export type SettingsPageId =
+  | "providers"
+  | "modelData"
+  | "limits"
+  | "skills"
+  | "mcp"
+  | "hooks"
+  | "websearch"
+  | "imageGeneration"
+  | "memory"
+  | "botsApprovals"
+  | "scheduledTasks"
+  | "computers"
+  | "simulator"
+  | "voiceSpeech"
+  | "connections"
+  | "appearance"
+  | "shortcut"
+  | "storage"
+  | "about";
+
+export type SettingsPageEntry = {
+  id: SettingsPageId;
+  title: string;
+  group: SettingsGroup;
+  /** One `section` per tab. The first available tab is the page's default. */
+  tabs: readonly SettingsSection[];
+  /** Sections that open a spot on the page instead of a tab. */
+  anchors?: readonly SettingsSection[];
+};
+
+/** The sidebar. `section` stays the only URL state; these pages group sections into tabs. */
+export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
+  { id: "providers", title: "Providers", group: "Models & Context", tabs: ["providers"] },
+  { id: "modelData", title: "Model Pad", group: "Models & Context", tabs: ["modelData"] },
+  { id: "limits", title: "Context & Limits", group: "Models & Context", tabs: ["limits"] },
+  { id: "skills", title: "Skills", group: "Capabilities", tabs: ["skills"] },
+  { id: "mcp", title: "Connectors", group: "Capabilities", tabs: ["mcp"] },
+  { id: "hooks", title: "Hooks", group: "Capabilities", tabs: ["hooks"] },
+  { id: "websearch", title: "Web Search", group: "Capabilities", tabs: ["websearch"] },
+  { id: "imageGeneration", title: "Image Generation", group: "Capabilities", tabs: ["imageGeneration"] },
+  { id: "memory", title: "Memory", group: "Capabilities", tabs: ["memory"] },
+  { id: "botsApprovals", title: "Bots & Approvals", group: "Autonomy & Devices", tabs: ["bots", "approvals", "appControls"] },
+  { id: "scheduledTasks", title: "Scheduled tasks", group: "Autonomy & Devices", tabs: ["scheduledTasks"] },
+  { id: "computers", title: "Computers & VMs", group: "Autonomy & Devices", tabs: ["computerUse", "botComputers"] },
+  { id: "simulator", title: "Simulator", group: "Autonomy & Devices", tabs: ["simulator"] },
+  { id: "voiceSpeech", title: "Voice & Speech", group: "Voice & Channels", tabs: ["voice", "tts", "geminiLive"] },
+  { id: "connections", title: "Connections", group: "Voice & Channels", tabs: ["remoteAccess", "peerHosts", "telegram"] },
+  { id: "appearance", title: "Appearance", group: "App", tabs: ["appearance"], anchors: ["links"] },
+  { id: "shortcut", title: "Keyboard shortcuts", group: "App", tabs: ["shortcut"] },
+  { id: "storage", title: "Storage", group: "App", tabs: ["storage"] },
+  { id: "about", title: "About", group: "App", tabs: ["about"] },
+];
+
+/** The host features that hide sections. */
+export type SettingsCapabilities = {
   computerUse: boolean;
   devices: boolean;
   botComputers: boolean;
-}): typeof SETTINGS_DESTINATIONS {
-  return SETTINGS_DESTINATIONS.filter(
-    (destination) =>
-      (destination.id !== "computerUse" || capabilities.computerUse) &&
-      (destination.id !== "simulator" || capabilities.devices) &&
-      (destination.id !== "botComputers" || capabilities.botComputers),
+  hooks: boolean;
+};
+
+function isSettingsSectionAvailable(
+  section: SettingsSection,
+  capabilities: SettingsCapabilities,
+): boolean {
+  return (
+    (section !== "computerUse" || capabilities.computerUse) &&
+    (section !== "simulator" || capabilities.devices) &&
+    (section !== "botComputers" || capabilities.botComputers) &&
+    (section !== "hooks" || capabilities.hooks)
+  );
+}
+
+export function availableSettingsDestinations(
+  capabilities: SettingsCapabilities,
+): typeof SETTINGS_DESTINATIONS {
+  return SETTINGS_DESTINATIONS.filter((destination) =>
+    isSettingsSectionAvailable(destination.id, capabilities),
+  );
+}
+
+/** The Settings pages the assistant may name on this host, each with its tabs and spots in brackets. */
+export function assistantSettingsPages(capabilities: SettingsCapabilities): string[] {
+  return availableSettingsPages(capabilities).map((page) => {
+    const parts = [...(page.tabs.length > 1 ? page.tabs : []), ...(page.anchors ?? [])];
+    return parts.length > 0 ? `${page.title} (${parts.map(settingsTabLabel).join(", ")})` : page.title;
+  });
+}
+
+function destinationFor(section: SettingsSection): (typeof SETTINGS_DESTINATIONS)[number] {
+  return SETTINGS_DESTINATIONS.find((destination) => destination.id === section)!;
+}
+
+/** The page that holds a section, as a tab or an anchor. */
+export function pageFor(section: SettingsSection): SettingsPageEntry {
+  return SETTINGS_PAGES.find(
+    (page) => page.tabs.includes(section) || page.anchors?.includes(section),
+  )!;
+}
+
+/** What a section's tab says. */
+export function settingsTabLabel(section: SettingsSection): string {
+  const destination = destinationFor(section);
+  return destination.tabLabel ?? destination.title;
+}
+
+/**
+ * The sidebar for this host: unavailable tabs are removed, pages with none left are
+ * dropped, and a merged page left with one tab takes that tab's title.
+ */
+export function availableSettingsPages(capabilities: SettingsCapabilities): SettingsPageEntry[] {
+  return SETTINGS_PAGES.flatMap((page) => {
+    const tabs = page.tabs.filter((tab) => isSettingsSectionAvailable(tab, capabilities));
+    if (tabs.length === 0) return [];
+    const merged = page.tabs.length > 1 && tabs.length === 1;
+    return [{ ...page, tabs, title: merged ? settingsTabLabel(tabs[0]!) : page.title }];
+  });
+}
+
+/**
+ * The section a deep link really opens. A section this host can't show falls to its
+ * page's first available tab, then to Providers, so a link never lands on an empty page.
+ */
+export function resolveSettingsSection(
+  requested: SettingsSection | undefined,
+  capabilities: SettingsCapabilities,
+): SettingsSection {
+  if (!requested) return "providers";
+  if (isSettingsSectionAvailable(requested, capabilities)) return requested;
+  return (
+    pageFor(requested).tabs.find((tab) => isSettingsSectionAvailable(tab, capabilities)) ??
+    "providers"
   );
 }
 
 /**
- * The sections the assistant may name and open on this host: Simulator only with the
- * devices feature, Bot computers only on Apple silicon.
+ * The section a sidebar row opens for a search, or undefined when the page doesn't match.
+ * A tab that matches on its own wins, so "approvals" opens Tool approvals and not the
+ * first tab of Bots & Approvals. The page title counts only after that.
  */
-export function assistantSettingsSections(capabilities: {
-  devices: boolean;
-  botComputers: boolean;
-}): SettingsSection[] {
-  return SETTINGS_SECTIONS.filter(
-    (section) =>
-      (section !== "simulator" || capabilities.devices) &&
-      (section !== "botComputers" || capabilities.botComputers),
+export function firstMatchingSettingsSection(
+  page: SettingsPageEntry,
+  search: string,
+  describe: (section: SettingsSection) => string = () => "",
+): SettingsSection | undefined {
+  const sections = [...page.tabs, ...(page.anchors ?? [])];
+  const matching = (context: string) =>
+    sections.find((section) =>
+      matchesSettingsSearch(
+        destinationFor(section),
+        search,
+        `${settingsTabLabel(section)} ${describe(section)} ${context}`,
+      ),
+    );
+  const named = sections.find((section) =>
+    matchesSettingsSearch({ title: settingsTabLabel(section), keywords: [] }, search),
   );
+  return named ?? matching("") ?? matching(page.title);
 }
 
 /**

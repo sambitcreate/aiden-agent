@@ -47,7 +47,7 @@ class AidenBotPlanContractTest {
         assertNull(plan.items.first().used); assertNull(plan.items.first().max)
     }
     @Test fun canonicalSnapshotAndOrderedPlanFramesDecode() {
-        assertEquals(58, root.getValue("contractRevision").jsonPrimitive.int)
+        assertEquals(60, root.getValue("contractRevision").jsonPrimitive.int)
         val session = wire.decodeFromJsonElement(AidenBotSession.serializer(), fixture.getValue("session"))
         assertEquals(0L, session.seq)
         assertHostFolderReview(requireNotNull(session.plan))

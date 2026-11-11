@@ -2,8 +2,30 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { BOT_FULL_ACCESS_NOTICE_VERSION } from "../../renderer/shared/bot-capabilities.js";
 import { createBotCapabilityInventoryPorts } from "./bot-capability-inventory-ports.js";
+import { getMcpPreset, serverFromPreset } from "./mcp-presets.js";
+import { composioServiceToolDescriptor } from "./composio-service-tool.js";
+import { normalizeSubagentMcpInventoryV2 } from "./subagents/subagent-mcp-read.js";
+import { COMPOSIO_SERVICE_ACCESS_IDENTITY } from "./bot-connection-capability-identity.js";
 
 const HASH = "a".repeat(64);
+
+test("only the exact trusted Composio connection authors a private service identity", async () => {
+  const trusted = serverFromPreset(getMcpPreset("composio")!);
+  let selected = trusted;
+  const unused = async (): Promise<never> => { throw new Error("unrelated inventory must not be read"); };
+  const ports = createBotCapabilityInventoryPorts({
+    loadOpaqueSelectionKey: unused, loadNoticeStatus: unused, listProviders: unused, providerCredentialSignature: unused,
+    listMcpServers: async () => [selected], inspectMcpScopes: async () => [{ serverId: selected.id, connectionFingerprint: HASH, tools: normalizeSubagentMcpInventoryV2([composioServiceToolDescriptor()]) }],
+    listSkills: unused, listApprovedLocations: unused, incarnations: { reconcileNamespace: unused }, getSettings: unused,
+    webSearchAvailability: unused, subagentsAvailable: () => false,
+  });
+  const signal = new AbortController().signal;
+  assert.equal((await ports.inspectConnections(signal))[0]!.accessIdentity, COMPOSIO_SERVICE_ACCESS_IDENTITY);
+  selected = { ...trusted, url: "https://connect.composio.dev/mcp/session/other" };
+  assert.equal((await ports.inspectConnections(signal))[0]!.accessIdentity, undefined, "a generic session tool copying the entire host descriptor cannot claim service identity");
+  selected = { ...trusted, id: "custom-composio", presetId: undefined };
+  assert.equal((await ports.inspectConnections(signal))[0]!.accessIdentity, undefined);
+});
 
 test("inventory ports project safe exact facts and conservative unavailable connections", async () => {
   let scheduledTasksEnabled = true;

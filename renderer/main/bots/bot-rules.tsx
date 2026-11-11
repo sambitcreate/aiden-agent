@@ -42,7 +42,7 @@ const ROW_CLASS =
 const ACTION_ROW_CLASS =
   "relative flex w-full min-w-0 items-center gap-3 px-4 py-3 text-left outline-none transition-colors duration-150 hover:bg-list-hover focus-visible:bg-list-hover focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring disabled:opacity-45 motion-reduce:transition-none";
 
-/** An inline link to Settings → Bots, in the secondary text under the rules. */
+/** An inline link to Settings → Bots & Approvals, in the secondary text under the rules. */
 const SETTINGS_LINK_CLASS =
   "rounded-control text-primary underline decoration-separator underline-offset-2 hover:text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring";
 

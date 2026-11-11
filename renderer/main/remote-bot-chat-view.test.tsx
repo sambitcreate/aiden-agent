@@ -8,6 +8,10 @@ import { detectedKeyboardPlatform } from "../shared/keybindings";
 import type { PeerHostView } from "../shared/peer-host";
 import type { PeerOperation } from "../shared/peer-operation";
 import { RemoteBotChatView } from "./remote-bot-chat-view";
+import {
+  AIDEN_CONTENT_REGIONS_SOURCE,
+  type AidenContentRegionFacts,
+} from "../../main/services/gemini-live/app-control/page-action";
 
 afterEach(() => {
   cleanup();
@@ -146,6 +150,23 @@ test("Retry on a failed reply from another Mac resends the person's words there,
   await waitFor(() => assert.equal(peerCalls().filter((call) => call.operation === "botSend").length, 1));
   const sent = peerCalls().find((call) => call.operation === "botSend")!;
   assert.deepEqual(sent.body, { text: "Move the dentist" });
+});
+
+test("Aiden Live finds a Bot's transcript as one chat region it may only count, with the composer outside it", async () => {
+  await mount();
+  const reply = await screen.findByText("Two meetings and a dentist.");
+  const box = await screen.findByPlaceholderText("Ask Planner");
+  // Main runs this on the live page to find what it must not read.
+  const regions = new Function(`return ${AIDEN_CONTENT_REGIONS_SOURCE}`)() as Element[] & {
+    facts: AidenContentRegionFacts[];
+  };
+  assert.deepEqual(
+    regions.facts.map((fact) => [fact.kind, fact.count]),
+    [["chat", 2]],
+    "one chat region holding the two messages",
+  );
+  assert.ok(regions[0]!.contains(reply), "the Bot's words are inside the region");
+  assert.equal(regions[0]!.contains(box), false, "the composer is not");
 });
 
 test("live frames from the host stream into the chat, and a deny-only approval answers by wait id from the keyboard", async () => {

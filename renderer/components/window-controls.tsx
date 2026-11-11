@@ -91,6 +91,8 @@ export function WindowControls() {
       role="group"
       aria-label="Window"
       data-window-controls
+      // Minimizing or closing the window is the user's alone, never Aiden Live's.
+      data-live-guard="you"
       // Above every dialog layer, including setup's own dialogs (z-70), so the
       // window can always be minimized or closed.
       className="no-drag pointer-events-auto fixed right-0 top-0 z-[80] flex h-13 items-center gap-1 pl-1 pr-3"

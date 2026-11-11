@@ -1007,8 +1007,15 @@
                 },
                 "dependentSchemas": {
                   "restoreDoneAt": {
-                    "required": ["done", "ifRevision"],
-                    "properties": { "done": { "const": true } }
+                    "required": [
+                      "done",
+                      "ifRevision"
+                    ],
+                    "properties": {
+                      "done": {
+                        "const": true
+                      }
+                    }
                   }
                 },
                 "anyOf": [
@@ -1636,7 +1643,7 @@
       ],
       "post": {
         "operationId": "uploadChatAttachment",
-      "description": "Stages one image or text file for this device's next turn in the chat. Since contract revision 50, a device holding attachments:raw may instead send one picture as its raw image/png or image/jpeg bytes, with an exact Content-Length (at most 8 MiB) and the file name, percent-encoded UTF-8, in Aiden-Attachment-Name. Both return the same single-use reference; without attachments:raw a raw upload is 403 capability_denied.",
+        "description": "Stages one image or text file for this device's next turn in the chat. Since contract revision 50, a device holding attachments:raw may instead send one picture as its raw image/png or image/jpeg bytes, with an exact Content-Length (at most 8 MiB) and the file name, percent-encoded UTF-8, in Aiden-Attachment-Name. Both return the same single-use reference; without attachments:raw a raw upload is 403 capability_denied.",
         "x-aiden-archived-access": "mutation_blocked",
         "x-aiden-capability": "chat:write",
         "parameters": [
@@ -1845,96 +1852,96 @@
         }
       }
     },
-      "/chats/{chatId}/jobs": {
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/ChatId"
-          },
-          {
-            "$ref": "#/components/parameters/ProtocolVersion"
-          }
-        ],
-        "get": {
-          "operationId": "listChatBackgroundJobs",
-          "x-aiden-archived-access": "readable",
-          "x-aiden-capability": "chat:read",
-          "x-aiden-capabilities": [
-            "chat:read",
-            "chat:jobs"
-          ],
-          "description": "Contract revision 49. What the agent left running for this chat on the Mac (a dev server, a watcher, a long test run), running jobs first, then the ones that ended recently in this session of the Mac app. fromCommand marks processes a run_command call left running, which have no exit code. ports are the TCP ports a running job listens on, on the Mac (localhost there, not on the phone). The list is not pushed: read it again after a reply settles or while it is on screen.",
-          "responses": {
-            "200": {
-              "description": "The chat's background jobs",
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/BackgroundJobs"
-                  }
-                }
-              }
-            },
-            "default": {
-              "$ref": "#/components/responses/Error"
-            }
-          }
+    "/chats/{chatId}/jobs": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ChatId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
         }
-      },
-      "/chats/{chatId}/jobs/{jobId}/stop": {
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/ChatId"
-          },
-          {
-            "name": "jobId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^job_[0-9a-f]{8}$"
-            }
-          },
-          {
-            "$ref": "#/components/parameters/ProtocolVersion"
-          }
+      ],
+      "get": {
+        "operationId": "listChatBackgroundJobs",
+        "x-aiden-archived-access": "readable",
+        "x-aiden-capability": "chat:read",
+        "x-aiden-capabilities": [
+          "chat:read",
+          "chat:jobs"
         ],
-        "post": {
-          "operationId": "stopChatBackgroundJob",
-          "x-aiden-capability": "chat:write",
-          "x-aiden-capabilities": [
-            "chat:write",
-            "chat:jobs"
-          ],
-          "description": "Contract revision 49. Stops a job and everything it started: politely first, forced after a few seconds, and only processes that carry the job's own marker. Returns once it has ended, with the chat's list. A job that already ended is returned as it is. The body is an empty object. 404 not_found for a job this chat does not have.",
-          "requestBody": {
-            "required": true,
+        "description": "Contract revision 49. What the agent left running for this chat on the Mac (a dev server, a watcher, a long test run), running jobs first, then the ones that ended recently in this session of the Mac app. fromCommand marks processes a run_command call left running, which have no exit code. ports are the TCP ports a running job listens on, on the Mac (localhost there, not on the phone). The list is not pushed: read it again after a reply settles or while it is on screen.",
+        "responses": {
+          "200": {
+            "description": "The chat's background jobs",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "maxProperties": 0
+                  "$ref": "#/components/schemas/BackgroundJobs"
                 }
               }
             }
           },
-          "responses": {
-            "200": {
-              "description": "The chat's background jobs after the stop",
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/BackgroundJobs"
-                  }
-                }
-              }
-            },
-            "default": {
-              "$ref": "#/components/responses/Error"
-            }
+          "default": {
+            "$ref": "#/components/responses/Error"
           }
         }
-      },
+      }
+    },
+    "/chats/{chatId}/jobs/{jobId}/stop": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ChatId"
+        },
+        {
+          "name": "jobId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^job_[0-9a-f]{8}$"
+          }
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "stopChatBackgroundJob",
+        "x-aiden-capability": "chat:write",
+        "x-aiden-capabilities": [
+          "chat:write",
+          "chat:jobs"
+        ],
+        "description": "Contract revision 49. Stops a job and everything it started: politely first, forced after a few seconds, and only processes that carry the job's own marker. Returns once it has ended, with the chat's list. A job that already ended is returned as it is. The body is an empty object. 404 not_found for a job this chat does not have.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "maxProperties": 0
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The chat's background jobs after the stop",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackgroundJobs"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/chats/{chatId}/visuals/{visualId}/document": {
       "parameters": [
         {
@@ -2506,9 +2513,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "maxProperties": 0
+                "$ref": "#/components/schemas/BotResumeRequest"
               }
             }
           }
@@ -3410,7 +3415,7 @@
             "name": "since",
             "in": "query",
             "required": false,
-            "description": "Only runs that finished after this host time (the previous response's now).",
+            "description": "Only notifications that became visible after this host time. Pass the previous response's now, the last completed millisecond included in that poll.",
             "schema": {
               "type": "string",
               "format": "date-time"
@@ -4505,7 +4510,13 @@
             "in": "header",
             "required": false,
             "description": "Optional identity or gzip for this route only. Send gzip only when GET /server.features contains speech-request-gzip-v1.",
-            "schema": { "type": "string", "enum": ["identity", "gzip"] }
+            "schema": {
+              "type": "string",
+              "enum": [
+                "identity",
+                "gzip"
+              ]
+            }
           }
         ],
         "requestBody": {
@@ -5549,7 +5560,7 @@
             "name": "since",
             "in": "query",
             "required": false,
-            "description": "Epoch-milliseconds cursor; runs finished at or after it are returned (inclusive \u2014 clients dedupe by run id).",
+            "description": "Epoch-milliseconds cursor; runs finished at or after it are returned (inclusive — clients dedupe by run id).",
             "schema": {
               "type": "integer",
               "minimum": 0
@@ -5576,7 +5587,7 @@
                     },
                     "now": {
                       "type": "integer",
-                      "description": "Server epoch-milliseconds clock \u2014 clients baseline first-poll cursors to this rather than the device clock."
+                      "description": "Server epoch-milliseconds clock — clients baseline first-poll cursors to this rather than the device clock."
                     }
                   },
                   "additionalProperties": false
@@ -6116,11 +6127,11 @@
         ],
         "description": "Requires the negotiated simulators:control grant on a paired mac or linux device, or since contract revision 26 the simulators:mobile grant on an iphone or ipad; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Relays an allowlisted path of the serving Mac's loopback simulator hub: the stream page assets and frame stream (GET or HEAD), and the per-device helper, serve-emu video and gesture, and device list WebSockets (GET with Upgrade). Location headers are never relayed. A device may hold at most 8 open relays; more are refused with handle_capacity. Device-scoped paths must name a simulator in the current listing. WebSocket upgrades authenticate the same bearer credential and reject any Origin header. The hub's exec route is never relayed. Relayed streams close when the owner turns sharing off or revokes the device. Phones also need the owner's Share with Aiden On The Go consent. Phones reach only vendor/serve-sim/helper/{udid}/stream.mjpeg, .../config, .../health and the helper WebSocket vendor/serve-sim/helper/ws?device={udid}; every other hub path, including every serve-emu route, is capability_denied for them.",
         "responses": {
-          "200": {
-            "description": "Relayed hub content"
-          },
           "101": {
             "description": "WebSocket upgrade for a listed simulator's helper stream or a listed emulator's stream"
+          },
+          "200": {
+            "description": "Relayed hub content"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -7227,8 +7238,1217 @@
         }
       }
     },
+    "/bots/{botId}/open-work": {
+      "get": {
+        "operationId": "botOpenWorkSnapshot",
+        "parameters": [
+          {
+            "name": "botId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          }
+        ],
+        "x-aiden-capabilities": [
+          "bot:read",
+          "chat:read",
+          "bot:open-work"
+        ],
+        "responses": {
+          "200": {
+            "description": "Open work response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotOpenWorkSnapshot"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-aiden-capability": "bot:read"
+      },
+      "post": {
+        "operationId": "botOpenWorkMutate",
+        "parameters": [
+          {
+            "name": "botId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          }
+        ],
+        "x-aiden-capabilities": [
+          "bot:read",
+          "chat:read",
+          "bot:write",
+          "bot:open-work"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotOpenWorkMutation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Open work response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotOpenWorkResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-aiden-capability": "bot:write"
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ]
+    },
+    "/bots/{botId}/open-work/{itemId}/evidence/{kind}": {
+      "get": {
+        "operationId": "botOpenWorkEvidence",
+        "parameters": [
+          {
+            "name": "botId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          },
+          {
+            "name": "itemId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          },
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "source",
+                "result"
+              ]
+            }
+          }
+        ],
+        "x-aiden-capabilities": [
+          "bot:read",
+          "chat:read",
+          "bot:open-work"
+        ],
+        "responses": {
+          "200": {
+            "description": "Open work response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotOpenWorkEvidence"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No retained evidence belongs to this work item"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-aiden-capability": "bot:read"
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ]
+    },
+    "/bots/{botId}/watches": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "listBotConnectorWatches",
+        "description": "Contract revision54; requires negotiated bot:watches. Source discovery is explicit. Mutations carry a stable UUID mutationId and existing-resource expectedRevision in JSON. No credentials, raw tools or executable configuration are accepted.",
+        "x-aiden-capability": "bot:read",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:watches"
+        ],
+        "responses": {
+          "200": {
+            "description": "Connector watch result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotConnectorWatchList"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createBotConnectorWatch",
+        "description": "Contract revision54; requires negotiated bot:watches. Source discovery is explicit. Mutations carry a stable UUID mutationId and existing-resource expectedRevision in JSON. No credentials, raw tools or executable configuration are accepted.",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:watches",
+          "bot:write"
+        ],
+        "responses": {
+          "201": {
+            "description": "Connector watch result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotConnectorWatch"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotConnectorWatchCreateRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bots/{botId}/watches/sources": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "discoverBotConnectorWatchSources",
+        "description": "Contract revision54; requires negotiated bot:watches. Source discovery is explicit. Mutations carry a stable UUID mutationId and existing-resource expectedRevision in JSON. No credentials, raw tools or executable configuration are accepted.",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:watches",
+          "bot:write"
+        ],
+        "responses": {
+          "200": {
+            "description": "Connector watch result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotConnectorWatchSourceList"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {},
+                "required": []
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bots/{botId}/watches/test": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "testBotConnectorWatch",
+        "description": "Contract revision54; requires negotiated bot:watches. Source discovery is explicit. Mutations carry a stable UUID mutationId and existing-resource expectedRevision in JSON. No credentials, raw tools or executable configuration are accepted.",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:watches",
+          "bot:write"
+        ],
+        "responses": {
+          "200": {
+            "description": "Connector watch result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotConnectorWatchTestResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotConnectorWatchTestRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bots/{botId}/watches/{watchId}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        },
+        {
+          "name": "watchId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-fA-F-]{36}$",
+            "maxLength": 36
+          }
+        }
+      ],
+      "patch": {
+        "operationId": "updateBotConnectorWatch",
+        "description": "Contract revision54; requires negotiated bot:watches. Source discovery is explicit. Mutations carry a stable UUID mutationId and existing-resource expectedRevision in JSON. No credentials, raw tools or executable configuration are accepted.",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:watches",
+          "bot:write"
+        ],
+        "responses": {
+          "200": {
+            "description": "Connector watch result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotConnectorWatch"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotConnectorWatchUpdateRequest"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteBotConnectorWatch",
+        "description": "Contract revision54; requires negotiated bot:watches. Source discovery is explicit. Mutations carry a stable UUID mutationId and existing-resource expectedRevision in JSON. No credentials, raw tools or executable configuration are accepted.",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:watches",
+          "bot:write"
+        ],
+        "responses": {
+          "200": {
+            "description": "Connector watch result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotConnectorWatchRemoval"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotConnectorWatchIdentityRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bots/{botId}/watches/{watchId}/enabled": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        },
+        {
+          "name": "watchId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-fA-F-]{36}$",
+            "maxLength": 36
+          }
+        }
+      ],
+      "post": {
+        "operationId": "enableBotConnectorWatch",
+        "description": "Contract revision54; requires negotiated bot:watches. Source discovery is explicit. Mutations carry a stable UUID mutationId and existing-resource expectedRevision in JSON. No credentials, raw tools or executable configuration are accepted.",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:watches",
+          "bot:write"
+        ],
+        "responses": {
+          "200": {
+            "description": "Connector watch result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotConnectorWatch"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotConnectorWatchEnableRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bots/{botId}/watches/{watchId}/run": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        },
+        {
+          "name": "watchId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-fA-F-]{36}$",
+            "maxLength": 36
+          }
+        }
+      ],
+      "post": {
+        "operationId": "runBotConnectorWatch",
+        "description": "Contract revision54; requires negotiated bot:watches. Source discovery is explicit. Mutations carry a stable UUID mutationId and existing-resource expectedRevision in JSON. No credentials, raw tools or executable configuration are accepted.",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:watches",
+          "bot:write"
+        ],
+        "responses": {
+          "200": {
+            "description": "Connector watch result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotConnectorWatchRunResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotConnectorWatchIdentityRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bots/{botId}/routine-models/{routineId}": {
+      "get": {
+        "operationId": "botRoutineModelSettings",
+        "parameters": [
+          {
+            "name": "botId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          },
+          {
+            "name": "routineId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          }
+        ],
+        "x-aiden-capability": "bot:read",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "chat:read",
+          "bot:routine-models"
+        ],
+        "responses": {
+          "200": {
+            "description": "Routine model response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotRoutineModelSettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "botRoutineModelSave",
+        "parameters": [
+          {
+            "name": "botId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          },
+          {
+            "name": "routineId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          }
+        ],
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "chat:read",
+          "bot:routine-models",
+          "bot:write"
+        ],
+        "responses": {
+          "200": {
+            "description": "Routine model response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotRoutineModelResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotRoutineModelSave"
+              }
+            }
+          }
+        }
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ]
+    },
+    "/bots/{botId}/routine-models/{routineId}/catalog": {
+      "get": {
+        "operationId": "botRoutineModelCatalog",
+        "parameters": [
+          {
+            "name": "botId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          },
+          {
+            "name": "routineId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          }
+        ],
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "chat:read",
+          "bot:routine-models",
+          "bot:write"
+        ],
+        "responses": {
+          "200": {
+            "description": "Routine model response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotRoutineModelCatalog"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ]
+    },
+    "/bots/{botId}/routine-models/{routineId}/runs": {
+      "get": {
+        "operationId": "botRoutineModelRuns",
+        "parameters": [
+          {
+            "name": "botId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          },
+          {
+            "name": "routineId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          }
+        ],
+        "x-aiden-capability": "bot:read",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "chat:read",
+          "bot:routine-models"
+        ],
+        "responses": {
+          "200": {
+            "description": "Routine model response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotRoutineModelRuns"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ]
+    },
+    "/bots/{botId}/routine-resume-status": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "botExecutionResumeStatus",
+        "parameters": [
+          {
+            "name": "botId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          }
+        ],
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "chat:read",
+          "bot:write",
+          "bot:routine-models"
+        ],
+        "responses": {
+          "200": {
+            "description": "Passive status for the person choosing Resume; it never acknowledges a charge or starts work.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotExecutionResumeStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bots/{botId}/routine-models": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "botRoutineModelDirectory",
+        "parameters": [
+          {
+            "name": "botId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          }
+        ],
+        "x-aiden-capability": "bot:read",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "chat:read",
+          "bot:routine-models"
+        ],
+        "responses": {
+          "200": {
+            "description": "Owned routine identities only; no executable source configuration or private grants.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotRoutineModelDirectory"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bots/{botId}/peers": {
+      "get": {
+        "operationId": "botPeerSettings",
+        "parameters": [
+          {
+            "name": "botId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          }
+        ],
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:peers"
+        ],
+        "x-aiden-capability": "bot:read",
+        "responses": {
+          "200": {
+            "description": "Bot messaging owner response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotPeerSettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "botPeerMutate",
+        "parameters": [
+          {
+            "name": "botId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          }
+        ],
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:peers",
+          "bot:write"
+        ],
+        "x-aiden-capability": "bot:write",
+        "responses": {
+          "200": {
+            "description": "Bot messaging owner response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotPeerMutationResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotPeerMutation"
+              }
+            }
+          }
+        }
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ]
+    },
+    "/bots/{botId}/peers/catalog": {
+      "get": {
+        "operationId": "botPeerCatalog",
+        "parameters": [
+          {
+            "name": "botId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          }
+        ],
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:peers"
+        ],
+        "x-aiden-capability": "bot:read",
+        "responses": {
+          "200": {
+            "description": "Bot messaging owner response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotPeerCatalog"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ]
+    },
+    "/bots/{botId}/peer-exchanges": {
+      "get": {
+        "operationId": "botPeerExchanges",
+        "parameters": [
+          {
+            "name": "botId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          }
+        ],
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:peers",
+          "chat:read"
+        ],
+        "x-aiden-capability": "bot:read",
+        "responses": {
+          "200": {
+            "description": "Bot messaging owner response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotPeerExchangeList"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ]
+    },
+    "/bots/{botId}/peer-exchanges/{exchangeId}": {
+      "get": {
+        "operationId": "botPeerExchange",
+        "parameters": [
+          {
+            "name": "botId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          },
+          {
+            "name": "exchangeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          }
+        ],
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:peers",
+          "chat:read"
+        ],
+        "x-aiden-capability": "bot:read",
+        "responses": {
+          "200": {
+            "description": "Bot messaging owner response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotPeerExchangeDetail"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ]
+    },
+    "/bots/{botId}/peer-exchanges/{exchangeId}/stop": {
+      "post": {
+        "operationId": "botPeerStop",
+        "parameters": [
+          {
+            "name": "botId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          },
+          {
+            "name": "exchangeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          }
+        ],
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:peers",
+          "chat:read",
+          "bot:write"
+        ],
+        "x-aiden-capability": "bot:write",
+        "responses": {
+          "200": {
+            "description": "Bot messaging owner response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotPeerStopResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotPeerStopMutation"
+              }
+            }
+          }
+        }
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ]
+    },
+    "/bots/{botId}/peer-exchanges/{exchangeId}/evidence/{kind}": {
+      "get": {
+        "operationId": "botPeerEvidence",
+        "parameters": [
+          {
+            "name": "botId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          },
+          {
+            "name": "exchangeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          },
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "source",
+                "result"
+              ]
+            }
+          }
+        ],
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:peers",
+          "chat:read"
+        ],
+        "x-aiden-capability": "bot:read",
+        "responses": {
+          "200": {
+            "description": "Bot messaging owner response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotPeerEvidence"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ]
+    },
     "/bots/messaging": {
-      "parameters": [{"$ref": "#/components/parameters/ProtocolVersion"}],
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
       "put": {
         "operationId": "updateBotMessaging",
         "x-aiden-archived-access": "mutation_blocked",
@@ -8273,6 +9493,10 @@
                 "bot:allowed",
                 "bot:images",
                 "bot:issues",
+                "bot:watches",
+                "bot:open-work",
+                "bot:routine-models",
+                "bot:peers",
                 "schedule:cards",
                 "chat:jobs",
                 "attachments:raw",
@@ -8323,6 +9547,10 @@
                 "bot:allowed",
                 "bot:images",
                 "bot:issues",
+                "bot:watches",
+                "bot:open-work",
+                "bot:routine-models",
+                "bot:peers",
                 "schedule:cards",
                 "chat:jobs",
                 "attachments:raw",
@@ -8476,6 +9704,10 @@
                 "bot:allowed",
                 "bot:images",
                 "bot:issues",
+                "bot:watches",
+                "bot:open-work",
+                "bot:routine-models",
+                "bot:peers",
                 "schedule:cards",
                 "chat:jobs",
                 "attachments:raw",
@@ -8526,19 +9758,23 @@
                 "simulators:mobile",
                 "bot:cards",
                 "bot:activity",
-                "bot:messaging",
                 "bot:handoffs",
                 "bot:handoff-notes",
                 "bot:handoff-on-mac",
-                "bot:access-requests",
-                "bot:plans",
-                "bot:allowed",
                 "bot:images",
                 "bot:issues",
+                "bot:watches",
+                "bot:open-work",
+                "bot:routine-models",
+                "bot:peers",
                 "schedule:cards",
                 "chat:jobs",
                 "attachments:raw",
-                "chat:new-worktree"
+                "chat:new-worktree",
+                "bot:messaging",
+                "bot:access-requests",
+                "bot:plans",
+                "bot:allowed"
               ]
             },
             "uniqueItems": true
@@ -10634,6 +11870,11 @@
               },
               "additionalProperties": false
             }
+          },
+          "inputSource": {
+            "type": "string",
+            "enum": ["voice"],
+            "description": "Additive in contract revision 60, user messages only: Aiden Live sent this message for the person on the Mac. Clients show a small \"By voice\" label; they ignore the key on assistant messages and any value they do not know."
           },
           "createdAt": {
             "type": "string",
@@ -15086,95 +16327,95 @@
           }
         }
       },
-        "BackgroundJobs": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "jobs"
-          ],
-          "description": "Contract revision 49 (chat:jobs).",
-          "properties": {
-            "jobs": {
-              "type": "array",
-              "maxItems": 40,
-              "items": {
-                "$ref": "#/components/schemas/BackgroundJob"
-              }
+      "BackgroundJobs": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "jobs"
+        ],
+        "description": "Contract revision 49 (chat:jobs).",
+        "properties": {
+          "jobs": {
+            "type": "array",
+            "maxItems": 40,
+            "items": {
+              "$ref": "#/components/schemas/BackgroundJob"
             }
           }
-        },
-        "BackgroundJob": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "id",
-            "label",
-            "state",
-            "startedAt",
-            "ports"
-          ],
-          "properties": {
-            "id": {
-              "type": "string",
-              "pattern": "^job_[0-9a-f]{8}$"
-            },
-            "label": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 200,
-              "description": "The agent's short label, else the command."
-            },
-            "state": {
-              "type": "string",
-              "enum": [
-                "running",
-                "exited",
-                "failed",
-                "stopped"
-              ]
-            },
-            "startedAt": {
-              "type": "string",
-              "format": "date-time"
-            },
-            "endedAt": {
-              "type": "string",
-              "format": "date-time",
-              "description": "Present exactly when the job is not running."
-            },
-            "exitCode": {
+        }
+      },
+      "BackgroundJob": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "label",
+          "state",
+          "startedAt",
+          "ports"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^job_[0-9a-f]{8}$"
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "The agent's short label, else the command."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "running",
+              "exited",
+              "failed",
+              "stopped"
+            ]
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "endedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Present exactly when the job is not running."
+          },
+          "exitCode": {
+            "type": "integer",
+            "description": "Only for exited or failed jobs whose exit code is known."
+          },
+          "endReason": {
+            "type": "string",
+            "enum": [
+              "agent",
+              "person",
+              "output-limit",
+              "chat-deleted",
+              "access-changed",
+              "app-quit"
+            ],
+            "description": "Present exactly when the job is stopped."
+          },
+          "fromCommand": {
+            "type": "boolean",
+            "const": true,
+            "description": "A run_command call left these processes running; they have no exit code."
+          },
+          "ports": {
+            "type": "array",
+            "maxItems": 5,
+            "items": {
               "type": "integer",
-              "description": "Only for exited or failed jobs whose exit code is known."
+              "minimum": 1,
+              "maximum": 65535
             },
-            "endReason": {
-              "type": "string",
-              "enum": [
-                "agent",
-                "person",
-                "output-limit",
-                "chat-deleted",
-                "access-changed",
-                "app-quit"
-              ],
-              "description": "Present exactly when the job is stopped."
-            },
-            "fromCommand": {
-              "type": "boolean",
-              "const": true,
-              "description": "A run_command call left these processes running; they have no exit code."
-            },
-            "ports": {
-              "type": "array",
-              "maxItems": 5,
-              "items": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 65535
-              },
-              "description": "TCP ports it listens on, on the Mac; empty unless it runs."
-            }
+            "description": "TCP ports it listens on, on the Mac; empty unless it runs."
           }
-        },
+        }
+      },
       "MemorySettings": {
         "type": "object",
         "required": [
@@ -17280,6 +18521,9 @@
               }
             },
             "additionalProperties": false
+          },
+          {
+            "$ref": "#/components/schemas/BotPeerSessionEntry"
           }
         ]
       },
@@ -18080,10 +19324,11 @@
                   "maxLength": 160
                 },
                 "kind": {
-                  "description": "Absent means routine. Issue and message items carry neither routineId nor status. Message items require bot:messaging, revision 54.",
+                  "description": "Absent means routine. Issue, peer and message items carry neither routineId nor status; routine items require them.",
                   "enum": [
                     "routine",
                     "issue",
+                    "peer",
                     "message"
                   ]
                 },
@@ -18132,6 +19377,7 @@
                       "kind": {
                         "enum": [
                           "issue",
+                          "peer",
                           "message"
                         ]
                       }
@@ -18672,128 +19918,6 @@
         },
         "additionalProperties": false
       },
-      "BotAllowedEntry": {
-        "oneOf": [
-          {
-            "type": "object",
-            "properties": {
-              "id": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 80,
-                "pattern": "^[A-Za-z0-9_-]+$"
-              },
-              "kind": {
-                "const": "rule"
-              },
-              "what": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 200,
-                "pattern": "^(?!\\s*$)[^\\u0000-\\u0008\\u000e-\\u001f\\u007f-\\u009f\\u00ad\\u061c\\u180e\\u200b\\u200e\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2060-\\u2064\\u2066-\\u206f\\ufeff\\ufff9-\\ufffb]+$"
-              },
-              "addedAt": {
-                "type": "string",
-                "format": "date-time"
-              },
-              "uses": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 9007199254740991
-              },
-              "lastUsedAt": {
-                "type": "string",
-                "format": "date-time"
-              }
-            },
-            "required": [
-              "id",
-              "kind",
-              "what",
-              "addedAt",
-              "uses"
-            ],
-            "additionalProperties": false,
-            "allOf": [
-              {
-                "if": {
-                  "properties": {
-                    "uses": {
-                      "const": 0
-                    }
-                  }
-                },
-                "then": {
-                  "not": {
-                    "required": [
-                      "lastUsedAt"
-                    ]
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "type": "object",
-            "properties": {
-              "id": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 80,
-                "pattern": "^[A-Za-z0-9_-]+$"
-              },
-              "kind": {
-                "const": "folder"
-              },
-              "what": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 200,
-                "pattern": "^(?!\\s*$)[^\\u0000-\\u0008\\u000e-\\u001f\\u007f-\\u009f\\u00ad\\u061c\\u180e\\u200b\\u200e\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2060-\\u2064\\u2066-\\u206f\\ufeff\\ufff9-\\ufffb]+$"
-              },
-              "addedAt": {
-                "type": "string",
-                "format": "date-time"
-              }
-            },
-            "required": [
-              "id",
-              "kind",
-              "what",
-              "addedAt"
-            ],
-            "additionalProperties": false
-          }
-        ]
-      },
-      "BotAllowedList": {
-        "type": "object",
-        "properties": {
-          "botId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 160,
-            "pattern": "^[A-Za-z0-9._:-]+$"
-          },
-          "entries": {
-            "type": "array",
-            "maxItems": 50,
-            "uniqueItems": true,
-            "items": {
-              "$ref": "#/components/schemas/BotAllowedEntry"
-            }
-          },
-          "nextCursor": {
-            "type": "string",
-            "pattern": "^cur_[A-Za-z0-9_-]{43}$"
-          }
-        },
-        "required": [
-          "botId",
-          "entries"
-        ],
-        "additionalProperties": false
-      },
       "BotApproval": {
         "description": "A tool call the Bot is waiting to have approved. Answered once, by waitId, through POST /approvals/{approvalId}/respond, which needs approval:respond, bot:read and bot:write. canAllow false: a phone may only deny it. An offered Always answer also requires bot:allowed and scope always; other Bot cards remain once-only. The receipt acknowledges the choice, not durable grant publication.",
         "type": "object",
@@ -19282,6 +20406,3215 @@
         },
         "additionalProperties": false
       },
+      "BotConnectorWatchCondition": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "email"
+              },
+              "sender": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "x-aiden-utf16-max": 200
+              },
+              "subject": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "x-aiden-utf16-max": 200
+              },
+              "unreadOnly": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "kind",
+              "unreadOnly"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "calendar"
+              },
+              "lookAheadMinutes": {
+                "type": "integer",
+                "minimum": 15,
+                "maximum": 1440
+              },
+              "timezone": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100,
+                "x-aiden-utf16-max": 100
+              }
+            },
+            "required": [
+              "kind",
+              "lookAheadMinutes",
+              "timezone"
+            ]
+          }
+        ]
+      },
+      "BotConnectorWatchSource": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "providerLabel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "x-aiden-utf16-max": 500
+          },
+          "accountLabel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "x-aiden-utf16-max": 500
+          },
+          "resourceLabel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "x-aiden-utf16-max": 500
+          }
+        },
+        "required": [
+          "providerLabel",
+          "accountLabel",
+          "resourceLabel"
+        ]
+      },
+      "BotOpenWorkSource": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "person"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "person"
+              },
+              "submissionId": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,31}$",
+                "maxLength": 32
+              },
+              "entryId": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,31}$",
+                "maxLength": 32
+              }
+            },
+            "required": [
+              "kind",
+              "submissionId",
+              "entryId"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "routine"
+              },
+              "submissionId": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,31}$",
+                "maxLength": 32
+              },
+              "entryId": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,31}$",
+                "maxLength": 32
+              },
+              "routineId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "runId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              }
+            },
+            "required": [
+              "kind",
+              "submissionId",
+              "entryId",
+              "routineId",
+              "runId"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "peer"
+              },
+              "exchangeId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "role": {
+                "enum": [
+                  "incoming",
+                  "outgoing"
+                ]
+              },
+              "peerBotId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              }
+            },
+            "required": [
+              "kind",
+              "exchangeId",
+              "role",
+              "peerBotId"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "peer"
+              },
+              "exchangeId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "role": {
+                "enum": [
+                  "incoming",
+                  "outgoing"
+                ]
+              },
+              "peerBotId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "submissionId": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,31}$",
+                "maxLength": 32
+              },
+              "entryId": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,31}$",
+                "maxLength": 32
+              }
+            },
+            "required": [
+              "kind",
+              "exchangeId",
+              "role",
+              "peerBotId",
+              "submissionId",
+              "entryId"
+            ]
+          }
+        ]
+      },
+      "BotOpenWorkLink": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "source",
+                  "result"
+                ]
+              },
+              "submissionId": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,31}$",
+                "maxLength": 32
+              },
+              "entryId": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,31}$",
+                "maxLength": 32
+              }
+            },
+            "required": [
+              "kind",
+              "submissionId",
+              "entryId"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "routine"
+              },
+              "routineId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "runId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              }
+            },
+            "required": [
+              "kind",
+              "routineId",
+              "runId"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "issue"
+              },
+              "issueId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              }
+            },
+            "required": [
+              "kind",
+              "issueId"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "peer"
+              },
+              "exchangeId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "peerBotId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              }
+            },
+            "required": [
+              "kind",
+              "exchangeId",
+              "peerBotId"
+            ]
+          }
+        ]
+      },
+      "BotOpenWorkExecution": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "idle",
+              "queued",
+              "running",
+              "interrupted",
+              "stopping"
+            ]
+          },
+          "canStop": {
+            "type": "boolean"
+          },
+          "blockedReason": {
+            "type": "string",
+            "enum": [
+              "mixed_inputs",
+              "not_linked",
+              "host_unavailable"
+            ]
+          }
+        },
+        "required": [
+          "state",
+          "canStop"
+        ]
+      },
+      "BotOpenWorkStopReceipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mutationId": {
+            "type": "string",
+            "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$",
+            "minLength": 36,
+            "maxLength": 36
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "requested",
+              "stopped",
+              "already_finished",
+              "not_running",
+              "uncertain",
+              "blocked"
+            ]
+          },
+          "requestedAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "finishedAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "mixed_inputs",
+              "host_unavailable",
+              "deadline",
+              "source_missing"
+            ]
+          }
+        },
+        "required": [
+          "mutationId",
+          "state",
+          "requestedAt"
+        ]
+      },
+      "BotOpenWorkUndoOption": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mutationId": {
+            "type": "string",
+            "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$",
+            "minLength": 36,
+            "maxLength": 36
+          },
+          "itemId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "expectedRevision": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "expiresAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "mutationId",
+          "itemId",
+          "expectedRevision",
+          "expiresAt"
+        ]
+      },
+      "BotOpenWorkItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "description": "At most160 Unicode scalars and640 UTF-8 bytes; well-formed Unicode."
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 1000,
+            "description": "At most1000 Unicode scalars and2048 UTF-8 bytes; may be empty."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "open",
+              "waiting",
+              "done",
+              "dismissed"
+            ]
+          },
+          "waitingReason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "description": "At most160 Unicode scalars and640 UTF-8 bytes; well-formed Unicode."
+          },
+          "createdAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "updatedAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "source": {
+            "$ref": "#/components/schemas/BotOpenWorkSource"
+          },
+          "links": {
+            "type": "array",
+            "maxItems": 4,
+            "items": {
+              "$ref": "#/components/schemas/BotOpenWorkLink"
+            }
+          },
+          "completion": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "by": {
+                "type": "string",
+                "enum": [
+                  "person",
+                  "bot"
+                ]
+              },
+              "at": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "result": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "submissionId": {
+                    "type": "string",
+                    "pattern": "^[1-9][0-9]{0,31}$",
+                    "maxLength": 32
+                  },
+                  "entryId": {
+                    "type": "string",
+                    "pattern": "^[1-9][0-9]{0,31}$",
+                    "maxLength": 32
+                  }
+                },
+                "required": [
+                  "submissionId",
+                  "entryId"
+                ]
+              }
+            },
+            "required": [
+              "by",
+              "at"
+            ]
+          },
+          "execution": {
+            "$ref": "#/components/schemas/BotOpenWorkExecution"
+          },
+          "lastStop": {
+            "$ref": "#/components/schemas/BotOpenWorkStopReceipt"
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "title",
+          "note",
+          "state",
+          "createdAt",
+          "updatedAt",
+          "source",
+          "links",
+          "execution"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "waiting"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "waitingReason"
+              ]
+            },
+            "else": {
+              "not": {
+                "required": [
+                  "waitingReason"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "BotOpenWorkSnapshot": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "botId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "items": {
+            "type": "array",
+            "maxItems": 192,
+            "items": {
+              "$ref": "#/components/schemas/BotOpenWorkItem"
+            }
+          },
+          "undo": {
+            "type": "array",
+            "maxItems": 192,
+            "items": {
+              "$ref": "#/components/schemas/BotOpenWorkUndoOption"
+            }
+          }
+        },
+        "required": [
+          "botId",
+          "revision",
+          "items",
+          "undo"
+        ],
+        "description": "Complete serialized response is at most900 KiB. At most64 active and128 terminal items; revisions are opaque strings and live execution may change at equal revision."
+      },
+      "BotOpenWorkMutation": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mutationId": {
+                "type": "string",
+                "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$",
+                "minLength": 36,
+                "maxLength": 36
+              },
+              "expectedRevision": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "action": {
+                "const": "add"
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 160,
+                "description": "At most160 Unicode scalars and640 UTF-8 bytes; well-formed Unicode."
+              },
+              "note": {
+                "type": "string",
+                "maxLength": 1000,
+                "description": "At most1000 Unicode scalars and2048 UTF-8 bytes; may be empty."
+              }
+            },
+            "required": [
+              "mutationId",
+              "expectedRevision",
+              "action",
+              "title"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mutationId": {
+                "type": "string",
+                "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$",
+                "minLength": 36,
+                "maxLength": 36
+              },
+              "expectedRevision": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "action": {
+                "const": "edit"
+              },
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "patch": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 160,
+                    "description": "At most160 Unicode scalars and640 UTF-8 bytes; well-formed Unicode."
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 1000,
+                    "description": "At most1000 Unicode scalars and2048 UTF-8 bytes; may be empty."
+                  },
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "open",
+                      "waiting",
+                      "done",
+                      "dismissed"
+                    ]
+                  },
+                  "waitingReason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 160,
+                    "description": "At most160 Unicode scalars and640 UTF-8 bytes; well-formed Unicode."
+                  }
+                },
+                "required": [],
+                "minProperties": 1,
+                "allOf": [
+                  {
+                    "if": {
+                      "required": [
+                        "state"
+                      ],
+                      "properties": {
+                        "state": {
+                          "const": "waiting"
+                        }
+                      }
+                    },
+                    "then": {
+                      "required": [
+                        "waitingReason"
+                      ]
+                    }
+                  },
+                  {
+                    "if": {
+                      "required": [
+                        "state"
+                      ],
+                      "properties": {
+                        "state": {
+                          "enum": [
+                            "open",
+                            "done",
+                            "dismissed"
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "not": {
+                        "required": [
+                          "waitingReason"
+                        ]
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "required": [
+              "mutationId",
+              "expectedRevision",
+              "action",
+              "id",
+              "patch"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mutationId": {
+                "type": "string",
+                "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$",
+                "minLength": 36,
+                "maxLength": 36
+              },
+              "expectedRevision": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "action": {
+                "type": "string",
+                "enum": [
+                  "dismiss",
+                  "stop",
+                  "stop_and_dismiss"
+                ]
+              },
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              }
+            },
+            "required": [
+              "mutationId",
+              "expectedRevision",
+              "action",
+              "id"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mutationId": {
+                "type": "string",
+                "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$",
+                "minLength": 36,
+                "maxLength": 36
+              },
+              "expectedRevision": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "action": {
+                "const": "undo"
+              },
+              "undoOf": {
+                "type": "string",
+                "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$",
+                "minLength": 36,
+                "maxLength": 36
+              }
+            },
+            "required": [
+              "mutationId",
+              "expectedRevision",
+              "action",
+              "undoOf"
+            ]
+          }
+        ]
+      },
+      "BotOpenWorkResult": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "ok": {
+                "const": true
+              },
+              "mutationId": {
+                "type": "string",
+                "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$",
+                "minLength": 36,
+                "maxLength": 36
+              },
+              "replayed": {
+                "type": "boolean"
+              },
+              "itemId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "snapshot": {
+                "$ref": "#/components/schemas/BotOpenWorkSnapshot"
+              },
+              "undo": {
+                "$ref": "#/components/schemas/BotOpenWorkUndoOption"
+              },
+              "stop": {
+                "$ref": "#/components/schemas/BotOpenWorkStopReceipt"
+              }
+            },
+            "required": [
+              "ok",
+              "mutationId",
+              "replayed",
+              "snapshot"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "ok": {
+                "const": false
+              },
+              "code": {
+                "type": "string",
+                "enum": [
+                  "invalid",
+                  "not_found",
+                  "stale",
+                  "active_full",
+                  "history_full",
+                  "receipts_full",
+                  "mutation_conflict",
+                  "undo_conflict",
+                  "undo_expired",
+                  "mixed_inputs",
+                  "unavailable",
+                  "deleted"
+                ]
+              },
+              "error": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 280
+              },
+              "snapshot": {
+                "$ref": "#/components/schemas/BotOpenWorkSnapshot"
+              }
+            },
+            "required": [
+              "ok",
+              "code",
+              "error"
+            ]
+          }
+        ]
+      },
+      "BotOpenWorkEvidence": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "itemId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "source",
+              "result"
+            ]
+          },
+          "submissionId": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,31}$",
+            "maxLength": 32
+          },
+          "entryId": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,31}$",
+            "maxLength": 32
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "description": "At most160 Unicode scalars and640 UTF-8 bytes; well-formed Unicode."
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 32768,
+            "description": "At most32768 UTF-8 bytes; truncated explicitly identifies an excerpt."
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "itemId",
+          "kind",
+          "submissionId",
+          "entryId",
+          "title",
+          "text",
+          "truncated"
+        ]
+      },
+      "BotConnectorWatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-fA-F-]{36}$",
+            "maxLength": 36
+          },
+          "botId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "x-aiden-utf16-max": 160
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^[0-9]{1,32}$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "x-aiden-utf16-max": 120
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32768,
+            "x-aiden-utf16-max": 32768
+          },
+          "templateId": {
+            "enum": [
+              "mail_messages",
+              "calendar_upcoming"
+            ]
+          },
+          "condition": {
+            "$ref": "#/components/schemas/BotConnectorWatchCondition"
+          },
+          "everyMinutes": {
+            "enum": [
+              15,
+              30,
+              60
+            ]
+          },
+          "source": {
+            "$ref": "#/components/schemas/BotConnectorWatchSource"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "state": {
+            "enum": [
+              "waiting",
+              "empty",
+              "unchanged",
+              "changed",
+              "error",
+              "paused"
+            ]
+          },
+          "lastCheckAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "nextCheckAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "lastRunAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "lastError": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "x-aiden-utf16-max": 200
+          }
+        },
+        "required": [
+          "id",
+          "botId",
+          "revision",
+          "name",
+          "prompt",
+          "templateId",
+          "condition",
+          "everyMinutes",
+          "source",
+          "enabled",
+          "state"
+        ]
+      },
+      "BotConnectorWatchList": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "supported": {
+            "type": "boolean"
+          },
+          "unavailableReason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "x-aiden-utf16-max": 200
+          },
+          "templates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "enum": [
+                    "mail_messages",
+                    "calendar_upcoming"
+                  ]
+                },
+                "kind": {
+                  "enum": [
+                    "email",
+                    "calendar"
+                  ]
+                },
+                "title": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500,
+                  "x-aiden-utf16-max": 500
+                },
+                "description": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500,
+                  "x-aiden-utf16-max": 500
+                },
+                "available": {
+                  "type": "boolean"
+                },
+                "unavailableReason": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "x-aiden-utf16-max": 200
+                },
+                "intervals": {
+                  "type": "array",
+                  "items": {
+                    "enum": [
+                      15,
+                      30,
+                      60
+                    ]
+                  },
+                  "maxItems": 3
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "title",
+                "description",
+                "available",
+                "intervals"
+              ]
+            },
+            "maxItems": 2
+          },
+          "watches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BotConnectorWatch"
+            },
+            "maxItems": 16
+          }
+        },
+        "required": [
+          "supported",
+          "templates",
+          "watches"
+        ]
+      },
+      "BotConnectorWatchSourceList": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "choices": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^[0-9a-fA-F-]{36}$",
+                  "maxLength": 36
+                },
+                "templateId": {
+                  "enum": [
+                    "mail_messages",
+                    "calendar_upcoming"
+                  ]
+                },
+                "providerLabel": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500,
+                  "x-aiden-utf16-max": 500
+                },
+                "accountLabel": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500,
+                  "x-aiden-utf16-max": 500
+                },
+                "resourceLabel": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500,
+                  "x-aiden-utf16-max": 500
+                },
+                "available": {
+                  "type": "boolean"
+                },
+                "unavailableReason": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "x-aiden-utf16-max": 200
+                }
+              },
+              "required": [
+                "id",
+                "templateId",
+                "providerLabel",
+                "accountLabel",
+                "resourceLabel",
+                "available"
+              ]
+            },
+            "maxItems": 500
+          },
+          "unavailableReasons": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "x-aiden-utf16-max": 200
+            },
+            "maxItems": 16
+          }
+        },
+        "required": [
+          "choices",
+          "unavailableReasons"
+        ]
+      },
+      "BotConnectorWatchTestResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "checkedAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "result": {
+            "enum": [
+              "baseline",
+              "empty",
+              "unchanged",
+              "changed"
+            ]
+          },
+          "itemCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 250
+          },
+          "changeCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 250
+          },
+          "preview": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "x-aiden-utf16-max": 500
+            },
+            "maxItems": 8
+          }
+        },
+        "required": [
+          "checkedAt",
+          "result",
+          "itemCount",
+          "changeCount",
+          "preview"
+        ]
+      },
+      "BotConnectorWatchRemoval": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-fA-F-]{36}$",
+            "maxLength": 36
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^deleted:[0-9]{1,32}$"
+          },
+          "removed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "removed"
+        ]
+      },
+      "BotConnectorWatchRunResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-fA-F-]{36}$",
+            "maxLength": 36
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^[0-9]{1,32}$"
+          },
+          "admitted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "admitted"
+        ]
+      },
+      "BotConnectorWatchCreateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "x-aiden-utf16-max": 120
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32768,
+            "x-aiden-utf16-max": 32768
+          },
+          "condition": {
+            "$ref": "#/components/schemas/BotConnectorWatchCondition"
+          },
+          "everyMinutes": {
+            "enum": [
+              15,
+              30,
+              60
+            ]
+          },
+          "sourceChoiceId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-fA-F-]{36}$",
+            "maxLength": 36
+          },
+          "mutationId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-fA-F-]{36}$",
+            "maxLength": 36
+          }
+        },
+        "required": [
+          "name",
+          "prompt",
+          "condition",
+          "everyMinutes",
+          "sourceChoiceId",
+          "mutationId"
+        ]
+      },
+      "BotConnectorWatchUpdateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "x-aiden-utf16-max": 120
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32768,
+            "x-aiden-utf16-max": 32768
+          },
+          "condition": {
+            "$ref": "#/components/schemas/BotConnectorWatchCondition"
+          },
+          "everyMinutes": {
+            "enum": [
+              15,
+              30,
+              60
+            ]
+          },
+          "sourceChoiceId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-fA-F-]{36}$",
+            "maxLength": 36
+          },
+          "mutationId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-fA-F-]{36}$",
+            "maxLength": 36
+          },
+          "expectedRevision": {
+            "type": "string",
+            "pattern": "^[0-9]{1,32}$"
+          }
+        },
+        "required": [
+          "name",
+          "prompt",
+          "condition",
+          "everyMinutes",
+          "mutationId",
+          "expectedRevision"
+        ]
+      },
+      "BotConnectorWatchIdentityRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mutationId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-fA-F-]{36}$",
+            "maxLength": 36
+          },
+          "expectedRevision": {
+            "type": "string",
+            "pattern": "^[0-9]{1,32}$"
+          }
+        },
+        "required": [
+          "mutationId",
+          "expectedRevision"
+        ]
+      },
+      "BotConnectorWatchEnableRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mutationId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-fA-F-]{36}$",
+            "maxLength": 36
+          },
+          "expectedRevision": {
+            "type": "string",
+            "pattern": "^[0-9]{1,32}$"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "mutationId",
+          "expectedRevision",
+          "enabled"
+        ]
+      },
+      "BotConnectorWatchTestRequest": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^[0-9a-fA-F-]{36}$",
+                "maxLength": 36
+              },
+              "expectedRevision": {
+                "type": "string",
+                "pattern": "^[0-9]{1,32}$"
+              }
+            },
+            "required": [
+              "id",
+              "expectedRevision"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "sourceChoiceId": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^[0-9a-fA-F-]{36}$",
+                "maxLength": 36
+              },
+              "condition": {
+                "$ref": "#/components/schemas/BotConnectorWatchCondition"
+              }
+            },
+            "required": [
+              "sourceChoiceId",
+              "condition"
+            ]
+          }
+        ]
+      },
+      "BotRoutineModelChoice": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "providerId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "modelId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "thinkingLevel": {
+            "type": "string",
+            "enum": [
+              "off",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        },
+        "required": [
+          "providerId",
+          "modelId",
+          "thinkingLevel"
+        ]
+      },
+      "BotRoutineModelSelection": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mode": {
+                "const": "inherit"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mode": {
+                "const": "selected"
+              },
+              "primary": {
+                "$ref": "#/components/schemas/BotRoutineModelChoice"
+              },
+              "fallback": {
+                "$ref": "#/components/schemas/BotRoutineModelChoice"
+              }
+            },
+            "required": [
+              "mode",
+              "primary"
+            ]
+          }
+        ]
+      },
+      "BotRoutineModelSettings": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "botId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "routineId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "selection": {
+            "$ref": "#/components/schemas/BotRoutineModelSelection"
+          },
+          "updatedAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "lastMutationId": {
+            "type": "string",
+            "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$",
+            "minLength": 36,
+            "maxLength": 36
+          }
+        },
+        "required": [
+          "botId",
+          "routineId",
+          "revision",
+          "selection",
+          "updatedAt"
+        ]
+      },
+      "BotRoutineModelSave": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "botId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "routineId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "mutationId": {
+            "type": "string",
+            "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$",
+            "minLength": 36,
+            "maxLength": 36
+          },
+          "expectedRevision": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "catalogRevision": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "selection": {
+            "$ref": "#/components/schemas/BotRoutineModelSelection"
+          }
+        },
+        "required": [
+          "botId",
+          "routineId",
+          "mutationId",
+          "expectedRevision",
+          "catalogRevision",
+          "selection"
+        ]
+      },
+      "BotRoutineModelOption": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "x-aiden-max-utf8-bytes": 640
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "supportsImages": {
+            "type": "boolean"
+          },
+          "thinkingLevels": {
+            "type": "array",
+            "maxItems": 7,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "off",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ]
+            }
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "available",
+          "supportsImages",
+          "thinkingLevels"
+        ]
+      },
+      "BotRoutineModelProvider": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "x-aiden-max-utf8-bytes": 640
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "models": {
+            "type": "array",
+            "maxItems": 512,
+            "items": {
+              "$ref": "#/components/schemas/BotRoutineModelOption"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "available",
+          "models"
+        ]
+      },
+      "BotRoutineModelCatalog": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "revision": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "providers": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {
+              "$ref": "#/components/schemas/BotRoutineModelProvider"
+            }
+          }
+        },
+        "required": [
+          "revision",
+          "providers"
+        ]
+      },
+      "BotRoutineRunModel": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "chosen": {
+            "$ref": "#/components/schemas/BotRoutineModelChoice"
+          },
+          "actual": {
+            "$ref": "#/components/schemas/BotRoutineModelChoice"
+          },
+          "providerLabel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "x-aiden-max-utf8-bytes": 640
+          },
+          "modelLabel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "x-aiden-max-utf8-bytes": 640
+          },
+          "chosenProviderLabel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "x-aiden-max-utf8-bytes": 640
+          },
+          "chosenModelLabel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "x-aiden-max-utf8-bytes": 640
+          },
+          "fallbackReason": {
+            "enum": [
+              "model_unavailable",
+              "credentials_unavailable"
+            ]
+          }
+        },
+        "required": [
+          "chosen",
+          "actual",
+          "providerLabel",
+          "modelLabel",
+          "chosenProviderLabel",
+          "chosenModelLabel"
+        ]
+      },
+      "BotRoutineModelRun": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "runId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "submissionId": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,31}$",
+            "maxLength": 32
+          },
+          "admittedAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "startedAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "scheduledFor": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "timezone": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "x-aiden-max-utf8-bytes": 640
+          },
+          "triggerKind": {
+            "enum": [
+              "scheduled",
+              "manual",
+              "event",
+              "retry",
+              "catch_up"
+            ]
+          },
+          "model": {
+            "$ref": "#/components/schemas/BotRoutineRunModel"
+          }
+        },
+        "required": [
+          "runId",
+          "admittedAt",
+          "triggerKind",
+          "model"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "scheduledFor"
+              ]
+            },
+            "then": {
+              "required": [
+                "timezone"
+              ]
+            }
+          }
+        ]
+      },
+      "BotRoutineModelRuns": {
+        "type": "array",
+        "maxItems": 64,
+        "items": {
+          "$ref": "#/components/schemas/BotRoutineModelRun"
+        }
+      },
+      "BotRoutineModelResult": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "ok": {
+                "const": true
+              },
+              "settings": {
+                "$ref": "#/components/schemas/BotRoutineModelSettings"
+              },
+              "mutationId": {
+                "type": "string",
+                "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$",
+                "minLength": 36,
+                "maxLength": 36
+              },
+              "replayed": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "ok",
+              "settings",
+              "mutationId",
+              "replayed"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "ok": {
+                "const": false
+              },
+              "code": {
+                "enum": [
+                  "conflict",
+                  "invalid",
+                  "unavailable",
+                  "not_found",
+                  "history_full"
+                ]
+              },
+              "error": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 160,
+                "x-aiden-max-utf8-bytes": 640
+              },
+              "settings": {
+                "$ref": "#/components/schemas/BotRoutineModelSettings"
+              }
+            },
+            "required": [
+              "ok",
+              "code",
+              "error"
+            ]
+          }
+        ]
+      },
+      "BotExecutionResumeStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "requiresUnknownCostAcknowledgement"
+        ],
+        "properties": {
+          "requiresUnknownCostAcknowledgement": {
+            "type": "boolean"
+          },
+          "interruptedSubmissionId": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,31}$",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "costReceiptId": {
+            "type": "string",
+            "pattern": "^cost_[a-f0-9]{64}$",
+            "minLength": 69,
+            "maxLength": 69
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "requiresUnknownCostAcknowledgement": {
+                  "const": true
+                }
+              },
+              "required": [
+                "requiresUnknownCostAcknowledgement"
+              ]
+            },
+            "then": {
+              "required": [
+                "interruptedSubmissionId",
+                "costReceiptId"
+              ]
+            },
+            "else": {
+              "not": {
+                "required": [
+                  "costReceiptId"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "BotResumeRequest": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "maxProperties": 0
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "acknowledgeUnknownCost",
+              "expectedSubmissionId",
+              "expectedCostReceiptId"
+            ],
+            "properties": {
+              "acknowledgeUnknownCost": {
+                "const": true
+              },
+              "expectedSubmissionId": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,31}$",
+                "minLength": 1,
+                "maxLength": 32
+              },
+              "expectedCostReceiptId": {
+                "type": "string",
+                "pattern": "^cost_[a-f0-9]{64}$",
+                "minLength": 69,
+                "maxLength": 69
+              }
+            }
+          }
+        ],
+        "description": "Confirmed unknown-cost Resume requires bot:routine-models, the exact interrupted input and opaque cost receipt returned by status. Ordinary Resume keeps an empty body. A stale token cannot acknowledge a later receipt, including on the same input."
+      },
+      "BotRoutineModelDirectory": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "botId",
+          "routines"
+        ],
+        "properties": {
+          "botId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "routines": {
+            "type": "array",
+            "maxItems": 1024,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "name",
+                "kind"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                  "minLength": 1,
+                  "maxLength": 160
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 160,
+                  "x-aiden-max-utf8-bytes": 640
+                },
+                "kind": {
+                  "enum": [
+                    "scheduled",
+                    "event",
+                    "watch"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "BotPeerIdentity": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "botId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          }
+        },
+        "required": [
+          "botId",
+          "name"
+        ]
+      },
+      "BotPeerPair": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "peer": {
+            "$ref": "#/components/schemas/BotPeerIdentity"
+          },
+          "approvedAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "peer",
+          "approvedAt"
+        ]
+      },
+      "BotPeerSettings": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "botId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "routingDescription": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 1000
+          },
+          "pairs": {
+            "type": "array",
+            "maxItems": 128,
+            "items": {
+              "$ref": "#/components/schemas/BotPeerPair"
+            }
+          },
+          "updatedAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "lastMutationId": {
+            "type": "string",
+            "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$"
+          }
+        },
+        "required": [
+          "botId",
+          "revision",
+          "routingDescription",
+          "pairs",
+          "updatedAt"
+        ]
+      },
+      "BotPeerCatalog": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "botId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "bots": {
+            "type": "array",
+            "maxItems": 128,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "botId": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                  "minLength": 1,
+                  "maxLength": 160
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 160
+                },
+                "available": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "botId",
+                "name",
+                "available"
+              ]
+            }
+          }
+        },
+        "required": [
+          "botId",
+          "revision",
+          "bots"
+        ]
+      },
+      "BotPeerMutation": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "botId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "mutationId": {
+                "type": "string",
+                "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$"
+              },
+              "expectedRevision": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "action": {
+                "const": "describe"
+              },
+              "routingDescription": {
+                "type": "string",
+                "minLength": 0,
+                "maxLength": 1000
+              }
+            },
+            "required": [
+              "botId",
+              "mutationId",
+              "expectedRevision",
+              "action",
+              "routingDescription"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "botId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "mutationId": {
+                "type": "string",
+                "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$"
+              },
+              "expectedRevision": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "action": {
+                "const": "approve"
+              },
+              "catalogRevision": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "peerBotId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              }
+            },
+            "required": [
+              "botId",
+              "mutationId",
+              "expectedRevision",
+              "action",
+              "catalogRevision",
+              "peerBotId"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "botId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "mutationId": {
+                "type": "string",
+                "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$"
+              },
+              "expectedRevision": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "action": {
+                "const": "revoke"
+              },
+              "pairId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "pairRevision": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              }
+            },
+            "required": [
+              "botId",
+              "mutationId",
+              "expectedRevision",
+              "action",
+              "pairId",
+              "pairRevision"
+            ]
+          }
+        ]
+      },
+      "BotPeerMutationResult": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "ok": {
+                "const": true
+              },
+              "mutationId": {
+                "type": "string",
+                "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$"
+              },
+              "replayed": {
+                "type": "boolean"
+              },
+              "snapshot": {
+                "$ref": "#/components/schemas/BotPeerSettings"
+              }
+            },
+            "required": [
+              "ok",
+              "mutationId",
+              "replayed",
+              "snapshot"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "ok": {
+                "const": false
+              },
+              "code": {
+                "enum": [
+                  "invalid",
+                  "conflict",
+                  "unavailable",
+                  "history_full",
+                  "access_changed",
+                  "not_found"
+                ]
+              },
+              "error": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              },
+              "snapshot": {
+                "$ref": "#/components/schemas/BotPeerSettings"
+              }
+            },
+            "required": [
+              "ok",
+              "code",
+              "error"
+            ]
+          }
+        ]
+      },
+      "BotPeerStopReceipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mutationId": {
+            "type": "string",
+            "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$"
+          },
+          "state": {
+            "enum": [
+              "requested",
+              "uncertain",
+              "stopped",
+              "not_running",
+              "blocked"
+            ]
+          },
+          "at": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "reason": {
+            "enum": [
+              "mixed_inputs",
+              "host_unavailable",
+              "stale_source"
+            ]
+          }
+        },
+        "required": [
+          "mutationId",
+          "state",
+          "at"
+        ]
+      },
+      "BotPeerExchangeSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "pairId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "sender": {
+            "$ref": "#/components/schemas/BotPeerIdentity"
+          },
+          "recipient": {
+            "$ref": "#/components/schemas/BotPeerIdentity"
+          },
+          "direction": {
+            "enum": [
+              "sent",
+              "received"
+            ]
+          },
+          "kind": {
+            "enum": [
+              "request",
+              "question",
+              "status",
+              "fyi"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "state": {
+            "enum": [
+              "waiting",
+              "queued",
+              "running",
+              "interrupted",
+              "stopping",
+              "completed",
+              "failed",
+              "cancelled",
+              "expired",
+              "uncertain"
+            ]
+          },
+          "createdAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "updatedAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "expiresAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "canStop": {
+            "type": "boolean"
+          },
+          "returnState": {
+            "enum": [
+              "reserved",
+              "waiting",
+              "queued",
+              "delivered",
+              "not_applicable"
+            ]
+          },
+          "parentExchangeId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "rootExchangeId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "blockedReason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "lastStop": {
+            "$ref": "#/components/schemas/BotPeerStopReceipt"
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "pairId",
+          "sender",
+          "recipient",
+          "direction",
+          "kind",
+          "title",
+          "state",
+          "createdAt",
+          "updatedAt",
+          "expiresAt",
+          "canStop",
+          "returnState"
+        ]
+      },
+      "BotPeerExchangeDetail": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "pairId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "sender": {
+            "$ref": "#/components/schemas/BotPeerIdentity"
+          },
+          "recipient": {
+            "$ref": "#/components/schemas/BotPeerIdentity"
+          },
+          "direction": {
+            "enum": [
+              "sent",
+              "received"
+            ]
+          },
+          "kind": {
+            "enum": [
+              "request",
+              "question",
+              "status",
+              "fyi"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "state": {
+            "enum": [
+              "waiting",
+              "queued",
+              "running",
+              "interrupted",
+              "stopping",
+              "completed",
+              "failed",
+              "cancelled",
+              "expired",
+              "uncertain"
+            ]
+          },
+          "createdAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "updatedAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "expiresAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "canStop": {
+            "type": "boolean"
+          },
+          "returnState": {
+            "enum": [
+              "reserved",
+              "waiting",
+              "queued",
+              "delivered",
+              "not_applicable"
+            ]
+          },
+          "parentExchangeId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "rootExchangeId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "blockedReason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "lastStop": {
+            "$ref": "#/components/schemas/BotPeerStopReceipt"
+          },
+          "request": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              }
+            },
+            "required": [
+              "text"
+            ]
+          },
+          "result": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "outcome": {
+                "enum": [
+                  "completed",
+                  "failed",
+                  "cancelled",
+                  "expired"
+                ]
+              },
+              "text": {
+                "type": "string",
+                "minLength": 0,
+                "maxLength": 16384
+              },
+              "truncated": {
+                "type": "boolean"
+              },
+              "createdAt": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "outcome",
+              "text",
+              "truncated",
+              "createdAt"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "pairId",
+          "sender",
+          "recipient",
+          "direction",
+          "kind",
+          "title",
+          "state",
+          "createdAt",
+          "updatedAt",
+          "expiresAt",
+          "canStop",
+          "returnState",
+          "request"
+        ]
+      },
+      "BotPeerExchangeList": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "botId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "exchanges": {
+            "type": "array",
+            "maxItems": 128,
+            "items": {
+              "$ref": "#/components/schemas/BotPeerExchangeSummary"
+            }
+          }
+        },
+        "required": [
+          "botId",
+          "revision",
+          "exchanges"
+        ]
+      },
+      "BotPeerStopMutation": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "botId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "mutationId": {
+            "type": "string",
+            "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$"
+          },
+          "expectedRevision": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "exchangeId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          }
+        },
+        "required": [
+          "botId",
+          "mutationId",
+          "expectedRevision",
+          "exchangeId"
+        ]
+      },
+      "BotPeerStopResult": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "ok": {
+                "const": true
+              },
+              "mutationId": {
+                "type": "string",
+                "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$"
+              },
+              "replayed": {
+                "type": "boolean"
+              },
+              "exchange": {
+                "$ref": "#/components/schemas/BotPeerExchangeDetail"
+              }
+            },
+            "required": [
+              "ok",
+              "mutationId",
+              "replayed",
+              "exchange"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "ok": {
+                "const": false
+              },
+              "code": {
+                "enum": [
+                  "invalid",
+                  "conflict",
+                  "unavailable",
+                  "history_full",
+                  "access_changed",
+                  "not_found"
+                ]
+              },
+              "error": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              },
+              "exchange": {
+                "$ref": "#/components/schemas/BotPeerExchangeDetail"
+              }
+            },
+            "required": [
+              "ok",
+              "code",
+              "error"
+            ]
+          }
+        ]
+      },
+      "BotPeerEvidence": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "exchangeId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "kind": {
+            "enum": [
+              "source",
+              "result"
+            ]
+          },
+          "botId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "submissionId": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,31}$",
+            "maxLength": 32
+          },
+          "entryId": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,31}$",
+            "maxLength": 32
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "text": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 32768
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "exchangeId",
+          "kind",
+          "botId",
+          "submissionId",
+          "entryId",
+          "title",
+          "text",
+          "truncated"
+        ]
+      },
+      "BotPeerSessionEntry": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "type": {
+            "const": "peer"
+          },
+          "exchangeId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "direction": {
+            "enum": [
+              "sent",
+              "received"
+            ]
+          },
+          "peerBotId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "peerName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "messageKind": {
+            "enum": [
+              "request",
+              "question",
+              "status",
+              "fyi",
+              "result"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "final": {
+            "const": true
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "exchangeId",
+          "direction",
+          "peerBotId",
+          "peerName",
+          "messageKind"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "final"
+              ]
+            },
+            "then": {
+              "properties": {
+                "messageKind": {
+                  "const": "result"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "BotAllowedEntry": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "pattern": "^[A-Za-z0-9_-]+$"
+              },
+              "kind": {
+                "const": "rule"
+              },
+              "what": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^(?!\\s*$)[^\\u0000-\\u0008\\u000e-\\u001f\\u007f-\\u009f\\u00ad\\u061c\\u180e\\u200b\\u200e\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2060-\\u2064\\u2066-\\u206f\\ufeff\\ufff9-\\ufffb]+$"
+              },
+              "addedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "uses": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "lastUsedAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "what",
+              "addedAt",
+              "uses"
+            ],
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "uses": {
+                      "const": 0
+                    }
+                  }
+                },
+                "then": {
+                  "not": {
+                    "required": [
+                      "lastUsedAt"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "pattern": "^[A-Za-z0-9_-]+$"
+              },
+              "kind": {
+                "const": "folder"
+              },
+              "what": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^(?!\\s*$)[^\\u0000-\\u0008\\u000e-\\u001f\\u007f-\\u009f\\u00ad\\u061c\\u180e\\u200b\\u200e\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2060-\\u2064\\u2066-\\u206f\\ufeff\\ufff9-\\ufffb]+$"
+              },
+              "addedAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "what",
+              "addedAt"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "BotAllowedList": {
+        "type": "object",
+        "properties": {
+          "botId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          },
+          "entries": {
+            "type": "array",
+            "maxItems": 50,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/BotAllowedEntry"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "pattern": "^cur_[A-Za-z0-9_-]{43}$"
+          }
+        },
+        "required": [
+          "botId",
+          "entries"
+        ],
+        "additionalProperties": false
+      },
       "BotMessagingSettings": {
         "type": "object",
         "required": [
@@ -19437,30 +23770,462 @@
                 ]
               },
               "allOf": [
-                {"if":{"properties":{"max":{"const":1}},"required":["max"]},"then":{"properties":{"used":{"maximum":1}}}},
-                {"if":{"properties":{"max":{"const":2}},"required":["max"]},"then":{"properties":{"used":{"maximum":2}}}},
-                {"if":{"properties":{"max":{"const":3}},"required":["max"]},"then":{"properties":{"used":{"maximum":3}}}},
-                {"if":{"properties":{"max":{"const":4}},"required":["max"]},"then":{"properties":{"used":{"maximum":4}}}},
-                {"if":{"properties":{"max":{"const":5}},"required":["max"]},"then":{"properties":{"used":{"maximum":5}}}},
-                {"if":{"properties":{"max":{"const":6}},"required":["max"]},"then":{"properties":{"used":{"maximum":6}}}},
-                {"if":{"properties":{"max":{"const":7}},"required":["max"]},"then":{"properties":{"used":{"maximum":7}}}},
-                {"if":{"properties":{"max":{"const":8}},"required":["max"]},"then":{"properties":{"used":{"maximum":8}}}},
-                {"if":{"properties":{"max":{"const":9}},"required":["max"]},"then":{"properties":{"used":{"maximum":9}}}},
-                {"if":{"properties":{"max":{"const":10}},"required":["max"]},"then":{"properties":{"used":{"maximum":10}}}},
-                {"if":{"properties":{"max":{"const":11}},"required":["max"]},"then":{"properties":{"used":{"maximum":11}}}},
-                {"if":{"properties":{"max":{"const":12}},"required":["max"]},"then":{"properties":{"used":{"maximum":12}}}},
-                {"if":{"properties":{"max":{"const":13}},"required":["max"]},"then":{"properties":{"used":{"maximum":13}}}},
-                {"if":{"properties":{"max":{"const":14}},"required":["max"]},"then":{"properties":{"used":{"maximum":14}}}},
-                {"if":{"properties":{"max":{"const":15}},"required":["max"]},"then":{"properties":{"used":{"maximum":15}}}},
-                {"if":{"properties":{"max":{"const":16}},"required":["max"]},"then":{"properties":{"used":{"maximum":16}}}},
-                {"if":{"properties":{"max":{"const":17}},"required":["max"]},"then":{"properties":{"used":{"maximum":17}}}},
-                {"if":{"properties":{"max":{"const":18}},"required":["max"]},"then":{"properties":{"used":{"maximum":18}}}},
-                {"if":{"properties":{"max":{"const":19}},"required":["max"]},"then":{"properties":{"used":{"maximum":19}}}},
-                {"if":{"properties":{"max":{"const":20}},"required":["max"]},"then":{"properties":{"used":{"maximum":20}}}},
-                {"if":{"properties":{"max":{"const":21}},"required":["max"]},"then":{"properties":{"used":{"maximum":21}}}},
-                {"if":{"properties":{"max":{"const":22}},"required":["max"]},"then":{"properties":{"used":{"maximum":22}}}},
-                {"if":{"properties":{"max":{"const":23}},"required":["max"]},"then":{"properties":{"used":{"maximum":23}}}},
-                {"if":{"properties":{"max":{"const":24}},"required":["max"]},"then":{"properties":{"used":{"maximum":24}}}}
+                {
+                  "if": {
+                    "properties": {
+                      "max": {
+                        "const": 1
+                      }
+                    },
+                    "required": [
+                      "max"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "used": {
+                        "maximum": 1
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "max": {
+                        "const": 2
+                      }
+                    },
+                    "required": [
+                      "max"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "used": {
+                        "maximum": 2
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "max": {
+                        "const": 3
+                      }
+                    },
+                    "required": [
+                      "max"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "used": {
+                        "maximum": 3
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "max": {
+                        "const": 4
+                      }
+                    },
+                    "required": [
+                      "max"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "used": {
+                        "maximum": 4
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "max": {
+                        "const": 5
+                      }
+                    },
+                    "required": [
+                      "max"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "used": {
+                        "maximum": 5
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "max": {
+                        "const": 6
+                      }
+                    },
+                    "required": [
+                      "max"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "used": {
+                        "maximum": 6
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "max": {
+                        "const": 7
+                      }
+                    },
+                    "required": [
+                      "max"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "used": {
+                        "maximum": 7
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "max": {
+                        "const": 8
+                      }
+                    },
+                    "required": [
+                      "max"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "used": {
+                        "maximum": 8
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "max": {
+                        "const": 9
+                      }
+                    },
+                    "required": [
+                      "max"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "used": {
+                        "maximum": 9
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "max": {
+                        "const": 10
+                      }
+                    },
+                    "required": [
+                      "max"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "used": {
+                        "maximum": 10
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "max": {
+                        "const": 11
+                      }
+                    },
+                    "required": [
+                      "max"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "used": {
+                        "maximum": 11
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "max": {
+                        "const": 12
+                      }
+                    },
+                    "required": [
+                      "max"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "used": {
+                        "maximum": 12
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "max": {
+                        "const": 13
+                      }
+                    },
+                    "required": [
+                      "max"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "used": {
+                        "maximum": 13
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "max": {
+                        "const": 14
+                      }
+                    },
+                    "required": [
+                      "max"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "used": {
+                        "maximum": 14
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "max": {
+                        "const": 15
+                      }
+                    },
+                    "required": [
+                      "max"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "used": {
+                        "maximum": 15
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "max": {
+                        "const": 16
+                      }
+                    },
+                    "required": [
+                      "max"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "used": {
+                        "maximum": 16
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "max": {
+                        "const": 17
+                      }
+                    },
+                    "required": [
+                      "max"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "used": {
+                        "maximum": 17
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "max": {
+                        "const": 18
+                      }
+                    },
+                    "required": [
+                      "max"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "used": {
+                        "maximum": 18
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "max": {
+                        "const": 19
+                      }
+                    },
+                    "required": [
+                      "max"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "used": {
+                        "maximum": 19
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "max": {
+                        "const": 20
+                      }
+                    },
+                    "required": [
+                      "max"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "used": {
+                        "maximum": 20
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "max": {
+                        "const": 21
+                      }
+                    },
+                    "required": [
+                      "max"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "used": {
+                        "maximum": 21
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "max": {
+                        "const": 22
+                      }
+                    },
+                    "required": [
+                      "max"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "used": {
+                        "maximum": 22
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "max": {
+                        "const": 23
+                      }
+                    },
+                    "required": [
+                      "max"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "used": {
+                        "maximum": 23
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "max": {
+                        "const": 24
+                      }
+                    },
+                    "required": [
+                      "max"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "used": {
+                        "maximum": 24
+                      }
+                    }
+                  }
+                }
               ]
             }
           },

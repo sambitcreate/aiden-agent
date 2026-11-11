@@ -7,7 +7,8 @@
  * directly, so every path is confined to the generation's workspace roots.
  * Unlike T3, the workspace permission is enforced here too: a read-only
  * generation refuses writes even when the agent's native mode would allow
- * them. Reads keep Aiden's `.env` exclusion, and all I/O goes through a
+ * them. Reads keep Aiden's `.env` exclusion, writes refuse hook and agent
+ * settings files (`protected-agent-config-paths.ts`), and all I/O goes through a
  * descriptor whose identity and location are re-verified before any byte is
  * read or written, so a symlink swapped in after validation is refused.
  */
@@ -21,6 +22,10 @@ import {
   createConfinedWorkspaceFile,
   ManagedWorktreeFileIoError,
 } from "../managed-worktree-file-io.js";
+import {
+  isProtectedAgentConfigPath,
+  PROTECTED_AGENT_CONFIG_WRITE_MESSAGE,
+} from "../protected-agent-config-paths.js";
 import { AcpHarnessError } from "./errors.js";
 
 export const MAX_CLIENT_READ_BYTES = 8 * 1024 * 1024;
@@ -334,6 +339,13 @@ export async function readClientTextFile(
   return { content: lines.slice(start, end).join("\n") };
 }
 
+/** Hook and agent-harness settings run commands, so the agent never writes them. */
+function rejectProtectedAgentConfig(...candidates: string[]): void {
+  if (candidates.some(isProtectedAgentConfigPath)) {
+    throw new AcpHarnessError("invalid_input", PROTECTED_AGENT_CONFIG_WRITE_MESSAGE);
+  }
+}
+
 export async function writeClientTextFile(
   params: WriteTextFileParams,
   policy: AcpClientFilePolicy,
@@ -348,6 +360,7 @@ export async function writeClientTextFile(
     throw new AcpHarnessError("invalid_input", "The file is too large to write (8 MiB limit).");
   }
   const target = await resolveConfinedPath(params.path, policy.roots);
+  rejectProtectedAgentConfig(params.path, target);
   let handle: FileHandle;
   try {
     handle = await open(target, fsConstants.O_RDWR | NO_FOLLOW);
@@ -368,6 +381,7 @@ export async function writeClientTextFile(
     const info = await handle.stat();
     if (!info.isFile()) throw new AcpHarnessError("invalid_input", "The path is not a file.");
     const verified = await assertStillConfined(params.path, policy.roots, info);
+    rejectProtectedAgentConfig(verified);
     if (info.size <= MAX_CLIENT_READ_BYTES) before = await handle.readFile("utf8");
     // Recheck right before the write: permission can change mid-turn.
     if (!policy.canWrite()) {

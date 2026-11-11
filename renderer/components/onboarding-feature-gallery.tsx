@@ -15,6 +15,7 @@ import {
   Globe2,
   LayoutDashboard,
   Lightbulb,
+  ListTodo,
   MessageSquare,
   Mic2,
   Monitor,
@@ -110,6 +111,15 @@ export const onboardingFeatures: OnboardingFeature[] = [
     description:
       "Ask for a page you'll come back to, like your open pull requests or a release checklist. Aiden keeps it in an Artifacts tab beside the chat, refreshes it from your workspace under its access setting, and its buttons can ask Aiden or run commands you approve.",
     icon: LayoutDashboard,
+    size: "standard",
+  },
+  {
+    id: "designMode",
+    group: "create",
+    title: "Design Mode",
+    description:
+      "Turn a chat into a design canvas with the Design button or /design. Aiden places live pages beside your notes and sketches. Comment on any element, edit words in place, and send your comments back as precise edits.",
+    icon: Palette,
     size: "standard",
   },
   {
@@ -228,7 +238,7 @@ export const onboardingFeatures: OnboardingFeature[] = [
     group: "control",
     title: "Aiden Live",
     description:
-      "Talk to Aiden, share screen context, and approve each app action one at a time from the Live button.",
+      "Talk to Aiden from a floating ribbon above your chat, pick its voice and speed, approve each app action, and say goodbye when you’re done. Live can move through Aiden's screens, read and send to the open chat, and take allow or deny out loud for approvals; you can turn each off in Settings.",
     icon: AudioWaveform,
     size: "hero",
   },
@@ -246,8 +256,40 @@ export const onboardingFeatures: OnboardingFeature[] = [
     group: "control",
     title: "Bot computers",
     description:
-      "Give a Bot its own macOS virtual machine, apart from your Mac. Watch it work in the Bot's Computer tab and take over anytime. Set it up in Settings → Bot computers; nothing downloads until you choose Set up.",
+      "Give a Bot its own macOS virtual machine, apart from your Mac. Watch it work in the Bot's Computer tab and take over anytime. Set it up in Settings → Computers & VMs → Bot computers; nothing downloads until you choose Set up.",
     icon: Monitor,
+    size: "standard",
+  },
+  {
+    id: "botWatches",
+    group: "control",
+    title: "Connected-app watches",
+    description: "Watch upcoming Calendar events on Mac or Linux, or a Mail mailbox on Mac. Choose the connected source in a Bot’s Profile, preview its matching metadata, and tell the Bot what to do. Checks continue while Aiden is running and the computer is awake. Manage them from desktop or a paired phone.",
+    icon: CalendarClock,
+    size: "standard",
+  },
+  {
+    id: "botOpenWork",
+    group: "control",
+    title: "Open work",
+    description: "Bots keep track of tasks they accept. See what is open or waiting, edit a note, mark work done, dismiss it or undo a change from desktop or a paired phone.",
+    icon: ListTodo,
+    size: "standard",
+  },
+  {
+    id: "botRoutineModels",
+    group: "control",
+    title: "Models for each routine",
+    description: "Choose a model, thinking level and optional fallback for each Bot routine. Each accepted run keeps its choice, including after a restart. Manage these choices from desktop or a paired phone.",
+    icon: Blocks,
+    size: "standard",
+  },
+  {
+    id: "botPeers",
+    group: "control",
+    title: "Bot messaging",
+    description: "Approve named Bot pairs to exchange requests. Each Bot keeps its own rules and access. Inspect exchanges and ask the host to stop linked work from desktop or a paired phone.",
+    icon: UsersRound,
     size: "standard",
   },
   {
@@ -264,7 +306,7 @@ export const onboardingFeatures: OnboardingFeature[] = [
     group: "control",
     title: "Voice & Dictation",
     description:
-      "Speak in the composer or dictate system-wide. Tap, hold, or both, and teach Aiden your names and terms in Voice settings. On-device models keep audio on this computer, and on Apple silicon your words appear as you speak. Or explicitly connect cloud transcription and review what it can access.",
+      "Speak in the composer or dictate system-wide. Tap, hold, or both, and teach Aiden your names and terms in Voice & Speech settings. On-device models keep audio on this computer, and on Apple silicon your words appear as you speak. Or explicitly connect cloud transcription and review what it can access.",
     icon: Mic2,
     size: "standard",
   },

@@ -31,7 +31,9 @@ Every field comes back with one of three statuses:
 | `uncertain` | A guess: low confidence, the wrong type, or not on the page | `{ status, guess, confidence?, sourceLine?, notFound? }` |
 | `null` | The page has no value | `{ status: "null", value: null }` |
 
-A value counts as found only when it appears in the page text (numbers, dates and words are matched the way people write them, so `$1,399` matches `1399`). A duration counts only when the page writes it with a unit that converts exactly to the one asked for ("2 weeks" is 14 days, but years never become days), and one written in parts, like "1 hour 30 minutes", counts only as its total. A date and time counts only when the date, the time and the whole UTC offset are on the same line, so "UTC+9:30" never matches +09:00. A value the page doesn't contain is always `uncertain` with `notFound: true`, never `extracted`, however confident the model was. An uncertain value is a `guess`, never a `value`, so code can't mistake one for the other.
+A value counts as found only when it appears in the page text (numbers, dates and words are matched the way people write them, so `$1,399` matches `1399`). A scale is part of the number: `1.2k` supports `1200`, never `1.2`. A duration counts only when the page writes it with a unit that converts exactly to the one asked for ("2 weeks" is 14 days, but years never become days), and one written in parts, like "1 hour 30 minutes", counts only as its total. A date and time counts only when the date, the time and the whole UTC offset are on the same line, so "UTC+9:30" never matches +09:00. A value the page doesn't contain is always `uncertain` with `notFound: true`, never `extracted`, however confident the model was. An uncertain value is a `guess`, never a `value`, so code can't mistake one for the other.
+
+Citations keep the full supporting span. Text split across lines is flattened into one quote, and separate list-item spans may be joined with `…`. Every list item, and every date/time/offset part of a datetime, must fit in the 200-character quote, counted as Unicode code points rather than UTF-16 units. If the complete support cannot fit, the field is an uncertain guess with no citation; it is not marked `notFound` when the value exists on the page.
 
 If extraction fails (setup, a rejected key, quota, a timeout, the service being down, or an answer Aiden can't read), the tool says why and returns the page text instead, so the agent can still answer.
 
@@ -51,9 +53,10 @@ The structured result is `{ url, title, mode: "read", text, truncated }` for a r
 
 Extract mode runs Cloudflare Workers AI's Clairic model (`@cf/cloudflare/clairic`) on your own Cloudflare account.
 
-1. Find your 32-character account ID on the Cloudflare dashboard and save it in **Cloudflare account ID**.
-2. Create a Workers AI API token and add it to the key list below it. This is the same write-only key pool Web Search uses: you can add several keys, and a key that is rejected or rate-limited cools down while the next one is tried.
-3. Turn on **Extract only the values asked for**.
+1. In Settings → Web Search → Web pages, choose **Set up Cloudflare…**. The form stays open once anything is saved.
+2. Find your 32-character account ID on the Cloudflare dashboard and save it in **Cloudflare account ID**.
+3. Create a Workers AI API token and add it to the key list below it. This is the same write-only key pool Web Search uses: you can add several keys, and a key that is rejected or rate-limited cools down while the next one is tried.
+4. Turn on **Extract only the values asked for**.
 
 The model is pluggable. Adding one means a definition in `renderer/shared/web-fetch-settings.ts` and an adapter in `main/services/web-extract-models.ts`; the tool and the page checks don't change.
 

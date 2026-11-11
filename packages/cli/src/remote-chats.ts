@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { rm } from "node:fs/promises";
 import { analyticsWorkspaceKind } from "../../../main/services/analytics/analytics-ids.js";
 import { createChatApplicationService } from "../../../main/services/chat-application-service.js";
+import { endWorkspaceChatSession } from "../../../main/services/workspace-chat-hooks.js";
 import { AidenRemoteChatService } from "../../../main/services/aiden-remote-chats.js";
 import { AidenRemoteModelService } from "../../../main/services/aiden-remote-models.js";
 import { AidenRemoteStreamService, removeRevokedDeviceStreams } from "../../../main/services/aiden-remote-streams.js";
@@ -22,13 +23,8 @@ import { liveRunAttention } from "../../../main/services/chat-pending-attention.
 export async function createCliRemoteChats(agentDir: string, daemon: ReturnType<typeof createDaemonChats>, workspace: ReturnType<typeof createCliWorkspaceApplication>, state: AidenRemoteStateRegistry,
   idempotency: AidenIdempotencyLedger, persistIdempotency: (value: AidenIdempotencySnapshot) => Promise<void>, bots: Awaited<ReturnType<typeof createCliBots>>) {
   const deleting = new JsonStore<string[]>(join(agentDir, "daemon-chat-deletions.json"), []);
-  // A journal deletion is a durable roll-forward checkpoint, including after a crash.
-  for (const id of await deleting.load()) {
-    await deleteCliBotSubagentHistory(agentDir, id);
-    await rm(daemon.sessionPath(id), { force: true });
-    if (await daemon.chatStore.get(id)) await daemon.chatStore.remove(id);
-    await deleting.update((values) => { values.splice(values.indexOf(id), 1); });
-  }
+  // Remote must not serve a chat whose deletion could not finish.
+  await daemon.recoverChatDeletions();
   const privateHistory = {
     async deleteChat(id: string) { await deleting.update((values) => { if (!values.includes(id)) values.push(id); }); await deleteCliBotSubagentHistory(agentDir, id); },
     async completeChatDeletion(id: string) { await deleting.update((values) => { const index = values.indexOf(id); if (index >= 0) values.splice(index, 1); }); },
@@ -58,6 +54,12 @@ export async function createCliRemoteChats(agentDir: string, daemon: ReturnType<
     },
     displayImageArtifactStore: artifacts, generativeUiArtifactStore: artifacts,
     subagentRunStore: privateHistory,
+    // SessionEnd for a deleted chat whose hooks ran in this daemon, as on the desktop; never awaited.
+    forgetDeletedChat: async (id) => {
+      endWorkspaceChatSession(id, undefined, {
+        onMessages: (lines) => { for (const line of lines) process.stderr.write(`aiden: hook: ${line}\n`); },
+      });
+    },
     piRuntimeEffectStore: { deleteChat: async (id) => { await rm(daemon.sessionPath(id), { force: true }); } },
     piCompactionSessionStore: { deleteChat: async () => {} }, // Compaction checkpoints are in that same pi journal.
     workspaceMutationGate: workspace.mutationGate, workspaceOperationRegistry: workspace.operationRegistry,

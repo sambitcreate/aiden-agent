@@ -9,7 +9,7 @@ Built on [pi](https://github.com/earendil-works/pi) (`@earendil-works/pi-coding-
 ## Requirements
 
 - macOS or Linux (x64 or arm64).
-- Node.js 22.19 or newer. Keep Node on the newest release of its line: the server's network calls run on the installed Node, and the October 21, 2026 Node.js security release (22.23.4, 24.22.1, 26.12.1) fixed a Brotli decoder flaw and HTTPS hostname-check bypasses that any older Node still has.
+- Node.js 22.22 or newer. Keep Node on the newest release of its line: the server's network calls run on the installed Node, and the October 21, 2026 Node.js security release (22.23.4, 24.22.1, 26.12.1) fixed a Brotli decoder flaw and HTTPS hostname-check bypasses that any older Node still has.
 - `openssl` on the `PATH`: the first `aiden serve` uses it to create the server's TLS identity for paired devices.
 - `git`, and for Tailscale pairing the Tailscale CLI on the host.
 
@@ -47,7 +47,7 @@ Every setup step is a short command you run once over SSH.
 aiden serve
 ```
 
-`aiden serve` starts the server in the foreground: the scheduler, configured Telegram polling, Bots and Remote, the authenticated HTTPS/SSE API that phones and Macs use (port 49320 by default). Remote is on by default; `aiden serve --no-remote` runs without it (`--remote` is still accepted).
+`aiden serve` starts the server in the foreground: the scheduler, configured Telegram polling, Bots and Remote, the authenticated HTTPS/SSE API that phones and Macs use (port 49320 by default). Remote is on by default; `aiden serve --no-remote` runs without it (`--remote` is still accepted). Either way, the server finishes any chat deletion a crash interrupted, and that chat takes no turns until it has.
 
 When `aiden serve` runs in the foreground in an interactive terminal, it prints a pairing QR code and manual code at startup, so you can scan it from the phone app right away. It pairs over the local network by default (over Tailscale when the server is set to Tailscale only, `remote mode tailscale`); `--pair tailscale` pairs over Tailscale instead, and `--no-pair` skips the code. No code is printed under `--daemon` or when output is not a terminal (a log, a pipe, a service manager), because the code is a single-use secret.
 
@@ -62,7 +62,7 @@ When `aiden serve` runs in the foreground in an interactive terminal, it prints 
 | `aiden remote devices`, `remote revoke <id>` | List or revoke paired devices. Revoking a device closes its open Bot session streams before the command returns. |
 | `aiden remote roots`, `remote approve-root <path>` | Folders that paired devices may open |
 
-**Stopping.** Once shutdown starts, the server takes no new connections, requests or chat turns, cancels running ones and drains. `aiden serve stop` force-kills a server still running 15 seconds after SIGTERM, after checking the PID is still that server: a `--daemon` server together with its process group (its Remote advertiser), a foreground `aiden serve` on its own so the rest of its shell job (`aiden serve | tee`) survives. Either way, its stdio MCP servers (each in a process group of its own, recorded in the lease directory) are killed too, but only groups that still contain a process the server started. A foreground server logs a stray unhandled rejection instead of exiting. Aiden commands exit 0 quietly when their reader closes early (`aiden schedule list | head -1`).
+**Stopping.** Once shutdown starts, the server takes no new connections, requests or chat turns, cancels running ones and drains. Control commands it already accepted finish and get their reply first. A stop during startup ends startup at the next step. `aiden serve stop` force-kills a server still running 15 seconds after SIGTERM, after checking the PID is still that server: a `--daemon` server together with its process group (its Remote advertiser), a foreground `aiden serve` on its own so the rest of its shell job (`aiden serve | tee`) survives. Either way, its stdio MCP servers (each in a process group of its own, recorded in the lease directory) are killed too, but only groups that still contain a process the server started. A foreground server logs a stray unhandled rejection instead of exiting. Aiden commands exit 0 quietly when their reader closes early (`aiden schedule list | head -1`).
 
 `remote` and `bots` commands talk to the running server over its control socket and fail if it is not running. `schedule` and `workspace` commands also work without the server, through a one-shot lease. `telegram status` works anytime; `telegram connect|configure|disable|disconnect` take the server's lease, so stop `aiden serve` before changing Telegram configuration.
 
@@ -113,6 +113,7 @@ Phones and Macs paired with the server see its workspaces, chats, Bots, schedule
 - **Joining a running chat.** Revision 58 clients can request a bounded snapshot of the server’s public reply, reasoning and activity when they attach or reconnect. Saved messages are available through the usual chat history.
 - **Phones and other runs.** A paired phone can watch, stop and answer approvals on a run another device started (`phone-run-control-v1`), shares read markers and unread state with paired desktops, and marks chats Done or snoozes them from its Inbox (`chat-triage-v1`, under the `chat:write` it was paired with). It doesn't read the host feed, and it offers no Steer on a run it didn't start.
 - **Project transfer.** The server does not advertise the desktop's `workspace-clone-v1` project transfer (Add this project to another machine); its Remote API keeps the existing workspace creation modes.
+- **Connector-watch management.** The optional `bot:watches` surface belongs to the Electron desktop on Mac and Linux. This server does not wire or advertise it; ordinary Composio MCP tools keep their existing CLI behavior.
 - **Scheduled-run notifications.** Run completions show up through `aiden schedule runs <id>`, `aiden schedule notifications` and, for tasks with `notify`, local notifications on paired phones via the Remote `scheduled-tasks/notifications` feed.
 
 ## Bots
@@ -135,7 +136,20 @@ CLI Bots also omit `propose_plan` and `plan_step`. The CLI supplies no plan cove
 
 Server chats have no schedule tool, so the model can't create or change schedules. Manage them with the `aiden schedule` commands or from a paired app.
 
+## Hooks
+
+Hooks run your own shell commands at points in an agent's work, in the Claude Code format; see [docs/hooks.md](../../docs/hooks.md). The server runs them on macOS and Linux, from its own store in `<agent dir>/hooks/` plus each registered workspace's `.aiden/hooks.json`. It does not share the desktop's store.
+
+- `aiden hooks list` shows every hook with its scope, status, command and digest, and lists `envAllow` names only. `hooks approve <id> <digest>` approves a workspace hook, which never runs until approved and needs approving again after its file, or a script file in the workspace that its command runs, changes. The digest is the one `hooks list` printed, so the approval covers exactly what you read. `hooks disable|enable <id>`, `hooks pause|resume` and `hooks test <id> <digest>` (a fixture run that leaves health and the run log alone, refused when the hook no longer matches the digest or while hooks are paused or off) do the rest. `approve`, `enable`, `resume` and `test` must be run by a person at a terminal: they refuse unless stdin and stdout are both a TTY. That check stops a casual agent shell command, but it is not a security boundary: a process running as your user can still reach the server's socket or write `hooks-trust.json` directly. The commands go through the running server, or open the store directly when none runs.
+- There is no command to add a hook. Add it to the workspace's `.aiden/hooks.json` by hand, then approve it, or use the desktop's Settings → Hooks for the desktop's own store.
+- Workspace chats, from phones, Telegram and scheduled tasks, run PreToolUse, PostToolUse, UserPromptSubmit, SessionStart, Stop (at most 8 continuations), PreCompact and SessionEnd (when a chat is deleted). Hooks run after Aiden's own access rules, so they can only tighten them. On a Telegram or scheduled turn a hook that asks for approval blocks the tool, and `updatedInput` is never applied. Hooks match the desktop tool names (`Bash`, `Write`, `Edit`, `Read` and their Aiden spellings).
+- A message a UserPromptSubmit hook refuses (a block or `continue: false`) ends that turn with a `chat:error`, stays in the transcript with a stored blocked mark (phones and paired Macs show the message without the mark for now), and never reaches the model later, including in forks. `continue: false` from PreToolUse or PostToolUse ends the turn after that tool. PreToolUse `additionalContext` joins the tool's result ahead of PostToolUse context. `systemMessage` text and hook notices go to clients as `chat:status` events with `phase: "hook_messages"`, never to the model; Bot hook messages go to stderr.
+- Bots run their global and Bot hooks (PreToolUse, PostToolUse, Stop, SessionStart, PreCompact) in the Bot's folder. Routines fire RoutineRun and RoutineFailed, Bot subagents fire SubagentStop, and a new managed worktree fires WorktreeSetup in the new checkout, using the source workspace's hooks.
+- File tools cannot write `.aiden/hooks.json`, `.claude/settings.json`, Codex hook files or the hooks store, even with Full access. `AIDEN_HOOKS=0` turns every hook off.
+
 ## MCP connectors
+
+The built-in Composio consumer connection exposes one `composio` tool and one service allowance. Manage its enabled apps/tools in Composio; each call validates the current operation schema while Aiden's action approvals and Bot rules still apply. Old partial Custom grants and individual hidden-operation exclusions require the person's single Composio allowance before broader service access. Credential or endpoint changes still invalidate old calls. See [Composio access](../../docs/composio.md).
 
 The desktop's per-workspace skill and connector switches (Workspace settings) are not read by the server yet; it uses every skill and connector it has.
 
@@ -168,11 +182,13 @@ The desktop's per-workspace skill and connector switches (Workspace settings) ar
 | `web-search show\|import <settings.json>` | Web Search provider routing; keys from environment variables |
 | `schedule list\|save\|preview\|status\|runs\|notifications\|run\|pause\|resume\|remove` | Scheduled tasks |
 | `bots …`, `bots enable-durable` | Bot administration (server must be running) |
+| `hooks list\|approve <id> <digest>\|disable <id>\|enable <id>\|pause\|resume\|test <id> <digest>` | Hooks: list, approve, switch off or test (macOS and Linux) |
 | `telegram status\|connect\|configure <file>\|disable\|disconnect` | Telegram bridge |
 | `speech status\|download\|select\|delete <id>\|transcribe <pcm16-file> <model-id>` | On-device transcription models used by Remote dictation |
 | `search <query>`, `import <file>`, `export <session.jsonl> [output]` | Find, import and export conversations |
 | `files list\|read`, `git status\|review\|branches\|worktrees`, `worktree list\|create\|remove` | Workspace files, Git and managed worktrees |
 | `app help [query]\|status\|get <topic>\|set <control> <value> <revision> [operation-id]` | Product help; shows Memory, Web Search and Skills settings and changes Memory and Web Search (Skills are read-only on the server) |
+| `telemetry status\|on\|off` | Anonymous usage and crash data; see Privacy |
 | `help`, `--version` | Command list and version |
 
 Notes:
@@ -190,7 +206,7 @@ Notes:
 
 | Path | Contents |
 | --- | --- |
-| `~/.aiden/agent/` | Server state: `settings.json`, `auth.json`, `aiden.json` (device-local feature settings), `aiden-mcp.json`, `web-search.json`, `remote.json` (Remote identity and paired devices), `chat-read-markers.json` and `chat-triage.json` (Inbox read state and Pin, Done and Snooze), `schedules.json`, `sessions/`, `bots/`, `bot-service/`, `artifacts/`, `credentials/`, `serve.log` and the private control socket |
+| `~/.aiden/agent/` | Server state: `settings.json`, `auth.json`, `aiden.json` (device-local feature settings), `aiden-mcp.json`, `web-search.json`, `remote.json` (Remote identity and paired devices), `chat-read-markers.json` and `chat-triage.json` (Inbox read state and Pin, Done and Snooze), `schedules.json`, `hooks/` (hooks, approvals and run log), `sessions/`, `bots/`, `bot-service/`, `artifacts/`, `credentials/`, `serve.log` and the private control socket |
 | `~/.aiden/` | Shared Aiden home (the desktop's portable `config.json`, `skills/`, `scripts/`; `memory/` is the shared desktop and server memory store, `ws-<folder-hash>` scopes) |
 | `AIDEN_CODING_AGENT_DIR` | Environment override for the agent directory (mirrors Pi's `PI_CODING_AGENT_DIR`; use it for tests and for running more than one server) |
 
@@ -199,7 +215,7 @@ New Memory databases support bounded incremental space reclamation on open and c
 ## Privacy and network
 
 - **No telemetry.** The server ships without Pi telemetry, enforced three ways: the entry forces `PI_TELEMETRY=0` (which gates both the pi.dev `report-install` ping and Pi's attribution headers, and overrides settings), the settings default is off, and the build patches the ping's call sites and endpoint out of the bundle, asserted by `tests/bundle.test.mjs`. The shared desktop runtime and durable Bots, which don't read that switch, set their own request identity with no attribution (`main/services/pi-client-identity.ts`). The entry also turns off pi.dev's version feed (`PI_SKIP_VERSION_CHECK=1`, overridable), because this package versions independently.
-- **No Aiden usage data.** The desktop app's opt-out usage data ([`docs/analytics.md`](../../docs/analytics.md)) does not apply to the server yet; when the server adopts it, it will follow the same event list, `DO_NOT_TRACK=1` and `AIDEN_ANALYTICS=0`.
+- **Aiden usage data.** A server built from a clone or the Docker image has no project key and sends nothing. Only the `aiden serve` process of a distribution build (`npm run cli:dist`) can send the anonymous usage and crash data in [`docs/analytics.md`](../../docs/analytics.md); admin commands send nothing, apart from the one final event of `aiden telemetry off`. It sends only after its one-time notice, shown at `aiden service install` or the first `aiden serve` on a terminal; a server that never showed the notice stays silent. `aiden telemetry status|on|off` is the switch (`off` also stops a running server; a server picks up `on` at its next start). `DO_NOT_TRACK=1` and `AIDEN_ANALYTICS=0` turn it off for that process, and a service does not inherit them from your shell, so use `aiden telemetry off` there. With `CI` set nothing is ever sent. State lives in `<agentDir>/aiden-analytics.json`, not Pi's `settings.json`.
 - **Manual-only catalogs.** models.dev, Artificial Analysis and OpenRouter benchmark data are fetched only by the explicit `aiden catalog models-dev fetch` and `aiden insights aa|openrouter fetch` commands, never on startup or in the background, and the fetched data is display-only. Speech models download only with `aiden speech download`.
 - **Remote.** Paired devices authenticate to the server's own TLS identity. Tailscale is used only after you choose it for pairing.
 
@@ -239,3 +255,9 @@ packages/cli/
 From this directory, after the root install: `npm install && npm run build`. `npm test` builds nothing; run `npm run build` first, because the tests exercise the built bundle. From the repository root, `npm run test:cli` installs, builds and tests in one step.
 
 History: the CLI started as a rebranded Pi terminal app ([`docs/plans/aiden-cli-plan.md`](../../docs/plans/aiden-cli-plan.md), [parity checklist](../../docs/plans/aiden-cli-parity-checklist.md)) and became serve-only on 2026-10-30 ([`docs/plans/aiden-serve-only-cli.md`](../../docs/plans/aiden-serve-only-cli.md)).
+
+The optional Open work management API is currently wired by the Electron desktop host, not `aiden serve`. The CLI does not advertise `bot:open-work`; paired clients keep that management surface unavailable for this host. The shared runtime’s request-scoped Stop and evidence helpers remain portable. See [Open work](../../docs/bot-open-work.md).
+
+Routine-model management (`bot:routine-models`) and Bot peers (`bot:peers`) also require the Electron host. The CLI retains its current routine model defaults and does not install pair authority, the peer delivery actor or `message_peer`. See [CLI durable Bots](../../docs/cli-durable-bots.md).
+
+The per-routine model/thinking/fallback API (`bot:routine-models`) and its protected execution grants are likewise desktop-host features. `aiden serve` retains its existing Bot model defaults and does not advertise those optional management routes or the desktop’s unconfirmed-cost Resume controls. See [routine models](../../docs/bot-routine-models.md).

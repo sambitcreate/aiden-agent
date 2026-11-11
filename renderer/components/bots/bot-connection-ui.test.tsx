@@ -9,6 +9,7 @@ import {
   type BotConnectionSuggestion,
   type ConnectCardEntry,
 } from "../../shared/bot-connections";
+import { LiveGuard } from "../live-guard";
 import { ConnectCard } from "./connect-card";
 import { ConnectionChips } from "./connection-chips";
 
@@ -22,6 +23,8 @@ function hostElements(node: React.ReactNode): AnyElement[] {
   if (!React.isValidElement(node)) return [];
   const element = node as AnyElement;
   const type = element.type as unknown;
+  // The Live guard only passes a context down; its children are the card.
+  if (type === LiveGuard) return hostElements(element.props.children as React.ReactNode);
   if (typeof type === "function") {
     return hostElements((type as (props: unknown) => React.ReactNode)(element.props));
   }

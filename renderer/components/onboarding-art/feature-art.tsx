@@ -2,9 +2,14 @@ import type * as React from "react";
 import type { BotAvatarColor } from "../../shared/bots";
 import type { KeyboardPlatform } from "../../shared/keybindings";
 import type { ArtProps } from "./art-kit";
+import { BotWatchesArt } from "./bot-watches-art";
+import { BotOpenWorkArt } from "./bot-open-work-art";
+import { BotRoutineModelsArt } from "./bot-routine-models-art";
+import { BotPeersArt } from "./bot-peers-art";
 import {
   BrowserArt,
   ComputerUseArt,
+  DesignModeArt,
   FilesEditorArt,
   GitWorkflowsArt,
   InlineVisualsArt,
@@ -60,6 +65,7 @@ export const FEATURE_ART = {
   browser: { tint: "peach", Art: BrowserArt },
   inlineVisuals: { tint: "rose", Art: InlineVisualsArt },
   workspaceArtifacts: { tint: "lilac", Art: WorkspaceArtifactsArt },
+  designMode: { tint: "mint", Art: DesignModeArt },
   filesEditor: { tint: "sun", Art: FilesEditorArt },
   reviewDiffs: { tint: "aqua", Art: ReviewDiffsArt },
   terminal: { tint: "periwinkle", Art: TerminalArt },
@@ -75,6 +81,10 @@ export const FEATURE_ART = {
   mcp: { tint: "mint", Art: McpConnectorsArt },
   geminiLive: { tint: "lilac", Art: AidenLiveArt },
   bots: { tint: "peach", Art: BotsArt },
+  botWatches: { tint: "rose", Art: BotWatchesArt },
+  botOpenWork: { tint: "lilac", Art: BotOpenWorkArt },
+  botRoutineModels: { tint: "sun", Art: BotRoutineModelsArt },
+  botPeers: { tint: "aqua", Art: BotPeersArt },
   botComputers: { tint: "aqua", Art: BotComputersArt },
   schedules: { tint: "mint", Art: ScheduledAutomationsArt },
   voice: { tint: "coral", Art: VoiceDictationArt },

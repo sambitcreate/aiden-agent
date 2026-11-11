@@ -12,6 +12,13 @@ import org.junit.Test
 class AidenNavigationStackTest {
     private val root = AidenNavigationStack.Root
 
+    @Test fun routineModelProfileRouteRestoresAndReturnsToItsProfile() {
+        val original=root.push(AidenScreen.BotProfile("bot-model")).push(AidenScreen.BotRoutineModels("bot-model"))
+        val restored=AidenNavigationStack.decode(original.encode())
+        assertEquals(AidenScreen.BotRoutineModels("bot-model"),restored.current)
+        assertEquals(AidenScreen.BotProfile("bot-model"),restored.pop()!!.current)
+    }
+
     @Test
     fun backReturnsToTheScreenThatOpenedTheCurrentOne() {
         val stack = root
@@ -127,6 +134,25 @@ class AidenNavigationStackTest {
     }
 
     @Test
+    fun aBotsWatchesPageSurvivesRestoreAndReturnsToItsProfile() {
+        val stack = root.push(AidenScreen.BotProfile("bot-1")).push(AidenScreen.BotWatches("bot-1"))
+        val saved = with(AidenNavigationStack.Saver) { SaverScope { true }.save(stack) }!!
+        val restored = AidenNavigationStack.Saver.restore(saved)!!
+        assertEquals(stack, restored)
+        assertEquals(AidenScreen.BotProfile("bot-1"), restored.pop()!!.current)
+        assertEquals("bot-watches|bot-1", restored.current.stateKey)
+    }
+
+    @Test
+    fun openWorkSurvivesSavedNavigationAndReturnsToTheOwningProfile() {
+        val stack=root.push(AidenScreen.BotProfile("bot-1")).push(AidenScreen.BotOpenWork("bot-1"))
+        val saved=with(AidenNavigationStack.Saver){SaverScope{true}.save(stack)}!!
+        val restored=AidenNavigationStack.Saver.restore(saved)!!
+        assertEquals(stack,restored)
+        assertEquals(AidenScreen.BotProfile("bot-1"),restored.pop()!!.current)
+    }
+
+    @Test
     fun unknownSettingsPagesAreDroppedOnRestore() {
         val restored = AidenNavigationStack.decode(listOf("settings", "settings|retired-page", "settings|voice"))
         assertEquals(root.push(AidenScreen.Settings()).push(AidenScreen.Settings(AidenSettingsPage.VOICE)), restored)
@@ -197,4 +223,11 @@ class AidenNavigationStackTest {
         assertEquals(predictiveBackSeekFraction(1f), predictiveBackSeekFraction(3f), 0f)
         assertTrue(predictiveBackSeekFraction(0.25f) < predictiveBackSeekFraction(0.75f))
     }
+    @Test fun peerProfileAndExchangeDestinationsRestoreTheirExactScopedOwner() {
+        val stack=AidenNavigationStack.Root.push(AidenScreen.BotProfile("bot_one")).push(AidenScreen.BotPeers("bot_one","exchange:one"))
+        val restored=AidenNavigationStack.decode(stack.encode())
+        assertEquals(AidenScreen.BotPeers("bot_one","exchange:one"),restored.current)
+        assertEquals(AidenScreen.BotProfile("bot_one"),restored.pop()!!.current)
+    }
+
 }

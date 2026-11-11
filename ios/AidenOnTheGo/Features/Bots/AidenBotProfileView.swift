@@ -396,6 +396,78 @@ struct AidenBotProfileView: View {
                     .padding(.top, 8)
                 }
 
+                if coordinator.botServer(on: machine)?.supportsBotOpenWork == true {
+                    NavigationLink {
+                        AidenBotOpenWorkView(coordinator: coordinator, machine: machine, botID: detail.id)
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "checklist").foregroundStyle(palette.secondary).accessibilityHidden(true)
+                            Text("Open work").foregroundStyle(palette.foreground)
+                            Spacer()
+                            Image(systemName: "chevron.right").font(.footnote.weight(.semibold))
+                                .foregroundStyle(palette.secondary).accessibilityHidden(true)
+                        }
+                        .padding(16)
+                        .background(palette.raised, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .accessibilityElement(children: .combine)
+                    }
+                    .buttonStyle(.plain).padding(.top, 8)
+                }
+
+                if coordinator.botServer(on: machine)?.supportsBotPeers == true {
+                    NavigationLink {
+                        AidenBotPeersView(coordinator: coordinator, machine: machine, botID: detail.id, botName: detail.name)
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "bubble.left.and.bubble.right").foregroundStyle(palette.secondary).accessibilityHidden(true)
+                            Text("Bot peers").foregroundStyle(palette.foreground)
+                            Spacer()
+                            Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(palette.secondary).accessibilityHidden(true)
+                        }
+                        .padding(16)
+                        .background(palette.raised, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .accessibilityElement(children: .combine)
+                    }.buttonStyle(.plain).padding(.top, 8)
+                }
+
+                if coordinator.botServer(on: machine)?.supportsBotRoutineModels == true {
+                    NavigationLink {
+                        AidenBotRoutineModelDirectoryView(coordinator: coordinator, machine: machine, botID: detail.id)
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "slider.horizontal.3").foregroundStyle(palette.secondary).accessibilityHidden(true)
+                            Text("Routine models").foregroundStyle(palette.foreground)
+                            Spacer()
+                            Image(systemName: "chevron.right").font(.footnote.weight(.semibold))
+                                .foregroundStyle(palette.secondary).accessibilityHidden(true)
+                        }
+                        .padding(16)
+                        .background(palette.raised, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .accessibilityElement(children: .combine)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 8)
+                }
+
+                if coordinator.botServer(on: machine)?.supportsBotWatches == true {
+                    NavigationLink {
+                        AidenBotWatchesView(coordinator: coordinator, machine: machine, botID: detail.id)
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "bell.badge").foregroundStyle(palette.secondary).accessibilityHidden(true)
+                            Text("Watches").foregroundStyle(palette.foreground)
+                            Spacer()
+                            Image(systemName: "chevron.right").font(.footnote.weight(.semibold))
+                                .foregroundStyle(palette.secondary).accessibilityHidden(true)
+                        }
+                        .padding(16)
+                        .background(palette.raised, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .accessibilityElement(children: .combine)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 8)
+                }
+
                 if AidenBotHostFeature.isAdvertised(AidenBotHostFeature.routines, by: coordinator.botFeatures(on: machine)) {
                     AidenBotRoutinesSection(coordinator: coordinator, machine: machine, botID: detail.id, canWrite: canWrite)
                         .padding(.top, 16)

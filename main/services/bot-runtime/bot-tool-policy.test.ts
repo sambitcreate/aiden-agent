@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { BotRuntimeEffectiveAuthority } from "../bot-runtime-authority.js";
 import { botIngressAllowsTool, botRunUnattended, botToolApprovalSummary, botToolVerdict, botTurnOf, type BotToolFacts } from "./bot-tool-policy.js";
+import { composioServiceToolDescriptor } from "../composio-service-tool.js";
+import { botMcpLiveToolGrantFacts } from "../bot-tool-authority.js";
 
 const QUESTION = "ask_user_question";
 const HANDOFF = "hand_off";
@@ -57,6 +59,18 @@ const TELEGRAM = "tg:bot:1:0:5";
 const DESK = "desk-1";
 const PHONE = "remote:device:key";
 const INTRO = "intro:bot";
+
+test("the Composio allowance never starts connection setup on unattended or mixed-source turns", async () => {
+  const descriptor = composioServiceToolDescriptor();
+  const facts = { ...bareFacts(), mcpTools: async () => new Map([["composio", botMcpLiveToolGrantFacts(descriptor)!]]), mcpToolDescriptor: async () => descriptor };
+  const connect = { action: "call", tool: "COMPOSIO_MANAGE_CONNECTIONS", arguments: { toolkits: ["gmail"] } };
+  assert.equal((await botToolVerdict("composio", facts, {}, connect)).allowed, true);
+  for (const turn of [{ routine: true }, { telegram: true }, { routine: true, telegram: true }]) {
+    assert.equal((await botToolVerdict("composio", facts, turn, connect)).allowed, false);
+    assert.equal((await botToolVerdict("composio", facts, turn, { action: "describe" })).allowed, true);
+  }
+  assert.ok(await botToolApprovalSummary("composio", connect, facts), "the normal mutating action approval remains required");
+});
 
 /** [request ids of the run's inputs, whether a person is there to answer a card]. */
 const RUNS: Array<[string, readonly (string | undefined)[], boolean]> = [
@@ -186,10 +200,60 @@ test("a Bot sets its own wake-ups only in turns a person started, and never from
   );
 });
 
+
+test("Open work needs the existing Tasks capability on both person and routine turns", async () => {
+  const facts = bareFacts();
+  assert.equal((await botToolVerdict("open_work", facts, {})).allowed, false);
+  const allowed = { ...facts, authority: { ...facts.authority, otherCapabilities: [{ kind: "tasks" }] } as unknown as BotRuntimeEffectiveAuthority };
+  assert.equal((await botToolVerdict("open_work", allowed, {})).allowed, true);
+  assert.equal((await botToolVerdict("open_work", allowed, { routine: true })).allowed, true);
+  assert.equal(await botToolApprovalSummary("open_work", { action: "add", title: "Explicit task" }, { ...allowed, mcpTools: async () => { throw new Error("Task tracking must not inspect unrelated connectors for approval."); } }), undefined);
+});
+test("peer ingress cannot turn a person joined later into approval, sign-in, wake-up or person-memory authority",async()=>{
+ const facts=browserFacts();for(const tool of [QUESTION,HANDOFF,SIGN_IN,"wake_up","routines","routine_notes","bot_memory","subagent","suggest_connection"]){assert.equal(botIngressAllowsTool(tool,["peer:accepted",DESK]),false,tool);assert.equal((await botToolVerdict(tool,facts,{peer:true})).allowed,false,tool);}assert.equal((await botToolVerdict("message_peer",facts,{peer:true})).allowed,true,"the dedicated source/pair host still checks every send");
+});
+
+test("Calendar watch task and peer continuations allow only one exact-account curated read under the recipient's own service grant", async () => {
+  const { withBotExecutionAdmission } = await import("./bot-execution.js");
+  const { buildComposioCalendarExecutorRequest } = await import("../bot-routine-events/connector-watch-composio.js");
+  const { composioSourceConnection } = await import("../bot-routine-events/connector-source-admission.js");
+  const descriptor=composioServiceToolDescriptor(),grant=botMcpLiveToolGrantFacts(descriptor)!;
+  const now=Date.now(),connection=composioSourceConnection("preset-composio","a".repeat(64));
+  const restriction={routineId:"accepted-watch",revision:1,binding:{adapter:"composio-calendar-v1" as const,serverId:"preset-composio",connection,tools:[grant],accountId:"ca_selected-account",calendarId:"planning@example.test",labels:{providerLabel:"Calendar",accountLabel:"Person",resourceLabel:"Planning"},contract:{revision:"composio-calendar-v1"as const,executorSchemaHash:"a".repeat(64),readSchemaHashes:{listCalendars:"b".repeat(64),listEvents:"c".repeat(64),getEvent:"d".repeat(64)}}},condition:{kind:"calendar"as const,lookAheadMinutes:60,timezone:"America/New_York"}};
+  const claim={id:"claim",botId:"recipient",requestId:"peer:host-issued",connectorServerId:"preset-composio",connectorRestriction:restriction} as import("../bot-routine-models.js").BotExecutionClaim;
+  const port={resolve:async()=>({release(){}})} as unknown as import("./bot-execution.js").BotExecutionPort;
+  const facts={...bareFacts(),mcpTools:async()=>new Map([["composio",grant]]),mcpToolDescriptor:async()=>descriptor};
+  const read=buildComposioCalendarExecutorRequest({kind:"listEvents",accountId:restriction.binding.accountId,calendarId:restriction.binding.calendarId,timeMin:new Date(now).toISOString(),timeMax:new Date(now+30*60_000).toISOString(),timezone:"America/New_York"});
+  const call={action:"call",tool:"COMPOSIO_MULTI_EXECUTE_TOOL",arguments:read};
+  await withBotExecutionAdmission("recipient",claim,port,async()=>{
+    for(const turn of [{routine:true},{peer:true},{routine:true,peer:true}]){
+      assert.equal((await botToolVerdict("composio",facts,turn,call)).allowed,true);
+      assert.equal(await botToolApprovalSummary("composio",call,facts),undefined,"the exact closed read does not request a broad write approval");
+    }
+    const wrongAccount={...call,arguments:{...read,tools:[{...read.tools[0],account:"ca_another-account"}]}};
+    const wrongCalendar=structuredClone(call);(wrongCalendar.arguments.tools[0].arguments as Record<string,unknown>).calendarId="another@example.test";
+    const batch={...call,arguments:{...read,tools:[read.tools[0],read.tools[0]]}};
+    const query=structuredClone(call);(query.arguments.tools[0].arguments as Record<string,unknown>).query="anything";
+    const write={action:"call",tool:"COMPOSIO_MULTI_EXECUTE_TOOL",arguments:{tools:[{account:restriction.binding.accountId,tool_slug:"GOOGLECALENDAR_CREATE_EVENT",arguments:{}}],sync_response_to_workbench:false}};
+    for(const denied of [wrongAccount,wrongCalendar,batch,query,write,{action:"call",tool:"COMPOSIO_SEARCH_TOOLS",arguments:{}},{action:"call",tool:"COMPOSIO_MANAGE_CONNECTIONS",arguments:{}}])assert.equal((await botToolVerdict("composio",facts,{peer:true},denied)).allowed,false);
+    assert.equal((await botToolVerdict("composio",{...facts,mcpTools:async()=>new Map()},{peer:true},call)).allowed,false,"the sender's scope cannot grant a receiving Bot the service");
+  });
+});
+
 test('Bot-message ingress withholds unattended tools and enforces the hop chain', () => {
  const d = '00112233-4455-4677-8899-aabbccddeeff';
  for(const name of ['ask_user_question','hand_off','sign_in','browser','routines','subagent','propose_skill','wake_up']) assert.equal(botIngressAllowsTool(name,[`bot:J:1:${d}`]),false,name);
  for(const name of ['run_command','mcp__mail__send']) assert.equal(botIngressAllowsTool(name,[`bot:J:1:${d}`]),true);
  for(const ids of [[undefined],['remote:d:k'],[`bot:J:1:${d}`]]) assert.equal(botIngressAllowsTool('message_bot',ids),true);
  for(const ids of [[`bot:J:2:${d}`],[undefined,`botreply:${d}`],['routine:t:1'],['tg:1'],['intro:x']]) assert.equal(botIngressAllowsTool('message_bot',ids),false);
+});
+
+test("approved-peer inputs cannot obtain shipping messaging, plan approval or widened folder access", async () => {
+  const facts = browserFacts();
+  for (const tool of ["message_bot", "request_access", "propose_plan", "plan_step", "wake_up", "bot_memory"]) {
+    assert.equal(botIngressAllowsTool(tool, ["peer:accepted"]), false, tool);
+    assert.equal(botIngressAllowsTool(tool, [DESK, "peer:accepted"]), false, tool);
+    assert.equal((await botToolVerdict(tool, facts, { peer: true })).allowed, false, tool);
+  }
+  assert.equal(botRunUnattended(["peer:accepted"]), true);
 });

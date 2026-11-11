@@ -817,7 +817,12 @@ test("terminal teardown is scoped by workspace and renderer web contents", async
   const second = await service.create("workspace-b", "/tmp", firstOwner.owner);
   const third = await service.create("workspace-b", "/tmp", secondOwner.owner);
 
+  assert.equal(service.hasOpenSession("workspace-a"), true);
+  assert.equal(service.hasOpenSession("workspace-c"), false);
+
   service.closeForWorkspace("workspace-a");
+  assert.equal(service.hasOpenSession("workspace-a"), false, "a closed shell no longer holds the worktree");
+  assert.equal(service.hasOpenSession("workspace-b"), true);
   assert.equal(children[0]!.killed(), true);
   assert.equal(children[1]!.killed(), false);
   assert.equal(children[2]!.killed(), false);

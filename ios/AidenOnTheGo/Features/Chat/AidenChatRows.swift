@@ -240,6 +240,9 @@ struct AidenMessageView: View, Equatable {
     var body: some View {
         VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 2) {
             messageBody
+            if message.isByVoice {
+                AidenVoiceInputLabel()
+            }
             if showsFooter, footerRevealed || readAloudActive {
                 AidenMessageFooter(
                     message: message,
@@ -609,5 +612,18 @@ private struct AidenMessageOutcomeView: View {
             in: RoundedRectangle(cornerRadius: 12, style: .continuous)
         )
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// A quiet "By voice" mark under a message Aiden Live sent for the person on
+/// the Mac (contract revision 60).
+struct AidenVoiceInputLabel: View {
+    var body: some View {
+        Label(AidenChatMessage.voiceInputLabel, systemImage: "mic")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .labelStyle(.titleAndIcon)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text("Sent by voice"))
     }
 }

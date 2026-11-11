@@ -7,9 +7,11 @@ import {
   reportChatMessageSent,
   reportConnectorAdded,
   reportCustomProviderConnected,
+  reportDesignCommentsSent,
 } from "./analytics-feature-reports.js";
 import { analyticsModelId, analyticsProviderId, analyticsRunTrigger, analyticsWorkspaceKind } from "./analytics-ids.js";
 import { analyticsSettled, captureAnalyticsEvents } from "./test-support.js";
+import { setAnalyticsReporter } from "./analytics-report.js";
 
 test("a built-in provider and its catalog model are sent, folded to the registry's lowercase", () => {
   assert.equal(analyticsProviderId("anthropic"), "anthropic");
@@ -101,5 +103,51 @@ test("a connector from the catalog sends its preset id, and a person's own sends
   assert.deepEqual(sent, [
     { event: "connector_added", props: { preset_id: preset.id.toLowerCase(), transport: "http" } },
     { event: "connector_added", props: { preset_id: "custom", transport: "stdio" } },
+  ]);
+});
+
+
+test("a delayed message cannot move to a replacement analytics sender", async t => {
+  const first = captureAnalyticsEvents(t);
+  let finish!: (value: boolean) => void;
+  const workspace = new Promise<boolean>(resolve => { finish = resolve; });
+  reportChatMessageSent({ providerId: "anthropic", model: "unlisted", origin: "desktop", inWorkspace: () => workspace });
+  const replacement = captureAnalyticsEvents(t);
+  finish(true);
+  await analyticsSettled();
+  assert.deepEqual(first, []);
+  assert.deepEqual(replacement, []);
+  reportChatMessageSent({ providerId: "anthropic", model: "unlisted", origin: "desktop", inWorkspace: () => false });
+  await analyticsSettled();
+  assert.equal(replacement.length, 1);
+});
+
+test("an action before any sender exists cannot be reported by a sender registered later", async t => {
+  setAnalyticsReporter(undefined);
+  let finish!: (value: boolean) => void;
+  const workspace = new Promise<boolean>(resolve => { finish = resolve; });
+  reportChatMessageSent({ providerId: "anthropic", model: "unlisted", origin: "desktop", inWorkspace: () => workspace });
+  const later = captureAnalyticsEvents(t);
+  finish(true);
+  await analyticsSettled();
+  assert.deepEqual(later, []);
+});
+
+test("a message carrying design comments reports only how many, from the person's latest message", (t) => {
+  const events = captureAnalyticsEvents(t);
+  const block = (count: number) =>
+    `<attached-design-comments>\nComments the person made.\n${JSON.stringify(
+      Array.from({ length: count }, (_, index) => ({ commentId: `c${index}`, note: "Make the button primary at /Users/person" })),
+    )}\n</attached-design-comments>`;
+  reportDesignCommentsSent([{ role: "user", content: `Fix these\n\n${block(3)}` }]);
+  reportDesignCommentsSent([
+    { role: "user", content: block(12) },
+    { role: "assistant", content: "Done." },
+    { role: "user", content: "Thanks, nothing attached this time" },
+  ]);
+  reportDesignCommentsSent([{ role: "user", content: block(1) }]);
+  assert.deepEqual(events, [
+    { event: "design_comments_sent", props: { count_bucket: "2-3" } },
+    { event: "design_comments_sent", props: { count_bucket: "1" } },
   ]);
 });

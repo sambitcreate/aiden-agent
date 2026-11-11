@@ -59,6 +59,58 @@ test("termination keeps escalating after the leader closes until a SIGTERM-ignor
   assert.equal(processGroupRunning(child.pid), false);
 });
 
+test("a finished termination means the group is gone, not that SIGKILL was sent", { skip: !posix }, async (t) => {
+  const child = spawnGroup(`trap "" TERM; echo ready; while :; do sleep 0.05; done`);
+  t.after(() => { try { process.kill(-child.pid!, "SIGKILL"); } catch { /* gone */ } });
+  await firstLine(child);
+  const terminator = createProcessGroupTerminator(child, { killGraceMs: 100 });
+  terminator.terminate();
+  assert.equal(await terminator.finished(), "exit_confirmed");
+  assert.equal(processGroupRunning(child.pid), false);
+});
+
+test("a group that outlives SIGKILL is reported unconfirmed, never stopped", { skip: !posix }, async (t) => {
+  const child = spawnGroup(`trap "" TERM; echo ready; while :; do sleep 0.05; done`);
+  t.after(() => { try { process.kill(-child.pid!, "SIGKILL"); } catch { /* gone */ } });
+  await firstLine(child);
+  // SIGKILL cannot be ignored, so the group is reported as stuck by the probe.
+  const terminator = createProcessGroupTerminator(child, {
+    killGraceMs: 50,
+    killConfirmMs: 100,
+    probe: { exists: () => true, stillRuns: async () => true },
+  });
+  terminator.terminate();
+  assert.equal(await terminator.finished(), "cleanup_unconfirmed");
+});
+
+test("zombies nobody reaped do not count against a stopped group", { skip: !posix }, async (t) => {
+  const child = spawnGroup(`trap "" TERM; echo ready; while :; do sleep 0.05; done`);
+  t.after(() => { try { process.kill(-child.pid!, "SIGKILL"); } catch { /* gone */ } });
+  await firstLine(child);
+  const terminator = createProcessGroupTerminator(child, {
+    killGraceMs: 50,
+    killConfirmMs: 5_000,
+    probe: { exists: () => true, stillRuns: async () => false },
+  });
+  const started = Date.now();
+  terminator.terminate();
+  assert.equal(await terminator.finished(), "exit_confirmed");
+  assert.ok(Date.now() - started < 2_000, "a zombie-only group must not wait out the confirmation window");
+});
+
+test("a probe that never answers cannot stretch the wait after SIGKILL", { skip: !posix }, async (t) => {
+  const child = spawnGroup(`trap "" TERM; echo ready; while :; do sleep 0.05; done`);
+  t.after(() => { try { process.kill(-child.pid!, "SIGKILL"); } catch { /* gone */ } });
+  await firstLine(child);
+  const terminator = createProcessGroupTerminator(child, {
+    killGraceMs: 50,
+    killConfirmMs: 100,
+    probe: { exists: () => true, stillRuns: () => new Promise<boolean>(() => {}) },
+  });
+  terminator.terminate();
+  assert.equal(await terminator.finished(), "cleanup_unconfirmed");
+});
+
 test("termination finishes as soon as the group exits instead of waiting out the grace period", { skip: !posix }, async () => {
   const child = spawnGroup("sleep 30");
   const terminator = createProcessGroupTerminator(child, { killGraceMs: 10_000 });

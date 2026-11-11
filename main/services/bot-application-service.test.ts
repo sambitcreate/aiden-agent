@@ -2945,3 +2945,19 @@ test("uncertain folder publication keeps its root and recovery fence until the r
   assert.equal((await app.journal.list())[0]!.rootId, record!.rootId);
   assert.ok((await fs.stat(app.folderPath)).isDirectory());
 });
+
+
+test("Bot count metadata cannot move an earlier action to a new analytics sender", async (t) => {
+  const previous = captureAnalyticsEvents(t), app = fixture();
+  await app.service.initialize();
+  const list = app.deps.botStore.list.bind(app.deps.botStore);
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  app.deps.botStore.list = async () => { await held; return list(); };
+  await app.service.createBot({ audienceId: "device:a", bot: { name: "Planner", instructions: "Plan.", avatar: { version: 1, shape: "wisp", color: "lilac" } } });
+  const current = captureAnalyticsEvents(t);
+  release();
+  await analyticsSettled();
+  assert.deepEqual(previous, []);
+  assert.deepEqual(current, [], "the earlier Bot creation cannot be attributed to the replacement sender");
+});

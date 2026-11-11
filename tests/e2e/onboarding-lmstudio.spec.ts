@@ -8,11 +8,34 @@ import {
   finishLmStudioOnboarding,
   LM_STUDIO_PROVIDER_ID,
   readJsonFile,
+  connectOnboardingLmStudio,
   test,
   type AidenE2e,
 } from "./fixtures";
 
 const DEFAULT_LM_STUDIO_BASE_URL = "http://127.0.0.1:1234/v1";
+
+test("the feature tour explains Calendar watches on supported desktop hosts", async ({ aiden }) => {
+  const { page } = aiden;
+  const onboarding = page.locator('section[aria-label="Set up Aiden"]');
+  await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
+  const next = onboarding.getByRole("button", { name: /^Next/u });
+  await next.click();
+  await connectOnboardingLmStudio(onboarding);
+  await onboarding.getByText("Explore Aiden’s features", { exact: true }).click();
+  const tile = onboarding.getByRole("article", { name: /^Connected-app watches\. Watch upcoming Calendar events on Mac or Linux/u });
+  await expect(tile).toBeVisible();
+  await expect(tile.getByText("Calendar · Team events", { exact: true })).toBeVisible();
+  await expect(tile.getByText("Next 2 hours", { exact: true })).toBeVisible();
+  await tile.focus();
+  await expect(tile.locator("[data-onboarding-feature-description]")).toBeVisible();
+  await expect(tile.locator("[data-onboarding-feature-description]")).toContainText("Mail mailbox on Mac");
+  await onboarding.getByRole("button", { name: "Start using Aiden" }).focus();
+  await page.mouse.move(1, 1);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await tile.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: test.info().outputPath("calendar-watch-tour.png"), fullPage: true });
+});
 
 function record(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -56,15 +79,8 @@ test.describe("fresh portable config", () => {
     await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
     await onboarding.getByRole("button", { name: /^Next/u }).click();
 
-    await onboarding.getByRole("button", { name: /Other ways/u }).click();
-    const google = onboarding.getByRole("button", { name: "Google Add your API key" });
-    await expect(google).toBeEnabled();
-    await google.click();
-    // The setup dialog is modal, so the choice behind it leaves the accessibility tree.
-    await expect(
-      onboarding.getByRole("button", { name: "Google Add your API key", includeHidden: true }),
-    ).toHaveAttribute("aria-pressed", "true");
-
+    await onboarding.getByRole("button", { name: /I have an API key/u }).click();
+    await onboarding.getByRole("button", { name: "Google", exact: true }).click();
     const setup = aiden.page.getByRole("dialog", { name: "Set up Google" });
     await expect(setup).toBeVisible();
     await setup.getByRole("button", { name: "Gemini API key" }).click();

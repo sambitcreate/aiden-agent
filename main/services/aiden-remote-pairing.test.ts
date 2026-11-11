@@ -25,6 +25,7 @@ const fingerprint = `sha256/${Buffer.alloc(32, 4).toString("base64")}`;
 function fixture(options: {
   devices?: Array<{ type: string; revokedAt?: number }>;
   issueFails?: boolean;
+  beforeDeviceList?: () => Promise<void>;
   botCapabilitiesSupported?: boolean;
   hostCapabilitiesSupported?: boolean;
 } = {}) {
@@ -55,7 +56,8 @@ function fixture(options: {
           },
         };
       },
-      listDevices: async () => (options.devices ?? []) as never,
+      revokeDevice: async () => true,
+      listDevices: async () => { await options.beforeDeviceList?.(); return (options.devices ?? []) as never; },
     },
     {
       now: () => now,
@@ -425,6 +427,7 @@ test("closing or replacing a consumed window fences deferred credential issuance
             },
           };
         },
+        revokeDevice: async () => true,
       },
       {
         now: () => 1_000,
@@ -449,6 +452,86 @@ test("closing or replacing a consumed window fences deferred credential issuance
     if (action === "close") assert.equal(service.status(), undefined);
     else assert.notEqual(service.status()?.sessionId, opened.sessionId);
   }
+});
+
+test("a window closed while the device record is being written leaves no working device", async () => {
+  for (const action of ["close", "replace"] as const) {
+    let randomCounter = 0;
+    let onCommitted = () => {};
+    const revoked: string[] = [];
+    const service = new AidenRemotePairingService(
+      "instance-1",
+      {
+        issueDevice: async (input) => {
+          // The registry authorizes inside the write, which then has to land.
+          assert.equal(input.authorizeCommit?.(), true);
+          onCommitted();
+          return {
+            credential: Buffer.alloc(32, 8).toString("base64url"),
+            device: {
+              id: "device-late",
+              name: input.name,
+              type: input.type,
+              clientVersion: input.clientVersion,
+              capabilities: [...(input.capabilities ?? [])],
+              createdAt: 1_000,
+              lastSeenAt: 0,
+            },
+          };
+        },
+        revokeDevice: async (deviceId) => {
+          revoked.push(deviceId);
+          return true;
+        },
+      },
+      { now: () => 1_000, randomBytes: (size) => Buffer.alloc(size, ++randomCounter) },
+    );
+    const opened = service.begin(endpoint, fingerprint);
+    onCommitted = () => {
+      if (action === "close") service.close(opened.sessionId);
+      else service.begin(endpoint, fingerprint);
+    };
+    await assert.rejects(
+      service.exchange(exchange(opened.bootstrap.secret), "phone"),
+      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "pairing_closed",
+    );
+    assert.deepEqual(revoked, ["device-late"]);
+  }
+});
+
+test("a revocation that fails after a closed window still reports the window as closed", async () => {
+  let randomCounter = 0;
+  let onCommitted = () => {};
+  const service = new AidenRemotePairingService(
+    "instance-1",
+    {
+      issueDevice: async (input) => {
+        onCommitted();
+        return {
+          credential: Buffer.alloc(32, 8).toString("base64url"),
+          device: {
+            id: "device-late",
+            name: input.name,
+            type: input.type,
+            clientVersion: input.clientVersion,
+            capabilities: [...(input.capabilities ?? [])],
+            createdAt: 1_000,
+            lastSeenAt: 0,
+          },
+        };
+      },
+      revokeDevice: async () => {
+        throw new Error("disk failed");
+      },
+    },
+    { now: () => 1_000, randomBytes: (size) => Buffer.alloc(size, ++randomCounter) },
+  );
+  const opened = service.begin(endpoint, fingerprint);
+  onCommitted = () => service.close(opened.sessionId);
+  await assert.rejects(
+    service.exchange(exchange(opened.bootstrap.secret), "phone"),
+    (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "pairing_closed",
+  );
 });
 
 test("a credential issued before bootstrap expiry remains finishing after the scan deadline", async () => {
@@ -517,4 +600,18 @@ test("a paired phone counts once with its route and the phones in use; a desktop
   await phone.service.exchange(exchange(phone.service.begin(endpoint, fingerprint, "tailscale").bootstrap.secret), "phone");
   await analyticsSettled();
   assert.deepEqual(sent, [{ event: "phone_paired", props: { transport: "tailscale", device_count: "2-3" } }]);
+});
+
+
+test("phone count metadata cannot move an earlier pairing to a new analytics sender", async (t) => {
+  const previous = captureAnalyticsEvents(t);
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const phone = fixture({ beforeDeviceList: () => held });
+  await phone.service.exchange(exchange(phone.service.begin(endpoint, fingerprint).bootstrap.secret), "phone");
+  const current = captureAnalyticsEvents(t);
+  release();
+  await analyticsSettled();
+  assert.deepEqual(previous, []);
+  assert.deepEqual(current, [], "the earlier pairing cannot be attributed to the replacement sender");
 });

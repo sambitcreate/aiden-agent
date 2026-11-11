@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { afterEach } from "node:test";
 import {
   acceleratorFromKeyboardEvent,
   applyKeybindingMutation,
@@ -13,10 +13,13 @@ import {
   normalizeKeybindingOverrides,
   prettyAcceleratorForPlatform,
   repairKeybindingOverrides,
+  setUnavailableCommandCapabilities,
   shouldPersistCanonicalKeybindings,
   validateEffectiveBindings,
   COMMAND_BY_ID,
 } from "./keybindings";
+
+afterEach(() => setUnavailableCommandCapabilities());
 
 test("Environment keeps its command id and shortcut while Quick View has a separate command", () => {
   assert.deepEqual(
@@ -272,6 +275,49 @@ test("Find in chat gets Command+F unless a saved shortcut already uses it", () =
   const repaired = repairKeybindingOverrides(saved);
   assert.equal(effectiveBinding("chat.search", repaired), "Command+F");
   assert.equal(effectiveBinding("chat.find", repaired), null);
+});
+
+test("design mode toggles on Command+Shift+L unless a saved shortcut already uses it", () => {
+  assert.equal(effectiveBinding("design.toggle", repairKeybindingOverrides(undefined)), "Command+Shift+L");
+  const saved = { version: 1, commands: { "chat.search": { binding: "Command+Shift+L" } } };
+  const repaired = repairKeybindingOverrides(saved);
+  assert.equal(effectiveBinding("chat.search", repaired), "Command+Shift+L", "the saved choice wins");
+  assert.equal(effectiveBinding("design.toggle", repaired), null);
+  // Dictation keeps Command+Shift+D, so turning it on never collides with design mode.
+  const dictation = applyKeybindingMutation(undefined, { commandId: "dictation.toggle", disabled: false });
+  assert.deepEqual(
+    [effectiveBinding("dictation.toggle", dictation), effectiveBinding("design.toggle", dictation)],
+    ["Command+Shift+D", "Command+Shift+L"],
+  );
+});
+
+test("with design mode unavailable, Command+Shift+L stays free and nothing is saved for the toggle", () => {
+  setUnavailableCommandCapabilities(["designMode"]);
+  assert.equal(effectiveBinding("design.toggle", repairKeybindingOverrides(undefined)), null);
+  for (const replace of [false, true]) {
+    const next = applyKeybindingMutation(undefined, {
+      commandId: "chat.search",
+      binding: "Command+Shift+L",
+      replace,
+    });
+    assert.equal(effectiveBinding("chat.search", next), "Command+Shift+L");
+    assert.equal(next.commands["design.toggle"], undefined, `replace: ${replace}`);
+  }
+  const saved = { version: 1, commands: { "chat.search": { binding: "Command+Shift+L" } } };
+  const repaired = repairKeybindingOverrides(saved);
+  assert.equal(effectiveBinding("chat.search", repaired), "Command+Shift+L");
+  assert.equal(repaired.commands["design.toggle"], undefined, "no permanent disabled override");
+  assert.equal(shouldPersistCanonicalKeybindings(saved, repaired), false);
+
+  // Once design mode ships, the saved choice still wins through the usual yield.
+  setUnavailableCommandCapabilities();
+  const later = repairKeybindingOverrides(repaired);
+  assert.equal(effectiveBinding("chat.search", later), "Command+Shift+L");
+  assert.equal(effectiveBinding("design.toggle", later), null);
+  assert.equal(
+    effectiveBinding("design.toggle", repairKeybindingOverrides(undefined)),
+    "Command+Shift+L",
+  );
 });
 
 test("a shortcut saved for New chat keeps Command+Shift+O ahead of Open folder", () => {

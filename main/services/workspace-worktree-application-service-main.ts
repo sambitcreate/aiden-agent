@@ -41,6 +41,7 @@ import { workspaceMutationGate } from "./workspace-mutation-gate.js";
 import { workspaceOperationRegistry } from "./workspace-operation-registry.js";
 import { createWorkspaceWorktreeApplicationService } from "./workspace-worktree-application-service.js";
 import { removeWorkspaceArtifacts } from "./workspace-artifacts/main.js";
+import { designGrants } from "./design-canvas/main.js";
 
 export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplicationService({
   environment: workspaceEnvironmentApplicationService,
@@ -137,6 +138,7 @@ export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplic
     await configStore.removeWorkspace(workspaceId);
     await removeWorkspaceArtifacts(workspaceId);
   },
+  designGrants,
   beginWorkspaceMutation: (workspaceId) => workspaceMutationGate.begin(workspaceId),
   workspaceIsChanging: (workspaceId) => workspaceMutationGate.isChanging(workspaceId),
   cancelWorkspaceOperations: (workspaceId, exceptSignal) =>
@@ -151,4 +153,17 @@ export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplic
   now: Date.now,
   notifyChanged: () => ipcMain.broadcast("workspaces:changed", {}),
   logError: (area, message, error) => logger.error(area, message, error),
+  // WorktreeSetup hooks: the source workspace's, run in the new worktree.
+  onWorktreeCreated: async (event) => {
+    const { runWorktreeSetupHooks } = await import("./agent-surface-hooks.js");
+    const notices = await runWorktreeSetupHooks({
+      sourceFolderPath: event.sourceFolderPath,
+      sourceRoot: event.sourceRoot,
+      worktreePath: event.worktreePath,
+      workspacePath: event.workspacePath,
+      workspaceId: event.workspace.id,
+      branch: event.branch,
+    });
+    for (const notice of notices) logger.warn("hooks", notice);
+  },
 });

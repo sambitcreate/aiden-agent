@@ -11,12 +11,14 @@ struct AidenBotSessionChatView: View {
     var initialSummary: AidenBotSummary?
 
     @Environment(\.dismiss) private var dismiss
+    @State private var isChatVisible = false
     @Environment(\.aidenPalette) private var palette
     @Environment(\.scenePhase) private var scenePhase
     @State private var model: AidenBotSessionModel?
     @State private var summary: AidenBotSummary?
     /// Lives here, not in the composer: the composer leaves while the Bot needs a model.
     @State private var composerSession: AidenComposerSession
+    @State private var peerExchangeID: String?
     @State private var isShowingProfile = false
     /// The profile sheet opens straight to Memory (from "Memory updated").
     @State private var profileOpensMemory = false
@@ -66,6 +68,13 @@ struct AidenBotSessionChatView: View {
         _composerSession = State(initialValue: composerSession ?? AidenComposerSession())
         // A Bot chat stays on the machine it opened on, whatever the default does.
         _openedOn = State(initialValue: machine)
+    }
+
+    /// Only while the chat itself is in front: any sheet over it, the session
+    /// sheet included, ends the foreground visit.
+    private var resumeVisitIsActive: Bool {
+        isChatVisible && scenePhase == .active && !isShowingProfile && !isShowingAdvanced && !showsSessionSheet
+            && peerExchangeID == nil && presentedFilesGrant == nil && !isFileImporterPresented && !attachmentPicker.isPresented
     }
 
     private var bot: AidenBotSummary? { summary ?? initialSummary }
@@ -174,12 +183,22 @@ struct AidenBotSessionChatView: View {
         .onReceive(NotificationCenter.default.publisher(for: .aidenStopDictationForReadAloud)) { _ in
             composerSession.stopVoice()
         }
-        .onAppear { coordinator.setOnScreen(true, view: onScreen, instanceId: openedOn) }
+        .onAppear {
+            coordinator.setOnScreen(true, view: onScreen, instanceId: openedOn)
+            isChatVisible = true
+            model?.setResumeForegroundVisit(active: resumeVisitIsActive)
+        }
         .onDisappear {
+            isChatVisible = false
+            model?.setResumeForegroundVisit(active: false)
             attachmentPicker.reset()
             composerSession.stopVoice()
             composerSession.discardAttachments()
             coordinator.setOnScreen(false, view: onScreen, instanceId: openedOn)
+        }
+        .onChange(of: resumeVisitIsActive) { _, active in
+            // The feed remains alive for background hand-offs (G24).
+            model?.setResumeForegroundVisit(active: active)
         }
         .background(palette.canvas.ignoresSafeArea())
         .navigationBarTitleDisplayMode(.inline)
@@ -213,6 +232,14 @@ struct AidenBotSessionChatView: View {
                 actions: AidenSessionActions { pendingSessionAction = $0 }
             )
         }
+        .sheet(isPresented: Binding(get: { peerExchangeID != nil }, set: { if !$0 { peerExchangeID = nil } })) {
+            if let peerExchangeID {
+                NavigationStack {
+                    AidenBotPeerExchangeView(coordinator: coordinator, machine: openedOn, botID: botID, exchangeID: peerExchangeID)
+                        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { self.peerExchangeID = nil } } }
+                }
+            }
+        }
         .sheet(isPresented: $isShowingProfile, onDismiss: { profileOpensMemory = false }) {
             if let bot {
                 tools.profile(
@@ -238,6 +265,13 @@ struct AidenBotSessionChatView: View {
                 onSaveFailed: { advancedSaveError = $0 }
             )
         }
+        .alert("Resume with an unconfirmed cost?", isPresented: Binding(
+            get: { model?.resumeModel?.needsConsent == true },
+            set: { _ in }
+        )) {
+            Button("Resume and acknowledge possible charge") { Task { await model?.confirmUnknownCostResume() } }
+            Button("Cancel", role: .cancel) { model?.resumeModel?.cancelConsent() }
+        } message: { Text(AidenBotResumeModel.confirmation) }
         .alert(
             "Something Went Wrong",
             isPresented: Binding(
@@ -630,6 +664,10 @@ struct AidenBotSessionChatView: View {
                     Task { await model.respondToProposal(card.proposalId, decision: decision) }
                 }
             )
+        case let .peer(peer):
+            if ownerConnection?.server?.supportsBotPeerExchanges == true {
+                AidenBotPeerTranscriptRow(peer: peer) { peerExchangeID = peer.exchangeId }
+            }
         case let .sharedImage(image):
             // Revision 45: the image the Bot shared, read from the Mac when it is drawn.
             AidenMessageImageAttachmentsView(
@@ -942,7 +980,7 @@ struct AidenBotSessionChatView: View {
         } else if model.isInterrupted {
             AidenBotInterruptedCard(
                 isAccessBlocked: model.isAccessBlocked,
-                isBusy: model.inFlight.contains(.resume) || model.inFlight.contains(.dismiss),
+                isBusy: model.inFlight.contains(.resume) || model.inFlight.contains(.dismiss) || model.resumeModel?.busy == true,
                 canAct: canWrite,
                 onResume: { Task { await model.resume() } },
                 onDismiss: { Task { await model.dismiss() } },
@@ -1217,6 +1255,19 @@ struct AidenBotSessionChatView: View {
             isOwnerRetained: { [coordinator] in coordinator.isRetained(context) },
             speech: client
         )
+        model.setResumeForegroundVisit(active: resumeVisitIsActive)
+        model.routineModelsSupported = { [coordinator] in
+            coordinator.botServer(on: context.instanceId)?.supportsBotRoutineModels == true
+        }
+        model.resumeModel = AidenBotResumeModel(botID: botID, transport: client,
+            mayResume: { [weak model] in
+                resumeVisitIsActive && UIApplication.shared.applicationState == .active
+                    && coordinator.isLive(context) && coordinator.botServer(on: context.instanceId)?.supportsBotRoutineModels == true
+                    && coordinator.botConnectionState(on: context.instanceId) == .connected
+                    && coordinator.botInstallation(on: context.instanceId)?.canWriteBots == true
+                    && model?.canResumeExecution == true
+            }, version: { [weak model] in model?.resumeConfirmationVersion ?? "released" },
+            store: .shared, scope: .init(instanceID: context.instanceId, deviceID: context.deviceId, botID: botID))
         model.activitySupported = activitySupported
         model.attachmentsSupported = isAdvertised(AidenBotHostFeature.attachments)
         feedOpenedWith = aidenBotSessionFeedGrants(ownerConnection?.installation)

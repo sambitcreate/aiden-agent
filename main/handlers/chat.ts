@@ -2,7 +2,7 @@
 // "chat:delta" / "chat:done" / "chat:error" broadcasts (see llm-client).
 
 import { ipcMain, logger } from "../platform.js";
-import { reportChatMessageSent } from "../services/analytics/analytics-feature-reports.js";
+import { reportChatMessageSent, reportDesignCommentsSent } from "../services/analytics/analytics-feature-reports.js";
 import { analyticsWorkspaceKind } from "../services/analytics/analytics-ids.js";
 import { configStore } from "../services/config-store.js";
 import { desktopChatExecutionOptions, startGenerationAndMaybeTitle } from "../services/chat-generation-start.js";
@@ -52,7 +52,7 @@ export function registerChatGenerationHandlers(): void {
                 desktopChatExecutionOptions(messageTurnId, () => { accepted = true; }),
               ),
             startTitle: (input) => chatTitleService.startForFirstTurn(input),
-            onStarted: ({ providerId, model, thinkingLevel, workspaceId }) =>
+            onStarted: ({ providerId, model, thinkingLevel, workspaceId }) => {
               reportChatMessageSent({
                 providerId,
                 model,
@@ -61,7 +61,9 @@ export function registerChatGenerationHandlers(): void {
                 inWorkspace: async () =>
                   Boolean(workspaceId) &&
                   analyticsWorkspaceKind(await configStore.getWorkspace(workspaceId!)) !== "none",
-              }),
+              });
+              reportDesignCommentsSent(parsed.messages);
+            },
           },
           id,
           parsed,
@@ -119,6 +121,7 @@ export function registerChatGenerationHandlers(): void {
         streamId,
         mode: parsed.mode,
         text: parsed.text,
+        ...(parsed.inputSource ? { inputSource: parsed.inputSource } : {}),
         ownerDocumentId: owner.documentId,
       });
       // A committed input mutates the transcript for every observing document,
@@ -159,7 +162,7 @@ export function registerChatGenerationHandlers(): void {
     },
   );
 
-  // Remembered "always allow" tool approval rules (Settings → Tool approvals).
+  // Remembered "always allow" tool approval rules (Settings → Bots & Approvals → Tool approvals).
   ipcMain.handle("chat:listApprovalRules", async () => toolApprovalRules.list());
 
   ipcMain.handle("chat:revokeApprovalRule", async (_event, ruleId: unknown) => {

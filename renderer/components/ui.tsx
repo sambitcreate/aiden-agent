@@ -49,6 +49,7 @@ import {
   useWindowChrome,
 } from "../lib/window-chrome";
 import { windowControlsApi } from "../lib/ipc";
+import { useLiveGuardAttributes } from "./live-guard";
 
 export { toast };
 export function Toaster(props: React.ComponentProps<typeof SonnerToaster>) {
@@ -92,6 +93,8 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
       ref={ref}
       type={asChild ? undefined : type}
       data-slot="button"
+      // Aiden Live asks the user before pressing a destructive button.
+      data-live-guard={variant === "destructive" ? "confirm" : undefined}
       className={cn(
         "dimmable inline-flex shrink-0 cursor-default items-center justify-center whitespace-nowrap border-0 text-strong outline-none transition-[background-color,color,box-shadow,opacity,transform,scale,translate] duration-(--motion-duration) ease-standard focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45 motion-reduce:transform-none [&_svg:not([class*='size-'])]:size-4",
         pressFeedback && "button-press-feedback",
@@ -344,12 +347,27 @@ export const Label = React.forwardRef<
 
 export function FieldSet({
   title,
+  hint,
+  action,
   className,
   children,
-}: React.PropsWithChildren<{ title?: React.ReactNode; className?: string }>) {
+}: React.PropsWithChildren<{
+  title?: React.ReactNode;
+  /** An `InfoHint` beside the title, kept out of the heading's accessible name. */
+  hint?: React.ReactNode;
+  /** A control for the whole group, at the end of the heading row. */
+  action?: React.ReactNode;
+  className?: string;
+}>) {
   return (
     <section className={cn("settings-group mb-7", className)}>
-      {title ? <h2 className="settings-group-title mb-3 px-4 text-large-strong text-primary">{title}</h2> : null}
+      {title ? (
+        <div className="settings-group-header mb-3 flex items-center gap-1.5 px-4">
+          <h2 className="settings-group-title text-large-strong text-primary">{title}</h2>
+          {hint}
+          {action ? <div className="ml-auto shrink-0">{action}</div> : null}
+        </div>
+      ) : null}
       <div className="settings-group-card overflow-visible rounded-card bg-well">{children}</div>
     </section>
   );
@@ -357,12 +375,15 @@ export function FieldSet({
 
 export function Field({
   label,
+  hint,
   description,
   orientation = "horizontal",
   className,
   children,
 }: React.PropsWithChildren<{
   label?: React.ReactNode;
+  /** An `InfoHint` beside the label, kept out of the row's accessible name. */
+  hint?: React.ReactNode;
   description?: React.ReactNode;
   orientation?: "horizontal" | "vertical";
   className?: string;
@@ -385,8 +406,11 @@ export function Field({
       {label || description || orientation === "horizontal" ? (
       <div className="min-w-0">
         {label ? (
-          <div id={labelId} className="text-strong text-primary">
-            {label}
+          <div className="flex items-center gap-1.5">
+            <div id={labelId} className="min-w-0 text-strong text-primary">
+              {label}
+            </div>
+            {hint}
           </div>
         ) : null}
         {description ? (
@@ -401,6 +425,59 @@ export function Field({
   );
 }
 
+/**
+ * A grouped card that folds away reference controls behind a summary row. The
+ * contents stay mounted, so a half-filled form survives closing it.
+ *
+ * `defaultOpen` may turn true after mount, when the state it depends on loads
+ * late. The fold then opens, unless the person has already used it, and it stays
+ * open if that state later clears.
+ */
+export function SettingsDisclosure({
+  title,
+  summary,
+  badge,
+  defaultOpen = false,
+  className,
+  children,
+}: React.PropsWithChildren<{
+  title: string;
+  summary: React.ReactNode;
+  /** A status chip after the title, shown open or closed. */
+  badge?: React.ReactNode;
+  defaultOpen?: boolean;
+  className?: string;
+}>) {
+  const [open, setOpen] = React.useState(defaultOpen);
+  const [touched, setTouched] = React.useState(false);
+  if (defaultOpen && !open && !touched) setOpen(true);
+  return (
+    <details open={open} className={cn("settings-card group mb-7 overflow-hidden rounded-card bg-well", className)}>
+      <summary
+        className="flex min-h-14 cursor-default list-none items-center gap-3 px-4 py-3 transition-colors duration-150 hover:bg-list-hover [--keyboard-focus-offset:-2px] [&::-webkit-details-marker]:hidden"
+        onClick={(event) => {
+          event.preventDefault();
+          setTouched(true);
+          setOpen(!open);
+        }}
+      >
+        <span className="min-w-0 flex-1">
+          <span className="flex flex-wrap items-center gap-2">
+            <span className="text-large-strong text-primary">{title}</span>
+            {badge}
+          </span>
+          <span className="mt-0.5 block truncate text-small text-secondary">{summary}</span>
+        </span>
+        <ChevronDown
+          aria-hidden="true"
+          className="size-4 shrink-0 text-tertiary transition-transform duration-150 group-open:rotate-180"
+        />
+      </summary>
+      <div className="border-t border-separator">{children}</div>
+    </details>
+  );
+}
+
 export const FieldGroup = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
   <div className={className} {...props} />
 );
@@ -411,7 +488,10 @@ export const FieldLabel = Label;
 
 const SplitContext = React.createContext<{
   collapsed: boolean;
+  /** The width the sidebar takes from the content: 0 while collapsed or overlaid. */
+  reservedWidth: number;
   toggle: () => void;
+  setCollapsed: (collapsed: boolean) => void;
   leadingAnchor: HTMLDivElement | null;
 } | null>(null);
 
@@ -428,6 +508,26 @@ export function useSplitViewCollapsedHeaderInset(): number | undefined {
 /** Whether the leading sidebar is collapsed, for full-height chrome that must clear the window controls. */
 export function useSplitViewCollapsed(): boolean {
   return React.useContext(SplitContext)?.collapsed === true;
+}
+
+/**
+ * The leading sidebar's collapsed state and a setter that persists like the
+ * toggle does, for layouts that collapse it for room. Null outside a SplitView.
+ */
+export function useSplitViewSidebar(): {
+  collapsed: boolean;
+  /** The width the sidebar takes from the content: 0 while collapsed or overlaid. */
+  reservedWidth: number;
+  setCollapsed: (collapsed: boolean) => void;
+} | null {
+  const context = React.useContext(SplitContext);
+  return React.useMemo(
+    () =>
+      context
+        ? { collapsed: context.collapsed, reservedWidth: context.reservedWidth, setCollapsed: context.setCollapsed }
+        : null,
+    [context],
+  );
 }
 
 type SplitViewProps = React.PropsWithChildren<{
@@ -487,6 +587,13 @@ function SplitViewRoot({
     localStorage.setItem(collapseKey, next ? "1" : "0");
     setCollapsed(next);
   }, [collapseKey, collapsed]);
+  const setPersistedCollapsed = React.useCallback(
+    (next: boolean) => {
+      localStorage.setItem(collapseKey, next ? "1" : "0");
+      setCollapsed(next);
+    },
+    [collapseKey],
+  );
   useCommandHandler("sidebar.toggle", toggle, !contentModalOpen);
 
   React.useEffect(() => {
@@ -614,8 +721,14 @@ function SplitViewRoot({
 
   const chrome = useWindowChrome();
   const splitContext = React.useMemo(
-    () => ({ collapsed, toggle, leadingAnchor }),
-    [collapsed, toggle, leadingAnchor],
+    () => ({
+      collapsed,
+      reservedWidth: reservedSidebarWidth,
+      toggle,
+      setCollapsed: setPersistedCollapsed,
+      leadingAnchor,
+    }),
+    [collapsed, reservedSidebarWidth, toggle, setPersistedCollapsed, leadingAnchor],
   );
 
   return (
@@ -994,6 +1107,7 @@ export function ScrollArea({
   leading,
   actions,
   toolbar,
+  toolbarAccessory,
   footer,
   alignFooterToScrollContent = false,
   autoScrollToBottom,
@@ -1006,9 +1120,16 @@ export function ScrollArea({
   scrollRestorationId,
   focusRegion,
   overlay,
+  bodyHidden = false,
   className,
   children,
 }: React.PropsWithChildren<{
+  /**
+   * Hides everything below the toolbar from sight, focus and assistive tech
+   * while keeping it mounted (and its scroll position), such as design mode's
+   * stacked layout showing the canvas in the chat's place.
+   */
+  bodyHidden?: boolean;
   /**
    * Marks the scrollport as the conversation F6 moves to, so arrow keys and
    * Page Up/Down scroll it once it has focus.
@@ -1028,6 +1149,11 @@ export function ScrollArea({
   leading?: React.ReactNode;
   actions?: React.ReactNode;
   toolbar?: React.ReactNode;
+  /**
+   * Sits under the toolbar as part of it, such as a notice, so the scroll
+   * content starts below it instead of underneath it.
+   */
+  toolbarAccessory?: React.ReactNode;
   footer?: React.ReactNode;
   /** Keep the fixed footer aligned with the scrollport when classic scrollbars reserve width. */
   alignFooterToScrollContent?: boolean;
@@ -1366,7 +1492,7 @@ export function ScrollArea({
           </h1>
           {titleAccessory}
         </div>
-        <div className="no-drag flex items-center gap-2">{actions}</div>
+        <div className="no-drag flex shrink-0 items-center gap-2">{actions}</div>
       </header>
     ) : null);
 
@@ -1381,120 +1507,128 @@ export function ScrollArea({
       {resolvedToolbar ? (
         <div ref={toolbarRef} className="absolute inset-x-0 top-0 z-30">
           {resolvedToolbar}
+          {toolbarAccessory}
         </div>
       ) : null}
+      {/* Always rendered so hiding the body never remounts (or rescrolls) the transcript. */}
       <div
-        ref={viewport}
-        data-scroll-restoration-id={scrollRestorationId}
-        data-scroll-top={atTop}
-        data-scroll-bottom={atScrollEnd}
-        data-follow={autoScrollToBottom ? following : undefined}
-        {...(focusRegion
-          ? {
-              "data-focus-region": focusRegion,
-              "data-focus-region-entry": "",
-              role: "region",
-              "aria-label": "Conversation",
-              tabIndex: -1,
-            }
-          : {})}
-        className={cn(
-          "scroll-edge-mask relative z-0 h-full w-full overflow-y-auto overscroll-contain",
-          focusRegion && "conversation-scrollport",
-        )}
-        style={{
-          paddingTop: toolbarHeight,
-          paddingBottom: footerHeight + Math.max(0, scrollContentBottomOffset),
-          // While following, the latch owns the bottom edge; browser scroll
-          // anchoring would fight it by holding a mid-transcript node still.
-          // A reader who has scrolled away keeps anchoring, so content changing
-          // above their place does not shift what they are reading.
-          overflowAnchor: autoScrollToBottom && following ? "none" : undefined,
-        }}
-        onScroll={(event) => {
-          const element = event.currentTarget;
-          const sample = { top: element.scrollTop, height: element.scrollHeight, viewport: element.clientHeight };
-          const previous = scrollSampleRef.current;
-          const clamped = previous !== null &&
-            (sample.height < previous.height || sample.viewport !== previous.viewport);
-          // Sandboxed frame input cannot reach our wheel/touch listeners. Its
-          // chained host scroll can still reveal the reader moving upward.
-          // Fractional upward movement adds up across events, including across
-          // a streaming snap; a downward move or a jump starts over.
-          if (!previous || clamped || followRef.current.jumpPending || sample.top > previous.top) {
-            upwardDriftRef.current = 0;
-          } else {
-            upwardDriftRef.current += previous.top - sample.top;
-          }
-          const movedUp = upwardDriftRef.current > 1;
-          if (movedUp) upwardDriftRef.current = 0;
-          scrollSampleRef.current = sample;
-          if (autoScrollRef.current && movedUp && !followRef.current.jumpPending && !followRef.current.scrollbarHeld) {
-            dispatchFollow({ type: "userIntent", intent: "drag", at: performance.now(), canScrollUp: true });
-          }
-          dispatchFollow({
-            type: clamped ? "contentResize" : "settle",
-            distance: measureDistance(element),
-            scrollTop: element.scrollTop,
-          });
-        }}
+        className={bodyHidden ? "contents invisible" : "contents"}
+        inert={bodyHidden}
+        aria-hidden={bodyHidden || undefined}
       >
-        <div ref={content} data-scroll-content className="min-h-full">
-          {children}
-        </div>
-      </div>
-      {focusRegion ? (
-        // The conversation's keyboard focus ring, drawn below the overlaid toolbar.
-        <div aria-hidden className="conversation-focus-ring pointer-events-none absolute inset-x-0 bottom-0 z-20" style={{ top: toolbarHeight }} />
-      ) : null}
-      {overlay ? (
         <div
-          className="pointer-events-none absolute inset-x-0 z-30 flex justify-end px-4"
-          style={{ top: toolbarHeight + 8 }}
-        >
-          <div className="pointer-events-auto">{overlay}</div>
-        </div>
-      ) : null}
-      {showScrollToBottomButton && offerJump ? (
-        // The button floats over the scrollport like the footer, but is centred
-        // on the same chat column as the composer, so it follows the column
-        // when Quick View insets it (and through that transition) and when a
-        // classic scrollbar takes a gutter.
-        <div
-          className="pointer-events-none absolute inset-x-0 bottom-0 z-20"
-          style={alignFooterToScrollContent ? { insetInlineEnd: scrollbarGutter } : undefined}
-        >
-          <div className="aiden-dock-inset chat-content-column relative">
-            <Button
-              iconOnly
-              size="medium"
-              variant="filled"
-              onClick={() => scrollToBottom()}
-              aria-label="Scroll to bottom"
-              className="pointer-events-auto absolute left-1/2 -translate-x-1/2 bg-popover/95 shadow-popover hover:bg-popover"
-              style={{ bottom: footerHeight + 12 + Math.max(0, scrollToBottomButtonOffset) }}
-            >
-              <ArrowDownToLine />
-            </Button>
-          </div>
-        </div>
-      ) : null}
-      {footer ? (
-        // Nothing scrolls the footer, so it never grows under the toolbar; a child
-        // that opts in with min-h-0 (a tall approval) shrinks to the room left.
-        // Anything still too tall overflows through the top, keeping the
-        // composer's input and actions at the bottom in view.
-        <div
-          ref={footerRef}
-          className="absolute inset-x-0 bottom-0 z-10 flex flex-col justify-end"
+          ref={viewport}
+          data-scroll-restoration-id={scrollRestorationId}
+          data-scroll-top={atTop}
+          data-scroll-bottom={atScrollEnd}
+          data-follow={autoScrollToBottom ? following : undefined}
+          {...(focusRegion
+            ? {
+                "data-focus-region": focusRegion,
+                "data-focus-region-entry": "",
+                role: "region",
+                "aria-label": "Conversation",
+                tabIndex: -1,
+              }
+            : {})}
+          className={cn(
+            "scroll-edge-mask relative z-0 h-full w-full overflow-y-auto overscroll-contain",
+            focusRegion && "conversation-scrollport",
+          )}
           style={{
-            maxHeight: `calc(100% - ${toolbarHeight}px)`,
-            ...(alignFooterToScrollContent ? { insetInlineEnd: scrollbarGutter } : undefined),
+            paddingTop: toolbarHeight,
+            paddingBottom: footerHeight + Math.max(0, scrollContentBottomOffset),
+            // While following, the latch owns the bottom edge; browser scroll
+            // anchoring would fight it by holding a mid-transcript node still.
+            // A reader who has scrolled away keeps anchoring, so content changing
+            // above their place does not shift what they are reading.
+            overflowAnchor: autoScrollToBottom && following ? "none" : undefined,
+          }}
+          onScroll={(event) => {
+            const element = event.currentTarget;
+            const sample = { top: element.scrollTop, height: element.scrollHeight, viewport: element.clientHeight };
+            const previous = scrollSampleRef.current;
+            const clamped = previous !== null &&
+              (sample.height < previous.height || sample.viewport !== previous.viewport);
+            // Sandboxed frame input cannot reach our wheel/touch listeners. Its
+            // chained host scroll can still reveal the reader moving upward.
+            // Fractional upward movement adds up across events, including across
+            // a streaming snap; a downward move or a jump starts over.
+            if (!previous || clamped || followRef.current.jumpPending || sample.top > previous.top) {
+              upwardDriftRef.current = 0;
+            } else {
+              upwardDriftRef.current += previous.top - sample.top;
+            }
+            const movedUp = upwardDriftRef.current > 1;
+            if (movedUp) upwardDriftRef.current = 0;
+            scrollSampleRef.current = sample;
+            if (autoScrollRef.current && movedUp && !followRef.current.jumpPending && !followRef.current.scrollbarHeld) {
+              dispatchFollow({ type: "userIntent", intent: "drag", at: performance.now(), canScrollUp: true });
+            }
+            dispatchFollow({
+              type: clamped ? "contentResize" : "settle",
+              distance: measureDistance(element),
+              scrollTop: element.scrollTop,
+            });
           }}
         >
-          {footer}
+          <div ref={content} data-scroll-content className="min-h-full">
+            {children}
+          </div>
         </div>
-      ) : null}
+        {focusRegion ? (
+          // The conversation's keyboard focus ring, drawn below the overlaid toolbar.
+          <div aria-hidden className="conversation-focus-ring pointer-events-none absolute inset-x-0 bottom-0 z-20" style={{ top: toolbarHeight }} />
+        ) : null}
+        {overlay ? (
+          <div
+            className="pointer-events-none absolute inset-x-0 z-30 flex justify-end px-4"
+            style={{ top: toolbarHeight + 8 }}
+          >
+            <div className="pointer-events-auto">{overlay}</div>
+          </div>
+        ) : null}
+        {showScrollToBottomButton && offerJump ? (
+          // The button floats over the scrollport like the footer, but is centred
+          // on the same chat column as the composer, so it follows the column
+          // when Quick View insets it (and through that transition) and when a
+          // classic scrollbar takes a gutter.
+          <div
+            className="pointer-events-none absolute inset-x-0 bottom-0 z-20"
+            style={alignFooterToScrollContent ? { insetInlineEnd: scrollbarGutter } : undefined}
+          >
+            <div className="aiden-dock-inset chat-content-column relative">
+              <Button
+                iconOnly
+                size="medium"
+                variant="filled"
+                onClick={() => scrollToBottom()}
+                aria-label="Scroll to bottom"
+                className="pointer-events-auto absolute left-1/2 -translate-x-1/2 bg-popover/95 shadow-popover hover:bg-popover"
+                style={{ bottom: footerHeight + 12 + Math.max(0, scrollToBottomButtonOffset) }}
+              >
+                <ArrowDownToLine />
+              </Button>
+            </div>
+          </div>
+        ) : null}
+        {footer ? (
+          // Nothing scrolls the footer, so it never grows under the toolbar; a child
+          // that opts in with min-h-0 (a tall approval) shrinks to the room left.
+          // Anything still too tall overflows through the top, keeping the
+          // composer's input and actions at the bottom in view.
+          <div
+            ref={footerRef}
+            className="absolute inset-x-0 bottom-0 z-10 flex flex-col justify-end"
+            style={{
+              maxHeight: `calc(100% - ${toolbarHeight}px)`,
+              ...(alignFooterToScrollContent ? { insetInlineEnd: scrollbarGutter } : undefined),
+            }}
+          >
+            {footer}
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -1517,6 +1651,8 @@ type DialogProps = React.PropsWithChildren<{
   description?: React.ReactNode;
   confirmLabel?: string;
   confirmDisabled?: boolean;
+  /** Id of the text that says why confirm is off, read with the button. */
+  confirmDescribedBy?: string;
   confirmHidden?: boolean;
   cancelRef?: React.RefObject<HTMLButtonElement | null>;
   dismissDisabled?: boolean;
@@ -1552,6 +1688,7 @@ export function Dialog({
   description,
   confirmLabel = "Done",
   confirmDisabled,
+  confirmDescribedBy,
   confirmHidden,
   cancelRef,
   dismissDisabled,
@@ -1570,6 +1707,7 @@ export function Dialog({
   onEscapeKeyDown,
   children,
 }: DialogProps) {
+  const liveGuard = useLiveGuardAttributes();
   const dismissBlocked = Boolean(
     dismissDisabled || cancelDisabled || (busy && !allowCancelWhileBusy),
   );
@@ -1587,6 +1725,7 @@ export function Dialog({
           className={cn("fixed inset-0 bg-transparent", layer === "onboarding" ? "z-[70]" : "z-50")}
         />
         <DialogPrimitive.Content
+          {...liveGuard}
           data-slot="dialog-content"
           aria-busy={busy || undefined}
           onCloseAutoFocus={(event) => {
@@ -1669,6 +1808,7 @@ export function Dialog({
                 variant="accent"
                 className={actionClassName}
                 disabled={confirmDisabled || busy}
+                aria-describedby={confirmDescribedBy}
                 onClick={() => void onConfirm?.()}
               >
                 {confirmLabel}
@@ -1693,9 +1833,9 @@ export function AlertDialog({
   returnFocus,
   onConfirm,
   layer = "default",
+  children,
 }: Omit<
   DialogProps,
-  | "children"
   | "size"
   | "confirmDisabled"
   | "confirmHidden"
@@ -1710,6 +1850,7 @@ export function AlertDialog({
   busy?: boolean;
   keepOpenOnConfirm?: boolean;
 }) {
+  const liveGuard = useLiveGuardAttributes();
   // Remember what had focus when the dialog opened so closing can return there.
   const openerRef = React.useRef<HTMLElement | null>(null);
   React.useLayoutEffect(() => {
@@ -1739,6 +1880,7 @@ export function AlertDialog({
           className={cn("fixed inset-0 bg-transparent", layer === "onboarding" ? "z-[70]" : "z-50")}
         />
         <AlertDialogPrimitive.Content
+          {...liveGuard}
           data-slot="dialog-content"
           aria-busy={busy}
           onCloseAutoFocus={(event) => {
@@ -1766,6 +1908,9 @@ export function AlertDialog({
             <AlertDialogPrimitive.Description asChild>
               <div className="mt-2 text-regular text-secondary">{description}</div>
             </AlertDialogPrimitive.Description>
+          ) : null}
+          {children ? (
+            <div className="mt-3 max-h-[46vh] min-h-0 overflow-y-auto text-small text-primary">{children}</div>
           ) : null}
           <div className="mt-5 flex justify-end gap-2">
             <AlertDialogPrimitive.Cancel asChild>
@@ -1800,6 +1945,7 @@ export const DropdownMenuContent = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Content>
 >(function Content({ className, sideOffset = 6, onCloseAutoFocus, ...props }, ref) {
+  const liveGuard = useLiveGuardAttributes(props);
   return (
     <DropdownMenuPrimitive.Portal>
       <DropdownMenuPrimitive.Content
@@ -1812,6 +1958,7 @@ export const DropdownMenuContent = React.forwardRef<
           className,
         )}
         {...props}
+        {...liveGuard}
         onCloseAutoFocus={(event) => {
           onCloseAutoFocus?.(event);
           // An item that opened a dialog has already moved focus into it. Sending
@@ -1851,6 +1998,7 @@ export const DropdownMenuItem = React.forwardRef<
   return (
     <DropdownMenuPrimitive.Item
       ref={ref}
+      data-live-guard={color === "red" || color === "status-red" ? "confirm" : undefined}
       className={cn(menuItemClass, color === "red" && "text-red",
         color === "status-red" && "text-status-red",
         (color === "red" || color === "status-red") && destructiveHighlightClass, className)}
@@ -1881,6 +2029,7 @@ export const DropdownMenuSubContent = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitive.SubContent>,
   React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.SubContent>
 >(function SubContent({ className, sideOffset = 4, ...props }, ref) {
+  const liveGuard = useLiveGuardAttributes(props);
   return (
     <DropdownMenuPrimitive.Portal>
       <DropdownMenuPrimitive.SubContent
@@ -1893,6 +2042,7 @@ export const DropdownMenuSubContent = React.forwardRef<
           className,
         )}
         {...props}
+        {...liveGuard}
       />
     </DropdownMenuPrimitive.Portal>
   );
@@ -1955,6 +2105,7 @@ export const PopoverContent = React.forwardRef<
   React.ElementRef<typeof PopoverPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Content>
 >(function PopoverContent({ className, sideOffset = 6, ...props }, ref) {
+  const liveGuard = useLiveGuardAttributes(props);
   return (
     <PopoverPrimitive.Portal>
       <PopoverPrimitive.Content
@@ -1967,6 +2118,7 @@ export const PopoverContent = React.forwardRef<
           className,
         )}
         {...props}
+        {...liveGuard}
       />
     </PopoverPrimitive.Portal>
   );
@@ -1978,6 +2130,7 @@ export const HoverCardContent = React.forwardRef<
   React.ElementRef<typeof HoverCardPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof HoverCardPrimitive.Content>
 >(function HoverCardContent({ className, sideOffset = 8, ...props }, ref) {
+  const liveGuard = useLiveGuardAttributes(props);
   return (
     <HoverCardPrimitive.Portal>
       <HoverCardPrimitive.Content
@@ -1990,6 +2143,7 @@ export const HoverCardContent = React.forwardRef<
           className,
         )}
         {...props}
+        {...liveGuard}
       />
     </HoverCardPrimitive.Portal>
   );
@@ -2001,6 +2155,7 @@ export const ContextMenuContent = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Content>
 >(function ContextContent({ className, ...props }, ref) {
+  const liveGuard = useLiveGuardAttributes(props);
   return (
     <ContextMenuPrimitive.Portal>
       <ContextMenuPrimitive.Content
@@ -2012,6 +2167,7 @@ export const ContextMenuContent = React.forwardRef<
           className,
         )}
         {...props}
+        {...liveGuard}
       />
     </ContextMenuPrimitive.Portal>
   );
@@ -2032,6 +2188,7 @@ export const ContextMenuItem = React.forwardRef<
   return (
     <ContextMenuPrimitive.Item
       ref={ref}
+      data-live-guard={color === "red" || color === "status-red" ? "confirm" : undefined}
       className={cn(menuItemClass, color === "red" && "text-red",
         color === "status-red" && "text-status-red",
         (color === "red" || color === "status-red") && destructiveHighlightClass, className)}
@@ -2056,6 +2213,7 @@ export const ContextMenuSubContent = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitive.SubContent>,
   React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.SubContent>
 >(function ContextSubContent({ className, sideOffset = 4, ...props }, ref) {
+  const liveGuard = useLiveGuardAttributes(props);
   return (
     <ContextMenuPrimitive.Portal>
       <ContextMenuPrimitive.SubContent
@@ -2068,6 +2226,7 @@ export const ContextMenuSubContent = React.forwardRef<
           className,
         )}
         {...props}
+        {...liveGuard}
       />
     </ContextMenuPrimitive.Portal>
   );
@@ -2111,6 +2270,7 @@ export const SelectContent = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content>
 >(function SelectContent({ className, children, position = "popper", ...props }, ref) {
+  const liveGuard = useLiveGuardAttributes(props);
   return (
     <SelectPrimitive.Portal>
       <SelectPrimitive.Content
@@ -2123,6 +2283,7 @@ export const SelectContent = React.forwardRef<
           className,
         )}
         {...props}
+        {...liveGuard}
       >
         <SelectPrimitive.Viewport className="p-1">{children}</SelectPrimitive.Viewport>
       </SelectPrimitive.Content>

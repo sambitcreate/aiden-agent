@@ -88,7 +88,7 @@ export function analyticsService(): AnalyticsService {
   });
   service = created;
   // Shared services report through the seam, so they never import this file.
-  setAnalyticsReporter((event, props) => created.track(event, props));
+  setAnalyticsReporter((event, props) => created.track(event, props), () => created.actionReporter());
   return created;
 }
 

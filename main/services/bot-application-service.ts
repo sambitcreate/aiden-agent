@@ -10,7 +10,7 @@ import type { BotFolderApprovalReceipt, BotFolderGrantInput, BotFolderGrantJourn
 import { BotFolderGrantReplayStaleError } from "./bot-folder-grant-journal.js";
 import { BotAccessRequestStaleError } from "./bot-runtime/bot-access-requests.js";
 import { analyticsBotPresetId } from "./analytics/analytics-ids.js";
-import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
+import { captureAnalyticsReporter } from "./analytics/analytics-report.js";
 import { countBucket } from "./analytics/analytics-sanitize.js";
 import { BotRuntimeInventoryLeaseInvalidError } from "./bot-runtime-inventory-lease.js";
 import type {
@@ -329,8 +329,9 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
 
   // Counted in the background, so a slow store cannot hold the new Bot back.
   const reportBotCreated = (presetId: string | undefined): void => {
+    const report = captureAnalyticsReporter();
     void deps.botStore.list().then(
-      (bots) => reportAnalyticsEvent("bot_created", {
+      (bots) => report("bot_created", {
         preset_id: analyticsBotPresetId(presetId),
         bot_count: countBucket(bots.length),
       }),

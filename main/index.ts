@@ -15,6 +15,7 @@ import path from "node:path";
 
 import { registerHandlers } from "./handlers/index.js";
 import { prepareLocalSpeechStorage } from "./services/local-speech-models.js";
+import { storageUsageService } from "./services/storage-usage-main.js";
 import { chatTriage, startChatTriage, stopChatTriage } from "./services/chat-triage-main.js";
 import {
   registerInboxDockBadgeIpc,
@@ -96,11 +97,13 @@ import { flushDiagnosticHealth } from "./services/diagnostic-health.js";
 import { pruneExpiredDiagnosticCrashDumps } from "./services/diagnostic-support.js";
 import { scheduleService } from "./services/schedule-service.js";
 import { analyticsService, installAnalyticsCrashCapture } from "./services/analytics/analytics-main.js";
+import { initializeHookService } from "./services/hooks/hook-service-main.js";
 import { telegramService } from "./services/telegram/telegram-service.js";
 import { registerAppPathOpener } from "./services/app-navigation.js";
 import {
   effectiveBindings,
   migrateLegacyKeybindings,
+  setUnavailableCommandCapabilities,
 } from "../renderer/shared/keybindings.js";
 import { applicationMenuTemplate, parseMenuCommandIds } from "./services/application-menu-core.js";
 import type { NotificationChannel } from "../renderer/preload-channels.js";
@@ -131,9 +134,14 @@ import { registerChatAttachmentProtocol } from "./services/chat-attachment-proto
 import { createMainVisualSnapshotQueue } from "./services/visual-snapshot-main.js";
 import { disposeVisualSnapshots, installVisualSnapshotQueue } from "./services/visual-snapshot-service.js";
 import { registerCustomSchemes } from "./services/custom-schemes.js";
-import { createImagesEnabled, designStudioEnabled, studioAssetsEnabled } from "./services/studio/feature-flags.js";
-import { designProjectStore, designRunService } from "./services/design/main.js";
-import { startDesignStudio } from "./services/design/startup-core.js";
+import { createImagesEnabled, designModeEnabled, studioAssetsEnabled, studioCapabilities } from "./services/studio/feature-flags.js";
+import { createDesignFrameNavigationGuard } from "./services/design-canvas/frame-navigation.js";
+import {
+  closeGuardDiscardPrompt,
+  closeGuardSavingPrompt,
+  type CloseGuardSources,
+} from "./services/close-guard-prompt.js";
+import { startDesignProtocol } from "./services/design-canvas/protocol-main.js";
 import { createImagesRuntime } from "./services/create-images/main.js";
 import { ImageQuitCoverage, imageRunsAllowQuit } from "./services/create-images/quit-confirm-core.js";
 import { registerStudioAssetProtocol } from "./services/studio-assets/protocol.js";
@@ -155,6 +163,7 @@ import { EmptyChatMigrationSnapshotError } from "./services/empty-chat-migration
 import { migrateLegacyEmptyWorkspaceChats } from "./services/empty-chat-migration-main.js";
 import { ensureUserDataDir } from "./services/data-store.js";
 import { piCompactionSessionStore } from "./services/pi-compaction-session-store.js";
+import { designCanvasStore } from "./services/design-canvas/main.js";
 import {
   reconcileExternalProviderCredentialChanges,
   reconcilePendingProviderCredentialRotation,
@@ -190,12 +199,16 @@ import { mainWindowState } from "./services/main-window-state.js";
 import { desktopVersionRequested } from "./desktop-cli-core.js";
 import {
   createLifecycleCheck,
+  createUpdateInstallIntent,
+  settleUpdateInstallQuit,
+  whenLifecycleCheckFree,
   shouldQuitAfterAllWindowsClose,
   shouldReleaseAuxiliaryWindows,
 } from "./application-lifecycle-core.js";
 import { isAuxiliaryWindow } from "./windows/auxiliary-windows.js";
 import { destroyPill } from "./windows/pill-window.js";
 import { hostPlatformCapabilities } from "./services/host-platform-capabilities.js";
+import { installElectronConnectorWatchTransport } from "./services/bot-routine-events/connector-watch-startup.js";
 import { backgroundJobs, reapFollowThroughProcesses, shutdownFollowThrough, startFollowThrough } from "./services/follow-through/follow-through-main.js";
 import { reconcileChatScopedStores } from "./services/startup-chat-reconciliation.js";
 import { removeWorkspaceArtifacts } from "./services/workspace-artifacts/main.js";
@@ -211,7 +224,15 @@ if (process.platform === "linux") {
   app.commandLine.appendSwitch("enable-features", "GlobalShortcutsPortal");
 }
 
-registerCustomSchemes({ studioAssets: studioAssetsEnabled() });
+registerCustomSchemes({ studioAssets: studioAssetsEnabled(), designMode: designModeEnabled() });
+
+// Commands behind a flag that is off claim no shortcut, so they never block a
+// person's own binding or leave a saved `disabled` override behind.
+setUnavailableCommandCapabilities(
+  Object.entries(studioCapabilities())
+    .filter(([, enabled]) => !enabled)
+    .map(([capability]) => capability as keyof ReturnType<typeof studioCapabilities>),
+);
 
 const ownsSingleInstanceLock = app.requestSingleInstanceLock();
 
@@ -222,13 +243,6 @@ let resolveShortcutInitialization: (() => void) | null = null;
 const shortcutInitializationPromise = new Promise<void>((resolve) => {
   resolveShortcutInitialization = resolve;
 });
-/** Which renderer surfaces hold the unsaved or saving work, as the renderer's close guard reports them. */
-interface CloseGuardSources {
-  dirty: readonly string[];
-  saving: readonly string[];
-  /** The image workflow's title, while it is unsaved or saving. */
-  imagesLabel?: string;
-}
 let closeGuard = {
   dirty: false,
   gitBusy: false,
@@ -246,7 +260,10 @@ const lifecycleCheck = createLifecycleCheck((error) =>
 let shutdownStarted = false;
 /** In-flight image requests a last-window close already got a "quit" answer for; the quit it triggers asks only about more. */
 const imageQuitCoverage = new ImageQuitCoverage();
-let installUpdateOnQuit = false;
+const updateInstall = createUpdateInstallIntent({
+  shutdownStarted: () => shutdownStarted,
+  onWithdrawn: () => appUpdateService.announceSnapshot(),
+});
 let pendingPackagedSubagentSoakReceipt: SubagentPackagedSoakSession | undefined;
 const disposeAppUpdateStateSubscription = appUpdateService.subscribe(
   (snapshot) => {
@@ -325,22 +342,13 @@ function confirmProtectedAction(
     });
     return false;
   }
-  // The Files editor reports no sources through the IPC path; without them it is the editor.
-  const sources = closeGuard.sources;
-  const imagesSaving = sources?.saving.includes("images") === true;
-  const editorSaving = sources ? sources.saving.includes("editor") : true;
-  const imagesDirty = sources?.dirty.includes("images") === true;
-  const editorDirty = sources ? sources.dirty.includes("editor") || !imagesDirty : true;
-  const workflow = sources?.imagesLabel
-    ? `the image workflow “${sources.imagesLabel}”`
-    : "the image workflow";
   if (closeGuard.saving) {
-    const imagesOnly = imagesSaving && !editorSaving;
+    const prompt = closeGuardSavingPrompt(closeGuard.sources, action);
     dialog.showMessageBoxSync(window, {
       type: "info",
-      title: imagesOnly ? "Image workflow save in progress" : "File save in progress",
-      message: `Wait for ${imagesOnly ? workflow : "the open file"} to finish saving before ${action === "close" ? "closing Aiden" : "reloading"}.`,
-      buttons: ["Keep Aiden Open"],
+      title: prompt.title,
+      message: prompt.message,
+      buttons: prompt.buttons,
       defaultId: 0,
       cancelId: 0,
       noLink: true,
@@ -348,26 +356,13 @@ function confirmProtectedAction(
     return false;
   }
   if (!closeGuard.dirty) return true;
-  const file = closeGuard.path ? `“${closeGuard.path}”` : "The open file";
-  const imagesOnly = imagesDirty && !editorDirty;
+  const prompt = closeGuardDiscardPrompt(closeGuard.sources, closeGuard.path, action);
   const response = dialog.showMessageBoxSync(window, {
     type: "warning",
-    title: imagesOnly ? "Discard unsaved changes?" : "Discard unsaved edits?",
-    message: imagesOnly
-      ? `${workflow.charAt(0).toUpperCase()}${workflow.slice(1)} has changes that have not been saved.`
-      : imagesDirty
-        ? `${file} and ${workflow} have edits that have not been saved.`
-        : `${file} has edits that have not been saved.`,
-    detail:
-      action === "close"
-        ? `Closing Aiden will permanently discard those ${imagesOnly ? "changes" : "edits"}.`
-        : `Reloading Aiden will permanently discard those ${imagesOnly ? "changes" : "edits"}.`,
-    buttons: [
-      "Keep Editing",
-      action === "close"
-        ? imagesOnly ? "Discard Changes and Close" : "Discard Edits and Close"
-        : imagesOnly ? "Discard Changes and Reload" : "Discard Edits and Reload",
-    ],
+    title: prompt.title,
+    message: prompt.message,
+    detail: prompt.detail,
+    buttons: prompt.buttons,
     defaultId: 0,
     cancelId: 0,
     noLink: true,
@@ -413,6 +408,8 @@ function cleanupApplication(): void {
  * service already enforces on itself.
  */
 const SHUTDOWN_BUDGET_MS = {
+  // A Storage sweep stops before its next item; this waits for the one in hand.
+  storageCleanup: 6_000,
   geminiLive: 3_000,
   // Generation grace (6 s) plus the Gemini context-cache deletes that
   // llmClient.shutdown() runs after it. A delete still in flight at the
@@ -435,7 +432,6 @@ const SHUTDOWN_BUDGET_MS = {
   botRuntime: 5_000,
   subagentRunStore: 3_000,
   terminalHistory: 2_000,
-  designWork: 2_000,
   // ImageRunCoordinator.shutdown(): 1.5 s for in-flight requests to settle, then up to
   // 3 s for background auto-saves to finish before the run ledger closes.
   imageRuns: 5_000,
@@ -476,7 +472,7 @@ const PRE_SHUTDOWN_BUDGET_MS = {
 const SHUTDOWN_HARD_CEILING_MS = (() => {
   const b = SHUTDOWN_BUDGET_MS;
   const serial =
-    b.geminiLive + b.parentGenerations + b.backgroundJobs + b.modelPace +
+    b.storageCleanup + b.geminiLive + b.parentGenerations + b.backgroundJobs + b.modelPace +
     b.subagentRuntime + b.spending + b.analytics + b.soakReceipt + b.remoteAccess;
   const parallel = Math.max(
     b.providerSignIn,
@@ -484,7 +480,6 @@ const SHUTDOWN_HARD_CEILING_MS = (() => {
     b.botIngress + b.botRuntime,
     b.subagentRunStore,
     b.terminalHistory,
-    b.designWork,
     b.imageRuns + b.studioAssets,
     b.browser,
     b.botComputers,
@@ -547,6 +542,7 @@ async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
       await prepareComputerUseForQuit();
     } catch (error) {
       shutdownStarted = false;
+      updateInstall.withdraw();
       llmClient.setQuitInProgress(false);
       computerUseSettings.resumeAfterCancelledShutdown();
       logger.error(
@@ -558,6 +554,8 @@ async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
     }
   }
   const disarmShutdownCeiling = armShutdownCeiling();
+  // First, so no further chat or worktree is deleted while the rest of the app stops.
+  await settleShutdownStep("main", "Storage cleanup", SHUTDOWN_BUDGET_MS.storageCleanup, () => storageUsageService.shutdown());
   await settleShutdownStep("voice", "Gemini Live", SHUTDOWN_BUDGET_MS.geminiLive, () => geminiLiveService.shutdown());
   // Settle parent generations before registry teardown. A child can still be
   // constructing tools before it is registered, and its bounded drain must
@@ -663,13 +661,6 @@ async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
       await subagentRunStore.close();
     }),
     settleShutdownStep("terminal", "Terminal history", SHUTDOWN_BUDGET_MS.terminalHistory, () => terminalService.flushHistory()),
-    // Run settlements record their end through the project store, so they drain
-    // first and in-flight store writes after them. A store that was never
-    // opened (flags off) resolves at once.
-    settleShutdownStep("design", "Design work", SHUTDOWN_BUDGET_MS.designWork, async () => {
-      await designRunService.drain();
-      await designProjectStore.drain();
-    }),
     (async () => {
       // Image runs record their end (and close the run ledger) before the asset store closes.
       // A ledger that was never opened (flag off) resolves at once.
@@ -709,8 +700,7 @@ async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
   await flushDiagnosticJournal(1_000);
   await flushDiagnosticHealth(1_000);
   forceAppQuit = true;
-  if (installUpdateOnQuit) {
-    installUpdateOnQuit = false;
+  if (updateInstall.take()) {
     if (appUpdateService.installDownloadedUpdateAndRestart()) {
       // The installer owns the exit from here; never cut it off mid-install.
       disarmShutdownCeiling();
@@ -1114,12 +1104,22 @@ async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
     await shutdownAndQuit(true);
     return shutdownStarted;
   } finally {
+    // Before the release, so work queued behind this quit sees the outcome.
+    updateInstall.withdraw();
     lifecycleCheck.release();
-    if (!shutdownStarted && installUpdateOnQuit) {
-      installUpdateOnQuit = false;
-      appUpdateService.announceSnapshot();
-    }
   }
+}
+
+/** Start a quit once the check is free, if it is still wanted by then. */
+function continueApplicationQuit(window: BrowserWindow, stillWanted: () => boolean): void {
+  whenLifecycleCheckFree(lifecycleCheck, () => {
+    if (!stillWanted() || shutdownStarted) return;
+    void settleUpdateInstallQuit(
+      () => requestApplicationQuit(window),
+      () => updateInstall.withdraw(),
+      (error) => logger.error("main", "A deferred quit failed.", error),
+    );
+  });
 }
 
 async function clearRendererOnboardingCompletion(
@@ -1171,7 +1171,7 @@ async function restoreRendererOnboardingCompletion(
 async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
   if (
     shutdownStarted ||
-    installUpdateOnQuit ||
+    updateInstall.armed ||
     window.isDestroyed() ||
     !lifecycleCheck.tryBegin()
   ) {
@@ -1434,8 +1434,8 @@ ipcMain.handle("app:restartToUpdate", (event): AppUpdateRestartResult => {
   }
 
   const window = mainWindow;
-  installUpdateOnQuit = true;
-  setImmediate(() => void requestApplicationQuit(window));
+  updateInstall.arm();
+  setImmediate(() => continueApplicationQuit(window, () => updateInstall.armed));
   return {
     accepted: true,
   };
@@ -1837,7 +1837,11 @@ async function createMainWindow(
     } else if (interruptedAction === "quit") {
       forceAppQuit = false;
       shutdownStarted = false;
-      setImmediate(() => void requestApplicationQuit(createdWindow));
+      updateInstall.retryScheduled();
+      setImmediate(() => continueApplicationQuit(createdWindow, () => {
+        updateInstall.retryBegan();
+        return true;
+      }));
     } else if (interruptedAction === "close") {
       setImmediate(() => void requestWindowClose(createdWindow));
     } else if (interruptedAction === "reload") {
@@ -1874,6 +1878,15 @@ async function createMainWindow(
   createdWindow.webContents.on("will-redirect", (event, url) => {
     event.preventDefault();
     openExternalUrl(url);
+  });
+  // A design canvas frame runs a workspace page's own scripts; it must never leave its
+  // aiden-design: host for the web or a blank page that keeps the frame's window.
+  const designFrames = createDesignFrameNavigationGuard();
+  createdWindow.webContents.on("did-navigate", () => designFrames.reset());
+  createdWindow.webContents.on("will-frame-navigate", (event) => {
+    if (designFrames.allows(event)) return;
+    event.preventDefault();
+    logger.warn("design", "Blocked a design canvas frame from leaving its workspace page");
   });
 
   logger.info("main", "Loading renderer", { url: mainWindowUrl });
@@ -2296,6 +2309,7 @@ if (!ownsSingleInstanceLock) {
   app
     .whenReady()
     .then(async () => {
+      installElectronConnectorWatchTransport(hostPlatformCapabilities().bots);
       const runtimeProfile = currentRuntimeProfile();
       writeDiagnosticEvent({
         level: "info",
@@ -2362,6 +2376,10 @@ if (!ownsSingleInstanceLock) {
         grants: studioAssetGrants,
         registerProtocol: registerStudioAssetProtocol,
       });
+      // Design mode frames workspace files only through granted aiden-design:// hosts. It is
+      // registered before the window loads: a page only reaches the schemes handled when it
+      // loaded, so the canvas's own <img> frames would otherwise fail with an unknown scheme.
+      if (designModeEnabled()) startDesignProtocol();
       initialMainWindow = createMainWindow({ startupAdmissionHeld: true });
       // Observed below after reconciliation; never an unhandled rejection.
       initialMainWindow.catch(() => undefined);
@@ -2382,6 +2400,15 @@ if (!ownsSingleInstanceLock) {
         logger.warn(
           "aiden-live",
           "Aiden Live thread recovery is unavailable; Live starts will retry before writing session metadata.",
+          error,
+        );
+      }
+      try {
+        await initializeHookService();
+      } catch (error) {
+        logger.warn(
+          "hooks",
+          "Hook settings could not be loaded; tool calls are blocked until they load, and each event tries again.",
           error,
         );
       }
@@ -2407,7 +2434,7 @@ if (!ownsSingleInstanceLock) {
         onError: (error) =>
           logger.warn(
             "studio",
-            "Studio assets are unavailable; Design and Images will report a storage error.",
+            "Studio assets are unavailable; Images will report a storage error.",
             error,
           ),
       });
@@ -2472,6 +2499,7 @@ if (!ownsSingleInstanceLock) {
         }
         await piRuntimeEffectStore.deleteChat(chatId);
         await piCompactionSessionStore.deleteChat(chatId);
+        await designCanvasStore.delete(chatId);
         await chatStore.remove(chatId);
         // The same Inbox cleanup the live delete runs: no snooze or pin is left
         // behind for a chat whose delete a crash cut short.
@@ -2482,16 +2510,6 @@ if (!ownsSingleInstanceLock) {
       // After deletions settle and before any renderer draft exists.
       await workspaceApplicationService.prepareNoWorkspaceChats().catch((error: unknown) => {
         logger.warn("workspace", "No workspace chats could not be prepared; they keep their current folders.", error);
-      });
-      await startDesignStudio({
-        enabled: designStudioEnabled(),
-        store: designProjectStore,
-        onError: (error) =>
-          logger.warn(
-            "design",
-            "Design projects could not be restored; Design Studio will report a storage error.",
-            error,
-          ),
       });
       if (displayImageArtifactAvailability.available) {
         try {

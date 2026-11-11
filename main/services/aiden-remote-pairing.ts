@@ -8,7 +8,7 @@ import {
   assertAidenRemoteEndpoint,
   type AidenRemoteCapability,
 } from "./aiden-remote-protocol.js";
-import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
+import { captureAnalyticsReporter } from "./analytics/analytics-report.js";
 import { countBucket } from "./analytics/analytics-sanitize.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import { hkdfSha256, sealAesGcm } from "./aiden-remote-sealed-envelope.js";
@@ -234,7 +234,7 @@ export class AidenRemotePairingService {
 
   constructor(
     private readonly instanceId: string,
-    private readonly devices: Pick<AidenRemoteStateRegistry, "issueDevice"> &
+    private readonly devices: Pick<AidenRemoteStateRegistry, "issueDevice" | "revokeDevice"> &
       Partial<Pick<AidenRemoteStateRegistry, "listDevices">>,
     private readonly dependencies: AidenRemotePairingDependencies = {
       now: Date.now,
@@ -517,6 +517,9 @@ export class AidenRemotePairingService {
         authorizeCommit: () => this.window === current && !current.cancelled,
       });
       if (this.window !== current || current.cancelled) {
+        // `authorizeCommit` passes inside the write, so the window can close
+        // after the record committed. Its credential never leaves this process.
+        await this.devices.revokeDevice(issued.device.id).catch(() => undefined);
         throw new AidenRemoteServiceError(
           "pairing_closed",
           "This pairing window was closed before the device was created.",
@@ -549,11 +552,12 @@ export class AidenRemotePairingService {
   // read in the background so the phone's pairing never waits on it.
   private reportPhonePaired(deviceType: AidenRemoteDeviceType, transport: "lan" | "tailscale"): void {
     if (deviceType === "mac" || deviceType === "linux") return;
+    const report = captureAnalyticsReporter();
     void Promise.resolve()
       .then(() => this.devices.listDevices?.())
       .then((devices = []) => {
         const phones = devices.filter((device) => !device.revokedAt && device.type !== "mac" && device.type !== "linux");
-        reportAnalyticsEvent("phone_paired", { transport, device_count: countBucket(phones.length) });
+        report("phone_paired", { transport, device_count: countBucket(phones.length) });
       })
       .catch(() => undefined);
   }

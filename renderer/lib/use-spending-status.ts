@@ -53,14 +53,14 @@ export function useSpendingStatus(
     return () => clearTimeout(timer);
   }, [periodEnd]);
   const allowMore = React.useCallback(async () => {
-    if (!ownerId) return;
+    if (!status || status.ownerId !== ownerId || status.ownerKind !== ownerKind) return;
     setAllowing(true);
     try {
-      const next = await spendingApi.allowMore(ownerKind, ownerId);
-      setStatus(next ?? undefined);
+      await spendingApi.allowMore(status);
+      reread.current?.();
     } finally {
       setAllowing(false);
     }
-  }, [ownerKind, ownerId]);
+  }, [ownerKind, ownerId, status]);
   return { status, allowMore, allowing };
 }

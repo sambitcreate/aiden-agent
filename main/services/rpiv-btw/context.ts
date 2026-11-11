@@ -1,6 +1,7 @@
 import type { Api, AssistantMessage, Message, Model } from "@earendil-works/pi-ai";
 import { compactGenerationContext } from "../generation-context.js";
 import { chatMessageToPiMessage } from "../generation-messages.js";
+import { isHookBlockedPrompt } from "../hook-blocked-prompt.js";
 import type { Chat } from "../types.js";
 import { BTW_LIMITS } from "../../../renderer/shared/btw.js";
 
@@ -90,6 +91,7 @@ export function completedVisibleContext(chat: Chat, model: Model<Api>): Message[
     chat.messages
       .slice(0, terminal + 1)
       .filter((message) => message.role === "user" || message.role === "assistant")
+      .filter((message) => !isHookBlockedPrompt(message))
       .map((message) => chatMessageToPiMessage(message, model, false)),
   );
 }

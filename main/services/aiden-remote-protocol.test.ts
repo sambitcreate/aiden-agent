@@ -467,7 +467,7 @@ test("pairing request fixtures only carry a sealed envelope for an approved requ
   delete revision19.botHandoffs;
   delete revision19.botAccessRequests;
   delete revision19.botPlans;
-  delete revision19.botAllowed;
+  delete revision19.botAllowed; delete revision19.voiceInput;
   // Bot issues on phones are revision 42.
   delete revision19.botIssues;
   // Schedule approval cards are revision 39.
@@ -701,6 +701,25 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/chats/{chatId}/controls/{panelId}",
     "/bots/{botId}/session/images/{entryId}",
     "/chats/{chatId}/recordings/{recordingId}",
+    "/bots/{botId}/open-work",
+    "/bots/{botId}/open-work/{itemId}/evidence/{kind}",
+    "/bots/{botId}/watches",
+    "/bots/{botId}/watches/sources",
+    "/bots/{botId}/watches/test",
+    "/bots/{botId}/watches/{watchId}",
+    "/bots/{botId}/watches/{watchId}/enabled",
+    "/bots/{botId}/watches/{watchId}/run",
+    "/bots/{botId}/routine-models/{routineId}",
+    "/bots/{botId}/routine-models/{routineId}/catalog",
+    "/bots/{botId}/routine-models/{routineId}/runs",
+    "/bots/{botId}/routine-resume-status",
+    "/bots/{botId}/routine-models",
+    "/bots/{botId}/peers",
+    "/bots/{botId}/peers/catalog",
+    "/bots/{botId}/peer-exchanges",
+    "/bots/{botId}/peer-exchanges/{exchangeId}",
+    "/bots/{botId}/peer-exchanges/{exchangeId}/stop",
+    "/bots/{botId}/peer-exchanges/{exchangeId}/evidence/{kind}",
     "/bots/messaging",
     "/bots/{botId}/allowed",
     "/bots/{botId}/allowed/{entryId}/remove",
@@ -2617,7 +2636,7 @@ test("Bot attachment references arrive in revision 33 and only where the host an
   const older = structuredClone(raw);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed;
+  delete older.botAllowed; delete older.voiceInput;
   older.contractRevision = 32;
   record(older.hostHealth, "hostHealth").contractRevision = 32;
   assert.throws(() => parseAidenRemoteContractFixture(older), /require contract revision 33/u);
@@ -2881,7 +2900,7 @@ test("Bot hand-off fixtures require their own revision, and an older fixture par
   const older = structuredClone(raw);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed;
+  delete older.botAllowed; delete older.voiceInput;
   older.contractRevision = AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION - 1;
   record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION - 1;
   delete older.scheduleCards;
@@ -2923,7 +2942,7 @@ test("new worktree fixtures need their own revision, and a moved chat has no mes
   const older = structuredClone(raw);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed;
+  delete older.botAllowed; delete older.voiceInput;
   older.contractRevision = AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION - 1;
   record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION - 1;
   assert.throws(
@@ -2958,7 +2977,7 @@ test("spending fixtures need their own revision, parse strictly, and refuse with
   const older = structuredClone(raw);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed;
+  delete older.botAllowed; delete older.voiceInput;
   older.contractRevision = AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION - 1;
   record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION - 1;
   assert.throws(
@@ -3007,7 +3026,7 @@ test("raw upload fixtures need their own revision, and every client spells a pic
   const older = structuredClone(raw);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed;
+  delete older.botAllowed; delete older.voiceInput;
   // Sections from later revisions leave with the downgrade, so only this one is refused.
   delete older.chatNewWorktree;
   older.contractRevision = AIDEN_REMOTE_RAW_UPLOADS_CONTRACT_REVISION - 1;
@@ -3043,7 +3062,7 @@ test("background job fixtures need their own revision, and the parser and schema
   const older = structuredClone(raw);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed;
+  delete older.botAllowed; delete older.voiceInput;
   // Sections from later revisions leave with the downgrade, so only this one is refused.
   delete older.chatNewWorktree;
   older.contractRevision = AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION - 1;
@@ -3137,7 +3156,7 @@ test("Bot shared images need their own revision, and the schema and parser accep
   const older = structuredClone(raw);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed;
+  delete older.botAllowed; delete older.voiceInput;
   older.contractRevision = AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION - 1;
   record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION - 1;
   delete older.browserRecordings;
@@ -3179,7 +3198,7 @@ test("browser recordings need their own revision, and a recording step carries o
   const older = structuredClone(raw);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed;
+  delete older.botAllowed; delete older.voiceInput;
   older.contractRevision = AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION - 1;
   record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION - 1;
   assert.throws(
@@ -3336,7 +3355,7 @@ test("Bot issue OpenAPI schemas accept the shared fixture and refuse what the pa
       notifications: [{ ...section.notification.notifications[0], status: "failed" }],
     }),
     false,
-    "an issue item must not carry a routine status",
+    "issue notifications cannot carry a routine status, matching the runtime parser",
   );
 });
 
@@ -3553,11 +3572,11 @@ test("revision 55 access fixtures and strict public DTOs reject private fields a
   for (const change of [{ label: "x".repeat(121) }, { why: "x".repeat(401) }, { place: "x".repeat(513) }, { why: " " }, { label: "Bad\u0000" }, { place: "relative/path" }, { waitId: "bad_id" }, { choices: ["once", "always", "not_now"] }, { choices: ["not_now", "once", "once"] }]) assert.throws(() => card({ ...section.folder, ...change }));
   assert.throws(() => card({ ...section.wholeMac, choices: ["not_now", "always", "once"] }));
   assert.throws(() => card({ ...section.wholeMac, place: "~/Reports" }));
-  const older = structuredClone(raw); delete older.botPlans; delete older.botAllowed; older.contractRevision = 54; older.hostHealth.contractRevision = 54;
+  const older = structuredClone(raw); delete older.botPlans; delete older.botAllowed; delete older.voiceInput; older.contractRevision = 54; older.hostHealth.contractRevision = 54;
   assert.throws(() => parseAidenRemoteContractFixture(older), /require revision 55/u);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed;
+  delete older.botAllowed; delete older.voiceInput;
   assert.equal(parseAidenRemoteContractFixture(older).botAccessRequests, undefined);
   const { default: Ajv2020 } = await import("ajv/dist/2020.js");
   const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
@@ -3588,7 +3607,7 @@ test("revision 56 plans decode strictly, preserve absent versus null, and exclud
   const section = protocol.parseAidenRemoteContractFixture(raw).botPlans!;
   assert.deepEqual(section, raw.botPlans);
   assert.equal(protocol.AIDEN_REMOTE_BOT_PLANS_CONTRACT_REVISION, 56);
-  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 58);
+  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 60);
   assert.equal(section.pending.status, "pending");
   assert.equal(section.active.steps[0].status, "done");
   const parse = protocol.parseAidenRemoteBotPlan;
@@ -3601,10 +3620,10 @@ test("revision 56 plans decode strictly, preserve absent versus null, and exclud
   assert.throws(() => protocol.parseAidenRemoteBotSessionEvent({ ...section.events[1], payload: {} }));
   const leaked = structuredClone(raw); leaked.botPlans.legacy.session.plan = null;
   assert.throws(() => protocol.parseAidenRemoteContractFixture(leaked));
-  const older = structuredClone(raw); delete older.botAllowed; older.contractRevision = 55; older.hostHealth.contractRevision = 55;
+  const older = structuredClone(raw); delete older.botAllowed; delete older.voiceInput; older.contractRevision = 55; older.hostHealth.contractRevision = 55;
   assert.throws(() => protocol.parseAidenRemoteContractFixture(older), /revision 56/u);
   delete older.botPlans;
-  delete older.botAllowed;
+  delete older.botAllowed; delete older.voiceInput;
   assert.equal(protocol.parseAidenRemoteContractFixture(older).botPlans, undefined);
 });
 
@@ -3675,7 +3694,7 @@ test("revision 57 allowed fixture is strict and exposes only bounded public list
   const raw = await json("fixtures/contract.json") as Record<string, any>;
   const section = protocol.parseAidenRemoteContractFixture(raw).botAllowed!;
   assert.deepEqual(section, raw.botAllowed);
-  assert.equal(protocol.AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION, 57); assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 58);
+  assert.equal(protocol.AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION, 57); assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 60);
   const all = [...section.paginated.firstPage.entries, ...section.paginated.nextPage.entries];
   assert.equal(all.length, 53); assert.equal(all.filter(e => e.kind === "rule").length, 50); assert.equal(all.filter(e => e.kind === "folder").length, 3);
   assert.equal(new Set(all.map(e => e.id)).size, 53);
@@ -3689,7 +3708,7 @@ test("revision 57 allowed fixture is strict and exposes only bounded public list
     assert.throws(() => protocol.parseAidenRemoteBotAccessRequest({ ...section.legacyAccessRequest, approvalCount: count }));
   }
   assert.throws(() => protocol.parseAidenRemoteBotApproval({ ...section.approval, canAllow: false }));
-  const older = structuredClone(raw); older.contractRevision = 56; older.hostHealth.contractRevision = 56;
+  const older = structuredClone(raw); delete older.voiceInput; older.contractRevision = 56; older.hostHealth.contractRevision = 56;
   assert.throws(() => protocol.parseAidenRemoteContractFixture(older), /revision 57/u); delete older.botAllowed;
   assert.equal(protocol.parseAidenRemoteContractFixture(older).botAllowed, undefined);
 });
@@ -3709,4 +3728,34 @@ test("D allowed OpenAPI accepts public fixtures, counts and pages and refuses pr
   assert.equal(access(section.accessRequest), true, JSON.stringify(access.errors)); assert.equal(access(section.legacyAccessRequest), true);
   assert.equal(access({ ...section.accessRequest, approvalCount: 21 }), false);
   assert.equal(access({ ...section.accessRequest, choices: ["not_now", "once"] }), false);
+});
+
+test("revision 60 marks only user messages Aiden Live sent by voice, and clients drop values they do not know", async () => {
+  const protocol = await import("./aiden-remote-protocol.js");
+  const raw = await json("fixtures/contract.json") as Record<string, any>;
+  assert.equal(protocol.AIDEN_REMOTE_VOICE_INPUT_CONTRACT_REVISION, 60);
+  const fixture = protocol.parseAidenRemoteContractFixture(raw).voiceInput;
+  assert.ok(fixture);
+  const byId = new Map(fixture.chat.messages.map((message) => [message.id, message.inputSource]));
+  assert.equal(byId.get("message_fixture_voice_user"), "voice");
+  assert.equal(byId.get("message_fixture_voice_assistant"), undefined, "assistant replies never carry the label");
+  assert.equal(byId.get("message_fixture_voice_unknown"), undefined, "an unknown source reads as typed");
+
+  // A fixture that claims a different marked set than the parser yields is refused.
+  const wrong = structuredClone(raw);
+  wrong.voiceInput.voiceMessageIds = ["message_fixture_voice_user", "message_fixture_voice_assistant"];
+  assert.throws(() => protocol.parseAidenRemoteContractFixture(wrong), /marks different messages/u);
+  const older = structuredClone(raw);
+  older.contractRevision = 59;
+  older.hostHealth.contractRevision = 59;
+  assert.throws(() => protocol.parseAidenRemoteContractFixture(older), /revision 60/u);
+
+  const { default: Ajv2020 } = await import("ajv/dist/2020.js");
+  const spec = await json("openapi.json") as { components: object };
+  const message = new Ajv2020({ strict: false, validateFormats: false }).compile({ $ref: "#/components/schemas/Message", components: spec.components });
+  const [voiceUser] = raw.voiceInput.chat.messages;
+  assert.equal(message(voiceUser), true, JSON.stringify(message.errors));
+  const { inputSource: _dropped, ...typed } = voiceUser;
+  assert.equal(message(typed), true, "the field is optional, so older hosts stay valid");
+  assert.equal(message({ ...voiceUser, inputSource: "dictation" }), false, "hosts send only the voice marker");
 });

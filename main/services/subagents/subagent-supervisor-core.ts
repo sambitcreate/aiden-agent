@@ -1,6 +1,7 @@
 import { parseCompactionModelOverrides } from "../../../renderer/shared/compaction.js";
 import type { CompactionEngine, CompactionModelOverrides } from "../../../renderer/shared/compaction.js";
 import type { ResolvedModelRuntime } from "../model-runtime-core.js";
+import type { SubagentRuntimeTransform } from "./subagent-runtime-authority.js";
 import type { WorkspacePermission } from "../types.js";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { createHash, randomUUID } from "node:crypto";
@@ -24,6 +25,7 @@ import {
   MAX_SUBAGENT_CHILD_TURNS,
 } from "./subagent-child-policy.js";
 import type { RunSubagentChildInput } from "./subagent-child-runner.js";
+import type { SurfaceHooks } from "../agent-surface-hooks.js";
 import type { SubagentReadToolName } from "./capability-profile.js";
 import {
   capturePersistedSubagentContext,
@@ -119,6 +121,8 @@ export interface SubagentSupervisorInput {
   chatId: string;
   workspaceId: string;
   runtime: ResolvedModelRuntime;
+  /** Parent-owned binding applied after isolated transport construction. */
+  transformRuntime?: SubagentRuntimeTransform;
   thinkingLevel: ThinkingLevel;
   workspaceRoot: string;
   permission: WorkspacePermission;
@@ -154,6 +158,11 @@ export interface SubagentSupervisorInput {
   healthMetrics?: SubagentHealthMetricsSink;
   policy?: SubagentSupervisorPolicy;
   runChild?: (input: RunSubagentChildInput) => Promise<SubagentTaskResult>;
+  /**
+   * The parent's hooks, for `SubagentStop` when each child reaches a terminal
+   * state. Observe-only and never awaited; absent means no hooks run.
+   */
+  stopHooks?: SurfaceHooks;
   now?: () => number;
   /** Test seam for deterministic opaque-identifier allocation. */
   randomUUID?: () => string;
@@ -370,6 +379,9 @@ function formatResults(
 }
 
 /** Generation-scoped launch budget and deterministic parallel child aggregation. */
+/** The child's report as SubagentStop hooks read it, bounded like a tool result. */
+const SUBAGENT_STOP_HOOK_SUMMARY_CHARS = 8_000;
+
 export class SubagentSupervisor {
   private launches = 0;
   private v2TokensUsed = 0;
@@ -393,6 +405,8 @@ export class SubagentSupervisor {
   ) => Promise<SubagentTaskResult>;
   private readonly randomUUID: () => string;
   private readonly terminalHealthRuns = new Set<string>();
+  /** Children whose SubagentStop hooks already fired. */
+  private readonly stoppedRuns = new Set<string>();
   /** Depth-1 child models, so a depth-2 child inherits from its own parent. */
   private readonly childModels = new Map<string, SubagentChildModel<ResolvedModelRuntime>>();
   private readonly liveBatchStops = new Set<(reason: Error) => number>();
@@ -493,6 +507,17 @@ export class SubagentSupervisor {
 
   private finishRun(runId: string, result: SubagentTaskResult): void {
     this.input.projector?.finish(runId, result);
+    if (!this.stoppedRuns.has(runId)) {
+      this.stoppedRuns.add(runId);
+      this.input.stopHooks?.observe("SubagentStop", {
+        stop_hook_active: false,
+        agent_id: runId,
+        agent_type: result.role,
+        aiden_label: result.label,
+        aiden_status: result.status,
+        last_assistant_message: result.summary.slice(0, SUBAGENT_STOP_HOOK_SUMMARY_CHARS),
+      }, { idempotencyKey: `SubagentStop:${this.input.generationId}:${runId}` });
+    }
     if (
       result.status !== "interrupted" &&
       !this.terminalHealthRuns.has(runId)
@@ -721,6 +746,7 @@ export class SubagentSupervisor {
                   childId: identity.childId,
                   groupId,
                   runtime: childModels[index]?.runtime ?? this.input.runtime,
+                  transformRuntime: this.input.transformRuntime,
                   thinkingLevel: authority.thinkingLevel,
                   compactionEngine: this.input.compactionEngine,
                   compactionModelOverrides: this.input.compactionModelOverrides,
@@ -1323,6 +1349,7 @@ export class SubagentSupervisor {
               childId: identity.childId,
               groupId,
               runtime: childModels[index]?.runtime ?? this.input.runtime,
+              transformRuntime: this.input.transformRuntime,
               thinkingLevel:
                 childModels[index]?.selection.effort ?? this.input.thinkingLevel,
               compactionEngine: this.input.compactionEngine,

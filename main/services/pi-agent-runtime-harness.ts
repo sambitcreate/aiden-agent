@@ -1,3 +1,9 @@
+import {
+  INITIAL_PI_MANAGED_RUN_STATE,
+  piManagedQueueBlock,
+  transitionPiManagedRun,
+  type PiManagedRunEvent,
+} from "./pi-managed-run-state.js";
 import { MODEL_CALL_RETRY_POLICY } from "./model-call-retry.js";
 import { createSideBySideToolPolicy } from "./side-by-side-tools.js";
 import { cutOffContinuationMessage, keptCutOffReply, type CutOffReason } from "./cut-off-reply.js";
@@ -329,6 +335,29 @@ export interface PiRuntimeRunOptions {
   maxCutOffContinuations?: number;
   /** Called before the continuation is sent; a dropped stream also reports its retry. */
   onContinue?: (event: PiRuntimeContinueEvent) => Promise<void> | void;
+  /**
+   * Asked when a reply ends normally (stop reason "stop"), before the run
+   * completes. Returning `continueWith` text keeps the run going with that
+   * text as a host message, at most `maxStopContinuations` times per run.
+   * Never asked after an abort, an error, an output-limit stop or a Stop by
+   * the person; a throw or a cancellation completes the run as it was.
+   */
+  onStop?: (event: PiRuntimeStopEvent) => Promise<PiRuntimeStopDecision | undefined> | PiRuntimeStopDecision | undefined;
+  /** Unset or 0 never asks `onStop`. */
+  maxStopContinuations?: number;
+}
+
+export interface PiRuntimeStopEvent {
+  finalMessage: AssistantMessage;
+  /** Stop continuations already made in this run; 0 for the first ask. */
+  continuations: number;
+  maxContinuations: number;
+  signal: AbortSignal;
+}
+
+export interface PiRuntimeStopDecision {
+  /** The host message the model receives before it continues. Blank ends the run. */
+  continueWith?: string;
 }
 
 export interface PiRuntimeQueueOptions {
@@ -923,15 +952,10 @@ export class PiAgentRuntimeHarness {
   private policyFault: Error | undefined;
   private managedHostFault: PiRuntimeHostFaultKind | undefined;
   private managedProviderFailure: PiRuntimeFailureReason | undefined;
-  private appCancelRequested = false;
-  /** An abort() that arrived while no managed run was active; the next run honours it. */
-  private pendingAbort = false;
-  /** Set by abortForShutdown: the cancelled run's operation is recorded as interrupted. */
-  private shutdownInterrupted = false;
+  /** Run gate. Every change goes through transitionPiManagedRun. */
+  private managedRun = INITIAL_PI_MANAGED_RUN_STATE;
   private managedAbortController: AbortController | undefined;
   private lastManagedOutcome: PiRuntimeTerminalOutcome | undefined;
-  private managedRunning = false;
-  private managedQueueOpen = false;
   private managedOperationSettlement: Promise<void> | undefined;
   private readonly detachedDurabilityOperations = new Set<Promise<void>>();
   private running = false;
@@ -1440,8 +1464,8 @@ export class PiAgentRuntimeHarness {
           this.terminatedNestedParents.delete(event.message.toolCallId);
         }
       }
-      if (event.type === "agent_start" && this.managedRunning && !this.appCancelRequested) {
-        this.managedQueueOpen = true;
+      if (event.type === "agent_start") {
+        this.advanceManagedRun({ type: "agent-started" });
       } else if (
         event.type === "message_end" &&
         event.message.role === "assistant" &&
@@ -1451,9 +1475,9 @@ export class PiAgentRuntimeHarness {
         // Pi does not drain steer/follow-up queues after an error, abort, or
         // output-limit terminal. Close admission before external subscribers
         // can observe the later turn_end event and enqueue work that cannot run.
-        this.managedQueueOpen = false;
+        this.advanceManagedRun({ type: "queue-closed" });
       } else if (event.type === "agent_end") {
-        this.managedQueueOpen = false;
+        this.advanceManagedRun({ type: "queue-closed" });
         this.activeTools.clear();
         this.nestedCalls.clear();
         this.nestedRetainedBytes.clear();
@@ -1886,17 +1910,14 @@ export class PiAgentRuntimeHarness {
     if (this.running || this.managedRunning) {
       throw new Error("Pi runtime harness is busy.");
     }
-    this.managedRunning = true;
-    this.managedQueueOpen = false;
+    // A Stop that arrived before this run started (while the caller was still
+    // preparing the turn) must cancel it rather than be forgotten here.
+    this.advanceManagedRun({ type: "run-started" });
     let settleManagedOperation!: () => void;
     const managedOperationSettlement = new Promise<void>((resolve) => {
       settleManagedOperation = resolve;
     });
     this.managedOperationSettlement = managedOperationSettlement;
-    // A Stop that arrived before this run started (while the caller was still
-    // preparing the turn) must cancel it rather than be forgotten here.
-    this.appCancelRequested = this.pendingAbort;
-    this.pendingAbort = false;
     this.managedHostFault = undefined;
     this.managedProviderFailure = undefined;
     this.lastManagedOutcome = undefined;
@@ -1913,7 +1934,7 @@ export class PiAgentRuntimeHarness {
     this.managedAbortController = abortController;
     const parentSignal = durability.signal;
     const abortFromParent = () => {
-      this.appCancelRequested = true;
+      this.advanceManagedRun({ type: "parent-aborted" });
       abortController.abort(parentSignal?.reason);
       this.agent.abort();
     };
@@ -1926,11 +1947,15 @@ export class PiAgentRuntimeHarness {
     let attempts = 0;
     let continuations = 0;
     const maxContinuations = Math.max(0, options.maxCutOffContinuations ?? 0);
+    let stopContinuations = 0;
+    const maxStopContinuations = options.onStop
+      ? Math.max(0, Math.floor(options.maxStopContinuations ?? 0))
+      : 0;
     const cancelled = () => this.appCancelRequested || abortController.signal.aborted;
     const finish = async (outcome: PiRuntimeTerminalOutcome): Promise<PiRuntimeTerminalOutcome> => {
       let finalized = outcome;
-      const interruptedByShutdown = this.shutdownInterrupted;
-      this.shutdownInterrupted = false;
+      const interruptedByShutdown = this.managedRun.shutdownInterrupted;
+      this.advanceManagedRun({ type: "shutdown-recorded" });
       try {
         await this.finishEffectOperation(
           outcome.kind === "completed"
@@ -2038,6 +2063,37 @@ export class PiAgentRuntimeHarness {
       }
       return await appendCutOffMessages([cutOffContinuationMessage()], finalMessage);
     };
+    // A completed reply the host asks to keep going (a Stop hook). The host
+    // message joins the live context and the journal like a cut-off
+    // continuation. "continue" means the loop sends the next attempt.
+    const continueAfterStop = async (
+      finalMessage: AssistantMessage,
+    ): Promise<PiRuntimeTerminalOutcome | "continue" | undefined> => {
+      const onStop = options.onStop;
+      if (!onStop || stopContinuations >= maxStopContinuations || cancelled()) return undefined;
+      const decision = await waitForManagedPromise(
+        Promise.resolve().then(() =>
+          onStop({
+            finalMessage: structuredClone(finalMessage),
+            continuations: stopContinuations,
+            maxContinuations: maxStopContinuations,
+            signal: abortController.signal,
+          }),
+        ),
+        abortController.signal,
+      );
+      // The person's Stop wins, and a failing host callback never breaks a
+      // reply that already completed.
+      if (decision.kind !== "completed" || cancelled()) return undefined;
+      const text = decision.value?.continueWith?.trim();
+      if (!text) return undefined;
+      stopContinuations += 1;
+      const stopped = await appendCutOffMessages(
+        [{ role: "user", content: [{ type: "text", text }], timestamp: Date.now() }],
+        finalMessage,
+      );
+      return stopped ?? "continue";
+    };
     this.runtimeEvents?.setAttempt(0);
     this.runtimeEvents?.emit({ type: "run_start", input: input.kind });
     try {
@@ -2112,7 +2168,11 @@ export class PiAgentRuntimeHarness {
       }
       if (cancelled()) return await finish({ kind: "app_cancelled", attempts });
 
-      const complete = async (assistant: AssistantMessage, alreadyCompacted: boolean) => {
+      // Settles a pending emergency checkpoint; a result means the run ended there.
+      const recoverCheckpoint = async (
+        assistant: AssistantMessage,
+        alreadyCompacted: boolean,
+      ): Promise<PiRuntimeTerminalOutcome | undefined> => {
         if (this.pendingEmergencyCheckpoint && !alreadyCompacted) {
           const recoveryOperation = coordinator.compact({ localOnly: this.stoppedAtSpendingLimit });
           const recovery = await waitForManagedPromise(recoveryOperation, abortController.signal);
@@ -2135,8 +2195,11 @@ export class PiAgentRuntimeHarness {
           if (recovery.value.messages) this.installCompactedMessages(recovery.value.messages);
           this.pendingEmergencyCheckpoint = false;
         }
-        return await finish({ kind: "completed", finalMessage: assistant, attempts });
+        return undefined;
       };
+      const complete = async (assistant: AssistantMessage, alreadyCompacted: boolean) =>
+        (await recoverCheckpoint(assistant, alreadyCompacted)) ??
+        (await finish({ kind: "completed", finalMessage: assistant, attempts }));
 
       try {
         const repairOperation = coordinator.prepareForPrompt();
@@ -2581,7 +2644,14 @@ export class PiAgentRuntimeHarness {
             attempts,
           });
         }
-        return await complete(assistant, compactionResult.compacted);
+        const recovered = await recoverCheckpoint(assistant, compactionResult.compacted);
+        if (recovered) return recovered;
+        if (assistant.stopReason === "stop") {
+          const afterStop = await continueAfterStop(assistant);
+          if (afterStop === "continue") continue;
+          if (afterStop) return afterStop;
+        }
+        return await finish({ kind: "completed", finalMessage: assistant, attempts });
       }
     } finally {
       parentSignal?.removeEventListener("abort", abortFromParent);
@@ -2595,8 +2665,7 @@ export class PiAgentRuntimeHarness {
       if (this.managedAbortController === abortController) {
         this.managedAbortController = undefined;
       }
-      this.managedRunning = false;
-      this.managedQueueOpen = false;
+      this.advanceManagedRun({ type: "run-settled" });
       settleManagedOperation();
       if (this.managedOperationSettlement === managedOperationSettlement) {
         this.managedOperationSettlement = undefined;
@@ -2612,10 +2681,8 @@ export class PiAgentRuntimeHarness {
    * the later queueSteer/queueFollowUp call, which re-validates atomically.
    */
   queueAdmissionBlocked(): "not-active" | "cancelled" | "capacity" | undefined {
-    if (this.disposed || !this.managedRunning || !this.managedQueueOpen) {
-      return "not-active";
-    }
-    if (this.appCancelRequested) return "cancelled";
+    const blocked = piManagedQueueBlock(this.managedRun, this.disposed);
+    if (blocked) return blocked;
     if (this.acceptedQueuedMessages.length >= PiAgentRuntimeHarness.MAX_ACCEPTED_QUEUE_MESSAGES) {
       return "capacity";
     }
@@ -2699,14 +2766,12 @@ export class PiAgentRuntimeHarness {
    * cancelled: the app is quitting, so the person can resume it next launch.
    */
   abortForShutdown(): void {
-    this.shutdownInterrupted = true;
+    this.advanceManagedRun({ type: "shutdown-requested" });
     this.abort();
   }
 
   abort(): void {
-    if (!this.managedRunning) this.pendingAbort = true;
-    this.appCancelRequested = true;
-    this.managedQueueOpen = false;
+    this.advanceManagedRun({ type: "stop-requested" });
     this.managedAbortController?.abort(new Error("The app cancelled the Pi runtime operation."));
     void this.compactionPromise?.then((coordinator) => coordinator.abort()).catch(() => undefined);
     this.agent.abort();
@@ -2780,9 +2845,7 @@ export class PiAgentRuntimeHarness {
     this.policyFault = undefined;
     this.managedHostFault = undefined;
     this.managedProviderFailure = undefined;
-    this.appCancelRequested = false;
-    this.pendingAbort = false;
-    this.managedQueueOpen = false;
+    this.advanceManagedRun({ type: "reset" });
     this.lastManagedOutcome = undefined;
     this.pendingDurableMessages = [];
     this.acceptedQueuedMessages = [];
@@ -3145,6 +3208,18 @@ export class PiAgentRuntimeHarness {
     });
   }
 
+  private advanceManagedRun(event: PiManagedRunEvent): void {
+    this.managedRun = transitionPiManagedRun(this.managedRun, event);
+  }
+
+  private get appCancelRequested(): boolean {
+    return this.managedRun.stop === "requested";
+  }
+
+  private get managedRunning(): boolean {
+    return this.managedRun.running;
+  }
+
   private assertUsable(): void {
     if (this.disposed) throw new Error("Pi runtime harness is disposed.");
   }
@@ -3152,10 +3227,8 @@ export class PiAgentRuntimeHarness {
   private rejectedQueueReceipt(
     message: AgentMessage,
   ): Extract<PiRuntimeQueueReceipt, { accepted: false }> | undefined {
-    if (this.disposed || !this.managedRunning || !this.managedQueueOpen) {
-      return { accepted: false, reason: "not-active" };
-    }
-    if (this.appCancelRequested) return { accepted: false, reason: "cancelled" };
+    const blocked = piManagedQueueBlock(this.managedRun, this.disposed);
+    if (blocked) return { accepted: false, reason: blocked };
     if (message.role !== "user") return { accepted: false, reason: "invalid-message" };
     if (this.acceptedQueuedMessages.length >= PiAgentRuntimeHarness.MAX_ACCEPTED_QUEUE_MESSAGES) {
       return { accepted: false, reason: "capacity" };

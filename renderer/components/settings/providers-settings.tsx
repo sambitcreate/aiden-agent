@@ -7,15 +7,7 @@ import {
   AlertDialog,
   Badge,
   Button,
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
+  Field,
   Separator,
   Select,
   SelectContent,
@@ -25,8 +17,9 @@ import {
   Text,
   toast,
 } from "../ui";
-import { Check, Loader2, ChevronDown, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Check, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { ProviderIcon } from "../provider-icon";
+import { InfoHint } from "../ui-info-hint";
 import { ProviderEditor } from "./provider-editor";
 import { ProviderEditorFocusTarget } from "./provider-editor-focus";
 import { BuiltinProviderEditor } from "./builtin-provider-editor";
@@ -34,16 +27,21 @@ import { ProviderSetupRow } from "./provider-setup-row";
 import { GeminiVoiceSetupDialog } from "./gemini-voice-setup-dialog";
 import { CodexProviderSettings } from "./codex-provider-settings";
 import { providersApi, settingsApi, titleProvidersApi } from "../../lib/ipc";
-import { splitPiBuiltinProviders } from "../../lib/pi-provider-display";
+import { availableChatModel } from "../../lib/provider-chat-readiness";
+import { GuidedProviderChooser, type ConnectionRoute } from "../guided-provider-chooser";
+import { ProviderKeyDialog } from "../provider-key-dialog";
+import { LocalProviderDialog } from "../local-provider-dialog";
 import {
   queryKeys,
   useFoundationModelsConnection,
+  useCodexProviderStatus,
   useModelCatalogStatus,
   useProviders,
   useSettings,
 } from "../../lib/queries";
 import {
   OPENAI_CODEX_PROVIDER_ID,
+  type AppSettings,
   type ChatTitleProviderId,
   type FoundationModelsConnectionStatus,
   type GeminiUsageScope,
@@ -56,7 +54,7 @@ import { useAppCapabilities } from "../../lib/app-capabilities";
 
 function statusBadge(p: Provider): React.ReactNode {
   if (p.isBuiltin) {
-    return p.hasKey ? <Badge color="green" icon={<Check />}>Ready</Badge> : null;
+    return p.hasKey ? <Badge>Configured</Badge> : <Badge color="warning">Needs attention</Badge>;
   }
   if (!p.needsKey) return <Badge color="blue">No key needed</Badge>;
   if (p.hasKey) return <Badge color="green" icon={<Check />}>Key saved</Badge>;
@@ -81,45 +79,14 @@ function foundationModelsBadge(status: FoundationModelsConnectionStatus): React.
   }
 }
 
-function ProviderInfo({
-  label,
-  title,
-  children,
-}: React.PropsWithChildren<{ label: string; title: string }>) {
-  return (
-    // Click/keyboard-opened so the explanation is reachable without a pointer and is announced as a dialog.
-    <Popover>
-      <PopoverTrigger asChild>
-        <Button iconOnly size="small" variant="transparent" aria-label={label} className="size-7">
-          <span aria-hidden className="text-xs font-semibold leading-none">
-            i
-          </span>
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent align="start" aria-label={title} className="w-80 p-3">
-        <Text variant="small-strong">{title}</Text>
-        <Text as="p" variant="small" color="secondary" className="mt-1 leading-relaxed">
-          {children}
-        </Text>
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-const CHAT_TITLE_PROVIDER_LABELS: Record<ChatTitleProviderId, string> = {
-  automatic: "Automatic",
-  "apple-foundation-models": "On-device only",
-  "chat-model": "Selected chat model",
-};
-
 function BuiltinProviderRows({
   providers,
   onSetUp,
-  geminiUsageScope,
+  settings,
 }: {
   providers: readonly Provider[];
   onSetUp: (provider: Provider) => void;
-  geminiUsageScope?: GeminiUsageScope;
+  settings?: AppSettings;
 }) {
   return providers.map((provider, index) => (
     <React.Fragment key={provider.id}>
@@ -136,11 +103,11 @@ function BuiltinProviderRows({
         name={provider.label}
         badge={statusBadge(provider)}
         subtitle={
-          provider.id === GOOGLE_PROVIDER_ID && geminiUsageScope === "transcription_only"
+          provider.id === GOOGLE_PROVIDER_ID && settings?.geminiUsageScope === "transcription_only"
             ? "Transcription only · chat models hidden"
-            : `${provider.models.length} available model${provider.models.length === 1 ? "" : "s"}`
+            : availableChatModel(provider, settings) ?? "No chat model available"
         }
-        actionLabel={provider.hasKey ? "Manage" : "Set up"}
+        actionLabel={provider.hasKey ? "Manage" : "Reconnect"}
         onAction={() => onSetUp(provider)}
       />
     </React.Fragment>
@@ -169,8 +136,12 @@ export function ProvidersSettings() {
   const [refreshingFoundationModels, setRefreshingFoundationModels] = React.useState(false);
   const [refreshingProviders, setRefreshingProviders] = React.useState(false);
   const [catalogOutcome, setCatalogOutcome] = React.useState<string | null>(null);
-  const [catalogDetailsOpen, setCatalogDetailsOpen] = React.useState(false);
-  const [showMoreBuiltinProviders, setShowMoreBuiltinProviders] = React.useState(false);
+  const [chooserOpen, setChooserOpen] = React.useState(false);
+  const [showCodex, setShowCodex] = React.useState(false);
+  const [routeMethod, setRouteMethod] = React.useState<"api_key" | "oauth">();
+  const [hostedKey, setHostedKey] = React.useState<"openai" | "anthropic" | null>(null);
+  const [runtime, setRuntime] = React.useState<"lmstudio" | "ollama" | null>(null);
+  const codex = useCodexProviderStatus();
 
   const invalidate = () => qc.invalidateQueries({ queryKey: queryKeys.providers });
   const list = (providers.data ?? []).filter(
@@ -178,7 +149,9 @@ export function ProvidersSettings() {
   );
   const builtins = list.filter((provider) => provider.isBuiltin);
   const customProviders = list.filter((provider) => !provider.isBuiltin);
-  const { featured: featuredBuiltins, more: moreBuiltins } = splitPiBuiltinProviders(builtins);
+  const configured = builtins.filter(p => p.hasKey || p.canLogout);
+  const hasCodex = codex.data?.configured || codex.data?.needsAttention;
+  const hasConnections = configured.length > 0 || customProviders.length > 0 || hasCodex;
   const titleProviderId = settings.data?.chatTitleProviderId ?? "automatic";
 
   const openBuiltinSetup = (provider: Provider) => {
@@ -288,7 +261,9 @@ export function ProvidersSettings() {
   };
 
   const addCustom = (template: "lmstudio" | "ollama" | "custom" | "tailnet") => {
-    editingFocusTarget.current.capture(addProviderTriggerRef.current);
+    editingFocusTarget.current.capture(document.activeElement instanceof HTMLElement ? document.activeElement : addProviderTriggerRef.current);
+    const existing = (template === "lmstudio" || template === "ollama") && customProviders.find(p => p.id === `custom:${template}`);
+    if (existing) { setEditing(existing); return; }
     const id =
       template === "lmstudio" || template === "ollama"
         ? `custom:${template}`
@@ -324,6 +299,24 @@ export function ProvidersSettings() {
     });
   };
 
+  const savedConnection = async (provider: Provider) => {
+    await invalidate();
+    setChooserOpen(false);
+    toast.success(`${provider.label} configured.`);
+  };
+
+  const returnFocus = () => editingFocusTarget.current.take() as HTMLElement | null ?? addProviderTriggerRef.current;
+  const chooseConnection = (route: ConnectionRoute, trigger: HTMLButtonElement) => {
+    editingFocusTarget.current.capture(trigger);
+    if (route.kind === "local") { setRuntime(route.runtime); return; }
+    if (route.kind === "endpoint") { addCustom(route.template); return; }
+    if (route.kind === "codex") { setShowCodex(true); setChooserOpen(false); return; }
+    const { id } = route.provider;
+    if (route.method === "api_key" && (id === "openai" || id === "anthropic")) { setHostedKey(id); return; }
+    setRouteMethod(route.method);
+    openBuiltinSetup(route.provider);
+  };
+
   const confirmRemove = async () => {
     if (!removing || removeBusy) return;
     setRemoveBusy(true);
@@ -350,85 +343,92 @@ export function ProvidersSettings() {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1">
             <Text as="h1" variant="heading1">Providers</Text>
-            <ProviderInfo label="About provider connections" title="Provider connections">
-              Aiden manages built-in provider endpoints and model catalogs. Use Add provider for a
-              local, private, or vendor-compatible endpoint.
-            </ProviderInfo>
+            <InfoHint topic="provider connections">
+              Connect an account, an API key or a local model. Custom endpoints and catalog updates are in Advanced.
+            </InfoHint>
           </div>
           <Text variant="small" color="secondary" className="mt-0.5 block">
-            Connect models to Aiden and manage the providers you already use.
+            Choose which AI services Aiden can use for chat.
           </Text>
         </div>
-        <div className="flex max-w-full shrink-0 flex-wrap items-center justify-end gap-1">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button ref={addProviderTriggerRef} variant="filled" size="small">
-                <Plus className="size-4" />
-                Add provider
-                <ChevronDown className="size-3.5" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-72">
-              <DropdownMenuLabel>Local model servers</DropdownMenuLabel>
-              <DropdownMenuItem
-                className="group"
-                disabled={customProviders.some((provider) => provider.id === "custom:lmstudio")}
-                onSelect={() => addCustom("lmstudio")}
-              >
-                <ProviderIcon
-                  providerId="custom:lmstudio"
-                  providerLabel="LM Studio"
-                  className="size-4 text-tertiary"
-                />
-                <span className="flex min-w-0 flex-col">
-                  <span>LM Studio</span>
-                  <span className="text-small text-tertiary">
-                    OpenAI-compatible local server
-                  </span>
-                </span>
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                className="group"
-                disabled={customProviders.some((provider) => provider.id === "custom:ollama")}
-                onSelect={() => addCustom("ollama")}
-              >
-                <ProviderIcon
-                  providerId="custom:ollama"
-                  providerLabel="Ollama"
-                  className="size-4 text-tertiary"
-                />
-                <span className="flex min-w-0 flex-col">
-                  <span>Ollama</span>
-                  <span className="text-small text-tertiary">
-                    Local server with Ollama-aware model discovery
-                  </span>
-                </span>
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuLabel>Private or custom</DropdownMenuLabel>
-              <DropdownMenuItem className="group" onSelect={() => addCustom("tailnet")}>
-                <span className="flex min-w-0 flex-col">
-                  <span>Model server over Tailscale</span>
-                  <span className="text-small text-tertiary">
-                    OpenAI-compatible, no authentication by default
-                  </span>
-                </span>
-              </DropdownMenuItem>
-              <DropdownMenuItem className="group" onSelect={() => addCustom("custom")}>
-                <span className="flex min-w-0 flex-col">
-                  <span>Other custom endpoint</span>
-                  <span className="text-small text-tertiary">
-                    Choose protocol and authentication
-                  </span>
-                </span>
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
       </div>
-
-      <CodexProviderSettings />
-
+      {providers.isLoading || codex.isLoading ? <Text role="status" variant="small">Loading connections…</Text>
+        : providers.isError || codex.isError ? <div role="alert" className="settings-card p-4">
+          Couldn’t read all connections. <Button size="small" onClick={() => { void providers.refetch(); void codex.refetch(); }}>Try again</Button>
+        </div> : null}
+      {hasConnections && <Text as="h2" variant="small-strong">Your connections</Text>}
+      {(hasCodex || showCodex || codex.isError) && <CodexProviderSettings />}
+      {configured.length > 0 && <div className="settings-card">
+        <BuiltinProviderRows providers={configured} onSetUp={p => { editingFocusTarget.current.capture(document.activeElement as HTMLElement | null); setRouteMethod(undefined); openBuiltinSetup(p); }} settings={settings.data} />
+      </div>}
+      {customProviders.length > 0 ? (
+        <div className="grid min-w-0 grid-cols-1 gap-2">
+          <div className="settings-card rounded-card">
+            {customProviders.map((p, i) => (
+              <React.Fragment key={p.id}>
+                {i > 0 ? <Separator /> : null}
+                <div className="flex items-center gap-3 px-4 py-3">
+                  <div className="flex size-8 shrink-0 items-center justify-center rounded-control bg-well text-secondary">
+                    <ProviderIcon
+                      providerId={p.id}
+                      providerLabel={p.label}
+                      artwork={p.artwork}
+                      className="size-4.5"
+                    />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <Text variant="strong" truncate>
+                        {p.label}
+                      </Text>
+                      {statusBadge(p)}
+                    </div>
+                    <Text variant="small" color="tertiary" truncate className="mt-0.5 block">
+                      {availableChatModel(p, settings.data) ?? (p.needsKey && !p.hasKey ? "Add an API key" : "No chat model available")}
+                    </Text>
+                  </div>
+                  <Button
+                    variant="filled"
+                    size="small"
+                    onClick={(event) => {
+                      editingFocusTarget.current.capture(event.currentTarget);
+                      setEditing(p);
+                    }}
+                  >
+                    Manage
+                  </Button>
+                  <Button
+                    variant="transparent"
+                    size="small"
+                    iconOnly
+                    aria-label={`Remove ${p.label}`}
+                    onClick={() => {
+                      setRemoveError(null);
+                      setRemoving(p);
+                    }}
+                  >
+                    <Trash2 className="size-4" />
+                  </Button>
+                </div>
+              </React.Fragment>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      <div className={hasConnections ? "grid justify-items-start gap-3" : "settings-card grid justify-items-start gap-3 p-4"}>
+        {!hasConnections && providers.isSuccess && codex.isSuccess && <div>
+          <Text as="h2" variant="strong">Give Aiden a way to reply</Text>
+          <Text as="p" variant="small" color="secondary">Connect an account, use an API key or run a model on your computer.</Text>
+        </div>}
+        <Button ref={addProviderTriggerRef} variant={hasConnections ? "filled" : "accent"} aria-expanded={chooserOpen}
+          onClick={() => setChooserOpen(!chooserOpen)}><Plus />{hasConnections ? "Connect another AI" : "Connect AI"}</Button>
+        {chooserOpen && <div className="w-full"><GuidedProviderChooser providers={builtins} showEndpoints={false} onChoose={chooseConnection} /></div>}
+      </div>
+      <details className="settings-card">
+        <summary className="cursor-pointer px-4 py-3 text-small-strong">Advanced</summary>
+        <div className="grid min-w-0 gap-5 px-4 pb-4">
+          <div className="flex flex-wrap gap-2"><Button variant="filled" size="small" onClick={() => addCustom("custom")}>Add custom endpoint</Button>
+            <Button variant="filled" size="small" onClick={() => addCustom("tailnet")}>Connect Tailscale server</Button></div>
       {capabilities.appleFoundationModels && foundationModels.data ? (
         <div
           className="settings-card rounded-card"
@@ -445,13 +445,10 @@ export function ProvidersSettings() {
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
                 <Text variant="strong">Apple Foundation Models</Text>
-                <ProviderInfo
-                  label="About Apple Foundation Models in Aiden"
-                  title="Background title generation"
-                >
+                <InfoHint topic="Apple Foundation Models in Aiden">
                   This on-device connection is used only for background chat titles. It never
                   appears in the chat model picker.
-                </ProviderInfo>
+                </InfoHint>
                 <Badge color="blue">On-device</Badge>
                 {foundationModelsBadge(foundationModels.data)}
               </div>
@@ -472,21 +469,16 @@ export function ProvidersSettings() {
               <RefreshCw className={`size-4 ${refreshingFoundationModels ? "animate-spin" : ""}`} />
             </Button>
           </div>
-          <details className="group border-t border-separator">
-            <summary className="flex min-h-12 cursor-default list-none items-center gap-3 px-4 py-2.5 outline-none hover:bg-list-hover focus-visible:bg-list-selection [&::-webkit-details-marker]:hidden">
-              <span className="min-w-0 flex-1">
-                <span className="block text-small-strong text-primary">Chat title generation</span>
-                <span className="mt-0.5 block text-small text-tertiary">
-                  {CHAT_TITLE_PROVIDER_LABELS[titleProviderId]}
-                </span>
-              </span>
-              <ChevronDown className="size-4 shrink-0 text-tertiary transition-transform duration-150 group-open:rotate-180" />
-            </summary>
-            <div className="flex flex-col gap-3 px-4 pb-4 pt-1 sm:flex-row sm:items-end sm:justify-between">
-              <Text variant="small" color="tertiary" as="p" className="max-w-md">
-                Automatic prefers this device, then uses the selected chat model only when Apple is
-                unavailable. On-device only never falls back to a network provider.
-              </Text>
+          <div className="border-t border-separator">
+            <Field
+              label="Chat title generation"
+              hint={
+                <InfoHint topic="chat title generation">
+                  Automatic uses the on-device model when it can, then your chat model. On-device
+                  only never sends your message to a network provider.
+                </InfoHint>
+              }
+            >
               <Select
                 value={titleProviderId}
                 disabled={savingTitleProvider}
@@ -505,8 +497,8 @@ export function ProvidersSettings() {
                   <SelectItem value="chat-model">Selected chat model</SelectItem>
                 </SelectContent>
               </Select>
-            </div>
-          </details>
+            </Field>
+          </div>
         </div>
       ) : !capabilities.appleFoundationModels ? (
         <div className="rounded-card bg-well px-3.5 py-3">
@@ -545,202 +537,70 @@ export function ProvidersSettings() {
         </div>
       ) : null}
 
-      <div className="grid min-w-0 grid-cols-1 gap-2">
-        <div className="px-1">
-          <div className="flex items-center gap-1">
-            <Text variant="small-strong">Built into Aiden</Text>
-            <ProviderInfo label="About providers built into Aiden" title="Managed by Aiden">
-              Aiden maintains these providers’ endpoints, model catalogs, and connection transport.
-              You provide credentials when required; managed connection details stay locked to
-              prevent accidental misconfiguration.
-            </ProviderInfo>
-          </div>
-          <Text variant="small" color="tertiary" className="mt-0.5 block">
-            Connect with credentials when required; Aiden keeps their model catalogs current.
-          </Text>
-        </div>
-        <div className="settings-card rounded-card">
-          <BuiltinProviderRows
-            providers={featuredBuiltins}
-            onSetUp={openBuiltinSetup}
-            geminiUsageScope={settings.data?.geminiUsageScope}
-          />
-          {moreBuiltins.length > 0 ? (
+      <div className="settings-card rounded-card">
+        <Field
+          label="Model catalog"
+          hint={
+            <InfoHint topic="model catalogs">
+              Downloaded models.dev data changes display details only, never which models can run or
+              their runtime limits.
+            </InfoHint>
+          }
+          description={
             <>
-              {featuredBuiltins.length > 0 ? <Separator /> : null}
-              <div className="px-4 py-2">
-                <Button
-                  variant="transparent"
-                  size="small"
-                  aria-controls="more-pi-providers"
-                  aria-expanded={showMoreBuiltinProviders}
-                  onClick={() => setShowMoreBuiltinProviders((showMore) => !showMore)}
-                >
-                  {showMoreBuiltinProviders
-                    ? "Show fewer providers"
-                    : `Show ${moreBuiltins.length} more provider${moreBuiltins.length === 1 ? "" : "s"}`}
-                  <ChevronDown
-                    className={`size-3.5 transition-transform duration-150 ${showMoreBuiltinProviders ? "rotate-180" : ""}`}
-                  />
-                </Button>
-              </div>
+              <span aria-live="polite" className="block">
+                {catalogOutcome ??
+                  `Model details: ${
+                    modelCatalogStatus.data?.source === "device-cache" ? "device cache" : "bundled snapshot"
+                  }${
+                    modelCatalogStatus.data?.fetchedAt
+                      ? ` · updated ${new Date(modelCatalogStatus.data.fetchedAt).toLocaleString()}`
+                      : ""
+                  }`}
+              </span>
+              <span className="mt-0.5 block">
+                Updating contacts built-in catalog services and models.dev. It sends no prompts, chats
+                or device identifier. A provider&apos;s own catalog service may use your sign-in for
+                that provider; models.dev gets no credentials.
+              </span>
             </>
-          ) : null}
-        </div>
-        {showMoreBuiltinProviders && moreBuiltins.length > 0 ? (
-          <div id="more-pi-providers" className="settings-card rounded-card">
-            <div className="px-4 py-3">
-              <Text variant="small-strong">More built-in providers</Text>
-              <Text variant="small" color="tertiary" className="mt-0.5 block">
-                These are also managed by Aiden and can be set up whenever you need them.
-              </Text>
-            </div>
-            <Separator />
-            <BuiltinProviderRows
-              providers={moreBuiltins}
-              onSetUp={openBuiltinSetup}
-              geminiUsageScope={settings.data?.geminiUsageScope}
+          }
+        >
+          <Button
+            variant="filled"
+            size="small"
+            disabled={refreshingProviders}
+            aria-busy={refreshingProviders}
+            onClick={() => void refreshProviders()}
+          >
+            <RefreshCw
+              className={`size-4 ${refreshingProviders ? "animate-spin motion-reduce:animate-none" : ""}`}
             />
-          </div>
-        ) : null}
+            {refreshingProviders ? "Updating…" : "Update model catalogs"}
+          </Button>
+        </Field>
       </div>
 
-      {customProviders.length > 0 ? (
-        <div className="grid min-w-0 grid-cols-1 gap-2">
-          <div className="px-1">
-            <Text variant="small-strong">Custom connections</Text>
-            <Text variant="small" color="tertiary" className="mt-0.5 block">
-              Configure local, private, and vendor-compatible endpoints here.
-            </Text>
-          </div>
-          <div className="settings-card rounded-card">
-            {customProviders.map((p, i) => (
-              <React.Fragment key={p.id}>
-                {i > 0 ? <Separator /> : null}
-                <div className="flex items-center gap-3 px-4 py-3">
-                  <div className="flex size-8 shrink-0 items-center justify-center rounded-control bg-well text-secondary">
-                    <ProviderIcon
-                      providerId={p.id}
-                      providerLabel={p.label}
-                      artwork={p.artwork}
-                      className="size-4.5"
-                    />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                      <Text variant="strong" truncate>
-                        {p.label}
-                      </Text>
-                      {statusBadge(p)}
-                    </div>
-                    <Text variant="small" color="tertiary" truncate className="mt-0.5 block">
-                      {p.models.length} model{p.models.length === 1 ? "" : "s"} · {p.baseUrl}
-                    </Text>
-                  </div>
-                  <Button
-                    variant="filled"
-                    size="small"
-                    onClick={(event) => {
-                      editingFocusTarget.current.capture(event.currentTarget);
-                      setEditing(p);
-                    }}
-                  >
-                    Manage
-                  </Button>
-                  <Button
-                    variant="transparent"
-                    size="small"
-                    iconOnly
-                    aria-label={`Remove ${p.label}`}
-                    onClick={() => {
-                      setRemoveError(null);
-                      setRemoving(p);
-                    }}
-                  >
-                    <Trash2 className="size-4" />
-                  </Button>
-                </div>
-              </React.Fragment>
-            ))}
-          </div>
         </div>
-      ) : null}
-
-      <div className="grid min-w-0 grid-cols-1 gap-2">
-        <div className="px-1">
-          <Text as="h2" variant="small-strong">Model catalog</Text>
-          <Text variant="small" color="tertiary" className="mt-0.5 block">
-            Provider catalogs determine what can run; model details improve names and capability hints.
-          </Text>
-        </div>
-        <div className="settings-card rounded-card px-4 py-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <Text variant="small" color="secondary" aria-live="polite">
-              {catalogOutcome ??
-                `Model details: ${
-                  modelCatalogStatus.data?.source === "device-cache" ? "device cache" : "bundled snapshot"
-                }${
-                  modelCatalogStatus.data?.fetchedAt
-                    ? ` · updated ${new Date(modelCatalogStatus.data.fetchedAt).toLocaleString()}`
-                    : ""
-                }`}
-            </Text>
-            <div className="flex flex-wrap items-center gap-1">
-              <Button
-                variant="transparent"
-                size="small"
-                aria-expanded={catalogDetailsOpen}
-                aria-controls="provider-catalog-details"
-                onClick={() => setCatalogDetailsOpen((open) => !open)}
-              >
-                Catalog details
-                <ChevronDown
-                  className={`size-3.5 transition-transform motion-reduce:transition-none ${catalogDetailsOpen ? "rotate-180" : ""}`}
-                />
-              </Button>
-              <Button
-                variant="filled"
-                size="small"
-                disabled={refreshingProviders}
-                aria-busy={refreshingProviders}
-                onClick={() => void refreshProviders()}
-              >
-                <RefreshCw
-                  className={`size-4 ${refreshingProviders ? "animate-spin motion-reduce:animate-none" : ""}`}
-                />
-                {refreshingProviders ? "Updating…" : "Update model catalogs"}
-              </Button>
-            </div>
-          </div>
-          <Text as="p" variant="small" color="tertiary" className="mt-1 leading-relaxed">
-            This foreground update contacts built-in catalog services and models.dev. It sends no
-            prompts, chats, provider keys, model selections, custom endpoints, cookies, or device
-            identifier.
-          </Text>
-          {catalogDetailsOpen ? (
-            <div id="provider-catalog-details" className="mt-2 border-t border-separator pt-2">
-              <Text as="p" variant="small" color="tertiary" className="leading-relaxed">
-                Downloaded models.dev data affects display details only, never which models can run or
-                their runtime limits.
-              </Text>
-            </div>
-          ) : null}
-        </div>
-      </div>
-
+      </details>
+      {hostedKey && <ProviderKeyDialog returnFocus={returnFocus} id={hostedKey} onClose={() => setHostedKey(null)} onSaved={savedConnection} />}
+      {runtime && <LocalProviderDialog returnFocus={returnFocus} runtime={runtime} onSaved={savedConnection} onClose={() => setRuntime(null)}
+        onEdit={() => { addCustom(runtime); setRuntime(null); }} />}
       {editing ? (
         <ProviderEditor
           provider={editing}
           open={editing !== null}
           onOpenChange={(open) => !open && setEditing(null)}
           onSaved={invalidate}
-          returnFocus={() => editingFocusTarget.current.take() as HTMLElement | null}
+          returnFocus={returnFocus}
         />
       ) : null}
 
       {settingUp ? (
         <BuiltinProviderEditor
           provider={settingUp}
+          method={routeMethod}
+          returnFocus={returnFocus}
           open={settingUp !== null}
           onOpenChange={(open) => !open && setSettingUp(null)}
           requireChatModel={settingUp.id !== GOOGLE_PROVIDER_ID}
@@ -749,6 +609,7 @@ export function ProvidersSettings() {
       ) : null}
 
       <GeminiVoiceSetupDialog
+        returnFocus={returnFocus}
         open={geminiDialogOpen}
         scope={geminiScope}
         activatesVoice={false}

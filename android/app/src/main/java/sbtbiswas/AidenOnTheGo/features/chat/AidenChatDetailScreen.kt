@@ -503,7 +503,7 @@ fun AidenChatDetailScreen(
                 scope.launch {
                     isDeletingBot = true
                     try {
-                        deleter.delete(cl, botIdentity.botId)
+                        coordinator.deleteBot(cl,botIdentity.botId,deleter)
                         confirmingBotDelete = false
                         onNavigateBack()
                     } catch (e: kotlinx.coroutines.CancellationException) {
@@ -1403,6 +1403,9 @@ private fun UserMessageRow(
                 edge = AidenMessageMediaEdge.TRAILING,
                 loadData = loadAttachmentImage
             )
+        }
+        if (message.isByVoice) {
+            AidenVoiceInputLabel(palette = palette)
         }
         if (showFooter) {
             AidenMessageFooter(
