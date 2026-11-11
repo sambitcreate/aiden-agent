@@ -221,9 +221,15 @@ test("adding another computer by setup code reports an unreachable address and r
   await expect(otherDevices).toHaveAttribute("aria-selected", "true");
   await expect(page.getByText("No computers yet", { exact: true })).toBeVisible();
   await page.keyboard.press("ArrowRight");
+  const otherApps = segments.getByRole("tab", { name: "Apps using Aiden", exact: true });
+  await expect(otherApps).toBeFocused();
+  await expect(otherApps).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("ArrowRight");
   const telegram = segments.getByRole("tab", { name: "Telegram", exact: true });
   await expect(telegram).toBeFocused();
   await expect(telegram).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("ArrowLeft");
+  await expect(otherApps).toBeFocused();
   await page.keyboard.press("ArrowLeft");
   await expect(otherDevices).toBeFocused();
   await expect(page.getByText("No computers yet", { exact: true })).toBeVisible();

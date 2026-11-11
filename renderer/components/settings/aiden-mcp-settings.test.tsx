@@ -1,12 +1,13 @@
 import "../../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
+import { execFileSync } from "node:child_process";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { installBotTestIpc } from "../../main/bots/test-dom";
 import { createBotTestQueryClient } from "../../main/bots/test-providers";
 import { AppCapabilitiesProvider, DISABLED_APP_CAPABILITIES } from "../../lib/app-capabilities";
-import type { AidenMcpAppView, AidenMcpServerStatusView } from "../../shared/aiden-mcp";
+import { aidenMcpClientSnippets, type AidenMcpAppView, type AidenMcpServerStatusView } from "../../shared/aiden-mcp";
 import { Toaster, toast } from "../ui";
 import { AidenMcpSettings } from "./aiden-mcp-settings";
 
@@ -158,10 +159,10 @@ test("adding an app shows its token once, with setup that reads it from the envi
   assert.equal(commands.length, 2);
   for (const command of commands) {
     assert.ok(!command.includes(TOKEN), "a client command keeps the token out of its saved config");
-    assert.match(command, /AIDEN_MCP_TOKEN/u);
+    assert.match(command, /AIDEN_MCP_TOKEN_CLAUDE_CODE_1\b/u, "the command reads this app's own variable");
     assert.match(command, /http:\/\/127\.0\.0\.1:49400\/mcp/u);
   }
-  assert.ok(code.includes(`export AIDEN_MCP_TOKEN='${TOKEN}'`));
+  assert.ok(code.includes(`export AIDEN_MCP_TOKEN_CLAUDE_CODE_1='${TOKEN}'`));
 
   fireEvent.click(within(sheet).getByRole("button", { name: "Copy token" }));
   await waitFor(() => assert.deepEqual(clipboard, [TOKEN]));
@@ -174,8 +175,47 @@ test("adding an app shows its token once, with setup that reads it from the envi
   assert.match(screen.getByText(/^Added /u).textContent ?? "", /Not used yet/u);
 });
 
+test("Add app waits until the server has an address for the setup commands", async () => {
+  mcpServer();
+  mount();
+  const add = (await screen.findByRole("button", { name: "Add app" })) as HTMLButtonElement;
+  assert.equal(add.disabled, true, "a token shown once must not arrive before the address its commands need");
+  assert.ok(screen.getByText(/^Turn on Let apps use Aiden, then add/u));
+  fireEvent.click(screen.getByRole("switch", { name: "Let apps use Aiden" }));
+  await waitFor(() => assert.equal(add.disabled, false));
+  assert.ok(screen.getByText(/^Add Claude Code, Codex or another MCP app/u));
+});
+
+/** What a shell that ran every export line in order hands each client command. */
+function tokenEachCommandReads(exportLines: string[], commands: string[]): string[] {
+  const variables = commands.map((command) => {
+    const name = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}|--bearer-token-env-var ([A-Za-z_][A-Za-z0-9_]*)/u.exec(command);
+    assert.ok(name, `no variable in ${command}`);
+    return name[1] ?? name[2];
+  });
+  const script = [...exportLines, ...variables.map((name) => `printf '%s\\n' "$${name}"`)].join("\n");
+  return execFileSync("/bin/sh", ["-c", script], { encoding: "utf8" }).trimEnd().split("\n");
+}
+
+test("two apps set up in one shell profile each connect with their own token", () => {
+  const url = "http://127.0.0.1:49400/mcp";
+  const apps = [
+    { id: "device_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", name: "Claude Code", token: "first-token" },
+    { id: "device_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", name: "Claude Code", token: "second'token" },
+    { id: "device_cccccccccccccccccccccccccccccccc", name: "\u{1F916}\u{1F916}", token: "third-token" },
+  ];
+  const snippets = apps.map((app) => aidenMcpClientSnippets(url, app.token, app));
+  const exportLines = snippets.flatMap((set) => [...new Set(set.map((snippet) => snippet.exportLine))]);
+  assert.equal(exportLines.length, apps.length, "each app sets one variable for both clients");
+  const commands = snippets.flatMap((set) => set.map((snippet) => snippet.command));
+  assert.deepEqual(
+    tokenEachCommandReads(exportLines, commands),
+    apps.flatMap((app) => [app.token, app.token]),
+  );
+});
+
 test("a failed add keeps the sheet open with the reason", async () => {
-  mcpServer({}, { "remote:mcpIssueApp": () => { throw new Error("You can connect at most 16 apps."); } });
+  mcpServer({ status: { enabled: true, running: true, port: 49400, url: "http://127.0.0.1:49400/mcp" } }, { "remote:mcpIssueApp": () => { throw new Error("You can connect at most 16 apps."); } });
   mount();
   fireEvent.click(await screen.findByRole("button", { name: "Add app" }));
   const addDialog = await screen.findByRole("dialog", { name: "Add an app" });
