@@ -52,7 +52,7 @@ await patchPiOAuthBranding(resolve(pkgDir, "../.."), piAiPkg);
 const banner = {
 	js: 'import { createRequire as __piCreateRequire } from "node:module"; const require = __piCreateRequire(import.meta.url);',
 };
-// Durable Bots explicitly pin chord and pi-durable to the desktop 1.4.0 line.
+// Durable Bots explicitly pin chord and pi-durable to the desktop 1.5.2 line.
 // Both are bundled; no Pi runtime package is allowed as an external.
 const allowedExternalPackages = new Set([
 	"@silvia-odwyer/photon-node",

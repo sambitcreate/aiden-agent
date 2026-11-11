@@ -1063,6 +1063,48 @@ test("isolated subagent inference executes only parent-owned tools with immutabl
   }
 });
 
+test("an Anthropic subagent sends its whole conversation on every model round, never a message thread", async (t) => {
+  const dir = temporary(t), requests = [], headers = [], original = process.env.AIDEN_CLI_ENTRY;
+  process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
+  t.after(() => { if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
+  const event = (type, data) => `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`;
+  const server = createServer(async (request, response) => {
+    let body = ""; for await (const chunk of request) body += chunk;
+    requests.push(JSON.parse(body)); headers.push(request.headers);
+    const first = requests.length === 1;
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write(event("message_start", { message: { id: `msg_${requests.length}`, type: "message", role: "assistant", model: "test", content: [], stop_reason: null, usage: { input_tokens: 10, output_tokens: 0 } } }));
+    if (first) {
+      response.write(event("content_block_start", { index: 0, content_block: { type: "tool_use", id: "toolu_read", name: "read_file", input: {} } }));
+      response.write(event("content_block_delta", { index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify({ path: "note.txt" }) } }));
+    } else {
+      response.write(event("content_block_start", { index: 0, content_block: { type: "text", text: "" } }));
+      response.write(event("content_block_delta", { index: 0, delta: { type: "text_delta", text: "The note says apricot" } }));
+    }
+    response.write(event("content_block_stop", { index: 0 }));
+    response.write(event("message_delta", { delta: { stop_reason: first ? "tool_use" : "end_turn" }, usage: { output_tokens: 4 } }));
+    response.end(event("message_stop", {}));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  // The `anthropic` provider at a path naming api.anthropic.com gets every default Pi gives Anthropic's own endpoint, message threads included.
+  api.atomicJson(join(dir, "models.json"), { providers: { anthropic: { api: "anthropic-messages", baseUrl: `http://127.0.0.1:${server.address().port}/api.anthropic.com`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  const runtime = await api.createCliModelRuntime(dir), diagnostics = [];
+  const result = await api.runCliSubagent(dir, { runtime: { model: runtime.getModel("anthropic", "test") }, workspaceRoot: dir, permission: "ask", thinkingLevel: "off", context: { mode: "fresh", revisionHash: "threads", messages: [] }, request: { role: "scout", label: "Scout", task: "Read the note" }, policy: { deadlineMs: 15000 } }, [{
+    name: "read_file", description: "Read the note", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+    execute: async () => ({ content: [{ type: "text", text: "Apricot" }], details: {} }),
+  }], async () => {}, (error) => diagnostics.push(error.message));
+  assert.equal(result.status, "completed", JSON.stringify({ result, diagnostics }));
+  assert.equal(requests.length, 2);
+  for (const [index, request] of requests.entries()) {
+    assert.equal("thread" in request, false, `round ${index + 1} has no thread`);
+    assert.doesNotMatch(String(headers[index]["anthropic-beta"] ?? ""), /message-threads/u);
+  }
+  // The second round carries the task, the tool call and its result itself, not a pointer to them.
+  assert.deepEqual(requests[1].messages.map((message) => message.role), ["user", "assistant", "user"]);
+  assert.match(JSON.stringify(requests[1].messages), /toolu_read/u);
+});
+
 test("a subagent that hits its deadline during an unanswered approval settles and dismisses the gate", async (t) => {
   const dir = temporary(t), original = process.env.AIDEN_CLI_ENTRY;
   process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");

@@ -1,6 +1,7 @@
 import { createAgentSession, DefaultResourceLoader, SessionManager, type AgentSession } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { withoutMessageThreads } from "../../../main/services/pi-message-threads.js";
 import { createCliModelRuntime } from "./providers.ts";
 
 interface Start {
@@ -22,8 +23,10 @@ process.on("message", (message: any) => {
 });
 
 async function run(input: Start) {
-  const runtime = await createCliModelRuntime(input.agentDir), model = runtime.getModel(input.provider, input.model);
-  if (!model) throw new Error("The delegated provider/model is unavailable.");
+  const runtime = await createCliModelRuntime(input.agentDir), found = runtime.getModel(input.provider, input.model);
+  if (!found) throw new Error("The delegated provider/model is unavailable.");
+  // Like daemon chats, a child sends its whole conversation each round, never a Pi message thread.
+  const model = withoutMessageThreads(found);
   const loader = new DefaultResourceLoader({ cwd: input.cwd, agentDir: input.agentDir, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true,
     extensionFactories: [{ name: "aiden-child-tools", factory(pi) {
       pi.on("before_agent_start", () => ({ systemPrompt: input.systemPrompt }));

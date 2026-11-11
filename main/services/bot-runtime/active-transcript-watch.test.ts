@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { after, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Conversation, EntryId, EntryRecord } from "@earendil-works/pi-durable";
-import { watchActiveConversation, type ActiveConversationView } from "./active-transcript-watch.js";
+import { ActiveTranscript, watchActiveConversation, type ActiveConversationView } from "./active-transcript-watch.js";
 import { createBotSessionService, type BotSessionRuntime } from "./bot-session-service.js";
 import { createFauxModels, FAUX_MODEL_REF, waitFor } from "./test-support/faux.js";
 import { recordingDeps } from "./test-support/fixtures.js";
@@ -95,6 +95,35 @@ test("frames keep the whole transcript through small appends, a burst past the w
     } finally {
       await watch.stop();
     }
+  } finally {
+    await service.shutdown();
+  }
+});
+
+test("a frame whose read waits behind a reset still gets its own active transcript", async () => {
+  const { service, conversation } = await botConversation();
+  try {
+    await appendNotes(conversation, 0, 120);
+    const raw = await conversation.watch(ctx);
+    const before = raw.value;
+    await raw.stop();
+
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const transcript = new ActiveTranscript({
+      context: async (context, options) => {
+        await gate;
+        return conversation.context(context, options);
+      },
+    });
+    const reading = transcript.start(before, ctx);
+    // The conversation moves on while the frame's read waits.
+    await conversation.reset("Carry on from the summary.", ctx);
+    await appendNotes(conversation, 120, 2);
+    release();
+
+    assert.deepEqual(notes(await reading), Array.from({ length: 120 }, (_, n) => n));
+    assert.deepEqual(notes((await conversation.context(ctx)).entries), [120, 121], "the live transcript did move on");
   } finally {
     await service.shutdown();
   }
