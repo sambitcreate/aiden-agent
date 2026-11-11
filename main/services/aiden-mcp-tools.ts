@@ -122,7 +122,8 @@ export class AidenMcpToolRunner {
   private readonly runs = new Map<string, Set<string>>();
   private readonly waits = new Map<string, Set<AbortController>>();
   /** In-flight and recent turn requests, so a retry replays instead of counting again. */
-  private readonly requests = new Map<string, Promise<CallToolResult>>();
+  /** Turn requests by app and clientRequestId; `settled` marks the ones a newer request may evict. */
+  private readonly requests = new Map<string, { promise: Promise<CallToolResult>; settled: boolean }>();
 
   constructor(private readonly dependencies: AidenMcpToolDependencies) {
     this.limits = { ...DEFAULT_AIDEN_MCP_LIMITS, ...dependencies.limits };
@@ -507,19 +508,28 @@ export class AidenMcpToolRunner {
   ): Promise<CallToolResult> {
     const key = `${app.id}\u0000${args.clientRequestId as string}`;
     const existing = this.requests.get(key);
-    if (existing) return existing;
-    const pending = run().catch((error: unknown) => {
-      // A refusal or failure is not cached: the app may retry once it clears.
-      this.requests.delete(key);
-      throw error;
-    });
-    this.requests.set(key, pending);
-    while (this.requests.size > REQUEST_CACHE_LIMIT) {
-      const oldest = this.requests.keys().next().value;
-      if (oldest === undefined) break;
-      this.requests.delete(oldest);
+    if (existing) return existing.promise;
+    const entry = { promise: undefined as unknown as Promise<CallToolResult>, settled: false };
+    entry.promise = run().then(
+      (result) => {
+        entry.settled = true;
+        return result;
+      },
+      (error: unknown) => {
+        // A refusal or failure is not cached: the app may retry once it clears.
+        if (this.requests.get(key) === entry) this.requests.delete(key);
+        throw error;
+      },
+    );
+    this.requests.set(key, entry);
+    // Only answered requests are forgotten. One still running stays, so a retry
+    // joins it rather than starting (and counting) the same turn a second time;
+    // running requests are already bounded by the app's concurrency limit.
+    for (const [cached, { settled }] of this.requests) {
+      if (this.requests.size <= REQUEST_CACHE_LIMIT) break;
+      if (settled) this.requests.delete(cached);
     }
-    return pending;
+    return entry.promise;
   }
 
   /** Refuses a turn over this app's rate or concurrency limit, then counts it. */

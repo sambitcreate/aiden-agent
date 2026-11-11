@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createServer, request as httpRequest, type IncomingHttpHeaders } from "node:http";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import { McpClient, StreamableHttpTransport, type CallToolResult } from "@earendil-works/pi-mcp";
 
 import { AIDEN_MCP_BODY_LIMIT, AidenMcpHost } from "./aiden-mcp-server.js";
@@ -79,6 +80,8 @@ async function freePort(): Promise<number> {
  */
 async function harness(options: {
   hold?: boolean;
+  /** Awaited before a chat's provenance is recorded: between its durable create and its first turn. */
+  beforeProvenance?: (chatId: string) => Promise<void>;
   limits?: Partial<AidenMcpLimits>;
   supported?: boolean;
   stored?: AidenRemoteStateDocument;
@@ -246,7 +249,10 @@ async function harness(options: {
   const tools = new AidenMcpToolRunner({
     services: async () => ({ chats: service, streams, workspaces: { list: async () => ({ workspaces: WORKSPACES }) } }),
     acquireAuthorization: (appId, tracksMutationDrain) => registry.acquireDeviceAuthorization(appId, tracksMutationDrain),
-    recordProvenance: (chatId, entry) => provenance.record(chatId, entry),
+    recordProvenance: async (chatId, entry) => {
+      await options.beforeProvenance?.(chatId);
+      return provenance.record(chatId, entry);
+    },
     appVersion: "9.9.9",
     hostName: async () => "Studio Mac",
     now: () => clock,
@@ -916,6 +922,46 @@ test("a retry the server's request cache has forgotten still replays, without co
     // Neither the replay from Aiden's durable record nor the refused start is counted.
     await analyticsSettled();
     assert.equal(chatsStarted(), 129);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("a start still running when 128 newer requests arrive is joined by its retry and counted once", async (t) => {
+  const events = captureAnalyticsEvents(t);
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let gated = false;
+  const fixture = await harness({
+    limits: { turnsPerMinute: 200, concurrentRuns: 200 },
+    // Only the original call waits: a retry that ran on its own would pass straight through.
+    beforeProvenance: (chatId) => {
+      if (chatId !== "chat-1" || gated) return Promise.resolve();
+      gated = true;
+      return held;
+    },
+  });
+  try {
+    await fixture.enable();
+    const client = await fixture.connect((await fixture.host.issueApp({ name: "Retrier", access: "supervised" })).credential);
+    const start = (id: string) =>
+      client.callTool({ name: "aiden_chat_start", arguments: { clientRequestId: id, workspaceId: "workspace-1", text: "Go" } });
+
+    // The first start has created its chat and waits before its first turn.
+    const first = start("slow-start-1");
+    while (fixture.chats.size === 0) await new Promise((resolve) => setImmediate(resolve));
+    for (let index = 0; index < 128; index += 1) structured(await start(`filler-start-${index}`));
+    // The retry gets as long as an independent start would need; it must not finish on its own.
+    const retry = start("slow-start-1");
+    await Promise.race([retry, delay(500)]);
+    release();
+    const [original, retried] = await Promise.all([first, retry]);
+    assert.deepEqual(structured(retried), structured(original));
+    assert.equal(fixture.generationStarts(), 129);
+    await analyticsSettled();
+    assert.equal(mcpEvents(events).filter(({ event }) => event === "mcp_chat_started").length, 129);
   } finally {
     await fixture.close();
   }
