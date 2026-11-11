@@ -227,6 +227,17 @@ test("advisory output checks return a tool's real reply unchanged with a data-fr
   assert.equal(guard.validateResult(toolName, { isError: true, content: [] }, "strict"), undefined);
 });
 
+test("an advisory diagnostic stays one inert line when the server names its tool and schema with control characters", () => {
+  const hostileName = "file_ticket\r\naiden: forged line\u001b[2J\u2028\u202e";
+  const hostileProperty = "status\n\u001b]0;title\u0007";
+  const guard = createMcpToolCallGuard([{ name: hostileName,
+    outputSchema: { type: "object", properties: { [hostileProperty]: { type: "string" } }, required: [hostileProperty] } }]);
+  const diagnostic = guard.validateResult(hostileName, { content: [], structuredContent: { [hostileProperty]: 7 } }, "advisory");
+  assert.ok(diagnostic);
+  assert.ok([...diagnostic].every((ch) => ch.codePointAt(0)! >= 0x20 && ch.codePointAt(0) !== 0x7f), "no line breaks or terminal controls reach the sink");
+  assert.match(diagnostic, /^MCP tool "file_ticket\?\?aiden: forged line\?\[2J\?\?": .*First failing rule: #\/properties\/status/u);
+});
+
 test("an advisory agent tool call through the live-client path carries the raw reply to the model", async (t) => {
   let next = 0;
   const { client } = await rawServerClient(t, (method) => method === "tools/list"

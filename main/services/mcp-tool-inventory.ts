@@ -275,9 +275,15 @@ export function createMcpToolCallGuard(
       if (problem === undefined) return undefined;
       if (mode === "strict") throw new Error(problem);
       const where = record.structuredContent === undefined ? undefined : validate.firstSchemaPath();
-      return `MCP tool "${name.slice(0, 128)}": ${problem}${where ? ` First failing rule: ${where}.` : ""} The result was used as received.`;
+      // The tool name and schema path come from the server; keep the diagnostic one inert line in every sink.
+      return `MCP tool "${diagnosticFragment(name, 128)}": ${problem}${where ? ` First failing rule: ${diagnosticFragment(where, 160)}.` : ""} The result was used as received.`;
     },
   };
+}
+
+/** Server-provided text bounded and stripped of line breaks, terminal controls and bidi overrides. */
+function diagnosticFragment(value: string, limit: number): string {
+  return value.replace(/[\p{Cc}\p{Zl}\p{Zp}\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu, "?").slice(0, limit);
 }
 
 export type McpToolCallGuard = ReturnType<typeof createMcpToolCallGuard>;
