@@ -1,6 +1,6 @@
 # iOS development
 
-Requirements: current Xcode, iOS 18 or newer, and access to this repository's configured Apple development team for signed hardware runs.
+Requirements: current Xcode, iOS 26 or newer, and access to this repository's configured Apple development team for signed hardware runs.
 
 Build and test the `AidenOnTheGo` scheme from `AidenOnTheGo.xcodeproj`. Use an explicit physical-device destination for acceptance evidence. Do not place credentials, pairing payloads, LAN addresses, certificates, or generated test-run files in source control.
 

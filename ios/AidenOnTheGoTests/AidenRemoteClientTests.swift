@@ -2218,6 +2218,7 @@ final class AidenRemoteClientTests: XCTestCase {
         var revokeCredential = false
         var chatAccessReads = 0
         var writeCount = 0
+        var conflictOnWrite = false
 
         func mutatedBotDetail(_ change: (inout [String: Any]) -> Void) throws -> Data {
             var object = try XCTUnwrap(JSONSerialization.jsonObject(with: botDetail) as? [String: Any])
@@ -2260,6 +2261,12 @@ final class AidenRemoteClientTests: XCTestCase {
             case ("GET", "/api/aiden/v1/bot-conversations/\(chatID)/files/\(fileID)"):
                 return Self.response(for: request, status: 200, data: document)
             case ("PUT", "/api/aiden/v1/bot-conversations/\(chatID)/files/\(fileID)"):
+                if conflictOnWrite {
+                    return Self.response(for: request, status: 409, json: """
+                    {"error":{"code":"revision_conflict","message":"The file changed.",
+                    "requestId":"request-bot-tools-conflict","retryable":false}}
+                    """)
+                }
                 writeCount += 1
                 let body = try Self.jsonBody(request)
                 XCTAssertEqual(body["expectedVersion"] as? String, "file_revision_1")
@@ -2286,7 +2293,7 @@ final class AidenRemoteClientTests: XCTestCase {
         await coordinator.start()
         XCTAssertEqual(coordinator.connectionState, .connected)
 
-        let tools = AidenBotChatToolsModel(chatID: chatID, botID: botID, cache: botCache)
+        let tools = AidenBotChatToolsModel(chatID: chatID, botID: botID, machine: "instance-bot-tools", cache: botCache)
         await tools.load(coordinator: coordinator)
         XCTAssertTrue(tools.hasFiles)
         let cachedAfterRefresh = await botCache.load(
@@ -2314,6 +2321,18 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertTrue(savedFile)
         XCTAssertEqual(writeCount, 1)
         XCTAssertEqual(chatAccessReads, 0, "Bot chats no longer read per-chat access.")
+        XCTAssertFalse(files.offersReload)
+
+        // The file changed on the machine since it was opened: the editor offers Reload.
+        conflictOnWrite = true
+        files.draft = "third"
+        let savedOverConflict = await files.save(coordinator: coordinator)
+        XCTAssertFalse(savedOverConflict)
+        XCTAssertTrue(files.offersReload, "A revision conflict offers Reload")
+        await files.reloadDocument(coordinator: coordinator)
+        XCTAssertFalse(files.offersReload, "Reloading clears the conflict")
+        XCTAssertEqual(files.draft, "second")
+        conflictOnWrite = false
 
         // A Bot access change on the Mac invalidates the grant before any write.
         currentBotDetail = try mutatedBotDetail { object in
@@ -2403,14 +2422,14 @@ final class AidenRemoteClientTests: XCTestCase {
         )
         await coordinator.start()
         XCTAssertEqual(coordinator.connectionState, .connected)
-        XCTAssertFalse(AidenBotDeletion.isAvailable(coordinator: coordinator),
+        XCTAssertFalse(AidenBotDeletion.isAvailable(coordinator: coordinator, machine: nil),
                        "A host that does not advertise delete must not offer Delete.")
 
         features = "[\"bot-delete-v1\"]"
         await coordinator.start()
-        XCTAssertTrue(AidenBotDeletion.isAvailable(coordinator: coordinator))
+        XCTAssertTrue(AidenBotDeletion.isAvailable(coordinator: coordinator, machine: nil))
 
-        try await AidenBotDeletion.delete(botID: botID, revision: "bot_revision_8", coordinator: coordinator)
+        try await AidenBotDeletion.delete(botID: botID, revision: "bot_revision_8", coordinator: coordinator, machine: nil)
         XCTAssertEqual(deletes, ["bot_revision_8"])
     }
 
@@ -2465,13 +2484,13 @@ final class AidenRemoteClientTests: XCTestCase {
             }
         )
         await coordinator.start()
-        try await AidenBotDeletion.deleteListed(botID: botID, coordinator: coordinator)
+        try await AidenBotDeletion.deleteListed(botID: botID, coordinator: coordinator, machine: nil)
         XCTAssertEqual(deletes, 0, "A Bot the Mac no longer has needs no delete request.")
 
         // Any other failure still reports that the Bot wasn't deleted.
         detailStatus = 500
         do {
-            try await AidenBotDeletion.deleteListed(botID: botID, coordinator: coordinator)
+            try await AidenBotDeletion.deleteListed(botID: botID, coordinator: coordinator, machine: nil)
             XCTFail("A server failure must not count as deleted.")
         } catch {
             XCTAssertFalse(AidenBotDeletion.isAlreadyGone(error))
@@ -3374,7 +3393,7 @@ final class AidenRemoteClientTests: XCTestCase {
             XCTFail("A loser must surface the first-responder conflict.")
         } catch {
             let loser = try XCTUnwrap(AidenForeignRunResolution.loser(from: error))
-            XCTAssertEqual(loser.notice, "Answered on Mac: allowed")
+            XCTAssertEqual(loser.notice, "Answered on your machine: allowed")
         }
     }
 
@@ -4430,7 +4449,7 @@ final class AidenRemoteClientTests: XCTestCase {
         let outcome = await coordinator.switchInstallationOutcome(to: "available")
 
         guard case .success = outcome else { return XCTFail("Switch should connect to the available computer") }
-        XCTAssertEqual(coordinator.activeInstanceId, "available")
+        XCTAssertEqual(coordinator.defaultInstanceId, "available")
         XCTAssertEqual(coordinator.connectionState, .connected)
         XCTAssertNil(coordinator.connectionIssue)
         XCTAssertEqual(unavailableAttempts, 1, "Switching must not first retry the unavailable computer")
@@ -4905,25 +4924,7 @@ final class AidenRemoteClientTests: XCTestCase {
             ),
             "Local Network"
         )
-        XCTAssertEqual(
-            AidenInstallationPresentation.reachability(
-                installationID: "instance-a",
-                activeInstallationID: "instance-b",
-                connectionState: .connected
-            ),
-            "Not checked"
-        )
-        XCTAssertEqual(AidenInstallationPresentation.identitySuffix("instance_studio_abcdef"), "abcdef")
-        XCTAssertEqual(
-            AidenInstallationPresentation.accessibilityValue(
-                installationID: "instance-a",
-                activeInstallationID: "instance-a",
-                connectionState: .connected,
-                endpoint: URL(string: "https://studio.local:49220/api/aiden/v1")!,
-                lastConnectedAt: nil
-            ),
-            "Selected, Connected, Local Network, Never connected"
-        )
+        XCTAssertEqual(AidenInstallationPresentation.lastConnection(nil), "Never connected")
     }
 
     @MainActor
@@ -6096,7 +6097,7 @@ final class AidenRemoteClientTests: XCTestCase {
         await coordinator.switchInstallation(to: "instance-2")
         await slowLoad.value
 
-        XCTAssertEqual(coordinator.activeInstanceId, "instance-2")
+        XCTAssertEqual(coordinator.defaultInstanceId, "instance-2")
         XCTAssertEqual(coordinator.server?.instanceId, "instance-2")
         XCTAssertEqual(coordinator.workspaces.map(\.id), ["workspace-instance-2"])
         XCTAssertEqual(coordinator.connectionState, .connected)
@@ -8311,7 +8312,7 @@ extension AidenRemoteClientTests {
                 markRead: { readMarks += 1; return readRefused ? 500 : 204 }
             )
             defer { try? FileManager.default.removeItem(at: inbox.root) }
-            XCTAssertEqual(inbox.coordinator.activeInstanceId, "instance-inbox")
+            XCTAssertEqual(inbox.coordinator.defaultInstanceId, "instance-inbox")
             AidenRemoteMockURLProtocol.hold = { request in
                 guard request.url?.path.hasSuffix("/triage") == true else { return nil }
                 arrived.fulfill()
@@ -8322,7 +8323,7 @@ extension AidenRemoteClientTests {
             let write = Task { await inbox.home.setTriage(.done(true), chatID: Self.inboxChatID, coordinator: inbox.coordinator) }
             await fulfillment(of: [arrived], timeout: 5)
             await inbox.coordinator.switchInstallation(to: Self.otherMacID)
-            XCTAssertEqual(inbox.coordinator.activeInstanceId, Self.otherMacID)
+            XCTAssertEqual(inbox.coordinator.defaultInstanceId, Self.otherMacID)
             let saved = await inbox.cache.loadChatSummaries(instanceId: "instance-inbox")?.summaries.first
             XCTAssertNotNil(saved?.inbox.doneAt, "The optimistic Done was saved for the first Mac.")
             release.signal()

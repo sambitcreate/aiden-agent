@@ -573,7 +573,7 @@ final class AidenBotRoutineNotifierTests: XCTestCase {
         server = host(held: [.botRead, .chatRead], legacy: true)
         transport.queue(try feed([("legacy-routine", "2026-11-03T12:00:00.000Z")], now: "2026-11-03T12:01:00.000Z"))
         await notifier.deliverFromHost(instanceId: instance, transport: transport, installation: { installed }, server: { server })
-        XCTAssertEqual(center.posted.map(\.identifier), ["aiden.bot-routine.legacy-routine"])
+        XCTAssertEqual(center.posted.map(\.identifier), ["aiden.bot-routine.\(instance).legacy-routine"])
     }
 
     func testPeerFinalNotificationRequiresCurrentCapabilityDeduplicatesAndOpensInitiatorChat() async throws {
@@ -585,7 +585,7 @@ final class AidenBotRoutineNotifierTests: XCTestCase {
         XCTAssertTrue(center.posted.isEmpty); XCTAssertEqual(defaults.string(forKey: AidenBotRoutineNotifier.cursorKey(instance)), "2026-11-03T11:00:00.000Z", "A late grant loss cannot consume a final update")
         await notifier.deliver(instanceId: instance, transport: transport, currentGrants: { [.botRead, .chatRead, .botPeers] })
         await notifier.deliver(instanceId: instance, transport: transport, currentGrants: { [.botRead, .chatRead, .botPeers] })
-        XCTAssertEqual(center.posted.count, 1); XCTAssertEqual(center.posted.first?.identifier, "aiden.bot-routine.peer_root_final_one")
+        XCTAssertEqual(center.posted.count, 1); XCTAssertEqual(center.posted.first?.identifier, "aiden.bot-routine.\(instance).peer_root_final_one")
         let content = try XCTUnwrap(center.posted.first?.content); XCTAssertEqual(content.threadIdentifier, "aiden.bot-peer.\(instance).bot_fixture_01")
         XCTAssertEqual(AidenRunAlertNotifier.deepLink(from: content.userInfo), AidenDeepLink.botChatURL(instanceId: instance, botId: "bot_fixture_01"))
     }
@@ -603,7 +603,7 @@ final class AidenBotRoutineNotifierTests: XCTestCase {
         XCTAssertFalse((defaults.stringArray(forKey: AidenBotRoutineNotifier.deliveredKey(instance)) ?? []).contains("peer_root_final_one"))
         allowsPeers = true; transport.queue(try peerFeed(now: "2026-11-03T12:01:00.000Z"))
         await notifier.deliver(instanceId: instance, transport: transport, currentGrants: { allowsPeers ? [.botRead, .chatRead, .botPeers] : [.botRead, .chatRead] })
-        XCTAssertEqual(center.posted.map(\.identifier), ["aiden.bot-routine.peer_root_final_one", "aiden.bot-routine.peer_root_final_one"])
+        XCTAssertEqual(center.posted.map(\.identifier), ["aiden.bot-routine.\(instance).peer_root_final_one", "aiden.bot-routine.\(instance).peer_root_final_one"])
         XCTAssertEqual(defaults.stringArray(forKey: AidenBotRoutineNotifier.deliveredKey(instance)), ["peer_root_final_one"])
     }
     func testPairingPurgeDuringAwaitedNotificationPostCannotRecreateOldCursorOrReceipts() async throws {
@@ -649,7 +649,7 @@ final class AidenBotRoutineNotifierTests: XCTestCase {
         await notifier.deliver(instanceId: instance, transport: transport)
 
         XCTAssertEqual(transport.cursors, [nil, "2026-08-19T15:00:00.000Z", "2026-08-19T16:00:00.000Z"])
-        XCTAssertEqual(center.posted.map(\.identifier), ["aiden.bot-routine.run_new"])
+        XCTAssertEqual(center.posted.map(\.identifier), ["aiden.bot-routine.\(instance).run_new"])
         let content = try XCTUnwrap(center.posted.first?.content)
         XCTAssertEqual(content.title, "Scout")
         XCTAssertEqual(content.body, "Morning brief: Your first meeting is at 9:30 with Priya.")
@@ -675,7 +675,7 @@ final class AidenBotRoutineNotifierTests: XCTestCase {
         await notifier.deliver(instanceId: instance, transport: transport)
 
         XCTAssertEqual(transport.cursors.last, "2026-08-19T15:00:00.000Z", "the cursor did not move past the failed run")
-        XCTAssertEqual(center.posted.map(\.identifier), ["aiden.bot-routine.run_b"])
+        XCTAssertEqual(center.posted.map(\.identifier), ["aiden.bot-routine.\(instance).run_b"])
     }
 
     func testCursorsAreKeptPerPairedMac() async throws {
@@ -706,7 +706,7 @@ final class AidenBotRoutineNotifierTests: XCTestCase {
         await notifier.deliver(instanceId: instance, transport: transport)
 
         XCTAssertEqual(center.authorizationRequests, 1)
-        XCTAssertEqual(center.posted.map(\.identifier), ["aiden.bot-routine.run_a"])
+        XCTAssertEqual(center.posted.map(\.identifier), ["aiden.bot-routine.\(instance).run_a"])
     }
 
     func testNothingIsFetchedWithoutNotificationPermission() async throws {
@@ -718,5 +718,39 @@ final class AidenBotRoutineNotifierTests: XCTestCase {
         await notifier.deliver(instanceId: instance, transport: transport)
 
         XCTAssertTrue(transport.cursors.isEmpty)
+    }
+
+    /// A routine on a machine other than the default still lands: the
+    /// foreground poll asks every connected machine, never the offline one.
+    func testTheForegroundPollAsksEveryConnectedMachine() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
+        await coordinator.start()
+        for connection in coordinator.hosts.ordered where connection.connectionState != .connected {
+            await connection.connect()
+        }
+        let connected = coordinator.hosts.ordered.filter { $0.connectionState == .connected }.map(\.instanceId)
+        XCTAssertEqual(Set(connected), ["studio", "laptop", "mini"])
+        for instanceId in connected {
+            defaults.removeObject(forKey: AidenBotRoutineNotifier.cursorKey(instanceId))
+            responder.reply(
+                instanceId: instanceId,
+                path: "/bots/routine-notifications",
+                status: 200,
+                json: Data(#"{"notifications":[],"now":"2026-08-19T15:00:00.000Z"}"#.utf8)
+            )
+        }
+        let notifier = AidenBotRoutineNotifier(defaults: defaults, center: FakeNotificationCenter())
+
+        await notifier.deliverIfSupported(coordinator: coordinator)
+
+        for instanceId in connected {
+            XCTAssertTrue(
+                responder.requests(instanceId: instanceId).contains("GET /bots/routine-notifications"),
+                "\(instanceId) was never asked"
+            )
+            XCTAssertEqual(defaults.string(forKey: AidenBotRoutineNotifier.cursorKey(instanceId)), "2026-08-19T15:00:00.000Z")
+        }
+        XCTAssertFalse(responder.requests(instanceId: "build").contains("GET /bots/routine-notifications"))
     }
 }

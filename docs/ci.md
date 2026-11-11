@@ -174,6 +174,120 @@ paint has finished. Production masking, its documented
 first-observation limitation, timeouts, retries and the flaky-test gate remain
 unchanged.
 
+On 2026-11-11 the flakes that kept `main` red between 2026-11-05 and 2026-11-10
+were fixed at their causes, without adding a retry or weakening an assertion.
+One wall-clock ceiling was raised; the iOS item says which.
+
+- The design-canvas region test (`renderer-other`, job 129429421249) gave the
+  lazy canvas chunk RTL's one-second `waitFor` to load. It now awaits that module
+  itself, then leaves only the render after it to `waitFor`. Under 90 concurrent
+  runs it failed 87 times before the change and 0 times after.
+- Three voice-recorder tests (`renderer-other`, job 127324138476) checked
+  `recording` and the live transcript reset straight after `onTranscript`. Those
+  updates render from an async `onstop` callback outside `act`, so the checks now
+  wait for that render too.
+- The subagent shell runner's stalled `setsid` cases (`runtime-subagents`, job
+  128208665607) raced the fixture's own one-second bound against the runner's
+  two-second deadline. That deadline also covers helper and shell startup, so on
+  a slow host it fired first. The fixture runs now take a deadline that only a
+  real hang reaches, and the fixture's own bound decides the result.
+- Design-canvas text editing (Electron, job 130172496593) reloaded a page under
+  the next edit. FSEvents could report the canvas's own write late. The watcher
+  now records the digest of each write the canvas makes and drops a report whose
+  file still holds those bytes. An event that names no file could also be a
+  stylesheet or image beside the page, so it is put down to that write only
+  under three conditions:
+  - It arrives within three seconds of the write. A report still waiting for
+    the quiet period when those seconds pass is judged by when its event
+    arrived.
+  - Every file beside the page still has the size, inode, and modification and
+    change times it had when the write began. The walk skips hidden folders,
+    which the watcher ignores, and stops after 500 entries; a larger folder
+    counts as changed.
+  - None of those files was modified or changed in the three seconds before
+    the write began, or since. This catches a stylesheet changed while the
+    walk was running, which the walk itself may have taken in, and one changed
+    just before the edit whose report arrives late.
+
+  The canvas's write changes only the page itself. Editing two pages in one
+  folder within three seconds can still reload the first page once more than
+  needed, because its neighbour changed.
+
+  Each page such an event queues is checked on its own. The edited page stays,
+  while every other page, and a page whose neighbours changed, is still
+  reported. The editor reloads the page itself when no frame shows the change in
+  place.
+- Terminal docking (Electron, job 130153055685) lost the order of typed input.
+  Each keystroke's access check waits on disk, and `ipcMain.handle` lets those
+  handlers finish out of order. Input for one session is now written in the
+  order it arrived.
+- Three iOS foreign-run tests in `AidenChatTests` (jobs 127594787585,
+  128145304945 and 130166879005) timed out. Their waits counted 500
+  ten-millisecond sleeps on the main actor, while the work they waited on ran
+  off it. In those runs ordinary tests took up to 43 seconds on the stalled
+  host, and the count ran out before the stub answered. Waits for a lookup to
+  finish now await the lookup tasks themselves and then assert the exact
+  request count. The remaining condition waits are bounded by 30 seconds of
+  wall-clock time, the same failure-only ceiling `waitForRequests` uses. That
+  is longer than the old budget of about 5 to 9 seconds. A six-second stub
+  stall fails all three tests under the old waits.
+
+Still open. None of these reproduced their CI symptom locally in 10–20 repeats
+each:
+
+- `crash-reporting.spec.ts:41`: an unhandled "Target crashed" right after a
+  browser tab's renderer is killed (job 130172496756). Locally, 5 of 10
+  repeats failed differently: the fixture's first `firstWindow` timed out.
+- A first turn that is never answered, in `worktree-folder-deleted.spec.ts:15`
+  (job 130053226128).
+- `testHeldHomeHTTPResponseCannotReplaceSettlementOrNewerHomeOwner` (job
+  127814921450).
+
+Later on 2026-11-11, the last two fixed-count polls in `AidenChatTests` (a
+local `waitUntil` and `waitUntil(attempts:)`) took the same 30-second
+wall-clock ceiling as `waitForCondition`. Neither had failed yet, but both
+counted main-actor turns the same way. The `bots-persistence.spec.ts:10`
+failures (jobs 128096428982, 128273572690 and 128292737560, all on
+2026-11-07) predate bb90b9125. That change removed about 6.8 seconds of
+Keychain calls from each Bot turn, which had pushed the first answer past
+the spec's 10-second expectation. It has not failed since, so it is no longer
+listed as open.
+
+`AidenChatMarkdownTests.testAPressDuringAStreamIsNotLostToTheNextToken`
+failed on 2026-11-11 (job 130752861135). It pressed the copy button after a
+fixed 50 ms pause, and the runner had not redrawn the next token yet, so the
+press copied the old source. The test now waits, up to the helper's 3-second
+ceiling, until the new code text is in the accessibility tree.
+
+`bot-plans.spec.ts:15` failed again on 2026-11-11 (job 130773369673, after
+jobs 128235396340 and 128250445861). Chromium's keyboard scroll animates, and a
+Home press sent while the End animation was still settling sometimes left the
+plan review at the bottom. The review now handles Home and End itself and jumps
+straight to its top or bottom, so the test presses Home once and expects the
+first step back in view.
+
+The 30-second `waitForCondition` ceiling is an explicit exception to the
+AGENTS.md rule against raising timeouts. It applies to all of that helper's
+roughly 30 callers in `AidenChatTests`. For the lookup waits it is only a
+backstop, because those now await the lookup tasks. For the two "live foreign
+output" waits in `testIdleChatAttachesToARunTheRosterAnnouncesAndShowsItLive`
+and `testAnnouncedRunNotYetRegisteredIsAttachedByOneRetry`, the longer ceiling
+is the whole fix: nothing deterministic was found to wait on instead.
+
+The exception is justified on three counts:
+- The wait polls a condition against the wall clock instead of counting
+  main-actor turns, so it ends as soon as the output appears and costs nothing
+  on a healthy host.
+- The old budget was a count of sleeps, not a time. On a stalled CI host it ran
+  out after about 5 to 9 seconds, while ordinary tests in those runs took up to
+  43 seconds.
+- It matches `waitForRequests` (38ab09a53), which already used a 30-second
+  wall-clock ceiling.
+
+Replacing those two waits with an expectation the stub fulfils, once it has
+served the run's events and the model has shown them, would make the ceiling
+bound only a failure there too.
+
 Release workflows, signing/notarization, publication and repository protection
 settings remain unchanged. The previous draft's release-admission rewrite has
 been removed to keep release hardening separate from this CI rollout.

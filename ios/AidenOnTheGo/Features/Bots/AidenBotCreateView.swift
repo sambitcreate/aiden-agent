@@ -79,8 +79,8 @@ struct AidenBotCreateOperations {
 /// made, and its Try Again sends the same request on the same key. When it can't be
 /// written nothing goes out, and the failure says so.
 ///
-/// Everything a create leaves behind is its pairing's alone: Bots home shows only the
-/// active pairing's, and Try Again sends only to the Mac it was for, so one Mac's
+/// Everything a create leaves behind is its pairing's alone: Bots home names the
+/// machine, and Try Again sends only to the machine it was for, so one machine's
 /// answers never become a Bot on another.
 @MainActor
 @Observable
@@ -89,7 +89,7 @@ final class AidenBotCreateFlow {
         let id: UUID
         let name: String
         let purpose: String
-        /// The pairing it is on its way to; Bots home shows it there only.
+        /// The pairing it is on its way to.
         let instanceId: String
         let deviceId: String
 
@@ -105,15 +105,17 @@ final class AidenBotCreateFlow {
         /// The pairing it was for.
         var instanceId = ""
         var deviceId = ""
+        /// Came back from an earlier launch: its words wait on disk until the person settles them.
+        var isParked = false
         /// The request that may have reached the Mac without an answer, and when it first went
         /// out: past the replay window, Try Again looks for its Bot instead of sending it again.
         var sent: AidenBotCreateRequest?
         var sentAt: Date?
     }
 
-    static let unreachable = "Aiden couldn’t reach your Mac, so the Bot wasn’t made. Try again."
+    static let unreachable = "Aiden couldn’t reach your machine, so the Bot wasn’t made. Try again."
     static let interrupted = "Aiden closed before the Bot was ready. Try again to finish making it."
-    static let notKept = "Aiden couldn’t store this Bot on your iPhone, so it wasn’t sent to your Mac. Try again."
+    static let notKept = "Aiden couldn’t store this Bot on your iPhone, so it wasn’t sent to your machine. Try again."
 
     /// What Try Again on Bots home does with a failure.
     enum Retry: Equatable {
@@ -150,7 +152,7 @@ final class AidenBotCreateFlow {
     /// The disk writes, made one after another in the order they were asked for; each says whether it was kept.
     @ObservationIgnored private var writes: Task<Bool, Never>?
     /// Pairings this flow already looked on disk for; an earlier launch's create comes back once.
-    @ObservationIgnored private var restoredScopes: Set<String> = []
+    private var restoredScopes: Set<String> = []
     /// The look on disk under way for each pairing; a newer one supersedes it.
     @ObservationIgnored private var restoring: [String: UUID] = [:]
     /// Pairings a create of this launch is sending for, in any flow: theirs is never shown as cut off.
@@ -170,7 +172,7 @@ final class AidenBotCreateFlow {
 
     nonisolated static func scope(instanceId: String, deviceId: String) -> String { "\(instanceId)|\(deviceId)" }
 
-    /// The failed create Bots home shows for this pairing; another pairing's is never shown here.
+    /// This pairing's failed create; another pairing's is never returned here.
     func failure(instanceId: String, deviceId: String) -> Failure? {
         failures[Self.scope(instanceId: instanceId, deviceId: deviceId)]
     }
@@ -184,8 +186,16 @@ final class AidenBotCreateFlow {
         retrying: Failure? = nil,
         onCreated: @MainActor (AidenBotDetail) async -> Void
     ) async {
+        // What waits on disk comes back before a new ask can take its place: a pairing keeps one,
+        // so only those same words can go out over it.
+        let scope = operations.scope
+        if retrying == nil, !hasLooked(scope) {
+            await restore(instanceId: operations.instanceId, deviceId: operations.deviceId)
+        }
+        let parked = failures[scope].flatMap { $0.isParked ? $0 : nil }
+        let leavesParkedAskAlone = retrying != nil || (hasLooked(scope) && (parked == nil || parked?.input == input))
         let ownMac = retrying.map { $0.instanceId == operations.instanceId && $0.deviceId == operations.deviceId } ?? true
-        guard pending == nil, ownMac else {
+        guard pending == nil, ownMac, leavesParkedAskAlone else {
             // Another Bot is still on its way (one is made at a time), or another Mac is the active
             // one now: nothing goes out. A Try Again's answers wait as they were, for their own Mac.
             if let retrying {
@@ -381,9 +391,19 @@ final class AidenBotCreateFlow {
             replays: saved.frozen != nil,
             instanceId: instanceId,
             deviceId: deviceId,
+            isParked: true,
             sent: unanswered,
             sentAt: unanswered == nil ? nil : saved.createdAt
         )
+    }
+
+    /// True once nothing an earlier launch left for this pairing can still come back.
+    func hasLooked(instanceId: String, deviceId: String) -> Bool {
+        hasLooked(Self.scope(instanceId: instanceId, deviceId: deviceId))
+    }
+
+    private func hasLooked(_ scope: String) -> Bool {
+        store == nil || restoredScopes.contains(scope) || !isFree(for: scope)
     }
 
     /// The person let the failed Bot go (OK, or New Bot closed after Try Again): it no
@@ -521,7 +541,8 @@ struct AidenBotCreateView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     /// What a Try Again brings back.
     var initial: AidenBotCreateInput?
-    var onCreate: (AidenBotCreateInput) -> Void = { _ in }
+    /// The Bot's answers and the machine to make it on.
+    var onCreate: (AidenBotCreateInput, AidenNewWorkTarget?) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.aidenPalette) private var palette
@@ -535,14 +556,48 @@ struct AidenBotCreateView: View {
     /// A durable-session host lets a Bot start without an AI model; it then
     /// reports `needs_model` until one is chosen on the Mac.
     @State private var allowsModellessCreate = false
+    /// Where the Bot is made.
+    @State private var picker: AidenNewWorkPicker
+    /// The machine the models on screen came from.
+    @State private var catalogTarget: AidenNewWorkTarget?
     @FocusState private var nameIsFocused: Bool
 
-    private var sessionIdentity: AidenBotCustomAccessSessionIdentity {
-        AidenBotCustomAccessSessionIdentity(coordinator: coordinator)
+    /// `pinnedTo` is a failed Bot's machine: its Try Again goes nowhere else.
+    init(
+        coordinator: AidenRemoteCoordinator,
+        initial: AidenBotCreateInput? = nil,
+        pinnedTo: String? = nil,
+        onCreate: @escaping (AidenBotCreateInput, AidenNewWorkTarget?) -> Void = { _, _ in }
+    ) {
+        self.coordinator = coordinator
+        self.initial = initial
+        self.onCreate = onCreate
+        let picker = AidenNewWorkPicker(coordinator: coordinator, kind: .bot, pinnedTo: pinnedTo)
+        _picker = State(initialValue: picker)
+        _catalogTarget = State(initialValue: picker.target)
+    }
+
+    /// The target leads, so the selection moving changes nothing here.
+    private var loadID: AidenNewWorkTarget? { picker.target }
+
+    private var pickedConnection: AidenHostConnection? {
+        picker.target.flatMap { coordinator.hosts.connection(for: $0.instanceId) }
+    }
+
+    private var installation: AidenInstallation? { pickedConnection?.installation }
+
+    private var isConnected: Bool { pickedConnection?.connectionState == .connected }
+
+    private func requestContext() throws -> AidenRemoteRequestContext {
+        guard let target = picker.target else { throw AidenRemoteClientError.installationChanged }
+        return try coordinator.ownerContext(for: target.instanceId)
     }
 
     private var usesDurableSession: Bool {
-        AidenBotHostFeature.isAdvertised(AidenBotHostFeature.durableSession, coordinator: coordinator)
+        AidenBotHostFeature.isAdvertised(
+            AidenBotHostFeature.durableSession,
+            by: picker.target.flatMap { coordinator.knownServerFeatures(of: $0.instanceId) }
+        )
     }
 
     private var input: AidenBotCreateInput {
@@ -555,7 +610,7 @@ struct AidenBotCreateView: View {
     /// Valid answers are enough: the model is the picked one, or the Mac's
     /// recommended one once it answers.
     private var canCreate: Bool {
-        guard coordinator.installationStore.activeInstallation?.canWriteBots == true,
+        guard installation?.canWriteBots == true, picker.canStart,
               (try? AidenBotCreateRequest(
                   name: name.trimmingCharacters(in: .whitespacesAndNewlines),
                   purpose: purpose.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -584,24 +639,35 @@ struct AidenBotCreateView: View {
                     }
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Create") {
-                            onCreate(input)
+                            onCreate(input, picker.target)
                             dismiss()
                         }
                         .disabled(!canCreate)
                     }
                 }
         }
-        .task(id: sessionIdentity.pairing) {
+        .task(id: loadID) {
+            if catalogTarget != picker.target {
+                // Each machine has its own models, so the last one's pick can't come along.
+                catalogTarget = picker.target
+                catalog = nil
+                draft = nil
+                loadError = nil
+                allowsModellessCreate = false
+            }
             prefill()
             await load()
         }
-        .onChange(of: coordinator.connectionState == .connected) { _, connected in
+        .onChange(of: isConnected) { _, connected in
             if connected, catalog == nil || loadError != nil { Task { await load() } }
         }
     }
 
     private var form: some View {
         Form {
+            if picker.showsPicker || picker.refusalMessage != nil {
+                Section { AidenNewWorkMachinePicker(picker: picker) }
+            }
             Section {
                 TextField("Name", text: $name)
                     .textContentType(.name)
@@ -690,9 +756,9 @@ struct AidenBotCreateView: View {
 
     private var accessNote: String {
         if allowsModellessCreate {
-            return "It needs an AI model before it can reply. Choose one on your Mac."
+            return "It needs an AI model before it can reply. Choose one on your machine."
         }
-        return "It can use everything your Mac allows. You can change this later in Advanced."
+        return "It can use everything your machine allows. You can change this later in Advanced."
     }
 
     private func prefill() {
@@ -707,23 +773,23 @@ struct AidenBotCreateView: View {
     /// The Mac's models, from the cache at once and then fresh. A picked model stays.
     @MainActor
     private func load() async {
-        let expected = sessionIdentity.pairing
-        guard let context = try? coordinator.requestContext() else { return }
+        let expected = loadID
+        guard let context = try? requestContext() else { return }
         if catalog == nil,
            let cached = await AidenBotCache.shared.load(instanceId: context.instanceId, deviceId: context.deviceId)?.catalog,
-           sessionIdentity.pairing == expected {
+           loadID == expected {
             adopt(cached)
         }
         do {
             let loaded = try await coordinator.remoteClient(for: context).botCapabilityCatalog()
-            guard coordinator.isCurrent(context), sessionIdentity.pairing == expected, !Task.isCancelled else { return }
+            guard coordinator.holds(context), loadID == expected, !Task.isCancelled else { return }
             loadError = nil
             adopt(loaded)
         } catch is CancellationError {
             return
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
-            guard sessionIdentity.pairing == expected else { return }
+            guard loadID == expected else { return }
             if catalog == nil { loadError = aidenBotFriendlyLoadError(error) }
         }
     }
@@ -747,9 +813,13 @@ struct AidenBotCreateView: View {
 /// a skeleton face, and "Creating…".
 struct AidenBotPendingCreateRow: View {
     let pending: AidenBotCreateFlow.Pending
+    /// Named when it's on its way to a machine other than the default.
+    var machine: String?
 
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
+
+    private var status: String { machine.map(AidenBotCreateCopy.creating(on:)) ?? AidenBotCreateCopy.creating }
 
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
@@ -759,7 +829,7 @@ struct AidenBotPendingCreateRow: View {
                     .font(.headline)
                     .foregroundStyle(palette.foreground)
                     .lineLimit(1)
-                Text(AidenBotCreateCopy.creating)
+                Text(status)
                     .font(.body)
                     .foregroundStyle(palette.secondary)
                     .lineLimit(1)
@@ -769,11 +839,12 @@ struct AidenBotPendingCreateRow: View {
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(pending.name), \(AidenBotCreateCopy.creating)")
+        .accessibilityLabel("\(pending.name), \(status)")
     }
 }
 
 enum AidenBotCreateCopy {
     static let creating = "Creating…"
+    static func creating(on machine: String) -> String { "Creating on \(machine)…" }
     static let failedTitle = "Couldn’t Create Bot"
 }

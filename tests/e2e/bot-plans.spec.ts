@@ -141,12 +141,9 @@ test("plan approval waits for the host, then becomes a stoppable checklist", asy
   await review.focus();
   await review.press("End");
   await expect(page.getByText(longPlan.items[7]!.line, { exact: true })).toBeInViewport();
-  // The last row enters the viewport before native End scrolling finishes.
-  // Wait for its boundary before asking Home to reverse the same scroller.
-  await expect.poll(() => review.evaluate(element =>
-    Math.abs(element.scrollHeight - element.clientHeight - element.scrollTop) <= 1,
-  )).toBe(true);
   await expect(review).toBeFocused();
+  // One Home press must bring the first step back: the review handles Home and
+  // End itself, so a press is never lost to an unfinished scroll animation.
   await review.press("Home");
   await expect(page.getByText(longPlan.steps[0]!.text, { exact: true })).toBeInViewport();
   await page.getByText(longPlan.steps[9]!.text, { exact: true }).scrollIntoViewIfNeeded();

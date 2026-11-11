@@ -19,7 +19,7 @@ final class AidenWorkspaceEnvironmentTests: XCTestCase {
             id: "workspace", name: "Workspace", permission: .ask, hasFolder: true,
             isManagedWorktree: false, branchName: nil, repositoryName: nil, git: nil,
             createdAt: .now, updatedAt: .now, revision: "r1"
-        ))
+        ), owner: AidenRemoteRequestContext(instanceId: "mac", deviceId: "phone", generation: 1, scope: .owner))
         model.isOfflineIndex = false
         model.isOfflineDocument = true
         XCTAssertTrue(model.canLoadPage)

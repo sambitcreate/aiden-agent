@@ -1481,7 +1481,7 @@ final class AidenRemotePhase0Tests: XCTestCase {
         XCTAssertNil(projection.pendingApproval)
         XCTAssertEqual(projection.state, .running)
         if case let .answeredElsewhere(resolution) = lost.first {
-            XCTAssertEqual(resolution.notice, "Answered on Mac: allowed")
+            XCTAssertEqual(resolution.notice, "Answered on your machine: allowed")
         }
 
         // A host-only approval reaches the phone as deny-only, without scopes.
@@ -1649,11 +1649,11 @@ final class AidenRemotePhase0Tests: XCTestCase {
             from: AidenRemoteClientError.server(statusCode: 409, body: fixtureError)
         ))
         XCTAssertEqual(denied.prompt, .approval(.deny))
-        XCTAssertEqual(denied.notice, "Answered on Mac: denied")
+        XCTAssertEqual(denied.notice, "Answered on your machine: denied")
         XCTAssertNotNil(denied.resolvedAt)
 
         let expired = try XCTUnwrap(loser(status: 409, #"{"error":{"code":"question_already_resolved","message":"Resolved.","requestId":"r1","retryable":false,"details":{"outcome":"expired","resolvedAt":"2026-10-05T10:00:00.000Z"}}}"#))
-        XCTAssertEqual(expired.notice, "Question expired on Mac")
+        XCTAssertEqual(expired.notice, "Question expired on your machine")
         XCTAssertNil(try loser(status: 403, #"{"error":{"code":"capability_denied","message":"No.","requestId":"r2","retryable":false}}"#))
         XCTAssertNil(AidenForeignRunResolution.loser(from: AidenRemoteClientError.invalidResponse))
     }

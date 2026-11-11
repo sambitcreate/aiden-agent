@@ -2,6 +2,8 @@ import SwiftUI
 
 struct AidenBotOpenWorkView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
+    /// The Bot's own machine; nil follows the selected one.
+    let machine: String?
     let botID: String
     @Environment(\.aidenPalette) private var palette
     @Environment(\.scenePhase) private var scenePhase
@@ -9,8 +11,8 @@ struct AidenBotOpenWorkView: View {
     @State private var context: AidenRemoteRequestContext?
     var body: some View {
         Group {
-            if let model, context.map(coordinator.isCurrent) == true, coordinator.server?.supportsBotOpenWork == true {
-                AidenOpenWorkListView(coordinator: coordinator, model: model)
+            if let model, context.map(coordinator.holds) == true, coordinator.botServer(on: machine)?.supportsBotOpenWork == true {
+                AidenOpenWorkListView(coordinator: coordinator, machine: machine, model: model)
             } else {
                 ContentUnavailableView("Open work unavailable", systemImage: "checklist",
                     description: Text("Connect to a paired host that supports Open work and grants Bot and chat access."))
@@ -20,13 +22,13 @@ struct AidenBotOpenWorkView: View {
         .navigationBarTitleDisplayMode(.inline)
         .background(palette.canvas.ignoresSafeArea())
         .task {
-            guard model == nil, coordinator.server?.supportsBotOpenWork == true,
-                  let current = try? coordinator.requestContext(), let client = try? coordinator.remoteClient(for: current) else { return }
+            guard model == nil, coordinator.botServer(on: machine)?.supportsBotOpenWork == true,
+                  let current = try? coordinator.botContext(on: machine), let client = try? coordinator.remoteClient(for: current) else { return }
             context = current
             model = AidenBotOpenWorkModel(botID: botID, transport: client, isCurrent: {
-                coordinator.isCurrent(current) && coordinator.server?.supportsBotOpenWork == true
+                coordinator.holds(current) && coordinator.botServer(on: machine)?.supportsBotOpenWork == true
             }, mayWrite: {
-                coordinator.connectionState == .connected && coordinator.installationStore.activeInstallation?.canWriteBots == true
+                coordinator.botConnectionState(on: machine) == .connected && coordinator.botInstallation(on: machine)?.canWriteBots == true
             }, store: .shared, scope: .init(instanceID: current.instanceId, deviceID: current.deviceId, botID: botID))
             await model?.load()
         }
@@ -39,7 +41,7 @@ struct AidenBotOpenWorkView: View {
                 await model?.load()
             }
         }
-        .onChange(of: coordinator.connectionState == .connected) { _, connected in
+        .onChange(of: coordinator.botConnectionState(on: machine) == .connected) { _, connected in
             if connected { Task { await model?.load() } }
         }
     }
@@ -47,6 +49,8 @@ struct AidenBotOpenWorkView: View {
 
 struct AidenOpenWorkListView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
+    /// The Bot's own machine; nil follows the selected one.
+    let machine: String?
     @Bindable var model: AidenBotOpenWorkModel
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
@@ -127,7 +131,7 @@ struct AidenOpenWorkListView: View {
         }
         .sheet(isPresented: $showingEditor) { AidenOpenWorkEditorView(model: model) }
         .sheet(isPresented: Binding(get: { selectedID != nil }, set: { if !$0 { selectedID = nil } })) {
-            if let selectedID { AidenOpenWorkDetailView(coordinator: coordinator, model: model, itemID: selectedID) }
+            if let selectedID { AidenOpenWorkDetailView(coordinator: coordinator, machine: machine, model: model, itemID: selectedID) }
         }
         .alert("Open work", isPresented: Binding(get: { model.message != nil && selectedID == nil && !showingEditor }, set: { if !$0 { model.message = nil } })) {
             Button("OK", role: .cancel) { model.message = nil }
@@ -159,6 +163,8 @@ private struct AidenOpenWorkEvidenceTarget: Identifiable {
 
 struct AidenOpenWorkDetailView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
+    /// The Bot's own machine; nil follows the selected one.
+    let machine: String?
     @Bindable var model: AidenBotOpenWorkModel
     let itemID: String
     @Environment(\.dismiss) private var dismiss
@@ -187,10 +193,10 @@ struct AidenOpenWorkDetailView: View {
                         LabeledContent("Execution", value: item.execution.state.rawValue.capitalized)
                         if let explanation = item.execution.explanation { Text(explanation).foregroundStyle(palette.secondary) }
                         if let stop = item.lastStop { Text(stop.description).foregroundStyle(palette.secondary) }
-                        if coordinator.server?.supportsBotPeerExchanges == true {
+                        if coordinator.botServer(on: machine)?.supportsBotPeerExchanges == true {
                             ForEach(peerExchangeIDs(item), id: \.self) { exchangeID in
                                 NavigationLink("View peer exchange") {
-                                    AidenBotPeerExchangeView(coordinator: coordinator, botID: model.botID, exchangeID: exchangeID)
+                                    AidenBotPeerExchangeView(coordinator: coordinator, machine: machine, botID: model.botID, exchangeID: exchangeID)
                                 }
                             }
                         }

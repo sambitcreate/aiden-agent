@@ -103,15 +103,6 @@ func aidenResolvedBotDeepLink(
     return .openChat(chat.chatId)
 }
 
-/// The Bots path a `aiden-otg://bot/{id}/chat` link opens on a Mac serving
-/// durable sessions: that Bot's one durable chat, where its hand-off card
-/// waits (Android parity). Nil on an older Mac, whose link opens the Bot's
-/// conversation (`aidenResolvedBotDeepLink`).
-func aidenBotSessionDeepLinkPath(botID: String, hostFeatures: [String]?) -> [String]? {
-    guard case let .durableSession(id) = AidenBotChatRoute.resolve(botID: botID, hostFeatures: hostFeatures) else { return nil }
-    return [AidenBotChatRoute.pathValue(botID: id)]
-}
-
 /// A shimmering placeholder block for cold loads. Warm refreshes keep the
 /// last-good UI in place and never show it.
 struct AidenBotSkeletonBlock: View {
@@ -259,23 +250,23 @@ private struct AidenBotHomeSkeletonView: View {
 
 struct AidenBotsHomeView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
-    let area: AidenProductArea
     let availability: AidenBotsAvailability
-    let navigationStore: AidenProductNavigationStore
-    @Binding var isShowingSwitcherCoachmark: Bool
-    let onSelectArea: (AidenProductArea) -> Void
     let onOpenConversation: (AidenBotConversationItem) async -> Void
     let onCreateConversation: (AidenBotSummary) async -> Void
     /// Opens a Bot's durable session (`bot-durable-session-v1`).
     var onOpenBotSession: (AidenBotSummary) -> Void = { _ in }
+    /// A new Bot was made on a machine this list doesn't show.
+    var onCreatedElsewhere: (AidenHostObjectID, AidenBotSummary) -> Void = { _, _ in }
+    /// With more than one machine shown: every machine's Bots,
+    /// listed in place of the selected machine's.
+    var machines: AidenBotsHomeMachines? = nil
 
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var snapshot: AidenBotCacheSnapshot?
     @State private var snapshotScope: AidenBotsHomeScope?
     @State private var query = ""
-    @State private var isSearching = false
     @State private var remoteSearchResults: [AidenBotConversationItem]?
     @State private var isLoading = false
     @State private var isCreatingConversation = false
@@ -291,30 +282,14 @@ struct AidenBotsHomeView: View {
     @State private var createFlow = AidenBotCreateFlow()
     /// The failed create New Bot reopens with after Try Again.
     @State private var createPrefill: AidenBotCreateFlow.Failure?
-    @FocusState private var searchIsFocused: Bool
 
     private var loadID: AidenBotsHomeLoadID {
         AidenBotsHomeLoadID(
-            instanceID: coordinator.activeInstanceId,
+            instanceID: coordinator.defaultInstanceId,
             deviceID: coordinator.installationStore.activeInstallation?.deviceId,
             connectionState: coordinator.connectionState,
-            isBotSurfaceActive: aidenBotSurfaceIsActive(area: area, availability: availability)
+            isBotSurfaceActive: availability.canOpen
         )
-    }
-
-    private var selectedBot: AidenBotSummary? {
-        get {
-            let installation = coordinator.installationStore.activeInstallation
-            guard let id = navigationStore.selectedBot(
-                for: installation?.id,
-                deviceID: installation?.deviceId
-            ) else { return nil }
-            return allBots.first { $0.id == id }
-        }
-        nonmutating set {
-            let installation = coordinator.installationStore.activeInstallation
-            navigationStore.setSelectedBot(newValue?.id, for: installation?.id, deviceID: installation?.deviceId)
-        }
     }
 
     private var allBots: [AidenBotSummary] { snapshot?.list?.bots ?? [] }
@@ -357,60 +332,50 @@ struct AidenBotsHomeView: View {
         )
     }
 
-    /// The pairing in use, as a create flow keys what it keeps.
-    private var activePairing: (instanceId: String, deviceId: String)? {
-        coordinator.installationStore.activeInstallation.map { ($0.id, $0.deviceId) }
+    /// The Bot on its way, and its machine when that isn't the default.
+    private var shownPendingCreate: (pending: AidenBotCreateFlow.Pending, machine: String?)? {
+        createFlow.shownPending(coordinator: coordinator)
     }
 
-    /// The Bot on its way, when it is on its way to the Mac in use.
-    private var activePendingCreate: AidenBotCreateFlow.Pending? {
-        guard let pending = createFlow.pending, let pairing = activePairing,
-              pending.instanceId == pairing.instanceId, pending.deviceId == pairing.deviceId else { return nil }
-        return pending
-    }
-
-    /// The failed create of the Mac in use; another Mac's waits for that Mac. It shows once no
-    /// other Bot is on its way, since one Bot is made at a time.
+    /// The failed create to show, whichever machine it's for.
     private var activeCreateFailure: AidenBotCreateFlow.Failure? {
-        guard createFlow.pending == nil else { return nil }
-        return activePairing.flatMap { createFlow.failure(instanceId: $0.instanceId, deviceId: $0.deviceId) }
+        createFlow.failureToShow(coordinator: coordinator)
     }
 
-    /// New Bot opens at once, connected or not (R15); the Bot is made once the Mac answers.
+    /// Bots home looks for what every machine's New Bot left, not just the default's.
+    private var parkedAskScopes: [String] {
+        createFlow.parkedAskScopes(coordinator: coordinator)
+    }
+
+    /// The default machine can make Bots and start their chats. It gates what
+    /// this list does on the default machine alone: a first chat with a Bot it
+    /// lists, the presets, and New Bot while it's the only machine listed. New
+    /// Bot opens at once, connected or not (R15); the Bot is made once it answers.
     private var canCreateBot: Bool {
         availability.canWrite
             && coordinator.installationStore.activeInstallation?.canWriteBots == true
             && createFlow.pending == nil
     }
 
+    /// New Bot asks whichever machine it's picked for, so one that can't make
+    /// Bots doesn't close it for the others.
+    private var canOpenNewBot: Bool {
+        createFlow.canOpenNewBot(coordinator: coordinator)
+    }
+
+    /// The toolbar's New Bot. With several machines listed it opens while any of
+    /// them can make Bots, and its picker starts on one that can.
+    private var canTapNewBot: Bool {
+        AidenBotCreateFlow.canTapNewBot(
+            groupsMachines: machines != nil,
+            defaultCanCreate: canCreateBot,
+            canOpen: canOpenNewBot,
+            coordinator: coordinator
+        )
+    }
+
     var body: some View {
-        Group {
-            if horizontalSizeClass == .regular {
-                NavigationSplitView {
-                    homeScroll
-                        .toolbar(.hidden, for: .navigationBar)
-                } detail: {
-                    if let selectedBot {
-                        AidenBotProfileView(
-                            coordinator: coordinator,
-                            initialSummary: selectedBot,
-                            onChanged: { Task { await load() } },
-                            onDeleted: { self.selectedBot = nil },
-                            showsDismissButton: false
-                        )
-                        .id("\(loadID.instanceID ?? "none")-\(loadID.deviceID ?? "none")-\(selectedBot.id)")
-                    } else {
-                        ContentUnavailableView(
-                            "Pick a Bot",
-                            systemImage: "bubble.left.and.bubble.right",
-                            description: Text("Tap a Bot to chat with it.")
-                        )
-                    }
-                }
-            } else {
-                homeScroll
-            }
-        }
+        home
         .sheet(item: $presentedSheet, onDismiss: {
             // Try Again reopened New Bot and it closed without Create: that Bot is let go.
             if let reopened = createPrefill {
@@ -420,19 +385,25 @@ struct AidenBotsHomeView: View {
         }) { sheet in
             switch sheet {
             case .create:
-                AidenBotCreateView(coordinator: coordinator, initial: createPrefill?.input) { input in
+                AidenBotCreateView(
+                    coordinator: coordinator,
+                    initial: createPrefill?.input,
+                    pinnedTo: createPrefill?.instanceId
+                ) { input, target in
                     // Reopened by Try Again: it goes only to the Mac it was for.
-                    startCreate(input, retrying: createPrefill)
+                    startCreate(input, retrying: createPrefill, on: target)
                 }
             case let .profile(bot):
                 AidenBotProfileView(
                     coordinator: coordinator,
+                    machine: nil,
                     initialSummary: bot,
                     onChanged: { Task { await load() } }
                 )
             case let .memory(bot):
                 AidenBotProfileView(
                     coordinator: coordinator,
+                    machine: nil,
                     initialSummary: bot,
                     onChanged: { Task { await load() } },
                     opensMemory: true
@@ -440,6 +411,7 @@ struct AidenBotsHomeView: View {
             case let .advanced(bot):
                 AidenBotProfileView(
                     coordinator: coordinator,
+                    machine: nil,
                     initialSummary: bot,
                     onChanged: { Task { await load() } },
                     opensAdvanced: true
@@ -465,7 +437,7 @@ struct AidenBotsHomeView: View {
             presenting: activeCreateFailure
         ) { failure in
             Button("Try Again") {
-                guard let pairing = activePairing else { return }
+                guard let pairing = failure.retryPairing(coordinator: coordinator) else { return }
                 switch createFlow.retry(
                     failure,
                     instanceId: pairing.instanceId,
@@ -474,7 +446,7 @@ struct AidenBotsHomeView: View {
                 ) {
                 case let .send(input):
                     // An earlier launch's create: the same request, on the same key.
-                    startCreate(input, retrying: failure)
+                    startCreate(input, retrying: failure, on: AidenNewWorkTarget(instanceId: failure.instanceId))
                 case let .reopen(reopened):
                     createPrefill = reopened
                     presentedSheet = .create
@@ -487,7 +459,7 @@ struct AidenBotsHomeView: View {
                 createFlow.discard(failure)
             }
         } message: { failure in
-            Text(failure.message)
+            Text(failure.shownMessage(coordinator: coordinator))
         }
         .alert(
             "Couldn’t Delete",
@@ -501,32 +473,52 @@ struct AidenBotsHomeView: View {
             Text(deleteError ?? "Please try again.")
         }
         .task(id: loadID) {
-            // A New Bot an earlier launch left on its way comes back with Try Again, on its own Mac only.
-            if loadID.isBotSurfaceActive, let context = try? coordinator.requestContext() {
-                let coordinator = coordinator
-                await createFlow.restore(instanceId: context.instanceId, deviceId: context.deviceId) {
-                    coordinator.isCurrent(context)
-                }
-            }
             await load()
+        }
+        .task(id: parkedAskScopes) {
+            if !parkedAskScopes.isEmpty {
+                await createFlow.restoreEveryMachine(coordinator: coordinator)
+            }
         }
         .task(id: searchID) {
             await searchConversations()
         }
     }
 
+    private var home: some View {
+        homeScroll
+            .navigationTitle("Bots")
+            .searchable(text: $query, prompt: "Search Bots")
+            .searchToolbarBehavior(.minimize)
+            .toolbar {
+                DefaultToolbarItem(kind: .search, placement: .primaryAction)
+                ToolbarSpacer(.fixed, placement: .primaryAction)
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        createPrefill = nil
+                        presentedSheet = .create
+                    } label: {
+                        Label("New Bot", systemImage: "plus")
+                    }
+                    .disabled(!canTapNewBot)
+                }
+            }
+    }
+
     private var homeScroll: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                header
-                if isSearching {
-                    searchField
+                if let machines {
+                    machinesContent(machines)
+                } else {
+                    if let loadError {
+                        statusBanner(loadError)
+                    } else if case .offline = coordinator.connectionState {
+                        statusBanner("Offline — showing saved Bots")
+                    }
+                    messagingControl
+                    content
                 }
-                if let loadError {
-                    statusBanner(loadError)
-                }
-                messagingControl
-                content
             }
             .padding(.bottom, 12)
         }
@@ -554,9 +546,9 @@ struct AidenBotsHomeView: View {
                         }
                     }
                 ))
-                .disabled(coordinator.botMessaging.isSaving || coordinator.connectionState != .connected
+                .disabled(coordinator.botMessaging.isSaving(for: context) || coordinator.connectionState != .connected
                     || coordinator.installationStore.activeInstallation?.canWriteBots != true)
-                if let error = coordinator.botMessaging.error {
+                if let error = coordinator.botMessaging.error(for: context) {
                     Text(error).font(.footnote).foregroundStyle(palette.secondary)
                 }
             }
@@ -565,94 +557,21 @@ struct AidenBotsHomeView: View {
         }
     }
 
-    private var header: some View {
-        HStack(spacing: 12) {
-            AidenProductSwitcherButton(
-                area: area,
-                botsAvailability: availability,
-                isCoachmarkPresented: $isShowingSwitcherCoachmark,
-                onSelect: onSelectArea
-            )
-            .frame(width: 68, height: 52)
-
-            Text("Bots")
-                .font(.largeTitle.bold())
-                .foregroundStyle(palette.foreground)
-            Spacer()
-            headerButton(systemImage: "magnifyingglass", label: isSearching ? "Close search" : "Search") {
-                isSearching.toggle()
-                if isSearching {
-                    searchIsFocused = true
-                } else {
-                    query = ""
-                }
-            }
-            .disabled(allRows.isEmpty && !isSearching)
-            headerButton(systemImage: "plus", label: "New Bot") {
-                createPrefill = nil
-                presentedSheet = .create
-            }
-            .disabled(!canCreateBot)
-        }
-        .padding(.horizontal, 20)
-        .padding(.top, 18)
-        .padding(.bottom, 10)
-    }
-
-    private func headerButton(systemImage: String, label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(palette.foreground)
-                .frame(width: 44, height: 44)
-                .background(palette.raised, in: Circle())
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(label)
-    }
-
-    private var searchField: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(palette.secondary)
-                .accessibilityHidden(true)
-            TextField("Search Bots", text: $query)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .submitLabel(.search)
-                .focused($searchIsFocused)
-            if !query.isEmpty {
-                Button { query = "" } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(palette.secondary)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Clear search")
-            }
-        }
-        .padding(.horizontal, 14)
-        .frame(minHeight: 44)
-        .background(palette.raised, in: Capsule())
-        .padding(.horizontal, 20)
-        .padding(.bottom, 10)
-    }
-
     @ViewBuilder
     private var content: some View {
-        if let pending = activePendingCreate {
-            AidenBotPendingCreateRow(pending: pending)
+        if let shown = shownPendingCreate {
+            AidenBotPendingCreateRow(pending: shown.pending, machine: shown.machine)
         }
         switch contentState {
         case .loading:
             AidenBotHomeSkeletonView(reduceMotion: reduceMotion)
-        case .empty where activePendingCreate != nil:
+        case .empty where shownPendingCreate != nil:
             EmptyView()
         case .empty where coordinator.connectionState == .connected && !presets.isEmpty:
             AidenBotMeetFirstBotView(
                 presets: presets,
                 isBusy: isStartingPreset,
-                canCreate: canCreateBot,
+                canCreate: canCreateBot && canOpenNewBot,
                 onStartChat: { preset in Task { await startChat(with: preset) } },
                 onCreateOwn: {
                     createPrefill = nil
@@ -669,10 +588,10 @@ struct AidenBotsHomeView: View {
                 Text(
                     coordinator.connectionState == .connected
                         ? "A Bot is a helper you can chat with anytime."
-                        : "Connect to your Mac to see your Bots."
+                        : "Connect to your machine to see your Bots."
                 )
             } actions: {
-                if canCreateBot {
+                if canOpenNewBot {
                     Button("New Bot") {
                         createPrefill = nil
                         presentedSheet = .create
@@ -680,7 +599,6 @@ struct AidenBotsHomeView: View {
                         .buttonStyle(.borderedProminent)
                         .buttonBorderShape(.capsule)
                         .aidenSolidFillTint()
-                        .disabled(!canCreateBot)
                 }
             }
             .padding(.top, 54)
@@ -701,10 +619,64 @@ struct AidenBotsHomeView: View {
         }
     }
 
-    private func botRow(_ row: AidenBotHomeRow) -> some View {
+    /// Every shown machine's Bots: the strip, then each machine's under its name
+    /// when the strip says All. A row opens the Bot on its own machine.
+    @ViewBuilder
+    private func machinesContent(_ machines: AidenBotsHomeMachines) -> some View {
+        AidenMachineStrip(labels: machines.roster.tabMachines, filter: machines.filter)
+            .padding(.vertical, AidenSpacing.xs)
+        if let shown = shownPendingCreate {
+            AidenBotPendingCreateRow(pending: shown.pending, machine: shown.machine)
+        }
+        let sections = AidenMachineSection.searched(machines.sections, filter: machines.filter.wrappedValue, matching: matchesQuery)
+        if sections.allSatisfy(\.rows.isEmpty) {
+            if normalizedQuery.isEmpty {
+                ContentUnavailableView(
+                    "No Bots",
+                    systemImage: "bubble.left.and.bubble.right",
+                    description: Text("A Bot is a helper you can chat with anytime.")
+                )
+                .padding(.top, 54)
+            } else {
+                ContentUnavailableView.search(text: normalizedQuery)
+                    .padding(.top, 54)
+            }
+        }
+        ForEach(sections) { section in
+            if machines.filter.wrappedValue == .all, !section.rows.isEmpty {
+                Text(machines.roster.labels[section.instanceId]?.name ?? "")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(palette.secondary)
+                    .padding(.horizontal, 20)
+                    .padding(.top, AidenSpacing.m)
+                    .accessibilityAddTraits(.isHeader)
+            }
+            AidenMachineSectionStatus(coordinator: coordinator, instanceId: section.instanceId, savedListName: String(localized: "Bots"))
+                .padding(.horizontal, 20)
+            ForEach(section.rows) { row in
+                Button {
+                    machines.onOpen(row)
+                } label: {
+                    botRow(AidenBotHomeRow(bot: row.bot, conversation: nil), machine: row.id.instanceId)
+                }
+                .buttonStyle(.plain)
+            }
+            // Each machine's own switch, so one that's off can be turned back on.
+            AidenMachineBotMessagingRow(messaging: AidenMachineBotMessaging(coordinator: coordinator, instanceId: section.instanceId))
+        }
+    }
+
+    private func matchesQuery(_ row: AidenMachineBotRow) -> Bool {
+        normalizedQuery.isEmpty
+            || row.bot.name.localizedCaseInsensitiveContains(normalizedQuery)
+            || row.bot.purpose.localizedCaseInsensitiveContains(normalizedQuery)
+    }
+
+    private func botRow(_ row: AidenBotHomeRow, machine: String? = nil) -> some View {
         HStack(alignment: .top, spacing: 14) {
             AidenBotCanonicalAvatarView(
                 coordinator: coordinator,
+                machine: machine,
                 botID: row.bot.id,
                 avatar: row.bot.avatar,
                 name: row.bot.name,
@@ -712,7 +684,13 @@ struct AidenBotsHomeView: View {
                 working: row.isWorking
             )
             VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
+                // At the accessibility sizes the purpose and time go under the
+                // name, so none of the three has to squeeze into a third of a row.
+                let stacked = dynamicTypeSize.isAccessibilitySize
+                let header = stacked
+                    ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
+                    : AnyLayout(HStackLayout(spacing: 8))
+                header {
                     Text(row.bot.name)
                         .font(.headline)
                         .foregroundStyle(palette.foreground)
@@ -722,12 +700,15 @@ struct AidenBotsHomeView: View {
                         Text(row.bot.purpose)
                             .font(.subheadline)
                             .foregroundStyle(palette.secondary)
-                            .lineLimit(1)
+                            // Two lines below the accessibility sizes: on one, the audit finds
+                            // a purpose such as "Finds the signal in a busy week" cut short
+                            // at the larger standard sizes (task-34 fix round 1).
+                            .lineLimit(stacked ? nil : 2)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 2)
                             .background(palette.raised, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
-                    Spacer(minLength: 4)
+                    if !stacked { Spacer(minLength: 4) }
                     if let conversation = row.conversation {
                         AidenRelativeTimestampView(date: conversation.updatedAt)
                             .font(.subheadline)
@@ -769,7 +750,7 @@ struct AidenBotsHomeView: View {
         Button("Advanced", systemImage: "slider.horizontal.3") {
             presentedSheet = .advanced(bot)
         }
-        if AidenBotDeletion.isAvailable(coordinator: coordinator) {
+        if AidenBotDeletion.isAvailable(coordinator: coordinator, machine: nil) {
             Divider()
             Button("Delete", systemImage: "trash", role: .destructive) {
                 pendingDelete = bot
@@ -794,28 +775,32 @@ struct AidenBotsHomeView: View {
     /// Makes the Bot New Bot asked for, after the sheet closed (R15). `retrying` is the failure
     /// a Try Again came from: the flow sends it only to that failure's own Mac.
     @MainActor
-    private func startCreate(_ input: AidenBotCreateInput, retrying: AidenBotCreateFlow.Failure? = nil) {
-        guard let context = try? coordinator.requestContext() else { return }
+    private func startCreate(
+        _ input: AidenBotCreateInput,
+        retrying: AidenBotCreateFlow.Failure? = nil,
+        on target: AidenNewWorkTarget? = nil
+    ) {
+        let context: AidenRemoteRequestContext
+        do {
+            context = try AidenBotCreateOperations.context(for: target, coordinator: coordinator)
+        } catch {
+            if target != nil { coordinator.presentedError = AidenNewWorkMachine.noLongerPaired }
+            return
+        }
         createPrefill = nil
-        let coordinator = coordinator
-        let operations = AidenBotCreateOperations(
-            instanceId: context.instanceId,
-            deviceId: context.deviceId,
-            usesDurableSession: AidenBotHostFeature.isAdvertised(AidenBotHostFeature.durableSession, coordinator: coordinator),
-            waitForConnection: { hold in await aidenBotWaitForConnection(coordinator, hold: hold) },
-            catalog: { try await coordinator.remoteClient(for: context).botCapabilityCatalog() },
-            create: { request, key in try await coordinator.remoteClient(for: context).createBot(request, idempotencyKey: key) },
-            createChat: { botID, request, key in
-                _ = try await coordinator.remoteClient(for: context).createBotChat(botId: botID, request: request, idempotencyKey: key)
-            },
-            readBot: { botID in try await coordinator.remoteClient(for: context).bot(id: botID) },
-            isCurrent: { coordinator.isCurrent(context) },
-            handleRevocation: { error in await coordinator.handleCredentialRevocation(error, context: context) }
-        )
+        let operations = AidenBotCreateOperations.make(coordinator: coordinator, context: context)
         Task {
             await createFlow.submit(input, operations: operations, retrying: retrying) { created in
-                // The new Bot's chat opens from the create receipt; the list refreshes behind it.
-                openChat(for: AidenBotSummary(detail: created))
+                let bot = AidenBotSummary(detail: created)
+                if context.instanceId == coordinator.defaultInstanceId {
+                    // The new Bot's chat opens from the create receipt; the list refreshes behind it.
+                    openChat(for: bot)
+                } else {
+                    onCreatedElsewhere(
+                        AidenHostObjectID(instanceId: context.instanceId, deviceId: context.deviceId, objectId: bot.id),
+                        bot
+                    )
+                }
                 await load()
             }
         }
@@ -850,11 +835,7 @@ struct AidenBotsHomeView: View {
     }
 
     private func presentProfile(_ bot: AidenBotSummary) {
-        if horizontalSizeClass == .regular {
-            selectedBot = bot
-        } else {
-            presentedSheet = .profile(bot)
-        }
+        presentedSheet = .profile(bot)
     }
 
     /// `POST /bots/from-preset`, then the new Bot's chat. A retry of the same
@@ -895,8 +876,7 @@ struct AidenBotsHomeView: View {
     private func delete(_ bot: AidenBotSummary) async {
         pendingDelete = nil
         do {
-            try await AidenBotDeletion.deleteListed(botID: bot.id, coordinator: coordinator)
-            if selectedBot?.id == bot.id { selectedBot = nil }
+            try await AidenBotDeletion.deleteListed(botID: bot.id, coordinator: coordinator, machine: nil)
             await load()
         } catch is CancellationError {
             return
@@ -910,11 +890,7 @@ struct AidenBotsHomeView: View {
         loadGeneration &+= 1
         let generation = loadGeneration
         let expectedLoadID = loadID
-        guard aidenBotSurfaceAllows(
-            .homeLoad,
-            area: area,
-            availability: availability
-        ), expectedLoadID.isBotSurfaceActive else {
+        guard availability.canOpen, expectedLoadID.isBotSurfaceActive else {
             snapshot = nil
             snapshotScope = nil
             remoteSearchResults = nil
@@ -965,7 +941,6 @@ struct AidenBotsHomeView: View {
            snapshot == nil || cached.savedAt > (snapshot?.savedAt ?? .distantPast) {
             snapshot = cached
         }
-        validateSelectedBot(in: snapshot?.list?.bots ?? [])
 
         if coordinator.connectionState != .connected {
             loadError = snapshot == nil ? nil : "Offline — showing saved Bots"
@@ -984,7 +959,7 @@ struct AidenBotsHomeView: View {
             // Bot identity and chat history are separately granted, so one
             // denied segment must not erase the other. Archived Bots are no
             // longer a phone concept and are not requested.
-            let messagingGeneration = coordinator.botMessaging.generation
+            let messagingGeneration = coordinator.botMessaging.generation(for: context)
             async let listRequest = aidenLoadBotsHomeSegment(enabled: plan.loadsList) {
                 try await client.bots()
             }
@@ -1049,7 +1024,6 @@ struct AidenBotsHomeView: View {
                   await AidenBotCache.shared.isCurrent(activation),
                   !Task.isCancelled else { return }
             snapshot = persistedSnapshot ?? refreshed
-            validateSelectedBot(in: list?.bots ?? snapshot?.list?.bots ?? [])
             isLoading = false
             Task { await AidenBotRoutineNotifier.shared.deliverIfSupported(coordinator: coordinator) }
             if cacheWriteFailed {
@@ -1077,7 +1051,6 @@ struct AidenBotsHomeView: View {
                snapshot == nil || cached.savedAt > (snapshot?.savedAt ?? .distantPast) {
                 snapshot = cached
             }
-            validateSelectedBot(in: snapshot?.list?.bots ?? [])
             isLoading = false
             loadError = snapshot == nil
                 ? error.localizedDescription
@@ -1086,25 +1059,10 @@ struct AidenBotsHomeView: View {
     }
 
     @MainActor
-    private func validateSelectedBot(in bots: [AidenBotSummary]) {
-        guard let selectedID = navigationStore.selectedBot(
-            for: coordinator.activeInstanceId,
-            deviceID: coordinator.installationStore.activeInstallation?.deviceId
-        ) else { return }
-        if !bots.contains(where: { $0.id == selectedID }) {
-            selectedBot = nil
-        }
-    }
-
-    @MainActor
     private func searchConversations() async {
         let expected = searchID
         remoteSearchResults = nil
-        guard aidenBotSurfaceAllows(
-                  .search,
-                  area: area,
-                  availability: availability
-              ),
+        guard availability.canOpen,
               expected.loadID.isBotSurfaceActive,
               !expected.query.isEmpty,
               coordinator.connectionState == .connected,

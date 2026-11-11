@@ -174,7 +174,7 @@ final class AidenBotGeneratedAvatarTests: XCTestCase {
         let coordinator = AidenRemoteCoordinator(
             installationStore: AidenInstallationStore(keychain: AidenAvatarMemoryKeychain())
         )
-        let model = AidenBotGeneratedAvatarModel(coordinator: coordinator, botID: "bot-a")
+        let model = AidenBotGeneratedAvatarModel(coordinator: coordinator, machine: nil, botID: "bot-a")
 
         await model.ingestCopiedCandidate(at: candidate, candidateStore: store)
 
@@ -202,7 +202,7 @@ final class AidenBotGeneratedAvatarTests: XCTestCase {
         let coordinator = AidenRemoteCoordinator(
             installationStore: AidenInstallationStore(keychain: AidenAvatarMemoryKeychain())
         )
-        let model = AidenBotGeneratedAvatarModel(coordinator: coordinator, botID: "bot-a")
+        let model = AidenBotGeneratedAvatarModel(coordinator: coordinator, machine: nil, botID: "bot-a")
 
         await model.ingestCopiedCandidate(at: link, candidateStore: store)
 
@@ -324,6 +324,7 @@ final class AidenBotGeneratedAvatarTests: XCTestCase {
         XCTAssertEqual(coordinator.connectionState, .connected)
         let model = AidenBotGeneratedAvatarModel(
             coordinator: coordinator,
+            machine: nil,
             botID: "bot_fixture_01",
             cache: cache
         )
@@ -430,7 +431,7 @@ final class AidenBotGeneratedAvatarTests: XCTestCase {
             }
         )
         await coordinator.start()
-        let model = AidenBotGeneratedAvatarModel(coordinator: coordinator, botID: "bot_fixture_01")
+        let model = AidenBotGeneratedAvatarModel(coordinator: coordinator, machine: nil, botID: "bot_fixture_01")
         await model.sessionDidChangeAndRefresh()
         await model.ingestCopiedCandidate(data: candidate)
 
@@ -508,7 +509,7 @@ final class AidenBotGeneratedAvatarTests: XCTestCase {
             }
         )
         await coordinator.start()
-        let model = AidenBotGeneratedAvatarModel(coordinator: coordinator, botID: "bot_fixture_01")
+        let model = AidenBotGeneratedAvatarModel(coordinator: coordinator, machine: nil, botID: "bot_fixture_01")
         await model.sessionDidChangeAndRefresh()
         await model.ingestCopiedCandidate(data: candidate)
         await model.useCandidate()
@@ -618,6 +619,7 @@ final class AidenBotGeneratedAvatarTests: XCTestCase {
         let cache = AidenBotCache(root: cacheRoot)
         let model = AidenBotGeneratedAvatarModel(
             coordinator: coordinator,
+            machine: nil,
             botID: "bot_fixture_01",
             cache: cache
         )
@@ -711,7 +713,7 @@ final class AidenBotGeneratedAvatarTests: XCTestCase {
             }
         )
         await coordinator.start()
-        let model = AidenBotGeneratedAvatarModel(coordinator: coordinator, botID: "bot_fixture_01")
+        let model = AidenBotGeneratedAvatarModel(coordinator: coordinator, machine: nil, botID: "bot_fixture_01")
         await model.sessionDidChangeAndRefresh()
         await model.ingestCopiedCandidate(data: candidate)
         currentDetail = try Self.detailObject(base: currentDetail, asset: macAsset)
@@ -792,7 +794,7 @@ final class AidenBotGeneratedAvatarTests: XCTestCase {
             }
         )
         await coordinator.start()
-        let model = AidenBotGeneratedAvatarModel(coordinator: coordinator, botID: "bot_fixture_01")
+        let model = AidenBotGeneratedAvatarModel(coordinator: coordinator, machine: nil, botID: "bot_fixture_01")
         await model.sessionDidChangeAndRefresh()
         XCTAssertEqual(model.authoritativeBot?.avatar.asset?.assetRevision, observedRevision)
         currentDetail = try Self.detailObject(base: currentDetail, asset: replacementAsset)
@@ -868,7 +870,7 @@ final class AidenBotGeneratedAvatarTests: XCTestCase {
             }
         )
         await coordinator.start()
-        let model = AidenBotGeneratedAvatarModel(coordinator: coordinator, botID: "bot_fixture_01")
+        let model = AidenBotGeneratedAvatarModel(coordinator: coordinator, machine: nil, botID: "bot_fixture_01")
         await model.sessionDidChangeAndRefresh()
         await model.ingestCopiedCandidate(
             data: Self.solidImageData(width: 700, height: 700, color: .systemPurple)

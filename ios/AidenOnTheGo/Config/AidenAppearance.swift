@@ -1,4 +1,7 @@
 import CoreHaptics
+#if DEBUG
+import os
+#endif
 import Observation
 import SwiftUI
 import UIKit
@@ -265,11 +268,43 @@ struct AidenPalette: Equatable, Sendable {
     let sidebarHex: String
     let raisedHex: String
     let foregroundHex: String
-    let secondaryHex: String
+    private(set) var secondaryHex: String
     let accentHex: String
     let successHex: String
     let warningHex: String
     let dangerHex: String
+    /// Status colours safe for text, worked out once here so rows only read them.
+    let successTextHex: String
+    let warningTextHex: String
+    let dangerTextHex: String
+
+    init(
+        canvasHex: String,
+        sidebarHex: String,
+        raisedHex: String,
+        foregroundHex: String,
+        secondaryHex: String,
+        accentHex: String,
+        successHex: String,
+        warningHex: String,
+        dangerHex: String
+    ) {
+        self.canvasHex = canvasHex
+        self.sidebarHex = sidebarHex
+        self.raisedHex = raisedHex
+        self.foregroundHex = foregroundHex
+        self.secondaryHex = secondaryHex
+        self.accentHex = accentHex
+        self.successHex = successHex
+        self.warningHex = warningHex
+        self.dangerHex = dangerHex
+        func grounds(_ statusHex: String) -> [String] {
+            Self.statusTextGrounds(statusHex, canvasHex: canvasHex, raisedHex: raisedHex)
+        }
+        successTextHex = Self.textSafeHex(successHex, on: grounds(successHex))
+        warningTextHex = Self.textSafeHex(warningHex, on: grounds(warningHex))
+        dangerTextHex = Self.textSafeHex(dangerHex, on: grounds(dangerHex))
+    }
 
     var canvas: Color { Color(aidenHex: canvasHex) }
     var sidebar: Color { Color(aidenHex: sidebarHex) }
@@ -301,17 +336,10 @@ struct AidenPalette: Equatable, Sendable {
         let delta = Double(contrast - baseline)
         let secondaryTarget = delta > 0 ? foregroundHex : canvasHex
         let fraction = min(abs(delta) / 100 * (delta > 0 ? 0.7 : 0.25), 0.7)
-        return AidenPalette(
-            canvasHex: canvasHex,
-            sidebarHex: sidebarHex,
-            raisedHex: raisedHex,
-            foregroundHex: foregroundHex,
-            secondaryHex: Color.mixHex(secondaryHex, secondaryTarget, fraction: fraction),
-            accentHex: accentHex,
-            successHex: successHex,
-            warningHex: warningHex,
-            dangerHex: dangerHex
-        )
+        // Only the secondary text moves, so the status colours carry over as they are.
+        var adjusted = self
+        adjusted.secondaryHex = Color.mixHex(secondaryHex, secondaryTarget, fraction: fraction)
+        return adjusted
     }
 }
 
@@ -355,6 +383,62 @@ struct AidenSolidFill: Equatable, Sendable {
     private static func pressed(_ fill: String) -> String {
         let darker = Color.mixHex(fill, "#000000", fraction: 0.1)
         return darker == fill ? Color.mixHex(fill, "#FFFFFF", fraction: 0.12) : darker
+    }
+}
+
+/// Status colours that are safe for text. The palette's `successHex`,
+/// `warningHex` and `dangerHex` stay as they are for fills, dots and icons.
+/// Text moves each one away from the ground (toward black on a light theme,
+/// toward white on a dark one) one percent at a time, only as far as 4.5:1
+/// needs on both the canvas and the raised surface. A hex that already passes
+/// does not move. A status chip's own tint counts as a ground too, so its
+/// words pass on it. Derived when the palette is made, so a new theme or a
+/// contrast adjustment needs no extra constants and a read costs nothing.
+extension AidenPalette {
+    static let minimumTextContrast = 4.5
+
+    var successText: Color { Color(aidenHex: successTextHex) }
+    var warningText: Color { Color(aidenHex: warningTextHex) }
+    var dangerText: Color { Color(aidenHex: dangerTextHex) }
+
+    func contrastRatio(foregroundHex: String, backgroundHex: String) -> Double {
+        Color.contrastRatio(foregroundHex, backgroundHex)
+    }
+
+    #if DEBUG
+    /// How many status colours have been worked out, so a test can tell a read
+    /// from a resolve. Locked, since the first palette can be made off the main thread.
+    private static let statusTextResolutions = OSAllocatedUnfairLock(initialState: 0)
+    static var statusTextResolutionCount: Int { statusTextResolutions.withLock { $0 } }
+    #endif
+
+    /// How strongly a status chip ("Approval", "Failed") tints its capsule.
+    static let statusChipFillOpacity = 0.12
+
+    /// Where status text is drawn: the canvas, the raised surface, and a status
+    /// chip's tint over each. The canvas comes first.
+    static func statusTextGrounds(_ statusHex: String, canvasHex: String, raisedHex: String) -> [String] {
+        let plain = [canvasHex, raisedHex]
+        return plain + plain.map { Color.mixHex($0, statusHex, fraction: statusChipFillOpacity) }
+    }
+
+    /// `grounds` starts with the canvas.
+    fileprivate static func textSafeHex(_ statusHex: String, on grounds: [String]) -> String {
+        #if DEBUG
+        statusTextResolutions.withLock { $0 += 1 }
+        #endif
+        func passes(_ hex: String) -> Bool {
+            grounds.allSatisfy { Color.contrastRatio(hex, $0) >= Self.minimumTextContrast }
+        }
+        let base = Color.mixHex(statusHex, statusHex, fraction: 0)
+        guard !passes(base) else { return base }
+        // Black and white give equal contrast at a luminance of about 0.179.
+        let target = Color.relativeLuminance(grounds[0]) > 0.179 ? "#000000" : "#FFFFFF"
+        for step in 1...100 {
+            let moved = Color.mixHex(base, target, fraction: Double(step) / 100)
+            if passes(moved) { return moved }
+        }
+        return target
     }
 }
 

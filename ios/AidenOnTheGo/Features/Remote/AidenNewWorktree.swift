@@ -7,7 +7,7 @@ import SwiftUI
 enum AidenNewWorktreeCopy {
     static let toggle = "New worktree"
     static let settingUp = "Setting up worktree…"
-    static let hint = "Your first message starts this chat in its own worktree on your Mac."
+    static let hint = "Your first message starts this chat in its own worktree on your machine."
     static let noLongerOffered = "New worktree isn’t available for this chat any more, so your message wasn’t sent. Send it again to use the chat’s own folder."
 }
 

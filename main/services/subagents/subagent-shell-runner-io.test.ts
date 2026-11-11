@@ -23,6 +23,13 @@ async function workspace(t: test.TestContext): Promise<string> {
   return realpath(root);
 }
 
+// The setsid fixture bounds its own wait for publication at one second, timed
+// from when it starts. The runner's deadline also counts the helper and shell
+// starting it, so the cases that need the fixture's own bound to fire first
+// give the runner a deadline that only catches a hang, not one shared with
+// the fixture's bound.
+const FIXTURE_DEADLINE_MS = 15_000;
+
 async function run(t: test.TestContext, command: string, timeoutMs = 2_000) {
   const root = await pinSubagentShellWorkspaceRoot(await workspace(t));
   return runSubagentShellProductionInert({
@@ -271,7 +278,7 @@ test(`a deliberate setsid double-fork proves the documented containment limit an
   };
   t.after(cleanup);
   try {
-    const result = await run(t, `${fixture} ${marker}${delay ? " --delay-detach" : ""}`);
+    const result = await run(t, `${fixture} ${marker}${delay ? " --delay-detach" : ""}`, FIXTURE_DEADLINE_MS);
     assert.equal(result.exitCode, 0);
     assert.equal(result.outcome, "exited");
     const markerDeadline = Date.now() + 20_000;
@@ -405,12 +412,12 @@ for (const settlement of ["success", "callback-error", "stream-error", "watchdog
   });
 }
 
-test("a stalled setsid handshake fails within the existing shell deadline", async (t) => {
+test("a stalled setsid handshake fails closed on the fixture's own bounded wait", async (t) => {
   if (process.platform !== "darwin") return;
   const rootPath = await workspace(t);
   const marker = path.join(rootPath, "detached.pid");
   const fixture = path.join(process.cwd(), "build", "native", "aiden-subagent-shell-setsid-fixture");
-  const result = await run(t, `${fixture} ${marker} --stall-detach`);
+  const result = await run(t, `${fixture} ${marker} --stall-detach`, FIXTURE_DEADLINE_MS);
   assert.equal(result.outcome, "exited");
   assert.equal(result.exitCode, 75);
   await assert.rejects(stat(marker), { code: "ENOENT" });
@@ -435,7 +442,7 @@ test("a timed-out publication cannot leave a detached child without a readiness 
       }
     }
   });
-  const result = await run(t, `${fixture} ${marker} --stall-publish`);
+  const result = await run(t, `${fixture} ${marker} --stall-publish`, FIXTURE_DEADLINE_MS);
   assert.equal(result.outcome, "exited");
   assert.equal(result.exitCode, 75);
   pid = Number.parseInt(await readFile(witness, "utf8"), 10);

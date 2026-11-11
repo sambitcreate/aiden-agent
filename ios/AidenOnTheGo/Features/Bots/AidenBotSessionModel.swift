@@ -25,6 +25,11 @@ enum AidenBotHostFeature {
     /// Reads the connection's `/server` answer, or the pairing's saved one
     /// while connecting, so a cold open resolves Bot routes the way the last
     /// connected open did.
+    ///
+    /// This reads the selected machine only. It's right on the single-machine
+    /// Bots page (`machines == nil`), where the selected machine is the only one
+    /// shown; anywhere that shows several machines, ask the row's own machine
+    /// with `isAdvertised(_:by: coordinator.knownServerFeatures(of:))`.
     @MainActor
     static func isAdvertised(_ token: String, coordinator: AidenRemoteCoordinator) -> Bool {
         isAdvertised(token, by: coordinator.knownServerFeatures)
@@ -39,11 +44,6 @@ enum AidenBotHostFeature {
 func aidenBotActivitySupported(server: AidenServer?, installation: AidenInstallation?) -> Bool {
     if let server { return server.supportsBotActivity }
     return installation?.cachedBotActivity == true
-}
-
-@MainActor
-func aidenBotActivitySupported(coordinator: AidenRemoteCoordinator) -> Bool {
-    aidenBotActivitySupported(server: coordinator.server, installation: coordinator.installationStore.activeInstallation)
 }
 
 /// The audience-shaping Bot session grants the pairing currently holds.
@@ -248,7 +248,7 @@ enum AidenBotSessionCopy {
     /// Revision 37: the person paused the Bot.
     static let pausedSubtitle = "Paused"
     static let needsModel = "Needs an AI model"
-    static let needsModelHint = "Set up on your Mac"
+    static let needsModelHint = "Set up on your machine"
     static let setUp = "Set up"
     static let queued = "Queued"
     /// The outbox file a previous launch left couldn't be read; it was set aside, not deleted.
@@ -258,9 +258,9 @@ enum AidenBotSessionCopy {
         "Set up an AI model so \(botName) can reply."
     }
     static let sessionReset = "This chat was restarted."
-    static let finishOnMac = "Finish on your Mac"
-    static let finishOnMacReadOnly = "Finish this on your Mac."
-    static let checkYourMac = "Check your Mac to finish."
+    static let finishOnMac = "Finish on your machine"
+    static let finishOnMacReadOnly = "Finish this on your machine."
+    static let checkYourMac = "Check your machine to finish."
     static let connected = "Connected ✓"
     static let failedTurn = "I couldn't finish that reply."
     static let retry = "Retry"
@@ -273,7 +273,7 @@ enum AidenBotSessionCopy {
     static let handoffSkip = "Skip"
     static let handoffOpen = "Open"
     static let handoffNotePlaceholder = "Add a note and send to mark it done"
-    static let signInPlaceholder = "Finish signing in on your Mac, or skip it."
+    static let signInPlaceholder = "Finish signing in on your machine, or skip it."
     /// Revision 40: a password-or-code card takes no note, so the composer waits.
     static let handoffNoNotePlaceholder = "Enter it yourself, then tap Done."
     static let handoffExpired = "That card was already answered or closed."
@@ -281,12 +281,12 @@ enum AidenBotSessionCopy {
     static let handoffNoteTooLong = "Keep the note under 4,000 characters."
     static let handoffPhotosWait = "Send photos after you answer the card."
     static let handoffFilesWait = "Send files after you answer the card."
-    static let finishSigningInOnMac = "Finish signing in on your Mac."
-    static let openAidenOnMac = "Open Aiden on your Mac to finish signing in."
+    static let finishSigningInOnMac = "Finish signing in on your machine."
+    static let openAidenOnMac = "Open Aiden on your machine to finish signing in."
     /// Revision 43: a step on the Bot's own browser or computer.
-    static let finishStepOnMac = "Finish this step on your Mac."
-    static let openAidenOnMacForStep = "Open Aiden on your Mac to finish this step."
-    static let handoffOnMacDetail = "This step is on the Bot’s own screen on your Mac."
+    static let finishStepOnMac = "Finish this step on your machine."
+    static let openAidenOnMacForStep = "Open Aiden on your machine to finish this step."
+    static let handoffOnMacDetail = "This step is on the Bot’s own screen on your machine."
     static let pauseBot = "Pause Bot"
     static let resumeBot = "Resume Bot"
     static func pausedTitle(_ name: String) -> String { "\(name) is paused." }
@@ -296,20 +296,20 @@ enum AidenBotSessionCopy {
     // Revision 42 (`bot:issues`), shared with desktop and Android.
     static let issueNeedsYou = "Needs you"
     /// A card whose only action opens the Mac's own settings.
-    static let issueOpenOnMac = "Open on your Mac"
+    static let issueOpenOnMac = "Open on your machine"
     static let issueOpenChat = "Open chat"
     static let issueResumeRoutine = "Resume routine"
     static let issueStop = "Stop"
     static let issueKeepWaiting = "Keep waiting"
     static let issueStale = "This card changed. Pull to refresh and try again."
-    static let issueNotSent = "That didn’t reach your Mac. Please try again."
+    static let issueNotSent = "That didn’t reach your machine. Please try again."
 
     static let memoryUpdated = "Memory updated"
     static let proposalTitle = "Add a routine?"
     static let addRoutine = "Add routine"
     static let notNow = "Not now"
     static let notAdded = "Not added"
-    static let proposalFailed = "That didn’t reach your Mac. Please try again."
+    static let proposalFailed = "That didn’t reach your machine. Please try again."
 
     static func proposalBody(name: String, label: String) -> String { "\(name) · \(label)" }
     static func proposalAdded(label: String) -> String { "Added ✓ · \(label)" }
@@ -1061,7 +1061,7 @@ func aidenBotSessionFailureIsAmbiguous(_ error: Error) -> Bool {
 /// A Bot request that didn't answer in time: it may still have reached the Mac,
 /// so it is ambiguous and keeps its Idempotency-Key.
 struct AidenBotRequestTimedOut: LocalizedError {
-    var errorDescription: String? { "Your Mac didn’t answer in time." }
+    var errorDescription: String? { "Your machine didn’t answer in time." }
 }
 
 /// Runs `operation`, giving up after `limit`. The phone's URLSession waits for
@@ -1208,6 +1208,9 @@ final class AidenBotSessionModel {
     }
 
     let botID: String
+    /// The machine this chat belongs to. `transport` and the cache key are its
+    /// own, so nothing here follows the selection.
+    let owner: AidenRemoteRequestContext
     var resumeModel: AidenBotResumeModel? {
         didSet { resumeModel?.setForegroundVisit(active: resumeVisitIsActive) }
     }
@@ -1222,6 +1225,30 @@ final class AidenBotSessionModel {
     var canResumeExecution: Bool { resumeVisitIsActive && isInterrupted && !isAccessBlocked && !released }
     var resumeConfirmationVersion: String { "\(stateWrites)|\(entries.last?.id ?? "")" }
     private let transport: any AidenBotSessionTransport
+    /// False once `owner`'s machine is forgotten or paired again. From then on
+    /// nothing is applied, written or sent.
+    @ObservationIgnored private let isOwnerLive: @MainActor () -> Bool
+    /// False once `owner`'s machine is forgotten. Unlike `isOwnerLive`, an offline
+    /// machine or one that reconnected still counts, so words go on being saved.
+    @ObservationIgnored private let isOwnerRetained: @MainActor () -> Bool
+
+    /// What the person is writing, the only copy in memory. It is saved as they
+    /// go, and `composerSession` reads and writes it here.
+    var draft = "" {
+        didSet {
+            guard draft != oldValue else { return }
+            draftEdits &+= 1
+            if !isRestoringDraft { scheduleDraftPersistence() }
+        }
+    }
+    @ObservationIgnored private let draftStore: AidenChatDraftStore?
+    /// Open once the store has been asked for this chat's saved draft.
+    @ObservationIgnored private var draftSession: AidenChatDraftStore.Session?
+    @ObservationIgnored private var draftPersistenceTask: Task<Void, Never>?
+    @ObservationIgnored private var isRestoringDraft = false
+    @ObservationIgnored private var draftRestoreStarted = false
+    @ObservationIgnored private var draftEdits = 0
+    @ObservationIgnored private let speech: (any AidenMacSpeechTransport)?
 
     private(set) var entries: [AidenBotSessionEntry] = []
     /// The streamed answer so far, as the Mac last sent it.
@@ -1375,22 +1402,37 @@ final class AidenBotSessionModel {
     init(
         botID: String,
         transport: any AidenBotSessionTransport,
+        owner: AidenRemoteRequestContext,
+        isOwnerLive: @escaping @MainActor () -> Bool = { true },
         cacheKey: AidenBotSessionKey? = nil,
         allowedSupported: Bool = false,
         plansSupported: Bool = false,
-        cache: AidenBotSessionCache = .shared,
+        cache: AidenBotSessionCache? = nil,
         outboxStore: AidenBotOutboxStore? = .shared,
+        isOwnerRetained: @escaping @MainActor () -> Bool = { true },
+        draftStore: AidenChatDraftStore? = .shared,
+        speech: (any AidenMacSpeechTransport)? = nil,
         retryDelays: [Duration] = [.seconds(1), .seconds(4)],
         requestLimit: Duration = .seconds(12),
         sharedImageBudget: Int = AidenSharedImageBytes.defaultMaxBytes,
         now: @escaping () -> Date = { Date() }
     ) {
+        assert(
+            cacheKey.map { $0.instanceId == owner.instanceId && $0.deviceId == owner.deviceId } ?? true,
+            "A Bot chat caches under the machine that owns it."
+        )
         self.botID = botID
+        self.owner = owner
+        self.isOwnerLive = isOwnerLive
+        self.isOwnerRetained = isOwnerRetained
+        self.speech = speech
+        self.draftStore = cacheKey == nil ? nil : draftStore
         self.allowedSupported = allowedSupported
         self.plansSupported = plansSupported
         self.sharedImages = AidenSharedImageBytes(maxBytes: sharedImageBudget)
         self.transport = transport
         self.cacheKey = cacheKey
+        let cache = cache ?? .shared
         self.cache = cache
         self.outboxStore = cacheKey == nil ? nil : outboxStore
         self.retryDelays = retryDelays
@@ -1439,6 +1481,61 @@ final class AidenBotSessionModel {
         sharedImages.removeAll()
     }
 
+    // MARK: The draft
+
+    /// Brings back what was being written, from this phone alone, so an offline
+    /// machine doesn't hold it up. Words already in the composer win.
+    private func restoreDraft() async {
+        guard let draftStore, !draftRestoreStarted else { return }
+        draftRestoreStarted = true
+        let edits = draftEdits
+        // The Bot's route, so it can't meet a chat's id, under the owner's machine,
+        // so the same Bot id on another machine has its own draft.
+        let session = await draftStore.beginSession(
+            instanceId: owner.instanceId,
+            chatId: AidenBotChatRoute.pathValue(botID: botID)
+        )
+        guard isOwnerRetained() else { return }
+        draftSession = session
+        let saved = await draftStore.load(session: session)
+        guard isOwnerRetained() else { return }
+        // Disk access yields the main actor while the composer stays editable.
+        guard draft.isEmpty, draftEdits == edits else {
+            scheduleDraftPersistence()
+            return
+        }
+        guard let saved else { return }
+        isRestoringDraft = true
+        draft = saved
+        isRestoringDraft = false
+    }
+
+    private func scheduleDraftPersistence() {
+        // Retained, not live: an offline machine is still paired, so its text stays.
+        guard let draftStore, isOwnerRetained(), let session = draftSession else { return }
+        let text = draft
+        draftPersistenceTask?.cancel()
+        // Holds the model: the screen owns it, and leaving must not drop the words.
+        draftPersistenceTask = Task {
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled, isOwnerRetained(), draft == text else { return }
+            _ = try? await draftStore.save(text, session: session)
+        }
+    }
+
+    // Await the already scheduled write without starting a new persistence owner.
+    func waitForDraftPersistence() async {
+        await draftPersistenceTask?.value
+    }
+
+    // MARK: Voice
+
+    /// What was said, as text from the machine that owns this chat.
+    func transcribeMacSpeech(_ pcm16: Data) async throws -> String {
+        guard let speech, !released, isOwnerLive() else { throw CancellationError() }
+        return try await aidenTranscribeSpeech(pcm16, on: speech) { !released && isOwnerLive() }
+    }
+
     var state: AidenBotSessionStateKind? { stateView?.state }
     var needsModel: Bool { state == .needsModel }
     var isRunning: Bool { state == .running }
@@ -1449,7 +1546,7 @@ final class AidenBotSessionModel {
     /// The composer takes a message unless the Mac said this Bot can't take one
     /// (it needs a model, is unavailable or is paused). Before the first
     /// snapshot it waits in the outbox (R14).
-    var canSend: Bool { !needsModel && state != .unavailable && state != .paused }
+    var canSend: Bool { !needsModel && state != .unavailable && state != .paused && isOwnerLive() }
 
     /// No snapshot yet: the chat draws skeleton bubbles where it has no transcript (R14).
     var showsSkeleton: Bool { !hasLoaded && entries.isEmpty }
@@ -1530,6 +1627,7 @@ final class AidenBotSessionModel {
     /// `GET /session`, after the outbox a previous launch left is restored;
     /// returns once what waits in the outbox has gone out.
     func load() async {
+        await restoreDraft()
         await restoreOutbox()
         _ = await fetchSnapshot()
         await runFlush()
@@ -1542,6 +1640,7 @@ final class AidenBotSessionModel {
             let session = try await aidenBotWithin(requestLimit) { [transport, botID] in
                 try await transport.botSession(botId: botID)
             }
+            guard isOwnerLive() else { return false }
             // Cleared first, so what the snapshot itself reports (a purged outbox) stays.
             errorMessage = nil
             apply(snapshot: session)
@@ -1549,6 +1648,7 @@ final class AidenBotSessionModel {
         } catch is CancellationError {
             return false
         } catch {
+            guard isOwnerLive() else { return false }
             // Losing access says so once ("That message wasn't sent"); nothing overwrites it.
             if Self.isAccessLoss(error) {
                 purgeForAccessLoss()
@@ -1565,7 +1665,7 @@ final class AidenBotSessionModel {
     func listen() async {
         await restoreOutbox()
         var failures = 0
-        while !Task.isCancelled {
+        while !Task.isCancelled, isOwnerLive() {
             do {
                 for try await event in openFeedConnection() {
                     failures = 0
@@ -1639,6 +1739,7 @@ final class AidenBotSessionModel {
     /// connection starts with a fresh snapshot anyway.
     @discardableResult
     func apply(_ event: AidenBotSessionEvent) async -> EventOutcome {
+        guard isOwnerLive() else { return .closed }
         guard event.botId == botID else { return .ignored }
         if case .closed = event.kind { return .closed }
         if case let .snapshot(session) = event.kind {
@@ -1674,7 +1775,7 @@ final class AidenBotSessionModel {
                 // entries leave it alone; the host clears it with `partial ""`.
                 if case let .message(message) = entry, message.role == .assistant { partial = nil }
             }
-            if let cacheKey { cache.store(entries, for: cacheKey) }
+            storeTranscript()
         case .unknownEntry:
             // A newer Mac's entry type: the sequence advances, nothing renders.
             break
@@ -1808,7 +1909,7 @@ final class AidenBotSessionModel {
         activity = session.activity
         queued = session.queued
         hasLoaded = true
-        if let cacheKey { cache.store(entries, for: cacheKey) }
+        storeTranscript()
         reconcileOutbox(snapshot: true)
         // A passive control reconciliation does not flush pending messages.
         if wakesOutbox { wakeOutbox() }
@@ -1909,13 +2010,18 @@ final class AidenBotSessionModel {
         return byText
     }
 
+    private func storeTranscript() {
+        guard let cacheKey, isOwnerLive() else { return }
+        cache.store(entries, for: cacheKey)
+    }
+
     // MARK: The outbox
 
     /// Writes the outbox to the cache and disk while this model owns the chat;
     /// an older model left open never overwrites a newer one's messages. The
     /// store keeps one ordered writer per chat.
     private func outboxDidChange() {
-        guard let cacheKey, !released,
+        guard let cacheKey, !released, isOwnerLive(),
               cache.storeOutbox(outbox, for: cacheKey, owner: ObjectIdentifier(self)) else { return }
         // A write before the restore would replace the previous launch's file. The first change starts the
         // restore, which writes the merged outbox once.
@@ -1926,7 +2032,7 @@ final class AidenBotSessionModel {
     /// The one write the restore owes: the merged outbox, even if the chat closed while the file was read,
     /// since messages sent before the restore exist nowhere else.
     private func writeRestoredOutbox(_ cacheKey: AidenBotSessionKey) {
-        guard let outboxStore, !outbox.isEmpty,
+        guard let outboxStore, !outbox.isEmpty, isOwnerLive(),
               cache.storeOutbox(outbox, for: cacheKey, owner: ObjectIdentifier(self)) else { return }
         outboxStore.submit(.save(outbox), for: cacheKey)
     }
@@ -1946,7 +2052,7 @@ final class AidenBotSessionModel {
         restoreTask = Task { [weak self] in
             let (stored, unreadable) = await outboxStore.restore(cacheKey)
             // Access was lost while the file was read: what it held stays purged, in memory and on disk.
-            guard let self, !Task.isCancelled, generation == self.purgeGeneration else { return }
+            guard let self, !Task.isCancelled, generation == self.purgeGeneration, self.isOwnerLive() else { return }
             if unreadable { self.restoreNotice = AidenBotSessionCopy.outboxUnrestorable }
             let known = Set(self.outbox.map(\.key))
             let now = self.now()
@@ -1986,7 +2092,7 @@ final class AidenBotSessionModel {
     /// The oldest unsettled message, unless it waits for a retry: nothing
     /// overtakes it, so messages reach the Mac in the order they were sent.
     private func nextToDeliver() -> UUID? {
-        guard isConnected, !released, let head = outbox.first(where: { $0.status == .sending }), !head.deferred else {
+        guard isConnected, !released, isOwnerLive(), let head = outbox.first(where: { $0.status == .sending }), !head.deferred else {
             return nil
         }
         return head.key
@@ -2166,7 +2272,9 @@ final class AidenBotSessionModel {
         }
     }
 
-    /// Access ended: nothing unsent is kept for this chat, in memory or on disk.
+    /// Access ended: no unsent message is kept for this chat, in memory or on disk.
+    /// The draft isn't a message yet and stays, as a chat's does, until the
+    /// machine's pairing ends and its drafts go with it.
     private func purgeForAccessLoss() {
         let hadUnsent = outbox.contains { $0.submissionId == nil }
         backoffTask?.cancel()
@@ -2641,6 +2749,12 @@ final class AidenBotSessionModel {
         attachTask?.cancel()
     }
 
+    var isPreparingAttachments: Bool { isAttaching }
+
+    func cancelAttachmentPreparation() {
+        cancelUploads()
+    }
+
     /// A late report from an earlier upload or batch never moves the bar back.
     private func recordUploadProgress(_ fraction: Double, index: Int, id: UUID) {
         guard uploadProgressID == id, let current = uploadProgress, current.index == index,
@@ -3076,7 +3190,7 @@ final class AidenBotSessionModel {
                 // The Mac can't set up this app; say so instead of "try again".
                 errorMessage = body.message
             } else {
-                errorMessage = "Your Mac didn’t get that request. Please try again."
+                errorMessage = "Your machine didn’t get that request. Please try again."
             }
         }
     }
