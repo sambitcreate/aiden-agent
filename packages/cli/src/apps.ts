@@ -59,7 +59,10 @@ export function createCliMcpHost(options: CliMcpHostOptions): AidenMcpHost {
 
 export const CLI_APPS_USAGE = "Usage: apps list | connect <name> [--access read|supervised] | revoke <app-id> | on | off";
 
-/** Daemon side of `aiden apps`. Sends no analytics. */
+/**
+ * Daemon side of `aiden apps`. The command itself sends nothing; a connect
+ * reports `mcp_app_connected` from this `aiden serve` process, through the host.
+ */
 export async function cliAppsCommand(host: AidenMcpHost, args: string[]): Promise<unknown> {
   const [action = "list", ...rest] = args;
   switch (action) {

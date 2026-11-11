@@ -18,6 +18,7 @@ import { Value } from "typebox/value";
 
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 import type { AidenMcpChatProvenance } from "./aiden-mcp-provenance.js";
+import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import type { AidenRemoteChatService, AidenRemoteMessageProjection } from "./aiden-remote-chats.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import type { AidenRemoteCapability } from "./aiden-remote-protocol.js";
@@ -452,13 +453,18 @@ export class AidenMcpToolRunner {
     }).catch(() => undefined);
     // The first turn goes through the same mutation fence as any other turn.
     const classification = await requireOrdinaryChat(services, chat.id);
-    if (createRecorded && !services.chats.hasRecordedRequest(app.id, { kind: "turn", chatId: chat.id }, turnKey)) {
-      this.admitTurn(services, app);
-    }
+    const turnRecorded =
+      createRecorded && services.chats.hasRecordedRequest(app.id, { kind: "turn", chatId: chat.id }, turnKey);
+    if (createRecorded && !turnRecorded) this.admitTurn(services, app);
     const turn = await services.chats.runMutation(app.id, chat.id, classification, () =>
       services.chats.startTurn(app.id, chat.id, turnKey, { text: args.text }),
     );
     this.trackRun(app.id, turn.streamId);
+    // Counted once, when the chat's first turn starts; a replay of a recorded
+    // request was counted the first time. Never the prompt, chat or workspace.
+    if (!turnRecorded) {
+      reportAnalyticsEvent("mcp_chat_started", { model_choice: providerId || modelId ? "chosen" : "default" });
+    }
     return toolResult({ chatId: chat.id, turnId: turn.turnId, runId: turn.streamId, state: "running" });
   }
 

@@ -184,6 +184,62 @@ test("aiden serve keeps /mcp off until an app is connected, then the app runs a 
   assert.ok((await toolNames(url, reader.token)).length > 0);
 });
 
+test("aiden serve counts a connected app and the chat it starts, and the admin command sends nothing", async (t) => {
+  const { agentDir, workspace, env: base } = sandbox(t);
+  // A server whose person already saw the notice and left usage data on. Keyless,
+  // so AIDEN_ANALYTICS_DEBUG prints each would-be event instead of sending it.
+  const env = { ...base, AIDEN_ANALYTICS_DEBUG: "1" };
+  for (const name of ["AIDEN_ANALYTICS", "CI", "DO_NOT_TRACK", "INVOCATION_ID", "XPC_SERVICE_NAME"]) delete env[name];
+  mkdirSync(agentDir, { recursive: true });
+  writeFileSync(join(agentDir, "aiden-analytics.json"), JSON.stringify({ enabled: true, noticeShownAt: "2026-11-01T00:00:00.000Z" }));
+  await fakeProvider(t, agentDir);
+  const added = runCli(["workspace", "add", workspace], env);
+  const { id: workspaceId } = json(added);
+  const { output } = await serve(t, env);
+  const sent = (event) => output.text.split("\n").filter((line) => line.startsWith(`[analytics debug] ${event} `));
+  const until = async (event, count) => {
+    const deadline = Date.now() + 30_000;
+    while (sent(event).length < count) {
+      assert.ok(Date.now() < deadline, `${event} was not sent ${count} time(s):\n${output.text}`);
+      await new Promise((done) => setTimeout(done, 50));
+    }
+  };
+
+  const connectResult = runCli(["apps", "connect", "Claude", "Code", "--access", "supervised"], env);
+  const connected = json(connectResult);
+  // The command only asks the running server; the server is the one that reports.
+  for (const result of [added, connectResult]) assert.doesNotMatch(result.stdout + result.stderr, /analytics debug/u);
+  await until("mcp_app_connected", 1);
+  assert.match(sent("mcp_app_connected")[0], /"access":"supervised"/u);
+  assert.match(sent("mcp_app_connected")[0], /"surface":"server"/u);
+
+  const { url } = connected.server;
+  const args = { clientRequestId: "mcp-apps-analytics-0001", workspaceId, text: "Say hello privately", providerId: "cli-test", modelId: "test" };
+  const started = await callTool(url, connected.token, "aiden_chat_start", args);
+  // The app retrying the same request is the same chat.
+  assert.deepEqual(await callTool(url, connected.token, "aiden_chat_start", args), started);
+  let run = { state: "running" };
+  for (let attempt = 0; attempt < 6 && run.state === "running"; attempt += 1) {
+    run = await callTool(url, connected.token, "aiden_chat_wait", { chatId: started.chatId, runId: started.runId, timeoutSeconds: 10 });
+  }
+  assert.equal(run.state, "done", JSON.stringify(run));
+  await until("mcp_chat_started", 1);
+  // Disconnecting sends nothing; the next connect is a later report to wait on.
+  json(runCli(["apps", "revoke", connected.app.id], env));
+  json(runCli(["apps", "connect", "Codex"], env));
+  await until("mcp_app_connected", 2);
+
+  assert.equal(sent("mcp_chat_started").length, 1, output.text);
+  assert.match(sent("mcp_chat_started")[0], /"model_choice":"chosen"/u);
+  assert.match(sent("mcp_app_connected")[1], /"access":"read"/u);
+  // An app's chat is not a person's chat, and a disconnect is not reported.
+  for (const event of ["chat_created", "chat_message_sent", "mcp_app_revoked"]) assert.deepEqual(sent(event), [], event);
+  const reports = output.text.split("\n").filter((line) => line.startsWith("[analytics debug] ")).join("\n");
+  for (const secret of ["Claude Code", "Codex", "Say hello", connected.token, connected.app.id, started.chatId, workspaceId, workspace, "cli-test"]) {
+    assert.equal(reports.includes(secret), false, secret);
+  }
+});
+
 test("aiden apps refuses what it cannot do, and never disconnects a phone", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "aiden-mcp-apps-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
