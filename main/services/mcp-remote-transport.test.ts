@@ -436,14 +436,16 @@ test("a request cancelled while its 401 refresh is pending is never re-sent", as
   const authority = rotatingAuthority("cancelled");
   const store = { session: { authorizationBinding: mcpAuthorizationBinding(serviceUrl), tokens: authority.initialTokens() } as McpOAuthSession };
   const toolCalls: unknown[] = [];
-  const cancellations: unknown[] = [];
+  const cancellations: Array<{ requestId: unknown; authorized: boolean }> = [];
   const fetch: typeof globalThis.fetch = async (input, init) => {
     const oauth = await authority.fetch(input, init);
     if (oauth) return oauth;
     if (init?.method === "GET") return new Response(null, { status: 405 });
     const request = JSON.parse(String(init?.body));
     if (request.method === "tools/call") toolCalls.push(request.id);
-    if (request.method === "notifications/cancelled") cancellations.push(request.params.requestId);
+    if (request.method === "notifications/cancelled") {
+      cancellations.push({ requestId: request.params.requestId, authorized: authority.accepts(init) });
+    }
     if (!authority.accepts(init)) {
       return new Response(null, { status: 401, headers: { "www-authenticate": "Bearer" } });
     }
@@ -466,6 +468,7 @@ test("a request cancelled while its 401 refresh is pending is never re-sent", as
   await until(() => cancellations.length >= 1);
   await delay(20);
   assert.equal(toolCalls.length, 1, "the cancelled tools/call reached the server only once, before the refresh");
+  assert.deepEqual(cancellations, [{ requestId: toolCalls[0], authorized: true }], "one cancellation, for that call, with the refreshed token");
   assert.equal(store.session.tokens?.access_token, authority.valid(), "refreshed tokens persist");
   // The connection itself remains usable after the refresh.
   assert.deepEqual((await client.callTool("example", {})).content, []);
