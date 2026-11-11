@@ -7183,6 +7183,79 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(decoded.detail, step.detail)
     }
 
+    private func stopTimelineStep(_ id: String, order: Int, toolName: String, label: String, status: AidenAgentStepStatus) -> AidenAgentStep {
+        AidenAgentStep(
+            id: id, order: order, kind: .tool,
+            toolCallId: "call-" + id.dropFirst("tool-".count), toolName: toolName,
+            label: label, status: status, startedAt: 1_000,
+            updatedAt: 2_000, finishedAt: 2_000, contentOffset: 0,
+            durationMs: nil, target: nil, detail: nil, lineChanges: nil
+        )
+    }
+
+    private func stopTimeline(
+        _ steps: [AidenAgentStep],
+        origin: AidenGenerationCancellationOrigin?,
+        claimCheck: AidenGenerationClaimCheck? = nil
+    ) -> AidenGenerationTimeline {
+        AidenGenerationTimeline(
+            version: 3, generationId: "stream-1", status: .cancelled,
+            startedAt: 1_000, finishedAt: 2_000, steps: steps,
+            cancellationOrigin: origin, claimCheck: claimCheck
+        )
+    }
+
+    func testCallThePersonStoppedReadsStoppedAndIsNotAnIssue() throws {
+        let compact = stopTimelineStep("tool-1", order: 0, toolName: "compact_context", label: "Compact context", status: .cancelled)
+        let timeline = stopTimeline([compact], origin: .userStop)
+        XCTAssertTrue(timeline.isStoppedByUser(compact))
+        XCTAssertEqual(timeline.issueCount, 0)
+        XCTAssertEqual(timeline.userStoppedStepIDs, ["tool-1"])
+        XCTAssertEqual(
+            AidenAgentActivityPresentation.line(for: compact, stoppedByUser: timeline.isStoppedByUser(compact)),
+            "Compact context stopped"
+        )
+        XCTAssertEqual(
+            AidenAgentActivityPresentation.tone(for: compact, stoppedByUser: timeline.isStoppedByUser(compact)),
+            .normal
+        )
+        // The decoder-level status is unchanged: a cancelled call is still an issue status.
+        XCTAssertTrue(compact.status?.isIssue == true)
+    }
+
+    func testOtherCancellationsAndFailuresStayIssues() throws {
+        let cancelled = stopTimelineStep("tool-1", order: 0, toolName: "run_command", label: "Run command", status: .cancelled)
+        for origin: AidenGenerationCancellationOrigin? in [.applicationShutdown, .chatDeletion, .scheduledTaskCancel, nil] {
+            let timeline = stopTimeline([cancelled], origin: origin)
+            XCTAssertFalse(timeline.isStoppedByUser(cancelled), String(describing: origin))
+            XCTAssertEqual(timeline.issueCount, 1, String(describing: origin))
+            XCTAssertEqual(
+                AidenAgentActivityPresentation.line(for: cancelled, stoppedByUser: timeline.isStoppedByUser(cancelled)),
+                "Run command cancelled"
+            )
+            XCTAssertEqual(AidenAgentActivityPresentation.tone(for: cancelled), .warning)
+        }
+
+        let failed = stopTimelineStep("tool-1", order: 0, toolName: "edit_file", label: "Edit file", status: .failed)
+        let failedStop = stopTimeline([failed], origin: .userStop)
+        XCTAssertFalse(failedStop.isStoppedByUser(failed))
+        XCTAssertEqual(failedStop.issueCount, 1)
+        XCTAssertEqual(AidenAgentActivityPresentation.tone(for: failed), .danger)
+    }
+
+    func testStoppedCallNamedByAClaimCheckStaysAnIssueAndStillDecodes() throws {
+        let run = stopTimelineStep("tool-1", order: 0, toolName: "run_command", label: "Run command", status: .cancelled)
+        let timeline = stopTimeline(
+            [run],
+            origin: .userStop,
+            claimCheck: AidenGenerationClaimCheck(kind: .unverifiedSuccess, stepIds: ["tool-1"])
+        )
+        XCTAssertFalse(timeline.isStoppedByUser(run))
+        XCTAssertEqual(timeline.issueCount, 1)
+        // Claim-check validation still sees the stopped call as an issue step.
+        XCTAssertTrue(timeline.isRendererSafe)
+    }
+
     func testActivitySummaryMatchesMacCategories() throws {
         let timeline = AidenGenerationTimeline(
             version: 3,

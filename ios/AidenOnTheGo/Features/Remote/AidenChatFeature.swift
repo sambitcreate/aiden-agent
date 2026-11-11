@@ -7044,6 +7044,7 @@ struct AidenMessageView: View, Equatable {
                 AidenChronologicalTranscript(
                     rows: rows,
                     active: false,
+                    stoppedStepIDs: message.timeline?.userStoppedStepIDs ?? [],
                     visualContent: { visual in AnyView(visualRow(visual)) },
                     loadRecording: loadBrowserRecording,
                     imageContent: { images in
@@ -7239,7 +7240,10 @@ private struct AidenActivityFeed: View {
     }
     private var headline: String {
         if stepInHeader, let last = visibleSteps.last {
-            return AidenAgentActivityPresentation.line(for: last)
+            return AidenAgentActivityPresentation.line(
+                for: last,
+                stoppedByUser: timeline.isStoppedByUser(last)
+            )
         }
         return AidenAgentActivityPresentation.summary(timeline)
     }
@@ -7251,7 +7255,11 @@ private struct AidenActivityFeed: View {
                 VStack(alignment: .leading, spacing: 4) {
                     if !stepInHeader {
                         ForEach(visibleSteps) { step in
-                            AidenActivityStepLine(step: step, shimmer: isRunning && step.isActive)
+                            AidenActivityStepLine(
+                                step: step,
+                                stoppedByUser: timeline.isStoppedByUser(step),
+                                shimmer: isRunning && step.isActive
+                            )
                         }
                     }
                     if let progressText, !progressText.isEmpty {
@@ -7305,7 +7313,11 @@ private struct AidenActivityFeed: View {
                 if showsCollapsedTicker {
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(rows) { step in
-                            AidenActivityStepLine(step: step, shimmer: step.id == rows.last?.id && step.isActive)
+                            AidenActivityStepLine(
+                                step: step,
+                                stoppedByUser: timeline.isStoppedByUser(step),
+                                shimmer: step.id == rows.last?.id && step.isActive
+                            )
                                 .frame(height: 24)
                                 .id(step.id)
                                 .transition(.opacity)
@@ -7342,19 +7354,21 @@ private struct AidenActivityFeed: View {
 private struct AidenActivityStepLine: View {
     @Environment(\.aidenPalette) private var palette
     let step: AidenAgentStep
+    /// The person ended this call with Stop: it reads "stopped" in the neutral tone.
+    var stoppedByUser = false
     let shimmer: Bool
 
     private var tone: Color {
-        switch step.status {
-        case .failed: palette.danger
-        case .blocked, .cancelled, .awaitingApproval: palette.warning
-        default: palette.secondary
+        switch AidenAgentActivityPresentation.tone(for: step, stoppedByUser: stoppedByUser) {
+        case .danger: palette.danger
+        case .warning: palette.warning
+        case .normal: palette.secondary
         }
     }
 
     var body: some View {
         HStack(spacing: 6) {
-            Text(AidenAgentActivityPresentation.line(for: step))
+            Text(AidenAgentActivityPresentation.line(for: step, stoppedByUser: stoppedByUser))
                 .lineLimit(1)
                 .truncationMode(.tail)
             if let file = step.producedFile {
@@ -8532,6 +8546,7 @@ private struct AidenLiveResponseView: View {
                 AidenChronologicalTranscript(
                     rows: chronologicalRows,
                     active: model.isLiveReplyUnsettled,
+                    stoppedStepIDs: model.activityTimeline?.userStoppedStepIDs ?? [],
                     loadRecording: liveRecordingLoader,
                     imageSlotContent: { call in
                         AnyView(ForEach(imageGenerationItems.filter { $0.id == call }) { item in
@@ -9326,6 +9341,8 @@ private struct AidenChronologicalTranscript: View {
     @Environment(\.aidenPalette) private var palette
     let rows: [AidenChronologicalRow]
     let active: Bool
+    /// Tool calls the person ended with Stop; see `AidenGenerationTimeline.isStoppedByUser`.
+    var stoppedStepIDs: Set<String> = []
     /// Draws a committed message's visual rows; the live stream has none.
     var visualContent: ((AidenChatVisual) -> AnyView)? = nil
     /// Present while the Mac serves browser recordings (revision 46).
@@ -9354,7 +9371,11 @@ private struct AidenChronologicalTranscript: View {
                 case .tool:
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(row.steps) { step in
-                            AidenActivityStepLine(step: step, shimmer: active && step.isActive)
+                            AidenActivityStepLine(
+                                step: step,
+                                stoppedByUser: stoppedStepIDs.contains(step.id),
+                                shimmer: active && step.isActive
+                            )
                         }
                     }
                     .padding(.horizontal, 12)

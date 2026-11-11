@@ -17,6 +17,7 @@ import {
   formatThinkingDuration,
   isActiveStep,
   isCompactContextOnly,
+  isStoppedByUser,
   reasoningActivityLabel,
   summarizeActivity,
 } from "./agent-steps.js";
@@ -89,7 +90,11 @@ function thinking(id: string, order: number, durationMs?: number): AgentThinking
   };
 }
 
-function timeline(status: GenerationTimeline["status"], steps: AgentStep[]): GenerationTimeline {
+function timeline(
+  status: GenerationTimeline["status"],
+  steps: AgentStep[],
+  extra: Partial<GenerationTimeline> = {},
+): GenerationTimeline {
   return {
     version: 3,
     generationId: "generation-1",
@@ -97,6 +102,7 @@ function timeline(status: GenerationTimeline["status"], steps: AgentStep[]): Gen
     startedAt: 1,
     ...(status === "running" ? {} : { finishedAt: 2 }),
     steps,
+    ...extra,
   };
 }
 
@@ -544,6 +550,32 @@ test("issues surface for review without reopening a healthy trail", () => {
   ]);
   assert.equal(activityIssueCount(failed), 2);
   assert.equal(activityTrailNeedsAttention(failed), true);
+});
+
+test("a call the person stopped is not an issue; other cancellations are", () => {
+  const steps = [step("edit", 0, "edit_file", "completed"), step("run", 1, "run_command", "cancelled")];
+  const stopped = timeline("cancelled", steps, { cancellationOrigin: "user_stop" });
+  assert.equal(isStoppedByUser(stopped, steps[1]!), true);
+  assert.equal(isStoppedByUser(stopped, steps[0]!), false);
+  assert.equal(activityIssueCount(stopped), 0);
+  assert.equal(activityTrailNeedsAttention(stopped), false);
+  assert.deepEqual(activityLine(steps[1]!, { stoppedByUser: true }), {
+    verb: "run_command stopped",
+    object: undefined,
+    tone: "normal",
+  });
+
+  for (const origin of ["application_shutdown", "chat_deletion", "scheduled_task_cancel"] as const) {
+    const other = timeline("cancelled", steps, { cancellationOrigin: origin });
+    assert.equal(isStoppedByUser(other, steps[1]!), false, origin);
+    assert.equal(activityIssueCount(other), 1, origin);
+    assert.equal(activityTrailNeedsAttention(other), true, origin);
+  }
+  // A failure in a stopped run is still a failure.
+  const failedStop = timeline("cancelled", [step("edit", 0, "edit_file", "failed")], {
+    cancellationOrigin: "user_stop",
+  });
+  assert.equal(activityIssueCount(failedStop), 1);
 });
 
 test("active thinking and named tool helpers match live timeline steps", () => {

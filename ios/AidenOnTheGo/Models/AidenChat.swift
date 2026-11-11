@@ -1273,8 +1273,28 @@ struct AidenGenerationTimeline: Codable, Equatable, Sendable {
         case cancellationOrigin, claimCheck
     }
 
+    /// Display-only: a tool call the person ended with Stop. The run was
+    /// cancelled from `user_stop`, so the call stopping is what they asked
+    /// for, not a problem to review. Other cancellation origins (app shutdown,
+    /// chat deletion, a scheduled task's cancel) keep the cancelled treatment,
+    /// and so does a call the claim check names. `isIssue` and the claim-check
+    /// validation below still count every cancelled call. Matches desktop's
+    /// `isStoppedByUser`.
+    func isStoppedByUser(_ step: AidenAgentStep) -> Bool {
+        cancellationOrigin == .userStop
+            && step.kind == .tool
+            && step.status == .cancelled
+            && claimCheck?.stepIds.contains(step.id) != true
+    }
+
+    /// The steps `isStoppedByUser` matches, for rows drawn away from the timeline.
+    var userStoppedStepIDs: Set<String> {
+        Set(steps.filter(isStoppedByUser).map(\.id))
+    }
+
+    /// Issues the activity header counts; calls the person stopped are not issues.
     var issueCount: Int {
-        steps.filter { $0.kind == .tool && $0.status?.isIssue == true }.count
+        steps.filter { $0.kind == .tool && $0.status?.isIssue == true && !isStoppedByUser($0) }.count
     }
 
     var isRendererSafe: Bool {
@@ -1596,7 +1616,24 @@ enum AidenAgentActivityPresentation {
             && questionnaireSteps(timeline).isEmpty
     }
 
-    static func line(for step: AidenAgentStep) -> String {
+    /// How an activity row is tinted. A call the person stopped reads as
+    /// ordinary secondary text, like desktop's neutral tone.
+    enum Tone: Equatable {
+        case normal
+        case warning
+        case danger
+    }
+
+    static func tone(for step: AidenAgentStep, stoppedByUser: Bool = false) -> Tone {
+        switch step.status {
+        case .failed: return .danger
+        case .cancelled: return stoppedByUser ? .normal : .warning
+        case .blocked, .awaitingApproval: return .warning
+        default: return .normal
+        }
+    }
+
+    static func line(for step: AidenAgentStep, stoppedByUser: Bool = false) -> String {
         if step.kind == .thinking {
             return step.isActive ? "Thinking" : "Thought \(duration(step.durationMs))"
         }
@@ -1618,7 +1655,7 @@ enum AidenAgentActivityPresentation {
         case .blocked:
             verb = "\(label) denied"
         case .cancelled:
-            verb = "\(label) cancelled"
+            verb = stoppedByUser ? "\(label) stopped" : "\(label) cancelled"
         case nil:
             verb = label
         }
