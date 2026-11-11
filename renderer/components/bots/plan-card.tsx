@@ -90,7 +90,7 @@ function PlanCardBody({ plan, botName, avatar, onRespond }: PlanCardProps) {
         </>
       }
     >
-      <div role="region" aria-label="Plan review" tabIndex={0} className="max-h-[min(40vh,24rem)] overflow-y-auto overscroll-contain focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring">
+      <div role="region" aria-label="Plan review" tabIndex={0} onKeyDown={jumpToReviewEdge} className="max-h-[min(40vh,24rem)] overflow-y-auto overscroll-contain focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring">
         <p className="whitespace-pre-line">{plan.why}</p>
         {active ? (
           <ul aria-label="Plan steps" className="mt-2 space-y-1">
@@ -131,4 +131,18 @@ function PlanCardBody({ plan, botName, avatar, onRespond }: PlanCardProps) {
       {error ? <p role="alert" className="mt-2 text-status-red">{error}</p> : null}
     </BotNoticeCard>
   );
+}
+
+/**
+ * Home and End jump the plan review to its top or bottom in one step. Chromium's
+ * own keyboard scroll animates, and a Home sent while an End animation was still
+ * settling was sometimes lost, leaving the review at the bottom.
+ */
+function jumpToReviewEdge(event: React.KeyboardEvent<HTMLDivElement>) {
+  if (event.target !== event.currentTarget) return;
+  if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+  if (event.key !== "Home" && event.key !== "End") return;
+  event.preventDefault();
+  const review = event.currentTarget;
+  review.scrollTop = event.key === "Home" ? 0 : review.scrollHeight;
 }
