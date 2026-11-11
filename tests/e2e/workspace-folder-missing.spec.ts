@@ -3,6 +3,9 @@ import { E2E_ASSISTANT_RESPONSE, expect, finishLmStudioOnboarding, test } from "
 
 test.use({ workspaceSeed: true });
 
+const ONE_PIXEL_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
+
 test("a moved workspace folder is named above the composer and the message waits until it is back", async ({
   aiden,
 }) => {
@@ -62,6 +65,14 @@ test("Continue in a new chat carries a chat whose folder is gone, and the unsent
   await rename(workspaceDir, `${workspaceDir}-moved`);
   const question = "Where were we?";
   await composer.fill(question);
+  await composer.evaluate((element, base64) => {
+    const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
+    const clipboard = new DataTransfer();
+    clipboard.items.add(new File([bytes], "clipboard.png", { type: "image/png" }));
+    element.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: clipboard }));
+  }, ONE_PIXEL_PNG_BASE64);
+  const removeImage = page.getByRole("button", { name: "Remove Pasted image.png" });
+  await expect(removeImage).toBeVisible();
   await composer.press("Enter");
   const notice = page.getByRole("status", { name: "Workspace folder missing" });
   await expect(notice).toBeVisible({ timeout: 15_000 });
@@ -71,7 +82,9 @@ test("Continue in a new chat carries a chat whose folder is gone, and the unsent
 
   // The new chat has the conversation and the unsent message, and its folder is fine.
   await expect(notice).toHaveCount(0, { timeout: 15_000 });
+  // The unsent message arrives with its image.
   await expect(composer).toHaveValue(question);
+  await expect(removeImage).toBeVisible();
   await expect(page.getByText("Hello before the folder moves")).toBeVisible();
   await expect(page.getByText(E2E_ASSISTANT_RESPONSE)).toHaveCount(1);
   await composer.press("Enter");

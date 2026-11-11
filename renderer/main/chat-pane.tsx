@@ -1321,14 +1321,23 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
   const continueInNewChat = React.useCallback(
     async (workspaceId: string) => {
-      // A send refused by the folder check may be waiting in the paused queue
-      // with the composer already cleared.
-      const text = (
-        loadComposerDraft(chatId).text.trim() || chatMessageQueue(chatId).getSnapshot().messages[0]?.text || ""
-      ).trim();
+      // The composer's draft goes along with its attachments. Otherwise a send
+      // refused by the folder check may be waiting in the paused queue with the
+      // composer already cleared, so that message goes instead.
+      const draft = cloneDraftRef.current;
+      const queued = chatMessageQueue(chatId).getSnapshot().messages[0];
+      const storedText = loadComposerDraft(chatId).text.trim();
+      const unsent =
+        draft.text.trim() || draft.attachments.length
+          ? { text: draft.text.trim(), attachments: draft.attachments }
+          : queued && (queued.text.trim() || queued.attachments.length)
+            ? { text: queued.text.trim(), attachments: queued.attachments }
+            : storedText
+              ? { text: storedText, attachments: [] }
+              : undefined;
       setContinuingInNewChat(true);
       try {
-        await copyChat(undefined, text ? { text, attachments: [] } : undefined, undefined, workspaceId);
+        await copyChat(undefined, unsent, undefined, workspaceId);
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Couldn't continue in a new chat.");
       } finally {
