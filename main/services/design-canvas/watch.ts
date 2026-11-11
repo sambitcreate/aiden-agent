@@ -8,6 +8,9 @@
 // the page itself. The file system can report one write more than once, and
 // late, so a report for it could otherwise reload the page under the person's
 // next edit. A change of the page to anything else is reported as usual.
+// An event that names no file could also be a stylesheet or an image beside
+// the page, so it is put down to the canvas's write only for a few seconds
+// after that write; later ones report the page again.
 // The canvas's writes are remembered only for the pages it still watches, so
 // a page that stops being watched and comes back reports any change again.
 
@@ -23,6 +26,12 @@ import { isPathInside } from "../../shared/path-containment.js";
 export const DESIGN_WATCH_LIMIT = 50;
 /** Quiet period before a burst of writes is reported, in milliseconds. */
 export const DESIGN_WATCH_DEBOUNCE_MS = 150;
+/**
+ * How long after the canvas's own write to a page an event naming no file is
+ * still put down to that write, in milliseconds. A late or repeated report of
+ * the write arrives well within it; a later unnamed event may be an asset.
+ */
+export const DESIGN_OWN_WRITE_WINDOW_MS = 3000;
 
 export const DESIGN_FILES_CHANGED_CHANNEL = "designCanvas:filesChanged";
 
@@ -40,19 +49,26 @@ type ChatWatch = {
   root: string;
   generation: number;
   folders: Array<{ close(): void }>;
-  /**
-   * Each queued path → whether a change of that page alone could explain every
-   * event that queued it: events naming the page, or naming no file at all.
-   * An event naming a file beside the page (a stylesheet, an image) cannot be.
-   */
-  pending: Map<string, boolean>;
+  /** Each queued path → what the events that queued it say about it. */
+  pending: Map<string, Queued>;
   timer: ReturnType<typeof setTimeout> | null;
 };
 
 const digest = (content: string | Buffer) => createHash("sha256").update(content).digest("hex");
 
-/** A write of the canvas to one of its pages; `settled` once the file holds it or the write gave up. */
-type OwnWrite = { digest: string; settled: Promise<void> };
+/**
+ * Why a page is queued. `beside`: an event named a file next to it (a
+ * stylesheet, an image), so it is reported whatever it holds. Otherwise only
+ * events naming the page queued it, or also events naming no file, the last
+ * of which arrived at `unnamedAt`.
+ */
+type Queued = { beside: boolean; unnamedAt: number | null };
+
+/**
+ * A write of the canvas to one of its pages; `settled` once the file holds it
+ * or the write gave up, at `settledAt`.
+ */
+type OwnWrite = { digest: string; settled: Promise<void>; settledAt: number | null };
 
 export class DesignFileWatcher {
   private readonly chats = new Map<string, ChatWatch>();
@@ -61,6 +77,8 @@ export class DesignFileWatcher {
   private readonly ownWrites = new Map<string, Map<string, OwnWrite>>();
   private readonly watch: WatchFn;
   private readonly debounceMs: number;
+  private readonly ownWriteWindowMs: number;
+  private readonly now: () => number;
 
   constructor(
     private readonly deps: {
@@ -69,10 +87,15 @@ export class DesignFileWatcher {
       allowed?: (chatId: string, root: string) => boolean;
       watch?: WatchFn;
       debounceMs?: number;
+      ownWriteWindowMs?: number;
+      /** A monotonic clock in milliseconds. */
+      now?: () => number;
     },
   ) {
     this.watch = deps.watch ?? ((folder, options, listener) => fsWatch(folder, options, listener));
     this.debounceMs = deps.debounceMs ?? DESIGN_WATCH_DEBOUNCE_MS;
+    this.ownWriteWindowMs = deps.ownWriteWindowMs ?? DESIGN_OWN_WRITE_WINDOW_MS;
+    this.now = deps.now ?? (() => performance.now());
   }
 
   /** Replaces the chat's watched set. An empty list stops watching. */
@@ -99,7 +122,7 @@ export class DesignFileWatcher {
           // An unnamed event may also be one of the pages changing by itself, so
           // each page it queues is checked against the canvas's own write.
           const page = name === null ? undefined : paths.find((relative) => path.posix.basename(relative) === name);
-          this.queue(chatId, generation, page ? [page] : paths, page !== undefined || name === null);
+          this.queue(chatId, generation, page ? [page] : paths, page ? "page" : name === null ? "unnamed" : "beside");
         });
         // A folder removed while watched errors once; the frame shows its own missing state.
         handle.on("error", () => handle.close());
@@ -120,22 +143,29 @@ export class DesignFileWatcher {
   /**
    * The canvas is about to write `content` to one of its pages. Until the page
    * changes to something else, reports of that page holding this content are
-   * dropped. A report waits for the write to finish, so it never reads the
-   * file between this call and the write. Call the returned function once the
-   * write has finished, saying whether the file now holds `content`.
+   * dropped: events naming the page, and for `DESIGN_OWN_WRITE_WINDOW_MS`
+   * after the write, events naming no file. A report waits for the write to
+   * finish, so it never reads the file between this call and the write. Call
+   * the returned function once the write has finished, saying whether the
+   * file now holds `content`.
    */
   ownWrite(chatId: string, relativePath: string, content: string): (written: boolean) => void {
     const writes = this.ownWrites.get(chatId) ?? new Map<string, OwnWrite>();
     this.ownWrites.set(chatId, writes);
     const before = writes.get(relativePath);
     let settle = () => {};
-    const write: OwnWrite = { digest: digest(content), settled: new Promise<void>((resolve) => (settle = resolve)) };
+    const write: OwnWrite = {
+      digest: digest(content),
+      settled: new Promise<void>((resolve) => (settle = resolve)),
+      settledAt: null,
+    };
     writes.set(relativePath, write);
     return (written) => {
       if (!written && this.ownWrites.get(chatId) === writes && writes.get(relativePath) === write) {
         if (before === undefined) writes.delete(relativePath);
         else writes.set(relativePath, before);
       }
+      write.settledAt = this.now();
       settle();
     };
   }
@@ -199,10 +229,14 @@ export class DesignFileWatcher {
     return byFolder.size > 0 ? byFolder : null;
   }
 
-  private queue(chatId: string, generation: number, paths: readonly string[], ownChange: boolean): void {
+  private queue(chatId: string, generation: number, paths: readonly string[], kind: "page" | "unnamed" | "beside"): void {
     const entry = this.chats.get(chatId);
     if (!entry || entry.generation !== generation) return;
-    for (const relative of paths) entry.pending.set(relative, (entry.pending.get(relative) ?? true) && ownChange);
+    const at = kind === "unnamed" ? this.now() : null;
+    for (const relative of paths) {
+      const queued = entry.pending.get(relative) ?? { beside: false, unnamedAt: null };
+      entry.pending.set(relative, { beside: queued.beside || kind === "beside", unnamedAt: at ?? queued.unnamedAt });
+    }
     if (entry.timer) clearTimeout(entry.timer);
     entry.timer = setTimeout(() => this.flush(chatId, entry), this.debounceMs);
   }
@@ -219,17 +253,20 @@ export class DesignFileWatcher {
     const writes = this.ownWrites.get(chatId);
     // Only a page whose own change could explain its events can be the
     // canvas's write; a change beside it (a stylesheet, an image) is reported
-    // whatever the page holds. A page the canvas never wrote, one that no
-    // longer holds the canvas's bytes, or one that can't be read is reported.
-    const checks = pending.filter(([relative, ownChange]) => ownChange && writes?.has(relative));
+    // whatever the page holds, and so is an event naming no file once the
+    // canvas's write is a few seconds old. A page the canvas never wrote, one
+    // that no longer holds the canvas's bytes, or one that can't be read is
+    // reported.
+    const checks = pending.filter(([relative, queued]) => !queued.beside && writes?.has(relative));
     if (checks.length === 0) {
       this.report(chatId, pending.map(([relative]) => relative));
       return;
     }
     void Promise.all(
-      pending.map(async ([relative, ownChange]) => {
-        const write = ownChange ? await this.settledOwnWrite(chatId, relative) : undefined;
+      pending.map(async ([relative, queued]) => {
+        const write = queued.beside ? undefined : await this.settledOwnWrite(chatId, relative);
         if (write === undefined) return relative;
+        if (queued.unnamedAt !== null && queued.unnamedAt > (write.settledAt ?? 0) + this.ownWriteWindowMs) return relative;
         const now = await fsp.readFile(path.join(entry.root, relative)).then(digest, () => null);
         return now === write.digest ? null : relative;
       }),

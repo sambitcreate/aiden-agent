@@ -6,6 +6,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test, { type TestContext } from "node:test";
 import {
+  DESIGN_OWN_WRITE_WINDOW_MS,
   DESIGN_WATCH_DEBOUNCE_MS,
   DESIGN_WATCH_LIMIT,
   DesignFileWatcher,
@@ -230,12 +231,13 @@ test("after a page stops being watched, a later revert to the canvas's own words
 });
 
 /** A watcher whose file-system events the test sends itself, as `fs.watch` would. */
-function fakeWatcher(t: TestContext) {
+function fakeWatcher(t: TestContext, options: { now?: () => number } = {}) {
   const watched: { emit?: (event: string, filename: string | null) => void } = {};
   const updates: DesignFilesChanged[] = [];
   const instance = new DesignFileWatcher({
     onChange: (update) => updates.push(update),
     debounceMs: 5,
+    ...(options.now ? { now: options.now } : {}),
     watch: (_folder, _options, listener) => {
       watched.emit = listener as (event: string, filename: string | null) => void;
       return Object.assign(new EventEmitter(), { close: () => undefined }) as unknown as fs.FSWatcher;
@@ -289,6 +291,29 @@ test("an event naming no file reports a page the canvas wrote once it holds othe
     [["design/hero.html", "design/about.html"]],
     "only the page still holding the canvas's own words is left alone",
   );
+});
+
+test("an event naming no file is put down to the canvas's write only for a few seconds after it", async (t) => {
+  const root = await workspace(t, { "design/hero.html": "<link rel=stylesheet href=hero.css><h1>Ship faster</h1>" });
+  let clock = 0;
+  const { instance, updates, emit } = fakeWatcher(t, { now: () => clock });
+  await instance.set("chat-1", root, ["design/hero.html"]);
+  const written = "<link rel=stylesheet href=hero.css><h1>Ship sooner</h1>";
+  const settle = instance.ownWrite("chat-1", "design/hero.html", written);
+  await fsp.writeFile(path.join(root, "design/hero.html"), written);
+  settle(true);
+
+  // A late report of the canvas's write, inside the window.
+  clock = DESIGN_OWN_WRITE_WINDOW_MS - 1;
+  emit(null);
+  await sleep(50);
+  assert.equal(updates.length, 0, "the page already shows its own words");
+
+  // Past it, an unnamed event may be the stylesheet changing, so the page reloads.
+  clock = DESIGN_OWN_WRITE_WINDOW_MS + 1;
+  emit(null);
+  await eventually(() => updates.length > 0);
+  assert.deepEqual(updates.map((update) => update.paths), [["design/hero.html"]]);
 });
 
 test("a change beside a page the canvas wrote, or a write that failed, is still reported", async (t) => {
