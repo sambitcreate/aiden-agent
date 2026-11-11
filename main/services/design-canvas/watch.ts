@@ -11,11 +11,11 @@
 // An event that names no file could also be a stylesheet or an image beside
 // the page. It is put down to the canvas's write only for a few seconds after
 // that write, and only while the files beside the page are as they were when
-// the write began and none of them was touched since it began; otherwise it
-// reports the page. The canvas's write changes
-// only the page itself, so a change beside it is usually someone else's. It
-// can also be the canvas editing another page in the same folder within those
-// seconds, which reloads this page once more than needed.
+// the write began and none of them was touched shortly before or since;
+// otherwise it reports the page. The canvas's write changes only the page
+// itself, so a change beside it is usually someone else's. It can also be the
+// canvas editing another page in the same folder within those seconds, which
+// reloads this page once more than needed.
 // The canvas's writes are remembered only for the pages it still watches, so
 // a page that stops being watched and comes back reports any change again.
 
@@ -42,14 +42,6 @@ export const DESIGN_OWN_WRITE_WINDOW_MS = 3000;
  * it nothing beside the page counts as unchanged.
  */
 export const DESIGN_NEIGHBOURHOOD_LIMIT = 500;
-
-/**
- * How far before the canvas's write began a neighbour's modification or
- * change time still counts as touched since, in milliseconds. It covers file
- * systems that keep times to the millisecond; one that keeps whole seconds
- * (HFS+, FAT) can hide a change made in the same second.
- */
-export const DESIGN_NEIGHBOUR_CLOCK_SLACK_MS = 10;
 
 /** The files beside a page: `rows` to compare, and the latest time any of them was modified or changed. */
 type Neighbours = { rows: string; latest: number };
@@ -109,6 +101,9 @@ export class DesignFileWatcher {
   private readonly watch: WatchFn;
   private readonly debounceMs: number;
   private readonly ownWriteWindowMs: number;
+  private readonly neighbourLookbackMs: number;
+  /** Per chat, how many flushes are reading the canvas's notes of the files beside its pages. */
+  private readonly flushing = new Map<string, number>();
   private readonly now: () => number;
 
   constructor(
@@ -121,6 +116,13 @@ export class DesignFileWatcher {
       ownWriteWindowMs?: number;
       /** A monotonic clock in milliseconds. */
       now?: () => number;
+      /**
+       * How long before the canvas's write began a neighbour modified or
+       * changed then still counts as touched since; by default the
+       * own-write window, so a change made just before the edit and
+       * reported late is caught too.
+       */
+      neighbourLookbackMs?: number;
       /** Runs while the files beside a page are noted for a write, once they are listed. */
       noting?: () => Promise<void>;
     },
@@ -128,6 +130,7 @@ export class DesignFileWatcher {
     this.watch = deps.watch ?? ((folder, options, listener) => fsWatch(folder, options, listener));
     this.debounceMs = deps.debounceMs ?? DESIGN_WATCH_DEBOUNCE_MS;
     this.ownWriteWindowMs = deps.ownWriteWindowMs ?? DESIGN_OWN_WRITE_WINDOW_MS;
+    this.neighbourLookbackMs = deps.neighbourLookbackMs ?? this.ownWriteWindowMs;
     this.now = deps.now ?? (() => performance.now());
   }
 
@@ -203,8 +206,6 @@ export class DesignFileWatcher {
       }
       write.settledAt = this.now();
       settle();
-      // Past the window nothing compares against what was beside the page.
-      setTimeout(() => (write.beside = NOTHING_NOTED), this.ownWriteWindowMs).unref?.();
     };
   }
 
@@ -303,8 +304,10 @@ export class DesignFileWatcher {
     const checks = pending.filter(([relative, queued]) => !queued.beside && writes?.has(relative));
     if (checks.length === 0) {
       this.report(chatId, pending.map(([relative]) => relative));
+      this.forgetStaleNotes(chatId);
       return;
     }
+    this.flushing.set(chatId, (this.flushing.get(chatId) ?? 0) + 1);
     void Promise.all(
       pending.map(async ([relative, queued]) => {
         const write = queued.beside ? undefined : await this.settledOwnWrite(chatId, relative);
@@ -315,16 +318,46 @@ export class DesignFileWatcher {
         if (now !== write.digest) return relative;
         if (unnamedAt === null) return null;
         // An event naming no file may be a stylesheet or an image beside the
-        // page. The canvas never writes those, so one touched since its write
-        // began is someone else's change, even one the noting walk took in.
+        // page. The canvas never writes those, so one touched since shortly
+        // before its write began is someone else's change, even one the
+        // noting walk took in.
         const [then, beside] = await Promise.all([write.beside, besidePage(entry.root, relative)]);
         if (then === null || beside === null || beside.rows !== then.rows) return relative;
-        return beside.latest < write.startedAt - DESIGN_NEIGHBOUR_CLOCK_SLACK_MS ? null : relative;
+        return beside.latest < write.startedAt - this.neighbourLookbackMs ? null : relative;
       }),
-    ).then((paths) => {
-      if (this.chats.get(chatId) !== entry) return;
-      this.report(chatId, paths.filter((relative): relative is string => relative !== null));
-    });
+    )
+      .then((paths) => {
+        if (this.chats.get(chatId) !== entry) return;
+        this.report(chatId, paths.filter((relative): relative is string => relative !== null));
+      })
+      .finally(() => {
+        const left = (this.flushing.get(chatId) ?? 1) - 1;
+        if (left > 0) this.flushing.set(chatId, left);
+        else this.flushing.delete(chatId);
+        this.forgetStaleNotes(chatId);
+      });
+  }
+
+  /**
+   * Drops the notes of the files beside the canvas's pages once nothing can
+   * use them: the write's window has passed, no flush is reading them, and
+   * no event still queued for the page arrived inside the window. A later
+   * event arrives after the window and is reported without one.
+   */
+  private forgetStaleNotes(chatId: string): void {
+    if (this.flushing.has(chatId)) return;
+    const writes = this.ownWrites.get(chatId);
+    if (!writes) return;
+    const now = this.now();
+    const pending = this.chats.get(chatId)?.pending;
+    for (const [relative, write] of writes) {
+      if (write.settledAt === null || write.beside === NOTHING_NOTED) continue;
+      const until = write.settledAt + this.ownWriteWindowMs;
+      if (now <= until) continue;
+      const unnamedAt = pending?.get(relative)?.unnamedAt ?? null;
+      if (unnamedAt !== null && unnamedAt <= until) continue;
+      write.beside = NOTHING_NOTED;
+    }
   }
 
   private report(chatId: string, paths: string[]): void {
@@ -347,7 +380,8 @@ export class DesignFileWatcher {
 /**
  * The files beside a page, as the watcher sees them: every file in the page's
  * folder (and below it, unless that is the workspace root) except the page,
- * each with its size, inode, and modification and change times. Hidden
+ * each with its size, inode, and modification and change times (a symbolic
+ * link's own, not its target's). Hidden
  * entries are counted but never entered: the watcher ignores them. Null when a folder can't be
  * read or more than `DESIGN_NEIGHBOURHOOD_LIMIT` entries are met, so the walk
  * stops early in a large tree.
@@ -385,7 +419,7 @@ async function besidePage(root: string, relativePath: string, noting?: () => Pro
   let latest = 0;
   const rows = await Promise.all(
     files.map((file) =>
-      fsp.stat(file).then(
+      fsp.lstat(file).then(
         (stats) => {
           latest = Math.max(latest, stats.mtimeMs, stats.ctimeMs);
           return `${path.relative(folder, file)}\0${stats.size}\0${stats.ino}\0${stats.mtimeMs}\0${stats.ctimeMs}`;

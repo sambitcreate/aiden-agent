@@ -197,15 +197,17 @@ One wall-clock ceiling was raised; the iOS item says which.
   file still holds those bytes. An event that names no file could also be a
   stylesheet or image beside the page, so it is put down to that write only
   under three conditions:
-  - It arrives within three seconds of the write.
+  - It arrives within three seconds of the write. A report still waiting for
+    the quiet period when those seconds pass is judged by when its event
+    arrived.
   - Every file beside the page still has the size, inode, and modification and
     change times it had when the write began. The walk skips hidden folders,
     which the watcher ignores, and stops after 500 entries; a larger folder
     counts as changed.
-  - None of those files was modified or changed after the write began. This
-    catches a stylesheet changed while the walk was running, which the walk
-    itself may have taken in. A file system that keeps whole seconds can hide a
-    change made in the same second.
+  - None of those files was modified or changed in the three seconds before
+    the write began, or since. This catches a stylesheet changed while the
+    walk was running, which the walk itself may have taken in, and one changed
+    just before the edit whose report arrives late.
 
   The canvas's write changes only the page itself. Editing two pages in one
   folder within three seconds can still reload the first page once more than

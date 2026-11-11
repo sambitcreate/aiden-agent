@@ -232,14 +232,29 @@ test("after a page stops being watched, a later revert to the canvas's own words
 });
 
 /** A watcher whose file-system events the test sends itself, as `fs.watch` would. */
-function fakeWatcher(t: TestContext, options: { now?: () => number; noting?: () => Promise<void> } = {}) {
+function fakeWatcher(
+  t: TestContext,
+  options: {
+    now?: () => number;
+    noting?: () => Promise<void>;
+    debounceMs?: number;
+    ownWriteWindowMs?: number;
+    /** Undefined for the watcher's own default. */
+    neighbourLookbackMs?: number | undefined;
+  } = {},
+) {
   const watched: { emit?: (event: string, filename: string | null) => void } = {};
   const updates: DesignFilesChanged[] = [];
+  // A fixture is written moments before its test, so by default a neighbour
+  // touched before the write began counts as changed only within 10 ms of it.
+  const lookback = "neighbourLookbackMs" in options ? options.neighbourLookbackMs : 10;
   const instance = new DesignFileWatcher({
     onChange: (update) => updates.push(update),
-    debounceMs: 5,
+    debounceMs: options.debounceMs ?? 5,
     ...(options.now ? { now: options.now } : {}),
     ...(options.noting ? { noting: options.noting } : {}),
+    ...(options.ownWriteWindowMs !== undefined ? { ownWriteWindowMs: options.ownWriteWindowMs } : {}),
+    ...(lookback !== undefined ? { neighbourLookbackMs: lookback } : {}),
     watch: (_folder, _options, listener) => {
       watched.emit = listener as (event: string, filename: string | null) => void;
       return Object.assign(new EventEmitter(), { close: () => undefined }) as unknown as fs.FSWatcher;
@@ -363,6 +378,43 @@ test("a stylesheet changed while the canvas notes the files beside its page stil
   await eventually(() => updates.length > 0);
   assert.equal(changes, 1, "the walk ran once for the write");
   assert.deepEqual(updates.map((update) => update.paths), [["design/hero.html"]], "the stylesheet changed after the write began");
+});
+
+test("an own-write event that arrived inside the window is still put down to the write when the report waits past it", async (t) => {
+  const root = await workspace(t, { "design/hero.html": "<h1>Ship faster</h1>", "design/hero.css": "h1{}" });
+  let clock = 0;
+  // The window is shorter than the quiet period before a report.
+  const { instance, updates, emit } = fakeWatcher(t, { now: () => clock, ownWriteWindowMs: 5, debounceMs: 60 });
+  await instance.set("chat-1", root, ["design/hero.html"]);
+  const written = "<h1>Ship sooner</h1>";
+  const settle = instance.ownWrite("chat-1", "design/hero.html", written);
+  await fsp.writeFile(path.join(root, "design/hero.html"), written);
+  settle(true);
+  await instance.noted("chat-1", "design/hero.html");
+  clock = 1;
+  emit(null);
+  // The window passes while the report still waits for the quiet period.
+  clock = 1000;
+  await sleep(200);
+  assert.equal(updates.length, 0, "the page already shows its own words");
+});
+
+test("a stylesheet changed just before the edit and reported late still reloads the page", async (t) => {
+  const root = await workspace(t, { "design/hero.html": "<link rel=stylesheet href=hero.css><h1>Ship faster</h1>", "design/hero.css": "h1{}" });
+  const { instance, updates, emit } = fakeWatcher(t, { neighbourLookbackMs: undefined });
+  await instance.set("chat-1", root, ["design/hero.html"]);
+  // Someone else changes the stylesheet. The edit starts a moment later, well
+  // inside the window, before the change's only report arrives.
+  await fsp.writeFile(path.join(root, "design/hero.css"), "h1{color:red}");
+  await sleep(100);
+  const written = "<link rel=stylesheet href=hero.css><h1>Ship sooner</h1>";
+  const settle = instance.ownWrite("chat-1", "design/hero.html", written);
+  await fsp.writeFile(path.join(root, "design/hero.html"), written);
+  settle(true);
+  await instance.noted("chat-1", "design/hero.html");
+  emit(null);
+  await eventually(() => updates.length > 0);
+  assert.deepEqual(updates.map((update) => update.paths), [["design/hero.html"]]);
 });
 
 /** One file more than the walk beside a page looks at, under `folder`. */
