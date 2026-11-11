@@ -10,6 +10,7 @@ Status (2026-11-11): the server core is in the desktop main process, behind the 
 - **Address:** `http://127.0.0.1:<port>/mcp`, loopback only. The server is a dedicated listener and is never served on the Remote Access LAN TLS listener, Tailscale or any other interface.
 - **Port:**
   - Release builds try 49400 first, then the next seven ports up. Development builds start at 50400.
+  - If every candidate is busy the first time the server starts, the system picks a free loopback port instead.
   - The first port that binds is saved in Aiden's Remote state file, so the URL stays the same across restarts and an app's configuration keeps working.
   - If another program later holds the saved port, the server reports `port_in_use` rather than moving, because moving would break every configured app silently.
 - **Credential:** each app gets its own bearer token, a 43-character base64url secret shown once when it is issued. Aiden stores only a hash. A token is sent as `Authorization: Bearer <token>`.
@@ -104,7 +105,7 @@ The Remote Access threat model has the matching section: [`docs/security/aiden-r
 
 `aiden serve` in `packages/cli` hosts the same server, built from the same `AidenMcpHost` and tool runner, with the same tools, access levels, limits, token handling and request checks. The differences:
 
-- **Port:** 49500 and the next seven ports, 100 above the desktop's range, so a desktop and a server on the same computer never take each other's port. Like the desktop, the first port that binds is saved, in the server's `remote.json`, and a busy saved port is reported as `port_in_use`.
+- **Port:** 49500 and the next seven ports, 100 above the desktop's range, so a desktop and a server on the same computer never take each other's port. Like the desktop, if all eight are busy on first start, the system picks a free loopback port, and the first port that binds is saved, in the server's `remote.json`, and a busy saved port is reported as `port_in_use`.
 - **Administration:** `aiden apps`, sent to the running server over its private control socket:
   - `aiden apps connect <name> [--access read|supervised]` turns the server on if it is off, issues the app (Read unless `--access supervised`) and shows its token once.
     - On a terminal it also prints the `claude mcp add` and `codex mcp add` commands, which read the token from `AIDEN_MCP_TOKEN` rather than storing it in the app's config.
