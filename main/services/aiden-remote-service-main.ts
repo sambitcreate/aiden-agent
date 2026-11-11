@@ -48,8 +48,23 @@ import {
   defaultAidenRemoteDisplayName,
   normalizeAidenRemoteStateForRuntimeProfile,
   parseAidenRemoteStateDocument,
+  type AidenRemoteAgentAccess,
+  type AidenRemoteAgentAppProjection,
   type AidenRemoteStateDocument,
 } from "./aiden-remote-state.js";
+import {
+  AIDEN_MCP_DEVELOPMENT_PORT,
+  AIDEN_MCP_PRODUCTION_PORT,
+  AidenMcpHost,
+  type AidenMcpServerStatus,
+} from "./aiden-mcp-server.js";
+import { AidenMcpToolRunner } from "./aiden-mcp-tools.js";
+import {
+  AidenMcpProvenanceLog,
+  emptyAidenMcpProvenanceDocument,
+  parseAidenMcpProvenanceDocument,
+  type AidenMcpProvenanceDocument,
+} from "./aiden-mcp-provenance.js";
 import {
   aidenRemoteDefaultLanPort,
   aidenRemotePortCandidatesForProfile,
@@ -201,6 +216,8 @@ const STATE_FILE = "aiden-remote-v1.json";
 const OPERATIONS_FILE = "aiden-remote-operations-v1.json";
 const STREAMS_FILE = "aiden-remote-streams-v1.json";
 const MAX_STATE_BYTES = 512 * 1_024;
+const MCP_PROVENANCE_FILE = "aiden-mcp-chat-provenance.json";
+const MAX_MCP_PROVENANCE_BYTES = 512 * 1_024;
 const execFileAsync = promisify(execFile);
 
 async function mapWithConcurrency<Input, Output>(
@@ -302,6 +319,8 @@ export interface AidenRemoteRuntime {
   service: AidenRemoteService;
   state: AidenRemoteStateRegistry;
   approvedRoots: AidenRemoteApprovedRootService;
+  /** The loopback MCP server for outside apps; off unless the person turns it on. */
+  mcp: AidenMcpHost;
   revokeDevice(deviceId: string): Promise<boolean>;
   pendingApprovalForChat(chatId: string): AidenRemotePendingApproval | null;
   pendingQuestionForChat(chatId: string): AidenRemotePendingQuestion | null;
@@ -492,6 +511,9 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     }
     return revoked;
   };
+  // Assigned by `workspaceApi` below, so the MCP server and Remote Access share
+  // one set of chat and stream services whether or not Remote Access is on.
+  let remoteWorkspaceApi: ((instanceId: string) => ReturnType<typeof workspaceApis>) | undefined;
   const service = new AidenRemoteService({
     state,
     appVersion: app.getVersion(),
@@ -513,7 +535,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     hostPlatform: aidenRemoteHostPlatform(process.platform),
     botRoutineWebhook: async (request) =>
       (await import("./bot-routine-events/sources-main.js")).handleBotRoutineWebhook(request),
-    workspaceApi: async (instanceId) => {
+    workspaceApi: remoteWorkspaceApi = async (instanceId) => {
       // A failed build is retried by the next start rather than replayed.
       const api = await workspaceApis(
         instanceId,
@@ -1249,10 +1271,44 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     }),
     log: writeRemoteLog,
   });
+  const mcpProvenance = new AidenMcpProvenanceLog(new DataStore<AidenMcpProvenanceDocument>(
+    MCP_PROVENANCE_FILE,
+    emptyAidenMcpProvenanceDocument(),
+    () => userData,
+    {
+      maxBytes: MAX_MCP_PROVENANCE_BYTES,
+      fileMode: 0o600,
+      compact: true,
+      normalize: (value) => parseAidenMcpProvenanceDocument(value),
+    },
+  ));
+  const mcpTools = new AidenMcpToolRunner({
+    services: async () => {
+      const api = await remoteWorkspaceApi?.((await state.snapshot()).instanceId);
+      if (!api) throw new Error("Aiden's chat services are unavailable.");
+      return api;
+    },
+    acquireAuthorization: (appId, tracksMutationDrain) =>
+      state.acquireDeviceAuthorization(appId, tracksMutationDrain),
+    recordProvenance: (chatId, provenance) => mcpProvenance.record(chatId, provenance),
+    appVersion: app.getVersion(),
+    hostName: async () => (await state.snapshot()).displayName,
+  });
+  const mcp = new AidenMcpHost({
+    state,
+    tools: mcpTools,
+    supported: () => hostPlatformCapabilities().mcpServer,
+    defaultPort: runtimeProfile.id === "development" ? AIDEN_MCP_DEVELOPMENT_PORT : AIDEN_MCP_PRODUCTION_PORT,
+    revokeDevice,
+    appVersion: app.getVersion(),
+    // Category-only: never a credential, app name, chat or path.
+    log: (event, details) => logger.info("aiden-mcp", event, details ?? {}),
+  });
   const runtime: AidenRemoteRuntime = {
     service,
     state,
     approvedRoots: new AidenRemoteApprovedRootService(state),
+    mcp,
     revokeDevice,
     pendingApprovalForChat: (chatId) => activeStreams?.pendingApprovalForChat(chatId) ?? null,
     pendingQuestionForChat: (chatId) => activeStreams?.pendingQuestionForChat(chatId) ?? null,
@@ -1280,15 +1336,43 @@ export function aidenRemoteServiceKeepsApplicationAlive(): boolean {
 }
 
 export async function initializeAidenRemoteService(): Promise<void> {
-  const service = await getAidenRemoteService();
-  await service.initialize();
+  const runtime = await getAidenRemoteRuntime();
+  // The MCP server is off by default and independent of Remote Access; a
+  // failure to bind is reported in its status, never thrown into startup.
+  void runtime.mcp.initialize().catch(() => logger.warn("aiden-mcp", "initialize-failed", {}));
+  await runtime.service.initialize();
 }
 
 export function stopAidenRemoteService(): void {
-  void runtimePromise?.then((runtime) => runtime.service.stop());
+  void runtimePromise?.then((runtime) => Promise.all([runtime.mcp.stop(), runtime.service.stop()]));
 }
 
 export async function stopAidenRemoteServiceAndSettle(): Promise<void> {
   const runtime = await runtimePromise;
+  await runtime?.mcp.stop();
   await runtime?.service.stopAndSettle();
+}
+
+/** Main-process controls for Aiden's MCP server (W4b adds the Settings UI on top). */
+export async function aidenMcpServerStatus(): Promise<AidenMcpServerStatus> {
+  return (await getAidenRemoteRuntime()).mcp.status();
+}
+
+export async function setAidenMcpServerEnabled(enabled: boolean): Promise<AidenMcpServerStatus> {
+  return (await getAidenRemoteRuntime()).mcp.setEnabled(enabled);
+}
+
+export async function issueAidenMcpApp(input: {
+  name: string;
+  access: AidenRemoteAgentAccess;
+}): Promise<{ credential: string; app: AidenRemoteAgentAppProjection }> {
+  return (await getAidenRemoteRuntime()).mcp.issueApp(input);
+}
+
+export async function listAidenMcpApps(): Promise<AidenRemoteAgentAppProjection[]> {
+  return (await getAidenRemoteRuntime()).mcp.listApps();
+}
+
+export async function revokeAidenMcpApp(appId: string): Promise<boolean> {
+  return (await getAidenRemoteRuntime()).mcp.revokeApp(appId);
 }

@@ -35,7 +35,54 @@ const LAST_SEEN_WRITE_INTERVAL_MS = 5 * 60_000;
 export const MAX_AIDEN_REMOTE_DISPLAY_NAME_CHARACTERS = 80;
 const FALLBACK_AIDEN_REMOTE_DISPLAY_NAME = "Aiden Agent";
 
-export type AidenRemoteDeviceType = "iphone" | "ipad" | "android" | "mac" | "linux";
+/**
+ * `agent` is an outside app (Claude Code, Codex, ...) connected to Aiden's
+ * MCP server. It is never paired through `/api/aiden/v1` and never listed as a
+ * phone or computer; see `docs/aiden-mcp-server.md`.
+ */
+export type AidenRemoteDeviceType = "iphone" | "ipad" | "android" | "mac" | "linux" | "agent";
+/** The two access levels an outside app can be connected with. */
+export type AidenRemoteAgentAccess = "read" | "supervised";
+/** At most this many outside apps can be connected at once. */
+export const MAX_AIDEN_REMOTE_AGENT_APPS = 16;
+const PAIRED_DEVICE_TYPES = ["iphone", "ipad", "android", "mac", "linux"] as const;
+const AGENT_CLIENT_VERSION = "mcp-1";
+/**
+ * The whole grant an outside app can ever hold. Approvals, questions, files,
+ * git, Bots, schedules and settings are deliberately absent: an outside app
+ * can read chats and, when Supervised, start and stop turns, nothing more.
+ */
+const AGENT_CAPABILITY_CEILING: Readonly<Record<AidenRemoteAgentAccess, readonly AidenRemoteCapability[]>> = {
+  read: ["server:read", "chat:read"],
+  supervised: ["server:read", "chat:read", "chat:write"],
+};
+
+/** The capability set an outside app connected at `access` holds. */
+export function aidenRemoteAgentCapabilities(access: AidenRemoteAgentAccess): AidenRemoteCapability[] {
+  return [...AGENT_CAPABILITY_CEILING[access]];
+}
+
+function isPairedDeviceType(value: unknown): value is (typeof PAIRED_DEVICE_TYPES)[number] {
+  return (PAIRED_DEVICE_TYPES as readonly unknown[]).includes(value);
+}
+
+function isDeviceType(value: unknown): value is AidenRemoteDeviceType {
+  return value === "agent" || isPairedDeviceType(value);
+}
+
+function agentAccess(capabilities: readonly AidenRemoteCapability[]): AidenRemoteAgentAccess {
+  return capabilities.includes("chat:write") ? "supervised" : "read";
+}
+
+/** A phone, tablet or computer paired through Remote Access. */
+export type AidenRemotePairedDeviceType = Exclude<AidenRemoteDeviceType, "agent">;
+
+/** True for a phone, tablet or computer; false for an outside app. */
+export function isAidenRemotePairedDevice<T extends { type: AidenRemoteDeviceType }>(
+  device: T,
+): device is T & { type: AidenRemotePairedDeviceType } {
+  return device.type !== "agent";
+}
 export type AidenRemoteConnectionMode = "lan" | "tailscale" | "both";
 
 interface StoredAidenRemoteDevice {
@@ -79,6 +126,25 @@ export interface AidenRemoteStateDocument {
   approvedRoots: AidenRemoteApprovedRoot[];
   tailscaleOwnership?: AidenTailscaleOwnership;
   tailscalePendingOutcome?: AidenTailscalePendingRouteOutcome;
+  /** The loopback MCP server for outside apps. Absent means off and no port claimed yet. */
+  mcpServer?: AidenMcpServerSettings;
+}
+
+export interface AidenMcpServerSettings {
+  enabled: boolean;
+  /** The stable loopback port, once one was claimed; kept across restarts so app configs keep working. */
+  port?: number;
+}
+
+/** An outside app as the main process lists it. Credentials never leave the registry. */
+export interface AidenRemoteAgentAppProjection {
+  id: string;
+  name: string;
+  access: AidenRemoteAgentAccess;
+  capabilities: AidenRemoteCapability[];
+  createdAt: number;
+  lastSeenAt: number;
+  revokedAt?: number;
 }
 
 export interface AidenRemoteStateStorage {
@@ -295,6 +361,14 @@ function parsePersistedCapabilities(
   // Opt-in vocabularies are stripped before validation so an older or corrupt
   // persisted record can never hold grants it could not have negotiated.
   const desktop = type === "mac" || type === "linux";
+  if (type === "agent") {
+    // An outside app holds only its ceiling; anything else on disk is dropped,
+    // so no edit to the state file can widen it.
+    const ceiling: readonly unknown[] = AGENT_CAPABILITY_CEILING.supervised;
+    return Array.isArray(value)
+      ? parseCapabilities(value.filter((capability) => ceiling.includes(capability)))
+      : null;
+  }
   const negotiatedValue = Array.isArray(value)
     ? value.filter(
         (capability) =>
@@ -342,7 +416,7 @@ function parseDevice(value: unknown): StoredAidenRemoteDevice | null {
   if (
     !boundedString(record.id, 128) ||
     !boundedString(record.name, 80) ||
-    (record.type !== "iphone" && record.type !== "ipad" && record.type !== "android" && record.type !== "mac" && record.type !== "linux") ||
+    !isDeviceType(record.type) ||
     !boundedString(record.clientVersion, 40) ||
     !digestString(record.lookupDigest) ||
     !digestString(record.credentialSalt) ||
@@ -367,8 +441,9 @@ function parseDevice(value: unknown): StoredAidenRemoteDevice | null {
     credentialSalt: record.credentialSalt,
     credentialDigest: record.credentialDigest,
     capabilities,
-    acceptsBotCapabilities,
-    acceptsProgressCapabilities,
+    // An outside app never opts into Bot or progress vocabularies.
+    acceptsBotCapabilities: record.type !== "agent" && acceptsBotCapabilities,
+    acceptsProgressCapabilities: record.type !== "agent" && acceptsProgressCapabilities,
     createdAt: record.createdAt,
     lastSeenAt: record.lastSeenAt,
     ...(record.revokedAt === undefined ? {} : { revokedAt: record.revokedAt }),
@@ -504,7 +579,7 @@ export function parseAidenRemoteStateDocument(
     !exactKeys(
       record,
       ["version", "instanceId", "enabled", "connectionMode", "lanPort", "devices", "approvedRoots"],
-      ["displayName", "lanPortCommitted", "tailscaleOwnership", "tailscalePendingOutcome"],
+      ["displayName", "lanPortCommitted", "tailscaleOwnership", "tailscalePendingOutcome", "mcpServer"],
     ) ||
     record.version !== STATE_VERSION ||
     !boundedString(record.instanceId, 128) ||
@@ -540,6 +615,7 @@ export function parseAidenRemoteStateDocument(
   }
   const tailscaleOwnership = parseOwnership(record.tailscaleOwnership);
   const tailscalePendingOutcome = parsePendingOutcome(record.tailscalePendingOutcome);
+  const mcpServer = parseMcpServerSettings(record.mcpServer);
   return {
     version: STATE_VERSION,
     instanceId: record.instanceId,
@@ -556,6 +632,41 @@ export function parseAidenRemoteStateDocument(
     approvedRoots: approvedRoots as AidenRemoteApprovedRoot[],
     ...(tailscaleOwnership ? { tailscaleOwnership } : {}),
     ...(tailscalePendingOutcome ? { tailscalePendingOutcome } : {}),
+    ...(mcpServer ? { mcpServer } : {}),
+  };
+}
+
+function parseMcpServerSettings(value: unknown): AidenMcpServerSettings | undefined {
+  if (value === undefined) return undefined;
+  const record = ownRecord(value);
+  if (
+    !record ||
+    !exactKeys(record, ["enabled"], ["port"]) ||
+    typeof record.enabled !== "boolean" ||
+    (record.port !== undefined && !isValidMcpServerPort(record.port))
+  ) {
+    throw new Error("Aiden Remote state contains invalid MCP server settings.");
+  }
+  return {
+    enabled: record.enabled,
+    ...(record.port === undefined ? {} : { port: record.port as number }),
+  };
+}
+
+/** An unprivileged TCP port the loopback MCP listener may claim. */
+export function isValidMcpServerPort(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) >= 1_024 && Number(value) <= 65_535;
+}
+
+function projectAgentApp(device: StoredAidenRemoteDevice): AidenRemoteAgentAppProjection {
+  return {
+    id: device.id,
+    name: device.name,
+    access: agentAccess(device.capabilities),
+    capabilities: [...device.capabilities],
+    createdAt: device.createdAt,
+    lastSeenAt: device.lastSeenAt,
+    ...(device.revokedAt === undefined ? {} : { revokedAt: device.revokedAt }),
   };
 }
 
@@ -576,7 +687,9 @@ function safeEqual(left: Buffer | null, right: Buffer): boolean {
   return Boolean(left && left.length === right.length && timingSafeEqual(left, right));
 }
 
-function projectDevice(device: StoredAidenRemoteDevice): AidenRemoteDeviceProjection {
+function projectDevice<T extends AidenRemoteDeviceType>(
+  device: StoredAidenRemoteDevice & { type: T },
+): AidenRemoteDeviceProjection & { type: T } {
   return {
     id: device.id,
     name: device.name,
@@ -772,9 +885,65 @@ export class AidenRemoteStateRegistry {
     });
   }
 
-  async listDevices(): Promise<AidenRemoteDeviceProjection[]> {
+  /** Paired phones, tablets and computers. Outside apps are listed by `listAgentApps`. */
+  async listDevices(): Promise<Array<AidenRemoteDeviceProjection & { type: AidenRemotePairedDeviceType }>> {
     const document = await this.snapshot();
-    return document.devices.map(projectDevice);
+    return document.devices.filter(isAidenRemotePairedDevice).map(projectDevice);
+  }
+
+  /** Outside apps connected to the MCP server, revoked ones included. */
+  async listAgentApps(): Promise<AidenRemoteAgentAppProjection[]> {
+    const document = await this.snapshot();
+    return document.devices.filter((device) => device.type === "agent").map(projectAgentApp);
+  }
+
+  async mcpServerSettings(): Promise<AidenMcpServerSettings> {
+    const document = await this.snapshot();
+    return document.mcpServer ? { ...document.mcpServer } : { enabled: false };
+  }
+
+  async setMcpServerEnabled(enabled: boolean): Promise<void> {
+    if (typeof enabled !== "boolean") throw new Error("Invalid MCP server setting.");
+    await this.mutateIfChanged((draft) => {
+      if ((draft.mcpServer?.enabled ?? false) === enabled) return { changed: false, value: undefined };
+      draft.mcpServer = { ...draft.mcpServer, enabled };
+      return { changed: true, value: undefined };
+    });
+  }
+
+  /** Keeps the port the MCP listener bound so outside apps' saved URLs stay valid. */
+  async commitMcpServerPort(port: number): Promise<void> {
+    if (!isValidMcpServerPort(port)) throw new Error("Invalid MCP server port.");
+    await this.mutateIfChanged((draft) => {
+      if (draft.mcpServer?.port === port) return { changed: false, value: undefined };
+      draft.mcpServer = { enabled: draft.mcpServer?.enabled ?? false, port };
+      return { changed: true, value: undefined };
+    });
+  }
+
+  /**
+   * Connects one outside app. Its credential is returned once and only its
+   * digest is kept. The capability set comes from `access` alone.
+   */
+  async issueAgentApp(input: {
+    name: string;
+    access: AidenRemoteAgentAccess;
+  }): Promise<{ credential: string; app: AidenRemoteAgentAppProjection }> {
+    if (
+      !boundedString(input?.name, 80) ||
+      (input.access !== "read" && input.access !== "supervised")
+    ) {
+      throw new Error("Invalid outside app metadata.");
+    }
+    const { credential, device } = await this.createCredential({
+      name: normalizeAidenRemoteDisplayName(input.name),
+      type: "agent",
+      clientVersion: AGENT_CLIENT_VERSION,
+      capabilities: aidenRemoteAgentCapabilities(input.access),
+      acceptsBotCapabilities: false,
+      acceptsProgressCapabilities: false,
+    });
+    return { credential, app: projectAgentApp(device) };
   }
 
   async updateDeviceName(
@@ -823,7 +992,7 @@ export class AidenRemoteStateRegistry {
     }
     return this.mutateIfChanged((draft) => {
       const device = draft.devices.find((candidate) => candidate.id === deviceId);
-      if (!device || device.revokedAt !== undefined) {
+      if (!device || device.revokedAt !== undefined || device.type === "agent") {
         return { changed: false, value: null };
       }
       // Callers check the device type first; a phone can never be granted
@@ -873,7 +1042,8 @@ export class AidenRemoteStateRegistry {
   }): Promise<AidenRemoteIssuedCredential> {
     if (
       !boundedString(input.name, 80) ||
-      (input.type !== "iphone" && input.type !== "ipad" && input.type !== "android" && input.type !== "mac" && input.type !== "linux") ||
+      // Outside apps are connected through `issueAgentApp`, never paired.
+      !isPairedDeviceType(input.type) ||
       !boundedString(input.clientVersion, 40) ||
       (input.acceptsBotCapabilities !== undefined &&
         typeof input.acceptsBotCapabilities !== "boolean") ||
@@ -899,6 +1069,28 @@ export class AidenRemoteStateRegistry {
     ) {
       throw new Error("Invalid device capabilities.");
     }
+    const issued = await this.createCredential({
+      name: input.name,
+      type: input.type,
+      clientVersion: input.clientVersion,
+      capabilities,
+      acceptsBotCapabilities: input.acceptsBotCapabilities === true,
+      acceptsProgressCapabilities: input.acceptsProgressCapabilities === true,
+      ...(input.authorizeCommit ? { authorizeCommit: input.authorizeCommit } : {}),
+    });
+    return { credential: issued.credential, device: projectDevice(issued.device) };
+  }
+
+  private async createCredential(input: {
+    name: string;
+    type: AidenRemoteDeviceType;
+    clientVersion: string;
+    capabilities: AidenRemoteCapability[];
+    acceptsBotCapabilities: boolean;
+    acceptsProgressCapabilities: boolean;
+    authorizeCommit?: () => boolean;
+  }): Promise<{ credential: string; device: StoredAidenRemoteDevice }> {
+    const capabilities = input.capabilities;
     const credential = this.dependencies.randomBytes(32).toString("base64url");
     const salt = this.dependencies.randomBytes(32);
     const credentialDigest = await this.dependencies.deriveCredentialDigest(
@@ -918,9 +1110,8 @@ export class AidenRemoteStateRegistry {
       credentialSalt: salt.toString("base64url"),
       credentialDigest: credentialDigest.toString("base64url"),
       capabilities,
-      acceptsBotCapabilities: input.acceptsBotCapabilities === true,
-      acceptsProgressCapabilities:
-        input.acceptsProgressCapabilities === true,
+      acceptsBotCapabilities: input.acceptsBotCapabilities,
+      acceptsProgressCapabilities: input.acceptsProgressCapabilities,
       createdAt: now,
       // Credential issuance is not proof that the client persisted the
       // credential and successfully authenticated back to this Mac.
@@ -934,8 +1125,14 @@ export class AidenRemoteStateRegistry {
           403,
         );
       }
-      if (draft.devices.filter((entry) => entry.revokedAt === undefined).length >= MAX_DEVICES) {
-        throw new Error("Aiden Remote device capacity reached.");
+      // Paired devices and outside apps have separate quotas, so connecting
+      // apps can never crowd out a phone.
+      const agent = input.type === "agent";
+      const active = draft.devices.filter(
+        (entry) => entry.revokedAt === undefined && (entry.type === "agent") === agent,
+      ).length;
+      if (active >= (agent ? MAX_AIDEN_REMOTE_AGENT_APPS : MAX_DEVICES)) {
+        throw new Error(agent ? "Aiden outside app capacity reached." : "Aiden Remote device capacity reached.");
       }
       if (draft.devices.length >= MAX_RETAINED_DEVICES) {
         const revokedIndex = draft.devices.findIndex(
@@ -946,7 +1143,7 @@ export class AidenRemoteStateRegistry {
       }
       draft.devices.push(device);
     });
-    return { credential, device: projectDevice(device) };
+    return { credential, device };
   }
 
   async authenticate(credential: string): Promise<AidenRemoteAuthenticatedDevice | null> {

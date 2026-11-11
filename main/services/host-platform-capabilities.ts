@@ -20,6 +20,12 @@ export interface HostPlatformCapabilities {
   backgroundJobs: boolean;
   /** Aiden hooks run commands in their own process group, so they need macOS or Linux, as background jobs do. */
   hooks: boolean;
+  /**
+   * The loopback MCP server that lets other apps on this computer use Aiden
+   * (`main/services/aiden-mcp-server.ts`). Off until the person turns it on,
+   * and offered where Remote Access runs: macOS and Linux.
+   */
+  mcpServer: boolean;
 }
 /**
  * Main-owned host capability policy. Persisted settings and renderer state may
@@ -45,5 +51,6 @@ export function hostPlatformCapabilities(
     macAppConnectors: darwin,
     backgroundJobs: darwin || platform === "linux",
     hooks: darwin || platform === "linux",
+    mcpServer: darwin || platform === "linux",
   };
 }

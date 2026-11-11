@@ -1145,7 +1145,10 @@ async function authenticateCredential(
     );
   }
   const device = await devices.authenticate(credential);
-  if (!device) {
+  // An outside app's credential belongs to the loopback MCP server only. It
+  // reads here exactly like an unknown credential, so this API never confirms
+  // that an app token exists.
+  if (!device || device.type === "agent") {
     throw new AidenRemoteServiceError(
       "authentication_required",
       "This device credential is not valid for this Aiden installation.",
