@@ -1,0 +1,15 @@
+# Stop opted-in background jobs once a chat settles (W8)
+
+- Branch `claude/stop-jobs-on-settle` (2026-11-11), adapted from T3 Code PR #31857. Plan: W8 in `docs/plans/upstream-week-2026-11-11-plan.md` (branch `claude/upstream-week-2026-11-11-plan`).
+- Opt-in per job: `background_job` `start` takes `stop_when_chat_settles: true`; the tool description tells the model to use it only for dev servers/watchers started to verify the current task. The view carries `stopWhenChatSettles: true`. Adopted `run_command` jobs never carry it; there are no person-started jobs today.
+- `main/services/follow-through/chat-settlement.ts` (`ChatSettlement`, `CHAT_SETTLE_STOP_MS` = 20 min) holds per-chat active run ids and one unref'd timer:
+  - `runStarted` cancels, `runEnded` arms once no run is active (wired from `observeRun` in `follow-through-main.ts`, skipping deleted chats).
+  - `jobsChanged` (from the BackgroundJobs onChange) arms if a stoppable job exists and nothing is armed, or cancels when none remain. Job output does not re-arm.
+  - `personActive` (from the `readJobOutput` IPC) restarts an armed window only.
+  - On fire: a busy chat (`llmClient.isChatBusy || noticeDelivery.hasPending`) re-arms; else `BackgroundJobs.stopSettled(chatId)` stops running opted-in jobs with `endReason: "chat-settled"`, then `jobsChanged` (an unconfirmed stop re-arms and retries).
+  - `clear(chatId)` on chat delete, `shutdown()` first in `shutdownFollowThrough`.
+- A `chat-settled` stop posts no chat notice (`finish` only reports reasonless or output-limit ends). `describeJobEnd` says "stopped after the chat went quiet".
+- Limitation: the desktop composer queue is renderer-only, so a queued message does not hold a job; sending it starts a run, which cancels the window. Documented in `docs/coding-follow-through.md`.
+- Restart: in memory only. Jobs are stopped at quit (`app-quit`) and reaped after a crash, so nothing resumes.
+- Wire: Remote revision 62 (`AIDEN_REMOTE_BACKGROUND_JOBS_CHAT_SETTLED_CONTRACT_REVISION`), provisional; #797 (W5 stopped-not-failed) claims 61. Re-claim at merge if #797 has not merged first or main moved. Fixture section `backgroundJobsChatSettled`; openapi `endReason` enum. iOS/Android decode `endReason` as String, so older phones show "Stopped"; new label "Stopped after the chat went quiet" on desktop chips, iOS `AidenBackgroundJobCopy.status`, Android `AidenBackgroundJobCopy.status`.
+- Tests: `chat-settlement.test.ts` (fake timers), new cases in `background-jobs.test.ts` (real processes), `background-job-tool.test.ts`, `follow-through-chips.test.tsx`, protocol revision 62 test, iOS `AidenBackgroundJobsTests.testAJobStoppedAfterTheChatWentQuietSaysSo`, Android `AidenBackgroundJobsTest.aJobStoppedAfterTheChatWentQuietSaysSo`.

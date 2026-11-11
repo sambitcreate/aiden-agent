@@ -16395,9 +16395,10 @@
               "output-limit",
               "chat-deleted",
               "access-changed",
-              "app-quit"
+              "app-quit",
+              "chat-settled"
             ],
-            "description": "Present exactly when the job is stopped."
+            "description": "Present exactly when the job is stopped. `chat-settled` (revision 62): the agent asked for the job to stop once the chat went quiet, and it did. Clients show an unknown reason as plain Stopped."
           },
           "fromCommand": {
             "type": "boolean",

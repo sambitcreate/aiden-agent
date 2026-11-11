@@ -36,6 +36,7 @@ import {
   type BackgroundJobEnded,
 } from "./background-jobs.js";
 import type { RunCommandLeftovers } from "../coding-tools.js";
+import { ChatSettlement } from "./chat-settlement.js";
 import { DoneWhenChecks, DONE_WHEN_TIMEOUT_MS, type DoneWhenRecord } from "./done-when.js";
 import { noticeDelivery } from "./notice-delivery-main.js";
 import type { PullRequestFollowRecord } from "./pull-request-follow.js";
@@ -119,6 +120,7 @@ function chatWasAnswering(chatId: string, at: number): boolean {
 function observeRun(summary: HostRunSummary): void {
   const terminal = summary.state === "done" || summary.state === "failed" || summary.state === "cancelled";
   if (!terminal) {
+    if (!deletedChats.has(summary.chatId)) chatSettlement.runStarted(summary.chatId, summary.runId);
     if (!runStarts.has(summary.runId)) {
       runStarts.set(summary.runId, { chatId: summary.chatId, start: Date.parse(summary.startedAt) || Date.now() });
     }
@@ -130,6 +132,7 @@ function observeRun(summary: HostRunSummary): void {
   const start = runStarts.get(summary.runId)?.start ?? (Date.parse(summary.startedAt) || Date.now());
   runStarts.delete(summary.runId);
   if (deletedChats.has(summary.chatId)) return;
+  chatSettlement.runEnded(summary.chatId, summary.runId);
   const now = Date.now();
   const windows = (runWindows.get(summary.chatId) ?? []).filter((window) => window.end > now - RUN_WINDOW_KEEP_MS);
   windows.push({ start, end: Date.parse(summary.updatedAt) || now });
@@ -181,7 +184,20 @@ function jobEndedNotice({ job, tail }: BackgroundJobEnded): void {
 export const backgroundJobs = new BackgroundJobs({
   logDir: path.join(app.getPath("userData"), "background-jobs"),
   onEnded: jobEndedNotice,
-  onChange: changed,
+  onChange: (chatId) => {
+    changed(chatId);
+    if (!deletedChats.has(chatId)) chatSettlement.jobsChanged(chatId);
+  },
+  log: (message, error) => logger.warn("background-jobs", message, error),
+});
+
+/** Jobs the agent marked `stop_when_chat_settles` stop 20 minutes after their chat goes quiet. */
+export const chatSettlement = new ChatSettlement({
+  hasStoppableJobs: (chatId) => backgroundJobs.hasSettleStoppable(chatId),
+  // The desktop composer's queue lives in the window; a queued message that
+  // sends starts an answer, which cancels the window.
+  isChatBusy: (chatId) => llmClient.isChatBusy(chatId) || noticeDelivery.hasPending(chatId),
+  stopSettled: (chatId) => backgroundJobs.stopSettled(chatId),
   log: (message, error) => logger.warn("background-jobs", message, error),
 });
 
@@ -326,6 +342,7 @@ export async function startFollowThrough(): Promise<void> {
 }
 
 export async function shutdownFollowThrough(): Promise<void> {
+  chatSettlement.shutdown();
   pullRequestFollows.shutdown();
   await doneWhen.shutdown();
   await backgroundJobs.shutdown();
@@ -337,6 +354,7 @@ export async function deleteChatFollowThrough(chatId: string): Promise<void> {
   pullRequestFollows.deleteChat(chatId);
   const checkStopped = doneWhen.clearAndSettle(chatId);
   runWindows.delete(chatId);
+  chatSettlement.clear(chatId);
   deletedChats.add(chatId);
   if (deletedChats.size > 500) deletedChats.delete(deletedChats.values().next().value!);
   for (const [runId, run] of runStarts) if (run.chatId === chatId) runStarts.delete(runId);
@@ -354,6 +372,7 @@ export async function closeWorkspaceFollowThrough(workspaceId: string): Promise<
   const resumePolls = pullRequestFollows.pauseChats(chatIds);
   try {
     await Promise.all([doneWhen.interruptWorkspace(workspaceId), commandHandoffs.cancelAndSettle(workspaceId)]);
+    // Stopping the jobs clears each chat's quiet window through `jobsChanged`.
     await backgroundJobs.stopWorkspace(workspaceId, "access-changed");
   } catch (error) {
     resumePolls();
@@ -397,7 +416,10 @@ export function chatFollowThrough(chatId: string): ChatFollowThroughV1 {
 }
 
 export function readJobOutput(chatId: string, jobId: string): BackgroundJobOutput {
-  return backgroundJobs.read(chatId, jobId);
+  const output = backgroundJobs.read(chatId, jobId);
+  // The person is looking at the chat's jobs: its quiet window starts over.
+  chatSettlement.personActive(chatId);
+  return output;
 }
 
 export async function stopJobForPerson(chatId: string, jobId: string): Promise<void> {

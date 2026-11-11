@@ -306,7 +306,16 @@ export const AIDEN_REMOTE_BOT_PEERS_CONTRACT_REVISION = 59 as const;
  * Display-only, no capability; clients show "By voice" and older ones ignore it.
  */
 export const AIDEN_REMOTE_VOICE_INPUT_CONTRACT_REVISION = 60 as const;
-export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_VOICE_INPUT_CONTRACT_REVISION;
+/**
+ * Contract revision 62 (provisional; another open change claims 61, so
+ * re-claim the next revision after `main`'s at merge by changing only this
+ * constant): a stopped background job may carry `endReason: "chat-settled"`
+ * when the agent asked for it to stop once the chat went quiet and it did.
+ * Display-only, no capability; clients show "Stopped after the chat went
+ * quiet", and older ones, which read the reason as text, show "Stopped".
+ */
+export const AIDEN_REMOTE_BACKGROUND_JOBS_CHAT_SETTLED_CONTRACT_REVISION = 62 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BACKGROUND_JOBS_CHAT_SETTLED_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -2272,6 +2281,8 @@ export interface AidenRemoteContractFixture {
   chatNewWorktree?: AidenRemoteChatNewWorktreeFixture;
   /** Revision 60: a user message Aiden Live sent ("By voice"), and values clients must ignore. */
   voiceInput?: AidenRemoteVoiceInputFixture;
+  /** Revision 62: a job stopped after its chat went quiet, beside one the person stopped. */
+  backgroundJobsChatSettled?: AidenRemoteBackgroundJobsChatSettledFixture;
   taskProgress: AidenRemoteChatTaskProgress;
   agentRoster: AidenRemoteChatAgentRoster;
   agentInterrupt: AidenRemoteChatAgentInterruptFixture;
@@ -8369,6 +8380,15 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     }
     voiceInput = parseVoiceInputFixture(value.voiceInput);
   }
+  let backgroundJobsChatSettled: AidenRemoteBackgroundJobsChatSettledFixture | undefined;
+  if (value.backgroundJobsChatSettled !== undefined) {
+    if (contractRevision < AIDEN_REMOTE_BACKGROUND_JOBS_CHAT_SETTLED_CONTRACT_REVISION) {
+      throw new Error(
+        `Chat-settled background job fixtures require contract revision ${AIDEN_REMOTE_BACKGROUND_JOBS_CHAT_SETTLED_CONTRACT_REVISION}.`,
+      );
+    }
+    backgroundJobsChatSettled = parseBackgroundJobsChatSettledFixture(value.backgroundJobsChatSettled);
+  }
   let botAllowed: AidenRemoteBotAllowedFixture | undefined;
   if (value.botAllowed !== undefined) {
     if (contractRevision < AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION) throw new Error("Bot allowed fixtures require revision 57.");
@@ -8494,6 +8514,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     ...(rawUploads ? { rawUploads } : {}),
     ...(chatNewWorktree ? { chatNewWorktree } : {}),
     ...(voiceInput ? { voiceInput } : {}),
+    ...(backgroundJobsChatSettled ? { backgroundJobsChatSettled } : {}),
   };
 }
 
@@ -8641,8 +8662,8 @@ export interface AidenRemoteBackgroundJob {
   endedAt?: string;
   /** How a job that ended by itself exited; absent when it is unknown. */
   exitCode?: number;
-  /** Why a stopped job was stopped. */
-  endReason?: "agent" | "person" | "output-limit" | "chat-deleted" | "access-changed" | "app-quit";
+  /** Why a stopped job was stopped; `chat-settled` from revision 62. */
+  endReason?: "agent" | "person" | "output-limit" | "chat-deleted" | "access-changed" | "app-quit" | "chat-settled";
   /** A `run_command` call left it running; it has no exit code. */
   fromCommand?: true;
   /** TCP ports it listens on, on the Mac, while it runs. */
@@ -8662,6 +8683,7 @@ export const AIDEN_REMOTE_BACKGROUND_JOB_END_REASONS = [
   "chat-deleted",
   "access-changed",
   "app-quit",
+  "chat-settled",
 ] as const;
 export const AIDEN_REMOTE_MAX_BACKGROUND_JOBS = 40;
 export const AIDEN_REMOTE_MAX_BACKGROUND_JOB_LABEL = 200;
@@ -8729,6 +8751,21 @@ export interface AidenRemoteBackgroundJobsFixture {
   stop: { jobId: string; request: Record<string, never>; response: AidenRemoteBackgroundJobs };
   /** Stop or read of a job the chat does not have. */
   notFound: AidenRemoteErrorEnvelope;
+}
+
+/** Revision 62: a chat's job list with a job stopped after the chat went quiet. */
+export interface AidenRemoteBackgroundJobsChatSettledFixture {
+  list: AidenRemoteBackgroundJobs;
+}
+
+function parseBackgroundJobsChatSettledFixture(value: unknown): AidenRemoteBackgroundJobsChatSettledFixture {
+  if (!isRecord(value)) throw new Error("Chat-settled background jobs fixture must be an object.");
+  assertExactKeys(value, ["list"], "Chat-settled background jobs fixture");
+  const list = parseAidenRemoteBackgroundJobs(value.list);
+  if (!list.jobs.some((job) => job.endReason === "chat-settled")) {
+    throw new Error("Chat-settled background jobs fixture must include a job stopped after the chat went quiet.");
+  }
+  return { list };
 }
 
 function parseBackgroundJobsFixture(value: unknown): AidenRemoteBackgroundJobsFixture {

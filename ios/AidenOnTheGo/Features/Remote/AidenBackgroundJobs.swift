@@ -19,7 +19,13 @@ enum AidenBackgroundJobCopy {
         case .running:
             return "Running for \(elapsed(from: job.startedAt, to: now))"
         case .stopped:
-            return job.endReason == "output-limit" ? "Stopped: too much output" : "Stopped"
+            switch job.endReason {
+            case "output-limit": return "Stopped: too much output"
+            // Revision 62: the agent asked for it to stop once the chat went quiet.
+            case "chat-settled": return "Stopped after the chat went quiet"
+            // A reason this version does not know reads as plain Stopped.
+            default: return "Stopped"
+            }
         case .exited, .failed:
             if job.fromCommand { return "Ended" }
             guard let exitCode = job.exitCode else { return job.state == .failed ? "Failed" : "Ended" }

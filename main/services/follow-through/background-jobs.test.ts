@@ -16,6 +16,7 @@ import {
   newBackgroundJobId,
   type BackgroundJobEnded,
 } from "./background-jobs.js";
+import { ChatSettlement } from "./chat-settlement.js";
 import { DoneWhenChecks, type DoneWhenNotice } from "./done-when.js";
 import { runBoundedShellCommand } from "../bounded-shell-command.js";
 
@@ -63,7 +64,7 @@ function harness(dir: string, options: Partial<ConstructorParameters<typeof Back
     stopGraceMs: 500,
     ...options,
   });
-  const start = (command: string, chatId = "chat-1", extra: { description?: string } = {}) =>
+  const start = (command: string, chatId = "chat-1", extra: { description?: string; stopWhenChatSettles?: boolean } = {}) =>
     jobs.start({ chatId, workspaceId: "ws-1", cwd: dir, command, env: process.env, ...extra });
   return { jobs, ended, start };
 }
@@ -259,6 +260,50 @@ test("stopping a chat's jobs for deletion forgets them and their logs", { skip }
   await jobs.stopChat("chat-1", "chat-deleted", true);
   assert.deepEqual(jobs.list("chat-1"), []);
   await assert.rejects(fs.access(path.join(dir, "logs", `${job.id}.log`)));
+});
+
+test("once a quiet chat's window runs out, only its jobs that asked for it stop, and the chat is not told", { skip }, async (t) => {
+  const dir = await tempDir();
+  const { jobs, ended, start } = harness(dir);
+  t.after(() => cleanUp(jobs, dir));
+  const settlement = new ChatSettlement({
+    hasStoppableJobs: (chatId) => jobs.hasSettleStoppable(chatId),
+    isChatBusy: () => false,
+    stopSettled: (chatId) => jobs.stopSettled(chatId),
+    quietMs: 150,
+  });
+  t.after(() => settlement.shutdown());
+  const preview = start("sleep 60", "chat-1", { description: "Run the preview", stopWhenChatSettles: true });
+  const kept = start("sleep 60", "chat-1", { description: "Run the server the person wants" });
+  const elsewhere = start("sleep 60", "chat-2", { stopWhenChatSettles: true });
+  assert.equal(preview.stopWhenChatSettles, true);
+  assert.equal(kept.stopWhenChatSettles, undefined);
+
+  settlement.runStarted("chat-1", "run-1");
+  settlement.runEnded("chat-1", "run-1");
+  await eventually(() => jobs.get("chat-1", preview.id)?.state === "stopped", "the opted-in job to stop");
+  const stopped = jobs.get("chat-1", preview.id)!;
+  assert.equal(stopped.endReason, "chat-settled");
+  assert.equal(describeJobEnd(stopped), "stopped after the chat went quiet");
+  assert.equal(jobs.get("chat-1", kept.id)?.state, "running", "a job that did not opt in keeps running");
+  assert.equal(jobs.get("chat-2", elsewhere.id)?.state, "running", "another chat's job waits for its own chat");
+  assert.equal(settlement.isArmed("chat-1"), false, "nothing is left to stop in that chat");
+  assert.deepEqual(ended, [], "a stop for being quiet is not news for the chat");
+});
+
+test("quitting stops an opted-in job like any other, and the next launch has nothing to stop for being quiet", { skip }, async (t) => {
+  const dir = await tempDir();
+  const { jobs, start } = harness(dir);
+  t.after(() => cleanUp(jobs, dir));
+  const job = start("sleep 60", "chat-1", { stopWhenChatSettles: true });
+  assert.equal(jobs.hasSettleStoppable("chat-1"), true);
+  await jobs.shutdown();
+  assert.equal(jobs.get("chat-1", job.id)?.endReason, "app-quit");
+  const relaunched = new BackgroundJobs({ logDir: path.join(dir, "logs"), stopGraceMs: 500 });
+  t.after(() => relaunched.shutdown());
+  await relaunched.reapPreviousLaunch();
+  assert.equal(relaunched.hasSettleStoppable("chat-1"), false);
+  assert.deepEqual(relaunched.list("chat-1"), [], "jobs do not come back after a restart");
 });
 
 test("after quitting, no new job starts", { skip }, async (t) => {
