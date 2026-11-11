@@ -109,7 +109,7 @@ Privacy:
 - Aiden keeps a local note of which app started a chat (`startedBy {kind: "app", name}`, in `aiden-mcp-chat-provenance.json`, the newest 1,000 entries). Only this computer's Aiden window reads it, for the **Started by** label; it is never sent to phones, Macs or apps.
 - App ids never appear in tool results.
 - Server logs carry only `started`, `stopped`, `start-failed` (with a problem code), `request-failed` and `revoke-bot-notices-unavailable` (an app was disconnected while Bot storage waits for repair), never a token, an app name, a path or chat text.
-- No analytics events are sent for the MCP server: a chat an app starts sends no `chat_created`, and its turns send no `chat_message_sent`.
+- A chat an app starts sends no `chat_created`, and its turns send no `chat_message_sent`. With usage data on, Aiden sends only two anonymous counts ([`docs/analytics.md`](analytics.md)): `mcp_app_connected` with the access level, when an app is connected, and `mcp_chat_started` with whether the app chose the model, when `aiden_chat_start` starts a chat. Never the app's name, its token or id, a chat id, a prompt, a workspace or a path. A retry with the same `clientRequestId`, `aiden_chat_send` and disconnecting an app send nothing.
 
 The Remote Access threat model has the matching section: [`docs/security/aiden-remote-threat-model.md`](security/aiden-remote-threat-model.md#10-local-mcp-server-for-outside-apps).
 
@@ -128,7 +128,7 @@ The Remote Access threat model has the matching section: [`docs/security/aiden-r
 - **Requires Remote:** the server lives in the CLI's Remote runtime, which holds the device records and chat services. `aiden serve --no-remote` has no MCP server.
 - **Containers:** loopback in a container is the container's own, so apps on the host can't reach it. Run `aiden serve` on the host for outside apps.
 - **Files:** the provenance note is `<agentDir>/aiden-mcp-chat-provenance.json`.
-- **Analytics:** `aiden apps` sends nothing, and app chats and turns send no usage events, as on the desktop.
+- **Analytics:** `aiden apps` sends nothing itself. The running `aiden serve` sends the same `mcp_app_connected` and `mcp_chat_started` counts as the desktop, under the server's own consent, and app chats and turns send no chat usage events.
 
 Code: `packages/cli/src/apps.ts` (host wiring and the `apps` command), `packages/cli/src/apps-display.ts` (the connect output) and `packages/cli/src/remote.ts`. Tests: `packages/cli/tests/mcp-apps.test.mjs`.
 

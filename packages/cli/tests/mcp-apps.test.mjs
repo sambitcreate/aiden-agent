@@ -190,7 +190,7 @@ test("aiden serve counts a connected app and the chat it starts, and the admin c
   // so AIDEN_ANALYTICS_DEBUG prints each would-be event instead of sending it.
   const env = { ...base, AIDEN_ANALYTICS_DEBUG: "1" };
   for (const name of ["AIDEN_ANALYTICS", "CI", "DO_NOT_TRACK", "INVOCATION_ID", "XPC_SERVICE_NAME"]) delete env[name];
-  mkdirSync(agentDir, { recursive: true });
+  mkdirSync(agentDir, { recursive: true, mode: 0o700 });
   writeFileSync(join(agentDir, "aiden-analytics.json"), JSON.stringify({ enabled: true, noticeShownAt: "2026-11-01T00:00:00.000Z" }));
   await fakeProvider(t, agentDir);
   const added = runCli(["workspace", "add", workspace], env);
