@@ -167,6 +167,7 @@ import { botHandoffs } from "./bot-runtime/bot-handoffs-main.js";
 import { botRunStarts, botTurnIntents } from "./bot-runtime/bot-turn-intents-main.js";
 import { botMutationGate } from "./bot-mutation-gate.js";
 import { botApplicationService } from "./bot-application-service-main.js";
+import { BotCapabilityUnavailableError } from "./bot-capability-store-core.js";
 import {
   BOT_DESKTOP_AUDIENCE_ID,
   botRuntimeAuthority,
@@ -482,7 +483,10 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
       logger.warn("aiden-remote", `Connection request notification ${stage} failed.`);
     },
   });
-  const revokeDevice = async (deviceId: string): Promise<boolean> => {
+  const revokeDevice = async (
+    deviceId: string,
+    botNotices: "required" | "when-available" = "required",
+  ): Promise<boolean> => {
     activeReadAloud?.revokeDevice(deviceId);
     activeProgress?.revokeDevice(deviceId);
     simulatorShareRelay.revokeDevice(deviceId);
@@ -507,7 +511,15 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     // Cleanup is intentionally idempotent: a retry after a crash between the
     // device tombstone and notice removal must still remove the acceptance.
     if (hostPlatformCapabilities().bots) {
-      await botApplicationService.revokeNoticeAudience(deviceId);
+      try {
+        await botApplicationService.revokeNoticeAudience(deviceId);
+      } catch (error) {
+        // An outside app's token is already tombstoned above. Bot storage that is
+        // waiting for repair (no Secret Service on Linux, say) must not make
+        // Settings report the app as still connected.
+        if (botNotices === "required" || !(error instanceof BotCapabilityUnavailableError)) throw error;
+        logger.warn("aiden-mcp", "revoke-bot-notices-unavailable", {});
+      }
     }
     return revoked;
   };
@@ -1302,7 +1314,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     tools: mcpTools,
     supported: () => hostPlatformCapabilities().mcpServer,
     defaultPort: runtimeProfile.id === "development" ? AIDEN_MCP_DEVELOPMENT_PORT : AIDEN_MCP_PRODUCTION_PORT,
-    revokeDevice,
+    revokeDevice: (appId) => revokeDevice(appId, "when-available"),
     appVersion: app.getVersion(),
     // Category-only: never a credential, app name, chat or path.
     log: (event, details) => logger.info("aiden-mcp", event, details ?? {}),
