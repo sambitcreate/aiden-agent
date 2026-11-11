@@ -1003,6 +1003,42 @@ test("an app with 8 starts still unanswered is refused a new one, while a retry 
   }
 });
 
+test("unanswered requests of a revoked app still count toward the host's limit until they finish", async () => {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const fixture = await harness({
+    limits: { turnsPerMinute: 200, concurrentRuns: 200, hostPendingRequests: 3 },
+    beforeProvenance: () => held,
+  });
+  try {
+    await fixture.enable();
+    const startWith = (client: Awaited<ReturnType<typeof fixture.connect>>) => (id: string) =>
+      client.callTool({ name: "aiden_chat_start", arguments: { clientRequestId: id, workspaceId: "workspace-1", text: "Go" } });
+    const old = await fixture.host.issueApp({ name: "Old", access: "supervised" });
+    const startOld = startWith(await fixture.connect(old.credential));
+    const stalled = [startOld("old-start-1"), startOld("old-start-2")];
+    while (fixture.chats.size < 2) await new Promise((resolve) => setImmediate(resolve));
+    // Revocation waits for the stalled writes to drain; the replacement is connected meanwhile.
+    const revoked = fixture.host.revokeApp(old.app.id);
+    const startNew = startWith(await fixture.connect((await fixture.host.issueApp({ name: "New", access: "supervised" })).credential));
+    const third = startNew("new-start-1");
+    while (fixture.chats.size < 3) await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(
+      refusal(await startNew("new-start-2")),
+      "Aiden is still answering too many requests from apps. Try again in a moment.",
+    );
+    release();
+    await Promise.allSettled([...stalled, revoked]);
+    structured(await third);
+    // With the old app's work finished there is room again.
+    structured(await startNew("new-start-3"));
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("Bot chats and the folders Aiden makes for one chat are out of an app's reach", async () => {
   const fixture = await harness();
   try {

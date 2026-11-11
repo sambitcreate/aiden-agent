@@ -76,6 +76,7 @@ There is deliberately no tool for approvals or questions. When a turn needs one,
 ## Limits
 
 - **Turns:** each app can start or send 10 turns a minute and have 2 runs at once. A retry of an accepted `clientRequestId` does not count again, even after a restart or after many newer requests: Aiden's durable request record answers it.
+- **Unanswered turns:** each app can have 8 `aiden_chat_start` or `aiden_chat_send` requests that Aiden has not answered yet, and all apps together 32, counting a revoked app's until they finish. A new request past either limit is refused; a retry of one still running joins it.
 - **Requests:**
   - A request body over 1 MiB is answered 413 before any tool runs, whether its size is declared or streamed.
   - The server drains the rest of an oversized upload for up to 5 seconds so the app sees the 413, then cuts the connection.

@@ -49,12 +49,24 @@ export interface AidenMcpLimits {
   concurrentRuns: number;
   /** The longest a single `aiden_chat_wait` holds before answering `running`. */
   maxWaitSeconds: number;
+  /**
+   * Turn requests one app may have unanswered at once. Below the server's
+   * connection cap, so a live client hears the refusal.
+   */
+  pendingRequests: number;
+  /**
+   * Turn requests all apps together may have unanswered, counting those of
+   * disconnected apps whose work has not finished yet.
+   */
+  hostPendingRequests: number;
 }
 
 export const DEFAULT_AIDEN_MCP_LIMITS: AidenMcpLimits = {
   turnsPerMinute: 10,
   concurrentRuns: 2,
   maxWaitSeconds: 55,
+  pendingRequests: 8,
+  hostPendingRequests: 32,
 };
 
 export interface AidenMcpToolDependencies {
@@ -83,11 +95,6 @@ const LIST_MAX_CHATS = 50;
 const MESSAGE_TEXT_LIMIT = 20_000;
 const TURN_TEXT_LIMIT = 200_000;
 const REQUEST_CACHE_LIMIT = 128;
-/**
- * Turn requests one app may have unanswered at once; a retry of one of them
- * always joins it. Below the server's connection cap, so a live client hears it.
- */
-const PENDING_REQUEST_LIMIT = 8;
 const TERMINAL_STATES: ReadonlySet<AidenRemoteStreamState> = new Set(["done", "error", "cancelled", "interrupted"]);
 
 const ID = { pattern: "^[A-Za-z0-9._:-]{1,128}$", maxLength: 128 } as const;
@@ -515,17 +522,26 @@ export class AidenMcpToolRunner {
     const existing = this.requests.get(key);
     if (existing) return existing.promise;
     // A request is cached before it reaches run admission and keeps running when
-    // its HTTP client goes away, so unanswered ones are capped here: stalled work
-    // or disconnecting callers cannot make the cache grow without bound.
+    // its HTTP client goes away, so unanswered ones are capped here, per app and
+    // across every app (a revoked app's stalled work included): stalled work or
+    // disconnecting callers cannot make the cache grow without bound.
     const prefix = `${app.id}\u0000`;
     let pending = 0;
-    for (const [cached, { settled }] of this.requests) if (!settled && cached.startsWith(prefix)) pending += 1;
-    if (pending >= PENDING_REQUEST_LIMIT) {
+    let hostPending = 0;
+    for (const [cached, { settled }] of this.requests) {
+      if (settled) continue;
+      hostPending += 1;
+      if (cached.startsWith(prefix)) pending += 1;
+    }
+    if (pending >= this.limits.pendingRequests) {
       return Promise.reject(
         new ToolRefusal(
-          `This app has ${PENDING_REQUEST_LIMIT} requests Aiden is still answering. Wait for one to finish, then try again.`,
+          `This app has ${this.limits.pendingRequests} requests Aiden is still answering. Wait for one to finish, then try again.`,
         ),
       );
+    }
+    if (hostPending >= this.limits.hostPendingRequests) {
+      return Promise.reject(new ToolRefusal("Aiden is still answering too many requests from apps. Try again in a moment."));
     }
     const entry = { promise: undefined as unknown as Promise<CallToolResult>, settled: false };
     entry.promise = run().then(
@@ -542,7 +558,7 @@ export class AidenMcpToolRunner {
     this.requests.set(key, entry);
     // Only answered requests are forgotten. One still running stays, so a retry
     // joins it rather than starting (and counting) the same turn a second time;
-    // unanswered ones are bounded by PENDING_REQUEST_LIMIT above.
+    // unanswered ones are bounded by the pending limits above.
     for (const [cached, { settled }] of this.requests) {
       if (this.requests.size <= REQUEST_CACHE_LIMIT) break;
       if (settled) this.requests.delete(cached);
