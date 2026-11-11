@@ -40,6 +40,20 @@ Steer and Queue input admitted through `admitChatRunInput` (desktop Steer, Teleg
 - The next turn runs only what the user sends next. The stopped input does not run as its own turn and gets no answer of its own. Like every other message in the chat, it is part of the history the model sees on later turns: the next turn syncs the saved transcript into Pi, so the model reads the stopped input as an earlier user message, once, before the new request. Aiden does not hide it from the model, because the model's context would then differ from the chat the user can see. To act on it, send it again.
 - Nothing is left to resume on the Mac. This matches desktop Stop, which pauses its local queue so nothing queued runs until the user chooses Resume queue. The difference is where the item lives: desktop queued rows are uncommitted drafts the user can still resume or edit, while admitted input is already history.
 
+### Input saved after the run's queue closed
+
+A run can finish while an input is being saved. Pi closes its queues at `agent_end`, or the run ends on a turn that never reads a follow-up it was given. When that happens, main makes the saved input the chat's next turn instead of leaving it saved but unanswered. The rules:
+
+- The receipt says "Queued to run next" (`queue: "follow-up"`) only after main has registered the input as that next turn, in the same step that saved it. This applies to a Steer as well: the run it aimed at has ended, so the input runs next rather than mid-run.
+- The owed turn starts once the run settles, even when the run failed after the input was saved. It answers the chat's latest user message, which is the saved input. Several inputs saved in that window are answered by one turn. A failure inside the owed turn is reported once and never retried.
+- The owed turn runs like a delivered agent notice: headless and unattended, with approvals, questions, subagents, Computer Use and connector tools off. Desktop and the phones see it as an ordinary running turn they can Stop.
+- UserPromptSubmit screens the input once, when it is admitted. The owed turn reuses that result and its hook context, injected once, instead of screening the input again.
+- A Stop that reaches the run after the receipt, whether it lands before or after the run records its outcome, still gives the person exactly one stopped turn. If the run had already recorded its outcome, the owed turn starts and stops at once. Nothing answers the input, and nothing reruns.
+- When main cannot register the input, because the chat is being deleted, Aiden is quitting, or the run's lifecycle has already closed, the receipt is committed-but-not-admitted ("Saved to the chat — the run ended before it could use it"), and no turn starts.
+- Only an ordinary chat run owes its chat a turn. Bot runs, Assistant modes, routines, Telegram and other interaction surfaces, and chats another feature owns deliver their input their own way. `aiden serve` never commits input it does not admit, so it owes nothing.
+
+The suites `main/services/chat-owed-turns.test.ts` and `main/services/chat-run-input-admission.test.ts` cover this behavior, along with the owed-turn hook test in `main/services/workspace-chat-hooks.test.ts`. The receipts and their copy are unchanged, so the iOS and Android clients need no change.
+
 If Stop lands while an input is being admitted, the receipt says the input was committed but not admitted. Desktop and both phones show the same copy for that receipt: "Saved to the chat — the run was cancelled before it could use it" (Stop), "Saved to the chat — the run ended before it could use it" (the run finished), or "Saved to the chat — the run queue was full" (capacity). The harness test "Stop after a queued follow-up is admitted keeps it as history and never runs it" covers this behavior.
 
 On The Go also answers `ask_user_question` prompts through question cards (`chat-question-prompts-v1`), and its composer opens `/` skill and `@` mention palettes ranked like desktop.

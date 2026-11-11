@@ -233,3 +233,22 @@ change was needed. Desktop's committed-but-not-admitted toasts now use
 `committedRunInputNotice`, the same three strings as iOS/Android
 `AidenRunInputPresentation.receipt`. Documented in
 `docs/chat-composer-busy-controls.md` ("Stop and admitted input").
+
+November 11 (W6b, `claude/server-owed-input-turn`): input admission commits
+after `agent_end` closed Pi's queue (receipt `not-active`, or the run left
+`active` after the save), and committed follow-ups the run ended without
+draining (`takeUndeliveredQueuedMessages().committed`), now become the
+chat's next turn instead of history that gets no answer.
+`main/services/chat-owed-turns.ts` is the registry. llm-client opens an
+entry per ordinary chat run, admission takes a hold and returns `follow-up`
+only if `register` succeeds (otherwise committed `run_not_active`), and each
+settlement path calls `owedTurns.settle`. One headless, unattended turn
+starts per settled run, like notice delivery. It starts nothing after a
+recorded Stop, quit or chat deletion. A Stop after the run recorded its outcome
+starts the owed turn and cancels it at once, so the person sees one stopped
+turn. The UserPromptSubmit result travels by message id
+(`createRunInputContexts().forMessage`, `screenedPrompt`), so the hooks
+screen it once and their context is injected once. No protocol, receipt or
+mobile change was needed. `aiden serve`'s admitInput never commits, so it
+owes nothing. llm-client host tests (`pi-cache-warming`, `bot-pause`) load
+the real registry module.

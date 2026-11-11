@@ -643,6 +643,7 @@ async function legacyChatHost() {
         return {};
       },
     },
+    "./chat-owed-turns.js": await import("../chat-owed-turns.js"),
     "./subagents/child-agent-runtime.js": {
       subagentRuntimeRegistry: {
         setHealthMetrics() {},

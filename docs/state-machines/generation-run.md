@@ -28,6 +28,10 @@ Inventory: `backend:M005`, `backend:M177`, and the terminal boundary of rank 8. 
 
 `escape.settle` always describes the current step. It settles the initializing entry, then the promoted run once `active` holds it, and does nothing once the completion task exists. From there the task's `finally` owns the run: a throw in the steps before `settleGeneration` cannot skip it, and `designRun.onSettled` still runs. Physical teardown of a promoted run happens once, even when the escape path follows a teardown that failed.
 
+## Owed turn
+
+An ordinary chat run (no Bot, Assistant mode, interaction surface or other owner) opens an entry in the owed-turn registry (`main/services/chat-owed-turns.ts`) just before it is published as active. Input admission holds that entry while it saves a message. An input saved after Pi closed its queue is registered there, and only then is its receipt `follow-up`; if registration fails the receipt is committed-but-not-admitted. Each settlement path calls `settleOwedTurn` after `settleGeneration`, with the committed queue items Pi never drained and whether the run recorded a Stop. Once every hold is released, the registry starts one headless turn for the owed input, or nothing if the run recorded a Stop, the chat is being deleted, or Aiden is quitting. A Stop that reaches the stream after it recorded its outcome is kept on the entry, and the owed turn is stopped as soon as it registers. While holds are open, `chatHasGenerationOwnership` treats the chat as busy.
+
 ## Commit points
 
 - **Ownership:** registration inside `chatTurnAdmission.handoff`.

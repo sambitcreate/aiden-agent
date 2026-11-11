@@ -350,6 +350,7 @@ async function cancellationHost() {
     "./generation-delta-coalescer.js": { GenerationDeltaCoalescer: UnusedService },
     "./gemini-context-cache.js": { GeminiContextCache: UnusedService },
     "./chat-run-input-admission.js": { createChatRunInputAdmission: (ports: { active: Map<string, Entry> }) => { active = ports.active; return {}; } },
+    "./chat-owed-turns.js": await import("./chat-owed-turns.js"),
     "./subagents/child-agent-runtime.js": { subagentRuntimeRegistry: { setHealthMetrics() {}, setLimits() {}, setRuntimeFaultReporter() {}, abortGeneration: (id: string) => children.push(id) } },
     "./tool-approval.js": { ToolApprovalCoordinator: class { cancelStream(id: string) { approvals.push(id); } } },
     "./ask-user-question-coordinator.js": { AskUserQuestionCoordinator: UnusedService },
