@@ -110,6 +110,6 @@ function parseConnectArgs(args: string[]): { name: string; access: AidenRemoteAg
   }
   const name = words.join(" ").trim();
   if (!name) throw new Error("Name the app, for example `aiden apps connect \"Claude Code\"`.");
-  if (name.length > 80) throw new Error("An app name is at most 80 characters.");
+  if ([...name].length > 80) throw new Error("An app name is at most 80 characters.");
   return { name, access };
 }

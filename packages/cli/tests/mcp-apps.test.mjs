@@ -255,6 +255,8 @@ test("aiden apps refuses what it cannot do, and never disconnects a phone", asyn
     [["connect"], /Name the app/],
     [["connect", "Claude", "--access", "admin"], /read or supervised/],
     [["connect", "x".repeat(81)], /at most 80/],
+    // The limit counts characters, not UTF-16 units, like the other names Aiden keeps.
+    [["connect", "\u{1F916}".repeat(81)], /at most 80/],
     [["connect", "Claude", "--scope", "user"], /Usage: apps/],
     [["revoke", "dev_unknown"], /No connected app/],
     [["rename"], /Usage: apps/],
@@ -273,7 +275,10 @@ test("aiden apps refuses what it cannot do, and never disconnects a phone", asyn
   // `aiden apps list` shows only the apps, never the phone.
   const app = await remote.apps(["connect", "Codex"]);
   assert.match(app.server.url, /^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
-  assert.deepEqual((await remote.apps(["list"])).apps.map(({ id }) => id), [app.app.id]);
+  const robots = "\u{1F916}".repeat(80);
+  const emoji = await remote.apps(["connect", robots]);
+  assert.equal(emoji.app.name, robots, "80 emoji is an 80-character name");
+  assert.deepEqual((await remote.apps(["list"])).apps.map(({ id }) => id).sort(), [app.app.id, emoji.app.id].sort());
 });
 
 test("aiden apps revoke disconnects an app while Bot storage waits for repair", async (t) => {
