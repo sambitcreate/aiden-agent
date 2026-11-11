@@ -1208,7 +1208,7 @@
       ],
       "post": {
         "operationId": "forkChat",
-        "description": "Contract revision 21 fork (chat-fork-v1). Creates a new chat in the same workspace from one message of a regular chat. position after keeps everything through the chosen settled assistant reply; position before keeps everything before the chosen user prompt and returns that prompt as prefill so the device can edit and resend it in the fork, with its attachments restaged for this device. A summary request (chat-fork-summary-v1) starts the fork with a pending summary of what followed the cut in the source. Bot chats are not forked (not_found). An ineligible message is invalid_request, a busy source is operation_in_progress, and a fork too large to copy is payload_too_large.",
+        "description": "Contract revision 21 fork (chat-fork-v1). Creates a new chat in the same workspace from one message of a regular chat. position after keeps everything through the chosen settled assistant reply; position before keeps everything before the chosen user prompt and returns that prompt as prefill so the device can edit and resend it in the fork, with its attachments restaged for this device. A summary request (chat-fork-summary-v1) starts the fork with a pending summary of what followed the cut in the source. Bot chats are not forked (not_found). An ineligible message is invalid_request, a busy source is operation_in_progress, and a fork too large to copy is payload_too_large. Contract revision 63 (chat:continue-in-new-chat, which the device must hold): the body { continueIn: { workspaceId } } continues a chat whose workspace folder is gone in a new chat in that workspace, or in No workspace when it names a hidden noWorkspace record. The fork keeps everything through the newest assistant reply (forkedFrom.position after), carries no prefill, and leaves the original chat as it is. A chat whose folder is present, the chat's own workspace, the Assistant, or a chat with no reply yet is invalid_request; an unknown workspace is not_found; a destination whose own folder is missing too is a non-retryable operation_in_progress whose message says so.",
         "x-aiden-archived-access": "mutation_blocked",
         "x-aiden-capability": "chat:write",
         "parameters": [
@@ -9500,7 +9500,8 @@
                 "schedule:cards",
                 "chat:jobs",
                 "attachments:raw",
-                "chat:new-worktree"
+                "chat:new-worktree",
+                "chat:continue-in-new-chat"
               ]
             },
             "uniqueItems": true
@@ -9554,7 +9555,8 @@
                 "schedule:cards",
                 "chat:jobs",
                 "attachments:raw",
-                "chat:new-worktree"
+                "chat:new-worktree",
+                "chat:continue-in-new-chat"
               ]
             },
             "uniqueItems": true
@@ -9711,7 +9713,8 @@
                 "schedule:cards",
                 "chat:jobs",
                 "attachments:raw",
-                "chat:new-worktree"
+                "chat:new-worktree",
+                "chat:continue-in-new-chat"
               ]
             },
             "uniqueItems": true
@@ -9771,6 +9774,7 @@
                 "chat:jobs",
                 "attachments:raw",
                 "chat:new-worktree",
+                "chat:continue-in-new-chat",
                 "bot:messaging",
                 "bot:access-requests",
                 "bot:plans",
@@ -13284,33 +13288,66 @@
         "additionalProperties": false
       },
       "ChatForkRequest": {
-        "type": "object",
-        "required": [
-          "messageId",
-          "position"
-        ],
-        "properties": {
-          "messageId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128,
-            "pattern": "^[A-Za-z0-9._:-]{1,128}$"
-          },
-          "position": {
-            "enum": [
-              "after",
-              "before"
-            ]
-          },
-          "summary": {
+        "description": "A fork at one message, or (contract revision 63, chat:continue-in-new-chat) a continue of a chat whose workspace folder is gone into another workspace.",
+        "oneOf": [
+          {
             "type": "object",
-            "description": "Fork with summary (chat-fork-summary-v1).",
+            "required": [
+              "messageId",
+              "position"
+            ],
             "properties": {
-              "focus": {
+              "messageId": {
                 "type": "string",
                 "minLength": 1,
-                "maxLength": 1000,
-                "description": "Optional focus for the summary; surrounding whitespace is trimmed."
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+              },
+              "position": {
+                "enum": [
+                  "after",
+                  "before"
+                ]
+              },
+              "summary": {
+                "type": "object",
+                "description": "Fork with summary (chat-fork-summary-v1).",
+                "properties": {
+                  "focus": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1000,
+                    "description": "Optional focus for the summary; surrounding whitespace is trimmed."
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "$ref": "#/components/schemas/ChatContinueInNewChatRequest"
+          }
+        ]
+      },
+      "ChatContinueInNewChatRequest": {
+        "type": "object",
+        "description": "Contract revision 63 (chat:continue-in-new-chat). Fork the whole conversation, through its newest reply, into the workspace named here. Send the id of a workspace from /workspaces, or of a hidden noWorkspace record for No workspace.",
+        "required": [
+          "continueIn"
+        ],
+        "properties": {
+          "continueIn": {
+            "type": "object",
+            "required": [
+              "workspaceId"
+            ],
+            "properties": {
+              "workspaceId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9._:-]{1,128}$"
               }
             },
             "additionalProperties": false
@@ -16591,6 +16628,17 @@
             "type": "string",
             "format": "date-time",
             "description": "Contract revision 19. When the winning resolution committed."
+          },
+          "reason": {
+            "enum": [
+              "folder_missing",
+              "worktree_missing"
+            ],
+            "description": "Contract revision 63, only to a device holding chat:continue-in-new-chat. On a turn's 409 workspace_unavailable: the chat's workspace folder (folder_missing) or its managed worktree's folder (worktree_missing) is gone. Never a path."
+          },
+          "canContinueInNewChat": {
+            "type": "boolean",
+            "description": "Contract revision 63, with reason. Whether POST /chats/{chatId}/fork with continueIn can continue this chat (it has an assistant reply to fork after)."
           }
         },
         "additionalProperties": false

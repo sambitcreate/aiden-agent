@@ -100,6 +100,23 @@ export interface ChatForkServiceDependencies {
 export type ChatForkService = ReturnType<typeof createChatForkService>;
 
 /**
+ * Where Continue in a new chat cuts: after the newest assistant reply that
+ * answers an earlier prompt. Undefined when there is nothing to continue yet.
+ */
+export function continueInNewChatForkPoint(messages: readonly Pick<ChatMessage, "id" | "role">[]): string | undefined {
+  let reply: string | undefined;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]!;
+    if (!reply) {
+      if (message.role === "assistant") reply = message.id;
+    } else if (message.role === "user") {
+      return reply;
+    }
+  }
+  return undefined;
+}
+
+/**
  * Creates forks for every surface. One copy runs at a time, the source stays
  * idle while it is copied, and dependent records (visual artifacts, the model
  * journal) are prepared before the fork becomes visible.
@@ -247,15 +264,8 @@ export function createChatForkService(deps: ChatForkServiceDependencies) {
 
   /** A continuation forks after the newest reply that answers one of the person's messages. */
   function continuationRequest(source: Chat, request: ChatForkRequest): ChatForkRequest {
-    let reply: ChatMessage | undefined;
-    for (let index = source.messages.length - 1; index >= 0; index -= 1) {
-      const message = source.messages[index]!;
-      if (!reply) {
-        if (message.role === "assistant") reply = message;
-      } else if (message.role === "user") {
-        return { chatId: request.chatId, forkAt: { messageId: reply.id, position: "after" } };
-      }
-    }
+    const messageId = continueInNewChatForkPoint(source.messages);
+    if (messageId) return { chatId: request.chatId, forkAt: { messageId, position: "after" } };
     throw new ChatForkError("ineligible", "There is nothing to continue yet. Start a new chat instead.");
   }
 

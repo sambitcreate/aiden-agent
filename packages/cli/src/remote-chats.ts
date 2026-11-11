@@ -92,6 +92,11 @@ export async function createCliRemoteChats(agentDir: string, daemon: ReturnType<
       const record = await workspace.configStore.getWorkspace(workspaceId);
       return record ? workspaceFolderRemoteRefusal(record, undefined, "server") : undefined;
     },
+    // Revision 63: only a device that negotiated it hears why, and may continue elsewhere.
+    deviceSupportsContinueInNewChat: async (deviceId) => {
+      const device = (await state.snapshot()).devices.find((candidate) => candidate.id === deviceId && candidate.revokedAt === undefined);
+      return device?.capabilities.includes("chat:continue-in-new-chat") === true;
+    },
     deviceIsPeer: async (deviceId) => {
       const device = (await state.snapshot()).devices.find((candidate) => candidate.id === deviceId);
       return device?.type === "mac" || device?.type === "linux";

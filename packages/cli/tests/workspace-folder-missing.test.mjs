@@ -1,7 +1,9 @@
 // `aiden serve` refuses work in a workspace whose folder was moved or deleted,
 // as the desktop does: a phone's turn is refused before anything is kept or
 // any provider request is made, and runs once the folder is back; a turn that
-// gets past the Remote check, and a scheduled run, end with a clear error.
+// gets past the Remote check, and a scheduled run, end with a clear error. A
+// phone that negotiated Continue in a new chat (revision 63) hears why, and
+// can fork the whole chat into another workspace; the original stays as it is.
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -49,9 +51,9 @@ async function fixture(t) {
 
 function phoneClient(dir, port, credential) {
   const ca = readFileSync(join(dir, "remote-tls/ca-certificate.pem"));
-  return (path, method = "GET", body, key) => new Promise((done, reject) => {
+  return (path, method = "GET", body, key, revision) => new Promise((done, reject) => {
     const request = httpsRequest({ hostname: "127.0.0.1", port, ca, path: `/api/aiden/v1${path}`, method,
-      headers: { authorization: `Bearer ${credential}`, "aiden-protocol-version": "1", ...(body ? { "content-type": "application/json" } : {}), ...(key ? { "idempotency-key": key } : {}) } }, (response) => {
+      headers: { authorization: `Bearer ${credential}`, "aiden-protocol-version": "1", ...(body ? { "content-type": "application/json" } : {}), ...(key ? { "idempotency-key": key } : {}), ...(revision ? { "if-match": revision } : {}) } }, (response) => {
       let data = ""; response.on("data", (chunk) => { data += chunk; });
       response.on("end", () => done({ status: response.statusCode, data: response.headers["content-type"]?.includes("json") && data ? JSON.parse(data) : data }));
     });
@@ -93,6 +95,58 @@ test("a phone's turn in a chat whose folder is gone is refused with the Remote m
   assert.equal(f.requests.length, 1);
   const messages = (await phone(`/chats/${chatId}`)).data.messages;
   assert.deepEqual(messages.map((message) => [message.role, message.text]), [["user", "Hello"], ["assistant", "Answer"]]);
+});
+
+test("a phone that negotiated it continues a chat whose folder is gone in a new chat in another workspace, and the original stays as it is", async (t) => {
+  const f = await fixture(t);
+  const otherFolder = join(f.dir, "other");
+  mkdirSync(otherFolder);
+  const other = await api.workspaceCommand(f.dir, ["add", otherFolder]);
+  const original = process.env.AIDEN_CLI_ENTRY; process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
+  t.after(() => { if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
+  const daemon = api.createDaemonChats(f.dir), scheduler = api.createCliScheduler(f.dir);
+  const remote = await api.createCliRemote(f.dir, daemon, scheduler, { port: PORT + 2, discovery: { async start() {}, stop() {} } });
+  f.stops.push(() => daemon.stop(), async () => { await remote.stop(); await scheduler.service.stopAndSettle(); });
+  await remote.start();
+  const status = await remote.service.status();
+  const issued = await remote.state.issueDevice({ name: "Phone", type: "android", clientVersion: "test", acceptsProgressCapabilities: true });
+  const phone = phoneClient(f.dir, status.lanPort, issued.credential);
+
+  const server = await phone("/server");
+  assert.equal(server.data.serverCapabilities.includes("chat:continue-in-new-chat"), true, "aiden serve offers it");
+  const negotiated = await phone("/device/capabilities", "POST", { accepts: ["chat:continue-in-new-chat"] });
+  assert.equal(negotiated.status, 200, JSON.stringify(negotiated));
+
+  const created = await phone("/chats", "POST", { workspaceId: f.workspace.id, providerId: "cli-test", modelId: "test" }, "create-continue-0001");
+  assert.equal(created.status, 201, JSON.stringify(created));
+  const chatId = created.data.id;
+  assert.equal((await phone(`/chats/${chatId}/turns`, "POST", { text: "Hello" }, "turn-continue-00000001")).status, 202);
+  await daemon.llmClient.waitForChatIdle(chatId);
+
+  rmSync(f.folder, { recursive: true, force: true });
+  const refused = await phone(`/chats/${chatId}/turns`, "POST", { text: "Still there?" }, "turn-continue-00000002");
+  assert.equal(refused.status, 409, JSON.stringify(refused));
+  assert.equal(refused.data.error.code, "workspace_unavailable");
+  assert.equal(refused.data.error.message, SERVER_REFUSAL);
+  assert.deepEqual(refused.data.error.details, { reason: "folder_missing", canContinueInNewChat: true });
+  assert.equal(JSON.stringify(refused.data).includes(f.dir), false, "a Remote error never carries the server's path");
+
+  const before = await phone(`/chats/${chatId}`);
+  const forked = await phone(`/chats/${chatId}/fork`, "POST", { continueIn: { workspaceId: other.id } }, "continue-fork-00000001", before.data.revision);
+  assert.equal(forked.status, 201, JSON.stringify(forked));
+  assert.equal(JSON.stringify(forked.data).includes(f.dir), false, "the new chat names no path");
+  assert.notEqual(forked.data.chat.id, chatId);
+  assert.equal(forked.data.chat.workspaceId, other.id);
+  assert.equal(forked.data.chat.forkedFrom.chatId, chatId);
+  assert.deepEqual(forked.data.chat.messages.map((message) => [message.role, message.text]), [["user", "Hello"], ["assistant", "Answer"]]);
+  const after = await phone(`/chats/${chatId}`);
+  assert.deepEqual(after.data.messages, before.data.messages, "the original chat is untouched");
+  assert.equal(after.data.workspaceId, f.workspace.id);
+
+  // The new chat works where its folder is.
+  assert.equal((await phone(`/chats/${forked.data.chat.id}/turns`, "POST", { text: "Go on" }, "turn-continue-00000003")).status, 202);
+  await daemon.llmClient.waitForChatIdle(forked.data.chat.id);
+  assert.equal(f.requests.length, 2);
 });
 
 test("a turn that reaches the daemon after its folder is gone ends with the missing-folder error before any provider request", async (t) => {
