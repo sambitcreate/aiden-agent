@@ -93,6 +93,15 @@ export default function DesignCanvas({ chatId }: { chatId: string }) {
 }
 
 type CanvasHandle = ReturnType<typeof useDesignCanvas>;
+/**
+ * How many times each framed file changed since the canvas opened, which its
+ * frames' addresses carry. A frame that already shows its own text edit keeps
+ * the version it loaded (`kept`) until the file changes again.
+ */
+type FileVersions = {
+  paths: ReadonlyMap<string, number>;
+  kept: ReadonlyMap<string, { path: string; shows: number }>;
+};
 
 function sameSet(a: ReadonlySet<string>, b: ReadonlySet<string>) {
   if (a.size !== b.size) return false;
@@ -158,7 +167,7 @@ function LoadedDesignCanvas({
   const [minimap, setMinimap] = React.useState(false);
   const [selection, setSelection] = React.useState<ReadonlySet<string>>(() => new Set());
   const [entered, setEntered] = React.useState<string | null>(null);
-  const [versions, setVersions] = React.useState<ReadonlyMap<string, number>>(() => new Map());
+  const [versions, setVersions] = React.useState<FileVersions>(() => ({ paths: new Map(), kept: new Map() }));
   const [missing, setMissing] = React.useState<ReadonlyMap<string, number>>(() => new Map());
   const [grant, setGrant] = React.useState<string | null>(null);
   const [autoFocusId, setAutoFocusId] = React.useState<string | null>(null);
@@ -220,12 +229,21 @@ function LoadedDesignCanvas({
     },
     [chatId],
   );
-  const reloadPaths = React.useCallback((paths: readonly string[]) => {
+  /** Reloads every frame of these files, except `keep`: a frame of one of them that already shows the change. */
+  const reloadPaths = React.useCallback((paths: readonly string[], keep?: string) => {
     if (paths.length === 0) return;
     setVersions((current) => {
-      const next = new Map(current);
-      for (const path of paths) next.set(path, (next.get(path) ?? 0) + 1);
-      return next;
+      const next = new Map(current.paths);
+      const kept = new Map(current.kept);
+      for (const path of paths) {
+        const before = next.get(path) ?? 0;
+        next.set(path, before + 1);
+        const shown = kept.get(keep ?? "");
+        // Any later change of the file reloads every frame of it, a kept one too.
+        for (const [frameId, held] of kept) if (held.path === path) kept.delete(frameId);
+        if (keep !== undefined) kept.set(keep, { path, shows: shown?.path === path ? shown.shows : before });
+      }
+      return { paths: next, kept };
     });
   }, []);
   React.useEffect(
@@ -281,7 +299,15 @@ function LoadedDesignCanvas({
   );
 
   const versionOf = React.useCallback(
-    (path: string | undefined) => (path ? (versions.get(path) ?? 0) : 0),
+    (path: string | undefined) => (path ? (versions.paths.get(path) ?? 0) : 0),
+    [versions],
+  );
+  const frameVersionOf = React.useCallback(
+    (frame: Pick<DesignFrame, "id" | "path">) => {
+      if (!frame.path) return 0;
+      const held = versions.kept.get(frame.id);
+      return held?.path === frame.path ? held.shows : (versions.paths.get(frame.path) ?? 0);
+    },
     [versions],
   );
 
@@ -305,17 +331,17 @@ function LoadedDesignCanvas({
   // At most six frames run a real page; the rest show their snapshots.
   React.useEffect(() => {
     // A hidden frame is not drawn, so it never runs its page.
-    const frames = framesOnPage(doc).filter((frame) => !frame.hidden && missing.get(frame.id) !== versionOf(frame.path));
+    const frames = framesOnPage(doc).filter((frame) => !frame.hidden && missing.get(frame.id) !== frameVersionOf(frame));
     setLive((previous) => {
       const next = selectLiveFrames({ frames, viewport, view: viewSize, selected: selection, entered, previous });
       return sameSet(previous, next) ? previous : next;
     });
-  }, [doc, missing, versionOf, viewport, viewSize, selection, entered]);
+  }, [doc, missing, frameVersionOf, viewport, viewSize, selection, entered]);
 
   const nodes = React.useMemo(() => nodesFromCanvas(doc, selection), [doc, selection]);
   const comments = useDesignComments({ chatId, doc, change, flow, wrapper, live, versionOf });
   const pageWindow = React.useCallback((frameId: string) => frameIframe(wrapper.current, frameId)?.contentWindow ?? null, []);
-  const reloadPath = React.useCallback((path: string) => reloadPaths([path]), [reloadPaths]);
+  const reloadPath = React.useCallback((path: string, keep?: string) => reloadPaths([path], keep), [reloadPaths]);
   const textEdits = usePageTextEdits({ chatId, doc, pageWindow, queueComment: comments.queueOnElement, flush, reload: reloadPath });
   forgetTextEdits.current = textEdits.forget;
   const toggleComments = () => {
@@ -665,7 +691,7 @@ function LoadedDesignCanvas({
           return true;
         }
         if (!frame || (frame.kind !== "file" && frame.kind !== "artifact")) return false;
-        if (frame.kind === "file" && missing.get(frame.id) === versionOf(frame.path)) return false;
+        if (frame.kind === "file" && missing.get(frame.id) === frameVersionOf(frame)) return false;
         setEntered(frame.id);
         return true;
       }
@@ -870,6 +896,7 @@ function LoadedDesignCanvas({
       live,
       entered,
       versionOf,
+      frameVersionOf,
       autoFocusId,
       enter: setEntered,
       markMissing: (id, version) =>
@@ -902,6 +929,7 @@ function LoadedDesignCanvas({
       live,
       entered,
       versionOf,
+      frameVersionOf,
       autoFocusId,
       removeFrames,
       update,

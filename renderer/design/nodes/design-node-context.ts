@@ -46,6 +46,8 @@ export type DesignNodeContextValue = {
   entered: string | null;
   /** How many times the file at this workspace path changed since the canvas opened. */
   versionOf(path: string | undefined): number;
+  /** The version a frame's page loads at: its file's, unless the frame already shows its own latest edit. */
+  frameVersionOf(frame: { id: string; path?: string | undefined }): number;
   /** The frame to focus once it mounts (a note the person just added). */
   autoFocusId: string | null;
   enter(id: string): void;

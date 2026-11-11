@@ -269,6 +269,53 @@ test("the canvas watches its pages and reloads one when its file changes", async
   );
 });
 
+test("a text edit written to a file shown twice reloads only the other frame", async () => {
+  // Two frames of one file, as ⌘D or Duplicate page leaves them.
+  measureCanvasAt1000x800();
+  const hero: DesignFrame = { id: "f1", kind: "file", title: "Hero", x: 0, y: 0, w: 300, h: 300, path: "design/hero.html", designWidth: 1280, pageId: "page-1", createdBy: "aiden" };
+  const copy: DesignFrame = { ...hero, id: "f2", title: "Hero copy", x: 400 };
+  const { calls } = setup(canvasWith(hero, copy), { "designCanvas:editText": () => ({ ok: true }) });
+  await mount();
+  fireEvent.doubleClick(screen.getByRole("group", { name: "Hero" }));
+  const frame = (id: string) => document.querySelector<HTMLIFrameElement>(`iframe[data-frame-id="${id}"]`);
+  await waitFor(() => {
+    assert.equal(frame("f1")?.getAttribute("src"), `aiden-design://${GRANT}/design/hero.html`);
+    assert.equal(frame("f2")?.getAttribute("src"), `aiden-design://${GRANT}/design/hero.html`);
+  });
+
+  // happy-dom loads no pages, so the edited frame gets a stand-in window to post from.
+  const edited = frame("f1")!;
+  const guest = { postMessage: () => undefined } as unknown as Window;
+  Object.defineProperty(edited, "contentWindow", { configurable: true, get: () => guest });
+  act(() => {
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        source: guest,
+        data: {
+          type: "aiden-design:edit-end",
+          cancelled: false,
+          plain: true,
+          changes: [{ before: "Ship faster", after: "Ship sooner" }],
+          beforeHtml: "<h1>Ship faster</h1>",
+          afterHtml: "<h1>Ship sooner</h1>",
+          element: null,
+        },
+      }),
+    );
+  });
+  await waitFor(() => assert.equal(frame("f2")?.getAttribute("src"), `aiden-design://${GRANT}/design/hero.html?v=1`), SAVE_WAIT);
+  assert.deepEqual(calls.find((call) => call.channel === "designCanvas:editText")?.args.slice(0, 2), ["chat-1", "f1"]);
+  assert.equal(frame("f1"), edited, "the frame being edited is not replaced");
+  assert.equal(edited.getAttribute("src"), `aiden-design://${GRANT}/design/hero.html`, "and keeps the page it shows");
+
+  // A later change of the file reloads both frames.
+  act(() => emitBotTestNotification("designCanvas:filesChanged", { chatId: "chat-1", paths: ["design/hero.html"] }));
+  await waitFor(() => {
+    assert.equal(frame("f1")?.getAttribute("src"), `aiden-design://${GRANT}/design/hero.html?v=2`);
+    assert.equal(frame("f2")?.getAttribute("src"), `aiden-design://${GRANT}/design/hero.html?v=2`);
+  });
+});
+
 test("a visual Aiden draws again under the same title replaces the one in its frame", async () => {
   const chart: DesignFrame = { id: "a1", kind: "artifact", title: "Chart", x: 0, y: 0, w: 640, h: 480, mediaId: "m1", pageId: "page-1", createdBy: "aiden" };
   let doc = canvasWith(chart);

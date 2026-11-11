@@ -10,7 +10,7 @@
 // the canvas can't be saved it isn't asked.
 //
 // The page being edited already shows its new words, so a written edit
-// reloads only other frames of the same file. ⌘Z and redo change the file
+// reloads only the other frames of the same file. ⌘Z and redo change the file
 // under the page, so they reload it. Main's watcher leaves these writes to
 // the canvas: the file system can report one write late, or twice, and that
 // report would reload the page under the person's next edit.
@@ -60,8 +60,8 @@ export function usePageTextEdits({
 }: {
   chatId: string;
   doc: DesignCanvas;
-  /** Reloads every frame of this workspace file. */
-  reload(path: string): void;
+  /** Reloads every frame of this workspace file, except `keep`, a frame that already shows the change. */
+  reload(path: string, keep?: string): void;
   /** Saves the canvas now: main finds the page's frame in the saved canvas. False when it couldn't. */
   flush(): Promise<boolean>;
   pageWindow(frameId: string): Window | null;
@@ -91,9 +91,7 @@ export function usePageTextEdits({
   const showWritten = React.useCallback(
     (frameId: string, shownInPlace: boolean) => {
       const path = docRef.current.frames.find((entry) => entry.id === frameId)?.path;
-      if (!path) return;
-      const framed = docRef.current.frames.filter((entry) => entry.kind === "file" && entry.path === path).length;
-      if (!shownInPlace || framed > 1) reload(path);
+      if (path) reload(path, shownInPlace ? frameId : undefined);
     },
     [reload],
   );
