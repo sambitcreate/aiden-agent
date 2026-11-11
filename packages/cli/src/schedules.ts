@@ -85,7 +85,9 @@ export function createCliScheduler(agentDir: string) {
           const workspace = (await workspaceStore(agentDir).load()).find((entry) => entry.id === task.workspaceId);
           if (!workspace) throw new Error("Register and select a workspace before running a schedule.");
           await assertCliWorkspaceFolderPresent(workspace, "scheduled");
-          if (accessFor(agentDir, workspace.folderPath) !== "full") throw new Error("Unattended work requires the workspace's explicit full access tier.");
+          // The presence check skips No Access workspaces, so refuse a persisted tier other than full before
+          // `accessFor` resolves a folder that may be gone and would surface its path in a raw ENOENT.
+          if (workspace.access !== "full" || accessFor(agentDir, workspace.folderPath) !== "full") throw new Error("Unattended work requires the workspace's explicit full access tier.");
           if (task.mode === "script") {
             if (task.permission !== "full") throw new Error("Script schedules require explicit full permission.");
             const script = await resolveScheduledScript({ script: task.script!, workspaceRoot: workspace.folderPath });

@@ -186,3 +186,22 @@ test("a scheduled run in a workspace whose folder is gone records the missing-fo
   assert.equal(run.result, "error", JSON.stringify(run));
   assert.equal(run.error, `The folder for “project” is missing. It may have been moved, renamed or deleted, or its drive isn't connected. Put it back, or start the chat in another workspace.`);
 });
+
+test("a schedule whose workspace was set to No Access and whose folder is gone after a restart is refused for its access, without the server's path", async (t) => {
+  const f = await fixture(t);
+  await api.workspaceCommand(f.dir, ["access", f.workspace.id, "full"]);
+  const first = api.createCliScheduler(f.dir);
+  const input = join(f.dir, "schedule.json");
+  writeFileSync(input, JSON.stringify({ name: "Nightly", mode: "script", script: "true", cron: "0 9 * * *", timezone: "UTC", permission: "full", enabled: true, workspaceId: f.workspace.id }));
+  const task = await first.command(["save", input]);
+  await first.service.stopAndSettle();
+
+  await api.workspaceCommand(f.dir, ["access", f.workspace.id, "none"]);
+  rmSync(f.folder, { recursive: true, force: true });
+  const restarted = api.createCliScheduler(f.dir);
+  f.stops.push(() => restarted.service.stopAndSettle());
+  const run = await restarted.service.runNow(task.id, { runId: "no-access-missing-run" });
+  assert.equal(run.result, "error", JSON.stringify(run));
+  assert.equal(run.error, "Unattended work requires the workspace's explicit full access tier.");
+  assert.equal(run.error.includes(f.dir), false, "a run's error never carries the server's path");
+});
