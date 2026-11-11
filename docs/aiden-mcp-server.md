@@ -95,7 +95,7 @@ Privacy:
 
 - Aiden keeps a local note of which app started a chat (`startedBy {kind: "app", name}`, in `aiden-mcp-chat-provenance.json`, the newest 1,000 entries). It is never sent to phones, Macs or apps.
 - App ids never appear in tool results.
-- Server logs carry only `started`, `stopped`, `start-failed` (with a problem code) and `request-failed`, never a token, an app name, a path or chat text.
+- Server logs carry only `started`, `stopped`, `start-failed` (with a problem code), `request-failed` and `revoke-bot-notices-unavailable` (an app was disconnected while Bot storage waits for repair), never a token, an app name, a path or chat text.
 - No analytics events are sent for the MCP server: a chat an app starts sends no `chat_created`, and its turns send no `chat_message_sent`.
 
 The Remote Access threat model has the matching section: [`docs/security/aiden-remote-threat-model.md`](security/aiden-remote-threat-model.md#10-local-mcp-server-for-outside-apps).
