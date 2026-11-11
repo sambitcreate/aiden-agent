@@ -2,6 +2,7 @@
 // the MCP server or its SDK into the admin command.
 import type { AidenMcpServerStatus } from "../../../main/services/aiden-mcp-server.js";
 import type { AidenRemoteAgentAppProjection } from "../../../main/services/aiden-remote-state.js";
+import { aidenMcpTokenEnvName } from "../../../renderer/shared/aiden-mcp-token-env.js";
 
 /**
  * The first port the server's `/mcp` endpoint tries (then the next seven).
@@ -22,13 +23,20 @@ export interface CliAppConnection {
 /**
  * The commands that add Aiden to Claude Code and Codex. The token goes in an
  * environment variable both clients read at connect time, so neither stores
- * it in its own config file.
+ * it in its own config file. The variable is the app's own
+ * (`aidenMcpTokenEnvName`, the same name the desktop's Settings sheet prints),
+ * so a second app set up in the same shell profile keeps its own token.
  */
-export function aidenMcpClientSnippets(url: string, token: string): { environment: string; claude: string; codex: string } {
+export function aidenMcpClientSnippets(
+  url: string,
+  token: string,
+  app: { id: string; name: string },
+): { environment: string; claude: string; codex: string } {
+  const variable = aidenMcpTokenEnvName(app);
   return {
-    environment: `export AIDEN_MCP_TOKEN=${token}`,
-    claude: `claude mcp add --scope user --transport http aiden ${url} --header 'Authorization: Bearer \${AIDEN_MCP_TOKEN}'`,
-    codex: `codex mcp add aiden --url ${url} --bearer-token-env-var AIDEN_MCP_TOKEN`,
+    environment: `export ${variable}='${token.replace(/'/gu, "'\\''")}'`,
+    claude: `claude mcp add --scope user --transport http aiden ${url} --header 'Authorization: Bearer \${${variable}}'`,
+    codex: `codex mcp add aiden --url ${url} --bearer-token-env-var ${variable}`,
   };
 }
 
@@ -43,7 +51,7 @@ export function renderAppConnection(connection: CliAppConnection): string {
     "",
   ];
   if (server.running && server.url) {
-    const snippets = aidenMcpClientSnippets(server.url, token);
+    const snippets = aidenMcpClientSnippets(server.url, token, app);
     lines.push(
       `Aiden's MCP server is listening at ${server.url} (this computer only).`,
       "",

@@ -2,7 +2,7 @@
 // connects, lists and disconnects the outside apps that use it. Everything
 // runs through the real CLI: the daemon, its control socket and the listener.
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, request as httpRequest } from "node:http";
@@ -303,6 +303,29 @@ test("aiden apps revoke disconnects an app while Bot storage waits for repair", 
   assert.ok((await remote.apps(["list"])).apps.find(({ id }) => id === app.app.id).revokedAt);
 });
 
+test("two apps set up in one shell profile each connect with their own token", () => {
+  // A real shell is the oracle. Stand-in claude and codex commands print what
+  // each client would send when it connects: Claude Code expands its saved
+  // header from the environment, and Codex reads the variable it was given.
+  const url = "http://127.0.0.1:49500/mcp";
+  const apps = [
+    { app: { id: "device_k3j9qxa1", name: "Claude Code" }, token: "a".repeat(43) },
+    { app: { id: "device_p7qd2mb2", name: "Claude Code" }, token: "b".repeat(43) },
+    { app: { id: "device_zz81aa03", name: "Codex" }, token: "c".repeat(43) },
+  ].map((entry) => ({ ...entry, snippets: api.aidenMcpClientSnippets(url, entry.token, entry.app) }));
+  const script = [
+    String.raw`claude() { while [ "$1" != --header ]; do shift; done; eval "printf '%s\n' \"$2\""; }`,
+    String.raw`codex() { while [ "$1" != --bearer-token-env-var ]; do shift; done; eval "printf 'Authorization: Bearer %s\n' \"\$$2\""; }`,
+    ...apps.map(({ snippets }) => snippets.environment),
+    ...apps.flatMap(({ snippets }) => [snippets.claude, snippets.codex]),
+  ].join("\n");
+  const output = execFileSync("/bin/sh", ["-c", script], { encoding: "utf8" });
+  assert.deepEqual(
+    output.trim().split("\n"),
+    apps.flatMap(({ token }) => [`Authorization: Bearer ${token}`, `Authorization: Bearer ${token}`]),
+  );
+});
+
 test("aiden serve --no-remote has no /mcp, and aiden apps says how to get it", async (t) => {
   const { env } = sandbox(t);
   await serve(t, env, ["--no-remote"]);
@@ -313,12 +336,10 @@ test("aiden serve --no-remote has no /mcp, and aiden apps says how to get it", a
 
 test("the Claude Code and Codex commands keep the token out of their config files", () => {
   const url = "http://127.0.0.1:49500/mcp", token = "t".repeat(43);
-  const snippets = api.aidenMcpClientSnippets(url, token);
-  assert.ok(snippets.environment.includes(token));
+  const snippets = api.aidenMcpClientSnippets(url, token, { id: "dev_1", name: "Claude Code" });
   for (const command of [snippets.claude, snippets.codex]) {
     assert.ok(command.includes(url), command);
     assert.equal(command.includes(token), false, command);
-    assert.ok(command.includes("AIDEN_MCP_TOKEN"), command);
   }
   // A server that could not start gives no commands to copy, only the way to retry.
   const blocked = api.renderAppConnection({ token, app: { id: "dev_1", name: "Claude Code", access: "read" },
