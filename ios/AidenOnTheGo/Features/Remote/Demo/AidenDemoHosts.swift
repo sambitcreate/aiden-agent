@@ -429,6 +429,9 @@ enum AidenDemoHosts {
         )
         installation.serverCapabilities = AidenRemoteCapability.v1Known
         installation.serverFeatures = AidenDemoContent.features
+        if AidenDemoRunOptions.readsAloud {
+            installation.serverFeatures.append("tts-v1")
+        }
         if AidenDemoRunOptions.raisesALateChatApproval {
             // A chat can only watch a run the phone didn't start on a Mac that
             // offers it, and with the grant to.
@@ -653,6 +656,27 @@ enum AidenDemoHosts {
                 json: AidenDemoContent.chatJSON(row: row, index: index)
             )
         }
+        if AidenDemoRunOptions.readsAloud {
+            for (index, row) in rows.enumerated() {
+                guard let chatId = row["id"] as? String else { continue }
+                let status = AidenDemoContent.readAloudStatusJSON(chatId: chatId, index: index)
+                responder.reply(instanceId: id, path: "/chats/\(chatId)/read-aloud", status: 200, json: status)
+                responder.reply(
+                    instanceId: id,
+                    method: "POST",
+                    path: "/chats/\(chatId)/read-aloud",
+                    status: 200,
+                    json: AidenDemoContent.readAloudJobJSON(chatId: chatId)
+                )
+                responder.reply(
+                    instanceId: id,
+                    method: "POST",
+                    path: "/chats/\(chatId)/read-aloud/stop",
+                    status: 200,
+                    json: AidenDemoContent.readAloudStopJSON()
+                )
+            }
+        }
         if AidenDemoRunOptions.raisesALateChatApproval,
            let row = rows.first(where: { $0["title"] as? String == AidenDemoContent.lateApprovalChatTitle }),
            let chatId = row["id"] as? String {
@@ -812,6 +836,35 @@ private enum AidenDemoContent {
         "Here is a first pass.\n\n1. Ship the inbox rework\n2. Cut the old shell\n3. Fold Bots into the same list\n\nThe risky item is step two.",
         "The review had three themes: spacing, empty states, and the composer. Spacing is mostly done.",
     ]
+
+    /// `GET /chats/{id}/read-aloud` for the chat's reply, mid-generation.
+    static func readAloudStatusJSON(chatId: String, index: Int) -> Data {
+        data([
+            "enabled": true,
+            "ready": true,
+            "settingsRevision": "read_aloud_settings_1",
+            "source": [
+                "chatId": chatId,
+                "messageId": "message_\(index + 1)_assistant",
+                "sourceRevision": "read_aloud_source_1",
+            ],
+            "job": readAloudJob(chatId: chatId),
+        ])
+    }
+
+    /// `POST /chats/{id}/read-aloud`: a job that is still generating, and stays so.
+    static func readAloudJobJSON(chatId: String) -> Data {
+        data(readAloudJob(chatId: chatId))
+    }
+
+    /// `POST /chats/{id}/read-aloud/stop`.
+    static func readAloudStopJSON() -> Data {
+        data(["ok": true])
+    }
+
+    private static func readAloudJob(chatId: String) -> [String: Any] {
+        ["jobId": "read_aloud_job_demo", "chatId": chatId, "phase": "generating", "totalSegments": 1, "readySegments": 0]
+    }
 
     /// A whole chat for a summary row, as `GET /chats/{id}` returns it.
     static func chatJSON(row: [String: Any], index: Int) -> Data {
@@ -1147,6 +1200,12 @@ enum AidenDemoStagedAttachment {
 /// no other launch sees it. Its newest replies carry fenced code.
 /// What a UI test can ask of a demo run beyond its scenario.
 enum AidenDemoRunOptions {
+    /// Every machine offers Read Aloud, and a reply read aloud keeps generating
+    /// (for about two minutes) until it's stopped, so a test can see it playing.
+    static var readsAloud: Bool {
+        ProcessInfo.processInfo.arguments.contains("-AidenDemoReadAloud")
+    }
+
     /// Every machine stays on connecting.
     static var connectsSlowly: Bool {
         ProcessInfo.processInfo.arguments.contains("-AidenDemoSlowConnect")

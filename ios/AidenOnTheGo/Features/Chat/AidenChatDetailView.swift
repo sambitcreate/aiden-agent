@@ -507,7 +507,7 @@ struct AidenChatDetailView: View {
                 readAloudActiveID: model.readAloud.activeMessageID,
                 revealedFooterID: footerReveal.shownID,
                 onTapMessage: { messageID in revealFooter { $0.tapMessage(messageID) } },
-                onTouchFooter: { footerReveal.touchFooter() },
+                onTouchFooter: { revealFooter { $0.touchFooter() } },
                 renderIDs: model.messageRenderIDs,
                 imageArrivalRevealIDs: model.imageArrivalRevealGenerationIDs,
                 appControlsAvailable: model.canReadAppControls,

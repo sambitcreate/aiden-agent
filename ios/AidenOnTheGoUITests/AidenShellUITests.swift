@@ -1260,7 +1260,74 @@ final class AidenShellUITests: XCTestCase {
 
         reply.tap()
         XCTAssertTrue(copyReply.waitForExistence(timeout: 3))
-        // Somewhere in the transcript clear of both messages and the footer.
+        tapClearOfTheMessages(in: app, question: question, reply: reply)
+        XCTAssertTrue(waitForAbsence(copyReply), "A tap elsewhere in the transcript left the footer")
+        XCTAssertFalse(copyQuestion.exists)
+        app.terminate()
+    }
+
+    /// The footer's own Copy and Read Aloud work and leave it shown. While the
+    /// reply reads aloud its footer stays, even through a tap elsewhere.
+    func testTheFootersOwnCopyAndReadAloudLeaveItShown() {
+        let app = AidenStateMatrix.launch(scenario: .busy, extraArguments: ["-AidenDemoReadAloud"])
+        let chat = openInbox(in: app)
+        XCTAssertTrue(chat.waitForExistence(timeout: 10), "No chat rows in the inbox")
+        hideOverlaySidebar(in: app)
+        chat.tap()
+        let question = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Where do we stand?")).firstMatch
+        let reply = app.staticTexts.matching(NSPredicate(
+            format: "label BEGINSWITH %@ OR label BEGINSWITH %@ OR label BEGINSWITH %@",
+            "I found the cause", "Here is a first pass", "The review had three themes"
+        )).firstMatch
+        XCTAssertTrue(question.waitForExistence(timeout: 10), "The chat did not open")
+        XCTAssertTrue(reply.waitForExistence(timeout: 5), "The chat has no reply")
+        let copyReply = app.buttons["Copy response"].firstMatch
+        let readAloud = app.buttons["Read response aloud"].firstMatch
+        let stop = app.buttons["Stop reading aloud"].firstMatch
+
+        reply.tap()
+        XCTAssertTrue(copyReply.waitForExistence(timeout: 3), "A tap on the reply didn't show its footer")
+
+        copyReply.tap()
+        XCTAssertFalse(waitForAbsence(copyReply, timeout: 1.5), "Copy hid the footer")
+
+        XCTAssertTrue(readAloud.waitForExistence(timeout: 3), "The reply's footer has no Read Aloud")
+        readAloud.tap()
+        XCTAssertTrue(stop.waitForExistence(timeout: 5), "Read Aloud didn't start")
+        XCTAssertTrue(copyReply.exists, "Read Aloud hid the footer")
+        stop.tap()
+        XCTAssertTrue(readAloud.waitForExistence(timeout: 5), "Stop didn't stop")
+        XCTAssertFalse(waitForAbsence(copyReply, timeout: 1.5), "Stop hid a footer the person showed")
+
+        // Shown for playback alone, it stays through a tap elsewhere, and goes with Stop.
+        readAloud.tap()
+        XCTAssertTrue(stop.waitForExistence(timeout: 5), "Read Aloud didn't start again")
+        tapClearOfTheMessages(in: app, question: question, reply: reply)
+        XCTAssertFalse(waitForAbsence(stop, timeout: 1.5), "A tap elsewhere hid the footer while reading aloud")
+        AidenStateMatrix.capture("chat-footer-reading-aloud", in: self)
+        stop.tap()
+        XCTAssertTrue(waitForAbsence(copyReply), "The footer stayed after playback it alone was shown for")
+
+        // What Copy put on the pasteboard, pasted into the composer. The test
+        // runner can't read the pasteboard itself without a paste prompt.
+        let field = composer(in: app)
+        field.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "The keyboard didn't come up")
+        field.press(forDuration: 1.2)
+        let paste = app.descendants(matching: .any).matching(NSPredicate(
+            format: "label == %@ AND (elementType == %d OR elementType == %d)",
+            "Paste", XCUIElement.ElementType.menuItem.rawValue, XCUIElement.ElementType.button.rawValue
+        )).firstMatch
+        XCTAssertTrue(paste.waitForExistence(timeout: 5), "The composer offers no Paste")
+        paste.tap()
+        let pasted = field.value as? String ?? ""
+        XCTAssertTrue(pasted.hasPrefix(String(reply.label.prefix(17))), "Copy didn't copy the reply: \(pasted)")
+        clearTheDraft(in: app)
+        app.terminate()
+    }
+
+    /// Taps the transcript somewhere clear of both messages and the reply's footer.
+    private func tapClearOfTheMessages(in app: XCUIApplication, question: XCUIElement, reply: XCUIElement) {
         let window = app.windows.firstMatch
         let field = composer(in: app).frame
         let below = reply.frame.maxY + 56
@@ -1268,9 +1335,6 @@ final class AidenShellUITests: XCTestCase {
         window.coordinate(withNormalizedOffset: .zero)
             .withOffset(CGVector(dx: window.frame.midX, dy: y))
             .tap()
-        XCTAssertTrue(waitForAbsence(copyReply), "A tap elsewhere in the transcript left the footer")
-        XCTAssertFalse(copyQuestion.exists)
-        app.terminate()
     }
 
     private func waitForAbsence(_ element: XCUIElement, timeout: TimeInterval = 3) -> Bool {

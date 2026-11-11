@@ -137,12 +137,23 @@ struct AidenSelectTextRequest: Identifiable {
 /// The transcript's own tap (`AidenTranscriptTap`, for the keyboard) also sees a
 /// tap on a message, in either order. It asks after a short beat and does
 /// nothing if a message, or a footer button, took the same tap.
+///
+/// A tap on the footer's own Copy or Read Aloud never toggles it. The message
+/// tap sits on the message body, not the footer, but should a footer touch
+/// reach it too, the two land within `sameTouch` of each other, in either
+/// order, and the footer's wins.
 struct AidenMessageFooterReveal: Equatable {
     /// How close a transcript tap and a message tap are to count as one.
     static let sameTap: TimeInterval = 0.35
+    /// How close two recognisers' calls are to come from one touch. UIKit ends
+    /// every recogniser a touch reaches in the same pass, so this is tight.
+    static let sameTouch: TimeInterval = 0.1
 
     private(set) var shownID: String?
     private var messageTouchedAt = Date.distantPast
+    private var footerTouchedAt = Date.distantPast
+    private var lastMessageTapAt = Date.distantPast
+    private var shownBeforeLastMessageTap: String?
 
     func shows(_ messageID: String, readingAloud: Bool = false) -> Bool {
         readingAloud || shownID == messageID
@@ -150,13 +161,23 @@ struct AidenMessageFooterReveal: Equatable {
 
     /// A tap on a message: shows its footer, or hides it if it already shows.
     mutating func tapMessage(_ messageID: String, at now: Date = .now) {
-        shownID = shownID == messageID ? nil : messageID
         messageTouchedAt = now
+        // The footer's own button took this touch.
+        guard abs(now.timeIntervalSince(footerTouchedAt)) > Self.sameTouch else { return }
+        shownBeforeLastMessageTap = shownID
+        lastMessageTapAt = now
+        shownID = shownID == messageID ? nil : messageID
     }
 
-    /// A tap on a shown footer's own button, which leaves the footer up.
+    /// A tap on a shown footer, its own buttons included, which leaves it as it was.
     mutating func touchFooter(at now: Date = .now) {
+        footerTouchedAt = now
         messageTouchedAt = now
+        // A message tap from this same touch came first: undo it.
+        if abs(now.timeIntervalSince(lastMessageTapAt)) <= Self.sameTouch {
+            shownID = shownBeforeLastMessageTap
+            lastMessageTapAt = .distantPast
+        }
     }
 
     /// A tap anywhere in the transcript. Hides the footer unless a message or
