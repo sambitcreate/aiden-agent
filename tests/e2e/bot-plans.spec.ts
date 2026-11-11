@@ -147,8 +147,13 @@ test("plan approval waits for the host, then becomes a stoppable checklist", asy
     Math.abs(element.scrollHeight - element.clientHeight - element.scrollTop) <= 1,
   )).toBe(true);
   await expect(review).toBeFocused();
-  await review.press("Home");
-  await expect(page.getByText(longPlan.steps[0]!.text, { exact: true })).toBeInViewport();
+  // Chromium can drop a Home press that lands while it is still settling the
+  // End scroll (job 130773369673), so press again if the first step has not
+  // come back. A Home key that never scrolls still fails at the deadline.
+  await expect(async () => {
+    await review.press("Home");
+    await expect(page.getByText(longPlan.steps[0]!.text, { exact: true })).toBeInViewport({ timeout: 1_000 });
+  }).toPass({ timeout: 10_000 });
   await page.getByText(longPlan.steps[9]!.text, { exact: true }).scrollIntoViewIfNeeded();
   await expect(page.getByText(longPlan.steps[9]!.text, { exact: true })).toBeInViewport();
   await expect(page.getByRole("button", { name: "Approve plan", exact: true })).toBeInViewport();

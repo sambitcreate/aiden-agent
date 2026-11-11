@@ -238,8 +238,6 @@ each:
 - `crash-reporting.spec.ts:41`: an unhandled "Target crashed" right after a
   browser tab's renderer is killed (job 130172496756). Locally, 5 of 10
   repeats failed differently: the fixture's first `firstWindow` timed out.
-- `bot-plans.spec.ts:15`: Home not scrolling the plan review back to the top
-  (jobs 128235396340 and 128250445861).
 - A first turn that is never answered, in `worktree-folder-deleted.spec.ts:15`
   (job 130053226128).
 - `testHeldHomeHTTPResponseCannotReplaceSettlementOrNewerHomeOwner` (job
@@ -260,6 +258,13 @@ failed on 2026-11-11 (job 130752861135). It pressed the copy button after a
 fixed 50 ms pause, and the runner had not redrawn the next token yet, so the
 press copied the old source. The test now waits, up to the helper's 3-second
 ceiling, until the new code text is in the accessibility tree.
+
+`bot-plans.spec.ts:15` failed again on 2026-11-11 (job 130773369673, after
+jobs 128235396340 and 128250445861). Its Home press, sent once the End scroll
+had reached the bottom, sometimes left the plan review where it was. The test
+now presses Home again each second until the first step is back in view, for
+up to 10 seconds, so a dropped key is retried but a Home key that never
+scrolls still fails.
 
 The 30-second `waitForCondition` ceiling is an explicit exception to the
 AGENTS.md rule against raising timeouts. It applies to all of that helper's
