@@ -117,7 +117,8 @@ Steps cancelled by app shutdown or chat deletion keep today's treatment. The dec
   - If the settling run fails after the commit, the owed turn still starts, because it is its own turn and not a retry. A failure inside the owed turn ends that turn only and never loops.
   - If main cannot register the turn (chat deleted, app shutting down, run lifecycle already closing), it returns `committed`, not `follow-up`. Clients show the existing "saved, not answered" treatment and the person can resend.
   - Phones need nothing new: they already render the `follow-up` and `committed` receipts and see the next turn through the normal stream.
-  - Tests: Stop right after a `follow-up` receipt leaves exactly one stopped turn and no rerun; a failure in the settle window still starts the owed turn exactly once; deleting the chat or shutting down before registration gives a `committed` receipt.
+  - Prompt hooks run once. Admission already screened the input with `UserPromptSubmit` before committing it, so the registered turn takes over that accepted result and any hook context, keyed by the committed message id, from the settling run's in-memory run-input contexts. The owed turn does not dispatch `UserPromptSubmit` again for that message and injects the carried context once.
+  - Tests: Stop right after a `follow-up` receipt leaves exactly one stopped turn and no rerun; a failure in the settle window still starts the owed turn exactly once; deleting the chat or shutting down before registration gives a `committed` receipt; a context-producing `UserPromptSubmit` hook runs once and its context reaches the owed turn once.
 
 ### W7: lenient output schemas
 
