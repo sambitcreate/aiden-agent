@@ -125,7 +125,12 @@ final class AidenChatMarkdownTests: XCTestCase {
         let button = try copyButton(in: window).element
 
         host.update(reply("one\ntwo"))
-        drainMainLoop(seconds: 0.05)
+        // Wait for the token to be drawn rather than for a fixed time: a slow runner can take
+        // longer than a moment to redraw, and the press would then copy the old source.
+        XCTAssertTrue(
+            runMainLoop(until: { self.accessibleElements(in: window).contains { $0.accessibilityLabel == "one\ntwo" } }),
+            "The next token was never drawn"
+        )
         // The element read before the token is the one pressed after it, as a finger that went down earlier would.
         XCTAssertTrue(button.accessibilityActivate())
         XCTAssertEqual(UIPasteboard.general.string, "one\ntwo")
