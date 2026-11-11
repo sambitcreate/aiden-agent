@@ -10,7 +10,7 @@ enum AidenDiagnosticArea: String, CaseIterable {
 enum AidenDiagnosticEvent: String, CaseIterable {
     case launch, requestFailed, contractRejected, cacheFailed, streamInterrupted
     case speechFailed, notificationFailed, liveActivityFailed, priorTerminationObserved
-    case priorCrashObserved, priorHangObserved
+    case priorCrashObserved, priorHangObserved, keyboardReachMissed
 }
 
 enum AidenDiagnosticOutcome: String, CaseIterable {

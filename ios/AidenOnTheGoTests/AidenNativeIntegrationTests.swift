@@ -166,6 +166,7 @@ final class AidenNativeIntegrationTests: XCTestCase {
             Set(["connection", "authentication", "contract", "cache", "stream", "speech", "notification", "liveActivity", "priorTermination", "app"])
         )
         XCTAssertTrue(AidenDiagnosticEvent.allCases.contains(.contractRejected))
+        XCTAssertTrue(AidenDiagnosticEvent.allCases.contains(.keyboardReachMissed))
         XCTAssertTrue(AidenDiagnosticCode.allCases.contains(.metricDiagnostic))
         let vocabulary = [
             AidenDiagnosticArea.allCases.map(\.rawValue),

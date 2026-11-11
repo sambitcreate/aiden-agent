@@ -1,6 +1,5 @@
 import SwiftUI
 import UIKit
-import os
 
 /// What a composer offers. Everything that changes with the conversation's
 /// moment-to-moment state is in `AidenComposerControls`.
@@ -633,20 +632,14 @@ struct AidenComposerFieldReach: UIViewRepresentable {
     final class ReachView: UIView {
         var handled: AidenComposerKeyboardRequest?
 
-        #if DEBUG
-        private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "sbtbiswas.AidenOnTheGo", category: "composer")
-        #endif
-
         func carryOut(_ request: AidenComposerKeyboardRequest) {
             let fields = ownFields()
             if fields.isEmpty {
                 // On screen with no field under it: SwiftUI has changed how the
                 // field is backed, and every keyboard ask would quietly do nothing.
-                #if DEBUG
                 if window != nil {
-                    Self.logger.fault("The composer's keyboard reach found no editable text input under it")
+                    AidenDiagnostics.record(.app, event: .keyboardReachMissed, outcome: .degraded, code: .unavailable)
                 }
-                #endif
                 return
             }
             if request.raises {
