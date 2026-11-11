@@ -481,6 +481,40 @@ test("rejected and unknown Steer receipts keep the draft without replaying it", 
   await expect(composer).toHaveValue("Keep this guidance");
 });
 
+test("a Steer that misses the finishing response is sent once as the next turn", async ({ aiden }) => {
+  const { page, lmStudio } = aiden;
+  await finishLmStudioOnboarding(page);
+  lmStudio.holdCompletions!();
+  const composer = page.locator("textarea");
+  await composer.fill("First response before late guidance");
+  await composer.press("Enter");
+  await expect(page.getByRole("button", { name: "Stop generating" })).toBeVisible();
+  // The run is past taking input (finishing up after agent_end): main
+  // refuses guidance as run_not_active and saves nothing.
+  await aiden.app.evaluate(({ ipcMain }) => {
+    const handlers = (ipcMain as unknown as {
+      _invokeHandlers: Map<string, (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => unknown>;
+    })._invokeHandlers;
+    handlers.set("chat:admitRunInput", async () => ({
+      admitted: false,
+      reason: "run_not_active",
+      committed: false,
+    }));
+  });
+  await composer.fill("Late guidance becomes the next turn");
+  await page.getByRole("button", { name: "Choose message action" }).click();
+  await page.getByRole("menuitemradio", { name: /^Steer/u }).click();
+  lmStudio.releaseCompletions!();
+  await expect(page.getByText(/It will send as your next message/u)).toBeVisible();
+  await expect(composer).toHaveValue("");
+  await expect.poll(() => lmStudio.requests.filter((request) =>
+    JSON.stringify(request.body).includes("Late guidance becomes the next turn"),
+  ).length).toBeGreaterThan(0);
+  await expect(page.getByRole("button", { name: "Stop generating" })).toHaveCount(0);
+  await expect(page.getByText("Late guidance becomes the next turn", { exact: true })).toHaveCount(1);
+  await expect(page.getByRole("button", { name: /queued message/u })).toHaveCount(0);
+});
+
 test("a response finishing while the queue editor is open waits for the saved edit", async ({
   aiden,
 }) => {
