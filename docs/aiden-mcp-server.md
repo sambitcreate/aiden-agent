@@ -62,7 +62,7 @@ There is deliberately no tool for approvals or questions. When a turn needs one,
 
 ## Limits
 
-- **Turns:** each app can start or send 10 turns a minute and have 2 runs at once. A retry of an accepted `clientRequestId` does not count again.
+- **Turns:** each app can start or send 10 turns a minute and have 2 runs at once. A retry of an accepted `clientRequestId` does not count again, even after a restart or after many newer requests: Aiden's durable request record answers it.
 - **Requests:**
   - A request body over 1 MiB is answered 413 before any tool runs, whether its size is declared or streamed.
   - The server drains the rest of an oversized upload for up to 5 seconds so the app sees the 413, then cuts the connection.
@@ -96,7 +96,7 @@ Privacy:
 - Aiden keeps a local note of which app started a chat (`startedBy {kind: "app", name}`, in `aiden-mcp-chat-provenance.json`, the newest 1,000 entries). It is never sent to phones, Macs or apps.
 - App ids never appear in tool results.
 - Server logs carry only `started`, `stopped`, `start-failed` (with a problem code) and `request-failed`, never a token, an app name, a path or chat text.
-- No analytics events are sent for the MCP server.
+- No analytics events are sent for the MCP server: a chat an app starts sends no `chat_created`, and its turns send no `chat_message_sent`.
 
 The Remote Access threat model has the matching section: [`docs/security/aiden-remote-threat-model.md`](security/aiden-remote-threat-model.md#10-local-mcp-server-for-outside-apps).
 

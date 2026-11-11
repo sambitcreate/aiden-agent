@@ -846,6 +846,33 @@ test("each app has its own turn rate limit and run cap, and a retry does not cou
   }
 });
 
+test("a retry the server's request cache has forgotten still replays, without counting as a new turn", async () => {
+  // Room for exactly the first start, its send and 128 more: then the rate limit is spent.
+  const fixture = await harness({ limits: { turnsPerMinute: 130, concurrentRuns: 130 } });
+  try {
+    await fixture.enable();
+    const client = await fixture.connect((await fixture.host.issueApp({ name: "Retrier", access: "supervised" })).credential);
+    const start = (id: string) =>
+      client.callTool({ name: "aiden_chat_start", arguments: { clientRequestId: id, workspaceId: "workspace-1", text: "Go" } });
+    const sendArgs = (chatId: unknown) => ({ clientRequestId: "evicted-send-1", chatId, text: "More" });
+
+    const first = structured(await start("evicted-start-1"));
+    await client.callTool({ name: "aiden_chat_wait", arguments: { chatId: first.chatId, runId: first.runId } });
+    const sent = structured(await client.callTool({ name: "aiden_chat_send", arguments: sendArgs(first.chatId) }));
+    // 128 newer requests push both out of the in-memory cache.
+    for (let index = 0; index < 128; index += 1) structured(await start(`filler-start-${index}`));
+    assert.equal(fixture.generationStarts(), 130);
+
+    assert.deepEqual(structured(await start("evicted-start-1")), first);
+    assert.deepEqual(structured(await client.callTool({ name: "aiden_chat_send", arguments: sendArgs(first.chatId) })), sent);
+    assert.equal(fixture.generationStarts(), 130);
+    // A new request is still held to the limit.
+    assert.match(refusal(await start("fresh-start-1")), /started 130 turns in the last minute/u);
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("Bot chats and the folders Aiden makes for one chat are out of an app's reach", async () => {
   const fixture = await harness();
   try {

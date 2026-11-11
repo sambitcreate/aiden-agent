@@ -741,6 +741,13 @@ test("a created chat counts once with its workspace kind, and a refused create c
   await application.service.create({ workspaceId: "workspace-1", title: "Chat" }, owner());
   assert.deepEqual(sent, [{ event: "chat_created", props: { workspace_kind: "folder" } }]);
 
+  // A chat an outside MCP app made is created, but not counted.
+  const uncounted = await application.service.create({ workspaceId: "workspace-1", title: "Chat" }, owner(), {
+    reportAnalytics: false,
+  });
+  assert.ok(uncounted?.id);
+  assert.equal(sent.length, 1);
+
   const stale = owner();
   stale.invalidate();
   await assert.rejects(application.service.create({ workspaceId: "workspace-1", title: "Chat" }, stale));
