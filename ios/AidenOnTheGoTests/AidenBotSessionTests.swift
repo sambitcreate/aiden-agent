@@ -6731,6 +6731,47 @@ extension AidenBotSessionTests {
         await assertSettles({ coordinator.hosts.connection(for: "studio") == nil }, "Leaving the chat ends the wait", timeout: 15)
     }
 
+    /// Main's revision 59 pages (Watches, Open work, Routine models, Bot peers)
+    /// open from a Bot's profile. On a Bot whose machine isn't the default they
+    /// read that machine, never the selected one, which here can't serve them.
+    func testBotContinuityPagesReadTheBotsOwnMachine() async throws {
+        let studio = AidenDemoHosts.installation(instanceId: "studio", name: "Studio")
+        var laptop = AidenDemoHosts.installation(instanceId: "laptop", name: "Laptop")
+        let continuity: [AidenRemoteCapability] = [.botWatches, .botOpenWork, .botRoutineModels, .botPeers]
+        laptop.deviceCapabilities += continuity
+        laptop.serverCapabilities? += continuity
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(installations: [studio, laptop], responder: responder)
+        await coordinator.start()
+        await coordinator.hosts.connection(for: "laptop")?.connect(over: .probe)
+        XCTAssertEqual(coordinator.installationStore.activeInstallationId, "studio")
+        let laptopServer = try XCTUnwrap(coordinator.botServer(on: "laptop"))
+        XCTAssertTrue(laptopServer.supportsBotWatches && laptopServer.supportsBotOpenWork)
+        XCTAssertTrue(laptopServer.supportsBotRoutineModels && laptopServer.supportsBotPeers)
+        XCTAssertFalse(coordinator.botServer(on: nil)?.supportsBotWatches == true, "the default machine can't serve them")
+
+        let bot = "bot_far"
+        let pages: [(String, AnyView)] = [
+            ("GET /bots/\(bot)/watches", AnyView(AidenBotWatchesView(coordinator: coordinator, machine: "laptop", botID: bot))),
+            ("GET /bots/\(bot)/open-work", AnyView(AidenBotOpenWorkView(coordinator: coordinator, machine: "laptop", botID: bot))),
+            ("GET /bots/\(bot)/routine-models", AnyView(AidenBotRoutineModelDirectoryView(coordinator: coordinator, machine: "laptop", botID: bot))),
+            ("GET /bots/\(bot)/peers", AnyView(AidenBotPeersView(coordinator: coordinator, machine: "laptop", botID: bot, botName: "Far"))),
+        ]
+        for (request, page) in pages {
+            // A hosted window has no scene of its own; Bot peers loads only while active.
+            let window = try await show(NavigationStack { page }.environment(\.scenePhase, .active))
+            await assertSettles(
+                { responder.requests(instanceId: "laptop").contains { $0.hasPrefix(request) } },
+                "\(request) never reached the Bot's machine"
+            )
+            close(window)
+        }
+        XCTAssertFalse(
+            responder.requests(instanceId: "studio").contains { $0.contains("/bots/\(bot)/") },
+            "a page read the default machine"
+        )
+    }
+
     func testTheBotScreenShowsAWorkingMic() async throws {
         let (coordinator, _) = demoCoordinator()
         let voice = AidenComposerFakeVoice()
