@@ -233,3 +233,54 @@ change was needed. Desktop's committed-but-not-admitted toasts now use
 `committedRunInputNotice`, the same three strings as iOS/Android
 `AidenRunInputPresentation.receipt`. Documented in
 `docs/chat-composer-busy-controls.md` ("Stop and admitted input").
+
+November 11 (W6b, `claude/server-owed-input-turn`): input admission commits
+after `agent_end` closed Pi's queue (receipt `not-active`, or the run left
+`active` after the save), and committed follow-ups the run ended without
+draining (`takeUndeliveredQueuedMessages().committed`), now become the
+chat's next turn instead of history that gets no answer.
+`main/services/chat-owed-turns.ts` is the registry. llm-client opens an
+entry per ordinary chat run, admission takes a hold and returns `follow-up`
+only if `register` succeeds (otherwise committed `run_not_active`), and each
+settlement path calls `owedTurns.settle`. One headless, unattended turn
+starts per settled run, like notice delivery. It starts nothing after a
+recorded Stop, quit or chat deletion. A Stop after the run recorded its outcome
+starts the owed turn and cancels it at once, so the person sees one stopped
+turn. The UserPromptSubmit result travels by message id
+(`createRunInputContexts().forMessage`, `screenedPrompt`), so the hooks
+screen it once and their context is injected once. No protocol, receipt or
+mobile change was needed. `aiden serve`'s admitInput never commits, so it
+owes nothing. llm-client host tests (`pi-cache-warming`, `bot-pause`) load
+the real registry module.
+
+November 11, later (W6b rework, PR #806): the owed turn is no longer a
+reduced notice-style turn. `startOwedTurn` starts an ordinary chat turn with
+a headless owner, as a phone's turn is started: subagents on, connectors on,
+the settled run's `visualAudience` and `excludeToolNames` carried over, and
+no `unattended`. Its owner's `send` feeds `main/services/chat-owed-turn-prompts.ts`,
+which keeps the turn's approval and question cards per chat. The Remote
+runtime's `pendingApprovalForChat`/`pendingQuestionForChat` and host
+respond methods fall back to those cards after the stream service's, so the
+desktop's existing remote-source host card shows them with no renderer
+change. Phones answer through `runs:control` (`approveAsHost`,
+`answerQuestionnaireAsHost`). The coordinators' one-shot settlement means the
+first answer wins, and the settle callbacks clear the card. An unanswered
+card is denied, or its question closed, after five minutes, as for a phone
+turn. What it still lacks, like every turn no window owns: Computer Use, the
+hooks tool (added to `excludeToolNames`), the exact command or file-change
+preview on the desktop card, and Allow for `classify`/`generate_image`.
+Design choice: handing the turn to the renderer's queue drain was rejected,
+because no window may be open and a window-owned turn would die with it. The
+phone path needs a paired device and its stream journal. The headless owner
+plus one small card board was the least new machinery.
+"Chat already taken": no other turn can begin first, because the chat is busy
+while input saves (`isHolding`) and the owed turn begins synchronously in the
+settle step. `beginChatTurn` can still refuse it (folder move or copy gate,
+a live subagent child). The input then has no `aiden.chat-message.v1`
+marker, so the next turn's `syncChatMessagesToPiSession` includes it once as
+history. The harness test "Stop after a queued follow-up is admitted keeps
+it as history and never runs it" proves this.
+Pullfrog fix: `owedTurns.settleAfter(streamId, endOwnership, settlement)`
+runs `settleGeneration` and settles the owed turn in a `finally`, so a
+throwing cleanup step (approval release, broadcast) never skips the owed
+turn. llm-client's three settle paths call it through `settleRun`.

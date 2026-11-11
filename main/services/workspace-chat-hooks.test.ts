@@ -42,6 +42,7 @@ import {
   workspaceChatSessionStartSource,
 } from "./workspace-chat-hooks.js";
 import { createChatRunInputAdmission, type ChatRunInputGenerationRef } from "./chat-run-input-admission.js";
+import { createChatOwedTurns, type OwedTurnPlan } from "./chat-owed-turns.js";
 
 interface Dispatched {
   event: HookEvent;
@@ -882,4 +883,78 @@ test("a blocked prompt sent on a turn where hooks don't run stays blocked; with 
   assert.equal(await runPromptIntakeHooks({ ...base, prompt, dispatch: noHooks }), undefined);
   assert.equal("hookBlocked" in prompt, false);
   assert.deepEqual(cleared, [undefined]);
+});
+
+test("input the run ended before reading is screened once, and its hook context reaches the owed turn once", async () => {
+  resetWorkspaceChatSessionsForTests();
+  const chatId = "owed-input-hooks";
+  const { dispatcher, calls } = fakeDispatcher({
+    UserPromptSubmit: { additionalContext: fenced("ticket: OPS-12"), ranHooks: ["scan"] },
+  });
+  const hooks = createWorkspaceChatHooks({ chatId }, dispatcher);
+  const contexts = createRunInputContexts();
+  const plans: OwedTurnPlan<null, "user_stop">[] = [];
+  const owedTurns = createChatOwedTurns<null, "user_stop">({ refuses: () => false, start: (plan) => plans.push(plan) });
+  owedTurns.open("stream", { chatId, ownerDocumentId: "doc", context: null });
+  const saved: ChatMessage[] = [];
+  const generation: ChatRunInputGenerationRef = {
+    chatId,
+    owner: { documentId: "doc" },
+    cancelRequested: false,
+    owedTurn: { hold: () => owedTurns.hold("stream") },
+    inputHooks: {
+      screen: ({ text, messageId }) =>
+        screenRunInputWithHooks({ dispatch: hooks.dispatch, text, idempotencyKey: `UserPromptSubmit:${messageId}` }),
+      attachContext: contexts.attach,
+    },
+    agent: {
+      queueAdmissionBlocked: () => undefined,
+      // agent_end already closed the run's queues.
+      queueSteer: () => ({ accepted: false, reason: "not-active" }),
+      queueFollowUp: () => ({ accepted: false, reason: "not-active" }),
+    } as unknown as ChatRunInputGenerationRef["agent"],
+  };
+  const active = new Map([["stream", generation]]);
+  const admission = createChatRunInputAdmission({
+    active,
+    isChatDeleting: () => false,
+    appendMessage: async (id, message) => {
+      saved.push({ ...message, createdAt: 2 } as ChatMessage);
+      return { id, messages: saved } as never;
+    },
+    readChat: async () => null,
+    newMessageId: () => "owed-message",
+  });
+
+  const receipt = await admission.admit({ streamId: "stream", mode: "queue", text: "then run the tests" });
+  assert.deepEqual(receipt, { admitted: true, queue: "follow-up", committed: true, messageId: "owed-message" });
+  active.delete("stream");
+  owedTurns.settle("stream", { committed: [], recordedStop: false });
+  assert.equal(plans.length, 1);
+  const owed = plans[0]!.inputs[plans[0]!.inputs.length - 1]!;
+
+  // The owed turn's intake takes over what the hooks said when the input arrived.
+  const turnContext = await runPromptIntakeHooks({
+    target: { chatId },
+    dispatch: hooks.dispatch,
+    hasPriorMessages: true,
+    prompt: { id: saved[0]!.id, content: saved[0]!.content },
+    screenedPrompt: { messageId: owed.messageId, ...(owed.hookContext ? { context: owed.hookContext } : {}) },
+    store: { setPromptHookBlock: async () => true },
+    idempotencyKeys: { userPromptSubmit: `UserPromptSubmit:${chatId}:owed` },
+    onStoreError: () => assert.fail("nothing is written"),
+  });
+  assert.deepEqual(
+    calls.map((call) => call.event),
+    ["UserPromptSubmit"],
+    "the input is screened when it arrives, never again by the owed turn",
+  );
+
+  const prompt: AgentMessage = { role: "user", content: "then run the tests", timestamp: 2 };
+  const transformed = await hooks
+    .extension({ promptTimestamp: () => 2, turnContext: () => turnContext, inputContext: contexts.lookup })
+    .transformContext!([prompt], undefined);
+  const sent = JSON.stringify(transformed);
+  assert.equal(sent.split("ticket: OPS-12").length - 1, 1, "the hook context reaches the model exactly once");
+  assert.match(sent, /then run the tests/u);
 });
