@@ -234,6 +234,28 @@ Keychain calls from each Bot turn, which had pushed the first answer past
 the spec's 10-second expectation. It has not failed since, so it is no longer
 listed as open.
 
+The 30-second `waitForCondition` ceiling is an explicit exception to the
+AGENTS.md rule against raising timeouts. It applies to all of that helper's
+roughly 30 callers in `AidenChatTests`. For the lookup waits it is only a
+backstop, because those now await the lookup tasks. For the two "live foreign
+output" waits in `testIdleChatAttachesToARunTheRosterAnnouncesAndShowsItLive`
+and `testAnnouncedRunNotYetRegisteredIsAttachedByOneRetry`, the longer ceiling
+is the whole fix: nothing deterministic was found to wait on instead.
+
+The exception is justified on three counts:
+- The wait polls a condition against the wall clock instead of counting
+  main-actor turns, so it ends as soon as the output appears and costs nothing
+  on a healthy host.
+- The old budget was a count of sleeps, not a time. On a stalled CI host it ran
+  out after about 5 to 9 seconds, while ordinary tests in those runs took up to
+  43 seconds.
+- It matches `waitForRequests` (38ab09a53), which already used a 30-second
+  wall-clock ceiling.
+
+Replacing those two waits with an expectation the stub fulfils, once it has
+served the run's events and the model has shown them, would make the ceiling
+bound only a failure there too.
+
 Release workflows, signing/notarization, publication and repository protection
 settings remain unchanged. The previous draft's release-admission rewrite has
 been removed to keep release hardening separate from this CI rollout.
