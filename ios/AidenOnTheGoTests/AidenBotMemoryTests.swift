@@ -573,7 +573,7 @@ final class AidenBotRoutineNotifierTests: XCTestCase {
         server = host(held: [.botRead, .chatRead], legacy: true)
         transport.queue(try feed([("legacy-routine", "2026-11-03T12:00:00.000Z")], now: "2026-11-03T12:01:00.000Z"))
         await notifier.deliverFromHost(instanceId: instance, transport: transport, installation: { installed }, server: { server })
-        XCTAssertEqual(center.posted.map(\.identifier), ["aiden.bot-routine.legacy-routine"])
+        XCTAssertEqual(center.posted.map(\.identifier), ["aiden.bot-routine.\(instance).legacy-routine"])
     }
 
     func testPeerFinalNotificationRequiresCurrentCapabilityDeduplicatesAndOpensInitiatorChat() async throws {
@@ -585,7 +585,7 @@ final class AidenBotRoutineNotifierTests: XCTestCase {
         XCTAssertTrue(center.posted.isEmpty); XCTAssertEqual(defaults.string(forKey: AidenBotRoutineNotifier.cursorKey(instance)), "2026-11-03T11:00:00.000Z", "A late grant loss cannot consume a final update")
         await notifier.deliver(instanceId: instance, transport: transport, currentGrants: { [.botRead, .chatRead, .botPeers] })
         await notifier.deliver(instanceId: instance, transport: transport, currentGrants: { [.botRead, .chatRead, .botPeers] })
-        XCTAssertEqual(center.posted.count, 1); XCTAssertEqual(center.posted.first?.identifier, "aiden.bot-routine.peer_root_final_one")
+        XCTAssertEqual(center.posted.count, 1); XCTAssertEqual(center.posted.first?.identifier, "aiden.bot-routine.\(instance).peer_root_final_one")
         let content = try XCTUnwrap(center.posted.first?.content); XCTAssertEqual(content.threadIdentifier, "aiden.bot-peer.\(instance).bot_fixture_01")
         XCTAssertEqual(AidenRunAlertNotifier.deepLink(from: content.userInfo), AidenDeepLink.botChatURL(instanceId: instance, botId: "bot_fixture_01"))
     }
@@ -603,7 +603,7 @@ final class AidenBotRoutineNotifierTests: XCTestCase {
         XCTAssertFalse((defaults.stringArray(forKey: AidenBotRoutineNotifier.deliveredKey(instance)) ?? []).contains("peer_root_final_one"))
         allowsPeers = true; transport.queue(try peerFeed(now: "2026-11-03T12:01:00.000Z"))
         await notifier.deliver(instanceId: instance, transport: transport, currentGrants: { allowsPeers ? [.botRead, .chatRead, .botPeers] : [.botRead, .chatRead] })
-        XCTAssertEqual(center.posted.map(\.identifier), ["aiden.bot-routine.peer_root_final_one", "aiden.bot-routine.peer_root_final_one"])
+        XCTAssertEqual(center.posted.map(\.identifier), ["aiden.bot-routine.\(instance).peer_root_final_one", "aiden.bot-routine.\(instance).peer_root_final_one"])
         XCTAssertEqual(defaults.stringArray(forKey: AidenBotRoutineNotifier.deliveredKey(instance)), ["peer_root_final_one"])
     }
     func testPairingPurgeDuringAwaitedNotificationPostCannotRecreateOldCursorOrReceipts() async throws {
