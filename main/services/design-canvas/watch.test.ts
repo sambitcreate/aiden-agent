@@ -133,6 +133,88 @@ test("rewriting one page reloads only that page, not the other pages in its fold
   );
 });
 
+test("the canvas's own write to a page is reported only to other chats, and the page's next change is reported", async (t) => {
+  const root = await workspace(t, { "design/hero.html": "<h1>Ship faster</h1>" });
+  const { instance, updates } = watcher(t);
+  await instance.set("chat-1", root, ["design/hero.html"]);
+  await instance.set("chat-2", root, ["design/hero.html"]);
+  await streamStarted();
+  const file = path.join(root, "design/hero.html");
+  const settle = instance.ownWrite("chat-1", "design/hero.html", "<h1>Ship sooner</h1>");
+  await fsp.writeFile(file, "<h1>Ship sooner</h1>");
+  // The file system can report one write more than once.
+  await fsp.writeFile(file, "<h1>Ship sooner</h1>");
+  settle(true);
+  await eventually(() => updates.some((update) => update.chatId === "chat-2"));
+  await sleep(DESIGN_WATCH_DEBOUNCE_MS + 200);
+  assert.deepEqual(
+    updates.map(({ chatId, paths }) => ({ chatId, paths })),
+    [{ chatId: "chat-2", paths: ["design/hero.html"] }],
+    "the chat that wrote already shows its words; another chat's frame does not",
+  );
+
+  await fsp.writeFile(file, "<h1>Ship today</h1>");
+  await eventually(() => updates.some((update) => update.chatId === "chat-1"));
+  assert.deepEqual(updates.filter((update) => update.chatId === "chat-1").map((update) => update.paths), [["design/hero.html"]]);
+  // That report reloads the page with the newer words, so the canvas's own
+  // earlier words are a change again.
+  await sleep(DESIGN_WATCH_DEBOUNCE_MS + 100);
+  await fsp.writeFile(file, "<h1>Ship sooner</h1>");
+  await eventually(() => updates.filter((update) => update.chatId === "chat-1").length >= 2);
+  assert.equal(updates.filter((update) => update.chatId === "chat-1").length, 2);
+});
+
+test("a report waits for the canvas's write in progress rather than reading the page before it lands", async (t) => {
+  const root = await workspace(t, { "design/hero.html": "<h1>Ship sooner</h1>" });
+  const watched: { emit?: (event: string, filename: string | null) => void } = {};
+  const updates: DesignFilesChanged[] = [];
+  const instance = new DesignFileWatcher({
+    onChange: (update) => updates.push(update),
+    debounceMs: 5,
+    watch: (_folder, _options, listener) => {
+      watched.emit = listener as (event: string, filename: string | null) => void;
+      return Object.assign(new EventEmitter(), { close: () => undefined }) as unknown as fs.FSWatcher;
+    },
+  });
+  t.after(() => instance.clearAll());
+  await instance.set("chat-1", root, ["design/hero.html"]);
+  instance.ownWrite("chat-1", "design/hero.html", "<h1>Ship sooner</h1>")(true);
+  // ⌘Z starts the next write just as the file system reports the earlier one, late.
+  const settle = instance.ownWrite("chat-1", "design/hero.html", "<h1>Ship faster</h1>");
+  watched.emit!("rename", "hero.html");
+  await sleep(50);
+  assert.deepEqual(updates, [], "nothing is read while the canvas is writing the page");
+  await fsp.writeFile(path.join(root, "design/hero.html"), "<h1>Ship faster</h1>");
+  settle(true);
+  await sleep(50);
+  assert.deepEqual(updates, [], "the page holds the canvas's own words");
+});
+
+test("a change beside a page the canvas wrote, or a write that failed, is still reported", async (t) => {
+  const root = await workspace(t, {
+    "design/hero.html": "<link rel=stylesheet href=hero.css><h1>Ship faster</h1>",
+    "design/hero.css": "h1{}",
+  });
+  const { instance, updates } = watcher(t);
+  await instance.set("chat-1", root, ["design/hero.html"]);
+  await streamStarted();
+  const written = "<link rel=stylesheet href=hero.css><h1>Ship sooner</h1>";
+  const settle = instance.ownWrite("chat-1", "design/hero.html", written);
+  await fsp.writeFile(path.join(root, "design/hero.html"), written);
+  settle(true);
+  await fsp.writeFile(path.join(root, "design/hero.css"), "h1{color:red}");
+  await eventually(() => updates.length > 0);
+  assert.deepEqual(updates[0]?.paths, ["design/hero.html"], "the stylesheet changed what the page shows");
+
+  await sleep(DESIGN_WATCH_DEBOUNCE_MS + 100);
+  const before = updates.length;
+  // A write the canvas gave up on leaves the file to whoever writes it next.
+  instance.ownWrite("chat-1", "design/hero.html", "<h1>Never written</h1>")(false);
+  await fsp.writeFile(path.join(root, "design/hero.html"), "<h1>Never written</h1>");
+  await eventually(() => updates.length > before);
+  assert.deepEqual(updates[before]?.paths, ["design/hero.html"]);
+});
+
 test("replacing the watched set closes the old watchers", async (t) => {
   const root = await workspace(t, { "a/one.html": "1", "b/two.html": "2" });
   const { instance, updates, open } = watcher(t);

@@ -8,6 +8,12 @@
 // Writes go one at a time, in the order they were made, and only once the
 // canvas is saved: main finds the page's file in the saved canvas, so while
 // the canvas can't be saved it isn't asked.
+//
+// The page being edited already shows its new words, so a written edit
+// reloads only other frames of the same file. ⌘Z and redo change the file
+// under the page, so they reload it. Main's watcher leaves these writes to
+// the canvas: the file system can report one write late, or twice, and that
+// report would reload the page under the person's next edit.
 
 import * as React from "react";
 import { toast } from "../components/ui";
@@ -50,9 +56,12 @@ export function usePageTextEdits({
   pageWindow,
   queueComment,
   flush,
+  reload,
 }: {
   chatId: string;
   doc: DesignCanvas;
+  /** Reloads every frame of this workspace file. */
+  reload(path: string): void;
   /** Saves the canvas now: main finds the page's frame in the saved canvas. False when it couldn't. */
   flush(): Promise<boolean>;
   pageWindow(frameId: string): Window | null;
@@ -77,6 +86,17 @@ export function usePageTextEdits({
     const frame = docRef.current.frames.find((entry) => entry.id === frameId);
     return frame?.path?.split("/").pop() ?? frame?.title ?? "the page";
   };
+
+  /** After a write to a frame's file: reloads the frames that don't already show it. */
+  const showWritten = React.useCallback(
+    (frameId: string, shownInPlace: boolean) => {
+      const path = docRef.current.frames.find((entry) => entry.id === frameId)?.path;
+      if (!path) return;
+      const framed = docRef.current.frames.filter((entry) => entry.kind === "file" && entry.path === path).length;
+      if (!shownInPlace || framed > 1) reload(path);
+    },
+    [reload],
+  );
 
   const handToAiden = React.useCallback(
     (
@@ -125,6 +145,7 @@ export function usePageTextEdits({
           toast.error("The page's file couldn't be changed.");
         } else if (result.ok) {
           history.current = { undo: [...history.current.undo, edit].slice(-50), redo: [] };
+          showWritten(frameId, true);
           toast.success(`Saved the words to ${fileName(frameId)}.`);
         } else if (result.reason === "ambiguous" || result.reason === "not-found" || result.reason === "too-long") {
           handToAiden(frameId, message, "unplaced");
@@ -135,7 +156,7 @@ export function usePageTextEdits({
         }
       });
     },
-    [chatId, flush, handToAiden, inTurn],
+    [chatId, flush, handToAiden, inTurn, showWritten],
   );
 
   const command = React.useCallback(
@@ -178,6 +199,7 @@ export function usePageTextEdits({
         } else if (result.ok) {
           const other = from === "undo" ? "redo" : "undo";
           history.current = { ...history.current, [other]: [...history.current[other], edit] };
+          showWritten(edit.frameId, false);
           toast(from === "undo" ? `Put back the words in ${fileName(edit.frameId)}.` : `Saved the words to ${fileName(edit.frameId)} again.`);
         } else {
           toast.error("The file changed since, so those words can't be put back.");
@@ -185,7 +207,7 @@ export function usePageTextEdits({
       });
       return true;
     },
-    [chatId, flush, inTurn],
+    [chatId, flush, inTurn, showWritten],
   );
 
   /** A change on the canvas comes after the file edits, so ⌘Z goes to it first. */

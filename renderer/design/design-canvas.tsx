@@ -220,17 +220,21 @@ function LoadedDesignCanvas({
     },
     [chatId],
   );
+  const reloadPaths = React.useCallback((paths: readonly string[]) => {
+    if (paths.length === 0) return;
+    setVersions((current) => {
+      const next = new Map(current);
+      for (const path of paths) next.set(path, (next.get(path) ?? 0) + 1);
+      return next;
+    });
+  }, []);
   React.useEffect(
     () =>
       designCanvasApi.onDesignFilesChanged((update) => {
-        if (update.chatId !== chatId || update.paths.length === 0) return;
-        setVersions((current) => {
-          const next = new Map(current);
-          for (const path of update.paths) next.set(path, (next.get(path) ?? 0) + 1);
-          return next;
-        });
+        if (update.chatId !== chatId) return;
+        reloadPaths(update.paths);
       }),
-    [chatId],
+    [chatId, reloadPaths],
   );
 
   // Aiden's canvas_read {snapshot: true}: a picture of the canvas region, or
@@ -311,7 +315,8 @@ function LoadedDesignCanvas({
   const nodes = React.useMemo(() => nodesFromCanvas(doc, selection), [doc, selection]);
   const comments = useDesignComments({ chatId, doc, change, flow, wrapper, live, versionOf });
   const pageWindow = React.useCallback((frameId: string) => frameIframe(wrapper.current, frameId)?.contentWindow ?? null, []);
-  const textEdits = usePageTextEdits({ chatId, doc, pageWindow, queueComment: comments.queueOnElement, flush });
+  const reloadPath = React.useCallback((path: string) => reloadPaths([path]), [reloadPaths]);
+  const textEdits = usePageTextEdits({ chatId, doc, pageWindow, queueComment: comments.queueOnElement, flush, reload: reloadPath });
   forgetTextEdits.current = textEdits.forget;
   const toggleComments = () => {
     const next = !comments.active;
