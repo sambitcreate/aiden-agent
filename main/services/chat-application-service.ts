@@ -239,7 +239,8 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
       return deps.llmClient.waitForChatIdle(chatId);
     },
 
-    async create(input: ParsedPublicChatCreate, owner: ChatApplicationOwner) {
+    /** `reportAnalytics: false` keeps `chat_created` unsent (an outside MCP app made the chat). */
+    async create(input: ParsedPublicChatCreate, owner: ChatApplicationOwner, options?: { reportAnalytics?: boolean }) {
       if (deps.llmClient.requiresAppendReconciliation(owner.documentId)) {
         throw new Error(appendReconciliationFailureMessage("blocked"));
       }
@@ -272,7 +273,9 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         };
         try {
           const chat = chatForRenderer(await deps.chatStore.create({ ...input, assertCurrent }));
-          reportAnalyticsEvent("chat_created", { workspace_kind: analyticsWorkspaceKind(workspace) });
+          if (options?.reportAnalytics !== false) {
+            reportAnalyticsEvent("chat_created", { workspace_kind: analyticsWorkspaceKind(workspace) });
+          }
           return chat;
         } catch (error) {
           if (isChatCreateReconciliationRequiredError(error)) {

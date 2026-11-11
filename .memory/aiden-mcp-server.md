@@ -42,12 +42,13 @@ A loopback MCP server that lets Claude Code, Codex or any MCP client use Aiden's
   - The server drains the rest for up to 5 s and then destroys the socket. Using `connection: close` instead raced the client's upload, and the client saw ECONNRESET in place of the 413.
 - **Write tools:**
   - They need `chat:write`, and Read apps do not see them listed.
-  - Turns are limited to 10 a minute and 2 concurrent runs per app; an idempotent retry does not count.
+  - Turns are limited to 10 a minute and 2 concurrent runs per app; an idempotent retry does not count, even after the 128-entry request cache forgets it or a restart (`AidenRemoteChatService.hasRecordedRequest` checks the durable ledger before admission).
+  - MCP app chats and turns send no `chat_created` / `chat_message_sent` (`deviceReportsAnalytics` is false for `agent` devices).
   - Waits are at most 55 s and default to 25 s.
 - **Reach:**
   - `aiden_workspace_list` and `aiden_chat_start` exclude `noWorkspace` folders and `ASSISTANT_WORKSPACE_ID`.
   - Chat list is regular chats only. `requireOrdinaryChat` refuses by id every chat the list hides (Bot, feature, assistant), via `AidenRemoteChatService.isListedChat`, with the unknown-id answer so existence is not leaked.
-  - Assistant and feature chats are still readable and sendable by id, as on phones.
+  - Phones can still read and send to assistant and feature chats by id; MCP apps cannot.
 - **No approval tool.** `aiden_chat_wait` returns `waiting_for_approval` or `waiting_for_input` with `approveIn` / `answerIn` set to "Aiden on <computer name>".
 - **Revoke:**
   - It runs `revokeAidenRemoteRuntimeDevice`, which denies approvals, cancels runs and closes watchers.
