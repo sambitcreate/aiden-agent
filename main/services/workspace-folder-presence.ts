@@ -13,6 +13,8 @@ import {
   type MissingWorktreeOptions,
   MANAGED_WORKTREE_MISSING_REMOTE_REFUSAL,
   managedWorktreeMissingMessage,
+  SERVER_MANAGED_WORKTREE_MISSING_REMOTE_REFUSAL,
+  SERVER_WORKSPACE_FOLDER_MISSING_REMOTE_REFUSAL,
   WORKSPACE_FOLDER_MISSING_REMOTE_REFUSAL,
   workspaceFolderCheckApplies,
   workspaceFolderMissingMessage,
@@ -64,8 +66,8 @@ export function workspaceFolderMissingText(workspace: Pick<Workspace, "name" | "
 
 export class WorkspaceFolderMissingError extends Error {
   readonly code = "workspace_folder_missing";
-  constructor(workspace: Pick<Workspace, "name" | "folderPath" | "managedWorktree">) {
-    super(workspaceFolderMissingText(workspace));
+  constructor(workspace: Pick<Workspace, "name" | "folderPath" | "managedWorktree">, message = workspaceFolderMissingText(workspace)) {
+    super(message);
     this.name = "WorkspaceFolderMissingError";
   }
 }
@@ -91,10 +93,28 @@ export async function workspaceFolderMissing(workspace: CheckedWorkspace, stat?:
   );
 }
 
-/** What a paired device hears when its turn is refused for a missing folder, or undefined. */
-export async function workspaceFolderRemoteRefusal(workspace: CheckedWorkspace, stat?: Stat): Promise<string | undefined> {
-  if (!(await workspaceFolderMissing(workspace, stat))) return undefined;
+/** Which host a paired device is talking to: the desktop app on a Mac, or `aiden serve`. */
+export type WorkspaceFolderRefusalHost = "mac" | "server";
+
+/** The path-free sentence a paired device hears for a missing folder. */
+export function workspaceFolderRemoteRefusalText(
+  workspace: Pick<Workspace, "managedWorktree">,
+  host: WorkspaceFolderRefusalHost = "mac",
+): string {
+  if (host === "server") {
+    return workspace.managedWorktree ? SERVER_MANAGED_WORKTREE_MISSING_REMOTE_REFUSAL : SERVER_WORKSPACE_FOLDER_MISSING_REMOTE_REFUSAL;
+  }
   return workspace.managedWorktree ? MANAGED_WORKTREE_MISSING_REMOTE_REFUSAL : WORKSPACE_FOLDER_MISSING_REMOTE_REFUSAL;
+}
+
+/** What a paired device hears when its turn is refused for a missing folder, or undefined. */
+export async function workspaceFolderRemoteRefusal(
+  workspace: CheckedWorkspace,
+  stat?: Stat,
+  host: WorkspaceFolderRefusalHost = "mac",
+): Promise<string | undefined> {
+  if (!(await workspaceFolderMissing(workspace, stat))) return undefined;
+  return workspaceFolderRemoteRefusalText(workspace, host);
 }
 
 /** Refuse to start a turn in a workspace whose folder is gone. */

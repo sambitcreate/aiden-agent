@@ -66,6 +66,17 @@ export const MANAGED_WORKTREE_MISSING_REMOTE_REFUSAL =
   "This chat's worktree folder is missing on your Mac. Put it back, or restore it from the chat on your Mac, then send again.";
 
 /**
+ * The same refusals from `aiden serve`, which may run on Linux and has no
+ * chat window to restore a worktree from. The error code is the same, so
+ * phones settle and show them exactly as they do the Mac's.
+ */
+export const SERVER_WORKSPACE_FOLDER_MISSING_REMOTE_REFUSAL =
+  "This chat's workspace folder is missing on the server. It may have been moved, renamed or deleted, or its drive isn't connected. Put it back, then send again.";
+
+export const SERVER_MANAGED_WORKTREE_MISSING_REMOTE_REFUSAL =
+  "This chat's worktree folder is missing on the server. Put it back, then send again.";
+
+/**
  * Which workspaces the check covers. A No Access workspace never touches its
  * folder, and a No workspace chat's hidden folder is made again when the chat
  * next runs. An Aiden-managed worktree is checked at its checkout's root.
