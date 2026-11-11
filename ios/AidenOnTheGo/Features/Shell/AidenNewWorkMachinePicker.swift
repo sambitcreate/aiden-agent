@@ -105,6 +105,9 @@ final class AidenNewWorkPicker {
     @ObservationIgnored private let coordinator: AidenRemoteCoordinator
     @ObservationIgnored private let preferences: AidenMachinePreferencesStore
     @ObservationIgnored private let pinnedMachine: String?
+    /// Hide is the Inbox's: opened from the Workspaces tab, whose strip lists
+    /// hidden machines too, the picker offers them as well.
+    private(set) var offersHiddenMachines = false
 
     /// `pinnedTo` holds the picker on one machine and shows no choice, for work
     /// that can only go back where it came from.
@@ -125,7 +128,12 @@ final class AidenNewWorkPicker {
     /// offline ones that can't right now.
     var machines: [AidenNewWorkMachine] {
         let labels = Self.labels(coordinator: coordinator, preferences: preferences)
-        return Self.visibleConnections(coordinator: coordinator, preferences: preferences, keeping: pinnedMachine).map { connection in
+        return Self.visibleConnections(
+            coordinator: coordinator,
+            preferences: preferences,
+            keeping: pinnedMachine,
+            includingHidden: offersHiddenMachines
+        ).map { connection in
             Self.machine(connection, label: labels[connection.instanceId], coordinator: coordinator, refusal: refusal(of: connection))
         }
     }
@@ -164,8 +172,10 @@ final class AidenNewWorkPicker {
     /// Workspaces tab filtered to one machine): it starts there instead, and says
     /// so if that machine can't take the work right now, as the default would.
     /// A new Bot never starts on a machine whose pairing can't make Bots while
-    /// another's can: the picker offers that one first.
-    func startOver(preferring preferred: String? = nil) {
+    /// another's can: the picker offers that one first. `offeringHidden` is for
+    /// the Workspaces tab, which lists the machines the Inbox hides.
+    func startOver(preferring preferred: String? = nil, offeringHidden: Bool = false) {
+        offersHiddenMachines = offeringHidden
         let rows = machines
         var start = preferred.flatMap { id in rows.first { $0.id == id } }
             ?? rows.first(where: \.isDefault) ?? rows.first(where: \.canBePicked) ?? rows.first
@@ -180,8 +190,13 @@ final class AidenNewWorkPicker {
     /// offline or not. An offline one opens the picker to say why it can't take
     /// the work yet; one whose pairing can never take it doesn't.
     var someMachineAllowsTheWork: Bool {
-        Self.visibleConnections(coordinator: coordinator, preferences: preferences, keeping: pinnedMachine)
-            .contains { kind.refusal(on: $0.installation) == nil }
+        Self.visibleConnections(
+            coordinator: coordinator,
+            preferences: preferences,
+            keeping: pinnedMachine,
+            includingHidden: offersHiddenMachines
+        )
+        .contains { kind.refusal(on: $0.installation) == nil }
     }
 
     /// A pinned machine has no other to send the person to, so what it says when
@@ -204,16 +219,20 @@ final class AidenNewWorkPicker {
         }
     }
 
-    /// Paired machines that aren't hidden. A revoked machine, or one that has to be
-    /// paired again, can't take anything.
+    /// Paired machines that aren't hidden, or every paired machine with
+    /// `includingHidden`. A revoked machine, or one that has to be paired again,
+    /// can't take anything.
     private static func visibleConnections(
         coordinator: AidenRemoteCoordinator,
         preferences: AidenMachinePreferencesStore,
-        keeping kept: String?
+        keeping kept: String?,
+        includingHidden: Bool = false
     ) -> [AidenHostConnection] {
         coordinator.hosts.ordered.filter { connection in
             !connection.isRevoked && connection.connectionState != .needsPairing
-                && (preferences.saved(for: connection.instanceId)?.isHidden != true || connection.instanceId == kept)
+                && (includingHidden
+                    || preferences.saved(for: connection.instanceId)?.isHidden != true
+                    || connection.instanceId == kept)
         }
     }
 

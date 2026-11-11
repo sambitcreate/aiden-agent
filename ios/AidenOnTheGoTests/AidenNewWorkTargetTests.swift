@@ -496,6 +496,25 @@ final class AidenNewWorkTargetTests: XCTestCase {
 
         flow.picker.startOver(preferring: "gone")
         XCTAssertEqual(flow.picker.target, AidenNewWorkTarget(instanceId: "studio"), "A machine that left falls back to the default")
+
+        // Hide is the Inbox's. The Workspaces tab still lists a hidden machine,
+        // so its compose offers it, and starts on it when the strip is on it.
+        preferences.update("laptop") { $0.isHidden = true }
+        flow.picker.startOver()
+        XCTAssertFalse(flow.picker.machines.map(\.id).contains("laptop"), "The Inbox's compose leaves a hidden machine out")
+        filter = .machine("laptop")
+        flow.picker.startOver(preferring: chrome().composeMachine, offeringHidden: true)
+        XCTAssertTrue(flow.picker.machines.map(\.id).contains("laptop"), "The Workspaces tab's compose offers a hidden machine")
+        XCTAssertEqual(flow.picker.target, AidenNewWorkTarget(instanceId: "laptop"), "A filter on a hidden machine starts there")
+        XCTAssertTrue(flow.canStart)
+        filter = .all
+        flow.picker.startOver(preferring: chrome().composeMachine, offeringHidden: true)
+        XCTAssertTrue(flow.picker.machines.map(\.id).contains("laptop"))
+        XCTAssertEqual(flow.picker.target, AidenNewWorkTarget(instanceId: "studio"), "All still starts on the default")
+        XCTAssertTrue(flow.picker.pick("laptop"), "A hidden machine can be picked from the Workspaces tab")
+        flow.picker.startOver()
+        XCTAssertFalse(flow.picker.machines.map(\.id).contains("laptop"), "The Inbox's compose leaves it out again")
+        XCTAssertEqual(flow.picker.target, AidenNewWorkTarget(instanceId: "studio"))
     }
 
     // MARK: A new Bot

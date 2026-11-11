@@ -273,16 +273,18 @@ final class AidenNewWorkChatFlow {
 
 /// The compose button, in the Inbox and on the Workspaces tab. It opens on the
 /// default machine each time, or on `preferredMachine` when the page it's on is
-/// showing just that one.
+/// showing just that one. `offersHiddenMachines` is the Workspaces tab's: Hide is
+/// the Inbox's, so there the picker offers hidden machines too.
 struct AidenNewWorkComposeButton: View {
     let flow: AidenNewWorkChatFlow
     var preferredMachine: String? = nil
+    var offersHiddenMachines = false
 
     @State private var isShowingChoices = false
 
     var body: some View {
         Button {
-            flow.picker.startOver(preferring: preferredMachine)
+            flow.picker.startOver(preferring: preferredMachine, offeringHidden: offersHiddenMachines)
             isShowingChoices = true
         } label: {
             Label("New chat", systemImage: "square.and.pencil")

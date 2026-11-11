@@ -867,6 +867,46 @@ final class AidenShellUITests: XCTestCase {
         app.terminate()
     }
 
+    /// Hide is the Inbox's. The Workspaces strip still lists a hidden machine,
+    /// and compose there, filtered to it, starts on it.
+    func testWorkspacesComposeStartsOnAHiddenMachineItIsFilteredTo() {
+        let app = AidenStateMatrix.launch(scenario: .four)
+        XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 15), "No chat rows in the Inbox")
+        hideOverlaySidebar(in: app)
+        app.buttons["aiden.machine-status"].tap()
+        let laptopRow = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Laptop,")).firstMatch
+        XCTAssertTrue(laptopRow.waitForExistence(timeout: 10), "Machines doesn't list the laptop")
+        laptopRow.tap()
+        let hide = app.switches["Hide from Inbox"].firstMatch
+        for _ in 0..<6 where !hide.isHittable { app.swipeUp() }
+        XCTAssertTrue(hide.waitForExistence(timeout: 5), "The machine page has no Hide from Inbox")
+        hide.switches.firstMatch.exists ? hide.switches.firstMatch.tap() : hide.tap()
+        XCTAssertEqual(hide.value as? String, "1", "The laptop didn't hide")
+
+        // Back past Machines to the Inbox, then over to Workspaces.
+        goBack(in: app)
+        goBack(in: app)
+        // Scrolling down to the switch minimised the tab bar; scroll back up.
+        let workspacesTab = app.tabBars.buttons["Workspaces"].firstMatch
+        for _ in 0..<3 where !workspacesTab.exists { app.swipeDown(velocity: .slow) }
+        AidenStateMatrix.openArea("Workspaces", in: app)
+        XCTAssertTrue(app.navigationBars["Workspaces"].waitForExistence(timeout: 10))
+        let laptop = app.buttons["Laptop"].firstMatch
+        XCTAssertTrue(laptop.waitForExistence(timeout: 10), "The Workspaces strip leaves the hidden machine out")
+        laptop.tap()
+
+        let compose = app.navigationBars.buttons["New chat"].firstMatch
+        let machine = app.buttons["Machine"].firstMatch
+        compose.tap()
+        XCTAssertTrue(machine.waitForExistence(timeout: 5), "Compose on Workspaces has no machine picker")
+        XCTAssertTrue(
+            (machine.value as? String)?.hasPrefix("Laptop") == true,
+            "Compose didn't start on the hidden machine: \(String(describing: machine.value))"
+        )
+        AidenStateMatrix.tapOutsidePopover(in: app)
+        app.terminate()
+    }
+
     func testTheMachinePageCountsItsOpenChats() {
         let app = AidenStateMatrix.launch(scenario: .four)
         XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 15), "No chat rows in the Inbox")

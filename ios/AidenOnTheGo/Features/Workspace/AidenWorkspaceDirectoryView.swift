@@ -157,7 +157,11 @@ struct AidenWorkspacesDirectoryView: View {
             ToolbarItem(placement: .primaryAction) { addWorkspaceMenu }
             ToolbarSpacer(.fixed, placement: .primaryAction)
             ToolbarItem(placement: .primaryAction) {
-                AidenNewWorkComposeButton(flow: tabChrome.newWork, preferredMachine: tabChrome.composeMachine)
+                AidenNewWorkComposeButton(
+                    flow: tabChrome.newWork,
+                    preferredMachine: tabChrome.composeMachine,
+                    offersHiddenMachines: true
+                )
             }
         }
         .sheet(isPresented: $isShowingFolderBrowser) {
