@@ -506,6 +506,7 @@
         "main/services/aiden-remote-simulators.test.ts",
         "main/services/aiden-remote-speech.test.ts",
         "main/services/aiden-mcp-server.test.ts",
+        "renderer/shared/aiden-mcp-token-env.test.ts",
         "main/services/aiden-remote-state.test.ts",
         "main/services/aiden-remote-streams.test.ts",
         "main/services/aiden-remote-tailscale-route.test.ts",
