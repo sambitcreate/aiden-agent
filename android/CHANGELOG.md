@@ -4,6 +4,8 @@ Aiden On The Go for Android. Earlier Android changes are recorded in the pull re
 
 ## Unreleased
 
+- **2026-11-11 — Continue in a new chat (Remote revision 63).** When a host offering `chat:continue-in-new-chat` refuses a send because the chat's workspace folder is missing and says the chat can continue elsewhere, the error gains **Continue in a new chat**. A sheet lists the host's other workspaces (never the chat's own, archived ones or any folder path); picking one forks the whole chat into that workspace with the host's `continueIn` request and opens the new chat, leaving the original as it was. Failures show the host's message; a destination whose folder is missing too keeps the action so another workspace can be picked. Without the host's offer, or on older hosts, the refusal looks as before. Bot contract-test revision assertions now expect 63.
+
 - **2026-11-06 — "By voice" label (Remote revision 60).** A chat message Aiden Live sent on the Mac shows a small "By voice" label with a microphone under it. The host marks it with `inputSource: "voice"` on user messages only; the app ignores any other value or a marker on a reply. Older hosts send no marker, so nothing changes there.
 
 - **2026-11-05 — Remote revision 59 reconciliation.** Main now uses revision 58 for connected-chat live-history checkpoints. Continuity watches, Open work, routine models and approved Bot peers therefore enter the combined release at revision 59. Earlier dated revision assignments remain historical; messaging/access/plans/allowed thresholds remain 54–57.

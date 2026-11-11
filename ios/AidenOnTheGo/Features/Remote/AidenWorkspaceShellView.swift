@@ -3586,7 +3586,8 @@ private struct AidenDirectoryWorkspaceDetail: View {
     }
 }
 
-private struct AidenWorkspaceRow: View {
+/// A workspace's name, permission and branch. It never shows a path.
+struct AidenWorkspaceRow: View {
     let workspace: AidenWorkspace
 
     var body: some View {

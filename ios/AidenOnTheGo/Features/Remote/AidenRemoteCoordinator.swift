@@ -854,7 +854,7 @@ final class AidenRemoteCoordinator {
     /// `schedule:cards` (revision 39), then `bot:images` (revision 45), then
     /// `bot:issues` (revision 42), then `chat:jobs` (revision 49), then
     /// `attachments:raw` (revision 50), then `chat:new-worktree` (revision 53),
-    /// then continuity watches, Open work, routine models and peers (revision 59),
+    /// then `chat:continue-in-new-chat` (revision 63), then continuity watches, Open work, routine models and peers (revision 59),
     /// followed by messaging, access requests, plans and allowed lists (revisions 54–57).
     static let capabilitiesAskedForAlone: [[AidenRemoteCapability]] = [
         [.botHandoffs, .botHandoffNotes, .botHandoffOnMac],
@@ -864,6 +864,7 @@ final class AidenRemoteCoordinator {
         [.chatJobs],
         [.attachmentsRaw],
         [.chatNewWorktree],
+        [.chatContinueInNewChat],
         [.botWatches],
         [.botOpenWork],
         [.botRoutineModels],

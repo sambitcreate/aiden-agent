@@ -501,6 +501,16 @@ class AidenChatViewModel(
     val forkSource: StateFlow<AidenChatForkSource?> = _forkSource.asStateFlow()
 
     private var forkAttempt: Pair<AidenChatForkAttempt, UUID>? = null
+
+    private val _continueInNewChatOffer = MutableStateFlow<AidenContinueInNewChatOffer?>(null)
+    /**
+     * Revision 63: the Mac refused the last send because this chat's folder is gone and offers to
+     * continue the whole chat in a new chat elsewhere. Null without that offer.
+     */
+    val continueInNewChatOffer: StateFlow<AidenContinueInNewChatOffer?> = _continueInNewChatOffer.asStateFlow()
+
+    /** The last Continue request (revision, workspace); an unknown outcome replays its key. */
+    private var continueAttempt: Pair<Pair<String, String>, UUID>? = null
     private var forkSummaryPollJob: Job? = null
     private var forkSourceJob: Job? = null
     private var resolvedForkSourceId: String? = null
@@ -602,6 +612,50 @@ class AidenChatViewModel(
                 if (!AidenChatForkErrors.isOutcomeUnknown(e)) forkAttempt = null
                 if (activeClient() !== client) return@launch
                 _presentedError.value = AidenChatForkErrors.forkMessage(e)
+                if (AidenChatForkErrors.isRevisionConflict(e)) loadChat()
+            } finally {
+                _isForking.value = false
+            }
+        }
+    }
+
+    /**
+     * Revision 63: continues this chat, whose folder is gone, in a new chat in [workspaceId]. Once
+     * the Mac created it, this caches the new chat and publishes it to [forkNavigation]; this chat
+     * stays as it is. A failure shows the Mac's own sentence. A retry whose outcome is unknown
+     * reuses its idempotency key, so it cannot make a second chat.
+     */
+    fun continueInNewChat(workspaceId: String) {
+        if (_isForking.value || _continueInNewChatOffer.value == null || !canWriteChats()) return
+        val client = activeClient() ?: return
+        val source = _chat.value ?: return
+        if (source.isBotChat || workspaceId == source.workspaceId) return
+        val pairingCreatedAt = pairingCreatedAt() ?: return
+        val writeToken = chatCache.reserveChatWrite()
+        val attempt = source.revision to workspaceId
+        val idempotencyKey = continueAttempt?.takeIf { it.first == attempt }?.second ?: UUID.randomUUID()
+        continueAttempt = attempt to idempotencyKey
+        _isForking.value = true
+        viewModelScope.launch {
+            try {
+                val result = client.continueChatInNewChat(chatId, source.revision, workspaceId, idempotencyKey)
+                continueAttempt = null
+                val created = result.chat
+                fun handoffRetained() = activeClient() === client &&
+                    isPairingRetained(pairingCreatedAt) &&
+                    chatCache.isChatWriteRetained(instanceId, created.id, writeToken)
+                if (!handoffRetained()) return@launch
+                withContext(ioDispatcher) { runCatching { chatCache.saveChat(created, instanceId, writeToken) } }
+                if (!handoffRetained()) return@launch
+                _continueInNewChatOffer.value = null
+                _presentedError.value = null
+                _forkNavigation.value = created.id
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                if (!AidenChatForkErrors.isOutcomeUnknown(e)) continueAttempt = null
+                if (activeClient() !== client) return@launch
+                if (!AidenContinueInNewChat.offerSurvives(e)) _continueInNewChatOffer.value = null
+                _presentedError.value = AidenContinueInNewChat.failureMessage(e)
                 if (AidenChatForkErrors.isRevisionConflict(e)) loadChat()
             } finally {
                 _isForking.value = false
@@ -1671,6 +1725,7 @@ class AidenChatViewModel(
         cancelVisualSnapshotRefresh()
         _isStarting.value = true
         _presentedError.value = null
+        _continueInNewChatOffer.value = null
         if (retryAttempt == null || _draft.value == text) _draft.value = ""
         val clearStoredDraft = if (_draft.value.isEmpty()) draftWriter?.reserveWrite("") else null
         _pendingAttachments.value = if (retryAttempt == null) emptyList() else _pendingAttachments.value.filter { attachment -> submittedAttachments.none { it.id == attachment.id } }
@@ -1804,6 +1859,7 @@ class AidenChatViewModel(
                             _isPendingSendRefusedBecauseBusy.value = false
                             turnAttempts.reset()
                             rateLimitedSendRetries = 0
+                            _continueInNewChatOffer.value = AidenContinueInNewChat.offer(e, _chat.value)
                         }
                         if (_pendingSend.value == null && e !is AidenNewWorktreeCanceled) _presentedError.value = e.localizedMessage
                     }

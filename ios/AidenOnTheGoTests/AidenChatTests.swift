@@ -479,6 +479,89 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testAMissingFolderRefusalThatOffersItContinuesTheWholeChatInAnotherWorkspace() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let cache = AidenChatCache(root: root.appending(path: "cache"))
+        let mac = AidenContinueInNewChatMacFixture(refusal: .offers)
+        var coordinator: AidenRemoteCoordinator!
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: cache,
+            draftStore: AidenChatDraftStore(root: root.appending(path: "drafts")),
+            onCoordinator: { coordinator = $0 },
+            responseOverride: { mac.response($0) },
+            extraCapabilities: [.chatContinueInNewChat]
+        )
+        await coordinator.refreshWorkspaces()
+        await model.load(observeProgress: false)
+        XCTAssertFalse(model.offersContinueInNewChat, "nothing is offered before the Mac refuses")
+
+        model.draft = "Fix the header"
+        await model.send()
+        XCTAssertEqual(model.presentedError, AidenContinueInNewChatMacFixture.refusal)
+        XCTAssertTrue(model.offersContinueInNewChat)
+        // Neither the chat's own workspace nor a hidden No workspace record is a choice.
+        XCTAssertEqual(model.continueInNewChatWorkspaces.map(\.id), ["workspace-2"])
+
+        // The Mac refuses first: its sentence reaches the picker and nothing opens.
+        mac.forkReply = .refuses
+        let refused = await model.continueInNewChat(workspaceId: "workspace-2")
+        XCTAssertNil(refused)
+        XCTAssertEqual(model.continueInNewChatError, AidenContinueInNewChatMacFixture.forkRefusal)
+
+        mac.forkReply = .creates
+        let continued = await model.continueInNewChat(workspaceId: "workspace-2")
+        XCTAssertEqual(continued?.id, "chat-continued")
+        XCTAssertEqual(continued?.workspaceId, "workspace-2")
+        XCTAssertNil(model.continueInNewChatError)
+        XCTAssertFalse(model.offersContinueInNewChat, "the offer ends once the chat continued")
+        XCTAssertEqual(model.chat.id, "chat-progress-lifecycle")
+        XCTAssertEqual(model.chat.workspaceId, "workspace-1", "this chat stays as it is")
+        XCTAssertEqual(model.draft, "Fix the header")
+
+        let forks = mac.forkRequests
+        XCTAssertEqual(forks.count, 2)
+        for fork in forks {
+            XCTAssertEqual(fork.body as NSDictionary, ["continueIn": ["workspaceId": "workspace-2"]])
+            XCTAssertEqual(fork.revision, "revision-1")
+            XCTAssertNotNil(fork.key)
+        }
+        XCTAssertNotEqual(forks.first?.key, forks.last?.key, "a definitive refusal is never replayed")
+        let cached = await cache.admittedChat(instanceId: "instance-progress-lifecycle", chatId: "chat-continued")
+        XCTAssertEqual(cached?.workspaceId, "workspace-2", "the new chat is ready to open")
+        model.stopProgressObservation()
+    }
+
+    @MainActor
+    func testAMissingFolderRefusalWithoutTheOfferShowsOnlyTheMacsSentence() async throws {
+        for kind in [AidenContinueInNewChatMacFixture.Refusal.plain, .declines] {
+            let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+            let mac = AidenContinueInNewChatMacFixture(refusal: kind)
+            var coordinator: AidenRemoteCoordinator!
+            let model = try await makeProgressLifecycleModel(
+                mode: .denied,
+                cache: AidenChatCache(root: root.appending(path: "cache")),
+                draftStore: AidenChatDraftStore(root: root.appending(path: "drafts")),
+                onCoordinator: { coordinator = $0 },
+                responseOverride: { mac.response($0) },
+                extraCapabilities: [.chatContinueInNewChat]
+            )
+            await coordinator.refreshWorkspaces()
+            await model.load(observeProgress: false)
+            model.draft = "Fix the header"
+            await model.send()
+            XCTAssertEqual(model.presentedError, AidenContinueInNewChatMacFixture.refusal, "\(kind)")
+            XCTAssertFalse(model.offersContinueInNewChat, "\(kind)")
+            let continued = await model.continueInNewChat(workspaceId: "workspace-2")
+            XCTAssertNil(continued, "\(kind)")
+            XCTAssertTrue(mac.forkRequests.isEmpty, "\(kind)")
+            model.stopProgressObservation()
+        }
+    }
+
+    @MainActor
     func testTheFirstMessageMovesTheChatIntoItsNewWorktreeThenSendsThere() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
@@ -13873,6 +13956,111 @@ private final class AidenNewWorktreeMacFixture: @unchecked Sendable {
         return """
         {"id":"\(id)","name":"Site","permission":"ask","hasFolder":true,"isManagedWorktree":\(worktree),\(branch)"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:00Z","revision":"workspace-revision-1"}
         """
+    }
+}
+
+/// A Mac whose chat's workspace folder is gone (revision 63). Sends are
+/// refused with or without the offer to continue, and the fork route either
+/// makes the new chat in another workspace or refuses with the Mac's sentence.
+private final class AidenContinueInNewChatMacFixture: @unchecked Sendable {
+    enum Refusal: Sendable { case offers, declines, plain }
+    enum ForkReply: Sendable { case creates, refuses }
+    struct ForkRequest {
+        let body: [String: Any]
+        let revision: String?
+        let key: String?
+    }
+    static let refusal = "This chat's workspace folder is missing on your Mac. Put it back, then send again."
+    static let forkRefusal = "That workspace's folder is missing on your Mac too."
+    private let lock = NSLock()
+    private let refusalKind: Refusal
+    private var reply: ForkReply = .creates
+    private var forks: [ForkRequest] = []
+
+    init(refusal: Refusal) { refusalKind = refusal }
+
+    var forkReply: ForkReply {
+        get { lock.withLock { reply } }
+        set { lock.withLock { reply = newValue } }
+    }
+    var forkRequests: [ForkRequest] { lock.withLock { forks } }
+
+    func response(_ request: URLRequest) -> (Int, String, Data)? {
+        switch request.url!.path {
+        case "/api/aiden/v1/server":
+            let grants = #"["server:read","workspace:read","chat:read","chat:write","chat:continue-in-new-chat"]"#
+            return (200, "application/json", Data("""
+            {"protocolVersion":1,"instanceId":"instance-progress-lifecycle","name":"Progress Lifecycle Mac","appVersion":"1.0","capabilities":\(grants),"serverCapabilities":\(grants),"features":[],"connectionMode":"lan","serverTime":"2026-11-11T09:00:00Z"}
+            """.utf8))
+        case "/api/aiden/v1/workspaces":
+            let workspaces = [
+                Self.workspace(id: "workspace-1", name: "Site", hidden: false),
+                Self.workspace(id: "workspace-2", name: "Docs", hidden: false),
+                Self.workspace(id: "workspace-home", name: "Chats", hidden: true),
+            ].joined(separator: ",")
+            return (200, "application/json", Data(#"{"workspaces":[\#(workspaces)]}"#.utf8))
+        case "/api/aiden/v1/models":
+            return (200, "application/json", Data(#"{"providers":[{"id":"openai","label":"OpenAI","models":[{"id":"gpt-5.6","label":"GPT"}]}],"defaults":{"providerId":"openai","modelId":"gpt-5.6"}}"#.utf8))
+        case "/api/aiden/v1/chats/chat-progress-lifecycle":
+            return (200, "application/json", Data(Self.chat(id: "chat-progress-lifecycle", workspaceId: "workspace-1", forked: false).utf8))
+        case "/api/aiden/v1/chats/chat-progress-lifecycle/turns" where request.httpMethod == "POST":
+            let details: String
+            switch refusalKind {
+            case .offers: details = #","details":{"reason":"folder_missing","canContinueInNewChat":true}"#
+            case .declines: details = #","details":{"reason":"folder_missing","canContinueInNewChat":false}"#
+            case .plain: details = ""
+            }
+            return (409, "application/json", Data("""
+            {"error":{"code":"workspace_unavailable","message":"\(Self.refusal)","requestId":"continue-refused","retryable":false\(details)}}
+            """.utf8))
+        case "/api/aiden/v1/chats/chat-progress-lifecycle/fork" where request.httpMethod == "POST":
+            let body = request.httpBody ?? request.httpBodyStream.map(Self.readStream) ?? Data()
+            let fields = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
+            let reply = lock.withLock { () -> ForkReply in
+                forks.append(ForkRequest(
+                    body: fields,
+                    revision: request.value(forHTTPHeaderField: "If-Match"),
+                    key: request.value(forHTTPHeaderField: "Idempotency-Key")
+                ))
+                return self.reply
+            }
+            if reply == .refuses {
+                return (409, "application/json", Data("""
+                {"error":{"code":"operation_in_progress","message":"\(Self.forkRefusal)","requestId":"continue-fork-refused","retryable":false}}
+                """.utf8))
+            }
+            return (201, "application/json", Data(#"{"chat":\#(Self.chat(id: "chat-continued", workspaceId: "workspace-2", forked: true))}"#.utf8))
+        default:
+            return nil
+        }
+    }
+
+    private static func chat(id: String, workspaceId: String, forked: Bool) -> String {
+        let lineage = forked
+            ? #","forkedFrom":{"chatId":"chat-progress-lifecycle","messageId":"message-answer","position":"after","at":"2026-11-11T09:00:00Z"}"#
+            : ""
+        return """
+        {"id":"\(id)","workspaceId":"\(workspaceId)","title":"Progress lifecycle","messages":[{"id":"message-question","role":"user","text":"Tidy the parser.","createdAt":"2026-09-14T12:00:00Z"},{"id":"message-answer","role":"assistant","text":"Done.","createdAt":"2026-09-14T12:00:01Z"}],"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:01Z","revision":"revision-1"\(lineage)}
+        """
+    }
+
+    private static func workspace(id: String, name: String, hidden: Bool) -> String {
+        """
+        {"id":"\(id)","name":"\(name)","permission":"ask","hasFolder":\(!hidden),"isManagedWorktree":false,"noWorkspace":\(hidden),"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:00Z","revision":"workspace-revision-1"}
+        """
+    }
+
+    private static func readStream(_ stream: InputStream) -> Data {
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4_096)
+        while stream.hasBytesAvailable {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            if count <= 0 { break }
+            data.append(buffer, count: count)
+        }
+        return data
     }
 }
 

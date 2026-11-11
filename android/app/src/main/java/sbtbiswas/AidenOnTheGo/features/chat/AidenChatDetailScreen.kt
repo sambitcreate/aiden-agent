@@ -229,12 +229,16 @@ fun AidenChatDetailScreen(
     val forkSource by viewModel.forkSource.collectAsStateWithLifecycle()
     val isUpdatingForkSummary by viewModel.isUpdatingForkSummary.collectAsStateWithLifecycle()
     var forkWithSummaryMessageId by remember(chatId) { mutableStateOf<String?>(null) }
+    // Revision 63: a chat whose folder is gone may continue in a new chat in another workspace.
+    val continueInNewChatOffer by viewModel.continueInNewChatOffer.collectAsStateWithLifecycle()
+    var showsContinueInNewChatPicker by rememberSaveable(chatId) { mutableStateOf(false) }
     val currentOnNavigateToChat by rememberUpdatedState(onNavigateToChat)
 
     // A created fork opens in place of the menu that asked for it.
     LaunchedEffect(forkNavigation) {
         val forkId = forkNavigation ?: return@LaunchedEffect
         forkWithSummaryMessageId = null
+        showsContinueInNewChatPicker = false
         viewModel.consumeForkNavigation(forkId)
         currentOnNavigateToChat(forkId)
     }
@@ -699,22 +703,16 @@ fun AidenChatDetailScreen(
                     exit = aidenBannerExit(reduceMotion)
                 ) {
                     (presentedError ?: readAloud.error)?.let { err ->
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 4.dp),
-                            colors = CardDefaults.cardColors(containerColor = palette.danger.copy(alpha = 0.12f)),
-                            shape = MaterialTheme.shapes.medium
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(10.dp)
-                            ) {
-                                Icon(Icons.Default.ErrorOutline, contentDescription = null, tint = palette.danger, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(text = err, style = MaterialTheme.typography.bodySmall, color = palette.danger)
-                            }
-                        }
+                        AidenChatErrorBanner(
+                            message = err,
+                            onContinueInNewChat = if (continueInNewChatOffer != null && presentedError != null) {
+                                {
+                                    coordinator.refreshWorkspaces()
+                                    showsContinueInNewChatPicker = true
+                                }
+                            } else null,
+                            continueEnabled = !isForking
+                        )
                     }
                 }
 
@@ -1288,6 +1286,31 @@ fun AidenChatDetailScreen(
                     summaryFocus = focus
                 )
             }
+        )
+    }
+
+    // The offer goes with the refusal: a new send, a success or a final failure closes the picker.
+    LaunchedEffect(continueInNewChatOffer) {
+        if (continueInNewChatOffer == null) showsContinueInNewChatPicker = false
+    }
+    val continueSource = chat
+    if (showsContinueInNewChatPicker && continueInNewChatOffer != null && continueSource != null) {
+        val workspaces by coordinator.workspaces.collectAsStateWithLifecycle()
+        val archivedWorkspaceIds by coordinator.archiveStore.workspaceIDsByInstance.collectAsStateWithLifecycle()
+        val instanceId = coordinator.activeInstanceId
+        val destinations = remember(workspaces, archivedWorkspaceIds, instanceId, continueSource.workspaceId) {
+            AidenContinueInNewChat.destinations(workspaces, continueSource.workspaceId) { workspaceId ->
+                coordinator.archiveStore.isArchived(workspaceId, instanceId)
+            }
+        }
+        AidenContinueInNewChatPicker(
+            destinations = destinations,
+            isContinuing = isForking,
+            onPick = { workspace ->
+                showsContinueInNewChatPicker = false
+                viewModel.continueInNewChat(workspace.id)
+            },
+            onDismiss = { showsContinueInNewChatPicker = false }
         )
     }
 
@@ -2531,5 +2554,42 @@ private suspend fun readContentUriBounded(
             output.write(buffer, 0, read)
         }
         output.toByteArray()
+    }
+}
+
+/**
+ * The error above the composer. [onContinueInNewChat] adds the revision 63 Continue action, for a
+ * refusal whose host offered to continue the chat in another workspace.
+ */
+@Composable
+internal fun AidenChatErrorBanner(
+    message: String,
+    onContinueInNewChat: (() -> Unit)? = null,
+    continueEnabled: Boolean = true
+) {
+    val palette = AidenTheme.palette
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        colors = CardDefaults.cardColors(containerColor = palette.danger.copy(alpha = 0.12f)),
+        shape = MaterialTheme.shapes.medium
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(10.dp)
+        ) {
+            Icon(Icons.Default.ErrorOutline, contentDescription = null, tint = palette.danger, modifier = Modifier.size(16.dp))
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(text = message, style = MaterialTheme.typography.bodySmall, color = palette.danger)
+        }
+        if (onContinueInNewChat != null) {
+            // Lines up with the message, past the icon and its gap.
+            AidenContinueInNewChatAction(
+                enabled = continueEnabled,
+                onClick = onContinueInNewChat,
+                modifier = Modifier.padding(start = 34.dp, end = 10.dp, bottom = 10.dp)
+            )
+        }
     }
 }
