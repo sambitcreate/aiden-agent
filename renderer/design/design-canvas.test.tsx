@@ -374,9 +374,9 @@ test("a page edited in place does not show its picture from before the edit once
   region.focus();
   fireEvent.keyDown(region, { key: "Escape", code: "Escape" });
   fireEvent.keyDown(region, { key: "Escape", code: "Escape" });
-  // Polled between acts: under happy-dom, waitFor never returned while the
-  // leaving frame's capture settled.
-  const deadline = Date.now() + 3000;
+  // Polled between acts, because RTL's waitFor hung here under happy-dom: it
+  // never returned, nor timed out, while the leaving frame's capture settled.
+  const deadline = Date.now() + SAVE_WAIT.timeout;
   while (document.querySelector('iframe[data-frame-id="kept-1"]') !== null && Date.now() < deadline) {
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 10));

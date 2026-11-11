@@ -13,6 +13,11 @@ type Rect = { x: number; y: number; width: number; height: number };
 export class FrameSnapshotCache {
   // A Map iterates in insertion order, so the first key is the least recently used.
   private readonly entries = new Map<string, { version: number; dataUrl: string }>();
+  /**
+   * Per frame, how many times its picture was kept or forgotten. A capture
+   * that started before the latest of those is older than what it would replace.
+   */
+  private readonly changes = new Map<string, number>();
   private readonly listeners = new Set<() => void>();
 
   constructor(private readonly limit = DESIGN_SNAPSHOT_LIMIT) {}
@@ -26,7 +31,19 @@ export class FrameSnapshotCache {
     return entry.dataUrl;
   }
 
-  set(frameId: string, version: number, dataUrl: string): void {
+  /** Taken when a capture starts and handed back to `set`. */
+  stamp(frameId: string): number {
+    return this.changes.get(frameId) ?? 0;
+  }
+
+  /**
+   * Keeps the frame's picture for `version`. False, and nothing kept, when
+   * `stamp` is from before the frame's picture was last kept or forgotten:
+   * the page may have changed since the capture started.
+   */
+  set(frameId: string, version: number, dataUrl: string, stamp?: number): boolean {
+    if (stamp !== undefined && stamp !== this.stamp(frameId)) return false;
+    this.changes.set(frameId, this.stamp(frameId) + 1);
     this.entries.delete(frameId);
     this.entries.set(frameId, { version, dataUrl });
     while (this.entries.size > this.limit) {
@@ -34,10 +51,12 @@ export class FrameSnapshotCache {
       this.entries.delete(oldest);
     }
     for (const listener of this.listeners) listener();
+    return true;
   }
 
-  /** Drops the frame's picture: what it showed is no longer what its page shows. */
+  /** Drops the frame's picture, and any capture still on its way: what it showed is no longer what its page shows. */
   forget(frameId: string): void {
+    this.changes.set(frameId, this.stamp(frameId) + 1);
     if (!this.entries.delete(frameId)) return;
     for (const listener of this.listeners) listener();
   }
@@ -50,13 +69,18 @@ export class FrameSnapshotCache {
 
 export const designFrameSnapshots = new FrameSnapshotCache();
 
-/** Captures `rect` of this window and keeps it as the frame's picture for `version`. */
+/**
+ * Captures `rect` of this window and keeps it as the frame's picture for
+ * `version`, unless the frame's picture was forgotten, or another kept,
+ * while the capture ran.
+ */
 export async function captureFrameSnapshot(
   cache: FrameSnapshotCache,
   frameId: string,
   version: number,
   rect: Rect,
 ): Promise<string | undefined> {
+  const stamp = cache.stamp(frameId);
   try {
     const result = await designCanvasApi.captureDesignFrame({
       x: rect.x,
@@ -65,7 +89,8 @@ export async function captureFrameSnapshot(
       height: rect.height,
     });
     if (!("dataUrl" in result)) return undefined;
-    cache.set(frameId, version, result.dataUrl);
+    // The page changed under a capture that took a while: its picture is of before.
+    if (!cache.set(frameId, version, result.dataUrl, stamp)) return undefined;
     return result.dataUrl;
   } catch {
     // The frame keeps the picture it had, or its skeleton.
