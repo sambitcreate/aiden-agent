@@ -36,3 +36,44 @@ test("a moved workspace folder is named above the composer and the message waits
   await composer.press("Enter");
   await expect(page.getByText(E2E_ASSISTANT_RESPONSE)).toHaveCount(2, { timeout: 15_000 });
 });
+
+test("Continue in a new chat carries a chat whose folder is gone, and the unsent message, into another workspace", async ({
+  aiden,
+}) => {
+  test.setTimeout(120_000);
+  const { page, workspaceDir } = aiden;
+  await finishLmStudioOnboarding(page);
+  const composer = page.locator("textarea");
+  await composer.fill("Hello before the folder moves");
+  await composer.press("Enter");
+  await expect(page.getByText(E2E_ASSISTANT_RESPONSE)).toHaveCount(1, { timeout: 15_000 });
+  await expect(page.getByRole("button", { name: "Stop generating" })).toHaveCount(0, { timeout: 15_000 });
+  // A second workspace to continue in, made after the chat so the chat stays in the seeded one.
+  await page.evaluate(async () => {
+    const bridge = (
+      window as unknown as { aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } } }
+    ).aidenAPI.ipc;
+    await bridge.invoke("workspaces:create", { name: "Another workspace", permission: "ask" });
+  });
+  // Creating a workspace over IPC does not notify the window, so reload to list it.
+  await page.reload();
+  await expect(page.getByText("Hello before the folder moves")).toBeVisible();
+
+  await rename(workspaceDir, `${workspaceDir}-moved`);
+  const question = "Where were we?";
+  await composer.fill(question);
+  await composer.press("Enter");
+  const notice = page.getByRole("status", { name: "Workspace folder missing" });
+  await expect(notice).toBeVisible({ timeout: 15_000 });
+
+  await notice.getByRole("button", { name: "Continue in a new chat" }).click();
+  await page.getByRole("menuitem", { name: "Another workspace" }).click();
+
+  // The new chat has the conversation and the unsent message, and its folder is fine.
+  await expect(notice).toHaveCount(0, { timeout: 15_000 });
+  await expect(composer).toHaveValue(question);
+  await expect(page.getByText("Hello before the folder moves")).toBeVisible();
+  await expect(page.getByText(E2E_ASSISTANT_RESPONSE)).toHaveCount(1);
+  await composer.press("Enter");
+  await expect(page.getByText(E2E_ASSISTANT_RESPONSE)).toHaveCount(2, { timeout: 15_000 });
+});
