@@ -30,6 +30,7 @@ import {
   projectBotAccessView,
   projectBotChatAccessView,
   projectBotNoticeStatus,
+  revokeBotNoticeAudience,
   type BotCapabilityState,
 } from "./bot-capability-store-core.js";
 
@@ -860,4 +861,25 @@ test("notice acknowledgement is isolated by stable audience and action admission
     BotCapabilityNoticeRequiredError,
   );
   editor.assertBotMayAct({ audienceId: "device:b", botId: "bot:one" });
+});
+
+test("an app's revoke skips Bot notices only while Bot storage waits for repair", async () => {
+  const unavailable = () => { throw new BotCapabilityUnavailableError(); };
+  let skipped = 0;
+  await revokeBotNoticeAudience(unavailable, "when-available", () => { skipped += 1; });
+  assert.equal(skipped, 1, "the app's revoke goes through and the skip is reported");
+
+  // A phone's revoke still fails, so a retry removes the acceptance later.
+  await assert.rejects(revokeBotNoticeAudience(unavailable, "required", () => { skipped += 1; }), BotCapabilityUnavailableError);
+  // Any other failure is not Bot storage waiting for repair.
+  await assert.rejects(
+    revokeBotNoticeAudience(() => Promise.reject(new Error("disk full")), "when-available", () => { skipped += 1; }),
+    /disk full/u,
+  );
+  assert.equal(skipped, 1);
+
+  let cleared = 0;
+  await revokeBotNoticeAudience(async () => { cleared += 1; return true; }, "required", () => { skipped += 1; });
+  assert.equal(cleared, 1);
+  assert.equal(skipped, 1, "a revoke that clears its notices reports no skip");
 });

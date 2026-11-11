@@ -30,7 +30,7 @@ import { createCliSpeech } from "./speech.ts";
 import { createCliRemoteChats } from "./remote-chats.ts";
 import { tailscaleSetupMessage, withTailscaleSetupMessage } from "./tailscale-setup-message.ts";
 import { revokeAidenRemoteRuntimeDevice } from "../../../main/services/aiden-remote-revocation.js";
-import { BotCapabilityUnavailableError } from "../../../main/services/bot-capability-store-core.js";
+import { revokeBotNoticeAudience, type BotNoticeRevokePolicy } from "../../../main/services/bot-capability-store-core.js";
 import { AidenRemoteScheduleService } from "../../../main/services/aiden-remote-schedules.js";
 import { createScheduledTaskApplicationService } from "../../../main/services/scheduled-task-application-service.js";
 import { listScheduledScripts } from "../../../main/services/schedule-script.js";
@@ -268,19 +268,14 @@ export async function createCliRemote(agentDir: string, chats: ReturnType<typeof
     },
   });
   // As on the desktop: drain host-wide and Bot subscriptions before and after the revocation fence; no run is cancelled.
-  const revokeDevice = async (id: string, botNotices: "required" | "when-available" = "required") => {
+  const revokeDevice = async (id: string, botNotices: BotNoticeRevokePolicy = "required") => {
     const drain = () => { hostFeed?.revokeDevice(id); hostRuns?.revokeDevice(id); botSessions?.revokeDevice(id); };
     drain();
     const revoked = await revokeAidenRemoteRuntimeDevice({ state, streams: chatApi?.streams, chats: chatApi?.chats, workspaceOwners: owners }, id);
     drain();
-    try {
-      await bots.application.revokeNoticeAudience(id);
-    } catch (error) {
-      // As on the desktop: an outside app's token is already tombstoned above, so
-      // Bot storage that is waiting for repair must not report the app as connected.
-      if (botNotices === "required" || !(error instanceof BotCapabilityUnavailableError)) throw error;
+    await revokeBotNoticeAudience(() => bots.application.revokeNoticeAudience(id), botNotices, () => {
       process.stderr.write("aiden: The app is disconnected, but Bot storage needs repair before its Bot notices can be cleared.\n");
-    }
+    });
     return revoked;
   };
   // The loopback `/mcp` endpoint for outside apps. Its own services, built
