@@ -86,10 +86,11 @@ async function serveOwned(agentDir: string, signal: AbortSignal, options: { remo
         try {
           if (!lifetime.acceptsCommands) throw new Error("The Aiden daemon is shutting down.");
           const request = JSON.parse(buffer.slice(0, end));
-          if (!["schedule", "remote", "bots", "workspace", "serve", "hooks"].includes(request.command) || !Array.isArray(request.args) || request.args.some((arg: unknown) => typeof arg !== "string")) throw new Error("Invalid daemon command.");
+          if (!["schedule", "remote", "bots", "workspace", "serve", "hooks", "apps"].includes(request.command) || !Array.isArray(request.args) || request.args.some((arg: unknown) => typeof arg !== "string")) throw new Error("Invalid daemon command.");
           if (request.command === "hooks" && !hooks) throw new Error("Hooks are off on this server: they run only on macOS and Linux, and the hook store must be readable.");
           if (request.command === "remote" && !remote) throw new Error("Remote is off for this server. Restart it with `aiden serve` (without --no-remote) to use Remote controls.");
-          const result = request.command === "serve" ? await serveStatus(remote, request.args) : request.command === "hooks" ? await hooksCommand(agentDir, hooks!, request.args) : request.command === "workspace" ? await workspaceCommand(agentDir, request.args, (remote?.workspaces ?? workspaceRuntime).application) : request.command === "bots" ? await bots.command(request.args) : request.command === "remote" ? await remote!.command(request.args) : await runtime.command(request.args);
+          if (request.command === "apps" && !remote) throw new Error("Outside apps reach this server through Remote, which is off. Restart it with `aiden serve` (without --no-remote) to connect apps.");
+          const result = request.command === "serve" ? await serveStatus(remote, request.args) : request.command === "hooks" ? await hooksCommand(agentDir, hooks!, request.args) : request.command === "workspace" ? await workspaceCommand(agentDir, request.args, (remote?.workspaces ?? workspaceRuntime).application) : request.command === "bots" ? await bots.command(request.args) : request.command === "remote" ? await remote!.command(request.args) : request.command === "apps" ? await remote!.apps(request.args) : await runtime.command(request.args);
           await reply({ result });
         } catch (error) { await reply({ error: error instanceof Error ? error.message : String(error) }); }
       })());
@@ -115,6 +116,8 @@ async function serveOwned(agentDir: string, signal: AbortSignal, options: { remo
     if (remote) {
       const status = await remote.service.status().catch(() => undefined);
       process.stderr.write(`Aiden Remote listening${status ? ` on port ${status.lanPort}${status.lanEndpoint ? ` (${status.lanEndpoint})` : ""}` : ""}. Pair a device with \`aiden remote pair lan|tailscale\`.\n`);
+      const mcp = await remote.mcp.status().catch(() => undefined);
+      if (mcp?.running && mcp.url) process.stderr.write(`Aiden MCP server listening at ${mcp.url} for connected apps (this computer only).\n`);
     } else process.stderr.write("Aiden Remote is off.\n");
     if (signal.aborted) return;
     lifetime.markServing();

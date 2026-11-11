@@ -62,6 +62,10 @@ export const ANALYTICS_EVENTS = {
   web_search_used: { search_provider: id },
   voice_used: { mode: enumProp("live", "dictation", "read_aloud"), engine: enumProp("local", "cloud") },
   phone_paired: { transport: enumProp("lan", "tailscale"), device_count: enumProp(...COUNT_BUCKETS) },
+  // Apps using Aiden (the MCP server). Never the app's name, token or id.
+  mcp_app_connected: { access: enumProp("read", "supervised") },
+  // Whether the app chose the provider or model, or left Aiden's default.
+  mcp_chat_started: { model_choice: enumProp("default", "chosen") },
   peer_mac_paired: { method: enumProp("discovery", "code", "link") },
   computer_use_enabled: {},
   bot_computer_set_up: { element_control: bool },

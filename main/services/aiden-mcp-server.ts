@@ -20,6 +20,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
 
 import type { AidenMcpApp, AidenMcpToolRunner } from "./aiden-mcp-tools.js";
+import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import type {
   AidenRemoteAgentAccess,
   AidenRemoteAgentAppProjection,
@@ -343,7 +344,10 @@ export class AidenMcpHost {
     access: AidenRemoteAgentAccess;
   }): Promise<{ credential: string; app: AidenRemoteAgentAppProjection }> {
     if (!this.dependencies.supported()) throw new Error("This computer cannot run Aiden's MCP server.");
-    return this.dependencies.state.issueAgentApp(input);
+    const issued = await this.dependencies.state.issueAgentApp(input);
+    // Only the access level: never the app's name, its id or the credential.
+    reportAnalyticsEvent("mcp_app_connected", { access: issued.app.access });
+    return issued;
   }
 
   listApps(): Promise<AidenRemoteAgentAppProjection[]> {

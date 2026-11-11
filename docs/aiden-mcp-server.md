@@ -2,7 +2,7 @@
 
 Aiden can act as a [Model Context Protocol](https://modelcontextprotocol.io) server, so another app on the same computer (Claude Code, Codex, or any MCP client) can list Aiden's workspaces and chats, read them, and, with permission, start and follow Aiden turns.
 
-Status (2026-11-11): the server is in the desktop main process, behind the `mcpServer` host capability (macOS and Linux desktop; see `main/services/host-platform-capabilities.ts`). It is **off by default**. Turn it on and connect apps in **Settings → Connections → Apps using Aiden** ([below](#set-it-up-in-settings)). A headless `aiden serve` counterpart (workstream W4c) is still to come.
+Status (2026-11-11): the server is in the desktop main process, behind the `mcpServer` host capability (macOS and Linux desktop; see `main/services/host-platform-capabilities.ts`). It is **off by default**. Turn it on and connect apps in **Settings → Connections → Apps using Aiden** ([below](#set-it-up-in-settings)). The headless server hosts the same endpoint, managed with `aiden apps` (see [Headless server](#headless-server-aiden-serve)).
 
 ## Set it up in Settings
 
@@ -21,6 +21,7 @@ A chat an app started shows **Started by <app>** under its title in Aiden on thi
 - **Address:** `http://127.0.0.1:<port>/mcp`, loopback only. The server is a dedicated listener and is never served on the Remote Access LAN TLS listener, Tailscale or any other interface.
 - **Port:**
   - Release builds try 49400 first, then the next seven ports up. Development builds start at 50400.
+  - If every candidate is busy the first time the server starts, the system picks a free loopback port instead.
   - The first port that binds is saved in Aiden's Remote state file, so the URL stays the same across restarts and an app's configuration keeps working.
   - If another program later holds the saved port, the server reports `port_in_use` rather than moving, because moving would break every configured app silently.
 - **Credential:** each app gets its own bearer token, a 43-character base64url secret shown once when it is issued. Aiden stores only a hash. A token is sent as `Authorization: Bearer <token>`.
@@ -75,6 +76,7 @@ There is deliberately no tool for approvals or questions. When a turn needs one,
 ## Limits
 
 - **Turns:** each app can start or send 10 turns a minute and have 2 runs at once. A retry of an accepted `clientRequestId` does not count again, even after a restart or after many newer requests: Aiden's durable request record answers it.
+- **Unanswered turns:** each app can have 8 `aiden_chat_start` or `aiden_chat_send` requests that Aiden has not answered yet, and all apps together 32, counting a revoked app's until they finish. A new request past either limit is refused; a retry of one still running joins it.
 - **Requests:**
   - A request body over 1 MiB is answered 413 before any tool runs, whether its size is declared or streamed.
   - The server drains the rest of an oversized upload for up to 5 seconds so the app sees the 413, then cuts the connection.
@@ -108,9 +110,28 @@ Privacy:
 - Aiden keeps a local note of which app started a chat (`startedBy {kind: "app", name}`, in `aiden-mcp-chat-provenance.json`, the newest 1,000 entries). Only this computer's Aiden window reads it, for the **Started by** label; it is never sent to phones, Macs or apps.
 - App ids never appear in tool results.
 - Server logs carry only `started`, `stopped`, `start-failed` (with a problem code), `request-failed` and `revoke-bot-notices-unavailable` (an app was disconnected while Bot storage waits for repair), never a token, an app name, a path or chat text.
-- No analytics events are sent for the MCP server: a chat an app starts sends no `chat_created`, and its turns send no `chat_message_sent`.
+- A chat an app starts sends no `chat_created`, and its turns send no `chat_message_sent`. With usage data on, Aiden sends only two anonymous counts ([`docs/analytics.md`](analytics.md)): `mcp_app_connected` with the access level, when an app is connected, and `mcp_chat_started` with whether the app chose the model, when `aiden_chat_start` starts a chat. Never the app's name, its token or id, a chat id, a prompt, a workspace or a path. A retry with the same `clientRequestId`, `aiden_chat_send` and disconnecting an app send nothing.
 
 The Remote Access threat model has the matching section: [`docs/security/aiden-remote-threat-model.md`](security/aiden-remote-threat-model.md#10-local-mcp-server-for-outside-apps).
+
+## Headless server (`aiden serve`)
+
+`aiden serve` in `packages/cli` hosts the same server, built from the same `AidenMcpHost` and tool runner, with the same tools, access levels, limits, token handling and request checks. The differences:
+
+- **Port:** 49500 and the next seven ports, 100 above the desktop's range, so a desktop and a server on the same computer never take each other's port. Like the desktop, if all eight are busy on first start, the system picks a free loopback port, and the first port that binds is saved, in the server's `remote.json`, and a busy saved port is reported as `port_in_use`.
+- **Administration:** `aiden apps`, sent to the running server over its private control socket:
+  - `aiden apps connect <name> [--access read|supervised]` turns the server on if it is off, issues the app (Read unless `--access supervised`) and shows its token once.
+    - On a terminal it also prints the `claude mcp add` and `codex mcp add` commands, which read the token from the app's own `AIDEN_MCP_TOKEN_<NAME>_<ID>` variable (the same name Settings prints) rather than storing it in the app's config.
+    - Piped, it prints JSON and warns on stderr that the output holds the token.
+  - `aiden apps list` shows the server's status and the connected apps, revoked ones with `revokedAt`.
+  - `aiden apps revoke <app-id>` disconnects one app through the same revocation path as `aiden remote revoke`. A phone's or Mac's id is refused.
+  - `aiden apps on|off` opens or closes the listener and saves the choice.
+- **Requires Remote:** the server lives in the CLI's Remote runtime, which holds the device records and chat services. `aiden serve --no-remote` has no MCP server.
+- **Containers:** loopback in a container is the container's own, so apps on the host can't reach it. Run `aiden serve` on the host for outside apps.
+- **Files:** the provenance note is `<agentDir>/aiden-mcp-chat-provenance.json`.
+- **Analytics:** `aiden apps` sends nothing itself. The running `aiden serve` sends the same `mcp_app_connected` and `mcp_chat_started` counts as the desktop, under the server's own consent, and app chats and turns send no chat usage events.
+
+Code: `packages/cli/src/apps.ts` (host wiring and the `apps` command), `packages/cli/src/apps-display.ts` (the connect output) and `packages/cli/src/remote.ts`. Tests: `packages/cli/tests/mcp-apps.test.mjs`.
 
 ## Main-process API and Settings IPC
 

@@ -90,6 +90,8 @@ export async function createCliRemoteChats(agentDir: string, daemon: ReturnType<
       const device = (await state.snapshot()).devices.find((candidate) => candidate.id === deviceId);
       return device?.type === "mac" || device?.type === "linux";
     },
+    // An outside MCP app's chats and turns are never product analytics.
+    deviceReportsAnalytics: async (deviceId) => (await state.snapshot()).devices.find((candidate) => candidate.id === deviceId)?.type !== "agent",
     retainedBotChatAuthorizer: (input) => bots.application.authorizeRetainedChat({ ...input, audienceId: input.deviceId }),
     botTurnAuthorityPreflight: (input) => bots.preflight(input),
     // Refused before the ledger records anything, so the same key runs after `aiden bots unpause`.
