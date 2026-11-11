@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { newChatWorkspaceChoices } from "./new-chat-workspaces";
+import { continueInWorkspaceChoices, newChatWorkspaceChoices } from "./new-chat-workspaces";
 import type { Workspace } from "./types";
 
 function workspace(id: string, name: string, createdAt: number, extra: Partial<Workspace> = {}): Workspace {
@@ -55,4 +55,29 @@ test("equal activity falls back to name order so the list is stable", () => {
     newChatWorkspaceChoices([beta, alpha], [], undefined).map(({ workspace }) => workspace.name),
     ["alpha", "beta"],
   );
+});
+
+test("a chat whose folder is gone can continue in No workspace or any other workspace, never its own", () => {
+  const hiddenHome = workspace("hidden-1", "hidden", 10, { noWorkspace: true });
+  const hiddenLater = workspace("hidden-2", "hidden", 20, { noWorkspace: true });
+  const assistant = workspace("assistant", "Assistant", 1);
+  const choices = continueInWorkspaceChoices([site, api, fresh, worktree, hiddenLater, hiddenHome, assistant], "site");
+  assert.deepEqual(choices, [
+    { workspaceId: "hidden-1", name: "No workspace", noWorkspace: true },
+    { workspaceId: "api", name: "api" },
+    { workspaceId: "fresh", name: "fresh" },
+  ]);
+});
+
+test("a deleted worktree's main checkout is offered first, and a No workspace chat is not offered No workspace again", () => {
+  const home = workspace("default", "default", 10, { noWorkspace: true });
+  assert.deepEqual(
+    continueInWorkspaceChoices([site, api, fresh, worktree, home], "api-wt", "site").map(({ workspaceId }) => workspaceId),
+    ["default", "site", "api", "fresh"],
+  );
+  assert.deepEqual(
+    continueInWorkspaceChoices([site, home], "default").map(({ workspaceId }) => workspaceId),
+    ["site"],
+  );
+  assert.deepEqual(continueInWorkspaceChoices([site], "site"), []);
 });

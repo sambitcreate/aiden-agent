@@ -398,7 +398,7 @@ export function registerChatHistoryHandlers(): void {
     };
     try {
       const copied = await chatForkService.fork(
-        { chatId: parsed.chatId, forkAt: parsed.forkAt, summary: parsed.summary },
+        { chatId: parsed.chatId, forkAt: parsed.forkAt, summary: parsed.summary, continueIn: parsed.continueIn },
         {
           admitWorkspace: (workspaceId) => {
             const mutationAdmission = workspaceMutationGate.admit(workspaceId);

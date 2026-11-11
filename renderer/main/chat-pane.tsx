@@ -179,6 +179,7 @@ import {
   type GenerationHandle,
 } from "../lib/ipc";
 import { isNoWorkspace, noWorkspaceHome } from "../lib/no-workspace";
+import { continueInWorkspaceChoices } from "../lib/new-chat-workspaces";
 import { noWorkspaceFolderForFirstSend } from "../lib/no-workspace-send";
 import {
   queryKeys,
@@ -1235,6 +1236,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       forkAt?: { messageId: string; position: ChatForkPosition },
       prefill?: { text: string; attachments: readonly Attachment[] },
       summary?: { instructions?: string },
+      continueInWorkspaceId?: string,
     ) => {
       if (getChatDraft(chatId)) throw new Error("Send the first message before copying this chat.");
       if (documentAppendReconciliationRequired) {
@@ -1254,7 +1256,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
         throw new Error("Finish the current response or approval before copying this chat.");
       }
       const sourceChatId = chatId;
-      const copied = await chatsApi.copyVisibleHistory(sourceChatId, forkAt, summary);
+      const copied = continueInWorkspaceId
+        ? await chatsApi.continueInNewChat(sourceChatId, continueInWorkspaceId)
+        : await chatsApi.copyVisibleHistory(sourceChatId, forkAt, summary);
       if (prefill) {
         saveComposerDraftText(copied.id, prefill.text);
         seedComposerAttachments(copied.id, prefill.attachments);
@@ -1301,6 +1305,37 @@ export function ChatPane({ chatId }: { chatId: string }) {
       qc,
       selectWorkspace,
     ],
+  );
+
+  // Continue in a new chat: fork the conversation into another workspace, or
+  // No workspace, and take the unsent message along. This chat stays as it is.
+  const [continuingInNewChat, setContinuingInNewChat] = React.useState(false);
+  const missingFolderWorkspaceId = missingWorkspaceFolder?.id;
+  const missingFolderMainWorkspaceId = missingWorkspaceFolder?.worktree?.mainWorkspaceId;
+  const continueChoices = React.useMemo(
+    () =>
+      missingFolderWorkspaceId
+        ? continueInWorkspaceChoices(workspaces, missingFolderWorkspaceId, missingFolderMainWorkspaceId)
+        : [],
+    [missingFolderMainWorkspaceId, missingFolderWorkspaceId, workspaces],
+  );
+  const continueInNewChat = React.useCallback(
+    async (workspaceId: string) => {
+      // A send refused by the folder check may be waiting in the paused queue
+      // with the composer already cleared.
+      const text = (
+        loadComposerDraft(chatId).text.trim() || chatMessageQueue(chatId).getSnapshot().messages[0]?.text || ""
+      ).trim();
+      setContinuingInNewChat(true);
+      try {
+        await copyChat(undefined, text ? { text, attachments: [] } : undefined, undefined, workspaceId);
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Couldn't continue in a new chat.");
+      } finally {
+        if (mountedRef.current) setContinuingInNewChat(false);
+      }
+    },
+    [chatId, copyChat],
   );
 
   const forkLineage = chat.data?.forkedFrom;
@@ -3885,6 +3920,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 {...(missingWorkspaceFolder.worktree ? { worktree: missingWorkspaceFolder.worktree } : {})}
                 checking={folderPresenceQuery.isFetching}
                 restoring={restoringWorktree}
+                continuing={continuingInNewChat}
+                continueChoices={continueChoices}
+                onContinueIn={(workspaceId) => void continueInNewChat(workspaceId)}
                 onCheckAgain={() => void folderPresenceQuery.refetch()}
                 onRestore={() => void restoreDeletedWorktree(missingWorkspaceFolder.id)}
                 onNewChatInMain={newChatActions ? () => {

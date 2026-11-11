@@ -18,6 +18,12 @@ export interface ChatForkRequest {
   forkAt?: { messageId: string; position: ChatForkPosition };
   /** Start the fork with a pending summary of what followed the cut. */
   summary?: { instructions?: string };
+  /**
+   * Continue a chat whose workspace folder is gone in another workspace: the
+   * conversation through its newest reply is forked there. Only for a chat
+   * whose folder is missing; it takes no cut or summary of its own.
+   */
+  continueIn?: { workspaceId: string };
 }
 
 /** A caller's hold on the destination workspace while the fork is created. */
@@ -70,6 +76,8 @@ export interface ChatForkServiceDependencies {
   prepareWorkspace?(sourceWorkspaceId: string): Promise<WorkspaceChatAssignment>;
   /** Release only an unowned hidden home; never discard a possibly committed copy. */
   releaseUnusedWorkspace?(workspaceId: string): Promise<void>;
+  /** Whether a workspace's folder is checked and gone. Continuing in a new chat needs this. */
+  workspaceFolderMissing?(workspaceId: string): Promise<boolean>;
   /** Why the chat cannot be copied yet, such as an unrecovered visual artifact. */
   blockedReason?(chatId: string): Promise<string | undefined>;
   htmlArtifacts?: ChatForkHtmlArtifacts;
@@ -102,7 +110,15 @@ export function createChatForkService(deps: ChatForkServiceDependencies) {
   return {
     supportsSummaries: deps.startSummary !== undefined,
 
+    supportsContinue: deps.workspaceFolderMissing !== undefined,
+
     async fork(request: ChatForkRequest, caller: ChatForkCaller): Promise<Chat> {
+      if (request.continueIn && (request.forkAt || request.summary)) {
+        throw new ChatForkError("ineligible", "Continuing in a new chat takes the whole conversation.");
+      }
+      if (request.continueIn && !deps.workspaceFolderMissing) {
+        throw new ChatForkError("unavailable", "Continuing in a new chat is unavailable here.");
+      }
       if (request.summary && !deps.startSummary) {
         throw new ChatForkError("unavailable", "Fork with summary is unavailable here.");
       }
@@ -135,6 +151,10 @@ export function createChatForkService(deps: ChatForkServiceDependencies) {
         if (blocked) throw new ChatForkError("unavailable", blocked);
 
         if (source.botId) {
+          // A Bot chat runs in its Bot's own home, never a workspace folder.
+          if (request.continueIn) {
+            throw new ChatForkError("ineligible", "Bot chats cannot be continued in another workspace.");
+          }
           if (!caller.copyBotChat) {
             throw new ChatForkError("not_found", "The chat is no longer available.");
           }
@@ -150,15 +170,28 @@ export function createChatForkService(deps: ChatForkServiceDependencies) {
             "Assistant chats cannot be copied into the main chat surface.",
           );
         }
+        const destinationWorkspaceId = request.continueIn?.workspaceId ?? workspaceId;
+        if (request.continueIn) {
+          if (destinationWorkspaceId === ASSISTANT_WORKSPACE_ID) {
+            throw new ChatForkError("ineligible", "Chats cannot be continued in the Assistant.");
+          }
+          if (destinationWorkspaceId === workspaceId) {
+            throw new ChatForkError("ineligible", "Choose another workspace to continue in.");
+          }
+        }
+        const forkRequest = request.continueIn ? continuationRequest(source, request) : request;
         const admission = caller.admitWorkspace(workspaceId);
-        let targetWorkspaceId = workspaceId;
+        const destinationAdmission = destinationWorkspaceId !== workspaceId
+          ? caller.admitWorkspace(destinationWorkspaceId)
+          : undefined;
+        let targetWorkspaceId = destinationWorkspaceId;
         let targetAdmission: ChatForkWorkspaceAdmission | undefined;
         let preserveTarget = false;
         let uncertain = false;
         let assignment: WorkspaceChatAssignment | undefined;
         try {
           const assertCurrent = () => {
-            if (admission.isAborted() || targetAdmission?.isAborted()) {
+            if (admission.isAborted() || destinationAdmission?.isAborted() || targetAdmission?.isAborted()) {
               throw new ChatForkError("busy", "The workspace changed before the chat was copied.");
             }
             caller.assertCurrent?.();
@@ -166,12 +199,26 @@ export function createChatForkService(deps: ChatForkServiceDependencies) {
           if (!(await deps.workspaceExists(workspaceId))) {
             throw new ChatForkError("unavailable", "The chat workspace is no longer available.");
           }
+          if (request.continueIn) {
+            // A chat whose folder is still there keeps working where it is.
+            if (!(await deps.workspaceFolderMissing!(workspaceId))) {
+              throw new ChatForkError("ineligible", "This chat's folder is available, so send in this chat.");
+            }
+            if (!(await deps.workspaceExists(destinationWorkspaceId))) {
+              throw new ChatForkError("not_found", "That workspace is no longer available.");
+            }
+            if (await deps.workspaceFolderMissing!(destinationWorkspaceId)) {
+              throw new ChatForkError("unavailable", "That workspace's folder is missing too. Choose another workspace.");
+            }
+          }
           assertCurrent();
-          assignment = await deps.prepareWorkspace?.(workspaceId);
-          targetWorkspaceId = assignment?.workspaceId ?? workspaceId;
-          if (targetWorkspaceId !== workspaceId) targetAdmission = caller.admitWorkspace(targetWorkspaceId);
+          assignment = await deps.prepareWorkspace?.(destinationWorkspaceId);
+          targetWorkspaceId = assignment?.workspaceId ?? destinationWorkspaceId;
+          if (targetWorkspaceId !== workspaceId && targetWorkspaceId !== destinationWorkspaceId) {
+            targetAdmission = caller.admitWorkspace(targetWorkspaceId);
+          }
           assertCurrent();
-          const copied = await copyRegular(source, workspaceId, targetWorkspaceId, request, caller, assertCurrent);
+          const copied = await copyRegular(source, workspaceId, targetWorkspaceId, forkRequest, caller, assertCurrent);
           preserveTarget = true;
           deps.published?.(copied);
           return copied;
@@ -184,8 +231,9 @@ export function createChatForkService(deps: ChatForkServiceDependencies) {
           throw error;
         } finally {
           targetAdmission?.release();
+          destinationAdmission?.release();
           admission.release();
-          if (!preserveTarget && targetWorkspaceId !== workspaceId) {
+          if (!preserveTarget && targetWorkspaceId !== destinationWorkspaceId) {
             await deps.releaseUnusedWorkspace?.(targetWorkspaceId).catch((error: unknown) => deps.reportDegraded?.(error));
           }
           if (!uncertain) assignment?.release();
@@ -196,6 +244,20 @@ export function createChatForkService(deps: ChatForkServiceDependencies) {
       }
     },
   };
+
+  /** A continuation forks after the newest reply that answers one of the person's messages. */
+  function continuationRequest(source: Chat, request: ChatForkRequest): ChatForkRequest {
+    let reply: ChatMessage | undefined;
+    for (let index = source.messages.length - 1; index >= 0; index -= 1) {
+      const message = source.messages[index]!;
+      if (!reply) {
+        if (message.role === "assistant") reply = message;
+      } else if (message.role === "user") {
+        return { chatId: request.chatId, forkAt: { messageId: reply.id, position: "after" } };
+      }
+    }
+    throw new ChatForkError("ineligible", "There is nothing to continue yet. Start a new chat instead.");
+  }
 
   async function copyRegular(
     source: Chat,

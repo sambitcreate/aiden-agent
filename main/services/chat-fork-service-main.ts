@@ -9,12 +9,17 @@ import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { artifactRecoveryMessage, unresolvedGuiArtifactMessage } from "./gui-artifact-recovery.js";
 import { llmClient } from "./llm-client.js";
 import { piCompactionSessionStore } from "./pi-compaction-session-store.js";
+import { workspaceFolderMissing } from "./workspace-folder-presence.js";
 
 /** Desktop forks, shared by the app window and paired Remote devices. */
 export const chatForkService = createChatForkService({
   chatStore,
   beginChatCopy: (chatId) => llmClient.beginChatCopy(chatId),
   workspaceExists: async (workspaceId) => Boolean(await configStore.getWorkspace(workspaceId)),
+  workspaceFolderMissing: async (workspaceId) => {
+    const workspace = await configStore.getWorkspace(workspaceId);
+    return Boolean(workspace && (await workspaceFolderMissing(workspace)));
+  },
   prepareWorkspace: async (workspaceId) => {
     // Resolve after startup: the workspace service also depends on chat/LLM services.
     const { workspaceApplicationService } = await import("./workspace-application-service-main.js");
