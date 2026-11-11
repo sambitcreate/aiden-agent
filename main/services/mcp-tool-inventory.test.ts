@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { boundedMcpToolPageReader, callMcpTool, callMcpToolOnLiveClient, createMcpToolCallGuard, createMcpToolInventoryCache, listMcpToolInventory, listMcpToolPage, readGuardedMcpInventory } from "./mcp-tool-inventory.js";
+import { boundedMcpToolPageReader, callMcpTool, callMcpToolOnLiveClient, createMcpToolCallGuard, createMcpToolInventoryCache, guardedMcpToolCall, listMcpToolInventory, listMcpToolPage, readGuardedMcpInventory } from "./mcp-tool-inventory.js";
 import { executeMcpAgentTool } from "./mcp-tool-result.js";
 import { LATEST_PROTOCOL_VERSION, McpClient, McpTimeoutError, type JsonRpcMessage } from "@earendil-works/pi-mcp";
 import { createInMemoryTransportPair } from "@earendil-works/pi-mcp/testing";
@@ -189,9 +189,63 @@ test("non-object structured content from a real tools/call reaches the agent res
     assert.deepEqual(result.structuredContent, value);
     assert.match((result.content[0] as { text: string }).text, /Structured content/u);
   }
-  const typed = createMcpToolCallGuard([{ name: "count", outputSchema: { type: "number" } }]);
-  assert.throws(() => typed.validateResult("count", { content: [] }), /did not return structured content/u);
-  assert.throws(() => typed.validateResult("count", { content: [], structuredContent: "1" }), /output schema/u);
+});
+
+const TICKET_SCHEMA = { type: "object", properties: { status: { enum: ["open", "closed"] } }, required: ["status"] };
+// A text-only reply, then one whose structured status is outside the schema's enum.
+const TICKET_REPLIES = [
+  { content: [{ type: "text", text: "Ticket 7 was filed." }] },
+  { content: [{ type: "text", text: "Ticket 8 was filed." }], structuredContent: { status: "pending-PRIVATE-VALUE" } },
+];
+
+test("advisory output checks return a tool's real reply unchanged with a data-free diagnostic; strict still rejects it", async (t) => {
+  let next = 0;
+  const { client } = await rawServerClient(t, () => TICKET_REPLIES[next++ % TICKET_REPLIES.length]);
+  const toolName = `file_ticket_${"x".repeat(300)}`;
+  const guard = createMcpToolCallGuard([{ name: toolName, outputSchema: TICKET_SCHEMA }]);
+  const diagnostics: string[] = [];
+  for (const reply of TICKET_REPLIES) {
+    const result = await guardedMcpToolCall(guard, client, { name: toolName, arguments: {} },
+      { outputSchema: "advisory", onOutputSchemaDiagnostic: (diagnostic) => diagnostics.push(diagnostic) });
+    assert.deepEqual(result, reply);
+  }
+  assert.equal(diagnostics.length, 2);
+  assert.match(diagnostics[0], /did not return structured content/u);
+  assert.match(diagnostics[1], /does not match the tool's output schema.*enum/u);
+  for (const diagnostic of diagnostics) {
+    assert.ok(diagnostic.length < 512, "the diagnostic is bounded even for a long tool name");
+    assert.doesNotMatch(diagnostic, /PRIVATE-VALUE|Ticket \d/u, "the diagnostic never carries the returned data");
+  }
+
+  // Strict is the default, and stays the rule for parsers: both replies reject.
+  await assert.rejects(guardedMcpToolCall(guard, client, { name: toolName, arguments: {} }), /did not return structured content/u);
+  await assert.rejects(guardedMcpToolCall(guard, client, { name: toolName, arguments: {} }, { outputSchema: "strict" }), /output schema/u);
+  assert.throws(() => guard.validateResult(toolName, TICKET_REPLIES[1]), /output schema/u);
+
+  // A conforming reply or a tool error reports nothing in either mode.
+  assert.equal(guard.validateResult(toolName, { content: [], structuredContent: { status: "open" } }, "advisory"), undefined);
+  assert.equal(guard.validateResult(toolName, { isError: true, content: [] }, "strict"), undefined);
+});
+
+test("an advisory agent tool call through the live-client path carries the raw reply to the model", async (t) => {
+  let next = 0;
+  const { client } = await rawServerClient(t, (method) => method === "tools/list"
+    ? { tools: [{ name: "file_ticket", inputSchema: { type: "object" }, outputSchema: TICKET_SCHEMA }] }
+    : TICKET_REPLIES[next++]);
+  const read = (live: McpClient) => readGuardedMcpInventory(live, () => listMcpToolInventory({ assertCurrent() {}, listPage: (cursor, signal) => listMcpToolPage(live, cursor, { signal }) }), () => {});
+  const { guard: discovered } = await read(client);
+  const diagnostics: string[] = [];
+  const callAsAgent = () => executeMcpAgentTool(() => callMcpToolOnLiveClient(discovered, client, read, { name: "file_ticket", arguments: {} },
+    { outputSchema: "advisory", onOutputSchemaDiagnostic: (diagnostic) => diagnostics.push(diagnostic) }));
+
+  const textOnly = await callAsAgent();
+  assert.match((textOnly.content[0] as { text: string }).text, /Ticket 7 was filed\./u);
+  assert.equal(textOnly.structuredContent, undefined);
+
+  const mismatched = await callAsAgent();
+  assert.match((mismatched.content[0] as { text: string }).text, /Ticket 8 was filed\./u);
+  assert.deepEqual({ ...mismatched.structuredContent as object }, { status: "pending-PRIVATE-VALUE" });
+  assert.equal(diagnostics.length, 2);
 });
 
 test("complete inventory guards preserve early-page output schemas and task requirements", async () => {

@@ -554,7 +554,9 @@ export function createCliMcpPool(agentDir: string, options: { child?: boolean } 
         current.guard.assertCallable(tool.name);
         return executeMcpAgentTool(async () => {
           const result = await callMcpTool(current.client, { name: tool.name, arguments: input as Record<string, unknown> }, { signal, timeoutMs: 60_000, beforeSend: () => current.guard.assertCallable(tool.name) });
-          current.guard.validateResult(tool.name, result);
+          // Advisory, as on the desktop: the call already ran, so the model gets the result as received.
+          const diagnostic = current.guard.validateResult(tool.name, result, "advisory");
+          if (diagnostic !== undefined) process.stderr.write(`aiden: ${diagnostic}\n`);
           return result;
         });
       },

@@ -170,7 +170,26 @@ function declaresSchemaId(value: unknown): boolean {
   return Object.prototype.hasOwnProperty.call(value, "$id") || Object.values(value).some(declaresSchemaId);
 }
 
-type JsonSchemaValidator = (value: unknown) => boolean;
+/** One compiled output schema, plus where its last failed check stopped. */
+type JsonSchemaValidator = { check(value: unknown): boolean; firstSchemaPath(): string | undefined };
+
+/**
+ * How a tools/call result that breaks its tool's output schema is treated.
+ * The tool has already run either way. `strict` rejects the result, for
+ * callers that parse it (the Composio facade, connector watches, internal
+ * readers). `advisory` returns it unchanged with a short diagnostic, for
+ * agent-facing calls, so the model sees the data instead of an error that
+ * invites it to repeat an action that already happened.
+ */
+export type McpOutputSchemaMode = "strict" | "advisory";
+
+/** Guarded-call options: transport options plus the output-schema policy. */
+export interface McpGuardedCallOptions extends McpCallOptions {
+  /** Defaults to `strict`. Agent-facing calls pass `advisory`. */
+  outputSchema?: McpOutputSchemaMode;
+  /** Receives the advisory diagnostic for a non-conforming result. */
+  onOutputSchemaDiagnostic?: (diagnostic: string) => void;
+}
 
 /** The validator configuration MCP clients use for tool output schemas. */
 function createOutputSchemaAjv(): Ajv {
@@ -214,7 +233,11 @@ export function createMcpToolCallGuard(
     let validator: JsonSchemaValidator;
     try {
       const compiledSchema: ValidateFunction = ajv.compile(schema);
-      validator = (value) => compiledSchema(value) === true;
+      validator = {
+        check: (value) => compiledSchema(value) === true,
+        // A location in the listed schema, bounded. Never the instance path, which can carry data keys.
+        firstSchemaPath: () => compiledSchema.errors?.[0]?.schemaPath?.slice(0, 160),
+      };
     } catch { throw new Error("This MCP tool's output schema could not be compiled."); }
     validators.set(name, validator);
     return validator;
@@ -234,15 +257,25 @@ export function createMcpToolCallGuard(
       // Compile before dispatch so an unusable schema cannot follow a side effect.
       validatorFor(name);
     },
-    validateResult(name: string, result: unknown): void {
+    /**
+     * Check a returned result against the tool's output schema. `strict` (the
+     * default) throws; `advisory` returns a short diagnostic naming only the
+     * tool and the schema rule, never the returned data.
+     */
+    validateResult(name: string, result: unknown, mode: McpOutputSchemaMode = "strict"): string | undefined {
       const validate = validatorFor(name);
-      if (!validate) return;
+      if (!validate) return undefined;
       const record = result && typeof result === "object" ? result as { structuredContent?: unknown; isError?: unknown } : {};
       // Tool failures may carry diagnostic JSON instead of the successful output shape.
       // Preserve that failure for the normal tool-result error path.
-      if (record.isError === true) return;
-      if (record.structuredContent === undefined) throw new Error("MCP tool has an output schema but did not return structured content.");
-      if (!validate(record.structuredContent)) throw new Error("MCP structured content does not match the tool's output schema.");
+      if (record.isError === true) return undefined;
+      let problem: string | undefined;
+      if (record.structuredContent === undefined) problem = "MCP tool has an output schema but did not return structured content.";
+      else if (!validate.check(record.structuredContent)) problem = "MCP structured content does not match the tool's output schema.";
+      if (problem === undefined) return undefined;
+      if (mode === "strict") throw new Error(problem);
+      const where = record.structuredContent === undefined ? undefined : validate.firstSchemaPath();
+      return `MCP tool "${name.slice(0, 128)}": ${problem}${where ? ` First failing rule: ${where}.` : ""} The result was used as received.`;
     },
   };
 }
@@ -284,11 +317,13 @@ export async function guardedMcpToolCall(
   guard: McpToolCallGuard,
   client: McpRequester,
   params: McpToolCallParams,
-  options?: McpCallOptions,
+  options?: McpGuardedCallOptions,
 ) {
+  const { outputSchema = "strict", onOutputSchemaDiagnostic, ...callOptions } = options ?? {};
   guard.assertCallable(params.name);
-  const result = await callMcpTool(client, params, { ...options, beforeSend: () => guard.assertCallable(params.name) });
-  guard.validateResult(params.name, result);
+  const result = await callMcpTool(client, params, { ...callOptions, beforeSend: () => guard.assertCallable(params.name) });
+  const diagnostic = guard.validateResult(params.name, result, outputSchema);
+  if (diagnostic !== undefined) onOutputSchemaDiagnostic?.(diagnostic);
   return result;
 }
 
@@ -303,7 +338,7 @@ export async function callMcpToolOnLiveClient<C extends McpRequester>(
   live: C,
   inventoryOf: (client: C) => Promise<{ guard: McpToolCallGuard }>,
   params: McpToolCallParams,
-  options?: McpCallOptions,
+  options?: McpGuardedCallOptions,
 ) {
   const { guard } = await inventoryOf(live);
   options?.signal?.throwIfAborted();
