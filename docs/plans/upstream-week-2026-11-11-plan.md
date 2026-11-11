@@ -111,7 +111,13 @@ Steps cancelled by app shutdown or chat deletion keep today's treatment. The dec
 ### W6: late steers
 
 - **W6a.** If the run has already ended, `steerMessage` and `steerQueued` put the message on the document queue instead of throwing.
-- **W6b.** Input that the admission step saved after `agent_end` closed the queue is kept as owed work. The run reports the existing `admitted`/`follow-up` receipt, so phones already show "Queued to run next". `llm-client` then starts the next run when the run completes normally. The receipt must stay true on every terminal path: after a Stop or a failure the owed input is not demoted to history; it stays pending as a paused queued item that runs when the person resumes or sends, and can be removed. Desktop, iOS and Android show it the same way, with tests for the Stop and failure paths.
+- **W6b.** Input that the admission step saved after `agent_end` closed the queue becomes the chat's next turn. There is no new queue contract and no protocol revision.
+  - Main returns the `follow-up` receipt only after it has registered the owed input as the chat's next turn, inside the same section that commits it. From then on it is an ordinary turn, so the receipt (shown on phones as "Queued to run next") is true.
+  - A later Stop stops that turn the normal way. The input stays in history as a stopped turn, like any stopped message, and nothing reruns automatically.
+  - If the settling run fails after the commit, the owed turn still starts, because it is its own turn and not a retry. A failure inside the owed turn ends that turn only and never loops.
+  - If main cannot register the turn (chat deleted, app shutting down, run lifecycle already closing), it returns `committed`, not `follow-up`. Clients show the existing "saved, not answered" treatment and the person can resend.
+  - Phones need nothing new: they already render the `follow-up` and `committed` receipts and see the next turn through the normal stream.
+  - Tests: Stop right after a `follow-up` receipt leaves exactly one stopped turn and no rerun; a failure in the settle window still starts the owed turn exactly once; deleting the chat or shutting down before registration gives a `committed` receipt.
 
 ### W7: lenient output schemas
 
