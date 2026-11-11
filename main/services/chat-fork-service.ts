@@ -198,15 +198,15 @@ export function createChatForkService(deps: ChatForkServiceDependencies) {
         }
         const forkRequest = request.continueIn ? continuationRequest(source, request) : request;
         const admission = caller.admitWorkspace(workspaceId);
-        const destinationAdmission = destinationWorkspaceId !== workspaceId
-          ? caller.admitWorkspace(destinationWorkspaceId)
-          : undefined;
+        // Acquired inside the try so a refused destination still releases the source hold.
+        let destinationAdmission: ChatForkWorkspaceAdmission | undefined;
         let targetWorkspaceId = destinationWorkspaceId;
         let targetAdmission: ChatForkWorkspaceAdmission | undefined;
         let preserveTarget = false;
         let uncertain = false;
         let assignment: WorkspaceChatAssignment | undefined;
         try {
+          if (destinationWorkspaceId !== workspaceId) destinationAdmission = caller.admitWorkspace(destinationWorkspaceId);
           const assertCurrent = () => {
             if (admission.isAborted() || destinationAdmission?.isAborted() || targetAdmission?.isAborted()) {
               throw new ChatForkError("busy", "The workspace changed before the chat was copied.");

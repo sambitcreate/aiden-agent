@@ -461,6 +461,27 @@ test("a chat whose folder is gone continues in another workspace with its histor
   assert.deepEqual(await fs.readdir(movedFolder), ["private.txt"]);
 });
 
+test("a destination workspace that refuses its hold releases the source workspace's hold", async (t) => {
+  const { store, source } = await fixture(t);
+  const { forks } = await missingFolderWorkspaces(t, store);
+  const held = new Set<string>();
+  const holdingCaller = (refuse?: string): ChatForkCaller => ({
+    admitWorkspace: (id) => {
+      if (id === refuse) throw new ChatForkError("busy", "That workspace is being changed.");
+      held.add(id);
+      return { isAborted: () => false, release: () => { held.delete(id); } };
+    },
+  });
+
+  await rejectsWith(forks.fork({ chatId: source.id, continueIn: { workspaceId: "elsewhere" } }, holdingCaller("elsewhere")), "busy");
+  assert.deepEqual([...held], []);
+  assert.deepEqual((await store.list()).map(({ id }) => id), [source.id]);
+  // Nothing is left held, so the next attempt goes through.
+  const continued = await forks.fork({ chatId: source.id, continueIn: { workspaceId: "elsewhere" } }, holdingCaller());
+  assert.equal(continued.workspaceId, "elsewhere");
+  assert.deepEqual([...held], []);
+});
+
 test("No workspace as the destination uses its home, then a fresh hidden folder once the home is taken", async (t) => {
   const { store, source } = await fixture(t);
   const { forks, records } = await missingFolderWorkspaces(t, store);
