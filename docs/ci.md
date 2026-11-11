@@ -199,7 +199,13 @@ One wall-clock ceiling was raised; the iOS item says which.
   under two conditions:
   - It arrives within three seconds of the write.
   - Every file beside the page still has the size, inode and modification time
-    it had when the write began (the canvas writes nothing else).
+    it had when the write began. The walk skips hidden folders, which the
+    watcher ignores, and stops after 500 entries; a larger folder counts as
+    changed.
+
+  The canvas's write changes only the page itself. Editing two pages in one
+  folder within three seconds can still reload the first page once more than
+  needed, because its neighbour changed.
 
   Each page such an event queues is checked on its own. The edited page stays,
   while every other page, and a page whose neighbours changed, is still

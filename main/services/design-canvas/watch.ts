@@ -11,8 +11,10 @@
 // An event that names no file could also be a stylesheet or an image beside
 // the page. It is put down to the canvas's write only for a few seconds after
 // that write, and only while the files beside the page are as they were when
-// the write began (the canvas writes nothing else); otherwise it reports the
-// page.
+// the write began; otherwise it reports the page. The canvas's write changes
+// only the page itself, so a change beside it is usually someone else's. It
+// can also be the canvas editing another page in the same folder within those
+// seconds, which reloads this page once more than needed.
 // The canvas's writes are remembered only for the pages it still watches, so
 // a page that stops being watched and comes back reports any change again.
 
@@ -34,8 +36,13 @@ export const DESIGN_WATCH_DEBOUNCE_MS = 150;
  * the write arrives well within it; a later unnamed event may be an asset.
  */
 export const DESIGN_OWN_WRITE_WINDOW_MS = 3000;
-/** The most files beside a page whose sizes and times are compared; past it nothing beside the page counts as unchanged. */
+/**
+ * The most folder entries looked at beside a page, hidden ones included; past
+ * it nothing beside the page counts as unchanged.
+ */
 export const DESIGN_NEIGHBOURHOOD_LIMIT = 500;
+
+const NOTHING_NOTED: Promise<string | null> = Promise.resolve(null);
 
 export const DESIGN_FILES_CHANGED_CHANNEL = "designCanvas:filesChanged";
 
@@ -174,6 +181,8 @@ export class DesignFileWatcher {
       }
       write.settledAt = this.now();
       settle();
+      // Past the window nothing compares against what was beside the page.
+      setTimeout(() => (write.beside = NOTHING_NOTED), this.ownWriteWindowMs).unref?.();
     };
   }
 
@@ -312,22 +321,36 @@ export class DesignFileWatcher {
 
 /**
  * The files beside a page, as the watcher sees them: every file in the page's
- * folder (and below it, unless that is the workspace root) except the page and
- * hidden ones, each with its size, inode and modification time. Null when the
- * folder can't be read or holds more than `DESIGN_NEIGHBOURHOOD_LIMIT` files.
+ * folder (and below it, unless that is the workspace root) except the page,
+ * each with its size, inode and modification time. Hidden entries are counted
+ * but never entered: the watcher ignores them. Null when a folder can't be
+ * read or more than `DESIGN_NEIGHBOURHOOD_LIMIT` entries are met, so the walk
+ * stops early in a large tree.
+ *
+ * The walk is not atomic: a file changed while it runs may be noted either
+ * way. That only matters for a change racing the canvas's own write.
  */
 async function besidePage(root: string, relativePath: string): Promise<string | null> {
   const folder = path.join(root, path.posix.dirname(relativePath));
   const page = path.join(root, relativePath);
+  const recursive = path.posix.dirname(relativePath) !== ".";
   const files: string[] = [];
+  const folders = [folder];
+  let seen = 0;
   try {
-    const listing = await fsp.opendir(folder, { recursive: path.posix.dirname(relativePath) !== "." });
-    for await (const item of listing) {
-      if (!item.isFile()) continue;
-      const file = path.join(item.parentPath, item.name);
-      if (file === page || path.relative(folder, file).split(path.sep).some((segment) => segment.startsWith("."))) continue;
-      if (files.length === DESIGN_NEIGHBOURHOOD_LIMIT) return null;
-      files.push(file);
+    for (let next = folders.pop(); next !== undefined; next = folders.pop()) {
+      const listing = await fsp.opendir(next);
+      for await (const item of listing) {
+        seen += 1;
+        if (seen > DESIGN_NEIGHBOURHOOD_LIMIT) return null;
+        if (item.name.startsWith(".")) continue;
+        const entry = path.join(next, item.name);
+        if (item.isDirectory()) {
+          if (recursive) folders.push(entry);
+        } else if ((item.isFile() || item.isSymbolicLink()) && entry !== page) {
+          files.push(entry);
+        }
+      }
     }
   } catch {
     return null;

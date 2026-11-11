@@ -6,6 +6,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test, { type TestContext } from "node:test";
 import {
+  DESIGN_NEIGHBOURHOOD_LIMIT,
   DESIGN_OWN_WRITE_WINDOW_MS,
   DESIGN_WATCH_DEBOUNCE_MS,
   DESIGN_WATCH_LIMIT,
@@ -333,6 +334,50 @@ test("an event naming no file is put down to the canvas's write only for a few s
 
   // Past it, an unnamed event may be the stylesheet changing, so the page reloads.
   clock = DESIGN_OWN_WRITE_WINDOW_MS + 1;
+  emit(null);
+  await eventually(() => updates.length > 0);
+  assert.deepEqual(updates.map((update) => update.paths), [["design/hero.html"]]);
+});
+
+/** One file more than the walk beside a page looks at, under `folder`. */
+function manyFiles(folder: string): Record<string, string> {
+  return Object.fromEntries(Array.from({ length: DESIGN_NEIGHBOURHOOD_LIMIT + 1 }, (_, index) => [`${folder}/${index}.js`, "x"]));
+}
+
+test("a large hidden folder beside a page is not walked, so the canvas's own write is still recognised", async (t) => {
+  const root = await workspace(t, {
+    "design/hero.html": "<h1>Ship faster</h1>",
+    "design/hero.css": "h1{}",
+    ...manyFiles("design/.next/cache"),
+  });
+  // A walk that went in would fail here, and could prove nothing unchanged.
+  const hidden = path.join(root, "design/.next");
+  await fsp.chmod(hidden, 0o000);
+  try {
+    const { instance, updates, emit } = fakeWatcher(t);
+    await instance.set("chat-1", root, ["design/hero.html"]);
+    const written = "<h1>Ship sooner</h1>";
+    const settle = instance.ownWrite("chat-1", "design/hero.html", written);
+    await fsp.writeFile(path.join(root, "design/hero.html"), written);
+    settle(true);
+    await instance.noted("chat-1", "design/hero.html");
+    emit(null);
+    await sleep(50);
+    assert.equal(updates.length, 0, "the page already shows its own words");
+  } finally {
+    await fsp.chmod(hidden, 0o755);
+  }
+});
+
+test("past the most entries the walk looks at, nothing beside the page counts as unchanged", async (t) => {
+  const root = await workspace(t, { "design/hero.html": "<h1>Ship faster</h1>", ...manyFiles("design/assets") });
+  const { instance, updates, emit } = fakeWatcher(t);
+  await instance.set("chat-1", root, ["design/hero.html"]);
+  const written = "<h1>Ship sooner</h1>";
+  const settle = instance.ownWrite("chat-1", "design/hero.html", written);
+  await fsp.writeFile(path.join(root, "design/hero.html"), written);
+  settle(true);
+  await instance.noted("chat-1", "design/hero.html");
   emit(null);
   await eventually(() => updates.length > 0);
   assert.deepEqual(updates.map((update) => update.paths), [["design/hero.html"]]);
