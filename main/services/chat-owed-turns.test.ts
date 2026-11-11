@@ -52,15 +52,21 @@ function host(options: { refuses?: (chatId: string) => boolean } = {}) {
     newMessageId: () => `message-${(ids += 1)}`,
   });
   owedTurns.open("stream-1", { chatId: "chat-1", ownerDocumentId: "doc-1", context: { model: "m" } });
-  /** What main does when the run finishes: record its outcome, leave the active map, settle. */
-  const finishRun = (outcome: { committed?: string[]; failed?: boolean } = {}) => {
+  /**
+   * What main does when the run finishes: record its outcome, end its
+   * ownership (every step runs, the first failure is rethrown), settle.
+   */
+  const finishRun = (outcome: { committed?: string[]; failed?: boolean; cleanupThrows?: boolean } = {}) => {
     queueOpen = false;
     const recordedStop = generation.cancelRequested;
-    active.delete("stream-1");
-    owedTurns.settle("stream-1", {
-      committed: (outcome.committed ?? []).map((messageId) => ({ messageId })),
-      recordedStop,
-    });
+    owedTurns.settleAfter(
+      "stream-1",
+      () => {
+        active.delete("stream-1");
+        if (outcome.cleanupThrows) throw new Error("approval release failed");
+      },
+      { committed: (outcome.committed ?? []).map((messageId) => ({ messageId })), recordedStop },
+    );
     return { recordedStop, failed: outcome.failed === true };
   };
   /** The person's Stop, as main's cancel handles it for this stream. */
@@ -171,6 +177,39 @@ test("a run that fails after saving the input still starts the owed turn exactly
   const later = await h.admission.admit({ streamId: "stream-1", mode: "queue", text: "too late" });
   assert.deepEqual(later, { admitted: false, reason: "run_not_active", committed: false });
   assert.equal(h.turns.length, 1);
+});
+
+test("a run whose ownership cleanup throws still answers its saved input with exactly one turn", () => {
+  const h = host();
+  // Pi still held this input when the run ended.
+  h.closeQueue();
+  assert.throws(() => h.finishRun({ committed: ["message-held"], cleanupThrows: true }), /approval release failed/);
+  assert.deepEqual(
+    h.turns.map(({ plan, outcome }) => ({ inputs: plan.inputs, outcome })),
+    [{ inputs: [{ messageId: "message-held" }], outcome: "answered" }],
+  );
+  // The run's other settle path runs too; nothing starts twice.
+  assert.throws(() => h.finishRun({ committed: ["message-held"], cleanupThrows: true }));
+  assert.equal(h.turns.length, 1);
+});
+
+test("input saved while a run with failing cleanup settles is still answered once", async () => {
+  const h = host();
+  const thrown: unknown[] = [];
+  h.setDuringSave(() => {
+    try {
+      h.finishRun({ cleanupThrows: true });
+    } catch (error) {
+      thrown.push(error);
+    }
+  });
+  const receipt = await h.admission.admit({ streamId: "stream-1", mode: "queue", text: "then this" });
+  assert.deepEqual(receipt, { admitted: true, queue: "follow-up", committed: true, messageId: "message-1" });
+  assert.equal(thrown.length, 1);
+  assert.deepEqual(
+    h.turns.map(({ plan }) => plan.inputs),
+    [[{ messageId: "message-1" }]],
+  );
 });
 
 test("an owed turn that throws on start is reported once and never retried", () => {

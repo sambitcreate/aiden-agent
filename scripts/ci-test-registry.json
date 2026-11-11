@@ -57,6 +57,7 @@
         "renderer/lib/inbox-triage.test.ts",
         "main/services/chat-run-input-admission.test.ts",
         "main/services/chat-owed-turns.test.ts",
+        "main/services/chat-owed-turn-prompts.test.ts",
         "main/services/chat-session-copy.test.ts",
         "main/services/chat-fork-service.test.ts",
         "main/services/chat-store-core.test.ts",

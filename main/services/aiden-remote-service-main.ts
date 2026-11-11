@@ -1254,12 +1254,17 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     state,
     approvedRoots: new AidenRemoteApprovedRootService(state),
     revokeDevice,
-    pendingApprovalForChat: (chatId) => activeStreams?.pendingApprovalForChat(chatId) ?? null,
-    pendingQuestionForChat: (chatId) => activeStreams?.pendingQuestionForChat(chatId) ?? null,
+    // A phone turn's card first, then the card of an owed turn no window owns.
+    pendingApprovalForChat: (chatId) =>
+      activeStreams?.pendingApprovalForChat(chatId) ?? llmClient.pendingOwedTurnApproval(chatId),
+    pendingQuestionForChat: (chatId) =>
+      activeStreams?.pendingQuestionForChat(chatId) ?? llmClient.pendingOwedTurnQuestion(chatId),
     respondQuestionFromHost: (chatId, promptId, response) =>
-      activeStreams?.respondQuestionFromHost(chatId, promptId, response) ?? false,
+      activeStreams?.respondQuestionFromHost(chatId, promptId, response) ||
+      llmClient.answerOwedTurnQuestion(chatId, promptId, response),
     respondApprovalFromHost: (chatId, approvalId, decision, scope) =>
-      activeStreams?.respondApprovalFromHost(chatId, approvalId, decision, scope) ?? false,
+      activeStreams?.respondApprovalFromHost(chatId, approvalId, decision, scope) ||
+      llmClient.decideOwedTurnApproval(chatId, approvalId, decision, scope),
   };
   activeRuntime = runtime;
   return runtime;

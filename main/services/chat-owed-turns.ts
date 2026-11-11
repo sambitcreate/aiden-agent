@@ -96,6 +96,14 @@ export function createChatOwedTurns<Context, Origin extends string>(
     }
   }
 
+  function settle(streamId: string, settlement: RunSettlement): void {
+    const entry = entries.get(streamId);
+    if (!entry || entry.settled) return;
+    entry.settled = { recordedStop: settlement.recordedStop };
+    entry.committed = settlement.committed.map((input) => ({ ...input }));
+    finalize(streamId, entry);
+  }
+
   return {
     /** A run that can owe its chat a turn has started. */
     open(streamId: string, run: { chatId: string; ownerDocumentId: string; context: Context }): void {
@@ -169,12 +177,19 @@ export function createChatOwedTurns<Context, Origin extends string>(
     },
 
     /** The run has settled; its owed turn starts once no input is being saved. Idempotent. */
-    settle(streamId: string, settlement: RunSettlement): void {
-      const entry = entries.get(streamId);
-      if (!entry || entry.settled) return;
-      entry.settled = { recordedStop: settlement.recordedStop };
-      entry.committed = settlement.committed.map((input) => ({ ...input }));
-      finalize(streamId, entry);
+    settle,
+
+    /**
+     * Ends the run's ownership, then settles it. The run settles even when
+     * ending its ownership throws, so saved input is never left unanswered;
+     * the failure still reaches the caller afterwards.
+     */
+    settleAfter(streamId: string, endOwnership: () => void, settlement: RunSettlement): void {
+      try {
+        endOwnership();
+      } finally {
+        settle(streamId, settlement);
+      }
     },
   };
 }
