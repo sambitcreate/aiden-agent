@@ -58,9 +58,9 @@ int main(int argc, char **argv) {
   if (first > 0) {
     close(ready[1]);
     close(grant[0]);
-    // Stay in the command until detachment and PID publication are confirmed.
-    // Bound the wait to half the shell test's two-second deadline, leaving
-    // the other half for process startup on a loaded runner.
+    // Stay in the command until detachment and PID publication are confirmed,
+    // for at most a second. The shell tests give the runner a far longer
+    // deadline, so this bound, not process startup, decides a stalled case.
     int confirmed = await_publication(ready[0]);
     close(ready[0]);
     unsigned char allowed = 1;
