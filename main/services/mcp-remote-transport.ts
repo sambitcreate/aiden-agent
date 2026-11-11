@@ -6,7 +6,13 @@ import {
   type McpTransportSendOptions,
 } from "@earendil-works/pi-mcp";
 import { mcpToolSendGuard } from "./mcp-client.js";
-import { adaptOAuthProvider, type OAuthClientProvider } from "@earendil-works/pi-mcp/oauth";
+import {
+  adaptOAuthProvider,
+  authorizeMcp,
+  McpOAuthAuthorizationRequiredError,
+  parseWwwAuthenticate,
+  type OAuthClientProvider,
+} from "@earendil-works/pi-mcp/oauth";
 import { createMcpFetchPolicy, MAX_MCP_RESPONSE_BYTES, type McpFetchPolicyOptions } from "./mcp-fetch-policy.js";
 
 /**
@@ -20,19 +26,102 @@ export type McpRemoteOAuthProvider = OAuthClientProvider & {
   observeRefreshFailure?: (cause: Error) => void;
   /** Replace an error the OAuth recovery after a 401 ended with (for example a transient refresh failure). */
   mapAuthorizationError?: (error: unknown) => unknown;
+  /**
+   * When the tokens the last `tokens()` call returned should be refreshed
+   * before they are sent (ms since the epoch), or undefined to send them
+   * until the server rejects them.
+   */
+  tokenRefreshDueAt?: () => number | undefined;
+  /**
+   * Hold the refresh lock of the stored grant (shared with other clients and,
+   * in the CLI, other processes) from re-reading its tokens to saving new ones.
+   */
+  withRefreshLock?: <T>(operation: () => Promise<T>) => Promise<T>;
 };
 
-function adaptRemoteOAuthProvider(provider: McpRemoteOAuthProvider): AuthProvider {
+/** A refresh that needs the user (sign-in) rather than a later retry. */
+function needsSignIn(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "mcp-oauth-sign-in-required";
+}
+
+type RefreshOptions = Partial<Pick<Parameters<typeof authorizeMcp>[1], "serverUrl" | "fetch" | "resourceMetadataUrl" | "scope">>;
+
+function adaptRemoteOAuthProvider(
+  provider: McpRemoteOAuthProvider,
+  service: { serverUrl: URL; fetch: typeof globalThis.fetch },
+): AuthProvider {
   const adapted = adaptOAuthProvider(provider);
-  if (!provider.mapAuthorizationError || !adapted.onUnauthorized) return adapted;
-  const onUnauthorized = adapted.onUnauthorized.bind(adapted);
+  const mapError = (error: unknown) => provider.mapAuthorizationError ? provider.mapAuthorizationError(error) : error;
+  if (!provider.withRefreshLock) {
+    if (!provider.mapAuthorizationError || !adapted.onUnauthorized) return adapted;
+    const onUnauthorized = adapted.onUnauthorized.bind(adapted);
+    return {
+      token: () => adapted.token(),
+      onUnauthorized: async (context) => {
+        try {
+          await onUnauthorized(context);
+        } catch (error) {
+          throw mapError(error);
+        }
+      },
+    };
+  }
+  let refreshing: Promise<void> | undefined;
+  /** The token an early refresh failed for transiently; it is sent until a 401. */
+  let earlyRefreshFailedFor: string | undefined;
+  /**
+   * Replace `staleToken`, the access token that expired or was rejected.
+   * Requests on this transport share one refresh; other clients of the same
+   * grant wait on the lock, then find the tokens its holder saved and use them.
+   */
+  const refresh = (staleToken: string | undefined, options: RefreshOptions = {}) => {
+    refreshing ??= provider.withRefreshLock!(async (): Promise<void> => {
+      const current = (await provider.tokens())?.access_token;
+      if (current !== undefined && current !== staleToken) return;
+      const result = await authorizeMcp(provider, {
+        ...options,
+        serverUrl: options.serverUrl ?? service.serverUrl,
+        fetch: options.fetch ?? service.fetch,
+      });
+      if (result === "REDIRECT") throw new McpOAuthAuthorizationRequiredError();
+    }).finally(() => {
+      refreshing = undefined;
+    });
+    return refreshing;
+  };
   return {
-    token: () => adapted.token(),
-    onUnauthorized: async (context) => {
+    token: async () => {
+      await refreshing?.catch(() => undefined);
+      const current = (await provider.tokens())?.access_token;
+      const dueAt = provider.tokenRefreshDueAt?.();
+      if (current === undefined || dueAt === undefined || dueAt > Date.now() || current === earlyRefreshFailedFor) return current;
       try {
-        await onUnauthorized(context);
+        await refresh(current);
       } catch (error) {
-        throw provider.mapAuthorizationError!(error);
+        // The grant is gone (invalid_grant, a dead client): fail rather than
+        // send a token the stored session no longer holds.
+        if (needsSignIn(error)) throw error;
+        // A transient failure: the token is still valid for a moment, so send
+        // it and let a 401 decide what happens next, without retrying the
+        // refresh on every request meanwhile.
+        earlyRefreshFailedFor = current;
+        return current;
+      }
+      return (await provider.tokens())?.access_token;
+    },
+    onUnauthorized: async (context) => {
+      const challenge = parseWwwAuthenticate(context.response.headers.get("www-authenticate"));
+      try {
+        // A step-up for more scope keeps the tokens; Pi's recovery handles it.
+        if (challenge.error === "insufficient_scope") return await adapted.onUnauthorized!(context);
+        await refresh(context.token, {
+          serverUrl: context.serverUrl,
+          resourceMetadataUrl: challenge.resourceMetadataUrl,
+          scope: challenge.scope,
+          fetch: context.fetch,
+        });
+      } catch (error) {
+        throw mapError(error);
       }
     },
   };
@@ -141,7 +230,9 @@ class AidenStreamableHttpTransport extends StreamableHttpTransport {
  * children. With an OAuth provider, a 401 refreshes the stored tokens once
  * (concurrent 401s on this transport share one refresh; the fetch policy
  * coalesces identical refreshes process-wide) and a request whose sender gave
- * up meanwhile is never re-sent.
+ * up meanwhile is never re-sent. A provider with a refresh lock also refreshes
+ * a token about to expire before sending it, and a client that waited on the
+ * lock uses the tokens the holder saved instead of refreshing again.
  */
 export function createMcpRemoteTransport(
   options: McpRemoteFetchOptions & { onTerminalFailure?: () => void; wrapFetch?: (send: typeof globalThis.fetch) => typeof globalThis.fetch },
@@ -169,6 +260,8 @@ export function createMcpRemoteTransport(
     url: options.serviceUrl,
     fetch,
     maxMessageBytes: MAX_MCP_RESPONSE_BYTES,
-    ...(options.authProvider ? { authProvider: adaptRemoteOAuthProvider(options.authProvider) } : {}),
+    ...(options.authProvider
+      ? { authProvider: adaptRemoteOAuthProvider(options.authProvider, { serverUrl: new URL(options.serviceUrl), fetch }) }
+      : {}),
   }, lifetime, toolSends, options.onTerminalFailure);
 }

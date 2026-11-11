@@ -3,7 +3,7 @@ import test from "node:test";
 import { mkdtempSync, mkdirSync, existsSync, readFileSync, writeFileSync, chmodSync, rmSync, statSync, utimesSync, renameSync, readdirSync, openSync, closeSync, ftruncateSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { createServer as createNetServer, createConnection } from "node:net";
@@ -1843,6 +1843,49 @@ test("aiden mcp login registers a fresh client on a random loopback port, and st
   assert.equal(oauth.seen.registrations.length, 1);
   const refresh = oauth.seen.tokenRequests.filter((request) => request.grant === "refresh_token");
   assert.deepEqual(refresh.map(({ status, presentedSecret }) => ({ status, presentedSecret })), [{ status: 200, presentedSecret: true }]);
+});
+
+/** `aiden serve` and an `aiden mcp` command as separate processes: each lists one server's tools over its own pool. */
+function mcpToolsInChildProcess(dir, server) {
+  const script = `import * as api from ${JSON.stringify(pathToFileURL(join(pkg, "dist/parity-test-api.js")).href)};
+const pool = api.createCliMcpPool(process.argv[1]);
+try { process.stdout.write(JSON.stringify((await pool.inspectTools(JSON.parse(process.argv[2]))).map((tool) => tool.name))); }
+finally { await pool.close(); }`;
+  const child = spawn(process.execPath, ["--input-type=module", "-e", script, dir, JSON.stringify(server)], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, AIDEN_ANALYTICS: "0" } });
+  let stdout = "", stderr = "";
+  child.stdout.on("data", (chunk) => { stdout += chunk; });
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  return new Promise((resolve, reject) => {
+    child.on("error", reject);
+    child.on("close", (code) => code === 0 ? resolve(JSON.parse(stdout)) : reject(new Error(`child exited ${code}: ${stderr}`)));
+  });
+}
+
+test("two aiden processes holding the same expired MCP token renew it once and both connect", async (t) => {
+  const dir = temporary(t), oauth = await api.startFakeOAuthServer();
+  t.after(() => oauth.close());
+  const server = { id: "remote", name: "Remote", transport: "http", url: oauth.serviceUrl, enabled: true, oauth: true };
+  api.atomicJson(join(dir, "aiden-mcp.json"), [server]);
+  const browser = fakeBrowser();
+  assert.deepEqual(await api.mcpLogin(dir, server, { openBrowser: browser.open }), { authorized: true });
+  await browser.pages[0];
+  oauth.expireAccessTokens();
+  const rejectedBefore = oauth.seen.unauthorized.length;
+  // Hold the first renewal (the refresh token is already rotated) until both processes were turned away.
+  oauth.control.beforeRefreshResponse = async () => {
+    oauth.control.beforeRefreshResponse = undefined;
+    const deadline = Date.now() + 20_000;
+    while (oauth.seen.unauthorized.length < rejectedBefore + 2 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+  };
+  const results = await Promise.all([mcpToolsInChildProcess(dir, server), mcpToolsInChildProcess(dir, server)]);
+  assert.equal(oauth.seen.unauthorized.length, rejectedBefore + 2, "both processes presented the expired token");
+  assert.deepEqual(results, [["echo"], ["echo"]]);
+  const refresh = oauth.seen.tokenRequests.filter((request) => request.grant === "refresh_token");
+  assert.deepEqual(refresh.map(({ status, error }) => [status, error ?? null]), [[200, null]], "one renewal; the waiting process used its tokens");
+  // The sign-in is intact: a third client connects on the stored tokens without renewing.
+  const pool = api.createCliMcpPool(dir); t.after(() => pool.close());
+  assert.deepEqual((await pool.inspectTools(server)).map((tool) => tool.name), ["echo"]);
+  assert.equal(oauth.seen.tokenRequests.filter((request) => request.grant === "refresh_token").length, 1);
 });
 
 test("a pre-registered OAuth client keeps its secret encrypted and signs in without registering", async (t) => {
