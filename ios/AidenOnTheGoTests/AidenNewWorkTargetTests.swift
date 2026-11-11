@@ -368,12 +368,12 @@ final class AidenNewWorkTargetTests: XCTestCase {
         try await takeOffline("studio")
         let flow = flow()
 
-        XCTAssertFalse(flow.isUnavailable, "An offline default leaves the other machines to pick")
+        XCTAssertFalse(flow.isUnavailable(), "An offline default leaves the other machines to pick")
         XCTAssertFalse(flow.canStart)
 
         try await takeOffline("laptop")
         try await takeOffline("mini")
-        XCTAssertFalse(flow.isUnavailable, "It opens and says why (R15)")
+        XCTAssertFalse(flow.isUnavailable(), "It opens and says why (R15)")
         XCTAssertFalse(flow.canStart)
         XCTAssertEqual(flow.picker.refusalMessage, "Studio is offline. Try again once it’s back.")
     }
@@ -384,7 +384,7 @@ final class AidenNewWorkTargetTests: XCTestCase {
         try await takeOffline("studio")
         let flow = flow()
         XCTAssertFalse(flow.picker.showsPicker)
-        XCTAssertFalse(flow.isUnavailable)
+        XCTAssertFalse(flow.isUnavailable())
         XCTAssertFalse(flow.canStart)
 
         let labels = try labels(of: AidenNewWorkMachinePicker(picker: flow.picker), showing: "offline")
@@ -515,6 +515,31 @@ final class AidenNewWorkTargetTests: XCTestCase {
         flow.picker.startOver()
         XCTAssertFalse(flow.picker.machines.map(\.id).contains("laptop"), "The Inbox's compose leaves it out again")
         XCTAssertEqual(flow.picker.target, AidenNewWorkTarget(instanceId: "studio"))
+    }
+
+    /// With every machine hidden from the Inbox, the Workspaces tab still lists
+    /// them, so its compose opens and starts on the filtered machine. The Inbox's
+    /// stays closed, whichever compose was opened last.
+    func testWithEveryMachineHiddenTheWorkspacesComposeStillOpens() async throws {
+        await connectAll()
+        let flow = flow()
+        for connection in coordinator.hosts.ordered {
+            preferences.update(connection.instanceId) { $0.isHidden = true }
+        }
+        XCTAssertTrue(flow.isUnavailable(), "The Inbox's compose has a machine")
+        XCTAssertFalse(flow.isUnavailable(offeringHidden: true), "The Workspaces tab's compose is closed")
+
+        flow.picker.startOver(preferring: "laptop", offeringHidden: true)
+        XCTAssertEqual(flow.picker.target, AidenNewWorkTarget(instanceId: "laptop"), "A filter starts on its machine")
+        XCTAssertTrue(flow.canStart)
+        XCTAssertTrue(flow.isUnavailable(), "Opening the Workspaces compose opened the Inbox's")
+
+        flow.picker.startOver(offeringHidden: true)
+        XCTAssertEqual(flow.picker.target, AidenNewWorkTarget(instanceId: "studio"), "All starts on the default")
+
+        flow.picker.startOver()
+        XCTAssertTrue(flow.isUnavailable())
+        XCTAssertFalse(flow.isUnavailable(offeringHidden: true), "Opening the Inbox's compose closed the Workspaces tab's")
     }
 
     // MARK: A new Bot

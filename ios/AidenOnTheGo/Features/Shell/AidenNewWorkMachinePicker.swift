@@ -127,12 +127,18 @@ final class AidenNewWorkPicker {
     /// Every machine that could take the work, in pairing order, including the
     /// offline ones that can't right now.
     var machines: [AidenNewWorkMachine] {
+        machines(includingHidden: offersHiddenMachines)
+    }
+
+    /// The machines one entry point offers, whatever the last compose opened
+    /// with: the Workspaces tab counts the machines the Inbox hides.
+    func machines(includingHidden: Bool) -> [AidenNewWorkMachine] {
         let labels = Self.labels(coordinator: coordinator, preferences: preferences)
         return Self.visibleConnections(
             coordinator: coordinator,
             preferences: preferences,
             keeping: pinnedMachine,
-            includingHidden: offersHiddenMachines
+            includingHidden: includingHidden
         ).map { connection in
             Self.machine(connection, label: labels[connection.instanceId], coordinator: coordinator, refusal: refusal(of: connection))
         }

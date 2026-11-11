@@ -129,8 +129,11 @@ final class AidenNewWorkChatFlow {
 
     /// Compose opens with any machine paired, so a machine that can't take the
     /// chat can say why (R15) and an offline default doesn't lock out the others.
-    var isUnavailable: Bool {
-        isCreating || picker.machines.isEmpty
+    /// Each entry point asks for itself: the Workspaces tab's compose counts the
+    /// machines the Inbox hides (`offeringHidden`), the Inbox's doesn't. Neither
+    /// depends on which compose was opened last.
+    func isUnavailable(offeringHidden: Bool = false) -> Bool {
+        isCreating || picker.machines(includingHidden: offeringHidden).isEmpty
     }
 
     var canStart: Bool { !isCreating && picker.canStart }
@@ -289,7 +292,7 @@ struct AidenNewWorkComposeButton: View {
         } label: {
             Label("New chat", systemImage: "square.and.pencil")
         }
-        .disabled(flow.isUnavailable)
+        .disabled(flow.isUnavailable(offeringHidden: offersHiddenMachines))
         .accessibilityHint("Choose where the new chat runs.")
         .popover(isPresented: $isShowingChoices, arrowEdge: .top) {
             AidenNewAgentPopover(
