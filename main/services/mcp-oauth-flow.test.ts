@@ -653,3 +653,93 @@ for (const atomicStore of [false, true]) {
     assert.notEqual(session.tokens?.refresh_token, rotated.refresh_token);
   });
 }
+
+/** Make the stored access token expire `inMs` from now, as the server's lifetime said. */
+async function storedTokenExpiresIn(h: Awaited<ReturnType<typeof setup>>, inMs: number | undefined) {
+  const session = await h.session();
+  if (inMs === undefined) delete session.expiresAt;
+  else session.expiresAt = Date.now() + inMs;
+  await h.store.set(h.server.id, session);
+}
+
+async function until(condition: () => boolean, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() > deadline) assert.fail("the expected state was not reached");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+test("two clients holding the same expired token renew it once and both connect", async (t) => {
+  const h = await setup(t);
+  await h.authorize();
+  const signedIn = await h.session();
+  h.fake.expireAccessTokens();
+  const rejectedBefore = h.fake.seen.unauthorized.length;
+  // Hold the renewal until both clients were turned away with the old token.
+  h.fake.control.beforeRefreshResponse = () => until(() => h.fake.seen.unauthorized.length >= rejectedBefore + 2);
+  const [a, b] = await Promise.all([h.backgroundConnect(), h.backgroundConnect()]);
+  assert.equal(a.length, 1);
+  assert.equal(b.length, 1);
+  assert.deepEqual(refreshVerdicts(h.fake), [[200, null]]);
+  const session = await h.session();
+  assert.notEqual(session.tokens?.refresh_token, signedIn.tokens?.refresh_token);
+  assert.equal(session.grantId, signedIn.grantId);
+  assert.deepEqual(await h.signInState(), { authorized: true, needsSignIn: false, hasSession: true });
+});
+
+test("a token within 30 seconds of its expiry is renewed before it is sent, so the server never rejects it", async (t) => {
+  const h = await setup(t);
+  await h.authorize();
+  const signedIn = await h.session();
+  assert.ok(signedIn.expiresAt, "the sign-in stores when its token expires");
+  const rejectedBefore = h.fake.seen.unauthorized.length;
+  // A minute left: not due yet.
+  await storedTokenExpiresIn(h, 60_000);
+  assert.equal((await h.backgroundConnect()).length, 1);
+  assert.deepEqual(refreshVerdicts(h.fake), []);
+  // Ten seconds left: renewed first.
+  await storedTokenExpiresIn(h, 10_000);
+  assert.equal((await h.backgroundConnect()).length, 1);
+  assert.deepEqual(refreshVerdicts(h.fake), [[200, null]]);
+  assert.equal(h.fake.seen.unauthorized.length, rejectedBefore, "no request was answered with 401");
+  const session = await h.session();
+  assert.notEqual(session.tokens?.access_token, signedIn.tokens?.access_token);
+  assert.ok(session.expiresAt && session.expiresAt > Date.now() + 3_000_000, "the new token's expiry is stored");
+  assert.equal(h.opened.length, 1, "no new browser sign-in");
+});
+
+test("an early renewal the token endpoint answers with 503 keeps the sign-in and sends the current token", async (t) => {
+  const h = await setup(t);
+  await h.authorize();
+  const signedIn = await h.session();
+  await storedTokenExpiresIn(h, 10_000);
+  h.fake.control.refreshStatus = 503;
+  assert.equal((await h.backgroundConnect()).length, 1);
+  assert.deepEqual(refreshVerdicts(h.fake), [[503, null]], "one attempt for the connection, not one per request");
+  assert.deepEqual((await h.session()).tokens, signedIn.tokens);
+  assert.deepEqual(await h.signInState(), { authorized: true, needsSignIn: false, hasSession: true });
+});
+
+test("an early renewal answered with invalid_grant signs out", async (t) => {
+  const h = await setup(t);
+  await h.authorize();
+  await storedTokenExpiresIn(h, 10_000);
+  h.fake.revokeRefreshTokens();
+  await assert.rejects(h.backgroundConnect(), McpOAuthSignInRequiredError);
+  assert.deepEqual(refreshVerdicts(h.fake), [[400, "invalid_grant"]]);
+  assert.equal((await h.session()).tokens, undefined);
+  assert.equal((await h.signInState()).needsSignIn, true);
+});
+
+test("a sign-in stored before expiries were recorded is still renewed after a 401", async (t) => {
+  const h = await setup(t);
+  await h.authorize();
+  await storedTokenExpiresIn(h, undefined);
+  h.fake.expireAccessTokens();
+  const rejectedBefore = h.fake.seen.unauthorized.length;
+  assert.equal((await h.backgroundConnect()).length, 1);
+  assert.equal(h.fake.seen.unauthorized.length, rejectedBefore + 1);
+  assert.deepEqual(refreshVerdicts(h.fake), [[200, null]]);
+  assert.ok((await h.session()).expiresAt, "the renewed tokens record their expiry");
+});

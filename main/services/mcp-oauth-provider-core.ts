@@ -47,6 +47,7 @@ import {
   sessionWithMcpClientInformation,
   sessionWithRefreshedMcpTokens,
   sessionWithSavedMcpTokens,
+  mcpTokenRefreshDueAt,
   usableMcpClientInformation,
   type McpObservedTokens,
   type McpOAuthSession,
@@ -88,6 +89,27 @@ export interface McpOAuthRuntime {
   clientMetadataUrl?: string;
   /** Fence configuration leases around a credential publication. */
   publish<T>(serverId: string, operation: () => Promise<T>): Promise<T>;
+  /**
+   * Hold the refresh lock for one server's stored grant around `operation`,
+   * from re-reading the stored tokens to saving the refreshed ones. Many
+   * servers rotate refresh tokens, so two clients refreshing the same grant
+   * at once would lose it. Defaults to a keyed lock in this process (the
+   * desktop); the CLI holds a per-server lease file, since `aiden serve` and
+   * `aiden mcp` commands share one store.
+   */
+  withRefreshLock?<T>(serverId: string, operation: () => Promise<T>): Promise<T>;
+}
+
+const inProcessRefreshLocks = new Map<string, Promise<unknown>>();
+
+/** One refresh per key at a time in this process; a failed holder releases the next. */
+export function withInProcessMcpRefreshLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
+  const previous = inProcessRefreshLocks.get(key) ?? Promise.resolve();
+  const next = previous.then(operation, operation);
+  const settled = next.catch(() => undefined);
+  inProcessRefreshLocks.set(key, settled);
+  void settled.then(() => { if (inProcessRefreshLocks.get(key) === settled) inProcessRefreshLocks.delete(key); });
+  return next;
 }
 
 /** A background connection reached a point that needs the user to sign in. */
@@ -172,12 +194,20 @@ export class AidenMcpOAuthProvider implements McpRemoteOAuthProvider {
   private exchangingCode = false;
   /** Why the last refresh failed without an OAuth error, if it did. */
   private refreshFailure?: Error;
+  /** When the tokens tokens() last returned should be refreshed early (background only). */
+  private refreshDueAt?: number;
   /**
    * The running flow read the stored tokens itself (a 401 recovery), as
    * opposed to a step-up for more scope, which never reads them in the flow.
    */
   private flowReadTokens = false;
   private readonly redirectUri: string;
+  /**
+   * Run a refresh of this server's stored grant under the shared refresh
+   * lock. Background connections only: an attended sign-in's 401 starts a new
+   * authorization, which must not wait on a refresh of the old grant.
+   */
+  readonly withRefreshLock?: <T>(operation: () => Promise<T>) => Promise<T>;
 
   constructor(options: McpOAuthProviderOptions) {
     this.runtime = options.runtime;
@@ -195,6 +225,12 @@ export class AidenMcpOAuthProvider implements McpRemoteOAuthProvider {
     this.redirectUri = options.redirectUri ?? options.runtime.loopback.redirectUri;
     if (this.mode !== "background" && !this.transaction) {
       throw new Error("An attended MCP sign-in needs a private session transaction.");
+    }
+    if (this.mode === "background") {
+      const { runtime, serverId } = this;
+      this.withRefreshLock = (operation) => runtime.withRefreshLock
+        ? runtime.withRefreshLock(serverId, operation)
+        : withInProcessMcpRefreshLock(serverId, operation);
     }
   }
 
@@ -391,7 +427,17 @@ export class AidenMcpOAuthProvider implements McpRemoteOAuthProvider {
     const tokens = session.tokens;
     if (tokens) this.observeTokens?.(tokens);
     this.lastTokens = observedTokens(session);
+    this.refreshDueAt = this.mode === "background" ? mcpTokenRefreshDueAt(session) : undefined;
     return tokens;
+  }
+
+  /**
+   * When the tokens the last tokens() call returned are due for an early
+   * refresh. Only background connections refresh early: an attended sign-in
+   * and its verifying connection hold tokens just issued.
+   */
+  tokenRefreshDueAt(): number | undefined {
+    return this.refreshDueAt;
   }
 
   async saveTokens(received: OAuthTokens): Promise<void> {
@@ -457,6 +503,7 @@ export class AidenMcpOAuthProvider implements McpRemoteOAuthProvider {
       if (scope === "all" || scope === "tokens") {
         const grantedScope = next.tokens?.scope || next.grantedScope;
         delete next.tokens;
+        delete next.expiresAt;
         if (grantedScope) next.grantedScope = grantedScope;
       }
       if (scope === "all" || scope === "client") delete next.clientInformation;

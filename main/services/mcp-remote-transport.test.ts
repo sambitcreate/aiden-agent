@@ -462,7 +462,8 @@ test("a request cancelled while its 401 refresh is pending is never re-sent", as
   controller.abort(new Error("caller cancelled"));
   await assert.rejects(call, /caller cancelled/u);
   authority.release();
-  await until(() => cancellations.length >= 2);
+  // The cancellation waits for the pending refresh and goes out once, with the new token.
+  await until(() => cancellations.length >= 1);
   await delay(20);
   assert.equal(toolCalls.length, 1, "the cancelled tools/call reached the server only once, before the refresh");
   assert.equal(store.session.tokens?.access_token, authority.valid(), "refreshed tokens persist");
