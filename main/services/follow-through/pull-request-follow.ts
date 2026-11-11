@@ -451,15 +451,21 @@ export function followStayedQuiet(previous: PullRequestFollowRecord, evaluated: 
   return { notices, record: { ...record, quietReads, nextCheckAt: now + followPollDelay(Boolean(record.checksPending), quietReads) } };
 }
 
-/** The probe showed nothing changed: no read, no notice, and the quiet backoff grows. */
+/**
+ * The probe showed nothing changed: no read, no notice, and the quiet backoff
+ * grows, but never past the moment the last full read turns half an hour old.
+ */
 export function followUnchanged(previous: PullRequestFollowRecord, now: number): PullRequestFollowRecord {
   const quietReads = (previous.quietReads ?? 0) + 1;
+  const backedOff = now + followPollDelay(Boolean(previous.checksPending), quietReads);
+  const fullReadDue = previous.etagsAt === undefined ? backedOff : previous.etagsAt + FOLLOW_FULL_READ_MS;
   const record: PullRequestFollowRecord = {
     ...previous,
     lastCheckedAt: now,
     readFailures: 0,
     quietReads,
-    nextCheckAt: now + followPollDelay(Boolean(previous.checksPending), quietReads),
+    // A deadline already passed (that look was the full read) never makes the next look immediate.
+    nextCheckAt: fullReadDue > now ? Math.min(backedOff, fullReadDue) : backedOff,
   };
   delete record.problem;
   delete record.holdUntil;

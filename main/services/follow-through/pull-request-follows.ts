@@ -307,13 +307,16 @@ export class PullRequestFollows {
       const [id, record] = due;
       const controller = new AbortController();
       this.pollInFlight = { id, controller };
-      // A nudge that arrives while this read runs is not served by it.
-      const served = this.nudges.get(id);
+      // A nudge that arrives while this read runs is not served by it, and
+      // neither is one still inside its debounce: a timed read that came due
+      // first may be too early to see the change the nudge is about.
+      const pending = this.nudges.get(id);
+      const served = pending && this.nudgeDueAt(record, pending) <= now ? pending : undefined;
       try {
         await this.poll(id, record, controller.signal);
-        if (this.nudges.get(id) === served) this.nudges.delete(id);
+        if (served && this.nudges.get(id) === served) this.nudges.delete(id);
       } catch (error) {
-        if (this.nudges.get(id) === served) this.nudges.delete(id);
+        if (served && this.nudges.get(id) === served) this.nudges.delete(id);
         if (controller.signal.aborted) continue;
         this.deps.log?.("A followed pull request could not be read.", error);
         const current = this.records.get(id);

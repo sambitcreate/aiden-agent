@@ -332,6 +332,26 @@ test("a nudge that arrives while its follow is being read gets one more read, no
   assert.equal(h.reads.length, 3);
 });
 
+test("a timed read that comes due inside a nudge's debounce does not use the nudge up", async () => {
+  const h = harness();
+  h.setAnswer(() => ({ kind: "ok", observation: quiet() }));
+  h.follows.follow(input());
+  await h.follows.kick();
+  const timedReadIn = nextCheckIn(h);
+
+  // A push two seconds before the timed read: that read may be too early to show it.
+  h.advance(timedReadIn - 2_000);
+  h.follows.nudge("chat-1", "action");
+  h.advance(2_000);
+  await h.follows.kick();
+  assert.equal(h.reads.length, 2, "the timed read ran");
+
+  await h.elapse(30_000);
+  assert.equal(h.reads.length, 3, "the nudge still reads once, after its interval");
+  await h.elapse(MINUTE);
+  assert.equal(h.reads.length, 3, "and only once");
+});
+
 test("a nudge never reads sooner than the follow's minimum interval or before a rate limit lifts", async () => {
   const h = harness();
   h.setAnswer(() => ({ kind: "ok", observation: quiet() }));
@@ -440,7 +460,9 @@ test("a quiet pull request is read less and less often, and back at the normal c
     await h.follows.kick();
     delays.push(nextCheckIn(h));
   }
-  assert.deepEqual(delays, [5, 10, 20, 30].map((minutes) => minutes * MINUTE));
+  // The third look would wait 20 minutes, but the full read is due 30 minutes
+  // after the last one (T+20 then T+30); after that the backoff is at its cap.
+  assert.deepEqual(delays, [5, 10, 10, 30].map((minutes) => minutes * MINUTE));
 
   // A new comment changes the pull request: the backoff starts over.
   h.setAnswer(() => ({
@@ -496,7 +518,9 @@ test("a failing check is never probed, and a full read half an hour old is never
     stale.advance(nextCheckIn(stale));
     await stale.follows.kick();
   }
-  // 5 + 5 + 10 minutes since the full read, and the next look is 20 minutes on.
+  // 5 + 5 + 10 minutes since the full read. The backoff would wait 20 more,
+  // but the full read is due 30 minutes after the last one, so 10 more.
+  assert.equal(nextCheckIn(stale), 10 * MINUTE);
   stale.advance(nextCheckIn(stale));
   await stale.follows.kick();
   assert.equal(stale.reads[stale.reads.length - 1]!.probe?.skipIfUnchanged, false);
