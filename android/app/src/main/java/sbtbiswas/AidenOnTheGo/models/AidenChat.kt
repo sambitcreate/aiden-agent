@@ -293,7 +293,14 @@ data class AidenAgentStep(
     val extraction: AidenWebExtractRecap? = null,
     /** Decoded leniently: a malformed recap is dropped, never the step (revision 46). */
     @Serializable(with = AidenBrowserRecordingRecapSerializer::class)
-    val recording: AidenBrowserRecordingRecap? = null
+    val recording: AidenBrowserRecordingRecap? = null,
+    /**
+     * Contract revision 61: `true` only on a cancelled tool step the Mac
+     * cancelled because the person pressed Stop. Any other value reads as
+     * null without rejecting the step.
+     */
+    @Serializable(with = AidenTolerantTrueSerializer::class)
+    val stoppedByUser: Boolean? = null
 ) {
     @Serializable
     enum class Kind {
@@ -528,18 +535,20 @@ data class AidenGenerationTimeline(
     val claimCheck: AidenGenerationClaimCheck? = null
 ) {
     /**
-     * Display-only: a tool call the person ended with Stop. The run was
-     * cancelled from `user_stop`, so the call stopping is what they asked for,
-     * not a problem to review. Other cancellation origins (app shutdown, chat
-     * deletion, a scheduled task's cancel) keep the cancelled treatment, and so
-     * does a call the claim check names. `isIssue` and the claim-check
-     * validation below still count every cancelled call. Matches desktop's
-     * `isStoppedByUser`.
+     * Display-only: a tool call the person ended with Stop. The Mac marks
+     * exactly the calls it cancelled because of Stop with `stoppedByUser`
+     * (revision 61), so the call stopping is what they asked for, not a
+     * problem to review. A call cancelled for any other reason (an earlier
+     * agent detach, app shutdown, chat deletion, a scheduled task's cancel)
+     * carries no mark and keeps the cancelled treatment, even in a run the
+     * person later stopped, and so does a call the claim check names.
+     * `isIssue` and the claim-check validation below still count every
+     * cancelled call. Matches desktop's `isStoppedByUser`.
      */
     fun isStoppedByUser(step: AidenAgentStep): Boolean =
-        cancellationOrigin == AidenGenerationCancellationOrigin.USER_STOP &&
-            step.kind == AidenAgentStep.Kind.TOOL &&
+        step.kind == AidenAgentStep.Kind.TOOL &&
             step.status == AidenAgentStepStatus.CANCELLED &&
+            step.stoppedByUser == true &&
             claimCheck?.stepIds?.contains(step.id) != true
 
     /** The steps [isStoppedByUser] matches, for rows drawn away from the timeline. */
@@ -2434,6 +2443,23 @@ object AidenTolerantStringSerializer : KSerializer<String?> {
         val json = decoder as? JsonDecoder ?: return decoder.decodeString()
         val primitive = json.decodeJsonElement() as? JsonPrimitive ?: return null
         return if (primitive.isString) primitive.content.takeIf { it.length <= 64 } else null
+    }
+}
+
+/** A `true` marker: any other value, `false` included, reads as null. */
+object AidenTolerantTrueSerializer : KSerializer<Boolean?> {
+    override val descriptor: SerialDescriptor =
+        PrimitiveSerialDescriptor("AidenTolerantTrue", PrimitiveKind.BOOLEAN).nullable
+
+    override fun serialize(encoder: Encoder, value: Boolean?) {
+        if (value == true) encoder.encodeBoolean(true) else encoder.encodeNull()
+    }
+
+    override fun deserialize(decoder: Decoder): Boolean? {
+        val json = decoder as? JsonDecoder ?: return decoder.decodeBoolean().takeIf { it }
+        val primitive = json.decodeJsonElement() as? JsonPrimitive ?: return null
+        if (primitive.isString) return null
+        return primitive.content.toBooleanStrictOrNull()?.takeIf { it }
     }
 }
 

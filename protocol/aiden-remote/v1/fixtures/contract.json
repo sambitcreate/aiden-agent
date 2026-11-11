@@ -1,5 +1,5 @@
 {
-  "contractRevision": 60,
+  "contractRevision": 61,
   "peerRouteAdvertisement": {
     "feature": "peer-routes-v1",
     "routes": [
@@ -2299,7 +2299,7 @@
     "instanceId": "instance_fixture_01",
     "displayName": "Fixture Aiden",
     "platform": "mac",
-    "contractRevision": 60,
+    "contractRevision": 61,
     "pairingRequests": true
   },
   "hostFeedEvents": [
@@ -7143,5 +7143,6 @@
       ]
     }
   },
-  "voiceInput": {"chat":{"id":"chat_fixture_voice_input","workspaceId":"workspace_fixture_01","title":"Fix login","providerId":"provider_fixture","modelId":"model_fixture","messages":[{"id":"message_fixture_voice_user","role":"user","text":"Also check the password reset page.","inputSource":"voice","createdAt":"2026-11-06T10:00:00.000Z"},{"id":"message_fixture_voice_assistant","role":"assistant","text":"Checking the reset page too.","inputSource":"voice","createdAt":"2026-11-06T10:00:02.000Z"},{"id":"message_fixture_voice_unknown","role":"user","text":"Thanks.","inputSource":"dictation","createdAt":"2026-11-06T10:00:05.000Z"}],"createdAt":"2026-11-06T09:59:00.000Z","updatedAt":"2026-11-06T10:00:05.000Z","revision":"chat_revision_voice_input_3"},"voiceMessageIds":["message_fixture_voice_user"]}
+  "voiceInput": {"chat":{"id":"chat_fixture_voice_input","workspaceId":"workspace_fixture_01","title":"Fix login","providerId":"provider_fixture","modelId":"model_fixture","messages":[{"id":"message_fixture_voice_user","role":"user","text":"Also check the password reset page.","inputSource":"voice","createdAt":"2026-11-06T10:00:00.000Z"},{"id":"message_fixture_voice_assistant","role":"assistant","text":"Checking the reset page too.","inputSource":"voice","createdAt":"2026-11-06T10:00:02.000Z"},{"id":"message_fixture_voice_unknown","role":"user","text":"Thanks.","inputSource":"dictation","createdAt":"2026-11-06T10:00:05.000Z"}],"createdAt":"2026-11-06T09:59:00.000Z","updatedAt":"2026-11-06T10:00:05.000Z","revision":"chat_revision_voice_input_3"},"voiceMessageIds":["message_fixture_voice_user"]},
+  "stoppedSteps": {"timeline":{"version":3,"generationId":"stream_fixture_stopped","status":"cancelled","startedAt":1794470400000,"finishedAt":1794470403000,"cancellationOrigin":"user_stop","steps":[{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"read_file","label":"Read file","status":"completed","startedAt":1794470400000,"updatedAt":1794470400500,"finishedAt":1794470400500,"contentOffset":0,"target":"package.json"},{"id":"tool-2","order":1,"kind":"tool","toolCallId":"call-2","toolName":"edit_file","label":"Edit file","status":"cancelled","startedAt":1794470400500,"updatedAt":1794470401000,"finishedAt":1794470401000,"contentOffset":0,"target":"src/app.ts"},{"id":"tool-3","order":2,"kind":"tool","toolCallId":"call-3","toolName":"run_command","label":"Run command","status":"cancelled","startedAt":1794470401000,"updatedAt":1794470403000,"finishedAt":1794470403000,"contentOffset":0,"stoppedByUser":true},{"id":"tool-4","order":3,"kind":"tool","toolCallId":"call-4","toolName":"grep","label":"Search files","status":"failed","startedAt":1794470401000,"updatedAt":1794470402000,"finishedAt":1794470402000,"contentOffset":0}]},"stoppedStepIds":["tool-3"],"issueStepIds":["tool-2","tool-4"]}
 }

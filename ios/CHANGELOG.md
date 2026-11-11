@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **2026-11-11 — Stopped calls read as stopped (Remote revision 61).** A tool call the person ended with Stop on the Mac reads "<Step> stopped" with a neutral mark and is not counted as an issue. The host marks exactly those calls with `stoppedByUser: true`; a call cancelled for any other reason, even earlier in a run the person later stopped, keeps the cancelled issue treatment. Older hosts send no mark, so their cancelled calls stay issues.
+
 - **2026-11-06 — "By voice" label (Remote revision 60).** A chat message Aiden Live sent on the Mac shows a small "By voice" label with a microphone under it. The host marks it with `inputSource: "voice"` on user messages only; the app ignores any other value or a marker on a reply. Older hosts send no marker, so nothing changes there.
 
 - **2026-11-05 — Remote revision 59 reconciliation.** Main now uses revision 58 for connected-chat live-history checkpoints. Continuity watches, Open work, routine models and approved Bot peers therefore enter the combined release at revision 59. Earlier dated revision assignments remain historical; messaging/access/plans/allowed thresholds remain 54–57.

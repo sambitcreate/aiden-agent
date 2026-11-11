@@ -11068,9 +11068,27 @@
           },
           "recording": {
             "$ref": "#/components/schemas/BrowserRecordingRecap"
+          },
+          "stoppedByUser": {
+            "const": true,
+            "description": "Contract revision 61. Set only on a cancelled step Aiden cancelled because the person pressed Stop; clients read it as stopped, not as an issue. Absent on every other step."
           }
         },
         "allOf": [
+          {
+            "if": {
+              "required": [
+                "stoppedByUser"
+              ]
+            },
+            "then": {
+              "properties": {
+                "status": {
+                  "const": "cancelled"
+                }
+              }
+            }
+          },
           {
             "if": {
               "required": [

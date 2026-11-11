@@ -118,21 +118,23 @@ function stepObject(step: AgentToolStep): string | undefined {
 }
 
 /**
- * Display-only: a tool call the person ended with Stop. Its timeline was
- * cancelled from `user_stop`, so the call stopping is the outcome they asked
- * for, not a problem to review. App shutdown, chat deletion and the other
- * cancellation origins keep the cancelled treatment, and so does a call a
- * claim check names, because that warning asks the person to review it.
+ * Display-only: a tool call the person ended with Stop. The producer marks
+ * exactly the steps it cancelled because of Stop (`stoppedByUser`), so the
+ * call stopping is the outcome they asked for, not a problem to review. A
+ * step cancelled for any other reason (app shutdown, chat deletion, an agent
+ * permission cancelled on detach) carries no mark and keeps the cancelled
+ * treatment, even when a later Stop ends the same generation. So does a call
+ * a claim check names, because that warning asks the person to review it.
  * Decoders and claim-check validation still treat every cancelled call as an issue.
  */
 export function isStoppedByUser(
-  timeline: Pick<GenerationTimeline, "cancellationOrigin" | "claimCheck">,
+  timeline: Pick<GenerationTimeline, "claimCheck">,
   step: AgentStep,
 ): boolean {
   return (
-    timeline.cancellationOrigin === "user_stop" &&
     isToolStep(step) &&
     step.status === "cancelled" &&
+    step.stoppedByUser === true &&
     !timeline.claimCheck?.stepIds.includes(step.id)
   );
 }

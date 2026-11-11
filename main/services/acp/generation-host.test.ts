@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Type } from "@earendil-works/pi-ai";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
 import type { GenerationTimeline } from "../../../renderer/shared/generation-timeline.js";
 import { GenerationTimelineProjector } from "../generation-timeline.js";
 import type { ToolApprovalOutcome } from "../tool-approval.js";
 import { parseAskUserQuestionPrompt } from "../../../renderer/shared/ask-user-question.js";
+import { ActivityFeed } from "../../../renderer/components/activity-feed.js";
+import { activityIssueCount } from "../../../renderer/lib/agent-steps.js";
 import { canHostAcpHarness, createAcpGenerationHost, questionFor, type AcpGenerationHostOptions } from "./generation-host.js";
 
 function setup(overrides: Partial<AcpGenerationHostOptions> = {}, outcome: ToolApprovalOutcome = "allowed", scope?: "once" | "chat") {
@@ -30,10 +34,36 @@ function setup(overrides: Partial<AcpGenerationHostOptions> = {}, outcome: ToolA
     takeApprovalScope: () => scope,
     ...overrides,
   });
-  return { host, prompts, timeline: () => latest };
+  return { host, prompts, projector: timeline, timeline: () => latest };
 }
 
 const signal = new AbortController().signal;
+
+test("an agent permission cancelled on detach stays an issue after a later Stop", () => {
+  const { host, projector } = setup();
+  // What the runtime reports when a permission request is cancelled because
+  // the agent detached: the step ends cancelled for a reason other than Stop.
+  host.activity.started("acp:s:1", "edit_file", { path: "src/app.ts" });
+  host.activity.finished("acp:s:1", "cancelled");
+  // The person then presses Stop while another agent call is running.
+  host.activity.started("acp:s:2", "run_command", { command: "npm test" });
+  host.activity.running("acp:s:2");
+  const final = projector.finish("cancelled", "user_stop");
+
+  const steps = final.steps.filter((step) => step.kind === "tool");
+  assert.deepEqual(
+    steps.map((step) => step.kind === "tool" && [step.toolName, step.status, step.stoppedByUser]),
+    [
+      ["edit_file", "cancelled", undefined],
+      ["run_command", "cancelled", true],
+    ],
+  );
+  assert.equal(activityIssueCount(final), 1);
+  const markup = renderToStaticMarkup(createElement(ActivityFeed, { timeline: final }));
+  assert.match(markup, />1 issue</u);
+  assert.match(markup, /Edit file cancelled/u);
+  assert.match(markup, /Run command stopped/u);
+});
 
 test("native activity becomes labelled, persisted timeline steps", () => {
   const { host, timeline } = setup();

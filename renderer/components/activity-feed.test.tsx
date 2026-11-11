@@ -209,7 +209,7 @@ test("a compaction the person stopped reads stopped, not as an issue", () => {
     <ActivityFeed
       timeline={timeline(
         "cancelled",
-        [step(0, "compact_context", "cancelled", { label: "Compact context" })],
+        [step(0, "compact_context", "cancelled", { label: "Compact context", stoppedByUser: true })],
         { cancellationOrigin: "user_stop" },
       )}
     />,
@@ -228,7 +228,7 @@ test("a stopped call among other work leaves the trail closed", () => {
     <ActivityFeed
       timeline={timeline(
         "cancelled",
-        [step(0, "read_file", "completed", { target: "package.json" }), step(1, "run_command", "cancelled", { label: "Run command" })],
+        [step(0, "read_file", "completed", { target: "package.json" }), step(1, "run_command", "cancelled", { label: "Run command", stoppedByUser: true })],
         { cancellationOrigin: "user_stop" },
       )}
     />,
@@ -254,6 +254,12 @@ test("cancellations the person did not ask for, and failures, are still flagged"
       "compact_context failed",
       timeline("cancelled", [step(0, "compact_context", "failed")], { cancellationOrigin: "user_stop" }),
     ],
+    // A Stop ends the generation, but this call was cancelled earlier for
+    // another reason (an agent permission cancelled on detach): no mark.
+    [
+      "compact_context cancelled",
+      timeline("cancelled", [step(0, "compact_context", "cancelled")], { cancellationOrigin: "user_stop" }),
+    ],
   ];
   for (const [line, flagged] of cases) {
     const markup = renderToStaticMarkup(<ActivityFeed timeline={flagged} />);
@@ -266,7 +272,7 @@ test("cancellations the person did not ask for, and failures, are still flagged"
 test("a stopped call that a claim check names stays an issue", () => {
   const markup = renderToStaticMarkup(
     <ActivityFeed
-      timeline={timeline("cancelled", [step(0, "read_file"), step(1, "run_command", "cancelled")], {
+      timeline={timeline("cancelled", [step(0, "read_file"), step(1, "run_command", "cancelled", { stoppedByUser: true })], {
         cancellationOrigin: "user_stop",
         claimCheck: { kind: "unverified_success", stepIds: ["tool-2"] },
       })}

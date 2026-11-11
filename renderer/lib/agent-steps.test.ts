@@ -553,21 +553,31 @@ test("issues surface for review without reopening a healthy trail", () => {
 });
 
 test("a call the person stopped is not an issue; other cancellations are", () => {
-  const steps = [step("edit", 0, "edit_file", "completed"), step("run", 1, "run_command", "cancelled")];
+  const stoppedStep = step("run", 1, "run_command", "cancelled", { stoppedByUser: true });
+  const steps = [step("edit", 0, "edit_file", "completed"), stoppedStep];
   const stopped = timeline("cancelled", steps, { cancellationOrigin: "user_stop" });
-  assert.equal(isStoppedByUser(stopped, steps[1]!), true);
+  assert.equal(isStoppedByUser(stopped, stoppedStep), true);
   assert.equal(isStoppedByUser(stopped, steps[0]!), false);
   assert.equal(activityIssueCount(stopped), 0);
   assert.equal(activityTrailNeedsAttention(stopped), false);
-  assert.deepEqual(activityLine(steps[1]!, { stoppedByUser: true }), {
+  assert.deepEqual(activityLine(stoppedStep, { stoppedByUser: true }), {
     verb: "run_command stopped",
     object: undefined,
     tone: "normal",
   });
 
+  // The rule is the step's own mark, not the generation's: a call cancelled
+  // earlier for another reason stays an issue after a later Stop.
+  const detached = step("permit", 2, "edit_file", "cancelled");
+  const mixed = timeline("cancelled", [...steps, detached], { cancellationOrigin: "user_stop" });
+  assert.equal(isStoppedByUser(mixed, detached), false);
+  assert.equal(activityIssueCount(mixed), 1);
+  assert.equal(activityTrailNeedsAttention(mixed), true);
+
   for (const origin of ["application_shutdown", "chat_deletion", "scheduled_task_cancel"] as const) {
-    const other = timeline("cancelled", steps, { cancellationOrigin: origin });
-    assert.equal(isStoppedByUser(other, steps[1]!), false, origin);
+    const unmarked = [steps[0]!, step("run", 1, "run_command", "cancelled")];
+    const other = timeline("cancelled", unmarked, { cancellationOrigin: origin });
+    assert.equal(isStoppedByUser(other, unmarked[1]!), false, origin);
     assert.equal(activityIssueCount(other), 1, origin);
     assert.equal(activityTrailNeedsAttention(other), true, origin);
   }

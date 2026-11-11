@@ -467,7 +467,7 @@ test("pairing request fixtures only carry a sealed envelope for an approved requ
   delete revision19.botHandoffs;
   delete revision19.botAccessRequests;
   delete revision19.botPlans;
-  delete revision19.botAllowed; delete revision19.voiceInput;
+  delete revision19.botAllowed; delete revision19.voiceInput; delete revision19.stoppedSteps;
   // Bot issues on phones are revision 42.
   delete revision19.botIssues;
   // Schedule approval cards are revision 39.
@@ -2636,7 +2636,7 @@ test("Bot attachment references arrive in revision 33 and only where the host an
   const older = structuredClone(raw);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed; delete older.voiceInput;
+  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps;
   older.contractRevision = 32;
   record(older.hostHealth, "hostHealth").contractRevision = 32;
   assert.throws(() => parseAidenRemoteContractFixture(older), /require contract revision 33/u);
@@ -2900,7 +2900,7 @@ test("Bot hand-off fixtures require their own revision, and an older fixture par
   const older = structuredClone(raw);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed; delete older.voiceInput;
+  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps;
   older.contractRevision = AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION - 1;
   record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION - 1;
   delete older.scheduleCards;
@@ -2942,7 +2942,7 @@ test("new worktree fixtures need their own revision, and a moved chat has no mes
   const older = structuredClone(raw);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed; delete older.voiceInput;
+  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps;
   older.contractRevision = AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION - 1;
   record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION - 1;
   assert.throws(
@@ -2977,7 +2977,7 @@ test("spending fixtures need their own revision, parse strictly, and refuse with
   const older = structuredClone(raw);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed; delete older.voiceInput;
+  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps;
   older.contractRevision = AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION - 1;
   record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION - 1;
   assert.throws(
@@ -3026,7 +3026,7 @@ test("raw upload fixtures need their own revision, and every client spells a pic
   const older = structuredClone(raw);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed; delete older.voiceInput;
+  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps;
   // Sections from later revisions leave with the downgrade, so only this one is refused.
   delete older.chatNewWorktree;
   older.contractRevision = AIDEN_REMOTE_RAW_UPLOADS_CONTRACT_REVISION - 1;
@@ -3062,7 +3062,7 @@ test("background job fixtures need their own revision, and the parser and schema
   const older = structuredClone(raw);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed; delete older.voiceInput;
+  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps;
   // Sections from later revisions leave with the downgrade, so only this one is refused.
   delete older.chatNewWorktree;
   older.contractRevision = AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION - 1;
@@ -3156,7 +3156,7 @@ test("Bot shared images need their own revision, and the schema and parser accep
   const older = structuredClone(raw);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed; delete older.voiceInput;
+  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps;
   older.contractRevision = AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION - 1;
   record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION - 1;
   delete older.browserRecordings;
@@ -3198,7 +3198,7 @@ test("browser recordings need their own revision, and a recording step carries o
   const older = structuredClone(raw);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed; delete older.voiceInput;
+  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps;
   older.contractRevision = AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION - 1;
   record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION - 1;
   assert.throws(
@@ -3572,11 +3572,11 @@ test("revision 55 access fixtures and strict public DTOs reject private fields a
   for (const change of [{ label: "x".repeat(121) }, { why: "x".repeat(401) }, { place: "x".repeat(513) }, { why: " " }, { label: "Bad\u0000" }, { place: "relative/path" }, { waitId: "bad_id" }, { choices: ["once", "always", "not_now"] }, { choices: ["not_now", "once", "once"] }]) assert.throws(() => card({ ...section.folder, ...change }));
   assert.throws(() => card({ ...section.wholeMac, choices: ["not_now", "always", "once"] }));
   assert.throws(() => card({ ...section.wholeMac, place: "~/Reports" }));
-  const older = structuredClone(raw); delete older.botPlans; delete older.botAllowed; delete older.voiceInput; older.contractRevision = 54; older.hostHealth.contractRevision = 54;
+  const older = structuredClone(raw); delete older.botPlans; delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; older.contractRevision = 54; older.hostHealth.contractRevision = 54;
   assert.throws(() => parseAidenRemoteContractFixture(older), /require revision 55/u);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed; delete older.voiceInput;
+  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps;
   assert.equal(parseAidenRemoteContractFixture(older).botAccessRequests, undefined);
   const { default: Ajv2020 } = await import("ajv/dist/2020.js");
   const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
@@ -3607,7 +3607,7 @@ test("revision 56 plans decode strictly, preserve absent versus null, and exclud
   const section = protocol.parseAidenRemoteContractFixture(raw).botPlans!;
   assert.deepEqual(section, raw.botPlans);
   assert.equal(protocol.AIDEN_REMOTE_BOT_PLANS_CONTRACT_REVISION, 56);
-  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 60);
+  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 61);
   assert.equal(section.pending.status, "pending");
   assert.equal(section.active.steps[0].status, "done");
   const parse = protocol.parseAidenRemoteBotPlan;
@@ -3620,10 +3620,10 @@ test("revision 56 plans decode strictly, preserve absent versus null, and exclud
   assert.throws(() => protocol.parseAidenRemoteBotSessionEvent({ ...section.events[1], payload: {} }));
   const leaked = structuredClone(raw); leaked.botPlans.legacy.session.plan = null;
   assert.throws(() => protocol.parseAidenRemoteContractFixture(leaked));
-  const older = structuredClone(raw); delete older.botAllowed; delete older.voiceInput; older.contractRevision = 55; older.hostHealth.contractRevision = 55;
+  const older = structuredClone(raw); delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; older.contractRevision = 55; older.hostHealth.contractRevision = 55;
   assert.throws(() => protocol.parseAidenRemoteContractFixture(older), /revision 56/u);
   delete older.botPlans;
-  delete older.botAllowed; delete older.voiceInput;
+  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps;
   assert.equal(protocol.parseAidenRemoteContractFixture(older).botPlans, undefined);
 });
 
@@ -3694,7 +3694,7 @@ test("revision 57 allowed fixture is strict and exposes only bounded public list
   const raw = await json("fixtures/contract.json") as Record<string, any>;
   const section = protocol.parseAidenRemoteContractFixture(raw).botAllowed!;
   assert.deepEqual(section, raw.botAllowed);
-  assert.equal(protocol.AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION, 57); assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 60);
+  assert.equal(protocol.AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION, 57); assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 61);
   const all = [...section.paginated.firstPage.entries, ...section.paginated.nextPage.entries];
   assert.equal(all.length, 53); assert.equal(all.filter(e => e.kind === "rule").length, 50); assert.equal(all.filter(e => e.kind === "folder").length, 3);
   assert.equal(new Set(all.map(e => e.id)).size, 53);
@@ -3708,7 +3708,7 @@ test("revision 57 allowed fixture is strict and exposes only bounded public list
     assert.throws(() => protocol.parseAidenRemoteBotAccessRequest({ ...section.legacyAccessRequest, approvalCount: count }));
   }
   assert.throws(() => protocol.parseAidenRemoteBotApproval({ ...section.approval, canAllow: false }));
-  const older = structuredClone(raw); delete older.voiceInput; older.contractRevision = 56; older.hostHealth.contractRevision = 56;
+  const older = structuredClone(raw); delete older.voiceInput; delete older.stoppedSteps; older.contractRevision = 56; older.hostHealth.contractRevision = 56;
   assert.throws(() => protocol.parseAidenRemoteContractFixture(older), /revision 57/u); delete older.botAllowed;
   assert.equal(protocol.parseAidenRemoteContractFixture(older).botAllowed, undefined);
 });
@@ -3758,4 +3758,43 @@ test("revision 60 marks only user messages Aiden Live sent by voice, and clients
   const { inputSource: _dropped, ...typed } = voiceUser;
   assert.equal(message(typed), true, "the field is optional, so older hosts stay valid");
   assert.equal(message({ ...voiceUser, inputSource: "dictation" }), false, "hosts send only the voice marker");
+});
+
+test("revision 61 reads only the steps Stop cancelled as stopped, and every other cancelled step stays an issue", async () => {
+  const protocol = await import("./aiden-remote-protocol.js");
+  const raw = await json("fixtures/contract.json") as Record<string, any>;
+  assert.equal(protocol.AIDEN_REMOTE_STOPPED_BY_USER_CONTRACT_REVISION, 61);
+  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 61);
+  const fixture = protocol.parseAidenRemoteContractFixture(raw).stoppedSteps;
+  assert.ok(fixture);
+  assert.deepEqual(fixture.stoppedStepIds, ["tool-3"]);
+  assert.deepEqual(fixture.issueStepIds, ["tool-2", "tool-4"], "a step cancelled before Stop is still an issue");
+  const flags = fixture.timeline.steps.map((step) => step.kind === "tool" ? step.stoppedByUser : undefined);
+  assert.deepEqual(flags, [undefined, undefined, true, undefined], "the mark survives the shared timeline parser");
+
+  // A fixture that claims a different stopped set than the parser yields is refused.
+  const wrong = structuredClone(raw);
+  wrong.stoppedSteps.stoppedStepIds = ["tool-2", "tool-3"];
+  wrong.stoppedSteps.issueStepIds = ["tool-4"];
+  assert.throws(() => protocol.parseAidenRemoteContractFixture(wrong), /marks different steps/u);
+  // A mark on a step that did not end cancelled is not a valid timeline.
+  const marked = structuredClone(raw);
+  marked.stoppedSteps.timeline.steps[3].stoppedByUser = true;
+  assert.throws(() => protocol.parseAidenRemoteContractFixture(marked), /valid timeline/u);
+  const older = structuredClone(raw);
+  older.contractRevision = 60;
+  older.hostHealth.contractRevision = 60;
+  assert.throws(() => protocol.parseAidenRemoteContractFixture(older), /revision 61/u);
+  delete older.stoppedSteps;
+  assert.equal(protocol.parseAidenRemoteContractFixture(older).stoppedSteps, undefined);
+
+  const { default: Ajv2020 } = await import("ajv/dist/2020.js");
+  const spec = await json("openapi.json") as { components: object };
+  const step = new Ajv2020({ strict: false, validateFormats: false }).compile({ $ref: "#/components/schemas/GenerationToolStep", components: spec.components });
+  const [, cancelled, stopped, failed] = raw.stoppedSteps.timeline.steps;
+  assert.equal(step(stopped), true, JSON.stringify(step.errors));
+  assert.equal(step(cancelled), true, "the field is optional, so older hosts stay valid");
+  assert.equal(step({ ...failed, stoppedByUser: true }), false, "only a cancelled step can carry the mark");
+  assert.equal(step({ ...stopped, status: "completed" }), false);
+  assert.equal(step({ ...stopped, stoppedByUser: false }), false, "hosts send only the true marker");
 });
