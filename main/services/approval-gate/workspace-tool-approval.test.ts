@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ApprovalMode, MacGrantClass } from "../../../renderer/shared/approval-mode.js";
-import { approvalRuleHostOf, resolveApprovalRule, type ApprovalRule } from "../../../renderer/shared/approval-rules.js";
+import { approvalRuleHostOf, approvalRulesPageCouldName, resolveApprovalRule, type ApprovalRule } from "../../../renderer/shared/approval-rules.js";
 import { workspaceRuleHost, workspaceToolApproval, type WorkspaceToolApprovalInput } from "./workspace-tool-approval.js";
 
 type Call = Pick<WorkspaceToolApprovalInput, "toolName" | "args" | "connector">;
@@ -139,11 +139,38 @@ test("rules page: a Block applies where no approval mode runs (Assistant, no-wor
   for (const permission of ["full", "ask"] as const) {
     assert.equal(legacy(permission, read, "block"), "block:rule", permission);
     assert.equal(legacy(permission, send, "block"), "block:rule", permission);
-    // A rules file that can't be read asks, since its Blocks can't be seen.
-    assert.equal(legacy(permission, read, "unreadable"), "ask", permission);
+    // A rules file that can't be read asks before a send, since its Blocks
+    // can't be seen, but a plain local read no rule could name still runs.
+    assert.equal(legacy(permission, send, "unreadable"), "ask", permission);
+    assert.equal(legacy(permission, read, "unreadable"), "run", permission);
   }
   assert.equal(legacy("ask", { toolName: "browser_click", args: {} }, "allow"), "ask", "an Allow rule widens nothing without a mode");
   assert.equal(legacy("full", read, "ask"), "run", "nor does an Ask rule tighten one");
+});
+
+test("rules page: a rules file that can't be read asks before anything a rule could name, never before a plain read", () => {
+  const withUnreadable = (mode: ApprovalMode, call: Call & { serverId?: string; host?: string }) => {
+    const subject = call.serverId
+      ? { connector: { serverId: call.serverId, tool: call.connector?.remoteName ?? "" }, ...(call.host ? { host: call.host } : {}) }
+      : { tool: call.toolName, ...(call.host ? { host: call.host } : {}) };
+    const result = workspaceToolApproval({
+      toolName: call.toolName, args: call.args, ...(call.connector ? { connector: call.connector } : {}),
+      permission: "ask", workspaceId: "w1", approval: { mode, macGrants: new Set() }, judgeAvailable: true,
+      pageRule: "unreadable", ...(approvalRulesPageCouldName(subject) ? { pageRuleCouldName: true } : {}),
+    });
+    return result.readsJudge ? "judge" : result.decision.outcome === "allow" ? "run" : result.decision.outcome;
+  };
+  for (const mode of ["ask", "auto", "never"] as const) {
+    // Local reads no rule on the page can name go by the mode, as before.
+    assert.equal(withUnreadable(mode, { toolName: "read_file", args: { path: "a.txt" } }), "run", `read_file in ${mode}`);
+    assert.equal(withUnreadable(mode, { toolName: "browser_snapshot", args: {} }), "run", `browser_snapshot in ${mode}`);
+    // A connected app, a site or a listed action might be the hidden Block: ask once, even in Never ask.
+    assert.equal(withUnreadable(mode, { ...gmail("gmail_list_messages"), serverId: "gmail" }), "ask", `gmail list in ${mode}`);
+    assert.equal(withUnreadable(mode, { toolName: "web_search", args: { query: "x" } }), "ask", `web_search in ${mode}`);
+    assert.equal(withUnreadable(mode, { toolName: "browser_click", args: { ref: "e1" }, host: "bank.example" }), "ask", `click in ${mode}`);
+    // Anything that changes or sends something asks too, and is never judged.
+    assert.equal(withUnreadable(mode, { ...gmail("gmail_send_message"), serverId: "gmail" }), "ask", `gmail send in ${mode}`);
+  }
 });
 
 test("rules page: a workspace click or typing is on the site its tab shows, unless it names one", async () => {

@@ -64,13 +64,22 @@ export interface WorkspaceToolApprovalInput {
   /** The judge's verdict, read only when `workspaceToolApproval(...).readsJudge` said so. */
   judge?: "pass" | "defer";
   /**
-   * Settings → Approvals' rule for this call (`resolveApprovalRule`). A Block,
-   * or a rule book that can't be read, applies wherever this gate runs:
-   * Assistant and no-workspace chats, scheduled runs and Bot-bound turns
-   * included. Allow and Ask rules apply only to a run with an approval mode,
-   * and never to a Bot-bound turn, whose authority is its Bot's.
+   * Settings → Approvals' rule for this call (`resolveApprovalRule`). A Block
+   * applies wherever this gate runs: Assistant and no-workspace chats,
+   * scheduled runs and Bot-bound turns included. Allow and Ask rules apply
+   * only to a run with an approval mode, and never to a Bot-bound turn, whose
+   * authority is its Bot's. A rules file that can't be read ("unreadable")
+   * asks once, everywhere, but only for a call that changes or sends
+   * something or that a page rule could name (`pageRuleCouldName`); any
+   * other call (a plain local read) goes by the mode.
    */
   pageRule?: "allow" | "ask" | "block" | "unreadable";
+  /**
+   * A rule made on the rules page could name this call
+   * (`approvalRulesPageCouldName`): an Aiden action Add rule offers, a
+   * connected app's tool, or an action on a site.
+   */
+  pageRuleCouldName?: boolean;
 }
 
 export type WorkspaceToolApproval =
@@ -142,11 +151,16 @@ export function workspaceGateAction(input: WorkspaceToolApprovalInput): GateActi
   const ruleTarget = !input.botBound && APPROVAL_TOOL_NAMES.has(toolName)
     ? toolApprovalRuleTarget(toolName, args, input.workspaceId)
     : undefined;
+  // A rules file that can't be read may hide a Block, so a call it could
+  // name, or one that changes or sends something, asks; a plain read doesn't.
+  const unreadableAsks = input.pageRule === "unreadable" &&
+    (consequential || explicitOnly || macClass !== undefined || input.pageRuleCouldName === true);
   return {
     toolName,
     ...(macClass ? { mac: true, macClass, ...(macGranted ? { macGranted: true } : {}) } : {}),
     ...(input.newDestination ? { newDestination: true } : {}),
-    ...(input.pageRule === "block" || input.pageRule === "unreadable" || (input.pageRule && !input.botBound && input.approval)
+    ...(input.pageRule === "block" || unreadableAsks ||
+      (input.pageRule && input.pageRule !== "unreadable" && !input.botBound && input.approval)
       ? { pageRule: input.pageRule }
       : {}),
     ...(input.judge ? { judge: input.judge } : {}),

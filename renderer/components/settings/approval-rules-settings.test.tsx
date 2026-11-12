@@ -176,7 +176,7 @@ test("approval cards offer broader scopes only when the approval can be allowed"
 
 test("a rules file that can't be read hides every rule, says what that means, and offers Try again or Start over", () => {
   const calls = view({ unreadable: true, rows: [ROWS[4]!], onRefresh: () => calls.push("refresh"), onSetAside: () => calls.push("set aside") });
-  assert.match(screen.getByRole("alert").textContent ?? "", /every action asks first and Bots don’t act/u);
+  assert.match(screen.getByRole("alert").textContent ?? "", /reaches the web asks first, and Bots don’t act/u);
   assert.equal(screen.queryByRole("heading", { name: "Always allow" }), null);
   assert.equal(screen.queryByRole("heading", { name: "Blocked" }), null);
   assert.equal(screen.queryAllByRole("button", { name: /Add a rule/u }).length, 0, "nothing can be added over a file that can't be read");

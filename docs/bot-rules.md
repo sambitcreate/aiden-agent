@@ -191,8 +191,11 @@ or words ("When a Bot wants to …", Ask or Block only, never Allow).
 - **A rules file Aiden can't read.** If `approval-rules.json` doesn't parse,
   was written by a newer release, or holds a rule this release can't read,
   Aiden never reads around it or writes over it, since its Block rules may be
-  the ones it can't see. Every workspace action asks first and Bots don't act
-  until it is fixed. The page hides the rules, says so, and offers **Try
+  the ones it can't see. Until it is fixed, a workspace action that changes
+  or sends something, uses a connected app, reaches a site or is one of the
+  actions Add rule offers asks once first, in every mode (Never ask included,
+  and never judged), and Bots don't act. A plain local read, such as reading,
+  listing or searching files, goes by the approval mode. The page hides the rules, says so, and offers **Try
   again** or **Start over**, which renames the file to
   `approval-rules.json.unreadable-<time>` beside it and starts empty.
 - Deleting a Bot or removing a workspace removes the rules only it owned.

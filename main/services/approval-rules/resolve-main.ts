@@ -13,8 +13,10 @@ import { approvalRules } from "./store-main.js";
 /**
  * The decision of the rule that answers for this call, if any. A rule book
  * that can't be read exactly (it doesn't parse, or holds a version or rule
- * this release can't read) is "unreadable": the gate then asks once in every
- * mode, Never ask included, since a Block may be the rule it can't see.
+ * this release can't read) is "unreadable": a workspace call that changes or
+ * sends something, or that a page rule could name, then asks once in every
+ * mode, Never ask included, since a Block may be the rule it can't see. A
+ * plain local read goes by the mode.
  */
 export async function pageRuleFor(subject: ApprovalRuleSubject): Promise<ApprovalRuleDecision | "unreadable" | undefined> {
   try {

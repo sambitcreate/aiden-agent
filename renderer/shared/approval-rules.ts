@@ -623,3 +623,16 @@ export const APPROVAL_RULE_AIDEN_TOOLS: readonly { tool: string; label: string; 
   { tool: "background_job", label: "Start a background job" },
   { tool: "forget_fact", label: "Forget a memory" },
 ];
+
+const APPROVAL_RULE_AIDEN_TOOL_NAMES: ReadonlySet<string> = new Set(APPROVAL_RULE_AIDEN_TOOLS.map((entry) => entry.tool));
+
+/**
+ * Whether a rule made on the rules page could name this call: one of the
+ * Aiden actions Add rule offers, a connected app's tool, or an action on a
+ * site. A plain local read (reading, listing or searching files) is none of
+ * these, so a rules file that can't be read leaves it to the approval mode.
+ */
+export function approvalRulesPageCouldName(subject: Pick<ApprovalRuleSubject, "tool" | "connector" | "host">): boolean {
+  return subject.connector !== undefined || subject.host !== undefined ||
+    (subject.tool !== undefined && APPROVAL_RULE_AIDEN_TOOL_NAMES.has(subject.tool));
+}
