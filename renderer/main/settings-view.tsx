@@ -48,15 +48,16 @@ import { RemoteAccessSettings } from "../components/settings/remote-access-setti
 import { PeerHostsSettingsPage } from "../components/settings/peer-hosts-settings";
 import { AppControlSettings } from "../components/settings/app-control-settings";
 import { SimulatorSettingsPage } from "../components/settings/device-workspace-settings";
-import { ToolApprovalSettings } from "../components/settings/tool-approval-settings";
+import { ApprovalRulesSettings } from "../components/settings/approval-rules-settings";
 import { ApprovalModeSettings } from "../components/settings/approval-mode-settings";
 
-/** Settings → Approvals: the mode first, then what Aiden may repeat without asking. */
+/** Settings → Approvals: the mode first, then the rules page, then Advanced. */
 function ApprovalsSettings() {
   return (
     <>
-      <ApprovalModeSettings />
-      <ToolApprovalSettings />
+      <ApprovalModeSettings>
+        <ApprovalRulesSettings />
+      </ApprovalModeSettings>
     </>
   );
 }

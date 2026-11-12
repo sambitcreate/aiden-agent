@@ -64,7 +64,7 @@ function useSettingsPatch() {
  * install that was already in use, and Advanced holds the approval model and
  * the legacy routines switch for people who had it on.
  */
-export function ApprovalModeSettings() {
+export function ApprovalModeSettings({ children }: { /** The rules page, under the mode and above Advanced. */ children?: React.ReactNode } = {}) {
   const settings = useSettings();
   const providers = useProviders();
   const { save, saving } = useSettingsPatch();
@@ -142,6 +142,7 @@ export function ApprovalModeSettings() {
           </Text>
         ) : null}
       </FieldSet>
+      {children}
       <FieldSet title="Advanced">
         <Field
           label="Approval model"

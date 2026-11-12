@@ -141,7 +141,7 @@ test("Create a bot keeps the draft after a failed save, then creates it with Ful
   await expect(editor.getByRole("textbox", { name: "What should it help with?" })).toHaveValue("Plan my meals and grocery list every week");
 });
 
-test("Create a bot from a name and a help answer, then switch its Advanced access to Only what I choose", async ({ aiden }) => {
+test("Create a bot from a name and a help answer, then disable a tool in Advanced → Tools", async ({ aiden }) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   await substituteBotIpc(aiden.app, { failFirstCreate: false });
@@ -169,10 +169,10 @@ test("Create a bot from a name and a help answer, then switch its Advanced acces
   // Advanced is in the Bot's menu, which its row in the Bots sidebar opens on right-click.
   await page.getByRole("navigation", { name: "Bots", exact: true }).getByRole("button", { name: /^Meal Planner/u }).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Advanced", exact: true }).click();
-  const onlyChoose = page.getByRole("radio", { name: "Only what I choose", exact: true });
-  await expect(page.getByRole("radio", { name: "Everything", exact: true })).toBeChecked();
-  await onlyChoose.click();
-  await expect(onlyChoose).toBeChecked();
+  await expect(page.getByText(/^Everything Aiden can use on this Mac/u)).toBeVisible();
+  await page.getByRole("button", { name: "Disable a tool", exact: true }).click();
+  await page.getByRole("dialog", { name: "Disable a tool", exact: true }).getByRole("option", { name: /^Run commands/u }).click();
+  await expect(page.getByRole("button", { name: "Turn on Run commands", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved", { exact: true })).toBeVisible();
 

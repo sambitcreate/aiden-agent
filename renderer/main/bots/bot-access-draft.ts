@@ -2,6 +2,7 @@ import type { BotAccessState } from "../../lib/ipc";
 import type { BotEditorAccessDraft } from "../../shared/bot-editor-save";
 import {
   BOT_FILE_SCOPE_SELECTION_GUIDANCE,
+  BOT_WEB_SEARCH_CAPABILITY_LABEL,
   botFileScopeSelectionIsCoherent,
   type BotAccessUpdate,
   type BotCapabilityCatalog,
@@ -180,4 +181,85 @@ export function botAccessDiffers(
     || !sameIdSet(current.otherCapabilityIds, next.otherCapabilityIds)
     || state.visionModelSelection?.providerId !== update.visionModel?.providerId
     || state.visionModelSelection?.modelId !== update.visionModel?.modelId;
+}
+
+// ---------------------------------------------------------------------------
+// Advanced → Tools (plan §3.5): "Disable a tool" instead of the Everything /
+// Only what I choose picker. Storage is unchanged: an Everything Bot is Full
+// access, and a Bot with a tool turned off is Custom access with the rest on.
+
+export type BotToolKey = "connectionIds" | "skillIds" | "otherCapabilityIds" | "shell" | "webSearch";
+
+export interface BotTool {
+  key: BotToolKey;
+  /** The grant id; "shell" and "web" for the two switches. */
+  id: string;
+  label: string;
+  /** "Connected apps", "Skills", "More". */
+  group: string;
+  description?: string;
+}
+
+const isWeb = (option: BotCapabilityOption) => option.label === BOT_WEB_SEARCH_CAPABILITY_LABEL;
+
+function toolOptions(catalog: BotCapabilityCatalog, draft: BotAccessDraft): BotTool[] {
+  const skillsAvailable = (option: BotCapabilityOption) => option.available || catalog.skillsEnabled === false;
+  const others = catalog.otherCapabilities.filter((option) => option.available && !(draft.usesFullAccess && isWeb(option)));
+  return [
+    ...catalog.connections.filter((option) => option.available).map((option) => ({ key: "connectionIds" as const, id: option.id, label: option.label, group: "Connected apps", ...(option.description ? { description: option.description } : {}) })),
+    ...catalog.skills.filter(skillsAvailable).map((option) => ({ key: "skillIds" as const, id: option.id, label: option.label, group: "Skills", ...(option.description ? { description: option.description } : {}) })),
+    ...others.map((option) => ({ key: "otherCapabilityIds" as const, id: option.id, label: option.label, group: "More", ...(option.description ? { description: option.description } : {}) })),
+    ...(catalog.shellAvailable ? [{ key: "shell" as const, id: "shell", label: "Run commands", group: "More", description: "Commands in Terminal on this Mac" }] : []),
+    // In Full access, Web search is its own switch; in Custom it is one of the capabilities above.
+    ...(draft.usesFullAccess ? [{ key: "webSearch" as const, id: "web", label: BOT_WEB_SEARCH_CAPABILITY_LABEL, group: "More", description: "Look things up with Aiden’s Web Search" }] : []),
+  ];
+}
+
+function toolIsOn(draft: BotAccessDraft, tool: BotTool): boolean {
+  if (tool.key === "webSearch") return draft.webSearchEnabled;
+  if (draft.usesFullAccess) return true;
+  if (tool.key === "shell") return draft.shellEnabled;
+  return draft[tool.key].includes(tool.id);
+}
+
+/** What this Bot can use and what is off, from the same draft the save sends. */
+export function botToolsOf(catalog: BotCapabilityCatalog, draft: BotAccessDraft): { on: BotTool[]; off: BotTool[] } {
+  const on: BotTool[] = [];
+  const off: BotTool[] = [];
+  for (const tool of toolOptions(catalog, draft)) (toolIsOn(draft, tool) ? on : off).push(tool);
+  return { on, off };
+}
+
+/**
+ * Turn one tool off. An Everything Bot becomes Custom access with every
+ * other tool still on and the widest file access it can name (the whole Mac
+ * when offered), so turning a tool off only ever narrows what it can reach.
+ */
+export function disableBotTool(catalog: BotCapabilityCatalog, draft: BotAccessDraft, tool: Pick<BotTool, "key" | "id">): BotAccessDraft {
+  if (tool.key === "webSearch") return draft.usesFullAccess ? { ...draft, webSearchEnabled: false } : draft;
+  let next = draft;
+  if (draft.usesFullAccess) {
+    const whole = catalog.fileScopes.find((scope) => scope.kind === "full_mac" && scope.available);
+    const home = catalog.fileScopes.find((scope) => scope.kind === "bot_home" && scope.available);
+    next = {
+      ...draft,
+      usesFullAccess: false,
+      fileScopeIds: whole ? [whole.id] : home ? [home.id, ...catalog.fileScopes.filter((scope) => scope.kind === "approved_location" && scope.available).map((scope) => scope.id)] : [],
+      shellEnabled: catalog.shellAvailable,
+      connectionIds: catalog.connections.filter((option) => option.available).map((option) => option.id),
+      skillIds: catalog.skills.filter((option) => option.available || catalog.skillsEnabled === false).map((option) => option.id),
+      // Web search stays as it was: on only if it was on.
+      otherCapabilityIds: catalog.otherCapabilities.filter((option) => option.available && (draft.webSearchEnabled || !isWeb(option))).map((option) => option.id),
+    };
+  }
+  if (tool.key === "shell") return { ...next, shellEnabled: false };
+  return { ...next, [tool.key]: next[tool.key].filter((id) => id !== tool.id) };
+}
+
+/** Turn one tool back on. It never turns a Custom Bot back into Everything. */
+export function enableBotTool(draft: BotAccessDraft, tool: Pick<BotTool, "key" | "id">): BotAccessDraft {
+  if (tool.key === "webSearch") return draft.usesFullAccess ? { ...draft, webSearchEnabled: true } : draft;
+  if (draft.usesFullAccess) return draft;
+  if (tool.key === "shell") return { ...draft, shellEnabled: true };
+  return draft[tool.key].includes(tool.id) ? draft : { ...draft, [tool.key]: [...draft[tool.key], tool.id] };
 }

@@ -1,38 +1,22 @@
 import { botMessagingEnabled } from "../../shared/bot-messages";
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { LockKeyhole } from "lucide-react";
-import { Button, Callout, Field, FieldSet, Switch, Text, toast } from "../ui";
-import { BotAllowedList } from "../bots/bot-allowed-list";
-import { useBotAllowed, useBotAllowedRemoval } from "../../main/bots/use-bot-allowed";
-import { useAppCapabilities } from "../../lib/app-capabilities";
+import { useNavigate } from "@tanstack/react-router";
+import { ChevronRight } from "lucide-react";
+import { Button, Field, FieldSet, Switch, toast } from "../ui";
 import { settingsApi } from "../../lib/ipc";
-import { queryKeys, useBots, useSettings } from "../../lib/queries";
+import { queryKeys, useSettings } from "../../lib/queries";
+import { settingsLocation } from "../../lib/settings-section";
 import type { AppSettings } from "../../lib/types";
 
-function Always() {
-  return (
-    <span className="flex shrink-0 items-center gap-1.5 justify-self-end text-small text-secondary">
-      <LockKeyhole aria-hidden="true" className="size-3.5" />
-      Always
-    </span>
-  );
-}
-
-/** Settings → Bots & Approvals: how every Bot handles a step that needs the person's OK. */
+/**
+ * Settings → Bots & Approvals → Bots: Bot messaging. What a Bot may do
+ * without asking lives with every other rule in Approvals.
+ */
 export function BotsSettings() {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const settings = useSettings();
-  const bots = useBots();
-  const allowed = useBotAllowed();
-  const removals = useBotAllowedRemoval();
-  const grouped = new Map<string, NonNullable<typeof allowed.data>>();
-  for (const entry of allowed.data ?? []) {
-    const rows = grouped.get(entry.botId) ?? [];
-    rows.push(entry);
-    grouped.set(entry.botId, rows);
-  }
-  const { computerUse } = useAppCapabilities();
   const [messagingPending, setMessagingPending] = React.useState<boolean | null>(null);
   const changeMessaging = async (next: boolean) => {
     setMessagingPending(next);
@@ -47,29 +31,15 @@ export function BotsSettings() {
           <Switch aria-label="Bots can message each other" checked={messagingPending ?? botMessagingEnabled(settings.data)} disabled={messagingPending !== null || settings.isLoading} onCheckedChange={next => void changeMessaging(next)} />
         </Field>
       </FieldSet>
-      <FieldSet title="Allowed without asking">
-        {allowed.data === undefined && allowed.isPending ? <Field><Text role="status" variant="small" color="secondary">Loading allowed actions…</Text></Field> : null}
-        {allowed.data?.length === 0 ? <Field description="No Bot does anything without asking yet." /> : null}
-        {[...grouped].map(([botId, entries]) => (
-          <Field key={botId} label={bots.data?.find((bot) => bot.id === botId)?.name ?? "Bot"} orientation="vertical">
-            <BotAllowedList entries={entries} removing={removals.removing?.botId === botId ? removals.removing.entryId : undefined} onRemove={(entry) => void removals.remove(entry)} />
-          </Field>
-        ))}
-        {allowed.isError ? <Field><Callout color="red" role="alert">Aiden couldn’t load these allowances.<Button size="small" variant="filled" onClick={() => void allowed.refetch()}>Try again</Button></Callout></Field> : null}
-        {removals.error ? <Field><Callout color="red" role="alert">{removals.error}</Callout></Field> : null}
-      </FieldSet>
-      <FieldSet title="Always comes to you">
-        <Field label="Passwords, 2FA codes and money" description="Bots hand these to you, in chats and routines.">
-          <Always />
+      <FieldSet title="What Bots may do">
+        <Field label="Rules for every Bot" description="Always allow, Always ask and Blocked, for every Bot and workspace on this Mac.">
+          <div className="flex justify-end">
+            <Button size="small" variant="transparent" onClick={() => void navigate({ ...settingsLocation("approvals"), replace: true })}>
+              Open Approvals
+              <ChevronRight className="size-4" aria-hidden />
+            </Button>
+          </div>
         </Field>
-        <Field label="Steps a Bot’s rules hand off to you" description="Set a rule to Hand off to me on a Bot’s profile to keep that step yours.">
-          <Always />
-        </Field>
-        {computerUse ? (
-          <Field label="Using your Mac with Computer Use" description="A Bot asks before each action on your own screen.">
-            <Always />
-          </Field>
-        ) : null}
       </FieldSet>
     </>
   );

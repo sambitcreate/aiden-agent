@@ -76,7 +76,7 @@ test("Advanced shows the current choice and opens Chat activity; Back returns to
   fireEvent.click(row);
   assert.ok(await screen.findByRole("heading", { name: "Chat activity" }));
   fireEvent.click(screen.getByRole("button", { name: "Back" }));
-  assert.ok(await screen.findByRole("radiogroup", { name: "What it can use" }));
+  assert.ok(await screen.findByRole("button", { name: "Disable a tool" }));
 });
 
 test("the Advanced row shows the new choice after a pick and Back", async () => {

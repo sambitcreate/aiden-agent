@@ -139,13 +139,13 @@ test("the Profile ••• menu holds Advanced, Pause Bot and Delete Bot", asyn
   assert.ok(within(dialog).getByRole("heading", { name: "Delete Planner?" }));
 });
 
-test("the Profile shows the Bot's rules after its routines", async () => {
+test("the Profile has no per-Bot rules list: one Approvals row after its routines", async () => {
   botStoreIpc(botFixture());
   await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot-1" });
-  const rules = await screen.findByRole("list", { name: "Rules" });
-  assert.ok(within(rules).getByText("Move money or enter card details"));
+  await screen.findByRole("button", { name: "Approvals" });
+  assert.equal(screen.queryByRole("list", { name: "Rules" }), null);
   const headings = screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent);
-  assert.ok(headings.includes("Routines") && headings.indexOf("Rules") > headings.indexOf("Routines"), headings.join(", "));
+  assert.ok(headings.includes("Routines") && !headings.includes("Rules"), headings.join(", "));
 });
 
 test("a paused Bot's Profile ••• menu resumes it, and a running one's pauses it", async () => {
@@ -191,17 +191,25 @@ test("Advanced shows the model, image model, access and Telegram controls, and n
   assert.ok(screen.getByRole("button", { name: "Model for photos" }));
   assert.equal(screen.queryByRole("combobox", { name: "AI service" }), null);
   assert.ok(screen.getByRole("button", { name: /Use recommended/u }));
-  const access = screen.getByRole("radiogroup", { name: "What it can use" });
-  assert.equal(within(access).getByRole("radio", { name: "Everything" }).getAttribute("aria-checked"), "true");
+  assert.ok(screen.getByText(/^Everything Aiden can use on this Mac/u));
+  assert.equal(screen.queryByRole("radiogroup", { name: "What it can use" }), null, "no Everything / Only what I choose picker");
   assert.equal(screen.queryByRole("textbox", { name: "Opening greeting" }), null);
   assert.equal(screen.queryByText(/Opening greeting/u), null);
   assert.ok(await screen.findByRole("button", { name: /Connect Telegram/u }));
   assert.equal((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled, true);
 
-  fireEvent.click(within(access).getByRole("radio", { name: "Only what I choose" }));
-  assert.ok(await screen.findByRole("switch", { name: "Allow Mail" }));
+  await disableTool("Mail");
+  assert.ok(await screen.findByRole("button", { name: "Turn on Mail" }));
   assert.equal((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled, false);
 });
+
+/** Advanced → Tools → Disable a tool, then the tool by name. */
+async function disableTool(name: string) {
+  fireEvent.click(await screen.findByRole("button", { name: "Disable a tool" }));
+  const dialog = await screen.findByRole("dialog", { name: "Disable a tool" });
+  fireEvent.click(within(dialog).getByRole("option", { name: new RegExp(`^${name}`, "u") }));
+  await waitFor(() => assert.equal(screen.queryByRole("dialog", { name: "Disable a tool" }), null));
+}
 
 test("Advanced names only the model in its control, says what it reads under the label, and saves a new choice", async () => {
   const { accessUpdates } = advancedIpc();
@@ -252,8 +260,7 @@ function advancedIpc() {
 test("Advanced saves access with the toolbar's one Save, then has nothing left to save, and opens again on the saved choice", async () => {
   const store = advancedIpc();
   await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot-1?page=advanced" });
-  const access = await screen.findByRole("radiogroup", { name: "What it can use" });
-  fireEvent.click(within(access).getByRole("radio", { name: "Only what I choose" }));
+  await disableTool("Mail");
   // No separate access save button: the toolbar's Save is the only one.
   assert.deepEqual(
     screen.getAllByRole("button").map((button) => button.textContent).filter((text) => /save/iu.test(text ?? "")),
@@ -273,16 +280,14 @@ test("Advanced saves access with the toolbar's one Save, then has nothing left t
   await screen.findByRole("button", { name: "Instructions" });
   await openMenu("More for Planner");
   fireEvent.click(await screen.findByRole("menuitem", { name: "Advanced" }));
-  const reopened = await screen.findByRole("radiogroup", { name: "What it can use" });
-  assert.equal(within(reopened).getByRole("radio", { name: "Only what I choose" }).getAttribute("aria-checked"), "true");
+  assert.ok(await screen.findByRole("button", { name: "Turn on Mail" }), "Mail is still off");
 });
 
 test("Advanced turns on web search for an Everything Bot that doesn't have it yet", async () => {
   const store = advancedIpc();
   await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot-1?page=advanced" });
-  const web = await screen.findByRole("switch", { name: "Allow web search" });
-  assert.equal(web.getAttribute("aria-checked"), "false", "an existing Bot is never opted in silently");
-  assert.equal((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled, true);
+  const web = await screen.findByRole("button", { name: "Turn on Web search" });
+  assert.equal((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled, true, "an existing Bot is never opted in silently");
 
   fireEvent.click(web);
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -291,18 +296,12 @@ test("Advanced turns on web search for an Everything Bot that doesn't have it ye
   assert.equal(sent.accessMode, "full");
   assert.equal(sent.webSearchEnabled, true);
 
-  // Custom access grants web search as one of its own choices instead.
-  const access = screen.getByRole("radiogroup", { name: "What it can use" });
-  fireEvent.click(within(access).getByRole("radio", { name: "Only what I choose" }));
-  await screen.findByRole("switch", { name: "Allow Mail" });
-  assert.equal(screen.queryByRole("switch", { name: "Allow web search" }), null);
 });
 
 test("Advanced Back with an unsaved access change asks before discarding it", async () => {
   const store = advancedIpc();
   const { router } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot-1?page=advanced" });
-  const access = await screen.findByRole("radiogroup", { name: "What it can use" });
-  fireEvent.click(within(access).getByRole("radio", { name: "Only what I choose" }));
+  await disableTool("Mail");
   fireEvent.click(screen.getByRole("button", { name: "Back" }));
   fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Discard" }));
   await screen.findByRole("button", { name: "Instructions" });
@@ -439,15 +438,10 @@ test("a Bot already in the list opens its Profile without a loading skeleton", a
   assert.equal(screen.queryByRole("status", { name: "Loading Bot" }), null);
 });
 
-test("Allowed without asking shows the count and opens the encoded Bot deep link", async () => {
-  botStoreIpc(botFixture({ id: "bot:a" }), { "bots:allowed:list": () => [
-    { kind: "rule", id: "r1", botId: "bot:a", what: "Calendar · Create event", createdAt: "2026-11-03T15:00:00Z", uses: 12 },
-    { kind: "folder", id: "folder_team", botId: "bot:a", what: "Folder · ~/Team", createdAt: "2026-11-03T15:00:00Z" },
-  ] });
+test("the Approvals row opens Settings → Approvals, where every Bot's rules live", async () => {
+  botStoreIpc(botFixture({ id: "bot:a" }));
   const { router } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot%3Aa" });
-  const row = await screen.findByRole("button", { name: "Allowed without asking" });
-  await within(row).findByText("2");
-  fireEvent.click(row);
-  await screen.findByRole("heading", { name: "Allowed without asking", level: 1 });
-  assert.equal(router.state.location.href, "/bots/bot%3Aa?page=allowed");
+  fireEvent.click(await screen.findByRole("button", { name: "Approvals" }));
+  await waitFor(() => assert.equal(router.state.location.href, "/settings?section=approvals"));
+  assert.equal(screen.queryByRole("button", { name: "Allowed without asking" }), null);
 });

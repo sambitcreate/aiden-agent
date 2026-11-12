@@ -6,13 +6,16 @@ import { useNavigate } from "@tanstack/react-router";
 import {
   Button,
   Callout,
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
   Dialog,
   EmptyState,
   Field,
   FieldSet,
-  Label,
-  RadioGroup,
-  RadioGroupItem,
   Select,
   SelectContent,
   SelectItem,
@@ -43,9 +46,13 @@ import {
   accessDraftFromState,
   botAccessDiffers,
   botFullAccessAccepted,
+  botToolsOf,
   buildBotAccessUpdate,
+  disableBotTool,
+  enableBotTool,
   firstAvailableModel,
   type BotAccessDraft,
+  type BotTool,
 } from "./bot-access-draft";
 import {
   chooseBotModel,
@@ -60,8 +67,6 @@ import { botRoutinesKey } from "./bot-routines";
 import { botInterruptionsSummary } from "./bot-interruptions-page";
 import { BotModelPicker, botModelCapabilityLabel } from "./bot-model-picker";
 import { BotPageShell, BotPageSkeleton, useDiscardChangesGuard } from "./bot-page-shell";
-
-type ToggleKey = "fileScopeIds" | "connectionIds" | "skillIds" | "otherCapabilityIds";
 
 function sameDraft(left: BotAccessDraft | null, right: BotAccessDraft | null): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
@@ -184,19 +189,45 @@ function ToggleFields({
   );
 }
 
-const ACCESS_CHOICES = [
-  {
-    value: "full",
-    label: "Everything",
-    description: "Anything Aiden can use on this Mac, including every app you connect. Approvals and safety rules still apply.",
-  },
-  {
-    value: "custom",
-    label: "Only what I choose",
-    description: "Pick the files, commands, connections, and skills below.",
-  },
-] as const;
+/** Advanced → Tools' picker: one tool this Bot will no longer use. */
+function DisableToolDialog({ open, onOpenChange, tools, onPick }: {
+  open: boolean;
+  onOpenChange(open: boolean): void;
+  tools: readonly BotTool[];
+  onPick(tool: BotTool): void;
+}) {
+  const groups = new Map<string, BotTool[]>();
+  for (const tool of tools) groups.set(tool.group, [...(groups.get(tool.group) ?? []), tool]);
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange} title="Disable a tool" description="This Bot won’t use it until you turn it back on." confirmHidden cancelLabel="Cancel">
+      <Command label="Tools" className="rounded-card bg-well">
+        <CommandInput placeholder="Search tools" aria-label="Search tools" />
+        <CommandList className="h-[min(260px,calc(100vh-16rem))]">
+          <CommandEmpty>No tool matches.</CommandEmpty>
+          {[...groups].map(([group, items]) => (
+            <CommandGroup key={group} heading={group}>
+              {items.map((tool) => (
+                <CommandItem key={`${tool.key}:${tool.id}`} value={`${tool.label} ${tool.group} ${tool.key}:${tool.id}`} onSelect={() => onPick(tool)}>
+                  <span className="flex min-w-0 flex-col">
+                    <span className="truncate">{tool.label}</span>
+                    {tool.description ? <span className="truncate text-small text-secondary">{tool.description}</span> : null}
+                  </span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          ))}
+        </CommandList>
+      </Command>
+    </Dialog>
+  );
+}
 
+/**
+ * Advanced → Tools (plan §3.5): every tool is on until the person disables
+ * one. An Everything Bot is Full access; a Bot with a tool off is Custom
+ * access with the rest on, so its reach is exactly what it was before this
+ * page, and turning a tool off only narrows it.
+ */
 function AccessSection({
   catalog,
   draft,
@@ -208,109 +239,62 @@ function AccessSection({
   disabled: boolean;
   onChange(next: BotAccessDraft): void;
 }) {
-  const toggle = (key: ToggleKey, id: string, checked: boolean) => {
-    if (key === "fileScopeIds") {
-      onChange({ ...draft, fileScopeIds: nextBotFileScopeIds(draft.fileScopeIds, catalog.fileScopes, id, checked) });
-      return;
-    }
-    const ids = new Set(draft[key]);
-    if (checked) ids.add(id);
-    else ids.delete(id);
-    onChange({ ...draft, [key]: [...ids] });
-  };
+  const [picking, setPicking] = React.useState(false);
+  const { on, off } = botToolsOf(catalog, draft);
   const full = draft.usesFullAccess;
   return (
     <>
-      <FieldSet title="What it can use">
-        <Field orientation="vertical">
-          <RadioGroup
-            orientation="vertical"
-            aria-label="What it can use"
-            value={full ? "full" : "custom"}
-            disabled={disabled}
-            onValueChange={(value) => onChange({ ...draft, usesFullAccess: value === "full" })}
-          >
-            {ACCESS_CHOICES.map((choice) => (
-              <Label
-                key={choice.value}
-                className="cursor-pointer items-start rounded-control bg-well px-3 py-2.5 hover:bg-list-hover has-[[data-state=checked]]:bg-list-selection"
-              >
-                <RadioGroupItem value={choice.value} aria-label={choice.label} className="mt-0.5 shrink-0" />
-                <span className="min-w-0">
-                  <span className="block text-regular text-primary">{choice.label}</span>
-                  <span className="mt-0.5 block text-small text-secondary">{choice.description}</span>
-                </span>
-              </Label>
-            ))}
-          </RadioGroup>
-        </Field>
-      </FieldSet>
-      {full ? (
-        <FieldSet title="More">
-          <Field
-            label="Web search"
-            description="Let it look things up with Aiden’s Web Search."
-          >
-            <Switch
-              checked={draft.webSearchEnabled}
-              disabled={disabled}
-              onCheckedChange={(webSearchEnabled) => onChange({ ...draft, webSearchEnabled })}
-              aria-label="Allow web search"
-            />
+      <FieldSet
+        title="Tools"
+        action={
+          <Button size="small" variant="transparent" disabled={disabled || on.length === 0} onClick={() => setPicking(true)}>
+            Disable a tool
+          </Button>
+        }
+      >
+        <Field
+          description={full
+            ? "Everything Aiden can use on this Mac, including apps you connect later. Approvals and rules still apply."
+            : "Everything except the tools below. Apps you connect later start off for this Bot."}
+        />
+        {off.map((tool) => (
+          <Field key={`${tool.key}:${tool.id}`} label={tool.label} description={`${tool.group} · Off for this Bot`}>
+            <div className="flex justify-end">
+              <Button size="small" variant="transparent" disabled={disabled} aria-label={`Turn on ${tool.label}`} onClick={() => onChange(enableBotTool(draft, tool))}>
+                Turn on
+              </Button>
+            </div>
           </Field>
+        ))}
+        {!full ? (
+          <Field label="Use everything" description="Turn every tool back on, including apps you connect later.">
+            <div className="flex justify-end">
+              <Button size="small" variant="filled" disabled={disabled} onClick={() => onChange({ ...draft, usesFullAccess: true })}>
+                Use everything
+              </Button>
+            </div>
+          </Field>
+        ) : null}
+      </FieldSet>
+      {!full ? (
+        <FieldSet title="Files">
+          <ToggleFields
+            options={catalog.fileScopes}
+            selected={draft.fileScopeIds}
+            disabled={disabled}
+            onToggle={(id, checked) => onChange({ ...draft, fileScopeIds: nextBotFileScopeIds(draft.fileScopeIds, catalog.fileScopes, id, checked) })}
+          />
         </FieldSet>
-      ) : (
-        <>
-          <FieldSet title="Files and commands">
-            <ToggleFields
-              options={catalog.fileScopes}
-              selected={draft.fileScopeIds}
-              disabled={disabled}
-              onToggle={(id, checked) => toggle("fileScopeIds", id, checked)}
-            />
-            <Field label="Run commands" description="Let it run commands in Terminal on this Mac.">
-              <Switch
-                checked={draft.shellEnabled}
-                disabled={disabled || (!catalog.shellAvailable && !draft.shellEnabled)}
-                onCheckedChange={(shellEnabled) => onChange({ ...draft, shellEnabled })}
-                aria-label="Allow running commands"
-              />
-            </Field>
-          </FieldSet>
-          <FieldSet title="Connections">
-            <ToggleFields
-              options={catalog.connections}
-              selected={draft.connectionIds}
-              disabled={disabled}
-              onToggle={(id, checked) => toggle("connectionIds", id, checked)}
-            />
-          </FieldSet>
-          <FieldSet title="Skills">
-            {catalog.skillsEnabled === false ? (
-              <Field description="Skills are off in Settings. Choices are kept for when they’re back on." />
-            ) : null}
-            <ToggleFields
-              options={catalog.skills.map((option) => ({
-                ...option,
-                available: option.available || catalog.skillsEnabled === false,
-              }))}
-              selected={draft.skillIds}
-              disabled={disabled}
-              onToggle={(id, checked) => toggle("skillIds", id, checked)}
-            />
-          </FieldSet>
-          {catalog.otherCapabilities.length ? (
-            <FieldSet title="More">
-              <ToggleFields
-                options={catalog.otherCapabilities}
-                selected={draft.otherCapabilityIds}
-                disabled={disabled}
-                onToggle={(id, checked) => toggle("otherCapabilityIds", id, checked)}
-              />
-            </FieldSet>
-          ) : null}
-        </>
-      )}
+      ) : null}
+      <DisableToolDialog
+        open={picking}
+        onOpenChange={setPicking}
+        tools={on}
+        onPick={(tool) => {
+          onChange(disableBotTool(catalog, draft, tool));
+          setPicking(false);
+        }}
+      />
     </>
   );
 }

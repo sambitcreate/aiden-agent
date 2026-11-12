@@ -2261,7 +2261,7 @@ for (const [label, decision, status] of [["Not now", "not_now", "pending"], ["St
   });
 }
 
-test("a repeated approval requests Always truthfully, preserves the draft and Manage opens its list", async (t) => {
+test("a repeated approval requests Always truthfully, preserves the draft and Manage opens Settings → Approvals", async (t) => {
   const messages: { message: unknown; options: { action?: { label: string; onClick(): void } } | undefined }[] = [];
   t.mock.method(toast, "success", (message: unknown, options?: unknown) => { messages.push({ message, options: options as typeof messages[number]["options"] }); return "requested"; });
   let release!: (value: { decided: boolean }) => void;
@@ -2297,7 +2297,7 @@ test("a repeated approval requests Always truthfully, preserves the draft and Ma
   assert.equal(messages[0]?.options?.action?.label, "Manage");
   assert.ok(!JSON.stringify(messages.map(({ message }) => message)).includes("won’t ask"), "the bridge ACK does not establish persistence");
   act(() => messages[0]!.options!.action!.onClick());
-  await waitFor(() => assert.equal(router.state.location.href, "/bots/bot-1?page=allowed"));
+  await waitFor(() => assert.equal(router.state.location.href, "/settings?section=approvals"));
 });
 
 test("Always errors keep the card retryable; a settled old card never returns after a late failure", async () => {

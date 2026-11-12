@@ -29,7 +29,8 @@ import { MessageAttachmentPreviewProvider, MessageAttachments } from "../../comp
 import { insertTextIntoTextarea } from "../../lib/composer-type-focus";
 import { AlertDialog, Button, Callout, EmptyState, ScrollArea, Text, toast } from "../../components/ui";
 import { BotNoticeCard } from "../../components/bots/bot-notice-card";
-import { botAllowedLocation, botListLocation } from "../../lib/bot-routes";
+import { botListLocation } from "../../lib/bot-routes";
+import { settingsLocation } from "../../lib/settings-section";
 import { botAlwaysAllowLabel } from "../../shared/tool-approval-scope";
 import { botsApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
@@ -244,7 +245,7 @@ export function BotApprovalCard({
       deciding={busy}
       onDecide={(decision, options) => void respond(decision, options?.scope === "always" ? "always" : undefined)}
       requester={name}
-      alwaysOption={{ label: botAlwaysAllowLabel(name), hint: `${name} won’t ask again for this. Undo under Allowed without asking.` }}
+      alwaysOption={{ label: botAlwaysAllowLabel(name), hint: `${name} won’t ask again for this. Undo in Settings → Approvals.` }}
       notes={prompt.always ? [`You’ve allowed this ${prompt.always.count} times in the last 2 weeks.`] : []}
       {...(allowElsewhere ? { allowElsewhere } : {})}
       error={answerError}
@@ -1675,7 +1676,7 @@ export function BotChatPane({ botId }: { botId: string }) {
                 approvalStatus.show(decision === "deny" ? { decision: "deny" } : { decision: "allow", ...(always ? { scope: always } : {}) });
                 if (always) {
                   toast.success("Always allow requested.", {
-                    action: { label: "Manage", onClick: () => void navigate(botAllowedLocation(current.id)) },
+                    action: { label: "Manage", onClick: () => void navigate(settingsLocation("approvals")) },
                   });
                 }
               }}

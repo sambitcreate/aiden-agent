@@ -4,6 +4,7 @@ import {
   type BotNoticeStatus,
 } from "../../renderer/shared/bot-capabilities.js";
 import { isNonChatModel } from "../../renderer/shared/model-eligibility.js";
+import { BOT_WEB_SEARCH_CAPABILITY_LABEL } from "../../renderer/shared/bot-capabilities.js";
 import { isModelHidden } from "../../renderer/shared/model-visibility.js";
 import type { AppSettings, McpServer, Provider } from "./types.js";
 import { mcpServerOffersTools } from "../../renderer/shared/mcp-exposure.js";
@@ -284,7 +285,7 @@ function ordinaryInventory(input: {
   }> = [
     {
       kind: "web",
-      label: "Web search",
+      label: BOT_WEB_SEARCH_CAPABILITY_LABEL,
       description: "Search the web through Aiden's configured service.",
       available: input.webSearchReady,
     },

@@ -33,10 +33,8 @@ import { BotPageShell } from "./bot-page-shell";
 import { setBotPaused } from "./bot-menu";
 import { BotRoutines } from "./bot-routines";
 import { BotSpendingSection } from "./bot-spending-section";
-import { BotRules } from "./bot-rules";
 import { useBotLiveSummary } from "./bot-sidebar-rows";
 import { botMemoryCount, botMemoryCountLabel, useBotMemory } from "./use-bot-memory";
-import { useBotAllowed } from "./use-bot-allowed";
 
 /** The file's bytes as base64 (no data: prefix). */
 function readFileAsBase64(file: Blob): Promise<string> {
@@ -164,7 +162,7 @@ export function BotProfile({
   onOpenMemory,
   onOpenLearning,
   onOpenWork,
-  onOpenAllowed,
+  onOpenApprovals,
   onDelete,
 }: {
   bot: BotDefinition;
@@ -175,12 +173,11 @@ export function BotProfile({
   onOpenMemory(): void;
   onOpenLearning?(): void;
   onOpenWork?(): void;
-  onOpenAllowed(): void;
+  /** Settings → Approvals, where every Bot's rules live. */
+  onOpenApprovals(): void;
   onDelete(): void;
 }) {
   const qc = useQueryClient();
-  const allowed = useBotAllowed(bot.id);
-  const allowedCountId = React.useId();
   const photoInput = React.useRef<HTMLInputElement | null>(null);
   const previewId = React.useId();
   const [photoBusy, setPhotoBusy] = React.useState(false);
@@ -342,14 +339,11 @@ export function BotProfile({
       <BotPeersSection key={bot.id} botId={bot.id} botName={bot.name} />
       <BotHealthSection bot={bot} />
       <BotSpendingSection bot={bot} />
-      <BotRules bot={bot} />
       <FieldSet>
-        <button type="button" aria-label="Allowed without asking" aria-describedby={allowedCountId} className={PROFILE_ROW_CLASS} onClick={onOpenAllowed}>
+        <button type="button" aria-label="Approvals" className={PROFILE_ROW_CLASS} onClick={onOpenApprovals}>
           <span className="min-w-0 flex-1">
-            <span className="block text-strong text-primary">Allowed without asking</span>
-            <span id={allowedCountId} className="mt-0.5 block text-small text-secondary">
-              {allowed.data === undefined ? allowed.isError ? "Couldn’t be read" : "Loading…" : allowed.data.length === 0 ? "Nothing yet" : allowed.data.length}
-            </span>
+            <span className="block text-strong text-primary">Approvals</span>
+            <span className="mt-0.5 block text-small text-secondary">What {bot.name} may do without asking, in Settings</span>
           </span>
           <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-tertiary" />
         </button>
