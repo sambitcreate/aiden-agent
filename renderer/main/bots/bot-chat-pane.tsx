@@ -1440,7 +1440,7 @@ export function BotChatPane({ botId }: { botId: string }) {
    */
   const answerHandoffWithNote = async (pending: BotPendingHandoff, text: string, attachments: Attachment[]) => {
     // Never a note for a sign-in or a password-or-code card: whatever is typed here reaches the Bot.
-    if (pending.kind === "sign_in") throw new Error(handoffSignInComposerText(current.name, pending));
+    if (pending.kind === "sign_in") throw new Error(handoffSignInComposerText(current.name));
     if (!botHandoffTakesNote(pending)) throw new Error(handoffNoNoteComposerText(current.name));
     if (attachments.length > 0) {
       throw new Error(
@@ -1716,7 +1716,7 @@ export function BotChatPane({ botId }: { botId: string }) {
               : state?.kind === "paused"
                 ? botPausedText(current.name)
                 : signInWaits
-                  ? handoffSignInComposerText(current.name, handoff ?? undefined)
+                  ? handoffSignInComposerText(current.name)
                   : noteRefused
                     ? handoffNoNoteComposerText(current.name)
                     : spendingReached

@@ -1472,28 +1472,28 @@ test("a hand-off card waits above the composer, Open asks for its page, and Done
     "bots:answerHandoff": () => new Promise((resolve) => (release = resolve)),
   });
   const card = await screen.findByRole("group", { name: "Planner needs you" });
-  assert.ok(within(card).getByText("Your turn: Enter the 2FA code for your bank"));
+  assert.ok(within(card).getByText("Needs you: Enter the 2FA code for your bank"));
   assert.ok(within(card).getByText("Only you get the code on your phone."));
   const note = screen.getByPlaceholderText("Add a note and send to mark it done");
   assert.ok(
-    within(card).getByRole("button", { name: "Done" }).compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING,
+    within(card).getByRole("button", { name: "I’m done" }).compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING,
     "the composer stays, for a note, and Tab reaches it after the card's buttons",
   );
 
-  fireEvent.click(within(card).getByRole("button", { name: "Open bank.example" }));
+  fireEvent.click(within(card).getByRole("button", { name: "Take control at bank.example" }));
   await waitFor(() =>
     assert.deepEqual(calls.find((call) => call.channel === "bots:openHandoff")?.args, [{ botId: "bot-1", waitId: "wait-h" }]),
   );
-  await waitFor(() => assert.equal((within(card).getByRole("button", { name: "Done" }) as HTMLButtonElement).disabled, false));
+  await waitFor(() => assert.equal((within(card).getByRole("button", { name: "I’m done" }) as HTMLButtonElement).disabled, false));
 
-  fireEvent.click(within(card).getByRole("button", { name: "Done" }));
-  fireEvent.click(within(card).getByRole("button", { name: "Done" }));
+  fireEvent.click(within(card).getByRole("button", { name: "I’m done" }));
+  fireEvent.click(within(card).getByRole("button", { name: "I’m done" }));
   await waitFor(() => assert.equal(handoffAnswers(calls).length, 1));
   assert.deepEqual(handoffAnswers(calls), [{ botId: "bot-1", waitId: "wait-h", outcome: "done" }], "a second press waits for the first");
   await act(async () => release({ answered: true }));
 
   act(() => emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: 1, type: "handoff", handoff: null }));
-  await waitFor(() => assert.equal(document.body.textContent?.includes("Your turn:"), false));
+  await waitFor(() => assert.equal(document.body.textContent?.includes("Needs you:"), false));
   act(() =>
     emitBotTestNotification("bots:live:event", {
       botId: "bot-1",
@@ -1556,8 +1556,8 @@ test("a note sent while Open is on its way keeps the card's buttons waiting for 
       "bots:answerHandoff": () => new Promise((resolve) => (answered = resolve)),
     });
     const card = await screen.findByRole("group", { name: "Planner needs you" });
-    const done = () => within(card).getByRole("button", { name: "Done" }) as HTMLButtonElement;
-    fireEvent.click(within(card).getByRole("button", { name: "Open bank.example" }));
+    const done = () => within(card).getByRole("button", { name: "I’m done" }) as HTMLButtonElement;
+    fireEvent.click(within(card).getByRole("button", { name: "Take control at bank.example" }));
     await waitFor(() => assert.equal(done().disabled, true));
     const box = screen.getByPlaceholderText("Add a note and send to mark it done");
     fireEvent.change(box, { target: { value: "Entered it." } });
@@ -1595,8 +1595,8 @@ test("the floating panel's copy of the card waits for a note sent from the compo
     await waitFor(() => assert.equal(screen.getAllByRole("group", { name: "Planner needs you" }).length, 2));
     // The panel's copy carries the title and buttons, not the card's reason.
     const panel = screen.getAllByRole("group", { name: "Planner needs you" }).find((group) => !within(group).queryByText(BANK_HANDOFF.why))!;
-    const done = () => within(panel).getByRole("button", { name: "Done" }) as HTMLButtonElement;
-    fireEvent.click(within(panel).getByRole("button", { name: "Open bank.example" }));
+    const done = () => within(panel).getByRole("button", { name: "I’m done" }) as HTMLButtonElement;
+    fireEvent.click(within(panel).getByRole("button", { name: "Take control at bank.example" }));
     await waitFor(() => assert.equal(done().disabled, true));
     fireEvent.change(screen.getByPlaceholderText("Add a note and send to mark it done"), { target: { value: "Entered it." } });
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
@@ -1664,7 +1664,7 @@ test("a password-or-code card takes no note: the composer points to the card, an
   });
   const card = await screen.findByRole("group", { name: "Planner needs you" });
   assert.ok(
-    screen.getByText("Enter it yourself, then choose Done above. This card takes no note, so a password or code never reaches Planner.", {
+    screen.getByText("Enter it yourself, then choose I’m done above. This card takes no note, so a password or code never reaches Planner.", {
       selector: "[role=status]",
     }),
     "the composer says where to answer",
@@ -1678,7 +1678,7 @@ test("a password-or-code card takes no note: the composer points to the card, an
   assert.equal(handoffAnswers(calls).length, 0, "the code typed in the chat is never sent");
   assert.equal(calls.some((call) => call.channel === "bots:send"), false);
 
-  fireEvent.click(within(card).getByRole("button", { name: "Done" }));
+  fireEvent.click(within(card).getByRole("button", { name: "I’m done" }));
   await waitFor(() => assert.deepEqual(handoffAnswers(calls), [{ botId: "bot-1", waitId: "wait-c", outcome: "done" }]));
 });
 
@@ -1737,14 +1737,14 @@ test("a sign-in card opens the site in the Bot's browser, brings its panel forwa
   const panel = document.getElementById("bot-panel");
   assert.equal(panel?.getAttribute("data-state"), "closed");
 
-  fireEvent.click(within(card).getByRole("button", { name: "Open sign-in" }));
+  fireEvent.click(within(card).getByRole("button", { name: "Take control to sign in" }));
   await waitFor(() =>
     assert.deepEqual(calls.find((call) => call.channel === "bots:openHandoff")?.args, [{ botId: "bot-1", waitId: "wait-s" }]),
   );
   await waitFor(() => assert.equal(document.getElementById("bot-panel")?.getAttribute("data-state"), "open"));
 
-  await waitFor(() => assert.equal((within(card).getByRole("button", { name: "I’m signed in" }) as HTMLButtonElement).disabled, false));
-  fireEvent.click(within(card).getByRole("button", { name: "I’m signed in" }));
+  await waitFor(() => assert.equal((within(card).getByRole("button", { name: "I’m done" }) as HTMLButtonElement).disabled, false));
+  fireEvent.click(within(card).getByRole("button", { name: "I’m done" }));
   await waitFor(() => assert.deepEqual(handoffAnswers(calls), [{ botId: "bot-1", waitId: "wait-s", outcome: "done" }]));
 });
 
@@ -1756,7 +1756,7 @@ test("a panel floating over the chat carries the sign-in's buttons, so I'm signe
     "bots:answerHandoff": () => ({ answered: true }),
   });
   const card = await screen.findByRole("group", { name: "Planner needs you" });
-  fireEvent.click(within(card).getByRole("button", { name: "Open sign-in" }));
+  fireEvent.click(within(card).getByRole("button", { name: "Take control to sign in" }));
   const panel = document.getElementById("bot-panel");
   assert.ok(panel);
   await waitFor(() => assert.equal(panel.getAttribute("data-state"), "open"));
@@ -1764,7 +1764,7 @@ test("a panel floating over the chat carries the sign-in's buttons, so I'm signe
 
   const inPanel = within(panel).getByRole("group", { name: "Planner needs you" });
   assert.ok(within(inPanel).getByText("Sign in to github.com for Planner"));
-  fireEvent.click(within(inPanel).getByRole("button", { name: "I’m signed in" }));
+  fireEvent.click(within(inPanel).getByRole("button", { name: "I’m done" }));
   await waitFor(() => assert.deepEqual(handoffAnswers(calls), [{ botId: "bot-1", waitId: "wait-s", outcome: "done" }]));
 
   act(() => emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: 1, type: "handoff", handoff: null }));
@@ -1785,7 +1785,7 @@ test("a panel docked beside the chat leaves the hand-off to its card, with no se
     assert.equal(panel.getAttribute("data-state"), "open");
     assert.equal(panel.getAttribute("data-surface-mode"), "tools-pinned");
     assert.equal(within(panel).queryByRole("group", { name: "Planner needs you" }), null);
-    assert.equal(screen.getAllByRole("button", { name: "I’m signed in" }).length, 1);
+    assert.equal(screen.getAllByRole("button", { name: "I’m done" }).length, 1);
   } finally {
     HTMLElement.prototype.getBoundingClientRect = measure;
   }
@@ -1799,7 +1799,7 @@ test("while a sign-in waits the composer takes no note, so a password typed ther
   });
   await screen.findByRole("group", { name: "Planner needs you" });
   assert.ok(
-    screen.getByText("Sign in for Planner with Open sign-in above, then choose I’m signed in.", { selector: "[role=status]" }),
+    screen.getByText("Sign in for Planner with Take control above, then choose I’m done.", { selector: "[role=status]" }),
     "the composer says where to answer",
   );
   assert.equal(screen.queryByPlaceholderText("Add a note and send to mark it done"), null);
@@ -1822,7 +1822,7 @@ test("a sign-in page that couldn't open says so, and the card keeps waiting", as
       "bots:openHandoff": () => ({ opened: "none" }),
     });
     const card = await screen.findByRole("group", { name: "Planner needs you" });
-    fireEvent.click(within(card).getByRole("button", { name: "Open sign-in" }));
+    fireEvent.click(within(card).getByRole("button", { name: "Take control to sign in" }));
     await waitFor(() => assert.deepEqual(errors.shown, ["Aiden couldn’t open the sign-in page."]));
     assert.equal(document.getElementById("bot-panel")?.getAttribute("data-state"), "closed");
     assert.ok(screen.getByRole("group", { name: "Planner needs you" }));

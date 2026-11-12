@@ -4,7 +4,7 @@
 // `kind: "sign_in"`.
 //
 // - Site: normalized to a public `https://` origin (`sign-in-origin.ts`), so
-//   the card names exactly what opens. The card's Open sign-in opens that
+//   the card names exactly what opens. The card's Take control opens that
 //   origin in a new tab of the Bot's browser, held for the person until the
 //   card settles (`bot-browser-handoff.ts`); the Bot can't read or drive that
 //   tab meanwhile, and never sees the password.

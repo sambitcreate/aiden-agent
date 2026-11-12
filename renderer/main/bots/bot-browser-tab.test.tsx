@@ -152,7 +152,7 @@ test("a tab the person holds says so and names the Bot, and an empty Bot browser
   let state = browserState([browserTab({ heldForPerson: { reason: "sign_in" } })]);
   installBotTestIpc(browserIpc(() => state));
   const view = render(<BrowserPanel workspaceId={WORKSPACE} active variant="bot" agentName="Planner" />);
-  const notice = await screen.findByText(/This tab is yours: sign in, then choose I’m signed in on Planner’s card/u);
+  const notice = await screen.findByText(/This tab is yours: sign in, then choose I’m done on Planner’s card/u);
   assert.equal(notice.getAttribute("role"), "status");
   view.unmount();
 
@@ -205,12 +205,12 @@ test("Open sign-in on the Mac moves the person into the Bot's Browser tab, where
   });
   assert.equal(botPanel().getAttribute("data-state"), "closed");
   const card = await screen.findByRole("group", { name: "Planner needs you" });
-  const open = within(card).getByRole("button", { name: "Open sign-in" });
+  const open = within(card).getByRole("button", { name: "Take control to sign in" });
   open.focus();
   await act(async () => fireEvent.click(open));
 
   await waitFor(() => assert.equal(selectedTab(), "Browser"));
-  assert.ok(await within(botPanel()).findByText(/This tab is yours: sign in, then choose I’m signed in on Planner’s card/u));
+  assert.ok(await within(botPanel()).findByText(/This tab is yours: sign in, then choose I’m done on Planner’s card/u));
   // The person asked for it, so focus follows them there; a tab the Bot opens leaves focus alone.
   await waitFor(() => assert.equal(document.activeElement?.textContent, "Browser"));
   assert.ok(botPanel().contains(document.activeElement));

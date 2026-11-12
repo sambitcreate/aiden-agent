@@ -313,7 +313,7 @@ test("Open Planner's computer on a sign-in card moves the person into the Comput
   });
   assert.equal(botPanel().getAttribute("data-state"), "closed");
   const card = await screen.findByRole("group", { name: "Planner needs you" });
-  const open = within(card).getByRole("button", { name: "Open Planner’s computer" });
+  const open = within(card).getByRole("button", { name: "Take control of Planner’s computer" });
   open.focus();
   await act(async () => fireEvent.click(open));
 
@@ -338,7 +338,7 @@ test("Finish on your Mac from a phone brings Planner's computer forward here onc
     "bots:live:subscribe": () => ({ ...chatSnapshot(), state: { kind: "running", submissionId: "sub-1" }, handoff: signIn }),
   });
   const card = await screen.findByRole("group", { name: "Planner needs you" });
-  within(card).getByRole("button", { name: "Open Planner’s computer" }).focus();
+  within(card).getByRole("button", { name: "Take control of Planner’s computer" }).focus();
   // The card waits while the Bot still has its computer: nothing moves.
   await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
   assert.equal(botPanel().getAttribute("data-state"), "closed");

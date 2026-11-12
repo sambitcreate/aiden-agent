@@ -179,9 +179,9 @@ test("an empty Bots list opens a starter Bot chat, sends to it, and answers its 
     }
   }, bot.id);
   const card = page.getByRole("group", { name: "Chief of Staff needs you" });
-  await expect(card.getByText("Your turn: Approve the calendar invite from Sam")).toBeVisible();
+  await expect(card.getByText("Needs you: Approve the calendar invite from Sam")).toBeVisible();
   await expect(page.getByPlaceholder("Add a note and send to mark it done")).toBeVisible();
-  await card.getByRole("button", { name: "Done", exact: true }).click();
+  await card.getByRole("button", { name: "I’m done", exact: true }).click();
   await expect
     .poll(() =>
       aiden.app.evaluate(() => (globalThis as unknown as { botStarterE2e: { handoffs: unknown[] } }).botStarterE2e.handoffs),
@@ -218,9 +218,9 @@ test("an empty Bots list opens a starter Bot chat, sends to it, and answers its 
   await expect(signIn.getByText("Sign in to github.com for Chief of Staff")).toBeVisible();
   await expect(signIn.getByText("Chief of Staff never sees your password.", { exact: false })).toBeVisible();
   // The answer is on the card: the composer takes no note while a sign-in waits.
-  await expect(page.getByText("Sign in for Chief of Staff with Open sign-in above, then choose I’m signed in.")).toBeVisible();
+  await expect(page.getByText("Sign in for Chief of Staff with Take control above, then choose I’m done.")).toBeVisible();
   await expect(page.getByPlaceholder("Add a note and send to mark it done")).toHaveCount(0);
-  await signIn.getByRole("button", { name: "Open sign-in" }).click();
+  await signIn.getByRole("button", { name: "Take control to sign in" }).click();
   await expect
     .poll(() => aiden.app.evaluate(() => (globalThis as unknown as { botStarterE2e: { opened: unknown[] } }).botStarterE2e.opened))
     .toEqual([{ botId: "bot-chief", waitId: "9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d" }]);
@@ -233,7 +233,7 @@ test("an empty Bots list opens a starter Bot chat, sends to it, and answers its 
   await expect(botPanel).toHaveAttribute("data-surface-mode", "tools-floating");
   const panelSignIn = botPanel.getByRole("group", { name: "Chief of Staff needs you" });
   await expect(panelSignIn.getByText("Sign in to github.com for Chief of Staff")).toBeVisible();
-  await panelSignIn.getByRole("button", { name: "I’m signed in" }).click();
+  await panelSignIn.getByRole("button", { name: "I’m done" }).click();
   await expect
     .poll(() =>
       aiden.app.evaluate(() => (globalThis as unknown as { botStarterE2e: { handoffs: unknown[] } }).botStarterE2e.handoffs),

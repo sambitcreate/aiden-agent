@@ -40,25 +40,25 @@ const buttonNames = () => screen.getAllByRole("button").map((button) => button.g
 
 test("the card says whose turn it is, what to do and why, and names the page Open goes to", () => {
   mount();
-  screen.getByText("Your turn: Enter the 2FA code for your bank");
+  screen.getByText("Needs you: Enter the 2FA code for your bank");
   screen.getByRole("group", { name: "Ada needs you" });
   screen.getByText("Only you get the code on your phone.");
   screen.getByText("Opens bank.example");
-  assert.deepEqual(buttonNames(), ["Open bank.example", "Skip", "Done"], "Open, then Skip, then Done in tab order");
+  assert.deepEqual(buttonNames(), ["Take control at bank.example", "Skip", "I’m done"], "Open, then Skip, then Done in tab order");
 });
 
 test("Open appears only when the Bot gave a page, and a rule's card says which rule asked", () => {
   mount({ ...HANDOFF, open: undefined, why: undefined, source: "rule", rule: { id: "money", label: "Move money" } });
-  assert.deepEqual(buttonNames(), ["Skip", "Done"]);
+  assert.deepEqual(buttonNames(), ["Skip", "I’m done"]);
   assert.equal(screen.queryByText(/^Opens /u), null);
   screen.getByText("From your rule: Move money");
 });
 
 test("Open, Skip and Done each report once to the chat", () => {
   const { answers, opens } = mount();
-  fireEvent.click(screen.getByRole("button", { name: "Open bank.example" }));
+  fireEvent.click(screen.getByRole("button", { name: "Take control at bank.example" }));
   fireEvent.click(screen.getByRole("button", { name: "Skip" }));
-  fireEvent.click(screen.getByRole("button", { name: "Done" }));
+  fireEvent.click(screen.getByRole("button", { name: "I’m done" }));
   assert.equal(opens(), 1);
   assert.deepEqual(answers, ["skipped", "done"]);
 });
@@ -97,7 +97,7 @@ test("on a Bot that lives on another Mac, a sign-in offers Finish there and Skip
   assert.deepEqual(answers, ["skipped"]);
   cleanup();
   draw({ kind: "action", action: HANDOFF.action, open: HANDOFF.open });
-  assert.deepEqual(buttonNames(), ["Open bank.example", "Skip", "Done"]);
+  assert.deepEqual(buttonNames(), ["Take control at bank.example", "Skip", "I’m done"]);
 });
 
 const SIGN_IN: BotPendingHandoff = {
@@ -116,12 +116,12 @@ const SIGN_IN: BotPendingHandoff = {
 test("a sign-in asks to sign in to one site for the Bot, opens it in the Bot's browser, and is answered I'm signed in or Skip", () => {
   const { answers, opens } = mount(SIGN_IN);
   screen.getByText("Sign in to github.com for Ada");
-  assert.equal(screen.queryByText(/^Your turn/u), null);
+  assert.equal(screen.queryByText(/^Needs you/u), null);
   screen.getByText("I need your GitHub account to read your issues.");
   screen.getByText("Opens in Ada’s own browser. Ada never sees your password.");
-  assert.deepEqual(buttonNames(), ["Open sign-in", "Skip", "I’m signed in"], "Open sign-in, then Skip, then I'm signed in in tab order");
-  fireEvent.click(screen.getByRole("button", { name: "Open sign-in" }));
-  fireEvent.click(screen.getByRole("button", { name: "I’m signed in" }));
+  assert.deepEqual(buttonNames(), ["Take control to sign in", "Skip", "I’m done"], "Open sign-in, then Skip, then I'm signed in in tab order");
+  fireEvent.click(screen.getByRole("button", { name: "Take control to sign in" }));
+  fireEvent.click(screen.getByRole("button", { name: "I’m done" }));
   assert.equal(opens(), 1);
   assert.deepEqual(answers, ["done"], "I'm signed in answers Done");
 });
@@ -136,18 +136,18 @@ test("a sign-in on the Bot's computer opens Ada's computer and says the Bot wait
   const { answers, opens } = mount(onComputer);
   screen.getByText("Sign in to github.com for Ada");
   screen.getByText("Opens on Ada’s own computer, with you in control. Ada waits until you answer, and never sees your password.");
-  assert.deepEqual(buttonNames(), ["Open Ada’s computer", "Skip", "I’m signed in"]);
-  fireEvent.click(screen.getByRole("button", { name: "Open Ada’s computer" }));
-  fireEvent.click(screen.getByRole("button", { name: "I’m signed in" }));
+  assert.deepEqual(buttonNames(), ["Take control of Ada’s computer", "Skip", "I’m done"]);
+  fireEvent.click(screen.getByRole("button", { name: "Take control of Ada’s computer" }));
+  fireEvent.click(screen.getByRole("button", { name: "I’m done" }));
   assert.equal(opens(), 1);
   assert.deepEqual(answers, ["done"]);
-  assert.equal(handoffSignInComposerText("Ada", onComputer), "Sign in for Ada with Open Ada’s computer above, then choose I’m signed in.");
+  assert.equal(handoffSignInComposerText("Ada"), "Sign in for Ada with Take control above, then choose I’m done.");
 });
 
 test("the panel's copy of the buttons names the Bot's computer too, and a Bot on another Mac still finishes there", () => {
   const onComputer: BotPendingHandoff = { ...SIGN_IN, target: "computer" };
   render(<HandoffActions handoff={onComputer} name="Ada" onOpen={() => undefined} onAnswer={() => undefined} />);
-  assert.deepEqual(buttonNames(), ["Open Ada’s computer", "Skip", "I’m signed in"]);
+  assert.deepEqual(buttonNames(), ["Take control of Ada’s computer", "Skip", "I’m done"]);
   cleanup();
   render(<HandoffActions handoff={onComputer} name="Ada" finishOn="Studio" onOpen={() => undefined} onAnswer={() => undefined} />);
   assert.deepEqual(buttonNames(), ["Finish on Studio", "Skip"]);
@@ -155,18 +155,18 @@ test("the panel's copy of the buttons names the Bot's computer too, and a Bot on
 
 test("a step on the Bot's own browser opens there, never in the person's browser, and is answered Done or Skip", () => {
   const { answers, opens } = mount({ ...HANDOFF, action: "Choose the delivery slot", open: { url: "https://shop.example/checkout" }, target: "browser" });
-  screen.getByText("Your turn: Choose the delivery slot");
+  screen.getByText("Needs you: Choose the delivery slot");
   screen.getByText("Opens in Ada’s own browser at shop.example, not in yours.");
   assert.equal(screen.queryByText("Opens shop.example"), null);
-  assert.deepEqual(buttonNames(), ["Open in Ada’s browser", "Skip", "Done"]);
-  fireEvent.click(screen.getByRole("button", { name: "Open in Ada’s browser" }));
-  fireEvent.click(screen.getByRole("button", { name: "Done" }));
+  assert.deepEqual(buttonNames(), ["Take control of Ada’s browser", "Skip", "I’m done"]);
+  fireEvent.click(screen.getByRole("button", { name: "Take control of Ada’s browser" }));
+  fireEvent.click(screen.getByRole("button", { name: "I’m done" }));
   assert.equal(opens(), 1);
   assert.deepEqual(answers, ["done"]);
   cleanup();
   mount({ ...HANDOFF, open: undefined, target: "computer" });
   screen.getByText("Opens on Ada’s own computer, with you in control. Ada waits until you answer.");
-  assert.deepEqual(buttonNames(), ["Open Ada’s computer", "Skip", "Done"]);
+  assert.deepEqual(buttonNames(), ["Take control of Ada’s computer", "Skip", "I’m done"]);
 });
 
 test("a step on the Bot's screen on another Mac offers Finish there beside Skip and Done", () => {
@@ -184,9 +184,9 @@ test("a step on the Bot's screen on another Mac offers Finish there beside Skip 
     />,
   );
   screen.getByText("This step is on Ada’s own screen on Studio.");
-  assert.deepEqual(buttonNames(), ["Finish on Studio", "Skip", "Done"]);
+  assert.deepEqual(buttonNames(), ["Finish on Studio", "Skip", "I’m done"]);
   fireEvent.click(screen.getByRole("button", { name: "Finish on Studio" }));
-  fireEvent.click(screen.getByRole("button", { name: "Done" }));
+  fireEvent.click(screen.getByRole("button", { name: "I’m done" }));
   assert.equal(finishes, 1);
   assert.deepEqual(answers, ["done"]);
 });

@@ -240,7 +240,7 @@ export interface BotRuleHandoff {
   rule: BotHandoffRule;
   /** What the call was about to do, for the block text ("The person did this themselves: …"). */
   summary: string;
-  /** The card's title after "Your turn: ". */
+  /** The card’s title after "Needs you: ". */
   action: string;
   why: string;
   /** The page where the person can do it (the Bot browser's tab): the card's Open. */
