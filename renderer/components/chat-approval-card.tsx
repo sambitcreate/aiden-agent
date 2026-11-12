@@ -103,8 +103,14 @@ const MAC_FILE_TOOLS: ReadonlySet<string> = new Set(["edit_file", "write_file", 
 
 /** The site a generic card's call reaches, when its summary names one. */
 function approvalTarget(summary: string): string | undefined {
-  const match = /\bhttps?:\/\/([^\s/?#]+)/iu.exec(summary);
-  return match?.[1]?.toLocaleLowerCase("en-US");
+  const match = /\bhttps?:\/\/[^\s<>"'()[\]{}]+/iu.exec(summary);
+  if (!match) return undefined;
+  try {
+    // Prose punctuation after the link ("…example.com, Tue") is not part of it.
+    return new URL(match[0].replace(/[.,;:!?…]+$/u, "")).hostname || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

@@ -139,6 +139,13 @@ test("a call that does not touch the Mac reads Review before its tool, and the s
   mount({ toolName: "web_fetch", summary: "Fetch https://Docs.Example.com/guide?page=2" });
   assert.ok(screen.getByRole("region", { name: "Review before Fetch web page → docs.example.com" }));
   cleanup();
+  // A link inside prose names only its host: no trailing punctuation, sign-in or port.
+  mount({ toolName: "calendar__create_event", summary: "Create “Review” on https://calendar.example.com, Tue 10:00" });
+  assert.ok(screen.getByRole("region", { name: "Review before Calendar create event → calendar.example.com" }));
+  cleanup();
+  mount({ toolName: "web_fetch", summary: "Fetch (https://me:pw@api.example.com:8443/v1)." });
+  assert.ok(screen.getByRole("region", { name: "Review before Fetch web page → api.example.com" }));
+  cleanup();
   mount({ toolName: "computer_use", summary: "Click Buy" });
   assert.ok(screen.getByRole("region", { name: "Use your Mac with Computer Use?" }));
 });
