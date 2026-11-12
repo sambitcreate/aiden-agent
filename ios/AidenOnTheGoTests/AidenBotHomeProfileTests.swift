@@ -18,7 +18,9 @@ final class AidenBotHomeProfileTests: XCTestCase {
                 Section("Files") { AidenBotFilesLoadingRows() }
             }
             .environment(\.aidenReduceMotion, reduceMotion))
-            let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+            let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
             window.rootViewController = host
             window.makeKeyAndVisible()
             host.view.setNeedsLayout()
@@ -480,7 +482,7 @@ final class AidenBotHomeProfileTests: XCTestCase {
         XCTAssertEqual(draft.photoModelNeed(catalog: catalog), .unavailable, "New Bot and Advanced explain it")
         XCTAssertEqual(
             draft.noImageModelNote(catalog: catalog),
-            "Fixture Model reads text only, and no model that reads images is set up on your Mac."
+            "Fixture Model reads text only, and no model that reads images is set up on your machine."
         )
 
         // New Bot creates it reading text only, and Advanced saves it the same way.

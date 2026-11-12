@@ -417,14 +417,16 @@ These values were derived from `/Users/sambitbiswas/projects/contactsheet/Contac
 
 ### App navigation
 
-The Aiden logo switches between exactly two product areas:
+iOS (2026-11, Option A): the app is one tab shell with **Inbox**, **Workspaces**, **Bots**, and **Search**, each with its own navigation stack. Inbox lists every shown machine's chats together. The Bots tab is never hidden; on an unsupported or ungranted machine it says why. Scheduled Tasks, Usage, appearance, Machines, and Settings are pages pushed onto a tab, not more tabs. Each tab keeps its own path. Android keeps the Aiden-logo switcher between **Bots** and **Workspaces** described below.
+
+The Android Aiden logo switches between exactly two product areas:
 
 - **Bots** — reusable helpers and their conversations. It becomes the default when the paired Mac supports and grants `bot:read`.
 - **Workspaces** — the retained project/folder-oriented chat experience.
 
-Scheduled Tasks, Usage, appearance, and paired-installation Settings remain shared destinations rather than a third product area. Older, unsupported, or ungranted installations fall back honestly to Workspaces. Preserve independent navigation state for Bots and Workspaces per paired installation.
+On Android, Scheduled Tasks, Usage, appearance, and paired-installation Settings remain shared destinations rather than a third product area. Older, unsupported, or ungranted installations fall back honestly to Workspaces. Preserve independent navigation state for Bots and Workspaces per paired installation.
 
-Files and Git are Workspace-scoped destinations opened from a workspace rather than new global tabs. On iPhone, use the retained navigation-stack patterns. On iPad, preserve adaptive `NavigationSplitView` behavior for both product areas, with the selected conversation in detail. Empty, disconnected, loading, and reconnecting states must work in compact and regular size classes.
+Files and Git are Workspace-scoped destinations opened from a workspace rather than new global tabs. On iOS, each tab uses a navigation stack, and at regular width the tab bar becomes a sidebar. Layout follows size classes, never device idiom. Empty, disconnected, loading, and reconnecting states must work in compact and regular size classes.
 
 ### Chat surface
 
@@ -787,7 +789,7 @@ Completed and streaming assistant replies expose a Hermex-style long-press Copy 
 5. **Expanded native scope:** App Intents, Live Activities, voice, Aiden Git/files, and scheduled tasks are planned after the stable chat/workspace core. Share Extension, generic Terminal UI, Computer Use controls, and cloud push remain deferred; the Mac-owned shell tool inside an authorized Bot turn is separately approved.
 6. **Apple identity:** Use automatic signing with team `5WP229CBB8`, the `sbtbiswas.*` bundle namespace, `group.sbtbiswas.AidenOnTheGo`, URL scheme `aiden-otg`, and SKU `aiden-on-the-go-ios`, subject to the Phase 0 provisioning preflight.
 7. **Tailscale ownership:** Aiden provides explicit Connect/Disconnect, previews the exact non-Funnel Serve change, records ownership, and removes only the route it created without altering unrelated routes.
-8. **Bot-first platform:** Redesign iPhone/iPad now around the Aiden-logo Bots/Workspaces switcher. Defer the Mac inbox/shell/Access redesign; Mac work is limited to authoritative runtime/persistence integration and canonical-photo display in existing surfaces.
+8. **Bot-first platform:** Redesign iPhone/iPad around the tab shell (Inbox, Workspaces, Bots, Search); Android keeps the Aiden-logo Bots/Workspaces switcher. Defer the Mac inbox/shell/Access redesign; Mac work is limited to authoritative runtime/persistence integration and canonical-photo display in existing surfaces.
 9. **Shared chat:** Every Bot conversation reuses the existing Swift `AidenChatDetailView` and its existing chat feature/view-model path. Bot identity and Access affordances wrap it; no second chat engine or copied transcript/composer is allowed.
 10. **Bot access:** Every valid new or migrated bot defaults to explicit Full Access after one versioned notice. Custom may reduce Files, shell, Connections/MCPs, Skills, and other capabilities per bot; a chat may narrow but not exceed its bot.
 11. **Bot home and shell:** Every bot has one hidden, durable Aiden-managed home. Shell is allowed and starts there, ordinary artifacts are saved there, and Full may inspect other OS-accessible Mac locations as needed. The main-owned system instructions enforce this behavior.

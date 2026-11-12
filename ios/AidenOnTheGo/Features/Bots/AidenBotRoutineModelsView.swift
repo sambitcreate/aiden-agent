@@ -2,6 +2,8 @@ import SwiftUI
 
 struct AidenBotRoutineModelsView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
+    /// The Bot's own machine; nil follows the selected one.
+    let machine: String?
     let botID: String; let routineID: String
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
@@ -11,7 +13,7 @@ struct AidenBotRoutineModelsView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if let model, context.map(coordinator.isCurrent) == true, coordinator.server?.supportsBotRoutineModels == true {
+                if let model, context.map(coordinator.holds) == true, coordinator.botServer(on: machine)?.supportsBotRoutineModels == true {
                     AidenRoutineModelForm(model: model)
                 } else {
                     ContentUnavailableView("Routine models unavailable", systemImage: "slider.horizontal.3",
@@ -27,16 +29,16 @@ struct AidenBotRoutineModelsView: View {
         .task(id: scenePhase) {
             guard scenePhase == .active else { return }
             if let model { await model.load(); return }
-            guard coordinator.server?.supportsBotRoutineModels == true,
-                  let current = try? coordinator.requestContext(), let client = try? coordinator.remoteClient(for: current) else { return }
+            guard coordinator.botServer(on: machine)?.supportsBotRoutineModels == true,
+                  let current = try? coordinator.botContext(on: machine), let client = try? coordinator.remoteClient(for: current) else { return }
             context = current
             model = AidenBotRoutineModelsModel(botID: botID, routineID: routineID, transport: client,
-                isCurrent: { isVisible && coordinator.isCurrent(current) && coordinator.server?.supportsBotRoutineModels == true },
-                mayWrite: { UIApplication.shared.applicationState == .active && coordinator.connectionState == .connected && coordinator.installationStore.activeInstallation?.canWriteBots == true },
+                isCurrent: { isVisible && coordinator.holds(current) && coordinator.botServer(on: machine)?.supportsBotRoutineModels == true },
+                mayWrite: { UIApplication.shared.applicationState == .active && coordinator.botConnectionState(on: machine) == .connected && coordinator.botInstallation(on: machine)?.canWriteBots == true },
                 store: .shared, scope: .init(instanceID: current.instanceId, deviceID: current.deviceId, botID: botID, routineID: routineID))
             await model?.load()
         }
-        .onChange(of: coordinator.connectionState == .connected) { _, connected in if connected, scenePhase == .active { Task { await model?.load() } } }
+        .onChange(of: coordinator.botConnectionState(on: machine) == .connected) { _, connected in if connected, scenePhase == .active { Task { await model?.load() } } }
     }
 }
 
@@ -197,6 +199,8 @@ private func date(_ ms: Int, timezone: String? = nil) -> String {
 /// A name-only host directory also reaches existing URL/script event routines.
 struct AidenBotRoutineModelDirectoryView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
+    /// The Bot's own machine; nil follows the selected one.
+    let machine: String?
     let botID: String
     @State private var routines: [AidenRoutineModelDirectory.Routine] = []
     @State private var selected: AidenRoutineModelDirectory.Routine?
@@ -205,7 +209,7 @@ struct AidenBotRoutineModelDirectoryView: View {
     @State private var context: AidenRemoteRequestContext?
     var body: some View {
         List {
-            if let context, coordinator.isCurrent(context), coordinator.server?.supportsBotRoutineModels == true {
+            if let context, coordinator.holds(context), coordinator.botServer(on: machine)?.supportsBotRoutineModels == true {
                 if routines.isEmpty, !loading, error == nil {
                     ContentUnavailableView("No routines yet", systemImage: "calendar.badge.clock", description: Text("Create a routine or watch first. New routines inherit the Bot model."))
                 }
@@ -222,20 +226,20 @@ struct AidenBotRoutineModelDirectoryView: View {
             if let error { Text(error); Button("Try again") { Task { await load() } } }
         }
         .navigationTitle("Routine models")
-        .sheet(item: $selected) { routine in AidenBotRoutineModelsView(coordinator: coordinator, botID: botID, routineID: routine.id) }
+        .sheet(item: $selected) { routine in AidenBotRoutineModelsView(coordinator: coordinator, machine: machine, botID: botID, routineID: routine.id) }
         .task { await load() }
         .refreshable { await load() }
     }
     @MainActor private func load() async {
-        guard coordinator.server?.supportsBotRoutineModels == true,
-              let current = try? coordinator.requestContext(), let client = try? coordinator.remoteClient(for: current) else {
+        guard coordinator.botServer(on: machine)?.supportsBotRoutineModels == true,
+              let current = try? coordinator.botContext(on: machine), let client = try? coordinator.remoteClient(for: current) else {
             routines = []; loading = false; error = "Connect to a host that supports routine model choices."; return
         }
         context = current; loading = true; defer { loading = false }
         do {
             let directory = try await client.routineModelDirectory(botId: botID)
-            guard coordinator.isCurrent(current) else { return }
+            guard coordinator.holds(current) else { return }
             routines = directory.routines; error = nil
-        } catch { if coordinator.isCurrent(current) { self.error = "Routines couldn’t be loaded." } }
+        } catch { if coordinator.holds(current) { self.error = "Routines couldn’t be loaded." } }
     }
 }

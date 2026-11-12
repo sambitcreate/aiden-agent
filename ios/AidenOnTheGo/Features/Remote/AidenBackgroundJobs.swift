@@ -31,7 +31,7 @@ enum AidenBackgroundJobCopy {
     /// shows them as text rather than opening them.
     static func addresses(_ job: AidenBackgroundJob) -> String? {
         guard job.state == .running, !job.ports.isEmpty else { return nil }
-        return job.ports.map { "localhost:\($0)" }.joined(separator: ", ") + " on your Mac"
+        return job.ports.map { "localhost:\($0)" }.joined(separator: ", ") + " on your machine"
     }
 
     /// The chip above the composer: shown only while something runs.
@@ -144,7 +144,7 @@ struct AidenBackgroundJobsSheet: View {
                         if let errorMessage = model.errorMessage {
                             Text(errorMessage).foregroundStyle(palette.danger)
                         }
-                        Text("These run on your Mac. Open an address in a browser there.")
+                        Text("These run on your machine. Open an address in a browser there.")
                             .foregroundStyle(palette.secondary)
                     }
                     .font(.footnote)

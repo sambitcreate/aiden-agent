@@ -71,7 +71,7 @@ extension AidenBotPlanTests {
     }
     private func loaded(supported: Bool = true) async throws -> (AidenBotSessionModel, PlanTestTransport) {
         let transport = PlanTestTransport(snapshot: try snapshot())
-        let model = AidenBotSessionModel(botID: transport.snapshot.botId, transport: transport, plansSupported: supported)
+        let model = AidenBotSessionModel(botID: transport.snapshot.botId, transport: transport, owner: .noMachine, plansSupported: supported)
         await model.load()
         return (model, transport)
     }

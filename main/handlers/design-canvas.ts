@@ -163,7 +163,7 @@ export function registerDesignCanvasHandlers<Event>(deps: {
   workspaceRoot(chat: DesignCanvasChat): Promise<string | null>;
   /** The window that sent `event`, or null when it has none (or it is gone). */
   windowFor(event: Event): DesignCanvasCaptureWindow | null;
-  watcher: Pick<DesignFileWatcher, "set" | "clear">;
+  watcher: Pick<DesignFileWatcher, "set" | "clear" | "ownWrite">;
   /** Shows the open dialog over the asking window; the chosen absolute path, or null. */
   pickFile(event: Event, options: DesignCanvasPickOptions): Promise<string | null>;
   /** Shows the save dialog over the asking window; the chosen absolute path, or null. */
@@ -393,8 +393,9 @@ export function registerDesignCanvasHandlers<Event>(deps: {
   // Editing a page's words in place: a plain text change is written into the
   // page's own file, only where its old words are found exactly once (see
   // text-edit.ts). Like export, the frame comes from the stored canvas and the
-  // file is written only while the chat may still frame its folder. The page
-  // reloads from the watcher, as for any change on disk.
+  // file is written only while the chat may still frame its folder. The canvas
+  // already shows the new words, or reloads the page itself, so the watcher
+  // does not report this write back to it.
   deps.handle(
     "designCanvas:editText",
     async (_event, chatId, frameId, changes, stamp): Promise<DesignCanvasEditTextResult> => {
@@ -431,7 +432,13 @@ export function registerDesignCanvasHandlers<Event>(deps: {
         const current = await fs.readFile(resolved.absolute, "utf8").catch(() => null);
         if (current === null) return { ok: false, reason: "missing" };
         if (current !== source) return { ok: false, reason: "changed" };
-        const written = await replaceWorkspaceText(resolved.absolute, plan.source, source);
+        const settle = deps.watcher.ownWrite(chat.id, framePath, plan.source);
+        let written: Awaited<ReturnType<typeof replaceWorkspaceText>> = "failed";
+        try {
+          written = await replaceWorkspaceText(resolved.absolute, plan.source, source);
+        } finally {
+          settle(written === "written");
+        }
         if (written === "written") return { ok: true };
         return { ok: false, reason: written === "changed" ? "changed" : "missing" };
       });

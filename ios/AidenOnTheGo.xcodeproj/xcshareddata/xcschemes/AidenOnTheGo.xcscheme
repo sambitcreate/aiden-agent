@@ -43,6 +43,17 @@
                ReferencedContainer = "container:AidenOnTheGo.xcodeproj">
             </BuildableReference>
          </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "DE30000000000000000000CB"
+               BuildableName = "AidenOnTheGoUITests.xctest"
+               BlueprintName = "AidenOnTheGoUITests"
+               ReferencedContainer = "container:AidenOnTheGo.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction

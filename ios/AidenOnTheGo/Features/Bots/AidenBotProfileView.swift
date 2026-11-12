@@ -117,6 +117,8 @@ private enum AidenBotProfileField: Hashable {
 /// instructions. Everything else sits behind ••• → Advanced.
 struct AidenBotProfileView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
+    /// The Bot's own machine, which Profile reads and writes; nil follows the selected one.
+    let machine: String?
     let initialSummary: AidenBotSummary
     var onChanged: () -> Void = { }
     /// Called after the Bot is deleted, so the caller can leave its chat.
@@ -164,27 +166,27 @@ struct AidenBotProfileView: View {
     private var botID: String { initialSummary.id }
 
     private var sessionIdentity: AidenBotCustomAccessSessionIdentity {
-        AidenBotCustomAccessSessionIdentity(coordinator: coordinator)
+        AidenBotCustomAccessSessionIdentity(coordinator: coordinator, machine: machine)
     }
 
     /// Edits apply at once, cached or fresh, connected or not (R15); each waits
     /// briefly for the Mac and rolls back with an error if it doesn't reach it.
     private var canWrite: Bool {
-        capturedContext.map(coordinator.isCurrent) == true
+        capturedContext.map(coordinator.holds) == true
             && saver != nil
-            && coordinator.installationStore.activeInstallation?.canWriteBots == true
+            && coordinator.botInstallation(on: machine)?.canWriteBots == true
             && !isDeleting
     }
 
     private var canDelete: Bool {
-        AidenBotDeletion.isAvailable(coordinator: coordinator) && detail != nil && !isDeleting
+        AidenBotDeletion.isAvailable(coordinator: coordinator, machine: machine) && detail != nil && !isDeleting
     }
 
     /// Revision 37: Pause and Resume, when the Mac serves `bot:handoffs` to
     /// this phone and reports the Bot's session state.
     private var canPause: Bool {
         canWrite && detail?.sessionState != nil && !isChangingPause
-            && coordinator.server?.supportsBotHandoffs == true
+            && coordinator.botServer(on: machine)?.supportsBotHandoffs == true
     }
 
     var body: some View {
@@ -207,6 +209,7 @@ struct AidenBotProfileView: View {
                 .navigationDestination(isPresented: $isShowingAdvanced) {
                     AidenBotAdvancedView(
                         coordinator: coordinator,
+                        machine: machine,
                         botID: botID,
                         onSaved: { updated in
                             apply(updated)
@@ -231,15 +234,15 @@ struct AidenBotProfileView: View {
             reset(for: expectedSession)
             await load(for: expectedSession)
         }
-        .onChange(of: coordinator.installationStore.activeInstallation?.deviceCapabilities) { _, _ in
+        .onChange(of: coordinator.botInstallation(on: machine)?.deviceCapabilities) { _, _ in
             allowedModel?.invalidate(); allowedModel = nil; isShowingAllowed = false
             Task { await load(for: sessionIdentity) }
         }
-        .onChange(of: coordinator.installationStore.activeInstallation?.serverCapabilities) { _, _ in
+        .onChange(of: coordinator.botInstallation(on: machine)?.serverCapabilities) { _, _ in
             allowedModel?.invalidate(); allowedModel = nil; isShowingAllowed = false
             Task { await load(for: sessionIdentity) }
         }
-        .onChange(of: coordinator.connectionState == .connected) { _, connected in
+        .onChange(of: coordinator.botConnectionState(on: machine) == .connected) { _, connected in
             guard connected, detail != nil else { return }
             let expectedSession = sessionIdentity
             Task { await load(for: expectedSession) }
@@ -313,7 +316,7 @@ struct AidenBotProfileView: View {
             ContentUnavailableView {
                 Label("Couldn’t Load Bot", systemImage: "exclamationmark.bubble")
             } description: {
-                Text(loadError ?? "Connect to your Mac, then try again.")
+                Text(loadError ?? "Connect to your machine, then try again.")
             } actions: {
                 Button("Try Again") {
                     let expectedSession = sessionIdentity
@@ -377,7 +380,7 @@ struct AidenBotProfileView: View {
 
                 instructionsRow(detail)
 
-                if let allowedModel, aidenBotAllowedSupported(coordinator.installationStore.activeInstallation) {
+                if let allowedModel, aidenBotAllowedSupported(coordinator.botInstallation(on: machine)) {
                     Button { isShowingAllowed = true } label: {
                         HStack { Text("Allowed without asking"); Spacer(); Text(allowedModel.countSummary ?? "").foregroundStyle(palette.secondary); Image(systemName: "chevron.right").foregroundStyle(palette.secondary) }
                             .padding(16).background(palette.raised, in: RoundedRectangle(cornerRadius: 20))
@@ -393,9 +396,9 @@ struct AidenBotProfileView: View {
                     .padding(.top, 8)
                 }
 
-                if coordinator.server?.supportsBotOpenWork == true {
+                if coordinator.botServer(on: machine)?.supportsBotOpenWork == true {
                     NavigationLink {
-                        AidenBotOpenWorkView(coordinator: coordinator, botID: detail.id)
+                        AidenBotOpenWorkView(coordinator: coordinator, machine: machine, botID: detail.id)
                     } label: {
                         HStack(spacing: 12) {
                             Image(systemName: "checklist").foregroundStyle(palette.secondary).accessibilityHidden(true)
@@ -411,9 +414,9 @@ struct AidenBotProfileView: View {
                     .buttonStyle(.plain).padding(.top, 8)
                 }
 
-                if coordinator.server?.supportsBotPeers == true {
+                if coordinator.botServer(on: machine)?.supportsBotPeers == true {
                     NavigationLink {
-                        AidenBotPeersView(coordinator: coordinator, botID: detail.id, botName: detail.name)
+                        AidenBotPeersView(coordinator: coordinator, machine: machine, botID: detail.id, botName: detail.name)
                     } label: {
                         HStack(spacing: 12) {
                             Image(systemName: "bubble.left.and.bubble.right").foregroundStyle(palette.secondary).accessibilityHidden(true)
@@ -427,9 +430,9 @@ struct AidenBotProfileView: View {
                     }.buttonStyle(.plain).padding(.top, 8)
                 }
 
-                if coordinator.server?.supportsBotRoutineModels == true {
+                if coordinator.botServer(on: machine)?.supportsBotRoutineModels == true {
                     NavigationLink {
-                        AidenBotRoutineModelDirectoryView(coordinator: coordinator, botID: detail.id)
+                        AidenBotRoutineModelDirectoryView(coordinator: coordinator, machine: machine, botID: detail.id)
                     } label: {
                         HStack(spacing: 12) {
                             Image(systemName: "slider.horizontal.3").foregroundStyle(palette.secondary).accessibilityHidden(true)
@@ -446,9 +449,9 @@ struct AidenBotProfileView: View {
                     .padding(.top, 8)
                 }
 
-                if coordinator.server?.supportsBotWatches == true {
+                if coordinator.botServer(on: machine)?.supportsBotWatches == true {
                     NavigationLink {
-                        AidenBotWatchesView(coordinator: coordinator, botID: detail.id)
+                        AidenBotWatchesView(coordinator: coordinator, machine: machine, botID: detail.id)
                     } label: {
                         HStack(spacing: 12) {
                             Image(systemName: "bell.badge").foregroundStyle(palette.secondary).accessibilityHidden(true)
@@ -465,8 +468,8 @@ struct AidenBotProfileView: View {
                     .padding(.top, 8)
                 }
 
-                if AidenBotHostFeature.isAdvertised(AidenBotHostFeature.routines, coordinator: coordinator) {
-                    AidenBotRoutinesSection(coordinator: coordinator, botID: detail.id, canWrite: canWrite)
+                if AidenBotHostFeature.isAdvertised(AidenBotHostFeature.routines, by: coordinator.botFeatures(on: machine)) {
+                    AidenBotRoutinesSection(coordinator: coordinator, machine: machine, botID: detail.id, canWrite: canWrite)
                         .padding(.top, 16)
                 }
             }
@@ -503,6 +506,7 @@ struct AidenBotProfileView: View {
                 } else {
                     AidenBotCanonicalAvatarView(
                         coordinator: coordinator,
+                        machine: machine,
                         botID: detail.id,
                         avatar: detail.avatar,
                         name: detail.name,
@@ -657,7 +661,7 @@ struct AidenBotProfileView: View {
     @MainActor
     private func prepareMemory(context: AidenRemoteRequestContext, botName: String) async {
         guard memoryModel == nil,
-              AidenBotHostFeature.isAdvertised(AidenBotHostFeature.memory, coordinator: coordinator),
+              AidenBotHostFeature.isAdvertised(AidenBotHostFeature.memory, by: coordinator.botFeatures(on: machine)),
               let client = try? coordinator.remoteClient(for: context) else { return }
         let model = AidenBotMemoryModel(botID: botID, botName: botName, transport: client)
         memoryModel = model
@@ -678,7 +682,7 @@ struct AidenBotProfileView: View {
                 try await coordinator.remoteClient(for: context).updateBotIdentity(id: botID, revision: revision, patch: patch)
             },
             refresh: { try await coordinator.remoteClient(for: context).bot(id: botID) },
-            waitForConnection: { hold in await aidenBotWaitForConnection(coordinator, hold: hold) }
+            waitForConnection: { hold in await coordinator.waitForBotConnection(on: machine, hold: hold) }
         )
         if let detail { saver?.adopt(detail) }
     }
@@ -692,7 +696,7 @@ struct AidenBotProfileView: View {
         isLoading = true
         var requestContext: AidenRemoteRequestContext?
         do {
-            let context = try coordinator.requestContext()
+            let context = try coordinator.botContext(on: machine)
             requestContext = context
             guard isCurrentLoad(generation, session: expectedSession, context: context) else { return }
             if detail == nil,
@@ -716,12 +720,12 @@ struct AidenBotProfileView: View {
                 hasOpenedAdvanced = true
                 isShowingAdvanced = true
             }
-            if aidenBotAllowedSupported(coordinator.installationStore.activeInstallation) {
+            if aidenBotAllowedSupported(coordinator.botInstallation(on: machine)) {
                 if allowedModel == nil, let client = try? coordinator.remoteClient(for: context) {
-                    let grants = coordinator.installationStore.activeInstallation?.deviceCapabilities
-                    let offered = coordinator.installationStore.activeInstallation?.serverCapabilities
+                    let grants = coordinator.botInstallation(on: machine)?.deviceCapabilities
+                    let offered = coordinator.botInstallation(on: machine)?.serverCapabilities
                     allowedModel = AidenBotAllowedModel(botID: botID, transport: client, isCurrent: {
-                        coordinator.isCurrent(context) && aidenBotAllowedSupported(coordinator.installationStore.activeInstallation) && coordinator.installationStore.activeInstallation?.deviceCapabilities == grants && coordinator.installationStore.activeInstallation?.serverCapabilities == offered
+                        coordinator.holds(context) && aidenBotAllowedSupported(coordinator.botInstallation(on: machine)) && coordinator.botInstallation(on: machine)?.deviceCapabilities == grants && coordinator.botInstallation(on: machine)?.serverCapabilities == offered
                     })
                 }
                 Task { await allowedModel?.load() }
@@ -732,7 +736,7 @@ struct AidenBotProfileView: View {
                 Task { await memoryModel?.load() }
             }
             if avatarModel == nil {
-                avatarModel = AidenBotGeneratedAvatarModel(coordinator: coordinator, botID: botID) { updated in
+                avatarModel = AidenBotGeneratedAvatarModel(coordinator: coordinator, machine: machine, botID: botID) { updated in
                     apply(updated)
                     onChanged()
                 }
@@ -764,7 +768,7 @@ struct AidenBotProfileView: View {
         session: AidenBotCustomAccessSessionIdentity,
         context: AidenRemoteRequestContext
     ) -> Bool {
-        loadGeneration == generation && sessionIdentity.pairing == session.pairing && coordinator.isCurrent(context)
+        loadGeneration == generation && sessionIdentity.pairing == session.pairing && coordinator.holds(context)
     }
 
     // MARK: Saving
@@ -814,11 +818,11 @@ struct AidenBotProfileView: View {
     /// rolls back to the Mac's Bot, or to what it showed before, with an error.
     @MainActor
     private func saveIdentity(_ patch: AidenBotIdentityPatch) async -> Bool {
-        guard canWrite, let context = capturedContext, coordinator.isCurrent(context),
+        guard canWrite, let context = capturedContext, coordinator.holds(context),
               let saver, let before = detail else { return false }
         switch await saver.save(patch) {
         case let .saved(updated):
-            guard coordinator.isCurrent(context), updated.id == botID else { return false }
+            guard coordinator.holds(context), updated.id == botID else { return false }
             apply(updated)
             _ = await coordinator.withRetainedInstallationData(for: context) {
                 _ = try? await AidenBotCache.shared.upsertDetailAndStore(
@@ -830,7 +834,7 @@ struct AidenBotProfileView: View {
             onChanged()
             return true
         case let .failed(authoritative):
-            guard coordinator.isCurrent(context) else { return false }
+            guard coordinator.holds(context) else { return false }
             let restored = authoritative ?? before
             detail = restored
             if focusedField != .name { nameText = restored.name }
@@ -893,7 +897,12 @@ struct AidenBotProfileView: View {
         isDeleting = true
         defer { isDeleting = false }
         do {
-            try await AidenBotDeletion.delete(botID: detail.id, revision: detail.revision, coordinator: coordinator)
+            try await AidenBotDeletion.delete(
+                botID: detail.id,
+                revision: detail.revision,
+                coordinator: coordinator,
+                machine: machine
+            )
             onChanged()
             onDeleted()
             if showsDismissButton { dismiss() }

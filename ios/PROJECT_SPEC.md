@@ -3,7 +3,7 @@
 Status: Approved implementation specification; bot-first extension approved August 22, 2026
 Protocol: Aiden Remote API v1 (`/api/aiden/v1`)
 Product: Aiden On The Go
-Platforms: iPhone and iPad, iOS/iPadOS 18+
+Platforms: iPhone and iPad, iOS/iPadOS 26+
 Authority: `docs/superpowers/specs/2026-10-07-bots-rework-design.md`, `docs/plans/bot-first-aiden-on-the-go-plan.md` (completed), `docs/plans/aiden-on-the-go-plan.md`, and `docs/aiden-remote-api-v1.md`
 
 ## 1. Product contract
@@ -12,7 +12,7 @@ Aiden On The Go is the native mobile control plane for a user-owned Aiden Agent 
 
 The app is not a Hermes WebUI client, a hosted service, a web view, or an agent runtime. Imported Hermex code is an implementation foundation only. New code must use Aiden Remote API v1 DTOs and events; do not add or preserve Hermes endpoints as a compatibility layer.
 
-The shipped product extension redesigns iPhone and iPad first around two areas, **Bots** and **Workspaces**, selected from the Aiden logo. Mac UX redesign is deferred. The paired Mac remains authoritative for bot identity, conversations, access policy, managed workspace, shell/tool execution, provider and capability catalogs, and the canonical bot photo.
+The shipped product extension redesigns iPhone and iPad first around one tab shell: **Inbox**, **Workspaces**, **Bots**, and **Search**. Mac UX redesign is deferred. The paired Mac remains authoritative for bot identity, conversations, access policy, managed workspace, shell/tool execution, provider and capability catalogs, and the canonical bot photo.
 
 Task progress and delegated-agent inspection are separately negotiated, read-only chat projections. The phone may request `tasks:read` and `agents:read` only after the authenticated server advertises the matching feature, then renders bounded snapshots and the standalone chat-scoped progress stream. These projections never grant turn control or expose child prompts, transcripts, private run identifiers, paths, credentials, or raw diagnostics; a public agent turn ID is only a selector for a bounded historical roster read.
 
@@ -20,7 +20,7 @@ Task progress and delegated-agent inspection are separately negotiated, read-onl
 
 The complete planned product includes:
 
-- Multiple paired Aiden installations with QR or 100-bit setup-code pairing, Keychain credentials, discovery, manual URL entry, switching, and revocation handling.
+- Multiple paired Aiden installations with QR or 100-bit setup-code pairing, Keychain credentials, discovery, manual URL entry, a default machine for new work, and revocation handling. Every paired machine's chats show together.
 - No workspace forks follow the returned hidden workspace ID and retain separate private folders and access on the host.
 - Chat list/open/create/rename/delete, bounded attachments, provider/model/thinking selection, atomic turn start, resumable streaming, cancel, reasoning/tool/timeline status, and allow/deny approvals.
 - Workspace registry list/create/update/unregister, including folderless, managed scratch, and folders selected through a server-approved desktop directory browser.
@@ -30,7 +30,7 @@ The complete planned product includes:
 - Aiden scheduled-task list/create/edit/remove/pause/resume/run-now/preview/history/settings.
 - Cache-only App Intents, app-driven Live Activities, native or paired-Mac local-model dictation, and desktop-configured read-aloud under the authenticated `tts-v1` contract.
 - Offline read-only display of previously fetched data. Mutations are disabled while disconnected.
-- A Bot-first inbox (a single Bots list with search), Bot profiles with Advanced settings and a Character card, and Bot creation from presets or scratch, alongside the retained Workspaces experience.
+- A Bots tab (every shown machine's Bots, with search), Bot profiles with Advanced settings and a Character card, and Bot creation from presets or scratch, alongside the retained Workspaces experience.
 - Bot message attachments (`bot-attachments-v1`, contract revision 33): images and text files staged with `POST /bots/{botId}/attachments` and sent with `attachmentIds`.
 - Bot hand-offs and pause (`bot:handoffs`, contract revision 37): negotiated in its own `POST /device/capabilities` call when the Mac lists it. The chat shows the step a Bot hands back to the person, answered with Done or Skip and an optional note, or finished on the Mac; a local notification announces a hand-off for a chat that is not on screen. Pause and Resume are on the Bot profile; a paused chat shows a calm card with Resume, and its composer explains why the Bot waits. Without the grant, a hand-off reads as an assistant notice and a paused Bot reads as unavailable.
 - Web page extract recap (contract revision 38): a completed `web_fetch` step may carry the values an extract call read. The transcript shows them in a card under the step's activity line, each with its page line, a Guess label on uncertain values and "Not on the page" for absent ones. A malformed or misplaced recap is dropped and the step still shows.
@@ -68,22 +68,24 @@ Remove Kanban, Hermes projects/profiles/personalities, Hermes Skills/Memory/Insi
 
 ## 4. Navigation and interaction
 
-The Aiden logo is the product-area switcher with exactly two choices:
+The app is a `TabView` of four tabs, each with its own navigation stack:
 
-- **Bots** — reusable helpers and their conversations; the default when the paired Mac supports and grants `bot:read`.
+- **Inbox** — every shown machine's chats, waiting and newest first. It is the first tab.
 - **Workspaces** — the retained project/folder-oriented experience.
+- **Bots** — reusable helpers and their conversations. The tab is never hidden: on a machine that doesn't support or grant `bot:read`, it says why.
+- **Search** — loaded chats, matched on the phone, and Bot conversations, which each connected machine matches itself.
 
-Scheduled Tasks, Usage, appearance, and paired-installation Settings remain shared destinations rather than becoming a third product area. Older or ungranted Macs fall back honestly to Workspaces.
+Scheduled Tasks, Usage, appearance, Machines, and Settings are pages pushed onto a tab's stack, not more tabs. A chat opens on its own machine, and moving the default machine never moves an open chat.
 
-Keep the Bots and Workspaces navigation roots alive while switching areas so in-progress navigation, scroll position, selection, and unsent drafts survive the switch. Persist the last selected area and safe navigation identifiers per paired installation; retain message drafts through the shared device-local draft store rather than copying them into a second Bot chat model.
+Each tab keeps its own path while another tab is shown, so in-progress navigation, scroll position, and unsent drafts survive. Tab paths persist in `aiden.product-navigation.v2`; the older per-machine v1 record is migrated once. Message drafts stay in the shared device-local draft store, where the chat model and `AidenBotSessionModel` each keep their own draft.
 
-Use one device-local draft store keyed by paired installation and chat ID for both product areas. `AidenChatViewModel` remains the sole owner of composer behavior and synchronizes that shared draft record.
+Use one device-local draft store keyed by paired installation and chat ID for Workspace and Bot chats. `AidenChatViewModel` and `AidenBotSessionModel` each own their draft and synchronize it with that shared record. A Bot's chat ID is its route value, so it cannot meet a real chat's.
 
 Draft text stays in the app's protected private container, never the App Group, intent/widget cache, or logs. Editable drafts and unresolved-send records are excluded from device backups, including existing storage during unconditional app startup even if no conversation opens; they do not transfer through backup restore. This is a device-only retention choice, not evidence that any previous backup uploaded this data. It is cleared after accepted send and purged with installation removal, revocation, or replacement-device pairing. An ambiguous send is stored separately from the editable draft, with its exact request, attachment references, device scope, idempotency key and first-attempt time. Retry is explicit and permitted only inside the conservative 24-hour replay window; it never substitutes a new key for an unresolved attempt. Removal and revocation purge both records.
 
-Server-supported Remote capabilities and the authenticated device's granted capabilities are distinct values. Bots is eligible only when both contain the required Bot read grant. A legacy installation whose single stored capability list is ambiguous fails closed for Bots until the Mac approves the upgrade or the phone re-pairs.
+Server-supported Remote capabilities and the authenticated device's granted capabilities are distinct values. Bots opens only when both contain the required Bot read grant; otherwise the Bots tab says why. A legacy installation whose single stored capability list is ambiguous fails closed for Bots until the Mac approves the upgrade or the phone re-pairs.
 
-Files and Git are workspace-scoped destinations, not global tabs. iPhone uses native navigation stacks. iPad uses `NavigationSplitView` and must remain useful in split view, rotation, and Stage Manager sizes.
+Files and Git are workspace-scoped destinations, not global tabs. Each tab uses a native navigation stack. At regular width the tab bar becomes a sidebar (`.sidebarAdaptable`), and the app must remain useful in split view, rotation, and Stage Manager sizes. Layout follows size classes, never device idiom.
 
 Workspace chats and legacy (pre-durable-session) Bot chats use `AidenChatDetailView`. On hosts advertising `bot-durable-session-v1`, each Bot's single durable conversation uses `AidenBotSessionChatView` with `AidenBotSessionModel`, which shares the attachment picker, transcript rendering components, and offline-history rules rather than reimplementing them.
 
@@ -128,7 +130,7 @@ Derived from the owner's Contact Sheet Generator project:
 - Apple team: `5WP229CBB8`
 - Main bundle: `sbtbiswas.AidenOnTheGo`
 - Unit tests: `sbtbiswas.AidenOnTheGoTests`
-- UI tests: `sbtbiswas.AidenOnTheGoUITests`
+- UI tests: `sbtbiswas.AidenOnTheGoUITests` (target `AidenOnTheGoUITests`; Debug builds only, driven by `-AidenDemoScenario`)
 - Live Activity widget: `sbtbiswas.AidenOnTheGo.LiveActivityWidget`
 - App Group: `group.sbtbiswas.AidenOnTheGo`
 - Keychain service: `sbtbiswas.AidenOnTheGo.pairing`
@@ -141,7 +143,7 @@ Apple Distribution signing and App Store profiles for the app and Live Activity 
 ## 8. Bot avatars and Apple image creation
 
 - The semantic Aiden avatar editor remains the universal creation, offline, unsupported-device, and rollback path.
-- On iOS/iPadOS 18.4 or later, use the system SwiftUI Image Playground sheet only when `supportsImagePlayground` is true. Do not use the deprecated programmatic `ImageCreator` path or promise that generation is universally on-device; Private Cloud Compute is acceptable.
+- On iOS/iPadOS 26 or later (the minimum), use the system SwiftUI Image Playground sheet only when `supportsImagePlayground` is true. Do not use the deprecated programmatic `ImageCreator` path or promise that generation is universally on-device; Private Cloud Compute is acceptable.
 - Prefill only visible bot identity/purpose, keep personalization disabled, support the explicit non-personalized illustration/animation/sketch styles, and provide honest cancel, restriction, model-download, usage-limit, and unavailable states.
 - Preview and normalize locally. Nothing is uploaded until the person chooses **Use this image**. Then send the bounded accepted image to the paired Mac, which validates and stores the canonical bot photo with semantic fallback.
 - The connected iPhone 13 Pro is valid physical-device evidence for the unsupported fallback and absence of dead controls. A supported Apple Intelligence iPhone or iPad is still required to prove successful system-sheet generation and paired-Mac persistence.

@@ -10,7 +10,7 @@ enum AidenDiagnosticArea: String, CaseIterable {
 enum AidenDiagnosticEvent: String, CaseIterable {
     case launch, requestFailed, contractRejected, cacheFailed, streamInterrupted
     case speechFailed, notificationFailed, liveActivityFailed, priorTerminationObserved
-    case priorCrashObserved, priorHangObserved
+    case priorCrashObserved, priorHangObserved, keyboardReachMissed
 }
 
 enum AidenDiagnosticOutcome: String, CaseIterable {
@@ -78,7 +78,9 @@ final class AidenMetricDiagnosticSubscriber: NSObject, MXMetricManagerSubscriber
 @main
 struct AidenOnTheGoApp: App {
     @State private var haptics: AidenHapticCenter
-    @State private var remoteCoordinator = AidenRemoteCoordinator()
+    @State private var remoteCoordinator: AidenRemoteCoordinator
+    /// Built here because an app's `init` runs once.
+    @State private var inboxStore: AidenUnifiedInboxStore
     @State private var appearance = AidenAppearanceStore()
 
     init() {
@@ -92,7 +94,29 @@ struct AidenOnTheGoApp: App {
         AidenDiagnostics.record(.app, event: .launch, outcome: .started)
         let haptics = AidenHapticCenter()
         _haptics = State(initialValue: haptics)
-        _remoteCoordinator = State(initialValue: AidenRemoteCoordinator(haptics: haptics))
+        let coordinator: AidenRemoteCoordinator
+#if DEBUG
+        // `-AidenDemoScenario <name>` runs the real shell against fake machines.
+        if let scenario = AidenDemoScenario.requested(in: ProcessInfo.processInfo.arguments) {
+            coordinator = AidenDemoHosts.coordinator(
+                scenario,
+                responder: AidenDemoResponder(),
+                haptics: haptics
+            )
+        } else {
+            coordinator = AidenRemoteCoordinator(haptics: haptics)
+        }
+#else
+        coordinator = AidenRemoteCoordinator(haptics: haptics)
+#endif
+        _remoteCoordinator = State(initialValue: coordinator)
+        _inboxStore = State(initialValue: AidenUnifiedInboxStore(coordinator: coordinator))
+        // A tap can launch the app, so this can't wait for `ContentView`.
+        AidenNotificationPresentationDelegate.openTap = { $0.open(coordinator: coordinator) }
+        // The unit-test host never touches the device's notifications.
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
+            Task { await AidenNotificationIdentifierMigration.runOnce() }
+        }
     }
 
     var body: some Scene {
@@ -103,10 +127,10 @@ struct AidenOnTheGoApp: App {
                     if AidenInboxFixtureView.isRequested {
                         AidenInboxFixtureView()
                     } else {
-                        ContentView(coordinator: remoteCoordinator)
+                        ContentView(coordinator: remoteCoordinator, inboxStore: inboxStore)
                     }
 #else
-                    ContentView(coordinator: remoteCoordinator)
+                    ContentView(coordinator: remoteCoordinator, inboxStore: inboxStore)
 #endif
                 }
                 .environment(appearance)

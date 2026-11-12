@@ -141,40 +141,58 @@ enum AidenRemoteMutationOutcome<Value> {
     }
 }
 
-/// An opaque activation lease for one selected Aiden installation. The
-/// generation prevents an A -> B -> A switch from making work started during
-/// the first A activation current again.
-struct AidenRemoteRequestContext: Equatable, Hashable, Sendable {
-    let instanceId: String
-    let deviceId: String
-    fileprivate let generation: Int
-
-    init(instanceId: String, deviceId: String, generation: Int) {
-        self.instanceId = instanceId
-        self.deviceId = deviceId
-        self.generation = generation
-    }
-}
-
 @MainActor
 @Observable
 final class AidenRemoteCoordinator {
     let botMessaging = AidenBotMessagingModel()
     typealias ClientFactory = (AidenInstallation, String) throws -> AidenRemoteClient
 
-    private struct ActiveClientKey: Equatable {
-        let instanceId: String
-        let deviceId: String
-        let credentialScope: String
-        let activationGeneration: Int
+    /// Connect checks and Inbox polling give up rather than wait for a network.
+    static let probeClientFactory: ClientFactory = {
+        try AidenRemoteClient(
+            installation: $0,
+            credential: $1,
+            waitsForConnectivity: false,
+            requestTimeout: AidenHostConnectScheduler.probeTimeout
+        )
     }
 
     let installationStore: AidenInstallationStore
     let haptics: any AidenHapticEmitting
+    /// The phone-local machine names, symbols and colours. A machine that leaves takes its entry with it.
+    let machinePreferences: AidenMachinePreferencesStore
     private let clientFactory: ClientFactory
-    private(set) var connectionIssue: AidenConnectionIssue?
-    private(set) var connectionState: AidenRemoteConnectionState
-    private(set) var server: AidenServer?
+    /// One connection per paired machine, the selected one included.
+    let hosts: AidenHostRegistry
+    /// The registry's entry for the selected machine, nil only when none is
+    /// selected.
+    private(set) var selectedConnection: AidenHostConnection?
+    /// What the app shows while `selectedConnection` is nil.
+    private var unselected: NoSelection
+    private(set) var connectionIssue: AidenConnectionIssue? {
+        get { if let selectedConnection { selectedConnection.connectionIssue } else { unselected.connectionIssue } }
+        set {
+            if let selectedConnection {
+                selectedConnection.adopt(connectionIssue: newValue)
+            } else {
+                unselected.connectionIssue = newValue
+            }
+        }
+    }
+    private(set) var connectionState: AidenRemoteConnectionState {
+        get { if let selectedConnection { selectedConnection.connectionState } else { unselected.connectionState } }
+        set {
+            if let selectedConnection {
+                selectedConnection.adopt(connectionState: newValue)
+            } else {
+                unselected.connectionState = newValue
+            }
+        }
+    }
+    private(set) var server: AidenServer? {
+        get { selectedConnection?.server }
+        set { selectedConnection?.adopt(server: newValue) }
+    }
     /// The Mac's feature tokens: this connection's `/server` answer, else what
     /// the active pairing saved from its last answer, else nil for a pairing
     /// that never heard `/server`. Gates read this so a cold or connecting open
@@ -184,34 +202,66 @@ final class AidenRemoteCoordinator {
         let saved = installationStore.activeInstallation?.serverFeatures ?? []
         return saved.isEmpty ? nil : saved
     }
-    private(set) var workspaces: [AidenWorkspace] = []
+    /// `knownServerFeatures`, for one machine rather than the selected one.
+    func knownServerFeatures(of instanceId: String) -> [String]? {
+        guard let connection = hosts.connection(for: instanceId) else { return nil }
+        if let server = connection.server { return server.features }
+        let saved = connection.installation.serverFeatures
+        return saved.isEmpty ? nil : saved
+    }
+    private(set) var workspaces: [AidenWorkspace] {
+        get { selectedConnection?.workspaces ?? [] }
+        set { selectedConnection?.adopt(workspaces: newValue) }
+    }
     private(set) var workspaceSnapshotRevision = 0
     private(set) var isMutating = false
     var presentedError: String?
     let workspaceArchiveStore: AidenWorkspaceArchiveStore
-    private let chatCache: AidenChatCache
+    let chatCache: AidenChatCache
     private let chatDraftStore: AidenChatDraftStore
     private let scheduledTaskCache: AidenScheduledTaskCache
     private let workspaceEnvironmentCache: AidenWorkspaceEnvironmentCache
     private let installationDataGate = AidenInstallationDataGate()
     private var pendingManagedWorktreeDeletionKeys: [String: UUID] = [:]
-    private var connectionGeneration = 0
-    private var activationGeneration = 0
-    private var cachedActiveClient: (key: ActiveClientKey, client: AidenRemoteClient)?
+    /// The views showing each machine's data. A revoked machine keeps its data
+    /// until its entry here empties.
+    @ObservationIgnored private var onScreenViews: [String: Set<ObjectIdentifier>] = [:]
+    private var connectionGeneration: Int {
+        selectedConnection?.connectionGeneration ?? 0
+    }
+    private var activationGeneration: Int? {
+        selectedConnection?.generation
+    }
+
+    private struct NoSelection {
+        var connectionState: AidenRemoteConnectionState
+        var connectionIssue: AidenConnectionIssue?
+    }
 
     init(haptics: (any AidenHapticEmitting)? = nil) {
         let installationStore = AidenInstallationStore()
         self.installationStore = installationStore
+        machinePreferences = .shared
         self.haptics = haptics ?? AidenHapticCenter()
         workspaceArchiveStore = AidenWorkspaceArchiveStore()
         chatCache = .shared
         chatDraftStore = .shared
         scheduledTaskCache = .shared
         workspaceEnvironmentCache = .shared
-        clientFactory = { try AidenRemoteClient(installation: $0, credential: $1) }
-        connectionState = installationStore.activeInstallation == nil ? .needsPairing : .connecting
+        let clientFactory: ClientFactory = { try AidenRemoteClient(installation: $0, credential: $1) }
+        self.clientFactory = clientFactory
+        hosts = Self.makeHosts(
+            installationStore: installationStore,
+            clientFactory: clientFactory,
+            probeClientFactory: Self.probeClientFactory
+        )
+        unselected = .init(connectionState: installationStore.activeInstallation == nil ? .needsPairing : .connecting)
+        hosts.delegate = self
+        syncSelectedConnection()
     }
 
+    /// `probeClientFactory` defaults to `clientFactory`, so a test's one fake
+    /// transport carries both.
     init(
         installationStore: AidenInstallationStore,
         workspaceArchiveStore: AidenWorkspaceArchiveStore? = nil,
@@ -220,9 +270,12 @@ final class AidenRemoteCoordinator {
         scheduledTaskCache: AidenScheduledTaskCache = .shared,
         workspaceEnvironmentCache: AidenWorkspaceEnvironmentCache = .shared,
         haptics: (any AidenHapticEmitting)? = nil,
-        clientFactory: @escaping ClientFactory = { try AidenRemoteClient(installation: $0, credential: $1) }
+        machinePreferences: AidenMachinePreferencesStore = .shared,
+        clientFactory: @escaping ClientFactory = { try AidenRemoteClient(installation: $0, credential: $1) },
+        probeClientFactory: ClientFactory? = nil
     ) {
         self.installationStore = installationStore
+        self.machinePreferences = machinePreferences
         self.haptics = haptics ?? AidenHapticCenter()
         self.workspaceArchiveStore = workspaceArchiveStore ?? AidenWorkspaceArchiveStore()
         self.chatCache = chatCache
@@ -230,13 +283,21 @@ final class AidenRemoteCoordinator {
         self.scheduledTaskCache = scheduledTaskCache
         self.workspaceEnvironmentCache = workspaceEnvironmentCache
         self.clientFactory = clientFactory
-        connectionState = installationStore.activeInstallation == nil ? .needsPairing : .connecting
+        hosts = Self.makeHosts(
+            installationStore: installationStore,
+            clientFactory: clientFactory,
+            probeClientFactory: probeClientFactory ?? clientFactory
+        )
+        unselected = .init(connectionState: installationStore.activeInstallation == nil ? .needsPairing : .connecting)
+        hosts.delegate = self
+        syncSelectedConnection()
     }
 
     func start() async {
         await chatDraftStore.migrateExistingStorage()
         guard installationStore.activeInstallation != nil else {
-            connectionGeneration &+= 1
+            syncSelectedConnection()
+            advanceConnectionGeneration()
             connectionState = .needsPairing
             updateIntentCatalog(for: nil)
             return
@@ -335,10 +396,13 @@ final class AidenRemoteCoordinator {
             throw AidenRemoteContractError.invalidPairingExchange
         }
         try Task.checkCancellation()
+        // A revoked connection never comes back, so a purge still waiting on its
+        // views ends here and the new pairing gets a connection of its own.
+        await completeRevokedPurge(instanceId: exchange.instanceId)?.value
         let previousDeviceId = installationStore.installations.first {
             $0.id == exchange.instanceId
         }?.deviceId
-        let knownWorkspaceIds = activeInstanceId == exchange.instanceId
+        let knownWorkspaceIds = defaultInstanceId == exchange.instanceId
             ? Set(workspaces.map(\.id))
             : []
         let installation = try installationStore.savePairing(
@@ -348,8 +412,10 @@ final class AidenRemoteCoordinator {
             validatedServer: validatedServer,
             connectedAt: Date()
         )
-        activationGeneration &+= 1
-        connectionGeneration &+= 1
+        let connection = syncSelectedConnection()
+        advanceActivationGeneration()
+        connection?.advanceHostGeneration()
+        advanceConnectionGeneration()
         if let previousDeviceId, previousDeviceId != installation.deviceId {
             await purgeInstallationData(installation.id, knownWorkspaceIds: knownWorkspaceIds)
         }
@@ -357,12 +423,15 @@ final class AidenRemoteCoordinator {
         applyWorkspaceSnapshot(validatedWorkspaces, instanceId: installation.id)
         connectionIssue = nil
         connectionState = .connected
-        await negotiateProgressCapabilitiesIfNeeded(
+        await connection?.negotiateProgressCapabilitiesIfNeeded(
             server: validatedServer,
             client: stagedClient,
-            installationId: installation.id,
-            generation: connectionGeneration
+            attempt: connectionGeneration
         )
+    }
+
+    static var capabilitiesAskedForAlone: [[AidenRemoteCapability]] {
+        AidenHostConnection.capabilitiesAskedForAlone
     }
 
     private static let pendingCredentialRecoveryMessage = String(localized:
@@ -370,29 +439,23 @@ final class AidenRemoteCoordinator {
     )
 
     func connectActiveInstallation() async {
-        connectionGeneration &+= 1
-        let generation = connectionGeneration
-        guard let installation = installationStore.activeInstallation else {
+        guard let connection = syncSelectedConnection() else {
+            advanceConnectionGeneration()
             connectionState = .needsPairing
             server = nil
             workspaces = []
             updateIntentCatalog(for: nil)
             return
         }
-        connectionState = .connecting
-        connectionIssue = nil
-        presentedError = nil
-        await seedSavedWorkspaces(installationId: installation.id, generation: generation)
-        do {
-            guard let credential = try installationStore.credential(for: installation),
-                  !credential.isEmpty else {
-                throw AidenRemoteClientError.missingCredential
-            }
-            try await load(installation: installation, credential: credential, generation: generation)
-        } catch {
-            guard isCurrentContext(installationId: installation.id, generation: generation) else { return }
-            await handleConnectionError(error, installationId: installation.id)
+        // Selecting a machine revoked in the background: its credential is dead,
+        // so it takes the selected machine's path rather than a connect. One
+        // held for its chat goes when that chat does, and not before.
+        if connection.isPurgePending {
+            guard !isHeldForItsChat(connection) else { return }
+            await revokeSelectedConnectionAndConnectNext(connection)
+            return
         }
+        await connection.connect()
     }
 
     func switchInstallation(to installationId: String) async {
@@ -404,16 +467,22 @@ final class AidenRemoteCoordinator {
         isMutating = true
         defer { isMutating = false }
         do {
-            let previousInstallationId = activeInstanceId
+            let previousInstallationId = defaultInstanceId
             try installationStore.setActive(installationId)
-            if previousInstallationId != activeInstanceId {
-                activationGeneration &+= 1
+            syncSelectedConnection()
+            if previousInstallationId != defaultInstanceId {
+                advanceActivationGeneration()
             }
-            server = nil
-            workspaces = []
+            // A machine that is already connected keeps what it holds. The
+            // connect below still checks it. So does one with a purge pending:
+            // the purge needs its workspaces to find the legacy cache files.
+            if connectionState != .connected, selectedConnection?.isPurgePending != true {
+                server = nil
+                workspaces = []
+            }
             updateIntentCatalog(for: nil)
             await connectActiveInstallation()
-            guard activeInstanceId == installationId else { return .stale }
+            guard defaultInstanceId == installationId else { return .stale }
             guard connectionState == .connected else { return .failure }
             return .success(())
         } catch let error where aidenIsCancellation(error) {
@@ -433,20 +502,20 @@ final class AidenRemoteCoordinator {
         isMutating = true
         defer { isMutating = false }
         do {
-            let previousInstallationId = activeInstanceId
-            let knownWorkspaceIds = previousInstallationId == installationId
-                ? Set(workspaces.map(\.id))
-                : []
+            let wasSelected = defaultInstanceId == installationId
+            let knownWorkspaceIds = Set(hosts.connection(for: installationId)?.workspaces.map(\.id) ?? [])
             try installationStore.remove(installationId)
-            if previousInstallationId != activeInstanceId {
-                activationGeneration &+= 1
+            syncSelectedConnection()
+            if wasSelected {
+                advanceActivationGeneration()
+                settleArrivingMachine()
             }
-            connectionGeneration &+= 1
-            server = nil
-            workspaces = []
             await purgeInstallationData(installationId, knownWorkspaceIds: knownWorkspaceIds)
             updateIntentCatalog(for: installationId)
-            await start()
+            // Forgetting another machine leaves the selected one alone.
+            if wasSelected {
+                await start()
+            }
             guard !installationStore.installations.contains(where: { $0.id == installationId }) else {
                 return .failure
             }
@@ -460,9 +529,19 @@ final class AidenRemoteCoordinator {
     }
 
     func refreshWorkspaces() async {
-        guard let installationId = activeInstanceId,
-              let client = try? activeClient() else {
+        guard let installationId = defaultInstanceId else {
             connectionState = .needsPairing
+            return
+        }
+        let client: AidenRemoteClient
+        do {
+            client = try activeClient()
+        } catch AidenRemoteClientError.missingCredential {
+            connectionState = .needsPairing
+            return
+        } catch {
+            // A failed read, such as the Keychain's, says nothing about the pairing.
+            await handleConnectionError(error, installationId: installationId)
             return
         }
         let generation = connectionGeneration
@@ -509,7 +588,7 @@ final class AidenRemoteCoordinator {
         presentedError = nil
         defer { isMutating = false }
 
-        guard let installationId = activeInstanceId else { return .stale }
+        guard let installationId = defaultInstanceId else { return .stale }
         let generation = connectionGeneration
         let client: AidenRemoteClient
         do {
@@ -568,7 +647,7 @@ final class AidenRemoteCoordinator {
         presentedError = nil
         defer { isMutating = false }
 
-        guard let installationId = activeInstanceId else { return .stale }
+        guard let installationId = defaultInstanceId else { return .stale }
         let generation = connectionGeneration
         let client: AidenRemoteClient
         do {
@@ -624,7 +703,7 @@ final class AidenRemoteCoordinator {
         presentedError = nil
         defer { isMutating = false }
 
-        guard let installationId = activeInstanceId else { return .stale }
+        guard let installationId = defaultInstanceId else { return .stale }
         let generation = connectionGeneration
         let client: AidenRemoteClient
         do {
@@ -637,7 +716,7 @@ final class AidenRemoteCoordinator {
         let key = pendingManagedWorktreeDeletionKeys[scope] ?? UUID()
         pendingManagedWorktreeDeletionKeys[scope] = key
         workspaces.removeAll { $0.id == workspace.id }
-        updateIntentCatalog(for: activeInstanceId)
+        updateIntentCatalog(for: defaultInstanceId)
         persistWorkspaces()
         do {
             _ = try await client.deleteManagedGitWorktree(
@@ -670,6 +749,141 @@ final class AidenRemoteCoordinator {
             await handleConnectionError(error, installationId: installationId)
             return .failure
         }
+    }
+
+    // MARK: Workspace Settings, on the context it opened under
+
+    /// Workspace Settings saves through the context it opened under. A `selected`
+    /// context writes the selected machine and goes stale once the selection
+    /// moves. An `owner` context writes its own machine while it's live. Either
+    /// way a save never reaches another machine's workspace with the same id.
+    func updateWorkspaceOutcome(
+        _ workspace: AidenWorkspace,
+        name: String? = nil,
+        permission: AidenWorkspacePermission? = nil,
+        memoryEnabled: Bool? = nil,
+        on context: AidenRemoteRequestContext
+    ) async -> AidenRemoteMutationOutcome<AidenWorkspace> {
+        guard holds(context) else { return .stale }
+        guard context.scope == .owner else {
+            return await updateWorkspaceOutcome(workspace, name: name, permission: permission, memoryEnabled: memoryEnabled)
+        }
+        guard !isMutating else { return .busy }
+        guard let connection = hosts.connection(for: context.instanceId),
+              let client = try? remoteClient(for: context) else { return .stale }
+        isMutating = true
+        presentedError = nil
+        defer { isMutating = false }
+        do {
+            let updated = try await client.updateWorkspace(
+                id: workspace.id,
+                revision: workspace.revision,
+                patch: AidenWorkspacePatch(name: name, permission: permission, memoryEnabled: memoryEnabled)
+            )
+            guard holds(context) else { return .stale }
+            connection.applyWorkspaceSnapshot(Self.replacing(updated, in: connection.workspaces))
+            return .success(updated)
+        } catch let error where aidenIsCancellation(error) {
+            return holds(context) ? .cancelled : .stale
+        } catch {
+            guard holds(context) else { return .stale }
+            if let canonical = try? await client.workspaces(), holds(context) {
+                connection.applyWorkspaceSnapshot(canonical)
+                if let reconciled = canonical.first(where: { $0.id == workspace.id }),
+                   (name == nil || reconciled.name == name),
+                   (permission == nil || reconciled.permission == permission),
+                   (memoryEnabled == nil || reconciled.memoryEnabled == memoryEnabled) {
+                    return .success(reconciled)
+                }
+            }
+            if await !handleCredentialRevocation(error, context: context), holds(context) {
+                presentedError = Self.workspaceFailure(
+                    String(localized: "Couldn’t save this workspace on \(machineName(of: context.instanceId))."),
+                    error
+                )
+            }
+            return .failure
+        }
+    }
+
+    /// Removes the workspace, or deletes a managed worktree, through the context
+    /// Workspace Settings opened under (see `updateWorkspaceOutcome(_:on:)`).
+    func removeWorkspaceOutcome(
+        _ workspace: AidenWorkspace,
+        on context: AidenRemoteRequestContext
+    ) async -> AidenRemoteMutationOutcome<Void> {
+        guard holds(context) else { return .stale }
+        guard context.scope == .owner else {
+            return workspace.isManagedWorktree
+                ? await removeManagedWorktreeOutcome(workspace)
+                : await removeWorkspaceOutcome(workspace)
+        }
+        guard !isMutating else { return .busy }
+        guard let connection = hosts.connection(for: context.instanceId),
+              let client = try? remoteClient(for: context) else { return .stale }
+        isMutating = true
+        presentedError = nil
+        defer { isMutating = false }
+        let scope = "\(context.instanceId):\(workspace.id)"
+        do {
+            if workspace.isManagedWorktree {
+                let key = pendingManagedWorktreeDeletionKeys[scope] ?? UUID()
+                pendingManagedWorktreeDeletionKeys[scope] = key
+                _ = try await client.deleteManagedGitWorktree(
+                    workspaceId: workspace.id,
+                    revision: workspace.revision,
+                    idempotencyKey: key
+                )
+                pendingManagedWorktreeDeletionKeys[scope] = nil
+            } else {
+                try await client.removeWorkspace(id: workspace.id, revision: workspace.revision)
+            }
+            guard holds(context) else { return .stale }
+            // The machine may seed a replacement for its last workspace, so its own
+            // list is read back; without it, the removed one simply goes.
+            let canonical = try? await client.workspaces()
+            guard holds(context) else { return .stale }
+            connection.applyWorkspaceSnapshot(canonical ?? connection.workspaces.filter { $0.id != workspace.id })
+            return .success(())
+        } catch let error where aidenIsCancellation(error) {
+            return holds(context) ? .cancelled : .stale
+        } catch {
+            guard holds(context) else { return .stale }
+            if let canonical = try? await client.workspaces(), holds(context) {
+                connection.applyWorkspaceSnapshot(canonical)
+                if !canonical.contains(where: { $0.id == workspace.id }) {
+                    pendingManagedWorktreeDeletionKeys[scope] = nil
+                    return .success(())
+                }
+            }
+            if !Self.isAmbiguousMutationError(error) {
+                pendingManagedWorktreeDeletionKeys[scope] = nil
+            }
+            if await !handleCredentialRevocation(error, context: context), holds(context) {
+                presentedError = Self.workspaceFailure(
+                    String(localized: "Couldn’t remove this workspace from \(machineName(of: context.instanceId))."),
+                    error
+                )
+            }
+            return .failure
+        }
+    }
+
+    /// A machine's name for a sentence about it.
+    private func machineName(of instanceId: String) -> String {
+        hosts.connection(for: instanceId)?.installation.name ?? String(localized: "its machine")
+    }
+
+    /// What went wrong on a machine other than the selected one, which the
+    /// selected machine's own error handling never hears about.
+    private static func workspaceFailure(_ summary: String, _ error: Error) -> String {
+        let detail = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        return detail.isEmpty ? summary : "\(summary) \(detail)"
+    }
+
+    private static func replacing(_ workspace: AidenWorkspace, in workspaces: [AidenWorkspace]) -> [AidenWorkspace] {
+        (workspaces.filter { $0.id != workspace.id } + [workspace])
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     func browserRoots(context: AidenRemoteRequestContext) async throws -> [AidenBrowserRoot] {
@@ -730,8 +944,32 @@ final class AidenRemoteCoordinator {
         }
     }
 
-    var activeInstanceId: String? {
+    /// The machine new work starts on, and what the facade's selected-machine
+    /// reads follow. Work a person aims elsewhere leaves it alone. It's saved in
+    /// the same Keychain field as ever, so nothing migrates.
+    var defaultInstanceId: String? {
         installationStore.activeInstallationId
+    }
+
+    /// Moves the default and nothing else. No machine is asked anything, a
+    /// connected machine stays connected, and work on an owner context goes on.
+    /// Work bound to the selection ends with it, as `isCurrent` has always said.
+    /// A machine that isn't connected yet is the scheduler's to reach.
+    @discardableResult
+    func setDefaultMachine(_ instanceId: String) -> AidenRemoteMutationOutcome<Void> {
+        guard !isMutating else { return .busy }
+        guard hosts.connection(for: instanceId)?.isRevoked == false else { return .stale }
+        guard defaultInstanceId != instanceId else { return .success(()) }
+        do {
+            try installationStore.setActive(instanceId)
+        } catch {
+            presentedError = error.localizedDescription
+            return .failure
+        }
+        syncSelectedConnection(stoppingOutgoingConnect: false)
+        advanceActivationGeneration()
+        updateIntentCatalog(for: instanceId)
+        return .success(())
     }
 
     func setDeviceArchivedWorkspaceIDs(_ workspaceIDs: Set<String>, for instanceId: String?) {
@@ -745,29 +983,62 @@ final class AidenRemoteCoordinator {
     }
 
     func requestContext(for instanceId: String? = nil) throws -> AidenRemoteRequestContext {
-        guard let activeInstallation = installationStore.activeInstallation,
-              let activeInstanceId,
-              instanceId == nil || instanceId == activeInstanceId else {
+        guard let defaultInstanceId,
+              instanceId == nil || instanceId == defaultInstanceId,
+              let connection = syncSelectedConnection() else {
             throw AidenRemoteClientError.installationChanged
         }
-        return AidenRemoteRequestContext(
-            instanceId: activeInstanceId,
-            deviceId: activeInstallation.deviceId,
-            generation: activationGeneration
-        )
+        return try connection.requestContext()
     }
 
-    func remoteClient(for context: AidenRemoteRequestContext) throws -> AidenRemoteClient {
-        guard isCurrent(context) else {
+    /// A context for work that belongs to one paired machine, selected or not.
+    /// It stays live while the selection moves. Asking starts no connection.
+    func ownerContext(for instanceId: String) throws -> AidenRemoteRequestContext {
+        syncSelectedConnection()
+        guard let connection = hosts.connection(for: instanceId) else {
             throw AidenRemoteClientError.installationChanged
         }
-        return try activeClient()
+        return try connection.requestContext(scope: .owner)
+    }
+
+    /// A `selected` context gets the selected machine's client and stops once
+    /// the selection moves. An `owner` context gets its own machine's client
+    /// while it is live. Asking starts no connection.
+    func remoteClient(for context: AidenRemoteRequestContext) throws -> AidenRemoteClient {
+        switch context.scope {
+        case .selected:
+            guard isCurrent(context) else {
+                throw AidenRemoteClientError.installationChanged
+            }
+            return try activeClient()
+        case .owner:
+            syncSelectedConnection()
+            guard isLive(context), let connection = hosts.connection(for: context.instanceId) else {
+                throw AidenRemoteClientError.installationChanged
+            }
+            return try connection.client()
+        }
     }
 
     func isCurrent(_ context: AidenRemoteRequestContext) -> Bool {
-        activeInstanceId == context.instanceId
+        defaultInstanceId == context.instanceId
             && activationGeneration == context.generation
             && isRetained(context)
+    }
+
+    /// True while the context's machine is still paired to the same device and
+    /// its `hostGeneration` hasn't moved. The selection plays no part: a context
+    /// stays live through A -> B -> A even though it stops being current.
+    func isLive(_ context: AidenRemoteRequestContext) -> Bool {
+        isRetained(context) && hosts.connection(for: context.instanceId)?.isLive(context) == true
+    }
+
+    /// True while work under `context` may go on, by the rule of its scope.
+    func holds(_ context: AidenRemoteRequestContext) -> Bool {
+        switch context.scope {
+        case .selected: isCurrent(context)
+        case .owner: isLive(context)
+        }
     }
 
     func isRetained(_ context: AidenRemoteRequestContext) -> Bool {
@@ -796,248 +1067,147 @@ final class AidenRemoteCoordinator {
 
     /// Bot feature calls use the remote client directly so their DTO state can
     /// stay feature-local. This keeps credential revocation on the same
-    /// immediate purge path as coordinator-owned Workspace operations.
+    /// immediate purge path as coordinator-owned Workspace operations. A 401
+    /// from any paired machine reaches that machine's own connection. A context
+    /// from before a re-pairing is neither current nor live, so an old
+    /// credential's answer can't end the new pairing. Revocation ends a context's
+    /// lease, so a second 401 from a machine already revoked finds it neither
+    /// too: it has nothing left to report, and its caller still has words to
+    /// give back.
     func handleCredentialRevocation(
         _ error: Error,
         context: AidenRemoteRequestContext
     ) async -> Bool {
-        guard isCurrent(context),
-              let clientError = error as? AidenRemoteClientError,
-              clientError.isCredentialRevoked else { return false }
-        await handleConnectionError(error, installationId: context.instanceId)
+        guard let clientError = error as? AidenRemoteClientError,
+              clientError.isCredentialRevoked,
+              let connection = hosts.connection(for: context.instanceId) else { return false }
+        guard isCurrent(context) || isLive(context) else {
+            return connection.isRevoked && isRetained(context)
+        }
+        await connection.handleConnectionError(error)
         return true
     }
 
-    private func load(
-        installation: AidenInstallation,
-        credential: String,
-        generation: Int
-    ) async throws {
-        let client = try client(
-            for: installation,
-            credential: credential,
-            activationGeneration: activationGeneration
-        )
-        async let serverRequest = client.server()
-        async let workspaceRequest = client.workspaces()
-        let (server, workspaces) = try await (serverRequest, workspaceRequest)
-        guard server.instanceId == installation.instanceId else {
-            throw AidenRemoteContractError.invalidPairingExchange
-        }
-        guard isCurrentContext(installationId: installation.id, generation: generation) else { return }
-        try installationStore.updateServer(server)
-        self.server = server
-        applyWorkspaceSnapshot(workspaces, instanceId: installation.id)
-        connectionIssue = nil
-        connectionState = .connected
-        await refreshDeviceIdentity(using: client, currentName: server.deviceName)
-        await negotiateProgressCapabilitiesIfNeeded(
-            server: server,
-            client: client,
-            installationId: installation.id,
-            generation: generation
-        )
-        for capabilities in Self.capabilitiesAskedForAlone {
-            await negotiateCapabilityAloneIfNeeded(
-                capabilities,
-                client: client,
-                installationId: installation.id,
-                generation: generation
-            )
-        }
+    /// True while the selected machine has revoked this phone and stays only for
+    /// its chat on screen. The pairing screen waits, or it would take the chat away.
+    var isHoldingRevokedChat: Bool {
+        selectedConnection.map(isHeldForItsChat) == true
     }
 
-    /// Opt-ins a Mac older than their revision refuses by name, in the order
-    /// they are asked for after the progress batch: `bot:handoffs` (revision
-    /// 37), with `bot:handoff-notes` (revision 40) and `bot:handoff-on-mac`
-    /// (revision 43) in the same call when the Mac offers them, then
-    /// `schedule:cards` (revision 39), then `bot:images` (revision 45), then
-    /// `bot:issues` (revision 42), then `chat:jobs` (revision 49), then
-    /// `attachments:raw` (revision 50), then `chat:new-worktree` (revision 53),
-    /// then continuity watches, Open work, routine models and peers (revision 59),
-    /// followed by messaging, access requests, plans and allowed lists (revisions 54–57).
-    static let capabilitiesAskedForAlone: [[AidenRemoteCapability]] = [
-        [.botHandoffs, .botHandoffNotes, .botHandoffOnMac],
-        [.scheduleCards],
-        [.botImages],
-        [.botIssues],
-        [.chatJobs],
-        [.attachmentsRaw],
-        [.chatNewWorktree],
-        [.botWatches],
-        [.botOpenWork],
-        [.botRoutineModels],
-        [.botPeers],
-
-        [.botMessaging],
-        [.botAccessRequests],
-        [.botPlans],
-        [.botAllowed],
-    ]
-
-    /// Existing pairings predate the progress opt-in field. Upgrade them only
-    /// after the authenticated server advertises the matching feature. A
-    /// failed additive negotiation is non-fatal and leaves progress hidden.
-    private func negotiateProgressCapabilitiesIfNeeded(
-        server: AidenServer,
-        client: AidenRemoteClient,
-        installationId: String,
-        generation: Int
-    ) async {
-        guard isCurrentContext(installationId: installationId, generation: generation) else { return }
-        var requested: [AidenRemoteCapability] = []
-        if server.supportsChatTasks { requested.append(.tasksRead) }
-        if server.supportsChatAgents { requested.append(.agentsRead) }
-        if server.supportsQuestionPrompts { requested.append(.questionsRespond) }
-        if server.supportsChatSkills { requested.append(.skillsInvoke) }
-        if server.supportsPhoneRunControl { requested += [.runsObserve, .runsControl] }
-        if server.supportsMobileSimulators { requested.append(.simulatorsMobile) }
-        if server.supportsBotCards { requested.append(.botCards) }
-        if server.offersBotActivity { requested.append(.botActivity) }
-        if server.features.contains("chat-ui-panels-enabled-v1") { requested.append(contentsOf: [.appControlsRead, .appControlsRespond]) }
-        guard !requested.isEmpty,
-              let installation = installationStore.installations.first(where: { $0.id == installationId }) else {
-            return
-        }
-        let missing = requested.filter {
-            !installation.deviceCapabilities.contains($0)
-                || installation.serverCapabilities?.contains($0) != true
-        }
-        guard !missing.isEmpty else { return }
-        do {
-            let negotiatedCapabilities = try await client.updateDeviceCapabilities(accepts: missing)
-            guard isCurrentContext(installationId: installationId, generation: generation) else {
-                return
-            }
-            let refreshedServer = try await client.server()
-            guard isCurrentContext(installationId: installationId, generation: generation),
-                  refreshedServer.instanceId == installationId else { return }
-            try installationStore.updateNegotiatedDeviceCapabilities(
-                negotiatedCapabilities,
-                confirmedBy: refreshedServer
-            )
-            self.server = refreshedServer
-        } catch let error where aidenIsCancellation(error) {
-            return
-        } catch {
-            if let context = try? requestContext(for: installationId),
-               isCurrentContext(installationId: installationId, generation: generation),
-               await handleCredentialRevocation(error, context: context) {
-                return
-            }
-            // Feature discovery and the device-capability update are additive;
-            // older Macs remain connected with the existing feature set.
-        }
+    private func isHeldForItsChat(_ connection: AidenHostConnection) -> Bool {
+        connection.isPurgePending && onScreenViews[connection.instanceId] != nil
     }
 
-    /// Contract revisions 37 and 39: `bot:handoffs` and `schedule:cards` are
-    /// each asked for in a call of their own, after the progress batch, and
-    /// only while the Mac lists them in `serverCapabilities`. A Mac that does
-    /// not know a name refuses the whole request with a 400, so naming it in
-    /// the batch could cost the device every other opt-in. A refusal leaves the
-    /// earlier grants as they are. Revision 40: the rest of a group, such as
-    /// `bot:handoff-notes`, joins its first opt-in's call only while the Mac
-    /// offers that first one and lists the member too, so a Mac on an earlier
-    /// revision still grants `bot:handoffs`, and a device that holds it asks
-    /// for the notes alone once its Mac updates.
-    private func negotiateCapabilityAloneIfNeeded(
-        _ capabilities: [AidenRemoteCapability],
-        client: AidenRemoteClient,
-        installationId: String,
-        generation: Int
-    ) async {
-        guard isCurrentContext(installationId: installationId, generation: generation),
-              let server = self.server, server.instanceId == installationId,
-              let first = capabilities.first, server.serverCapabilities?.contains(first) == true,
-              let installation = installationStore.installations.first(where: { $0.id == installationId }) else {
+    /// Records that `view` is or isn't showing `instanceId`'s data. The last
+    /// view leaving a revoked machine ends its wait for the purge.
+    func setOnScreen(_ onScreen: Bool, view: AnyObject, instanceId: String) {
+        if onScreen {
+            onScreenViews[instanceId, default: []].insert(ObjectIdentifier(view))
             return
         }
-        let missing = capabilities.filter {
-            server.serverCapabilities?.contains($0) == true && !installation.hasNegotiatedAccess(to: $0)
-        }
-        guard !missing.isEmpty else { return }
-        do {
-            let negotiatedCapabilities = try await client.updateDeviceCapabilities(accepts: missing)
-            guard isCurrentContext(installationId: installationId, generation: generation) else { return }
-            let refreshedServer = try await client.server()
-            guard isCurrentContext(installationId: installationId, generation: generation),
-                  refreshedServer.instanceId == installationId else { return }
-            try installationStore.updateNegotiatedDeviceCapabilities(
-                negotiatedCapabilities,
-                confirmedBy: refreshedServer
-            )
-            self.server = refreshedServer
-        } catch let error where aidenIsCancellation(error) {
-            return
-        } catch {
-            if let context = try? requestContext(for: installationId),
-               isCurrentContext(installationId: installationId, generation: generation),
-               await handleCredentialRevocation(error, context: context) {
-                return
-            }
-            // A Mac without the route, or a refusal (400 or 404), keeps the
-            // grants the device already has: hand-offs stay on the Mac, and
-            // scheduled-task approvals keep the summary card.
-        }
+        onScreenViews[instanceId]?.remove(ObjectIdentifier(view))
+        guard onScreenViews[instanceId]?.isEmpty == true else { return }
+        onScreenViews[instanceId] = nil
+        completeRevokedPurge(instanceId: instanceId)
     }
 
-    private func refreshDeviceIdentity(
-        using client: AidenRemoteClient,
-        currentName: String?
-    ) async {
-        let name = Self.deviceName
-        guard let currentName, currentName != name else { return }
-        // Older Macs do not expose this additive route. A failed label refresh
-        // must never make a valid authenticated connection fail.
-        try? await client.updateDeviceIdentity(name: name)
+    /// Removes a revoked machine and its cached data. The returned task is for
+    /// a caller that needs to wait, and is nil when no purge is pending.
+    @discardableResult
+    func completeRevokedPurge(instanceId: String) -> Task<Void, Never>? {
+        guard let connection = hosts.connection(for: instanceId), connection.isPurgePending else { return nil }
+        connection.purgeStarted()
+        return Task { await purgeRevokedMachine(connection) }
+    }
+
+    private func purgeRevokedMachine(_ connection: AidenHostConnection) async {
+        guard !hostConnectionIsSelected(connection) else {
+            await revokeSelectedConnectionAndConnectNext(connection)
+            return
+        }
+        let installationId = connection.instanceId
+        let knownWorkspaceIds = Set(connection.workspaces.map(\.id))
+        try? installationStore.remove(installationId)
+        syncSelectedConnection()
+        await purgeInstallationData(installationId, knownWorkspaceIds: knownWorkspaceIds)
+        updateIntentCatalog(for: installationId)
     }
 
     private func activeClient() throws -> AidenRemoteClient {
-        guard let installation = installationStore.activeInstallation else {
+        guard let connection = syncSelectedConnection() else {
             throw AidenRemoteClientError.missingCredential
         }
-        // The cache key changes whenever the active installation, its device
-        // identity, its credential scope, or the activation generation does,
-        // so a hit never needs the Keychain read below.
-        if let cachedActiveClient,
-           cachedActiveClient.key == activeClientKey(for: installation, activationGeneration: activationGeneration) {
-            return cachedActiveClient.client
+        return try connection.client()
+    }
+
+    /// Matches the registry to the saved machines and follows the store's
+    /// selection. Nothing the app shows moves on its own here: the callers clear
+    /// and advance at the point they always have.
+    @discardableResult
+    private func syncSelectedConnection(stoppingOutgoingConnect: Bool = true) -> AidenHostConnection? {
+        if installationStore.activeInstallation == nil, let outgoing = selectedConnection {
+            unselected = NoSelection(
+                connectionState: outgoing.connectionState,
+                connectionIssue: outgoing.connectionIssue
+            )
+            selectedConnection = nil
         }
-        guard let credential = try installationStore.credential(for: installation),
-              !credential.isEmpty else {
-            throw AidenRemoteClientError.missingCredential
+        hosts.sync(with: installationStore.installations)
+        let connection = installationStore.activeInstallationId.flatMap { hosts.connection(for: $0) }
+        if selectedConnection !== connection {
+            // An attempt the person was waiting on stops with the selection, so
+            // its late answer can't land on a machine they have left.
+            if stoppingOutgoingConnect { selectedConnection?.cancelConnect() }
+            selectedConnection = connection
         }
-        return try client(
-            for: installation,
-            credential: credential,
-            activationGeneration: activationGeneration
+        return connection
+    }
+
+    private static func makeHosts(
+        installationStore store: AidenInstallationStore,
+        clientFactory: @escaping ClientFactory,
+        probeClientFactory: @escaping ClientFactory
+    ) -> AidenHostRegistry {
+        AidenHostRegistry(
+            credential: { instanceId in
+                guard let saved = store.installations.first(where: { $0.id == instanceId }),
+                      let credential = try store.credential(for: saved) else {
+                    throw AidenRemoteClientError.missingCredential
+                }
+                return credential
+            },
+            clientFactory: clientFactory,
+            probeClientFactory: probeClientFactory
         )
     }
 
-    private func activeClientKey(
-        for installation: AidenInstallation,
-        activationGeneration: Int
-    ) -> ActiveClientKey {
-        ActiveClientKey(
-            instanceId: installation.id,
-            deviceId: installation.deviceId,
-            credentialScope: installation.credentialScope,
-            activationGeneration: activationGeneration
-        )
+    /// The selected machine's generation moves on arrival, so A -> B -> A can't
+    /// make an old context current again.
+    private func advanceActivationGeneration() {
+        selectedConnection?.advanceGeneration()
     }
 
-    private func client(
-        for installation: AidenInstallation,
-        credential: String,
-        activationGeneration: Int
-    ) throws -> AidenRemoteClient {
-        let key = activeClientKey(for: installation, activationGeneration: activationGeneration)
-        if let cachedActiveClient, cachedActiveClient.key == key {
-            return cachedActiveClient.client
+    private func advanceConnectionGeneration() {
+        selectedConnection?.advanceConnectionGeneration()
+    }
+
+    /// The selection reached this machine because the one before it went, and
+    /// a connect follows once that machine's data is purged. Until then a
+    /// connected machine keeps showing its own data, and any other shows the
+    /// connect it is about to get rather than a state left from earlier.
+    private func settleArrivingMachine() {
+        guard let selectedConnection else { return }
+        selectedConnection.advanceConnectionGeneration()
+        guard selectedConnection.connectionState != .connected else { return }
+        // A machine revoked in the background still needs its workspaces: the
+        // purge reads them to find the legacy cache files, as it does when the
+        // selection switches to it.
+        if !selectedConnection.isPurgePending {
+            server = nil
+            workspaces = []
         }
-        let client = try clientFactory(installation, credential)
-        cachedActiveClient = (key, client)
-        return client
+        connectionIssue = nil
+        connectionState = .connecting
     }
 
     private func mutateOutcome(
@@ -1047,7 +1217,7 @@ final class AidenRemoteCoordinator {
         isMutating = true
         presentedError = nil
         defer { isMutating = false }
-        guard let installationId = activeInstanceId else { return .stale }
+        guard let installationId = defaultInstanceId else { return .stale }
         let generation = connectionGeneration
         do {
             let client = try activeClient()
@@ -1066,88 +1236,37 @@ final class AidenRemoteCoordinator {
     }
 
     private func applyWorkspaceSnapshot(_ workspaces: [AidenWorkspace], instanceId: String) {
-        guard activeInstanceId == instanceId else { return }
-        self.workspaces = workspaces
-        // A hidden No workspace record can't be archived (the Chats group has no Unarchive), so
-        // a flag an older build left on one is dropped here and every archive check agrees.
-        workspaceArchiveStore.prune(
-            instanceID: instanceId,
-            validWorkspaceIDs: Set(AidenNoWorkspace.choices(workspaces).map(\.id))
-        )
-        workspaceSnapshotRevision &+= 1
-        updateIntentCatalog(for: instanceId)
-        persistWorkspaces()
-    }
-
-    /// Shows the last saved workspace list while the connection comes up, so
-    /// Home can project saved Recents instead of an empty state. A live answer
-    /// that arrived first always wins.
-    private func seedSavedWorkspaces(installationId: String, generation: Int) async {
-        guard workspaces.isEmpty,
-              let saved = await chatCache.loadWorkspaces(instanceId: installationId),
-              isCurrentContext(installationId: installationId, generation: generation),
-              workspaces.isEmpty else { return }
-        // Not a live snapshot, so `workspaceSnapshotRevision` stays put and
-        // archive pruning waits for the Mac's own answer.
-        workspaces = saved
+        guard defaultInstanceId == instanceId else { return }
+        syncSelectedConnection()?.applyWorkspaceSnapshot(workspaces)
     }
 
     private func persistWorkspaces() {
-        guard let instanceId = activeInstanceId else { return }
-        let snapshot = workspaces
+        guard let instanceId = defaultInstanceId else { return }
+        persistWorkspaces(workspaces, instanceId: instanceId)
+    }
+
+    private func persistWorkspaces(_ snapshot: [AidenWorkspace], instanceId: String) {
         let writeToken = chatCache.reserveChatWrite()
         let cache = chatCache
         Task { await cache.saveWorkspaces(snapshot, instanceId: instanceId, writeToken: writeToken) }
     }
 
     private func isCurrentContext(installationId: String, generation: Int) -> Bool {
-        activeInstanceId == installationId && connectionGeneration == generation
+        defaultInstanceId == installationId && connectionGeneration == generation
     }
 
     private func upsert(_ workspace: AidenWorkspace) {
         workspaces.removeAll { $0.id == workspace.id }
         workspaces.append(workspace)
         workspaces.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        updateIntentCatalog(for: activeInstanceId)
+        updateIntentCatalog(for: defaultInstanceId)
         persistWorkspaces()
     }
 
-    private func handleConnectionError(_ error: Error, installationId: String?) async {
-        guard installationId == nil || installationId == activeInstanceId else { return }
-        if let clientError = error as? AidenRemoteClientError,
-           clientError.isCredentialRevoked,
-           let installationId {
-            let revocationMessage = String(localized: "This device was revoked. Pair it with Aiden Agent again.")
-            let previousInstallationId = activeInstanceId
-            let knownWorkspaceIds = previousInstallationId == installationId
-                ? Set(workspaces.map(\.id))
-                : []
-            try? installationStore.remove(installationId)
-            if previousInstallationId != activeInstanceId {
-                activationGeneration &+= 1
-            }
-            connectionGeneration &+= 1
-            server = nil
-            workspaces = []
-            await purgeInstallationData(installationId, knownWorkspaceIds: knownWorkspaceIds)
-            updateIntentCatalog(for: installationId)
-            connectionState = installationStore.activeInstallation == nil ? .needsPairing : .connecting
-            if installationStore.activeInstallation != nil {
-                await connectActiveInstallation()
-            }
-            presentedError = revocationMessage
-            return
-        }
-        if let clientError = error as? AidenRemoteClientError,
-           case .server = clientError, connectionState != .connecting {
-            connectionIssue = nil
-        connectionState = .connected
-        } else {
-            let issue = AidenConnectionIssue.classify(error)
-            connectionIssue = issue
-            connectionState = .offline(message: issue.message)
-        }
-        presentedError = error.localizedDescription
+    private func handleConnectionError(_ error: Error, installationId: String) async {
+        guard installationId == defaultInstanceId,
+              let connection = syncSelectedConnection() else { return }
+        await connection.handleConnectionError(error)
     }
 
     private func purgeInstallationData(
@@ -1168,6 +1287,7 @@ final class AidenRemoteCoordinator {
     ) async {
         workspaceArchiveStore.purge(instanceID: installationId)
         AidenProductNavigationStore.shared.purge(instanceID: installationId)
+        AidenAppNavigationStore().purge(instanceID: installationId)
         AidenChatForkPrefillHandoff.purge(instanceId: installationId)
         await AidenBotCache.shared.purge(instanceId: installationId)
         await AidenChatDraftStore.shared.purge(instanceId: installationId)
@@ -1179,6 +1299,11 @@ final class AidenRemoteCoordinator {
         AidenBotSessionCache.shared.purge(instanceId: installationId)
         await AidenBotOutboxStore.shared.purge(instanceId: installationId)
         AidenModelPreferenceStore.shared.purge(instanceID: installationId)
+        // A machine that is still paired, such as one pairing again with a new device ID, keeps
+        // the name, symbol and colour the person gave it.
+        if !installationStore.installations.contains(where: { $0.id == installationId }) {
+            machinePreferences.remove(installationId)
+        }
         await chatCache.purge(instanceId: installationId)
         await scheduledTaskCache.purge(instanceId: installationId)
         await workspaceEnvironmentCache.purge(
@@ -1193,7 +1318,7 @@ final class AidenRemoteCoordinator {
             AidenIntentInstallationRecord(id: $0.id, name: $0.name)
         }
         let cachedWorkspaces: [AidenIntentWorkspaceRecord]
-        if let instanceId, instanceId == activeInstanceId {
+        if let instanceId, instanceId == defaultInstanceId {
             let archivedWorkspaceIDs = workspaceArchiveStore.archivedWorkspaceIDs(for: instanceId)
             // Shortcuts see chats without a workspace as one Chats entry, as the sidebar does.
             let hiddenIDs = workspaces.filter(\.noWorkspace).map(\.id)
@@ -1210,7 +1335,7 @@ final class AidenRemoteCoordinator {
         }
         try? AidenIntentCatalogStore.shared.update(
             installations: installations,
-            activeInstallationId: activeInstanceId,
+            activeInstallationId: defaultInstanceId,
             workspaces: cachedWorkspaces,
             for: instanceId
         )
@@ -1220,7 +1345,7 @@ final class AidenRemoteCoordinator {
         UIDevice.current.userInterfaceIdiom == .pad ? .ipad : .iphone
     }
 
-    private static var deviceName: String {
+    static var deviceName: String {
         // Future iCloud sync should reconcile this user-visible label through
         // an account-scoped device record. Never reuse that cloud identity for
         // Remote authentication: deviceId and its credential stay Mac-specific.
@@ -1247,6 +1372,186 @@ final class AidenRemoteCoordinator {
             return body.code.rawValue == "idempotency_in_flight" || body.code.rawValue == "internal_error"
         case .invalidEndpoint, .missingCredential, .missingTrustConfiguration, .installationChanged:
             return false
+        }
+    }
+}
+
+extension AidenRemoteCoordinator: AidenHostConnectionDelegate {
+    func hostConnectionIsSelected(_ connection: AidenHostConnection) -> Bool {
+        connection === selectedConnection && connection.instanceId == defaultInstanceId
+    }
+
+    func hostConnectionSavedInstallation(_ connection: AidenHostConnection) -> AidenInstallation? {
+        installationStore.installations.first { $0.id == connection.instanceId }
+    }
+
+    func hostConnectionSavedWorkspaces(_ connection: AidenHostConnection) async -> [AidenWorkspace]? {
+        await chatCache.loadWorkspaces(instanceId: connection.instanceId)
+    }
+
+    func hostConnectionWillConnect(_ connection: AidenHostConnection) {
+        guard hostConnectionIsSelected(connection) else { return }
+        presentedError = nil
+    }
+
+    func hostConnection(_ connection: AidenHostConnection, didReceive server: AidenServer) throws {
+        try installationStore.updateServer(server)
+        syncSelectedConnection()
+    }
+
+    func hostConnection(
+        _ connection: AidenHostConnection,
+        didNegotiate capabilities: [AidenRemoteCapability],
+        confirmedBy server: AidenServer
+    ) throws {
+        try installationStore.updateNegotiatedDeviceCapabilities(capabilities, confirmedBy: server)
+        syncSelectedConnection()
+    }
+
+    func hostConnectionDidApplyWorkspaceSnapshot(_ connection: AidenHostConnection) {
+        let instanceId = connection.instanceId
+        // A hidden No workspace record can't be archived (the Chats group has no Unarchive), so
+        // a flag an older build left on one is dropped here and every archive check agrees.
+        workspaceArchiveStore.prune(
+            instanceID: instanceId,
+            validWorkspaceIDs: Set(AidenNoWorkspace.choices(connection.workspaces).map(\.id))
+        )
+        // The revision and the intent catalog describe the selected machine.
+        if hostConnectionIsSelected(connection) {
+            workspaceSnapshotRevision &+= 1
+            updateIntentCatalog(for: instanceId)
+        }
+        persistWorkspaces(connection.workspaces, instanceId: instanceId)
+    }
+
+    func hostConnection(_ connection: AidenHostConnection, didFailWith error: Error) {
+        guard hostConnectionIsSelected(connection) else { return }
+        presentedError = error.localizedDescription
+    }
+
+    /// Reached from the revoked connection's own attempt, and from
+    /// `handleConnectionError` when a request outside any attempt finds out. A
+    /// probe holds a scheduler slot, so the next machine's connect runs beside
+    /// that attempt rather than in it: ending the attempt, by timeout or by
+    /// `backgrounded()`, can't leave the slot held, and the connect isn't cut
+    /// short with it. An interactive attempt holds no slot, and its caller waits
+    /// for the outcome.
+    func hostConnectionWasRevoked(
+        _ connection: AidenHostConnection,
+        over route: AidenHostConnection.ConnectRoute
+    ) async {
+        // The selected machine is only the default for new work, so a chat of
+        // its on screen gets what any machine's does. The selection moves on,
+        // if there's anywhere to go, and the purge waits for that chat to leave.
+        if onScreenViews[connection.instanceId] != nil {
+            connection.markRevokedWithPurgePending()
+            hostConnectionNeedsPairing(connection)
+            return
+        }
+        guard route == .probe else {
+            await revokeSelectedConnectionAndConnectNext(connection)
+            return
+        }
+        let message = Self.revocationMessage
+        switch await revokeSelectedConnection(connection) {
+        case .notSelected:
+            return
+        case .needsPairing:
+            presentedError = message
+        case .connectNext:
+            // The connect clears the error when it starts, so it is set once the
+            // connect has ended, as it is on the awaiting path.
+            Task {
+                await connectActiveInstallation()
+                presentedError = message
+            }
+        }
+    }
+
+    private static var revocationMessage: String {
+        String(localized: "This device was revoked. Pair it with Aiden Agent again.")
+    }
+
+    private enum RevocationOutcome {
+        case notSelected
+        case needsPairing
+        /// Another machine is selected and still needs its connect.
+        case connectNext
+    }
+
+    /// Removes the selected machine's pairing and data.
+    private func revokeSelectedConnection(_ connection: AidenHostConnection) async -> RevocationOutcome {
+        // Everything below acts on the selected machine and the app-wide error.
+        guard hostConnectionIsSelected(connection) else { return .notSelected }
+        let installationId = connection.instanceId
+        let previousInstallationId = defaultInstanceId
+        let knownWorkspaceIds = previousInstallationId == installationId
+            ? Set(workspaces.map(\.id))
+            : []
+        connection.purgeStarted()
+        try? installationStore.remove(installationId)
+        if !installationStore.installations.contains(where: { $0.id == installationId }) {
+            connection.markRevoked()
+        }
+        syncSelectedConnection()
+        if previousInstallationId != defaultInstanceId {
+            advanceActivationGeneration()
+            settleArrivingMachine()
+        } else {
+            advanceConnectionGeneration()
+            server = nil
+            workspaces = []
+        }
+        await purgeInstallationData(installationId, knownWorkspaceIds: knownWorkspaceIds)
+        updateIntentCatalog(for: installationId)
+        connectionState = installationStore.activeInstallation == nil ? .needsPairing : .connecting
+        return installationStore.activeInstallation == nil ? .needsPairing : .connectNext
+    }
+
+    /// For a caller that isn't inside the revoked machine's attempt, like
+    /// selecting a machine revoked in the background: it waits for the next
+    /// machine's connect.
+    private func revokeSelectedConnectionAndConnectNext(_ connection: AidenHostConnection) async {
+        let message = Self.revocationMessage
+        switch await revokeSelectedConnection(connection) {
+        case .notSelected:
+            return
+        case .needsPairing:
+            presentedError = message
+        case .connectNext:
+            await connectActiveInstallation()
+            presentedError = message
+        }
+    }
+
+    /// Nothing here reaches the person: not the error, not the pairing screen.
+    /// With nothing on screen the purge runs now, as it does for the selected
+    /// machine, because the credential is dead and no view needs the data.
+    func hostConnectionWasRevokedInBackground(_ connection: AidenHostConnection) async {
+        guard !connection.isRevoked else { return }
+        connection.markRevokedWithPurgePending()
+        guard onScreenViews[connection.instanceId] == nil else { return }
+        await completeRevokedPurge(instanceId: connection.instanceId)?.value
+    }
+
+    /// Pairing shows only when no machine remains to fall back on.
+    func hostConnectionNeedsPairing(_ connection: AidenHostConnection) {
+        guard hostConnectionIsSelected(connection),
+              let next = machine(after: connection),
+              (try? installationStore.setActive(next.instanceId)) != nil else { return }
+        syncSelectedConnection()
+        advanceActivationGeneration()
+        settleArrivingMachine()
+        updateIntentCatalog(for: nil)
+        Task { await connectActiveInstallation() }
+    }
+
+    /// The next machine in pairing order that could still connect.
+    private func machine(after connection: AidenHostConnection) -> AidenHostConnection? {
+        let ordered = hosts.ordered
+        let position = ordered.firstIndex { $0 === connection } ?? 0
+        return (ordered[position...].dropFirst() + ordered[..<position]).first {
+            !$0.isRevoked && $0.connectionState != .needsPairing
         }
     }
 }

@@ -50,7 +50,7 @@ light, dark, and every preset. The mascot was not carried over.
     now-internal `Color.mixHex`), `AidenOnboardingArtMotion`, the `AidenOnboardingArtwork` tile, and the
     `OnboardingArt*` kit.
   - `AidenOnboardingVignettes.swift` has one view per page. Build shows the workspace chat with the
-    Workspaces/Bots switcher menu and a file tree. Extend shows the composer's model menu by provider with a
+    app's tabs (Inbox, Workspaces chosen, Bots) and a file tree. Extend shows the composer's model menu by provider with a
     thinking-level submenu and a pending image. Control shows Scheduled Tasks with real
     `AidenScheduledTaskPresentation.cadence` labels and a Run Now/Pause/Edit card.
   - Each vignette is drawn on a fixed 300 × 220 pt canvas and scaled by

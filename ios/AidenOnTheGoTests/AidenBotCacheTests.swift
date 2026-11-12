@@ -50,10 +50,152 @@ final class AidenBotCacheTests: XCTestCase {
         let afterInvalid = await cache.load(instanceId: "instance", deviceId: "device")
         XCTAssertEqual(afterInvalid, restored)
         let otherActivation = await cache.activate(instanceId: "other-instance", deviceId: "device")
+        let stillCurrent = await cache.isCurrent(activation)
+        XCTAssertTrue(stillCurrent, "Another machine's activation leaves this one current")
+        // Activating the same machine again is what makes the first activation stale.
+        let reactivated = await cache.activate(instanceId: "instance", deviceId: "device")
         let stale = try await cache.mergeAndStore(AidenBotCacheSegments(catalogsByBotID: ["bot:a": second]), activation: activation)
         XCTAssertNil(stale)
         let current = await cache.isCurrent(otherActivation)
+        let reactivatedIsCurrent = await cache.isCurrent(reactivated)
         XCTAssertTrue(current)
+        XCTAssertTrue(reactivatedIsCurrent)
+        let afterStale = await cache.load(instanceId: "instance", deviceId: "device")
+        let otherRows = await cache.load(instanceId: "other-instance", deviceId: "device")
+        XCTAssertEqual(afterStale, restored, "A catalog never lands under another Bot or instance")
+        XCTAssertNil(otherRows)
+    }
+
+    private func catalog(revision: String) throws -> AidenBotCapabilityCatalog {
+        var data = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(fixture().botCapabilityCatalog)
+        ) as? [String: Any])
+        data["revision"] = revision
+        return try JSONDecoder.aidenRemote().decode(
+            AidenBotCapabilityCatalog.self,
+            from: JSONSerialization.data(withJSONObject: data)
+        )
+    }
+
+    private func temporaryCache(_ name: String) -> (AidenBotCache, URL) {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "aiden-bot-cache-\(name)-\(UUID().uuidString)", directoryHint: .isDirectory)
+        return (AidenBotCache(root: root), root)
+    }
+
+    func testActivatingASecondMachineKeepsTheFirstCurrent() async throws {
+        let (cache, root) = temporaryCache("keeps-first")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let a = await cache.activate(instanceId: "instance-a", deviceId: "device-a")
+        let b = await cache.activate(instanceId: "instance-b", deviceId: "device-b")
+
+        let aIsCurrent = await cache.isCurrent(a)
+        let bIsCurrent = await cache.isCurrent(b)
+        let storedA = try await cache.store(AidenBotCacheSnapshot(list: try fixture().botList), activation: a)
+        XCTAssertTrue(aIsCurrent)
+        XCTAssertTrue(bIsCurrent)
+        XCTAssertTrue(storedA, "A write for the first machine still lands")
+    }
+
+    func testDeactivatingOneMachineLeavesTheOther() async throws {
+        let (cache, root) = temporaryCache("deactivate")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let a = await cache.activate(instanceId: "instance-a", deviceId: "device-a")
+        let b = await cache.activate(instanceId: "instance-b", deviceId: "device-b")
+
+        await cache.deactivate(instanceId: "instance-a")
+
+        let aIsCurrent = await cache.isCurrent(a)
+        let bIsCurrent = await cache.isCurrent(b)
+        let staleWrite = try await cache.store(AidenBotCacheSnapshot(list: try fixture().botList), activation: a)
+        let liveWrite = try await cache.store(AidenBotCacheSnapshot(list: try fixture().botList), activation: b)
+        XCTAssertFalse(aIsCurrent)
+        XCTAssertTrue(bIsCurrent)
+        XCTAssertFalse(staleWrite)
+        XCTAssertTrue(liveWrite)
+    }
+
+    func testTwoMachinesWithTheSameBotIDDoNotShareRows() async throws {
+        let (cache, root) = temporaryCache("same-bot")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let forA = try catalog(revision: "catalog-on-a")
+        let forB = try catalog(revision: "catalog-on-b")
+        let a = await cache.activate(instanceId: "instance-a", deviceId: "device-a")
+        let b = await cache.activate(instanceId: "instance-b", deviceId: "device-b")
+
+        // A's write is still in flight after B is activated, and lands under A.
+        _ = try await cache.mergeAndStore(AidenBotCacheSegments(catalogsByBotID: ["bot:shared": forB]), activation: b)
+        _ = try await cache.mergeAndStore(AidenBotCacheSegments(catalogsByBotID: ["bot:shared": forA]), activation: a)
+
+        let loadedA = await cache.load(instanceId: "instance-a", deviceId: "device-a")
+        let loadedB = await cache.load(instanceId: "instance-b", deviceId: "device-b")
+        XCTAssertEqual(loadedA?.catalog(forBotID: "bot:shared"), forA)
+        XCTAssertEqual(loadedB?.catalog(forBotID: "bot:shared"), forB)
+        let crossed = await cache.load(instanceId: "instance-a", deviceId: "device-b")
+        XCTAssertNil(crossed)
+    }
+
+    func testReactivatingOneMachineMakesOnlyItsOlderActivationStale() async throws {
+        let (cache, root) = temporaryCache("reactivate")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let firstA = await cache.activate(instanceId: "instance-a", deviceId: "device-a")
+        let b = await cache.activate(instanceId: "instance-b", deviceId: "device-b")
+        let secondA = await cache.activate(instanceId: "instance-a", deviceId: "device-a")
+
+        let firstIsCurrent = await cache.isCurrent(firstA)
+        let secondIsCurrent = await cache.isCurrent(secondA)
+        let bIsCurrent = await cache.isCurrent(b)
+        XCTAssertFalse(firstIsCurrent)
+        XCTAssertTrue(secondIsCurrent)
+        XCTAssertTrue(bIsCurrent)
+    }
+
+    func testReactivatingAnInstanceWithANewDeviceMakesTheOldPairingStale() async throws {
+        let (cache, root) = temporaryCache("repair")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let list = try fixture().botList
+        let first = AidenBotCacheSnapshot(list: list, savedAt: Date(timeIntervalSince1970: 1))
+        let second = AidenBotCacheSnapshot(list: list, savedAt: Date(timeIntervalSince1970: 2))
+        let late = AidenBotCacheSnapshot(list: list, savedAt: Date(timeIntervalSince1970: 3))
+        let old = await cache.activate(instanceId: "instance-a", deviceId: "dev1")
+        _ = try await cache.store(first, activation: old)
+        let repaired = await cache.activate(instanceId: "instance-a", deviceId: "dev2")
+        _ = try await cache.store(second, activation: repaired)
+
+        let oldIsCurrent = await cache.isCurrent(old)
+        let lateStore = try await cache.store(late, activation: old)
+        let lateMerge = try await cache.mergeAndStore(AidenBotCacheSegments(list: list), activation: old)
+
+        let repairedIsCurrent = await cache.isCurrent(repaired)
+        let dev2 = await cache.load(instanceId: "instance-a", deviceId: "dev2")
+        let dev1 = await cache.load(instanceId: "instance-a", deviceId: "dev1")
+        XCTAssertFalse(oldIsCurrent)
+        XCTAssertFalse(lateStore)
+        XCTAssertNil(lateMerge)
+        XCTAssertTrue(repairedIsCurrent)
+        XCTAssertEqual(dev2, second, "The new pairing's rows are unchanged")
+        XCTAssertEqual(dev1, first, "The refused write didn't reach the old pairing either")
+    }
+
+    func testAStaleWriteAfterPurgeIsRefused() async throws {
+        let (cache, root) = temporaryCache("purge-stale")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let snapshot = AidenBotCacheSnapshot(list: try fixture().botList)
+        let a = await cache.activate(instanceId: "instance-a", deviceId: "device-a")
+        let b = await cache.activate(instanceId: "instance-b", deviceId: "device-b")
+
+        await cache.purge(instanceId: "instance-a")
+
+        let aIsCurrent = await cache.isCurrent(a)
+        let staleStore = try await cache.store(snapshot, activation: a)
+        let staleMerge = try await cache.mergeAndStore(AidenBotCacheSegments(list: snapshot.list), activation: a)
+        let loadedA = await cache.load(instanceId: "instance-a", deviceId: "device-a")
+        let bIsCurrent = await cache.isCurrent(b)
+        XCTAssertFalse(aIsCurrent)
+        XCTAssertFalse(staleStore)
+        XCTAssertNil(staleMerge)
+        XCTAssertNil(loadedA)
+        XCTAssertTrue(bIsCurrent)
     }
 
     func testLegacyCacheDecodesWithoutScopedCatalogsAndListRefreshPrunesDeletedBotScopes() throws {
@@ -239,21 +381,6 @@ final class AidenBotCacheTests: XCTestCase {
             .showBot
         )
         XCTAssertEqual(aidenResolvedBotDeepLink(botID: "bot_fixture_01", conversations: []), .showBot)
-    }
-
-    @MainActor
-    func testBotChatDeepLinkOnAMacServingDurableSessionsOpensTheDurableChatWhereTheCardWaits() throws {
-        let path = try XCTUnwrap(aidenBotSessionDeepLinkPath(botID: "bot_fixture_01", hostFeatures: ["bot-durable-session-v1"]))
-        XCTAssertEqual(path.compactMap(AidenBotChatRoute.botID(fromPath:)), ["bot_fixture_01"], "the Bots stack opens that Bot's durable chat")
-        XCTAssertNil(aidenBotSessionDeepLinkPath(botID: "bot_fixture_01", hostFeatures: []), "an older Mac keeps the conversation link")
-        XCTAssertNil(aidenBotSessionDeepLinkPath(botID: "bot_fixture_01", hostFeatures: nil))
-
-        // The Bots stack keeps the path the link set, as it restores it.
-        let suiteName = "AidenBotCacheTests.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-        AidenProductNavigationStore(defaults: defaults).setCompactBotPath(path, for: "mac-a")
-        XCTAssertEqual(AidenProductNavigationStore(defaults: defaults).compactBotPath(for: "mac-a"), path)
     }
 
     func testBotCachePurgesOnlySelectedInstallationAndInvalidatesItsActivation() async throws {

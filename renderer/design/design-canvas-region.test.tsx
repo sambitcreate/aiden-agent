@@ -29,6 +29,10 @@ test("while the canvas chunk loads, the region shows a neutral loading state, no
   assert.equal(screen.queryByText(DESIGN_CANVAS_EMPTY_COPY) === null, true, "no empty-state copy while loading");
   assert.equal(loading.textContent?.trim() ?? "", "", "the skeleton draws no words");
 
+  // The region's lazy import is this same module, so this waits for the chunk
+  // itself, however long a busy machine takes to load it, and only the render
+  // after it is left to waitFor.
+  await import("./design-canvas");
   await waitFor(() => screen.getByText(DESIGN_CANVAS_EMPTY_COPY));
   assert.equal(screen.queryByRole("status", { name: "Loading canvas" }) === null, true);
   assert.ok(screen.getByRole("region", { name: "Design canvas" }));
