@@ -4,6 +4,54 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenWorkspaceEnvironmentTests: XCTestCase {
+    @MainActor
+    func testCommitAvailabilityRetainsTheHostReviewPermission() async throws {
+        let snapshotID = "snap_\(String(repeating: "s", count: 43))"
+        for capability in [#""capability":{"allowed":false,"reason":"A file could not be shown."},"#,
+                           #""capability":{"allowed":true},"#, ""] {
+            let recorder = EnvironmentRequestRecorder()
+            EnvironmentMockURLProtocol.handler = { request in
+                recorder.record(request)
+                let path = request.url?.path ?? ""
+                if path.hasSuffix("/git/review") {
+                    return Self.response(request, 200, """
+                    {"operationId":"op_review","status":"snapshot","snapshotId":"\(snapshotID)",\(capability)
+                     "result":{"kind":"review","branch":"main","uncommitted":2,"files":[{"id":"file_\(String(repeating: "f", count: 43))","displayPath":"README.md","status":"modified"}]}}
+                    """)
+                }
+                if path.hasSuffix("/git/branches") {
+                    return Self.response(request, 200, """
+                    {"operationId":"op_branches","status":"snapshot","snapshotId":"\(snapshotID)","result":{"kind":"branches","current":"main","branches":["main"]}}
+                    """)
+                }
+                if path.hasSuffix("/git/worktrees") {
+                    return Self.response(request, 200, #"{"operationId":"op_worktrees","status":"snapshot","result":{"kind":"worktrees","worktrees":[]}}"#)
+                }
+                throw URLError(.unsupportedURL)
+            }
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.protocolClasses = [EnvironmentMockURLProtocol.self]
+            let client = AidenRemoteClient(endpoint: URL(string: "https://aiden.test/api/aiden/v1")!, credential: "credential", session: URLSession(configuration: configuration))
+            let model = AidenWorkspaceGitModel()
+            await model.refresh(client: client, workspaceId: "workspace-1", isCurrent: { true })
+            XCTAssertNil(model.errorMessage)
+            if capability.contains("true") {
+                XCTAssertTrue(model.canCommitReviewedChanges)
+                XCTAssertNil(model.commitUnavailableReason)
+                model.isLoading = true
+                XCTAssertFalse(model.canCommitReviewedChanges)
+                model.isLoading = false
+                model.reviewSnapshotId = nil
+                XCTAssertFalse(model.canCommitReviewedChanges)
+            } else {
+                XCTAssertFalse(model.canCommitReviewedChanges)
+                XCTAssertEqual(model.commitUnavailableReason, capability.isEmpty ? "Commit is unavailable for this review." : "A file could not be shown.")
+                await model.commit(client: client, workspaceId: "workspace-1", message: "Update", stagedOnly: false, isCurrent: { true })
+                XCTAssertFalse(recorder.requests.contains { $0.httpMethod == "POST" })
+            }
+        }
+    }
+
     func testGitReviewPreservesUnavailableLineCounts() throws {
         let data = Data(#"{"kind":"review","branch":"main","uncommitted":2,"files":[{"id":"known","displayPath":"small.txt","status":"untracked","additions":3,"deletions":0},{"id":"unknown","displayPath":"budgeted.txt","status":"untracked"}]}"#.utf8)
         let review = try AidenRemoteJSONDecoder.decode(AidenGitReview.self, from: data)
@@ -322,6 +370,8 @@ final class AidenWorkspaceEnvironmentTests: XCTestCase {
         )
         let model = AidenWorkspaceGitModel()
         model.reviewSnapshotId = snapshotID
+        model.review = AidenGitReview(kind: "review", branch: "main", uncommitted: 1, files: [AidenGitFile(id: "visible", displayPath: "README.md", status: .modified, staged: false, additions: nil, deletions: nil)])
+        model.commitCapability = AidenGitCapability(allowed: true, reason: nil)
         await model.commit(
             client: client,
             workspaceId: "workspace-1",

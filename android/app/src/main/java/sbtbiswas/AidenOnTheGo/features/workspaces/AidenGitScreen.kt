@@ -150,6 +150,10 @@ fun AidenGitScreen(
     }
 
     val review = gitReviewResult?.review
+    val canCommit = gitReviewResult?.canCommitReviewedChanges == true && reviewIsFresh && !isOperating && pendingOperation == null
+    val commitUnavailableReason = if (review != null && gitReviewResult?.capability?.allowed != true) {
+        gitReviewResult?.capability?.reason ?: stringResource(R.string.git_commit_unavailable)
+    } else null
     val diffColors = aidenDiffColors(palette)
 
     Scaffold(
@@ -457,14 +461,12 @@ fun AidenGitScreen(
                             shadowElevation = 8.dp,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            AidenPrimaryButton(
-                                text = pendingOperation ?: pluralStringResource(R.plurals.git_commit_changes_count, review.files.size, review.files.size),
-                                onClick = { showCommitSheet = true },
-                                enabled = reviewIsFresh && pendingOperation == null,
-                                leadingIcon = Icons.Default.Check,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(16.dp)
+                            AidenGitCommitAction(
+                                result = gitReviewResult,
+                                isFresh = reviewIsFresh,
+                                isOperating = isOperating,
+                                pendingOperation = pendingOperation,
+                                onClick = { showCommitSheet = true }
                             )
                         }
                     }
@@ -532,16 +534,20 @@ fun AidenGitScreen(
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
+                commitUnavailableReason?.let { reason ->
+                    Text(reason, style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
 
                 AidenPrimaryButton(
                     text = stringResource(R.string.git_review_and_commit),
                     onClick = {
-                        if (commitMessage.trim().isNotEmpty()) {
+                        if (canCommit && commitMessage.trim().isNotEmpty()) {
                             showConfirmDialog = true
                         }
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    enabled = commitMessage.trim().isNotEmpty() && !isOperating
+                    enabled = canCommit && commitMessage.trim().isNotEmpty()
                 )
             }
 
@@ -549,8 +555,11 @@ fun AidenGitScreen(
                 AidenWorkspaceAlertDialog(
                     title = stringResource(R.string.git_confirm_commit),
                     onDismissRequest = { showConfirmDialog = false },
-                    confirmText = stringResource(R.string.git_commit),
+                    confirmText = if (canCommit) stringResource(R.string.git_commit) else null,
                     onConfirm = confirm@{
+                        if (!canCommit) {
+                            return@confirm
+                        }
                         showConfirmDialog = false
                         showCommitSheet = false
                         val snapshotId = gitReviewResult?.snapshotId ?: return@confirm
@@ -1112,5 +1121,34 @@ internal fun AidenGitActionBar(
                 modifier = Modifier.weight(1f)
             )
         }
+    }
+}
+
+@Composable
+internal fun AidenGitCommitAction(
+    result: AidenGitResult?,
+    isFresh: Boolean,
+    isOperating: Boolean,
+    pendingOperation: String?,
+    onClick: () -> Unit
+) {
+    val palette = AidenTheme.palette
+    val fileCount = result?.review?.files?.size ?: 0
+    Column(modifier = Modifier.padding(16.dp)) {
+        if (result?.capability?.allowed != true) {
+            Text(
+                text = result?.capability?.reason ?: stringResource(R.string.git_commit_unavailable),
+                style = MaterialTheme.typography.bodySmall,
+                color = palette.secondary
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+        AidenPrimaryButton(
+            text = pendingOperation ?: pluralStringResource(R.plurals.git_commit_changes_count, fileCount, fileCount),
+            onClick = onClick,
+            enabled = result?.canCommitReviewedChanges == true && isFresh && !isOperating && pendingOperation == null,
+            leadingIcon = Icons.Default.Check,
+            modifier = Modifier.fillMaxWidth()
+        )
     }
 }

@@ -9,6 +9,30 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import java.io.File
 
 class AidenWorkspaceEnvironmentTest {
+    @Test fun commitAvailabilityUsesTheDecodedReviewCapability() {
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+        val denied = json.decodeFromString(AidenGitResultWire, """
+            {"operationId":"review-1","status":"snapshot","snapshotId":"snapshot-1",
+             "capability":{"allowed":false,"reason":"A file could not be shown."},
+             "result":{"kind":"review","branch":"main","uncommitted":2,
+                       "files":[{"id":"visible","displayPath":"README.md","status":"modified"}]}}
+        """)
+        assertEquals(false, denied.capability?.allowed)
+        assertEquals("A file could not be shown.", denied.capability?.reason)
+        assertFalse(denied.canCommitReviewedChanges)
+
+        val allowed = json.decodeFromString(AidenGitResultWire, """
+            {"operationId":"review-2","status":"snapshot","snapshotId":"snapshot-2",
+             "capability":{"allowed":true},
+             "result":{"kind":"review","branch":"main","uncommitted":1,
+                       "files":[{"id":"visible","displayPath":"README.md","status":"modified"}]}}
+        """)
+        assertTrue(allowed.canCommitReviewedChanges)
+        assertFalse(allowed.copy(capability = null).canCommitReviewedChanges)
+        assertFalse(allowed.copy(snapshotId = null).canCommitReviewedChanges)
+        assertFalse(allowed.copy(review = allowed.review!!.copy(files = emptyList())).canCommitReviewedChanges)
+    }
+
     @Test fun gitReviewPreservesUnavailableLineCounts() {
         val review = kotlinx.serialization.json.Json.decodeFromString<AidenGitReview>(
             """{"kind":"review","branch":"main","uncommitted":2,"files":[{"id":"known","displayPath":"small.txt","status":"untracked","additions":3,"deletions":0},{"id":"unknown","displayPath":"budgeted.txt","status":"untracked"}]}""")

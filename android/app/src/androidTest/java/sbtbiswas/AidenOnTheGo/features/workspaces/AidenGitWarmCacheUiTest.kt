@@ -2,11 +2,15 @@ package sbtbiswas.AidenOnTheGo.features.workspaces
 
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasProgressBarRangeInfo
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import org.junit.Assert.assertEquals
+import sbtbiswas.AidenOnTheGo.models.AidenGitCapability
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.CoroutineScope
@@ -70,6 +74,40 @@ class AidenGitWarmCacheUiTest {
     }
 
     @Test
+    fun aDeniedCommitShowsTheHostReasonAndCannotBeTapped() {
+        var taps = 0
+        compose.setContent {
+            AidenTheme {
+                AidenGitCommitAction(commitReview(false), true, false, null) { taps += 1 }
+            }
+        }
+        compose.onNodeWithText("A file could not be shown.").assertIsDisplayed()
+        compose.onNodeWithText("Commit Changes (1 file)").assertIsNotEnabled().performClick()
+        assertEquals(0, taps)
+    }
+
+    @Test
+    fun anAllowedFreshCommitCanBeTapped() {
+        var taps = 0
+        compose.setContent {
+            AidenTheme {
+                AidenGitCommitAction(commitReview(true), true, false, null) { taps += 1 }
+            }
+        }
+        compose.onNodeWithText("A file could not be shown.").assertDoesNotExist()
+        compose.onNodeWithText("Commit Changes (1 file)").assertIsEnabled().performClick()
+        assertEquals(1, taps)
+    }
+
+    private fun commitReview(allowed: Boolean) = AidenGitResult(
+        operationId = "review-1", status = AidenGitOperationStatus.SNAPSHOT, snapshotId = "snapshot-1",
+        capability = AidenGitCapability(allowed, if (allowed) null else "A file could not be shown."),
+        review = AidenGitReview(branch = "main", uncommitted = 2, files = listOf(
+            AidenGitFile(id = "visible", displayPath = "README.md", status = AidenGitFileStatus.MODIFIED)
+        ))
+    )
+
+    @Test
     fun aSavedReviewRendersAtOnceAndHoldsSnapshotActionsUntilItIsFresh() {
         coordinator.readSnapshotCache.store(
             "mac-1",
@@ -78,6 +116,7 @@ class AidenGitWarmCacheUiTest {
                 operationId = "op-1",
                 status = AidenGitOperationStatus.SNAPSHOT,
                 snapshotId = "snapshot-stale",
+                capability = AidenGitCapability(allowed = true),
                 review = AidenGitReview(
                     branch = "release",
                     uncommitted = 1,
