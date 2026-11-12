@@ -788,6 +788,7 @@
         "main/services/approval-judge/judge.test.ts",
         "main/services/approval-judge/replay.test.ts",
         "main/services/approval-judge/spend.test.ts",
+        "main/services/approval-rules/rules.test.ts",
         "main/services/vision-analysis-tool.test.ts",
         "main/services/workspace-application-service.test.ts",
         "main/services/workspace-environment-application-service.test.ts",

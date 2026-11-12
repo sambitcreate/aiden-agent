@@ -4,15 +4,17 @@
 //
 // The steps run in Rakazo's order:
 //
-//   1. block            a hook denied it, access refuses it, its authority went
-//                       stale, or the person already declined it in this run
+//   1. block            a hook denied it, a Block rule on the rules page, access
+//                       refuses it, its authority went stale, or the person
+//                       already declined it in this run
 //   2. money            purchases, money, credentials and anything a rule hands
 //                       to the person: the person does it (or the run refuses)
 //   3. explicit-only    asks once in every mode, never remembered
 //   4. never ask        the Never ask mode, and the run-scoped pre-approvals
-//   5. ask rule         a rule asks first
+//   5. ask rule         a Bot's rule or an Always-ask rule asks first
 //   6. new destination  after outside content: judged in Auto, asked in Ask
-//   7. always allow     a remembered grant covers it
+//   7. always allow     a remembered grant or an Always-allow rule covers it
+//                       (a rule never covers the person's Mac)
 //   8. consequential    judged in Auto, asked in Ask; the Mac always asks
 //   9. otherwise        allow
 //
@@ -120,6 +122,11 @@ export interface GateAction {
   delegate?: "memory";
   /** The strictest of the Bot's rules that matched the call. */
   rule?: GateRule;
+  /**
+   * The rules page's decision for this call (§3.5): Block refuses at step 1,
+   * Ask asks at step 5, Allow allows at step 7. Never covers the Mac.
+   */
+  pageRule?: "allow" | "ask" | "block";
   /** The authority this call was admitted under changed. */
   stale?: boolean;
   /** The person declined this exact action earlier in this run. */
@@ -151,6 +158,8 @@ export type GateBlockReason =
   | "needs-person"
   | "unattended-rule"
   | "peer"
+  /** A Block rule on the rules page. */
+  | "rule"
   /** A run nobody started (a routine) cannot ask; it refuses and reports. */
   | "unattended";
 
@@ -176,7 +185,9 @@ export type GateAllowVia =
   | "remembered"
   | "hook-allow"
   | "allow-list"
-  | "grant";
+  | "grant"
+  /** An Always-allow rule on the rules page. */
+  | "rule";
 
 export type GateDecision =
   | { outcome: "block"; step: GateStep; reason: GateBlockReason }
@@ -216,12 +227,13 @@ function decide(context: GateContext, action: GateAction): GateDecision {
   const attendance = context.attendance ?? "person";
   const unwatched = UNWATCHED.has(attendance);
   const mode = gateMode(context);
-  const needsAnswer = action.consequential === true || action.rule !== undefined;
+  const needsAnswer = action.consequential === true || action.rule !== undefined || action.pageRule === "ask";
   // The person's Mac with no grant covering it: asks in every mode.
   const macOpen = action.mac === true && action.granted !== true && action.macGranted !== true;
 
   // 1. Block.
   if (context.hook === "deny") return { outcome: "block", step: "block", reason: "hook" };
+  if (action.pageRule === "block") return { outcome: "block", step: "block", reason: "rule" };
   if (action.stale) return { outcome: "block", step: "block", reason: "stale" };
   if (action.declinedInRun) return { outcome: "block", step: "block", reason: "declined" };
   if (action.consequential && context.surface !== "workspace" && (context.access === "read-only" || context.access === "none")) {
@@ -271,6 +283,11 @@ function decide(context: GateContext, action: GateAction): GateDecision {
     if (!action.consequential && unwatched) return { outcome: "block", step: "ask-rule", reason: "unattended-rule" };
     return { outcome: "ask", step: "ask-rule", offer: "rule" };
   }
+  if (action.pageRule === "ask") {
+    // As a Bot's own rule: nobody can answer a card on a call that needed none.
+    if (!action.consequential && unwatched) return { outcome: "block", step: "ask-rule", reason: "unattended-rule" };
+    return { outcome: "ask", step: "ask-rule", offer: "once" };
+  }
 
   // The Bot's own things never ask on their own account; a rule the person
   // wrote (above) still does.
@@ -284,6 +301,8 @@ function decide(context: GateContext, action: GateAction): GateDecision {
 
   // 7. Always allow: a remembered grant covers it.
   if (action.granted) return { outcome: "allow", step: "always-allow", via: "grant" };
+  // An Always-allow rule never reaches the person's Mac; only its grant does.
+  if (action.pageRule === "allow" && !action.mac) return { outcome: "allow", step: "always-allow", via: "rule" };
   if (action.mac && action.macGranted) return { outcome: "allow", step: "always-allow", via: "grant" };
   if (action.consequential && action.rememberable) {
     if (context.hook === "allow") return { outcome: "allow", step: "always-allow", via: "hook-allow" };
