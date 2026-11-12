@@ -13,7 +13,13 @@ afterEach(cleanup);
 type Held = { patch: Partial<AppSettings>; finish(): void; fail(): void };
 
 /** Holds every settings save open until the test finishes or fails it, like a slow disk. */
-async function mount(settings: Partial<AppSettings> = {}, options: { hold?: boolean; settingsFail?: boolean } = {}) {
+/** A provider billed by the request: an API key for a hosted endpoint. */
+const METERED = { id: "openai", models: ["fast"], baseUrl: "https://api.openai.com/v1", hasKey: true, credentialType: "api_key" };
+
+async function mount(
+  settings: Partial<AppSettings> = {},
+  options: { hold?: boolean; settingsFail?: boolean; providers?: unknown[] } = {},
+) {
   let stored: Partial<AppSettings> = { ...settings };
   const held: Held[] = [];
   const calls = installBotTestIpc({
@@ -21,7 +27,7 @@ async function mount(settings: Partial<AppSettings> = {}, options: { hold?: bool
       if (options.settingsFail) throw new Error("unreadable");
       return stored;
     },
-    "providers:list": () => [{ id: "local", models: ["fast"] }],
+    "providers:list": () => options.providers ?? [METERED],
     "settings:set": (value: unknown) => {
       const patch = value as Partial<AppSettings>;
       if (!options.hold) {
@@ -78,6 +84,23 @@ test("the page leads with context settings, then usage and spending limits", asy
   const positions = titles.map((title) => text.indexOf(title));
   assert.ok(positions.every((position) => position >= 0), `missing a group: ${positions.join(", ")}`);
   assert.deepEqual([...positions].sort((a, b) => a - b), positions);
+});
+
+test("spending limits wait for a provider that bills by the request; a sign-in or a model on this Mac costs nothing", async () => {
+  const free = [
+    { id: "ollama", models: ["llama"], baseUrl: "http://127.0.0.1:11434/v1", hasKey: true },
+    { id: "anthropic", models: ["claude"], baseUrl: "https://api.anthropic.com", hasKey: true, credentialType: "oauth" },
+    { id: "groq", models: ["fast"], baseUrl: "https://api.groq.com/openai/v1", hasKey: false },
+  ];
+  await mount({}, { providers: free });
+  await screen.findByText("Nothing here costs money yet");
+  assert.equal(screen.queryByRole("combobox", { name: "Spending limit for each chat" }), null);
+});
+
+test("a limit already set stays in reach even with no paid provider, so it can be changed or cleared", async () => {
+  await mount({ spendingLimits: { botMonthUsd: 10 } }, { providers: [] });
+  await screen.findByRole("combobox", { name: "Spending limit for each Bot per month" });
+  assert.equal(screen.queryByText("Nothing here costs money yet"), null);
 });
 
 test("the page says what compaction may send to the chat model", async () => {

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   formatUsd,
+  meteredProviderConnected,
   ordinalDay,
   parseSpendingLimitsSettings,
   parseSpendingStatusView,
@@ -65,4 +66,15 @@ test("a status from main is read strictly", () => {
   assert.equal(parseSpendingStatusView({ ...chat, limitUsd: 0 }), null);
   assert.equal(parseSpendingStatusView({ ...chat, ownerId: "" }), null);
   assert.equal(parseSpendingStatusView({ ...chat, periodEnd: 1.5 }), null);
+});
+
+test("only a hosted provider with a stored API key bills by the request", () => {
+  const hosted = { id: "openai", baseUrl: "https://api.openai.com/v1", hasKey: true };
+  assert.equal(meteredProviderConnected([hosted]), true);
+  assert.equal(meteredProviderConnected([{ ...hosted, credentialType: "oauth" }]), false, "a sign-in is $0");
+  assert.equal(meteredProviderConnected([{ ...hosted, hasKey: false }]), false, "no key, nothing to bill");
+  assert.equal(meteredProviderConnected([{ ...hosted, deployment: "local" }]), false, "marked as running on this Mac");
+  assert.equal(meteredProviderConnected([{ ...hosted, baseUrl: "http://localhost:1234/v1" }]), false);
+  assert.equal(meteredProviderConnected([{ ...hosted, id: "antigravity" }]), false, "an agent harness bills its own way");
+  assert.equal(meteredProviderConnected([]), false);
 });

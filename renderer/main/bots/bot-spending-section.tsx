@@ -1,13 +1,21 @@
 // A Bot's monthly spending limit on its Profile: the default from Settings,
-// no limit, or an amount of its own, with what it spent this month.
+// no limit, or an amount of its own, with what it spent this month. It is an
+// override of the Mac's limits, so like them it shows only once a provider
+// bills by the request, or while the Bot or the Mac already has a limit.
 
 import * as React from "react";
 import { Field, FieldSet, toast } from "../../components/ui";
 import { SpendingAmountSelect } from "../../components/spending/spending-amount-select";
 import { spendingApi, type BotSpendingLimitChoice } from "../../lib/ipc";
-import { useSettings } from "../../lib/queries";
+import { useProviders, useSettings } from "../../lib/queries";
 import { useSpendingStatus } from "../../lib/use-spending-status";
-import { formatUsd, ordinalDay, parseSpendingLimitsSettings } from "../../shared/spending";
+import {
+  anySpendingLimitSet,
+  formatUsd,
+  meteredProviderConnected,
+  ordinalDay,
+  parseSpendingLimitsSettings,
+} from "../../shared/spending";
 import type { BotDefinition } from "../../shared/bots";
 
 function choiceValue(choice: BotSpendingLimitChoice | undefined): string {
@@ -17,6 +25,7 @@ function choiceValue(choice: BotSpendingLimitChoice | undefined): string {
 
 export function BotSpendingSection({ bot }: { bot: Pick<BotDefinition, "id" | "name"> }) {
   const settings = useSettings();
+  const providers = useProviders();
   const { status } = useSpendingStatus("bot", bot.id);
   const [choice, setChoice] = React.useState<BotSpendingLimitChoice | undefined>(undefined);
   React.useEffect(() => {
@@ -49,6 +58,14 @@ export function BotSpendingSection({ bot }: { bot: Pick<BotDefinition, "id" | "n
       toast.error(`Couldn’t change ${bot.name}’s spending limit.`);
     }
   };
+
+  const shown =
+    providers.isError ||
+    meteredProviderConnected(providers.data ?? []) ||
+    anySpendingLimitSet(defaults) ||
+    (choice !== undefined && choice.kind !== "default") ||
+    status !== undefined;
+  if (!shown) return null;
 
   return (
     <FieldSet title="Spending">
