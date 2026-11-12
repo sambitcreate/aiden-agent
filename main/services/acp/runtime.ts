@@ -1027,8 +1027,10 @@ export class AcpHarnessRuntime {
       if (paths.length === 0 && request.toolCall.kind === "edit") turn.unscopedWriteGrants += 1;
       for (const target of paths) turn.writeGrants.add(target);
     }
-    if (step && (!chosen || chosen.kind.startsWith("reject"))) {
-      host.activity.finished(id, chosen ? "blocked" : "cancelled");
+    if (!chosen || chosen.kind.startsWith("reject")) {
+      // A refused write makes no write, so a later write to its path is not tagged with it.
+      turn.openWriteActivities.delete(id);
+      if (step) host.activity.finished(id, chosen ? "blocked" : "cancelled");
     }
     return response;
   }

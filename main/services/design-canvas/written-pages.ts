@@ -290,10 +290,43 @@ export async function placeWrittenPagesOnCanvas(input: {
           }
         : {},
     );
+    // The mode can still turn off while the file is being written. Then the
+    // frames are taken back off, unless the person changed the canvas since
+    // or design mode is on again by the time that runs.
+    if (shouldSave && !(await shouldSave())) {
+      await retractPlacedFrames(input, saved.revision, placedIds, shouldSave);
+      return [];
+    }
     input.broadcast({ chatId: input.chatId, revision: saved.revision });
     return placedIds;
   } catch (error) {
     if (error === UNCHANGED) return [];
     throw error;
+  }
+}
+
+async function retractPlacedFrames(
+  input: { chatId: string; store: Pick<DesignCanvasStore, "update">; broadcast(update: { chatId: string; revision: number }): void },
+  savedRevision: number,
+  placedIds: readonly string[],
+  shouldSave: () => Promise<boolean> | boolean,
+): Promise<void> {
+  const placed = new Set(placedIds);
+  try {
+    const retracted = await input.store.update(
+      input.chatId,
+      (doc) => {
+        if (doc.revision !== savedRevision) throw UNCHANGED;
+        return { ...doc, frames: doc.frames.filter((frame) => !placed.has(frame.id)) };
+      },
+      {
+        beforeWrite: async () => {
+          if (await shouldSave()) throw UNCHANGED;
+        },
+      },
+    );
+    input.broadcast({ chatId: input.chatId, revision: retracted.revision });
+  } catch (error) {
+    if (error !== UNCHANGED) throw error;
   }
 }

@@ -258,6 +258,48 @@ test("leaving design mode while the page's save waits keeps the frame off the st
   assert.deepEqual((await store.get("chat-1")).frames, []);
 });
 
+test("leaving design mode while the page's file is being written takes the frame back off, unless the mode is on again", async (t) => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-written-pages-exit-write-"));
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const workspaceRoot = path.join(base, "workspace");
+  await fs.mkdir(path.join(workspaceRoot, "design"), { recursive: true });
+  await fs.writeFile(path.join(workspaceRoot, "design", "home.html"), "<!doctype html><title>Home</title>");
+  const run = async (chatId: string, backOnBeforeRetract: boolean) => {
+    const store = new DesignCanvasStore({ root: () => path.join(base, "canvases") });
+    let designMode = true;
+    let calls = 0;
+    const broadcasts: number[] = [];
+    const placedIds = await placeWrittenPagesOnCanvas({
+      chatId,
+      workspaceRoot,
+      paths: ["design/home.html"],
+      store: {
+        update: async (id, mutate, options) => {
+          calls += 1;
+          // The person enters design mode again before the take-back runs.
+          if (calls === 2 && backOnBeforeRetract) designMode = true;
+          const saved = await store.update(id, mutate, options);
+          // The exit commits after the pre-write check passed, while the file was written.
+          if (calls === 1) designMode = false;
+          return saved;
+        },
+      },
+      shouldSave: () => designMode,
+      broadcast: (update) => broadcasts.push(update.revision),
+      newId: ids(),
+    });
+    return { placedIds, broadcasts, frames: (await store.get(chatId)).frames.map((frame) => frame.path) };
+  };
+
+  const exited = await run("chat-exit", false);
+  assert.deepEqual(exited.placedIds, [] as string[]);
+  assert.deepEqual(exited.frames, [] as string[]);
+  assert.deepEqual(exited.broadcasts, [2], "open canvases hear about the take-back");
+
+  const reentered = await run("chat-reenter", true);
+  assert.deepEqual(reentered.frames, ["design/home.html"], "a canvas the person opened again keeps the page");
+});
+
 test("a page's own width hint picks its design width; pages that do not say stay at 1280", () => {
   assert.equal(inferDesignWidth('<head><meta name="aiden-design-width" content="390"></head>'), 390);
   assert.equal(inferDesignWidth("<meta content='1440' name='aiden-design-width'>"), 1440);
