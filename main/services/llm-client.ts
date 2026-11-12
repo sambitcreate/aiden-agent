@@ -5301,6 +5301,7 @@ export const llmClient = {
               scratchDir: await acpScratch.directoryFor(params.chatId),
               permission: () => permission,
               timeline,
+              stoppedByUser: generationStoppedByUser,
               requestApproval: (prompt, approvalSignal) => approvals.request(prompt, approvalSignal, owner.documentId),
               takeApprovalScope: (approvalStreamId, toolCallId) =>
                 approvals.takeDecisionPayload(approvalStreamId, toolCallId)?.scope,

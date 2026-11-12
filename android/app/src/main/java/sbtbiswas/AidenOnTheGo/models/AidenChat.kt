@@ -590,7 +590,10 @@ data class AidenGenerationTimeline(
                     step.status != AidenAgentStepStatus.COMPLETED ||
                     step.lineChanges.additions !in 0..100_000_000 ||
                     step.lineChanges.deletions !in 0..100_000_000
-                ))
+                )) ||
+                // Revision 61 marks stopped calls only in version 3 timelines;
+                // an older timeline carrying the mark is invalid, as on desktop.
+                (step.stoppedByUser != null && version != 3)
             ) return false
 
             if (version == 3) {

@@ -11755,6 +11755,11 @@
                           "required": [
                             "extraction"
                           ]
+                        },
+                        {
+                          "required": [
+                            "stoppedByUser"
+                          ]
                         }
                       ]
                     }

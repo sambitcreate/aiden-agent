@@ -38,6 +38,7 @@ export interface GenerationTimelinePort {
     toolCallId: string,
     status: Extract<AgentStepStatus, "completed" | "failed" | "blocked" | "cancelled">,
     resultDetails?: unknown,
+    options?: { stoppedByUser?: boolean },
   ): void;
   publicToolCallId(toolCallId: string): string | undefined;
 }
@@ -54,6 +55,12 @@ export interface AcpGenerationHostOptions {
   scratchDir: string;
   permission(): AcpHostPermission;
   timeline: GenerationTimelinePort;
+  /**
+   * True while the turn is being cancelled because the person pressed Stop.
+   * A step the agent reports cancelled then reads as stopped, not as an issue;
+   * any other cancellation (detach, shutdown) keeps the issue treatment.
+   */
+  stoppedByUser?(): boolean;
   requestApproval(
     prompt: { streamId: string; toolCallId: string; toolName: string; summary: string; scopes?: readonly ToolApprovalScope[] },
     signal: AbortSignal,
@@ -190,7 +197,10 @@ export function createAcpGenerationHost(options: AcpGenerationHostOptions): AcpT
     activity: {
       started: (id, toolName, args) => options.timeline.toolStarted(id, toolName, args),
       running: (id) => options.timeline.toolRunning(id),
-      finished: (id, status, details) => options.timeline.toolFinished(id, status, details),
+      finished: (id, status, details) =>
+        status === "cancelled" && options.stoppedByUser?.() === true
+          ? options.timeline.toolFinished(id, status, details, { stoppedByUser: true })
+          : options.timeline.toolFinished(id, status, details),
     },
     bridgeableTools(tools: readonly Tool[]): Tool[] {
       return tools.filter((tool) => !AGENT_DUPLICATED_TOOL_NAMES.has(tool.name));

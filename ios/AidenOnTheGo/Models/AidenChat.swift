@@ -1369,7 +1369,11 @@ struct AidenGenerationTimeline: Codable, Equatable, Sendable {
                           && step.status == .completed
                           && (0...100_000_000).contains(changes.additions)
                           && (0...100_000_000).contains(changes.deletions)
-                  }) ?? true else {
+                  }) ?? true,
+                  // Revision 61 marks stopped calls only in version 3
+                  // timelines; an older timeline carrying the mark is
+                  // invalid, as on desktop.
+                  step.stoppedByUser == nil || version == 3 else {
                 return false
             }
 

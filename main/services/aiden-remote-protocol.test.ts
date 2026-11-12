@@ -3797,4 +3797,19 @@ test("revision 61 reads only the steps Stop cancelled as stopped, and every othe
   assert.equal(step({ ...failed, stoppedByUser: true }), false, "only a cancelled step can carry the mark");
   assert.equal(step({ ...stopped, status: "completed" }), false);
   assert.equal(step({ ...stopped, stoppedByUser: false }), false, "hosts send only the true marker");
+
+  // The mark is a version 3 field: the schema and the desktop parser agree
+  // that an older timeline carrying it is invalid, and valid without it.
+  const validateTimeline = new Ajv2020({ strict: false, validateFormats: false }).compile({ $ref: "#/components/schemas/GenerationTimeline", components: spec.components });
+  const { contentOffset: _offset, ...olderStopped } = stopped;
+  const { stoppedByUser: _mark, ...olderPlain } = olderStopped;
+  const timelineOf = (version: number, stepValue: unknown) => ({ version, generationId: "gen-1", status: "cancelled", startedAt: 1, finishedAt: 2, steps: [{ ...(stepValue as object), order: 0 }] });
+  assert.equal(validateTimeline(timelineOf(3, stopped)), true, JSON.stringify(validateTimeline.errors));
+  assert.ok(parseGenerationTimeline(timelineOf(3, stopped)));
+  for (const version of [1, 2]) {
+    assert.equal(validateTimeline(timelineOf(version, olderStopped)), false, `schema: version ${version} with the mark`);
+    assert.equal(parseGenerationTimeline(timelineOf(version, olderStopped)), undefined, `runtime: version ${version} with the mark`);
+    assert.equal(validateTimeline(timelineOf(version, olderPlain)), true, `schema: version ${version} without the mark ${JSON.stringify(validateTimeline.errors)}`);
+    assert.ok(parseGenerationTimeline(timelineOf(version, olderPlain)), `runtime: version ${version} without the mark`);
+  }
 });

@@ -77,6 +77,22 @@ class AidenStoppedActivityTest {
     }
 
     @Test
+    fun aStopMarkIsValidOnlyInAVersionThreeTimeline() {
+        val stopped = step(1, "run_command", "Run command", AidenAgentStepStatus.CANCELLED, stoppedByUser = true)
+        val plain = step(1, "run_command", "Run command", AidenAgentStepStatus.CANCELLED)
+        assertTrue(cancelled(listOf(stopped), AidenGenerationCancellationOrigin.USER_STOP).isRendererSafe())
+        for (version in listOf(1, 2)) {
+            val older = cancelled(listOf(stopped.copy(contentOffset = null)), AidenGenerationCancellationOrigin.USER_STOP)
+                .copy(version = version)
+            assertFalse("version $version with the mark", older.isRendererSafe())
+            assertTrue(
+                "version $version without the mark",
+                older.copy(steps = listOf(plain.copy(contentOffset = null))).isRendererSafe()
+            )
+        }
+    }
+
+    @Test
     fun otherCancellationsAndFailuresStayIssues() {
         val run = step(1, "run_command", "Run command", AidenAgentStepStatus.CANCELLED)
         val origins = listOf(

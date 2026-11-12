@@ -7289,6 +7289,28 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(timeline.issueCount, issueIDs.count)
     }
 
+    func testStopMarkIsValidOnlyInAVersionThreeTimeline() {
+        let stopped = stopTimelineStep(
+            "tool-1", order: 0, toolName: "run_command", label: "Run command",
+            status: .cancelled, stoppedByUser: true
+        )
+        let plain = stopTimelineStep(
+            "tool-1", order: 0, toolName: "run_command", label: "Run command", status: .cancelled
+        )
+        XCTAssertTrue(stopTimeline([stopped], origin: .userStop).isRendererSafe)
+        for version in [1, 2] {
+            func older(_ step: AidenAgentStep) -> AidenGenerationTimeline {
+                AidenGenerationTimeline(
+                    version: version, generationId: "stream-1", status: .cancelled,
+                    startedAt: 1_000, finishedAt: 2_000, steps: [step],
+                    cancellationOrigin: .userStop, claimCheck: nil
+                )
+            }
+            XCTAssertFalse(older(stopped).isRendererSafe, "version \(version) with the mark")
+            XCTAssertTrue(older(plain).isRendererSafe, "version \(version) without the mark")
+        }
+    }
+
     func testStopMarkDecodesOnlyAsTrueOnACancelledToolStep() throws {
         func decode(status: String, mark: String?) throws -> AidenAgentStep {
             let markField = mark.map { ",\"stoppedByUser\":\($0)" } ?? ""
