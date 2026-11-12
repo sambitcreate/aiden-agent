@@ -115,8 +115,17 @@ There is no per-Bot mode.
 
 - **Ask**: a step an Ask first rule covers, or a consequential step (a
   connection tool that changes something, sharing an image), shows its card.
-- **Auto**: Bots have no approval judge yet, so a Bot's turn in Auto asks
-  exactly as in Ask.
+- **Auto**: before a consequential step's card, the approval model (the one
+  named under Approvals → Advanced, else the Bot's own model) reads the Bot's
+  instructions, what the owner asked for and the action, with typed text and
+  secrets left out. If it is sure the step is what the owner asked for, the
+  step runs; otherwise the card shows as in Ask. No model (an ACP agent), an
+  error, a slow or unsure reply, or a turn that has already read a
+  connection's data or a web page all show the card. Rules you wrote, page
+  rules, sharing an image, purchases, hand-offs and your Mac are never
+  judged. A routine still refuses a step the model would ask about. Each check
+  shows in usage as `approval-judge` and counts toward the Bot's spending
+  limit when it costs money.
 - **Never ask**: only Block rules apply. Ask first rules and consequential
   steps run without a card. Hand off to me rules, the locked password and
   money rules, and the first use of the person's Mac (shell, Computer Use)
@@ -144,8 +153,8 @@ The older **Go ahead without asking** switch (`AppSettings.botRoutinesGoAhead`)
 is no longer offered. For someone who had it on it keeps working as before and
 shows under Approvals → Advanced, where it can only be turned off. Main reads
 the mode and the switch fresh at every tool call (`checkPolicy` in
-`bot-tool-assembly.ts`). The CLI's durable Bot host has no rules, runs in Ask
-and keeps asking for every MCP call.
+`bot-tool-assembly.ts`). The CLI's durable Bot host has no rules or judge,
+runs in Ask and keeps asking for every MCP call.
 
 ## The rules page
 
@@ -160,8 +169,9 @@ or words ("When a Bot wants to …", Ask or Block only, never Allow).
   a Bot owns answers only for that owner and beats the Mac's rule at the same
   specificity; a Mac Block still wins.
 - **Modes.** In Never ask only Block rules apply, so the page dims the other
-  rows and says so. In Ask and Auto an Ask rule shows the card even for a
-  read. An Allow rule runs a consequential action without a card but never
+  rows and says so; a row with **Do it myself** is not dimmed, since the
+  hand-off still comes to the person. In Ask and Auto an Ask rule shows the
+  card even for a read. An Allow rule runs a consequential action without a card but never
   reaches the person's Mac (shell, file changes, Computer Use).
 - **Locked.** Passwords, 2FA codes, account security, purchases and money
   always come to the person; the page says so and no rule changes it.
@@ -172,7 +182,20 @@ or words ("When a Bot wants to …", Ask or Block only, never Allow).
 - Rules are global to this Mac. A customized workspace's remembered commands
   and files stay its own rows.
 - Site rules match calls that name the site in their address (navigate,
-  fetch, and a Bot's browser actions on a page with that address).
+  fetch), a Bot's browser actions on a page with that address, and a
+  workspace chat's browser actions on the address its tab shows at that
+  moment.
+- A Block applies everywhere the gate runs, including a workspace chat bound
+  to a Bot. Sharing an image offers only Ask and Block: it always asks unless
+  blocked.
+- **A rules file Aiden can't read.** If `approval-rules.json` doesn't parse,
+  was written by a newer release, or holds a rule this release can't read,
+  Aiden never reads around it or writes over it, since its Block rules may be
+  the ones it can't see. Every workspace action asks first and Bots don't act
+  until it is fixed. The page hides the rules, says so, and offers **Try
+  again** or **Start over**, which renames the file to
+  `approval-rules.json.unreadable-<time>` beside it and starts empty.
+- Deleting a Bot or removing a workspace removes the rules only it owned.
 
 ### Rows kept from before
 
@@ -190,8 +213,10 @@ it is stored and answers only for its old owner:
 Remove goes through the row's own store, so a Bot's allow list keeps its
 receipts, tombstones and counts: a removed entry is never brought back by a
 replayed decision, and the 50-per-Bot and 1,000-per-profile caps still hold.
-Turning a Bot's Allow row into Block removes the allowance and adds a Block
-owned by that Bot. The previous release reads every older file unchanged; the
+Turning a Bot's Allow row into Block first asks (a site Block covers the
+whole site and its subdomains), then adds a Block owned by that Bot and
+removes the allowance only once the Block is saved. A change the page can't
+store as written is refused and the row stays as it was. The previous release reads every older file unchanged; the
 page's own rules live in `approval-rules.json`, which it ignores.
 
 ## Allowed without asking (from cards)
@@ -205,8 +230,12 @@ in Always allow on the rules page, and Remove there stops it on the next call.
 Paired iOS and Android clients still show the Bot's list when the host grants
 `bot:allowed`.
 
-Choosing Always saves that allowance for this Bot. Allow once keeps the card
-for next time; when an offer was present, the Bot may mention the option in
+Choosing Always saves that allowance for this Bot. While this Mac is in Ask
+and a model could judge, the card with the repeat count also offers **Switch
+to Auto**, which changes the Mac's mode as Settings → Approvals would. A
+workspace card offers it too once the same kind of action was allowed three
+times in that workspace since Aiden opened, unless the workspace keeps its
+own mode. Allow once keeps the card for next time; when an offer was present, the Bot may mention the option in
 one short sentence, at most once a week for that class. Decisions on a
 Bot-message turn still count, but do not send or consume that hint because the
 reply goes to another Bot. Expiry and automatic
