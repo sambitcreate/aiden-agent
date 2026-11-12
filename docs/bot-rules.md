@@ -119,11 +119,20 @@ There is no per-Bot mode.
   named under Approvals → Advanced, else the Bot's own model) reads the Bot's
   instructions, what the owner asked for and the action, with typed text and
   secrets left out. If it is sure the step is what the owner asked for, the
-  step runs; otherwise the card shows as in Ask. No model (an ACP agent), an
-  error, a slow or unsure reply, or a turn that has already read a
-  connection's data or a web page all show the card. Rules you wrote, page
-  rules, sharing an image, purchases, hand-offs and your Mac are never
-  judged. A routine still refuses a step the model would ask about. Each check
+  step runs; otherwise the card shows as in Ask. "What the owner asked for"
+  is only words the owner wrote: your own message, or the prompt of a routine
+  you accepted. A turn whose input also carries other text (an event's
+  payload such as an email, the notes a routine kept, a wake-up the Bot set,
+  another Bot's message, Telegram or a peer) is never judged. No model (an
+  ACP agent), an error, a slow or unsure reply, or a turn that has already
+  read outside content all show the card. For a Bot, outside content is a
+  connection's data, a web page, its browser, its own computer or shell, or
+  an image it inspected, and it is read from the turn's saved results, so a
+  turn resumed after a restart still counts as having read it. Rules you
+  wrote, page rules, sharing an image, purchases, hand-offs and your Mac are
+  never judged, and neither is a built-in Ask first rule on the Bot's own
+  computer or shell (a delete there keeps its card). A routine still refuses
+  a step the model would ask about. Each check
   shows in usage as `approval-judge` and counts toward the Bot's spending
   limit when it costs money.
 - **Never ask**: only Block rules apply. Ask first rules and consequential
@@ -234,11 +243,15 @@ Paired iOS and Android clients still show the Bot's list when the host grants
 `bot:allowed`.
 
 Choosing Always saves that allowance for this Bot. While this Mac is in Ask
-and a model could judge, the card with the repeat count also offers **Switch
-to Auto**, which changes the Mac's mode as Settings → Approvals would. A
-workspace card offers it too once the same kind of action was allowed three
-times in that workspace since Aiden opened, unless the workspace keeps its
-own mode. Allow once keeps the card for next time; when an offer was present, the Bot may mention the option in
+and a model could judge (an agent-runtime provider alone can't), the card
+with the repeat count also offers **Switch to Auto**, which changes the
+Mac's mode as Settings → Approvals would. It shows only where Auto would
+actually let the model decide that card, never on a command, a file change,
+a background job, a saved screenshot, sharing or creating an image, a
+purchase, the Bot's shell or a turn Auto wouldn't judge. A workspace card
+offers it too once the same kind of action was allowed three times in that
+workspace since Aiden opened, unless the workspace keeps its own mode.
+Switching doesn't answer the card on screen; it still needs your answer. Allow once keeps the card for next time; when an offer was present, the Bot may mention the option in
 one short sentence, at most once a week for that class. Decisions on a
 Bot-message turn still count, but do not send or consume that hint because the
 reply goes to another Bot. Expiry and automatic
