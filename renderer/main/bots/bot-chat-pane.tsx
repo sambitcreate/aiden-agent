@@ -177,11 +177,18 @@ function mergePrompts(current: BotApprovalPrompt[], next: BotApprovalPrompt[]): 
   return [...byId.values()];
 }
 
-/** Identical pending approvals in a run (same tool and request) share one card. */
+/**
+ * Identical pending approvals in one reply (same tool, card and exact
+ * arguments) share one card. A wait without its arguments and run hashes is
+ * never grouped: equal text is not the same action.
+ */
 export function groupBotApprovalPrompts(prompts: readonly BotApprovalPrompt[]): BotApprovalPrompt[][] {
   const groups = new Map<string, BotApprovalPrompt[]>();
   for (const prompt of prompts) {
-    const key = JSON.stringify([prompt.botId, prompt.toolName, prompt.summary, prompt.always?.key ?? null]);
+    const key =
+      prompt.argumentsHash && prompt.runHash
+        ? JSON.stringify([prompt.botId, prompt.runHash, prompt.argumentsHash, prompt.toolName, prompt.summary, prompt.always?.key ?? null])
+        : JSON.stringify(["wait", prompt.botId, prompt.waitId]);
     const group = groups.get(key);
     if (group) group.push(prompt);
     else groups.set(key, [prompt]);
@@ -1645,15 +1652,28 @@ export function BotChatPane({ botId }: { botId: string }) {
               onAnswer={async (decision, scope) => {
                 const group = approvalGroups[0]!;
                 for (const prompt of group) answeringApprovals.current.add(prompt.waitId);
-                const results = await Promise.all(
+                const results = await Promise.allSettled(
                   group.map((prompt, index) => botsApi.approve(prompt.waitId, decision, index === 0 ? scope : undefined)),
                 ).finally(() => {
                   for (const prompt of group) answeringApprovals.current.delete(prompt.waitId);
                 });
-                if (!results[0]!.decided) throw new Error("That approval was already answered or closed.");
-                for (const prompt of group) approvals.remove(prompt.waitId);
-                approvalStatus.show(decision === "deny" ? { decision: "deny" } : { decision: "allow", ...(scope ? { scope } : {}) });
-                if (scope === "always") {
+                const decided = (index: number) => {
+                  const result = results[index];
+                  return result?.status === "fulfilled" && result.value.decided;
+                };
+                if (!group.some((_prompt, index) => decided(index))) {
+                  const failed = results.find((result) => result.status === "rejected");
+                  if (failed) throw failed.reason;
+                  throw new Error("That approval was already answered or closed.");
+                }
+                // Only the waits this answer reached leave; any other stays to be answered.
+                group.forEach((prompt, index) => {
+                  if (decided(index)) approvals.remove(prompt.waitId);
+                });
+                // Always rides on the first wait only, so it counts only when that one was decided.
+                const always = scope === "always" && decided(0) ? scope : undefined;
+                approvalStatus.show(decision === "deny" ? { decision: "deny" } : { decision: "allow", ...(always ? { scope: always } : {}) });
+                if (always) {
                   toast.success("Always allow requested.", {
                     action: { label: "Manage", onClick: () => void navigate(botAllowedLocation(current.id)) },
                   });

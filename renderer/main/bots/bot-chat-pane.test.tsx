@@ -651,22 +651,70 @@ test("identical waiting calls share one card, which answers every one of them", 
     "bots:pendingApprovals": () => [],
     "bots:approve": () => ({ decided: true }),
   });
-  const same = { botId: "bot-1", toolName: "send_email", summary: "Send the weekly update to the team." };
+  // A mutating tool's card can read the same for different arguments: only the hashes say it is the same call.
+  const same = { botId: "bot-1", toolName: "send_email", summary: "send_email", argumentsHash: "args-ana", runHash: "run-1" };
   act(() => {
     emitBotTestNotification("bots:approval", { ...same, waitId: "wait-1", toolCallId: "call-1" });
     emitBotTestNotification("bots:approval", { ...same, waitId: "wait-2", toolCallId: "call-2" });
-    emitBotTestNotification("bots:approval", { botId: "bot-1", waitId: "wait-3", toolCallId: "call-3", toolName: "share_image", summary: "Share the chart." });
+    emitBotTestNotification("bots:approval", { ...same, argumentsHash: "args-bo", waitId: "wait-3", toolCallId: "call-3" });
+    emitBotTestNotification("bots:approval", { ...same, runHash: "run-2", waitId: "wait-4", toolCallId: "call-4" });
+    emitBotTestNotification("bots:approval", { botId: "bot-1", toolName: "send_email", summary: "send_email", waitId: "wait-5", toolCallId: "call-5" });
   });
-  const card = await screen.findByRole("region", { name: "Review before Send email 1 of 2" });
-  assert.equal(screen.queryByRole("region", { name: "Review before Share image" }), null, "one card at a time");
+  const card = await screen.findByRole("region", { name: "Review before Send email 1 of 4" });
   fireEvent.click(within(card).getByRole("button", { name: "Deny" }));
   await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:approve").length, 2));
   assert.deepEqual(calls.filter((call) => call.channel === "bots:approve").map((call) => call.args), [
     [{ waitId: "wait-1", decision: "deny" }],
     [{ waitId: "wait-2", decision: "deny" }],
-  ]);
-  // The other request is next, on its own.
-  assert.ok(await screen.findByRole("region", { name: "Review before Share image" }));
+  ], "different arguments, another reply, or no hashes each wait for their own answer");
+  assert.ok(await screen.findByRole("region", { name: "Review before Send email 1 of 3" }));
+});
+
+test("a shared card's answer removes only the waits it reached", async () => {
+  const answers: Record<string, { decided: boolean }> = { "wait-1": { decided: false }, "wait-2": { decided: true } };
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot(),
+    "bots:pendingApprovals": () => [],
+    "bots:approve": (request) => answers[(request as { waitId: string }).waitId],
+  });
+  const approved = () => calls.filter((call) => call.channel === "bots:approve").map((call) => (call.args[0] as { waitId: string }).waitId);
+  const same = { botId: "bot-1", toolName: "send_email", summary: "Send it.", argumentsHash: "args", runHash: "run" };
+  act(() => {
+    emitBotTestNotification("bots:approval", { ...same, waitId: "wait-1", toolCallId: "call-1" });
+    emitBotTestNotification("bots:approval", { ...same, waitId: "wait-2", toolCallId: "call-2" });
+  });
+  const card = await screen.findByRole("region", { name: "Review before Send email" });
+  fireEvent.click(within(card).getByRole("button", { name: "Allow once" }));
+  await waitFor(() => assert.deepEqual(approved(), ["wait-1", "wait-2"]));
+  // The second wait was allowed although the first was not: no error.
+  await waitFor(() => assert.equal((within(card).getByRole("button", { name: "Allow once" }) as HTMLButtonElement).disabled, false));
+  assert.equal(within(card).queryByRole("alert"), null);
+  // Only the wait it did not reach is still on the card.
+  answers["wait-1"] = { decided: true };
+  fireEvent.click(within(card).getByRole("button", { name: "Allow once" }));
+  await waitFor(() => assert.deepEqual(approved(), ["wait-1", "wait-2", "wait-1"]));
+  assert.ok(await screen.findByText("Allowed once"));
+});
+
+test("a shared card whose answer reached none of its waits says so and stays", async () => {
+  await mountChat({
+    "bots:live:subscribe": () => snapshot(),
+    "bots:pendingApprovals": () => [],
+    "bots:approve": (request) =>
+      (request as { waitId: string }).waitId === "wait-1"
+        ? { decided: false }
+        : Promise.reject(new Error("The approval could not be sent.")),
+  });
+  const same = { botId: "bot-1", toolName: "send_email", summary: "Send it.", argumentsHash: "args", runHash: "run" };
+  act(() => {
+    emitBotTestNotification("bots:approval", { ...same, waitId: "wait-1", toolCallId: "call-1" });
+    emitBotTestNotification("bots:approval", { ...same, waitId: "wait-2", toolCallId: "call-2" });
+  });
+  const card = await screen.findByRole("region", { name: "Review before Send email" });
+  fireEvent.click(within(card).getByRole("button", { name: "Allow once" }));
+  assert.equal((await within(card).findByRole("alert")).textContent, "The approval could not be sent.");
+  assert.equal(screen.queryByText("Allowed once"), null);
+  assert.ok(screen.getByRole("region", { name: "Review before Send email" }), "neither wait was removed");
 });
 
 test("a card answered on another device collapses to No longer active, and a deny here to Denied", async () => {

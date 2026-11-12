@@ -833,6 +833,11 @@ test("two identical rule-made calls each get their own card", async () => {
     assert.equal(turn.deps.approvals.length, 2);
     assert.equal(new Set(turn.deps.approvals.map((request) => request.waitId)).size, 2);
     assert.deepEqual(turn.deps.approvals.map((request) => request.toolCallId), ["call-1", "call-2"]);
+    // Main still asks for each wait; the same call in the same reply is what the desktop may show as one card.
+    const [first, second] = turn.deps.approvals;
+    assert.ok(first?.argumentsHash && first.runHash);
+    assert.equal(second?.argumentsHash, first.argumentsHash);
+    assert.equal(second?.runHash, first.runHash);
   } finally {
     await harness.close(ctx);
   }
@@ -857,6 +862,10 @@ test("an action the person declined is not asked again in the same run", async (
     await (await root.submit({ type: "input", content: "send it" }, ctx)).wait(ctx);
     assert.deepEqual(deps.approvals.map((request) => request.toolCallId), ["send-1", "send-3"],
       "the retried identical call gets no second card; a different one still asks");
+    const [hello, different] = deps.approvals;
+    assert.notEqual(hello?.argumentsHash, different?.argumentsHash, "different arguments are never one card");
+    assert.equal(hello?.runHash, different?.runHash);
+    assert.doesNotMatch(JSON.stringify([hello?.argumentsHash, hello?.runHash]), /hello|send it/u, "the hashes carry no argument text");
     const results = await toolResults(root);
     assert.equal(results.length, 3);
     for (const result of results) assert.match(String(result.content[0]?.text), /Tool call blocked: The person declined this action\./);

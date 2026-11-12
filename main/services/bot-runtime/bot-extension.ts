@@ -328,6 +328,13 @@ export interface BotApprovalRequest {
   toolCallId: string;
   toolName: string;
   summary: string;
+  /**
+   * One-way hashes of the call's exact arguments and of the reply it belongs
+   * to. Waits that match on both (and on the card) are the same action in the
+   * same run, so one card may answer them; nothing else is grouped.
+   */
+  argumentsHash?: string;
+  runHash?: string;
   /** Aborted when the turn is stopped; the approval prompt should be withdrawn. */
   signal: AbortSignal | undefined;
 }
@@ -983,6 +990,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     const capturedRemember = approval.remember ? structuredClone(approval.remember) : undefined;
     const request: BotApprovalRequest = {
       botId, waitId: memo.waitId, toolCallId: memo.toolCallId, toolName: call.name, summary: approval.summary,
+      argumentsHash: approvalHash({ toolName: call.name, args: call.arguments ?? null }), runHash: approvalHash(declineRun),
       authorizationFingerprint: fingerprint, owner, signal: context.abortSignal, assertCurrent: () => assertLive(api, context, owner),
       ...(capturedRemember?.offer && !approval.rule ? { always: { key: botApprovalRuleKey(capturedRemember.target), count: capturedRemember.offer.count } } : {}),
       ...(capturedRequirements && capturedRemember && !approval.rule ? {
