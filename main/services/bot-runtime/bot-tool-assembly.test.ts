@@ -2488,3 +2488,147 @@ test("rules page: an unreadable rule book refuses the call instead of running it
   assert.equal(outcome.sent, 0);
   assert.deepEqual(outcome.approvals, []);
 });
+
+// --- The Auto judge for Bots (plan §3.2) -------------------------------------
+
+type JudgeCall = { run: string; request: string; action: string; effect: string };
+
+/** A judge port that answers `reply` (or throws) and records what it was shown. */
+function recordingJudge(reply: "pass" | "defer" | "throw") {
+  const calls: JudgeCall[] = [];
+  const judge = async (_botId: string, input: JudgeCall) => {
+    calls.push({ run: input.run, request: input.request, action: input.action, effect: input.effect });
+    if (reply === "throw") throw new Error("model offline");
+    return reply;
+  };
+  return { judge, calls };
+}
+
+/** One Bot turn whose model makes `steps` (one assistant message each) under `mode`. */
+async function judgedTurn(options: {
+  mode: ApprovalMode;
+  steps: string[][];
+  judge?: ReturnType<typeof recordingJudge>["judge"];
+  content?: string;
+  botRules?: () => readonly BotRule[];
+  pageRules?: () => readonly ApprovalRule[];
+}) {
+  const state = assemblyState(full(botHome()));
+  const send = countingTool(SEND_EMAIL_TOOL);
+  const read = countingTool(READ_INBOX_TOOL);
+  const fauxModels = createFauxModels([
+    ...options.steps.map((names) => fauxAssistantMessage(names.map((name) => fauxToolCall(name, { text: "x", to: "sam@example.com" })), { stopReason: "toolUse" })),
+    fauxAssistantMessage("done"),
+  ]);
+  const deps = assemblyDeps(state, {
+    candidates: () => [{ tool: send, mcp: true }, { tool: read, mcp: true }],
+    rules: options.botRules ?? (() => defaultBotRules()),
+    approvalMode: () => options.mode,
+    ...(options.judge ? { judge: options.judge } : {}),
+    ...(options.pageRules ? { pageRules: options.pageRules } : {}),
+  });
+  const { harness, root } = await memoryHarness(deps, fauxModels);
+  try {
+    await (await root.submit({ type: "input", content: options.content ?? "Email Sam today's notes" }, ctx)).wait(ctx);
+    return { cards: deps.approvals.map((request) => request.toolName), sent: send.executions.length, read: read.executions.length };
+  } finally {
+    await harness.close(ctx);
+  }
+}
+
+test("Auto: the judge passes a send the owner asked for, which runs with no card; it reads the request and the action", async () => {
+  const { judge, calls } = recordingJudge("pass");
+  const outcome = await judgedTurn({ mode: "auto", steps: [[SEND_EMAIL_TOOL]], judge });
+  assert.deepEqual(outcome, { cards: [], sent: 1, read: 0 });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]!.request, "Email Sam today's notes");
+  assert.match(calls[0]!.action, new RegExp(`Tool: ${SEND_EMAIL_TOOL}`, "u"));
+  assert.match(calls[0]!.action, /sam@example\.com/u);
+});
+
+test("Auto fails closed for Bots: a deferral, a failed judge or no judge shows the card", async () => {
+  for (const reply of ["defer", "throw"] as const) {
+    const { judge, calls } = recordingJudge(reply);
+    assert.deepEqual(await judgedTurn({ mode: "auto", steps: [[SEND_EMAIL_TOOL]], judge }), { cards: [SEND_EMAIL_TOOL], sent: 1, read: 0 }, reply);
+    assert.equal(calls.length, 1, reply);
+  }
+  assert.deepEqual(await judgedTurn({ mode: "auto", steps: [[SEND_EMAIL_TOOL]] }), { cards: [SEND_EMAIL_TOOL], sent: 1, read: 0 }, "no judge");
+});
+
+test("only Auto asks the judge: Ask shows the card and Never ask runs, with no judge call", async () => {
+  const ask = recordingJudge("pass");
+  assert.deepEqual(await judgedTurn({ mode: "ask", steps: [[SEND_EMAIL_TOOL]], judge: ask.judge }), { cards: [SEND_EMAIL_TOOL], sent: 1, read: 0 });
+  const never = recordingJudge("pass");
+  assert.deepEqual(await judgedTurn({ mode: "never", steps: [[SEND_EMAIL_TOOL]], judge: never.judge }), { cards: [], sent: 1, read: 0 });
+  assert.equal(ask.calls.length + never.calls.length, 0);
+});
+
+test("Auto: once a run has read a connection's data, a later send shows its card unjudged", async () => {
+  const { judge, calls } = recordingJudge("pass");
+  const outcome = await judgedTurn({ mode: "auto", steps: [[READ_INBOX_TOOL], [SEND_EMAIL_TOOL]], judge });
+  assert.deepEqual(outcome, { cards: [SEND_EMAIL_TOOL], sent: 1, read: 1 });
+  assert.equal(calls.length, 0, "outside content could have steered it");
+});
+
+test("Auto never judges a rule the person wrote, here or on the rules page", async () => {
+  const words: BotRule = { id: "custom.0b8a3f5e-2c11-4d5f-9b7a-0123456789ac", text: "send an email", behavior: "ask", locked: false };
+  const own = recordingJudge("pass");
+  assert.deepEqual(
+    await judgedTurn({ mode: "auto", steps: [[SEND_EMAIL_TOOL]], judge: own.judge, botRules: () => [...defaultBotRules(), words] }),
+    { cards: [SEND_EMAIL_TOOL], sent: 1, read: 0 },
+  );
+  const page = recordingJudge("pass");
+  assert.deepEqual(
+    await judgedTurn({ mode: "auto", steps: [[SEND_EMAIL_TOOL]], judge: page.judge,
+      pageRules: () => [pageRule("r1", { kind: "connector", serverId: MAIL_SERVER.id }, "ask")] }),
+    { cards: [SEND_EMAIL_TOOL], sent: 1, read: 0 },
+  );
+  assert.equal(own.calls.length + page.calls.length, 0);
+});
+
+/** One policy check, as a turn of `kind` would make it, for steps the harness can't stage. */
+async function judgedCheck(options: {
+  toolName: string;
+  action: BotClassifiableAction;
+  judge: ReturnType<typeof recordingJudge>["judge"];
+  routine?: true;
+}): Promise<string> {
+  const state = assemblyState(full(botHome()));
+  const deps = assemblyDeps(state, {
+    candidates: () => [{ tool: countingTool(options.toolName), ...(options.toolName === SEND_EMAIL_TOOL ? { mcp: true } : {}) }],
+    rules: () => defaultBotRules(),
+    approvalMode: () => "auto",
+    judge: options.judge,
+    approvalFor: async () => ({ approval: { summary: "Do the thing" }, action: options.action }),
+  });
+  const decision = await deps.checkPolicy("bot-1", options.toolName, {
+    callId: "call-1",
+    args: { action: "click" },
+    signal: undefined,
+    requestIds: [options.routine ? "routine:daily:fire-1" : "req-1"],
+    ...(options.routine ? { hasRoutineInputs: async () => true } : {}),
+  });
+  if (!decision.allowed) return "refused";
+  if (decision.handoff) return "hand off";
+  if (!decision.approval) return "run";
+  return decision.approval.preapproved ? "run" : "card";
+}
+
+test("Auto never judges a purchase, Computer Use on the Mac or sharing an image", async () => {
+  const purchase: BotClassifiableAction = { surface: "computer_use", action: "click", app: "Safari", windowTitle: "Checkout", element: { role: "AXButton", label: "Place your order" } };
+  const plainClick: BotClassifiableAction = { surface: "computer_use", action: "click", app: "Notes", element: { role: "AXButton", label: "Bold" } };
+  const { judge, calls } = recordingJudge("pass");
+  assert.equal(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: purchase, judge }), "card", "a purchase");
+  assert.equal(await judgedCheck({ toolName: "computer_use", action: plainClick, judge }), "card", "the Mac");
+  assert.equal(await judgedCheck({ toolName: "share_image", action: plainClick, judge }), "card", "a disclosure");
+  assert.equal(calls.length, 0);
+  // A consequential call no rule names is judged.
+  assert.equal(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: plainClick, judge }), "run");
+  assert.equal(calls.length, 1);
+});
+
+test("Auto in a routine: a pass runs the step, and a deferral still refuses it", async () => {
+  const plainClick: BotClassifiableAction = { surface: "computer_use", action: "click", app: "Notes", element: { role: "AXButton", label: "Bold" } };
+  assert.equal(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: plainClick, judge: recordingJudge("pass").judge, routine: true }), "run");
+  assert.equal(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: plainClick, judge: recordingJudge("defer").judge, routine: true }), "refused");
+});

@@ -574,6 +574,7 @@
         "main/services/renderer-document-owner.test.ts",
         "main/services/bot-runtime/bot-session-service.test.ts",
         "main/services/bot-runtime/bot-tool-assembly.test.ts",
+        "main/services/bot-runtime/bot-approval-judge.test.ts",
         "main/services/bot-runtime/harness-host.test.ts",
         "main/services/bot-runtime/bot-pause.test.ts",
         "main/services/bot-pause-store.test.ts",

@@ -36,6 +36,7 @@ import {
   type BotAdmission,
   type BotAllowListPort,
   type BotToolAssembly,
+  type BotToolAssemblyPorts,
   type BotLiveApproval,
   type BotToolCandidate,
 } from "../bot-tool-assembly.js";
@@ -276,6 +277,8 @@ export interface AssemblyDepsOptions {
   pageRules?: () => readonly ApprovalRule[];
   /** Settings → Approvals' mode, read on every call. Absent: no port (Ask). */
   approvalMode?: () => ApprovalMode;
+  /** The Auto judge. Absent: no port (Auto shows the card). */
+  judge?: NonNullable<BotToolAssemblyPorts["judge"]>;
 }
 
 export interface AssemblyDeps extends BotExtensionDeps {
@@ -319,6 +322,7 @@ export function assemblyDeps(state: AssemblyState, options: AssemblyDepsOptions)
     ...(options.routinesGoAhead === undefined ? {} : { routinesGoAhead: async () => options.routinesGoAhead!() }),
     ...(options.pageRules === undefined ? {} : { pageRules: async () => options.pageRules!() }),
     ...(options.approvalMode === undefined ? {} : { approvalMode: async () => options.approvalMode!() }),
+    ...(options.judge === undefined ? {} : { judge: options.judge }),
   });
   const deps: AssemblyDeps = {
     approvals: [],

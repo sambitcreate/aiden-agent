@@ -306,6 +306,8 @@ export interface BotToolCallCheck {
   /** Request ids of the inputs the calling run serves (one per input; `undefined` when it has none). */
   requestIds?: readonly (string | undefined)[];
   hasRoutineInputs?(): Promise<boolean>;
+  /** The text of the inputs the calling run serves, for the Auto judge. */
+  ownerRequest?(): Promise<string>;
 }
 
 export type BotReadmission = { ok: true } | { ok: false; reason: "access_changed" | "bot_missing" };
@@ -860,6 +862,25 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
           }
           return requestIds.length > 0;
         }, context);
+      },
+      ownerRequest: async () => {
+        // The text of the inputs this run serves, as the person (or routine) wrote them.
+        const live = await api.snapshot(LiveDoc, api.conversationId, context);
+        const { submissions } = await harness!.inspect(context);
+        const conversation = await harness!.conversation(api.conversationId, context);
+        if (!conversation) return "";
+        const texts: string[] = [];
+        for (const id of live?.run?.inputs ?? []) {
+          const submission = submissions.find((candidate) => candidate.id === id);
+          if (submission?.type !== "input" || submission.entry === undefined) continue;
+          const entry = await conversation.commit((tx) => tx.entry(submission.entry!), context);
+          for (const message of entry?.model ?? []) {
+            if (message.role !== "user") continue;
+            if (typeof message.content === "string") texts.push(message.content);
+            else for (const part of message.content) if (part.type === "text") texts.push(part.text);
+          }
+        }
+        return texts.join("\n\n");
       },
     };
     let decision = await deps.checkPolicy(botId, call.name, check);

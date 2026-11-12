@@ -47,7 +47,8 @@ import type { BotDefinition } from "../../../renderer/shared/bots.js";
 import type { ConnectCardEntry } from "../../../renderer/shared/bot-connections.js";
 import { connectionSourceIdFor, resolveConnectCardStatus } from "../bot-runtime-tools/suggest-connection.js";
 import { botRoutinesGoAhead, defaultBotRules } from "../../../renderer/shared/bot-rules.js";
-import { effectiveApprovalMode } from "../../../renderer/shared/approval-mode.js";
+import { effectiveApprovalMode, parseApprovalModel } from "../../../renderer/shared/approval-mode.js";
+import { createBotApprovalJudge } from "./bot-approval-judge.js";
 import { botApplicationService } from "../bot-application-service-main.js";
 import { botCapabilityCatalog, botCapabilityStore, botManagedWorkspace, botServiceRoot } from "../bot-capability-services-main.js";
 import { desktopBotProtectedRoots } from "../bot-desktop-protected-settings.js";
@@ -76,7 +77,7 @@ import { botStore } from "../bot-store.js";
 import { botRoutineGuidance, withBotManagedWorkspace, withBotPersona, type BotWorkspacePromptAuthority } from "../bot-system-prompt.js";
 import { buildSystemPrompt } from "../chat-system-prompt.js";
 import { runtimeSupportsImages } from "../generation-runtime.js";
-import { resolveBotModelRuntime, type ResolvedModelRuntime } from "../model-runtime.js";
+import { resolveBotModelRuntime, resolveModelRuntime, type ResolvedModelRuntime } from "../model-runtime.js";
 import { registerSubagentProviderAuthority } from "../subagents/subagent-runtime-authority.js";
 import { telegramBotBindingAuthority, telegramBotBindings } from "../telegram/telegram-bot-bindings.js";
 import { botApprovals, configureBotApprovalDecisionLookup } from "./bot-approvals-main.js";
@@ -323,6 +324,31 @@ const planAuthority = createBotPlanAuthority({
 });
 configureBotPlanAuthority({ revalidate: planAuthority.revalidate, revokeAccess: planAuthority.revokeAccess });
 
+// The Auto judge for Bots: the approval model named in Advanced, else the
+// Bot's own model, never another provider Aiden picks itself. An ACP agent
+// can't judge, so its Bot's calls show their cards.
+const botApprovalJudge = createBotApprovalJudge({
+  job: async (botId) => (await botStore.get(botId))?.instructions,
+  runtime: async (botId, signal) => {
+    const configured = parseApprovalModel((await configStore.getSettings()).approvalModel);
+    const runtime = configured
+      ? await resolveModelRuntime(configured.providerId, configured.model, signal, `bot:${botId}`)
+      : await withAdmission(botId, ({ authority }) =>
+          resolveBotModelRuntime(authority.provider.sourceProviderId, authority.provider.sourceModelId, signal, botId));
+    if (isAcpHarnessProvider(runtime.provider.id)) return undefined;
+    return {
+      judge: { model: runtime.model, provider: runtime.provider, apiKey: runtime.apiKey, ...(runtime.headers ? { headers: runtime.headers } : {}), streams: runtime.streams },
+      countsSpend: () => spendCounts({ local: isLocalModelProvider(runtime.provider), provider: runtime.provider, models: runtime.models }),
+    };
+  },
+  recordUsage: async (record) => {
+    const { usageStore } = await import("../usage-store.js");
+    await usageStore.record(record);
+  },
+  recordSpend: (botId, requestIds, usd) => spending.record(botSpendingOwner(botId, requestIds), usd),
+  onSpendError: (botId, error) => logger.warn("bots", `Bot ${botId} approval judge spending could not be counted.`, error),
+});
+
 const tools = createBotToolAssembly({
   allowList: botAllowList,
   admit,
@@ -334,6 +360,7 @@ const tools = createBotToolAssembly({
   plans: botPlans,
   pageRules: async (botId) => (await approvalRules.list()).filter((rule) =>
     rule.owner.kind === "mac" || (rule.owner.kind === "bot" && rule.owner.botId === botId)),
+  judge: botApprovalJudge,
 });
 
 /** The Bot's rules for its prompt; the defaults when the file can't be read (calls still fail closed). */
