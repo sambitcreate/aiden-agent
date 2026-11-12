@@ -49,11 +49,11 @@ import {
 
 /* Art for the "Automate and stay in control" tiles. */
 
-/** The composer's workspace access menu, in its real order and icon colours. */
+/** The composer's approvals menu, in its real order and icon colours. */
 const ACCESS_LEVELS = [
-  { label: "Full access", icon: OctagonAlert, color: "var(--support-warning)", detail: "60%" },
-  { label: "Ask first", icon: ShieldQuestion, color: "var(--text-secondary)", detail: "84%" },
-  { label: "No access", icon: Lock, color: "var(--text-tertiary)", detail: "70%" },
+  { label: "Auto", icon: ShieldCheck, color: "var(--text-secondary)", detail: "60%" },
+  { label: "Ask", icon: ShieldQuestion, color: "var(--text-secondary)", detail: "84%" },
+  { label: "Never ask", icon: OctagonAlert, color: "var(--support-warning)", detail: "70%" },
 ] as const;
 
 export function PermissionsArt() {

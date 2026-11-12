@@ -364,7 +364,7 @@ export const onboardingFeatures: OnboardingFeature[] = [
     id: "permissions",
     group: "control",
     title: "Permissioned by Default",
-    description: "Choose No access, Ask first, or Full per workspace; keys stay encrypted.",
+    description: "Choose Auto, Ask, or Never ask, per workspace if you like; keys stay encrypted.",
     icon: ShieldCheck,
     size: "wide",
   },

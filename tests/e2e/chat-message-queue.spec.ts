@@ -47,16 +47,17 @@ test("composer squircle follows resizing and draft growth without clipping acces
   await expect.poll(async () => (await shell.boundingBox())!.width).toBeLessThan(initial!.width);
   await assertShape();
   await composer.fill("");
-  const access = page.getByRole("button", { name: /^Workspace access: Ask first/u });
-  await access.click();
-  const options = page.getByRole("radiogroup", { name: "Workspace access" });
-  const noAccess = options.getByRole("radio", { name: /^Workspace access: No access/u });
+  // A fresh install starts in No workspace, whose composer always shows the approvals chip.
+  const approvals = page.getByRole("button", { name: /^Approvals: /u });
+  await approvals.click();
+  const options = page.getByRole("radiogroup", { name: "Approvals" });
+  const chatOnly = options.getByRole("radio", { name: "Approvals: Chat only", exact: true });
   // Clicking a choice above the shell also verifies that overflow is hit-testable.
   await expect(options).toBeVisible();
   await expectSquircleButtons(page);
   expect((await options.boundingBox())!.y).toBeLessThan((await shell.boundingBox())!.y);
-  await noAccess.click();
-  await expect(page.getByRole("button", { name: /^Workspace access: No access/u })).toBeVisible();
+  await chatOnly.click();
+  await expect(page.getByRole("button", { name: /^Approvals: Chat only\./u })).toBeVisible();
   await composer.fill("");
   await assertShape();
   await page.screenshot({ path: test.info().outputPath("squircle-composer.png") });

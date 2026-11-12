@@ -88,9 +88,9 @@ test("a new chat on a paired Mac names that Mac and its project, model and machi
   assert.ok(view.button(/^Model on Studio: Fast model$/u));
   assert.ok(view.button(/^Attach files or images$/u), "the host stages uploads, so files can be attached");
   assert.equal(
-    view.buttons.some((node) => (node.getAttribute("aria-label") ?? "").startsWith("Workspace access")),
+    view.buttons.some((node) => (node.getAttribute("aria-label") ?? "").startsWith("Approvals:")),
     false,
-    "this Mac's workspace access control never appears for a remote chat",
+    "this Mac's approvals chip never appears for a remote chat",
   );
   assert.equal(view.attr("data-remote-new-chat-unresolved"), null);
   assert.doesNotMatch(view.text, /first\.|Connecting to/u, "nothing holds the first message back");

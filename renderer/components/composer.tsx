@@ -4,8 +4,8 @@ import { formatContextTokenCount, type ChatContextPressureV1 } from "../shared/c
 // Message composer. On a new chat the top-row folder opens the workspace picker;
 // established chats reveal that folder in the system file manager. Git workspaces also show the
 // current branch. The input
-// row carries a new-chat button, a per-workspace permission control, the model
-// picker, voice input, and send/stop.
+// row carries a new-chat button, the approvals chip (only for a workspace with
+// its own approval mode, or Chat only), the model picker, voice input, and send/stop.
 
 import * as React from "react";
 import { flushSync } from "react-dom";
@@ -32,7 +32,9 @@ import {
   OctagonAlert,
   Paperclip,
   Plus,
+  ShieldCheck,
   ShieldQuestion,
+  SlidersHorizontal,
   Square,
   X,
 } from "lucide-react";
@@ -61,9 +63,19 @@ import { browserAnnotationDelivery } from "../lib/browser-annotation-delivery";
 import { composerImageAttach } from "../lib/composer-attach";
 import type { BrowserAnnotation } from "../shared/browser";
 import { applyDictationDictionary, parseDictationDictionary } from "../shared/dictation-dictionary";
-import { useDiscoveredSkills, useSettings } from "../lib/queries";
+import { useDiscoveredSkills, useProviders, useSettings } from "../lib/queries";
+import { isUsable } from "../lib/model-picker-data";
+import { openWorkspaceSettings } from "./workspace-settings-dialog";
 import { aidenLivePreferences } from "../shared/aiden-live-settings";
-import type { Attachment, Chat, GitInfo, Workspace, WorkspacePermission } from "../lib/types";
+import {
+  APPROVAL_MODE_HELP,
+  APPROVAL_MODE_LABELS,
+  APPROVAL_MODES,
+  effectiveApprovalMode,
+  workspaceApprovalPolicy,
+  type ApprovalMode,
+} from "../shared/approval-mode";
+import type { Attachment, Chat, GitInfo, Workspace } from "../lib/types";
 import { composerSubmissionAllowed, effectiveBusySendMode } from "../lib/composer-submission";
 import {
   ComposerAttachmentOperation,
@@ -140,7 +152,6 @@ import { LOCAL_COMPOSER_SURFACES, type ComposerSurfaces } from "../lib/hosts/com
 import { CONNECT_PROVIDER_ACTION } from "../lib/provider-setup-copy";
 import { escapeStopsGeneration } from "../lib/composer-type-focus";
 import { isNoWorkspace, NO_WORKSPACE_LABEL } from "../lib/no-workspace";
-import { LiveGuard } from "./live-guard";
 
 const CLIPBOARD_IMAGE_MIME_TYPES = new Set([
   "image/png",
@@ -217,7 +228,8 @@ interface ComposerProps {
   /** The workspace's Git status read: change count, upstream and remote for the context-bar chips. */
   gitStatus?: GitInfo;
   onOpenFolder?: () => void;
-  onChangePermission?: (permission: WorkspacePermission) => void | Promise<void>;
+  /** Saves a choice from the approvals chip as a workspace patch. */
+  onChangeApprovals?: (patch: ComposerApprovalsPatch) => void | Promise<void>;
   workspacePickerEnabled?: boolean;
   workspaces?: Workspace[];
   onSelectWorkspace?: (workspaceId: string) => Promise<void>;
@@ -317,31 +329,34 @@ export interface ComposerSkillCatalog {
   isLoading: boolean;
   refetch(): unknown;
 }
-const PERMISSION_META: Record<
-  WorkspacePermission,
-  {
-    label: string;
-    icon: React.ComponentType<{ className?: string }>;
-    className: string;
-  }
+/**
+ * A workspace patch from the approvals chip: a mode of its own, `null` to
+ * follow Settings → Approvals, or (in a No workspace chat) Chat only.
+ */
+export interface ComposerApprovalsPatch {
+  approvalMode?: ApprovalMode | null;
+  permission?: "ask" | "none";
+}
+
+/** One choice in the approvals chip's menu. */
+type ApprovalChoice = "settings" | ApprovalMode | "chat-only";
+
+const APPROVAL_CHOICE_ICONS: Record<
+  ApprovalChoice,
+  { icon: React.ComponentType<{ className?: string }>; className: string }
 > = {
-  full: {
-    label: "Full access",
-    icon: OctagonAlert,
-    className: "text-support-warning",
-  },
-  ask: {
-    label: "Ask first",
-    icon: ShieldQuestion,
-    className: "text-secondary",
-  },
-  none: {
-    label: "No access",
-    icon: Lock,
-    className: "text-tertiary",
-  },
+  settings: { icon: SlidersHorizontal, className: "text-secondary" },
+  auto: { icon: ShieldCheck, className: "text-secondary" },
+  ask: { icon: ShieldQuestion, className: "text-secondary" },
+  never: { icon: OctagonAlert, className: "text-support-warning" },
+  "chat-only": { icon: Lock, className: "text-tertiary" },
 };
-const PERMISSION_ORDER: readonly WorkspacePermission[] = ["full", "ask", "none"];
+
+function approvalChoicePatch(choice: ApprovalChoice, chatOnly: boolean): ComposerApprovalsPatch {
+  if (choice === "chat-only") return { permission: "none" };
+  // Leaving Chat only (a No workspace chat) turns folder work back on too.
+  return { approvalMode: choice === "settings" ? null : choice, ...(chatOnly ? { permission: "ask" as const } : {}) };
+}
 
 function skillSourceLabel(source: SkillSource): string {
   if (source === "builtin") return "Built-in";
@@ -407,7 +422,7 @@ export function Composer({
   gitUnborn,
   gitStatus,
   onOpenFolder,
-  onChangePermission,
+  onChangeApprovals,
   workspacePickerEnabled,
   workspaces = [],
   onSelectWorkspace,
@@ -609,8 +624,7 @@ export function Composer({
   const firstSendPending = firstMessageSaving || (freezeWhileSending && sending);
   firstSendPendingRef.current = firstSendPending;
   const [permissionSaving, setPermissionSaving] = React.useState(false);
-  const [confirmFullAccess, setConfirmFullAccess] = React.useState(false);
-  const [permissionMenuOpen, setPermissionMenuOpen] = React.useState(false);
+  const [permissionMenuState, setPermissionMenuOpen] = React.useState(false);
   const permissionOptionsId = React.useId();
   const permissionControlRef = React.useRef<HTMLButtonElement>(null);
   const [renameDialogOpen, setRenameDialogOpen] = React.useState(false);
@@ -669,6 +683,19 @@ export function Composer({
     !(isGenerating && stoppingGeneration);
   const settings = useSettings();
   const liveChatAccess = aidenLivePreferences(settings.data).chatAccess;
+  const providers = useProviders();
+  const usableModel = (providers.data ?? []).some(isUsable);
+  const globalApprovalMode = effectiveApprovalMode(settings.data, usableModel);
+  const approvalPolicy = workspaceApprovalPolicy(workspace, globalApprovalMode);
+  // A workspace that follows Settings → Approvals shows no chip; people
+  // customize it in Workspace settings. Chat only stays visible so the person
+  // can see why tools are off. A No workspace chat has no Workspace settings,
+  // so its chip always shows.
+  const approvalsChipShown =
+    Boolean(workspace) && (isNoWorkspace(workspace) || approvalPolicy.customized || approvalPolicy.chatOnly);
+  const workspaceSettingsId = workspace && !isNoWorkspace(workspace) ? workspace.id : undefined;
+  // A choice that hides the chip (Use Settings) also closes its menu.
+  const permissionMenuOpen = permissionMenuState && approvalsChipShown;
   // Design comments waiting to go to Aiden; they go with the next send.
   const commentTray = useDesignCommentTray(chatId);
   // Read at transcript time so dictionary edits apply to an in-flight recording.
@@ -792,7 +819,6 @@ export function Composer({
     const session =
       !skillsOffered ||
       slashPaletteBlocked ||
-      confirmFullAccess ||
       renameDialogOpen ||
       forkDialogOpen ||
       sessionDialogOpen ||
@@ -813,7 +839,6 @@ export function Composer({
       skillsOffered,
       surfaces.slashCommands,
       composing,
-      confirmFullAccess,
       forkDialogOpen,
       logoutChooserOpen,
       logoutConfirmOpen,
@@ -890,7 +915,7 @@ export function Composer({
         workspaceChangeBlockedReason ??
         (gitOperationBusy ? "Wait for the current Git operation to finish." : undefined),
       composerControlBlockedReason: permissionSaving
-        ? "Wait for workspace access to finish updating."
+        ? "Wait for approvals to finish updating."
         : workspaceChangeBlockedReason
           ? workspaceChangeBlockedReason
           : gitOperationBusy
@@ -1291,9 +1316,14 @@ export function Composer({
     toast.success("Latest response copied");
   }, [latestAssistantResponse]);
   const openAccessMenu = React.useCallback(() => {
+    if (!approvalsChipShown) {
+      // Without a chip, approvals are changed in Workspace settings.
+      if (workspaceSettingsId) openWorkspaceSettings(workspaceSettingsId, "general");
+      return;
+    }
     setPermissionMenuOpen(true);
     requestAnimationFrame(() => permissionControlRef.current?.focus());
-  }, []);
+  }, [approvalsChipShown, workspaceSettingsId]);
   const openForkDialog = React.useCallback(() => {
     setForkQuery("");
     setForkDialogOpen(true);
@@ -2133,9 +2163,34 @@ export function Composer({
     }
   };
 
-  const permission = workspace?.permission ?? "ask";
-  const PermissionIcon = PERMISSION_META[permission].icon;
   const noWorkspace = isNoWorkspace(workspace);
+  const currentApprovalChoice: ApprovalChoice = approvalPolicy.chatOnly
+    ? "chat-only"
+    : approvalPolicy.customized
+      ? approvalPolicy.mode
+      : "settings";
+  // A workspace's Chat only is changed in Workspace settings, so its chip offers
+  // only that. A No workspace chat has no Workspace settings and offers Chat only here.
+  const approvalChoices: readonly ApprovalChoice[] =
+    approvalPolicy.chatOnly && !noWorkspace
+      ? []
+      : [
+          "settings",
+          ...APPROVAL_MODES.filter((mode) => mode !== "auto" || usableModel || currentApprovalChoice === "auto"),
+          ...(noWorkspace ? (["chat-only"] as const) : []),
+        ];
+  const approvalChoiceLabel = (choice: ApprovalChoice) =>
+    choice === "settings"
+      ? `Use Settings (${APPROVAL_MODE_LABELS[globalApprovalMode]})`
+      : choice === "chat-only"
+        ? "Chat only"
+        : APPROVAL_MODE_LABELS[choice];
+  // A No workspace chat that follows Settings shows the mode it runs in.
+  const chipChoice: ApprovalChoice = currentApprovalChoice === "settings" ? globalApprovalMode : currentApprovalChoice;
+  const approvalsLabel = approvalChoiceLabel(chipChoice);
+  const ApprovalsIcon = APPROVAL_CHOICE_ICONS[chipChoice].icon;
+  const approvalsHelp =
+    chipChoice === "chat-only" ? "The agent can't read or change this folder." : APPROVAL_MODE_HELP[chipChoice];
   const folderName = noWorkspace
     ? NO_WORKSPACE_LABEL
     : workspace?.folderPath
@@ -2154,49 +2209,33 @@ export function Composer({
   });
   const autoHideContext = useAutoHideComposerContext();
 
-  const applyPermission = async (nextPermission: WorkspacePermission) => {
+  const chooseApprovals = async (choice: ApprovalChoice) => {
     if (workspaceChangeBlockedReason) {
       toast.info(workspaceChangeBlockedReason);
       return;
     }
     if (
-      !onChangePermission ||
-      nextPermission === permission ||
+      !onChangeApprovals ||
+      choice === currentApprovalChoice ||
       permissionSaving ||
       isGenerating ||
       sending ||
       gitOperationBusy
     )
       return;
+    if (choice === "settings" && !noWorkspace) {
+      // Following Settings hides the chip, so focus goes back to the draft.
+      setPermissionMenuOpen(false);
+      inputRef?.current?.focus({ preventScroll: true });
+    }
     setPermissionSaving(true);
     try {
-      await onChangePermission(nextPermission);
+      await onChangeApprovals(approvalChoicePatch(choice, approvalPolicy.chatOnly));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Couldn't change workspace access.");
+      toast.error(error instanceof Error ? error.message : "Couldn't change approvals.");
     } finally {
       setPermissionSaving(false);
     }
-  };
-
-  const requestPermission = (nextPermission: WorkspacePermission) => {
-    if (workspaceChangeBlockedReason) {
-      toast.info(workspaceChangeBlockedReason);
-      return;
-    }
-    if (
-      nextPermission === permission ||
-      permissionSaving ||
-      isGenerating ||
-      sending ||
-      gitOperationBusy
-    )
-      return;
-    if (nextPermission === "full") {
-      setPermissionMenuOpen(false);
-      setConfirmFullAccess(true);
-      return;
-    }
-    void applyPermission(nextPermission);
   };
 
   return (
@@ -2214,7 +2253,7 @@ export function Composer({
           <ComposerSlashPalettePresence
             present={Boolean(slashSession)}
             immediate={
-              slashPaletteBlocked || confirmFullAccess || renameDialogOpen || permissionMenuOpen
+              slashPaletteBlocked || renameDialogOpen || permissionMenuOpen
             }
           >
             {slashSession ? (
@@ -2632,9 +2671,9 @@ export function Composer({
                 </span>
                 </>
                 ) : null}
-                {surfaces.localContext ? (
+                {surfaces.localContext && approvalsChipShown ? (
                 <div
-                  // Workspace access is the user's to change: Aiden Live never opens or picks it.
+                  // Approvals are the user's to change: Aiden Live never opens or picks them.
                   data-live-guard="you"
                   className="composer-permission-control group/access relative h-8 w-34 shrink-0"
                   data-open={permissionMenuOpen || undefined}
@@ -2659,9 +2698,10 @@ export function Composer({
                 >
                   <button
                     type="button"
-                    aria-label={`Workspace access: ${PERMISSION_META[permission].label}. Show access options.`}
+                    aria-label={`Approvals: ${approvalsLabel}. Show options.`}
                     aria-expanded={permissionMenuOpen}
                     aria-controls={permissionOptionsId}
+                    title={approvalsHelp}
                     onFocus={() => setPermissionMenuOpen(true)}
                     onClick={() => setPermissionMenuOpen(true)}
                     onKeyDown={(event) => {
@@ -2672,17 +2712,37 @@ export function Composer({
                     }}
                     className="composer-permission-trigger absolute inset-0 flex items-center gap-2 overflow-hidden whitespace-nowrap rounded-pill bg-transparent px-3 text-regular outline-none transition-opacity duration-100 ease-out"
                   >
-                    <PermissionIcon
-                      className={cn("size-4 shrink-0", PERMISSION_META[permission].className)}
+                    <ApprovalsIcon
+                      className={cn("size-4 shrink-0", APPROVAL_CHOICE_ICONS[chipChoice].className)}
                     />
                     <span className="composer-permission-label truncate">
-                      {permissionSaving ? "Updating…" : PERMISSION_META[permission].label}
+                      {permissionSaving ? "Updating…" : approvalsLabel}
                     </span>
                   </button>
+                  {approvalChoices.length === 0 ? (
+                    <div
+                      id={permissionOptionsId}
+                      className="invisible pointer-events-none absolute bottom-full left-0 z-20 flex min-w-34 translate-y-1 flex-col items-stretch overflow-hidden rounded-dialog bg-popover p-1 opacity-0 shadow-control-hover transition-[opacity,transform,visibility] duration-100 ease-out group-data-[open=true]/access:visible group-data-[open=true]/access:pointer-events-auto group-data-[open=true]/access:translate-y-0 group-data-[open=true]/access:opacity-100"
+                    >
+                      {/* Chat only is a workspace setting, changed where it was set. */}
+                      <button
+                        ref={permissionControlRef}
+                        type="button"
+                        onClick={() => {
+                          setPermissionMenuOpen(false);
+                          if (workspaceSettingsId) openWorkspaceSettings(workspaceSettingsId, "general");
+                        }}
+                        className="flex h-8 w-full items-center gap-2 overflow-hidden whitespace-nowrap rounded-control px-3 text-regular outline-none transition-[background-color,box-shadow,color] duration-100 ease-out hover:bg-list-hover focus-visible:bg-list-selection focus-visible:outline-none active:bg-list-selection"
+                      >
+                        <SlidersHorizontal className="size-4 shrink-0 text-secondary" />
+                        <span className="truncate">Workspace settings…</span>
+                      </button>
+                    </div>
+                  ) : (
                   <div
                     id={permissionOptionsId}
                     role="radiogroup"
-                    aria-label="Workspace access"
+                    aria-label="Approvals"
                     aria-disabled={
                       !workspace ||
                       permissionSaving ||
@@ -2694,10 +2754,11 @@ export function Composer({
                     }
                     className="invisible pointer-events-none absolute bottom-full left-0 z-20 flex min-w-34 translate-y-1 flex-col items-stretch overflow-hidden rounded-dialog bg-popover p-1 opacity-0 shadow-control-hover transition-[opacity,transform,visibility] duration-100 ease-out group-data-[open=true]/access:visible group-data-[open=true]/access:pointer-events-auto group-data-[open=true]/access:translate-y-0 group-data-[open=true]/access:opacity-100"
                   >
-                    {PERMISSION_ORDER.map((value, index) => {
-                      const meta = PERMISSION_META[value];
+                    {approvalChoices.map((value, index) => {
+                      const meta = APPROVAL_CHOICE_ICONS[value];
                       const Icon = meta.icon;
-                      const selected = value === permission;
+                      const label = approvalChoiceLabel(value);
+                      const selected = value === currentApprovalChoice;
                       const disabled =
                         !workspace ||
                         permissionSaving ||
@@ -2714,17 +2775,18 @@ export function Composer({
                           aria-checked={selected}
                           aria-label={
                             workspaceChangeBlockedReason
-                              ? `Workspace access: ${meta.label}. ${workspaceChangeBlockedReason}.`
+                              ? `Approvals: ${label}. ${workspaceChangeBlockedReason}.`
                               : isGenerating || sending
-                                ? `Workspace access: ${meta.label}. Finish or stop the current response to change access.`
-                                : `Workspace access: ${meta.label}`
+                                ? `Approvals: ${label}. Finish or stop the current response to change approvals.`
+                                : `Approvals: ${label}`
                           }
+                          title={value === "settings" || value === "chat-only" ? undefined : APPROVAL_MODE_HELP[value]}
                           tabIndex={selected ? 0 : -1}
                           aria-disabled={disabled || undefined}
                           onClick={(event) => {
                             if (disabled) return;
-                            requestPermission(value);
-                            if (event.detail > 0 && (value !== "full" || value === permission)) {
+                            void chooseApprovals(value);
+                            if (event.detail > 0) {
                               setPermissionMenuOpen(false);
                               inputRef?.current?.focus({ preventScroll: true });
                             }
@@ -2733,19 +2795,19 @@ export function Composer({
                             if (disabled) return;
                             if (event.key === "Enter" || event.key === " ") {
                               event.preventDefault();
-                              if (value !== permission) requestPermission(value);
+                              if (value !== currentApprovalChoice) void chooseApprovals(value);
                               return;
                             }
                             let nextIndex: number | undefined;
                             if (event.key === "ArrowDown" || event.key === "ArrowRight") {
-                              nextIndex = (index + 1) % PERMISSION_ORDER.length;
+                              nextIndex = (index + 1) % approvalChoices.length;
                             }
                             if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
                               nextIndex =
-                                (index - 1 + PERMISSION_ORDER.length) % PERMISSION_ORDER.length;
+                                (index - 1 + approvalChoices.length) % approvalChoices.length;
                             }
                             if (event.key === "Home") nextIndex = 0;
-                            if (event.key === "End") nextIndex = PERMISSION_ORDER.length - 1;
+                            if (event.key === "End") nextIndex = approvalChoices.length - 1;
                             if (nextIndex === undefined) return;
                             event.preventDefault();
                             const radios =
@@ -2762,11 +2824,12 @@ export function Composer({
                           )}
                         >
                           <Icon className={cn("size-4 shrink-0", meta.className)} />
-                          <span className="truncate">{meta.label}</span>
+                          <span className="truncate">{label}</span>
                         </button>
                       );
                     })}
                   </div>
+                  )}
                 </div>
                 ) : null}
               </div>
@@ -2860,23 +2923,6 @@ export function Composer({
         returnFocus={() => inputRef?.current ?? null}
         onConfirm={() => voice.resolveRecordedRetryConsent(true)}
       />
-      <LiveGuard guard="you" wrap={false}>
-      <AlertDialog
-        open={confirmFullAccess}
-        onOpenChange={setConfirmFullAccess}
-        title="Enable Full Access?"
-        description={
-          <Text variant="small" color="secondary">
-            {noWorkspace
-              ? "Aiden will be able to read and edit files, and run commands in this chat’s own folder without asking each time. "
-              : <>Aiden will be able to read and edit files, and run commands in “{folderName ?? "this workspace"}” without asking each time. </>}
-            You can change this any time from the composer.
-          </Text>
-        }
-        confirmLabel="Enable Full Access"
-        onConfirm={() => void applyPermission("full")}
-      />
-      </LiveGuard>
       <Dialog
         open={renameDialogOpen}
         onOpenChange={setRenameDialogOpen}

@@ -109,7 +109,7 @@ import { GitFork, TerminalSquare } from "lucide-react";
 import { MessageList } from "../components/message-list";
 import { useReadAloud } from "../lib/tts-client";
 import type { ReadAloudActionProps } from "../components/read-aloud-button";
-import { Composer } from "../components/composer";
+import { Composer, type ComposerApprovalsPatch } from "../components/composer";
 import { AskUserQuestionComposer } from "../components/ask-user-question-composer";
 import { DesignModeConsentCard, useDesignModeConsent } from "../design/design-mode-consent";
 import { useCanvasFocusRequests } from "../design/canvas-focus-requests";
@@ -218,7 +218,6 @@ import {
   type ChatMeta,
   type GitBranches,
   type Workspace,
-  type WorkspacePermission,
 } from "../lib/types";
 import { COMPUTER_USE_CONTINUE_PROMPT } from "../shared/computer-use-access";
 import { userFacingErrorMessage } from "../lib/ipc-error";
@@ -2756,21 +2755,21 @@ export function ChatPane({ chatId }: { chatId: string }) {
     if (effectiveWorkspace?.folderPath) void workspacesApi.openFolder(effectiveWorkspace.id);
   }, [effectiveWorkspace?.folderPath, effectiveWorkspace?.id]);
 
-  const changePermission = React.useCallback(
-    async (permission: WorkspacePermission) => {
+  const changeApprovals = React.useCallback(
+    async (patch: ComposerApprovalsPatch) => {
       if (!effectiveWorkspace) return;
       if (getChatDraft(chatId)?.sending)
         throw new Error("Wait for the first message to finish saving.");
       if (environmentPanel.gitOperationBusy)
         throw new Error(
-          "Wait for the current Git operation to finish before changing workspace access.",
+          "Wait for the current Git operation to finish before changing approvals.",
         );
       if (environmentPanel.editorState.saving)
         throw new Error(
-          "Wait for the open file to finish saving before changing workspace access.",
+          "Wait for the open file to finish saving before changing approvals.",
         );
       if (environmentPanel.editorState.dirty)
-        throw new Error("Save or discard the open file's edits before changing workspace access.");
+        throw new Error("Save or discard the open file's edits before changing approvals.");
       if (environmentPanel.agentBusy) environmentPanel.cancelAgent?.();
       let targetId = effectiveWorkspace.id;
       // A No workspace draft shares its folder with an existing chat until it
@@ -2786,7 +2785,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           targetId = separateId;
         }
       }
-      await workspacesApi.update(targetId, { permission });
+      await workspacesApi.update(targetId, patch);
       await Promise.all([
         qc.invalidateQueries({ queryKey: queryKeys.workspaces }),
         qc.invalidateQueries({
@@ -4007,7 +4006,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 gitUnborn={git.data?.unborn}
                 gitStatus={git.data?.isRepo ? git.data : undefined}
                 onOpenFolder={openFolder}
-                onChangePermission={changePermission}
+                onChangeApprovals={changeApprovals}
                 workspacePickerEnabled={isNewChat}
                 machinePicker={
                   // A new chat may run on a paired Mac instead.

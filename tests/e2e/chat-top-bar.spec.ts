@@ -49,6 +49,18 @@ async function closeMenu(page: Page): Promise<void> {
   await expect(page.getByRole("menu")).toHaveCount(0);
 }
 
+/** Chat only is a workspace setting: set it in Workspace settings → General → Access. */
+async function setChatOnly(page: Page): Promise<void> {
+  const menu = await openChipMenu(page);
+  await menu.getByRole("menuitem", { name: "Workspace settings…" }).click();
+  const dialog = page.getByRole("dialog", { name: "Workspace settings" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("combobox", { name: "Folder access" }).click();
+  await page.getByRole("option", { name: "Chat only", exact: true }).click();
+  await dialog.getByRole("button", { name: "Done", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+}
+
 test.describe("folder workspaces", () => {
   test.use({ workspaceSeed: true });
 
@@ -454,12 +466,9 @@ test.describe("folder workspaces", () => {
     await startPersistedChat(page);
     await expect(page.locator('[data-workspace-tool="review"]')).toBeVisible();
 
-    await page.getByRole("button", { name: /^Workspace access: Full access/u }).click();
-    await page
-      .getByRole("radiogroup", { name: "Workspace access" })
-      .getByRole("radio", { name: /^Workspace access: No access/u })
-      .click();
-    await expect(page.getByRole("button", { name: /^Workspace access: No access/u })).toBeVisible();
+    await setChatOnly(page);
+    // Chat only keeps the composer chip, so the person can see why tools are off.
+    await expect(page.getByRole("button", { name: /^Approvals: Chat only\./u })).toBeVisible();
 
     await expect(page.locator('[data-workspace-tool="review"]')).toHaveCount(0);
     await expect(page.locator('[data-workspace-tool="files"]')).toBeDisabled();

@@ -486,9 +486,9 @@ export const SLASH_COMMANDS = Object.freeze([
   define({
     name: "access",
     aliases: ["permissions"],
-    title: "Workspace access",
-    description: "Review the current workspace access mode.",
-    keywords: ["full", "ask", "none"],
+    title: "Approvals",
+    description: "Review how this workspace's chats ask before acting.",
+    keywords: ["approvals", "auto", "ask", "never ask", "chat only", "access"],
     icon: "access",
     action: { kind: "composer-control", control: "access" },
     behavior: "picker",

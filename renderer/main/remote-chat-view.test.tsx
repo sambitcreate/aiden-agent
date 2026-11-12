@@ -254,7 +254,7 @@ test("a run started on the host streams into the open chat, and its composer can
   assert.equal(stop.hasAttribute("disabled"), false);
   assert.ok(view.button(/Queue message|Steer response/), "typing while it runs goes to the host's run");
   // Nothing on this Mac is offered for a chat that runs elsewhere.
-  for (const label of [/Attach files/i, /Workspace access/i, /terminal/i, /Open in/i, /Reveal/i]) {
+  for (const label of [/Attach files/i, /^Approvals:/i, /terminal/i, /Open in/i, /Reveal/i]) {
     assert.equal(view.button(label), undefined, `unexpected ${label} control`);
   }
   assert.doesNotMatch(view.text, /last-known transcript/);
