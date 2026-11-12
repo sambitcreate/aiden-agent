@@ -117,10 +117,17 @@ function chatWasAnswering(chatId: string, at: number): boolean {
   );
 }
 
+/** The registry dropped a run: one evicted while running will never report its end. */
+function observeRemovedRun(summary: HostRunSummary): void {
+  if (settledRuns.has(summary.runId)) return;
+  runStarts.delete(summary.runId);
+  if (!deletedChats.has(summary.chatId)) chatSettlement.hostRunChanged(summary, true);
+}
+
 function observeRun(summary: HostRunSummary): void {
   const terminal = summary.state === "done" || summary.state === "failed" || summary.state === "cancelled";
   if (!terminal) {
-    if (!deletedChats.has(summary.chatId)) chatSettlement.runStarted(summary.chatId, summary.runId);
+    if (!deletedChats.has(summary.chatId)) chatSettlement.hostRunChanged(summary, false);
     if (!runStarts.has(summary.runId)) {
       runStarts.set(summary.runId, { chatId: summary.chatId, start: Date.parse(summary.startedAt) || Date.now() });
     }
@@ -132,7 +139,7 @@ function observeRun(summary: HostRunSummary): void {
   const start = runStarts.get(summary.runId)?.start ?? (Date.parse(summary.startedAt) || Date.now());
   runStarts.delete(summary.runId);
   if (deletedChats.has(summary.chatId)) return;
-  chatSettlement.runEnded(summary.chatId, summary.runId);
+  chatSettlement.hostRunChanged(summary, false);
   const now = Date.now();
   const windows = (runWindows.get(summary.chatId) ?? []).filter((window) => window.end > now - RUN_WINDOW_KEEP_MS);
   windows.push({ start, end: Date.parse(summary.updatedAt) || now });
@@ -319,7 +326,8 @@ export async function startFollowThrough(): Promise<void> {
   if (started) return;
   started = true;
   hostRunRegistry.onChange((summary, removed) => {
-    if (!removed) observeRun(summary);
+    if (removed) observeRemovedRun(summary);
+    else observeRun(summary);
   });
   const state = await loadState();
   savedFollows = state.follows;

@@ -5,6 +5,7 @@
 
 import assert from "node:assert/strict";
 import test, { mock } from "node:test";
+import { HostRunRegistry } from "../host-run-registry.js";
 import { ChatSettlement } from "./chat-settlement.js";
 
 const MINUTE = 60_000;
@@ -184,4 +185,47 @@ test("after quitting nothing is stopped for being quiet, and a new launch starts
   assert.equal(relaunched.isArmed("chat-1"), false, "windows are not saved across a restart");
   await advance(60 * MINUTE);
   assert.deepEqual(stoppedAfterRelaunch, []);
+});
+
+test("an answer evicted from a full run registry still lets the chat settle, a full window after it goes idle", async (t) => {
+  const { settlement, busy, stopped, advance } = harness(t, { busy: new Set(["chat-1"]) });
+  let clock = 0;
+  const registry = new HostRunRegistry({ now: () => ++clock, maxRuns: 2 });
+  registry.onChange((summary, removed) => settlement.hostRunChanged(summary, removed));
+
+  registry.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });
+  registry.begin({ runId: "run-2", chatId: "chat-2", origin: "renderer" });
+  registry.begin({ runId: "run-3", chatId: "chat-3", origin: "renderer" });
+  assert.equal(registry.summary("run-1"), undefined, "the registry evicted chat-1's running answer to make room");
+
+  // Step a minute at a time: a mocked tick only runs timers that were already due.
+  const advanceMinutes = async (minutes: number) => {
+    for (let minute = 0; minute < minutes; minute += 1) await advance(MINUTE);
+  };
+  await advanceMinutes(60);
+  assert.deepEqual(stopped, [], "nothing stops while the evicted answer is still running");
+
+  // The answer ends, but the registry no longer knows the run and reports nothing.
+  busy.delete("chat-1");
+  registry.settle("run-1");
+  await advanceMinutes(20);
+  assert.deepEqual(stopped, [], "the quiet window is a full twenty minutes from when the chat went idle");
+  await advanceMinutes(1);
+  assert.deepEqual(stopped, ["chat-1"]);
+});
+
+test("a run that ended before the registry dropped it does not delay its chat's window", async (t) => {
+  const { settlement, stopped, advance } = harness(t);
+  let clock = 0;
+  const registry = new HostRunRegistry({ now: () => ++clock, maxRuns: 1 });
+  registry.onChange((summary, removed) => settlement.hostRunChanged(summary, removed));
+
+  registry.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });
+  registry.settle("run-1");
+  registry.begin({ runId: "run-2", chatId: "chat-2", origin: "renderer" });
+  assert.equal(registry.summary("run-1"), undefined, "the ended run was dropped to make room");
+  await advance(20 * MINUTE - 1);
+  assert.deepEqual(stopped, []);
+  await advance(1);
+  assert.deepEqual(stopped, ["chat-1"]);
 });
