@@ -75,6 +75,7 @@ export function approvalAnalyticsAnswer(
   if (!allowed) return "deny";
   if (scope === "chat") return "chat";
   if (scope === "always") return surface === "bot" ? "bot" : "workspace";
+  if (scope === "workspace") return "workspace";
   return "once";
 }
 

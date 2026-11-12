@@ -8,13 +8,17 @@
  *   while the app stays open.
  * - `always`: persists that same narrow rule for the workspace until the user
  *   revokes it from Settings → Bots & Approvals → Tool approvals.
+ * - `workspace`: a Mac card's "Allow in this workspace" under an approval
+ *   mode: that part of the Mac (commands, file changes) in this workspace,
+ *   removable in Workspace settings. Desktop only; the Remote projection
+ *   never offers it to phones.
  */
-export const TOOL_APPROVAL_SCOPES = ["once", "chat", "always"] as const;
+export const TOOL_APPROVAL_SCOPES = ["once", "chat", "always", "workspace"] as const;
 
 export type ToolApprovalScope = (typeof TOOL_APPROVAL_SCOPES)[number];
 
 export function parseToolApprovalScope(value: unknown): ToolApprovalScope | undefined {
-  return value === "once" || value === "chat" || value === "always" ? value : undefined;
+  return value === "once" || value === "chat" || value === "always" || value === "workspace" ? value : undefined;
 }
 
 /** Tools whose calls can be remembered by an approval rule. */
@@ -61,7 +65,7 @@ export function rememberableApprovalScopes(
 ): Exclude<ToolApprovalScope, "once">[] {
   if (!canAllow || !scopes) return [];
   const offered = new Set(scopes.map(parseToolApprovalScope));
-  return (["chat", "always"] as const).filter((scope) => offered.has(scope));
+  return (["chat", "always", "workspace"] as const).filter((scope) => offered.has(scope));
 }
 
 export function toolApprovalScopeLabel(scope: ToolApprovalScope): string {
@@ -71,6 +75,8 @@ export function toolApprovalScopeLabel(scope: ToolApprovalScope): string {
     case "chat":
       return "Allow in this chat";
     case "always":
+      return "Allow in this workspace";
+    case "workspace":
       return "Allow in this workspace";
   }
 }

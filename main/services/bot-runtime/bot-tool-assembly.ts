@@ -63,6 +63,8 @@ import type {
 } from "./bot-extension.js";
 import { ruleAskUnattendedBlock, ruleUnattendedBlock } from "./bot-handoff-text.js";
 import { planActionGate, type GateAction, type GateAttendance, type GateContext } from "../approval-gate/gate.js";
+import { BOT_EXEMPT_TOOL_NAMES } from "../approval-gate/tool-classes.js";
+import type { ApprovalMode } from "../../../renderer/shared/approval-mode.js";
 import { botIngressAllowsTool, botToolApprovalSummary, botToolVerdict, botTurnOf, SUBAGENT_TOOL, type BotToolFacts } from "./bot-tool-policy.js";
 import type { BotToolCall, ToolReplay } from "./tool-adapter.js";
 
@@ -137,8 +139,10 @@ export interface BotToolAssemblyPorts {
   rules?(botId: string): Promise<readonly BotRule[]>;
   /** The Bot's name, for the hand-off card's "why". */
   botName?(botId: string): Promise<string | undefined>;
-  /** Settings → Bots & Approvals, read fresh on every call: routine runs go ahead without asking. Absent: off. */
+  /** The legacy routines switch "Go ahead without asking", read fresh on every call. Absent: off. */
   routinesGoAhead?(): Promise<boolean>;
+  /** The global approval mode, read fresh on every call. Absent: Ask. */
+  approvalMode?(): Promise<ApprovalMode>;
   plans?: Pick<BotPlans, "cover" | "admit">;
 }
 
@@ -165,6 +169,8 @@ function accessChangedReason(error: unknown): string {
 }
 
 const RULES_UNREADABLE = "This Bot's rules couldn't be read, so this action didn't run. Tell the person.";
+/** A routine has nobody to ask, so a step that needs the person's OK is skipped and reported. */
+const ROUTINE_NEEDS_PERSON = "This step needs the person's OK, and nobody is here to give it during a routine, so it didn't run. Tell them in your reply.";
 
 function bounded(text: string, maximum: number): string {
   const characters = [...text];
@@ -512,11 +518,17 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
         const computerUse = toolName === COMPUTER_USE_TOOL_NAME;
         const routineGoAhead = approval !== undefined && routineOnly && !computerUse &&
           (await ports.routinesGoAhead?.().catch(() => false)) === true && (await call.hasRoutineInputs?.()) === true;
-        const gateContext: GateContext = { surface: "bot", access: "ask", attendance, ...(routineGoAhead ? { routineGoAhead } : {}) };
+        // Every Bot follows the global mode. Auto has no judge for Bots yet,
+        // so it fails closed to the card, as Ask does.
+        const mode = (await ports.approvalMode?.().catch(() => "ask" as const)) ?? "ask";
+        const gateContext: GateContext = { surface: "bot", access: "ask", mode, attendance, ...(routineGoAhead ? { routineGoAhead } : {}) };
         const remembered = baseline && !rule && !computerUse ? botApprovalTargetOf(toolName, action) : undefined;
         const gateAction: GateAction = {
           toolName,
           ...(computerUse ? { mac: true } : {}),
+          // The shell runs on the person's Mac: its first use asks in every mode.
+          ...(toolName === "run_command" ? { mac: true, macClass: "shell" as const } : {}),
+          ...(BOT_EXEMPT_TOOL_NAMES.has(toolName) ? { exempt: true } : {}),
           ...(baseline !== undefined ? { consequential: true } : {}),
           ...(ruled === "hand_off" ? { rule: { behavior: "hand_off" as const, locked: rule?.locked === true } }
             : rule !== undefined ? { rule: { behavior: "ask" as const, locked: rule.locked === true } } : {}),
@@ -557,7 +569,8 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
             return { allowed: false, reason: decision.reason === "needs-person" ? ruleUnattendedBlock(label)
               : decision.reason === "unattended-rule" ? ruleAskUnattendedBlock(label)
                 : decision.reason === "peer" ? "Peer work cannot obtain fresh person approval for this action."
-                  : RULES_UNREADABLE };
+                  : decision.reason === "unattended" ? ROUTINE_NEEDS_PERSON
+                    : RULES_UNREADABLE };
           case "hand-off": {
             if (!rule || !ruleRef) return { allowed: false, reason: RULES_UNREADABLE };
             const botName = (await ports.botName?.(botId).catch(() => undefined)) ?? "Your Bot";
@@ -576,7 +589,9 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
           }
           case "allow":
             if (!approval) return { allowed: true };
-            if (decision.via === "routine-go-ahead") return { allowed: true, approval: { ...approval, preapproved: true } };
+            if (decision.via === "routine-go-ahead" || decision.via === "never-ask" || decision.via === "exempt") {
+              return { allowed: true, approval: { ...approval, preapproved: true } };
+            }
             if (decision.via === "plan" && permit) {
               return { allowed: true, approval: { ...approval, preapproved: true, planPermit: permit,
                 planOperation: args => operationIdentity(toolName, args, action, live?.browserTarget), planRulesCurrent: rulesCurrent } };

@@ -16,7 +16,9 @@ import {
   scheduleToolRequiresApproval,
 } from "../schedule-tool.js";
 import { toolApprovalRuleTarget, type ToolApprovalRuleTarget } from "../tool-approval-rules.js";
+import type { ApprovalMode, MacGrantClass } from "../../../renderer/shared/approval-mode.js";
 import { planActionGate, type GateAction, type GateContext } from "./gate.js";
+import { connectorToolEffect, MAC_TOOL_CLASSES } from "./tool-classes.js";
 
 /** Aiden's own names for the two tools that drive the Mac's screen. */
 export const WORKSPACE_COMPUTER_USE_TOOL = "computer_use";
@@ -45,6 +47,20 @@ export interface WorkspaceToolApprovalInput {
    * `workspaceToolApproval(...).readsRemembered` said so.
    */
   remembered?: "chat" | "always";
+  /**
+   * The run's approval mode and "Allowed in this workspace" grants (§3.1).
+   * Absent: the legacy mode of `permission`, where Full access also allows
+   * shell and files (the reach Full had before modes).
+   */
+  approval?: { mode: ApprovalMode; macGrants: ReadonlySet<MacGrantClass> };
+  /** A connector (MCP) tool: its real remote name and declared read-only hint. */
+  connector?: { remoteName: string; readOnlyHint?: boolean };
+  /** After outside content: a connector new to the run, or a site the person did not name. */
+  newDestination?: boolean;
+  /** This run can ask the judge (Auto). */
+  judgeAvailable?: boolean;
+  /** The judge's verdict, read only when `workspaceToolApproval(...).readsJudge` said so. */
+  judge?: "pass" | "defer";
 }
 
 export type WorkspaceToolApproval =
@@ -54,14 +70,18 @@ export type WorkspaceToolApproval =
   | { outcome: "memory" }
   | {
       outcome: "ask";
-      /** Remembered scopes the card offers (`SCOPED_APPROVAL_OFFER`) for this target. */
+      /** The exact-target rule a remembered approval (a legacy row) matched against. */
       ruleTarget?: ToolApprovalRuleTarget;
+      /** A Mac card: it offers "Allow in this workspace" for this part of the Mac. */
+      macGrant?: MacGrantClass;
     };
 
 export interface WorkspaceToolApprovalDecision {
   decision: WorkspaceToolApproval;
   /** The remembered-approval target to read before deciding again, when one applies. */
   readsRemembered?: ToolApprovalRuleTarget;
+  /** Ask the judge, then decide again with its verdict (Auto). */
+  readsJudge?: true;
 }
 
 const HOOK_VERDICTS = { block: "deny", ask: "ask", allow: "allow" } as const;
@@ -71,9 +91,15 @@ export function workspaceGateAction(input: WorkspaceToolApprovalInput): GateActi
   const { toolName, args } = input;
   if (toolName === WORKSPACE_COMPUTER_USE_TOOL) {
     // Reached only once the chat's Computer Use access was granted.
-    return { toolName, mac: true, consequential: true, granted: true };
+    return { toolName, mac: true, macClass: "computer-use", consequential: true, granted: true };
   }
+  const macClass = APPROVAL_TOOL_NAMES.has(toolName) ? MAC_TOOL_CLASSES.get(toolName) : undefined;
+  // The legacy Full access already allowed shell and files; a chosen mode
+  // allows them only once "Allowed in this workspace".
+  const macGranted = macClass !== undefined &&
+    (input.approval ? input.approval.macGrants.has(macClass) : input.permission !== "ask");
   const consequential =
+    (input.connector !== undefined && connectorToolEffect(input.connector.remoteName, input.connector) === "write") ||
     APPROVAL_TOOL_NAMES.has(toolName) ||
     BROWSER_MUTATION_TOOL_NAMES.has(toolName) ||
     deviceToolRequiresApproval(toolName, args) ||
@@ -94,6 +120,9 @@ export function workspaceGateAction(input: WorkspaceToolApprovalInput): GateActi
     : undefined;
   return {
     toolName,
+    ...(macClass ? { mac: true, macClass, ...(macGranted ? { macGranted: true } : {}) } : {}),
+    ...(input.newDestination ? { newDestination: true } : {}),
+    ...(input.judge ? { judge: input.judge } : {}),
     ...(consequential ? { consequential: true } : {}),
     ...(explicitOnly ? { explicitOnly: true } : {}),
     ...(memory ? { delegate: "memory" as const } : {}),
@@ -112,6 +141,8 @@ export function workspaceToolApproval(input: WorkspaceToolApprovalInput): Worksp
   const context: GateContext = {
     surface: "workspace",
     access: input.permission,
+    ...(input.approval ? { mode: input.approval.mode } : {}),
+    ...(input.judgeAvailable ? { judge: true } : {}),
     ...(input.hook ? { hook: HOOK_VERDICTS[input.hook] } : {}),
   };
   const action = workspaceGateAction(input);
@@ -125,10 +156,20 @@ export function workspaceToolApproval(input: WorkspaceToolApprovalInput): Worksp
     case "delegate":
       return { decision: { outcome: "memory" } };
     case "lookup":
+      if (decision.lookup === "judge") return { decision: { outcome: "ask" }, readsJudge: true };
       // Until the remembered approval is read, the call would ask with scopes.
-      return { decision: { outcome: "ask", ...(ruleTarget ? { ruleTarget } : {}) }, ...(ruleTarget ? { readsRemembered: ruleTarget } : {}) };
+      return {
+        decision: { outcome: "ask", ...(ruleTarget ? { ruleTarget } : {}), ...(action.macClass ? { macGrant: action.macClass } : {}) },
+        ...(ruleTarget ? { readsRemembered: ruleTarget } : {}),
+      };
     case "ask":
-      return { decision: { outcome: "ask", ...(decision.offer === "workspace-scopes" && ruleTarget ? { ruleTarget } : {}) } };
+      return {
+        decision: {
+          outcome: "ask",
+          ...((decision.offer === "workspace-scopes" || decision.offer === "mac") && ruleTarget ? { ruleTarget } : {}),
+          ...(decision.offer === "mac" && action.macClass ? { macGrant: action.macClass } : {}),
+        },
+      };
     case "allow":
       return {
         decision: {

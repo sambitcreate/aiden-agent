@@ -4,7 +4,8 @@
 // is a literal outcome captured from that code; the scenarios drive the real
 // entry points (the workspace decision llm-client calls, ACP's
 // `answerPermission`, a Bot's `checkPolicy`, the Computer Use access gate and
-// a subagent run grant). Phase 1 must not change a single row.
+// a subagent run grant). Phase 1 did not change a single row; Phase 2 changes
+// only the rows marked "Phase 2", each listed in the plan's Phase 2 notes.
 
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -555,8 +556,10 @@ const EXPECTED = {
   },
   bot: {
     "purchase click | approval | purchase ask | person": "ask (rule)",
-    "purchase click | approval | purchase ask | routine": "ask (rule)",
-    "purchase click | approval | purchase ask | routine | go ahead": "ask (rule)",
+    // Phase 2: a routine refuses where it would ask (plan §3.2 Unattended runs).
+    "purchase click | approval | purchase ask | routine": "block: This step needs the person's OK, and nobody is here to give it during a routine, so it didn't run. Tell them in your reply.",
+    // Phase 2: a routine refuses where it would ask (plan §3.2 Unattended runs).
+    "purchase click | approval | purchase ask | routine | go ahead": "block: This step needs the person's OK, and nobody is here to give it during a routine, so it didn't run. Tell them in your reply.",
     "purchase click | approval | purchase ask | telegram": "ask (rule)",
     "purchase click | approval | purchase ask | bot message": "ask (rule)",
     "purchase click | approval | purchase hand_off | person": "hand off",
@@ -575,8 +578,10 @@ const EXPECTED = {
     "purchase click | no approval | purchase hand_off | telegram": "block: This needs the person (Make a purchase or booking). Tell them in your reply.",
     "purchase click | no approval | purchase hand_off | bot message": "block: This needs the person (Make a purchase or booking). Tell them in your reply.",
     "plain click | approval | purchase ask | person": "ask",
-    "plain click | approval | purchase ask | routine": "ask",
-    "plain click | approval | purchase ask | routine | go ahead": "ask",
+    // Phase 2: a routine refuses where it would ask (plan §3.2 Unattended runs).
+    "plain click | approval | purchase ask | routine": "block: This step needs the person's OK, and nobody is here to give it during a routine, so it didn't run. Tell them in your reply.",
+    // Phase 2: a routine refuses where it would ask (plan §3.2 Unattended runs).
+    "plain click | approval | purchase ask | routine | go ahead": "block: This step needs the person's OK, and nobody is here to give it during a routine, so it didn't run. Tell them in your reply.",
     "plain click | approval | purchase ask | telegram": "ask",
     "plain click | approval | purchase ask | bot message": "ask",
     "plain click | no approval | purchase ask | person": "allow",
@@ -595,7 +600,8 @@ const EXPECTED = {
     "password typing | no approval | purchase ask | telegram": "block: This needs the person (Enter a password or 2FA code, or change account security). Tell them in your reply.",
     "password typing | no approval | purchase ask | bot message": "block: This needs the person (Enter a password or 2FA code, or change account security). Tell them in your reply.",
     "send email | approval | communicate ask | person": "ask (rule)",
-    "send email | approval | communicate ask | routine": "ask (rule)",
+    // Phase 2: a routine refuses where it would ask (plan §3.2 Unattended runs).
+    "send email | approval | communicate ask | routine": "block: This step needs the person's OK, and nobody is here to give it during a routine, so it didn't run. Tell them in your reply.",
     "send email | approval | communicate ask | routine | go ahead": "allow (go ahead)",
     "send email | approval | communicate ask | telegram": "ask (rule)",
     "send email | approval | communicate ask | bot message": "ask (rule)",

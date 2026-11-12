@@ -47,6 +47,7 @@ import type { BotDefinition } from "../../../renderer/shared/bots.js";
 import type { ConnectCardEntry } from "../../../renderer/shared/bot-connections.js";
 import { connectionSourceIdFor, resolveConnectCardStatus } from "../bot-runtime-tools/suggest-connection.js";
 import { botRoutinesGoAhead, defaultBotRules } from "../../../renderer/shared/bot-rules.js";
+import { effectiveApprovalMode } from "../../../renderer/shared/approval-mode.js";
 import { botApplicationService } from "../bot-application-service-main.js";
 import { botCapabilityCatalog, botCapabilityStore, botManagedWorkspace, botServiceRoot } from "../bot-capability-services-main.js";
 import { desktopBotProtectedRoots } from "../bot-desktop-protected-settings.js";
@@ -327,6 +328,7 @@ const tools = createBotToolAssembly({
   rules: (botId) => botRules.rules(botId),
   botName: async (botId) => (await botStore.get(botId))?.name,
   routinesGoAhead: async () => botRoutinesGoAhead(await configStore.getSettings()),
+  approvalMode: async () => effectiveApprovalMode(await configStore.getSettings(), true),
   plans: botPlans,
 });
 
