@@ -29,8 +29,10 @@ test("migration: no install already in use is moved to Auto", () => {
 });
 
 test("a fresh install is Auto once a usable model exists, else Ask; a stored mode is kept", () => {
-  assert.equal(effectiveApprovalMode({}, true), "auto");
-  assert.equal(effectiveApprovalMode({}, false), "ask");
+  assert.equal(effectiveApprovalMode({ approvalModeOrigin: "fresh" }, true), "auto");
+  assert.equal(effectiveApprovalMode({ approvalModeOrigin: "fresh" }, false), "ask");
+  // Never seeded (an unreadable settings file): could be an install in use, so Ask.
+  assert.equal(effectiveApprovalMode({}, true), "ask");
   assert.equal(effectiveApprovalMode({ approvalMode: "auto" }, false), "ask");
   assert.equal(effectiveApprovalMode({ approvalMode: "ask" }, true), "ask");
   assert.equal(effectiveApprovalMode({ approvalMode: "never" }, false), "never");

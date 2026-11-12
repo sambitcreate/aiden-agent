@@ -49,6 +49,7 @@ export function parseWorkspaceMacGrants(value: unknown): WorkspaceMacGrants | un
 /** The global setting, before a model's availability is considered. */
 export interface ApprovalModeSettings {
   approvalMode?: unknown;
+  approvalModeOrigin?: unknown;
 }
 
 /**
@@ -59,8 +60,13 @@ export interface ApprovalModeSettings {
  */
 export function effectiveApprovalMode(settings: ApprovalModeSettings | undefined, usableModel: boolean): ApprovalMode {
   const raw = settings?.approvalMode;
-  // Unset follows a usable model to Auto; a value that isn't a mode is Ask.
-  const mode = raw === undefined ? "auto" : (parseApprovalMode(raw) ?? "ask");
+  // Unset follows a usable model to Auto only when the fresh-install seed said
+  // so: settings that were never seeded (an unreadable file, say) may belong
+  // to an install already in use, so they read as Ask. A value that isn't a
+  // mode is Ask too.
+  const mode = raw === undefined
+    ? (settings?.approvalModeOrigin === "fresh" ? "auto" : "ask")
+    : (parseApprovalMode(raw) ?? "ask");
   return mode === "auto" && !usableModel ? "ask" : mode;
 }
 

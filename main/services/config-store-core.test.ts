@@ -21,6 +21,7 @@ import {
 import { withoutWorkspaceDisabledMcpServers } from "./workspace-capabilities.js";
 import { freshWebSearchSettings } from "./web-search-provider-registry-core.js";
 import { defaultWebFetchSettings } from "../../renderer/shared/web-fetch-settings.js";
+import { effectiveApprovalMode } from "../../renderer/shared/approval-mode.js";
 import type { AssistantConfig, StoredProvider, Workspace } from "./types.js";
 
 function expectedWebSearchSettings(enabled: boolean) {
@@ -3562,6 +3563,21 @@ test("approval mode: onboarding finished on an earlier release counts as in use"
   const settings = await restartStore(h).getSettings();
   assert.equal(settings.approvalModeOrigin, "upgrade");
   assert.equal(settings.approvalMode, "ask");
+});
+
+test("approval mode: an install whose settings file is unreadable runs in Ask, never Auto", async (t) => {
+  const h = await harness(t, {
+    providers: [],
+    settings: { lastProviderId: "anthropic", lastModel: "claude" },
+    workspaces: [{ id: "proj", name: "Project", folderPath: "/work/proj", permission: "ask", createdAt: 1, updatedAt: 1 }],
+    seeded: true,
+  });
+  await fs.writeFile(h.settingsFile, "{ this is not json", "utf-8");
+  const settings = await restartStore(h).getSettings();
+  assert.equal(effectiveApprovalMode(settings, true), "ask");
+  // Only the fresh-install seed's own marker lets an unset mode follow a model to Auto.
+  const fresh = await (await harness(t)).store.getSettings();
+  assert.equal(effectiveApprovalMode(fresh, true), "auto");
 });
 
 test("a workspace keeps only a valid approval mode and Mac grants across saves and reloads", async (t) => {

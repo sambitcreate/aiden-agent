@@ -422,7 +422,7 @@ function mountApprovals(
   options: { settings?: Partial<AppSettings>; providers?: Provider[] } = {},
 ) {
   installBotTestIpc({
-    "settings:get": () => options.settings ?? {},
+    "settings:get": () => options.settings ?? { approvalModeOrigin: "fresh" },
     "providers:list": () => options.providers ?? [USABLE_MODEL],
   });
   const patches: ComposerApprovalsPatch[] = [];
