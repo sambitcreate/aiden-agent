@@ -4,6 +4,8 @@ import type { ToolApprovalOutcome } from "../tool-approval.js";
 import type { ComputerUseStatus } from "../types.js";
 import type { ComputerUseController } from "./controller.js";
 import type { ComputerUseArgs } from "./schema.js";
+import { planActionGate } from "../approval-gate/gate.js";
+import { COMPUTER_USE_TOOL_NAME } from "./tool.js";
 
 export const COMPUTER_USE_ACCESS_SUMMARY =
   "Use your computer in this chat. Screenshots and accessibility text go to the selected model, and Aiden can click and type in your apps.";
@@ -126,6 +128,13 @@ export function createComputerUseAccessGate(
   deps: ComputerUseAccessGateDependencies,
 ) {
   let declined = false;
+  // Computer Use is the person's Mac itself: its first use asks in every
+  // mode, and a chat grant ("always" included) is the remembered answer.
+  const accessGate = (granted: boolean) =>
+    planActionGate(
+      { surface: "workspace", access: "ask" },
+      { toolName: COMPUTER_USE_TOOL_NAME, mac: true, consequential: true, granted, declinedInRun: declined },
+    );
   /** Grant revision at which this stream knew it was granted. */
   let grantedAt: number | null = null;
   /** Grant revision at which this stream saw granted && ready; later calls skip the probe. */
@@ -191,7 +200,8 @@ export function createComputerUseAccessGate(
     signal?: AbortSignal,
     attempt = 1,
   ): Promise<ComputerUseAccessDecision> => {
-    if (declined)
+    // A deny holds for the rest of the stream: the gate never asks again.
+    if (accessGate(false).outcome === "block")
       return { allowed: false, reason: COMPUTER_USE_DECLINED_REASON };
     if (resetsInProgress > 0)
       return { allowed: false, reason: COMPUTER_USE_RESETTING_REASON };
@@ -219,7 +229,7 @@ export function createComputerUseAccessGate(
     // A revocation during the awaits above makes both the cached grant and this
     // read stale. Decide again so a passed grant is current at this point.
     if (revision !== grantRevision) return decideAgain(toolCallId, signal, attempt);
-    if (grantedAt === revision) {
+    if (accessGate(grantedAt === revision).outcome === "allow") {
       if (status.ready) {
         await clearPending();
         if (revision !== grantRevision) return decideAgain(toolCallId, signal, attempt);

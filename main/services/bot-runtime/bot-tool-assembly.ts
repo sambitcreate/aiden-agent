@@ -62,6 +62,7 @@ import type {
   BotTurnContext,
 } from "./bot-extension.js";
 import { ruleAskUnattendedBlock, ruleUnattendedBlock } from "./bot-handoff-text.js";
+import { planActionGate, type GateAction, type GateAttendance, type GateContext } from "../approval-gate/gate.js";
 import { botIngressAllowsTool, botToolApprovalSummary, botToolVerdict, botTurnOf, SUBAGENT_TOOL, type BotToolFacts } from "./bot-tool-policy.js";
 import type { BotToolCall, ToolReplay } from "./tool-adapter.js";
 
@@ -494,73 +495,105 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
         if (call === undefined) return { allowed: true };
         const policy = await describePolicy(botId, toolName, call, facts);
         const { live, baseline, action, rule, matchingAsk, ruled, rulesCurrent } = policy;
-        const unattended = turns.some((turn) => turn.routine || turn.telegram || turn.peer);
         const label = rule ? botRuleLabel(rule) : "";
         const ruleRef = rule ? { id: rule.id, label } : undefined;
         const ownSummary = baseline?.summary ?? live?.summary ?? summarizeToolCall(toolName, call.args);
         const callSummary = rule?.locked && action ? lockedRuleSummary(action, ownSummary) : ownSummary;
-        if (ruled !== "hand_off") {
-          // Build the approval only once, after rules have decided whether it may run.
-          const approval: BotApprovalRequirement | undefined = rule === undefined ? baseline : {
-            ...baseline, summary: `Rule · ${label} — ${callSummary}`, rule: ruleRef,
-          };
-          if (!approval) return { allowed: true };
-          if (turns.some(turn => turn.peer)) return { allowed: false, reason: "Peer work cannot obtain fresh person approval for this action." };
-          const routineOnly = turns.length > 0 && turns.every(turn => turn.routine && !turn.telegram && !turn.peer);
-          const goAhead = routineOnly && toolName !== COMPUTER_USE_TOOL_NAME &&
-            (await ports.routinesGoAhead?.().catch(() => false)) === true && (await call.hasRoutineInputs?.()) === true;
-          if (goAhead) return { allowed: true, approval: { ...approval, preapproved: true } };
-          if (ports.plans && !call.skipPlanCoverage && call.executionId) {
-            const operationFingerprint = operationIdentity(toolName, call.args, action, live?.browserTarget);
-            const permit = operationFingerprint === undefined ? undefined : await ports.plans.cover(botId, {
-              executionId: call.executionId, operationFingerprint, toolName,
-              requestIds: call.authorizationIds ?? call.requestIds ?? [], action, baseline: baseline !== undefined,
-              rules: matchingAsk.map(rule => ({ id: rule.id, fingerprint: botPlanRuleFingerprint(rule) })),
-            }).catch(() => undefined);
-            if (permit) return { allowed: true, approval: { ...approval, preapproved: true, planPermit: permit,
-              planOperation: args => operationIdentity(toolName, args, action, live?.browserTarget), planRulesCurrent: rulesCurrent } };
-          }
-          if (ports.allowList && !call.skipAllowList && baseline && !rule && toolName !== COMPUTER_USE_TOOL_NAME) {
-            const described = botApprovalTargetOf(toolName, action);
-            if (described) {
-              let requirements: BotApprovalRequirements | undefined;
-              try { requirements = await requirementsFrom(botId, toolName, call, original!, admission, facts, policy); } catch { /* Ask normally. */ }
-              if (requirements?.matchedRuleId) {
-                const expected = requirements;
-                return { allowed: true, approval: { ...approval, requirements: expected, preapproved: true,
-                  onAllow: () => allowEntry(botId, toolName, call, expected, baseline) } };
-              }
-              if (!requirements) return checkPolicy(botId, toolName, { ...call, skipPlanCoverage: true, skipAllowList: true });
-              let offer: { count: number } | undefined;
-              try { offer = await ports.allowList.offer(botId, described.target); } catch { /* No offer. */ }
-              // Offering can await disk; stale evidence must never attach to a new card.
-              const fresh = await approvalRequirements(botId, toolName, call);
-              if (!fresh || fresh.authorizationFingerprint !== requirements.authorizationFingerprint)
-                return checkPolicy(botId, toolName, { ...call, skipPlanCoverage: true, skipAllowList: true });
-              return { allowed: true, approval: await ordinaryApproval(botId, toolName, call, original!, admission, facts, policy,
-                { ...approval, remember: { ...described, ...(offer ? { offer } : {}) }, requirements }) };
-            }
-          }
-          if (baseline === undefined && rule && unattended) return { allowed: false, reason: ruleAskUnattendedBlock(label) };
-          const described = call.skipAllowList && baseline && !rule ? botApprovalTargetOf(toolName, action) : undefined;
-          return { allowed: true, approval: await ordinaryApproval(botId, toolName, call, original!, admission, facts, policy,
-            described ? { ...approval, remember: described } : approval) };
-        }
-        if (!rule || !ruleRef) return { allowed: false, reason: RULES_UNREADABLE };
-        if (unattended || turns.some(turn => turn.botMessage)) return { allowed: false, reason: ruleUnattendedBlock(label) };
-        const botName = (await ports.botName?.(botId).catch(() => undefined)) ?? "Your Bot";
-        const open = live?.open !== undefined && isBotHandoffOpenUrl(live.open.url) ? { url: live.open.url } : undefined;
-        return {
-          allowed: true,
-          handoff: {
-            rule: ruleRef,
-            summary: callSummary,
-            action: ruleActionText(rule),
-            why: ruleWhyText(label, botName, callSummary),
-            ...(live?.browserTarget && { browserTarget: live.browserTarget }),
-            ...(open === undefined ? {} : { open }),
-          },
+        if (ruled === "hand_off" && (!rule || !ruleRef)) return { allowed: false, reason: RULES_UNREADABLE };
+        // Build the approval only once, after rules have decided whether it may run.
+        const approval: BotApprovalRequirement | undefined = ruled === "hand_off" ? undefined : rule === undefined ? baseline : {
+          ...baseline, summary: `Rule · ${label} — ${callSummary}`, rule: ruleRef,
         };
+        const routineOnly = turns.length > 0 && turns.every(turn => turn.routine && !turn.telegram && !turn.peer);
+        const attendance: GateAttendance = turns.some(turn => turn.peer) ? "peer"
+          : routineOnly ? "routine"
+            : turns.some(turn => turn.routine || turn.telegram) ? "unattended"
+              : turns.some(turn => turn.botMessage) ? "bot-message" : "person";
+        const computerUse = toolName === COMPUTER_USE_TOOL_NAME;
+        const routineGoAhead = approval !== undefined && routineOnly && !computerUse &&
+          (await ports.routinesGoAhead?.().catch(() => false)) === true && (await call.hasRoutineInputs?.()) === true;
+        const gateContext: GateContext = { surface: "bot", access: "ask", attendance, ...(routineGoAhead ? { routineGoAhead } : {}) };
+        const remembered = baseline && !rule && !computerUse ? botApprovalTargetOf(toolName, action) : undefined;
+        const gateAction: GateAction = {
+          toolName,
+          ...(computerUse ? { mac: true } : {}),
+          ...(baseline !== undefined ? { consequential: true } : {}),
+          ...(ruled === "hand_off" ? { rule: { behavior: "hand_off" as const, locked: rule?.locked === true } }
+            : rule !== undefined ? { rule: { behavior: "ask" as const, locked: rule.locked === true } } : {}),
+          ...(ports.plans && !call.skipPlanCoverage && call.executionId ? { planAvailable: true } : {}),
+          ...(ports.allowList && !call.skipAllowList && remembered ? { allowListAvailable: true } : {}),
+        };
+        let decision = planActionGate(gateContext, gateAction);
+        let permit: Awaited<ReturnType<NonNullable<BotToolAssemblyPorts["plans"]>["cover"]>> | undefined;
+        if (decision.outcome === "lookup" && decision.lookup === "plan" && ports.plans && call.executionId) {
+          const operationFingerprint = operationIdentity(toolName, call.args, action, live?.browserTarget);
+          permit = operationFingerprint === undefined ? undefined : await ports.plans.cover(botId, {
+            executionId: call.executionId, operationFingerprint, toolName,
+            requestIds: call.authorizationIds ?? call.requestIds ?? [], action, baseline: baseline !== undefined,
+            rules: matchingAsk.map(rule => ({ id: rule.id, fingerprint: botPlanRuleFingerprint(rule) })),
+          }).catch(() => undefined);
+          decision = planActionGate(gateContext, { ...gateAction, plan: permit ? "covered" : "not-covered" });
+        }
+        if (decision.outcome === "lookup" && decision.lookup === "allow-list" && ports.allowList && remembered && baseline && approval) {
+          let requirements: BotApprovalRequirements | undefined;
+          try { requirements = await requirementsFrom(botId, toolName, call, original!, admission, facts, policy); } catch { /* Ask normally. */ }
+          if (requirements?.matchedRuleId) {
+            const expected = requirements;
+            return { allowed: true, approval: { ...approval, requirements: expected, preapproved: true,
+              onAllow: () => allowEntry(botId, toolName, call, expected, baseline) } };
+          }
+          if (!requirements) return checkPolicy(botId, toolName, { ...call, skipPlanCoverage: true, skipAllowList: true });
+          let offer: { count: number } | undefined;
+          try { offer = await ports.allowList.offer(botId, remembered.target); } catch { /* No offer. */ }
+          // Offering can await disk; stale evidence must never attach to a new card.
+          const fresh = await approvalRequirements(botId, toolName, call);
+          if (!fresh || fresh.authorizationFingerprint !== requirements.authorizationFingerprint)
+            return checkPolicy(botId, toolName, { ...call, skipPlanCoverage: true, skipAllowList: true });
+          return { allowed: true, approval: await ordinaryApproval(botId, toolName, call, original!, admission, facts, policy,
+            { ...approval, remember: { ...remembered, ...(offer ? { offer } : {}) }, requirements }) };
+        }
+        switch (decision.outcome) {
+          case "block":
+            return { allowed: false, reason: decision.reason === "needs-person" ? ruleUnattendedBlock(label)
+              : decision.reason === "unattended-rule" ? ruleAskUnattendedBlock(label)
+                : decision.reason === "peer" ? "Peer work cannot obtain fresh person approval for this action."
+                  : RULES_UNREADABLE };
+          case "hand-off": {
+            if (!rule || !ruleRef) return { allowed: false, reason: RULES_UNREADABLE };
+            const botName = (await ports.botName?.(botId).catch(() => undefined)) ?? "Your Bot";
+            const open = live?.open !== undefined && isBotHandoffOpenUrl(live.open.url) ? { url: live.open.url } : undefined;
+            return {
+              allowed: true,
+              handoff: {
+                rule: ruleRef,
+                summary: callSummary,
+                action: ruleActionText(rule),
+                why: ruleWhyText(label, botName, callSummary),
+                ...(live?.browserTarget && { browserTarget: live.browserTarget }),
+                ...(open === undefined ? {} : { open }),
+              },
+            };
+          }
+          case "allow":
+            if (!approval) return { allowed: true };
+            if (decision.via === "routine-go-ahead") return { allowed: true, approval: { ...approval, preapproved: true } };
+            if (decision.via === "plan" && permit) {
+              return { allowed: true, approval: { ...approval, preapproved: true, planPermit: permit,
+                planOperation: args => operationIdentity(toolName, args, action, live?.browserTarget), planRulesCurrent: rulesCurrent } };
+            }
+            break;
+          case "ask": {
+            if (!approval) break;
+            const described = call.skipAllowList && baseline && !rule ? botApprovalTargetOf(toolName, action) : undefined;
+            return { allowed: true, approval: await ordinaryApproval(botId, toolName, call, original!, admission, facts, policy,
+              described ? { ...approval, remember: described } : approval) };
+          }
+          default:
+            break;
+        }
+        // The gate asked for a fact this call cannot supply, or allowed a
+        // call that needs a card: never run it unasked.
+        return { allowed: false, reason: RULES_UNREADABLE };
       } catch (error) {
         return { allowed: false, reason: accessChangedReason(error) };
       } finally {

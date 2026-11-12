@@ -3,6 +3,7 @@ import { types as utilTypes } from "node:util";
 import { isSafeSubagentIdentifier } from "../../../renderer/shared/subagent-runs.js";
 import { subagentAuthorityDigestV2, type SubagentAuthorityV2 } from "./authority-v2.js";
 import type { WorkspacePermission } from "../types.js";
+import { planActionGate } from "../approval-gate/gate.js";
 
 export type SubagentRunGrantPhaseV2 =
   | "unrequested"
@@ -71,8 +72,18 @@ export class SubagentRunGrantV2 {
     permission: WorkspacePermission,
     request: () => Promise<boolean>,
   ): Promise<boolean> {
-    if (this.valid(authority, permission)) return true;
-    if (this.permission !== "ask" || !this.bound(authority, permission)) return false;
+    const decision = planActionGate(
+      { surface: "subagent", access: this.permission },
+      {
+        toolName: "subagent_run_grant",
+        consequential: true,
+        ...(this.bound(authority, permission) ? {} : { stale: true }),
+        ...(this.phase === "denied" || this.phase === "revoked" ? { declinedInRun: true } : {}),
+        ...(this.phase === "granted" ? { granted: true } : {}),
+      },
+    );
+    if (decision.outcome === "allow") return this.valid(authority, permission);
+    if (decision.outcome !== "ask") return false;
     if (this.phase === "unrequested") {
       this.apply("request");
       this.decision = Promise.resolve().then(request).then(
