@@ -154,9 +154,16 @@ test("navigation during isolated setup cannot fall back to the replacement page 
   try {
     await finishLmStudioOnboarding(aiden.page);
     const { tabId } = await command(aiden.page, { action: "create", show: false });
+    let guestId = 0;
+    await expect.poll(async () => {
+      guestId = await aiden.app.evaluate(({ webContents }) =>
+        webContents.getAllWebContents().find(contents => contents.getURL() === "about:blank")?.id ?? 0);
+      return guestId;
+    }).toBeGreaterThan(0);
     await command(aiden.page, { action: "navigate", tabId: tabId!, url: `${url}/start`, readiness: "load" });
-    await aiden.app.evaluate(({ webContents }, targetUrl) => {
-      const guest = webContents.getAllWebContents().find(contents => contents.getURL() === targetUrl)!;
+    await expect.poll(() => aiden.app.evaluate(({ webContents }, id) => webContents.fromId(id)?.getURL(), guestId)).toBe(`${url}/start`);
+    await aiden.app.evaluate(({ webContents }, id) => {
+      const guest = webContents.fromId(id)!;
       const original = guest.debugger.sendCommand.bind(guest.debugger);
       let release!: () => void;
       const ready = new Promise<void>(resolve => { release = resolve; });
@@ -170,15 +177,15 @@ test("navigation during isolated setup cannot fall back to the replacement page 
         }
         return result;
       };
-    }, `${url}/start`);
+    }, guestId);
     filling = command(aiden.page, { action: "viewport", tabId: tabId!, viewport: {mode:"fill",width:640,height:480} })
       .then(result => ({result}), error => ({error:String(error)}));
     await expect.poll(() => aiden.app.evaluate(() => (globalThis as SetupGlobal).__browserSetupGate?.held)).toBe(true);
     await aiden.app.evaluate(async ({ webContents }, urls) => {
-      const guest = webContents.getAllWebContents().find(contents => contents.getURL() === urls.start)!;
+      const guest = webContents.fromId(urls.guestId)!;
       await guest.loadURL(urls.next);
       (globalThis as SetupGlobal).__browserSetupGate!.release();
-    }, {start:`${url}/start`,next:`${url}/next`});
+    }, {guestId,next:`${url}/next`});
     expect((await filling).error).toMatch(/browser page changed.*isolated evaluation/i);
   } finally {
     await aiden.app.evaluate(() => {
@@ -187,5 +194,44 @@ test("navigation during isolated setup cannot fall back to the replacement page 
     });
     await filling;
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  }
+});
+
+test("a queued commit notification preserves an already observed isolated document", async ({ aiden }) => {
+  await finishLmStudioOnboarding(aiden.page);
+  const { tabId } = await command(aiden.page, { action: "create", show: false });
+  let guestId = 0;
+  await expect.poll(async () => {
+    guestId = await aiden.app.evaluate(({ webContents }) =>
+      webContents.getAllWebContents().find(contents => contents.getURL() === "about:blank")?.id ?? 0);
+    return guestId;
+  }).toBeGreaterThan(0);
+  type CommitGlobal = typeof globalThis & { __restoreQueuedCommit?: () => void };
+  await aiden.app.evaluate(({ webContents }, id) => {
+    const guest = webContents.fromId(id)!;
+    guest.emit("did-navigate", {}, guest.getURL(), 200, "OK");
+    const original = guest.debugger.sendCommand.bind(guest.debugger);
+    let delivered = false;
+    (globalThis as CommitGlobal).__restoreQueuedCommit = () => { guest.debugger.sendCommand = original; };
+    guest.debugger.sendCommand = async (method, params, sessionId) => {
+      const result = await original(method, params, sessionId);
+      if (method === "Page.getFrameTree" && !delivered) {
+        delivered = true;
+        // Chromium already returned this document, then main receives its commit.
+        guest.emit("did-navigate", {}, guest.getURL(), 200, "OK");
+      }
+      return result;
+    };
+  }, guestId);
+  try {
+    const filled = await command(aiden.page, { action: "viewport", tabId: tabId!, viewport: {mode:"fill",width:640,height:480} });
+    const actual = await aiden.app.evaluate(({ webContents }, id) =>
+      webContents.fromId(id)!.executeJavaScript("({width:innerWidth,height:innerHeight})"), guestId);
+    expect(filled.state.tabs.find(tab => tab.id === tabId)!.viewport).toMatchObject(actual);
+  } finally {
+    await aiden.app.evaluate(() => {
+      (globalThis as CommitGlobal).__restoreQueuedCommit?.();
+      delete (globalThis as CommitGlobal).__restoreQueuedCommit;
+    });
   }
 });

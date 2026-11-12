@@ -1491,26 +1491,20 @@ export class BrowserService {
   ): Promise<any> {
     let contextId: number | undefined;
     if (isolated) {
-      const navigation = tab.navigationSequence, document = tab.committedNavigation;
-      const currentDocument = () => {
-        if (navigation !== tab.navigationSequence || document !== tab.committedNavigation)
-          throw new Error("The browser page changed before isolated evaluation. Try again.");
-      };
       contextId = tab.contextId;
       if (!contextId) {
         const tree = await this.send(tab, "Page.getFrameTree", {}, signal);
-        currentDocument();
+        const frame = tree.frameTree.frame;
         const world = await this.send(
           tab,
           "Page.createIsolatedWorld",
           {
-            frameId: tree.frameTree.frame.id,
+            frameId: frame.id,
             worldName: "aiden-browser",
             grantUniveralAccess: false,
           },
           signal,
         );
-        currentDocument();
         contextId = world.executionContextId;
         if (typeof contextId !== "number" || !Number.isSafeInteger(contextId) || contextId <= 0)
           throw new Error("The browser isolated context is unavailable.");
@@ -1524,7 +1518,11 @@ export class BrowserService {
           },
           signal,
         );
-        currentDocument();
+        const current = (await this.send(tab, "Page.getFrameTree", {}, signal)).frameTree.frame;
+        // Native commit events may be delivered after getFrameTree already
+        // observed that document. Compare Chromium's document identity itself.
+        if (current.id !== frame.id || current.loaderId !== frame.loaderId)
+          throw new Error("The browser page changed before isolated evaluation. Try again.");
         // Publish only a fully initialized context for this same document.
         // Never re-read a cache navigation may have cleared during an await.
         tab.contextId = contextId;
