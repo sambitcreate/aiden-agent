@@ -351,6 +351,7 @@ async function cancellationHost() {
     "./chat-run-input-admission.js": { createChatRunInputAdmission: (ports: { active: Map<string, Entry> }) => { active = ports.active; return {}; } },
     "./subagents/child-agent-runtime.js": { subagentRuntimeRegistry: { setHealthMetrics() {}, setLimits() {}, setRuntimeFaultReporter() {}, abortGeneration: (id: string) => children.push(id) } },
     "./tool-approval.js": { ToolApprovalCoordinator: class { cancelStream(id: string) { approvals.push(id); } } },
+    "./approval-gate/approval-analytics.js": { ApprovalAnalytics: UnusedService },
     "./ask-user-question-coordinator.js": { AskUserQuestionCoordinator: UnusedService },
     "./workspace-files-touched.js": { createWorkspaceFilesTouchedNotifier: () => () => {} },
     "./acp/scratch-directory.js": { createAcpScratchDirectories: () => ({ directoryFor: async () => "", forget: async () => {} }) },
