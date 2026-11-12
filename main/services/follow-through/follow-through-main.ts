@@ -42,13 +42,12 @@ import { noticeDelivery } from "./notice-delivery-main.js";
 import type { PullRequestFollowRecord } from "./pull-request-follow.js";
 import { PullRequestFollowReader } from "./pull-request-follow-github.js";
 import { PullRequestFollows } from "./pull-request-follows.js";
+import { AnsweringRuns } from "./answering-runs.js";
 
 const chatConfiguration = new WorkspaceMutationGate();
 const commandHandoffs = new WorkspaceOperationRegistry();
 const JOB_NOTICE_OUTPUT_CHARS = 3_000;
 const MAX_CHECK_OUTPUT_BYTES = 10 * 1024 * 1024;
-const RUN_WINDOW_SLACK_MS = 60_000;
-const RUN_WINDOW_KEEP_MS = 2 * 24 * 60 * 60_000;
 
 function followThroughDir(): string {
   return path.join(app.getPath("userData"), "follow-through");
@@ -102,48 +101,36 @@ async function loadState(): Promise<SavedState> {
 
 // ── When each chat was answering (own-comment detection, check trigger) ──
 
-const runStarts = new Map<string, { chatId: string; start: number }>();
-const runWindows = new Map<string, Array<{ start: number; end: number }>>();
+const answeringRuns = new AnsweringRuns({ isChatBusy: (chatId) => llmClient.isChatBusy(chatId) });
 const settledRuns = new Set<string>();
 /** Recently deleted chats, so a run that ends after its chat is gone leaves no window behind. */
 const deletedChats = new Set<string>();
 
 function chatWasAnswering(chatId: string, at: number): boolean {
-  for (const run of runStarts.values()) {
-    if (run.chatId === chatId && at >= run.start - RUN_WINDOW_SLACK_MS) return true;
-  }
-  return (runWindows.get(chatId) ?? []).some(
-    (window) => at >= window.start - RUN_WINDOW_SLACK_MS && at <= window.end + RUN_WINDOW_SLACK_MS,
-  );
+  return answeringRuns.wasAnswering(chatId, at);
 }
 
 /** The registry dropped a run: one evicted while running will never report its end. */
 function observeRemovedRun(summary: HostRunSummary): void {
-  if (settledRuns.has(summary.runId)) return;
-  runStarts.delete(summary.runId);
-  if (!deletedChats.has(summary.chatId)) chatSettlement.hostRunChanged(summary, true);
+  if (settledRuns.has(summary.runId) || deletedChats.has(summary.chatId)) return;
+  answeringRuns.hostRunChanged(summary, true);
+  chatSettlement.hostRunChanged(summary, true);
 }
 
 function observeRun(summary: HostRunSummary): void {
   const terminal = summary.state === "done" || summary.state === "failed" || summary.state === "cancelled";
   if (!terminal) {
-    if (!deletedChats.has(summary.chatId)) chatSettlement.hostRunChanged(summary, false);
-    if (!runStarts.has(summary.runId)) {
-      runStarts.set(summary.runId, { chatId: summary.chatId, start: Date.parse(summary.startedAt) || Date.now() });
-    }
+    if (deletedChats.has(summary.chatId)) return;
+    answeringRuns.hostRunChanged(summary, false);
+    chatSettlement.hostRunChanged(summary, false);
     return;
   }
   if (settledRuns.has(summary.runId)) return;
   settledRuns.add(summary.runId);
   if (settledRuns.size > 500) settledRuns.delete(settledRuns.values().next().value!);
-  const start = runStarts.get(summary.runId)?.start ?? (Date.parse(summary.startedAt) || Date.now());
-  runStarts.delete(summary.runId);
   if (deletedChats.has(summary.chatId)) return;
+  answeringRuns.hostRunChanged(summary, false);
   chatSettlement.hostRunChanged(summary, false);
-  const now = Date.now();
-  const windows = (runWindows.get(summary.chatId) ?? []).filter((window) => window.end > now - RUN_WINDOW_KEEP_MS);
-  windows.push({ start, end: Date.parse(summary.updatedAt) || now });
-  runWindows.set(summary.chatId, windows.slice(-50));
   if (summary.state === "done" && doneWhen.get(summary.chatId)?.state === "waiting") {
     void (async () => {
       await llmClient.waitForChatIdle(summary.chatId);
@@ -351,6 +338,7 @@ export async function startFollowThrough(): Promise<void> {
 
 export async function shutdownFollowThrough(): Promise<void> {
   chatSettlement.shutdown();
+  answeringRuns.shutdown();
   pullRequestFollows.shutdown();
   await doneWhen.shutdown();
   await backgroundJobs.shutdown();
@@ -361,11 +349,10 @@ export async function shutdownFollowThrough(): Promise<void> {
 export async function deleteChatFollowThrough(chatId: string): Promise<void> {
   pullRequestFollows.deleteChat(chatId);
   const checkStopped = doneWhen.clearAndSettle(chatId);
-  runWindows.delete(chatId);
+  answeringRuns.deleteChat(chatId);
   chatSettlement.clear(chatId);
   deletedChats.add(chatId);
   if (deletedChats.size > 500) deletedChats.delete(deletedChats.values().next().value!);
-  for (const [runId, run] of runStarts) if (run.chatId === chatId) runStarts.delete(runId);
   await Promise.all([checkStopped, backgroundJobs.stopChat(chatId, "chat-deleted", true)]);
 }
 
