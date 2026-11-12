@@ -37,6 +37,8 @@ import { mintPeerIdempotencyKey, type PeerHostFeedSnapshot, type PeerHostView, t
 import type { PeerOperation } from "../shared/peer-operation";
 import type { AidenRemoteBotApproval, AidenRemoteBotHandoff } from "../../main/services/aiden-remote-protocol";
 import { BotApprovalCard, BotInterruptedCard, TranscriptEntries, questionPrompt } from "./bots/bot-chat-pane";
+import { ApprovalStatusLine } from "../components/chat-approval-card";
+import { useApprovalStatusLine } from "../lib/use-approval-status-line";
 import { BOT_CHAT_COMPOSER_SURFACES } from "./bots/bot-chat-mode";
 import { botReplyQuote } from "./bots/bot-message-actions";
 import { BotPausedNotice, botPausedText } from "./bots/bot-paused-card";
@@ -132,6 +134,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
   // id: the host's frame (or a fresh snapshot) for it is a new prompt, and it shows.
   const [settledQuestion, setSettledQuestion] = React.useState<BotPendingQuestion | null>(null);
   const [settledApproval, setSettledApproval] = React.useState<AidenRemoteBotApproval | null>(null);
+  const approvalStatus = useApprovalStatusLine(`${hostId}:${botId}`);
   const [statusLayout, setStatusLayout] = React.useState("");
   // A send whose acknowledgement was lost keeps its key and staged photos, so
   // sending the same thing again is deduplicated by the host, not repeated.
@@ -555,7 +558,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
 
   const footer = (
     <div className="flex flex-col">
-      {approval || handoff ? (
+      {approval || approvalStatus.status || handoff ? (
         <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-2">
           {handoff ? (
             <HandoffCard
@@ -579,12 +582,18 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
               keyboardShortcuts
               onAnswer={(decision) => {
                 setSettledApproval(approval);
+                approvalStatus.show({ decision });
                 void call(
                   { operation: "respondApproval", resourceId: approval.waitId, idempotencyKey: mintPeerIdempotencyKey(), body: { decision } },
                   "Aiden couldn’t send that answer.",
-                ).catch(() => setSettledApproval((settled) => (settled === approval ? null : settled)));
+                ).catch(() => {
+                  approvalStatus.clear();
+                  setSettledApproval((settled) => (settled === approval ? null : settled));
+                });
               }}
             />
+          ) : approvalStatus.status ? (
+            <ApprovalStatusLine status={approvalStatus.status} />
           ) : null}
         </div>
       ) : null}

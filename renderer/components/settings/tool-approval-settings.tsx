@@ -39,7 +39,7 @@ export function ToolApprovalSettingsView({
         title="Always allowed"
         hint={
           <InfoHint topic="always allowed rules">
-            Rules match only the exact command or file path you approved, in that workspace, and stay on this device. Allow for this chat ends when the app quits.
+            Rules match only the exact command or file path you approved, in that workspace, and stay on this device. Allow in this chat ends when the app quits.
           </InfoHint>
         }
       >

@@ -69,9 +69,9 @@ export function toolApprovalScopeLabel(scope: ToolApprovalScope): string {
     case "once":
       return "Allow once";
     case "chat":
-      return "Allow for this chat";
+      return "Allow in this chat";
     case "always":
-      return "Always allow";
+      return "Allow in this workspace";
   }
 }
 

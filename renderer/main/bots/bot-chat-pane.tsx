@@ -10,7 +10,7 @@ import { useBotAccessRequestActions } from "./use-bot-access-request-actions";
 import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { CircleAlert, CircleCheck, CircleSlash, FileText, Hourglass, LogIn, Pause, RotateCcw, ShieldQuestion, Square } from "lucide-react";
+import { CircleAlert, CircleCheck, CircleSlash, FileText, Hourglass, LogIn, Pause, RotateCcw, Square } from "lucide-react";
 import { AskUserQuestionComposer } from "../../components/ask-user-question-composer";
 import { Composer } from "../../components/composer";
 import { ConnectCard } from "../../components/bots/connect-card";
@@ -22,14 +22,8 @@ import { BotIssueCard } from "../../components/bots/bot-issue-card";
 import { HandoffCard, handoffNoNoteComposerText, handoffSignInComposerText } from "../../components/bots/handoff-card";
 import { PlanCard } from "../../components/bots/plan-card";
 import { MemoryCardIcon } from "../../components/memory-card-icon";
-import { toolLabel } from "../../components/chat-approval-card";
-import { detectedKeyboardPlatform } from "../../shared/keybindings";
-import {
-  approvalAriaKeyShortcut,
-  approvalShortcutLabel,
-  useApprovalShortcuts,
-  type ApprovalShortcut,
-} from "../../lib/approval-shortcuts";
+import { ApprovalStatusLine, ChatApprovalCard } from "../../components/chat-approval-card";
+import { useApprovalStatusLine } from "../../lib/use-approval-status-line";
 import { SafeMessageBubble } from "../../components/message-bubble";
 import { MessageAttachmentPreviewProvider, MessageAttachments } from "../../components/message-attachments";
 import { insertTextIntoTextarea } from "../../lib/composer-type-focus";
@@ -87,7 +81,6 @@ import { formatUsageLimitTime, type UsageLimitWaitView } from "../../shared/usag
 import { useSpendingStatus } from "../../lib/use-spending-status";
 import { SpendingLimitNotice } from "../../components/spending/spending-limit-notice";
 import { spendingNotice } from "../../shared/spending";
-import { LiveGuard } from "../../components/live-guard";
 
 export const BOT_INTERRUPTED_TEXT = "I got interrupted while working on this.";
 export const BOT_ACCESS_CHANGED_TEXT = "This Bot's access changed. Review it in Advanced.";
@@ -138,8 +131,12 @@ export function BotInterruptedCard({
 }
 
 /** Tool approvals a Bot is waiting on, live: pushed prompts and withdrawals, plus a read on mount. */
-function useBotApprovals(botId: string | undefined) {
+function useBotApprovals(botId: string | undefined, onWithdrawn?: (waitId: string) => void) {
   const [prompts, setPrompts] = React.useState<BotApprovalPrompt[]>([]);
+  const withdrawn = React.useRef(onWithdrawn);
+  withdrawn.current = onWithdrawn;
+  const shown = React.useRef(prompts);
+  shown.current = prompts;
   React.useEffect(() => {
     if (!botId) return;
     let active = true;
@@ -151,6 +148,8 @@ function useBotApprovals(botId: string | undefined) {
     });
     const offSettled = botsApi.onApprovalSettled((settled) => {
       if (settled.botId === botId) {
+        // Still shown here, so nobody answered it on this device: it went away (answered elsewhere, expired, the run ended).
+        if (shown.current.some((prompt) => prompt.waitId === settled.waitId)) withdrawn.current?.(settled.waitId);
         setPrompts((current) => current.filter((prompt) => prompt.waitId !== settled.waitId));
       }
     });
@@ -178,13 +177,26 @@ function mergePrompts(current: BotApprovalPrompt[], next: BotApprovalPrompt[]): 
   return [...byId.values()];
 }
 
-/** A Bot's tool call that needs the person's yes or no before it runs. */
+/** Identical pending approvals in a run (same tool and request) share one card. */
+export function groupBotApprovalPrompts(prompts: readonly BotApprovalPrompt[]): BotApprovalPrompt[][] {
+  const groups = new Map<string, BotApprovalPrompt[]>();
+  for (const prompt of prompts) {
+    const key = JSON.stringify([prompt.botId, prompt.toolName, prompt.summary, prompt.always?.key ?? null]);
+    const group = groups.get(key);
+    if (group) group.push(prompt);
+    else groups.set(key, [prompt]);
+  }
+  return [...groups.values()];
+}
+
+/** A Bot's tool call that needs the person's yes or no before it runs: the shared approval card. */
 export function BotApprovalCard({
   name,
   prompt,
   onAnswer,
   allowElsewhere,
   keyboardShortcuts = false,
+  pendingCount = 1,
 }: {
   name: string;
   prompt: BotApprovalPrompt;
@@ -193,6 +205,8 @@ export function BotApprovalCard({
   allowElsewhere?: string;
   /** ⌘↩ allows and ⌘⌫ denies while the message box is empty; only the first card takes them. */
   keyboardShortcuts?: boolean;
+  /** Cards waiting in this chat, this one first. */
+  pendingCount?: number;
 }) {
   const [busy, setBusy] = React.useState(false);
   const inFlight = React.useRef(false);
@@ -211,69 +225,25 @@ export function BotApprovalCard({
       setBusy(false);
     }
   };
-  const platform = detectedKeyboardPlatform();
-  useApprovalShortcuts({ enabled: keyboardShortcuts && !busy, canAllow: !allowElsewhere, onShortcut: (decision) => void respond(decision) });
-  const hint = (shortcut: ApprovalShortcut) =>
-    keyboardShortcuts ? (
-      <span aria-hidden="true" data-approval-shortcut={shortcut} className="ml-1.5 shrink-0 font-normal tabular-nums opacity-65">
-        {approvalShortcutLabel(shortcut, platform)}
-      </span>
-    ) : null;
   return (
-    <>
-      {/* The first card says it arrived, as the workspace approval card does. */}
-      {keyboardShortcuts ? (
-        <p className="sr-only" role="status">{`${name} needs approval to use ${toolLabel(prompt.toolName)}`}</p>
-      ) : null}
-      <BotNoticeCard
-        label={`${name} needs approval`}
-        elevated
-        icon={<ShieldQuestion />}
-        iconTone="warning"
-        title={`${name} wants to use ${toolLabel(prompt.toolName)}.`}
-        actions={
-          // Approvals are the user's: Aiden Live can never answer them by pressing.
-          <LiveGuard guard="you">
-            <Button
-              variant="transparent"
-              size="small"
-              disabled={busy}
-              aria-keyshortcuts={keyboardShortcuts ? approvalAriaKeyShortcut("deny", platform) : undefined}
-              onClick={() => void respond("deny")}
-            >
-              Deny
-              {hint("deny")}
-            </Button>
-            {prompt.always && !allowElsewhere ? (
-              <Button variant="transparent" size="small" disabled={busy} onClick={() => void respond("allow", "always")}>
-                {botAlwaysAllowLabel(name)}
-              </Button>
-            ) : null}
-            {allowElsewhere ? null : (
-              <Button
-                variant="accent"
-                size="small"
-                disabled={busy}
-                aria-keyshortcuts={keyboardShortcuts ? approvalAriaKeyShortcut("allow", platform) : undefined}
-                onClick={() => void respond("allow")}
-              >
-                Allow
-                {hint("allow")}
-              </Button>
-            )}
-          </LiveGuard>
-        }
-      >
-        {prompt.always ? <p className="text-tertiary">{`You’ve allowed this ${prompt.always.count} times in the last 2 weeks.`}</p> : null}
-        {allowElsewhere ? <p>{`Allow it on ${allowElsewhere}.`}</p> : null}
-        {prompt.summary ? (
-          <p className="mt-1.5 max-h-24 select-text overflow-y-auto whitespace-pre-wrap break-words rounded-control bg-well px-3 py-2 text-primary">
-            {prompt.summary}
-          </p>
-        ) : null}
-        {answerError ? <p role="alert" className="mt-1 text-status-red">{answerError}</p> : null}
-      </BotNoticeCard>
-    </>
+    <ChatApprovalCard
+      pending={{
+        approvalId: prompt.waitId,
+        toolCallId: prompt.toolCallId,
+        toolName: prompt.toolName,
+        summary: prompt.summary,
+        ...(prompt.always ? { scopes: ["once", "always"] } : {}),
+      }}
+      deciding={busy}
+      onDecide={(decision, options) => void respond(decision, options?.scope === "always" ? "always" : undefined)}
+      requester={name}
+      alwaysOption={{ label: botAlwaysAllowLabel(name), hint: `${name} won’t ask again for this. Undo under Allowed without asking.` }}
+      notes={prompt.always ? [`You’ve allowed this ${prompt.always.count} times in the last 2 weeks.`] : []}
+      {...(allowElsewhere ? { allowElsewhere } : {})}
+      error={answerError}
+      keyboardShortcuts={keyboardShortcuts}
+      pendingCount={pendingCount}
+    />
   );
 }
 
@@ -1107,7 +1077,14 @@ export function BotChatPane({ botId }: { botId: string }) {
 
   const connectionSetup = useConnectionSetup(() => live.reload());
   const [addingConnection, setAddingConnection] = React.useState(false);
-  const approvals = useBotApprovals(botId);
+  const approvalStatus = useApprovalStatusLine(botId);
+  const showApprovalStatus = approvalStatus.show;
+  // Cards this device is answering: their settlement is this answer, not a stale card.
+  const answeringApprovals = React.useRef(new Set<string>());
+  const approvals = useBotApprovals(botId, (waitId) => {
+    if (!answeringApprovals.current.has(waitId)) showApprovalStatus({ decision: "stale" });
+  });
+  const approvalGroups = groupBotApprovalPrompts(approvals.prompts);
   const [answering, setAnswering] = React.useState(false);
   const findBar = useChatFind(botId);
   const accessRequestActions = useBotAccessRequestActions(botId, live.snapshot?.accessRequest?.waitId);
@@ -1628,7 +1605,7 @@ export function BotChatPane({ botId }: { botId: string }) {
 
   const footer = (
     <div className="flex flex-col">
-      {plan || approvals.prompts.length > 0 || handoff || accessRequest ? (
+      {plan || approvals.prompts.length > 0 || approvalStatus.status || handoff || accessRequest ? (
         <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-2">
           {plan ? (
             <PlanCard
@@ -1657,16 +1634,25 @@ export function BotChatPane({ botId }: { botId: string }) {
               onAnswer={(outcome) => void handoffActions.answer(handoff, outcome)}
             />
           ) : null}
-          {approvals.prompts.map((prompt, index) => (
+          {/* One card at a time; identical waiting calls share it, and it answers all of them. */}
+          {approvalGroups[0] ? (
             <BotApprovalCard
-              key={`${prompt.botId}:${prompt.waitId}`}
+              key={`${approvalGroups[0][0]!.botId}:${approvalGroups[0][0]!.waitId}`}
               name={current.name}
-              prompt={prompt}
-              keyboardShortcuts={index === 0}
+              prompt={approvalGroups[0][0]!}
+              pendingCount={approvalGroups.length}
+              keyboardShortcuts
               onAnswer={async (decision, scope) => {
-                const { decided } = await botsApi.approve(prompt.waitId, decision, scope);
-                if (!decided) throw new Error("That approval was already answered or closed.");
-                approvals.remove(prompt.waitId);
+                const group = approvalGroups[0]!;
+                for (const prompt of group) answeringApprovals.current.add(prompt.waitId);
+                const results = await Promise.all(
+                  group.map((prompt, index) => botsApi.approve(prompt.waitId, decision, index === 0 ? scope : undefined)),
+                ).finally(() => {
+                  for (const prompt of group) answeringApprovals.current.delete(prompt.waitId);
+                });
+                if (!results[0]!.decided) throw new Error("That approval was already answered or closed.");
+                for (const prompt of group) approvals.remove(prompt.waitId);
+                approvalStatus.show(decision === "deny" ? { decision: "deny" } : { decision: "allow", ...(scope ? { scope } : {}) });
                 if (scope === "always") {
                   toast.success("Always allow requested.", {
                     action: { label: "Manage", onClick: () => void navigate(botAllowedLocation(current.id)) },
@@ -1674,7 +1660,9 @@ export function BotChatPane({ botId }: { botId: string }) {
                 }
               }}
             />
-          ))}
+          ) : approvalStatus.status ? (
+            <ApprovalStatusLine status={approvalStatus.status} />
+          ) : null}
         </div>
       ) : null}
       {/* A waiting A–E question takes the composer's place, as in workspace chats. */}

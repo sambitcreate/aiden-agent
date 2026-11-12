@@ -98,7 +98,7 @@ test("approval cards offer broader scopes only when the approval can be allowed"
   assert.deepEqual(rememberableApprovalScopes(["once"], true), []);
   assert.deepEqual(
     (["once", "chat", "always"] as const).map(toolApprovalScopeLabel),
-    ["Allow once", "Allow for this chat", "Always allow"],
+    ["Allow once", "Allow in this chat", "Allow in this workspace"],
   );
   assert.equal(
     describeToolApprovalRule({ toolName: "write_file", pattern: "out/report.txt" }),

@@ -9,6 +9,7 @@ import { queryKeys, useComputerUseStatus } from "../lib/queries";
 import { cn } from "../lib/ui-utils";
 import type { ComputerUseStatus } from "../lib/types";
 import type { ChatApprovalDecisionOptions } from "./chat-approval-card";
+import { ApprovalActions, ApprovalIconTile } from "./approval-card-parts";
 import { LiveGuard } from "./live-guard";
 
 export const COMPUTER_USE_ALWAYS_ALLOW_HINT =
@@ -200,7 +201,6 @@ export function ComputerUseAccessApproval({
   const summaryId = `approval-summary-${pending.approvalId}`;
   const checklistId = `approval-checklist-${pending.approvalId}`;
   const allowBlockedId = `approval-allow-blocked-${pending.approvalId}`;
-  const alwaysHintId = `approval-scope-always-${pending.approvalId}`;
   const canAllow = pending.canAllow !== false;
   const allowBlockedReason =
     local && !ready
@@ -211,97 +211,82 @@ export function ComputerUseAccessApproval({
           : "Allow Accessibility and Screen Recording for Aiden first."
       : undefined;
   const disabled = deciding || disabledReason !== undefined;
-  const allowDisabled = disabled || allowBlockedReason !== undefined;
   const allowDescription = [allowBlockedReason ? allowBlockedId : undefined, showChecklist ? checklistId : undefined]
     .filter(Boolean)
     .join(" ");
 
   return (
     <LiveGuard guard="you">
-      <p className="sr-only" role="status">
-        {`Approval needed for Computer Use${pendingCount > 1 ? `, 1 of ${pendingCount}` : ""}`}
-      </p>
-      <section
-        ref={cardRef}
-        aria-labelledby={titleId}
-        aria-describedby={summaryId}
-        className="rounded-card bg-popover p-3 shadow-popover"
-        data-computer-use-access="true"
-      >
-        <div className="flex items-start gap-2.5">
-          <span className="grid size-8 shrink-0 place-items-center rounded-full bg-status-warning-surface text-status-warning">
-            <MousePointer2 aria-hidden="true" className="size-4" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <Text variant="small-strong" as="p" id={titleId}>
-              Aiden wants to use your computer
-              {pendingCount > 1 ? (
-                <span className="ml-1.5 font-normal text-tertiary">1 of {pendingCount}</span>
-              ) : null}
+      <div className="flex min-h-0 flex-col">
+        <p className="sr-only" role="status">
+          {`Approval needed for Computer Use${pendingCount > 1 ? `, 1 of ${pendingCount}` : ""}`}
+        </p>
+        <section
+          ref={cardRef}
+          aria-labelledby={titleId}
+          aria-describedby={summaryId}
+          className="approval-shell composer-shell min-h-0 overflow-y-auto overscroll-contain bg-popover p-4 shadow-composer"
+          data-computer-use-access="true"
+        >
+          <div className="flex shrink-0 flex-col items-center text-center">
+            <ApprovalIconTile icon={MousePointer2} />
+            <Text variant="strong" as="p" id={titleId} className="mt-2.5 text-balance">
+              Use your Mac with Computer Use?
+              {pendingCount > 1 ? <span className="ml-1.5 font-normal text-tertiary">1 of {pendingCount}</span> : null}
             </Text>
-            <Text variant="small" color="secondary" as="p" id={summaryId} className="mt-0.5 text-pretty">
-              Screenshots and accessibility text from your apps go to the selected model. If you allow
-              it, Aiden can click and type in this chat without asking again.
+            <Text variant="small" color="secondary" as="p" id={summaryId} className="mt-1.5 text-pretty">
+              Screenshots and accessibility text from your apps go to the selected model. If you allow it, Aiden can
+              click and type in any app in this chat without asking again.
             </Text>
           </div>
-        </div>
-        {local ? (
-          showChecklist ? (
-            <ComputerUsePermissionChecklist
-              id={checklistId}
-              status={status.data}
-              checkError={status.isError ? status.error : undefined}
-              checking={status.isFetching}
-              onCheckAgain={() => void status.refetch()}
-            />
-          ) : null
-        ) : (
-          <Text variant="small" color="secondary" as="p" role="note" className="mt-2.5">
-            Finish any Computer Use setup on the host Mac.
-          </Text>
-        )}
-        {disabledReason ? (
-          <Text variant="small" color="secondary" as="p" role="note" className="mt-2.5">
-            {disabledReason}
-          </Text>
-        ) : null}
-        {allowBlockedReason ? (
-          <span id={allowBlockedId} className="sr-only">
-            {allowBlockedReason}
-          </span>
-        ) : null}
-        <span id={alwaysHintId} className="sr-only">
-          {COMPUTER_USE_ALWAYS_ALLOW_HINT}
-        </span>
-        <div className="mt-2.5 flex flex-wrap justify-end gap-2">
-          <Button ref={denyRef} variant="transparent" size="small" disabled={disabled} onClick={() => onDecide("deny")}>
-            Deny
-          </Button>
-          {canAllow ? (
-            <>
-              <Button
-                variant="transparent"
-                size="small"
-                disabled={allowDisabled}
-                title={COMPUTER_USE_ALWAYS_ALLOW_HINT}
-                aria-describedby={[alwaysHintId, allowDescription].filter(Boolean).join(" ")}
-                onClick={() => onDecide("allow", { scope: "always" })}
-              >
-                Always allow
-              </Button>
-              <Button
-                variant="accent"
-                size="small"
-                disabled={allowDisabled}
-                aria-describedby={allowDescription || undefined}
-                onClick={() => onDecide("allow", { scope: "chat" })}
-              >
-                {deciding ? "Sending…" : "Allow for this chat"}
-              </Button>
-            </>
+          {local ? (
+            showChecklist ? (
+              <ComputerUsePermissionChecklist
+                id={checklistId}
+                status={status.data}
+                checkError={status.isError ? status.error : undefined}
+                checking={status.isFetching}
+                onCheckAgain={() => void status.refetch()}
+              />
+            ) : null
+          ) : (
+            <Text variant="small" color="secondary" as="p" role="note" className="mt-2.5 text-center">
+              Finish any Computer Use setup on the host Mac.
+            </Text>
+          )}
+          {disabledReason ? (
+            <Text variant="small" color="secondary" as="p" role="note" className="mt-2.5 text-center">
+              {disabledReason}
+            </Text>
           ) : null}
-        </div>
-      </section>
+          {allowBlockedReason ? (
+            <span id={allowBlockedId} className="sr-only">
+              {allowBlockedReason}
+            </span>
+          ) : null}
+          <ApprovalActions
+            denyRef={denyRef}
+            onDeny={() => onDecide("deny")}
+            {...(canAllow
+              ? {
+                  allowLabel: deciding ? "Sending…" : "Allow in this chat",
+                  onAllow: () => onDecide("allow", { scope: "chat" }),
+                  allowDisabled: allowBlockedReason !== undefined,
+                  ...(allowDescription ? { allowDescribedBy: allowDescription } : {}),
+                  rememberOptions: [
+                    {
+                      key: "always",
+                      label: "Always allow",
+                      hint: COMPUTER_USE_ALWAYS_ALLOW_HINT,
+                      onSelect: () => onDecide("allow", { scope: "always" }),
+                    },
+                  ],
+                }
+              : {})}
+            disabled={disabled}
+          />
+        </section>
+      </div>
     </LiveGuard>
   );
 }

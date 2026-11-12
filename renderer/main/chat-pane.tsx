@@ -158,7 +158,9 @@ import { ContextMeter } from "../components/context-meter";
 import { ContextPressureFeed } from "../lib/context-pressure-feed";
 import type { ChatContextPressureV1 } from "../shared/context-pressure";
 import { ReasoningVisibilityControl } from "../components/reasoning-visibility-control";
-import { ChatApprovalCard } from "../components/chat-approval-card";
+import { ApprovalStatusLine, ChatApprovalCard } from "../components/chat-approval-card";
+import { useApprovalStatusLine } from "../lib/use-approval-status-line";
+import { isComputerUseAccessApprovalDetails } from "../shared/computer-use-access";
 import { liveOpenChat } from "../lib/live-open-chat";
 import {
   useLiveApprovalVoiceHint,
@@ -813,6 +815,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
   // After a Deny, the composer invites the user to say what to do instead,
   // until they send something or leave the chat.
   const [deniedApprovalChatId, setDeniedApprovalChatId] = React.useState<string | null>(null);
+  const approvalStatus = useApprovalStatusLine(chatId);
+  const showApprovalStatus = approvalStatus.show;
   const [questionnaire, setQuestionnaire] = React.useState<(AskUserQuestionPromptV1 & { source?: "remote" }) | null>(null);
   const [questionnaireSubmitting, setQuestionnaireSubmitting] = React.useState(false);
   // Aiden's "Open design mode?" card for this chat, while one is waiting.
@@ -2616,6 +2620,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
           prev.filter((approval) => approval.approvalId !== prompt.approvalId),
         );
         setDeniedApprovalChatId(decision === "deny" ? decisionChatId : null);
+        showApprovalStatus(
+          decision === "deny"
+            ? { decision: "deny" }
+            : {
+                decision: "allow",
+                ...(options?.scope ? { scope: options.scope } : {}),
+                // Computer Use's always covers every chat; elsewhere it is this workspace's list.
+                always: isComputerUseAccessApprovalDetails(prompt.details) ? "everywhere" : "workspace",
+              },
+        );
       } catch (approvalError) {
         if (chatIdRef.current !== decisionChatId) return;
         if (prompt.source === "remote") {
@@ -2635,7 +2649,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         }
       }
     },
-    [chatControl, chatId],
+    [chatControl, chatId, showApprovalStatus],
   );
   // Aiden Live answers the first approval by voice through this same decide.
   usePublishLiveChatApprovals(chatId, approvals, decideApproval);
@@ -3774,7 +3788,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         footer={
           <ScrollAreaFooterStack>
             <EventPresence
-              present={Boolean(pending)}
+              present={Boolean(pending) || approvalStatus.status !== null}
               className="aiden-dock-inset chat-content-column flex min-h-0 flex-col pb-2"
             >
               {pending ? (
@@ -3788,6 +3802,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   keyboardShortcuts
                   liveVoice={pendingLiveVoice}
                 />
+              ) : approvalStatus.status ? (
+                <ApprovalStatusLine status={approvalStatus.status} />
               ) : null}
             </EventPresence>
             <EventPresence
@@ -3932,6 +3948,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 }
                 onSend={(...args) => {
                   setDeniedApprovalChatId(null);
+                  approvalStatus.clear();
                   return handleSend(...args);
                 }}
                 freezeWhileSending={Boolean(draft)}

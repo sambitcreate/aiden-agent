@@ -457,7 +457,7 @@ test("a host that does not grant run control shows its prompts read-only, to be 
     chat: session(online, ["messagesWindow", "observe"]).chat(),
   });
 
-  assert.match(view.text, /Allow Run shell\?/);
+  assert.match(view.text, /Review before Run shell/);
   assert.match(view.text, /Run the release script/);
   assert.match(view.text, /Approve or deny it on Studio\./);
   assert.match(view.text, /Which branch should I tag\?/);

@@ -178,7 +178,7 @@ test("repeated approvals lead to a removable entry on the profile and in Setting
     });
   }, bot);
   await page.getByRole("button", { name: "Bots", exact: true }).click();
-  const card = page.getByRole("group", { name: "Ada needs approval", exact: true });
+  const card = page.getByRole("region", { name: "Review before Calendar create", exact: true });
   await expect(card).toContainText("You’ve allowed this 3 times in the last 2 weeks.");
   const draft = page.locator("textarea");
   await draft.fill("Keep this unsent draft");
@@ -188,13 +188,18 @@ test("repeated approvals lead to a removable entry on the profile and in Setting
       await window.aidenAPI.ipc.invoke("settings:previewAppearance", { ...appearance, mode, reduceMotion: "on" });
     }, mode);
     await aiden.app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0]!.setSize(width, 900), width);
-    await expect(card.getByRole("button", { name: "Always allow for Ada", exact: true })).toBeVisible();
+    await expect(card.getByRole("button", { name: "More ways to allow", exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath(`repeated-approval-${mode}.png`) });
   }
+  // Keyboard only: Deny, Allow once, then the menu with Ada's own Always.
   await card.getByRole("button", { name: "Deny", exact: true }).focus();
   await page.keyboard.press("Tab");
-  await expect(card.getByRole("button", { name: "Always allow for Ada", exact: true })).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(card.getByRole("button", { name: "More ways to allow", exact: true })).toBeFocused();
+  await page.keyboard.press("Enter");
+  const always = page.getByRole("menuitem", { name: /^Always allow for Ada/u });
+  await expect(always).toBeVisible();
   await page.keyboard.press("Enter");
   expect(await aiden.app.evaluate(() => (globalThis as unknown as { allowedE2e: AllowedE2eState }).allowedE2e.answers)).toEqual([{ waitId: "ordinary-approval", decision: "allow", scope: "always" }]);
   await expect(draft).toHaveValue("Keep this unsent draft");

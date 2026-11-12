@@ -2,7 +2,7 @@ import "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { ChatApprovalCard, type ChatApprovalDecisionOptions } from "./chat-approval-card";
+import { ApprovalStatusLine, ChatApprovalCard, type ApprovalStatus, type ChatApprovalDecisionOptions } from "./chat-approval-card";
 import { TooltipProvider } from "./ui";
 import type { ApprovalPrompt } from "../lib/ipc";
 import type { AssistantAutomationApprovalDetails, ScheduledTaskApprovalDetails } from "../shared/assistant";
@@ -27,7 +27,7 @@ function mount(pending: Partial<ApprovalPrompt> & Pick<ApprovalPrompt, "toolName
   return { card: screen.getByRole("region"), decisions };
 }
 
-test("a command approval asks a plain question and shows the exact command", () => {
+test("a command approval asks whether to run it on the Mac and shows the exact command", () => {
   const command = "rm -rf dist && npm ci";
   const { card, decisions } = mount({
     toolName: "run_command",
@@ -36,7 +36,7 @@ test("a command approval asks a plain question and shows the exact command", () 
     scopes: ["once", "chat", "always"],
   });
 
-  assert.equal(screen.getByRole("region", { name: "Run this command?" }), card);
+  assert.equal(screen.getByRole("region", { name: "Run on your Mac?" }), card);
   assert.match(card.querySelector("#approval-summary-approval-1")?.textContent ?? "", /rm -rf dist && npm ci$/u);
   assert.deepEqual(
     within(card).getAllByRole("button").map((button) => button.getAttribute("aria-label") ?? button.textContent),
@@ -64,8 +64,8 @@ test("the Allow menu offers the remembered scopes and sends the one picked", asy
   assert.deepEqual(
     items.map((item) => item.textContent),
     [
-      "Allow for this chatWon't ask again for this exact command until Aiden quits.",
-      "Always allow in this workspaceWon't ask again for this exact command here. Undo in Settings → Bots & Approvals → Tool approvals.",
+      "Allow in this chatWon't ask again for this exact command until Aiden quits.",
+      "Allow in this workspaceWon't ask again for this exact command here. Undo in Settings → Bots & Approvals → Tool approvals.",
     ],
   );
   fireEvent.click(items[1]!);
@@ -80,8 +80,8 @@ test("a remembered file approval says it covers any later change to that file", 
   assert.deepEqual(
     (await screen.findAllByRole("menuitem")).map((item) => item.textContent),
     [
-      "Allow for this chatWon't ask again for any edit to forecast.ts until Aiden quits.",
-      "Always allow in this workspaceWon't ask again for any edit to forecast.ts here. Undo in Settings → Bots & Approvals → Tool approvals.",
+      "Allow in this chatWon't ask again for any edit to forecast.ts until Aiden quits.",
+      "Allow in this workspaceWon't ask again for any edit to forecast.ts here. Undo in Settings → Bots & Approvals → Tool approvals.",
     ],
   );
 });
@@ -97,7 +97,7 @@ test("a file edit shows the lines it removes and adds, labelled for screen reade
     }),
   });
 
-  assert.ok(screen.getByRole("region", { name: "Edit forecast.ts?" }));
+  assert.ok(screen.getByRole("region", { name: "Change files on your Mac?" }));
   const change = within(card).getByRole("group", { name: "Change to src/forecast.ts" });
   assert.deepEqual(
     [...change.querySelectorAll("[data-line]")].map((line) => [line.getAttribute("data-line"), line.textContent]),
@@ -114,14 +114,14 @@ test("a file edit shows the lines it removes and adds, labelled for screen reade
 test("a paired host's command summary still shows just the command", () => {
   const { card } = mount({ toolName: "run_command", summary: "Run command: git status" });
 
-  assert.ok(screen.getByRole("region", { name: "Run this command?" }));
+  assert.ok(screen.getByRole("region", { name: "Run on your Mac?" }));
   assert.match(card.querySelector("#approval-summary-approval-1")?.textContent ?? "", /^\$ git status$/u);
   assert.ok(within(card).getByText("Aiden is paused until you choose."));
   cleanup();
 
-  // A paired host's file summary names its one file in the title and keeps the summary as sent.
+  // A paired host's file summary asks the same question and keeps the summary as sent.
   mount({ toolName: "edit_file", summary: "Edit file: src/forecast.ts" });
-  assert.ok(screen.getByRole("region", { name: "Edit forecast.ts?" }));
+  assert.ok(screen.getByRole("region", { name: "Change files on your Mac?" }));
   assert.ok(screen.getByText("Edit file: src/forecast.ts"));
 });
 
@@ -129,10 +129,79 @@ test("a subagent's web search reaches the owner as a plain card with its whole r
   const summary = subagentOutboundApprovalSummaryV2({ toolName: "web_search", kind: "web" }, { query: "best hikes near Boulder" });
   const { card, decisions } = mount({ toolName: "web_search", summary });
 
-  assert.ok(screen.getByRole("region", { name: "Allow Web search?" }));
+  assert.ok(screen.getByRole("region", { name: "Review before Web search" }));
   assert.equal(within(card).getByText(/^Search the public web/u).textContent, summary, "every line of the request is shown");
   fireEvent.click(within(card).getByRole("button", { name: "Allow once" }));
   assert.deepEqual(decisions, [["allow", undefined]]);
+});
+
+test("a call that does not touch the Mac reads Review before its tool, and the site it reaches", () => {
+  mount({ toolName: "web_fetch", summary: "Fetch https://Docs.Example.com/guide?page=2" });
+  assert.ok(screen.getByRole("region", { name: "Review before Fetch web page → docs.example.com" }));
+  cleanup();
+  mount({ toolName: "computer_use", summary: "Click Buy" });
+  assert.ok(screen.getByRole("region", { name: "Use your Mac with Computer Use?" }));
+});
+
+test("a Bot's card names the Bot, keeps its own Always, and notes how often it was allowed", async () => {
+  const decisions: Array<[string, ChatApprovalDecisionOptions | undefined]> = [];
+  render(
+    <TooltipProvider>
+      <ChatApprovalCard
+        pending={{ approvalId: "wait-1", toolCallId: "call-1", toolName: "calendar__create_event", summary: "Create event", scopes: ["once", "always"] }}
+        deciding={false}
+        onDecide={(decision, options) => decisions.push([decision, options])}
+        requester="Ada"
+        alwaysOption={{ label: "Always allow for Ada", hint: "Ada won’t ask again for this." }}
+        notes={["You’ve allowed this 3 times in the last 2 weeks."]}
+      />
+    </TooltipProvider>,
+  );
+  const card = screen.getByRole("region", { name: "Review before Calendar create event" });
+  assert.ok(within(card).getByText("Ada is paused until you choose."));
+  assert.ok(within(card).getByText("You’ve allowed this 3 times in the last 2 weeks."));
+  assert.equal(screen.getByRole("status").textContent, "Ada needs approval for Calendar create event");
+  fireEvent.pointerDown(within(card).getByRole("button", { name: "More ways to allow" }), { button: 0, pointerType: "mouse" });
+  const items = await screen.findAllByRole("menuitem");
+  assert.deepEqual(items.map((item) => item.textContent), ["Always allow for AdaAda won’t ask again for this."]);
+  fireEvent.click(items[0]!);
+  assert.deepEqual(decisions, [["allow", { scope: "always" }]]);
+});
+
+test("a card that may only be allowed on another device shows its request and only Deny", () => {
+  render(
+    <TooltipProvider>
+      <ChatApprovalCard
+        pending={{ approvalId: "wait-2", toolCallId: "call-2", toolName: "send_email", summary: "Send the update to the team." }}
+        deciding={false}
+        onDecide={() => undefined}
+        requester="Ada"
+        allowElsewhere="Studio Mac"
+      />
+    </TooltipProvider>,
+  );
+  const card = screen.getByRole("region");
+  assert.ok(within(card).getByText("Send the update to the team."));
+  assert.ok(within(card).getByText("Allow it on Studio Mac."));
+  assert.deepEqual(within(card).getAllByRole("button").map((button) => button.textContent), ["Deny"]);
+});
+
+test("an answered or stale card collapses to one status line", () => {
+  const cases: Array<[ApprovalStatus, string]> = [
+    [{ decision: "allow" }, "Allowed once"],
+    [{ decision: "allow", scope: "once" }, "Allowed once"],
+    [{ decision: "allow", scope: "chat" }, "Allowed in this chat"],
+    [{ decision: "allow", scope: "always", always: "workspace" }, "Allowed in this workspace"],
+    [{ decision: "allow", scope: "always", always: "everywhere" }, "Always allowed"],
+    [{ decision: "allow", scope: "always" }, "Always allowed"],
+    [{ decision: "deny" }, "Denied"],
+    [{ decision: "stale" }, "No longer active"],
+  ];
+  for (const [status, label] of cases) {
+    render(<ApprovalStatusLine status={status} />);
+    assert.equal(screen.getByRole("status").textContent, label);
+    cleanup();
+  }
 });
 
 test("an approval that cannot be allowed here offers only Deny", () => {
