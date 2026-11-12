@@ -8,9 +8,10 @@
 // judges them.
 //
 // The person's own words name sites; their workspace files and attachments are
-// their own content and do not taint the run.
+// their own content and do not taint the run. `bringsOutsideContent` lists the
+// sources.
 
-import { FETCH_TOOL_NAMES, TAINT_SOURCE_TOOL_NAMES } from "./tool-classes.js";
+import { bringsOutsideContent, FETCH_TOOL_NAMES } from "./tool-classes.js";
 
 const URL_PATTERN = /\bhttps?:\/\/[^\s<>"'`)\]]+/gi;
 const BARE_HOST_PATTERN = /\b((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24})\b/gi;
@@ -75,7 +76,7 @@ export class RunTaint {
     for (const text of input.personText) for (const host of namedHosts(text)) this.hosts.add(host);
     for (const entry of input.history ?? []) {
       if (entry.role !== "toolResult" || entry.toolName === undefined) continue;
-      if (TAINT_SOURCE_TOOL_NAMES.has(entry.toolName) || input.isConnectorTool?.(entry.toolName)) this.outside = true;
+      if (bringsOutsideContent(entry.toolName) || input.isConnectorTool?.(entry.toolName)) this.outside = true;
     }
   }
 
@@ -110,6 +111,6 @@ export class RunTaint {
       this.outside = true;
       return;
     }
-    if (TAINT_SOURCE_TOOL_NAMES.has(call.toolName)) this.outside = true;
+    if (bringsOutsideContent(call.toolName)) this.outside = true;
   }
 }

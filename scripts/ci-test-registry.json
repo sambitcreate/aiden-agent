@@ -783,6 +783,7 @@
         "main/services/approval-gate/approval-mode.test.ts",
         "main/services/approval-gate/gate-modes.test.ts",
         "main/services/approval-gate/workspace-tool-approval.test.ts",
+        "main/services/approval-gate/run-taint.test.ts",
         "main/services/approval-gate/tool-classes.test.ts",
         "main/services/approval-judge/judge.test.ts",
         "main/services/approval-judge/replay.test.ts",

@@ -42,15 +42,32 @@ export const BOT_EXEMPT_TOOL_NAMES: ReadonlySet<string> = new Set([
   "computer_shell",
 ]);
 
-/** Tools whose results bring outside content into the run (§3.2 Taint). */
-export const TAINT_SOURCE_TOOL_NAMES: ReadonlySet<string> = new Set([
+/**
+ * Tools whose results bring outside content into the run (§3.2 Taint), besides
+ * every connector (MCP) tool: the web, a device's screen, a subagent's report
+ * (it may have read anything), a pull request's comments, and codemode (it
+ * calls connectors). Shell output and the person's workspace files are their
+ * own project and do not taint; a command that fetches runs only on the
+ * person's shell grant.
+ */
+const TAINT_SOURCE_TOOL_NAMES: ReadonlySet<string> = new Set([
   "web_fetch",
   "web_search",
-  "browser_open",
-  "browser_navigate",
-  "browser_snapshot",
-  "browser_wait_for",
+  "web_search_exa",
+  "device_screenshot",
+  "subagent",
+  "follow_pull_request",
+  "codemode",
 ]);
+
+/** Browser tools that only change the window, never read the page. */
+const BROWSER_WINDOW_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set(["browser_resize", "browser_set_appearance"]);
+
+/** Whether a tool's result brings outside content into the run. Every browser tool reads or acts on a page. */
+export function bringsOutsideContent(toolName: string): boolean {
+  if (TAINT_SOURCE_TOOL_NAMES.has(toolName)) return true;
+  return toolName.startsWith("browser_") && !BROWSER_WINDOW_ONLY_TOOL_NAMES.has(toolName);
+}
 
 /** Tools that fetch a URL the model chose: a destination once the run is tainted. */
 export const FETCH_TOOL_NAMES: ReadonlySet<string> = new Set(["web_fetch", "browser_open", "browser_navigate"]);
