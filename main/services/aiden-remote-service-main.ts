@@ -97,6 +97,7 @@ import { persistedChatWorkspaceId } from "./chat-workspace-authority.js";
 import { chatActivityRegistry } from "./chat-activity.js";
 import { chatTitleService } from "./chat-title.js";
 import { configStore } from "./config-store.js";
+import { effectiveApprovalMode } from "../../renderer/shared/approval-mode.js";
 import { createAidenRemoteNewWorktrees } from "./aiden-remote-new-worktree.js";
 import { firstMessageWorktrees } from "./first-message-worktree-main.js";
 import { llmClient } from "./llm-client.js";
@@ -1130,6 +1131,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             source: createAidenRemoteHostFeedSource({
               chats,
               listWorkspaces: () => workspaceApplicationService.list(),
+              approvalMode: async () => effectiveApprovalMode(await configStore.getSettings(), true),
               repositoryIdentity: gitCachedRepositoryIdentity,
               ...(bots ? { listBots: () => bots.list() } : {}),
               // Read runtime signals without opening conversation entries or context.
@@ -1236,6 +1238,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               idempotency,
               persistIdempotency: (snapshot) => operationStore.save(snapshot),
               notifyChanged: () => ipcMain.broadcast("workspaces:changed", {}),
+              approvalMode: async () => effectiveApprovalMode(await configStore.getSettings(), true),
             }),
           };
         },

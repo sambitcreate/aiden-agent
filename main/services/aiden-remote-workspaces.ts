@@ -17,6 +17,7 @@ import {
 import type { AidenRemoteWorkspaceBrowserService } from "./aiden-remote-workspace-browser.js";
 import type { createWorkspaceApplicationService } from "./workspace-application-service.js";
 import type { Workspace, WorkspacePermission } from "./types.js";
+import { legacyWorkspaceTier, type ApprovalMode } from "../../renderer/shared/approval-mode.js";
 
 const WORKSPACE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/u;
 const IDEMPOTENCY_KEY_PATTERN = /^[\x21-\x7e]{16,128}$/u;
@@ -93,13 +94,19 @@ function displayNameFromPath(value: string | undefined): string | undefined {
   return components[components.length - 1]?.slice(0, 120);
 }
 
+/**
+ * A workspace as a Remote client sees it. Phones know only the access tiers,
+ * so `permission` is the tier that never reads narrower than what runs under
+ * `globalMode` (`legacyWorkspaceTier`). The revision stays the stored one.
+ */
 export function projectAidenRemoteWorkspace(
   workspace: Workspace,
+  globalMode: ApprovalMode = "ask",
 ): AidenRemoteWorkspaceProjection {
   return {
     id: workspace.id,
     name: workspace.name,
-    permission: workspace.permission,
+    permission: legacyWorkspaceTier(workspace, globalMode),
     memoryEnabled: workspace.memoryEnabled !== false,
     hasFolder: Boolean(workspace.folderPath),
     isManagedWorktree: Boolean(workspace.managedWorktree),
@@ -163,6 +170,8 @@ function parsePatch(value: unknown): {
   name?: string;
   permission?: WorkspacePermission;
   memoryEnabled?: boolean;
+  approvalMode?: "ask";
+  clearMacGrants?: true;
 } {
   const record = ownRecord(value);
   if (
@@ -185,6 +194,9 @@ function parsePatch(value: unknown): {
     ...(record.permission !== undefined
       ? { permission: record.permission as WorkspacePermission }
       : {}),
+    // An older client's Ask means Ask: the workspace's own mode becomes Ask
+    // and its Mac grants go, which only ever narrows what runs.
+    ...(record.permission === "ask" ? { approvalMode: "ask" as const, clearMacGrants: true as const } : {}),
     ...(typeof record.memoryEnabled === "boolean"
       ? { memoryEnabled: record.memoryEnabled }
       : {}),
@@ -235,6 +247,8 @@ export class AidenRemoteWorkspaceService {
       persistIdempotency?: (snapshot: AidenIdempotencySnapshot) => Promise<void>;
       notifyChanged?: () => void;
       clone?: WorkspaceIntakeService["clone"];
+      /** The global approval mode the projected access tier reads under; Ask when absent. */
+      approvalMode?: () => ApprovalMode | Promise<ApprovalMode>;
     },
   ) {
     this.idempotency = options.idempotency ?? new AidenIdempotencyLedger();
@@ -260,10 +274,13 @@ export class AidenRemoteWorkspaceService {
     );
   }
 
+  private async globalMode(): Promise<ApprovalMode> {
+    return (await this.options.approvalMode?.()) ?? "ask";
+  }
+
   async list(): Promise<{ workspaces: AidenRemoteWorkspaceProjection[] }> {
-    return {
-      workspaces: (await this.options.application.list()).map(projectAidenRemoteWorkspace),
-    };
+    const [workspaces, mode] = await Promise.all([this.options.application.list(), this.globalMode()]);
+    return { workspaces: workspaces.map((workspace) => projectAidenRemoteWorkspace(workspace, mode)) };
   }
 
   async get(workspaceId: string): Promise<AidenRemoteWorkspaceProjection> {
@@ -271,7 +288,7 @@ export class AidenRemoteWorkspaceService {
     if (!workspace) {
       throw new AidenRemoteServiceError("not_found", "This Aiden workspace no longer exists.", 404);
     }
-    return projectAidenRemoteWorkspace(workspace);
+    return projectAidenRemoteWorkspace(workspace, await this.globalMode());
   }
 
   async create(
@@ -400,7 +417,7 @@ export class AidenRemoteWorkspaceService {
             }
           }
           this.options.notifyChanged?.();
-          return projectAidenRemoteWorkspace(workspace);
+          return projectAidenRemoteWorkspace(workspace, await this.globalMode());
         },
       );
     } catch (error) {
@@ -425,7 +442,7 @@ export class AidenRemoteWorkspaceService {
       assertCurrent: (workspace) => requireWorkspaceRevision(expectedRevision, workspace),
     });
     this.options.notifyChanged?.();
-    return projectAidenRemoteWorkspace(updated);
+    return projectAidenRemoteWorkspace(updated, await this.globalMode());
   }
 
   async remove(workspaceId: string, expectedRevision: string): Promise<void> {

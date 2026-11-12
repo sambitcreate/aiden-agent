@@ -141,10 +141,11 @@ export function workspaceApprovalPolicy(
  */
 export function workspaceApprovalPatch(
   workspace: ApprovalWorkspaceFields,
-  change: { mode?: ApprovalMode | null; revokeMac?: MacGrantClass; grantMac?: MacGrantClass },
+  change: { mode?: ApprovalMode | null; revokeMac?: MacGrantClass; grantMac?: MacGrantClass; clearMac?: true },
 ): { permission?: "ask"; approvalMode?: ApprovalMode | null; macGrants: WorkspaceMacGrants | null } {
   const current = workspaceApprovalPolicy(workspace, "ask");
   const grants = new Set(current.macGrants);
+  if (change.clearMac) grants.clear();
   if (change.revokeMac) grants.delete(change.revokeMac);
   if (change.grantMac) grants.add(change.grantMac);
   const macGrants: WorkspaceMacGrants = {};
@@ -162,6 +163,8 @@ export interface WorkspaceApprovalChange {
   /** `null` goes back to the global mode. */
   mode?: ApprovalMode | null;
   revokeMac?: MacGrantClass;
+  /** Remove every Mac grant (an older client choosing Ask). */
+  clearMac?: true;
 }
 
 /**
@@ -180,11 +183,15 @@ export function parseWorkspaceApprovalChange(fields: Readonly<Record<string, unk
       change.mode = mode;
     }
   }
+  if (fields.clearMacGrants !== undefined) {
+    if (fields.clearMacGrants !== true) throw new Error("Invalid Mac permission.");
+    change.clearMac = true;
+  }
   if (fields.revokeMacGrant !== undefined) {
     if (!MAC_GRANT_CLASSES.includes(fields.revokeMacGrant as MacGrantClass)) throw new Error("Invalid Mac permission.");
     change.revokeMac = fields.revokeMacGrant as MacGrantClass;
   }
-  return change.mode !== undefined || change.revokeMac !== undefined ? change : undefined;
+  return change.mode !== undefined || change.revokeMac !== undefined || change.clearMac ? change : undefined;
 }
 
 /**
@@ -254,4 +261,19 @@ export function parseApprovalModel(value: unknown): { providerId: string; model:
   } catch {
     return undefined;
   }
+}
+
+/**
+ * A workspace as an older client's access tier (none, ask or full), which
+ * never reads narrower than what runs: Chat only is "none"; Ask with nothing
+ * allowed is "ask"; anything that can run without a card (Auto, Never ask,
+ * or a Mac grant) is "full".
+ */
+export function legacyWorkspaceTier(
+  workspace: ApprovalWorkspaceFields,
+  globalMode: ApprovalMode,
+): "none" | "ask" | "full" {
+  const policy = workspaceApprovalPolicy(workspace, globalMode);
+  if (policy.chatOnly) return "none";
+  return policy.mode === "ask" && policy.macGrants.size === 0 ? "ask" : "full";
 }
