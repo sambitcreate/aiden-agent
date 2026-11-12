@@ -21,7 +21,7 @@ import { withUsageLimitWait } from "./usage-limit-stream.js";
 import { spending } from "./spending-main.js";
 import { createSpendingMeter, spendCounts } from "./spending-service.js";
 import { effectiveApprovalMode, parseApprovalModel, workspaceApprovalPolicy, type MacGrantClass } from "../../renderer/shared/approval-mode.js";
-import { currentWorkspaceApproval, legacyAccessOf, workspaceWithMacGrant } from "./approval-gate/run-approval.js";
+import { currentWorkspaceApproval, legacyAccessOf } from "./approval-gate/run-approval.js";
 import { RunTaint } from "./approval-gate/run-taint.js";
 import { declaredReadOnlyHint } from "./approval-gate/tool-classes.js";
 import { approvalJudgeAction, createApprovalJudge, type ApprovalJudge } from "./approval-judge/judge.js";
@@ -4771,8 +4771,10 @@ export const llmClient = {
             const scope = toolCallId ? approvals.takeDecisionPayload(streamId, toolCallId)?.scope : undefined;
             if (scope === "workspace") {
               try {
-                const current = await configStore.getWorkspace(workspaceId);
-                if (current) await configStore.saveWorkspace(workspaceWithMacGrant(current, macGrantOffer));
+                // Through the application, so the save can't cross a settings
+                // change and the sidebar and Workspace settings refresh.
+                const { workspaceApplicationService } = await import("./workspace-application-service-main.js");
+                await workspaceApplicationService.grantMac(workspaceId, macGrantOffer);
               } catch (error) {
                 // Allowed once already; the next call asks again.
                 logger.warn("pi", "Could not save the workspace's Mac grant.", error);

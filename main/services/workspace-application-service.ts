@@ -1,7 +1,12 @@
 import * as path from "node:path";
 import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import { reportApprovalModeChanged } from "./approval-gate/approval-analytics.js";
-import { applyWorkspaceApprovalChange, parseWorkspaceApprovalChange } from "../../renderer/shared/approval-mode.js";
+import {
+  applyWorkspaceApprovalChange,
+  parseWorkspaceApprovalChange,
+  type MacGrantClass,
+} from "../../renderer/shared/approval-mode.js";
+import { workspaceWithMacGrant } from "./approval-gate/run-approval.js";
 import type { configStore } from "./config-store.js";
 import type { llmClient } from "./llm-client.js";
 import type { scheduleService } from "./schedule-service.js";
@@ -26,6 +31,13 @@ function nonEmptyString(value: unknown, name: string): string {
   }
   return value;
 }
+
+/** The approval fields a concurrent Mac grant may change under an update. */
+function approvalFieldsOf(workspace: Workspace | undefined): string {
+  return JSON.stringify([workspace?.permission, workspace?.approvalMode ?? null, workspace?.macGrants ?? null]);
+}
+
+class StaleWorkspaceGrant extends Error {}
 
 function defaultWorkspaceId(): string {
   return `w-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -410,11 +422,19 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
           next = applyWorkspaceApprovalChange(next, approvalChange);
         }
         const reportModeChange = () => reportApprovalModeChanged("workspace", existing.approvalMode, next.approvalMode);
+        // A Mac card answered "Allow in this workspace" after this update read
+        // the workspace: refuse rather than save over the new grant.
+        const beforeSave = async (current: Workspace | undefined) => {
+          if (current && approvalFieldsOf(current) !== approvalFieldsOf(existing)) {
+            throw new Error("This workspace's approvals changed while saving. Try again.");
+          }
+          await options.beforeSave?.(current);
+        };
         const authorityChanged =
           next.permission !== existing.permission ||
           next.memoryEnabled !== existing.memoryEnabled;
         if (!authorityChanged) {
-          const saved = await deps.configStore.saveWorkspace(next, options.beforeSave);
+          const saved = await deps.configStore.saveWorkspace(next, beforeSave);
           deps.onChanged?.();
           reportModeChange();
           return saved;
@@ -438,7 +458,7 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
             if (next.permission !== existing.permission) followThroughChange.finish = await deps.followThrough?.closeForWorkspace(existing.id);
             await deps.scheduleService.cancelWorkspace(existing.id);
             options.assertCurrent?.(await deps.configStore.getWorkspace(id) ?? existing);
-            const saved = await deps.configStore.saveWorkspace(next, options.beforeSave);
+            const saved = await deps.configStore.saveWorkspace(next, beforeSave);
             followThroughChange.committed = true;
             deps.onChanged?.();
             reportModeChange();
@@ -457,6 +477,30 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
           finishMutation();
         }
       }
+    },
+
+    /**
+     * "Allow in this workspace" on a Mac card: adds that grant and nothing else.
+     * It neither cancels nor waits for the workspace's chats (the chat that
+     * asked is about to run the call), and a save that lands in between is
+     * read again rather than overwritten. A workspace that no longer exists
+     * gets nothing.
+     */
+    async grantMac(workspaceId: string, grant: MacGrantClass): Promise<Workspace | undefined> {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const existing = await deps.configStore.getWorkspace(workspaceId);
+        if (!existing) return undefined;
+        try {
+          const saved = await deps.configStore.saveWorkspace(workspaceWithMacGrant(existing, grant), (current) => {
+            if (!current || current.updatedAt !== existing.updatedAt) throw new StaleWorkspaceGrant();
+          });
+          deps.onChanged?.();
+          return saved;
+        } catch (error) {
+          if (!(error instanceof StaleWorkspaceGrant)) throw error;
+        }
+      }
+      throw new Error("The workspace kept changing; its Mac permission was not saved.");
     },
 
     async remove(

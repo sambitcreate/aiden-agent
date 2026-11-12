@@ -574,3 +574,58 @@ test("changing a Full workspace keeps its shell and file grants and stores Ask f
   assert.equal(full.permission, "full");
   assert.equal("approvalMode" in full, false);
 });
+
+test("Allow in this workspace saves the grant through the application, without stopping the chat that asked", async () => {
+  let changed = 0;
+  const application = fixture();
+  (application.deps as { onChanged?: () => void }).onChanged = () => { changed += 1; };
+  const service = createWorkspaceApplicationService(application.deps);
+  const saved = await service.grantMac("workspace-1", "shell");
+  assert.deepEqual(saved?.macGrants, { shell: true });
+  assert.equal(changed, 1, "the sidebar and Workspace settings refresh");
+  assert.deepEqual(application.events, ["save"], "nothing is cancelled: the card's own call is about to run");
+  assert.equal(await service.grantMac("missing", "shell").then(() => "ok", () => "threw"), "ok");
+});
+
+test("a grant and a settings change that cross never lose the grant", async () => {
+  let current = workspace();
+  let racing: (() => void) | undefined;
+  const application = fixture();
+  const store = application.deps.configStore as unknown as {
+    getWorkspace: (id: string) => Promise<Workspace | undefined>;
+    saveWorkspace: (value: Workspace, guard?: (current: Workspace | undefined) => void | Promise<void>) => Promise<Workspace>;
+  };
+  store.getWorkspace = async () => {
+    const read = current;
+    // Another save lands between this read and the write that follows it.
+    const race = racing;
+    racing = undefined;
+    race?.();
+    return read;
+  };
+  store.saveWorkspace = async (value, guard) => {
+    await guard?.(current);
+    current = { ...value, updatedAt: current.updatedAt + 1 };
+    return current;
+  };
+  const service = createWorkspaceApplicationService(application.deps);
+
+  racing = () => { current = { ...current, name: "Renamed elsewhere", updatedAt: current.updatedAt + 1 }; };
+  await service.grantMac("workspace-1", "files");
+  assert.equal(current.name, "Renamed elsewhere");
+  assert.deepEqual(current.macGrants, { files: true });
+
+  // A settings update that read the workspace before a grant landed does not drop the grant.
+  racing = undefined;
+  let updateRead = false;
+  store.getWorkspace = async () => {
+    const read = current;
+    if (!updateRead) {
+      updateRead = true;
+      current = { ...current, macGrants: { files: true, shell: true }, updatedAt: current.updatedAt + 1 };
+    }
+    return read;
+  };
+  await assert.rejects(service.update("workspace-1", { name: "Mine" }), /changed/u);
+  assert.deepEqual(current.macGrants, { files: true, shell: true });
+});
