@@ -23,9 +23,15 @@ the issue treatment.
   `generationStoppedByUser()` (cancel requested and origin `user_stop`) at the tool end and the
   compaction abort.
 - `finish("cancelled", "user_stop")` marks the steps its sweep closes.
-- ACP's `GenerationTimelinePort.toolFinished` is 3-arg, so an ACP permission cancel never marks.
+- ACP (`main/services/acp/generation-host.ts`): `GenerationTimelinePort.toolFinished` takes the same
+  4th `{ stoppedByUser }` argument, and `AcpGenerationHostOptions.stoppedByUser()` (llm-client passes
+  `generationStoppedByUser`) marks an agent permission that ends `cancelled` during Stop. A permission
+  cancelled on detach or any other cancel stays unmarked (an issue). Covered by
+  `generation-host.test.ts` "an agent permission cancelled by Stop reads as stopped...".
 The shared parser (`renderer/shared/generation-timeline.ts`) accepts the key only as `true` on a
-cancelled step of timeline version 3, so it survives chat reload and the Remote projection.
+cancelled step of timeline version 3, so it survives chat reload and the Remote projection. The
+OpenAPI v1/v2 timeline conditional forbids it, and iOS/Android `isRendererSafe` reject a v1/v2
+timeline that carries it (see the revision 61 section of `docs/aiden-remote-api-v1.md`).
 
 ## Protocol
 Remote revision 61 (`AIDEN_REMOTE_STOPPED_BY_USER_CONTRACT_REVISION`, provisional, claimed when main
