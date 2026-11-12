@@ -1,6 +1,7 @@
 import { botMessageTurnOf, isBotMessageRequestId } from "../../../renderer/shared/bot-messages.js";
 import { BOT_MESSAGE_INPUT_KIND, type BotMessageInputMetadata } from "./bot-input-entry.js";
 import { BOT_ROUTINE_INPUT_KIND } from "./bot-input-entry.js";
+import { ownerRequestOf, type BotRunInputForJudge } from "./bot-owner-request.js";
 import { botExecutionScope } from "./bot-execution.js";
 // The `aiden-bot` Pi Durable extension: everything a Bot turn needs from
 // Aiden, installed in a Bot harness's registry before anything can run.
@@ -306,8 +307,14 @@ export interface BotToolCallCheck {
   /** Request ids of the inputs the calling run serves (one per input; `undefined` when it has none). */
   requestIds?: readonly (string | undefined)[];
   hasRoutineInputs?(): Promise<boolean>;
-  /** The text of the inputs the calling run serves, for the Auto judge. */
-  ownerRequest?(): Promise<string>;
+  /**
+   * What the owner asked for in the inputs the calling run serves, for the
+   * Auto judge: `undefined` when any input carries words the owner didn't
+   * write (`ownerRequestOf`).
+   */
+  ownerRequest?(): Promise<string | undefined>;
+  /** Tools whose results the calling run has already committed, oldest first. */
+  runToolNames?(): Promise<string[]>;
 }
 
 export type BotReadmission = { ok: true } | { ok: false; reason: "access_changed" | "bot_missing" };
@@ -705,6 +712,72 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
       ? [] : inputs.filter((input): input is NonNullable<typeof input> => input !== undefined)};
   }
 
+  /** What the Auto judge reads about the calling run: the owner's words, and the tools it already ran. */
+  function judgeReads(
+    api: Pick<DocumentReader, "snapshot"> & { readonly conversationId: ConversationId }, context: Context,
+  ): Pick<BotToolCallCheck, "ownerRequest" | "runToolNames"> {
+    return {
+      ownerRequest: async () => {
+        const inputs = await readRunInputEntries(api, context);
+        return inputs === undefined ? undefined : ownerRequestOf(inputs.map(({ input }) => input));
+      },
+      runToolNames: async () => {
+        const inputs = await readRunInputEntries(api, context);
+        if (inputs === undefined) throw new Error("The run's inputs could not be read.");
+        const first = inputs.reduce<number | undefined>((min, { entryId }) => (min === undefined || entryId < min ? entryId : min), undefined);
+        if (first === undefined) return [];
+        const conversation = await harness!.conversation(api.conversationId, context);
+        if (!conversation) throw new Error("The conversation could not be read.");
+        return conversation.commit(async (tx) => {
+          const names: string[] = [];
+          let cursor: Parameters<typeof tx.scanEntries>[2];
+          do {
+            const page = await tx.scanEntries({ conversationId: api.conversationId, minEntryId: first as never, order: "ascending" }, 500, cursor);
+            for (const entry of page.items) {
+              for (const message of entry.model ?? []) {
+                if (message.role === "toolResult" && typeof message.toolName === "string") names.push(message.toolName);
+              }
+            }
+            cursor = page.next;
+          } while (cursor !== undefined);
+          return names;
+        }, context);
+      },
+    };
+  }
+
+  /**
+   * The committed entries of the inputs the calling run serves, with their
+   * request ids and user text, or `undefined` when any can't be read.
+   */
+  async function readRunInputEntries(
+    api: Pick<DocumentReader, "snapshot"> & { readonly conversationId: ConversationId }, context: Context,
+  ): Promise<{ entryId: number; input: BotRunInputForJudge }[] | undefined> {
+    if (!harness) return undefined;
+    const live = await api.snapshot(LiveDoc, api.conversationId, context);
+    const { submissions } = await harness.inspect(context);
+    const conversation = await harness.conversation(api.conversationId, context);
+    if (!conversation) return undefined;
+    const out: { entryId: number; input: BotRunInputForJudge }[] = [];
+    for (const id of live?.run?.inputs ?? []) {
+      const submission = submissions.find((candidate) => candidate.id === id);
+      if (submission?.type !== "input" || submission.entry === undefined) return undefined;
+      const entry = await conversation.commit((tx) => tx.entry(submission.entry!), context);
+      if (!entry) return undefined;
+      const texts: string[] = [];
+      for (const message of entry.model ?? []) {
+        if (message.role !== "user") continue;
+        if (typeof message.content === "string") texts.push(message.content);
+        else for (const part of message.content) if (part.type === "text") texts.push(part.text);
+      }
+      out.push({ entryId: Number(entry.id), input: {
+        ...(submission.requestId !== undefined ? { requestId: submission.requestId } : {}),
+        kind: entry.kind, ...(entry.data !== undefined ? { data: entry.data } : {}), text: texts.join("\n\n"),
+      } });
+    }
+    return out;
+  }
+
   function botInputMetadata(requestId: string | undefined, data: JsonValue | undefined): BotMessageInputMetadata | undefined {
     const turn = botMessageTurnOf(requestId);
     if (!data || typeof data !== "object" || Array.isArray(data)) return undefined;
@@ -863,25 +936,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
           return requestIds.length > 0;
         }, context);
       },
-      ownerRequest: async () => {
-        // The text of the inputs this run serves, as the person (or routine) wrote them.
-        const live = await api.snapshot(LiveDoc, api.conversationId, context);
-        const { submissions } = await harness!.inspect(context);
-        const conversation = await harness!.conversation(api.conversationId, context);
-        if (!conversation) return "";
-        const texts: string[] = [];
-        for (const id of live?.run?.inputs ?? []) {
-          const submission = submissions.find((candidate) => candidate.id === id);
-          if (submission?.type !== "input" || submission.entry === undefined) continue;
-          const entry = await conversation.commit((tx) => tx.entry(submission.entry!), context);
-          for (const message of entry?.model ?? []) {
-            if (message.role !== "user") continue;
-            if (typeof message.content === "string") texts.push(message.content);
-            else for (const part of message.content) if (part.type === "text") texts.push(part.text);
-          }
-        }
-        return texts.join("\n\n");
-      },
+      ...judgeReads(api, context),
     };
     let decision = await deps.checkPolicy(botId, call.name, check);
     if (!planAdmissionAvailable && decision.allowed && decision.approval?.evidence && !decision.approval.preapproved) {
@@ -1151,6 +1206,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     const decision = await deps.checkPolicy(botId, toolName, { executionId, callId: (api as ToolExecutionApi).callId,
       args, owner, requestIds, authorizationIds: await runInputIds(api, context),
       signal: context.abortSignal, assertCurrent: () => assertLive(api, context, owner),
+      ...judgeReads(api, context),
       skipPlanCoverage: true, skipAllowList: true, approvalProbe: true });
     if (!decision.allowed || !decision.approval || decision.approval.preapproved) return undefined;
     return ordinaryEvidence(decision.approval, executionId, toolName, args, owner, requestIds);

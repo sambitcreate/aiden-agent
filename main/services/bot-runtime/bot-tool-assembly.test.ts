@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { BOT_MESSAGE_REQUEST_PREFIX } from "../../../renderer/shared/bot-messages.js";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -2590,23 +2591,28 @@ test("Auto never judges a rule the person wrote, here or on the rules page", asy
 async function judgedCheck(options: {
   toolName: string;
   action: BotClassifiableAction;
-  judge: ReturnType<typeof recordingJudge>["judge"];
+  judge?: ReturnType<typeof recordingJudge>["judge"];
   routine?: true;
+  botMessage?: true;
+  ownerRequest?: string | undefined;
+  runToolNames?: () => Promise<string[]>;
 }): Promise<string> {
-  const state = assemblyState(full(botHome()));
+  const state = { ...assemblyState(testAuthority({ mode: "full", home: botHome(), ...FULL_GRANTS, other: [...FULL_GRANTS.other, "computer"] })), hasComputer: true };
   const deps = assemblyDeps(state, {
     candidates: () => [{ tool: countingTool(options.toolName), ...(options.toolName === SEND_EMAIL_TOOL ? { mcp: true } : {}) }],
     rules: () => defaultBotRules(),
     approvalMode: () => "auto",
-    judge: options.judge,
+    ...(options.judge ? { judge: options.judge } : {}),
     approvalFor: async () => ({ approval: { summary: "Do the thing" }, action: options.action }),
   });
   const decision = await deps.checkPolicy("bot-1", options.toolName, {
     callId: "call-1",
     args: { action: "click" },
     signal: undefined,
-    requestIds: [options.routine ? "routine:daily:fire-1" : "req-1"],
+    requestIds: [options.routine ? "routine:daily:fire-1" : options.botMessage ? BOT_MESSAGE_REQUEST : "req-1"],
     ...(options.routine ? { hasRoutineInputs: async () => true } : {}),
+    ownerRequest: async () => ("ownerRequest" in options ? options.ownerRequest : "Email Sam"),
+    runToolNames: options.runToolNames ?? (async () => []),
   });
   if (!decision.allowed) return "refused";
   if (decision.handoff) return "hand off";
@@ -2631,4 +2637,74 @@ test("Auto in a routine: a pass runs the step, and a deferral still refuses it",
   const plainClick: BotClassifiableAction = { surface: "computer_use", action: "click", app: "Notes", element: { role: "AXButton", label: "Bold" } };
   assert.equal(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: plainClick, judge: recordingJudge("pass").judge, routine: true }), "run");
   assert.equal(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: plainClick, judge: recordingJudge("defer").judge, routine: true }), "refused");
+});
+
+const BOT_MESSAGE_REQUEST = `${BOT_MESSAGE_REQUEST_PREFIX}0b8a3f5e-2c11-4d5f-9b7a-0123456789ac`;
+const DELETE_ON_COMPUTER: BotClassifiableAction = { surface: "computer", action: "click", intent: "Delete the old backups" };
+
+test("Auto keeps a built-in Ask rule on the Bot's own computer: a delete in its shell shows the card, judged or not", async () => {
+  const { judge, calls } = recordingJudge("pass");
+  assert.equal(await judgedCheck({ toolName: "computer_shell", action: DELETE_ON_COMPUTER, judge }), "card", "a judge that would pass");
+  assert.equal(await judgedCheck({ toolName: "computer_shell", action: DELETE_ON_COMPUTER }), "card", "no judge on this host");
+  assert.equal(await judgedCheck({ toolName: "computer", action: DELETE_ON_COMPUTER, judge }), "card", "its screen");
+  assert.equal(calls.length, 0, "exempt tools never reach the judge");
+});
+
+test("Auto in a routine: a delete in the Bot's shell still refuses, judged or not", async () => {
+  const { judge } = recordingJudge("pass");
+  assert.equal(await judgedCheck({ toolName: "computer_shell", action: DELETE_ON_COMPUTER, judge, routine: true }), "refused");
+  assert.equal(await judgedCheck({ toolName: "computer_shell", action: DELETE_ON_COMPUTER, routine: true }), "refused");
+});
+
+test("Auto with no judge keeps a built-in rule's card for a connection send it would otherwise judge", async () => {
+  const sendDelete: BotClassifiableAction = { surface: "computer", action: "click", intent: "Delete the old thread" };
+  assert.equal(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: sendDelete }), "card");
+  const { judge, calls } = recordingJudge("pass");
+  assert.equal(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: sendDelete, judge }), "run", "with a judge, the rule's class is judged");
+  assert.equal(calls.length, 1);
+});
+
+test("Auto never judges a run whose inputs carry words the owner didn't write, or a Bot-message turn", async () => {
+  const plainClick: BotClassifiableAction = { surface: "computer_use", action: "click", app: "Notes", element: { role: "AXButton", label: "Bold" } };
+  const injected = recordingJudge("pass");
+  assert.equal(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: plainClick, judge: injected.judge, routine: true, ownerRequest: undefined }), "refused",
+    "an event routine's email body is not the owner's request");
+  assert.equal(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: plainClick, judge: injected.judge, ownerRequest: undefined }), "card");
+  const peer = recordingJudge("pass");
+  assert.notEqual(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: plainClick, judge: peer.judge, botMessage: true, ownerRequest: "Email Sam" }), "run");
+  assert.equal(injected.calls.length + peer.calls.length, 0);
+});
+
+test("Auto: outside content the run read before a restart still stops judging", async () => {
+  const plainClick: BotClassifiableAction = { surface: "computer_use", action: "click", app: "Notes", element: { role: "AXButton", label: "Bold" } };
+  for (const earlier of ["computer_shell", "computer", "browser", "inspect_image", READ_INBOX_TOOL]) {
+    const { judge, calls } = recordingJudge("pass");
+    assert.equal(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: plainClick, judge, ownerRequest: "Email Sam", runToolNames: async () => ["bot_memory", earlier] }), "card", earlier);
+    assert.equal(calls.length, 0, earlier);
+  }
+  const unreadable = recordingJudge("pass");
+  assert.equal(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: plainClick, judge: unreadable.judge, ownerRequest: "Email Sam",
+    runToolNames: async () => { throw new Error("unreadable"); } }), "card", "a run that can't be read counts as tainted");
+  const clean = recordingJudge("pass");
+  assert.equal(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: plainClick, judge: clean.judge, ownerRequest: "Email Sam", runToolNames: async () => ["bot_memory"] }), "run");
+});
+
+test("Auto fails closed when the host can't say what the run read or what the owner asked", async () => {
+  const plainClick: BotClassifiableAction = { surface: "computer_use", action: "click", app: "Notes", element: { role: "AXButton", label: "Bold" } };
+  const state = assemblyState(full(botHome()));
+  const { judge, calls } = recordingJudge("pass");
+  const deps = assemblyDeps(state, {
+    candidates: () => [{ tool: countingTool(SEND_EMAIL_TOOL), mcp: true }],
+    rules: () => defaultBotRules(), approvalMode: () => "auto", judge,
+    approvalFor: async () => ({ approval: { summary: "Do the thing" }, action: plainClick }),
+  });
+  const base = { callId: "call-1", args: { action: "click" }, signal: undefined, requestIds: ["req-1"] };
+  for (const [name, extra] of [
+    ["no record of the run's tools", { ownerRequest: async () => "Email Sam" }],
+    ["no owner request", { runToolNames: async () => [] }],
+  ] as const) {
+    const decision = await deps.checkPolicy("bot-1", SEND_EMAIL_TOOL, { ...base, ...extra });
+    assert.ok(decision.allowed && decision.approval && !decision.approval.preapproved, name);
+  }
+  assert.equal(calls.length, 0);
 });

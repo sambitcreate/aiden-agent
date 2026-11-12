@@ -78,6 +78,15 @@ import { BOT_EXEMPT_TOOL_NAMES, bringsOutsideContent, DISCLOSURE_TOOL_NAMES } fr
 
 /** A Bot's built-in rules that only mark an action consequential: Auto judges them (plan §3.2 tool classes). */
 const BOT_JUDGED_RULE_CLASSES: ReadonlySet<string> = new Set(["communicate", "delete", "publish", "install"]);
+/**
+ * A Bot's own tools whose results bring outside content, besides the shared
+ * list and every connection: its computer's screen and shell output, its
+ * browser, and an image it inspects.
+ */
+const BOT_TAINT_SOURCE_TOOL_NAMES: ReadonlySet<string> = new Set(["computer", "computer_shell", "browser", "inspect_image"]);
+function botBringsOutsideContent(toolName: string): boolean {
+  return bringsOutsideContent(toolName) || BOT_TAINT_SOURCE_TOOL_NAMES.has(toolName);
+}
 import type { ApprovalMode } from "../../../renderer/shared/approval-mode.js";
 import { botIngressAllowsTool, botToolApprovalSummary, botToolVerdict, botTurnOf, SUBAGENT_TOOL, type BotToolFacts } from "./bot-tool-policy.js";
 import type { BotToolCall, ToolReplay } from "./tool-adapter.js";
@@ -534,10 +543,17 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
   // Runs that already read outside content: their calls are never judged.
   const taintedRuns = new Set<string>();
   const TAINTED_RUNS_KEPT = 500;
-  /** A run is the inputs it serves: every step answering them shares its verdicts and its taint. */
-  function botJudgeRun(botId: string, call: Pick<BotToolCallCheck, "owner" | "requestIds">): string {
+  /**
+   * A run is the inputs it serves: every step answering them shares its
+   * verdicts and its taint. A call that names none is a run of its own.
+   */
+  function botJudgeRun(botId: string, call: Pick<BotToolCallCheck, "owner" | "requestIds" | "callId">): string {
     const inputs = call.owner?.inputs.map((input) => input.submissionId) ?? [];
-    return canonical([botId, inputs.length > 0 ? inputs : [...(call.requestIds ?? [])].map((id) => id ?? null), inputs.length > 0 ? null : call.owner?.runId ?? null]);
+    if (inputs.length > 0) return canonical([botId, "inputs", inputs]);
+    const requests = [...(call.requestIds ?? [])].filter((id): id is string => typeof id === "string" && id.length > 0);
+    if (requests.length > 0) return canonical([botId, "requests", requests]);
+    if (call.owner?.runId) return canonical([botId, "task", call.owner.runId]);
+    return canonical([botId, "call", call.callId]);
   }
   /** Calls whose result brings outside content: a page, a search, a connection's data. */
   const bringsOutside = new WeakMap<BotToolCallCheck, boolean>();
@@ -547,6 +563,23 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
     taintedRuns.delete(run);
     taintedRuns.add(run);
     while (taintedRuns.size > TAINTED_RUNS_KEPT) taintedRuns.delete(taintedRuns.values().next().value!);
+  }
+
+  /**
+   * Whether the run's committed tool results already brought outside content,
+   * which survives a restart. A run that can't be read, or a host that can't
+   * say, counts as having read it.
+   */
+  async function runReadOutside(call: BotToolCallCheck, facts: BotToolFacts): Promise<boolean> {
+    if (!call.runToolNames) return true;
+    try {
+      const names = await call.runToolNames();
+      if (names.length === 0) return false;
+      const mcp = await facts.mcpTools();
+      return names.some((name) => botBringsOutsideContent(name) || mcp.has(name));
+    } catch {
+      return true;
+    }
   }
 
   async function decidePolicy(botId: string, toolName: string, original?: BotToolCallCheck): Promise<BotPolicyDecision> {
@@ -562,7 +595,7 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
     try {
       await admission.revalidateBeforeEffect();
       const facts = await ports.sources.facts(botId, admission);
-      if (original) bringsOutside.set(original, bringsOutsideContent(toolName) || (await facts.mcpTools()).has(toolName));
+      if (original) bringsOutside.set(original, botBringsOutsideContent(toolName) || (await facts.mcpTools()).has(toolName));
       // The calling run's own ingress, not whoever refreshed the tools last.
       if (call?.requestIds && !botIngressAllowsTool(toolName, call.requestIds)) return {allowed: false, reason: "This tool is not available on this turn."};
       const turns = (call?.requestIds ?? []).map(botTurnOf);
@@ -602,14 +635,24 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
       // outside content, or a host without a judge, shows the card.
       const mode = (await ports.approvalMode?.().catch(() => "ask" as const)) ?? "ask";
       const run = botJudgeRun(botId, call);
-      const judging = mode === "auto" && ports.judge !== undefined && !taintedRuns.has(run);
+      // Only a run the person (or a routine they accepted) started is judged:
+      // a Bot message, Telegram, a peer or a self-intro carries words nobody
+      // here wrote. A run that already read outside content, in this process
+      // or before a restart, is never judged either.
+      const ownerStarted = turns.length > 0 && turns.every((turn) => !turn.botMessage && !turn.telegram && !turn.peer && !turn.intro);
+      const judging = mode === "auto" && ports.judge !== undefined && ownerStarted &&
+        !taintedRuns.has(run) && !(await runReadOutside(call, facts));
       const gateContext: GateContext = { surface: "bot", access: "ask", mode, attendance,
         ...(routineGoAhead ? { routineGoAhead } : {}), ...(judging ? { judge: true } : {}) };
       // A built-in rule that only asks (send a message, delete, publish,
       // install) marks a consequential action: Auto judges it like any
       // other. Purchases, locked rules, hand-offs and rules the person
       // wrote (here or on the rules page) always ask.
-      const judgedRule = mode === "auto" && ruled === "ask" && rule !== undefined && matchingAsk.length > 0 &&
+      // Only when the judge will really be asked: with no judge the rule's
+      // own card stands. A Bot's exempt tools (its computer, shell,
+      // subagents) keep their rule, since exempt calls never reach the judge.
+      const judgedRule = judging && ruled === "ask" && rule !== undefined && matchingAsk.length > 0 &&
+        !BOT_EXEMPT_TOOL_NAMES.has(toolName) &&
         matchingAsk.every((candidate) => candidate.actionClass !== undefined && !candidate.locked && BOT_JUDGED_RULE_CLASSES.has(candidate.actionClass));
       const remembered = baseline && !rule && !computerUse ? botApprovalTargetOf(toolName, action) : undefined;
       const gateAction: GateAction = {
@@ -633,8 +676,12 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
         if (planned.outcome !== "lookup" || planned.lookup !== "judge" || !ports.judge) return planned;
         let verdict: "pass" | "defer" = "defer";
         try {
-          const effect = toolCallApprovalEffect(toolName, call.args) ?? `${toolName}\u0000${call.callId}`;
-          const request = (await call.ownerRequest?.().catch(() => "")) ?? "";
+          const effect = toolCallApprovalEffect(toolName, call.args, live?.browserTarget) ?? `${toolName}\u0000${call.callId}`;
+          // Only words the owner wrote: a run whose inputs carry anything
+          // else (an event's payload, routine notes, another Bot's message)
+          // is never judged.
+          const request = await call.ownerRequest?.().catch(() => undefined);
+          if (request === undefined) throw new Error("The run's inputs are not only the owner's words.");
           verdict = await ports.judge(botId, {
             run, requestIds: call.requestIds ?? [], effect, request,
             action: approvalJudgeAction(toolName, call.args, callSummary),
