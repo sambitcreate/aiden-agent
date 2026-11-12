@@ -65,11 +65,33 @@ test("the Allow menu offers the remembered scopes and sends the one picked", asy
     items.map((item) => item.textContent),
     [
       "Allow in this chatWon't ask again for this exact command until Aiden quits.",
-      "Allow in this workspaceWon't ask again for this exact command here. Undo in Settings → Bots & Approvals → Tool approvals.",
+      "Allow in this workspaceWon't ask again for this exact command here. Undo in Settings → Bots & Approvals → Approvals.",
     ],
   );
   fireEvent.click(items[1]!);
   assert.deepEqual(decisions, [["allow", { scope: "always" }]]);
+});
+
+test("under an approval mode a Mac card keeps Allow once and offers the shell for this whole workspace", async () => {
+  const { card, decisions } = mount({
+    toolName: "run_command",
+    summary: "Run command: npm test",
+    preview: { kind: "command", command: "npm test" },
+    scopes: ["once", "workspace"],
+  });
+  assert.equal(screen.getByRole("region", { name: "Run on your Mac?" }), card);
+  assert.ok(within(card).getByRole("button", { name: "Allow once" }));
+  fireEvent.pointerDown(within(card).getByRole("button", { name: "More ways to allow" }), { button: 0, pointerType: "mouse" });
+  const items = await screen.findAllByRole("menuitem");
+  assert.deepEqual(
+    items.map((item) => item.textContent),
+    ["Allow in this workspaceWon't ask again before running commands in this workspace. Remove it in Workspace settings."],
+  );
+  fireEvent.click(items[0]!);
+  assert.deepEqual(decisions, [["allow", { scope: "workspace" }]]);
+  cleanup();
+  render(<ApprovalStatusLine status={{ decision: "allow", scope: "workspace" }} />);
+  assert.ok(screen.getByText("Allowed in this workspace"));
 });
 
 test("a remembered file approval says it covers any later change to that file", async () => {
@@ -81,7 +103,7 @@ test("a remembered file approval says it covers any later change to that file", 
     (await screen.findAllByRole("menuitem")).map((item) => item.textContent),
     [
       "Allow in this chatWon't ask again for any edit to forecast.ts until Aiden quits.",
-      "Allow in this workspaceWon't ask again for any edit to forecast.ts here. Undo in Settings → Bots & Approvals → Tool approvals.",
+      "Allow in this workspaceWon't ask again for any edit to forecast.ts here. Undo in Settings → Bots & Approvals → Approvals.",
     ],
   );
 });

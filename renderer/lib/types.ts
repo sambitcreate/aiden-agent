@@ -270,6 +270,14 @@ export interface Workspace {
    * workspace row or choice. Device-local; Remote projections leave it out.
    */
   noWorkspace?: true;
+  /**
+   * Workspace settings → Customize: this workspace's own approval mode. Absent,
+   * it follows Settings → Approvals (a legacy `permission: "full"` reads as
+   * Never ask with shell and files allowed; see `workspaceApprovalPolicy`).
+   */
+  approvalMode?: import("../shared/approval-mode").ApprovalMode;
+  /** Parts of the Mac a Mac card allowed in this workspace. */
+  macGrants?: import("../shared/approval-mode").WorkspaceMacGrants;
   createdAt: number;
   updatedAt: number;
 }
@@ -956,6 +964,14 @@ export interface AppSettings extends AidenLiveSettingsFields {
    * the password and money rules, or chat turns. Absent means off.
    */
   botRoutinesGoAhead?: boolean;
+  /** Settings → Approvals: Auto, Ask or Never ask. Absent on a fresh install: Auto once a model works. */
+  approvalMode?: import("../shared/approval-mode").ApprovalMode;
+  /** Written once by the main process: whether this install was already in use when modes arrived. */
+  approvalModeOrigin?: "fresh" | "upgrade";
+  /** The one-time "What changed" note in Settings → Approvals was dismissed. */
+  approvalChangesSeen?: boolean;
+  /** Approvals → Advanced: the model Auto asks instead of the chat's own. */
+  approvalModel?: { providerId: string; model: string };
   botMessaging?: boolean;
   /** Settings → Context & Limits: dollar limits per chat, Bot month and routine run. Absent amounts: no limit. */
   spendingLimits?: import("../shared/spending").SpendingLimitsSettings;

@@ -151,6 +151,7 @@ export function approvalStatusLabel(status: ApprovalStatus): string {
   if (status.decision === "deny") return "Denied";
   if (status.decision === "stale") return "No longer active";
   if (status.scope === "chat") return "Allowed in this chat";
+  if (status.scope === "workspace") return "Allowed in this workspace";
   if (status.scope === "always") return status.always === "workspace" ? "Allowed in this workspace" : "Always allowed";
   return "Allowed once";
 }

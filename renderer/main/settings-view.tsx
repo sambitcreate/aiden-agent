@@ -49,6 +49,17 @@ import { PeerHostsSettingsPage } from "../components/settings/peer-hosts-setting
 import { AppControlSettings } from "../components/settings/app-control-settings";
 import { SimulatorSettingsPage } from "../components/settings/device-workspace-settings";
 import { ToolApprovalSettings } from "../components/settings/tool-approval-settings";
+import { ApprovalModeSettings } from "../components/settings/approval-mode-settings";
+
+/** Settings → Approvals: the mode first, then what Aiden may repeat without asking. */
+function ApprovalsSettings() {
+  return (
+    <>
+      <ApprovalModeSettings />
+      <ToolApprovalSettings />
+    </>
+  );
+}
 import { LimitsSettings } from "../components/settings/limits-settings";
 import { HooksSettings } from "../components/settings/hooks-settings";
 import {
@@ -117,7 +128,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   hooks: HooksSettings,
   websearch: WebSearchSettings,
   imageGeneration: ImageGenerationSettings,
-  approvals: ToolApprovalSettings,
+  approvals: ApprovalsSettings,
   appControls: AppControlSettings,
   computerUse: ComputerUseSettings,
   bots: BotsSettings,
@@ -194,7 +205,7 @@ const DESCRIPTIONS: Record<SettingsSection, string> = {
   peerHosts: "Pair the other computers you control from here, and manage them.",
   websearch: "Choose how Aiden searches and reads the web.",
   imageGeneration: "Connect image providers and choose the models Aiden uses to make images.",
-  approvals: "Review the exact actions Aiden may repeat without asking, and revoke them.",
+  approvals: "Choose when Aiden asks before acting, and review what it may repeat without asking.",
   appControls: "Ask Aiden how a feature works or to show its settings. Chat controls use the same settings and permissions as the app.",
   computerUse: "Manage Aiden’s access to native apps and your screen.",
   bots: "Choose how every Bot handles steps that need your OK.",

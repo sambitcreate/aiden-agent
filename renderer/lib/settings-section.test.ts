@@ -264,7 +264,7 @@ test("a section this host can't show opens the next tab on its page, then Provid
 
 test("the assistant names pages as people see them, and none this host hides", () => {
   const pages = assistantSettingsPages(APPLE_SILICON);
-  assert.ok(pages.includes("Bots & Approvals (Bots, Tool approvals, Controls in chat)"));
+  assert.ok(pages.includes("Bots & Approvals (Bots, Approvals, Controls in chat)"));
   assert.ok(pages.includes("Connections (Control this device, Control other devices, Telegram)"));
   assert.ok(pages.includes("Appearance (Links)"));
   assert.ok(pages.includes("Memory"));

@@ -13,8 +13,6 @@ import { BotsSettings } from "./bots-settings";
 
 afterEach(cleanup);
 
-const switchName = "Let routines go ahead without asking";
-
 function mount(settings: Partial<AppSettings>, options: { computerUse?: boolean; failSave?: boolean } = {}) {
   let current: Partial<AppSettings> = { ...settings };
   const calls = installBotTestIpc({
@@ -36,32 +34,10 @@ function mount(settings: Partial<AppSettings>, options: { computerUse?: boolean;
   return { saves, current: () => current };
 }
 
-test("routines ask by default, and turning the switch on saves it for every Bot", async () => {
-  const { saves, current } = mount({});
-  const toggle = await screen.findByRole("switch", { name: switchName });
-  await waitFor(() => assert.equal(toggle.getAttribute("aria-checked"), "false"));
-  fireEvent.click(toggle);
-  await waitFor(() => assert.deepEqual(saves(), [{ botRoutinesGoAhead: true }]));
-  await waitFor(() => assert.equal(toggle.getAttribute("aria-checked"), "true"));
-  assert.equal(current().botRoutinesGoAhead, true);
-});
-
-test("a saved choice shows as on and can be turned off", async () => {
-  const { saves } = mount({ botRoutinesGoAhead: true });
-  const toggle = await screen.findByRole("switch", { name: switchName });
-  await waitFor(() => assert.equal(toggle.getAttribute("aria-checked"), "true"));
-  fireEvent.click(toggle);
-  await waitFor(() => assert.deepEqual(saves(), [{ botRoutinesGoAhead: false }]));
-  await waitFor(() => assert.equal(toggle.getAttribute("aria-checked"), "false"));
-});
-
-test("a save that fails puts the switch back", async () => {
-  mount({}, { failSave: true });
-  const toggle = await screen.findByRole("switch", { name: switchName });
-  await waitFor(() => assert.equal(toggle.hasAttribute("disabled"), false));
-  fireEvent.click(toggle);
-  await waitFor(() => assert.equal(toggle.hasAttribute("disabled"), false));
-  assert.equal(toggle.getAttribute("aria-checked"), "false");
+test("the routines switch is no longer on the Bots page, even for someone who had it on", async () => {
+  mount({ botRoutinesGoAhead: true });
+  await screen.findByRole("switch", { name: "Bots can message each other" });
+  assert.equal(screen.queryByRole("switch", { name: "Let routines go ahead without asking" }), null);
 });
 
 test("the page lists what always comes to the person; Computer Use only where this Mac offers it", async () => {

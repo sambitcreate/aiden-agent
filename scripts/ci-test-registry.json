@@ -1272,6 +1272,7 @@
         "main/handlers/bot-rules.test.ts",
         "renderer/main/bots/bot-rules.test.tsx",
         "renderer/components/settings/bots-settings.test.tsx",
+        "renderer/components/settings/approval-mode-settings.test.tsx",
         "renderer/components/settings/hooks-settings.test.tsx",
         "renderer/shared/hooks-settings.test.ts",
         "renderer/shared/bot-rules.test.ts",

@@ -156,8 +156,13 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
   },
   {
     id: "approvals",
-    title: "Tool approvals",
+    title: "Approvals",
     keywords: [
+      "auto",
+      "ask",
+      "never ask",
+      "approval mode",
+      "approval model",
       "always allow",
       "allow for this chat",
       "remembered",
@@ -415,7 +420,7 @@ export function resolveSettingsSection(
 
 /**
  * The section a sidebar row opens for a search, or undefined when the page doesn't match.
- * A tab that matches on its own wins, so "approvals" opens Tool approvals and not the
+ * A tab that matches on its own wins, so "approvals" opens Approvals and not the
  * first tab of Bots & Approvals. The page title counts only after that.
  */
 export function firstMatchingSettingsSection(

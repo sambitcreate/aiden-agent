@@ -181,6 +181,23 @@ export function parseWorkspaceApprovalChange(fields: Readonly<Record<string, unk
   return change.mode !== undefined || change.revokeMac !== undefined ? change : undefined;
 }
 
+/**
+ * The workspace record after a mode or grant change: what the main process
+ * saves, and what the renderer shows at once before the save returns.
+ */
+export function applyWorkspaceApprovalChange<T extends ApprovalWorkspaceFields>(workspace: T, change: WorkspaceApprovalChange): T {
+  const approval = workspaceApprovalPatch(workspace, change);
+  const next = { ...workspace, ...(approval.permission ? { permission: approval.permission } : {}) } as T & {
+    approvalMode?: ApprovalMode;
+    macGrants?: WorkspaceMacGrants;
+  };
+  if (approval.approvalMode) next.approvalMode = approval.approvalMode;
+  else delete next.approvalMode;
+  if (approval.macGrants) next.macGrants = approval.macGrants;
+  else delete next.macGrants;
+  return next;
+}
+
 /** The approval settings a Settings write may change. */
 export interface ApprovalSettingsPatch {
   approvalMode?: ApprovalMode;

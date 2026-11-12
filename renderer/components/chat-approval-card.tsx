@@ -254,8 +254,18 @@ function rememberScopeHint(
         : pending.toolName === "write_file"
           ? `any write to ${file}`
           : "this exact action";
+  if (scope === "workspace") {
+    // A Mac card's grant covers that part of the Mac, not one exact action.
+    const reach =
+      pending.toolName === "computer_use"
+        ? "using your Mac with Computer Use"
+        : pending.toolName === "run_command" || pending.preview?.kind === "command"
+          ? "running commands"
+          : "changing files";
+    return `Won't ask again before ${reach} in this workspace. Remove it in Workspace settings.`;
+  }
   return scope === "always"
-    ? `Won't ask again for ${target} here. Undo in Settings → Bots & Approvals → Tool approvals.`
+    ? `Won't ask again for ${target} here. Undo in Settings → Bots & Approvals → Approvals.`
     : `Won't ask again for ${target} until Aiden quits.`;
 }
 

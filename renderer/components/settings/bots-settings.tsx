@@ -3,14 +3,12 @@ import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { LockKeyhole } from "lucide-react";
 import { Button, Callout, Field, FieldSet, Switch, Text, toast } from "../ui";
-import { InfoHint } from "../ui-info-hint";
 import { BotAllowedList } from "../bots/bot-allowed-list";
 import { useBotAllowed, useBotAllowedRemoval } from "../../main/bots/use-bot-allowed";
 import { useAppCapabilities } from "../../lib/app-capabilities";
 import { settingsApi } from "../../lib/ipc";
 import { queryKeys, useBots, useSettings } from "../../lib/queries";
 import type { AppSettings } from "../../lib/types";
-import { botRoutinesGoAhead } from "../../shared/bot-rules";
 
 function Always() {
   return (
@@ -35,7 +33,6 @@ export function BotsSettings() {
     grouped.set(entry.botId, rows);
   }
   const { computerUse } = useAppCapabilities();
-  const [pending, setPending] = React.useState<boolean | null>(null);
   const [messagingPending, setMessagingPending] = React.useState<boolean | null>(null);
   const changeMessaging = async (next: boolean) => {
     setMessagingPending(next);
@@ -43,44 +40,11 @@ export function BotsSettings() {
     catch { toast.error("Could not change Bot messaging."); }
     finally { setMessagingPending(null); }
   };
-  const goAhead = pending ?? botRoutinesGoAhead(settings.data);
-
-  // Instant: the switch moves at once and rolls back if it can't be saved.
-  const change = async (next: boolean) => {
-    setPending(next);
-    try {
-      const saved = await settingsApi.set({ botRoutinesGoAhead: next });
-      queryClient.setQueryData<AppSettings>(queryKeys.settings, saved);
-    } catch {
-      toast.error("Couldn’t change how routines handle these steps.");
-    } finally {
-      setPending(null);
-    }
-  };
-
   return (
     <>
       <FieldSet title="Other Bots">
         <Field label="Bots can message each other" description="Bots can send each other messages and bring the answer back to their chat.">
           <Switch aria-label="Bots can message each other" checked={messagingPending ?? botMessagingEnabled(settings.data)} disabled={messagingPending !== null || settings.isLoading} onCheckedChange={next => void changeMessaging(next)} />
-        </Field>
-      </FieldSet>
-      <FieldSet title="Routines">
-        <Field
-          label="Go ahead without asking"
-          hint={
-            <InfoHint topic="going ahead without asking">
-              With this off, a routine skips Ask first steps and the Bot says so in its reply. Changes in connected apps wait under Needs you.
-            </InfoHint>
-          }
-          description="When a Bot runs a routine on its own, steps set to Ask first and changes in connected apps go ahead without waiting for your OK. In chats, Bots still ask."
-        >
-          <Switch
-            aria-label="Let routines go ahead without asking"
-            checked={goAhead}
-            disabled={pending !== null || settings.isLoading}
-            onCheckedChange={(next) => void change(next)}
-          />
         </Field>
       </FieldSet>
       <FieldSet title="Allowed without asking">

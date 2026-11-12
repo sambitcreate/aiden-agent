@@ -1183,6 +1183,10 @@ export const workspacesApi = {
       memoryEnabled?: boolean;
       disabledSkills?: string[];
       disabledMcpServerIds?: string[];
+      /** A mode of its own, or `null` to follow Settings → Approvals. */
+      approvalMode?: import("../shared/approval-mode").ApprovalMode | null;
+      /** Remove one "Allowed in this workspace" Mac grant. */
+      revokeMacGrant?: import("../shared/approval-mode").MacGrantClass;
     },
   ) => invoke<Workspace>("workspaces:update", id, patch),
   remove: (id: string) => invoke<void>("workspaces:remove", id),

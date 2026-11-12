@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import { reportApprovalModeChanged } from "./approval-gate/approval-analytics.js";
-import { parseWorkspaceApprovalChange, workspaceApprovalPatch } from "../../renderer/shared/approval-mode.js";
+import { applyWorkspaceApprovalChange, parseWorkspaceApprovalChange } from "../../renderer/shared/approval-mode.js";
 import type { configStore } from "./config-store.js";
 import type { llmClient } from "./llm-client.js";
 import type { scheduleService } from "./schedule-service.js";
@@ -375,7 +375,7 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
         if ("folderPath" in fields) {
           throw new Error("Workspace folders cannot be changed from renderer input.");
         }
-        const next: Workspace = {
+        let next: Workspace = {
           ...existing,
           name:
             typeof fields.name === "string" && fields.name.trim()
@@ -407,12 +407,7 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
           delete next.approvalMode;
           delete next.macGrants;
         } else if (approvalChange) {
-          const approval = workspaceApprovalPatch(next, approvalChange);
-          if (approval.permission) next.permission = approval.permission;
-          if (approval.approvalMode) next.approvalMode = approval.approvalMode;
-          else delete next.approvalMode;
-          if (approval.macGrants) next.macGrants = approval.macGrants;
-          else delete next.macGrants;
+          next = applyWorkspaceApprovalChange(next, approvalChange);
         }
         const reportModeChange = () => reportApprovalModeChanged("workspace", existing.approvalMode, next.approvalMode);
         const authorityChanged =
