@@ -49,24 +49,26 @@ interface SharedApproval {
  * anything else that picks the target, such as a browser tab. Two calls with
  * the same key do the same thing. A value that is not plain JSON has no key.
  */
+/** JSON with object keys sorted, so equal values read the same; throws on a value JSON can't hold. */
+export function canonicalJson(value: unknown): string {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new Error("not JSON");
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) return `[${value.map((item) => (item === undefined ? "null" : canonicalJson(item))).join(",")}]`;
+  if (typeof value !== "object") throw new Error("not JSON");
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, child]) => child !== undefined)
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+    .map(([key, child]) => `${JSON.stringify(key)}:${canonicalJson(child)}`);
+  return `{${entries.join(",")}}`;
+}
+
 export function toolCallApprovalEffect(toolName: string, args: unknown, target?: unknown): string | undefined {
-  const canonical = (value: unknown): string => {
-    if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
-    if (typeof value === "number") {
-      if (!Number.isFinite(value)) throw new Error("not JSON");
-      return JSON.stringify(value);
-    }
-    if (Array.isArray(value)) return `[${value.map((item) => (item === undefined ? "null" : canonical(item))).join(",")}]`;
-    if (typeof value !== "object") throw new Error("not JSON");
-    const entries = Object.entries(value as Record<string, unknown>)
-      .filter(([, child]) => child !== undefined)
-      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-      .map(([key, child]) => `${JSON.stringify(key)}:${canonical(child)}`);
-    return `{${entries.join(",")}}`;
-  };
   try {
     return createHash("sha256")
-      .update(canonical({ toolName, args: args ?? null, target: target ?? null }))
+      .update(canonicalJson({ toolName, args: args ?? null, target: target ?? null }))
       .digest("hex");
   } catch {
     return undefined;

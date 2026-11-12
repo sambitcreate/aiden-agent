@@ -24,7 +24,7 @@ import { effectiveApprovalMode, parseApprovalModel, workspaceApprovalPolicy, typ
 import { currentWorkspaceApproval, legacyAccessOf, workspaceWithMacGrant } from "./approval-gate/run-approval.js";
 import { RunTaint } from "./approval-gate/run-taint.js";
 import { declaredReadOnlyHint } from "./approval-gate/tool-classes.js";
-import { createApprovalJudge, type ApprovalJudge } from "./approval-judge/judge.js";
+import { approvalJudgeAction, createApprovalJudge, type ApprovalJudge } from "./approval-judge/judge.js";
 import { approvalJudgeComplete } from "./approval-judge/model-complete.js";
 import type { SpendingOwner } from "./spending-core.js";
 import { createLocalClassifierModels } from "./pi-local-classifier.js";
@@ -4461,7 +4461,11 @@ export const llmClient = {
                   effect:
                     toolCallApprovalEffect(context.toolCall.name, context.args) ??
                     `${context.toolCall.name}\u0000${context.toolCall.id}`,
-                  action: summarizeToolCall(context.toolCall.name, context.args),
+                  action: approvalJudgeAction(
+                    context.toolCall.name,
+                    context.args,
+                    summarizeToolCall(context.toolCall.name, context.args),
+                  ),
                   request: approvalRequestText,
                 },
                 signal,
