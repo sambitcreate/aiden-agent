@@ -210,3 +210,12 @@ Deviations from the P1 plan:
 - Kill switch: `designModeEnabled` = not `AIDEN_DESIGN_MODE` in 0/false/off/no. Studio-foundation's "flags off" E2E sets `AIDEN_DESIGN_MODE: "0"`; design specs no longer set any env.
 - Analytics: `design_mode_entered {source}` and `design_mode_exited` from `chats:setDesignMode` (renderer passes the source as a 3rd arg; previous state read through the service's `assertCurrent`, so a no-op counts nothing), `design_mode_entered {source: "aiden"}` and `design_mode_declined` from `DesignModeConsent.answer`, `design_comments_sent {count_bucket}` from desktop `chat:start` via `reportDesignCommentsSent` (counts the block's JSON list with `attachedDesignCommentCount`).
 - Onboarding: `designMode` tile in "Build in your workspace" (mint tint, `DesignModeArt` in create-art), hidden by `visibleOnboardingFeatures` when `designMode === false`.
+
+## Watcher and picture follow-up (2026-11-12)
+
+- `besidePage` returns null (nothing beside the page counts as unchanged) for a link whose target is a folder, so an unnamed event near a linked asset folder always reloads the page.
+- `OwnWrite.fileClockOffset` (from the page's mtime/ctime right after the canvas writes it, 0 or less) shifts the neighbour time fence onto the files' clock; `wallNow` is injectable for tests.
+- Each settled write schedules a timer that runs `forgetStaleNotes` at its window's end; `heldNotes(chatId)` reports how many notes are still held.
+- `FrameSnapshotCache.stamp` hands out a global sequence; `set` keeps a picture only when its stamp is newer than the frame's last kept or forgotten one, so the latest-started capture wins.
+- In RTL `waitFor` checks, never strict-assert a DOM element against null: the failure diff of a happy-dom element is slow enough to starve `waitFor`'s timers. Compare `=== null` to a boolean.
+

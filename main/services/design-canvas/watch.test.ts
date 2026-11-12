@@ -237,6 +237,7 @@ function fakeWatcher(
   options: {
     now?: () => number;
     noting?: () => Promise<void>;
+    wallNow?: () => number;
     debounceMs?: number;
     ownWriteWindowMs?: number;
     /** Undefined for the watcher's own default. */
@@ -253,6 +254,7 @@ function fakeWatcher(
     debounceMs: options.debounceMs ?? 5,
     ...(options.now ? { now: options.now } : {}),
     ...(options.noting ? { noting: options.noting } : {}),
+    ...(options.wallNow ? { wallNow: options.wallNow } : {}),
     ...(options.ownWriteWindowMs !== undefined ? { ownWriteWindowMs: options.ownWriteWindowMs } : {}),
     ...(lookback !== undefined ? { neighbourLookbackMs: lookback } : {}),
     watch: (_folder, _options, listener) => {
@@ -380,6 +382,44 @@ test("a stylesheet changed while the canvas notes the files beside its page stil
   assert.deepEqual(updates.map((update) => update.paths), [["design/hero.html"]], "the stylesheet changed after the write began");
 });
 
+test("a stylesheet changed as the canvas notes its page reloads the page when the volume's clock is behind this Mac's", async (t) => {
+  const root = await workspace(t, {
+    "design/hero.html": "<link rel=stylesheet href=hero.css><h1>Ship faster</h1>",
+    "design/hero.css": "h1{}",
+  });
+  let changes = 0;
+  const { instance, updates, emit } = fakeWatcher(t, {
+    // This Mac's clock runs a minute ahead of the one that stamps the
+    // workspace's files, as on a network volume.
+    wallNow: () => Date.now() + 60_000,
+    noting: async () => {
+      if ((changes += 1) === 1) await fsp.writeFile(path.join(root, "design/hero.css"), "h1{color:red}");
+    },
+  });
+  await instance.set("chat-1", root, ["design/hero.html"]);
+  const written = "<link rel=stylesheet href=hero.css><h1>Ship sooner</h1>";
+  const settle = instance.ownWrite("chat-1", "design/hero.html", written);
+  await fsp.writeFile(path.join(root, "design/hero.html"), written);
+  settle(true);
+  emit(null);
+  await eventually(() => updates.length > 0);
+  assert.deepEqual(updates.map((update) => update.paths), [["design/hero.html"]], "the stylesheet changed after the write began, by the volume's clock");
+});
+
+test("a write's note of the files beside its page is let go once its window has passed, with no event to report", async (t) => {
+  const root = await workspace(t, { "design/hero.html": "<h1>Ship faster</h1>", "design/hero.css": "h1{}" });
+  const { instance } = fakeWatcher(t, { ownWriteWindowMs: 30 });
+  await instance.set("chat-1", root, ["design/hero.html"]);
+  const written = "<h1>Ship sooner</h1>";
+  const settle = instance.ownWrite("chat-1", "design/hero.html", written);
+  await fsp.writeFile(path.join(root, "design/hero.html"), written);
+  settle(true);
+  await instance.noted("chat-1", "design/hero.html");
+  assert.equal(instance.heldNotes("chat-1"), 1, "the note is kept for an event inside the window");
+  await eventually(() => instance.heldNotes("chat-1") === 0);
+  assert.equal(instance.heldNotes("chat-1"), 0, "nothing can use the note past the window");
+});
+
 test("an own-write event that arrived inside the window is still put down to the write when the report waits past it", async (t) => {
   const root = await workspace(t, { "design/hero.html": "<h1>Ship faster</h1>", "design/hero.css": "h1{}" });
   let clock = 0;
@@ -434,6 +474,28 @@ test("a stylesheet beside a page that links elsewhere in the workspace reloads t
   emit(null);
   await eventually(() => updates.length > 0);
   assert.deepEqual(updates.map((update) => update.paths), [["design/hero.html"]]);
+});
+
+test("a folder beside a page that links elsewhere in the workspace counts as changed, since a file inside it changes unseen", async (t) => {
+  const root = await workspace(t, {
+    "design/hero.html": "<img src=assets/logo.svg><h1>Ship faster</h1>",
+    "shared/assets/logo.svg": "<svg></svg>",
+  });
+  await fsp.symlink("../shared/assets", path.join(root, "design/assets"));
+  // Older than the times the watcher counts as touched around a write.
+  await sleep(50);
+  const { instance, updates, emit } = fakeWatcher(t);
+  await instance.set("chat-1", root, ["design/hero.html"]);
+  const written = "<img src=assets/logo.svg><h1>Ship sooner</h1>";
+  const settle = instance.ownWrite("chat-1", "design/hero.html", written);
+  await fsp.writeFile(path.join(root, "design/hero.html"), written);
+  settle(true);
+  await instance.noted("chat-1", "design/hero.html");
+  // The logo inside the linked folder changes; neither the link nor the folder it points at does.
+  await fsp.writeFile(path.join(root, "shared/assets/logo.svg"), "<svg><circle r=1></circle></svg>");
+  emit(null);
+  await eventually(() => updates.length > 0);
+  assert.deepEqual(updates.map((update) => update.paths), [["design/hero.html"]], "the page's logo may have changed");
 });
 
 test("a link beside a page whose target is missing counts as changed", async (t) => {
