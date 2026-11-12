@@ -95,7 +95,7 @@ async function fixture(options: {
   questionsAvailable?: boolean;
   skillsAvailable?: boolean;
   agentInterruptAvailable?: boolean;
-  deviceType?: "iphone" | "ipad" | "android" | "mac" | "linux";
+  deviceType?: "iphone" | "ipad" | "android" | "mac" | "linux" | "agent";
   simulators?: AidenRemoteSimulatorRelay;
   /** `true` installs a recording fake; an object installs that feed service. */
   hostFeed?: boolean | NonNullable<Parameters<typeof createAidenRemoteRequestHandler>[0]["hostFeed"]>;
@@ -4167,6 +4167,26 @@ test("manual pairing bootstrap is bounded, origin-rejecting, and does not accept
       body: "{}",
     });
     assert.equal(browser.status, 403);
+  } finally {
+    await app.close();
+  }
+});
+
+test("an outside app's MCP credential is refused by the Remote API like an unknown one", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const capabilities: AidenRemoteCapability[] = ["server:read", "chat:read", "chat:write"];
+  const phone = await fixture({ deviceType: "iphone", capabilities });
+  try {
+    assert.equal((await fetch(`${phone.base}/chats`, { headers })).status, 200);
+  } finally {
+    await phone.close();
+  }
+  const app = await fixture({ deviceType: "agent", capabilities });
+  try {
+    const response = await fetch(`${app.base}/chats`, { headers });
+    assert.equal(response.status, 401);
+    assert.equal((await response.json()).error.code, "authentication_required");
+    assert.equal(app.calls.some((entry) => entry.startsWith("chat-list:")), false);
   } finally {
     await app.close();
   }

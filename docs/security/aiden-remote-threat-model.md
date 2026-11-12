@@ -161,3 +161,54 @@ Before each phase gate:
 - Verify managed-home ownership/`cwd`, no automatic `.git`, task-needed outside-home access, and authoritative prompt ordering without treating the prompt as enforcement.
 - Verify Image Playground unavailable/cancel/PCC disclosure, accepted-image-only upload, Mac-side decode/normalization, asset isolation, and temporary-file cleanup on physical supported and unsupported devices.
 - Run two independent fresh-memory security/architecture reviews and clear all P0/P1 findings.
+
+## 10. Local MCP server for outside apps
+
+Added 2026-11-11. Design and tools: [`docs/aiden-mcp-server.md`](../aiden-mcp-server.md).
+
+```text
+Outside app (Claude Code, Codex, any MCP client) on this computer
+  -> http://127.0.0.1:<port>/mcp (dedicated loopback listener, never the LAN TLS listener)
+  -> Host/Origin check, no CORS, 1 MiB body limit, connection cap
+  -> agent-app bearer token (separate audience from phones and Macs)
+  -> per-tool capability check, schema validation, per-app rate/concurrency limits
+  -> shared Remote chat and stream services (same generation owner and revocation path as a phone)
+```
+
+- **Off by default** and gated by the `mcpServer` host capability. It is a separate switch from Remote Access, with its own port saved in the Remote state file.
+- **Audience separation.** Agent-app records are Remote devices of type `agent`. `/api/aiden/v1` refuses their tokens, `/mcp` refuses phone and Mac tokens, and revoking an app through the MCP host refuses a phone or Mac id.
+- **Capability ceiling.**
+  - An app holds `server:read` and `chat:read` (Read), plus `chat:write` (Supervised), and nothing else.
+  - The ceiling is re-applied whenever the state file is parsed, so no edit can grant `approval:respond`, files, Git, Bots, schedules, settings or pairing.
+  - Apps never answer approvals or questions; the person does, in Aiden on the computer.
+- **Browser and rebinding.** `Host` must be the exact loopback host and port, and any `Origin` other than the same loopback origin is refused. No `Access-Control-*` header is ever sent.
+- **Reach.**
+  - Apps see ordinary chats and offered workspaces only. Bot, feature and assistant chats are not listed, and every chat tool refuses them by id with the same not-found answer as an unknown id, so an app cannot learn they exist. MCP apps are trusted less than paired phones, which can open assistant chats. New chats cannot be started in one-chat folders or the assistant workspace.
+  - An app can wait on and stop only runs it started.
+- **Residual risk.** A Supervised app is delegated the person's own authority in the chosen workspace. In a Full-access workspace its turns run tools without approval. Supervised access and Full-access workspaces are the person's informed choices; neither is containment.
+- **Revocation** goes through `revokeAidenRemoteRuntimeDevice`:
+  - It rejects the token at once, ends open waits and stops the app's runs.
+  - It denies the runs' pending approvals.
+  - Disabling the server closes every connection.
+- **Privacy.**
+  - The app that started a chat is recorded only locally (`aiden-mcp-chat-provenance.json`) and is never projected.
+  - Logs follow section 7 and carry only content-free events.
+  - No analytics events are sent.
+
+Required evidence: `main/services/aiden-mcp-server.test.ts` covers:
+
+- a missing, wrong or revoked token
+- phone and Mac tokens on `/mcp`
+- Host and Origin rebinding
+- the absent CORS headers
+- declared and streamed oversized bodies
+- a Read app's write refusals
+- idempotent starts
+- unanswerable approvals
+- own-run stop
+- revoke ending a wait
+- the rate and concurrency limits
+- Bot chats and hidden workspaces out of reach
+- assistant and feature chats answering every chat tool as an unknown id does
+
+`main/services/aiden-remote-router.test.ts` covers agent tokens on `/api/aiden/v1`. `main/services/aiden-remote-state.test.ts` covers the capability ceiling and the app quota.

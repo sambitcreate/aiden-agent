@@ -175,6 +175,13 @@ export interface AidenRemoteStreamSnapshot {
 interface StreamSubscriber {
   flush(): void;
   close(): void;
+  /** True for a status observer that delivers no journal replay. */
+  observer?: boolean;
+}
+
+function hasReplaySubscriber(stream: { subscribers: Set<StreamSubscriber> }): boolean {
+  for (const subscriber of stream.subscribers) if (!subscriber.observer) return true;
+  return false;
 }
 
 interface StreamRecord {
@@ -1178,7 +1185,7 @@ export class AidenRemoteStreamService {
       .filter((entry) => entry.streamId !== currentStreamId && terminal(entry.state))
       .sort((left, right) => left.updatedAt - right.updatedAt);
     for (const entry of terminalStreams) {
-      if (entry.subscribers.size > 0 || entry.evictAfterDelivery) {
+      if (hasReplaySubscriber(entry) || entry.evictAfterDelivery) {
         // Keep accepted terminal bytes and replay state until delivery settles.
         // A disconnected or timed-out subscriber may not have received it.
         // Defer until successful delivery or normal retention expiry, even if
@@ -1932,6 +1939,37 @@ export class AidenRemoteStreamService {
     }
   }
 
+  /**
+   * Observe one owned stream without reading its journal. `onChange` runs after
+   * every appended or coalesced event; `onClose` runs once when the owning
+   * device is revoked. The returned function detaches the observer. Watching
+   * never defers terminal eviction, because it delivers no replay.
+   */
+  watch(
+    deviceId: string,
+    streamId: string,
+    handlers: { onChange(): void; onClose(): void },
+  ): () => void {
+    const stream = this.requireStream(deviceId, streamId);
+    let attached = true;
+    const subscriber: StreamSubscriber = {
+      observer: true,
+      flush: () => {
+        if (attached) handlers.onChange();
+      },
+      close: () => {
+        if (!attached) return;
+        attached = false;
+        handlers.onClose();
+      },
+    };
+    stream.subscribers.add(subscriber);
+    return () => {
+      attached = false;
+      stream.subscribers.delete(subscriber);
+    };
+  }
+
   openEvents(deviceId: string, streamId: string, after: number, response: ServerResponse): void {
     const stream = this.requireStream(deviceId, streamId);
     const lastSequence = stream.events[stream.events.length - 1]?.sequence ?? 0;
@@ -1982,7 +2020,7 @@ export class AidenRemoteStreamService {
         if (
           finished &&
           stream.evictAfterDelivery &&
-          stream.subscribers.size === 0 &&
+          !hasReplaySubscriber(stream) &&
           this.streams.get(streamId) === stream
         ) {
           stream.owner.invalidate();
