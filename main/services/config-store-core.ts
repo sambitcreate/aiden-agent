@@ -1171,6 +1171,7 @@ export function createConfigStore(
       // append-only migration record that a settings change never rewrites. Do
       // not "fix" this by folding settings back into the portable file.
       const providerIdAliases = (await readPortable()).providerIdAliases;
+      let approvalModeChanged = false;
       const saved = await mutateSettings((config) => {
         // Web Search has its own versioned mutation seam. A generic settings
         // write may preserve an unsupported raw document, but it must not use
@@ -1194,6 +1195,7 @@ export function createConfigStore(
         if (Object.prototype.hasOwnProperty.call(patch, "webFetch")) {
           throw new Error("Web page settings change only through their own settings call.");
         }
+        approvalModeChanged = patch.approvalMode !== undefined && patch.approvalMode !== config.settings.approvalMode;
         const lastProviderId =
           typeof patch.lastProviderId === "string"
             ? (resolveProviderAlias(providerIdAliases, patch.lastProviderId) ??
@@ -1209,6 +1211,9 @@ export function createConfigStore(
         };
         return structuredClone(config.settings);
       }, isCurrent);
+      // Every workspace that follows the global mode now reads differently
+      // (its Remote access tier among them), so workspace observers refresh.
+      if (approvalModeChanged) notifyListeners(workspaceListeners);
       return runtimeSettingsFrom(saved);
     },
 

@@ -3565,6 +3565,18 @@ test("approval mode: onboarding finished on an earlier release counts as in use"
   assert.equal(settings.approvalMode, "ask");
 });
 
+test("approval mode: changing the global mode tells workspace observers, so phones see the new access tier", async (t) => {
+  const h = await harness(t);
+  let notified = 0;
+  h.store.onWorkspacesChanged(() => { notified += 1; });
+  await h.store.setSettings({ memoryEnabled: false });
+  assert.equal(notified, 0, "an unrelated setting changes no workspace");
+  await h.store.setSettings({ approvalMode: "never" });
+  assert.equal(notified, 1);
+  await h.store.setSettings({ approvalMode: "never" });
+  assert.equal(notified, 1, "saving the same mode again changes nothing");
+});
+
 test("approval mode: an install whose settings file is unreadable runs in Ask, never Auto", async (t) => {
   const h = await harness(t, {
     providers: [],
