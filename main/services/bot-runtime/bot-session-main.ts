@@ -470,7 +470,7 @@ const execution: BotExecutionPort = {
   getClaim: (botId, id, requestId) => botRoutineModels.getClaim(botId, id, requestId),
   selectFallback: (botId, id, reason) => botRoutineModels.selectFallback(botId, id, reason),
   recordSubmission: (botId, id, submissionId) => botRoutineModels.recordSubmission(botId, id, submissionId),
-  releaseUnsubmittedClaim: (botId, id, requestId) => botRoutineModels.releaseUnsubmittedClaim(botId, id, requestId),
+  releaseUnsubmittedClaim: (botId, requestId) => botRoutineModels.releaseUnsubmittedClaim(botId, requestId),
   async hasUnknown(_botId, claim) { await reconcileBotPendingKnownCost(claim); return Boolean(await spending.pendingDispatch(botExecutionSpendingOwner(claim))); },
   async unknownDispatch(_botId, claim) { await reconcileBotPendingKnownCost(claim); return (await spending.pendingDispatch(botExecutionSpendingOwner(claim)))?.dispatchId; },
   unknownCostReceipt: async (botId, claim, submissionId, scopeId) => {await reconcileBotPendingKnownCost(claim);return botExecutionUnknownCostReceipt(spending, botId, claim, submissionId, scopeId, botRoutineModels);},

@@ -874,9 +874,8 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         // so a phone's retry is not answered with a saved server failure. A
         // plain message also drops its claim, so that retry binds the Bot's
         // current model instead of the one that was refused.
-        let claimed: BotExecutionClaim | undefined;
         const admit = async () => {
-          const execution = claimed = await deps.execution?.claim(botId, { requestId: input.requestId, ...(routineOrigin ? { routineOrigin } : {}), ...(input.peerOrigin ? { peerOrigin: input.peerOrigin } : {}), ...(input.routineTiming ?? {}), ...(input.retryOf ? { retryOf: input.retryOf } : {}), ...(botConnectorInventoryServer() ? { connectorServerId: botConnectorInventoryServer() } : {}), ...(botConnectorExecutionRestriction() ? { connectorRestriction: botConnectorExecutionRestriction() } : {}) });
+          const execution = await deps.execution?.claim(botId, { requestId: input.requestId, ...(routineOrigin ? { routineOrigin } : {}), ...(input.peerOrigin ? { peerOrigin: input.peerOrigin } : {}), ...(input.routineTiming ?? {}), ...(input.retryOf ? { retryOf: input.retryOf } : {}), ...(botConnectorInventoryServer() ? { connectorServerId: botConnectorInventoryServer() } : {}), ...(botConnectorExecutionRestriction() ? { connectorRestriction: botConnectorExecutionRestriction() } : {}) });
           const model = execution && deps.execution
             ? await withBotExecutionAdmission(botId, execution, deps.execution, async () => {
               await registry.refresh();
@@ -887,8 +886,10 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
           return { execution, model };
         };
         const { execution, model } = await admit().catch(async (error: unknown) => {
-          // A claim that cannot be dropped stays as it was; the refusal stands.
-          if (claimed && !routineOrigin && !peer && !input.retryOf) await deps.execution?.releaseUnsubmittedClaim?.(botId, claimed.id, claimed.requestId).catch(() => undefined);
+          // Released by request, so a claim saved before claim() itself failed
+          // goes too. If the release fails the refusal still stands: the stale
+          // claim is refused again on retry, and that retry releases it again.
+          if (deps.execution && !routineOrigin && !peer && !input.retryOf) await deps.execution.releaseUnsubmittedClaim?.(botId, input.requestId).catch(() => undefined);
           if (error instanceof BotSessionError) throw error;
           throw new BotSessionError("model_error", error instanceof Error && error.message.length > 0 ? error.message : defaultMessage("model_error"), authorityOf(error));
         });

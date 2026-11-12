@@ -382,13 +382,16 @@ export function createBotRoutineModelService(options: BotRoutineModelServiceOpti
     /**
      * A person's or Bot's message refused before it was submitted holds no work
      * yet, so its claim is dropped and a retry of the same request binds the
-     * Bot's current model. Routine, peer and started claims are never dropped.
+     * Bot's current model. It is found by request, so a claim whose save
+     * succeeded but whose reply was lost is dropped too. Routine, peer and
+     * started claims are never dropped.
      */
-    async releaseUnsubmittedClaim(botId: string, id: string, requestId: string) {
+    async releaseUnsubmittedClaim(botId: string, requestId: string) {
       await serial("store", async () => {
-        const state = await load(), index = state.claims.findIndex((row) => row.botId === botId && row.id === id && row.requestId === requestId), claim = state.claims[index];
+        const state = await load(), identity = await anchors(botId);
+        const index = state.claims.findIndex((row) => row.botId === botId && row.requestId === requestId && row.botIncarnation === identity.botIncarnation), claim = state.claims[index];
         if (!claim || claim.startedAt !== undefined || claim.submissionId !== undefined || claim.routineId !== undefined || claim.peer || claim.peerRoot || claim.root.botId !== botId || claim.root.requestId !== requestId) return;
-        if (state.costApprovals.some((row) => row.facts.ownerClaimId === id || row.facts.sourceClaimId === id) || state.responseEvidence.some((row) => row.facts.claimId === id)) return;
+        if (state.costApprovals.some((row) => row.facts.ownerClaimId === claim.id || row.facts.sourceClaimId === claim.id) || state.responseEvidence.some((row) => row.facts.claimId === claim.id)) return;
         state.claims.splice(index, 1); await saveState(state, async () => {});
       });
     },

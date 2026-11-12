@@ -84,8 +84,9 @@ test("an inherited choice takes the lowest thinking level the Bot's model suppor
 test("a message refused before submission drops its claim, so the same request binds the repaired default; routine and submitted claims stay", async t => {
   const f = await fixture(t);
   f.defaultNeedsThinking(); f.failMetadata(true);
+  let loseClaimReply = false;
   const execution: BotExecutionPort = {
-    claim: (botId, input) => f.service.claim(botId, input), getClaim: (...args) => f.service.getClaim(...args), recordSubmission: (...args) => f.service.recordSubmission(...args), selectFallback: (...args) => f.service.selectFallback(...args), releaseUnsubmittedClaim: (...args) => f.service.releaseUnsubmittedClaim(...args),
+    claim: async (botId, input) => { const saved = await f.service.claim(botId, input); if (loseClaimReply) throw new Error("The claim was saved but its reply was lost."); return saved; }, getClaim: (...args) => f.service.getClaim(...args), recordSubmission: (...args) => f.service.recordSubmission(...args), selectFallback: (...args) => f.service.selectFallback(...args), releaseUnsubmittedClaim: (...args) => f.service.releaseUnsubmittedClaim(...args),
     async resolve(_botId, claim) {
       const model = f.models.getModel("proof", claim.primary.binding.sourceModelId)!;
       if (claim.primary.thinkingLevel === "off") throw new Error("This model cannot turn thinking off.");
@@ -100,13 +101,19 @@ test("a message refused before submission drops its claim, so the same request b
   assert.equal(sent.deduped, false);
   assert.equal((await f.service.claimByRequest("bot:one", "phone-send"))?.primary.thinkingLevel, "minimal");
 
+  loseClaimReply = true;
+  await assert.rejects(runtime.send("bot:one", { requestId: "lost-reply", text: "again" }), { name: "BotSessionError", reason: "model_error" });
+  assert.equal(await f.service.claimByRequest("bot:one", "lost-reply"), undefined, "a claim saved before its reply was lost is released too");
+  loseClaimReply = false; f.faux.setResponses([fauxAssistantMessage("again back")]);
+  assert.equal((await runtime.send("bot:one", { requestId: "lost-reply", text: "again" })).deduped, false);
+
   const origin = { version: 1 as const, botId: "bot:one", routineId: "routine:one", runId: "event-run", kind: "event" as const };
   const routine = await f.service.claim("bot:one", { requestId: "event-run", routineOrigin: origin });
-  await f.service.releaseUnsubmittedClaim("bot:one", routine.id, routine.requestId);
+  await f.service.releaseUnsubmittedClaim("bot:one", routine.requestId);
   assert.deepEqual(await f.service.claimByRequest("bot:one", "event-run"), routine);
   const submitted = await f.service.claim("bot:one", { requestId: "submitted-turn" });
   await f.service.recordSubmission("bot:one", submitted.id, "7");
-  await f.service.releaseUnsubmittedClaim("bot:one", submitted.id, submitted.requestId);
+  await f.service.releaseUnsubmittedClaim("bot:one", submitted.requestId);
   assert.equal((await f.service.claimByRequest("bot:one", "submitted-turn"))?.submissionId, "7");
 });
 test("explicit routine grant admits its model while Custom default stays unavailable and unchanged; forged/cross-owner/recreated grants fail", async (t) => {
