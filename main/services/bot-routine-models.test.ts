@@ -28,7 +28,7 @@ async function fixture(t: test.TestContext) {
   const open = async () => {
     const store = createBotCapabilityStore({ root: () => root, checkpoint: createBotCapabilityStateCheckpoint({ root: () => root, keyStore: createBotCapabilityOpaqueKeyStore({ root: () => root }), anchor: { load: async () => anchor, store: async (value, expected) => { assert.equal(anchor, expected); anchor = value; } }, bootstrapMarker: { load: async () => marker, store: async (value, expected) => { assert.deepEqual(marker, expected); marker = value; } }, inspectInitialBootstrap: async () => "clean" as const }) }); await store.initialize(); return store;
   };
-  const store = await open(); let quiet = false, routinePresent = true, connection = "one", defaultAvailable = true, botIncarnation = "bot-one", routineIncarnation = "routine-one", defaultCalls = 0, now = 1_000, failAfterPublish = false;
+  const store = await open(); let quiet = false, routinePresent = true, connection = "one", defaultAvailable = true, botIncarnation = "bot-one", routineIncarnation = "routine-one", defaultCalls = 0, now = 1_000, failAfterPublish = false, defaultNeedsThinking = false;
   let heldPersistence: { stage: "read" | "write"; entered(): void; released: Promise<void> } | undefined;
   const pausePersistence = async (stage: "read" | "write") => { const held = heldPersistence; if (held?.stage !== stage) return; heldPersistence = undefined; held.entered(); await held.released; };
   const holdNextPersistence = (stage: "read" | "write") => {
@@ -42,9 +42,9 @@ async function fixture(t: test.TestContext) {
   const custom = { providerId: provider.id, modelId: d.id, fileScopeIds: [], connectionIds: [], skillIds: [], otherCapabilityIds: [], shellEnabled: false };
   await store.acknowledgeNotice("desktop", { version: "bot-full-access-v1", decision: "customize_first", confirmedForeground: true });
   await store.createBotPolicy({ botId: "bot:one", catalog: initial.catalog, access: { accessMode: "custom", catalogRevision: initial.catalog.revision, custom }, binding: bindBotCustomSelection({ selection: custom, catalogRevision: initial.catalog.revision, snapshot: initial }) });
-  const service = createBotRoutineModelService({ persistence: { read: async () => { await pausePersistence("read"); return store.getRoutineModelsState(); }, write: async (...args) => { await pausePersistence("write"); await store.saveRoutineModelsState(...args); if (failAfterPublish) { failAfterPublish = false; throw new Error("lost response after protected publication"); } } }, identity: async (botId, routineId) => { if (!["bot:one", "bot:two", "bot:three"].includes(botId) || routineId && (!routinePresent || routineId !== "routine:one")) throw new Error("Unknown owner"); return { botIncarnation: botId === "bot:one" ? botIncarnation : botId === "bot:two" ? "bot-two" : "bot-three", ...(routineId ? { routineIncarnation } : {}) }; }, snapshot: async () => snapshot(), metadata: async (_provider, id) => models.getModel("proof", id)!, deliveryQuiet: async () => quiet, defaultChoice: async () => { defaultCalls++; if (!defaultAvailable) throw new Error("default unavailable"); return { binding: bindBotProviderModel({ providerId: provider.id, modelId: d.id, catalogRevision: snapshot().catalog.revision, snapshot: snapshot() }), thinkingLevel: "off" }; }, now: () => now });
+  const service = createBotRoutineModelService({ persistence: { read: async () => { await pausePersistence("read"); return store.getRoutineModelsState(); }, write: async (...args) => { await pausePersistence("write"); await store.saveRoutineModelsState(...args); if (failAfterPublish) { failAfterPublish = false; throw new Error("lost response after protected publication"); } } }, identity: async (botId, routineId) => { if (!["bot:one", "bot:two", "bot:three"].includes(botId) || routineId && (!routinePresent || routineId !== "routine:one")) throw new Error("Unknown owner"); return { botIncarnation: botId === "bot:one" ? botIncarnation : botId === "bot:two" ? "bot-two" : "bot-three", ...(routineId ? { routineIncarnation } : {}) }; }, snapshot: async () => snapshot(), metadata: async (_provider, id) => { const model = models.getModel("proof", id)!; return id === "D" && defaultNeedsThinking ? { ...model, reasoning: true, thinkingLevelMap: { off: null } } : model; }, deliveryQuiet: async () => quiet, defaultChoice: async () => { defaultCalls++; if (!defaultAvailable) throw new Error("default unavailable"); return { binding: bindBotProviderModel({ providerId: provider.id, modelId: d.id, catalogRevision: snapshot().catalog.revision, snapshot: snapshot() }), thinkingLevel: "off" }; }, now: () => now });
   const saveA = async () => service.save({ botId: "bot:one", routineId: "routine:one", mutationId: randomUUID(), expectedRevision: (await service.read("bot:one", "routine:one")).revision, catalogRevision: (await service.catalog("bot:one", "routine:one")).revision, selection: { mode: "selected", primary: { providerId: provider.id, modelId: a.id, thinkingLevel: "high" } } }, lifetime());
-  return { root, store, open, service, snapshot, saveA, provider, a, d, models, faux, holdNextPersistence, get defaultCalls() { return defaultCalls; }, setQuiet(value:boolean) {quiet=value;}, unavailableDefault() { defaultAvailable = false; }, rotate() { connection = "two"; }, recreate() { routineIncarnation = "routine-two"; }, removeRoutine() { routinePresent = false; }, recreateBot() { botIncarnation = "bot-two"; }, tick() { now++; }, loseResponse() { failAfterPublish = true; } };
+  return { root, store, open, service, snapshot, saveA, provider, a, d, models, faux, holdNextPersistence, get defaultCalls() { return defaultCalls; }, setQuiet(value:boolean) {quiet=value;}, unavailableDefault() { defaultAvailable = false; }, defaultNeedsThinking() { defaultNeedsThinking = true; }, rotate() { connection = "two"; }, recreate() { routineIncarnation = "routine-two"; }, removeRoutine() { routinePresent = false; }, recreateBot() { botIncarnation = "bot-two"; }, tick() { now++; }, loseResponse() { failAfterPublish = true; } };
 }
 test("a prepared choice refuses model, thinking and fallback drift while credential repair and existing ownership retain their routes", async t => {
   const f = await fixture(t);
@@ -70,6 +70,17 @@ test("a prepared choice refuses model, thinking and fallback drift while credent
   }
 });
 
+test("an inherited choice takes the lowest thinking level the Bot's model supports when it cannot think off", async t => {
+  const f = await fixture(t);
+  f.defaultNeedsThinking();
+  const chat = await f.service.claim("bot:one", { requestId: "chat-turn" });
+  assert.equal(chat.primary.binding.sourceModelId, "D");
+  assert.equal(chat.primary.thinkingLevel, "minimal");
+  const origin = { version: 1 as const, botId: "bot:one", routineId: "routine:one", runId: "event-run", kind: "event" as const };
+  const prepared = await f.service.prepareRoutineClaim("bot:one", "routine:one");
+  const routine = await f.service.claim("bot:one", { requestId: "event-run", routineOrigin: origin, expectedChoiceHash: prepared });
+  assert.equal(routine.primary.thinkingLevel, "minimal");
+});
 test("explicit routine grant admits its model while Custom default stays unavailable and unchanged; forged/cross-owner/recreated grants fail", async (t) => {
   const f = await fixture(t); assert.equal((await f.saveA()).ok, true); f.unavailableDefault();
   const claim = await f.service.claim("bot:one", { requestId: "routine:one:fire", routineOrigin: { version: 1, botId: "bot:one", routineId: "routine:one", runId: "routine:one:fire", kind: "manual" } });

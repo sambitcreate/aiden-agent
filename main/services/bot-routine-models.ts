@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { getSupportedThinkingLevels, type Api, type Model } from "@earendil-works/pi-ai";
+import { clampThinkingLevel, getSupportedThinkingLevels, type Api, type Model } from "@earendil-works/pi-ai";
 import { BOT_ROUTINE_THINKING_LEVELS, parseBotRoutineModelId, parseBotRoutineModelSave, parseBotRoutineModelSettings, type BotRoutineModelCatalog, type BotRoutineModelChoice, type BotRoutineModelResult, type BotRoutineModelRun, type BotRoutineModelSave, type BotRoutineModelSettings, type BotRoutineThinkingLevel } from "../../renderer/shared/bot-routine-models.js";
 import { assertBoundBotProviderModelCurrent, bindBotProviderModel, parseBoundBotProviderModel, type BoundBotProviderModel } from "./bot-capability-bindings.js";
 import type { BotCapabilityCatalogSnapshot } from "./bot-capability-catalog-core.js";
@@ -154,6 +154,18 @@ export function createBotRoutineModelService(options: BotRoutineModelServiceOpti
     if (!executableLevels(model).includes(choice.thinkingLevel)) throw new BotRoutineModelSelectionError("This model does not support the selected thinking level.");
     return { binding, thinkingLevel: choice.thinkingLevel };
   }
+  /**
+   * The Bot's own model has no thinking setting of its own, so an inherited
+   * choice takes the nearest level that model supports rather than one it
+   * would refuse. Unreadable metadata leaves the choice for the run to refuse.
+   */
+  async function inheritedChoice(botId: string): Promise<BotExecutionModelChoice> {
+    const choice = await options.defaultChoice(botId);
+    let model: Model<Api>;
+    try { model = await options.metadata(choice.binding.sourceProviderId, choice.binding.sourceModelId); } catch { return choice; }
+    const thinkingLevel = clampThinkingLevel(model, choice.thinkingLevel);
+    return thinkingLevel === choice.thinkingLevel || !executableLevels(model).includes(thinkingLevel) ? choice : { ...choice, thinkingLevel };
+  }
   async function read(botId: string, routineId: string): Promise<BotRoutineModelSettings> { return serial("store", async () => publicConfig(currentConfig(await load(), botId, routineId, await anchors(botId, routineId)))); }
   async function catalog(botId: string, routineId: string): Promise<BotRoutineModelCatalog> {
     await anchors(botId, routineId); const state = await load(), config = currentConfig(state, botId, routineId, await anchors(botId, routineId));
@@ -203,7 +215,7 @@ export function createBotRoutineModelService(options: BotRoutineModelServiceOpti
   async function prepareRoutineClaim(botId: string, routineId: string): Promise<string> {
     return serial("store", async () => {
       const state = await load(), identity = await anchors(botId, routineId), config = currentConfig(state, botId, routineId, identity);
-      const primary = config.selection.mode === "selected" ? config.primary! : await options.defaultChoice(botId);
+      const primary = config.selection.mode === "selected" ? config.primary! : await inheritedChoice(botId);
       const vision = await options.companionChoice?.(botId), fallback = config.fallback;
       return preparedChoiceHash(identity, primary, vision, fallback);
     });
@@ -228,7 +240,7 @@ export function createBotRoutineModelService(options: BotRoutineModelServiceOpti
       const config = input.routineOrigin ? currentConfig(state, botId, input.routineOrigin.routineId, identity) : undefined;
       const original = input.retryOf ? state.claims.find((row) => row.botId === botId && row.requestId === input.retryOf && row.routineId === input.routineOrigin?.routineId && row.botIncarnation === identity.botIncarnation && row.routineIncarnation === identity.routineIncarnation) : undefined;
       if (input.retryOf && (!original || input.routineOrigin?.kind !== "retry")) throw new Error("The retry has no original accepted model binding.");
-      const primary = resumed ? resumed.actual === "fallback" ? resumed.fallback! : resumed.primary : original?.primary ?? (config?.selection.mode === "selected" ? config.primary! : await options.defaultChoice(botId));
+      const primary = resumed ? resumed.actual === "fallback" ? resumed.fallback! : resumed.primary : original?.primary ?? (config?.selection.mode === "selected" ? config.primary! : await inheritedChoice(botId));
       const vision = resumed ? resumed.vision : original ? original.vision : await options.companionChoice?.(botId);
       const fallback = resumed ? undefined : original ? original.fallback : config?.fallback;
       const deliveryQuiet = resumed ? resumed.deliveryQuiet : original ? original.deliveryQuiet : input.routineOrigin && await options.deliveryQuiet?.(botId,input.routineOrigin.routineId) ? true : undefined;

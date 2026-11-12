@@ -63,7 +63,7 @@ import type { BotRuntimeAuthorityAdmission } from "../bot-runtime-authority.js";
 import { admitWithBotConnectorInventoryScope, botConnectorInventoryServer } from "../bot-connector-inventory-scope.js";
 import { botExecutionScope, createBotBackgroundExecutionModels, withoutBotExecutionScope, type BotExecutionPort, type BotExecutionRuntime } from "./bot-execution.js";
 import { botRoutineModels } from "../bot-routine-models-main.js";
-import { botRoutineModelThinkingLevels, inspectBotRoutineModelGrant, type BotExecutionClaim } from "../bot-routine-models.js";
+import { BotRoutineModelUnavailableError, botRoutineModelThinkingLevels, inspectBotRoutineModelGrant, type BotExecutionClaim } from "../bot-routine-models.js";
 import { assertBotExecutionConnectorSource } from "./bot-execution-source.js";
 import { randomUUID } from "node:crypto";
 import { createBotDispatchCoordinator } from "./bot-dispatch-coordinator.js";
@@ -530,7 +530,7 @@ const execution: BotExecutionPort = {
       await sourceCurrent();
       const selected = claim.actual === "fallback" ? claim.fallback! : claim.primary;
       const runtime = await resolveBotModelRuntime(proof.binding.sourceProviderId, proof.binding.sourceModelId, boundSignal, botId);
-      if (!botRoutineModelThinkingLevels(runtime.model).includes(selected.thinkingLevel)) throw new Error("This routine's model no longer supports its selected thinking level.");
+      if (!botRoutineModelThinkingLevels(runtime.model).includes(selected.thinkingLevel)) throw new BotRoutineModelUnavailableError("model_unavailable", "The selected model no longer supports its thinking level. Review the Model settings.");
       return await buildBotExecutionRuntime(botId, claim, runtime, boundSignal,
         async () => { boundSignal.throwIfAborted(); await peerLease?.revalidate(); await proof.assertCurrent(); await sourceCurrent(); await admission.revalidateBeforeEffect(); boundSignal.throwIfAborted(); },
         () => {admission.release();peerLease?.release();}, selected.thinkingLevel);

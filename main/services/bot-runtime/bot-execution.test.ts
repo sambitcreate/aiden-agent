@@ -929,3 +929,18 @@ test("Bot-message input keeps host provenance, deadline and approval ownership u
   assert.ok(entries.filter(entry => entry.model?.[0]?.role === "user" || entry.kind === "pi.assistant").every(entry => owners.get(entry.id) === "unattended"));
   assert.deepEqual(env.calls.map(call => call.model), ["D", "D"]);
 });
+
+test("a send whose model cannot be admitted is refused before anything is submitted, and the same request runs once it can", async (t) => {
+  const folder = await mkdtemp(path.join(os.tmpdir(), "aiden-execution-admission-refusal-")); t.after(() => rm(folder, { recursive: true, force: true }));
+  const env = await environment(path.join(folder, "unused.sqlite")); await env.harness.close(ctx);
+  const base = env.port.resolve; let admits = false;
+  env.port.resolve = async (...args) => { if (!admits) throw new Error("This model does not support thinking off."); return base(...args); };
+  const service = await createBotSessionService({ profileDir: folder, models: env.models, execution: env.port, extension: recordingDeps(), resolveModel: async () => ({ provider: "proof", modelId: "D" }), knownBotIds: async () => new Set(["bot:one"]), settings: { compaction: { enabled: false } } }); t.after(() => service.shutdown());
+  await assert.rejects(service.send("bot:one", { requestId: "D", text: "hello" }), { name: "BotSessionError", reason: "model_error", message: "This model does not support thinking off." });
+  assert.equal(await service.submissionForRequest("bot:one", "D"), undefined);
+  assert.equal(env.calls.length, 0);
+  admits = true; env.faux.setResponses([fauxAssistantMessage("hello back")]);
+  const sent = await service.send("bot:one", { requestId: "D", text: "hello" });
+  assert.equal(sent.deduped, false);
+  await waitFor(async () => env.calls.length === 1);
+});

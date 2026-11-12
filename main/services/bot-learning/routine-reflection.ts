@@ -94,7 +94,6 @@ export interface RoutineReflectionDependencies {
   admit(botId: string): Promise<BotMemoryAdmission>;
   appendEntry(botId: string, kind: string, data: Record<string, unknown>): Promise<void>;
   state: { lastReflected(taskId: string): Promise<number | undefined>; set(taskId: string, at: number): Promise<void> };
-  timeoutMs?: number;
 }
 
 /** Settled runs that say something about the routine: successes and failures. */
@@ -131,7 +130,9 @@ export function createRoutineReflection(deps: RoutineReflectionDependencies) {
             content: reflectionMessage({ routineName: task.name, prompt: task.prompt ?? "", notes: await deps.notes(botId, task.id), lessons, runs: views }),
             timestamp: Date.now(),
           }];
-          const signal = AbortSignal.any([AbortSignal.timeout(deps.timeoutMs ?? 60_000), admission.lease.signal]);
+          // No timer on the request: one cut off after it was sent may still be
+          // billed, and its unknown cost would block the Bot's next request.
+          const signal = admission.lease.signal;
           await admission.lease.revalidate();
           let answer: AssistantMessage;
           try {

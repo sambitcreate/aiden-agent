@@ -251,7 +251,9 @@ export async function maybeTidyMemory(botId: string): Promise<"not_needed" | "to
     }
     try {
       const target = targets[0]!;
-      const operations = await proposeMemoryTidy(admission, view, target, AbortSignal.any([AbortSignal.timeout(60_000), admission.lease.signal]));
+      // No timer on the request: one cut off after it was sent may still be
+      // billed, and its unknown cost would block the Bot's next request.
+      const operations = await proposeMemoryTidy(admission, view, target, admission.lease.signal);
       await reserved.settle(undefined);
       if (!operations) return "unchanged";
       await admission.lease.revalidate();
