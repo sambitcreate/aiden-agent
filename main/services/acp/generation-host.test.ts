@@ -3,7 +3,9 @@ import test from "node:test";
 import { Type } from "@earendil-works/pi-ai";
 
 import type { GenerationTimeline } from "../../../renderer/shared/generation-timeline.js";
+import type { ProducedFile } from "../../../renderer/shared/produced-file.js";
 import { GenerationTimelineProjector } from "../generation-timeline.js";
+import { writtenPagePath } from "../design-canvas/written-pages.js";
 import type { ToolApprovalOutcome } from "../tool-approval.js";
 import { parseAskUserQuestionPrompt } from "../../../renderer/shared/ask-user-question.js";
 import { canHostAcpHarness, createAcpGenerationHost, questionFor, type AcpGenerationHostOptions } from "./generation-host.js";
@@ -169,4 +171,25 @@ test("only attended desktop chats may host an agent harness", () => {
   ]) {
     assert.equal(canHostAcpHarness({ ...attended, ...blocked }), false, JSON.stringify(blocked));
   }
+});
+
+test("confined agent file writes report ProducedFile provenance for live design pages and stop when access ends", () => {
+  const seen: ProducedFile[] = [];
+  let currentPermission: "ask" | "none" = "ask";
+  const { host } = setup({
+    permission: () => currentPermission,
+    onFileWrite: (file) => seen.push(file),
+  });
+  host.onFileWrite?.("/work/project/design/home.html", undefined, "<h1>Home</h1>");
+  host.onFileWrite?.("/work/project/design/home.html", "<h1>Home</h1>", "<h1>Updated</h1>");
+  host.onFileWrite?.("/outside/secret.html", undefined, "<h1>Out</h1>");
+  currentPermission = "none";
+  host.onFileWrite?.("/work/project/design/blocked.html", undefined, "<h1>No</h1>");
+
+  assert.deepEqual(seen, [
+    { relativePath: "design/home.html", operation: "written", bytes: 13 },
+    { relativePath: "design/home.html", operation: "edited", bytes: 16 },
+  ]);
+  assert.equal(writtenPagePath("write_file", { producedFile: seen[0] }), "design/home.html");
+  assert.equal(writtenPagePath("edit_file", { producedFile: seen[1] }), "design/home.html");
 });

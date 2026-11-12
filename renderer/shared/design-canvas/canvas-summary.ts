@@ -12,8 +12,13 @@ import { activeDesignPage, isDesignContainer, type DesignCanvas, type DesignFram
  */
 export const DESIGN_REFERENCE_VIEW = { w: 1200, h: 800 } as const;
 
-/** At most this many frames are listed one by one; the rest are counted. */
-export const CANVAS_READ_FRAME_LIMIT = 60;
+/**
+ * At most this many frames are listed one by one, those in view first and
+ * then those outside it; the rest are counted. A page holds at most 400.
+ */
+export const CANVAS_READ_FRAME_LIMIT = 200;
+/** A note's or text item's words are cut to this many characters when it is outside the view. */
+const OUTSIDE_TEXT_CHARS = 120;
 /** At most this many comments are listed, newest first. */
 export const CANVAS_READ_COMMENT_LIMIT = 40;
 
@@ -43,6 +48,12 @@ export type CanvasFrameSummary = {
   tweaks?: Record<string, string>;
   /** Hidden from the canvas by the person (still on the page). */
   hidden?: true;
+  /** Locked: it cannot be moved, resized or removed until someone unlocks it. */
+  locked?: true;
+  guide?: DesignFrame["guide"];
+  radius?: number;
+  paper?: DesignFrame["paper"];
+  printMode?: DesignFrame["printMode"];
   openComments?: number;
 };
 
@@ -60,8 +71,12 @@ export type CanvasReadAnswer = {
   inView: CanvasFrameSummary[];
   /** Frames outside the view, by group (`"ungrouped"` for the rest). */
   outsideView: { groupId: string; title: string; frames: number }[];
-  /** Listed frames past `CANVAS_READ_FRAME_LIMIT`, left out. */
+  /** The frames outside the view one by one, within what is left of `CANVAS_READ_FRAME_LIMIT`. */
+  outsideFrames: CanvasFrameSummary[];
+  /** Frames in view past `CANVAS_READ_FRAME_LIMIT`, left out. */
   omitted: number;
+  /** Frames outside the view left out of `outsideFrames`. */
+  outsideOmitted: number;
   /** The page's open and sent comments, newest first; present when there are any. */
   comments?: Record<string, unknown>[];
 };
@@ -116,6 +131,11 @@ export function summarizeFrame(frame: DesignFrame, openComments = 0): CanvasFram
     ...(frame.dark ? { dark: true as const } : {}),
     ...(frame.tweaks ? { tweaks: { ...frame.tweaks } } : {}),
     ...(frame.hidden ? { hidden: true as const } : {}),
+    ...(frame.locked ? { locked: true as const } : {}),
+    ...(frame.guide ? { guide: frame.guide } : {}),
+    ...(frame.radius !== undefined ? { radius: frame.radius } : {}),
+    ...(frame.paper ? { paper: frame.paper } : {}),
+    ...(frame.printMode ? { printMode: frame.printMode } : {}),
     ...(openComments > 0 ? { openComments } : {}),
   };
 }
@@ -126,7 +146,8 @@ function endSummary(end: NonNullable<DesignFrame["ends"]>[number]): { x: number;
 
 /**
  * One page of the canvas (the page on screen by default), as `canvas_read`
- * answers: what the stored view shows in detail and the rest in counts.
+ * answers: what the stored view shows in detail, then every frame outside
+ * it (so Aiden can move, group or focus them) and counts by group.
  */
 export function describeCanvas(
   doc: DesignCanvas,
@@ -137,6 +158,9 @@ export function describeCanvas(
   const frames = doc.frames.filter((frame) => frame.pageId === page.id);
   const comments = openCommentCounts(doc);
   const visible = frames.filter((frame) => overlaps(frame, view));
+  const elsewhere = frames.filter((frame) => !overlaps(frame, view));
+  const listedInView = visible.slice(0, CANVAS_READ_FRAME_LIMIT);
+  const listedOutside = elsewhere.slice(0, Math.max(0, CANVAS_READ_FRAME_LIMIT - listedInView.length));
   const outside = new Map<string, { groupId: string; title: string; frames: number }>();
   const titles = new Map(frames.filter((frame) => isDesignContainer(frame.kind)).map((frame) => [frame.id, frame.title]));
   for (const frame of frames) {
@@ -162,9 +186,16 @@ export function describeCanvas(
     view,
     frameCount: frames.length,
     openComments: doc.comments.filter((comment) => comment.state === "open" && comment.pageId === page.id).length,
-    inView: visible.slice(0, CANVAS_READ_FRAME_LIMIT).map((frame) => summarizeFrame(frame, comments.get(frame.id))),
+    inView: listedInView.map((frame) => summarizeFrame(frame, comments.get(frame.id))),
     outsideView: [...outside.values()],
-    omitted: Math.max(0, visible.length - CANVAS_READ_FRAME_LIMIT),
+    outsideFrames: listedOutside.map((frame) => {
+      const summary = summarizeFrame(frame, comments.get(frame.id));
+      return summary.text && summary.text.length > OUTSIDE_TEXT_CHARS
+        ? { ...summary, text: `${summary.text.slice(0, OUTSIDE_TEXT_CHARS)}…` }
+        : summary;
+    }),
+    omitted: visible.length - listedInView.length,
+    outsideOmitted: elsewhere.length - listedOutside.length,
     ...commentsOn(doc, page.id),
   };
 }

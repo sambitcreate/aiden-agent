@@ -6,10 +6,13 @@ import type { ToolCallUpdate } from "@agentclientprotocol/sdk";
 import { getCurrentSystemPrompt, Type, type AssistantMessage, type Message, type ToolResultMessage } from "@earendil-works/pi-ai";
 
 import { createAgentsInstructionRefresher } from "../agents-instructions.js";
+import { captureRootIdentity } from "./client-files.js";
+import { createAcpGenerationHost } from "./generation-host.js";
 import { AcpHostRegistry } from "./host.js";
 import { AcpProcess } from "./process.js";
 import { AcpHarnessRuntime } from "./runtime.js";
 import { AcpSessionStore } from "./session-store.js";
+import { pagesWrittenInChat } from "../design-canvas/written-pages.js";
 import { GenerationTimelineProjector } from "../generation-timeline.js";
 import { AidenRemoteStreamService } from "../aiden-remote-streams.js";
 import {
@@ -106,7 +109,10 @@ test("300 growing diff updates keep timeline and Remote journal publications bou
   assert.deepEqual(step.lineChanges, { additions: 300, deletions: 1 });
 });
 
-type ScriptEntry = (ToolCallUpdate & { sessionUpdate: "tool_call" | "tool_call_update" }) | { permission: ToolCallUpdate };
+type ScriptEntry =
+  | (ToolCallUpdate & { sessionUpdate: "tool_call" | "tool_call_update" })
+  | { permission: ToolCallUpdate }
+  | { write: { path: string; content: string } };
 function toolScript(entries: ScriptEntry[]): Message {
   return userMessage(`tool-updates:${JSON.stringify(entries)}`);
 }
@@ -411,8 +417,9 @@ test("a rewound conversation starts a fresh session that receives a reconstructi
   await h.runtime.close();
 });
 
-test("native edits go through Aiden's file callback, after Aiden's approval in Ask mode", async () => {
+test("native edits go through Aiden's file callback, after Aiden's approval in Ask mode", async (t) => {
   const h = harness();
+  t.after(() => h.runtime.close());
   const file = path.join(h.dir, "notes.txt");
   writeFileSync(file, "old line\n");
   const host = new RecordingHost("chat-1", h.dir);
@@ -433,9 +440,144 @@ test("native edits go through Aiden's file callback, after Aiden's approval in A
   assert.deepEqual(started?.args, { path: "notes.txt" });
   const finished = host.activities.find((activity) => activity.event === "finished");
   assert.equal(finished?.status, "completed");
-  assert.deepEqual(finished?.details, { kind: "file_line_changes", version: 1, additions: 1, deletions: 1 });
-  await h.runtime.close();
+  assert.deepEqual(finished?.details, {
+    kind: "file_line_changes",
+    version: 1,
+    additions: 1,
+    deletions: 1,
+    producedFile: { relativePath: "notes.txt", operation: "edited", bytes: 9 },
+  });
 });
+
+test(
+  "symlinked roots, multiple writes to the same file, diff-less creations, and failed edits preserve exact producedFile provenance",
+  { skip: process.platform !== "darwin" && process.platform !== "linux" },
+  async (t) => {
+    const h = harness();
+    t.after(() => h.runtime.close());
+    const realWorkspace = path.join(h.dir, "real-workspace");
+    const symlinkWorkspace = path.join(h.dir, "linked-workspace");
+    await fs.mkdir(realWorkspace, { recursive: true });
+    await fs.symlink(realWorkspace, symlinkWorkspace);
+    const folderIdentity = await captureRootIdentity(symlinkWorkspace);
+    const timeline = new GenerationTimelineProjector("stream-1", () => {});
+    const liveWrites: Array<{ relativePath: string; operation: string; bytes: number }> = [];
+    const host = createAcpGenerationHost({
+      chatId: "chat-1",
+      streamId: "stream-1",
+      label: "Fake Agent",
+      folderPath: symlinkWorkspace,
+      folderIdentity,
+      scratchDir: path.join(h.dir, "scratch"),
+      permission: () => "full",
+      timeline,
+      requestApproval: async () => "allowed",
+      takeApprovalScope: () => undefined,
+      onFileWrite: (produced) => liveWrites.push(produced),
+    });
+    h.hosts.register(host);
+
+    const home = path.join(symlinkWorkspace, "design", "home.html");
+    const about = path.join(symlinkWorkspace, "design", "about.html");
+    const draft = path.join(symlinkWorkspace, "design", "draft.html");
+    const result = await turn(h, [
+      toolScript([
+        // Diff-less creation reported directly on completion promotes edit_file -> write_file.
+        { write: { path: home, content: "<h1>Home</h1>\n" } },
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "create-home",
+          title: "Write home",
+          kind: "edit",
+          status: "completed",
+          locations: [{ path: home }],
+        },
+        // Two pipelined edits to the same file before the first completion keep both FIFO entries.
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "edit-home-1",
+          title: "Edit home 1",
+          kind: "edit",
+          status: "in_progress",
+          locations: [{ path: home }],
+        },
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "edit-home-2",
+          title: "Edit home 2",
+          kind: "edit",
+          status: "in_progress",
+          locations: [{ path: home }],
+        },
+        { write: { path: home, content: "<h1>Home v2</h1>\n" } },
+        { write: { path: home, content: "<h1>Home v3!</h1>\n" } },
+        { sessionUpdate: "tool_call_update", toolCallId: "edit-home-1", status: "completed" },
+        { sessionUpdate: "tool_call_update", toolCallId: "edit-home-2", status: "completed" },
+        // A creation whose step already started as edit_file keeps parseProducedFile-valid provenance.
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "create-about",
+          title: "Create about",
+          kind: "edit",
+          status: "in_progress",
+          locations: [{ path: about }],
+        },
+        { write: { path: about, content: "<h1>About</h1>\n" } },
+        {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "create-about",
+          status: "completed",
+          content: [{ type: "diff", path: about, newText: "<h1>About</h1>\n" }],
+        },
+        // A failed edit drops its queued write so a subsequent no-op edit cannot claim it.
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "fail-draft",
+          title: "Edit draft",
+          kind: "edit",
+          status: "in_progress",
+          locations: [{ path: draft }],
+        },
+        { write: { path: draft, content: "<h1>Draft</h1>\n" } },
+        { sessionUpdate: "tool_call_update", toolCallId: "fail-draft", status: "failed" },
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "noop-draft",
+          title: "No-op draft",
+          kind: "edit",
+          status: "completed",
+          locations: [{ path: draft }],
+          content: [{ type: "diff", path: draft, oldText: "a\n", newText: "b\n" }],
+        },
+      ]),
+    ]);
+    assert.equal(result.stopReason, "stop");
+    assert.deepEqual(liveWrites, [
+      { relativePath: "design/home.html", operation: "written", bytes: 14 },
+      { relativePath: "design/home.html", operation: "edited", bytes: 17 },
+      { relativePath: "design/home.html", operation: "edited", bytes: 18 },
+      { relativePath: "design/about.html", operation: "written", bytes: 15 },
+      { relativePath: "design/draft.html", operation: "written", bytes: 15 },
+    ]);
+    const finishedTimeline = timeline.finish("completed");
+    const toolSteps = finishedTimeline.steps.filter((step) => step.kind === "tool");
+    assert.deepEqual(
+      toolSteps.map((step) => step.kind === "tool" && [step.toolName, step.status, step.producedFile ?? null]),
+      [
+        ["write_file", "completed", { relativePath: "design/home.html", operation: "written", bytes: 14 }],
+        ["edit_file", "completed", { relativePath: "design/home.html", operation: "edited", bytes: 17 }],
+        ["edit_file", "completed", { relativePath: "design/home.html", operation: "edited", bytes: 18 }],
+        ["edit_file", "completed", { relativePath: "design/about.html", operation: "edited", bytes: 15 }],
+        ["edit_file", "failed", null],
+        ["edit_file", "completed", null],
+      ],
+    );
+    assert.deepEqual(pagesWrittenInChat([{ timeline: finishedTimeline }]), [
+      "design/home.html",
+      "design/about.html",
+    ]);
+  },
+);
 
 test("a denied approval leaves the file untouched and marks the activity blocked", async () => {
   const h = harness();

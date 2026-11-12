@@ -33,7 +33,14 @@ import { getCurrentTools } from "@earendil-works/pi-ai";
 import path from "node:path";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
-import { AcpToolCallTracker, timelineStepFor, type AcpToolActivity } from "./activity.js";
+import {
+  AcpToolCallTracker,
+  canonicalDisplayPath,
+  relativeDisplayPath,
+  timelineStepFor,
+  type AcpToolActivity,
+} from "./activity.js";
+import { lineChangeCounts } from "../coding-tools.js";
 import { readClientTextFile, writeClientTextFile } from "./client-files.js";
 import { AcpConnection } from "./connection.js";
 import { AcpHarnessError, abortError, isAbortError } from "./errors.js";
@@ -88,6 +95,12 @@ interface PendingTool {
   timer: ReturnType<typeof setTimeout>;
 }
 
+interface WrittenFileEntry {
+  created: boolean;
+  bytes: number;
+  lineChanges: { additions: number; deletions: number };
+}
+
 interface Turn {
   completion: Promise<void>;
   controller: AbortController;
@@ -99,6 +112,8 @@ interface Turn {
   writeGrants: Set<string>;
   /** Approved edits whose request named no path; each allows one write. */
   unscopedWriteGrants: number;
+  /** Host-confirmed file writes in this turn, queued FIFO per workspace-relative path. */
+  writtenFiles: Map<string, WrittenFileEntry[]>;
 }
 
 interface Binding {
@@ -128,7 +143,7 @@ interface Binding {
   bridge: AcpMcpBridge | undefined;
   tracker: AcpToolCallTracker;
   toolUpdatesSkipped: Map<string, number>;
-  startedActivities: Set<string>;
+  startedActivities: Map<string, string>;
   lastPlan: string | undefined;
   queue: Promise<void>;
   turn: Turn | undefined;
@@ -413,6 +428,7 @@ export class AcpHarnessRuntime {
         followUp: undefined,
         writeGrants: new Set(),
         unscopedWriteGrants: 0,
+        writtenFiles: new Map(),
       };
       binding.turn = turn;
       binding.hostInstructionsFingerprint = instructionFingerprint;
@@ -704,7 +720,17 @@ export class AcpHarnessRuntime {
           return writeClientTextFile(request, {
             roots: current.roots,
             canWrite: () => allowed && (current.permission() === "full" || current.permission() === "ask"),
-            onWrite: (file, before, after) => current.onFileWrite?.(file, before, after),
+            onWrite: (file, before, after) => {
+              const relativePath = relativeDisplayPath(file, current.roots);
+              if (relativePath) {
+                recordWrittenFile(turn, relativePath, {
+                  created: before === undefined,
+                  bytes: Buffer.byteLength(after, "utf8"),
+                  lineChanges: lineChangeCounts(before ?? "", after),
+                });
+              }
+              current.onFileWrite?.(file, before, after);
+            },
           });
         },
       },
@@ -772,7 +798,7 @@ export class AcpHarnessRuntime {
         bridge,
         tracker: new AcpToolCallTracker(),
         toolUpdatesSkipped: new Map(),
-        startedActivities: new Set(),
+        startedActivities: new Map(),
         lastPlan: undefined,
         queue: Promise.resolve(),
         turn: undefined,
@@ -917,18 +943,48 @@ export class AcpHarnessRuntime {
     const id = `acp:${binding.sessionId}:${activity.id}`;
     const step = timelineStepFor(activity, host.roots);
     if (!step) return;
+    const targetPath = typeof step.args.path === "string" ? step.args.path : undefined;
+    const written =
+      activity.status === "completed" &&
+      (step.toolName === "write_file" || step.toolName === "edit_file") &&
+      targetPath
+        ? shiftWrittenFile(binding.turn, targetPath)
+        : undefined;
     if (!binding.startedActivities.has(id)) {
-      binding.startedActivities.add(id);
+      if (written?.created && step.toolName === "edit_file") {
+        step.toolName = "write_file";
+      }
+      binding.startedActivities.set(id, step.toolName);
       host.activity.started(id, step.toolName, step.args);
     }
     if (activity.status === "running") host.activity.running(id);
     else if (activity.status === "completed") {
+      const startedToolName = binding.startedActivities.get(id) ?? step.toolName;
+      const lineChanges = activity.lineChanges ?? written?.lineChanges;
+      const producedFile =
+        written && targetPath && (startedToolName === "write_file" || startedToolName === "edit_file")
+          ? {
+              relativePath: targetPath,
+              operation: startedToolName === "write_file" ? ("written" as const) : ("edited" as const),
+              bytes: written.bytes,
+            }
+          : undefined;
       host.activity.finished(
         id,
         "completed",
-        activity.lineChanges ? { kind: "file_line_changes", version: 1, ...activity.lineChanges } : undefined,
+        lineChanges
+          ? {
+              kind: "file_line_changes",
+              version: 1,
+              ...lineChanges,
+              ...(producedFile ? { producedFile } : {}),
+            }
+          : undefined,
       );
-    } else if (activity.status === "failed") host.activity.finished(id, "failed");
+    } else if (activity.status === "failed") {
+      if (targetPath) binding.turn?.writtenFiles.delete(targetPath);
+      host.activity.finished(id, "failed");
+    }
   }
 
   private async onPermission(
@@ -944,7 +1000,7 @@ export class AcpHarnessRuntime {
     const id = `acp:${binding.sessionId}:${activity.id}`;
     const step = classification.kind === "approval" ? timelineStepFor(activity, host.roots) : undefined;
     if (step && !binding.startedActivities.has(id)) {
-      binding.startedActivities.add(id);
+      binding.startedActivities.set(id, step.toolName);
       host.activity.started(id, step.toolName, step.args);
     }
     const turn = binding.turn;
@@ -955,7 +1011,9 @@ export class AcpHarnessRuntime {
         : undefined;
     if (chosen?.kind.startsWith("allow") && classification.kind === "approval" && isMutation(request.toolCall.kind)) {
       if (chosen.kind === "allow_always") binding.sessionWriteGrant = true;
-      const paths = (request.toolCall.locations ?? []).map((location) => path.resolve(location.path));
+      const paths = (request.toolCall.locations ?? []).map(
+        (location) => canonicalDisplayPath(location.path) ?? path.resolve(location.path),
+      );
       // Only a path-less edit may write an unnamed file; deletes and moves never do.
       if (paths.length === 0 && request.toolCall.kind === "edit") turn.unscopedWriteGrants += 1;
       for (const target of paths) turn.writeGrants.add(target);
@@ -1099,6 +1157,31 @@ function isMutation(kind: string | null | undefined): boolean {
   return kind === "edit" || kind === "delete" || kind === "move";
 }
 
+const MAX_WRITTEN_FILES_PER_PATH = 32;
+const MAX_WRITTEN_FILE_PATHS = 512;
+
+function recordWrittenFile(turn: Turn, relativePath: string, entry: WrittenFileEntry): void {
+  const existing = turn.writtenFiles.get(relativePath);
+  if (existing) {
+    if (existing.length >= MAX_WRITTEN_FILES_PER_PATH) existing.shift();
+    existing.push(entry);
+    return;
+  }
+  if (turn.writtenFiles.size >= MAX_WRITTEN_FILE_PATHS) {
+    const oldest = turn.writtenFiles.keys().next().value;
+    if (oldest !== undefined) turn.writtenFiles.delete(oldest);
+  }
+  turn.writtenFiles.set(relativePath, [entry]);
+}
+
+function shiftWrittenFile(turn: Turn | undefined, relativePath: string): WrittenFileEntry | undefined {
+  const queue = turn?.writtenFiles.get(relativePath);
+  if (!queue) return undefined;
+  const next = queue.shift();
+  if (queue.length === 0) turn?.writtenFiles.delete(relativePath);
+  return next;
+}
+
 /**
  * Full permits any write inside the roots. Ask permits only writes the user
  * approved this turn (or "always" for the session). Read-only and no-access
@@ -1110,7 +1193,7 @@ function writeAllowed(binding: Binding, turn: Turn, host: AcpTurnHost, requested
   if (permission !== "ask") return false;
   if (binding.sessionWriteGrant) return true;
   // An "allow once" covers one write to that path.
-  if (turn.writeGrants.delete(path.resolve(requested))) return true;
+  if (turn.writeGrants.delete(canonicalDisplayPath(requested) ?? path.resolve(requested))) return true;
   if (turn.unscopedWriteGrants > 0) {
     turn.unscopedWriteGrants -= 1;
     return true;

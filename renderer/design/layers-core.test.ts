@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { emptyDesignCanvas, type DesignCanvas, type DesignFrame } from "../shared/design-canvas/schema";
 import { nodesFromCanvas } from "./canvas-adapter-core";
-import { designLayers, reorderLayer, stepLayer, type DesignLayer } from "./layers-core";
+import { bringLayerToFront, designLayers, reorderLayer, sendLayerToBack, stepLayer, type DesignLayer } from "./layers-core";
 
 function frame(id: string, overrides: Partial<DesignFrame> = {}): DesignFrame {
   return { id, kind: "note", title: id, x: 0, y: 0, w: 200, h: 120, text: "", pageId: "page-1", createdBy: "person", ...overrides };
@@ -62,4 +62,17 @@ test("one step forward or back trades with the next sibling, and stops at the en
   assert.equal(stepLayer(forward, "a", "forward"), forward);
   assert.equal(stepLayer(page, "loose", "forward"), page);
   assert.deepEqual(outline(designLayers(stepLayer(page, "board", "forward"))).slice(1), [["board", ["b", "a"]], "group"]);
+});
+
+test("bringing a layer to the front or back moves it past all its siblings, and only them", () => {
+  const front = bringLayerToFront(page, "loose");
+  assert.equal(front, page, "already in front of its siblings");
+  const back = sendLayerToBack(page, "b");
+  assert.deepEqual(outline(designLayers(back)).slice(-1)[0], ["board", ["a", "b"]]);
+  const toFront = bringLayerToFront(back, "b");
+  assert.deepEqual(outline(designLayers(toFront)).slice(-1)[0], ["board", ["b", "a"]]);
+  // A frame on another page reorders among that page's frames.
+  const other = canvas(frame("x", { pageId: "page-2" }), frame("y", { pageId: "page-2" }));
+  assert.deepEqual(bringLayerToFront(other, "x").frames.map((entry) => entry.id), ["y", "x"]);
+  assert.equal(sendLayerToBack(page, "missing"), page);
 });

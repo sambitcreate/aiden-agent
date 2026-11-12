@@ -5,6 +5,11 @@ import path from "node:path";
 import test from "node:test";
 import { emptyDesignCanvas, type DesignCanvas, type DesignFrame } from "../../../renderer/shared/design-canvas/schema.js";
 import {
+  DESIGN_WIDTH_HINT_BYTES,
+  EARLIER_PAGES_LIMIT,
+  inferDesignWidth,
+  readDesignWidthHint,
+  RECENT_WRITTEN_PAGES_LIMIT,
   RecentWrittenPages,
   pagesWrittenInChat,
   placeWrittenPageFrames,
@@ -147,11 +152,149 @@ test("pages a running reply wrote join the saved ones for design mode's entry, n
     ["design/old.html", "design/b.html", "design/a.html"],
     "a page saved and written again counts once, at its newest place",
   );
-  for (let index = 0; index < 20; index += 1) recent.note("chat-1", `design/p${index}.html`);
+  for (let index = 0; index < RECENT_WRITTEN_PAGES_LIMIT + 5; index += 1) {
+    recent.note("chat-1", `design/p${index}.html`);
+  }
   const merged = recent.merged("chat-1", ["design/old.html"]);
-  assert.equal(merged.length, 12);
-  assert.equal(merged[merged.length - 1], "design/p19.html");
+  assert.equal(merged.length, RECENT_WRITTEN_PAGES_LIMIT + 1, "merged keeps saved + bounded recent pages so deleted newest pages do not starve older ones");
+  assert.equal(merged[0], "design/old.html");
+  assert.equal(merged[merged.length - 1], `design/p${RECENT_WRITTEN_PAGES_LIMIT + 4}.html`);
   recent.forget("chat-1");
   assert.deepEqual(recent.merged("chat-1", ["design/old.html"]), ["design/old.html"]);
   assert.deepEqual(recent.merged("chat-2", []), ["design/other.html"]);
+});
+
+test("deleted newest pages do not starve older surviving pages under limit, and shouldSave prevents recreating a deleted chat's canvas", async (t) => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-written-pages-race-"));
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const workspaceRoot = path.join(base, "workspace");
+  const canvasesDir = path.join(base, "canvases");
+  await fs.mkdir(path.join(workspaceRoot, "design"), { recursive: true });
+  const recent = new RecentWrittenPages();
+  const saved: string[] = [];
+  for (let index = 0; index < 16; index += 1) {
+    const relativePath = `design/page-${String(index).padStart(2, "0")}.html`;
+    if (index < 12) {
+      await fs.writeFile(path.join(workspaceRoot, relativePath), `<!doctype html><title>${index}</title>`);
+    }
+    if (index < 6) saved.push(relativePath);
+    else recent.note("chat-1", relativePath);
+  }
+  // Pages 12..15 were noted most recently and then deleted before entry.
+  // Pages 00..11 still exist on disk and should all 12 land in chronological order.
+  const store = new DesignCanvasStore({ root: () => canvasesDir });
+  const broadcasts: string[] = [];
+
+  // First simulate deleting the chat (or leaving design mode) before store.update runs.
+  let canSave = false;
+  const abortedIds = await placeWrittenPagesOnCanvas({
+    chatId: "deleted-chat",
+    workspaceRoot,
+    paths: recent.merged("chat-1", saved),
+    limit: EARLIER_PAGES_LIMIT,
+    shouldSave: () => canSave,
+    store,
+    broadcast: (update) => broadcasts.push(`${update.chatId}:${update.revision}`),
+    newId: ids(),
+    onlyIfEmpty: true,
+  });
+  assert.deepEqual(abortedIds, [] as string[]);
+  assert.deepEqual(broadcasts, [] as string[]);
+  await assert.rejects(fs.stat(path.join(canvasesDir, "deleted-chat.json")), { code: "ENOENT" });
+
+  // Now allow saving and verify all 12 surviving older pages land oldest-to-newest.
+  canSave = true;
+  const placedIds = await placeWrittenPagesOnCanvas({
+    chatId: "chat-1",
+    workspaceRoot,
+    paths: recent.merged("chat-1", saved),
+    limit: EARLIER_PAGES_LIMIT,
+    shouldSave: () => canSave,
+    store,
+    broadcast: (update) => broadcasts.push(`${update.chatId}:${update.revision}`),
+    newId: ids(),
+    onlyIfEmpty: true,
+  });
+  assert.equal(placedIds.length, EARLIER_PAGES_LIMIT);
+  const doc = await store.get("chat-1");
+  assert.deepEqual(
+    doc.frames.map((frame) => frame.path),
+    Array.from({ length: 12 }, (_, index) => `design/page-${String(index).padStart(2, "0")}.html`),
+  );
+  assert.deepEqual(broadcasts, ["chat-1:1"]);
+});
+
+test("a page's own width hint picks its design width; pages that do not say stay at 1280", () => {
+  assert.equal(inferDesignWidth('<head><meta name="aiden-design-width" content="390"></head>'), 390);
+  assert.equal(inferDesignWidth("<meta content='1440' name='aiden-design-width'>"), 1440);
+  assert.equal(inferDesignWidth('<meta name="viewport" content="width=375, initial-scale=1">'), 390);
+  assert.equal(inferDesignWidth('<meta name="viewport" content="width=820">'), 768);
+  assert.equal(inferDesignWidth('<meta name="viewport" content="width=1440">'), 1440);
+  assert.equal(inferDesignWidth('<meta name="viewport" content="width=device-width, initial-scale=1">'), undefined);
+  assert.equal(inferDesignWidth("<style>.phone{width:390px;height:844px}</style>"), 390);
+  assert.equal(inferDesignWidth("<style>body { margin: 0; max-width: 768px }</style>"), 768);
+  assert.equal(
+    inferDesignWidth("<style>.phone{width:390px} .screen{max-width:1200px}</style>"),
+    undefined,
+    "shell widths that disagree say nothing",
+  );
+  assert.equal(
+    inferDesignWidth("<style>.container{max-width:1200px} .phone{width:390px;height:844px}</style>"),
+    undefined,
+    "a desktop page showcasing an embedded phone preview stays desktop",
+  );
+  assert.equal(
+    inferDesignWidth("<style>.hero{padding:64px} @media (max-width: 640px) { body { max-width: 390px } }</style>"),
+    undefined,
+    "responsive mobile media queries do not turn a desktop page into a phone frame",
+  );
+  assert.equal(
+    inferDesignWidth("<style>/* .phone { width: 390px } */</style><p>.phone { width: 390px }</p>"),
+    undefined,
+    "CSS comments and HTML prose are ignored",
+  );
+  assert.equal(inferDesignWidth("<style>.card{width:390px}</style>"), undefined, "a card is not a phone shell");
+  assert.equal(inferDesignWidth("<!doctype html><title>Plain</title>"), undefined);
+});
+
+test("written pages land at the width they ask for, with that width's box", async (t) => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-written-widths-"));
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const workspaceRoot = path.join(base, "workspace");
+  await fs.mkdir(path.join(workspaceRoot, "design"), { recursive: true });
+  await fs.writeFile(path.join(workspaceRoot, "design", "phone.html"), '<!doctype html><meta name="aiden-design-width" content="390"><title>Phone</title>');
+  await fs.writeFile(path.join(workspaceRoot, "design", "tablet.html"), '<!doctype html><meta name="viewport" content="width=768"><title>Tablet</title>');
+  await fs.writeFile(path.join(workspaceRoot, "design", "desk.html"), "<!doctype html><title>Desk</title>");
+  const store = new DesignCanvasStore({ root: () => path.join(base, "canvases") });
+  await placeWrittenPagesOnCanvas({
+    chatId: "chat-1",
+    workspaceRoot,
+    paths: ["design/phone.html", "design/tablet.html", "design/desk.html"],
+    store,
+    broadcast: () => undefined,
+    newId: ids(),
+  });
+  const doc = await store.get("chat-1");
+  assert.deepEqual(
+    doc.frames.map((frame) => [frame.path, frame.designWidth, frame.w, frame.h]),
+    [
+      ["design/phone.html", 390, 390, 844],
+      ["design/tablet.html", 768, 576, 768],
+      ["design/desk.html", 1280, 640, 436],
+    ],
+  );
+});
+
+test("the width hint is read only from a regular file, never through a symbolic link", async (t) => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-written-hint-"));
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const real = path.join(base, "real.html");
+  await fs.writeFile(real, '<meta name="aiden-design-width" content="390">');
+  await fs.symlink(real, path.join(base, "link.html"));
+  assert.equal(await readDesignWidthHint(real), 390);
+  assert.equal(await readDesignWidthHint(path.join(base, "link.html")), undefined);
+  assert.equal(await readDesignWidthHint(base), undefined, "a folder is not a page");
+  // Only the start of a page is read.
+  await fs.writeFile(real, `${" ".repeat(DESIGN_WIDTH_HINT_BYTES)}<meta name="aiden-design-width" content="390">`);
+  assert.equal(await readDesignWidthHint(real), undefined);
 });

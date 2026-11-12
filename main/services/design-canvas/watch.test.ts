@@ -235,6 +235,7 @@ test("after a page stops being watched, a later revert to the canvas's own words
 function fakeWatcher(
   t: TestContext,
   options: {
+    allowed?: (chatId: string, root: string) => boolean;
     now?: () => number;
     noting?: () => Promise<void>;
     wallNow?: () => number;
@@ -252,6 +253,7 @@ function fakeWatcher(
   const instance = new DesignFileWatcher({
     onChange: (update) => updates.push(update),
     debounceMs: options.debounceMs ?? 5,
+    ...(options.allowed ? { allowed: options.allowed } : {}),
     ...(options.now ? { now: options.now } : {}),
     ...(options.noting ? { noting: options.noting } : {}),
     ...(options.wallNow ? { wallNow: options.wallNow } : {}),
@@ -672,4 +674,16 @@ test("a chat that may no longer frame its workspace stops being watched", async 
   await sleep(400);
   assert.equal(updates.length, 0);
   assert.equal(open(), 0);
+
+  // Also when permission is lost while an async own-write check is still waiting.
+  allowed = true;
+  const inflight = fakeWatcher(t, { allowed: () => allowed });
+  await inflight.instance.set("chat-1", root, ["design/page.html"]);
+  const finishWrite = inflight.instance.ownWrite("chat-1", "design/page.html", "own");
+  inflight.emit("page.html");
+  await sleep(DESIGN_WATCH_DEBOUNCE_MS + 30);
+  allowed = false;
+  finishWrite(false);
+  await sleep(40);
+  assert.equal(inflight.updates.length, 0, "revoked permission during async flush suppresses the report");
 });

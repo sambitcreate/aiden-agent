@@ -357,6 +357,41 @@ test("an update from elsewhere that lands while a save is in flight is fetched o
   assert.equal(xOf(controller.doc, "a"), 10);
 });
 
+test("an update announced while the initial read is still in flight is refetched as soon as the read lands", async () => {
+  let resolveInitialGet!: (doc: DesignCanvas) => void;
+  let firstRead = true;
+  stored = canvas(0);
+  calls = installBotTestIpc({
+    "designCanvas:get": () => {
+      if (firstRead) {
+        firstRead = false;
+        return new Promise<DesignCanvas>((resolve) => {
+          resolveInitialGet = resolve;
+        });
+      }
+      return structuredClone(stored);
+    },
+    "designCanvas:save": (_chatId, doc, base) => {
+      stored = { ...(doc as DesignCanvas), revision: (base as number) + 1 };
+      return { ok: true, revision: stored.revision };
+    },
+  });
+
+  render(<Probe chatId="chat-1" />);
+  await settle();
+  assert.equal(controller.status, "loading");
+
+  // Main's designPagesOnEntry saves revision 1 and broadcasts before the initial get resolves.
+  stored = canvas(1, note("entry-page"));
+  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 1 }));
+  await act(async () => resolveInitialGet(canvas(0)));
+  await settle();
+
+  assert.equal(gets().length, 2, "the stale initial revision triggers an immediate refetch");
+  assert.equal(controller.doc?.revision, 1);
+  assert.deepEqual(ids(controller.doc), ["entry-page"]);
+});
+
 test("saving now says whether the stored canvas caught up, so readers of it can wait or stop", async () => {
   await mount();
   await act(async () => controller.change(addNote("b")));

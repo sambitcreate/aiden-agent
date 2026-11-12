@@ -391,6 +391,10 @@ export class DesignFileWatcher {
         // A newer set may have replaced this watch meanwhile; the pages it still watches are reported.
         const current = this.chats.get(chatId);
         if (!current || current.root !== entry.root) return;
+        if (this.deps.allowed && !this.deps.allowed(chatId, current.root)) {
+          this.clear(chatId);
+          return;
+        }
         this.report(
           chatId,
           paths.filter((relative): relative is string => relative !== null && current.paths.has(relative)),

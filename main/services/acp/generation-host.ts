@@ -10,9 +10,11 @@ import type {
   AskUserQuestionResponseV1,
   AskUserQuestionV1,
 } from "../../../renderer/shared/ask-user-question.js";
+import type { ProducedFile } from "../../../renderer/shared/produced-file.js";
 import type { ToolApprovalScope } from "../../../renderer/shared/tool-approval-scope.js";
 import type { AgentStepStatus } from "../../../renderer/shared/generation-timeline.js";
 import type { ToolApprovalOutcome } from "../tool-approval.js";
+import { relativeDisplayPath } from "./activity.js";
 import type { AcpRootIdentity } from "./client-files.js";
 import type { AcpHostPermission, AcpQuestion } from "./harness.js";
 import type { AcpApprovalOutcome, AcpApprovalRequest, AcpTurnHost } from "./host.js";
@@ -65,6 +67,7 @@ export interface AcpGenerationHostOptions {
     questions: AskUserQuestionV1[],
     signal: AbortSignal,
   ): Promise<AskUserQuestionResponseV1>;
+  onFileWrite?(producedFile: ProducedFile): void;
 }
 
 const CARD_TOOL: Record<AcpApprovalRequest["kind"], string> = {
@@ -146,12 +149,13 @@ export function questionFor(
 
 export function createAcpGenerationHost(options: AcpGenerationHostOptions): AcpTurnHost {
   let notices = 0;
+  // Fail closed: without the identity captured at turn start there is no
+  // file access at all, never a fallback to the mutable pathname.
+  const roots = () => (options.folderIdentity && options.permission() !== "none" ? [options.folderIdentity] : []);
   return {
     chatId: options.chatId,
-    cwd: options.folderPath ?? options.scratchDir,
-    // Fail closed: without the identity captured at turn start there is no
-    // file access at all, never a fallback to the mutable pathname.
-    roots: options.folderIdentity && options.permission() !== "none" ? [options.folderIdentity] : [],
+    cwd: options.folderIdentity?.path ?? options.folderPath ?? options.scratchDir,
+    roots: roots(),
     permission: options.permission,
     async requestApproval(request, signal): Promise<AcpApprovalOutcome> {
       const id = request.activityId ?? request.toolCallId;
@@ -202,6 +206,19 @@ export function createAcpGenerationHost(options: AcpGenerationHostOptions): AcpT
       options.timeline.toolStarted(id, CONTEXT_REBUILT_STEP, {});
       options.timeline.toolFinished(id, "completed");
     },
+    ...(options.onFileWrite
+      ? {
+          onFileWrite(absolutePath, before, after) {
+            const relativePath = relativeDisplayPath(absolutePath, roots());
+            if (!relativePath) return;
+            options.onFileWrite!({
+              relativePath,
+              operation: before === undefined ? "written" : "edited",
+              bytes: Buffer.byteLength(after, "utf8"),
+            });
+          },
+        }
+      : {}),
   };
 }
 
