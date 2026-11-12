@@ -704,3 +704,28 @@ test("a capped channel preserves the other live content and a provider reset sta
   assert.equal(retry.replyText, "");
   assert.equal(retry.replyReasoning, "Retrying");
 });
+
+test("a Mac card's Allow in this workspace never reaches a Remote reader and cannot be answered from one", async () => {
+  const { registry, service, access, effects } = harness();
+  registry.publish("run-1", "chat:approval", approval("approval-1", {
+    toolName: "computer_use",
+    details: { kind: "computer-use-access" },
+    scopes: ["once", "chat", "workspace"],
+  }));
+  for (const device of [controller("device-a"), observer("device-o"), phone("device-phone")]) {
+    const prompt = open(service, device, "run-1").frames().find((frame) => frame.event === "approval_required")!.data.payload;
+    assert.equal(Array.isArray(prompt.scopes) && prompt.scopes.includes("workspace"), false, device.id);
+  }
+
+  for (const [key, phoneScoped] of [[KEY_A, false], [KEY_B, true]] as const) {
+    const refused = await rejection(
+      service.respondApproval("device-a", "run-1", "approval-1", { decision: "allow", scope: "workspace" }, key, access, {
+        phoneScoped,
+      }),
+    );
+    assert.equal(refused.code, "invalid_request");
+  }
+  assert.deepEqual(effects.approvals, []);
+  const denied = await service.respondApproval("device-a", "run-1", "approval-1", { decision: "deny" }, "key-controller-c-0001", access);
+  assert.equal(denied.decision, "deny");
+});

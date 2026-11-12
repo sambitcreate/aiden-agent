@@ -10,8 +10,8 @@
  *   revokes it from Settings → Bots & Approvals → Approvals.
  * - `workspace`: a Mac card's "Allow in this workspace" under an approval
  *   mode: that part of the Mac (commands, file changes) in this workspace,
- *   removable in Workspace settings. Desktop only; the Remote projection
- *   never offers it to phones.
+ *   removable in Workspace settings. Desktop only: Remote projections strip
+ *   it and a Remote answer naming it is refused (`parseRemoteToolApprovalScope`).
  */
 export const TOOL_APPROVAL_SCOPES = ["once", "chat", "always", "workspace"] as const;
 
@@ -19,6 +19,17 @@ export type ToolApprovalScope = (typeof TOOL_APPROVAL_SCOPES)[number];
 
 export function parseToolApprovalScope(value: unknown): ToolApprovalScope | undefined {
   return value === "once" || value === "chat" || value === "always" || value === "workspace" ? value : undefined;
+}
+
+/** A scope a Remote device may answer with: any but the desktop-only `workspace`. */
+export function parseRemoteToolApprovalScope(value: unknown): Exclude<ToolApprovalScope, "workspace"> | undefined {
+  const scope = parseToolApprovalScope(value);
+  return scope === "workspace" ? undefined : scope;
+}
+
+/** The scopes a Remote device may be offered: the list without `workspace`. */
+export function remoteOfferedScopes(value: unknown): unknown {
+  return Array.isArray(value) ? value.filter((scope) => scope !== "workspace") : value;
 }
 
 /** Tools whose calls can be remembered by an approval rule. */

@@ -5704,6 +5704,8 @@ export const llmClient = {
     decision: ApprovalDecision,
     payload?: ToolApprovalDecisionPayload,
   ): boolean {
+    // Remote callers only: "Allow in this workspace" is answered on the host.
+    if (payload?.scope === "workspace") return false;
     return (
       approvals.decideAsHost(approvalId, decision === "allow", payload) ||
       botApprovals.decide(approvalId, decision)

@@ -21,7 +21,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { createGzip } from "node:zlib";
 import {
-  parseToolApprovalScope,
+  parseRemoteToolApprovalScope,
   type ToolApprovalScope,
 } from "../../renderer/shared/tool-approval-scope.js";
 import { VISUAL_VIEWER_CSP } from "../../renderer/shared/visual-viewer.js";
@@ -1598,7 +1598,8 @@ function approvalDecision(value: unknown): {
     ? value as Record<string, unknown>
     : null;
   const keys = record ? Object.keys(record) : [];
-  const scope = record && "scope" in record ? parseToolApprovalScope(record.scope) : undefined;
+  // "workspace" is desktop-only: a Remote answer naming it is invalid.
+  const scope = record && "scope" in record ? parseRemoteToolApprovalScope(record.scope) : undefined;
   if (
     !record ||
     keys.some((key) => key !== "decision" && key !== "scope") ||

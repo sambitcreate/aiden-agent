@@ -1,6 +1,7 @@
 import type { ServerResponse } from "node:http";
 import {
-  parseToolApprovalScope,
+  parseRemoteToolApprovalScope,
+  remoteOfferedScopes,
   type ToolApprovalScope,
 } from "../../renderer/shared/tool-approval-scope.js";
 import type { ChatRunInputAdmissionResult } from "../../renderer/shared/chat-run-input.js";
@@ -189,8 +190,11 @@ function projectPayload(
   payload: Record<string, unknown>,
   projection: RunProjection,
 ): Record<string, unknown> {
-  if (type !== "approval_required" || projection === "full") return payload;
-  const { details: _details, detailsOmitted: _omitted, scopes, ...summary } = payload;
+  if (type !== "approval_required") return payload;
+  // "Allow in this workspace" is answered only on the host, for every reader.
+  const remote = payload.scopes === undefined ? payload : { ...payload, scopes: remoteOfferedScopes(payload.scopes) };
+  if (projection === "full") return remote;
+  const { details: _details, detailsOmitted: _omitted, scopes, ...summary } = remote;
   if (projection === "observer") return scopes === undefined ? summary : { ...summary, scopes };
   // The phone projection matches the phone's own stream approvals: a summary,
   // whether it may allow from the phone, and allow scopes only when it may.
@@ -342,7 +346,7 @@ function requireInformedAllow(payload: Record<string, unknown>, scope: ToolAppro
 
 function parseRunApproval(value: unknown): { decision: "allow" | "deny"; scope?: ToolApprovalScope } {
   const record = ownRecord(value);
-  const scope = record && "scope" in record ? parseToolApprovalScope(record.scope) : undefined;
+  const scope = record && "scope" in record ? parseRemoteToolApprovalScope(record.scope) : undefined;
   if (
     !record ||
     Object.keys(record).some((key) => key !== "decision" && key !== "scope") ||
