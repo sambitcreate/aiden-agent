@@ -6,6 +6,7 @@
 import type { AnalyticsEventProps } from "../analytics/analytics-events.js";
 import { reportAnalyticsEvent } from "../analytics/analytics-report.js";
 import type { ToolApprovalScope } from "../../../renderer/shared/tool-approval-scope.js";
+import type { ApprovalMode } from "../../../renderer/shared/approval-mode.js";
 
 export type ApprovalAnalyticsKind = AnalyticsEventProps<"approval_shown">["kind"];
 export type ApprovalAnalyticsMode = AnalyticsEventProps<"approval_shown">["mode"];
@@ -122,4 +123,19 @@ export class ApprovalAnalytics {
   forget(approvalId: string): void {
     this.shownCards.delete(approvalId);
   }
+}
+
+/**
+ * Count the person choosing an approval mode, for this Mac or one workspace.
+ * A workspace going back to the global mode reports "global". Saving the mode
+ * it already had counts nothing.
+ */
+export function reportApprovalModeChanged(
+  scope: "global" | "workspace",
+  before: ApprovalMode | undefined,
+  after: ApprovalMode | undefined,
+): void {
+  if (before === after) return;
+  if (scope === "global" && after === undefined) return;
+  reportAnalyticsEvent("approval_mode_changed", { mode: after ?? "global", scope });
 }

@@ -61,6 +61,7 @@ import {
 import { GOOGLE_PROVIDER_ID } from "../../renderer/shared/google-provider.js";
 import { normalizeProviderArtwork } from "../../renderer/shared/provider-artwork.js";
 import { parseOnboardingState } from "../../renderer/shared/onboarding.js";
+import { parseApprovalMode, parseApprovalModel } from "../../renderer/shared/approval-mode.js";
 import { parseWebSearchSettings } from "./web-search-provider-registry-core.js";
 import { parseWebFetchSettings } from "../../renderer/shared/web-fetch-settings.js";
 import { parseTtsSettingsDocument } from "./tts/settings.js";
@@ -748,6 +749,9 @@ export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
   if (settings.usageLimitWaitHours !== undefined && !isUsageLimitWaitHours(settings.usageLimitWaitHours)) delete runtime.usageLimitWaitHours;
   // Only a literal true lets routines go ahead; anything else hand-edited reads as off.
   if (settings.botRoutinesGoAhead !== undefined && settings.botRoutinesGoAhead !== true) delete runtime.botRoutinesGoAhead;
+  // A hand-edited approval mode that isn't one of the three reads as Ask, never as unset (which may be Auto).
+  if (settings.approvalMode !== undefined && parseApprovalMode(settings.approvalMode) === undefined) runtime.approvalMode = "ask";
+  if (settings.approvalModel !== undefined && parseApprovalModel(settings.approvalModel) === undefined) delete runtime.approvalModel;
   if (settings.spendingLimits !== undefined) {
     const spendingLimits = parseSpendingLimitsSettings(settings.spendingLimits);
     if (spendingLimits === undefined) delete runtime.spendingLimits;

@@ -534,3 +534,43 @@ test("each way of adding a workspace counts once, and a failed save counts nothi
   await assert.rejects(failing.service.createFromFolder("/approved/project"), /persistence failed/u);
   assert.deepEqual(sent, []);
 });
+
+test("a workspace's own approval mode and Mac grants change without stopping its chats, and count by mode only", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const application = fixture();
+  const customized = await application.service.update("workspace-1", { approvalMode: "never" });
+  assert.equal(customized.approvalMode, "never");
+  assert.equal(customized.permission, "ask");
+  // The gate reads the mode per call, so a running reply is not cancelled.
+  assert.deepEqual(application.events, ["save"]);
+
+  // Saving the same mode again counts nothing; going back to the global mode does.
+  await application.service.update("workspace-1", { approvalMode: "never", name: "Same" });
+  const following = await application.service.update("workspace-1", { approvalMode: null });
+  assert.equal("approvalMode" in following, false);
+  assert.deepEqual(sent, [
+    { event: "approval_mode_changed", props: { mode: "never", scope: "workspace" } },
+    { event: "approval_mode_changed", props: { mode: "global", scope: "workspace" } },
+  ]);
+
+  await assert.rejects(application.service.update("workspace-1", { approvalMode: "full" }), /approval mode/u);
+  await assert.rejects(application.service.update("workspace-1", { revokeMacGrant: "everything" }), /Mac permission/u);
+});
+
+test("changing a Full workspace keeps its shell and file grants and stores Ask for an older release", async () => {
+  const application = fixture({ existing: workspace({ permission: "full" }) });
+  const updated = await application.service.update("workspace-1", { revokeMacGrant: "files" });
+  assert.equal(updated.permission, "ask", "an older release reads Ask, never wider");
+  assert.equal(updated.approvalMode, "never", "this release keeps the reach it had");
+  assert.deepEqual(updated.macGrants, { shell: true });
+  // The stored access changed, so running chats stop as for any access change.
+  assert.ok(application.events.includes("cancel-generations"));
+
+  const cleared = await application.service.update("workspace-1", { revokeMacGrant: "shell" });
+  assert.equal("macGrants" in cleared, false);
+
+  // An older client choosing Full gets the legacy reading back, with no own mode left over.
+  const full = await application.service.update("workspace-1", { permission: "full" });
+  assert.equal(full.permission, "full");
+  assert.equal("approvalMode" in full, false);
+});

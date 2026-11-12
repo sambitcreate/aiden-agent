@@ -151,6 +151,36 @@ export function workspaceApprovalPatch(
   };
 }
 
+/** A Workspace settings change to its mode or Mac grants. */
+export interface WorkspaceApprovalChange {
+  /** `null` goes back to the global mode. */
+  mode?: ApprovalMode | null;
+  revokeMac?: MacGrantClass;
+}
+
+/**
+ * Validate the approval fields of a workspace update: `approvalMode` (a mode,
+ * or `null` to follow the global mode) and `revokeMacGrant`. Returns undefined
+ * when neither is present; anything malformed throws. Grants are added only
+ * by answering a Mac card, never from this patch.
+ */
+export function parseWorkspaceApprovalChange(fields: Readonly<Record<string, unknown>>): WorkspaceApprovalChange | undefined {
+  const change: WorkspaceApprovalChange = {};
+  if (fields.approvalMode !== undefined) {
+    if (fields.approvalMode === null) change.mode = null;
+    else {
+      const mode = parseApprovalMode(fields.approvalMode);
+      if (!mode) throw new Error("Invalid approval mode.");
+      change.mode = mode;
+    }
+  }
+  if (fields.revokeMacGrant !== undefined) {
+    if (!MAC_GRANT_CLASSES.includes(fields.revokeMacGrant as MacGrantClass)) throw new Error("Invalid Mac permission.");
+    change.revokeMac = fields.revokeMacGrant as MacGrantClass;
+  }
+  return change.mode !== undefined || change.revokeMac !== undefined ? change : undefined;
+}
+
 /** The approval settings a Settings write may change. */
 export interface ApprovalSettingsPatch {
   approvalMode?: ApprovalMode;

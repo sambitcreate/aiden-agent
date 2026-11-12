@@ -1,5 +1,7 @@
 import * as path from "node:path";
 import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
+import { reportApprovalModeChanged } from "./approval-gate/approval-analytics.js";
+import { parseWorkspaceApprovalChange, workspaceApprovalPatch } from "../../renderer/shared/approval-mode.js";
 import type { configStore } from "./config-store.js";
 import type { llmClient } from "./llm-client.js";
 import type { scheduleService } from "./schedule-service.js";
@@ -398,12 +400,28 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
         };
         if (!next.disabledSkills) delete next.disabledSkills;
         if (!next.disabledMcpServerIds) delete next.disabledMcpServerIds;
+        const approvalChange = parseWorkspaceApprovalChange(fields);
+        if (fields.permission === "full") {
+          // An older client choosing Full: the legacy reading (Never ask with
+          // shell and files allowed) applies, so drop any own mode or grants.
+          delete next.approvalMode;
+          delete next.macGrants;
+        } else if (approvalChange) {
+          const approval = workspaceApprovalPatch(next, approvalChange);
+          if (approval.permission) next.permission = approval.permission;
+          if (approval.approvalMode) next.approvalMode = approval.approvalMode;
+          else delete next.approvalMode;
+          if (approval.macGrants) next.macGrants = approval.macGrants;
+          else delete next.macGrants;
+        }
+        const reportModeChange = () => reportApprovalModeChanged("workspace", existing.approvalMode, next.approvalMode);
         const authorityChanged =
           next.permission !== existing.permission ||
           next.memoryEnabled !== existing.memoryEnabled;
         if (!authorityChanged) {
           const saved = await deps.configStore.saveWorkspace(next, options.beforeSave);
           deps.onChanged?.();
+          reportModeChange();
           return saved;
         }
         return await withWorkspaceScheduleRestoration(
@@ -428,6 +446,7 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
             const saved = await deps.configStore.saveWorkspace(next, options.beforeSave);
             followThroughChange.committed = true;
             deps.onChanged?.();
+            reportModeChange();
             if (saved.permission !== "none") {
               ensureResumedOnExit();
               await deps.scheduleService.resumeWorkspace(saved.id);

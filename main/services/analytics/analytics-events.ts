@@ -32,7 +32,7 @@ const RUN_TRIGGERS = enumProp("automatic", "manual", "catch_up", "retry", "file_
 
 const APPROVAL_CARD = {
   kind: enumProp("command", "file", "computer_use", "form_fill", "schedule", "subagent", "hook", "classifier", "tool"),
-  mode: enumProp("ask", "full", "read_only", "none", "bot"),
+  mode: enumProp("ask", "auto", "never", "full", "read_only", "none", "bot"),
   chat: enumProp("workspace", "subagent", "bot"),
 } as const;
 
@@ -83,6 +83,12 @@ export const ANALYTICS_EVENTS = {
   // which every event already carries (desktop or server).
   approval_shown: APPROVAL_CARD,
   approval_answered: { ...APPROVAL_CARD, scope: enumProp("once", "chat", "workspace", "bot", "deny") },
+  // The person chose an approval mode: for this Mac, or for one workspace
+  // ("global" there means it went back to following this Mac's mode).
+  approval_mode_changed: {
+    mode: enumProp("ask", "auto", "never", "global"),
+    scope: enumProp("global", "workspace"),
+  },
 
   // Crashes without a JavaScript stack (process gone, unclean exit)
   app_crashed: {
