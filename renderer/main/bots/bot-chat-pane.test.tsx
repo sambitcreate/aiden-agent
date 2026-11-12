@@ -2300,6 +2300,50 @@ test("a repeated approval requests Always truthfully, preserves the draft and Ma
   await waitFor(() => assert.equal(router.state.location.href, "/settings?section=approvals"));
 });
 
+test("in Ask, a repeated approval also offers Auto, which saves the Mac's mode through settings", async () => {
+  const USABLE = [{ id: "openai", models: ["fast"], hasKey: true, needsKey: true }];
+  let saved: unknown;
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot(), "bots:pendingApprovals": () => [],
+    "settings:get": () => ({ approvalMode: "ask" }),
+    "settings:set": (patch) => { saved = patch; return { approvalMode: "auto" }; },
+    "providers:list": () => USABLE,
+  });
+  act(() => emitBotTestNotification("bots:approval", { botId: "bot-1", waitId: "w-1", toolCallId: "call-a", toolName: "send_email", summary: "Send the update.", always: { key: "k", count: 3 } }));
+  const card = await screen.findByRole("region", { name: "Review before Send email" });
+  const offer = await within(card).findByRole("button", { name: "Switch to Auto" });
+  await act(async () => fireEvent.click(offer));
+  assert.deepEqual(saved, { approvalMode: "auto" });
+  // The card itself is still waiting for an answer: switching answers nothing.
+  assert.equal(calls.filter((call) => call.channel === "bots:approve").length, 0);
+  // Once in Auto the offer goes.
+  await waitFor(() => assert.equal(within(card).queryByRole("button", { name: "Switch to Auto" }), null));
+});
+
+test("Auto is offered only for a repeat, only in Ask, and only when a model could judge", async () => {
+  const USABLE = [{ id: "openai", models: ["fast"], hasKey: true, needsKey: true }];
+  const cases: Array<[string, { settings: unknown; providers: unknown[]; always: boolean }]> = [
+    ["a first-time card", { settings: { approvalMode: "ask" }, providers: USABLE, always: false }],
+    ["already in Never ask", { settings: { approvalMode: "never" }, providers: USABLE, always: true }],
+    ["already in Auto", { settings: { approvalMode: "auto" }, providers: USABLE, always: true }],
+    ["no model that could judge", { settings: { approvalMode: "ask" }, providers: [], always: true }],
+  ];
+  for (const [index, [name, setup]] of cases.entries()) {
+    await mountChat({
+      "bots:live:subscribe": () => snapshot(), "bots:pendingApprovals": () => [],
+      "settings:get": () => setup.settings,
+      "providers:list": () => setup.providers,
+    });
+    act(() => emitBotTestNotification("bots:approval", { botId: "bot-1", waitId: `wait-${index}`, toolCallId: "call-a", toolName: "send_email", summary: "Send the update.",
+      ...(setup.always ? { always: { key: "k", count: 3 } } : {}) }));
+    const card = await screen.findByRole("region", { name: "Review before Send email" });
+    // Give settings and providers a chance to land before checking it stayed out.
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    assert.equal(within(card).queryByRole("button", { name: "Switch to Auto" }), null, name);
+    cleanup();
+  }
+});
+
 test("Always errors keep the card retryable; a settled old card never returns after a late failure", async () => {
   let reject!: (error: Error) => void;
   const calls = await mountChat({

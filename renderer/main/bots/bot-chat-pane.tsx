@@ -82,6 +82,7 @@ import { formatUsageLimitTime, type UsageLimitWaitView } from "../../shared/usag
 import { useSpendingStatus } from "../../lib/use-spending-status";
 import { SpendingLimitNotice } from "../../components/spending/spending-limit-notice";
 import { spendingNotice } from "../../shared/spending";
+import { switchToAutoSuggestion, useSwitchToAutoOffer } from "../../lib/switch-to-auto";
 
 export const BOT_INTERRUPTED_TEXT = "I got interrupted while working on this.";
 export const BOT_ACCESS_CHANGED_TEXT = "This Bot's access changed. Review it in Advanced.";
@@ -219,6 +220,9 @@ export function BotApprovalCard({
   const [busy, setBusy] = React.useState(false);
   const inFlight = React.useRef(false);
   const [answerError, setAnswerError] = React.useState<string | null>(null);
+  // Allowed again and again in Ask: Auto is offered beside Always. Not on a
+  // device that may only deny.
+  const autoOffer = useSwitchToAutoOffer(prompt.always !== undefined && allowElsewhere === undefined);
   const respond = async (decision: "allow" | "deny", scope?: "always") => {
     if (inFlight.current) return;
     inFlight.current = true;
@@ -247,6 +251,7 @@ export function BotApprovalCard({
       requester={name}
       alwaysOption={{ label: botAlwaysAllowLabel(name), hint: `${name} won’t ask again for this. Undo in Settings → Approvals.` }}
       notes={prompt.always ? [`You’ve allowed this ${prompt.always.count} times in the last 2 weeks.`] : []}
+      {...(autoOffer ? { suggestion: switchToAutoSuggestion(autoOffer) } : {})}
       {...(allowElsewhere ? { allowElsewhere } : {})}
       error={answerError}
       keyboardShortcuts={keyboardShortcuts}

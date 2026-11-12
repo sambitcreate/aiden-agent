@@ -2,7 +2,7 @@ import { ClassifierApproval } from "./classifier-approval";
 import { classifierApprovalState } from "../shared/classifier-approval";
 import * as React from "react";
 import { CalendarClock, FilePen, FilePlus, Hand, Mic, ShieldQuestion, SquareTerminal, type LucideIcon } from "lucide-react";
-import { Text } from "./ui";
+import { Button, Text } from "./ui";
 import { ApprovalActions, ApprovalIconTile, type ApprovalRememberOption } from "./approval-card-parts";
 import { CopyButton } from "./copy-button";
 import { cn } from "../lib/ui-utils";
@@ -321,6 +321,7 @@ export function ChatApprovalCard({
   requester = "Aiden",
   alwaysOption,
   notes = [],
+  suggestion,
   allowElsewhere,
   error,
 }: {
@@ -354,6 +355,8 @@ export function ChatApprovalCard({
   alwaysOption?: { label: string; hint: string };
   /** Quiet lines under the request, such as how often it was allowed before. */
   notes?: readonly string[];
+  /** A quiet offer under the notes, such as switching to Auto after repeated allows. */
+  suggestion?: { text: string; action: string; onAction(): void; busy?: boolean };
   /** This device may only deny: the device where the person can allow it instead. */
   allowElsewhere?: string;
   /** The last answer could not be sent. */
@@ -541,6 +544,16 @@ export function ChatApprovalCard({
             {note}
           </Text>
         ))}
+        {suggestion ? (
+          <div className="mt-1 flex shrink-0 flex-wrap items-center justify-center gap-x-1.5" role="group" aria-label={suggestion.text}>
+            <Text variant="small" color="tertiary" as="span" className="text-pretty">
+              {suggestion.text}
+            </Text>
+            <Button variant="transparent" size="small" disabled={suggestion.busy === true || deciding} onClick={suggestion.onAction}>
+              {suggestion.action}
+            </Button>
+          </div>
+        ) : null}
         {allowElsewhere !== undefined ? (
           <Text variant="small" color="secondary" as="p" role="note" className="mt-1.5 shrink-0 text-center">
             {`Allow it on ${allowElsewhere}.`}

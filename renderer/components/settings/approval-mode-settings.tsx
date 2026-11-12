@@ -146,7 +146,7 @@ export function ApprovalModeSettings({ children }: { /** The rules page, under t
       <FieldSet title="Advanced">
         <Field
           label="Approval model"
-          description="The model Auto asks before an action runs. By default it's the chat's own model, so nothing goes anywhere the chat wasn't already using. Each action it reviews is sent to this model, with typed text, passwords and card details left out."
+          description="The model Auto asks before an action runs. By default it's the chat's own model, or for a Bot the Bot's own model, so nothing goes anywhere the chat or Bot wasn't already using. Each action it reviews is sent to this model, with typed text, passwords and card details left out."
         >
           <Select
             value={modelChoice}

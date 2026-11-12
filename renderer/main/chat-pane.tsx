@@ -159,6 +159,7 @@ import { ContextPressureFeed } from "../lib/context-pressure-feed";
 import type { ChatContextPressureV1 } from "../shared/context-pressure";
 import { ReasoningVisibilityControl } from "../components/reasoning-visibility-control";
 import { ApprovalStatusLine, ChatApprovalCard } from "../components/chat-approval-card";
+import { noteWorkspaceAllow, repeatableApproval, useWorkspaceRepeatNudge } from "../lib/switch-to-auto";
 import { useApprovalStatusLine } from "../lib/use-approval-status-line";
 import { isComputerUseAccessApprovalDetails } from "../shared/computer-use-access";
 import { liveOpenChat } from "../lib/live-open-chat";
@@ -2619,6 +2620,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
           prev.filter((approval) => approval.approvalId !== prompt.approvalId),
         );
         setDeniedApprovalChatId(decision === "deny" ? decisionChatId : null);
+        const workspaceId = effectiveWorkspaceIdRef.current;
+        if (decision === "allow" && options?.scope === undefined && workspaceId && repeatableApproval(prompt)) {
+          noteWorkspaceAllow(workspaceId, prompt.toolName);
+        }
         showApprovalStatus(
           decision === "deny"
             ? { decision: "deny" }
@@ -3263,6 +3268,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
 
   const pending = approvals[0];
+  // Allowed again and again in Ask: the card offers Auto.
+  const repeatNudge = useWorkspaceRepeatNudge(effectiveWorkspace, pending);
   const pendingLiveVoice = useLiveApprovalVoiceHint(pending?.approvalId);
   const showComputerUseContinue =
     computerUsePendingContinue &&
@@ -3800,6 +3807,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   pendingCount={approvals.length}
                   keyboardShortcuts
                   liveVoice={pendingLiveVoice}
+                  {...repeatNudge}
                 />
               ) : approvalStatus.status ? (
                 <ApprovalStatusLine status={approvalStatus.status} />
