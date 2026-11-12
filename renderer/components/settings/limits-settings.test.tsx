@@ -129,6 +129,14 @@ test("spending limits stay locked when settings can't be read, so a save can't w
   assert.equal(trigger.hasAttribute("disabled"), true);
 });
 
+test("settings that can't be read never claim nothing costs money: the limits show, locked", async () => {
+  const free = [{ id: "ollama", models: ["llama"], baseUrl: "http://127.0.0.1:11434/v1", hasKey: true }];
+  await mount({}, { settingsFail: true, providers: free });
+  const trigger = await screen.findByRole("combobox", { name: "Spending limit for each chat" });
+  assert.equal(trigger.hasAttribute("disabled"), true);
+  assert.equal(screen.queryByText("Nothing here costs money yet"), null, "a limit set there may be the one not shown");
+});
+
 test("a settings read failure says why the limits can't change", async () => {
   await mount({}, { settingsFail: true });
   assert.match((await screen.findByRole("alert")).textContent ?? "", /Couldn’t load your limits/u);

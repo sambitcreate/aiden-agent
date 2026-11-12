@@ -101,8 +101,10 @@ export function LimitsSettings() {
   const locked = !settings.data;
   const amountValue = (amount: number | undefined) => (amount === undefined ? "none" : String(amount));
   // Only API key requests cost money, so the limits wait for a provider that bills by the request. A limit
-  // already set keeps them in reach, and a provider list that can't be read shows them rather than hiding one.
-  const showSpending = providers.isError || meteredProviderConnected(providers.data ?? []) || anySpendingLimitSet(limits);
+  // already set keeps them in reach, and settings or a provider list that can't be read show them rather than
+  // hiding one. "Nothing here costs money yet" needs both read: until then, neither shows.
+  const showSpending = providers.isError || settings.isError || meteredProviderConnected(providers.data ?? []) || anySpendingLimitSet(limits);
+  const nothingCosts = !showSpending && providers.isSuccess && settings.data !== undefined;
 
   return (
     <div className="flex flex-col gap-6">
@@ -202,7 +204,7 @@ export function LimitsSettings() {
             </Select>
           </Field>
         </FieldSet>
-      ) : providers.isSuccess ? (
+      ) : nothingCosts ? (
         <FieldSet title="Spending limits">
           <Field
             label="Nothing here costs money yet"

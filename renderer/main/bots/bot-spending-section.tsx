@@ -28,14 +28,19 @@ export function BotSpendingSection({ bot }: { bot: Pick<BotDefinition, "id" | "n
   const providers = useProviders();
   const { status } = useSpendingStatus("bot", bot.id);
   const [choice, setChoice] = React.useState<BotSpendingLimitChoice | undefined>(undefined);
+  /** The Bot's own limit couldn't be read: it may be the one set. */
+  const [unread, setUnread] = React.useState(false);
   React.useEffect(() => {
     let current = true;
     setChoice(undefined);
+    setUnread(false);
     void spendingApi.botLimit(bot.id).then(
       (next) => {
         if (current) setChoice(next);
       },
-      () => undefined,
+      () => {
+        if (current) setUnread(true);
+      },
     );
     return () => {
       current = false;
@@ -59,8 +64,12 @@ export function BotSpendingSection({ bot }: { bot: Pick<BotDefinition, "id" | "n
     }
   };
 
+  // Shown once something here can cost money, and whenever a limit might be
+  // set but can't be read, so a hidden section never hides a limit.
   const shown =
     providers.isError ||
+    settings.isError ||
+    unread ||
     meteredProviderConnected(providers.data ?? []) ||
     anySpendingLimitSet(defaults) ||
     (choice !== undefined && choice.kind !== "default") ||

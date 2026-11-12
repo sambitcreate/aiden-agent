@@ -1007,6 +1007,7 @@
         "renderer/components/settings/settings-page.test.tsx",
         "renderer/components/settings/sidebar-view-picker.test.tsx",
         "renderer/components/spending/spending-limit-notice.test.tsx",
+        "renderer/main/bots/bot-spending-section.test.tsx",
         "renderer/components/settings/simulator-settings.test.tsx",
         "renderer/components/settings/simulator-ssh-hosts.test.tsx",
         "renderer/components/settings/skills-settings.test.tsx",
