@@ -7,7 +7,7 @@ import test from "node:test";
 import { captureAnalyticsEvents } from "../analytics/test-support.js";
 import { createBotApprovals } from "../bot-runtime/bot-approvals.js";
 import type { BotApprovalRequest } from "../bot-runtime/bot-extension.js";
-import { ToolApprovalCoordinator, type ToolApprovalPrompt } from "../tool-approval.js";
+import { ToolApprovalCoordinator, toolCallApprovalEffect, type ToolApprovalPrompt } from "../tool-approval.js";
 import { ApprovalAnalytics } from "./approval-analytics.js";
 
 function workspaceCoordinator(mode: "ask" | "full" = "ask") {
@@ -74,7 +74,12 @@ test("a card that leaves without the person's answer is shown but never answered
 test("identical parallel calls share one counted card, and a re-ask after Deny is not counted", async (t) => {
   const events = captureAnalyticsEvents(t);
   const { coordinator, prompts } = workspaceCoordinator();
-  const card = { streamId: "s1", toolName: "run_command", summary: "Run command: npm test" };
+  const card = {
+    streamId: "s1",
+    toolName: "run_command",
+    summary: "Run command: npm test",
+    effect: toolCallApprovalEffect("run_command", { command: "npm test" }),
+  };
   const first = coordinator.request({ ...card, toolCallId: "c1" });
   const second = coordinator.request({ ...card, toolCallId: "c2" });
   coordinator.decide(prompts[0]!.approvalId, false);

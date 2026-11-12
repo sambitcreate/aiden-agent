@@ -248,6 +248,7 @@ import {
 import {
   ToolApprovalCoordinator,
   toolApprovalBlockReason,
+  toolCallApprovalEffect,
   type ToolApprovalDecisionPayload,
 } from "./tool-approval.js";
 import { botApprovals } from "./bot-runtime/bot-approvals-main.js";
@@ -4242,6 +4243,10 @@ export const llmClient = {
                   toolCallId,
                   toolName: context.toolCall.name,
                   summary: `${summarizeToolCall(context.toolCall.name, context.args)}\n\n${hookAsk}`,
+                  ...(() => {
+                    const effect = toolCallApprovalEffect(context.toolCall.name, context.args);
+                    return effect ? { effect } : {};
+                  })(),
                 },
                 signal,
                 owner.documentId,
@@ -4580,12 +4585,21 @@ export const llmClient = {
             (() => {
               const toolCallId = timeline.publicToolCallId(context.toolCall.id);
               if (!toolCallId) throw new Error("The tool approval step was not initialized.");
+              // The exact call (its full arguments, and the browser tab it
+              // acts on), so only a truly identical parallel call shares this
+              // card, and only that action is refused again after a Deny.
+              const effect = toolCallApprovalEffect(
+                context.toolCall.name,
+                context.args,
+                browserActionApproval?.argumentsFingerprint,
+              );
               return {
                 streamId,
                 toolCallId,
                 toolName: context.toolCall.name,
                 summary,
                 details: approvalDetails,
+                ...(effect ? { effect } : {}),
                 ...(() => {
                   const preview = approvalDetails
                     ? undefined

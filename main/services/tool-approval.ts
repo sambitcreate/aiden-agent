@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { ApprovalAnalytics } from "./approval-gate/approval-analytics.js";
 import type { ToolApprovalDetails } from "../../renderer/shared/assistant.js";
 import type { ToolApprovalPreview } from "../../renderer/shared/tool-approval-preview.js";
@@ -44,17 +44,51 @@ interface SharedApproval {
 }
 
 /**
- * What a card asks the person, so two calls that would show the same card
- * share it and a declined one is not asked again in the run. The owning
- * document is part of it: only the same window's calls share.
+ * What a call would do, for a caller that can name it exactly: the tool and
+ * its canonical arguments (object keys sorted, undefined fields dropped), plus
+ * anything else that picks the target, such as a browser tab. Two calls with
+ * the same key do the same thing. A value that is not plain JSON has no key.
+ */
+export function toolCallApprovalEffect(toolName: string, args: unknown, target?: unknown): string | undefined {
+  const canonical = (value: unknown): string => {
+    if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
+    if (typeof value === "number") {
+      if (!Number.isFinite(value)) throw new Error("not JSON");
+      return JSON.stringify(value);
+    }
+    if (Array.isArray(value)) return `[${value.map((item) => (item === undefined ? "null" : canonical(item))).join(",")}]`;
+    if (typeof value !== "object") throw new Error("not JSON");
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, child]) => child !== undefined)
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .map(([key, child]) => `${JSON.stringify(key)}:${canonical(child)}`);
+    return `{${entries.join(",")}}`;
+  };
+  try {
+    return createHash("sha256")
+      .update(canonical({ toolName, args: args ?? null, target: target ?? null }))
+      .digest("hex");
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The card two calls may share, and a denied one is remembered by, in a run.
+ * Only a caller-supplied effect (`toolCallApprovalEffect`) counts: a card's
+ * text often leaves the arguments out, so equal text is not the same action.
+ * The owning document and everything the card shows are part of it too.
  */
 function approvalEffectKey(
   descriptor: Omit<ToolApprovalPrompt, "approvalId">,
+  effect: string | undefined,
   ownerDocumentId: string | undefined,
 ): string | undefined {
+  if (effect === undefined) return undefined;
   try {
     return JSON.stringify([
       ownerDocumentId ?? null,
+      effect,
       descriptor.toolName,
       descriptor.summary,
       descriptor.details ?? null,
@@ -158,15 +192,18 @@ export class ToolApprovalCoordinator {
    * process (Bots persist it as their `waitId`). A still-pending prompt with
    * the same id is withdrawn first, so the id always names the newest ask.
    *
-   * Without one, the card belongs to this run: an identical card already
-   * pending in the stream is shared (one card answers every waiting call),
-   * and a card the person denied in the stream is not shown again.
+   * Without one, the card belongs to this run. When the caller also names the
+   * call's `effect` (`toolCallApprovalEffect`), a card for the same action
+   * already pending in the stream is shared (one card answers every waiting
+   * call), and an action the person denied in the stream is not asked again.
+   * A call without an effect always gets its own card.
    */
   request(
-    descriptor: Omit<ToolApprovalPrompt, "approvalId"> & { approvalId?: string },
+    request: Omit<ToolApprovalPrompt, "approvalId"> & { approvalId?: string; effect?: string },
     signal?: AbortSignal,
     ownerDocumentId?: string,
   ): Promise<ToolApprovalOutcome> {
+    const { effect: callEffect, ...descriptor } = request;
     if (this.stopped || signal?.aborted) {
       return Promise.resolve("cancelled");
     }
@@ -176,11 +213,11 @@ export class ToolApprovalCoordinator {
       if (closedOutcome === "detached") this.shortCircuited({ ...descriptor, approvalId });
       return Promise.resolve(closedOutcome);
     }
-    const effect = descriptor.approvalId === undefined ? approvalEffectKey(descriptor, ownerDocumentId) : undefined;
+    const effect = descriptor.approvalId === undefined ? approvalEffectKey(descriptor, callEffect, ownerDocumentId) : undefined;
     if (effect !== undefined) {
       if (this.denied.get(descriptor.streamId)?.has(effect)) return Promise.resolve("denied");
       const leader = this.shared.get(descriptor.streamId)?.get(effect);
-      if (leader) return this.follow(leader, descriptor, signal, ownerDocumentId);
+      if (leader) return this.follow(leader, request, signal, ownerDocumentId);
     }
     this.pending.get(approvalId)?.settle("cancelled");
     const result = this.ask(descriptor, approvalId, signal, ownerDocumentId, effect);
@@ -190,7 +227,7 @@ export class ToolApprovalCoordinator {
   /** Wait on an identical card already pending in this run. */
   private async follow(
     leader: SharedApproval,
-    descriptor: Omit<ToolApprovalPrompt, "approvalId">,
+    descriptor: Omit<ToolApprovalPrompt, "approvalId"> & { effect?: string },
     signal: AbortSignal | undefined,
     ownerDocumentId: string | undefined,
   ): Promise<ToolApprovalOutcome> {
