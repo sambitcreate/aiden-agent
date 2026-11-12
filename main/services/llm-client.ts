@@ -68,7 +68,6 @@ import {
   canUseDeviceTools,
   createDeviceAgentTools,
   deviceToolApprovalSummary,
-  deviceToolRequiresApproval,
   isDeviceToolName,
 } from "./devices/device-tools.js";
 import { devicesEnabled } from "./devices/feature-flag.js";
@@ -77,8 +76,6 @@ import { WEB_FETCH_TOOL_NAME } from "../../renderer/shared/web-extract.js";
 import { webFetchService } from "./web-fetch-main.js";
 import { createVisionAnalysisTool, INSPECT_IMAGE_TOOL_NAME } from "./vision-analysis-tool.js";
 import {
-  APPROVAL_TOOL_NAMES,
-  DISCLOSURE_APPROVAL_TOOL_NAMES,
   buildPinnedCodingTools,
   summarizeToolCall,
 } from "./coding-tools.js";
@@ -111,7 +108,7 @@ import {
 } from "./bot-runtime-authority-main.js";
 import type { BotRuntimeAuthorityAdmission } from "./bot-runtime-authority.js";
 import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
-import { backgroundJobRequiresApproval } from "./follow-through/background-job-tool.js";
+import { workspaceToolApproval } from "./approval-gate/workspace-tool-approval.js";
 import {
   hostRunRegistry,
   recordRunAttentionResolved,
@@ -255,7 +252,6 @@ import {
 import { botApprovals } from "./bot-runtime/bot-approvals-main.js";
 import {
   SCOPED_APPROVAL_OFFER,
-  toolApprovalRuleTarget,
   type ToolApprovalRuleTarget,
 } from "./tool-approval-rules.js";
 import { toolApprovalRules } from "./tool-approval-rules-main.js";
@@ -431,7 +427,6 @@ import {
   memoryMetadataForChat,
   memoryProvenanceForGeneration,
   memoryScopeForChat,
-  REMEMBER_MEMORY_TOOL_NAME,
   FORGET_MEMORY_TOOL_NAME,
 } from "./memory-context.js";
 import { memoryStore } from "./memory-store-main.js";
@@ -4163,6 +4158,8 @@ export const llmClient = {
             else if (hook.kind === "allow") hookAllow = true;
             return undefined;
           };
+          const hookVerdict = (): "ask" | "allow" | undefined =>
+            hookAsk ? "ask" : hookAllow ? "allow" : undefined;
           const notifyApprovalWaiting = () =>
             chatHooks?.notify(
               `Aiden needs your permission to use ${context.toolCall.name}`,
@@ -4219,7 +4216,13 @@ export const llmClient = {
             if (!access.allowed) return blockComputerUse(access.reason);
             const hookBlock = await runPreToolUseHooks();
             if (hookBlock) return hookBlock;
-            if (hookAsk) {
+            const computerUseDecision = workspaceToolApproval({
+              toolName: context.toolCall.name,
+              args: context.args,
+              permission,
+              hook: hookVerdict(),
+            }).decision;
+            if (computerUseDecision.outcome === "ask") {
               // A hook asked: this one action needs its own card.
               const toolCallId = timeline.publicToolCallId(context.toolCall.id);
               if (!toolCallId) return blockComputerUse("The tool approval step was not initialized.");
@@ -4295,17 +4298,6 @@ export const llmClient = {
               scheduleToolRequiresApproval(context.args);
             const editScheduleApproval = context.toolCall.name === EDIT_AUTOMATION_TOOL_NAME;
             const scheduleApproval = createScheduleApproval || editScheduleApproval;
-            const workspaceApproval =
-              permission === "ask" &&
-              (APPROVAL_TOOL_NAMES.has(context.toolCall.name) ||
-                BROWSER_MUTATION_TOOL_NAMES.has(context.toolCall.name) ||
-                deviceToolRequiresApproval(context.toolCall.name, context.args) ||
-                backgroundJobRequiresApproval(context.toolCall.name, context.args));
-            const disclosureApproval = DISCLOSURE_APPROVAL_TOOL_NAMES.has(context.toolCall.name);
-            const memoryApproval =
-              context.toolCall.name === REMEMBER_MEMORY_TOOL_NAME ||
-              context.toolCall.name === FORGET_MEMORY_TOOL_NAME;
-            const botMcpApproval = botMutatingToolNames.has(context.toolCall.name);
             let artifactApproval: WorkspaceArtifactCallApproval | undefined;
             if (context.toolCall.name === WORKSPACE_ARTIFACT_TOOL_NAME && workspaceId) {
               try {
@@ -4330,55 +4322,47 @@ export const llmClient = {
             }
             attendedScheduleApproval = scheduleApproval && attendedAssistant;
             let preparedStandardScheduleSummary: string | undefined;
-            if (
-              !scheduleApproval &&
-              !workspaceApproval &&
-              !disclosureApproval &&
-              !memoryApproval &&
-              !botMcpApproval &&
-              !artifactApproval?.required &&
-              !browserFileApproval?.requiresApproval &&
-              !hookAsk
-            ) {
-              // The question card itself is the wait; hooks hear about it.
-              if (context.toolCall.name === ASK_USER_QUESTION_TOOL_NAME) {
-                chatHooks?.notify("Aiden is asking you a question", "elicitation_dialog");
-              }
-              timeline.toolRunning(context.toolCall.id);
-              return undefined;
-            }
+            const workspaceGateInput = {
+              toolName: context.toolCall.name,
+              args: context.args,
+              permission,
+              hook: hookVerdict(),
+              botBound: Boolean(preparedBotContext),
+              botMutating: botMutatingToolNames.has(context.toolCall.name),
+              artifactRequired: artifactApproval?.required === true,
+              browserFileRequired: browserFileApproval?.requiresApproval === true,
+              workspaceId,
+            };
+            let workspaceGate = workspaceToolApproval(workspaceGateInput);
             // Only the parent's plain workspace tools can be remembered, and
             // never for Bot-bound turns whose authority is policy-owned.
             // A hook's ask never offers or uses a remembered approval.
-            if (
-              workspaceApproval &&
-              !hookAsk &&
-              !preparedBotContext &&
-              APPROVAL_TOOL_NAMES.has(context.toolCall.name)
-            ) {
-              scopedRuleTarget = toolApprovalRuleTarget(
-                context.toolCall.name,
-                context.args,
-                workspaceId,
-              );
-              if (scopedRuleTarget && hookAllow && !signal?.aborted) {
-                // A remembered scope could cover this call, so a hook may too.
+            if (workspaceGate.readsRemembered) {
+              let remembered: "chat" | "always" | undefined;
+              try {
+                remembered = await toolApprovalRules.match(params.chatId, workspaceGate.readsRemembered);
+              } catch (error) {
+                logger.warn("pi", "Could not read remembered tool approvals; asking instead.", error);
+              }
+              if (remembered) workspaceGate = workspaceToolApproval({ ...workspaceGateInput, remembered });
+            }
+            const workspaceDecision = workspaceGate.decision;
+            if (workspaceDecision.outcome === "allow") {
+              if (!workspaceDecision.via) {
+                // The question card itself is the wait; hooks hear about it.
+                if (context.toolCall.name === ASK_USER_QUESTION_TOOL_NAME) {
+                  chatHooks?.notify("Aiden is asking you a question", "elicitation_dialog");
+                }
                 timeline.toolRunning(context.toolCall.id);
                 return undefined;
               }
-              if (scopedRuleTarget) {
-                let remembered: "chat" | "always" | undefined;
-                try {
-                  remembered = await toolApprovalRules.match(params.chatId, scopedRuleTarget);
-                } catch (error) {
-                  logger.warn("pi", "Could not read remembered tool approvals; asking instead.", error);
-                }
-                if (remembered && !signal?.aborted) {
-                  timeline.toolRunning(context.toolCall.id);
-                  return undefined;
-                }
+              if (!signal?.aborted) {
+                timeline.toolRunning(context.toolCall.id);
+                return undefined;
               }
             }
+            if (workspaceDecision.outcome === "ask") scopedRuleTarget = workspaceDecision.ruleTarget;
+            const memoryApproval = workspaceDecision.outcome === "memory";
             if (scheduleApproval && attendedAssistant) {
               try {
                 const proposal = editScheduleApproval
