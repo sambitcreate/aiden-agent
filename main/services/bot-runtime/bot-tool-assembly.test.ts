@@ -18,6 +18,7 @@ import { declarePiRuntimeReplay } from "../pi-runtime-tool.js";
 import { buildSkillTools, SKILL_TOOL_NAME } from "../skill-tools.js";
 import { LOAD_TOOLS_TOOL_NAME } from "../on-demand-tools.js";
 import { botRuleLabel, defaultBotRules, type BotRule } from "../../../renderer/shared/bot-rules.js";
+import type { ApprovalMode } from "../../../renderer/shared/approval-mode.js";
 import type { ApprovalRule } from "../../../renderer/shared/approval-rules.js";
 import { BOT_HANDOFF_RESULT_ENTRY_KIND } from "../../../renderer/shared/bot-handoffs.js";
 import type { BotClassifiableAction } from "../bot-rules/classify.js";
@@ -2451,6 +2452,34 @@ test("rules page: a 'When a Bot wants to' Block refuses the matching call only, 
   const asked = await mailTurnUnderPage(() => [pageRule("r2", { kind: "text", text: "send an email" }, "ask")]);
   assert.equal(asked.sent, 1);
   assert.deepEqual(asked.approvals.map((request) => request.summary), [`Rule · Send a message or email to someone — ${SEND_EMAIL_TOOL}`]);
+});
+
+test("rules page: sharing an image asks in Never ask and under an Always-allow rule; only Block skips the card", async () => {
+  async function share(options: { mode?: ApprovalMode; page?: () => readonly ApprovalRule[]; content?: string } = {}) {
+    const state = assemblyState(full(botHome()));
+    const fauxModels = createFauxModels([
+      fauxAssistantMessage([fauxToolCall("share_image", { path: "photo.png" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage("done"),
+    ]);
+    const deps = assemblyDeps(state, {
+      candidates: (authority) => [shareImageCandidate(authority)],
+      ...(options.mode ? { approvalMode: () => options.mode! } : {}),
+      ...(options.page ? { pageRules: options.page } : {}),
+    });
+    const { harness, root } = await memoryHarness(deps, fauxModels);
+    try {
+      await (await root.submit({ type: "input", content: "send me the photo" }, ctx)).wait(ctx);
+      return { cards: deps.approvals.length, shared: (await sharedImages(root)).length };
+    } finally {
+      await harness.close(ctx);
+    }
+  }
+  const allowShare = () => [pageRule("r1", { kind: "tool", tool: "share_image" }, "allow")];
+  assert.deepEqual(await share({ mode: "never" }), { cards: 1, shared: 1 }, "Never ask still shows the card");
+  assert.deepEqual(await share({ page: allowShare }), { cards: 1, shared: 1 }, "an Always-allow rule doesn't skip it");
+  assert.deepEqual(await share({ mode: "auto", page: allowShare }), { cards: 1, shared: 1 }, "nor does Auto");
+  const blocked = await share({ mode: "never", page: () => [pageRule("r1", { kind: "tool", tool: "share_image" }, "block")] });
+  assert.deepEqual(blocked, { cards: 0, shared: 0 }, "a Block rule still wins");
 });
 
 test("rules page: an unreadable rule book refuses the call instead of running it", async () => {

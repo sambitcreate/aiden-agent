@@ -144,6 +144,9 @@ test("Add and Change inputs are strict: no Bot owner from the page, no allow in 
     { target: { kind: "tool", tool: "browser_click" }, decision: "allow", scope: "everything" },
     { target: { kind: "site", host: "localhost" }, decision: "allow" },
     { target: { kind: "tool", tool: "a b" }, decision: "allow" },
+    // Disclosure tools ask in every mode: no rule may allow them.
+    { target: { kind: "tool", tool: "share_image" }, decision: "allow" },
+    { target: { kind: "tool", tool: "generate_image" }, decision: "allow" },
   ]) {
     assert.throws(() => parseApprovalRuleAddInput(input), Error, JSON.stringify(input));
   }

@@ -23,6 +23,7 @@ import { skillToolKey } from "../../skill-registry-core.js";
 import type { BotHandoffAnswer } from "../../../../renderer/shared/bot-handoffs.js";
 import type { BotRule } from "../../../../renderer/shared/bot-rules.js";
 import type { ApprovalRule } from "../../../../renderer/shared/approval-rules.js";
+import type { ApprovalMode } from "../../../../renderer/shared/approval-mode.js";
 import type {
   BotApprovalRequest,
   BotExtensionDeps,
@@ -273,6 +274,8 @@ export interface AssemblyDepsOptions {
   routinesGoAhead?: () => boolean;
   /** Settings → Approvals' rules, read on every call; a throw is an unreadable rule book. Absent: no port. */
   pageRules?: () => readonly ApprovalRule[];
+  /** Settings → Approvals' mode, read on every call. Absent: no port (Ask). */
+  approvalMode?: () => ApprovalMode;
 }
 
 export interface AssemblyDeps extends BotExtensionDeps {
@@ -315,6 +318,7 @@ export function assemblyDeps(state: AssemblyState, options: AssemblyDepsOptions)
     ...(options.botName === undefined ? {} : { botName: async () => options.botName }),
     ...(options.routinesGoAhead === undefined ? {} : { routinesGoAhead: async () => options.routinesGoAhead!() }),
     ...(options.pageRules === undefined ? {} : { pageRules: async () => options.pageRules!() }),
+    ...(options.approvalMode === undefined ? {} : { approvalMode: async () => options.approvalMode!() }),
   });
   const deps: AssemblyDeps = {
     approvals: [],

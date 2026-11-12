@@ -139,6 +139,25 @@ test("Add rule: pick a tool, choose Block, and the rule is added for the whole M
   await waitFor(() => assert.equal(open, false));
 });
 
+test("Add rule: sharing an image offers only Ask and Block, so an Allow chosen first becomes Ask", async () => {
+  const added: ApprovalRuleAddInput[] = [];
+  render(
+    <AddApprovalRuleDialog
+      open
+      onOpenChange={() => {}}
+      initialDecision="allow"
+      options={[{ target: { kind: "tool", tool: "share_image" }, label: "Share an image in chat", group: "Aiden" }]}
+      onAdd={async (input) => { added.push(input); }}
+    />,
+  );
+  fireEvent.click(screen.getByText("Share an image in chat"));
+  const decision = screen.getByRole("radiogroup", { name: "Decision" });
+  assert.deepEqual(within(decision).getAllByRole("radio").map((radio) => radio.textContent), ["Ask", "Block"]);
+  fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
+  await waitFor(() => assert.equal(added.length, 1));
+  assert.equal(added[0]!.decision, "ask");
+});
+
 test("approval cards offer broader scopes only when the approval can be allowed", () => {
   assert.deepEqual(rememberableApprovalScopes(["always", "once", "chat"], true), ["chat", "always"]);
   assert.deepEqual(rememberableApprovalScopes(["once", "always", "bogus"], true), ["always"]);

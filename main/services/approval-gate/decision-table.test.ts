@@ -4,8 +4,9 @@
 // is a literal outcome captured from that code; the scenarios drive the real
 // entry points (the workspace decision llm-client calls, ACP's
 // `answerPermission`, a Bot's `checkPolicy`, the Computer Use access gate and
-// a subagent run grant). Phase 1 did not change a single row; Phase 2 changes
-// only the rows marked "Phase 2", each listed in the plan's Phase 2 notes.
+// a subagent run grant). Phase 1 did not change a single row; Phases 2 and 3
+// change only the rows marked "Phase 2" or "Phase 3", each listed in that
+// phase's notes in the plan.
 
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -265,6 +266,16 @@ test("Bot connection tool (send email)", async () => {
           }
         }
       }
+    }
+  }
+});
+
+test("Bot disclosure tool (share_image)", async () => {
+  // A plain action no Bot rule matches: only the tool's class decides.
+  for (const [turnName, turn] of Object.entries(BOT_TURNS)) {
+    for (const goAhead of turnName === "routine" ? [false, true] : [false]) {
+      const key = `share image | approval | ${turnName}${goAhead ? " | go ahead" : ""}`;
+      check("bot", key, await botOutcome({ toolName: "share_image", action: BOT_ACTIONS["plain click"]!, baseline: true, purchase: "ask", turn, goAhead }));
     }
   }
 });
@@ -620,6 +631,12 @@ const EXPECTED = {
     "send email | no approval | communicate hand_off | routine | go ahead": "block: This needs the person (Send a message or email to someone). Tell them in your reply.",
     "send email | no approval | communicate hand_off | telegram": "block: This needs the person (Send a message or email to someone). Tell them in your reply.",
     "send email | no approval | communicate hand_off | bot message": "block: This needs the person (Send a message or email to someone). Tell them in your reply.",
+    "share image | approval | person": "ask",
+    "share image | approval | routine": "block: This step needs the person's OK, and nobody is here to give it during a routine, so it didn't run. Tell them in your reply.",
+    // Phase 3: disclosure tools are explicit-only for Bots too (plan deviation e), so the routines go-ahead no longer shares.
+    "share image | approval | routine | go ahead": "block: This step needs the person's OK, and nobody is here to give it during a routine, so it didn't run. Tell them in your reply.",
+    "share image | approval | telegram": "ask",
+    "share image | approval | bot message": "ask",
   },
   computerUse: {
     "not granted | ready | answer allow": "allow, then allow; cards 1",

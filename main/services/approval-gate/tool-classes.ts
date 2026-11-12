@@ -23,9 +23,10 @@ export const MAC_TOOL_CLASSES: ReadonlyMap<string, MacGrantClass> = new Map([
 
 /**
  * Disclosure tools (deviation e): sending the person's data to another
- * service asks in every mode, Never ask included.
+ * service asks in every mode, Never ask included. Shared with the rules page,
+ * which offers no Always allow for them.
  */
-export const DISCLOSURE_TOOL_NAMES: ReadonlySet<string> = new Set(["share_image", "generate_image", "classify"]);
+export { DISCLOSURE_TOOL_NAMES } from "../../../renderer/shared/approval-rules.js";
 
 /**
  * A Bot's own things (§3.2 Exempt): its memory, its notes, its wake-ups, its

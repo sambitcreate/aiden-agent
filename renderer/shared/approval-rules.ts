@@ -176,9 +176,21 @@ export function parseApprovalRuleOwner(value: unknown): ApprovalRuleOwner | unde
   return undefined;
 }
 
-/** A natural-language rule never allows: words can only tighten. */
-export function approvalRuleDecisionsFor(target: Pick<ApprovalRuleTarget, "kind">): readonly ApprovalRuleDecision[] {
-  return target.kind === "text" ? ["ask", "block"] : APPROVAL_RULE_DECISIONS;
+/**
+ * Disclosure tools (plan §3.2 deviation e): sending the person's data to
+ * another service, or into a chat, asks once in every mode, Never ask
+ * included, so no Always-allow rule can skip their card.
+ */
+export const DISCLOSURE_TOOL_NAMES: ReadonlySet<string> = new Set(["share_image", "generate_image", "classify"]);
+
+/**
+ * The decisions a new or changed rule may take. A natural-language rule never
+ * allows (words can only tighten), and nor does a rule on a disclosure tool.
+ */
+export function approvalRuleDecisionsFor(target: ApprovalRuleTarget | Pick<ApprovalRuleTarget, "kind">): readonly ApprovalRuleDecision[] {
+  if (target.kind === "text") return ["ask", "block"];
+  if (target.kind === "tool" && "tool" in target && DISCLOSURE_TOOL_NAMES.has(target.tool)) return ["ask", "block"];
+  return APPROVAL_RULE_DECISIONS;
 }
 
 /** One stored rule, read strictly: anything malformed is dropped, never widened. */
@@ -190,7 +202,9 @@ export function parseApprovalRule(value: unknown): ApprovalRule | undefined {
   const decision = parseApprovalRuleDecision(record.decision);
   const owner = parseApprovalRuleOwner(record.owner);
   if (!target || !decision || !owner) return undefined;
-  if (!approvalRuleDecisionsFor(target).includes(decision)) return undefined;
+  // Words never allow. (An Allow on a disclosure tool is read but never
+  // applies: the gate asks for those first.)
+  if (target.kind === "text" && decision === "allow") return undefined;
   if (typeof record.createdAt !== "string" || Number.isNaN(Date.parse(record.createdAt))) return undefined;
   // "Do it myself" only on an Always-ask natural-language rule.
   const handOff = record.handOff === true && decision === "ask" && target.kind === "text";

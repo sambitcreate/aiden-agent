@@ -72,7 +72,7 @@ import {
   type ApprovalRuleDecision,
   type ApprovalRuleSubject,
 } from "../../../renderer/shared/approval-rules.js";
-import { BOT_EXEMPT_TOOL_NAMES } from "../approval-gate/tool-classes.js";
+import { BOT_EXEMPT_TOOL_NAMES, DISCLOSURE_TOOL_NAMES } from "../approval-gate/tool-classes.js";
 import type { ApprovalMode } from "../../../renderer/shared/approval-mode.js";
 import { botIngressAllowsTool, botToolApprovalSummary, botToolVerdict, botTurnOf, SUBAGENT_TOOL, type BotToolFacts } from "./bot-tool-policy.js";
 import type { BotToolCall, ToolReplay } from "./tool-adapter.js";
@@ -599,6 +599,9 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
           // The shell runs on the person's Mac: its first use asks in every mode.
           ...(toolName === "run_command" ? { mac: true, macClass: "shell" as const } : {}),
           ...(BOT_EXEMPT_TOOL_NAMES.has(toolName) ? { exempt: true } : {}),
+          // Sharing the person's data asks once in every mode, Never ask
+          // included, and no Always-allow rule skips it.
+          ...(DISCLOSURE_TOOL_NAMES.has(toolName) ? { explicitOnly: true } : {}),
           ...(baseline !== undefined ? { consequential: true } : {}),
           ...(ruled === "hand_off" ? { rule: { behavior: "hand_off" as const, locked: rule?.locked === true } }
             : rule !== undefined ? { rule: { behavior: "ask" as const, locked: rule.locked === true } } : {}),
