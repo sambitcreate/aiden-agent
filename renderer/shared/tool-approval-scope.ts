@@ -27,9 +27,15 @@ export function parseRemoteToolApprovalScope(value: unknown): Exclude<ToolApprov
   return scope === "workspace" ? undefined : scope;
 }
 
-/** The scopes a Remote device may be offered: the list without `workspace`. */
-export function remoteOfferedScopes(value: unknown): unknown {
-  return Array.isArray(value) ? value.filter((scope) => scope !== "workspace") : value;
+/**
+ * The scopes a Remote device may be offered: the list without `workspace`, or
+ * undefined (omit the field) when only a one-time allow is left, as the Remote
+ * API says. Both native clients reject an empty list and accept a missing one.
+ */
+export function remoteOfferedScopes(value: unknown): unknown[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const offered = value.filter((scope) => scope !== "workspace");
+  return offered.some((scope) => scope !== "once") ? offered : undefined;
 }
 
 /** Tools whose calls can be remembered by an approval rule. */

@@ -192,7 +192,9 @@ function projectPayload(
 ): Record<string, unknown> {
   if (type !== "approval_required") return payload;
   // "Allow in this workspace" is answered only on the host, for every reader.
-  const remote = payload.scopes === undefined ? payload : { ...payload, scopes: remoteOfferedScopes(payload.scopes) };
+  const { scopes: hostScopes, ...rest } = payload;
+  const offered = remoteOfferedScopes(hostScopes);
+  const remote: Record<string, unknown> = offered ? { ...rest, scopes: offered } : rest;
   if (projection === "full") return remote;
   const { details: _details, detailsOmitted: _omitted, scopes, ...summary } = remote;
   if (projection === "observer") return scopes === undefined ? summary : { ...summary, scopes };

@@ -729,3 +729,16 @@ test("a Mac card's Allow in this workspace never reaches a Remote reader and can
   const denied = await service.respondApproval("device-a", "run-1", "approval-1", { decision: "deny" }, "key-controller-c-0001", access);
   assert.equal(denied.decision, "deny");
 });
+
+test("a Mac card left with only a one-time allow carries no scopes to any Remote reader", async () => {
+  const { registry, service } = harness();
+  registry.publish("run-1", "chat:approval", approval("approval-1", {
+    toolName: "computer_use",
+    details: { kind: "computer-use-access" },
+    scopes: ["once", "workspace"],
+  }));
+  for (const device of [controller("device-a"), observer("device-o"), phone("device-phone")]) {
+    const prompt = open(service, device, "run-1").frames().find((frame) => frame.event === "approval_required")!.data.payload;
+    assert.equal("scopes" in prompt, false, device.id);
+  }
+});
