@@ -245,9 +245,6 @@ function decide(context: GateContext, action: GateAction): GateDecision {
   if (action.delegate) return { outcome: "delegate", step: "explicit-only", to: action.delegate };
   if (action.explicitOnly || context.hook === "ask") return { outcome: "ask", step: "explicit-only", offer: "once" };
 
-  // The Bot's own things never ask.
-  if (action.exempt) return { outcome: "allow", step: "exempt", via: "exempt" };
-
   // 4. Never ask, and the run-scoped pre-approvals. The person's Mac is never
   // pre-approved this way; only its grant lets it run.
   if (needsAnswer && !macOpen) {
@@ -274,6 +271,10 @@ function decide(context: GateContext, action: GateAction): GateDecision {
     if (!action.consequential && unwatched) return { outcome: "block", step: "ask-rule", reason: "unattended-rule" };
     return { outcome: "ask", step: "ask-rule", offer: "rule" };
   }
+
+  // The Bot's own things never ask on their own account; a rule the person
+  // wrote (above) still does.
+  if (action.exempt) return { outcome: "allow", step: "exempt", via: "exempt" };
 
   // 6. New destination after outside content entered the run.
   if (action.newDestination && !macOpen) {

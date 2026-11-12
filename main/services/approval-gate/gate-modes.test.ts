@@ -55,12 +55,13 @@ const TABLE: ReadonlyArray<[string, GateAction, Partial<GateContext>, Record<App
   ["disclosure tool", SHARE, {}, { ask: "ask@explicit-only", auto: "ask@explicit-only", never: "ask@explicit-only" }],
   ["schedule mutation", SCHEDULE, {}, { ask: "ask@explicit-only", auto: "ask@explicit-only", never: "ask@explicit-only" }],
   ["hook ask", SEND, { hook: "ask" }, { ask: "ask@explicit-only", auto: "ask@explicit-only", never: "ask@explicit-only" }],
-  // Exempt: a Bot's own things.
-  ["exempt", MEMORY, {}, { ask: "allow@exempt", auto: "allow@exempt", never: "allow@exempt" }],
   // Step 4: Never ask.
   ["consequential", SEND, {}, { ask: "ask@consequential", auto: "lookup:judge", never: "allow@never-ask" }],
   // Step 5: ask rule (only Block rules apply in Never ask).
   ["ask rule", { ...SEND, rule: { behavior: "ask", locked: false } }, {}, { ask: "ask@ask-rule", auto: "ask@ask-rule", never: "allow@never-ask" }],
+  // Exempt: a Bot's own things run without a card, unless a rule the person wrote asks.
+  ["exempt", MEMORY, {}, { ask: "allow@exempt", auto: "allow@exempt", never: "allow@never-ask" }],
+  ["exempt, ask rule", { ...MEMORY, rule: { behavior: "ask", locked: false } }, {}, { ask: "ask@ask-rule", auto: "ask@ask-rule", never: "allow@never-ask" }],
   // Step 6: new destination after outside content.
   ["new destination", FETCH_NEW, {}, { ask: "ask@new-destination", auto: "lookup:judge", never: "allow@never-ask" }],
   // Step 7: always allow.

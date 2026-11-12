@@ -1153,9 +1153,12 @@ test("routines going ahead never lowers a hand-off, Computer Use on the person's
   assert.equal(money.turn.computer.executions.length, 0);
   assert.ok(resultText(money.results[0]).includes(ruleUnattendedBlock(botRuleLabel({ actionClass: "money" }))));
 
-  // Computer Use acts on the person's own Mac: it still asks.
+  // Computer Use acts on the person's own Mac: it still needs the person, so
+  // the routine refuses and reports it instead of waiting (Phase 2).
   const mac = await goAheadTurn({ rules: () => rulesWith("ask"), routinesGoAhead: () => true }, "routine:daily:fire-1");
-  assert.equal(mac.turn.deps.approvals.length, 1);
+  assert.equal(mac.turn.deps.approvals.length, 0);
+  assert.equal(mac.turn.computer.executions.length, 0);
+  assert.ok(resultText(mac.results[0]).includes("nobody is here to give it during a routine"));
 
   // A person chatting is asked as before.
   const chat = await goAheadTurn({ rules: () => rulesWith("ask"), baseline: false, toolName: BOT_COMPUTER_TOOL_NAME, routinesGoAhead: () => true });
@@ -1179,7 +1182,9 @@ test("routines going ahead never lowers a hand-off, Computer Use on the person's
 });
 
 test("with routines going ahead, a routine sends through a connection without waiting for an OK", async () => {
-  for (const [goAhead, scheduled] of [[true, true], [true, false], [false, true]] as const) {
+  // Phase 2: a routine never waits for an OK. Without the legacy override (or
+  // without a real scheduled fire) it refuses the send and reports it.
+  for (const [goAhead, scheduled, sends] of [[true, true, 1], [true, false, 0], [false, true, 0]] as const) {
     const state = assemblyState(full(botHome()));
     const send = countingTool(SEND_EMAIL_TOOL);
     const fauxModels = createFauxModels([
@@ -1198,9 +1203,8 @@ test("with routines going ahead, a routine sends through a connection without wa
       await (await root.submit({ type: "input", content: "send it", requestId: recordedId,
         ...(scheduled ? { entry: { kind: "aiden.routine-input" } } : {}),
       }, ctx)).wait(ctx);
-      // Off, the send still waits for the person's OK (this test's approver allows it).
-      assert.equal(deps.approvals.length, goAhead && scheduled ? 0 : 1, `goAhead ${goAhead}, scheduled ${scheduled}`);
-      assert.equal(send.executions.length, 1);
+      assert.equal(deps.approvals.length, 0, `goAhead ${goAhead}, scheduled ${scheduled}`);
+      assert.equal(send.executions.length, sends, `goAhead ${goAhead}, scheduled ${scheduled}`);
     } finally {
       await harness.close(ctx);
     }
