@@ -402,6 +402,19 @@ function boundedNumber(value: number): number {
   return Math.max(-Number.MAX_SAFE_INTEGER, Math.min(Number.MAX_SAFE_INTEGER, value));
 }
 
+/**
+ * Credentials in free text, and nothing else: `password=…` and `api_key: …`
+ * assignments, Basic/Bearer values, self-identifying tokens and URL userinfo.
+ * Unlike `sanitizeDiagnosticText` it keeps URLs and paths.
+ */
+export function redactCredentialText(value: string, replacement = "[withheld]"): string {
+  return value
+    .replace(CREDENTIAL_ASSIGNMENT, `$1${replacement}`)
+    .replace(AUTHORIZATION_VALUE, replacement)
+    .replace(BARE_CREDENTIAL_TOKEN, replacement)
+    .replace(CREDENTIAL_URL, `$1${replacement}@`);
+}
+
 export function sanitizeDiagnosticText(value: string, maxLength = MAX_DIAGNOSTIC_FIELD_LENGTH): string {
   return value
     .normalize("NFKC")

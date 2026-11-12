@@ -147,3 +147,32 @@ test("the judge sees the arguments, not just the tool's name", () => {
   const huge = approvalJudgeAction("t", { body: "x".repeat(50_000) }, "t");
   assert.ok(huge.length <= 4_001 + 64, `clipped, got ${huge.length}`);
 });
+
+test("the judge never sees typed text, secret-named fields or credentials, whichever model it runs on", () => {
+  const typed = approvalJudgeAction("browser_type", { selector: "#password", text: "hunter2-correct-horse" }, "Type in browser");
+  assert.doesNotMatch(typed, /hunter2/u);
+  assert.match(typed, /#password/u, "where it types is still judged");
+
+  const fields = approvalJudgeAction("mcp__shop__checkout", {
+    item: "Desk lamp",
+    card_number: "4111 1111 1111 1111",
+    cvv: "123",
+    payment: { cardholder: "Sam", expiry: "12/29", securityCode: "999" },
+    password: "p@ss",
+    verification_code: "482913",
+    apiKey: "plain-key-value",
+  }, "mcp__shop__checkout");
+  for (const secret of ["4111", "123\"", "999", "p@ss", "482913", "plain-key-value"]) {
+    assert.ok(!fields.includes(secret), `${secret} withheld`);
+  }
+  assert.match(fields, /Desk lamp/u);
+
+  const inText = approvalJudgeAction("mcp__mail__send_message", {
+    to: "ops@example.com",
+    body: "Deploy with Authorization: Bearer abcdefghijklmnop and key sk-live1234567890abcdef, password=letmein",
+  }, "mcp__mail__send_message");
+  for (const secret of ["abcdefghijklmnop", "sk-live1234567890abcdef", "letmein"]) {
+    assert.ok(!inText.includes(secret), `${secret} withheld`);
+  }
+  assert.match(inText, /ops@example\.com/u);
+});

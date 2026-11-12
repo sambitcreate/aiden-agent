@@ -64,6 +64,12 @@ test("a fresh install with a usable model is on Auto, and choosing Ask saves it"
   await waitFor(() => assert.equal(checked(group), "Ask"));
 });
 
+test("the Approval model setting says the actions it reviews are sent to that model", async () => {
+  mount({ approvalModeOrigin: "fresh" });
+  await modeGroup();
+  screen.getByText(/Each action it reviews is sent to this model, with typed text, passwords and card details left out\./u);
+});
+
 test("with no usable model Auto is hidden and the mode reads Ask", async () => {
   mount({ approvalMode: "auto" }, [{ ...MODEL, hasKey: false }]);
   const group = await modeGroup();

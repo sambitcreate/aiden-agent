@@ -10,6 +10,7 @@
 // destinations in Auto. Explicit-only tools and the person's Mac never reach
 // the judge.
 
+import { redactCredentialText } from "../diagnostics-contract.js";
 import { canonicalJson } from "../tool-approval.js";
 
 /** Rakazo's rubric, verbatim from the plan. */
@@ -66,19 +67,71 @@ function quoted(text: string, limit: number): string {
   return clip(text, limit).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+/** Text a tool types into a page or app: the card never shows it, so neither does the judge. */
+const TYPED_TEXT_FIELDS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["browser_type", new Set(["text"])],
+  ["type_text", new Set(["text"])],
+  ["form_fill", new Set(["value", "values", "fields", "text"])],
+  ["computer_use", new Set(["text"])],
+]);
+
+/** Words that mark a field as a secret, a payment detail or a one-time code. */
+const SECRET_FIELD_WORDS: ReadonlySet<string> = new Set([
+  "password", "passwd", "pwd", "passcode", "passphrase", "secret", "token", "apikey", "auth", "authorization",
+  "cookie", "otp", "mfa", "totp", "cvv", "cvc", "csc", "card", "iban", "ssn", "pin", "credential", "credentials",
+  "privatekey", "verification", "security", "routing", "expiry", "expiration",
+]);
+
+function fieldWords(key: string): string[] {
+  const words = key
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((word) => word.length > 0);
+  // "api_key" and "private key" read as one word.
+  const joined: string[] = [...words];
+  for (let index = 0; index + 1 < words.length; index += 1) joined.push(`${words[index]}${words[index + 1]}`);
+  return joined;
+}
+
+const WITHHELD = "[withheld]";
+
+/**
+ * Arguments with everything the person would not want a second model to read
+ * removed: text typed into a page or app, any field whose name marks it as a
+ * secret, payment detail or code, and credentials inside free text.
+ */
+export function redactJudgeArguments(toolName: string, args: unknown): unknown {
+  const typed = TYPED_TEXT_FIELDS.get(toolName);
+  const visit = (value: unknown, depth: number): unknown => {
+    if (typeof value === "string") return redactCredentialText(value, WITHHELD);
+    if (Array.isArray(value)) return value.map((item) => visit(item, depth + 1));
+    if (value === null || typeof value !== "object") return value;
+    const out: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      const secret = (depth === 0 && typed?.has(key)) || fieldWords(key).some((word) => SECRET_FIELD_WORDS.has(word));
+      out[key] = secret && child !== undefined && child !== null ? WITHHELD : visit(child, depth + 1);
+    }
+    return out;
+  };
+  return visit(args ?? null, 0);
+}
+
 /**
  * The action as the judge reads it: the card's summary, the tool and its
- * arguments as canonical JSON, clipped. A summary alone is often just the
- * tool's name, which would leave the judge deciding blind.
+ * arguments as canonical JSON with secrets withheld (`redactJudgeArguments`),
+ * clipped. A summary alone is often just the tool's name, which would leave
+ * the judge deciding blind.
  */
 export function approvalJudgeAction(toolName: string, args: unknown, summary: string): string {
   let json: string;
   try {
-    json = canonicalJson(args ?? null);
+    json = canonicalJson(redactJudgeArguments(toolName, args));
   } catch {
     json = "(arguments that are not JSON)";
   }
-  const lines = [...(summary.trim() && summary.trim() !== toolName ? [summary.trim()] : []), `Tool: ${toolName}`, `Arguments: ${json}`];
+  const shown = redactCredentialText(summary.trim(), WITHHELD);
+  const lines = [...(shown && shown !== toolName ? [shown] : []), `Tool: ${toolName}`, `Arguments: ${json}`];
   return clip(lines.join("\n"), MAX_ACTION_CHARS);
 }
 
