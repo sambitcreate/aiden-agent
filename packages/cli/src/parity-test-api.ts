@@ -77,3 +77,5 @@ export { projectBotTranscript } from "../../../main/services/bot-runtime/live-pr
 export { createCliBotSpending } from "./bot-spending.ts";
 
 export { createGenerationWatchdog } from "./generation-watchdog.ts";
+
+export { cliWorkspaceCodingTools } from "./workspace-coding-tools.ts";

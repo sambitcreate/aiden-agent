@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fsPromises from "node:fs/promises";
 import test from "node:test";
 import { mkdtempSync, mkdirSync, existsSync, readFileSync, writeFileSync, chmodSync, rmSync, statSync, utimesSync, renameSync, readdirSync, openSync, closeSync, ftruncateSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -2984,7 +2985,7 @@ test("daemon chats send a retried prompt once its hook lets it through, and drop
   assert.equal(after.messages.find((message) => message.id === stored.id)?.hookBlocked, undefined);
 });
 
-test("workspace daemon and scheduled file tools refuse outside paths and environment secrets", async (t) => {
+test("workspace daemon and scheduled file tools refuse outside paths and credential files", async (t) => {
   for (const lane of ["daemon", "scheduled-full", "scheduled-read-only"]) await t.test(lane, async (t) => {
     const dir = temporary(t), repo = join(dir, "repo"), requests = [];
     const originalEntry = process.env.AIDEN_CLI_ENTRY;
@@ -2994,7 +2995,28 @@ test("workspace daemon and scheduled file tools refuse outside paths and environ
     writeFileSync(join(dir, "outside.txt"), "OUTSIDE-SECRET-536");
     writeFileSync(join(repo, ".env"), "ENV-SECRET-536");
     writeFileSync(join(repo, "note.txt"), "Visible workspace note");
-    const calls = ["../outside.txt", ".env", "note.txt"].map((path) => ({ name: "read_file", arguments: { path } }));
+    writeFileSync(join(repo, "id_rsa"), "CREDENTIAL-SECRET-536");
+    writeFileSync(join(repo, "id_rsa.pub"), "Visible public key");
+    writeFileSync(join(repo, "credentials.ts"), "Visible credential helper source");
+    writeFileSync(join(repo, ".env.example"), "Visible environment template");
+    writeFileSync(join(repo, ".gitignore"), "Visible ignore configuration");
+    mkdirSync(join(repo, ".ssh"));
+    writeFileSync(join(repo, ".ssh", "config"), "DIRECTORY-CREDENTIAL-SECRET-536");
+    mkdirSync(join(repo, ".github"));
+    writeFileSync(join(repo, ".github", "workflow.yml"), "Visible workflow");
+    symlinkSync("id_rsa", join(repo, "alias.txt"));
+    symlinkSync("note.txt", join(repo, "id_ed25519"));
+    symlinkSync("note.txt", join(repo, "note-alias.txt"));
+    symlinkSync(".ssh", join(repo, "alias-dir"));
+    const calls = ["../outside.txt", ".env", "note.txt", "id_rsa", "id_rsa.pub", "credentials.ts", ".env.example"].map((path) => ({ name: "read_file", arguments: { path } }));
+    calls.push(
+      ...["alias.txt", "id_ed25519", ".ssh/config", "alias-dir/config", "note-alias.txt", ".gitignore"].map((path) => ({ name: "read_file", arguments: { path } })),
+      { name: "list_dir", arguments: { path: ".github" } },
+      { name: "list_dir", arguments: { path: "." } },
+      { name: "grep", arguments: { pattern: "Visible|SECRET-536" } },
+      { name: "glob", arguments: { pattern: "id_rsa" } },
+      { name: "glob", arguments: { pattern: "**/*" } }
+    );
     if (lane !== "scheduled-read-only") calls.push(
       { name: "write_file", arguments: { path: "generated.txt", content: "Generated note" } },
       { name: "edit_file", arguments: { path: "generated.txt", old_string: "Generated", new_string: "Updated" } }
@@ -3042,7 +3064,21 @@ test("workspace daemon and scheduled file tools refuse outside paths and environ
     assert.match(JSON.stringify(toolReplies[0]), /outside the workspace/u);
     assert.match(JSON.stringify(toolReplies[1]), /Reading \.env files is disabled/u);
     assert.match(JSON.stringify(toolReplies[2]), /Visible workspace note/u);
-    assert.doesNotMatch(JSON.stringify(requests), /OUTSIDE-SECRET-536|ENV-SECRET-536/u);
+    assert.match(JSON.stringify(toolReplies[3]), /Reading credential files is disabled/u);
+    assert.match(JSON.stringify(toolReplies[4]), /Visible public key/u);
+    assert.match(JSON.stringify(toolReplies[5]), /Visible credential helper source/u);
+    assert.match(JSON.stringify(toolReplies[6]), /Visible environment template/u);
+    for (const index of [7, 8, 9, 10]) assert.match(JSON.stringify(toolReplies[index]), /Reading credential files is disabled/u);
+    assert.match(JSON.stringify(toolReplies[11]), /Visible workspace note/u);
+    assert.match(JSON.stringify(toolReplies[12]), /Visible ignore configuration/u);
+    assert.match(JSON.stringify(toolReplies[13]), /workflow\.yml/u);
+    assert.match(JSON.stringify(toolReplies[14]), /note\.txt/u);
+    assert.doesNotMatch(JSON.stringify(toolReplies[14]), /id_rsa(?!\.pub)|\.ssh/u);
+    assert.match(JSON.stringify(toolReplies[15]), /Visible workspace note/u);
+    assert.match(JSON.stringify(toolReplies[16]), /no matches/u);
+    assert.match(JSON.stringify(toolReplies[17]), /note\.txt/u);
+    assert.doesNotMatch(JSON.stringify(toolReplies[17]), /id_rsa(?!\.pub)|\.ssh/u);
+    assert.doesNotMatch(JSON.stringify(requests), /OUTSIDE-SECRET-536|ENV-SECRET-536|CREDENTIAL-SECRET-536/u);
   });
 });
 
@@ -3169,5 +3205,38 @@ test("an active scheduled tool loop completes beyond the former five-minute wall
     controller.abort();
     t.mock.timers.reset();
     await completion.catch(() => {});
+  }
+});
+
+
+test("CLI credential prechecks preserve cancellation while a filesystem lookup is pending", async (t) => {
+  const dir = temporary(t);
+  writeFileSync(join(dir, "note.txt"), "Visible note");
+  mkdirSync(join(dir, "src"));
+  for (const [name, params] of [["read_file", { path: "note.txt" }], ["list_dir", { path: "src" }], ["grep", { path: "src", pattern: "note" }]]) {
+    const tool = api.cliWorkspaceCodingTools(dir, true).find((tool) => tool.name === name);
+    const originalStat = fsPromises.stat;
+    const held = Promise.withResolvers(), started = Promise.withResolvers();
+    const target = resolve(dir, params.path);
+    t.mock.method(fsPromises, "stat", async (...args) => {
+      if (resolve(String(args[0])) === target) { started.resolve(); await held.promise; }
+      return originalStat(...args);
+    });
+    syncBuiltinESMExports();
+    const controller = new AbortController();
+    const pending = tool.execute("held", params, controller.signal);
+    let outcome;
+    pending.then(() => { outcome = "completed"; }, (error) => { outcome = error.message; });
+    try {
+      await started.promise;
+      controller.abort(new Error("review cancelled"));
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(outcome, "review cancelled", name);
+    } finally {
+      held.resolve();
+      await pending.catch(() => {});
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    }
   }
 });
