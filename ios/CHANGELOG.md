@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **2026-11-11 — "Stopped after the chat went quiet" (Remote revision 62, provisional).** A background job the agent asked the Mac to stop once its chat went quiet now reads "Stopped after the chat went quiet" in the chat's job list. The host sends it as `endReason: "chat-settled"`; any reason this version does not know still reads as Stopped. The revision is re-claimed at merge.
+
 - The app is now one tab shell: **Inbox**, **Workspaces**, **Bots** and **Search**, each with its own stack, and a sidebar at regular width. Inbox lists every paired machine's chats together. The Aiden-logo menu, its first-run tip and the per-machine sidebar views are gone, along with the build setting that chose between the two shells. Scheduled tasks, Usage, Machines and Settings open as pages in a tab. An open chat stays on its own machine when the default machine changes. A notification for a machine you've removed now does nothing instead of showing an error.
 
 - Behind the scenes, `AidenChatFeature.swift` and `AidenWorkspaceShellView.swift` are now split into focused files under `Features/Chat/` and `Features/Workspace/`. No change to behavior or appearance.

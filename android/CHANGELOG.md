@@ -4,6 +4,8 @@ Aiden On The Go for Android. Earlier Android changes are recorded in the pull re
 
 ## Unreleased
 
+- **2026-11-11 — "Stopped after the chat went quiet" (Remote revision 62, provisional).** A background job the agent asked the Mac to stop once its chat went quiet now reads "Stopped after the chat went quiet" in the chat's job list. The host sends it as `endReason: "chat-settled"`; any reason this version does not know still reads as Stopped. The revision is re-claimed at merge.
+
 - **2026-11-06 — "By voice" label (Remote revision 60).** A chat message Aiden Live sent on the Mac shows a small "By voice" label with a microphone under it. The host marks it with `inputSource: "voice"` on user messages only; the app ignores any other value or a marker on a reply. Older hosts send no marker, so nothing changes there.
 
 - **2026-11-05 — Remote revision 59 reconciliation.** Main now uses revision 58 for connected-chat live-history checkpoints. Continuity watches, Open work, routine models and approved Bot peers therefore enter the combined release at revision 59. Earlier dated revision assignments remain historical; messaging/access/plans/allowed thresholds remain 54–57.

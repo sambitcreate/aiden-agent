@@ -141,6 +141,22 @@ test("a server a command left running reads as ended, never as failed, once it s
   assert.equal(within(dialog).queryByText(/Failed/u), null);
 });
 
+test("a job Aiden stopped after the chat went quiet says so; one the person stopped reads as stopped", async () => {
+  mount({
+    ...emptyChatFollowThrough("chat-1"),
+    jobs: [
+      job(),
+      job({ id: "job_00000004", description: "Run the preview", state: "stopped", endReason: "chat-settled", endedAt: NOW }),
+      job({ id: "job_00000005", description: "Run the old server", state: "stopped", endReason: "person", endedAt: NOW }),
+    ],
+  });
+  fireEvent.click(screen.getByRole("button", { name: "1 background job running" }));
+  const dialog = await screen.findByRole("dialog", { name: "Background jobs" });
+  assert.ok(within(dialog).getByText("Stopped after the chat went quiet"));
+  assert.ok(within(dialog).getByText("Stopped"));
+  assert.equal(within(dialog).getAllByRole("button", { name: "Stop" }).length, 1, "a stopped job cannot be stopped again");
+});
+
 test("a job's running time is current when its list opens, not when the chip appeared", async (t) => {
   let clock = NOW;
   t.mock.method(Date, "now", () => clock);

@@ -6,6 +6,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -40,11 +41,12 @@ import java.util.concurrent.TimeUnit
 
 /** Contract revision 49 (`chat:jobs`), read from the fixture every client shares. */
 class AidenBackgroundJobsTest {
-    private val fixture: JsonObject by lazy {
+    private val contract: JsonObject by lazy {
         val text = requireNotNull(javaClass.classLoader?.getResourceAsStream("contract.json")) { "contract.json" }
             .bufferedReader().use { it.readText() }
-        Json.parseToJsonElement(text).jsonObject.getValue("backgroundJobs").jsonObject
+        Json.parseToJsonElement(text).jsonObject
     }
+    private val fixture: JsonObject by lazy { contract.getValue("backgroundJobs").jsonObject }
 
     private lateinit var server: MockWebServer
     private lateinit var client: AidenRemoteClient
@@ -148,6 +150,21 @@ class AidenBackgroundJobsTest {
         assertNull(AidenBackgroundJobCopy.chip(0))
         assertEquals("2 in background", AidenBackgroundJobCopy.chip(2))
         assertEquals("1 background job running", AidenBackgroundJobCopy.chipDescription(1))
+    }
+
+    /** Revision 62: a job the agent asked to stop once its chat went quiet says so; one the
+     * person stopped, or a reason this version does not know, reads as plain Stopped. */
+    @Test
+    fun aJobStoppedAfterTheChatWentQuietSaysSo() {
+        assertEquals(62, contract.getValue("contractRevision").jsonPrimitive.int)
+        val list = contract.getValue("backgroundJobsChatSettled").jsonObject.getValue("list")
+        val decoded = AidenBackgroundJobs.decode(list.toString())
+        val labels = decoded.jobs.associate { it.id to AidenBackgroundJobCopy.status(it, start) }
+        assertEquals("Stopped after the chat went quiet", labels["job_2c3d4e5f"])
+        assertEquals("Stopped", labels["job_6a7b8c9d"])
+
+        val fromLaterHost = AidenBackgroundJobs.decode(list.toString().replace("chat-settled", "a-later-reason"))
+        assertEquals(listOf("Stopped", "Stopped"), fromLaterHost.jobs.map { AidenBackgroundJobCopy.status(it, start) })
     }
 
     @Test

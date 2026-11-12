@@ -123,6 +123,8 @@ export interface StartBackgroundJobInput {
   command: string;
   description?: string;
   env: NodeJS.ProcessEnv;
+  /** Stop the job once its chat has settled (see `ChatSettlement`). */
+  stopWhenChatSettles?: boolean;
 }
 
 interface JobRecord {
@@ -339,6 +341,7 @@ export class BackgroundJobs {
       state: "running",
       startedAt: this.now(),
       outputBytes: 0,
+      ...(input.stopWhenChatSettles ? { stopWhenChatSettles: true as const } : {}),
     };
     let resolveExited!: () => void;
     const exited = new Promise<void>((resolve) => {
@@ -584,6 +587,25 @@ export class BackgroundJobs {
       }
       this.options.onChange?.(chatId);
     }
+  }
+
+  /** Whether the chat has a running job that asked to stop once the chat settles. */
+  hasSettleStoppable(chatId: string): boolean {
+    return [...this.jobs.values()].some(
+      (job) => job.view.chatId === chatId && job.view.state === "running" && job.view.stopWhenChatSettles === true,
+    );
+  }
+
+  /**
+   * The chat went quiet: stop only its running jobs that asked for this, with
+   * `chat-settled`. Other jobs keep running. Returns the jobs that were stopped.
+   */
+  async stopSettled(chatId: string): Promise<BackgroundJobView[]> {
+    const jobs = [...this.jobs.values()].filter(
+      (job) => job.view.chatId === chatId && job.view.state === "running" && job.view.stopWhenChatSettles === true,
+    );
+    await Promise.all(jobs.map((job) => this.stopRecord(job, "chat-settled")));
+    return jobs.map((job) => ({ ...job.view }));
   }
 
   async stopWorkspace(workspaceId: string, reason: BackgroundJobEndReason): Promise<void> {
@@ -1006,6 +1028,7 @@ export class BackgroundJobs {
 export function describeJobEnd(job: BackgroundJobView): string {
   if (job.state === "running") return "still running";
   if (job.endReason === "output-limit") return "stopped: its output passed the size limit";
+  if (job.endReason === "chat-settled") return "stopped after the chat went quiet";
   if (job.endReason) return "stopped";
   if (job.origin === "command") return "ended";
   if (job.signal) return `ended by signal ${job.signal}`;

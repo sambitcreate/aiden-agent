@@ -1,5 +1,5 @@
 {
-  "contractRevision": 60,
+  "contractRevision": 62,
   "peerRouteAdvertisement": {
     "feature": "peer-routes-v1",
     "routes": [
@@ -2299,7 +2299,7 @@
     "instanceId": "instance_fixture_01",
     "displayName": "Fixture Aiden",
     "platform": "mac",
-    "contractRevision": 60,
+    "contractRevision": 62,
     "pairingRequests": true
   },
   "hostFeedEvents": [
@@ -7143,5 +7143,29 @@
       ]
     }
   },
-  "voiceInput": {"chat":{"id":"chat_fixture_voice_input","workspaceId":"workspace_fixture_01","title":"Fix login","providerId":"provider_fixture","modelId":"model_fixture","messages":[{"id":"message_fixture_voice_user","role":"user","text":"Also check the password reset page.","inputSource":"voice","createdAt":"2026-11-06T10:00:00.000Z"},{"id":"message_fixture_voice_assistant","role":"assistant","text":"Checking the reset page too.","inputSource":"voice","createdAt":"2026-11-06T10:00:02.000Z"},{"id":"message_fixture_voice_unknown","role":"user","text":"Thanks.","inputSource":"dictation","createdAt":"2026-11-06T10:00:05.000Z"}],"createdAt":"2026-11-06T09:59:00.000Z","updatedAt":"2026-11-06T10:00:05.000Z","revision":"chat_revision_voice_input_3"},"voiceMessageIds":["message_fixture_voice_user"]}
+  "voiceInput": {"chat":{"id":"chat_fixture_voice_input","workspaceId":"workspace_fixture_01","title":"Fix login","providerId":"provider_fixture","modelId":"model_fixture","messages":[{"id":"message_fixture_voice_user","role":"user","text":"Also check the password reset page.","inputSource":"voice","createdAt":"2026-11-06T10:00:00.000Z"},{"id":"message_fixture_voice_assistant","role":"assistant","text":"Checking the reset page too.","inputSource":"voice","createdAt":"2026-11-06T10:00:02.000Z"},{"id":"message_fixture_voice_unknown","role":"user","text":"Thanks.","inputSource":"dictation","createdAt":"2026-11-06T10:00:05.000Z"}],"createdAt":"2026-11-06T09:59:00.000Z","updatedAt":"2026-11-06T10:00:05.000Z","revision":"chat_revision_voice_input_3"},"voiceMessageIds":["message_fixture_voice_user"]},
+  "backgroundJobsChatSettled": {
+    "list": {
+      "jobs": [
+        {
+          "id": "job_2c3d4e5f",
+          "label": "Run the preview server",
+          "state": "stopped",
+          "startedAt": "2026-11-11T09:00:00.000Z",
+          "endedAt": "2026-11-11T09:42:00.000Z",
+          "endReason": "chat-settled",
+          "ports": []
+        },
+        {
+          "id": "job_6a7b8c9d",
+          "label": "Run the API server",
+          "state": "stopped",
+          "startedAt": "2026-11-11T08:30:00.000Z",
+          "endedAt": "2026-11-11T08:55:00.000Z",
+          "endReason": "person",
+          "ports": []
+        }
+      ]
+    }
+  }
 }

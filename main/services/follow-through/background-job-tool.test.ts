@@ -70,6 +70,17 @@ test("start returns the job id and early output, and the job keeps running after
   assert.deepEqual(ended, [], "the agent's own stop is not news for the chat");
 });
 
+test("a job started to check the current work is marked to stop when the chat goes quiet; others are not", { skip }, async (t) => {
+  const { run, jobs } = await setup(t);
+  const preview = text(await run({ action: "start", command: "sleep 30", description: "Run the preview", stop_when_chat_settles: true }));
+  assert.match(preview, /20 minutes after this chat goes quiet/u, "the agent is told when the job will stop");
+  const plain = text(await run({ action: "start", command: "sleep 30", description: "Run the server" }));
+  assert.doesNotMatch(plain, /goes quiet/u);
+  assert.equal(jobs.get("chat-1", jobIdIn(preview))?.stopWhenChatSettles, true);
+  assert.equal(jobs.get("chat-1", jobIdIn(plain))?.stopWhenChatSettles, undefined);
+  assert.deepEqual(await jobs.stopSettled("chat-1").then((stopped) => stopped.map((job) => job.id)), [jobIdIn(preview)]);
+});
+
 test("a command that fails at once comes back as an error with its output, and no notice follows", { skip }, async (t) => {
   const { run, ended } = await setup(t);
   const result = await run({ action: "start", command: "echo 'npm ERR! missing script: dev' >&2; exit 1" });

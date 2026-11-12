@@ -102,7 +102,13 @@ object AidenBackgroundJobCopy {
 
     fun status(job: AidenBackgroundJob, now: Instant): String = when (job.state) {
         AidenBackgroundJob.State.RUNNING -> "Running for ${elapsed(Instant.parse(job.startedAt), now)}"
-        AidenBackgroundJob.State.STOPPED -> if (job.endReason == "output-limit") "Stopped: too much output" else "Stopped"
+        AidenBackgroundJob.State.STOPPED -> when (job.endReason) {
+            "output-limit" -> "Stopped: too much output"
+            // Revision 62: the agent asked for it to stop once the chat went quiet.
+            "chat-settled" -> "Stopped after the chat went quiet"
+            // A reason this version does not know reads as plain Stopped.
+            else -> "Stopped"
+        }
         AidenBackgroundJob.State.EXITED, AidenBackgroundJob.State.FAILED -> when {
             job.isFromCommand -> "Ended"
             job.exitCode == null -> if (job.state == AidenBackgroundJob.State.FAILED) "Failed" else "Ended"
