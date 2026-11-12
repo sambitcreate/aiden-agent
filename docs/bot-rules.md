@@ -118,6 +118,18 @@ There is no per-Bot mode.
   money rules, and the first use of the person's Mac (shell, Computer Use)
   still come to the person; disclosure tools and schedule changes still ask.
 
+In a workspace chat, once outside content has entered the chat, Aiden is
+more careful about where things go next. Outside content is a web page or
+search result, anything from the browser (except resizing it or changing its
+appearance), a simulator screenshot, a subagent's report, a pull request's
+comments, codemode, or any connector's result, and it counts for the rest of
+the chat, earlier turns included. From then on **Ask** also asks before a fetch
+to a site you didn't name in the chat and before the first use of each
+connector, even one that only reads; **Auto** has the approval model judge
+those; **Never ask** runs them. Expect a few more cards in Ask after a chat has
+used the browser or a subagent: that is by design, since text you didn't write
+could be steering the model.
+
 A routine run (scheduled, manual, event or missed-fire input, and a Bot's own
 wake-up) has nobody to ask. Where the gate would show a card, the routine
 refuses the step and the Bot says in its reply that it needs the person's OK,
