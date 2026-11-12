@@ -1,3 +1,4 @@
+import { effectiveApprovalMode } from "../../shared/approval-mode";
 import * as React from "react";
 import { Ellipsis, LockKeyhole, Plus, RotateCcw } from "lucide-react";
 import {
@@ -67,9 +68,11 @@ export function BotRules({ bot }: { bot: RuleBot }) {
   const { apply, busy } = useBotRuleChange(bot.id);
   const { botComputers } = useAppCapabilities();
   const settings = useSettings();
-  const goAhead = botRoutinesGoAhead(settings.data);
+  // A routine refuses where the gate would ask, unless the global mode is Never ask
+  // or the legacy routines switch is still on (plan §3.2).
+  const goAhead = botRoutinesGoAhead(settings.data) || effectiveApprovalMode(settings.data, true) === "never";
   const navigate = useNavigate();
-  const openBotSettings = () => void navigate({ to: "/settings", search: { section: "bots" } });
+  const openBotSettings = () => void navigate({ to: "/settings", search: { section: "approvals" } });
   const [problem, setProblem] = React.useState<string | null>(null);
   const [editing, setEditingState] = React.useState<BotRule | "new" | null>(null);
   const [editorSession, setEditorSession] = React.useState(0);
@@ -160,7 +163,7 @@ export function BotRules({ bot }: { bot: RuleBot }) {
       <Text as="p" variant="small" color="secondary" className="mt-2 px-4 text-pretty">
         {goAhead
           ? "In routines, Ask first steps go ahead without asking. "
-          : `In routines, ${bot.name} skips Ask first steps and tells you in its reply. `}
+          : `In routines, ${bot.name} skips steps that need your OK and tells you in its reply. `}
         <button type="button" className={SETTINGS_LINK_CLASS} onClick={openBotSettings}>
           Change this for every Bot
         </button>

@@ -38,7 +38,7 @@ The root install is required: without it the build fails with `Could not resolve
 Every setup step is a short command you run once over SSH.
 
 1. **Sign in to a model provider.** `aiden auth login <provider>` prints a browser URL or device code to open on any device, or asks for an API key and validates it. `aiden auth list` shows what is configured; standard provider environment variables also work. `aiden auth login openai` supports Sign in with ChatGPT; Anthropic supports its browser and copy-code flows.
-2. **Add a workspace.** `aiden workspace add /absolute/project`, then `aiden workspace access <id> full|ask|none`. Ask mode needs one approval per tool call from a paired device; unattended Telegram and scheduled runs need Full access.
+2. **Add a workspace.** `aiden workspace add /absolute/project`, then `aiden workspace access <id> full|ask|none`. Ask mode needs one approval per tool call from a paired device; unattended Telegram and scheduled runs need Full access. The server's Bots run in the Ask approval mode (there is no approval model on a server), so a Bot routine skips a step that needs your OK and says so instead of waiting.
 3. **Optionally, connectors and providers.** `aiden mcp presets` and `aiden mcp preset <id>` add MCP connectors from the desktop's catalog, `aiden mcp login <id>` signs in, and `aiden provider import <models.json>` adds custom OpenAI-compatible, Ollama or LM Studio providers.
 
 ## Running the server

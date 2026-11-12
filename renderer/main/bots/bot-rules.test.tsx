@@ -199,22 +199,22 @@ test("where Bots have their own computers, the rules say they read the Bot's sta
   assert.equal(screen.queryByText(note), null);
 });
 
-test("under the rules, the profile says what routines do with Ask first steps and links to Settings → Bots & Approvals", async () => {
-  for (const goAhead of [false, true]) {
+test("under the rules, the profile says what routines do with Ask first steps and links to Settings → Approvals", async () => {
+  for (const [goAhead, settings] of [[false, { approvalMode: "ask" }], [true, { approvalMode: "never" }], [true, { approvalMode: "ask", botRoutinesGoAhead: true }]] as const) {
     installBotTestIpc({
       "bots:rules:get": (botId) => ({ botId: String(botId), revision: 0, rules: [] }),
-      "settings:get": () => ({ botRoutinesGoAhead: goAhead }),
+      "settings:get": () => settings,
     });
     const { router } = await mountWithBotRouter(<BotRules bot={bot} />, { initialPath: "/bots/bot-1" });
     await screen.findByText(
       goAhead
         ? /In routines, Ask first steps go ahead without asking\./u
-        : /In routines, Planner skips Ask first steps and tells you in its reply\./u,
+        : /In routines, Planner skips steps that need your OK and tells you in its reply\./u,
     );
     fireEvent.click(screen.getByRole("button", { name: "Change this for every Bot" }));
     await waitFor(() => {
       assert.equal(router.state.location.pathname, "/settings");
-      assert.equal((router.state.location.search as { section?: string }).section, "bots");
+      assert.equal((router.state.location.search as { section?: string }).section, "approvals");
     });
     cleanup();
   }

@@ -7,7 +7,7 @@ Bot stricter: the strictest of the Bot's own approval and every matching rule
 wins, so no rule can let through a step the Bot would otherwise ask about.
 You can approve a bounded plan for the current task, as described below.
 Settings → Bots & Approvals also has a routines-only go-ahead setting
-(see [Routines that go ahead](#routines-that-go-ahead-settings--bots--approvals)).
+(see [Routines and the approval mode](#routines-and-the-approval-mode-settings--bots--approvals--approvals)).
 
 The design is in `docs/plans/bot-handoffs-rules-computers-plan.md` §6;
 implementation notes are in `.memory/bot-rules.md`.
@@ -102,32 +102,34 @@ rest of its calls. The CLI host does not offer plan tools or coverage, and a
 desktop viewing another desktop's Bot does not show plan cards. Such a viewer
 can still show Waiting for you; answer on the host desktop or a supported phone.
 
-## Routines that go ahead (Settings → Bots & Approvals)
+## Routines and the approval mode (Settings → Bots & Approvals → Approvals)
 
-Settings → Bots & Approvals has one switch for every Bot on the desktop, **Go ahead without
-asking** under Routines (`AppSettings.botRoutinesGoAhead`, off by default).
-While it is on, a run made only of routine inputs (a scheduled, manual, event
-or missed-fire run, and a Bot's own wake-up) takes a step that would otherwise
-wait for the person's OK without a card:
+Every Bot follows the one approval mode in Settings → Bots & Approvals →
+Approvals: **Auto**, **Ask** or **Never ask** (see
+[docs/plans/bot-ux-simplification.md](plans/bot-ux-simplification.md) §3.1).
+There is no per-Bot mode.
 
-- a step an Ask first rule covers, built-in or the person's own, with or
-  without an approval of its own;
-- an approval the step has without any rule: a connection tool that changes
-  something, or sharing an image.
+- **Ask**: a step an Ask first rule covers, or a consequential step (a
+  connection tool that changes something, sharing an image), shows its card.
+- **Auto**: Bots have no approval judge yet, so a Bot's turn in Auto asks
+  exactly as in Ask.
+- **Never ask**: only Block rules apply. Ask first rules and consequential
+  steps run without a card. Hand off to me rules, the locked password and
+  money rules, and the first use of the person's Mac (shell, Computer Use)
+  still come to the person; disclosure tools and schedule changes still ask.
 
-It never lowers anything else:
+A routine run (scheduled, manual, event or missed-fire input, and a Bot's own
+wake-up) has nobody to ask. Where the gate would show a card, the routine
+refuses the step and the Bot says in its reply that it needs the person's OK,
+except in Never ask. This includes a connection tool that changes something
+and Computer Use on the person's Mac, which no longer wait under Needs you.
 
-- Hand off to me rules, and the locked password and money rules, still stop
-  the step and the Bot says in its reply what the person needs to do.
-- Computer Use on the person's Mac still asks before each action.
-- A chat turn, a Telegram turn, and a routine run a person's message joined
-  still ask as before.
-
-Main reads the setting fresh at every tool call (`checkPolicy` in
-`bot-tool-assembly.ts`), so turning it off applies to the next step. Under each
-Bot's rules, the profile says what routines do with Ask first steps and links
-to the page. The CLI's durable Bot host has no rules and keeps asking for every
-MCP call.
+The older **Go ahead without asking** switch (`AppSettings.botRoutinesGoAhead`)
+is no longer offered. For someone who had it on it keeps working as before and
+shows under Approvals → Advanced, where it can only be turned off. Main reads
+the mode and the switch fresh at every tool call (`checkPolicy` in
+`bot-tool-assembly.ts`). The CLI's durable Bot host has no rules, runs in Ask
+and keeps asking for every MCP call.
 
 ## Allowed without asking
 
