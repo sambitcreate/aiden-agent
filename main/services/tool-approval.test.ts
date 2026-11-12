@@ -603,3 +603,88 @@ test("a scope granted with an answer does not survive the stream's cancellation"
   coordinator.cancelStream("s-scope");
   assert.equal(coordinator.takeDecisionPayload("s-scope", "c-scope"), undefined);
 });
+
+test("identical parallel calls in one run share one card, and its answer reaches every call", async () => {
+  const prompts: Array<{ approvalId: string; toolCallId: string }> = [];
+  const approvals = new ToolApprovalCoordinator((prompt) => prompts.push(prompt));
+  const card = { streamId: "run", toolName: "run_command", summary: "Run command: npm test", scopes: ["once", "chat", "always"] as const };
+  const first = approvals.request({ ...card, toolCallId: "call-1" }, undefined, "doc");
+  const second = approvals.request({ ...card, toolCallId: "call-2" }, undefined, "doc");
+  const other = approvals.request({ ...card, summary: "Run command: npm run lint", toolCallId: "call-3" }, undefined, "doc");
+  assert.deepEqual(prompts.map((prompt) => prompt.toolCallId), ["call-1", "call-3"], "the identical call joins the first card");
+
+  assert.equal(approvals.decide(prompts[0]!.approvalId, true, "doc", { scope: "chat" }), true);
+  assert.deepEqual(await Promise.all([first, second]), ["allowed", "allowed"]);
+  assert.deepEqual(approvals.takeDecisionPayload("run", "call-1"), { scope: "chat" });
+  assert.deepEqual(approvals.takeDecisionPayload("run", "call-2"), { scope: "chat" }, "the shared answer's scope applies to both calls");
+  approvals.decide(prompts[1]!.approvalId, true, "doc");
+  assert.equal(await other, "allowed");
+});
+
+test("a denied action is not asked again in the same run", async () => {
+  const prompts: Array<{ approvalId: string; toolCallId: string }> = [];
+  const approvals = new ToolApprovalCoordinator((prompt) => prompts.push(prompt));
+  const card = { streamId: "run", toolName: "write_file", summary: "Create or replace file: notes.md" };
+  const first = approvals.request({ ...card, toolCallId: "call-1" });
+  approvals.decide(prompts[0]!.approvalId, false);
+  assert.equal(await first, "denied");
+
+  assert.equal(await approvals.request({ ...card, toolCallId: "call-2" }), "denied");
+  assert.equal(prompts.length, 1, "no second card for the same action");
+
+  const different = approvals.request({ ...card, summary: "Create or replace file: todo.md", toolCallId: "call-3" });
+  assert.equal(prompts.length, 2, "a different action still asks");
+  approvals.decide(prompts[1]!.approvalId, true);
+  assert.equal(await different, "allowed");
+
+  const nextRun = approvals.request({ ...card, streamId: "next-run", toolCallId: "call-4" });
+  assert.equal(prompts.length, 3, "the next run asks again");
+  approvals.decide(prompts[2]!.approvalId, true);
+  assert.equal(await nextRun, "allowed");
+
+  approvals.releaseStream("run");
+  const afterRelease = approvals.request({ ...card, toolCallId: "call-5" });
+  assert.equal(prompts.length, 4, "a released run's stream id starts fresh");
+  approvals.decide(prompts[3]!.approvalId, false);
+  assert.equal(await afterRelease, "denied");
+});
+
+test("a shared card withdrawn for its own call alone asks again for the calls still waiting", async () => {
+  const prompts: Array<{ approvalId: string; toolCallId: string }> = [];
+  const approvals = new ToolApprovalCoordinator((prompt) => prompts.push(prompt));
+  const card = { streamId: "run", toolName: "run_command", summary: "Run command: make" };
+  const leaderStop = new AbortController();
+  const leader = approvals.request({ ...card, toolCallId: "call-1" }, leaderStop.signal);
+  const follower = approvals.request({ ...card, toolCallId: "call-2" });
+  assert.equal(prompts.length, 1);
+  leaderStop.abort();
+  assert.equal(await leader, "cancelled");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(prompts.map((prompt) => prompt.toolCallId), ["call-1", "call-2"], "the waiting call gets its own card");
+  approvals.decide(prompts[1]!.approvalId, true);
+  assert.equal(await follower, "allowed");
+
+  const followerStop = new AbortController();
+  const shared = approvals.request({ ...card, summary: "Run command: make test", toolCallId: "call-3" });
+  const leaving = approvals.request({ ...card, summary: "Run command: make test", toolCallId: "call-4" }, followerStop.signal);
+  followerStop.abort();
+  assert.equal(await leaving, "cancelled", "a waiting call can stop on its own");
+  approvals.decide(prompts[2]!.approvalId, true);
+  assert.equal(await shared, "allowed");
+});
+
+test("cards a caller names (Bot waits) are never shared or skipped after a deny", async () => {
+  const prompts: Array<{ approvalId: string }> = [];
+  const approvals = new ToolApprovalCoordinator((prompt) => prompts.push(prompt));
+  const card = { streamId: "bot:b1", toolName: "send_email", summary: "Send email" };
+  const first = approvals.request({ ...card, approvalId: "w1", toolCallId: "w1" });
+  const second = approvals.request({ ...card, approvalId: "w2", toolCallId: "w2" });
+  assert.equal(prompts.length, 2);
+  approvals.decideAsHost("w1", false);
+  approvals.decideAsHost("w2", false);
+  assert.deepEqual(await Promise.all([first, second]), ["denied", "denied"]);
+  const third = approvals.request({ ...card, approvalId: "w3", toolCallId: "w3" });
+  assert.equal(prompts.length, 3);
+  approvals.decideAsHost("w3", true);
+  assert.equal(await third, "allowed");
+});
