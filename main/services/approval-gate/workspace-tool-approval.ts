@@ -23,6 +23,7 @@ import { connectorToolEffect, MAC_TOOL_CLASSES } from "./tool-classes.js";
 /** Aiden's own names for the two tools that drive the Mac's screen. */
 export const WORKSPACE_COMPUTER_USE_TOOL = "computer_use";
 export const WORKSPACE_FORM_FILL_TOOL = "form_fill";
+const DEVICE_SCREENSHOT_TOOL = "device_screenshot";
 
 export type WorkspaceGatePermission = "full" | "ask" | "read-only" | "none";
 
@@ -86,6 +87,20 @@ export interface WorkspaceToolApprovalDecision {
 
 const HOOK_VERDICTS = { block: "deny", ask: "ask", allow: "allow" } as const;
 
+/**
+ * The part of the person's Mac a workspace tool call reaches, if any. Anything
+ * that starts a process is shell; anything that writes into the folder is
+ * files. These ask on first use in every mode and are never judged.
+ */
+export function workspaceMacClass(toolName: string, args: unknown): MacGrantClass | undefined {
+  if (APPROVAL_TOOL_NAMES.has(toolName)) return MAC_TOOL_CLASSES.get(toolName);
+  // A background job runs a shell command the model chose.
+  if (backgroundJobRequiresApproval(toolName, args)) return "shell";
+  // A device screenshot with `saveTo` writes a file into the workspace.
+  if (toolName === DEVICE_SCREENSHOT_TOOL && deviceToolRequiresApproval(toolName, args)) return "files";
+  return undefined;
+}
+
 /** The gate's facts for one workspace tool call, from today's fixed tool sets. */
 export function workspaceGateAction(input: WorkspaceToolApprovalInput): GateAction {
   const { toolName, args } = input;
@@ -93,7 +108,7 @@ export function workspaceGateAction(input: WorkspaceToolApprovalInput): GateActi
     // Reached only once the chat's Computer Use access was granted.
     return { toolName, mac: true, macClass: "computer-use", consequential: true, granted: true };
   }
-  const macClass = APPROVAL_TOOL_NAMES.has(toolName) ? MAC_TOOL_CLASSES.get(toolName) : undefined;
+  const macClass = workspaceMacClass(toolName, args);
   // The legacy Full access already allowed shell and files; a chosen mode
   // allows them only once "Allowed in this workspace".
   const macGranted = macClass !== undefined &&
