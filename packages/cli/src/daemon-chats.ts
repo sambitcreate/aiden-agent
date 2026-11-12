@@ -43,6 +43,8 @@ import { toolCallIdempotencyKey } from "../../../main/services/hooks/hook-config
 import type { HookOutcome } from "../../../main/services/hooks/hook-types.js";
 import { markWorkspaceChatCompacted, runPromptIntakeHooks, workspaceChatHookScopes } from "../../../main/services/workspace-chat-hooks.js";
 import { isProtectedAgentConfigPath, PROTECTED_AGENT_CONFIG_WRITE_MESSAGE } from "../../../main/services/protected-agent-config-paths.js";
+import { cliWorkspaceCodingTools } from "./workspace-coding-tools.ts";
+import { createGenerationWatchdog } from "./generation-watchdog.ts";
 
 /**
  * The approval summary a paired phone shows. A call with only a command or path reads
@@ -55,9 +57,9 @@ export function daemonApprovalSummary(toolName: string, input: unknown): string 
     const value = args && Object.keys(args).length === 1 ? args[key] : undefined;
     return typeof value === "string" && value.trim() ? value : undefined;
   };
-  const readable = toolName === "bash" ? only("command") && `Run command: ${only("command")}`
-    : toolName === "read" ? only("path") && `Read file: ${only("path")}`
-      : toolName === "ls" ? only("path") && `List folder: ${only("path")}`
+  const readable = toolName === "run_command" ? only("command") && `Run command: ${only("command")}`
+    : toolName === "read_file" ? only("path") && `Read file: ${only("path")}`
+      : toolName === "list_dir" ? only("path") && `List folder: ${only("path")}`
         : undefined;
   return readable || `${toolName}: ${JSON.stringify(input)}`;
 }
@@ -70,7 +72,7 @@ export function daemonApprovalSummary(toolName: string, input: unknown): string 
 const HOOK_ASK_SUMMARY_CHARS = 400;
 
 /**
- * Whether a pi `write` or `edit` call targets hook or agent settings
+ * Whether a file mutation targets hook or agent settings
  * (`.aiden/hooks.json`, `.claude/settings.json`, the daemon's own hook
  * store …). Both the lexical path and its symlink-resolved form are checked,
  * so a link cannot route around the rule.
@@ -89,9 +91,8 @@ export function daemonWriteTargetsProtectedConfig(cwd: string, input: unknown): 
 }
 
 /**
- * pi's built-in tool names as Aiden names, so a hook matcher such as `Bash`
- * or `Write` (or `run_command`) matches the daemon's tools as it does the
- * desktop's. Other tools (Aiden's own, MCP) already carry Aiden names.
+ * Hooks receive the same tool names as desktop chats. Legacy Pi names can
+ * still appear in old journals, so normalize them when replaying results.
  */
 const PI_TOOL_AIDEN_NAMES: Readonly<Record<string, string>> = {
   bash: "run_command", write: "write_file", edit: "edit_file", read: "read_file", grep: "grep", find: "glob", ls: "list_dir",
@@ -200,7 +201,7 @@ export function createDaemonChats(agentDir: string) {
       let botAdmission: BotRuntimeAuthorityAdmission | undefined;
       let removeBotAbort = () => {};
       const disposeOwner = owner.onInvalidated(() => entry.requestStopQuietly());
-      const timer = setTimeout(() => entry.requestStopQuietly(), 300_000);
+      const watchdog = createGenerationWatchdog(() => entry.requestStopQuietly());
       // Every event also feeds the run journal, so a paired desktop sees the run even after its owner leaves.
       const send: typeof owner.send = (channel, payload) => { recorders.recordRunNotification(runs, streamId, channel, payload); if (!owner.isDestroyed()) owner.send(channel, payload); };
       const produced: AssistantMessage[] = [];
@@ -262,6 +263,7 @@ export function createDaemonChats(agentDir: string) {
         const model = runtime.getModel(params.providerId, params.model);
         if (!model) throw new Error("The saved provider/model is unavailable.");
         const botTools = botAdmission ? await bots!.tools(botAdmission) : [];
+        const codingTools = !botAdmission && workspace.folderPath ? cliWorkspaceCodingTools(cwd) : [];
         const additionalNames: string[] = [];
         const registeredTools: { readonly name: string; readonly label?: string }[] = [];
         // Activity shows MCP tools by their server label, not the generated name.
@@ -309,14 +311,14 @@ export function createDaemonChats(agentDir: string) {
               const instructions = await bots!.instructions(botAdmission);
               return { systemPrompt: `${event.systemPrompt}\n\n${instructions}` };
             });
-            for (const tool of botTools) pi.registerTool({ ...tool, label: tool.label ?? tool.name });
+            for (const tool of [...botTools, ...codingTools]) pi.registerTool({ ...tool, label: tool.label ?? tool.name });
             pi.on("tool_call", async (event) => {
             try {
               await assertAuthority();
               if (botAdmission && !botTools.some((tool) => tool.name === event.toolName)) return { block: true, reason: "This tool is outside the Bot capability grant." };
               const tier = botAdmission ? "full" : workspace.folderPath ? accessFor(agentDir, cwd) : "none";
               if (tier === "none") return { block: true, reason: "Workspace tools are disabled." };
-              if (!botAdmission && (event.toolName === "write" || event.toolName === "edit") && daemonWriteTargetsProtectedConfig(cwd, event.input)) return { block: true, reason: PROTECTED_AGENT_CONFIG_WRITE_MESSAGE };
+              if (!botAdmission && (event.toolName === "write_file" || event.toolName === "edit_file") && daemonWriteTargetsProtectedConfig(cwd, event.input)) return { block: true, reason: PROTECTED_AGENT_CONFIG_WRITE_MESSAGE };
               // PreToolUse runs after Aiden's own rules allowed the call, so a
               // hook can only tighten them; its updatedInput is not applied.
               const hooked = await dispatchHook("PreToolUse", { ...hookToolPayload(daemonHookToolName(event.toolName), event.input), tool_use_id: event.toolCallId },
@@ -361,7 +363,7 @@ export function createDaemonChats(agentDir: string) {
         const manager = SessionManager.open(sessionPath(params.chatId), join(root, "journals"), cwd);
         const { session } = await createAgentSession({ cwd, agentDir, modelRuntime: runtime, model,
           thinkingLevel: params.thinkingLevel, resourceLoader: loader, sessionManager: manager,
-          tools: botAdmission ? botTools.map((tool) => tool.name) : workspace.folderPath ? ["read", "bash", "edit", "write", "grep", "find", "ls", ...additionalNames] : [],
+          tools: botAdmission ? botTools.map((tool) => tool.name) : workspace.folderPath ? [...codingTools.map((tool) => tool.name), ...additionalNames] : [],
         });
         entry.session = session;
         // A hook's `continue: false` ends the run once the current tool batch finishes.
@@ -373,6 +375,7 @@ export function createDaemonChats(agentDir: string) {
         await session.bindExtensions({ mode: "rpc" });
         await assertAuthority();
         unsubscribe = session.subscribe((event) => {
+          watchdog.activity(event);
           if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
             timeline.thinkingEnded();
             const delta = (separator && content ? "\n" : "") + event.assistantMessageEvent.delta;
@@ -448,7 +451,7 @@ export function createDaemonChats(agentDir: string) {
         }
         send("chat:error", { streamId, message: error instanceof Error ? error.message : String(error), cancelled, timeline: finalTimeline }); return true;
       } finally {
-        clearTimeout(timer); unsubscribe(); disposeOwner(); removeBotAbort(); botAdmission?.release();
+        watchdog.dispose(); unsubscribe(); disposeOwner(); removeBotAbort(); botAdmission?.release();
         if (entry.session) {
           try { await entry.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }); }
           finally { entry.session.dispose(); }

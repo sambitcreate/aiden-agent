@@ -75,3 +75,5 @@ export { AIDEN_REMOTE_LEGACY_CAPABILITIES, AIDEN_REMOTE_HOST_CAPABILITIES } from
 
 export { projectBotTranscript } from "../../../main/services/bot-runtime/live-projection.js";
 export { createCliBotSpending } from "./bot-spending.ts";
+
+export { createGenerationWatchdog } from "./generation-watchdog.ts";

@@ -24,7 +24,7 @@ async function fakeProvider(t, dir) {
     const parsed = JSON.parse(body); requests.push(parsed);
     const toolTurn = !parsed.messages.some((message) => message.role === "tool");
     const delta = toolTurn
-      ? { role: "assistant", tool_calls: [{ index: 0, id: "list-1", type: "function", function: { name: "ls", arguments: JSON.stringify({ path: "." }) } }] }
+      ? { role: "assistant", tool_calls: [{ index: 0, id: "list-1", type: "function", function: { name: "list_dir", arguments: JSON.stringify({ path: "." }) } }] }
       : { role: "assistant", content: "Listed the folder" };
     response.writeHead(200, { "content-type": "text/event-stream" });
     response.write(`data: ${JSON.stringify({ id: "x", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`);

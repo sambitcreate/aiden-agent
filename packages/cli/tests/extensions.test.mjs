@@ -17,7 +17,11 @@ function evalModule(expression) {
 	const result = spawnSync(
 		process.execPath,
 		["--experimental-strip-types", "--input-type=module", "--no-warnings", "-e", expression],
-		{ cwd: pkgDir, encoding: "utf-8", timeout: 60_000 },
+		{
+			cwd: pkgDir, encoding: "utf-8", timeout: 60_000,
+			// Source imports resolve native helpers through the installed CLI entry, as the bundle does.
+			env: { ...process.env, AIDEN_CLI_ENTRY: path.join(pkgDir, "dist", "app", "cli.js") },
+		},
 	);
 	assert.equal(result.status, 0, result.stderr);
 	return result.stdout;
