@@ -211,6 +211,8 @@ export async function runMemoryReview(run: MemoryReviewRun): Promise<MemoryRevie
   for (let round = 0; round < run.maxRounds; round += 1) {
     if (deadline.aborted) break;
     await fence();
+    // The access check can itself take long enough to cross the limit.
+    if (deadline.aborted) break;
     let answer: AssistantMessage;
     try {
       answer = await run.model.models.completeSimple(

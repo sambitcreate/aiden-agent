@@ -150,6 +150,39 @@ test("a review past its time limit keeps the answer already on its way and sends
   }
 });
 
+test("a review whose access check runs past its time limit sends no further request", async () => {
+  const reviewRequests: Message[][] = [];
+  const step: FauxResponseStep = async (context) => {
+    if (!isReviewRequest(context.messages)) return fauxAssistantMessage("ok");
+    reviewRequests.push(context.messages);
+    return addFact(`Fact ${reviewRequests.length}.`)();
+  };
+  const { harness, review, personTurns, userFile, authority, errors } = await setup(
+    Array.from({ length: 60 }, () => step),
+    { timeoutMs: 200 },
+  );
+  // Once the first fact is saved, the access check before the next round is
+  // slow enough to cross the time limit.
+  const revalidate = authority.lease.revalidate.bind(authority.lease);
+  let slowed = false;
+  authority.lease.revalidate = async () => {
+    if (!slowed && existsSync(userFile) && readFileSync(userFile, "utf8").length > 0) {
+      slowed = true;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    await revalidate();
+  };
+  try {
+    await personTurns(10);
+    assert.deepEqual(await review.runNow(BOT), { kind: "reviewed", added: 1, targets: ["user"] });
+    assert.equal(reviewRequests.length, 1, "no request starts after the limit");
+    assert.equal(readFileSync(userFile, "utf8"), "Fact 1.");
+    assert.deepEqual(errors, []);
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
 test("routine and self-intro inputs are not counted or reviewed", async () => {
   const script = scripted([nothing]);
   const { harness, review, personTurns, routineTurn, introTurn } = await setup(script.steps);

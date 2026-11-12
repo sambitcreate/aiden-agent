@@ -379,6 +379,19 @@ export function createBotRoutineModelService(options: BotRoutineModelServiceOpti
     async approveCost(raw: BotCostApprovalFacts): Promise<string> { return serial("store", async () => { const facts = parseCostApprovalFacts(raw), state = await load(), botIncarnation = await approvalOwners(state, facts), existing = state.costApprovals.find((row) => row.botIncarnation === botIncarnation && digest(row.facts) === digest(facts)); if (existing) return existing.id; if (state.costApprovals.length >= 4096) throw new Error("Protected cost approvals are full. No prior approval was discarded."); const id = randomUUID(); state.costApprovals.push({ id, issuedAt: now(), botIncarnation, facts }); await saveState(state, async () => { if (await approvalOwners(state, facts) !== botIncarnation) throw new Error("The cost approval owner changed."); }); return id; }); },
     async verifyCostApproval(id: string, raw: BotCostApprovalFacts): Promise<boolean> { const facts = parseCostApprovalFacts(raw), state = await load(), approval = state.costApprovals.find((row) => row.id === id && digest(row.facts) === digest(facts)); if (!approval) return false; return approval.botIncarnation === await approvalOwners(state, facts); },
     async recordSubmission(botId: string, id: string, submissionId: string) { await updateClaim(botId, id, (claim) => { if (claim.submissionId && claim.submissionId !== submissionId) throw new Error("Execution submission mismatch."); claim.submissionId = submissionId; }); },
+    /**
+     * A person's or Bot's message refused before it was submitted holds no work
+     * yet, so its claim is dropped and a retry of the same request binds the
+     * Bot's current model. Routine, peer and started claims are never dropped.
+     */
+    async releaseUnsubmittedClaim(botId: string, id: string, requestId: string) {
+      await serial("store", async () => {
+        const state = await load(), index = state.claims.findIndex((row) => row.botId === botId && row.id === id && row.requestId === requestId), claim = state.claims[index];
+        if (!claim || claim.startedAt !== undefined || claim.submissionId !== undefined || claim.routineId !== undefined || claim.peer || claim.peerRoot || claim.root.botId !== botId || claim.root.requestId !== requestId) return;
+        if (state.costApprovals.some((row) => row.facts.ownerClaimId === id || row.facts.sourceClaimId === id) || state.responseEvidence.some((row) => row.facts.claimId === id)) return;
+        state.claims.splice(index, 1); await saveState(state, async () => {});
+      });
+    },
     async started(botId: string, id: string) { await updateClaim(botId, id, (claim) => { claim.startedAt ??= now(); }); },
     async selectFallback(botId: string, id: string, reason: "model_unavailable" | "credentials_unavailable") { await updateClaim(botId, id, (claim) => { if (claim.startedAt || !claim.fallback) throw new Error("Fallback is not available for dispatched work."); claim.actual = "fallback"; claim.fallbackReason = reason; }); },
     async readRuns(botId: string, routineId: string): Promise<BotRoutineModelRun[]> {

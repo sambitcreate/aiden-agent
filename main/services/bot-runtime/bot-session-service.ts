@@ -871,9 +871,12 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         if (before.kind === "interrupted" && (input.ifNotInterrupted || peer)) throw new BotSessionError("bot_paused");
         if (input.ifIdle && before.kind !== "idle") throw new BotSessionError("bot_busy");
         // A choice that cannot be admitted refuses before anything is submitted,
-        // so a phone's retry is not answered with a saved server failure.
+        // so a phone's retry is not answered with a saved server failure. A
+        // plain message also drops its claim, so that retry binds the Bot's
+        // current model instead of the one that was refused.
+        let claimed: BotExecutionClaim | undefined;
         const admit = async () => {
-          const execution = await deps.execution?.claim(botId, { requestId: input.requestId, ...(routineOrigin ? { routineOrigin } : {}), ...(input.peerOrigin ? { peerOrigin: input.peerOrigin } : {}), ...(input.routineTiming ?? {}), ...(input.retryOf ? { retryOf: input.retryOf } : {}), ...(botConnectorInventoryServer() ? { connectorServerId: botConnectorInventoryServer() } : {}), ...(botConnectorExecutionRestriction() ? { connectorRestriction: botConnectorExecutionRestriction() } : {}) });
+          const execution = claimed = await deps.execution?.claim(botId, { requestId: input.requestId, ...(routineOrigin ? { routineOrigin } : {}), ...(input.peerOrigin ? { peerOrigin: input.peerOrigin } : {}), ...(input.routineTiming ?? {}), ...(input.retryOf ? { retryOf: input.retryOf } : {}), ...(botConnectorInventoryServer() ? { connectorServerId: botConnectorInventoryServer() } : {}), ...(botConnectorExecutionRestriction() ? { connectorRestriction: botConnectorExecutionRestriction() } : {}) });
           const model = execution && deps.execution
             ? await withBotExecutionAdmission(botId, execution, deps.execution, async () => {
               await registry.refresh();
@@ -883,7 +886,9 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
             : await prepareToRun(botId, conversation, registry);
           return { execution, model };
         };
-        const { execution, model } = await admit().catch((error: unknown) => {
+        const { execution, model } = await admit().catch(async (error: unknown) => {
+          // A claim that cannot be dropped stays as it was; the refusal stands.
+          if (claimed && !routineOrigin && !peer && !input.retryOf) await deps.execution?.releaseUnsubmittedClaim?.(botId, claimed.id, claimed.requestId).catch(() => undefined);
           if (error instanceof BotSessionError) throw error;
           throw new BotSessionError("model_error", error instanceof Error && error.message.length > 0 ? error.message : defaultMessage("model_error"), authorityOf(error));
         });
