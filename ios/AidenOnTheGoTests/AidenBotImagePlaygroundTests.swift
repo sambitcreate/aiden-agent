@@ -11,10 +11,6 @@ final class AidenBotImagePlaygroundTests: XCTestCase {
         guard ProcessInfo.processInfo.environment["AIDEN_EXPECT_IMAGE_PLAYGROUND_UNAVAILABLE"] == "1" else {
             throw XCTSkip("Enable only for a known ineligible physical iPhone acceptance run.")
         }
-        guard #available(iOS 18.1, *) else {
-            XCTFail("The physical acceptance device must run iOS 18.1 or later.")
-            return
-        }
         XCTAssertEqual(UIDevice.current.userInterfaceIdiom, .phone)
         XCTAssertFalse(
             ImagePlaygroundViewController.isAvailable,

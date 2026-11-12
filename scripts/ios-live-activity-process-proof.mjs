@@ -19,7 +19,20 @@ const XCODE_DEVICE_ID_PATTERN = /^[0-9A-F]{8}-[0-9A-F]{16}$/iu;
 const CORE_DEVICE_ID_PATTERN = /^[0-9A-F]{8}(?:-[0-9A-F]{4}){3}-[0-9A-F]{12}$/iu;
 const TEST_IDENTIFIER =
   "AidenOnTheGoTests/AidenNativeIntegrationTests/testOptInPhysicalActivityKitProcessBoundaryPhase";
-const TEST_TARGET_PATH = ":TestConfigurations:0:TestTargets:0";
+const TEST_TARGET_NAME = "AidenOnTheGoTests";
+
+// The scheme lists the unit and UI test targets, and the xctestrun keeps them
+// in an order of its own, so the unit target is found by name, never by index.
+export function unitTestTargetPath(xctestrun) {
+  const targets = xctestrun?.TestConfigurations?.[0]?.TestTargets ?? [];
+  const matches = targets.flatMap((target, index) => (target?.BlueprintName === TEST_TARGET_NAME ? [index] : []));
+  if (matches.length !== 1) {
+    throw new Error(
+      `the xctestrun must hold exactly one ${TEST_TARGET_NAME} test target, found ${matches.length}`,
+    );
+  }
+  return `:TestConfigurations:0:TestTargets:${matches[0]}`;
+}
 
 export function parseActivityProcessProofOptions(argv, env = process.env) {
   const known = new Set(["--xcode-device-id", "--core-device-id"]);
@@ -51,14 +64,14 @@ export function physicalDestination(xcodeDeviceId) {
   return `platform=iOS,id=${xcodeDeviceId}`;
 }
 
-export function destinationArtifactPlistCommands() {
+export function destinationArtifactPlistCommands(targetPath) {
   return [
-    `Add ${TEST_TARGET_PATH}:UseDestinationArtifacts bool true`,
-    `Add ${TEST_TARGET_PATH}:TestBundleDestinationRelativePath string __TESTHOST__/PlugIns/AidenOnTheGoTests.xctest`,
-    `Add ${TEST_TARGET_PATH}:UITargetAppBundleIdentifier string sbtbiswas.AidenOnTheGo`,
-    `Delete ${TEST_TARGET_PATH}:TestBundlePath`,
-    `Delete ${TEST_TARGET_PATH}:TestHostPath`,
-    `Delete ${TEST_TARGET_PATH}:DependentProductPaths`,
+    `Add ${targetPath}:UseDestinationArtifacts bool true`,
+    `Add ${targetPath}:TestBundleDestinationRelativePath string __TESTHOST__/PlugIns/AidenOnTheGoTests.xctest`,
+    `Add ${targetPath}:UITargetAppBundleIdentifier string sbtbiswas.AidenOnTheGo`,
+    `Delete ${targetPath}:TestBundlePath`,
+    `Delete ${targetPath}:TestHostPath`,
+    `Delete ${targetPath}:DependentProductPaths`,
   ];
 }
 
@@ -122,25 +135,30 @@ function deletePlistEntryIfPresent(xctestrun, entry) {
   if (result.error) throw result.error;
 }
 
-function setPhase(xctestrun, phase) {
+function readUnitTestTargetPath(xctestrun) {
+  const json = execute("plutil", ["-convert", "json", "-o", "-", xctestrun], { capture: true });
+  return unitTestTargetPath(JSON.parse(json));
+}
+
+function setPhase(xctestrun, targetPath, phase) {
   plistBuddy(
     xctestrun,
-    `Set ${TEST_TARGET_PATH}:EnvironmentVariables:AIDEN_ACTIVITYKIT_PROCESS_PHASE ${phase}`,
+    `Set ${targetPath}:EnvironmentVariables:AIDEN_ACTIVITYKIT_PROCESS_PHASE ${phase}`,
   );
 }
 
-function configureDestinationArtifacts(xctestrun) {
+function configureDestinationArtifacts(xctestrun, targetPath) {
   const entriesToReplace = [
-    `${TEST_TARGET_PATH}:UseDestinationArtifacts`,
-    `${TEST_TARGET_PATH}:TestBundleDestinationRelativePath`,
-    `${TEST_TARGET_PATH}:UITargetAppBundleIdentifier`,
+    `${targetPath}:UseDestinationArtifacts`,
+    `${targetPath}:TestBundleDestinationRelativePath`,
+    `${targetPath}:UITargetAppBundleIdentifier`,
   ];
   for (const entry of entriesToReplace) deletePlistEntryIfPresent(xctestrun, entry);
-  for (const command of destinationArtifactPlistCommands().slice(0, 3)) plistBuddy(xctestrun, command);
+  for (const command of destinationArtifactPlistCommands(targetPath).slice(0, 3)) plistBuddy(xctestrun, command);
   for (const entry of [
-    `${TEST_TARGET_PATH}:TestBundlePath`,
-    `${TEST_TARGET_PATH}:TestHostPath`,
-    `${TEST_TARGET_PATH}:DependentProductPaths`,
+    `${targetPath}:TestBundlePath`,
+    `${targetPath}:TestHostPath`,
+    `${targetPath}:DependentProductPaths`,
   ]) {
     deletePlistEntryIfPresent(xctestrun, entry);
   }
@@ -248,6 +266,7 @@ export function runActivityProcessProof(options) {
   const destination = physicalDestination(options.xcodeDeviceId);
   const proofId = `process-proof-${randomUUID().toUpperCase()}`;
   let xctestrun;
+  let targetPath;
   let startAttempted = false;
   let destinationArtifactsConfigured = false;
   let completed = false;
@@ -280,13 +299,14 @@ export function runActivityProcessProof(options) {
     xctestrun = findFile(join(temporaryRoot, "Build", "Products"), ".xctestrun");
     if (!xctestrun) throw new Error("build-for-testing did not produce an .xctestrun file");
 
+    targetPath = readUnitTestTargetPath(xctestrun);
     plistBuddy(
       xctestrun,
-      `Add ${TEST_TARGET_PATH}:EnvironmentVariables:AIDEN_ACTIVITYKIT_PROCESS_PROOF_ID string ${proofId}`,
+      `Add ${targetPath}:EnvironmentVariables:AIDEN_ACTIVITYKIT_PROCESS_PROOF_ID string ${proofId}`,
     );
     plistBuddy(
       xctestrun,
-      `Add ${TEST_TARGET_PATH}:EnvironmentVariables:AIDEN_ACTIVITYKIT_PROCESS_PHASE string start`,
+      `Add ${targetPath}:EnvironmentVariables:AIDEN_ACTIVITYKIT_PROCESS_PHASE string start`,
     );
     startAttempted = true;
     runSelectedPhase({
@@ -297,8 +317,8 @@ export function runActivityProcessProof(options) {
     });
     ensureProcessBoundary(options.coreDeviceId, temporaryRoot, repositoryRoot);
 
-    setPhase(xctestrun, "reconcile");
-    configureDestinationArtifacts(xctestrun);
+    setPhase(xctestrun, targetPath, "reconcile");
+    configureDestinationArtifacts(xctestrun, targetPath);
     destinationArtifactsConfigured = true;
     runSelectedPhase({
       xctestrun,
@@ -311,8 +331,8 @@ export function runActivityProcessProof(options) {
   } finally {
     if (startAttempted && !completed && xctestrun) {
       try {
-        setPhase(xctestrun, "cleanup");
-        if (!destinationArtifactsConfigured) configureDestinationArtifacts(xctestrun);
+        setPhase(xctestrun, targetPath, "cleanup");
+        if (!destinationArtifactsConfigured) configureDestinationArtifacts(xctestrun, targetPath);
         runSelectedPhase({
           xctestrun,
           destination,

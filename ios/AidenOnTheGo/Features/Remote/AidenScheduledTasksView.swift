@@ -109,6 +109,9 @@ final class AidenScheduledTasksModel {
     private let coordinator: AidenRemoteCoordinator
     private let cache: AidenScheduledTaskCache
     private let activationContext: AidenRemoteRequestContext?
+    /// The machine this page was opened on. Nil keeps it on the selected machine,
+    /// ending when the selection moves.
+    let machine: AidenNewWorkTarget?
     private var pendingRunKeys: [String: UUID] = [:]
     private let hapticScope = UUID()
     private var taskStorage: [AidenScheduledTask] = []
@@ -127,16 +130,23 @@ final class AidenScheduledTasksModel {
 
     init(
         coordinator: AidenRemoteCoordinator,
-        cache: AidenScheduledTaskCache = .shared
+        cache: AidenScheduledTaskCache = .shared,
+        machine: AidenNewWorkTarget? = nil
     ) {
         self.coordinator = coordinator
         self.cache = cache
-        activationContext = try? coordinator.requestContext()
+        self.machine = machine
+        activationContext = machine.map { try? coordinator.ownerContext(for: $0.instanceId) }
+            ?? (try? coordinator.requestContext())
+    }
+
+    private var pickedConnection: AidenHostConnection? {
+        machine.flatMap { coordinator.hosts.connection(for: $0.instanceId) }
     }
 
     var isConnected: Bool {
-        coordinator.connectionState == .connected
-            && activationContext.map(coordinator.isCurrent) == true
+        (machine == nil ? coordinator.connectionState : pickedConnection?.connectionState) == .connected
+            && activationContext.map(coordinator.holds) == true
     }
     var canReadSchedules: Bool { currentAccess.canRead }
     var canWriteSchedules: Bool { currentAccess.canWrite }
@@ -147,7 +157,7 @@ final class AidenScheduledTasksModel {
     /// task already uses, so editing it still shows (and keeps) where it runs, as on the desktop.
     func workspaceChoices(keeping workspaceID: String?) -> [AidenWorkspace] {
         guard canManageSchedules else { return [] }
-        return AidenNoWorkspace.choices(coordinator.workspaces, keeping: workspaceID)
+        return AidenNoWorkspace.choices(machine == nil ? coordinator.workspaces : pickedConnection?.workspaces ?? [], keeping: workspaceID)
             .filter { $0.permission != .none }
     }
 
@@ -158,10 +168,10 @@ final class AidenScheduledTasksModel {
 
     private func access(for context: AidenRemoteRequestContext) -> AidenScheduledTaskAccess {
         AidenScheduledTaskAccess.resolve(
-            installation: coordinator.installationStore.activeInstallation,
+            installation: machine == nil ? coordinator.installationStore.activeInstallation : pickedConnection?.installation,
             instanceId: context.instanceId,
             deviceId: context.deviceId,
-            isCurrent: coordinator.isCurrent(context)
+            isCurrent: coordinator.holds(context)
         )
     }
 
@@ -193,7 +203,7 @@ final class AidenScheduledTasksModel {
     }
 
     private func requestContext() throws -> AidenRemoteRequestContext {
-        guard let activationContext, coordinator.isCurrent(activationContext) else {
+        guard let activationContext, coordinator.holds(activationContext) else {
             throw AidenRemoteClientError.installationChanged
         }
         return activationContext
@@ -293,7 +303,7 @@ final class AidenScheduledTasksModel {
             }
             scripts = loaded
         } catch {
-            guard coordinator.isCurrent(context) else { return }
+            guard coordinator.holds(context) else { return }
             scripts = []
             presentedError = error.localizedDescription
         }
@@ -358,7 +368,7 @@ final class AidenScheduledTasksModel {
         } catch let error where aidenIsCancellation(error) {
             return false
         } catch {
-            guard coordinator.isCurrent(context) else { return false }
+            guard coordinator.holds(context) else { return false }
             presentedError = error.localizedDescription
             coordinator.haptics.play(.error, scope: hapticScope)
             await load()
@@ -417,7 +427,7 @@ final class AidenScheduledTasksModel {
         } catch let error where aidenIsCancellation(error) {
             return false
         } catch {
-            guard coordinator.isCurrent(context) else { return false }
+            guard coordinator.holds(context) else { return false }
             presentedError = error.localizedDescription
             coordinator.haptics.play(.error, scope: hapticScope)
             await load()
@@ -461,7 +471,7 @@ final class AidenScheduledTasksModel {
         } catch let error where aidenIsCancellation(error) {
             return
         } catch {
-            guard coordinator.isCurrent(context) else { return }
+            guard coordinator.holds(context) else { return }
             if !Self.isAmbiguous(error) { pendingRunKeys[task.id] = nil }
             presentedError = error.localizedDescription
             coordinator.haptics.play(Self.isAmbiguous(error) ? .warning : .error, scope: hapticScope)
@@ -490,7 +500,7 @@ final class AidenScheduledTasksModel {
                 }
                 return retained
             }
-            guard coordinator.isCurrent(context) else {
+            guard coordinator.holds(context) else {
                 throw AidenRemoteClientError.installationChanged
             }
             throw error
@@ -530,7 +540,7 @@ final class AidenScheduledTasksModel {
         } catch let error where aidenIsCancellation(error) {
             return false
         } catch {
-            guard coordinator.isCurrent(context) else { return false }
+            guard coordinator.holds(context) else { return false }
             presentedError = error.localizedDescription
             coordinator.haptics.play(.error, scope: hapticScope)
             await load()
@@ -565,7 +575,7 @@ final class AidenScheduledTasksModel {
             return
         }
         catch {
-            guard coordinator.isCurrent(context) else { return }
+            guard coordinator.holds(context) else { return }
             presentedError = error.localizedDescription
             coordinator.haptics.play(.error, scope: hapticScope)
             await load()
@@ -578,7 +588,7 @@ final class AidenScheduledTasksModel {
         taskStorage.append(task)
         taskStorage.sort(by: Self.sort)
         if let instanceId = activationContext?.instanceId,
-           activationContext.map(coordinator.isCurrent) == true {
+           activationContext.map(coordinator.holds) == true {
             let taskSnapshot = taskStorage
             let settingsSnapshot = settingsStorage
             Task {
@@ -640,8 +650,11 @@ struct AidenScheduledTasksView: View {
         case running = "Running"
     }
 
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.aidenPalette) private var palette
     @State private var model: AidenScheduledTasksModel
+    /// The machine whose schedules show.
+    @State private var picker: AidenNewWorkPicker
+    private let coordinator: AidenRemoteCoordinator
     @State private var editorTask: AidenScheduledTask?
     @State private var isCreating = false
     @State private var isShowingSettings = false
@@ -649,7 +662,10 @@ struct AidenScheduledTasksView: View {
     @State private var filter: TaskFilter = .all
 
     init(coordinator: AidenRemoteCoordinator) {
-        _model = State(initialValue: AidenScheduledTasksModel(coordinator: coordinator))
+        self.coordinator = coordinator
+        let picker = AidenNewWorkPicker(coordinator: coordinator, kind: .reading)
+        _picker = State(initialValue: picker)
+        _model = State(initialValue: AidenScheduledTasksModel(coordinator: coordinator, machine: picker.target))
     }
 
     private var visibleTasks: [AidenScheduledTask] {
@@ -669,156 +685,165 @@ struct AidenScheduledTasksView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    Label {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Create tasks in any chat")
-                                .font(.headline)
-                            Text("Ask Aiden in any chat. Aiden proposes the schedule and unattended access for your approval before saving it.")
+        List {
+            if picker.showsPicker {
+                Section { AidenNewWorkMachinePicker(picker: picker) }
+            }
+            Section {
+                Label {
+                    VStack(alignment: .leading, spacing: AidenSpacing.xs) {
+                        Text("Create tasks in any chat")
+                            .font(.headline)
+                        Text("Ask Aiden in any chat. Aiden proposes the schedule and unattended access for your approval before saving it.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                } icon: {
+                    Image(systemName: "bubble.left.and.text.bubble.right")
+                        .foregroundStyle(.tint)
+                }
+            }
+            if !model.canReadSchedules {
+                ContentUnavailableView(
+                    "Schedule access required",
+                    systemImage: "lock.shield",
+                    description: Text("Enable schedule read access for this paired device on your desktop to view task definitions and cached run history.")
+                )
+                .listRowBackground(Color.clear)
+            } else {
+                if !model.canWriteSchedules {
+                    Section {
+                        Label {
+                            Text("View only — schedule write access is not granted. You can inspect tasks and run history, but changes are disabled.")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
+                        } icon: {
+                            Image(systemName: "eye")
+                                .foregroundStyle(.secondary)
                         }
-                    } icon: {
-                        Image(systemName: "bubble.left.and.text.bubble.right")
-                            .foregroundStyle(.tint)
                     }
                 }
-                if !model.canReadSchedules {
+                Section {
+                    Picker("Filter", selection: $filter) {
+                        ForEach(TaskFilter.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                }
+                if let message = model.outcomeMessage {
+                    Section { Text(message).font(.footnote).foregroundStyle(.secondary) }
+                }
+                if model.tasks.isEmpty && !model.isLoading {
                     ContentUnavailableView(
-                        "Schedule Access Required",
-                        systemImage: "lock.shield",
-                        description: Text("Enable schedule read access for this paired device on your desktop to view task definitions and cached run history.")
+                        "No scheduled tasks",
+                        systemImage: "clock.badge.plus",
+                        description: Text("Ask Aiden in any chat to create unattended work that runs on your desktop.")
                     )
                     .listRowBackground(Color.clear)
-                } else {
-                    if !model.canWriteSchedules {
-                        Section {
-                            Label {
-                                Text("View only — schedule write access is not granted. You can inspect tasks and run history, but changes are disabled.")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            } icon: {
-                                Image(systemName: "eye")
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    Section {
-                        Picker("Filter", selection: $filter) {
-                            ForEach(TaskFilter.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                        }
-                        .pickerStyle(.segmented)
-                    }
-                    if let message = model.outcomeMessage {
-                        Section { Text(message).font(.footnote).foregroundStyle(.secondary) }
-                    }
-                    if model.tasks.isEmpty && !model.isLoading {
-                        ContentUnavailableView(
-                            "No Scheduled Tasks",
-                            systemImage: "clock.badge.plus",
-                            description: Text("Ask Aiden in any chat to create unattended work that runs on your desktop.")
-                        )
+                } else if visibleTasks.isEmpty && !model.isLoading {
+                    ContentUnavailableView.search(text: searchText)
                         .listRowBackground(Color.clear)
-                    } else if visibleTasks.isEmpty && !model.isLoading {
-                        ContentUnavailableView.search(text: searchText)
-                            .listRowBackground(Color.clear)
-                    } else {
-                        Section("Tasks") {
-                            ForEach(visibleTasks) { task in
-                                NavigationLink {
-                                    AidenScheduledTaskDetailView(model: model, taskId: task.id)
-                                } label: {
-                                    VStack(alignment: .leading, spacing: 5) {
-                                        HStack {
-                                            Text(task.name).font(.headline)
-                                            if task.running { ProgressView().controlSize(.small) }
-                                            Spacer()
-                                            Text(model.isEnabled(task) ? "Active" : "Paused")
-                                                .font(.caption).foregroundStyle(.secondary)
-                                        }
-                                        Text(AidenScheduledTaskPresentation.cadence(schedule: task.schedule))
-                                            .font(.subheadline)
-                                            .foregroundStyle(.secondary)
-                                        if let next = task.nextRunAt {
-                                            Text("Next \(next.formatted(date: .abbreviated, time: .shortened))")
-                                                .font(.caption).foregroundStyle(.secondary)
-                                        }
+                } else {
+                    Section("Tasks") {
+                        ForEach(visibleTasks) { task in
+                            NavigationLink {
+                                AidenScheduledTaskDetailView(model: model, taskId: task.id)
+                            } label: {
+                                VStack(alignment: .leading, spacing: AidenSpacing.xs) {
+                                    HStack {
+                                        Text(task.name).font(.headline)
+                                        if task.running { ProgressView().controlSize(.small) }
+                                        Spacer()
+                                        Text(model.isEnabled(task) ? "Active" : "Paused")
+                                            .font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    Text(AidenScheduledTaskPresentation.cadence(schedule: task.schedule))
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                    if let next = task.nextRunAt {
+                                        Text("Next \(next.formatted(date: .abbreviated, time: .shortened))")
+                                            .font(.caption).foregroundStyle(.secondary)
                                     }
                                 }
-                                .swipeActions(edge: .trailing) {
-                                    if model.canManageSchedules {
-                                        Button(model.isEnabled(task) ? "Pause" : "Resume") {
-                                            Task { await model.pauseOrResume(task) }
-                                        }
-                                        .tint(.orange)
+                            }
+                            .swipeActions(edge: .trailing) {
+                                if model.canManageSchedules {
+                                    Button(model.isEnabled(task) ? "Pause" : "Resume") {
+                                        Task { await model.pauseOrResume(task) }
                                     }
+                                    .tint(palette.warning)
                                 }
                             }
                         }
                     }
                 }
             }
-            .navigationTitle("Scheduled Tasks")
-            .searchable(text: $searchText, prompt: "Search tasks")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
-                ToolbarItemGroup(placement: .primaryAction) {
-                    Button { isShowingSettings = true } label: { Label("Settings", systemImage: "gearshape") }
-                        .disabled(!model.canManageSchedules || !model.isConnected || model.isMutating)
-                    Menu {
-                        Button { isCreating = true } label: {
-                            Label("Create Manually", systemImage: "slider.horizontal.3")
-                        }
-                    } label: {
-                        Label("More", systemImage: "ellipsis")
-                    }
-                        .disabled(!model.canManageSchedules || !model.isConnected || model.isMutating)
-                }
-            }
-            .refreshable { await model.load() }
-            .overlay { if model.isLoading && model.tasks.isEmpty { ProgressView("Loading tasks…") } }
-            .safeAreaInset(edge: .top) {
-                if model.canReadSchedules && !model.isConnected {
-                    Text("Offline — task history remains visible, but changes are disabled.")
-                        .font(.footnote).frame(maxWidth: .infinity).padding(8).background(.thinMaterial)
-                }
-            }
-            .sheet(isPresented: $isCreating) {
-                AidenScheduledTaskEditor(model: model, task: nil) { isCreating = false }
-            }
-            .sheet(item: $editorTask) { task in
-                AidenScheduledTaskEditor(model: model, task: task) { editorTask = nil }
-            }
-            .sheet(isPresented: $isShowingSettings) {
-                AidenScheduledSettingsView(model: model)
-            }
-            .alert("Scheduled Tasks", isPresented: Binding(
-                get: { model.presentedError != nil },
-                set: { if !$0 { model.presentedError = nil } }
-            )) { Button("OK") { model.presentedError = nil } } message: {
-                Text(model.presentedError ?? "")
-            }
-            .task { await model.load() }
-            .onChange(of: model.canReadSchedules) { _, _ in
-                Task { await model.reconcileAccess() }
-            }
-            .onChange(of: model.canWriteSchedules) { _, canWrite in
-                if !canWrite {
-                    isCreating = false
-                    isShowingSettings = false
-                    editorTask = nil
-                }
-                Task { await model.reconcileAccess() }
-            }
-            .onAppear { model.setHapticsActive(true) }
-            .onDisappear { model.setHapticsActive(false) }
         }
+        .navigationTitle("Scheduled tasks")
+        .searchable(text: $searchText, prompt: "Search tasks")
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button { isShowingSettings = true } label: { Label("Settings", systemImage: "gearshape") }
+                    .disabled(!model.canManageSchedules || !model.isConnected || model.isMutating)
+                Menu {
+                    Button { isCreating = true } label: {
+                        Label("Create manually", systemImage: "slider.horizontal.3")
+                    }
+                } label: {
+                    Label("More", systemImage: "ellipsis")
+                }
+                    .disabled(!model.canManageSchedules || !model.isConnected || model.isMutating)
+            }
+        }
+        .refreshable { await model.load() }
+        .overlay { if model.isLoading && model.tasks.isEmpty { ProgressView("Loading tasks…") } }
+        .safeAreaInset(edge: .top) {
+            if model.canReadSchedules && !model.isConnected {
+                Text("Offline — task history remains visible, but changes are disabled.")
+                    .font(.footnote).frame(maxWidth: .infinity).padding(AidenSpacing.s)
+                    .background(palette.raised)
+            }
+        }
+        .sheet(isPresented: $isCreating) {
+            AidenScheduledTaskEditor(model: model, task: nil) { isCreating = false }
+        }
+        .sheet(item: $editorTask) { task in
+            AidenScheduledTaskEditor(model: model, task: task) { editorTask = nil }
+        }
+        .sheet(isPresented: $isShowingSettings) {
+            AidenScheduledSettingsView(model: model)
+        }
+        .alert("Scheduled tasks", isPresented: Binding(
+            get: { model.presentedError != nil },
+            set: { if !$0 { model.presentedError = nil } }
+        )) { Button("OK") { model.presentedError = nil } } message: {
+            Text(model.presentedError ?? "")
+        }
+        .task(id: picker.target) {
+            if picker.target != model.machine {
+                model.setHapticsActive(false)
+                model = AidenScheduledTasksModel(coordinator: coordinator, machine: picker.target)
+                model.setHapticsActive(true)
+            }
+            await model.load()
+        }
+        .onChange(of: model.canReadSchedules) { _, _ in
+            Task { await model.reconcileAccess() }
+        }
+        .onChange(of: model.canWriteSchedules) { _, canWrite in
+            if !canWrite {
+                isCreating = false
+                isShowingSettings = false
+                editorTask = nil
+            }
+            Task { await model.reconcileAccess() }
+        }
+        .onAppear { model.setHapticsActive(true) }
+        .onDisappear { model.setHapticsActive(false) }
     }
 }
 
 private struct AidenScheduledTaskDetailView: View {
+    @Environment(\.aidenPalette) private var palette
     @Bindable var model: AidenScheduledTasksModel
     let taskId: String
     @State private var runs: [AidenScheduledRun] = []
@@ -836,7 +861,7 @@ private struct AidenScheduledTaskDetailView: View {
         List {
             if !model.canReadSchedules {
                 ContentUnavailableView(
-                    "Schedule Access Required",
+                    "Schedule access required",
                     systemImage: "lock.shield",
                     description: Text("Schedule read access was removed. Task details and cached run history are hidden.")
                 )
@@ -858,7 +883,7 @@ private struct AidenScheduledTaskDetailView: View {
                 }
                 if model.canWriteSchedules {
                     Section("Actions") {
-                        Button("Run Now", systemImage: "play.fill") { isConfirmingRun = true }
+                        Button("Run now", systemImage: "play.fill") { isConfirmingRun = true }
                         Button(model.isEnabled(task) ? "Pause" : "Resume", systemImage: model.isEnabled(task) ? "pause" : "play") {
                             Task { await model.pauseOrResume(task) }
                         }
@@ -885,18 +910,18 @@ private struct AidenScheduledTaskDetailView: View {
                         .foregroundStyle(.secondary)
                     }
                 }
-                Section("Run History") {
+                Section("Run history") {
                     if runs.isEmpty { Text("No completed runs yet.").foregroundStyle(.secondary) }
                     ForEach(runs) { run in
-                        VStack(alignment: .leading, spacing: 5) {
+                        VStack(alignment: .leading, spacing: AidenSpacing.xs) {
                             HStack { Text(run.status.capitalized).font(.headline); Spacer(); Text(run.startedAt, style: .relative).font(.caption) }
                             if let summary = run.summary { Text(summary).font(.body).textSelection(.enabled) }
-                            if let code = run.errorCode { Text(code).font(.caption).foregroundStyle(.red) }
+                            if let code = run.errorCode { Text(code).font(.caption).foregroundStyle(palette.dangerText) }
                         }
                     }
                 }
             } else {
-                ContentUnavailableView("Task Removed", systemImage: "trash")
+                ContentUnavailableView("Task removed", systemImage: "trash")
             }
         }
         .navigationTitle(task?.name ?? "Task")
@@ -905,16 +930,16 @@ private struct AidenScheduledTaskDetailView: View {
                 AidenScheduledTaskEditor(model: model, task: task) { isEditing = false }
             } else {
                 ContentUnavailableView(
-                    "Connector List Required",
+                    "Connector list required",
                     systemImage: "arrow.clockwise",
-                    description: Text("Refresh Scheduled Tasks before editing this legacy task so Aiden can freeze its exact connector access.")
+                    description: Text("Refresh scheduled tasks before editing this legacy task so Aiden can freeze its exact connector access.")
                 )
-                .padding()
+                .padding(AidenSpacing.l)
             }
         }
         .confirmationDialog("Run this task now?", isPresented: $isConfirmingRun, titleVisibility: .visible) {
             if model.canManageSchedules, let task {
-                Button("Run Now") { Task { await model.run(task); await loadRuns() } }
+                Button("Run now") { Task { await model.run(task); await loadRuns() } }
             }
             Button("Cancel", role: .cancel) {}
         } message: { Text("Aiden Agent owns the run. It continues if this phone disconnects.") }
@@ -954,6 +979,7 @@ private struct AidenScheduledTaskDetailView: View {
 }
 
 private struct AidenScheduledTaskEditor: View {
+    @Environment(\.aidenPalette) private var palette
     @Bindable var model: AidenScheduledTasksModel
     let task: AidenScheduledTask?
     let onSaved: () -> Void
@@ -1048,7 +1074,7 @@ private struct AidenScheduledTaskEditor: View {
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                     TextField("Timezone", text: $draft.timezone)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    Button("Preview Next Runs") {
+                    Button("Preview next runs") {
                         Task { do { preview = try await model.preview(draft) } catch { model.presentedError = error.localizedDescription } }
                     }
                     ForEach(preview, id: \.self) { Text($0.formatted(date: .abbreviated, time: .shortened)).foregroundStyle(.secondary) }
@@ -1113,7 +1139,7 @@ private struct AidenScheduledTaskEditor: View {
                                         draft.setMcpServer(id: serverID, selected: selected)
                                     }
                                 )) {
-                                    VStack(alignment: .leading, spacing: 2) {
+                                    VStack(alignment: .leading, spacing: AidenSpacing.xs) {
                                         Text("Unavailable connection")
                                         Text(serverID)
                                             .font(.caption)
@@ -1140,7 +1166,7 @@ private struct AidenScheduledTaskEditor: View {
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                 }
-                Section("Unattended Access") {
+                Section("Unattended access") {
                     Picker("Permission", selection: $draft.permission) {
                         ForEach(AidenScheduledTaskPermission.allCases, id: \.self) { Text($0.title).tag($0) }
                     }
@@ -1148,18 +1174,18 @@ private struct AidenScheduledTaskEditor: View {
                     Text("Enabled tasks can run on your desktop while this phone is disconnected. Full permission can edit files and run commands without asking.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
-                        if let validation = reviewValidationMessage { Section { Text(validation).foregroundStyle(.red) } }
+                        if let validation = reviewValidationMessage { Section { Text(validation).foregroundStyle(palette.dangerText) } }
                     }
                 } else {
                     ContentUnavailableView(
-                        "Schedule Write Access Required",
+                        "Schedule write access required",
                         systemImage: "lock.shield",
                         description: Text("Task fields are hidden because this paired device no longer has permission to manage scheduled tasks.")
                     )
-                    .padding()
+                    .padding(AidenSpacing.l)
                 }
             }
-            .navigationTitle(task == nil ? "New Task" : "Edit Task")
+            .navigationTitle(task == nil ? "New task" : "Edit task")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
@@ -1201,7 +1227,7 @@ private struct AidenScheduledTaskEditor: View {
                 if model.canManageSchedules {
                     NavigationStack {
                     Form {
-                        Section("Final Review") {
+                        Section("Final review") {
                             LabeledContent("Task", value: draft.name)
                             LabeledContent(
                                 "Schedule",
@@ -1225,7 +1251,7 @@ private struct AidenScheduledTaskEditor: View {
                         }
                         Section { Text("Confirm only if this unattended work should run on your desktop while the phone is disconnected.") }
                     }
-                    .navigationTitle("Review Task")
+                    .navigationTitle("Review task")
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) { Button("Back") { isReviewing = false } }
                         ToolbarItem(placement: .confirmationAction) {
@@ -1242,11 +1268,11 @@ private struct AidenScheduledTaskEditor: View {
                 }
                 } else {
                     ContentUnavailableView(
-                        "Schedule Write Access Required",
+                        "Schedule write access required",
                         systemImage: "lock.shield",
                         description: Text("Close this review and restore schedule write access before saving the task.")
                     )
-                    .padding()
+                    .padding(AidenSpacing.l)
                 }
             }
             .onChange(of: model.canManageSchedules) { _, canManage in
@@ -1292,14 +1318,14 @@ private struct AidenScheduledSettingsView: View {
                     }
                 } else {
                     ContentUnavailableView(
-                        "Schedule Write Access Required",
+                        "Schedule write access required",
                         systemImage: "lock.shield",
                         description: Text("Settings are hidden because this paired device cannot change scheduled tasks.")
                     )
-                    .padding()
+                    .padding(AidenSpacing.l)
                 }
             }
-            .navigationTitle("Task Settings")
+            .navigationTitle("Task settings")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {

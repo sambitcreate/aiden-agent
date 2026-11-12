@@ -613,7 +613,7 @@ enum AidenBotNotificationKind: String, Codable, Sendable {
 /// issue card for a device holding `bot:issues`. An issue item's `routineName`
 /// is the card's title and it carries no `routineId` or `status`.
 struct AidenBotRoutineNotification: Codable, Equatable, Identifiable, Sendable {
-    /// The routine run id; posted once as `aiden.bot-routine.<id>`.
+    /// The routine run id; posted once as `aiden.bot-routine.<instanceId>.<id>`.
     let id: String
     let kind: AidenBotNotificationKind
     let botId: String

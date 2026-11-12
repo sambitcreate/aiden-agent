@@ -484,15 +484,28 @@ struct AidenInboxProjection: Equatable {
         projection.updates.sort(by: Self.newestFirst)
         projection.earlier.sort(by: Self.newestFirst)
         projection.working.sort(by: Self.oldestFirst)
-        if !searching, !showAllEarlier, projection.earlier.count > earlierLimit {
-            let limit = max(0, earlierLimit)
-            let openPastCap = limit > 0 ? projection.earlier.dropFirst(limit).first { $0.id == openChatID } : nil
-            var shown = Array(projection.earlier.prefix(openPastCap == nil ? limit : limit - 1))
-            if let openPastCap { shown.append(openPastCap) }
-            projection.earlierOverflow = projection.earlier.count - shown.count
-            projection.earlier = shown
+        if !searching, !showAllEarlier {
+            let capped = Self.capEarlier(projection.earlier, limit: earlierLimit) { $0.id == openChatID }
+            projection.earlier = capped.rows
+            projection.earlierOverflow = capped.overflow
         }
         return projection
+    }
+
+    /// The Earlier cap: the first `limit` rows of a newest-first list, with the
+    /// open chat kept when it sits past the cap (it takes the last slot). Shared
+    /// with the merged Inbox, so both cap the same way.
+    static func capEarlier<Element>(
+        _ rows: [Element],
+        limit: Int,
+        isOpen: (Element) -> Bool
+    ) -> (rows: [Element], overflow: Int) {
+        guard rows.count > limit else { return (rows, 0) }
+        let limit = max(0, limit)
+        let openPastCap = limit > 0 ? rows.dropFirst(limit).first(where: isOpen) : nil
+        var shown = Array(rows.prefix(openPastCap == nil ? limit : limit - 1))
+        if let openPastCap { shown.append(openPastCap) }
+        return (shown, rows.count - shown.count)
     }
 
     private static func newestFirst(_ left: Row, _ right: Row) -> Bool {

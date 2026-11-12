@@ -2,8 +2,8 @@ import SwiftUI
 
 /// Copy for an Advanced Save that didn't stick, shown by the screen behind it.
 enum AidenBotAdvancedCopy {
-    static let unreachable = "Aiden couldn’t reach your Mac, so Advanced wasn’t saved. Open it to try again."
-    static let changedOnMac = "Something changed on your Mac, so Advanced wasn’t saved. Open it to check and save again."
+    static let unreachable = "Aiden couldn’t reach your machine, so Advanced wasn’t saved. Open it to try again."
+    static let changedOnMac = "Something changed on your machine, so Advanced wasn’t saved. Open it to check and save again."
     static let couldNotCheck = "Aiden couldn’t check what Advanced saved. Open it again to see."
 }
 
@@ -84,6 +84,8 @@ func aidenBotAdvancedSave(
 /// character, and instructions live on the Profile.
 struct AidenBotAdvancedView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
+    /// The Bot's own machine, which Advanced reads and writes; nil follows the selected one.
+    let machine: String?
     let botID: String
     var onSaved: (AidenBotDetail) -> Void = { _ in }
     /// A Save that didn't reach the Mac, after Advanced closed: the screen behind says so.
@@ -105,7 +107,7 @@ struct AidenBotAdvancedView: View {
     @State private var chatActivityReport = AidenBotChatActivityReport()
 
     private var sessionIdentity: AidenBotCustomAccessSessionIdentity {
-        AidenBotCustomAccessSessionIdentity(coordinator: coordinator)
+        AidenBotCustomAccessSessionIdentity(coordinator: coordinator, machine: machine)
     }
 
     private var isDirty: Bool {
@@ -121,8 +123,8 @@ struct AidenBotAdvancedView: View {
     /// Editing works on the saved details at once, connected or not (R15); Save
     /// waits briefly for the Mac after the page closes.
     private var canWrite: Bool {
-        capturedContext.map(coordinator.isCurrent) == true
-            && coordinator.installationStore.activeInstallation?.canWriteBots == true
+        capturedContext.map(coordinator.holds) == true
+            && coordinator.botInstallation(on: machine)?.canWriteBots == true
     }
 
     private var canSave: Bool {
@@ -152,7 +154,7 @@ struct AidenBotAdvancedView: View {
                 reset(for: expectedSession)
                 await load(for: expectedSession)
             }
-            .onChange(of: coordinator.connectionState == .connected) { _, connected in
+            .onChange(of: coordinator.botConnectionState(on: machine) == .connected) { _, connected in
                 guard connected, baselineBot != nil else { return }
                 let expectedSession = sessionIdentity
                 Task { await load(for: expectedSession) }
@@ -218,7 +220,7 @@ struct AidenBotAdvancedView: View {
                     Label(readOnlyMessage, systemImage: "lock.fill")
                         .foregroundStyle(palette.secondary)
                 }
-            } else if coordinator.connectionState != .connected {
+            } else if coordinator.botConnectionState(on: machine) != .connected {
                 Section {
                     // Never a lock: changes save once the Mac is reachable.
                     Text(AidenBotSessionCopy.connecting)
@@ -247,7 +249,7 @@ struct AidenBotAdvancedView: View {
             if let chatActivityModel, let baselineBot {
                 AidenBotChatActivityView(
                     bot: baselineBot,
-                    canWrite: coordinator.installationStore.activeInstallation?.canWriteBots == true,
+                    canWrite: coordinator.botInstallation(on: machine)?.canWriteBots == true,
                     model: chatActivityModel
                 )
                 .onAppear { chatActivityReport.appeared(.chatActivity) }
@@ -260,9 +262,9 @@ struct AidenBotAdvancedView: View {
     @ViewBuilder
     private var messagingSection: some View {
         if let bot = baselineBot,
-           coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .botMessaging) == true,
+           coordinator.botInstallation(on: machine)?.hasNegotiatedAccess(to: .botMessaging) == true,
            bot.botMessaging != nil {
-            AidenBotMessagingSection(coordinator: coordinator, bot: bot, locked: isDirty || !canWrite) { saved in
+            AidenBotMessagingSection(coordinator: coordinator, machine: machine, bot: bot, locked: isDirty || !canWrite) { saved in
                 if let catalog, let draft, let baselineBot {
                     if let rebased = try? aidenBotEditorRebasedDraft(
                         draft, baseline: baselineBot, baselineCatalog: catalog,
@@ -270,7 +272,7 @@ struct AidenBotAdvancedView: View {
                     ) { self.draft = rebased }
                 }
                 baselineBot = saved
-                if let context = try? coordinator.requestContext() { cacheDetail(saved, for: context) }
+                if let context = try? coordinator.botContext(on: machine) { cacheDetail(saved, for: context) }
                 onSaved(saved)
             }
         }
@@ -293,7 +295,7 @@ struct AidenBotAdvancedView: View {
             case .none:
                 EmptyView()
             case .unavailable:
-                Text("To look at photos, add an AI that can see images on your Mac.")
+                Text("To look at photos, add an AI that can see images on your machine.")
                     .foregroundStyle(palette.secondary)
             case .choose:
                 AidenBotModelRow(
@@ -324,7 +326,7 @@ struct AidenBotAdvancedView: View {
             Text("What it can use")
         } footer: {
             if draft?.usesFullAccess == true {
-                Text("It can use everything your Mac allows. Your Mac still asks before risky steps.")
+                Text("It can use everything your machine allows. Your machine still asks before risky steps.")
             } else {
                 Text("Turn on only what this Bot needs.")
             }
@@ -336,8 +338,8 @@ struct AidenBotAdvancedView: View {
     @ViewBuilder
     private var chatActivitySection: some View {
         if aidenBotShowsChatActivity(
-            server: coordinator.server,
-            installation: coordinator.installationStore.activeInstallation,
+            server: coordinator.botServer(on: machine),
+            installation: coordinator.botInstallation(on: machine),
             hasBaseline: baselineBot != nil
         ), let baselineBot {
             Section {
@@ -356,7 +358,7 @@ struct AidenBotAdvancedView: View {
                 .buttonStyle(.plain)
                 .disabled(isDirty)
             } footer: {
-                Text(isDirty ? "Save or cancel your changes first." : "What you see in its chat on your Mac while it works.")
+                Text(isDirty ? "Save or cancel your changes first." : "What you see in its chat on your machine while it works.")
             }
         }
     }
@@ -366,9 +368,9 @@ struct AidenBotAdvancedView: View {
         if chatActivityModel?.isSaving != true {
             let botID = bot.id
             // The pairing this page opens under; every request and result stays with it.
-            let context = try? coordinator.requestContext()
+            let context = try? coordinator.botContext(on: machine)
             let isCurrent: @MainActor () -> Bool = { [coordinator] in
-                context.map(coordinator.isCurrent) == true
+                context.map(coordinator.holds) == true
             }
             chatActivityModel = AidenBotChatActivityModel(
                 bot: bot,
@@ -395,7 +397,7 @@ struct AidenBotAdvancedView: View {
                     cacheDetail(saved, for: context)
                     report.saved(saved, reportBehind: onSaved)
                 },
-                waitForConnection: { hold in await aidenBotWaitForConnection(coordinator, hold: hold) },
+                waitForConnection: { hold in await coordinator.waitForBotConnection(on: machine, hold: hold) },
                 isCurrent: isCurrent
             )
         }
@@ -403,7 +405,7 @@ struct AidenBotAdvancedView: View {
     }
 
     private func cacheDetail(_ detail: AidenBotDetail, for context: AidenRemoteRequestContext) {
-        guard coordinator.isCurrent(context) else { return }
+        guard coordinator.holds(context) else { return }
         Task {
             _ = await coordinator.withRetainedInstallationData(for: context) {
                 _ = try? await AidenBotCache.shared.upsertDetailAndStore(
@@ -528,7 +530,7 @@ struct AidenBotAdvancedView: View {
     }
 
     private var readOnlyMessage: String {
-        if capturedContext == nil { return "Connect to your Mac to change this." }
+        if capturedContext == nil { return "Connect to your machine to change this." }
         return "This phone can look but not change Bots."
     }
 
@@ -556,16 +558,16 @@ struct AidenBotAdvancedView: View {
         loadError = nil
         var requestContext: AidenRemoteRequestContext?
         do {
-            let context = try coordinator.requestContext()
+            let context = try coordinator.botContext(on: machine)
             requestContext = context
-            guard coordinator.isCurrent(context), sessionIdentity.pairing == expectedSession.pairing else { return }
+            guard coordinator.holds(context), sessionIdentity.pairing == expectedSession.pairing else { return }
             if draft == nil, let cached = await AidenBotCache.shared.load(
                 instanceId: context.instanceId,
                 deviceId: context.deviceId
             ), let cachedCatalog = cached.catalog(forBotID: botID),
                let cachedBot = cached.details.first(where: { $0.id == botID }),
                let cachedDraft = AidenBotEditorDraft(detail: cachedBot, catalog: cachedCatalog) {
-                guard coordinator.isCurrent(context), sessionIdentity.pairing == expectedSession.pairing else { return }
+                guard coordinator.holds(context), sessionIdentity.pairing == expectedSession.pairing else { return }
                 catalog = cachedCatalog
                 baselineBot = cachedBot
                 draft = cachedDraft
@@ -577,7 +579,7 @@ struct AidenBotAdvancedView: View {
             async let catalogRequest = client.botCapabilityCatalog(botId: botID)
             async let detailRequest = client.bot(id: botID)
             let (loadedCatalog, loadedBot) = try await (catalogRequest, detailRequest)
-            guard coordinator.isCurrent(context), sessionIdentity.pairing == expectedSession.pairing,
+            guard coordinator.holds(context), sessionIdentity.pairing == expectedSession.pairing,
                   !Task.isCancelled else { return }
             let loadedDraft: AidenBotEditorDraft
             if isDirty, let draft, let baselineBot, let catalog {
@@ -612,7 +614,7 @@ struct AidenBotAdvancedView: View {
                     deviceId: context.deviceId
                 )
             }
-            guard coordinator.isCurrent(context), sessionIdentity.pairing == expectedSession.pairing,
+            guard coordinator.holds(context), sessionIdentity.pairing == expectedSession.pairing,
                   !Task.isCancelled else { return }
             isLoading = false
         } catch is CancellationError {
@@ -634,7 +636,7 @@ struct AidenBotAdvancedView: View {
     /// briefly for the Mac; the screens behind hear the Mac's Bot, or the error.
     @MainActor
     private func save() {
-        guard canSave, let context = capturedContext, coordinator.isCurrent(context),
+        guard canSave, let context = capturedContext, coordinator.holds(context),
               let catalog, let draft, let baselineBot else { return }
         let botID = baselineBot.id
         let coordinator = coordinator
@@ -642,7 +644,7 @@ struct AidenBotAdvancedView: View {
         let onSaved = onSaved
         let onSaveFailed = onSaveFailed
         let operations = AidenBotAdvancedSaveOperations(
-            waitForConnection: { hold in await aidenBotWaitForConnection(coordinator, hold: hold) },
+            waitForConnection: { hold in await coordinator.waitForBotConnection(on: machine, hold: hold) },
             updateIdentity: { revision, patch in
                 try await coordinator.remoteClient(for: context).updateBotIdentity(id: botID, revision: revision, patch: patch)
             },
@@ -655,7 +657,7 @@ struct AidenBotAdvancedView: View {
         )
         Task { @MainActor in
             let outcome = await aidenBotAdvancedSave(draft: draft, baseline: baselineBot, catalog: catalog, operations: operations)
-            guard coordinator.isCurrent(context) else { return }
+            guard coordinator.holds(context) else { return }
             switch outcome {
             case let .saved(latest):
                 report.reportedByAdvanced()
@@ -680,7 +682,7 @@ struct AidenBotAdvancedView: View {
 /// Plain-language load errors for Bot surfaces.
 func aidenBotFriendlyLoadError(_ error: Error) -> String {
     if case AidenBotContractError.invalidCombination("no available provider and model") = error {
-        return "Needs an AI model. Set one up on your Mac, then try again."
+        return "Needs an AI model. Set one up on your machine, then try again."
     }
     return error.localizedDescription
 }
@@ -803,7 +805,7 @@ struct AidenBotModelListView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(model.label).foregroundStyle(palette.foreground)
-                    Text(usable ? (model.supportsImages ? "Reads images" : "Text only") : "Set up on your Mac")
+                    Text(usable ? (model.supportsImages ? "Reads images" : "Text only") : "Set up on your machine")
                         .font(.footnote)
                         .foregroundStyle(palette.secondary)
                 }
@@ -832,21 +834,44 @@ func aidenBotIsRevisionConflict(_ error: Error) -> Bool {
     return status == 409 || body.code == AidenRemoteErrorCode(rawValue: "revision_conflict")
 }
 
-/// Waits for the Mac connection to come up, so an optimistic pick made while connecting
-/// still goes out. False once `hold` runs out, or when no Mac is paired.
+/// Holds until `state` says connected. False once `hold` runs out, or when there's
+/// no machine left to wait for.
 @MainActor
-func aidenBotWaitForConnection(_ coordinator: AidenRemoteCoordinator, hold: Duration) async -> Bool {
+private func aidenBotWaitForConnection(
+    hold: Duration,
+    state: @MainActor () -> AidenRemoteConnectionState?
+) async -> Bool {
     let clock = ContinuousClock()
     let deadline = clock.now.advanced(by: hold)
-    while coordinator.connectionState != .connected {
-        if coordinator.connectionState == .needsPairing || clock.now >= deadline || Task.isCancelled { return false }
+    while state() != .connected {
+        let current = state()
+        if current == nil || current == .needsPairing || clock.now >= deadline || Task.isCancelled { return false }
         try? await Task.sleep(for: .milliseconds(200))
     }
     return true
 }
 
+/// `aidenBotWaitForConnection`, for one machine rather than the selected one.
+@MainActor
+func aidenBotWaitForConnection(
+    _ coordinator: AidenRemoteCoordinator,
+    on instanceId: String,
+    hold: Duration
+) async -> Bool {
+    await aidenBotWaitForConnection(hold: hold) { coordinator.hosts.connection(for: instanceId)?.connectionState }
+}
 
-/// Copy shared with the desktop page (`bot-chat-activity-page.tsx`) and Android.
+/// Waits for the Mac connection to come up, so an optimistic pick made while connecting
+/// still goes out. False once `hold` runs out, or when no Mac is paired.
+@MainActor
+func aidenBotWaitForConnection(_ coordinator: AidenRemoteCoordinator, hold: Duration) async -> Bool {
+    await aidenBotWaitForConnection(hold: hold) { coordinator.connectionState }
+}
+
+
+/// Copy shared with the desktop page (`bot-chat-activity-page.tsx`) and Android, except
+/// that iOS says "machine" where they say "Mac", until the Android decision
+/// (spec section 11).
 enum AidenBotChatActivityCopy {
     static let title = "Chat activity"
     static let levelTitle = "How much to show"
@@ -855,8 +880,8 @@ enum AidenBotChatActivityCopy {
     static let phonesFooter = "Always just the line, with the same words."
     static let recommended = "Recommended"
     static let saveFailed = "Aiden couldn’t save that choice."
-    static let saveConflict = "This changed on your Mac. Showing what it has now."
-    static let saveUnreachable = "Aiden couldn’t reach your Mac to save that choice."
+    static let saveConflict = "This changed on your machine. Showing what it has now."
+    static let saveUnreachable = "Aiden couldn’t reach your machine to save that choice."
 
     static func message(_ failure: AidenBotChatActivityFailure) -> String {
         switch failure {
@@ -903,7 +928,7 @@ enum AidenBotChatActivityCopy {
     }
 
     static func description(botName: String) -> String {
-        "What you see in \(botName)’s chat on your Mac while it works. Changes save as you pick them."
+        "What you see in \(botName)’s chat on your machine while it works. Changes save as you pick them."
     }
 }
 
@@ -1382,29 +1407,72 @@ struct AidenBotChatActivityPreviewView: View {
     }
 }
 
-/// Shared across the list and Advanced for the active, authenticated connection.
+/// Bot messaging, one state for each paired machine. The Bots list and every
+/// Advanced page share it, whatever machine they're on: a page reads and writes
+/// its own machine's state, so one machine's read or save never blanks or drops
+/// another's. A selected and an owner context for the same pairing share state;
+/// a new pairing of the machine starts over.
 @MainActor
 @Observable
 final class AidenBotMessagingModel {
-    private var context: AidenRemoteRequestContext?
-    private(set) var settings: AidenBotMessagingSettings?
-    private(set) var isSaving = false
-    private(set) var generation = 0
-    private(set) var error: String?
+    private struct Pairing: Hashable {
+        let instanceId: String
+        let deviceId: String
+        let hostGeneration: Int
+
+        init(_ context: AidenRemoteRequestContext) {
+            instanceId = context.instanceId
+            deviceId = context.deviceId
+            hostGeneration = context.hostGeneration
+        }
+    }
+
+    private struct MachineState {
+        let pairing: Pairing
+        var settings: AidenBotMessagingSettings?
+        var isSaving = false
+        var generation = 0
+        var error: String?
+    }
+
+    /// Keyed by machine, so a new pairing replaces the old one's state.
+    private var machines: [String: MachineState] = [:]
+
+    private func state(for context: AidenRemoteRequestContext?) -> MachineState? {
+        guard let context, let state = machines[context.instanceId],
+              state.pairing == Pairing(context) else { return nil }
+        return state
+    }
 
     func value(for context: AidenRemoteRequestContext?) -> AidenBotMessagingSettings? {
-        self.context == context ? settings : nil
+        state(for: context)?.settings
+    }
+
+    func isSaving(for context: AidenRemoteRequestContext?) -> Bool {
+        state(for: context)?.isSaving == true
+    }
+
+    func error(for context: AidenRemoteRequestContext?) -> String? {
+        state(for: context)?.error
+    }
+
+    /// Taken before a read, so a read that started before a save can't replace its result.
+    func generation(for context: AidenRemoteRequestContext?) -> Int {
+        state(for: context)?.generation ?? 0
     }
 
     func adopt(_ value: AidenBotMessagingSettings?, context: AidenRemoteRequestContext, generation: Int? = nil) {
-        if let generation, generation != self.generation { return }
-        if self.context != context {
-            self.context = context
-            self.generation += 1
-            isSaving = false
-            error = nil
-        } else if isSaving { return }
-        settings = value
+        guard var state = state(for: context) else {
+            // A machine read for the first time, or paired again.
+            let previous = machines[context.instanceId]?.generation ?? 0
+            if let generation, generation != 0, generation != previous { return }
+            machines[context.instanceId] = MachineState(pairing: Pairing(context), settings: value, generation: previous &+ 1)
+            return
+        }
+        if let generation, generation != state.generation { return }
+        if state.isSaving { return }
+        state.settings = value
+        machines[context.instanceId] = state
     }
 
     func save(
@@ -1414,24 +1482,31 @@ final class AidenBotMessagingModel {
         read: @escaping @MainActor () async throws -> AidenBotMessagingSettings?,
         isCurrent: @MainActor () -> Bool
     ) async {
-        guard self.context == context, let previous = settings, !isSaving, isCurrent() else { return }
-        isSaving = true
-        generation += 1
-        error = nil
-        settings = AidenBotMessagingSettings(enabled: enabled)
+        guard var state = state(for: context), let previous = state.settings, !state.isSaving, isCurrent() else { return }
+        state.isSaving = true
+        state.generation &+= 1
+        state.error = nil
+        state.settings = AidenBotMessagingSettings(enabled: enabled)
+        machines[context.instanceId] = state
+        var result: AidenBotMessagingSettings
+        var failure: String?
         do {
             let call = AidenBotMainActorCall(send)
-            let saved = try await aidenBotWithin(.seconds(12)) { try await call.call() }
-            guard self.context == context, isCurrent() else { return }
-            settings = saved
+            result = try await aidenBotWithin(.seconds(12)) { try await call.call() }
         } catch {
             let call = AidenBotMainActorCall(read)
             let authoritative = try? await aidenBotWithin(.seconds(12)) { try await call.call() }
-            guard self.context == context, isCurrent() else { return }
-            settings = authoritative ?? previous
-            if authoritative?.enabled != enabled { self.error = AidenBotIdentitySaver.failedMessage }
+            result = authoritative ?? previous
+            if authoritative?.enabled != enabled { failure = AidenBotIdentitySaver.failedMessage }
         }
-        if self.context == context { isSaving = false }
+        // The machine may have been paired again while the save was out.
+        guard var current = self.state(for: context) else { return }
+        current.isSaving = false
+        if isCurrent() {
+            current.settings = result
+            current.error = failure
+        }
+        machines[context.instanceId] = current
     }
 }
 
@@ -1441,6 +1516,7 @@ func aidenBotMessagingControlsEnabled(settings: AidenBotMessagingSettings?, canW
 
 struct AidenBotMessagingSection: View {
     @Bindable var coordinator: AidenRemoteCoordinator
+    let machine: String?
     let bot: AidenBotDetail
     let locked: Bool
     let onSaved: (AidenBotDetail) -> Void
@@ -1449,7 +1525,7 @@ struct AidenBotMessagingSection: View {
     @State private var saveError: String?
 
     private var enabled: Bool {
-        coordinator.botMessaging.value(for: try? coordinator.requestContext())?.enabled == true
+        coordinator.botMessaging.value(for: try? coordinator.botContext(on: machine))?.enabled == true
     }
 
     var body: some View {
@@ -1466,21 +1542,21 @@ struct AidenBotMessagingSection: View {
         } header: {
             Text("Other Bots")
         } footer: {
-            if coordinator.botMessaging.value(for: try? coordinator.requestContext())?.enabled == false { Text("Turned off for all Bots") }
+            if coordinator.botMessaging.value(for: try? coordinator.botContext(on: machine))?.enabled == false { Text("Turned off for all Bots") }
             else if !enabled { Text("Connect to check Bot messaging.") }
             else if locked { Text("Save or cancel your changes first.") }
         }
         .disabled(!aidenBotMessagingControlsEnabled(
-            settings: coordinator.botMessaging.value(for: try? coordinator.requestContext()),
-            canWrite: !locked, saving: isSaving || coordinator.botMessaging.isSaving
+            settings: coordinator.botMessaging.value(for: try? coordinator.botContext(on: machine)),
+            canWrite: !locked, saving: isSaving || coordinator.botMessaging.isSaving(for: try? coordinator.botContext(on: machine))
         ))
-        .task(id: try? coordinator.requestContext()) {
-            guard let context = try? coordinator.requestContext(),
+        .task(id: try? coordinator.botContext(on: machine)) {
+            guard let context = try? coordinator.botContext(on: machine),
                   let client = try? coordinator.remoteClient(for: context) else { return }
-            let generation = coordinator.botMessaging.generation
+            let generation = coordinator.botMessaging.generation(for: context)
             do {
                 let list = try await client.bots()
-                guard coordinator.isCurrent(context) else { return }
+                guard coordinator.holds(context) else { return }
                 coordinator.botMessaging.adopt(list.messaging, context: context, generation: generation)
             } catch { saveError = "Couldn’t check Bot messaging. Try again when connected." }
         }
@@ -1488,7 +1564,7 @@ struct AidenBotMessagingSection: View {
 
     private func save(receive: Bool? = nil, send: Bool? = nil) {
         guard !locked, enabled, !isSaving, let previous = bot.botMessaging,
-              let context = try? coordinator.requestContext(),
+              let context = try? coordinator.botContext(on: machine),
               let client = try? coordinator.remoteClient(for: context),
               let patch = try? AidenBotIdentityPatch(botMessaging: AidenBotMessagingPatch(receive: receive, send: send)) else { return }
         optimistic = patch.botMessaging?.applying(to: previous)
@@ -1501,7 +1577,7 @@ struct AidenBotMessagingSection: View {
             )
             saver.adopt(bot)
             let result = await saver.save(patch)
-            guard coordinator.isCurrent(context) else { return }
+            guard coordinator.holds(context) else { return }
             switch result {
             case .saved(let saved): onSaved(saved)
             case .failed(let authoritative):

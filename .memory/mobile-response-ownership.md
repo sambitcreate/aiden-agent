@@ -8,7 +8,7 @@ Both independent Sol medium reviewers inspected original-main and current source
 
 ## Workspace rename response versus terminal settlement
 
-Affected iOS: AidenWorkspaceChatsModel.rename/persist in Features/Remote/AidenChatFeature.swift; detail AidenChatViewModel.reconcileChat/acceptRemoteChat. Routes: PATCH /chats/{id} with If-Match, then GET /chats/{id} for reconciliation. Both exist in original-main.
+Affected iOS: AidenWorkspaceChatsModel.rename/persist in Features/Chat/AidenWorkspaceChatsModel.swift; detail AidenChatViewModel.reconcileChat/acceptRemoteChat in Features/Chat/AidenChatViewModel.swift. Routes: PATCH /chats/{id} with If-Match, then GET /chats/{id} for reconciliation. Both exist in original-main.
 
 Schedule: hold a successful PATCH response containing new title + pre-terminal messages. Let detail stream finish and authoritative GET save final messages. Release PATCH. Workspace model upserts/persists its older full transcript and publishes onChatUpdated. isMutating fences only one workspace model; transcriptGeneration fences only one detail model; isCurrent validates installation, not response order. PR217 tokens order already-accepted writes, so a newly accepted delayed HTTP response receives a newer token.
 

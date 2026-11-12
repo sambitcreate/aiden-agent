@@ -57,11 +57,12 @@ final class AidenRemoteLiveActivityManager {
         attributes.instanceID == instanceID && attributes.streamID == streamID
     }
 
-    func start(instanceID: String, chatID: String, title: String, streamID: String) async {
+    func start(instanceID: String, deviceID: String? = nil, chatID: String, title: String, streamID: String) async {
         guard drivesActivityKit, ActivityAuthorizationInfo().areActivitiesEnabled else { return }
         let startedAt = Date()
         let attributes = AgentRunActivityAttributes(
             instanceID: instanceID,
+            deviceID: deviceID,
             sessionID: chatID,
             sessionTitle: title,
             streamID: streamID,
@@ -230,13 +231,16 @@ final class AidenRemoteLiveActivityManager {
     /// authenticated Aiden client. An unreachable server leaves state stale.
     func reconcile(
         instanceID: String,
+        deviceID: String? = nil,
         client: AidenRemoteClient,
         isCurrent: @MainActor () -> Bool
     ) async {
         for activity in systemActivities
         where activity.attributes.instanceID == instanceID && isLive(activity) {
             guard isCurrent() else { return }
-            guard let streamID = activity.attributes.streamID else {
+            // No stream to ask about, or a run from an older pairing of the machine.
+            guard let streamID = activity.attributes.streamID,
+                  Self.isSamePairing(activity.attributes.deviceID, deviceID) else {
                 discardThrottle(for: activity.id)
                 await activity.end(nil, dismissalPolicy: .immediate)
                 stateByActivityID[activity.id] = nil
@@ -259,6 +263,42 @@ final class AidenRemoteLiveActivityManager {
                 let state = AgentRunActivityStateReducer.stale(state: state(for: activity))
                 stateByActivityID[activity.id] = state
                 await throttle(for: activity).submitUrgent(state)
+            }
+        }
+    }
+
+    /// Unset on either side counts as a match: an activity from an older build
+    /// has no device, and the single-machine reconcile doesn't name one.
+    private static func isSamePairing(_ first: String?, _ second: String?) -> Bool {
+        guard let first, let second else { return true }
+        return first == second
+    }
+
+    /// Every machine with a live connection, selected or not.
+    func reconcileTargets(of coordinator: AidenRemoteCoordinator) -> [AidenHostConnection] {
+        coordinator.hosts.ordered.filter { $0.connectionState == .connected && !$0.isRevoked }
+    }
+
+    /// Reconciles each connected machine through its own client, or only the
+    /// ones in `instanceIDs`. Machines run side by side, so one that stopped
+    /// answering can't hold up the others' activities. The selection plays no part.
+    func reconcileConnectedMachines(
+        of coordinator: AidenRemoteCoordinator,
+        only instanceIDs: Set<String>? = nil
+    ) async {
+        await withTaskGroup(of: Void.self) { group in
+            for connection in reconcileTargets(of: coordinator)
+            where instanceIDs?.contains(connection.instanceId) != false {
+                guard let owner = try? coordinator.ownerContext(for: connection.instanceId),
+                      let client = try? coordinator.remoteClient(for: owner) else { continue }
+                group.addTask { @MainActor in
+                    await self.reconcile(
+                        instanceID: owner.instanceId,
+                        deviceID: owner.deviceId,
+                        client: client,
+                        isCurrent: { coordinator.isLive(owner) }
+                    )
+                }
             }
         }
     }

@@ -195,3 +195,17 @@ test("the complete review can receive keyboard focus independently of the answer
   fireEvent.click(screen.getByRole("button", { name: "Show details" }));
   within(review).getByText("Create a calendar event");
 });
+
+test("Home and End move the plan review to its top and bottom in one step", () => {
+  render(card());
+  const review = screen.getByRole("region", { name: "Plan review" });
+  Object.defineProperty(review, "scrollHeight", { configurable: true, value: 900 });
+  review.focus();
+  assert.equal(fireEvent.keyDown(review, { key: "End" }), false, "End is handled by the review");
+  assert.equal(review.scrollTop, 900);
+  assert.equal(fireEvent.keyDown(review, { key: "Home" }), false, "Home is handled by the review");
+  assert.equal(review.scrollTop, 0);
+  review.scrollTop = 300;
+  assert.equal(fireEvent.keyDown(review, { key: "Home", metaKey: true }), true, "a modified Home is left to the browser");
+  assert.equal(review.scrollTop, 300);
+});

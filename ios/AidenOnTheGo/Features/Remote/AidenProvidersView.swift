@@ -24,13 +24,13 @@ struct AidenProvidersView: View {
                     }
                 }
                 if catalog == nil && errorMessage == nil { ProgressView("Loading providers") }
-            } header: { Text("Connected to your Mac") } footer: {
-                Text("Providers and API keys are stored on your paired Mac. Add a custom connection using the endpoint and exact model IDs your server accepts.")
+            } header: { Text("Connected to your machine") } footer: {
+                Text("Providers and API keys are stored on your paired machine. Add a custom connection using the endpoint and exact model IDs your server accepts.")
             }
             Section {
                 Button("Add provider", systemImage: "plus") { showingCreation = true }
                     .disabled(!canCreate)
-                if !canCreate { Text("Connect to an updated Mac with permission to manage workspaces to add providers.").font(.footnote).foregroundStyle(.secondary) }
+                if !canCreate { Text("To add providers, connect to a machine running an updated Aiden Agent, with permission to manage workspaces.").font(.footnote).foregroundStyle(.secondary) }
                 if let errorMessage { Text(errorMessage).foregroundStyle(.red) }
                 Button("Refresh providers") { Task { await load() } }
             }
@@ -43,7 +43,7 @@ struct AidenProvidersView: View {
     }
 
     private func load() async {
-        guard let context = try? coordinator.requestContext() else { errorMessage = "Connect to your paired Mac."; return }
+        guard let context = try? coordinator.requestContext() else { errorMessage = "Connect to your paired machine."; return }
         do {
             let value = try await coordinator.remoteClient(for: context).modelCatalog()
             guard coordinator.isCurrent(context) else { return }
@@ -94,7 +94,7 @@ private struct AidenProviderCreationView: View {
                 Section {
                     DisclosureGroup("Connection options") {
                         Picker("API format", selection: $kind) { Text("OpenAI-compatible").tag("openai"); Text("Anthropic-compatible").tag("anthropic") }
-                        Picker("Deployment", selection: $deployment) { Text("Hosted").tag("hosted"); Text("Local to the Mac").tag("local") }
+                        Picker("Deployment", selection: $deployment) { Text("Hosted").tag("hosted"); Text("Local to the machine").tag("local") }
                         Toggle("Requires API key", isOn: $needsKey)
                     }
                     DisclosureGroup("Model capabilities") {

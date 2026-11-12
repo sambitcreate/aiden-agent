@@ -16,7 +16,7 @@ Branch `feature/thinking-block-jitter-0da5d2`. Fixes the transcript jumping up a
 
 ## iOS and Android
 Both had the same 1s auto-preview and now match the desktop row.
-- iOS: `AidenReasoningCard` in `ios/AidenOnTheGo/Features/Remote/AidenChatFeature.swift` starts collapsed with no `.task` timer; the line sits in a `ZStack` between label and chevron, `.id(liveLine)` with opacity + 4pt offset, hidden from VoiceOver. Helper `AidenAgentActivityPresentation.latestReasoningLine` in `ios/AidenOnTheGo/Models/AidenChat.swift` (Unicode scalars, `[0-9]` instead of ICU `\d`). Tests in `AidenChatTests`; run with `xcodebuild test ... -only-testing:AidenOnTheGoTests/AidenChatTests` on an iOS simulator (passed 344/344 on 2026-10-29).
+- iOS: `AidenReasoningCard` in `ios/AidenOnTheGo/Features/Chat/AidenChronologicalTranscript.swift` starts collapsed with no `.task` timer; the line sits in a `ZStack` between label and chevron, `.id(liveLine)` with opacity + 4pt offset, hidden from VoiceOver. Helper `AidenAgentActivityPresentation.latestReasoningLine` in `ios/AidenOnTheGo/Models/AidenChat.swift` (Unicode scalars, `[0-9]` instead of ICU `\d`). Tests in `AidenChatTests`; run with `xcodebuild test ... -only-testing:AidenOnTheGoTests/AidenChatTests` on an iOS simulator (passed 344/344 on 2026-10-29).
 - Android: `AidenChronologicalReasoningCard` in `features/chat/AidenChatDetailScreen.kt` starts collapsed; `AnimatedContent` line slot with no size transform, alpha via `graphicsLayer`, `clearAndSetSemantics {}`. Helper `AidenReasoningLine.latest` in `features/chat/AidenReasoningLine.kt`, test `AidenReasoningLineTest`. Unit tests need `JAVA_HOME` from Android Studio's bundled JBR and `ANDROID_HOME=~/Library/Android/sdk`.
 
 ## Bots

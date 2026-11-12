@@ -4,6 +4,14 @@
 
 - **2026-11-11 — "Stopped after the chat went quiet" (Remote revision 62, provisional).** A background job the agent asked the Mac to stop once its chat went quiet now reads "Stopped after the chat went quiet" in the chat's job list. The host sends it as `endReason: "chat-settled"`; any reason this version does not know still reads as Stopped. The revision is re-claimed at merge.
 
+- The app is now one tab shell: **Inbox**, **Workspaces**, **Bots** and **Search**, each with its own stack, and a sidebar at regular width. Inbox lists every paired machine's chats together. The Aiden-logo menu, its first-run tip and the per-machine sidebar views are gone, along with the build setting that chose between the two shells. Scheduled tasks, Usage, Machines and Settings open as pages in a tab. An open chat stays on its own machine when the default machine changes. A notification for a machine you've removed now does nothing instead of showing an error.
+
+- Behind the scenes, `AidenChatFeature.swift` and `AidenWorkspaceShellView.swift` are now split into focused files under `Features/Chat/` and `Features/Workspace/`. No change to behavior or appearance.
+
+- Aiden On The Go now needs iOS 26 or later (it was iOS 18). iPhones that cannot run iOS 26 stay on the last build they have. The app uses the system Liquid Glass and Image Playground APIs directly, without the older material fallbacks. Reduce Transparency still shows solid surfaces.
+
+- Debug builds can launch the real shell against fake machines: `-AidenDemoScenario <one|four|empty|busy|offline-mix|old-host>` serves every request from an in-process responder on `*.demo.invalid`, without touching your Keychain, pairings or caches. A new `AidenOnTheGoUITests` target uses it. CI runs one smoke test that opens the shell against every scenario; the screenshot matrix and accessibility audit stay a local tool. Release builds contain none of it. CI also gains a non-blocking Xcode 27 build and test check; releases stay on Xcode 26.6.
+
 - **2026-11-06 — "By voice" label (Remote revision 60).** A chat message Aiden Live sent on the Mac shows a small "By voice" label with a microphone under it. The host marks it with `inputSource: "voice"` on user messages only; the app ignores any other value or a marker on a reply. Older hosts send no marker, so nothing changes there.
 
 - **2026-11-05 — Remote revision 59 reconciliation.** Main now uses revision 58 for connected-chat live-history checkpoints. Continuity watches, Open work, routine models and approved Bot peers therefore enter the combined release at revision 59. Earlier dated revision assignments remain historical; messaging/access/plans/allowed thresholds remain 54–57.

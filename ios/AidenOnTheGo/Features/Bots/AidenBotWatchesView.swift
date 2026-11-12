@@ -4,6 +4,8 @@ import SwiftUI
 /// another pairing from entering this page; reconnect keeps the editor alive.
 struct AidenBotWatchesView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
+    /// The Bot's own machine; nil follows the selected one.
+    let machine: String?
     let botID: String
     @Environment(\.aidenPalette) private var palette
     @Environment(\.scenePhase) private var scenePhase
@@ -13,30 +15,30 @@ struct AidenBotWatchesView: View {
 
     var body: some View {
         Group {
-            if let model, capturedContext.map(coordinator.isCurrent) == true,
-               coordinator.server?.supportsBotWatches == true {
-                AidenBotWatchListView(model: model, onModel: coordinator.server?.supportsBotRoutineModels == true ? { modelRoutineID = $0 } : nil)
+            if let model, capturedContext.map(coordinator.holds) == true,
+               coordinator.botServer(on: machine)?.supportsBotWatches == true {
+                AidenBotWatchListView(model: model, onModel: coordinator.botServer(on: machine)?.supportsBotRoutineModels == true ? { modelRoutineID = $0 } : nil)
             } else {
                 ContentUnavailableView("Watches unavailable", systemImage: "bell.badge",
                     description: Text("Connect to a paired host that supports Bot watches."))
             }
         }
         .sheet(isPresented: Binding(get: { modelRoutineID != nil }, set: { if !$0 { modelRoutineID = nil } })) {
-            if let modelRoutineID { AidenBotRoutineModelsView(coordinator: coordinator, botID: botID, routineID: modelRoutineID) }
+            if let modelRoutineID { AidenBotRoutineModelsView(coordinator: coordinator, machine: machine, botID: botID, routineID: modelRoutineID) }
         }
         .navigationTitle("Watches")
         .navigationBarTitleDisplayMode(.inline)
         .background(palette.canvas.ignoresSafeArea())
         .task {
-            guard model == nil, coordinator.server?.supportsBotWatches == true,
-                  let context = try? coordinator.requestContext(),
+            guard model == nil, coordinator.botServer(on: machine)?.supportsBotWatches == true,
+                  let context = try? coordinator.botContext(on: machine),
                   let client = try? coordinator.remoteClient(for: context) else { return }
             capturedContext = context
             model = AidenBotWatchModel(botID: botID, transport: client, isCurrent: {
-                coordinator.isCurrent(context) && coordinator.server?.supportsBotWatches == true
+                coordinator.holds(context) && coordinator.botServer(on: machine)?.supportsBotWatches == true
             }, mayWrite: {
-                coordinator.connectionState == .connected
-                    && coordinator.installationStore.activeInstallation?.canWriteBots == true
+                coordinator.botConnectionState(on: machine) == .connected
+                    && coordinator.botInstallation(on: machine)?.canWriteBots == true
             }, draftStore: .shared, draftScope: .init(instanceID: context.instanceId, deviceID: context.deviceId, botID: botID))
             await model?.load()
         }
@@ -49,7 +51,7 @@ struct AidenBotWatchesView: View {
                 await model?.load()
             }
         }
-        .onChange(of: coordinator.connectionState == .connected) { _, connected in
+        .onChange(of: coordinator.botConnectionState(on: machine) == .connected) { _, connected in
             if connected { Task { await model?.load() } }
         }
     }
