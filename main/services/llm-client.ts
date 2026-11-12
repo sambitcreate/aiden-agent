@@ -20,6 +20,12 @@ import { usageLimits } from "./usage-limit-main.js";
 import { withUsageLimitWait } from "./usage-limit-stream.js";
 import { spending } from "./spending-main.js";
 import { createSpendingMeter, spendCounts } from "./spending-service.js";
+import { effectiveApprovalMode, parseApprovalModel, workspaceApprovalPolicy, type MacGrantClass } from "../../renderer/shared/approval-mode.js";
+import { currentWorkspaceApproval, legacyAccessOf, workspaceWithMacGrant } from "./approval-gate/run-approval.js";
+import { RunTaint } from "./approval-gate/run-taint.js";
+import { declaredReadOnlyHint } from "./approval-gate/tool-classes.js";
+import { createApprovalJudge, type ApprovalJudge } from "./approval-judge/judge.js";
+import { approvalJudgeComplete } from "./approval-judge/model-complete.js";
 import type { SpendingOwner } from "./spending-core.js";
 import { createLocalClassifierModels } from "./pi-local-classifier.js";
 import { piResourcesForSkillSnapshot } from "./skill-tools.js";
@@ -254,6 +260,7 @@ import {
 import { botApprovals } from "./bot-runtime/bot-approvals-main.js";
 import {
   SCOPED_APPROVAL_OFFER,
+  MAC_GRANT_OFFER,
   type ToolApprovalRuleTarget,
 } from "./tool-approval-rules.js";
 import { toolApprovalRules } from "./tool-approval-rules-main.js";
@@ -1228,8 +1235,16 @@ async function prepareGeneration(
     await assertWorkspaceFolderPresent(workspace);
     await assertManagedWorktreeAdmission(workspace);
   }
-  const permission: GenerationPermission = options.permission ?? workspace?.permission ?? "ask";
-  approvalModes.set(streamId, approvalAnalyticsMode(permission));
+  // A person's workspace chat follows the global approval mode, or the
+  // workspace's own when it is customized (plan §3.1). Internal policies
+  // (scheduled runs), Bot-bound turns and the Assistant keep their access.
+  const approvalPolicy =
+    workspace && !botBound && !assistantMode && options.permission === undefined
+      ? workspaceApprovalPolicy(workspace, effectiveApprovalMode(await configStore.getSettings(), true))
+      : undefined;
+  const permission: GenerationPermission =
+    options.permission ?? (approvalPolicy ? legacyAccessOf(approvalPolicy) : workspace?.permission ?? "ask");
+  approvalModes.set(streamId, approvalPolicy ? approvalPolicy.mode : approvalAnalyticsMode(permission));
   const folderPath = workspace?.folderPath;
   // Connectors this workspace switched off. Bots keep their own grants.
   const workspaceDisabledMcpServerIds = botBound ? undefined : workspace?.disabledMcpServerIds;
@@ -2466,6 +2481,8 @@ async function prepareGeneration(
     browserFileApprovals,
     browserActionApprovals,
     permission,
+    /** The run decides approvals by the mode, read fresh before each call. */
+    usesApprovalModes: approvalPolicy !== undefined,
     folderPath,
     git,
     tools,
@@ -2896,6 +2913,7 @@ export const llmClient = {
       botApprovedRoots,
       botMutatingToolNames,
       offerHooksTool,
+      usesApprovalModes,
     } = setup;
     // Claim checks tell connector failures by the tools' real MCP identity.
     const claimCheckOptions = {
@@ -2971,6 +2989,10 @@ export const llmClient = {
     const skillSnapshot =
       hooksTool || !setupSkillSnapshot ? setupSkillSnapshot : withoutSkills(setupSkillSnapshot, DESKTOP_HOOK_SKILLS);
     let hookTurnContext: string | undefined;
+    /** Outside content in this run, for the gate's new destinations (plan §3.2). */
+    let runTaint: RunTaint | undefined;
+    /** What the person asked for in this run, for the Auto judge. */
+    let approvalRequestText = "";
     // Mid-flight input's UserPromptSubmit context, on that input's message only.
     const hookInputContexts = createRunInputContexts();
     // Each response's price counts toward the chat's limit (a Bot chat's, its
@@ -2984,6 +3006,35 @@ export const llmClient = {
       owner: spendingOwner,
       counts: () => spendCounts({ local: isLocalModelProvider(runtime.provider), provider: runtime.provider, models: runtime.models }),
     });
+    // The Auto judge (plan §3.2): the chat's own model, or the approval model
+    // the person named in Advanced. Built on first use; with no model that
+    // can judge (an ACP agent's run), every judged action shows its card.
+    let approvalJudge: ApprovalJudge | undefined;
+    const runApprovalJudge = async (): Promise<ApprovalJudge> => {
+      if (approvalJudge) return approvalJudge;
+      let complete: Parameters<typeof createApprovalJudge>[0]["complete"];
+      if (!harnessProvider) {
+        try {
+          const configured = parseApprovalModel((await configStore.getSettings()).approvalModel);
+          const judgeRuntime = configured
+            ? await resolveModelRuntime(configured.providerId, configured.model, initialization.controller.signal, params.chatId)
+            : runtime;
+          const judgeMeter = createSpendingMeter({
+            spending,
+            owner: spendingOwner,
+            counts: () => spendCounts({ local: isLocalModelProvider(judgeRuntime.provider), provider: judgeRuntime.provider, models: judgeRuntime.models }),
+          });
+          complete = approvalJudgeComplete(
+            { model: judgeRuntime.model, provider: judgeRuntime.provider, apiKey: judgeRuntime.apiKey, ...(judgeRuntime.headers ? { headers: judgeRuntime.headers } : {}), streams: judgeRuntime.streams },
+            { recordUsage: (record) => usageStore.record(record), countSpend: (message) => judgeMeter.count(message) },
+          );
+        } catch (error) {
+          logger.warn("pi", "The approval model is unavailable; Auto will ask instead.", error);
+        }
+      }
+      approvalJudge = createApprovalJudge({ complete });
+      return approvalJudge;
+    };
     const approvalModelSelection = {
       providerId: runtime.provider.id,
       providerName: runtime.provider.label,
@@ -3860,6 +3911,16 @@ export const llmClient = {
         runtimeTools = onDemandTools.initialTools(initialMessages);
         generationContextOptions.tools = runtimeTools;
       }
+      // Outside content already in the transcript taints the run from the start.
+      runTaint = new RunTaint({
+        personText: generationChat.messages.filter((message) => message.role === "user").map((message) => message.content),
+        history: initialMessages.map((message) => ({
+          role: message.role,
+          ...("toolName" in message && typeof message.toolName === "string" ? { toolName: message.toolName } : {}),
+        })),
+        isConnectorTool: (name) => claimCheckOptions.isConnectorTool(name),
+      });
+      approvalRequestText = currentUser?.content ?? "";
       const head = createInitialSystemMessage(systemPrompt, runtimeTools.map(toToolDeclaration));
       if (head) initialMessages = [head, ...initialMessages];
       if (agentsInstructions) {
@@ -4142,6 +4203,24 @@ export const llmClient = {
           let browserFileApproval: PreparedBrowserFile | undefined;
           let browserActionApproval: BrowserToolApproval | undefined;
           let scopedRuleTarget: ToolApprovalRuleTarget | undefined;
+          /** A Mac card's "Allow in this workspace" grant, when the card offers it. */
+          let macGrantOffer: MacGrantClass | undefined;
+          // The approval mode and Mac grants now, and what this call reaches
+          // (plan §3.2): a connector's real name and declared hint, and
+          // whether it is a new destination after outside content.
+          const runApproval = usesApprovalModes && workspaceId
+            ? await currentWorkspaceApproval(configStore, workspaceId).catch((error: unknown) => {
+                logger.warn("pi", "Could not read the approval mode; asking as in Ask.", error);
+                return { mode: "ask" as const, macGrants: new Set<MacGrantClass>(), customized: false, chatOnly: false, legacyFull: false };
+              })
+            : undefined;
+          const calledTool = context.context.tools?.find((tool) => tool.name === context.toolCall.name);
+          const calledMcp = calledTool ? mcpAgentToolIdentity(calledTool) : undefined;
+          const taintCall = {
+            toolName: context.toolCall.name,
+            args: context.args,
+            ...(calledMcp ? { connectorId: calledMcp.serverId } : {}),
+          };
           // PreToolUse hooks (docs/plans/aiden-hooks-plan.md §5): deny blocks,
           // ask forces a card without a remember offer, and allow may only skip
           // a card a remembered approval scope could already skip.
@@ -4345,6 +4424,21 @@ export const llmClient = {
               artifactRequired: artifactApproval?.required === true,
               browserFileRequired: browserFileApproval?.requiresApproval === true,
               workspaceId,
+              ...(runApproval
+                ? {
+                    approval: { mode: runApproval.mode, macGrants: runApproval.macGrants },
+                    judgeAvailable: true,
+                    ...(calledMcp && !preparedBotContext
+                      ? {
+                          connector: {
+                            remoteName: calledMcp.toolName,
+                            ...declaredReadOnlyHint(calledTool ? mcpAgentToolDescriptor(calledTool)?.annotations : undefined),
+                          },
+                        }
+                      : {}),
+                    ...(runTaint?.isNewDestination(taintCall) ? { newDestination: true } : {}),
+                  }
+                : {}),
             };
             let workspaceGate = workspaceToolApproval(workspaceGateInput);
             // Only the parent's plain workspace tools can be remembered, and
@@ -4359,8 +4453,33 @@ export const llmClient = {
               }
               if (remembered) workspaceGate = workspaceToolApproval({ ...workspaceGateInput, remembered });
             }
+            if (workspaceGate.readsJudge) {
+              // Auto: one short call on the chat's model. It passes or defers;
+              // anything but a clear pass shows the card.
+              const verdict = await (await runApprovalJudge()).judge(
+                {
+                  effect:
+                    toolCallApprovalEffect(context.toolCall.name, context.args) ??
+                    `${context.toolCall.name}\u0000${context.toolCall.id}`,
+                  action: summarizeToolCall(context.toolCall.name, context.args),
+                  request: approvalRequestText,
+                },
+                signal,
+              );
+              workspaceGate = workspaceToolApproval({ ...workspaceGateInput, judge: verdict.verdict });
+              if (workspaceGate.readsRemembered) {
+                let remembered: "chat" | "always" | undefined;
+                try {
+                  remembered = await toolApprovalRules.match(params.chatId, workspaceGate.readsRemembered);
+                } catch (error) {
+                  logger.warn("pi", "Could not read remembered tool approvals; asking instead.", error);
+                }
+                workspaceGate = workspaceToolApproval({ ...workspaceGateInput, judge: verdict.verdict, ...(remembered ? { remembered } : {}) });
+              }
+            }
             const workspaceDecision = workspaceGate.decision;
             if (workspaceDecision.outcome === "allow") {
+              runTaint?.observeRunning(taintCall);
               if (!workspaceDecision.via) {
                 // The question card itself is the wait; hooks hear about it.
                 if (context.toolCall.name === ASK_USER_QUESTION_TOOL_NAME) {
@@ -4374,7 +4493,12 @@ export const llmClient = {
                 return undefined;
               }
             }
-            if (workspaceDecision.outcome === "ask") scopedRuleTarget = workspaceDecision.ruleTarget;
+            if (workspaceDecision.outcome === "ask") {
+              // Under a mode, a Mac card offers "Allow in this workspace" for
+              // that part of the Mac; the old exact-action scopes are only read.
+              if (runApproval) macGrantOffer = workspaceDecision.macGrant;
+              else scopedRuleTarget = workspaceDecision.ruleTarget;
+            }
             const memoryApproval = workspaceDecision.outcome === "memory";
             if (scheduleApproval && attendedAssistant) {
               try {
@@ -4607,6 +4731,7 @@ export const llmClient = {
                   return preview ? { preview } : {};
                 })(),
                 ...(scopedRuleTarget ? { scopes: SCOPED_APPROVAL_OFFER } : {}),
+                ...(macGrantOffer ? { scopes: MAC_GRANT_OFFER } : {}),
               };
             })(),
             signal,
@@ -4637,6 +4762,20 @@ export const llmClient = {
               }
             }
           }
+          if (allowed && macGrantOffer && workspaceId) {
+            const toolCallId = timeline.publicToolCallId(context.toolCall.id);
+            const scope = toolCallId ? approvals.takeDecisionPayload(streamId, toolCallId)?.scope : undefined;
+            if (scope === "workspace") {
+              try {
+                const current = await configStore.getWorkspace(workspaceId);
+                if (current) await configStore.saveWorkspace(workspaceWithMacGrant(current, macGrantOffer));
+              } catch (error) {
+                // Allowed once already; the next call asks again.
+                logger.warn("pi", "Could not save the workspace's Mac grant.", error);
+              }
+            }
+          }
+          if (allowed) runTaint?.observeRunning(taintCall);
           if (!allowed && !signal?.aborted) deniedToolCalls.add(context.toolCall.id);
           if (allowed && (browserFileApproval || browserActionApproval)) {
             try {
