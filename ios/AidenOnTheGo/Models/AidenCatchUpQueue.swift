@@ -58,11 +58,11 @@ struct AidenCatchUpEnding: Hashable, Codable {
     var message: String {
         switch (walked, unreached) {
         case (true, 0): String(localized: "You’ve been through every chat in Catch Up.")
-        case (true, 1): String(localized: "You’ve been through every chat you can reach. 1 more is on an offline machine.")
-        case (true, _): String(localized: "You’ve been through every chat you can reach. \(unreached) more are on offline machines.")
+        case (true, 1): String(localized: "You’ve been through every chat you can reach. 1 more is on an offline computer.")
+        case (true, _): String(localized: "You’ve been through every chat you can reach. \(unreached) more are on offline computers.")
         case (false, 0): String(localized: "There’s nothing in Catch Up right now.")
-        case (false, 1): String(localized: "1 chat needs you on an offline machine.")
-        case (false, _): String(localized: "\(unreached) chats need you on offline machines.")
+        case (false, 1): String(localized: "1 chat needs you on an offline computer.")
+        case (false, _): String(localized: "\(unreached) chats need you on offline computers.")
         }
     }
 }

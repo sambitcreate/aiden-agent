@@ -127,7 +127,7 @@ function isMacAppConnector(server: McpServer): boolean {
 export function validateMcpServer(value: unknown): McpServer {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid MCP server.");
   const server = value as McpServer;
-  if (server.authProvider !== undefined) throw new Error("Desktop MCP provider approvals do not apply to the CLI.");
+  if (server.authProvider !== undefined) throw new Error("MCP provider approvals from Aiden Agent do not apply to the CLI.");
   // Types first: a non-string id would otherwise stringify past the pattern ("undefined", "123").
   if (typeof server.id !== "string" || !server.id) throw new Error("MCP server needs a string id.");
   // Pi reads a leading + or - in tool lists as an include/exclude modifier.
@@ -347,9 +347,9 @@ export async function mcpCommand(agentDir: string, args: string[]) {
     if (!value) throw new Error("Provide a server JSON file or preset id.");
     const preset = action === "preset" ? getMcpPreset(value) : undefined;
     if (action === "preset" && !preset) throw new Error("MCP preset not found.");
-    if (preset?.transport === "stdio") throw new Error(`Set up ${preset.name} in Settings → Connectors in the Aiden desktop app on your Mac.`);
+    if (preset?.transport === "stdio") throw new Error(`Set up ${preset.name} in Settings → Connectors in Aiden Agent.`);
     const parsed = validateMcpServer(preset ? serverFromPreset(preset) : JSON.parse(readFileSync(value, "utf8")));
-    if (isMacAppConnector(parsed)) throw new Error("Set up Mac app connectors in the Aiden desktop app on your Mac.");
+    if (isMacAppConnector(parsed)) throw new Error("Set up Mac app connectors in Aiden Agent on your Mac.");
     const existing = (await store.load()).find((item) => item.id === parsed.id);
     const server = await storeClientSecret(agentDir, parsed, existing);
     let replaced: McpServer | undefined;

@@ -520,7 +520,7 @@ final class AidenShellUITests: XCTestCase {
         let laptop = offline.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Laptop")).firstMatch
         XCTAssertTrue(laptop.waitForExistence(timeout: 10), "No offline machine to select")
         laptop.tap()
-        let change = offline.buttons["Make this the default machine"].firstMatch
+        let change = offline.buttons["Make this the default computer"].firstMatch
         // Far down a lazy form: it isn't built until it's scrolled to.
         for _ in 0..<6 where !change.waitForExistence(timeout: 1) { offline.swipeUp() }
         XCTAssertTrue(change.exists, "No way to select the offline machine")
@@ -616,7 +616,7 @@ final class AidenShellUITests: XCTestCase {
         let machines = machinesRow(in: app)
         XCTAssertTrue(machines.waitForExistence(timeout: 10), "No Machines in Settings")
         machines.tap()
-        let pair = app.buttons["Pair a machine"].firstMatch
+        let pair = app.buttons["Pair a computer"].firstMatch
         XCTAssertTrue(pair.waitForExistence(timeout: 10), "No way to pair another machine")
         pair.tap()
         XCTAssertTrue(app.navigationBars["Pair Aiden"].waitForExistence(timeout: 10), "Pairing did not open")
@@ -638,7 +638,7 @@ final class AidenShellUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Laptop"].waitForExistence(timeout: 10), "The machine did not open")
 
         goBack(in: app)
-        XCTAssertTrue(app.navigationBars["Machines"].waitForExistence(timeout: 10), "Back left Machines")
+        XCTAssertTrue(app.navigationBars["Computers"].waitForExistence(timeout: 10), "Back left Machines")
         goBack(in: app)
         XCTAssertTrue(app.navigationBars["App settings"].waitForExistence(timeout: 10), "Back left Settings")
         app.terminate()
@@ -814,14 +814,14 @@ final class AidenShellUITests: XCTestCase {
         let app = AidenStateMatrix.launch(scenario: .offlineMix)
         let item = app.buttons["aiden.machine-status"]
         XCTAssertTrue(item.waitForExistence(timeout: 10), "The Inbox has no status item")
-        let settled = NSPredicate(format: "label == %@", "2 of 4 machines online")
+        let settled = NSPredicate(format: "label == %@", "2 of 4 computers online")
         expectation(for: settled, evaluatedWith: item)
         waitForExpectations(timeout: 15)
         hideOverlaySidebar(in: app)
 
         item.tap()
 
-        XCTAssertTrue(app.navigationBars["Machines"].waitForExistence(timeout: 10), "The item didn't open Machines")
+        XCTAssertTrue(app.navigationBars["Computers"].waitForExistence(timeout: 10), "The item didn't open Machines")
     }
 
     func testTheStripNarrowsTheInboxToOneMachine() {
@@ -841,7 +841,7 @@ final class AidenShellUITests: XCTestCase {
         waitForExpectations(timeout: 10)
         XCTAssertTrue(studioRow.exists, "The filter left the Inbox empty")
 
-        app.buttons["All machines"].firstMatch.tap()
+        app.buttons["All computers"].firstMatch.tap()
         XCTAssertTrue(onStudio.waitForExistence(timeout: 10), "All brings every machine back")
     }
 
@@ -853,7 +853,7 @@ final class AidenShellUITests: XCTestCase {
         AidenStateMatrix.openArea("Workspaces", in: app)
         XCTAssertTrue(app.navigationBars["Workspaces"].waitForExistence(timeout: 10))
         let compose = app.navigationBars.buttons["New chat"].firstMatch
-        let machine = app.buttons["Machine"].firstMatch
+        let machine = app.buttons["Computer"].firstMatch
 
         compose.tap()
         XCTAssertTrue(machine.waitForExistence(timeout: 5), "Compose on Workspaces has no machine picker")
@@ -900,7 +900,7 @@ final class AidenShellUITests: XCTestCase {
         laptop.tap()
 
         let compose = app.navigationBars.buttons["New chat"].firstMatch
-        let machine = app.buttons["Machine"].firstMatch
+        let machine = app.buttons["Computer"].firstMatch
         compose.tap()
         XCTAssertTrue(machine.waitForExistence(timeout: 5), "Compose on Workspaces has no machine picker")
         XCTAssertTrue(
@@ -934,7 +934,7 @@ final class AidenShellUITests: XCTestCase {
         let app = AidenStateMatrix.launch(scenario: .one)
         let row = openInbox(in: app)
         XCTAssertTrue(row.waitForExistence(timeout: 15), "No chat rows in the Inbox")
-        XCTAssertFalse(app.buttons["All machines"].exists)
+        XCTAssertFalse(app.buttons["All computers"].exists)
         XCTAssertFalse(row.label.contains("On Studio Mac"), "One machine has nothing to tell apart: \(row.label)")
     }
 
@@ -967,7 +967,7 @@ final class AidenShellUITests: XCTestCase {
                 AidenStateMatrix.capture("machines-inbox-scrolled-\(tag)", in: self)
                 if size == .large {
                     app.swipeDown()
-                    let all = app.buttons["All machines"].firstMatch
+                    let all = app.buttons["All computers"].firstMatch
                     XCTAssertTrue(all.waitForExistence(timeout: 5))
                     all.swipeLeft()
                     Thread.sleep(forTimeInterval: 1)
@@ -1462,7 +1462,7 @@ final class AidenShellUITests: XCTestCase {
         XCTAssertTrue(laptopRow.waitForExistence(timeout: 10), "The other machines' chats left the Inbox")
 
         switchConnection.tap()
-        XCTAssertTrue(app.navigationBars["Machines"].waitForExistence(timeout: 10), "Switch connection didn't open Machines")
+        XCTAssertTrue(app.navigationBars["Computers"].waitForExistence(timeout: 10), "Switch connection didn't open Machines")
         let studio = app.buttons.matching(NSPredicate(format: "label == %@", "Studio Mac, Offline")).firstMatch
         XCTAssertTrue(studio.waitForExistence(timeout: 10), "Machines doesn't say the default is offline")
         let laptop = app.buttons.matching(NSPredicate(format: "label == %@", "Laptop, Online")).firstMatch
@@ -1581,7 +1581,7 @@ final class AidenShellUITests: XCTestCase {
         XCTAssertTrue(openInbox(in: prompt).waitForExistence(timeout: 10))
         AidenStateMatrix.openArea("Search", in: prompt)
         let description = prompt.staticTexts.matching(
-            NSPredicate(format: "label CONTAINS %@", "any of your machines")
+            NSPredicate(format: "label CONTAINS %@", "any of your computers")
         ).firstMatch
         XCTAssertTrue(description.waitForExistence(timeout: 10), "No prompt")
         for _ in 0..<4 { dragResults(in: prompt, from: 0.4, to: 0.05) }
@@ -1880,7 +1880,7 @@ final class AidenShellUITests: XCTestCase {
             // row stacking at the accessibility sizes. Nothing drawn is cut.
             reason: "Settings' Machines row label, whole at XXXL and AX5",
             ceiling: ["settings": 1],
-            matches: { $0.type == .textClipped && $0.label == "Machines" }
+            matches: { $0.type == .textClipped && $0.label == "Computers" }
         ),
         AuditAllowance(
             // The time under a message reads as "Sent November 10, 2026 at 3:14 AM"
@@ -1900,7 +1900,7 @@ final class AidenShellUITests: XCTestCase {
             // regular-width run record in option-a-accessibility.md). The editor's
             // Hide from Inbox footer, the section above them, is reported in some
             // runs and not others on iOS 27, and in every iOS 26.5 run.
-            reason: "Text the larger sizes push below the screen (Machines footer and Pair a machine, the machine editor's lower sections, Settings' Read Aloud note, Search's unsearched note)",
+            reason: "Text the larger sizes push below the screen (Computers footer and Pair a computer, the computer editor's lower sections, Settings' Read Aloud note, Search's unsearched note)",
             ceiling: ["machines": 2, "search": 1],
             ceilingInRegularWidth: ["machines": 2, "machine editor": 5, "settings": 1, "search": 1],
             matches: { finding in
@@ -1957,8 +1957,8 @@ final class AidenShellUITests: XCTestCase {
     /// Text that larger sizes push below the bottom of the screen, by screen and
     /// the start of its label.
     private static let textPushedBelowTheScreen: [(screen: String, label: String)] = [
-        ("machines", "Hiding a machine keeps it paired"), ("machines", "Pair a machine"),
-        ("machine editor", "A hidden machine stays paired"), ("machine editor", "Connection"),
+        ("machines", "Hiding a computer keeps it paired"), ("machines", "Pair a computer"),
+        ("machine editor", "A hidden computer stays paired"), ("machine editor", "Connection"),
         ("machine editor", "Identity"), ("machine editor", "Reconnect"),
         ("settings", "Read Aloud is unavailable"),
         ("search", "Couldn’t search Bot conversations on "),
@@ -2004,7 +2004,7 @@ final class AidenShellUITests: XCTestCase {
                 let fadedEdges = band == 0 ? [] : (navigationBar.exists
                     ? [CGRect(x: navigationBar.frame.minX, y: navigationBar.frame.maxY, width: navigationBar.frame.width, height: band)]
                     : []) + bottomBars.map(\.frame).map { CGRect(x: $0.minX, y: $0.minY - band, width: $0.width, height: band) }
-                let stripElement = app.buttons["All machines"].firstMatch
+                let stripElement = app.buttons["All computers"].firstMatch
                 let strip = stripElement.exists
                     ? CGRect(x: 0, y: stripElement.frame.minY, width: .greatestFiniteMagnitude, height: stripElement.frame.height)
                     : nil
@@ -2083,7 +2083,7 @@ final class AidenShellUITests: XCTestCase {
             XCTAssertTrue(status.waitForExistence(timeout: 10), "The Inbox has no status item")
             hideOverlaySidebar(in: app)
             status.tap()
-            XCTAssertTrue(app.navigationBars["Machines"].waitForExistence(timeout: 10), "Machines did not open")
+            XCTAssertTrue(app.navigationBars["Computers"].waitForExistence(timeout: 10), "Machines did not open")
             let studio = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Studio Mac,")).firstMatch
             XCTAssertTrue(studio.waitForExistence(timeout: 10), "Machines doesn't list the machine")
             try audit("machines")
@@ -2337,7 +2337,7 @@ final class AidenShellUITests: XCTestCase {
     }
 
     private func machinesRow(in app: XCUIApplication) -> XCUIElement {
-        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Machines")).firstMatch
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Computers")).firstMatch
     }
 
     /// Offline rows sit above the chats, and at the largest text they fill the first

@@ -47,7 +47,7 @@ export function recordBotPeerAttempt(command: Command, options: { retry?: boolea
     const proof = options.freshExchange;
     if (now < previous.createdAt || canonical.kind !== "stop" || !proof || proof.id !== canonical.request.exchangeId
       || (proof.direction === "sent" ? proof.sender : proof.recipient).botId !== canonical.request.botId
-      || proof.lastStop?.mutationId !== canonical.request.mutationId || !["requested", "uncertain"].includes(proof.lastStop.state)) throw new Error("This request is too old to retry without a matching pending Stop receipt from the host. Its outcome remains unconfirmed.");
+      || proof.lastStop?.mutationId !== canonical.request.mutationId || !["requested", "uncertain"].includes(proof.lastStop.state)) throw new Error("This request is too old to retry without a matching pending Stop receipt from the computer. Its outcome remains unconfirmed.");
   }
   const common = { version: 1 as const, createdAt: previous?.createdAt ?? now, attempts: (previous?.attempts ?? 0) + 1 };
   const row = { ...common, ...canonical } as BotPeerAttempt;

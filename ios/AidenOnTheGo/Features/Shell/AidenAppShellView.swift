@@ -49,9 +49,9 @@ extension AidenBotsAvailability {
         case .mobileDisabled:
             String(localized: "Bots aren’t available in this version of Aiden On The Go.")
         case .unsupported:
-            String(localized: "Bots need a newer version of Aiden Agent on your paired machine.")
+            String(localized: "Bots need a newer version of Aiden Agent on your paired computer.")
         case .notGranted:
-            String(localized: "Approve Bot access on your paired machine, or pair this phone again.")
+            String(localized: "Approve Bot access on your paired computer, or pair this phone again.")
         }
     }
 }
@@ -465,7 +465,7 @@ final class AidenChatRouteModel {
     func load(coordinator: AidenRemoteCoordinator) async {
         if case .ready = state { return }
         guard let owner = try? coordinator.ownerContext(for: id.instanceId), owner.deviceId == id.deviceId else {
-            state = .unavailable(String(localized: "This machine is no longer paired. Pair it again to open this chat."))
+            state = .unavailable(String(localized: "This computer is no longer paired. Pair it again to open this chat."))
             return
         }
         if let receipt {
@@ -484,7 +484,7 @@ final class AidenChatRouteModel {
             return
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: owner) {
-                state = .unavailable(String(localized: "This machine is no longer paired. Pair it again to open this chat."))
+                state = .unavailable(String(localized: "This computer is no longer paired. Pair it again to open this chat."))
                 return
             }
             // The view loads again once the machine settles.

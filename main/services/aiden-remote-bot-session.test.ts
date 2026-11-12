@@ -3278,7 +3278,7 @@ test("an answer the card does not accept is invalid and the card keeps waiting; 
       await assert.rejects(
         service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0011", { outcome: "done" }, HOLDER),
         (error: { code?: string; status?: number; message?: string }) =>
-          error.code === "invalid_request" && error.status === 400 && /signing in on your Mac/u.test(error.message ?? ""),
+          error.code === "invalid_request" && error.status === 400 && /signing in on your computer/u.test(error.message ?? ""),
         `${attempt}: the same request UUID gets the same refusal`,
       );
     }
@@ -3320,7 +3320,7 @@ test("a sign-in the Bot asks for reaches a holder as a sign_in card and other de
     });
     const legacy = await service.session(BOT_ID);
     const notice = last(legacy.entries);
-    assert.equal(notice?.type === "message" && notice.text, "Scout needs you on your Mac: Sign in to github.com");
+    assert.equal(notice?.type === "message" && notice.text, "Scout needs you on your computer: Sign in to github.com");
 
     // Finish on your Mac: the Mac opens this card where the Bot signs in, and the card still waits.
     assert.deepEqual(await service.openHandoffOnMac(DEVICE_ID, BOT_ID, card.waitId, "open-request-000101", {}), {
@@ -3649,7 +3649,7 @@ test("a newly shared image reaches bot:images streams as an image and other stre
       type: "message",
       id: shown.payload.entry.id,
       role: "assistant",
-      text: "I shared an image: sketch.png. Open this chat on your Mac to see it.",
+      text: "I shared an image: sketch.png. Open this chat on your computer to see it.",
     });
     assert.equal(shown.seq, line.seq);
   } finally {
@@ -3952,7 +3952,7 @@ test("access requests reach holders, while legacy phones and paired desktops fol
     assert.equal(holder.raw.join("").includes("folderPath"), false);
     const read = await service.session(BOT_ID);
     assert.equal("accessRequest" in read, false);
-    assert.deepEqual(last(read.entries), { type: "message", role: "assistant", id: `access-notice:${card.waitId}`, text: "Planner needs you on your Mac: allow access to Taxes" });
+    assert.deepEqual(last(read.entries), { type: "message", role: "assistant", id: `access-notice:${card.waitId}`, text: "Planner needs you on your computer: allow access to Taxes" });
     assert.deepEqual(reducedView(legacy.frames), remoteBotSessionView(read));
     await service.answerAccessRequest(DEVICE_ID, BOT_ID, card.waitId, "access-answer-key-001", { choice: "once" });
     assert.equal((await asked).choice, "once");
@@ -4497,7 +4497,7 @@ test("unrepresentable pending file scope offers no phone approval but active/end
       assert.ok(dto); assert.equal(dto.status, status);
       const item = dto.items[0]!;
       assert.ok(item.line.startsWith("Files · change ")); assert.ok(item.line.endsWith(" for this plan"));
-      assert.ok(item.details.includes("Review the full folder location on the host desktop."));
+      assert.ok(item.details.includes("Review the full folder location in Aiden Agent on your computer."));
       assert.ok(item.details.includes("Read and change · allowed once, for this plan only"));
       assert.ok([...item.line].length <= 120);
       assert.equal(parseAidenRemoteBotSession({ botId: BOT_ID, epoch: "e1", seq: 0, state: "running", interrupted: false, entries: [], hasOlder: false, question: null, approval: null, plan: dto }).plan?.status, status);
@@ -4587,7 +4587,7 @@ test("an active unsafe ancestor still shows a safe folder name without changing 
   const dto = projectAidenRemoteBotPlan({ ...view, status: "active" });
   assert.ok(dto);
   assert.equal(dto.items[0]!.line, "Files · read …/Family Photos for this plan");
-  assert.deepEqual(dto.items[0]!.details, ["Review the full folder location on the host desktop.", "Read only · allowed once, for this plan only"]);
+  assert.deepEqual(dto.items[0]!.details, ["Review the full folder location in Aiden Agent on your computer.", "Read only · allowed once, for this plan only"]);
 });
 
 

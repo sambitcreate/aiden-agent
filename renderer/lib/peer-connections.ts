@@ -34,16 +34,16 @@ export function peerConnectionRecovery(host: PeerHostView, failure: PeerHostStat
   const routeHelp = onlyRouteKind === "tailscale"
     ? "On both computers, open Tailscale and check that they are online in the same tailnet. Check its access rules allow Aiden."
     : onlyRouteKind === "lan"
-      ? "Connect both computers to the same network. Check the host firewall and Local Network permission for Aiden."
+      ? "Connect both computers to the same network. Check the other computer's firewall and Local Network permission for Aiden."
       : "Check that both computers are awake and connected to the same network or Tailscale.";
   switch (failure) {
-    case "dns": return `This computer couldn't resolve the other computer's address. ${routeHelp}`;
+    case "dns": return `Aiden couldn't resolve the other computer's address. ${routeHelp}`;
     case "refused": return "The other computer refused the connection. Open Aiden there and turn on Control this device in Settings → Connections. Check its firewall allows Aiden.";
     case "timeout": return `The other computer didn't respond in time. ${routeHelp}`;
-    case "network": return `This computer has no network route to the other computer. ${routeHelp}`;
+    case "network": return `There's no network route to the other computer. ${routeHelp}`;
     case "tls": return "The secure connection failed. Check the date and time on both computers, update Aiden, then reconnect.";
     case "invalid_response": return "The other computer returned an unreadable response. Update Aiden on both computers, then reconnect.";
-    default: return `Couldn't reach this computer. ${routeHelp}`;
+    default: return `Couldn't reach that computer. ${routeHelp}`;
   }
 }
 

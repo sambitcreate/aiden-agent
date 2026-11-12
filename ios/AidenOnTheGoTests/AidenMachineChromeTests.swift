@@ -223,7 +223,7 @@ final class AidenMachineChromeTests: XCTestCase {
         defer { close(window) }
 
         let elements = accessibleElements(in: window)
-        XCTAssertEqual(elements.compactMap(\.accessibilityLabel), ["All machines", "Studio Mac", "Laptop"])
+        XCTAssertEqual(elements.compactMap(\.accessibilityLabel), ["All computers", "Studio Mac", "Laptop"])
         XCTAssertTrue(elements[0].accessibilityTraits.contains(.selected), "Selection isn't left to colour")
         XCTAssertFalse(elements[2].accessibilityTraits.contains(.selected))
 
@@ -634,7 +634,7 @@ final class AidenMachineChromeTests: XCTestCase {
 
         XCTAssertEqual(AidenHostStatusItem.title(online: 3, total: 4), "3 of 4")
         let item = try XCTUnwrap(accessibleElements(in: window).first)
-        XCTAssertEqual(item.accessibilityLabel, "3 of 4 machines online")
+        XCTAssertEqual(item.accessibilityLabel, "3 of 4 computers online")
         XCTAssertTrue(item.accessibilityTraits.contains(.button))
         XCTAssertTrue(item.accessibilityActivate())
         XCTAssertEqual(opens, 1)
@@ -647,9 +647,9 @@ final class AidenMachineChromeTests: XCTestCase {
             return accessibleElements(in: window).first?.accessibilityLabel
         }
 
-        XCTAssertEqual(try spoken(online: 1, total: 1), "1 of 1 machine online")
-        XCTAssertEqual(try spoken(online: 0, total: 1), "0 of 1 machine online")
-        XCTAssertEqual(try spoken(online: 1, total: 2), "1 of 2 machines online")
+        XCTAssertEqual(try spoken(online: 1, total: 1), "1 of 1 computer online")
+        XCTAssertEqual(try spoken(online: 0, total: 1), "0 of 1 computer online")
+        XCTAssertEqual(try spoken(online: 1, total: 2), "1 of 2 computers online")
     }
 
     // MARK: Chat subtitle

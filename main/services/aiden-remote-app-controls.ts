@@ -19,7 +19,7 @@ async function target(authority: RemoteAppControlAuthority, chatId: string, pane
   if (!authority.current() || (await configStore.getSettings()).remoteAppControlsEnabled !== true)
     throw new AidenRemoteServiceError(
       "capability_denied",
-      "Allow paired-device chat controls in Settings → Approvals → Controls in chat on the desktop first.",
+      "Allow paired-device chat controls in Aiden Agent on your computer first, in Settings → Approvals → Controls in chat.",
       403,
     );
   const chat = await chatStore.get(chatId);
@@ -37,7 +37,7 @@ async function target(authority: RemoteAppControlAuthority, chatId: string, pane
   const context = {
     actor: `remote:${authority.deviceId}`,
     workspaceId: chat.workspaceId,
-    target: "Paired host",
+    target: "Paired computer",
     remote: true,
     humanGesture: true,
     isCurrent: authority.current,
@@ -108,7 +108,7 @@ export const remoteAppControls = {
       throw new AidenRemoteServiceError(
         denied ? "capability_denied" : "revision_conflict",
         denied
-          ? "This control is no longer authorized. Refresh the host's current permissions."
+          ? "This control is no longer authorized. Refresh the computer's current permissions."
           : "Control change could not be confirmed. Refresh its current value or check the original operation.",
         denied ? 403 : 409,
       );

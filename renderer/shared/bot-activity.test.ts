@@ -109,7 +109,7 @@ test("Always Thinking says Thinking for everything except waiting, stopping and 
   }
   assert.equal(botActivityDisplay("waiting", "thinking").word, "Waiting for you");
   assert.equal(botActivityDisplay("stopping", "thinking").word, "Stopping");
-  assert.equal(botActivityDisplay("reconnecting", "thinking").word, "Reconnecting to your Mac");
+  assert.equal(botActivityDisplay("reconnecting", "thinking").word, "Reconnecting to your computer");
 });
 
 test("elapsed time shows only after 20 seconds, as minutes and seconds", () => {

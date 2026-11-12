@@ -346,5 +346,5 @@ export interface HostChatAdapter {
 
 export const FENCED_ERROR: HostChatError = {
   code: "fenced",
-  message: "The host connection changed before this response arrived.",
+  message: "The connection to that computer changed before this response arrived.",
 };

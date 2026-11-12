@@ -128,7 +128,7 @@ test("a send whose acknowledgement was lost keeps the draft and retries with the
   assert.deepEqual(sent[1]!.body, sent[0]!.body, "the retry replays the original request");
 });
 
-test("Retry on a failed reply from another Mac resends the person's words there, not the failed turn's id", async () => {
+test("Retry on a failed reply from another computer resends the person's words there, not the failed turn's id", async () => {
   const { peerCalls } = await mount(HOST, {
     "remote:peerCall": (_hostId, operation) => {
       const { operation: name } = operation as PeerOperation;
@@ -313,7 +313,7 @@ async function takeControl(name = "Take control at bank.example.com") {
   fireEvent.click(await screen.findByRole("button", { name }));
 }
 
-test("a hand-off from a Bot on another Mac shows its card here, and Done answers it there by wait id", async () => {
+test("a hand-off from a Bot on another computer shows its card here, and Done answers it there by wait id", async () => {
   const { handoffAnswers } = await mountHandoff(RUNNING_WITH_HANDOFF);
   const card = await screen.findByRole("group", { name: "Planner needs you" });
   assert.ok(screen.getByText("Needs you: Enter the 2FA code your bank sent you"));
@@ -351,7 +351,7 @@ test("typing while a hand-off waits answers it as done with a note, and Open ope
   assert.equal(calls.some((call) => call.channel === "remote:peerCall" && (call.args[1] as PeerOperation).operation === "botSend"), false);
 });
 
-test("a card already settled on the other Mac goes away quietly", async () => {
+test("a card already settled on the other computer goes away quietly", async () => {
   const expired = await mountHandoff(RUNNING_WITH_HANDOFF, () => ({
     ok: false,
     error: { code: "request_failed", status: 409, remoteCode: "handoff_expired", message: "The other device could not complete this request." },
@@ -448,7 +448,7 @@ test("a sign-in is finished on the Bot's own Mac: the card offers Finish there, 
   assert.equal(handoffAnswers().length, 0);
 });
 
-test("a password-or-code card from another Mac takes no note: no note box, and Done answers it bare", async () => {
+test("a password-or-code card from another computer takes no note: no note box, and Done answers it bare", async () => {
   const { calls, handoffAnswers } = await mountHandoff({
     ...RUNNING_WITH_HANDOFF,
     handoff: { ...BANK_HANDOFF, takesNote: false },
@@ -467,7 +467,7 @@ test("a password-or-code card from another Mac takes no note: no note box, and D
   assert.equal(calls.some((call) => call.channel === "remote:peerCall" && (call.args[1] as PeerOperation).operation === "botSend"), false);
 });
 
-test("a paused Bot on another Mac says so, blocks the composer, and Resume lifts the pause there", async () => {
+test("a paused Bot on another computer says so, blocks the composer, and Resume lifts the pause there", async () => {
   const { peerCalls } = await mountHandoff(SESSION);
   await screen.findByText("Two meetings and a dentist.");
   fireEvent.keyDown(screen.getByRole("button", { name: "More for Planner" }), { key: "Enter" });
@@ -551,7 +551,7 @@ function sharedImageSession(image: (operation: PeerOperation) => unknown) {
   };
 }
 
-test("an image a Bot on another Mac shared draws here once its bytes are read from that Mac", async () => {
+test("an image a Bot on another computer shared draws here once its bytes are read from that computer", async () => {
   const { peerCalls } = await mount(
     { ...HOST, capabilities: [...HOST.capabilities, "bot:images"] },
     sharedImageSession(() => ({ ok: true, value: { mimeType: "image/png", bytes: new Uint8Array(PIXEL) } })),
@@ -566,11 +566,11 @@ test("an image a Bot on another Mac shared draws here once its bytes are read fr
   );
 });
 
-test("a shared image whose bytes cannot be read from the other Mac says what it was instead", async () => {
+test("a shared image whose bytes cannot be read from the other computer says what it was instead", async () => {
   await mount(
     { ...HOST, capabilities: [...HOST.capabilities, "bot:images"] },
     sharedImageSession(() => ({ ok: false, error: { code: "not_found", message: "This image is no longer in the Bot's chat." } })),
   );
-  assert.ok(await screen.findByText(/I shared an image: dentist-map\.png\. Open this chat on its Mac to see it\./));
+  assert.ok(await screen.findByText(/I shared an image: dentist-map\.png\. Open this chat on its computer to see it\./));
   assert.ok(!screen.queryByRole("img", { name: "dentist-map.png" }), "no image drawn");
 });

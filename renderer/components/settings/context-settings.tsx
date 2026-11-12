@@ -117,7 +117,7 @@ export function PromptCacheGroup() {
     <FieldSet title="Prompt cache">
       <Field
         label="Warm caches during active chats"
-        description="Optional paid one-token requests keep an eligible provider cache warm during long desktop agent runs. Off by default; starts with your next chat run and stops when the run ends."
+        description="Optional paid one-token requests keep an eligible provider cache warm during long agent runs in Aiden Agent. Off by default; starts with your next chat run and stops when the run ends."
       >
         <Switch
           aria-label="Warm prompt caches during active chats"

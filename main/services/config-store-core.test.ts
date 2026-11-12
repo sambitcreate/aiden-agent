@@ -3378,7 +3378,7 @@ test("chat controls cannot widen a disabled or revoked paired-host policy", asyn
   const { appControlRevision } = await import("./app-controls-core.js");
   await h.store.setSettings({ appControlPolicy: "safe", memoryEnabled: true });
   const operation = { control: "memory.enabled" as const, value: false, expectedRevision: appControlRevision({ settings: await h.store.getSettings() }, "memory.enabled"), operationId: "first" };
-  await assert.rejects(h.store.updateAppControl(operation, () => true, true), /Paired-host/u);
+  await assert.rejects(h.store.updateAppControl(operation, () => true, true), /paired devices were disabled/u);
   await assert.rejects(h.store.updateAppControl(operation, () => false), /cancel|current|authority|no longer active/iu);
   await assert.rejects(h.store.updateAppControl(operation, () => true, false, async () => { throw new Error("Chat access revoked"); }), /Chat access revoked/u);
   assert.equal((await h.store.getSettings()).memoryEnabled, true);

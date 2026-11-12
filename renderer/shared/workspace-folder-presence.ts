@@ -60,10 +60,10 @@ export const MANAGED_WORKTREE_MISSING_SEND_REFUSAL =
  * carry one.
  */
 export const WORKSPACE_FOLDER_MISSING_REMOTE_REFUSAL =
-  "This chat's workspace folder is missing on your Mac. It may have been moved, renamed or deleted, or its drive isn't connected. Put it back, then send again.";
+  "This chat's workspace folder is missing on your computer. It may have been moved, renamed or deleted, or its drive isn't connected. Put it back, then send again.";
 
 export const MANAGED_WORKTREE_MISSING_REMOTE_REFUSAL =
-  "This chat's worktree folder is missing on your Mac. Put it back, or restore it from the chat on your Mac, then send again.";
+  "This chat's worktree folder is missing on your computer. Put it back, or restore it from the chat on your computer, then send again.";
 
 /**
  * Which workspaces the check covers. A No Access workspace never touches its

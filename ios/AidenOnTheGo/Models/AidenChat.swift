@@ -849,8 +849,8 @@ enum AidenBrowserRecordingLoad: Equatable, Sendable {
     /// Anything else: offline, refused, or an answer the phone rejected.
     case failed
 
-    static let watchOnMacMessage = "Watch this recording on your machine."
-    static let missingMessage = "This recording is no longer on the machine."
+    static let watchOnMacMessage = "Watch this recording on your computer."
+    static let missingMessage = "This recording is no longer on the computer."
     static let failedMessage = "This recording can\u{2019}t be played right now."
 
     /// A 404 means the recording is gone; every other failure may pass.
@@ -3465,8 +3465,8 @@ enum AidenApprovalPresentation {
         }
         if !canAllow {
             return kind == .scheduledTask
-                ? AidenApprovalLimit(text: String(localized: "This task must be approved on your paired desktop."), symbol: "desktopcomputer")
-                : AidenApprovalLimit(text: String(localized: "Allow this on your machine. You can deny it here."), symbol: "desktopcomputer")
+                ? AidenApprovalLimit(text: String(localized: "This task must be approved on your paired computer."), symbol: "desktopcomputer")
+                : AidenApprovalLimit(text: String(localized: "Allow this on your computer. You can deny it here."), symbol: "desktopcomputer")
         }
         return nil
     }
@@ -3623,7 +3623,7 @@ struct AidenScheduleCardPresentation: Equatable {
         var isWarning: Bool { self == .schedulerOff }
     }
 
-    static let footnote = String(localized: "Scheduled work runs on your desktop while Aiden is open and the computer is awake.")
+    static let footnote = String(localized: "Scheduled work runs on your computer while Aiden is open and the computer is awake.")
     static let truncatedNote = String(localized: "Shortened to fit. The full text is on your computer.")
 
     let title: String
@@ -3967,13 +3967,13 @@ struct AidenForeignRunResolution: Equatable, Sendable {
     var notice: String {
         switch prompt {
         case .approval(.allow?):
-            String(localized: "Answered on your machine: allowed")
+            String(localized: "Answered on your computer: allowed")
         case .approval(.deny?):
-            String(localized: "Answered on your machine: denied")
+            String(localized: "Answered on your computer: denied")
         case .question("expired"):
-            String(localized: "Question expired on your machine")
+            String(localized: "Question expired on your computer")
         case .approval(nil), .question:
-            String(localized: "Answered on your machine")
+            String(localized: "Answered on your computer")
         }
     }
 

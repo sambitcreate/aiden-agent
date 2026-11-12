@@ -250,7 +250,7 @@ export function scheduledTaskProviderGuardrail(
   if (appDefaultProviderId && isAcpHarnessProvider(appDefaultProviderId)) {
     // The default exists and works in chats, so "no app default" would be wrong; say why it can't run here.
     const label = providers?.find((provider) => provider.id === appDefaultProviderId)?.label ?? "an agent-backed model";
-    return `No provider pinned, and the app default (${label}) runs only in chats you have open on this computer. Pin a provider so this task can run.`;
+    return `No provider pinned, and the app default (${label}) runs only in chats you have open. Pin a provider so this task can run.`;
   }
   const usableDefault =
     appDefaultProviderId !== undefined &&

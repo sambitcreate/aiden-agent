@@ -387,7 +387,7 @@ test("a host that grants reading only shows no composer and says why", () => {
     chat: session(online, ["messagesWindow", "observe"]).chat(),
   });
   assert.equal(view.typing.length, 0);
-  assert.match(view.text, /This chat runs on Studio\. That Mac doesn't allow sending from here\./);
+  assert.match(view.text, /This chat runs on Studio\. That computer doesn't allow sending from here\./);
   assert.equal(view.button(/Chat actions/), undefined);
 });
 
@@ -398,7 +398,7 @@ test("an offline host keeps the composer but refuses to send, stop or answer unt
     chat: session(offline).chat(),
   });
 
-  assert.match(view.text, /That Mac is offline\. Nothing is sent until it is back online\./);
+  assert.match(view.text, /That computer is offline\. Nothing is sent until it is back online\./);
   assert.ok(view.button(/Stop generating/)?.hasAttribute("disabled"), "no stop is queued for later");
   // The approval stays visible, disabled with the reason, never answered locally.
   assert.ok(view.button(/Allow once/)?.hasAttribute("disabled"));
@@ -689,16 +689,16 @@ test("opening a remote chat directly waits for the paired hosts before calling t
 
 test("a remote chat whose Mac is unpaired, turned off or unreadable says so once the hosts are known", async () => {
   const unpaired = await route((client) => client.setQueryData(hostQueryKeys.list(), []));
-  assert.match(unpaired, /This Mac is not connected/);
+  assert.match(unpaired, /That computer isn't connected/);
 
   const off = await route((client) => client.setQueryData(hostQueryKeys.list(), [{ ...studioView, enabled: false }]));
-  assert.match(off, /This Mac is not connected/);
+  assert.match(off, /That computer isn't connected/);
 
   const failed = await route((client) =>
     client.prefetchQuery({ queryKey: hostQueryKeys.list(), queryFn: () => Promise.reject(new Error("Keychain locked")) }),
   );
   assert.doesNotMatch(failed, /Loading…/);
-  assert.match(failed, /Paired Macs could not be read/);
+  assert.match(failed, /Paired computers could not be read/);
   assert.match(failed, /Keychain locked/);
 });
 

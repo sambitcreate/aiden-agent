@@ -1456,7 +1456,7 @@ extension AidenBotSessionCopy {
     static let tryAgain = "Try again"
     static let connecting = "Connecting…"
     static let removeMessage = "Remove message"
-    static let unreachable = "Aiden couldn’t reach your machine. Try again."
+    static let unreachable = "Aiden couldn’t reach your computer. Try again."
 }
 
 /// The Steer/Queue pill's mode: Queue by default, kept while the Bot works, and
@@ -1504,7 +1504,7 @@ enum AidenBotConnectionHint: Equatable {
 }
 
 /// The hint to show, or nil when connected. While a turn runs the status line
-/// already says "Reconnecting to your Mac", so the hint stays out of the way.
+/// already says "Reconnecting to your computer", so the hint stays out of the way.
 @MainActor
 func aidenBotConnectionHint(for model: AidenBotSessionModel, nowMs: Int) -> AidenBotConnectionHint? {
     guard model.isConnecting else { return nil }
@@ -1691,7 +1691,7 @@ struct AidenBotRoutineProposalCardView: View {
 
 /// Revision 42 (`bot:issues`): a "Needs you" card the host raised, with up to
 /// two actions. A card that offers nothing a phone can do (the Mac's own
-/// settings opened it) says "Open on your machine".
+/// settings opened it) says "Open on your computer".
 struct AidenBotIssueCardView: View {
     let issue: AidenRemoteBotIssue
     let canAct: Bool

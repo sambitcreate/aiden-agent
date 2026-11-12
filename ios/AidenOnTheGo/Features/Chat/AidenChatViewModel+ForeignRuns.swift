@@ -603,11 +603,11 @@ extension AidenChatViewModel {
             case .allowed:
                 nil
             case .approvalResponseRequired:
-                String(localized: "This paired device can't answer requests from runs it didn't start. Answer it on your machine.")
+                String(localized: "This paired device can't answer requests from runs it didn't start. Answer it on your computer.")
             case .scheduleWriteRequired:
                 String(localized: "Schedule write access was removed from this paired device. The task was not approved.")
             case .hostApprovalRequired:
-                String(localized: "This request can only be approved on your paired desktop.")
+                String(localized: "This request can only be approved on your paired computer.")
             }
             return
         }
@@ -643,7 +643,7 @@ extension AidenChatViewModel {
                 showForeignRunNotice(loser.notice)
                 return
             }
-            presentedError = String(localized: "The approval response was not confirmed. Check the request on your machine.")
+            presentedError = String(localized: "The approval response was not confirmed. Check the request on your computer.")
             coordinator.haptics.play(.error, scope: hapticScope)
         }
     }
@@ -679,12 +679,12 @@ extension AidenChatViewModel {
                 showForeignRunNotice(loser.notice)
                 return
             }
-            presentedError = String(localized: "The question response was not confirmed. Check the prompt on your machine.")
+            presentedError = String(localized: "The question response was not confirmed. Check the prompt on your computer.")
             coordinator.haptics.play(.error, scope: hapticScope)
         }
     }
 
-    /// "Answered on your machine": the transient composer caption a losing phone shows.
+    /// "Answered on your computer": the transient composer caption a losing phone shows.
     private func showForeignRunNotice(_ text: String) {
         showRunInputReceipt(text)
     }

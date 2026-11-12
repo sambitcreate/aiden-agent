@@ -67,7 +67,7 @@ export function createCliScheduler(agentDir: string) {
   const active = new Map<string, AbortController>();
   let botPorts: BotRoutineExecutorPorts | undefined;
   const routineExecutor = createBotRoutineExecutor({ store, ports: () => {
-    if (!botPorts) throw new Error("Durable Bot routines are unavailable on this host.");
+    if (!botPorts) throw new Error("Durable Bot routines are not available on this computer.");
     return botPorts;
   }, broadcast: () => {} });
   const service = createScheduleServiceCore({ store,

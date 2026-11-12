@@ -78,7 +78,7 @@ export function toRemoteBotHandoff(prompt: BotPendingHandoff): AidenRemoteBotHan
 
 /**
  * What a device without `bot:handoffs` shows for a waiting hand-off: one
- * assistant line, "Ada needs you on your Mac: Enter the 2FA code". It has no
+ * assistant line, "Ada needs you on your computer: Enter the 2FA code". It has no
  * `createdAt`, so it never moves a chat's preview or unread state.
  */
 export function legacyHandoffNotice(botName: string, prompt: BotPendingHandoff): AidenRemoteBotSessionEntry {
@@ -87,7 +87,7 @@ export function legacyHandoffNotice(botName: string, prompt: BotPendingHandoff):
     type: "message",
     id: legacyHandoffNoticeId(prompt.waitId),
     role: "assistant",
-    text: `${name} needs you on your Mac: ${normalizeBotHandoffAction(prompt.action)}`,
+    text: `${name} needs you on your computer: ${normalizeBotHandoffAction(prompt.action)}`,
   };
 }
 

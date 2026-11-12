@@ -66,7 +66,7 @@ test("Bot pairs review both names, preserve lost requests and inspect Stop outco
   await exchange.getByRole("button", { name: "Stop exchange", exact: true }).click(); await page.getByRole("dialog", { name: "Stop this exchange?", exact: true }).getByRole("button", { name: "Confirm Stop", exact: true }).click();
   await expect(exchange.getByRole("button", { name: "Retry saved Stop", exact: true })).toBeVisible();
   await exchange.getByRole("button", { name: "Retry saved Stop", exact: true }).click();
-  await expect(exchange.getByText("The host refused Stop because this run includes other inputs.", { exact: true })).toBeVisible();
+  await expect(exchange.getByText("The computer refused Stop because this run includes other inputs.", { exact: true })).toBeVisible();
   const stops = await aiden.app.evaluate(() => (globalThis as { peerStops?: unknown[] }).peerStops!); expect(stops).toHaveLength(2); expect(stops[1]).toEqual(stops[0]);
   for (const width of [1280, 600, 390]) {
     await aiden.app.evaluate(({ BrowserWindow }, w) => BrowserWindow.getAllWindows()[0]!.setSize(w, 900), width);

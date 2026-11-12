@@ -385,8 +385,8 @@ enum AidenBotRoutineFailure: Equatable {
 
     var message: String {
         switch self {
-        case .changedOnMac: "This routine changed on your machine. Review it and try again."
-        case .removedOnMac: "This routine was removed on your machine."
+        case .changedOnMac: "This routine changed on your computer. Review it and try again."
+        case .removedOnMac: "This routine was removed on your computer."
         case let .other(message): message
         }
     }

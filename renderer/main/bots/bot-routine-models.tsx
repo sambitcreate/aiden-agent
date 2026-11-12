@@ -65,7 +65,7 @@ export function BotRoutineModelDialog({ botId, routineId, routineName, onClose, 
     if (!baseline) { setBaseline(view.data); setDraft((current) => current ?? toDraft(view.data.selection)); }
     try {
       for (const row of pendingRoutineModelChanges(botId, routineId)) if (view.data.lastMutationId === row.request.mutationId) {
-        clearRoutineModelAttempt(row, true); setDraft(toDraft(view.data.selection)); setBaseline(view.data); setConflict(null); setError(null); setMessage("The host confirmed the saved model change.");
+        clearRoutineModelAttempt(row, true); setDraft(toDraft(view.data.selection)); setBaseline(view.data); setConflict(null); setError(null); setMessage("The computer confirmed the saved model change.");
       }
     } catch { refreshPending(); }
   }, [view.data, baseline, botId, routineId, refreshPending]);
@@ -89,7 +89,7 @@ export function BotRoutineModelDialog({ botId, routineId, routineName, onClose, 
         if (result.code === "conflict" && result.settings) setConflict(result.settings);
         setError(result.error + (attempt.attempts > 1 || result.code === "unavailable" ? " The earlier outcome is unconfirmed. Retry the same saved request." : "")); return;
       }
-      if (result.mutationId !== attempt.request.mutationId || result.settings.botId !== botId || result.settings.routineId !== routineId) throw new Error("The host returned a different model change identity.");
+      if (result.mutationId !== attempt.request.mutationId || result.settings.botId !== botId || result.settings.routineId !== routineId) throw new Error("The computer returned a different model change identity.");
       clearRoutineModelAttempt(attempt, true);
       const current = qc.getQueryData<BotRoutineModelSettings>(key), latest = current && current !== before ? current : result.settings;
       if (current === before) { await qc.cancelQueries({ queryKey: key, exact: true }); qc.setQueryData(key, result.settings); }
@@ -101,7 +101,7 @@ export function BotRoutineModelDialog({ botId, routineId, routineName, onClose, 
   return <><Dialog open confirmHidden title={`Model for ${routineName}`} onOpenChange={(open) => { if (!open) guard.requestLeave(); }}>
     {message && <Text variant="small" role="status">{message}</Text>}
     {(error || pending.error) && <Text variant="small" color="red" role="alert">{error ?? pending.error}</Text>}
-    {pending.rows.map((row) => <Field key={row.request.mutationId} orientation="vertical" label="Saved change awaiting confirmation" description="The exact request is retained on this device. A matching host receipt is needed to confirm it."><Button size="small" variant="filled" disabled={busy} onClick={() => void perform(row.request, true)}>Retry saved request</Button></Field>)}
+    {pending.rows.map((row) => <Field key={row.request.mutationId} orientation="vertical" label="Saved change awaiting confirmation" description="The exact request is retained on this device. A matching receipt from the computer is needed to confirm it."><Button size="small" variant="filled" disabled={busy} onClick={() => void perform(row.request, true)}>Retry saved request</Button></Field>)}
     {view.isError && !view.data ? <Field label="Routine model unavailable"><Button size="small" onClick={() => void view.refetch()}>Try again</Button></Field> : view.isPending || !draft ? <Text role="status">Loading routine model…</Text> : <FieldSet title="Routine model">
       <Field orientation="vertical" label="Model choice"><Select value={draft.mode} disabled={disabled} onValueChange={(mode) => setDraft({ ...draft, mode: mode as Draft["mode"] })}><SelectTrigger aria-label="Model choice"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="inherit">Inherit Bot model</SelectItem><SelectItem value="selected">Choose a routine model</SelectItem></SelectContent></Select></Field>
       {draft.mode === "inherit" ? <Field orientation="vertical"><Text variant="small" color="tertiary">Each new run keeps the Bot model and thinking chosen when that run is accepted.</Text></Field> : catalog.isPending ? <Field orientation="vertical"><Text role="status">Loading available models…</Text></Field> : catalog.isError || !catalog.data ? <Field label="Models unavailable"><Button size="small" onClick={() => void catalog.refetch()}>Try again</Button></Field> : <>

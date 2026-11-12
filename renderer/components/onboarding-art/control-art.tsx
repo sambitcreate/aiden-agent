@@ -31,7 +31,9 @@ import {
 import { AidenActivityMark } from "../aiden-activity-mark";
 import { AvatarFace } from "../bot-avatar";
 import { ProviderIcon } from "../provider-icon";
+import { useAppCapabilities } from "../../lib/app-capabilities";
 import { THEME_PRESETS, type ThemePresetId } from "../../shared/appearance";
+import { thisComputerLabel } from "../../shared/computer-noun";
 import { COMMAND_BY_ID, prettyAcceleratorForPlatform, type CommandId } from "../../shared/keybindings";
 import {
   ArtButton,
@@ -641,6 +643,7 @@ const CHAT_CONTROL_ROWS = [
 
 /** A reply that answers a settings request with a live settings card in the chat. */
 export function ChatControlsArt() {
+  const { platform } = useAppCapabilities();
   return (
     <>
       <div className="oa-ctl-ask" style={{ right: 12, top: 10, width: 96 }}>
@@ -655,7 +658,7 @@ export function ChatControlsArt() {
           <ArtIcon icon={Settings} />
           <span className="oa-strong">Settings</span>
           <span className="oa-grow" />
-          <ArtChip icon={Monitor}>This desktop</ArtChip>
+          <ArtChip icon={Monitor}>{thisComputerLabel(platform)}</ArtChip>
         </div>
         {CHAT_CONTROL_ROWS.map(({ label, on }, index) => (
           <div key={label} className="oa-ctl-row">
@@ -673,9 +676,10 @@ export function ChatControlsArt() {
 
 /** The paired-project clone dialog, cropped to its destination and explicit file choices. */
 export function PeerProjectsArt() {
+  const { platform } = useAppCapabilities();
   return <ArtWindow raised className="oa-otg-card" style={{ left: 14, top: 12, width: 172 }}>
     <span className="oa-row" style={{ gap: 6 }}><ArtIcon icon={Folder} /><span className="oa-mono">Add project</span></span>
-    <div className="oa-row" style={{ gap: 5, marginTop: 5 }}><ArtChip icon={Monitor}>This Mac</ArtChip><ArtIcon icon={ChevronRight} /><ArtChip icon={Monitor}>Studio</ArtChip></div>
+    <div className="oa-row" style={{ gap: 5, marginTop: 5 }}><ArtChip icon={Monitor}>{thisComputerLabel(platform)}</ArtChip><ArtIcon icon={ChevronRight} /><ArtChip icon={Monitor}>Studio</ArtChip></div>
     <div className="oa-row" style={{ gap: 5, marginTop: 6 }}><ArtIcon icon={Folder} /><Bar width="70%" tone="soft" /></div>
     <div className="oa-stack" style={{ gap: 5, marginTop: 6 }}><span className="oa-row" style={{ gap: 5 }}><Radio /><span className="oa-mono">.env</span><Bar width="40%" tone="soft" /></span><span className="oa-row" style={{ gap: 5 }}><Radio /><Bar width="55%" tone="soft" /></span></div>
     <ArtButton variant="primary" style={{ marginTop: 7, justifySelf: "end" }}>Clone project</ArtButton>

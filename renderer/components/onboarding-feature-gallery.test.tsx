@@ -54,8 +54,8 @@ test("the Bots tile introduces the first Bot's set-up chat and still explains bo
   const tile = container.querySelector<HTMLElement>('[data-onboarding-feature="bots"]');
   assert.ok(tile);
   assert.equal(container.querySelectorAll('[data-onboarding-feature="bots"]').length, 1);
-  assert.ok(within(tile).getByText("Your first Bot asks what you need and sets itself up. Bots remember, ask each other for help, run routines, and hand steps back to you. Approve a whole plan on desktop or phone, follow its checklist, or stop it. Approval covers only listed actions within the Bot's access and limits, for this run and up to 60 minutes."));
-  assert.match(tile.getAttribute("aria-label") ?? "", /Approve a whole plan on desktop or phone/u);
+  assert.ok(within(tile).getByText("Your first Bot asks what you need and sets itself up. Bots remember, ask each other for help, run routines, and hand steps back to you. Approve a whole plan in Aiden Agent or on your phone, follow its checklist, or stop it. Approval covers only listed actions within the Bot's access and limits, for this run and up to 60 minutes."));
+  assert.match(tile.getAttribute("aria-label") ?? "", /Approve a whole plan in Aiden Agent or on your phone/u);
   assert.equal(tile.tabIndex, 0, "the tile remains reachable by keyboard");
   assert.ok(within(tile).getByText("COS replied"));
   unmount();

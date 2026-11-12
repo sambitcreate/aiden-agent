@@ -51,7 +51,7 @@ async function readPeerHostFeed(
       if (pending.get(hostId) === buffered) pending.delete(hostId);
     }
   }
-  throw new Error("The host's rows kept changing while they were read.");
+  throw new Error("That computer's rows kept changing while they were read.");
 }
 
 /** Stable `combine` for the feed queries; it reruns only when a result changes. */

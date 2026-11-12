@@ -214,7 +214,7 @@ test("a picture this Mac cannot decode is explained instead of sent", async () =
     ),
     (error) =>
       error instanceof RemoteAttachmentError &&
-      error.message === "broken.webp can't be sent to another Mac. Save it as a PNG or JPEG and attach it again.",
+      error.message === "broken.webp can't be sent to another computer. Save it as a PNG or JPEG and attach it again.",
   );
 });
 

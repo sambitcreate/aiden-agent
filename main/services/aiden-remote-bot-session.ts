@@ -418,7 +418,7 @@ function remotePlanFileScope(scope: NonNullable<BotPlanItemView["fileScope"]>): 
   const summary = safe ? shortPlace : basename.trim() && safePlanLocationText(basename)
     ? "…/" + elidePlanLocation(basename, available - 2) : "[folder location unavailable]";
   return { line: prefix + summary + suffix,
-    details: complete ? [...chunks, ...lifetime] : ["Review the full folder location on the host desktop.", ...lifetime], complete };
+    details: complete ? [...chunks, ...lifetime] : ["Review the full folder location in Aiden Agent on your computer.", ...lifetime], complete };
 }
 
 /** Bound each public member before budgeting it; select fields explicitly. */
@@ -703,7 +703,7 @@ function sharedImageWireOf(image: {
 
 /** What a device without `bot:images` reads for a shared image (revision 45). */
 export function botSharedImageLegacyText(name: string): string {
-  return `I shared an image: ${name}. Open this chat on your Mac to see it.`;
+  return `I shared an image: ${name}. Open this chat on your computer to see it.`;
 }
 
 /** A shared image as a device without `bot:images` reads it: an assistant line under the same id. */
@@ -2128,7 +2128,7 @@ export class AidenRemoteBotSessionService {
       why: prompt.why, choices: [...prompt.choices], ...(prompt.place === undefined ? {} : { place: prompt.place }),
       ...(prompt.approvalCount === undefined ? {} : { approvalCount: prompt.approvalCount }) });
     const { name } = await this.options.bots.bot(botId);
-    return { card, notice: { type: "message", id: `access-notice:${card.waitId}`, role: "assistant", text: `${name} needs you on your Mac: allow access to ${card.label}` } };
+    return { card, notice: { type: "message", id: `access-notice:${card.waitId}`, role: "assistant", text: `${name} needs you on your computer: allow access to ${card.label}` } };
   }
 
   private async handoffOf(botId: string): Promise<ProjectedHandoff | null> {
@@ -2292,7 +2292,7 @@ export class AidenRemoteBotSessionService {
         if (decision === "allow" && !wireApproval(prompt).canAllow) {
           throw new AidenRemoteServiceError(
             "capability_denied",
-            "This approval can only be allowed from the Aiden desktop app.",
+            "Allow this in Aiden Agent on your computer.",
             403,
           );
         }
@@ -2371,7 +2371,7 @@ export class AidenRemoteBotSessionService {
           const before = await plans.current(bot.id, id);
           if (!before || before.status !== (parsed.decision === "stop" ? "active" : "pending")) throw new AidenOperationNotExecutedError(expired());
           if (parsed.decision === "approve" && projectAidenRemoteBotPlan(before) === null) {
-            throw new AidenOperationNotExecutedError(new AidenRemoteServiceError("plan_expired", "Review this plan on the host desktop.", 409));
+            throw new AidenOperationNotExecutedError(new AidenRemoteServiceError("plan_expired", "Review this plan in Aiden Agent on your computer.", 409));
           }
           const result = await plans.respond(bot.id, id, parsed.decision);
           if (result !== "done") throw new AidenOperationNotExecutedError(expired());
@@ -2460,7 +2460,7 @@ export class AidenRemoteBotSessionService {
           const prompt = handoffs.get(bot.id, id);
           if (!prompt) throw handoffExpired();
           if (prompt.kind === "sign_in" && parsed.outcome === "done") {
-            throw new AidenRemoteServiceError("invalid_request", "Finish signing in on your Mac, or skip it.", 400);
+            throw new AidenRemoteServiceError("invalid_request", "Finish signing in on your computer, or skip it.", 400);
           }
           const outcome = handoffs.answer(bot.id, id, parsed);
           if (outcome === "invalid") {

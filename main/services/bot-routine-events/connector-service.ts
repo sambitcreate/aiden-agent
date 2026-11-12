@@ -25,7 +25,7 @@ export class BotConnectorWatchError extends Error {
   constructor(readonly code: "invalid_request" | "not_found" | "revision_conflict" | "idempotency_conflict" | "idempotency_capacity" | "capability_denied" | "unavailable", message: string, readonly details?: Record<string, unknown>) { super(message); }
 }
 class ConnectorReadInterrupted extends BotConnectorWatchError {
-  constructor() { super("unavailable", "This check stopped because the Bot, watch or host paused or changed. Check again when it is ready."); }
+  constructor() { super("unavailable", "This check stopped because the Bot, watch or computer paused or changed. Check again when it is ready."); }
 }
 function fail(message: string): never { throw new BotConnectorWatchError("invalid_request", message); }
 export function connectorFields(value: unknown, allowed: readonly string[]): Record<string, unknown> {
@@ -98,7 +98,7 @@ export function createBotConnectorWatchService(ports: BotConnectorWatchServicePo
   const retainedSources = new Map<string, () => void>();
   function projection(routines: readonly BotEventRoutine[]): BotConnectorWatchList {
     const supported = ports.supported();
-    return { supported, ...(!supported ? { unavailableReason: "Connector watches are not available on this host." } : {}), templates: structuredClone(BOT_CONNECTOR_WATCH_TEMPLATES.map(template=>template.kind==="calendar"&&ports.calendarAvailable?.()?{...template,available:true,unavailableReason:undefined}:template.kind==="email"&&ports.mailAvailable?.()===false?{...template,available:false,unavailableReason:"Local Mail watches require the owning Mac and iMCP."}:template)), watches: routines.filter((row) => isConnector(row) && row.connector?.deletedAt === undefined).map(view) };
+    return { supported, ...(!supported ? { unavailableReason: "Connector watches are not available on this computer." } : {}), templates: structuredClone(BOT_CONNECTOR_WATCH_TEMPLATES.map(template=>template.kind==="calendar"&&ports.calendarAvailable?.()?{...template,available:true,unavailableReason:undefined}:template.kind==="email"&&ports.mailAvailable?.()===false?{...template,available:false,unavailableReason:"Local Mail watches require the owning Mac and iMCP."}:template)), watches: routines.filter((row) => isConnector(row) && row.connector?.deletedAt === undefined).map(view) };
   }
   function withinListBudget(routines: readonly BotEventRoutine[]): void {
     if (Buffer.byteLength(JSON.stringify(projection(routines)), "utf8") > MAX_LIST_BYTES) fail("These watches have too much saved text. Shorten the instructions or remove a watch before adding more.");
@@ -113,7 +113,7 @@ export function createBotConnectorWatchService(ports: BotConnectorWatchServicePo
   }
   async function bot(botId: string): Promise<void> {
     if (!await ports.knownBot(botId)) throw new BotConnectorWatchError("not_found", "This Bot no longer exists.");
-    if (!ports.supported()) throw new BotConnectorWatchError("unavailable", "Connector watches require the owning desktop host.");
+    if (!ports.supported()) throw new BotConnectorWatchError("unavailable", "Connector watches need the computer that runs this Bot.");
   }
   async function current(botId: string, id: string): Promise<BotEventRoutine> {
     await bot(botId);
@@ -157,7 +157,7 @@ export function createBotConnectorWatchService(ports: BotConnectorWatchServicePo
   }
   async function read(botId: string, binding: BotConnectorWatchBinding, selected: BotConnectorWatchCondition, previous: BotEventRoutine["watch"], signal: AbortSignal, id?: string) {
     if(!connectorBindingMatchesCondition(binding,selected))fail("Choose a source matching this watch template.");
-    if(binding.adapter==="composio-calendar-v1"&&(!ports.calendarAvailable?.()||!ports.withCalendarPort))throw new BotConnectorWatchError("unavailable","Calendar watches require the verified read transport on the owning host.");
+    if(binding.adapter==="composio-calendar-v1"&&(!ports.calendarAvailable?.()||!ports.withCalendarPort))throw new BotConnectorWatchError("unavailable","Calendar watches need the verified read transport on the computer that runs this Bot.");
     const controller = new AbortController(); active.set(controller, { botId, ...(id ? { id } : {}) });
     const combined = AbortSignal.any([signal, controller.signal]);
     try {
@@ -196,7 +196,7 @@ export function createBotConnectorWatchService(ports: BotConnectorWatchServicePo
     async list(botId: string): Promise<BotConnectorWatchList> {
       if (!await ports.knownBot(botId)) throw new BotConnectorWatchError("not_found", "This Bot no longer exists.");
       const result = projection(await ports.store.list(botId));
-      if (Buffer.byteLength(JSON.stringify(result), "utf8") > 1_048_576) throw new BotConnectorWatchError("unavailable", "Saved watch data exceeds this host's limit. Restore the last valid backup or contact support.");
+      if (Buffer.byteLength(JSON.stringify(result), "utf8") > 1_048_576) throw new BotConnectorWatchError("unavailable", "Saved watch data exceeds this computer's limit. Restore the last valid backup or contact support.");
       return result;
     },
     async discoverSources(botId: string, lifetime?: BotConnectorWatchDiscoveryLifetime): Promise<BotConnectorWatchSourceList> {

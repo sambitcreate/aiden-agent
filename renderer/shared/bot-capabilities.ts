@@ -4,6 +4,8 @@
  * fingerprints, credentials, and filesystem paths are main-process only.
  */
 
+import { localComputerNoun, runtimeComputerPlatform } from "./computer-noun.js";
+
 export const BOT_CAPABILITY_STORE_VERSION = 3 as const;
 export const BOT_FULL_ACCESS_NOTICE_VERSION = "bot-full-access-v1" as const;
 
@@ -29,10 +31,18 @@ export const BOT_CAPABILITY_LIMITS = {
   noticeAudiences: 256,
 } as const;
 
-export const BOT_ACCESS_SUMMARIES = {
-  full: "Can use your Mac, shell, enabled connections, and skills.",
-  custom: "Uses only the access you select. This chat can reduce it further.",
-} as const;
+/** The Full Access and Custom summaries; Full names the computer the Bot runs on. */
+export function botAccessSummaries(platform: string | null | undefined = runtimeComputerPlatform()) {
+  return {
+    full: `Can use your ${localComputerNoun(platform)}, shell, enabled connections, and skills.`,
+    custom: "Uses only the access you select. This chat can reduce it further.",
+  } as const;
+}
+
+/** The whole-computer file scope's label: "Full Mac" on macOS, "Full computer" elsewhere. */
+export function botFullComputerLabel(platform: string | null | undefined = runtimeComputerPlatform()): string {
+  return `Full ${localComputerNoun(platform)}`;
+}
 
 export type BotAccessMode = "full" | "custom";
 export type BotChatAccessMode = "inherit" | "custom";
@@ -456,8 +466,12 @@ export function cloneBotCustomSelection(selection: BotCustomSelection): BotCusto
   };
 }
 
-export const BOT_FILE_SCOPE_SELECTION_GUIDANCE =
-  "Choose Full Mac, Bot folder, approved locations with the Bot folder, or Files Off.";
+export function botFileScopeSelectionGuidance(platform: string | null | undefined = runtimeComputerPlatform()): string {
+  return `Choose ${botFullComputerLabel(platform)}, Bot folder, approved locations with the Bot folder, or Files Off.`;
+}
+
+/** The guidance for the platform this code runs on. */
+export const BOT_FILE_SCOPE_SELECTION_GUIDANCE = botFileScopeSelectionGuidance();
 
 /** True when Custom file scopes match the grant rules the binder will enforce. */
 export function botFileScopeSelectionIsCoherent(

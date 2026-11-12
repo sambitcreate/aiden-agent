@@ -45,6 +45,7 @@ import { LocalVoiceSettings } from "./local-voice-settings";
 import { automaticVoiceCaption, effectiveLocalModelId } from "../../shared/voice-provider";
 import { effectiveLanguage, effectiveTask, normalizeLanguageIntent } from "../../shared/voice-language";
 
+import { localComputerNoun } from "../../shared/computer-noun";
 const AUTOMATIC = "automatic";
 const AUTO_LANGUAGE = "auto";
 /** Languages offered for cloud transcription; both providers detect others. */
@@ -262,7 +263,7 @@ export function VoiceInputSettings() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={AUTOMATIC}>Automatic</SelectItem>
-                <SelectItem value="local">{platform === "darwin" ? "On this Mac · Private" : "On this device · Private"}</SelectItem>
+                <SelectItem value="local">{`On this ${localComputerNoun(platform)} · Private`}</SelectItem>
                 <SelectItem value="openai">Online · OpenAI</SelectItem>
                 <SelectItem value="gemini">Online · Google Gemini</SelectItem>
               </SelectContent>

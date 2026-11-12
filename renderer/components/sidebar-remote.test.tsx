@@ -45,7 +45,7 @@ test("the filter chip shows the machine and offers a labelled way back to all ma
   const { all, buttons } = parse(<MachineFilterChip label="Laptop" onClear={noop} />);
   assert.ok(all.some((node) => node.textContent === "Laptop"));
   assert.equal(buttons.length, 1);
-  assert.equal(buttons[0]?.getAttribute("aria-label"), "Show all machines instead of Laptop only");
+  assert.equal(buttons[0]?.getAttribute("aria-label"), "Show all computers instead of Laptop only");
 });
 
 const hosts: SidebarHost[] = [

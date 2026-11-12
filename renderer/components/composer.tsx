@@ -153,6 +153,8 @@ import { CONNECT_PROVIDER_ACTION } from "../lib/provider-setup-copy";
 import { escapeStopsGeneration } from "../lib/composer-type-focus";
 import { isNoWorkspace, NO_WORKSPACE_LABEL } from "../lib/no-workspace";
 
+import { useAppCapabilities } from "../lib/app-capabilities";
+import { localComputerNoun } from "../shared/computer-noun";
 const CLIPBOARD_IMAGE_MIME_TYPES = new Set([
   "image/png",
   "image/jpeg",
@@ -468,6 +470,7 @@ export function Composer({
   machinePicker,
   remoteContext,
 }: ComposerProps) {
+  const { platform } = useAppCapabilities();
   const restoredText = React.useMemo(
     () => initialText || loadComposerDraft(chatId).text,
     [chatId, initialText],
@@ -901,7 +904,7 @@ export function Composer({
       sessionActionBlockedReason: slashSessionBlockedReason,
       sideQuestionBlockedReason,
       followThroughBlockedReason: !surfaces.localContext
-        ? "Available in workspace chats on this computer."
+        ? `Available in workspace chats on this ${localComputerNoun(platform)}.`
         : !workspace?.folderPath
           ? "This chat has no folder."
           : workspace.permission === "none"
@@ -950,6 +953,7 @@ export function Composer({
       gitUnborn,
       latestAssistantResponse,
       permissionSaving,
+      platform,
       onCreateGitWorktree,
       sending,
       sessionCommandBusy,

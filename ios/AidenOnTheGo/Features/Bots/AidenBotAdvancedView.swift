@@ -2,8 +2,8 @@ import SwiftUI
 
 /// Copy for an Advanced Save that didn't stick, shown by the screen behind it.
 enum AidenBotAdvancedCopy {
-    static let unreachable = "Aiden couldn’t reach your machine, so Advanced wasn’t saved. Open it to try again."
-    static let changedOnMac = "Something changed on your machine, so Advanced wasn’t saved. Open it to check and save again."
+    static let unreachable = "Aiden couldn’t reach your computer, so Advanced wasn’t saved. Open it to try again."
+    static let changedOnMac = "Something changed on your computer, so Advanced wasn’t saved. Open it to check and save again."
     static let couldNotCheck = "Aiden couldn’t check what Advanced saved. Open it again to see."
 }
 
@@ -295,7 +295,7 @@ struct AidenBotAdvancedView: View {
             case .none:
                 EmptyView()
             case .unavailable:
-                Text("To look at photos, add an AI that can see images on your machine.")
+                Text("To look at photos, add an AI that can see images on your computer.")
                     .foregroundStyle(palette.secondary)
             case .choose:
                 AidenBotModelRow(
@@ -339,7 +339,7 @@ struct AidenBotAdvancedView: View {
             Text("What it can use")
         } footer: {
             if draft?.usesFullAccess == true {
-                Text("It can use everything your machine allows. Your machine still asks before risky steps.")
+                Text("It can use everything your computer allows. Your computer still asks before risky steps.")
             } else {
                 Text("Turn on only what this Bot needs.")
             }
@@ -543,7 +543,7 @@ struct AidenBotAdvancedView: View {
     }
 
     private var readOnlyMessage: String {
-        if capturedContext == nil { return "Connect to your machine to change this." }
+        if capturedContext == nil { return "Connect to your computer to change this." }
         return "This phone can look but not change Bots."
     }
 
@@ -695,7 +695,7 @@ struct AidenBotAdvancedView: View {
 /// Plain-language load errors for Bot surfaces.
 func aidenBotFriendlyLoadError(_ error: Error) -> String {
     if case AidenBotContractError.invalidCombination("no available provider and model") = error {
-        return "Needs an AI model. Set one up on your machine, then try again."
+        return "Needs an AI model. Set one up on your computer, then try again."
     }
     return error.localizedDescription
 }
@@ -818,7 +818,7 @@ struct AidenBotModelListView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(model.label).foregroundStyle(palette.foreground)
-                    Text(usable ? (model.supportsImages ? "Reads images" : "Text only") : "Set up on your machine")
+                    Text(usable ? (model.supportsImages ? "Reads images" : "Text only") : "Set up on your computer")
                         .font(.footnote)
                         .foregroundStyle(palette.secondary)
                 }
@@ -883,8 +883,7 @@ func aidenBotWaitForConnection(_ coordinator: AidenRemoteCoordinator, hold: Dura
 }
 
 
-/// Copy shared with the desktop page (`bot-chat-activity-page.tsx`) and Android, except
-/// that iOS says "machine" where they say "Mac", until the Android decision
+/// Copy shared with the desktop page (`bot-chat-activity-page.tsx`) and Android
 /// (spec section 11).
 enum AidenBotChatActivityCopy {
     static let title = "Chat activity"
@@ -894,8 +893,8 @@ enum AidenBotChatActivityCopy {
     static let phonesFooter = "Always just the line, with the same words."
     static let recommended = "Recommended"
     static let saveFailed = "Aiden couldn’t save that choice."
-    static let saveConflict = "This changed on your machine. Showing what it has now."
-    static let saveUnreachable = "Aiden couldn’t reach your machine to save that choice."
+    static let saveConflict = "This changed on your computer. Showing what it has now."
+    static let saveUnreachable = "Aiden couldn’t reach your computer to save that choice."
 
     static func message(_ failure: AidenBotChatActivityFailure) -> String {
         switch failure {

@@ -106,27 +106,37 @@ export function remoteHostCapabilities(host: Pick<PeerHostView, "features" | "ca
   return capabilities;
 }
 
-/** Why a host refuses control right now, or null when it is online. */
-export function hostControlRefusal(status: Pick<HostChatStatus, "availability" | "blockedReason">): HostChatError | null {
+/**
+ * Why a host refuses control right now, or null when it is online. The
+ * message names the host by `hostName` when the caller has it, and says
+ * "that computer" otherwise, never this computer's own label.
+ */
+export function hostControlRefusal(
+  status: Pick<HostChatStatus, "availability" | "blockedReason">,
+  hostName?: string,
+): HostChatError | null {
+  const name = hostName?.trim() || undefined;
+  const subject = name ?? "That computer";
+  const object = name ?? "that computer";
   switch (status.availability) {
     case "online":
       return null;
     case "connecting":
-      return { code: "host_unavailable", message: "Still connecting to this Mac. Try again once it is online." };
+      return { code: "host_unavailable", message: `Still connecting to ${object}. Try again once it is online.` };
     case "offline":
-      return { code: "host_unavailable", message: "This Mac is offline. Nothing is sent until it is back online." };
+      return { code: "host_unavailable", message: `${subject} is offline. Nothing is sent until it is back online.` };
     case "blocked":
       return {
         code: "host_blocked",
         message:
           status.blockedReason === "protocol"
-            ? "This Mac runs an incompatible version of Aiden. Update both Macs to control it."
-            : "This Mac needs to be paired again before it can be controlled.",
+            ? `${subject} runs an incompatible version of Aiden. Update Aiden on both computers to control it.`
+            : `${subject} needs to be paired again before it can be controlled.`,
       };
   }
 }
 
-const OUTCOME_UNKNOWN_MESSAGE = "The connection to this Mac changed before it answered. It may or may not have applied this change.";
+const OUTCOME_UNKNOWN_MESSAGE = "The connection to that computer changed before it answered. It may or may not have applied this change.";
 
 function text(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
@@ -137,7 +147,7 @@ function record(value: unknown): Record<string, unknown> {
 }
 
 function failure(error: unknown): HostChatError {
-  return { code: "failed", message: error instanceof Error ? error.message : "The host request failed." };
+  return { code: "failed", message: error instanceof Error ? error.message : "The request to that computer failed." };
 }
 
 /**
@@ -150,20 +160,20 @@ export function mapHostForkLineage(value: unknown): ChatForkLineageV1 {
   let summary: Record<string, unknown> | undefined;
   if (lineage.summary !== undefined) {
     const { focus, ...rest } = record(lineage.summary);
-    if ("instructions" in rest) throw new Error("The host's fork lineage was malformed.");
+    if ("instructions" in rest) throw new Error("That computer's fork lineage was malformed.");
     summary = focus === undefined ? rest : { ...rest, instructions: focus };
   }
   const parsed = Number.isFinite(at)
     ? parseChatForkLineageV1({ ...lineage, at, ...(summary ? { summary } : {}) })
     : undefined;
-  if (!parsed) throw new Error("The host's fork lineage was malformed.");
+  if (!parsed) throw new Error("That computer's fork lineage was malformed.");
   return parsed;
 }
 
 export function mapHostChatLineage(value: unknown): HostChatLineage {
   const chat = record(value);
   const revision = text(chat.revision);
-  if (!revision) throw new Error("The host's chat had no revision.");
+  if (!revision) throw new Error("That computer's chat had no revision.");
   return { revision, ...(chat.forkedFrom === undefined ? {} : { forkedFrom: mapHostForkLineage(chat.forkedFrom) }) };
 }
 
@@ -171,35 +181,35 @@ export function mapHostForkedChat(value: unknown): HostForkedChat {
   const body = record(value);
   const chat = record(body.chat);
   const id = text(chat.id);
-  if (!id || typeof chat.title !== "string") throw new Error("The host's fork was incomplete.");
+  if (!id || typeof chat.title !== "string") throw new Error("That computer's fork was incomplete.");
   const forked: HostForkedChat = { id, title: chat.title, forkedFrom: mapHostForkLineage(chat.forkedFrom) };
   if (body.prefill === undefined) return forked;
   const prefill = record(body.prefill);
-  if (typeof prefill.text !== "string") throw new Error("The host's fork prefill was incomplete.");
+  if (typeof prefill.text !== "string") throw new Error("That computer's fork prefill was incomplete.");
   const attachments = Array.isArray(prefill.attachments) ? prefill.attachments : [];
   const attachmentIds = attachments.map((attachment) => text(record(attachment).id));
-  if (attachmentIds.some((attachmentId) => !attachmentId)) throw new Error("The host's fork prefill was incomplete.");
+  if (attachmentIds.some((attachmentId) => !attachmentId)) throw new Error("That computer's fork prefill was incomplete.");
   return { ...forked, prefill: { text: prefill.text, attachmentIds: attachmentIds as string[] } };
 }
 
 function pressureNumber(value: unknown): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw new Error("The host's context pressure was malformed.");
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw new Error("That computer's context pressure was malformed.");
   return value;
 }
 
 /** `GET /chats/{chatId}/context`, as main validated it: `null` when the host cannot project the chat. */
 export function mapHostContextPressure(value: unknown, chatId: string): RemoteContextPressure | null {
   const body = record(value);
-  if (body.chatId !== chatId) throw new Error("The host answered for another chat.");
+  if (body.chatId !== chatId) throw new Error("That computer answered for another chat.");
   if (body.pressure === null) return null;
   const pressure = record(body.pressure);
   if (
     typeof pressure.shouldCompact !== "boolean" ||
     (pressure.source !== "provider-anchored" && pressure.source !== "estimated")
   )
-    throw new Error("The host's context pressure was malformed.");
+    throw new Error("That computer's context pressure was malformed.");
   const contextWindow = pressureNumber(pressure.contextWindow);
-  if (contextWindow < 1) throw new Error("The host's context pressure was malformed.");
+  if (contextWindow < 1) throw new Error("That computer's context pressure was malformed.");
   return {
     contextTokens: pressureNumber(pressure.contextTokens),
     contextWindow,
@@ -349,7 +359,7 @@ export class RemoteHostAdapter implements HostChatAdapter {
       });
       if (!outcome.ok) return outcome;
       const window = mapRemoteMessagesWindow(outcome.value);
-      if (window.chatId !== chatId) return { ok: false, error: { code: "failed", message: "The host answered for another chat." } };
+      if (window.chatId !== chatId) return { ok: false, error: { code: "failed", message: "That computer answered for another chat." } };
       return { ok: true, value: window };
     });
   }
@@ -442,7 +452,7 @@ export class RemoteHostAdapter implements HostChatAdapter {
       };
     }
     const entry = remoteTriageEntry(answer);
-    if (!entry || answer.chatId !== chatId) throw new HostChatControlError({ code: "invalid_response", message: "The host's answer was incomplete." });
+    if (!entry || answer.chatId !== chatId) throw new HostChatControlError({ code: "invalid_response", message: "That computer's answer was incomplete." });
     return { ok: true, entry };
   }
 
@@ -460,7 +470,7 @@ export class RemoteHostAdapter implements HostChatAdapter {
   ): Promise<unknown> {
     if (this.disposed) throw new HostChatControlError(FENCED_ERROR);
     if (!this.granted.has(capability))
-      throw new HostChatControlError({ code: "unsupported", message: "This Mac does not allow that from here." });
+      throw new HostChatControlError({ code: "unsupported", message: "That computer does not allow that from here." });
     const refusal = hostControlRefusal(this.current);
     if (refusal) throw new HostChatControlError(refusal);
     const generation = this.current.generation;
@@ -498,7 +508,7 @@ export class RemoteHostAdapter implements HostChatAdapter {
     );
     const turnId = text(value.turnId);
     const streamId = text(value.streamId);
-    if (!turnId || !streamId) throw new HostChatControlError({ code: "invalid_response", message: "The host's answer was incomplete." });
+    if (!turnId || !streamId) throw new HostChatControlError({ code: "invalid_response", message: "That computer's answer was incomplete." });
     return { turnId, streamId };
   }
 
@@ -606,7 +616,7 @@ export class RemoteHostAdapter implements HostChatAdapter {
     const value = record(await this.mutate("attach", { operation: "uploadAttachment", resourceId: chatId, body: upload }));
     const id = text(value.id);
     if (!id || typeof value.size !== "number")
-      throw new HostChatControlError({ code: "invalid_response", message: "The host's answer was incomplete." });
+      throw new HostChatControlError({ code: "invalid_response", message: "That computer's answer was incomplete." });
     return { id, name: text(value.name) ?? upload.name, size: value.size };
   }
 
@@ -669,7 +679,7 @@ export class RemoteHostAdapter implements HostChatAdapter {
   /** Runs a read the host must grant first, dropping its answer when the connection moved on. */
   private read<T>(capability: HostChatCapability, operation: PeerOperation, map: (value: unknown) => T): Promise<HostChatResult<T>> {
     if (!this.granted.has(capability))
-      return Promise.resolve({ ok: false, error: { code: "unsupported", message: "This Mac does not allow that from here." } });
+      return Promise.resolve({ ok: false, error: { code: "unsupported", message: "That computer does not allow that from here." } });
     return this.fenced(async () => {
       const outcome = await this.transport.call(this.hostId, operation);
       if (!outcome.ok) return outcome;
@@ -755,7 +765,7 @@ export class RemoteHostAdapter implements HostChatAdapter {
     try {
       return map(value);
     } catch {
-      throw new HostChatControlError({ code: "invalid_response", message: "The host's answer was incomplete." });
+      throw new HostChatControlError({ code: "invalid_response", message: "That computer's answer was incomplete." });
     }
   }
 

@@ -41,8 +41,10 @@ import {
   type NewChatMachine,
   type RemoteProjectChoice,
 } from "../lib/hosts/new-chat-targets";
+import { useAppCapabilities } from "../lib/app-capabilities";
 import { peerHostsApi } from "../lib/ipc";
 import type { Attachment } from "../lib/types";
+import { localComputerNoun } from "../shared/computer-noun";
 import { hostResourceKey, type PeerHostFeedSnapshot, type PeerHostStatus, type PeerHostView } from "../shared/peer-host";
 
 /**
@@ -87,17 +89,17 @@ export interface RemoteNewChatPaneProps {
 }
 
 /** Why the composer cannot send yet, or null when it can. */
-function sendBlockedReason(props: RemoteNewChatPaneProps): string | null {
+function sendBlockedReason(props: RemoteNewChatPaneProps, platform: string): string | null {
   const { host, capabilities, snapshot, project, projects } = props;
   if (host.disabledReason) return host.disabledReason;
   if (!snapshot) return `Connecting to ${host.label}…`;
   if (snapshot.unresolved) return "Retry or dismiss the message above before sending another.";
-  // A project this host does not list, such as one carried over from another Mac, is no choice at all.
+  // A project this host does not list, such as one carried over from another computer, is no choice at all.
   const chosen = project === SCRATCH_PROJECT || projects.some((choice) => choice.id === project);
   if (!chosen) {
     return capabilities.has("createWorkspace") || projects.length > 0
       ? `Choose a project on ${host.label} first.`
-      : `${host.label} has no projects this Mac can use yet.`;
+      : `${host.label} has no projects this ${localComputerNoun(platform)} can use yet.`;
   }
   return null;
 }
@@ -105,7 +107,8 @@ function sendBlockedReason(props: RemoteNewChatPaneProps): string | null {
 /** The new remote chat's presentation; all state arrives in props. */
 export function RemoteNewChatPane(props: RemoteNewChatPaneProps) {
   const { host, machines, capabilities, snapshot, projects, project, models, modelsLoading, model } = props;
-  const blocked = sendBlockedReason(props);
+  const { platform } = useAppCapabilities();
+  const blocked = sendBlockedReason(props, platform);
   const unresolved = snapshot?.unresolved ?? null;
   const starting = Boolean(snapshot?.starting);
   const unavailable = host.availability !== "online";
@@ -137,7 +140,7 @@ export function RemoteNewChatPane(props: RemoteNewChatPaneProps) {
                     {unresolved.text}
                   </Text>
                   <Text variant="small" color="tertiary" as="p" className="mt-1">
-                    Retry checks with that Mac and never sends it twice.
+                    Retry checks with that computer and never sends it twice.
                   </Text>
                 </div>
                 <div className="flex shrink-0 items-center gap-1.5">
@@ -203,7 +206,7 @@ export function RemoteNewChatPane(props: RemoteNewChatPaneProps) {
       <div className="flex min-h-full items-center justify-center">
         <EmptyState
           title={`What would you like to work on with ${host.label}?`}
-          description="This chat, its files and its tools run on that Mac."
+          description={`This chat, its files and its tools run on ${host.label}.`}
         />
       </div>
     </ScrollArea>
@@ -246,6 +249,7 @@ export function RemoteFolderList({
     ? entries.map((entry) => hostFolderPlaces.entry(place, entry))
     : (roots ?? []).map((root) => hostFolderPlaces.root(root));
   const failure = location ? error : rootsError;
+  const { platform } = useAppCapabilities();
   return (
     <div className="flex min-h-64 flex-col gap-2" aria-busy={loading || busy || undefined}>
       <nav aria-label={`Folders on ${hostLabel}`} className="flex min-w-0 flex-wrap items-center gap-0.5 text-small text-secondary">
@@ -278,7 +282,7 @@ export function RemoteFolderList({
           </Text>
         ) : rows.length === 0 ? (
           <Text as="p" variant="small" color="secondary" className="p-4">
-            {location ? "No folders inside this one." : `${hostLabel} hasn't shared any folders with this Mac.`}
+            {location ? "No folders inside this one." : `${hostLabel} hasn't shared any folders with this ${localComputerNoun(platform)}.`}
           </Text>
         ) : (
           <ul aria-label={location ? `Folders in ${location.label}` : `Shared folders on ${hostLabel}`}>
@@ -380,7 +384,7 @@ function RemoteFolderBrowserDialog({
       open={open}
       onOpenChange={onOpenChange}
       title={`Choose a folder on ${hostLabel}`}
-      description="The new project uses this folder on that Mac."
+      description="The new project uses this folder on that computer."
       confirmLabel={busy ? "Creating project…" : "Use this folder"}
       confirmDisabled={!place}
       busy={busy}
@@ -444,6 +448,7 @@ export interface RemoteNewChatRouteProps {
 
 /** The new remote chat route, fed by the host queries the sidebar keeps current. */
 export function RemoteNewChatRoute({ hostId, workspaceId, onOpenChat, onSelectMachine, onManage }: RemoteNewChatRouteProps) {
+  const { platform } = useAppCapabilities();
   const list = useQuery<PeerHostView[]>({ queryKey: hostQueryKeys.list(), queryFn: skipToken });
   const statuses = useQuery<PeerHostStatus[]>({ queryKey: hostQueryKeys.statuses(), queryFn: skipToken });
   const feed = useQuery<PeerHostFeedSnapshot | null>({ queryKey: hostQueryKeys.feed(hostId), queryFn: skipToken });
@@ -495,7 +500,7 @@ export function RemoteNewChatRoute({ hostId, workspaceId, onOpenChat, onSelectMa
     try {
       await peerHostsApi.reconnect(id);
     } catch (error) {
-      toast.error(errorText(error, "Aiden could not reconnect to that Mac."));
+      toast.error(errorText(error, "Aiden could not reconnect to that computer."));
     }
   }, []);
 
@@ -508,13 +513,13 @@ export function RemoteNewChatRoute({ hostId, workspaceId, onOpenChat, onSelectMa
       </div>
     );
   }
-  const machines = newChatMachines(list.data ?? [], statuses.data ?? []);
+  const machines = newChatMachines(list.data ?? [], statuses.data ?? [], platform);
   const listed = machines.find((entry) => entry.id === hostId);
   if (!view || !listed) {
     return (
       <div className="flex h-full min-h-0 items-center justify-center">
         <EmptyState
-          title="This Mac is not connected"
+          title="That computer isn't connected"
           description="Pair it again or turn it back on in Settings → Connections → Control other devices to start chats on it."
         />
       </div>

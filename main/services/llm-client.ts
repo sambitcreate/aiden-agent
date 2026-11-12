@@ -1,6 +1,8 @@
 import { createWorkspaceFilesTouchedNotifier } from "./workspace-files-touched.js";
 import { aidenAppNavigation } from "./aiden-app-navigation.js";
 import type { AgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
+import { botFullComputerLabel } from "../../renderer/shared/bot-capabilities.js";
+import { thisComputerLabel } from "../../renderer/shared/computer-noun.js";
 import { createAidenAppTools } from "./aiden-app-tools.js";
 import { appControlsService } from "./app-controls-main.js";
 import {
@@ -2034,7 +2036,7 @@ async function prepareGeneration(
     if (authority.files.fullMac) {
       fileLocations.push({
         id: authority.files.fullMac.sourceId,
-        label: "Full Mac",
+        label: botFullComputerLabel(process.platform),
         root: "/",
       });
     }
@@ -2381,7 +2383,7 @@ async function prepareGeneration(
       service: appControlsService, liveState: browserOwner?.kind !== "remote",
       runtime: { interaction: "attended-workspace", workspacePermission: permission, providerId: params.providerId, modelId: params.model, availableTools: tools.map((tool) => tool.name) },
       open: browserOwner?.kind !== "remote" ? (destination, toolSignal) => aidenAppNavigation.open(destination, browserOwner, toolSignal) : undefined,
-      context: { actor: `agent:${params.chatId}`, target: browserOwner?.kind === "remote" ? "Paired host" : "This desktop", workspaceId: workspace?.id,
+      context: { actor: `agent:${params.chatId}`, target: browserOwner?.kind === "remote" ? "Paired computer" : thisComputerLabel(process.platform), workspaceId: workspace?.id,
         humanGesture: false, isCurrent: () => !signal.aborted && !browserOwner?.isDestroyed() },
       present: (panel) => {
         if (appPanels.length >= 4) throw new Error("This response already has four settings panels.");
@@ -4804,7 +4806,7 @@ export const llmClient = {
               const providerId = (context.args as { provider?: unknown }).provider;
               const provider = typeof providerId === "string" ? await configStore.getProvider(providerId) : undefined;
               approvalDetails = classifierApprovalFor(context.args, provider?.label ?? (typeof providerId === "string" ? providerRegistry.builtinProvider(providerId)?.label : undefined));
-              summary += ". Review the complete state and questions on the owning desktop before allowing. Full classification inputs are available only in the desktop approval.";
+              summary += ". Review the complete state and questions in Aiden Agent on your computer before allowing. Full classification inputs are available only there.";
             } catch (error) {
               deniedToolCalls.add(context.toolCall.id);
               timeline.toolFinished(context.toolCall.id, "blocked");

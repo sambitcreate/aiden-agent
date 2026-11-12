@@ -25,9 +25,11 @@ test("every Bot starts with the plan's rule table", () => {
   ];
   const rules = defaultBotRules();
   assert.deepEqual(
-    rules.map((rule) => [botRuleLabel(rule), rule.behavior, rule.locked]),
+    rules.map((rule) => [botRuleLabel(rule, "darwin"), rule.behavior, rule.locked]),
     expected,
   );
+  // Bots also run on Linux, where the person's computer isn't a Mac.
+  assert.equal(botRuleLabel({ actionClass: "install" }, "linux"), "Install software on your computer");
   // One built-in rule per class, and every class has one.
   assert.deepEqual(rules.map((rule) => rule.actionClass).sort(), [...BOT_ACTION_CLASSES].sort());
   assert.equal(new Set(rules.map((rule) => rule.id)).size, rules.length);

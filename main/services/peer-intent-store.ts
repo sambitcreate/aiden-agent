@@ -95,7 +95,7 @@ export class PeerIntentStore {
     return this.run(async () => {
       const rows = await this.load();
       const row = rows.find(row => row.intent.hostId === hostId && row.intent.idempotencyKey === operation.idempotencyKey);
-      if (!row) throw new Error("This saved request is no longer available. Check delivery on the host.");
+      if (!row) throw new Error("This saved request is no longer available. Check delivery on that computer.");
       if (!isDeepStrictEqual(savedOperation(row.intent), operation)) throw new Error("The saved request cannot be changed during recovery.");
       if (!chatIntentRetryAllowed(row.intent.createdAt)) throw new Error("The saved request retry window has ended.");
       return row.identity;

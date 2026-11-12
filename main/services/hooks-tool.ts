@@ -21,6 +21,7 @@
  */
 
 import * as path from "node:path";
+import { localComputerNoun } from "../../renderer/shared/computer-noun.js";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
 import { fenceAsData } from "../../renderer/shared/agent-notices.js";
@@ -129,7 +130,7 @@ interface HooksToolParams {
 
 const DESCRIPTION = [
   "Read and propose Aiden hooks: shell commands Aiden runs at lifecycle events of this chat (before or after a tool, when a prompt is sent, at session start, when a turn stops).",
-  'Actions: "list" shows this chat\'s hooks and pending proposals; "propose" asks the owner to add, change (hookId) or delete (change "delete", hookId) a workspace or chat hook, and waits for their answer on the Mac;',
+  `Actions: "list" shows this chat's hooks and pending proposals; "propose" asks the owner to add, change (hookId) or delete (change "delete", hookId) a workspace or chat hook, and waits for their answer on their ${localComputerNoun(process.platform)};`,
   '"disable" turns off a workspace or chat hook an agent proposed (hooks the owner added are turned off only in Settings → Hooks, and only the owner can turn one back on); "test" shows the last run, since only the owner can run a test from Settings → Hooks; "logs" shows recent runs.',
   `Agent hooks stop after at most ${MAX_AGENT_HOOK_TIMEOUT_SECONDS} seconds. Global hooks and a repo's .aiden/hooks.json are managed in Settings → Hooks only. Load the aiden-hooks skill for the hook protocol.`,
 ].join(" ");
@@ -322,7 +323,7 @@ export function createHooksTool(deps: HooksToolDependencies): PiRuntimeTool {
     const listed = await service.listHooks(scopes);
     const proposals = service.listProposals().filter((proposal) => ownScopeKeys.has(hookScopeKey(proposal.definition.scope)));
     const notes: string[] = [];
-    if (listed.disabledByEnvironment) notes.push("Hooks are turned off on this Mac (AIDEN_HOOKS=0), so none run.");
+    if (listed.disabledByEnvironment) notes.push(`Hooks are turned off on this ${localComputerNoun(process.platform)} (AIDEN_HOOKS=0), so none run.`);
     else if (listed.paused) notes.push("The owner paused all hooks in Settings → Hooks, so none run until they resume them.");
     if (!deps.workspaceRoot) notes.push("This chat has no folder, so only chat hooks can be proposed.");
     for (const file of listed.workspaceFiles) {
@@ -461,7 +462,7 @@ export function createHooksTool(deps: HooksToolDependencies): PiRuntimeTool {
     if (proposal.action === "delete") return text(`The owner approved. Hook ${proposal.hookId} is deleted and won't run again.`);
     const state = await service.listHooks(scopes);
     const pausedNote = state.disabledByEnvironment
-      ? " Hooks are turned off on this Mac (AIDEN_HOOKS=0), so it won't run until they're turned back on."
+      ? ` Hooks are turned off on this ${localComputerNoun(process.platform)} (AIDEN_HOOKS=0), so it won't run until they're turned back on.`
       : state.paused
         ? " All hooks are paused in Settings → Hooks, so it won't run until the owner resumes them."
         : "";

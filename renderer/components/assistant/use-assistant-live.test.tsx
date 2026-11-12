@@ -744,6 +744,7 @@ test("enabled experimental Live stays visible but blocked for unavailable model 
 
   const deniedFixture = await mountHook({
     getMicrophoneStatus: async () => "denied",
+    platform: "darwin",
   });
   assert.equal(deniedFixture.controller().microphonePermission, "denied");
   assert.equal(deniedFixture.controller().microphonePermissionReady, false);
@@ -751,6 +752,15 @@ test("enabled experimental Live stays visible but blocked for unavailable model 
   await deniedFixture.controller().start();
   assert.equal(deniedFixture.startCalls(), 0);
   await deniedFixture.unmount();
+
+  // Off macOS there is no System Settings to point at.
+  const linuxDeniedFixture = await mountHook({
+    getMicrophoneStatus: async () => "denied",
+    platform: "linux",
+  });
+  assert.match(linuxDeniedFixture.controller().startBlockedReason ?? "", /your system settings/u);
+  assert.doesNotMatch(linuxDeniedFixture.controller().startBlockedReason ?? "", /System Settings/u);
+  await linuxDeniedFixture.unmount();
 });
 
 test("a busy setup close transition aborts pending microphone permission and stops main", async () => {

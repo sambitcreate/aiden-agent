@@ -127,7 +127,7 @@ test("sending waits for a project, a reachable host and a connected control", ()
   assert.match(needsProject.text, /Choose a project on Studio first\./u);
 
   const noProjects = renderPane({ project: "", projects: [], capabilities: new Set<HostChatCapability>(["send", "createChat"]) });
-  assert.match(noProjects.text, /Studio has no projects this Mac can use yet\./u);
+  assert.match(noProjects.text, /Studio has no projects this computer can use yet\./u);
 
   const foreign = renderPane({ project: "w-from-another-mac" });
   assert.match(foreign.text, /Choose a project on Studio first\./u, "a project this host does not list cannot be sent to");
@@ -263,7 +263,7 @@ test("the folder browser lists a host's shared roots, then a folder's subfolders
       />,
     ),
   );
-  assert.match(empty.text, /Studio hasn't shared any folders with this Mac\./u);
+  assert.match(empty.text, /Studio hasn't shared any folders with this computer\./u);
 });
 
 test("Bots on paired Macs are grouped by Mac, and a Mac that cannot open them says why", () => {

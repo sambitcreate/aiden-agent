@@ -75,7 +75,7 @@ export class AidenRemoteProviderService {
         // Config publication precedes key installation. A matching config alone
         // does not prove the original encrypted transaction has completed.
         if (existing.needsKey && !await this.dependencies.recoverCredential(existing)) {
-          throw new AidenRemoteServiceError("internal_error", "Provider credentials are not ready. Try saving again after the Mac's credential storage is available.", 503);
+          throw new AidenRemoteServiceError("internal_error", "Provider credentials are not ready. Try saving again after your computer's credential storage is available.", 503);
         }
         if (!isCurrent()) throw new AidenRemoteServiceError("credential_revoked", "This device is no longer authorized.", 403);
         const recovered = await this.dependencies.get(id);

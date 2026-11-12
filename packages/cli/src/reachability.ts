@@ -399,6 +399,6 @@ export async function remoteCheckCommand(agentDir: string, dependencies: RemoteC
   const tailscale = tailscaleChecklist(facts, host.platform)
     .map((item) => server?.connectionMode === "lan" && item.state === "fail" ? { ...item, state: "off" as const } : item);
   const aiden = serverChecklist(server, facts, cloud, answered);
-  (dependencies.out ?? process.stdout).write(`${formatChecklist("Tailscale on this machine", tailscale)}\n\n${formatChecklist("Aiden server", aiden)}\n`);
+  (dependencies.out ?? process.stdout).write(`${formatChecklist("Tailscale on this computer", tailscale)}\n\n${formatChecklist("Aiden server", aiden)}\n`);
   return ![...tailscale, ...aiden].some((item) => item.state === "fail");
 }

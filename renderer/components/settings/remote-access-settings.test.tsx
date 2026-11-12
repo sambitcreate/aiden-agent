@@ -198,12 +198,12 @@ async function openPairingDialog() {
   return screen.findByRole("dialog", { name: "Pair Aiden On The Go" });
 }
 
-test("the security hint says what a phone can reach and that keys stay on the desktop", async () => {
+test("the security hint says what a phone can reach and that keys stay on this computer", async () => {
   remoteServer(snapshotWith());
   mount();
   fireEvent.click(await screen.findByRole("button", { name: "About Remote Access security" }));
   const hint = (await screen.findByRole("tooltip")).textContent ?? "";
-  assert.match(hint, /capabilities and folders approved on this desktop/u);
+  assert.match(hint, /capabilities and folders approved on this Mac/u);
   assert.match(hint, /Provider keys never leave Aiden\./u);
 });
 
@@ -213,7 +213,7 @@ test("pairing shows the address and setup code, copies the code, and never rende
 
   const dialog = await openPairingDialog();
   assert.deepEqual(server.calls("remote:beginPairing").map((call) => call.args), [["lan"]]);
-  assert.match(dialog.textContent ?? "", /Nearby desktop address/u);
+  assert.match(dialog.textContent ?? "", /Nearby computer address/u);
   assert.match(dialog.textContent ?? "", /192\.168\.1\.20/u);
   assert.match(dialog.textContent ?? "", new RegExp(MANUAL_CODE, "u"));
   // The certificate check is derived from the server fingerprint, not the secret.
@@ -223,13 +223,13 @@ test("pairing shows the address and setup code, copies the code, and never rende
 
   fireEvent.click(within(dialog).getByRole("button", { name: "Copy setup code" }));
   await waitFor(() => assert.deepEqual(clipboard, [MANUAL_CODE]));
-  fireEvent.click(within(dialog).getByRole("button", { name: "Copy desktop address" }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Copy computer address" }));
   await waitFor(() => assert.deepEqual(clipboard, [MANUAL_CODE, "https://192.168.1.20:48100/api/aiden/v1"]));
 
   assert.equal(renderedSurface().includes(PAIRING_SECRET), false, "the pairing secret leaked into the DOM");
 });
 
-test("a Tailscale-only desktop pairs over its private address", async () => {
+test("a Tailscale-only computer pairs over its private address", async () => {
   const server = remoteServer(snapshotWith({
     status: status({ connectionMode: "tailscale", tailscaleConnected: true, tailscaleRouteState: "owned" }),
   }));
@@ -301,12 +301,12 @@ test("unmounting Settings closes an open pairing window", async () => {
 
 test("an unreachable TLS endpoint is reported without opening a pairing window", async () => {
   remoteServer(snapshotWith(), {
-    "remote:beginPairing": () => ({ ok: false, code: "unreachable", message: "Your phone couldn't reach this desktop." }),
+    "remote:beginPairing": () => ({ ok: false, code: "unreachable", message: "Your phone couldn't reach this computer." }),
   });
   mount();
 
   fireEvent.click(await screen.findByRole("button", { name: "Connect a device" }));
-  assert.ok(await screen.findByText("Your phone couldn't reach this desktop."));
+  assert.ok(await screen.findByText("Your phone couldn't reach this computer."));
   assert.ok(absent(screen.queryByRole("dialog", { name: "Pair Aiden On The Go" })));
 });
 
@@ -453,7 +453,7 @@ test("a live route owned by another profile is disclosed with no takeover action
   }));
   mount();
 
-  assert.ok(await screen.findByText(/Another running Aiden profile owns this desktop’s mobile route/u));
+  assert.ok(await screen.findByText(/Another running Aiden profile owns this Mac’s mobile route/u));
   assert.ok(absent(screen.queryByRole("button", { name: "Review takeover" })));
 });
 
@@ -483,7 +483,7 @@ test("a saved endpoint collision is never moved silently", async () => {
   assert.ok(screen.getByText(/Aiden will never move a saved mobile connection silently/u));
   fireEvent.click(screen.getByRole("button", { name: "Use another port" }));
   const review = await screen.findByRole("alertdialog", { name: "Move this Remote Access endpoint?" });
-  assert.match(review.textContent ?? "", /Previously paired devices may need to discover this desktop again/u);
+  assert.match(review.textContent ?? "", /Previously paired devices may need to discover this Mac again/u);
   assert.equal(server.calls("remote:moveToAvailablePort").length, 0);
 
   fireEvent.click(within(review).getByRole("button", { name: "Use Another Port" }));
@@ -492,7 +492,7 @@ test("a saved endpoint collision is never moved silently", async () => {
   assert.ok(screen.getByText(/Private API port 48101/u));
 });
 
-test("the enable switch and desktop name write through to main", async () => {
+test("the enable switch and computer name write through to main", async () => {
   const server = remoteServer(snapshotWith());
   mount();
 
@@ -501,7 +501,7 @@ test("the enable switch and desktop name write through to main", async () => {
   await waitFor(() => assert.deepEqual(server.calls("remote:setEnabled").map((call) => call.args), [[false]]));
 
   assert.ok(screen.getByText(/Identity remains 4a1b2c\./u));
-  const name = screen.getByRole("textbox", { name: "Desktop display name" }) as HTMLInputElement;
+  const name = screen.getByRole("textbox", { name: "Computer display name" }) as HTMLInputElement;
   assert.equal(name.maxLength, 80);
   const save = screen.getByRole("button", { name: "Save" }) as HTMLButtonElement;
   assert.equal(save.disabled, true, "an unchanged name has nothing to save");

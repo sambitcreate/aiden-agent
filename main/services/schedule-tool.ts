@@ -1,4 +1,5 @@
 import { Type } from "@earendil-works/pi-ai";
+import { localComputerNoun } from "../../renderer/shared/computer-noun.js";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { mcpServerOffersTools } from "../../renderer/shared/mcp-exposure.js";
 import {
@@ -1837,7 +1838,7 @@ const BOT_ROUTINE_TRIGGER = Type.Object(
   {
     kind: Type.String({
       description:
-        '"file_change" (a file in your folder changes), "webhook" (the routine gets its own link on this Mac\'s network) ' +
+        `"file_change" (a file in your folder changes), "webhook" (the routine gets its own link on this ${localComputerNoun(process.platform)}'s network) ` +
         'or "watch" (Aiden checks a page or a script on an interval and wakes you only when its output changes).',
     }),
     folder: Type.Optional(Type.String({ description: "file_change: a folder relative to your folder, for example \"inbox\"." })),

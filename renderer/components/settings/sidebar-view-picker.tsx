@@ -4,6 +4,7 @@ import { Field, FieldSet, Switch } from "../ui";
 import type { SidebarView } from "../../lib/sidebar-organization";
 import { handleRadioNavigation } from "./radio-navigation";
 
+import { localComputerNoun } from "../../shared/computer-noun";
 /** The Organize menu's three views, in its order, named for what each lists. */
 const SIDEBAR_VIEW_OPTIONS: ReadonlyArray<{ value: SidebarView; label: string; beta?: boolean }> = [
   { value: "projects", label: "By workspace" },
@@ -92,7 +93,7 @@ export function InboxDockBadgeSetting() {
     <FieldSet className="appearance-sidebar-badge mt-3 mb-0">
       <Field
         label={label}
-        description="Counts what’s in Needs you: chats and Bots waiting on you, on this computer and on paired ones that are online."
+        description={`Counts what’s in Needs you: chats and Bots waiting on you, on this ${localComputerNoun(platform)} and on paired computers that are online.`}
       >
         <Switch checked={enabled} onCheckedChange={setEnabled} aria-label={label} />
       </Field>

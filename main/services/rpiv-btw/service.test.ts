@@ -199,7 +199,7 @@ test("BTW refuses feature-owned chats before provider dispatch", async () => {
   const app = fixture({ chat: { owner: { kind: "design-project", projectId: "project-1" } } });
   await assert.rejects(
     app.service.start("chat-a", "Question", app.owner),
-    /only in ordinary desktop chats/u,
+    /only in ordinary chats in Aiden Agent/u,
   );
   assert.deepEqual(app.events, []);
   assert.deepEqual(app.usage, []);

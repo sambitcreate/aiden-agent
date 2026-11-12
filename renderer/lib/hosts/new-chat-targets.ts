@@ -2,6 +2,7 @@ import type { PeerFeedRow, PeerHostFeedSnapshot, PeerHostStatus, PeerHostView } 
 import { sidebarHosts, type SidebarHost } from "../sidebar-remote-groups";
 import type { HostChatCapability } from "./host-chat-adapter";
 import { hostControlRefusal, remoteHostCapabilities } from "./remote-host-adapter";
+import { localComputerNoun } from "../../shared/computer-noun";
 
 /**
  * Where new work can start: this Mac or a paired host, the projects each host
@@ -15,15 +16,20 @@ export interface NewChatMachine extends SidebarHost {
   disabledReason?: string;
 }
 
-/** Why `host` cannot do `capability` for this Mac now, naming the host rather than "this Mac". */
+/**
+ * Why `host` cannot do `capability` for this computer now. The host is named
+ * by its label, and this computer by its platform noun ("this Mac" on macOS).
+ */
 function unavailableReason(
   host: SidebarHost,
   view: PeerHostView | undefined,
   capability: HostChatCapability,
   action: string,
+  platform: string | null | undefined,
 ): string | undefined {
-  if (!view || !remoteHostCapabilities(view).has(capability)) return `${host.label} hasn't allowed this Mac to ${action}.`;
-  return hostControlRefusal(host)?.message.replace(/this Mac/i, host.label);
+  if (!view || !remoteHostCapabilities(view).has(capability))
+    return `${host.label} hasn't allowed this ${localComputerNoun(platform)} to ${action}.`;
+  return hostControlRefusal(host, host.label)?.message;
 }
 
 /**
@@ -33,10 +39,11 @@ function unavailableReason(
 export function newChatMachines(
   views: readonly PeerHostView[],
   statuses: readonly PeerHostStatus[],
+  platform: string | null | undefined,
 ): NewChatMachine[] {
   const byId = new Map(views.map((view) => [view.id, view]));
   return sidebarHosts(views, statuses).map((host) => {
-    const disabledReason = unavailableReason(host, byId.get(host.id), "createChat", "start chats");
+    const disabledReason = unavailableReason(host, byId.get(host.id), "createChat", "start chats", platform);
     return disabledReason ? { ...host, disabledReason } : host;
   });
 }
@@ -140,6 +147,7 @@ export function remoteBotGroups(
   views: readonly PeerHostView[],
   statuses: readonly PeerHostStatus[],
   feeds: ReadonlyMap<string, PeerHostFeedSnapshot | null | undefined>,
+  platform: string | null | undefined,
 ): RemoteBotGroup[] {
   const byId = new Map(views.map((view) => [view.id, view]));
   const groups: RemoteBotGroup[] = [];
@@ -158,7 +166,7 @@ export function remoteBotGroups(
         };
       });
     if (bots.length === 0) continue;
-    const disabledReason = unavailableReason(host, byId.get(host.id), "botChats", "start Bot chats");
+    const disabledReason = unavailableReason(host, byId.get(host.id), "botChats", "start Bot chats", platform);
     groups.push({ host: disabledReason ? { ...host, disabledReason } : host, bots });
   }
   return groups;

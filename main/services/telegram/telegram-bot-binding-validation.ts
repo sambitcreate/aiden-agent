@@ -1,9 +1,10 @@
 import type { TelegramBotBinding } from "./telegram-bot-binding-store.js";
+import { localComputerNoun } from "../../../renderer/shared/computer-noun.js";
 import type { TelegramBotBindingSnapshot } from "./telegram-queue.js";
 
 export const TELEGRAM_BOT_BINDING_VALIDATION_COPY = Object.freeze({
   temporarilyUnavailable:
-    "This bot is temporarily unavailable. Open Aiden on the Mac to repair it.",
+    `This bot is temporarily unavailable. Open Aiden on your ${localComputerNoun(process.platform)} to repair it.`,
   unavailableOrArchived: "This bot is unavailable or archived.",
   bindingChanged: "This Telegram bot binding has changed or was disabled.",
   conversationMismatch:

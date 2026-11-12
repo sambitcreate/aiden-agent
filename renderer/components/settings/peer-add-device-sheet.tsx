@@ -179,7 +179,7 @@ function SetupCodeForm({
       </Text>
       {device ? null : (
         <label htmlFor={addressId} className="flex flex-col gap-1.5">
-          <Text variant="small-strong">Desktop address</Text>
+          <Text variant="small-strong">Computer address</Text>
           <Input
             id={addressId}
             value={address}

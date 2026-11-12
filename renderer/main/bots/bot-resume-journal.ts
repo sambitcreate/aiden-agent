@@ -35,7 +35,7 @@ export function recordBotResume(input: Omit<BotResumeAttempt, "version" | "creat
   assertBotCanSavePendingChanges(input.botId);
   const rows = pendingBotResumes(input.botId), previous = rows.find((row) => row.requestId === input.requestId);
   if (retry ? !previous || previous.submissionId !== input.submissionId || JSON.stringify(previous.acknowledgement) !== JSON.stringify(input.acknowledgement) : rows.length > 0) throw new Error("Confirm the saved Resume request before starting another.");
-  if (previous && (Date.now() < previous.createdAt || Date.now() - previous.createdAt >= 23 * 60 * 60 * 1000)) throw new Error("The saved Resume request is too old to retry safely. Its outcome remains unknown; inspect the owning host.");
+  if (previous && (Date.now() < previous.createdAt || Date.now() - previous.createdAt >= 23 * 60 * 60 * 1000)) throw new Error("The saved Resume request is too old to retry safely. Its outcome remains unknown; inspect the computer that runs this Bot.");
   const row = parse(JSON.stringify({ ...input, version: 1, createdAt: previous?.createdAt ?? Date.now(), attempts: (previous?.attempts ?? 0) + 1 }));
   const text = JSON.stringify(row); localStorage.setItem(key(row), text);
   if (localStorage.getItem(key(row)) !== text) throw new Error("This device couldn’t retain the Resume request safely.");

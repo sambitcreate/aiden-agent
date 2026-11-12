@@ -313,7 +313,7 @@ export class AidenRemoteWorkspaceService {
         async () => {
           let workspace: Workspace;
           if (parsed.mode === "clone") {
-            if (!this.options.clone) throw new AidenRemoteServiceError("not_found", "Project cloning is unavailable on this host.", 404);
+            if (!this.options.clone) throw new AidenRemoteServiceError("not_found", "Project cloning is not available on this computer.", 404);
             const selection = await this.options.browser.consumeSelection(deviceId, parsed.selection);
             const current = () => this.options.browser.revalidateConsumedSelection(deviceId, selection);
             await current();
@@ -360,11 +360,11 @@ export class AidenRemoteWorkspaceService {
                   },
                 },
               });
-              if (!repository.ok) throw new AidenRemoteServiceError("invalid_request", repository.code === "cancelled" ? "Project clone was stopped. Check the host project list before trying again." : repository.code === "register-failed" ? "The repository was cloned, but it could not be registered. Check the destination computer before retrying." : repository.reason, 400);
+              if (!repository.ok) throw new AidenRemoteServiceError("invalid_request", repository.code === "cancelled" ? "Project clone was stopped. Check the computer's project list before trying again." : repository.code === "register-failed" ? "The repository was cloned, but it could not be registered. Check the destination computer before retrying." : repository.reason, 400);
               workspace = repository.workspace;
             } catch (error) {
               if (error instanceof AidenRemoteServiceError) throw error;
-              throw new AidenRemoteServiceError("invalid_request", "The project could not be cloned with the selected environment files. Nothing existing was overwritten. Check the host project list before retrying.", 400);
+              throw new AidenRemoteServiceError("invalid_request", "The project could not be cloned with the selected environment files. Nothing existing was overwritten. Check the computer's project list before retrying.", 400);
             } finally {
               clearTimeout(deadline);
               signal?.removeEventListener("abort", cancel);

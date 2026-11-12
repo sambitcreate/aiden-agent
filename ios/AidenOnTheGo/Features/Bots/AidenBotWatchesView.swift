@@ -20,7 +20,7 @@ struct AidenBotWatchesView: View {
                 AidenBotWatchListView(model: model, onModel: coordinator.botServer(on: machine)?.supportsBotRoutineModels == true ? { modelRoutineID = $0 } : nil)
             } else {
                 ContentUnavailableView("Watches unavailable", systemImage: "bell.badge",
-                    description: Text("Connect to a paired host that supports Bot watches."))
+                    description: Text("Connect to a paired computer that supports Bot watches."))
             }
         }
         .sheet(isPresented: Binding(get: { modelRoutineID != nil }, set: { if !$0 { modelRoutineID = nil } })) {
@@ -68,7 +68,7 @@ struct AidenBotWatchListView: View {
     var body: some View {
         List {
             Section {
-                Text("Your paired host checks these sources while Aiden is open and the host is awake. Checks continue when this phone disconnects.")
+                Text("Your paired computer checks these sources while Aiden is open and the computer is awake. Checks continue when this phone disconnects.")
                     .font(.subheadline)
                     .foregroundStyle(palette.secondary)
                     .listRowBackground(Color.clear)
@@ -81,15 +81,15 @@ struct AidenBotWatchListView: View {
             }
             if model.uncertain {
                 Section("Waiting for confirmation") {
-                    Text("A previous request may have reached your host. Other changes wait until its outcome is known.")
-                    Button("Check host") { Task { await model.load() } }
+                    Text("A previous request may have reached your computer. Other changes wait until its outcome is known.")
+                    Button("Check computer") { Task { await model.load() } }
                     Button("Retry same request") { Task { await model.retryPending() } }
                         .disabled(!model.canWrite || model.isBusy)
                 }
             }
             if let list = model.list {
                 if !list.supported {
-                    Section { Text(list.unavailableReason ?? "Watches aren’t available on this host.") }
+                    Section { Text(list.unavailableReason ?? "Watches aren’t available on this computer.") }
                 }
                 if !list.watches.isEmpty {
                     Section {
@@ -166,13 +166,13 @@ struct AidenBotWatchListView: View {
                 if let deleting { Task { await model.remove(deleting) } }
                 deleting = nil
             }
-        } message: { Text("This stops future checks. Work already admitted on your host may still finish.") }
+        } message: { Text("This stops future checks. Work already admitted on your computer may still finish.") }
         .confirmationDialog("Run this watch now?", isPresented: Binding(get: { running != nil }, set: { if !$0 { running = nil } }), titleVisibility: .visible) {
             Button("Run now") {
                 if let running { Task { await model.run(running) } }
                 running = nil
             }
-        } message: { Text("This asks your paired host to run the Bot under its current access and limits.") }
+        } message: { Text("This asks your paired computer to run the Bot under its current access and limits.") }
         .alert("Watches", isPresented: Binding(get: { model.message != nil && !showingEditor }, set: { if !$0 { model.message = nil } })) {
             Button("OK", role: .cancel) { model.message = nil }
         } message: { Text(model.message ?? "") }

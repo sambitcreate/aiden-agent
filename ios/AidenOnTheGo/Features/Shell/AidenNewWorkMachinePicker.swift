@@ -54,15 +54,15 @@ struct AidenNewWorkMachine: Identifiable, Equatable {
         func message(machine name: String, canPickAnother: Bool) -> String {
             switch (self, canPickAnother) {
             case (.offline, true):
-                String(localized: "\(name) is offline. Pick another machine, or try again once it’s back.")
+                String(localized: "\(name) is offline. Pick another computer, or try again once it’s back.")
             case (.offline, false):
                 String(localized: "\(name) is offline. Try again once it’s back.")
             case (.cannotStartChats, true):
-                String(localized: "\(name) can’t start chats from this phone. Pick another machine.")
+                String(localized: "\(name) can’t start chats from this phone. Pick another computer.")
             case (.cannotStartChats, false):
                 String(localized: "\(name) can’t start chats from this phone.")
             case (.cannotCreateBots, true):
-                String(localized: "\(name) can’t create Bots from this phone. Pick another machine.")
+                String(localized: "\(name) can’t create Bots from this phone. Pick another computer.")
             case (.cannotCreateBots, false):
                 String(localized: "\(name) can’t create Bots from this phone.")
             }
@@ -70,7 +70,7 @@ struct AidenNewWorkMachine: Identifiable, Equatable {
     }
 
     static var noLongerPaired: String {
-        String(localized: "This machine is no longer paired. Pair it again to continue.")
+        String(localized: "This computer is no longer paired. Pair it again to continue.")
     }
 
     let id: String
@@ -340,9 +340,9 @@ struct AidenNewWorkMachinePicker: View {
                     .frame(minHeight: 44)
                     .contentShape(Rectangle())
                 }
-                .accessibilityLabel("Machine")
+                .accessibilityLabel("Computer")
                 .accessibilityValue(accessibilityValue)
-                .accessibilityHint("Chooses which machine this goes to.")
+                .accessibilityHint("Chooses which computer this goes to.")
                 refusalLine
             }
         } else {
@@ -387,7 +387,7 @@ struct AidenDefaultMachineRow: View {
     var body: some View {
         let machines = AidenNewWorkPicker.defaultMachineChoices(coordinator: coordinator)
         if machines.count > 1 {
-            Picker("Default machine", selection: selection) {
+            Picker("Default computer", selection: selection) {
                 ForEach(machines) { machine in
                     // At the accessibility sizes the symbol would take half the
                     // row and cut the name short, so the name stands alone.
@@ -398,7 +398,7 @@ struct AidenDefaultMachineRow: View {
                     }
                 }
             }
-            .accessibilityHint("New work starts here. You can pick another machine each time.")
+            .accessibilityHint("New work starts here. You can pick another computer each time.")
         }
     }
 }

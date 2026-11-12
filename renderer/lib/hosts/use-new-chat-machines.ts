@@ -1,6 +1,7 @@
 import { skipToken, useQuery } from "@tanstack/react-query";
 import * as React from "react";
 import type { PeerHostStatus, PeerHostView } from "../../shared/peer-host";
+import { useAppCapabilities } from "../app-capabilities";
 import { hostQueryKeys } from "./host-query-keys";
 import { newChatMachines, type NewChatMachine } from "./new-chat-targets";
 
@@ -11,5 +12,9 @@ import { newChatMachines, type NewChatMachine } from "./new-chat-targets";
 export function useNewChatMachines(): NewChatMachine[] {
   const list = useQuery<PeerHostView[]>({ queryKey: hostQueryKeys.list(), queryFn: skipToken });
   const statuses = useQuery<PeerHostStatus[]>({ queryKey: hostQueryKeys.statuses(), queryFn: skipToken });
-  return React.useMemo(() => newChatMachines(list.data ?? [], statuses.data ?? []), [list.data, statuses.data]);
+  const { platform } = useAppCapabilities();
+  return React.useMemo(
+    () => newChatMachines(list.data ?? [], statuses.data ?? [], platform),
+    [list.data, statuses.data, platform],
+  );
 }

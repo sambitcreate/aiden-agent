@@ -1111,7 +1111,7 @@ export function createConfigStore(
       const saved = await mutateSettings(async (config) => {
         await authorize?.();
         const state: AppControlState = { settings: runtimeSettingsFrom(config.settings) };
-        if (remote && state.settings.remoteAppControlsEnabled !== true) throw new Error("Paired-host app controls were disabled.");
+        if (remote && state.settings.remoteAppControlsEnabled !== true) throw new Error("Chat controls from paired devices were disabled.");
         if (!isCurrent() || appControlPolicy(state.settings) === "disabled") throw new Error("App control authority changed.");
         if (appControlRevision(state, operation.control) !== operation.expectedRevision) throw new Error("Settings changed. Refresh this control.");
         if (operation.control === "models.newChat") {

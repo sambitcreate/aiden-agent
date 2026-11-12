@@ -28,6 +28,8 @@ import {
   type TtsSettingsV1,
 } from "../../shared/tts";
 
+import { useAppCapabilities } from "../../lib/app-capabilities";
+import { localComputerNoun } from "../../shared/computer-noun";
 interface TtsSettingsSnapshot {
   settings: TtsSettingsV1;
   settingsRevision: string;
@@ -49,6 +51,7 @@ const PRESET_LABELS: Record<TtsDeliveryPreset, string> = {
 };
 
 export function TtsSettings() {
+  const { platform } = useAppCapabilities();
   const [snapshot, setSnapshot] = React.useState<TtsSettingsSnapshot | null>(null);
   const [voices, setVoices] = React.useState<Array<{ providerVoiceId: string; name: string }>>([]);
   const [dedicatedKey, setDedicatedKey] = React.useState("");
@@ -148,6 +151,7 @@ export function TtsSettings() {
 
   return (
     <TtsSettingsView
+      platform={platform}
       snapshot={snapshot}
       loadError={loadError}
       voices={voices}
@@ -191,6 +195,8 @@ export async function clearGeneratedAudio(deps: {
 }
 
 export interface TtsSettingsViewProps {
+  /** This computer's platform, which names it in the copy. */
+  platform?: string | null;
   snapshot: TtsSettingsSnapshot | null;
   loadError: boolean;
   voices: ReadonlyArray<{ providerVoiceId: string; name: string }>;
@@ -212,6 +218,7 @@ export interface TtsSettingsViewProps {
 
 /** Stateless Text to Speech settings surface; the container owns IPC and playback. */
 export function TtsSettingsView({
+  platform,
   snapshot,
   loadError,
   voices,
@@ -293,7 +300,7 @@ export function TtsSettingsView({
         {settings.credentialSource === "dedicated" ? (
           <Field
             label="Dedicated key"
-            description="Stored encrypted on this Mac. The value is never read back into settings."
+            description={`Stored encrypted on this ${localComputerNoun(platform)}. The value is never read back into settings.`}
           >
             <div className="flex items-center gap-2">
               <Input

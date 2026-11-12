@@ -49,13 +49,13 @@ struct AidenMacTranscriptionSettingsView: View {
                     }
                 }
             } else if isLoading {
-                ProgressView("Loading desktop speech models…")
+                ProgressView("Loading computer speech models…")
             }
             if let errorMessage {
                 Section { Text(errorMessage).foregroundStyle(.red) }
             }
         }
-        .navigationTitle("Desktop Transcription")
+        .navigationTitle("Computer Transcription")
         .navigationBarTitleDisplayMode(.inline)
         .task { await refresh() }
         .task(id: downloadPollKey) {

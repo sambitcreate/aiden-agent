@@ -262,7 +262,7 @@ test("Measured speed offers Clear… only with speeds, and asks before clearing"
   const server = insightsServer();
   mount({ measuredCount: 1 });
   const row = screen.getByRole("group", { name: "Measured speed" });
-  within(row).getByText("1 model · from your chats on this Mac");
+  within(row).getByText("1 model · from your chats on this computer");
   const clear = within(row).getByRole("button", { name: "Clear measured speeds" });
   fireEvent.click(clear);
   const dialog = await screen.findByRole("alertdialog", { name: "Clear measured speeds?" });

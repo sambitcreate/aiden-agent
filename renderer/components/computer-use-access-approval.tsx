@@ -251,7 +251,7 @@ export function ComputerUseAccessApproval({
             ) : null
           ) : (
             <Text variant="small" color="secondary" as="p" role="note" className="mt-2.5 text-center">
-              Finish any Computer Use setup on the host Mac.
+              Finish any Computer Use setup on that Mac.
             </Text>
           )}
           {disabledReason ? (

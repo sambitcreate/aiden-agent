@@ -22,7 +22,7 @@ enum AidenBotMemoryCopy {
     static func notesTitle(botName: String) -> String { "\(botName)’s notes" }
 
     static func description(botName: String) -> String {
-        "What \(botName) remembers about you and its work. It’s stored on your machine, and \(botName) uses it in every chat."
+        "What \(botName) remembers about you and its work. It’s stored on your computer, and \(botName) uses it in every chat."
     }
 
     static func aboutYouEmpty(botName: String) -> String {

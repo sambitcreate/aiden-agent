@@ -1,5 +1,6 @@
 import type { ChatRowState } from "../shared/chat-row-state";
 import type { ChatTriageEntry } from "../shared/chat-triage";
+import { thisComputerLabel } from "../shared/computer-noun";
 import type {
   PeerBlockedReason,
   PeerFeedRow,
@@ -31,7 +32,13 @@ import type { HostChatCapability } from "./hosts/host-chat-adapter";
  * cross-machine grouping. Everything here is pure.
  */
 
-export const LOCAL_MACHINE_LABEL = "This Mac";
+/** This computer's label in machine lists: "This Mac" on macOS, "This computer" elsewhere. */
+export function localMachineLabel(platform: string | null | undefined): string {
+  return thisComputerLabel(platform);
+}
+
+/** Shown for a paired host with no name. Never a bare "Mac" or "computer". */
+export const UNNAMED_PAIRED_HOST_LABEL = "Paired computer";
 
 export type SidebarHostAvailability = "online" | "connecting" | "offline" | "blocked";
 
@@ -145,8 +152,11 @@ export function sidebarHosts(
 ): SidebarHost[] {
   const enabled = views.filter((view) => view.enabled);
   const byStatus = new Map(statuses.map((status) => [status.hostId, status]));
-  const nameOf = (view: PeerHostView) => view.name.trim() || "Paired Mac";
-  const counts = new Map<string, number>([[LOCAL_MACHINE_LABEL.toLocaleLowerCase(), 1]]);
+  const nameOf = (view: PeerHostView) => view.name.trim() || UNNAMED_PAIRED_HOST_LABEL;
+  // A peer named like this computer's own label gets a suffix on every platform.
+  const counts = new Map<string, number>(
+    [thisComputerLabel("darwin"), thisComputerLabel("linux")].map((label) => [label.toLocaleLowerCase(), 1]),
+  );
   for (const view of enabled) {
     const folded = nameOf(view).toLocaleLowerCase();
     counts.set(folded, (counts.get(folded) ?? 0) + 1);
@@ -265,11 +275,12 @@ export function effectiveMachineFilter(
 export function machineFilterLabel(
   filter: SidebarMachineFilter,
   hosts: readonly SidebarHost[],
+  platform: string | null | undefined,
 ): string {
-  if (filter === "all") return "All machines";
-  if (filter === "local") return LOCAL_MACHINE_LABEL;
+  if (filter === "all") return "All computers";
+  if (filter === "local") return localMachineLabel(platform);
   const hostId = filter.slice("host:".length);
-  return hosts.find((host) => host.id === hostId)?.label ?? "All machines";
+  return hosts.find((host) => host.id === hostId)?.label ?? "All computers";
 }
 
 export function machineFilterForHost(hostId: string): SidebarMachineFilter {
@@ -404,11 +415,12 @@ export function combineSidebarRows<L extends SidebarProjectSummary, LC extends S
   return { projects, chats };
 }
 
-/** The machines a merged group spans, this Mac first, for its badges. */
+/** The machines a merged group spans, this computer first, for its badges. */
 export function projectEntryMachineLabels<L extends SidebarProjectSummary>(
   entry: SidebarProjectEntry<L>,
+  platform: string | null | undefined,
 ): string[] {
   return entry.members.map((member) =>
-    isRemoteSidebarProject(member) ? member.hostLabel : LOCAL_MACHINE_LABEL,
+    isRemoteSidebarProject(member) ? member.hostLabel : localMachineLabel(platform),
   );
 }

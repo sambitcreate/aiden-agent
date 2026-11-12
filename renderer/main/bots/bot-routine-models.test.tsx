@@ -84,7 +84,7 @@ test("matching host receipt confirms an accepted lost save after remount without
   f.api.save = async (input) => { await save(input); throw new Error("Lost reply."); };
   const first = mount(f.api); await primary(); fireEvent.click(screen.getByRole("button", { name: "Save model" }));
   await screen.findByText("Lost reply."); first.unmount(); first.client.clear(); mount(f.api);
-  await screen.findByText("The host confirmed the saved model change.");
+  await screen.findByText("The computer confirmed the saved model change.");
   assert.equal(pendingRoutineModelChanges(botId, routineId).length, 0); assert.equal(f.requests.length, 1);
 });
 test("a stale first save retains the draft and requires reviewing the newer revision", async () => {

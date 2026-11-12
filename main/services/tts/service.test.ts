@@ -898,7 +898,7 @@ test("remote cannot replace desktop playback; disabling on desktop stops remote 
   await flush();
   await h.service.updateSettings(h.owner(), h.revision, { enabled: false });
   assert.equal((await remote.status()).enabled, false);
-  await assert.rejects(remote.read(authority, job.jobId, 0, 0), /desktop/u);
+  await assert.rejects(remote.read(authority, job.jobId, 0, 0), /Turn on Read Aloud in Aiden Agent/u);
   remote.close();
 });
 

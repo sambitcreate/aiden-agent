@@ -808,7 +808,7 @@ data class AidenBotAccessRequest(
             if (target != AidenBotAccessTarget.FOLDER || !(it.startsWith("~/") || it.startsWith("/")))
                 throw AidenBotContractException.InvalidField("accessRequest.place")
         }
-        if (target == AidenBotAccessTarget.WHOLE_MAC && (label != "your whole Mac" || place != null))
+        if (target == AidenBotAccessTarget.WHOLE_MAC && ((label != "your whole Mac" && label != "your whole computer") || place != null))
             throw AidenBotContractException.InvalidField("accessRequest")
         if (choices != listOf(AidenBotAccessRequestChoice.NOT_NOW, AidenBotAccessRequestChoice.ONCE) &&
             !(target == AidenBotAccessTarget.FOLDER && choices == listOf(AidenBotAccessRequestChoice.NOT_NOW, AidenBotAccessRequestChoice.ALWAYS, AidenBotAccessRequestChoice.ONCE)))

@@ -27,6 +27,7 @@ import {
   peerHostPresentation,
   peerLocalNameError,
 } from "../../lib/peer-connections";
+import { localComputerNoun } from "../../shared/computer-noun";
 import type { PeerHostStatus, PeerHostView } from "../../shared/peer-host";
 import { PeerAddDeviceSheet } from "./peer-add-device-sheet";
 
@@ -256,7 +257,7 @@ function RenameDialog({
 /** Settings → Connections → Control other devices. */
 export function PeerHostsSettingsPage() {
   const capabilities = useAppCapabilities();
-  return <PeerHostsSettings hostLabel={capabilities.platform === "darwin" ? "Mac" : "computer"} />;
+  return <PeerHostsSettings hostLabel={localComputerNoun(capabilities.platform)} />;
 }
 
 export function PeerHostsSettings({ hostLabel }: { hostLabel: string }) {
@@ -370,7 +371,7 @@ export function PeerHostsSettings({ hostLabel }: { hostLabel: string }) {
         onConfirm={async () => {
           const host = forgetting;
           if (!host) return;
-          if (await act(host.id, () => peerHostsApi.remove(host.id), "Couldn't forget this computer.")) setForgetting(null);
+          if (await act(host.id, () => peerHostsApi.remove(host.id), "Couldn't forget that computer.")) setForgetting(null);
         }}
       />
     </>

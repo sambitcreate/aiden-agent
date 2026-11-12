@@ -9,11 +9,11 @@ struct AidenOpenWorkEditorView: View {
         NavigationStack {
             Form {
                 if !model.canWrite {
-                    Section { Text("Connect to your paired host with Bot write access to save. Your draft is kept.") }
+                    Section { Text("Connect to your paired computer with Bot write access to save. Your draft is kept.") }
                 }
                 if model.uncertain { AidenOpenWorkPendingSection(model: model) }
                 if let conflict = model.conflict {
-                    Section("Changed on your host") {
+                    Section("Changed on your computer") {
                         Text("Your draft is kept. Review the saved version before using its revision.")
                         Text(conflict.title).font(.headline)
                         if !conflict.note.isEmpty { Text(conflict.note) }
@@ -24,16 +24,16 @@ struct AidenOpenWorkEditorView: View {
                     }
                 }
                 if model.addNeedsReview {
-                    Section("Open work changed on your host") {
+                    Section("Open work changed on your computer") {
                         Text("Your new item is kept as a draft. Refresh and review the latest work before adding it.")
                         Text(model.countSummary).foregroundStyle(palette.secondary)
-                        Button("Refresh host state") { Task { await model.load() } }
+                        Button("Refresh from computer") { Task { await model.load() } }
                         Button("Keep draft and use latest list") { model.useLatestRevision() }
                             .disabled(!model.canEditDraft)
                     }
                 }
                 if model.wasRemoved {
-                    Section { Text("This item was removed on your host. Your draft is kept for reference and can’t recreate that item.") }
+                    Section { Text("This item was removed on your computer. Your draft is kept for reference and can’t recreate that item.") }
                 }
                 if let stop = model.baseline?.lastStop, !stop.state.isTerminal {
                     Section { Text(stop.description) }

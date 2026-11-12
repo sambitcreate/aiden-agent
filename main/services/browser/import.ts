@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import { localComputerNoun } from "../../../renderer/shared/computer-noun.js";
 import * as path from "node:path";
 import * as os from "node:os";
 import { createHash, createDecipheriv, pbkdf2Sync } from "node:crypto";
@@ -327,7 +328,7 @@ async function encryptionKey(source: Source): Promise<Buffer> {
     return pbkdf2Sync(result.stdout.replace(/\r?\n$/, ""), "saltysalt", 1, 16, "sha1");
   } catch {
     throw new Error(
-      `${source.browser}'s cookie key is unavailable from the desktop credential store.`,
+      `${source.browser}'s cookie key is unavailable from this ${localComputerNoun(process.platform)}'s credential store.`,
     );
   }
 }

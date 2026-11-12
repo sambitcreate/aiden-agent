@@ -66,27 +66,27 @@ export interface ChatSessionSnapshot {
 }
 
 const OFFLINE_REASON: Record<"connecting" | "offline" | "blocked", string> = {
-  connecting: "Connecting to that Mac…",
-  offline: "That Mac is offline. Nothing is sent until it is back online.",
-  blocked: "That Mac needs attention in Settings before it can be controlled.",
+  connecting: "Connecting to that computer…",
+  offline: "That computer is offline. Nothing is sent until it is back online.",
+  blocked: "That computer needs attention in Settings before it can be controlled.",
 };
 
 const UNSUPPORTED_REASON: Partial<Record<HostChatCapability, string>> = {
-  send: "That Mac doesn't allow sending from here.",
-  cancel: "That Mac doesn't allow stopping runs from here.",
-  respondApproval: "Answer this approval on the other Mac. It doesn't allow approvals from here.",
-  answerQuestion: "Answer this question on the other Mac. It doesn't allow answers from here.",
-  steer: "That Mac doesn't allow steering from here.",
-  rename: "That Mac doesn't allow renaming from here.",
-  remove: "That Mac doesn't allow deleting from here.",
-  attach: "That Mac doesn't accept attachments from here.",
-  skills: "That Mac doesn't allow skills from here.",
-  createChat: "That Mac doesn't allow new chats from here.",
-  browseFolders: "That Mac doesn't allow browsing its folders from here.",
-  createWorkspace: "That Mac doesn't allow new projects from here.",
-  botChats: "That Mac doesn't allow Bot chats from here.",
-  fork: "That Mac doesn't allow forking from here.",
-  forkSummary: "That Mac doesn't allow fork summaries from here.",
+  send: "That computer doesn't allow sending from here.",
+  cancel: "That computer doesn't allow stopping runs from here.",
+  respondApproval: "Answer this approval on the other computer. It doesn't allow approvals from here.",
+  answerQuestion: "Answer this question on the other computer. It doesn't allow answers from here.",
+  steer: "That computer doesn't allow steering from here.",
+  rename: "That computer doesn't allow renaming from here.",
+  remove: "That computer doesn't allow deleting from here.",
+  attach: "That computer doesn't accept attachments from here.",
+  skills: "That computer doesn't allow skills from here.",
+  createChat: "That computer doesn't allow new chats from here.",
+  browseFolders: "That computer doesn't allow browsing its folders from here.",
+  createWorkspace: "That computer doesn't allow new projects from here.",
+  botChats: "That computer doesn't allow Bot chats from here.",
+  fork: "That computer doesn't allow forking from here.",
+  forkSummary: "That computer doesn't allow fork summaries from here.",
 };
 
 /** What a turn carries besides its text. */
@@ -124,7 +124,7 @@ export async function stageAttachments(
     if (isOutcomeUnknown(error)) {
       throw new HostChatControlError({
         code: "upload_failed",
-        message: "An attachment didn't reach that Mac. Nothing was sent; try again.",
+        message: "An attachment didn't reach that computer. Nothing was sent; try again.",
         retryable: true,
       });
     }
@@ -200,7 +200,7 @@ export class ChatSessionControl {
         kind: intent.kind,
         idempotencyKey: intent.idempotencyKey,
         ...(intent.text !== undefined ? { text: intent.text } : {}),
-        message: this.ledger.retryAllowed(intent) ? "Couldn't confirm delivery." : "Delivery is still unconfirmed. The safe retry window has ended; check the conversation on the host before dismissing this notice.",
+        message: this.ledger.retryAllowed(intent) ? "Couldn't confirm delivery." : "Delivery is still unconfirmed. The safe retry window has ended; check the conversation on that computer before dismissing this notice.",
         retrying,
         retryAllowed: this.ledger.retryAllowed(intent),
       },
@@ -390,7 +390,7 @@ export class ChatSessionControl {
     const { intent } = unresolved;
     if (!this.ledger.retryAllowed(intent)) {
       this.update(this.recorded());
-      throw new HostChatControlError({ code: "retry_expired", message: "The safe retry window has ended. Check the conversation on the host before starting a new attempt." });
+      throw new HostChatControlError({ code: "retry_expired", message: "The safe retry window has ended. Check the conversation on that computer before starting a new attempt." });
     }
     this.guard(intent.kind === "submitInput" ? "steer" : intent.kind);
     this.ledger.retrying(this.ref, intent.idempotencyKey, true);
@@ -527,7 +527,7 @@ export class ChatSessionControl {
     if (!this.ledger.isReady(this.ref)) await this.ledger.ready(this.ref);
     const previous = this.ledger.forkIntent(this.ref);
     if (previous && (!this.ledger.retryAllowed(previous) || previous.signature !== signature)) {
-      throw new HostChatControlError({ code: "retry_expired", message: "An earlier fork is unconfirmed. Check the host for that fork before creating another." });
+      throw new HostChatControlError({ code: "retry_expired", message: "An earlier fork is unconfirmed. Check that computer for that fork before creating another." });
     }
     const key = previous?.idempotencyKey ?? mintPeerIdempotencyKey();
     const intent = previous ?? { signature, idempotencyKey: key, request: { kind: "fork" as const, signature, input: { ...input, revision, idempotencyKey: key } } };

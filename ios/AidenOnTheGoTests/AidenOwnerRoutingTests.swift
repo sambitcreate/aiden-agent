@@ -1293,7 +1293,7 @@ final class AidenOwnerRoutingTests: XCTestCase {
         XCTAssertFalse(coordinator.acceptLink(link))
 
         // Nothing on screen names the machine, and the phone doesn't know it.
-        XCTAssertEqual(coordinator.presentedError, "That machine is no longer paired. Pair it again to continue.")
+        XCTAssertEqual(coordinator.presentedError, "That computer is no longer paired. Pair it again to continue.")
         XCTAssertEqual(coordinator.defaultInstanceId, "studio")
         XCTAssertEqual(requests("gone"), [])
     }
@@ -1336,11 +1336,11 @@ final class AidenOwnerRoutingTests: XCTestCase {
         )
         XCTAssertEqual(
             coordinator.noLongerPairedMessage(for: "gone"),
-            "That machine is no longer paired. Pair it again to continue."
+            "That computer is no longer paired. Pair it again to continue."
         )
         XCTAssertEqual(
             coordinator.noLongerPairedMessage(for: nil),
-            "That machine is no longer paired. Pair it again to continue."
+            "That computer is no longer paired. Pair it again to continue."
         )
     }
 

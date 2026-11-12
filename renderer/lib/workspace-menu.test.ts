@@ -108,13 +108,13 @@ test("a registered folder the renderer has not listed yet is named by its path",
 });
 
 test("clone failures read as main's sentence, cancellation shows nothing, and a stranded clone says where it is", () => {
-  assert.equal(cloneFailureMessage({ ok: false, code: "cancelled", reason: "Clone cancelled." }), null);
+  assert.equal(cloneFailureMessage({ ok: false, code: "cancelled", reason: "Clone cancelled." }, "darwin"), null);
   assert.equal(
-    cloneFailureMessage({ ok: false, code: "not-found", reason: "That repository wasn't found." }),
+    cloneFailureMessage({ ok: false, code: "not-found", reason: "That repository wasn't found." }, "darwin"),
     "That repository wasn't found.",
   );
   assert.equal(
-    cloneFailureMessage({ ok: false, code: "network", reason: "  " }),
+    cloneFailureMessage({ ok: false, code: "network", reason: "  " }, "darwin"),
     "Git couldn't reach that host. Check the URL and your connection.",
   );
   assert.equal(
@@ -123,9 +123,12 @@ test("clone failures read as main's sentence, cancellation shows nothing, and a 
       code: "register-failed",
       reason: "Aiden couldn't add that folder.",
       destination: "/Users/me/projects/site",
-    }),
+    }, "darwin"),
     "Aiden couldn't add that folder. It is in /Users/me/projects/site.",
   );
+  // The fallback names this computer the way its platform does.
+  assert.equal(cloneFailureMessage({ ok: false, code: "git-unavailable", reason: "" }, "darwin"), "Git isn't available on this Mac.");
+  assert.equal(cloneFailureMessage({ ok: false, code: "git-unavailable", reason: "" }, "linux"), "Git isn't available on this computer.");
 });
 
 test("clone progress names Git's phase and a clamped whole percentage", () => {

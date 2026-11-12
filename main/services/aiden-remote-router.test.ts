@@ -499,7 +499,7 @@ async function fixture(options: {
             supportsBrowserRecordings: true,
             browserRecording: async (id: string, recordingId: string) => {
               calls.push(`browser-recording:${id}:${recordingId}`);
-              if (!recordingId.startsWith("recording-")) throw new AidenRemoteServiceError("not_found", "This recording is no longer on the Mac.", 404);
+              if (!recordingId.startsWith("recording-")) throw new AidenRemoteServiceError("not_found", "This recording is no longer on your computer.", 404);
               return { bytes: Buffer.from("fake mp4"), mimeType: "video/mp4" };
             },
           }
@@ -4766,7 +4766,7 @@ test("the simulator vocabulary is advertised only to paired desktops", async () 
 
 test("chat controls require both scoped grants and advertise owner-enabled negotiation separately", async () => {
   let reads = 0, writes = 0;
-  const appControls = { enabled: async () => false, get: async () => { reads++; return { version: 1 as const, title: "Memory", target: "Paired host", policy: "safe" as const, rows: [] }; }, apply: async () => { writes++; throw new Error("unexpected write"); } };
+  const appControls = { enabled: async () => false, get: async () => { reads++; return { version: 1 as const, title: "Memory", target: "Paired computer", policy: "safe" as const, rows: [] }; }, apply: async () => { writes++; throw new Error("unexpected write"); } };
   const app = await fixture({ appControls, capabilities: ["server:read", "chat:read", "app-controls:read"], acceptsProgressCapabilities: true });
   const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
   try {
@@ -4787,7 +4787,7 @@ test("foreground invalidation stream admits control readers without task or agen
   let enabled = true;
   const appControls = {
     enabled: async () => enabled,
-    get: async () => ({ version: 1 as const, title: "Memory", target: "Paired host", policy: "safe" as const, rows: [] }),
+    get: async () => ({ version: 1 as const, title: "Memory", target: "Paired computer", policy: "safe" as const, rows: [] }),
     apply: async () => { throw new Error("unexpected write"); },
   };
   const app = await fixture({ appControls, capabilities: ["server:read", "chat:read", "app-controls:read"], acceptsProgressCapabilities: true });
@@ -6572,7 +6572,7 @@ test("a phone answers a real hand-off and pauses its Bot over HTTP, while a lega
     assert.deepEqual(session.handoff, { waitId: HANDOFF_WAIT, kind: "action", action: "Enter the 2FA code" });
     const legacySession = await (await fetch(`${legacy.base}/bots/bot-1/session`, { headers })).json();
     assert.equal("handoff" in legacySession, false);
-    assert.equal(legacySession.entries[legacySession.entries.length - 1].text, "Planner needs you on your Mac: Enter the 2FA code");
+    assert.equal(legacySession.entries[legacySession.entries.length - 1].text, "Planner needs you on your computer: Enter the 2FA code");
 
     const shown = await fetch(`${holder.base}/bots/bot-1/handoffs/${HANDOFF_WAIT}/open-on-mac`, post("open-request-000036"));
     assert.deepEqual(await shown.json(), { waitId: HANDOFF_WAIT, opened: true });

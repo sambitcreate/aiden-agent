@@ -100,7 +100,7 @@ function list(value: unknown): unknown[] {
 
 export class HostResourceShapeError extends Error {
   constructor() {
-    super("The host's answer was incomplete.");
+    super("That computer's answer was incomplete.");
     this.name = "HostResourceShapeError";
   }
 }

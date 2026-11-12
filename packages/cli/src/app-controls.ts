@@ -50,7 +50,7 @@ export function createCliAppControls(agentDir: string) {
     onChanged() {},
     commit: async (operation, context) => {
       if (!CLI_APP_CONTROLS.has(operation.control))
-        throw new Error("This is a desktop-only control.");
+        throw new Error("This control can only be changed in Aiden Agent.");
       const assertRevision = async () => {
         if (
           !context.isCurrent() ||
@@ -87,7 +87,7 @@ export function createCliAppControls(agentDir: string) {
       for (const row of snapshot.rows)
         if (!CLI_APP_CONTROLS.has(row.id))
           row.disabledReason =
-            "This setting has no supported CLI execution gate. Change it in the Aiden desktop app.";
+            "This setting has no supported CLI execution gate. Change it in Aiden Agent.";
       return snapshot;
     },
     async apply(input: unknown, isCurrent: () => boolean = () => true) {

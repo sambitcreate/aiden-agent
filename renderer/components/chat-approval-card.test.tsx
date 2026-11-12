@@ -309,7 +309,7 @@ test("a scheduled task reads as the task itself: its question, cadence, next run
     within(card).getByLabelText("Instructions").textContent,
     "Summarize overnight commits.\nFlag anything that broke the build.",
   );
-  assert.ok(within(card).getByText("Scheduled work runs on your desktop while Aiden is open and the computer is awake."));
+  assert.ok(within(card).getByText("Scheduled work runs on this computer while Aiden is open and it's awake."));
   assert.equal(within(card).queryAllByRole("note").length, 0, "a task that will run as asked needs no warning");
 
   fireEvent.click(within(card).getByRole("button", { name: "Allow once" }));

@@ -11,6 +11,8 @@ import {
   type BrowserRecordingRecapV1,
 } from "../shared/browser-recording";
 
+import { useAppCapabilities } from "../lib/app-capabilities";
+import { localComputerNoun } from "../shared/computer-noun";
 const IS_MAC = typeof navigator !== "undefined" && /Mac/u.test(navigator.userAgent);
 
 type Playback =
@@ -26,6 +28,7 @@ export function browserRecordingSizeLabel(bytes: number): string {
 }
 
 export function BrowserRecordingCard({ recording }: { recording: BrowserRecordingRecapV1 }) {
+  const { platform } = useAppCapabilities();
   const [playback, setPlayback] = React.useState<Playback>({ phase: "idle" });
   const [revealFailed, setRevealFailed] = React.useState(false);
   const urlRef = React.useRef<string | undefined>(undefined);
@@ -100,14 +103,14 @@ export function BrowserRecordingCard({ recording }: { recording: BrowserRecordin
           </Button>
           {playback.phase === "missing" ? (
             <span role="status" className="text-small text-secondary">
-              This recording is no longer on this computer.
+              This recording is no longer on this {localComputerNoun(platform)}.
             </span>
           ) : null}
         </div>
       )}
       {revealFailed && playback.phase !== "missing" ? (
         <p role="status" className="mt-2 text-small text-secondary">
-          This recording is no longer on this computer.
+          This recording is no longer on this {localComputerNoun(platform)}.
         </p>
       ) : null}
     </section>

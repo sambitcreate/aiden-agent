@@ -897,7 +897,7 @@ test("unhealthy binding authority blocks both pairing and ordinary Telegram fall
         hasToken: true,
         allowedUserId,
         assertBotBindingStoreHealthy: async () => {
-          throw new Error("Telegram routing data is unavailable. Open Aiden on the Mac to repair it.");
+          throw new Error("Telegram routing data is unavailable. Open Aiden on your computer to repair it.");
         },
         batches: [[makeUpdate(1, makeMessage(10, sender, "must not fall back"))]],
         autoStop: true,

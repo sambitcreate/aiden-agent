@@ -264,7 +264,7 @@ test("file choices enforce Full Mac exclusivity and approved-location Bot folder
         catalogRevision: current.catalog.revision,
         snapshot: current,
       }),
-    /Full Mac, Bot folder/u,
+    /Full (Mac|computer), Bot folder/u,
   );
   assert.throws(
     () =>
@@ -273,7 +273,7 @@ test("file choices enforce Full Mac exclusivity and approved-location Bot folder
         catalogRevision: current.catalog.revision,
         snapshot: current,
       }),
-    /Full Mac, Bot folder/u,
+    /Full (Mac|computer), Bot folder/u,
   );
   assert.doesNotThrow(() =>
     bindBotCustomSelection({

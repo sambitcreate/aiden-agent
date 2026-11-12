@@ -143,9 +143,9 @@ test("a legacy device reads a waiting hand-off as one assistant line that names 
   assert.equal(notice && "createdAt" in notice, false, "the notice never moves a chat's preview or unread state");
 
   const spaced = legacyHandoffNotice("  Ada \n Lovelace ", prompt({ action: "Approve the  transfer.\n" }));
-  assert.equal(spaced.type === "message" && spaced.text, "Ada Lovelace needs you on your Mac: Approve the transfer");
+  assert.equal(spaced.type === "message" && spaced.text, "Ada Lovelace needs you on your computer: Approve the transfer");
   const unnamed = legacyHandoffNotice(" ", prompt());
-  assert.equal(unnamed.type === "message" && unnamed.text, "Your Bot needs you on your Mac: Enter the 2FA code your bank sent you");
+  assert.equal(unnamed.type === "message" && unnamed.text, "Your Bot needs you on your computer: Enter the 2FA code your bank sent you");
 });
 
 test("only a person's pause reads differently to a legacy device", () => {

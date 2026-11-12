@@ -182,13 +182,13 @@ struct AidenMachineDetailView: View {
                 ProgressView()
             } else {
                 ContentUnavailableView(
-                    "Machine not found",
+                    "Computer not found",
                     systemImage: "desktopcomputer",
-                    description: Text("This machine is no longer paired.")
+                    description: Text("This computer is no longer paired.")
                 )
             }
         }
-        .navigationTitle(model.row(instanceId)?.name ?? String(localized: "Machine"))
+        .navigationTitle(model.row(instanceId)?.name ?? String(localized: "Computer"))
         .navigationBarTitleDisplayMode(.inline)
         .task(id: model.machineIDs) {
             model.register()
@@ -244,7 +244,7 @@ struct AidenMachineDetailView: View {
             } header: {
                 Text("Name")
             } footer: {
-                Text("Leave it blank to use the machine's own name, \(row.ownName). The name only changes on this phone.")
+                Text("Leave it blank to use the computer's own name, \(row.ownName). The name only changes on this phone.")
             }
 
             Section("Symbol") {
@@ -271,7 +271,7 @@ struct AidenMachineDetailView: View {
                     set: { model.setHidden(instanceId, $0) }
                 ))
             } footer: {
-                Text("A hidden machine stays paired. Its chats leave the Inbox, and you can still open the machine from Machines.")
+                Text("A hidden computer stays paired. Its chats leave the Inbox, and you can still open the computer from Computers.")
             }
 
             Section("Connection") {
@@ -309,13 +309,13 @@ struct AidenMachineDetailView: View {
                     .disabled(!row.canReconnect)
                 }
                 if row.isSelected {
-                    Label("This is the default machine", systemImage: "checkmark")
+                    Label("This is the default computer", systemImage: "checkmark")
                         .foregroundStyle(.secondary)
                 } else {
                     Button {
                         Task { await switchToMachine() }
                     } label: {
-                        Label("Make this the default machine", systemImage: "arrow.left.arrow.right")
+                        Label("Make this the default computer", systemImage: "arrow.left.arrow.right")
                     }
                     .disabled(model.isBusy || coordinator.connectionState == .connecting)
                 }
@@ -326,7 +326,7 @@ struct AidenMachineDetailView: View {
                     commitName()
                     showsForget = true
                 } label: {
-                    Label("Forget this machine", systemImage: "trash")
+                    Label("Forget this computer", systemImage: "trash")
                         .foregroundStyle(.red)
                 }
                 .disabled(model.isBusy)
@@ -337,7 +337,7 @@ struct AidenMachineDetailView: View {
             isPresented: $showsForget,
             titleVisibility: .visible
         ) {
-            Button("Forget machine", role: .destructive) {
+            Button("Forget computer", role: .destructive) {
                 Task { await forget() }
             }
             Button("Cancel", role: .cancel) {}
@@ -421,7 +421,7 @@ struct AidenMachineDetailView: View {
         // only "did not answer" when the selection itself went through.
         failure = model.failureMessage(
             for: outcome,
-            fallback: String(localized: "The machine did not answer. It is now the default machine, and you can reconnect from here.")
+            fallback: String(localized: "The computer did not answer. It is now the default computer, and you can reconnect from here.")
         )
     }
 
@@ -437,6 +437,6 @@ struct AidenMachineDetailView: View {
         case .busy, .cancelled, .stale:
             break
         }
-        failure = model.failureMessage(for: outcome, fallback: String(localized: "The machine is still paired. Try again in a moment."))
+        failure = model.failureMessage(for: outcome, fallback: String(localized: "The computer is still paired. Try again in a moment."))
     }
 }

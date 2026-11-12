@@ -145,7 +145,7 @@ function mapBotMutationError(error: unknown): never {
   if (error instanceof BotCapabilityUnavailableError) {
     throw new AidenRemoteServiceError(
       "operation_stale",
-      "Some selected Bot access is unavailable. Refresh and review it on your Mac.",
+      "Some selected Bot access is unavailable. Refresh and review it on your computer.",
       409,
       true,
     );

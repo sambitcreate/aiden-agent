@@ -175,7 +175,7 @@ struct AidenMachineStrip: View {
         if Self.isShown(for: labels) {
             ScrollView(.horizontal) {
                 HStack(spacing: AidenSpacing.s) {
-                    button(for: .all, spokenAs: String(localized: "All machines")) {
+                    button(for: .all, spokenAs: String(localized: "All computers")) {
                         Text("All")
                     }
                     ForEach(labels, id: \.instanceId) { label in
@@ -192,7 +192,7 @@ struct AidenMachineStrip: View {
             .contentMargins(.horizontal, AidenSpacing.l, for: .scrollContent)
             .scrollIndicators(.hidden)
             .accessibilityElement(children: .contain)
-            .accessibilityLabel("Filter by machine")
+            .accessibilityLabel("Filter by computer")
         }
     }
 
@@ -337,8 +337,8 @@ struct AidenHostStatusItem: View {
     /// What VoiceOver says for the item.
     static func spokenTitle(online: Int, total: Int) -> String {
         total == 1
-            ? String(localized: "\(online) of 1 machine online")
-            : String(localized: "\(online) of \(total) machines online")
+            ? String(localized: "\(online) of 1 computer online")
+            : String(localized: "\(online) of \(total) computers online")
     }
 
     var body: some View {
@@ -359,7 +359,7 @@ struct AidenHostStatusItem: View {
         }
         .accessibilityShowsLargeContentViewer()
         .accessibilityLabel(Self.spokenTitle(online: online, total: total))
-        .accessibilityHint("Opens Machines")
+        .accessibilityHint("Opens Computers")
         .accessibilityIdentifier("aiden.machine-status")
     }
 }
