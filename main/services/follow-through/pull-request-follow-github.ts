@@ -2,6 +2,11 @@
 // request, its checks, comments and reviews; the end of a failed Actions job's
 // log; and who may write to the repository. Comment authors are trusted only
 // when they own the repository or GitHub says they can write to it.
+//
+// Before the full read, a probe asks GitHub with If-None-Match whether the
+// pull request, its head commit's check runs or its commit statuses changed.
+// A 304 does not count against GitHub's rate limit, so a quiet pull request
+// costs nothing to check.
 
 import type { GitHubApi, GitHubApiResult } from "../github/github-api.js";
 import { PULL_REQUEST_FRAGMENT, pullRequestFromGraphQl } from "../github/github-pull-request-graphql.js";
@@ -33,7 +38,17 @@ const FOLLOW_QUERY = `query AidenFollowPullRequest($owner: String!, $name: Strin
 ${PULL_REQUEST_FRAGMENT}`;
 
 export type FollowReadResult =
-  | { kind: "ok"; observation: PullRequestObservation; viewer?: string }
+  | {
+      kind: "ok";
+      observation: PullRequestObservation;
+      viewer?: string;
+      /** Entity tags the probe saw, by path, to send next time. */
+      etags?: Record<string, string>;
+      /** Every probe answered 304: this full read only refreshed what was known. */
+      probedUnchanged?: true;
+    }
+  /** Every probe answered 304 and the caller allowed skipping the full read. */
+  | { kind: "unchanged" }
   /** The pull request or repository is gone, or this account cannot see it. */
   | { kind: "gone"; message: string }
   | { kind: "retry"; message: string; retryAt?: number };
@@ -142,6 +157,25 @@ function retryable(result: GitHubApiResult<unknown>): FollowReadResult {
   }
 }
 
+export interface FollowProbe {
+  /** Entity tags from the last full read, by path. */
+  etags?: Readonly<Record<string, string>>;
+  /** Skip the full read when every probe answers 304. */
+  skipIfUnchanged: boolean;
+}
+
+/** The REST objects whose entity tags show a change: the pull request and its head commit's checks. */
+export function followProbePaths(follow: { repository: string; number: number; headSha?: string }): string[] {
+  const paths = [`/repos/${follow.repository}/pulls/${follow.number}`];
+  if (follow.headSha && /^[0-9a-f]{40}$/u.test(follow.headSha)) {
+    paths.push(
+      `/repos/${follow.repository}/commits/${follow.headSha}/check-runs?per_page=100&filter=latest`,
+      `/repos/${follow.repository}/commits/${follow.headSha}/status`,
+    );
+  }
+  return paths;
+}
+
 export class PullRequestFollowReader {
   private readonly permissions = new Map<string, { write: boolean; at: number }>();
 
@@ -151,11 +185,21 @@ export class PullRequestFollowReader {
   ) {}
 
   async read(
-    follow: { host: string; repository: string; number: number },
+    follow: { host: string; repository: string; number: number; headSha?: string },
     signal?: AbortSignal,
+    probe?: FollowProbe,
   ): Promise<FollowReadResult> {
     const [owner, name] = follow.repository.split("/");
     if (!owner || !name) return { kind: "gone", message: "The repository name is invalid." };
+    let etags: Record<string, string> | undefined;
+    let probedUnchanged = false;
+    if (probe) {
+      const probed = await this.probe(follow, probe.etags ?? {}, signal);
+      if ("retry" in probed) return probed.retry;
+      etags = probed.etags;
+      probedUnchanged = probed.unchanged;
+      if (probedUnchanged && probe.skipIfUnchanged) return { kind: "unchanged" };
+    }
     const result = await this.api.graphql<Record<string, unknown>>({
       host: follow.host,
       operation: "pr.follow",
@@ -201,6 +245,8 @@ export class PullRequestFollowReader {
     return {
       kind: "ok",
       ...(viewer ? { viewer } : {}),
+      ...(etags && Object.keys(etags).length ? { etags } : {}),
+      ...(probedUnchanged ? { probedUnchanged: true as const } : {}),
       observation: {
         title: summary.title,
         url: summary.url,
@@ -212,6 +258,39 @@ export class PullRequestFollowReader {
         comments,
       },
     };
+  }
+
+  /**
+   * Ask GitHub whether each probed object changed. A rate limit stops the read
+   * here; any other failure counts as a change and leaves the full read to decide.
+   */
+  private async probe(
+    follow: { host: string; repository: string; number: number; headSha?: string },
+    known: Readonly<Record<string, string>>,
+    signal?: AbortSignal,
+  ): Promise<{ etags: Record<string, string>; unchanged: boolean } | { retry: FollowReadResult }> {
+    const etags: Record<string, string> = {};
+    let unchanged = true;
+    for (const path of followProbePaths(follow)) {
+      signal?.throwIfAborted();
+      const previous = known[path];
+      const result = await this.api.rest<unknown>({
+        host: follow.host,
+        operation: "pr.follow.probe",
+        path,
+        ...(previous ? { ifNoneMatch: previous } : {}),
+        ...(signal ? { signal } : {}),
+      });
+      if (result.kind === "not-modified") {
+        const etag = result.etag ?? previous;
+        if (etag) etags[path] = etag;
+        continue;
+      }
+      unchanged = false;
+      if (result.kind === "rate-limited") return { retry: retryable(result) };
+      if (result.kind === "ok" && result.etag) etags[path] = result.etag;
+    }
+    return { etags, unchanged };
   }
 
   /** The end of a failed Actions job's log, or undefined when it cannot be read. */

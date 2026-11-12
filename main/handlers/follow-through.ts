@@ -63,6 +63,18 @@ export function registerFollowThroughHandlers(): void {
     pullRequestFollows.stop(chatId(value.chatId), { host, repository, number }, "person");
   });
 
+  // The person opened a chat's followed pull requests, or the app came back
+  // online: read them soon. Debounced and rate-capped in PullRequestFollows.
+  ipcMain.handle("chats:followThroughNudgePullRequests", (event, input: unknown) => {
+    activeDocument(event);
+    const value = record(input);
+    if (value.chatId === undefined) {
+      pullRequestFollows.nudgeAll("ambient");
+      return;
+    }
+    pullRequestFollows.nudge(chatId(value.chatId), "action");
+  });
+
   ipcMain.handle("chats:followThroughSetCheck", async (event, input: unknown) => {
     activeDocument(event);
     const value = record(input);

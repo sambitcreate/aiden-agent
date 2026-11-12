@@ -253,9 +253,20 @@ function FollowChip({ chatId, follows, onChanged }: { chatId: string; follows: P
       .then(onChanged)
       .catch((error: unknown) => toast.error(error instanceof Error ? error.message : "Could not stop following."));
   };
+  // Opening the list is a good moment to look again: the person wants news.
+  const toggle = (next: boolean) => {
+    setOpen(next);
+    if (next) void chatsApi.nudgeFollowedPullRequests(chatId).catch(() => undefined);
+  };
+  // Back online after a drop: followed pull requests may have moved meanwhile.
+  React.useEffect(() => {
+    const online = () => void chatsApi.nudgeFollowedPullRequests().catch(() => undefined);
+    window.addEventListener("online", online);
+    return () => window.removeEventListener("online", online);
+  }, []);
   if (!first) return null;
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={toggle}>
       <ChipTrigger
         icon={GitPullRequest}
         label={active.length === 1 ? `Following #${first.number}` : `Following ${active.length} PRs`}

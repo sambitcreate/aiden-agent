@@ -38,7 +38,7 @@ import {
 import type { RunCommandLeftovers } from "../coding-tools.js";
 import { DoneWhenChecks, DONE_WHEN_TIMEOUT_MS, type DoneWhenRecord } from "./done-when.js";
 import { noticeDelivery } from "./notice-delivery-main.js";
-import type { PullRequestFollowRecord } from "./pull-request-follow.js";
+import { commandMayChangePullRequest, type PullRequestFollowRecord } from "./pull-request-follow.js";
 import { PullRequestFollowReader } from "./pull-request-follow-github.js";
 import { PullRequestFollows } from "./pull-request-follows.js";
 
@@ -241,6 +241,20 @@ export const pullRequestFollows = new PullRequestFollows({
 });
 
 /**
+ * A push Aiden made (the Push dialog, a paired device, or the agent): read
+ * the followed pull requests in that repository soon. `repository` is the
+ * credential-free `host/owner/name` the push captured; without one the timed
+ * read still catches the change.
+ */
+export function pullRequestBranchPushed(repository: string | undefined): void {
+  const selector = repository?.toLowerCase();
+  if (!selector) return;
+  for (const chatId of new Set(pullRequestFollows.all().map((follow) => follow.chatId))) {
+    pullRequestFollows.nudge(chatId, "action", (follow) => `${follow.host}/${follow.repository}`.toLowerCase() === selector);
+  }
+}
+
+/**
  * `run_command` in a workspace chat: each command's processes carry a fresh
  * job marker, and whatever the command leaves running becomes one of the
  * chat's background jobs.
@@ -254,6 +268,10 @@ export function runCommandLeftovers(input: { chatId: string; workspaceId: string
       return {
         signal: operation.signal,
         release: operation.release,
+        // A push or `gh pr comment` from the agent: read this chat's follows soon.
+        finished: (command) => {
+          if (commandMayChangePullRequest(command)) pullRequestFollows.nudge(input.chatId, "action");
+        },
         env: { [BACKGROUND_JOB_MARKER]: id },
         adopt: async (processGroup, command, description, output) => {
           let job: BackgroundJobView | undefined;

@@ -1685,6 +1685,9 @@ export const chatsApi = {
   followPullRequest: (chatId: string) => invoke<void>("chats:followThroughFollowPullRequest", { chatId }),
   stopFollowingPullRequest: (chatId: string, ref: { host: string; repository: string; number: number }) =>
     invoke<void>("chats:followThroughStopFollow", { chatId, ...ref }),
+  /** Read this chat's followed pull requests soon, or every chat's when `chatId` is omitted. */
+  nudgeFollowedPullRequests: (chatId?: string) =>
+    invoke<void>("chats:followThroughNudgePullRequests", chatId === undefined ? {} : { chatId }),
   setDoneWhenCheck: (chatId: string, command: string) =>
     invoke<void>("chats:followThroughSetCheck", { chatId, command }),
   clearDoneWhenCheck: (chatId: string) => invoke<void>("chats:followThroughClearCheck", { chatId }),
