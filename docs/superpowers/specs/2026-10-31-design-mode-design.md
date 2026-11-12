@@ -140,6 +140,7 @@ The canvas reuses `StudioCanvas` with its own node registry (`renderer/design/`)
   - Once entered, it receives input and carries `nodrag nowheel`.
   - Escape leaves the frame.
 - **Reload:** when its file or any asset under the same folder changes on disk, the frame reloads in place. The file watch is debounced by 150 ms and scoped to the open frames.
+- **Pages Aiden writes (2026-11-12):** while design mode is on, an HTML page Aiden writes or edits with `write_file` or `edit_file` in an attended desktop turn lands as an Aiden file frame beside the frames in view (once per path, on any page of the canvas) and the canvas fits it; later saves reload it through the watch. Design mode is checked at each write, so turning it on mid-reply works. Opening design mode on an empty canvas places the HTML pages the chat's earlier replies wrote (at most 12, newest kept, only files that still exist). Hidden folders and `node_modules` are skipped. A change queued while the watched set is replaced is kept for the pages that stay watched.
 
 ### 5.4 The `aiden-design:` scheme
 
@@ -274,7 +275,7 @@ The canvas tools are host-owned and registered only for desktop turns in a chat 
 | Tool | Does | Returns |
 |---|---|---|
 | `canvas_read` | Describes one page of the canvas (the one on screen unless `page` names another) and lists every page. | The viewport, the frames in view with their kind, title, path, box, group and open comments, a summary of the frames outside the view clustered by group, the selection, and (since P4e) the page's open and sent comments with what each points at. With `{snapshot: true}` it also attaches a downscaled screenshot of the canvas region (longest side at most 1 568 px). |
-| `canvas_place_frame` | Adds a frame. It takes `{kind: "file" \| "image" \| "note" \| "group" \| "text" \| "shape" \| "connector" \| "frame", path?, text?, title, x?, y?, w?, h?, groupId?, designWidth?, page?}`. Since P4b, `text` and `shape` (`shape: "rect" \| "oval"`, with its label in `text`) take `color`, `fill` and `size`, and since P4c a `note` takes `size`, `color` and `fill` too, and notes and text hold the Markdown subset (`**bold**`, `*italic*`, `<u>underline</u>`, links, `- ` and `1. ` lists); a `connector` takes `from` and `to`, each `{frameId, side?}` or `{x, y}`, and `arrow: "none" \| "end" \| "both"`; a `frame` is an empty artboard that holds what is placed in it. Pencil and pen strokes are drawn only by the person. | The new frame's ID and box. If x and y are left out, the frame goes to the right of the last frame in its group, or of the current view, with a 64 px gap. |
+| `canvas_place_frame` | Adds a frame. It takes `{kind: "file" \| "image" \| "note" \| "group" \| "text" \| "shape" \| "connector" \| "frame", path?, text?, title, x?, y?, w?, h?, groupId?, designWidth?, page?}`. Since P4b, `text` and `shape` (`shape: "rect" \| "oval"`, with its label in `text`) take `color`, `fill` and `size`, and since P4c a `note` takes `size`, `color` and `fill` too, and notes and text hold the Markdown subset (`**bold**`, `*italic*`, `<u>underline</u>`, links, `- ` and `1. ` lists); a `connector` takes `from` and `to`, each `{frameId, side?}` or `{x, y}`, and `arrow: "none" \| "end" \| "both"`; a `frame` is an empty artboard that holds what is placed in it. Pencil and pen strokes are drawn only by the person. | The new frame's ID and box. If x and y are left out, the frame goes to the right of the last frame in its group, or of the current view, with a 64 px gap. A `file` for a page that already landed by itself (Aiden's, ungrouped, same page and width) moves that frame instead of adding a copy. |
 | `canvas_update_frame` | Moves, resizes, retitles or regroups a frame, and (since P4b) changes text, colours, size and connector ends. Moving an artboard moves what it holds; connectors follow the frames they are on. | The frame. |
 | `canvas_remove_frame` | Removes a frame Aiden created. Removing a person's frame needs `confirm: true` and shows a one-line notice in chat. | `removed`. |
 | `canvas_focus` | Pans and zooms to frames, but only while the person is not interacting with the canvas. | `focused` or `skipped`. |
@@ -314,7 +315,7 @@ A built-in desktop skill, `aiden-design`, joins the desktop-only artifact skills
 - write each design as a self-contained HTML file under `design/`, with assets beside it and no network;
 - use `aiden-design:` library paths for charts and math;
 - add `data-aiden-src` stamps to meaningful elements, and keep `data-aiden-comment` IDs;
-- place each file with `canvas_place_frame`, at most 3 directions per request, each in its own group;
+- let each page it writes land on the canvas by itself, and use `canvas_place_frame` to group pages (at most 3 directions per request, each in its own group), move them or show them at another width;
 - make small edits to one file at a time;
 - treat each comment as an edit request scoped to its element;
 - say which file changed.

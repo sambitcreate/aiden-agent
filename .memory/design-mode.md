@@ -219,3 +219,12 @@ Deviations from the P1 plan:
 - `FrameSnapshotCache.stamp` hands out a global sequence; `set` keeps a picture only when its stamp is newer than the frame's last kept or forgotten one, so the latest-started capture wins.
 - In RTL `waitFor` checks, never strict-assert a DOM element against null: the failure diff of a happy-dom element is slow enough to starve `waitFor`'s timers. Compare `=== null` to a boolean.
 
+
+## Live pages while Aiden works (2026-11-12)
+
+- Owner reported the canvas staying empty while Aiden edited `design/*.html` (the model never called `canvas_place_frame`, and the canvas tools only exist when the turn starts in design mode). Fix: `main/services/design-canvas/written-pages.ts`. llm-client's `tool_execution_end` passes each completed `write_file`/`edit_file` `producedFile` to `placeWrittenPage` (set when `designCanvasToolsAllowed({...designTurn, designMode: true})`), which re-reads `designMode` at each write, places a file frame once per path (any page) and sends `designCanvas:focus`. Codemode's nested calls emit their own events, so they count. `run_command` writes do not.
+- `chatApplicationService.setDesignMode` calls `designPagesOnEntry` (wired in `chat-application-service-main.ts`) only on an off→on change with a workspace folder; it places `pagesWrittenInChat(chat.messages)` (saved timeline `producedFile`s, newest 12) on an empty canvas only, then broadcasts `designCanvas:focus` (the focus store keeps it until the canvas mounts). Never awaited by the switch.
+- `canvas_place_frame` kind file adopts an existing Aiden, ungrouped frame of the same path, page and width (keeps its id, lock, tweaks) instead of adding a copy; the prompt section and `aiden-design` skill say pages land by themselves.
+- Watcher: `set()` used to drop events queued under the old set (close cleared the debounce). A page landing while Aiden edits another page lost that edit (seen once in E2E). Now pending events for pages still watched carry over, and an async flush reports to the replacing watch for pages it still watches (`ChatWatch.paths`).
+- Canvas focus waited the full 3 s because `getNodes()` on the controlled flow never carries `measured`; it now checks `getInternalNode(id).measured`.
+- E2E: `tests/e2e/design-canvas.spec.ts` "pages Aiden writes land on the canvas by themselves…" (shots `1440-canvas-earlier-page`, `1440-canvas-live-pages`).

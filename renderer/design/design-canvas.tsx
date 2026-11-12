@@ -407,7 +407,9 @@ function LoadedDesignCanvas({
     // Frames Aiden just placed arrive with the next canvas read, and a canvas
     // that just opened has not measured them yet; wait briefly for both.
     const waited = Date.now() - pendingFocus.at;
-    const measured = flow.current?.getNodes().some((node) => (node.measured?.width ?? 0) > 0) ?? false;
+    // Measurements live on React Flow's internal nodes; the controlled nodes it hands back never carry them.
+    const measuredIds = present.length > 0 ? present : nodes.map((node) => node.id);
+    const measured = measuredIds.some((id) => (flow.current?.getInternalNode(id)?.measured?.width ?? 0) > 0);
     const arriving = present.length < pendingFocus.ids.length || (nodes.length > 0 && !measured);
     if (arriving && waited < FOCUS_WAIT_MS) {
       const timer = setTimeout(() => setPendingFocus((current) => (current ? { ...current } : current)), 200);

@@ -121,7 +121,7 @@ export const DESIGN_MODE_PROMPT_SECTION = [
   "## Design mode is on",
   "This chat sits beside an infinite design canvas. The person sees its frames while you talk. Load the aiden-design skill before you design on it.",
   "- Call canvas_read before changing the canvas, and again if the person says they moved things.",
-  "- To show a design, write a self-contained HTML file in the workspace (for example under design/), then place it with canvas_place_frame. Put each direction in its own group.",
+  "- To show a design, write a self-contained HTML file in the workspace (for example under design/). Each page you write or edit lands on the canvas by itself and reloads as you save it. Use canvas_place_frame on a page only to group it, move it or show it at another width. Put each direction in its own group.",
   "- A visual you draw with render_artifact also lands on the canvas. Drawing it again under the same title replaces it in place.",
   "- Move, resize or retitle your own frames with canvas_update_frame. Remove a frame the person added only when they ask, with confirm: true.",
   "- For a flow or diagram, place shapes (with their labels in text), text and frames (artboards), then connectors between them by frameId; a connector follows its frames when they move.",
@@ -432,14 +432,58 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 ...(outline ? { color: outline } : {}),
                 ...(arrow ? { arrow } : {}),
               };
-              const placed = placeFrame(doc, input, canvasView(doc, undefined, pageId), () => id);
+              // A page Aiden wrote is already on the canvas by itself (see
+              // written-pages.ts). Placing it again adopts that frame, keeping
+              // its id, instead of adding a second copy beside it.
+              const adopted =
+                kind === "file"
+                  ? doc.frames.find(
+                      (entry) =>
+                        entry.kind === "file" &&
+                        entry.pageId === pageId &&
+                        entry.path === path &&
+                        entry.createdBy === "aiden" &&
+                        entry.groupId === undefined &&
+                        (entry.designWidth ?? DEFAULT_DESIGN_WIDTH) === width,
+                    )
+                  : undefined;
+              if (adopted && !groupId && (x === undefined || y === undefined)) {
+                const frames = doc.frames.map((entry) =>
+                  entry.id === adopted.id
+                    ? {
+                        ...entry,
+                        title,
+                        ...(p.w !== undefined ? { w: clampSize(w, "file") } : {}),
+                        ...(p.h !== undefined ? { h: clampSize(h, "file") } : {}),
+                      }
+                    : entry,
+                );
+                const next = { ...doc, frames };
+                const frame = next.frames.find((entry) => entry.id === adopted.id)!;
+                return { doc: next, value: { status: "placed", units: "canvas", frame: summarizeFrame(frame) } };
+              }
+              const frameId = adopted?.id ?? id;
+              const base = adopted ? { ...doc, frames: doc.frames.filter((entry) => entry.id !== adopted.id) } : doc;
+              const placed = placeFrame(base, input, canvasView(base, undefined, pageId), () => frameId);
               if ("error" in placed) {
                 throw new CanvasToolError(
                   `The canvas is full (${DESIGN_CANVAS_LIMITS.frames} frames, ${DESIGN_CANVAS_LIMITS.framesPerPage} on a page). Remove a frame first.`,
                 );
               }
-              const frame = placed.doc.frames.find((entry) => entry.id === id)!;
-              return { doc: placed.doc, value: { status: "placed", units: "canvas", frame: summarizeFrame(frame) } };
+              let placedDoc = placed.doc;
+              if (adopted) {
+                // Keep what the person set on the adopted frame (lock, tweaks, dark); take the new box and group.
+                placedDoc = {
+                  ...placedDoc,
+                  frames: placedDoc.frames.map((entry) => {
+                    if (entry.id !== frameId) return entry;
+                    const { groupId: _oldGroup, ...kept } = adopted;
+                    return { ...kept, title: entry.title, x: entry.x, y: entry.y, w: entry.w, h: entry.h, ...(entry.groupId ? { groupId: entry.groupId } : {}) };
+                  }),
+                };
+              }
+              const frame = placedDoc.frames.find((entry) => entry.id === frameId)!;
+              return { doc: placedDoc, value: { status: "placed", units: "canvas", frame: summarizeFrame(frame) } };
             });
           }),
       },

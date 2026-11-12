@@ -604,6 +604,37 @@ test("replacing the watched set closes the old watchers", async (t) => {
   assert.equal(open(), 0);
 });
 
+test("a change queued just before the watched set grows is still reported for the pages that stay watched", async (t) => {
+  // A page Aiden writes lands as a frame, which replaces the watched set,
+  // while Aiden's edit to another page is still waiting out the quiet period.
+  const root = await workspace(t, {
+    "design/home.html": "<p>1</p>",
+    "design/library.html": "<p>1</p>",
+    "other/gone.html": "<p>1</p>",
+  });
+  const emitters: Array<(event: string, filename: string | null) => void> = [];
+  const updates: DesignFilesChanged[] = [];
+  const instance = new DesignFileWatcher({
+    onChange: (update) => updates.push(update),
+    watch: (_folder, _options, listener) => {
+      emitters.push(listener as (event: string, filename: string | null) => void);
+      return Object.assign(new EventEmitter(), { close: () => undefined }) as unknown as fs.FSWatcher;
+    },
+  });
+  t.after(() => instance.clearAll());
+  await instance.set("chat-1", root, ["design/home.html", "other/gone.html"]);
+  assert.equal(emitters.length, 2, "each page's folder is watched");
+  const [designFolder, otherFolder] = emitters as [
+    (event: string, filename: string | null) => void,
+    (event: string, filename: string | null) => void,
+  ];
+  designFolder("change", "home.html");
+  otherFolder("change", "gone.html");
+  await instance.set("chat-1", root, ["design/home.html", "design/library.html"]);
+  await sleep(DESIGN_WATCH_DEBOUNCE_MS + 100);
+  assert.deepEqual(updates, [{ chatId: "chat-1", paths: ["design/home.html"] }], "a page no longer watched is not reported");
+});
+
 test("at most 50 paths are watched", async (t) => {
   const files = Object.fromEntries(Array.from({ length: 60 }, (_, index) => [`design/f${index}.html`, "x"]));
   const root = await workspace(t, files);

@@ -64,6 +64,37 @@ test("Aiden places a workspace page, a note and a group, and an open canvas hear
   assert.ok(broadcasts.every((update) => update.chatId === "chat-1"));
 });
 
+test("placing a page that already landed on the canvas by itself moves that frame instead of adding a copy", async (t) => {
+  const { store, call } = await setup(t);
+  // The page landed by itself after Aiden wrote it (written-pages.ts).
+  await store.update("chat-1", (doc) => ({
+    ...doc,
+    frames: [
+      { id: "auto", kind: "file", title: "home.html", path: "design/home.html", x: 0, y: 0, w: 640, h: 436, designWidth: 1280, pageId: doc.activePageId, createdBy: "aiden", locked: true },
+    ],
+  }));
+  const retitled = await call("canvas_place_frame", { kind: "file", title: "Home", path: "design/home.html" });
+  assert.equal(retitled.frame.id, "auto");
+  assert.deepEqual(retitled.frame.box, { x: 0, y: 0, w: 640, h: 436 });
+
+  const group = await call("canvas_place_frame", { kind: "group", title: "Direction A", x: 0, y: 2000, w: 2000, h: 1200 });
+  const grouped = await call("canvas_place_frame", { kind: "file", title: "Home", path: "design/home.html", groupId: group.frame.id });
+  assert.equal(grouped.frame.id, "auto");
+  assert.equal(grouped.frame.groupId, group.frame.id);
+  assert.ok(grouped.frame.box.y >= 2000, "it moved into the group");
+
+  // Once grouped it is the person's layout: another placement at a new width is a second frame.
+  const phone = await call("canvas_place_frame", { kind: "file", title: "Home phone", path: "design/home.html", designWidth: 390 });
+  assert.notEqual(phone.frame.id, "auto");
+
+  const doc = await store.get("chat-1");
+  const pages = doc.frames.filter((frame) => frame.kind === "file");
+  assert.equal(pages.length, 2);
+  const adopted = pages.find((frame) => frame.id === "auto")!;
+  assert.equal(adopted.title, "Home");
+  assert.equal(adopted.locked, true, "what the person set on the frame stays");
+});
+
 test("a frame placed into a group sits inside it, and moving the group moves its frames", async (t) => {
   const { store, call } = await setup(t);
   const group = await call("canvas_place_frame", { kind: "group", title: "Direction A", x: 100, y: 100, w: 2000, h: 1200 });

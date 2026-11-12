@@ -1,4 +1,5 @@
-import { logger } from "../platform.js";
+import { randomUUID } from "node:crypto";
+import { ipcMain, logger } from "../platform.js";
 import { chatStore } from "./chat-store.js";
 import { configStore } from "./config-store.js";
 import { displayImageArtifactStore } from "./display-image-artifact-store.js";
@@ -17,6 +18,8 @@ import { remoteAttachmentStore } from "./aiden-remote-attachments-main.js";
 import { toolOutputStore } from "./tool-output-store.js";
 import { chatPullRequestStore } from "./chat-pull-request-service-main.js";
 import { designCanvasStore, designGrants } from "./design-canvas/main.js";
+import { EARLIER_PAGES_LIMIT, pagesWrittenInChat, placeWrittenPagesOnCanvas } from "./design-canvas/written-pages.js";
+import { DESIGN_CANVAS_UPDATED_CHANNEL } from "../handlers/design-canvas.js";
 import { cancelVisualSnapshots } from "./visual-snapshot-service.js";
 import { beginFollowThroughMove, deleteChatFollowThrough, restoreChatFollowThrough } from "./follow-through/follow-through-main.js";
 import { interruptedWaits } from "./interrupted-waits-main.js";
@@ -39,6 +42,19 @@ export const chatApplicationService = createChatApplicationService({
   chatPullRequestStore,
   designCanvasStore,
   designGrants,
+  designPagesOnEntry: async (chat, workspaceRoot) => {
+    const frameIds = await placeWrittenPagesOnCanvas({
+      chatId: chat.id,
+      workspaceRoot,
+      paths: pagesWrittenInChat(chat.messages).slice(-EARLIER_PAGES_LIMIT),
+      store: designCanvasStore,
+      broadcast: (update) => ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, update),
+      newId: randomUUID,
+      onlyIfEmpty: true,
+    });
+    // The canvas fits them once it loads, so the person sees them whole.
+    if (frameIds.length > 0) ipcMain.broadcast("designCanvas:focus", { chatId: chat.id, frameIds });
+  },
   visualSnapshots: { cancelChat: cancelVisualSnapshots },
   followThrough: { beginMove: beginFollowThroughMove, deleteChat: deleteChatFollowThrough, restoreChat: restoreChatFollowThrough },
   memoryStore,

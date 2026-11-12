@@ -534,6 +534,7 @@ import { createDesignModeTool, DESIGN_MODE_TOOL_NAME } from "./design-canvas/des
 import { chatSurface } from "../../renderer/shared/chat-visibility.js";
 import { canvasPromptLine } from "../../renderer/shared/design-canvas/canvas-summary.js";
 import { placeArtifactsOnCanvas, type CanvasArtifact } from "./design-canvas/artifact-frames.js";
+import { placeWrittenPagesOnCanvas, writtenPagePath } from "./design-canvas/written-pages.js";
 import { DESIGN_CANVAS_UPDATED_CHANNEL } from "../handlers/design-canvas.js";
 
 subagentRuntimeRegistry.setHealthMetrics(subagentHealthMetrics);
@@ -2424,6 +2425,39 @@ async function prepareGeneration(
       if (designModeTool.length > 0) generationExtensions.push({ id: "aiden.design-mode", tools: designModeTool });
     }
   }
+  /**
+   * Set when this turn could use the canvas: puts an HTML page Aiden just wrote
+   * or edited on it while design mode is on, so the person watches the design
+   * take shape. Design mode is checked at each write, so turning it on
+   * mid-reply works too. Writes are placed one after another.
+   */
+  let placeWrittenPage: ((relativePath: string) => void) | undefined;
+  if (
+    folderPath &&
+    !options.excludeToolNames?.has("canvas_place_frame") &&
+    designCanvasToolsAllowed({ ...designTurn, designMode: true })
+  ) {
+    const pageRoot = folderPath;
+    let pagesPlaced: Promise<void> = Promise.resolve();
+    placeWrittenPage = (relativePath) => {
+      pagesPlaced = pagesPlaced.then(async () => {
+        if (signal.aborted || (await chatStore.getMeta(params.chatId))?.designMode !== true) return;
+        const placedIds = await placeWrittenPagesOnCanvas({
+          chatId: params.chatId,
+          workspaceRoot: pageRoot,
+          paths: [relativePath],
+          store: designCanvasStore,
+          broadcast: (update) => ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, update),
+          newId: randomUUID,
+        });
+        if (placedIds.length > 0 && !browserOwner.isDestroyed()) {
+          browserOwner.send("designCanvas:focus", { chatId: params.chatId, frameIds: placedIds });
+        }
+      }).catch((error) => {
+        logger.warn("pi", "Could not put a written page on the design canvas.", error);
+      });
+    };
+  }
   /** Declares the held canvas tools from the step after the person entered design mode. */
   const withEnteredCanvasTools = (context: AgentContext): AgentContext => {
     if (!enteredDesignModeThisTurn || heldCanvasTools.length === 0) return context;
@@ -2471,6 +2505,7 @@ async function prepareGeneration(
     displayedImages,
     displayedHtmlArtifacts,
     placeCanvasArtifacts,
+    placeWrittenPage,
     withEnteredCanvasTools,
     appPanels,
     htmlArtifactPlacements,
@@ -2868,6 +2903,7 @@ export const llmClient = {
       displayedImages,
       displayedHtmlArtifacts,
       placeCanvasArtifacts,
+      placeWrittenPage,
       withEnteredCanvasTools,
       appPanels,
       htmlArtifactPlacements,
@@ -4932,6 +4968,10 @@ export const llmClient = {
             });
             // A failed command may still have written files, so only a denied call is skipped.
             if (!denied) notifyWorkspaceFilesTouched(workspaceId, event.toolName);
+            if (placeWrittenPage && terminalStatus === "completed") {
+              const page = writtenPagePath(event.toolName, event.result?.details);
+              if (page) placeWrittenPage(page);
+            }
             break;
           }
           default:
