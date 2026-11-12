@@ -531,3 +531,24 @@ export function approvalRuleKindLabel(kind: ApprovalRuleTargetKind): string {
 export function approvalRuleGroupOf(decision: ApprovalRuleDecision): Exclude<ApprovalRuleRowGroup, "mac"> {
   return decision;
 }
+
+/**
+ * Aiden's own tools that Add rule offers: the ones that change or send
+ * something, or reach the web. Labels say what the tool does.
+ */
+export const APPROVAL_RULE_AIDEN_TOOLS: readonly { tool: string; label: string; description?: string }[] = [
+  { tool: "browser_click", label: "Click on a web page" },
+  { tool: "browser_type", label: "Type on a web page" },
+  { tool: "browser_press", label: "Press keys on a web page" },
+  { tool: "browser_evaluate", label: "Run a script on a web page", description: "Workspace chats only" },
+  { tool: "browser_navigate", label: "Go to a web page" },
+  { tool: "web_fetch", label: "Fetch a web page" },
+  { tool: "web_search", label: "Search the web" },
+  { tool: "share_image", label: "Share an image" },
+  { tool: "generate_image", label: "Create an image" },
+  { tool: "run_command", label: "Run a command", description: "Your Mac still asks on first use" },
+  { tool: "write_file", label: "Create or replace a file", description: "Your Mac still asks on first use" },
+  { tool: "edit_file", label: "Edit a file", description: "Your Mac still asks on first use" },
+  { tool: "background_job", label: "Start a background job" },
+  { tool: "forget_fact", label: "Forget a memory" },
+];

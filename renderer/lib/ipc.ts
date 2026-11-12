@@ -333,6 +333,15 @@ import type {
 } from "../shared/workspace-artifacts";
 import type { DesignCanvas } from "../shared/design-canvas/schema";
 import { invoke, onNotification } from "./ipc-bridge";
+import {
+  APPROVAL_RULE_CHANNELS,
+  type ApprovalRule,
+  type ApprovalRuleAddInput,
+  type ApprovalRuleChangeInput,
+  type ApprovalRulePickerOption,
+  type ApprovalRuleRowRef,
+  type ApprovalRulesView,
+} from "../shared/approval-rules";
 
 export { invoke, onNotification } from "./ipc-bridge";
 export { dictationApi, settingsApi, voiceApi } from "./ipc-voice";
@@ -719,6 +728,16 @@ export const hooksApi = {
     onNotification<HooksChangedEvent>(HOOKS_CHANGED_CHANNEL, (event) => {
       if (event && typeof event.reason === "string") handler(event);
     }),
+};
+
+/** Settings → Approvals, the rules page. */
+export const approvalRulesApi = {
+  list: () => invoke<ApprovalRulesView>(APPROVAL_RULE_CHANNELS.list),
+  picker: () => invoke<ApprovalRulePickerOption[]>(APPROVAL_RULE_CHANNELS.picker),
+  add: (input: ApprovalRuleAddInput) => invoke<ApprovalRule>(APPROVAL_RULE_CHANNELS.add, input),
+  change: (input: ApprovalRuleChangeInput) => invoke<{ changed: boolean }>(APPROVAL_RULE_CHANNELS.change, input),
+  remove: (ref: ApprovalRuleRowRef) => invoke<{ removed: boolean }>(APPROVAL_RULE_CHANNELS.remove, { ref }),
+  onChanged: (handler: () => void) => onNotification(APPROVAL_RULE_CHANNELS.changed, () => handler()),
 };
 
 export const computerUseApi = {

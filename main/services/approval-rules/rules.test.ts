@@ -141,7 +141,7 @@ test("Add and Change inputs are strict: no Bot owner from the page, no allow in 
     { target: { kind: "site", host: "localhost" }, decision: "allow" },
     { target: { kind: "tool", tool: "a b" }, decision: "allow" },
   ]) {
-    assert.throws(() => parseApprovalRuleAddInput(input), undefined, JSON.stringify(input));
+    assert.throws(() => parseApprovalRuleAddInput(input), Error, JSON.stringify(input));
   }
   assert.throws(() => parseApprovalRuleChangeInput({ ref: { source: "rule", id: "r1" } }));
   assert.throws(() => parseApprovalRuleChangeInput({ ref: { source: "bot-allow", botId: "ada", entryId: "e", extra: 1 }, decision: "ask" }));
