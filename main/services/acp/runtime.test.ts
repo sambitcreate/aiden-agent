@@ -579,6 +579,47 @@ test(
   },
 );
 
+test("a failed edit forgets only its own write, so a later edit to the same page keeps its provenance", async (t) => {
+  const h = harness();
+  t.after(() => h.runtime.close());
+  const workspace = path.join(h.dir, "workspace");
+  await fs.mkdir(path.join(workspace, "design"), { recursive: true });
+  const timeline = new GenerationTimelineProjector("stream-1", () => {});
+  const host = createAcpGenerationHost({
+    chatId: "chat-1",
+    streamId: "stream-1",
+    label: "Fake Agent",
+    folderPath: workspace,
+    folderIdentity: await captureRootIdentity(workspace),
+    scratchDir: path.join(h.dir, "scratch"),
+    permission: () => "full",
+    timeline,
+    requestApproval: async () => "allowed",
+    takeApprovalScope: () => undefined,
+  });
+  h.hosts.register(host);
+  const page = path.join(workspace, "design", "page.html");
+  const result = await turn(h, [
+    toolScript([
+      { sessionUpdate: "tool_call", toolCallId: "edit-a", title: "Edit A", kind: "edit", status: "in_progress", locations: [{ path: page }] },
+      { sessionUpdate: "tool_call", toolCallId: "edit-b", title: "Edit B", kind: "edit", status: "in_progress", locations: [{ path: page }] },
+      { write: { path: page, content: "<h1>A</h1>\n" } },
+      { write: { path: page, content: "<h1>Page B</h1>\n" } },
+      { sessionUpdate: "tool_call_update", toolCallId: "edit-a", status: "failed" },
+      { sessionUpdate: "tool_call_update", toolCallId: "edit-b", status: "completed" },
+    ]),
+  ]);
+  assert.equal(result.stopReason, "stop");
+  const steps = timeline.finish("completed").steps.filter((step) => step.kind === "tool");
+  assert.deepEqual(
+    steps.map((step) => step.kind === "tool" && [step.status, step.producedFile ?? null]),
+    [
+      ["failed", null],
+      ["completed", { relativePath: "design/page.html", operation: "edited", bytes: 16 }],
+    ],
+  );
+});
+
 test("a denied approval leaves the file untouched and marks the activity blocked", async () => {
   const h = harness();
   const file = path.join(h.dir, "notes.txt");

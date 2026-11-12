@@ -99,6 +99,8 @@ interface WrittenFileEntry {
   created: boolean;
   bytes: number;
   lineChanges: { additions: number; deletions: number };
+  /** The write or edit activity that was open on this path when the write landed, if any. */
+  activityId?: string;
 }
 
 interface Turn {
@@ -114,6 +116,8 @@ interface Turn {
   unscopedWriteGrants: number;
   /** Host-confirmed file writes in this turn, queued FIFO per workspace-relative path. */
   writtenFiles: Map<string, WrittenFileEntry[]>;
+  /** Write and edit activities started but not finished, oldest first, with the path each names. */
+  openWriteActivities: Map<string, string>;
 }
 
 interface Binding {
@@ -429,6 +433,7 @@ export class AcpHarnessRuntime {
         writeGrants: new Set(),
         unscopedWriteGrants: 0,
         writtenFiles: new Map(),
+        openWriteActivities: new Map(),
       };
       binding.turn = turn;
       binding.hostInstructionsFingerprint = instructionFingerprint;
@@ -724,6 +729,7 @@ export class AcpHarnessRuntime {
               const relativePath = relativeDisplayPath(file, current.roots);
               if (relativePath) {
                 recordWrittenFile(turn, relativePath, {
+                  activityId: openWriteActivityFor(turn, relativePath),
                   created: before === undefined,
                   bytes: Buffer.byteLength(after, "utf8"),
                   lineChanges: lineChangeCounts(before ?? "", after),
@@ -944,12 +950,11 @@ export class AcpHarnessRuntime {
     const step = timelineStepFor(activity, host.roots);
     if (!step) return;
     const targetPath = typeof step.args.path === "string" ? step.args.path : undefined;
-    const written =
-      activity.status === "completed" &&
-      (step.toolName === "write_file" || step.toolName === "edit_file") &&
-      targetPath
-        ? shiftWrittenFile(binding.turn, targetPath)
-        : undefined;
+    const writes = (step.toolName === "write_file" || step.toolName === "edit_file") && targetPath !== undefined;
+    const finished = activity.status === "completed" || activity.status === "failed";
+    if (writes && !finished) noteOpenWriteActivity(binding.turn, id, targetPath);
+    const written = writes && activity.status === "completed" ? takeWrittenFile(binding.turn, targetPath, id) : undefined;
+    if (finished) binding.turn?.openWriteActivities.delete(id);
     if (!binding.startedActivities.has(id)) {
       if (written?.created && step.toolName === "edit_file") {
         step.toolName = "write_file";
@@ -982,7 +987,8 @@ export class AcpHarnessRuntime {
           : undefined,
       );
     } else if (activity.status === "failed") {
-      if (targetPath) binding.turn?.writtenFiles.delete(targetPath);
+      // Only this activity's own write is dropped; later writes to the path keep their provenance.
+      if (writes) dropWrittenFiles(binding.turn, targetPath, id);
       host.activity.finished(id, "failed");
     }
   }
@@ -1002,6 +1008,9 @@ export class AcpHarnessRuntime {
     if (step && !binding.startedActivities.has(id)) {
       binding.startedActivities.set(id, step.toolName);
       host.activity.started(id, step.toolName, step.args);
+    }
+    if (step && (step.toolName === "write_file" || step.toolName === "edit_file") && typeof step.args.path === "string") {
+      noteOpenWriteActivity(binding.turn, id, step.args.path);
     }
     const turn = binding.turn;
     const response = await answerPermission(request, classification, host, turn.controller.signal, step ? id : undefined);
@@ -1174,12 +1183,51 @@ function recordWrittenFile(turn: Turn, relativePath: string, entry: WrittenFileE
   turn.writtenFiles.set(relativePath, [entry]);
 }
 
-function shiftWrittenFile(turn: Turn | undefined, relativePath: string): WrittenFileEntry | undefined {
+const MAX_OPEN_WRITE_ACTIVITIES = 512;
+
+function noteOpenWriteActivity(turn: Turn | undefined, activityId: string, relativePath: string): void {
+  if (!turn || turn.openWriteActivities.has(activityId)) return;
+  if (turn.openWriteActivities.size >= MAX_OPEN_WRITE_ACTIVITIES) {
+    const oldest = turn.openWriteActivities.keys().next().value;
+    if (oldest !== undefined) turn.openWriteActivities.delete(oldest);
+  }
+  turn.openWriteActivities.set(activityId, relativePath);
+}
+
+/** The oldest open write or edit on `relativePath` that has no write of its own yet. */
+function openWriteActivityFor(turn: Turn, relativePath: string): string | undefined {
+  const queue = turn.writtenFiles.get(relativePath) ?? [];
+  for (const [activityId, target] of turn.openWriteActivities) {
+    if (target === relativePath && !queue.some((entry) => entry.activityId === activityId)) return activityId;
+  }
+  return undefined;
+}
+
+/**
+ * The write a finished activity made: the one landed while it was open, or
+ * else the oldest write no other open activity claimed (an agent may report a
+ * creation only once it is done).
+ */
+function takeWrittenFile(turn: Turn | undefined, relativePath: string, activityId: string): WrittenFileEntry | undefined {
   const queue = turn?.writtenFiles.get(relativePath);
   if (!queue) return undefined;
-  const next = queue.shift();
+  let index = queue.findIndex((entry) => entry.activityId === activityId);
+  if (index < 0) {
+    index = queue.findIndex((entry) => entry.activityId === undefined || !turn!.openWriteActivities.has(entry.activityId));
+  }
+  if (index < 0) return undefined;
+  const [next] = queue.splice(index, 1);
   if (queue.length === 0) turn?.writtenFiles.delete(relativePath);
   return next;
+}
+
+/** Forgets the writes a failed activity made on the path, and only those. */
+function dropWrittenFiles(turn: Turn | undefined, relativePath: string, activityId: string): void {
+  const queue = turn?.writtenFiles.get(relativePath);
+  if (!queue) return;
+  const kept = queue.filter((entry) => entry.activityId !== activityId);
+  if (kept.length === 0) turn?.writtenFiles.delete(relativePath);
+  else turn?.writtenFiles.set(relativePath, kept);
 }
 
 /**

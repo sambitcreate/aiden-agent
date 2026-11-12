@@ -781,3 +781,45 @@ test("adversarial edge cases: partial size with designWidth, cross-page regroupi
   await call("canvas_update_frame", { id: pinnedNote.frame.id, locked: false });
   assert.equal((await call("canvas_arrange", { frameIds: [lockedGroup.frame.id, pinnedNote.frame.id] })).status, "error");
 });
+
+test("a locked group or artboard keeps its box: nothing can be placed, moved or arranged into it, and frames leaving it do not refit it", async (t) => {
+  const { store, call } = await setup(t);
+  const group = await call("canvas_place_frame", { kind: "group", title: "Pinned set", x: 0, y: 0, w: 400, h: 300 });
+  const artboard = await call("canvas_place_frame", { kind: "frame", title: "Phone", x: 2000, y: 0, w: 390, h: 844 });
+  const member = await call("canvas_place_frame", { kind: "note", title: "Inside", groupId: group.frame.id });
+  const loose = await call("canvas_place_frame", { kind: "note", title: "Loose", x: 900, y: 900 });
+  await call("canvas_update_frame", { id: group.frame.id, locked: true });
+  await call("canvas_update_frame", { id: artboard.frame.id, locked: true });
+  const boxes = async () => {
+    const doc = await store.get("chat-1");
+    return [group.frame.id, artboard.frame.id].map((id) => {
+      const frame = doc.frames.find((entry) => entry.id === id)!;
+      return [frame.x, frame.y, frame.w, frame.h];
+    });
+  };
+  const before = await boxes();
+
+  for (const target of [group.frame.id, artboard.frame.id]) {
+    const placed = await call("canvas_place_frame", { kind: "note", title: "New", groupId: target, x: 5000, y: 5000 });
+    assert.equal(placed.status, "error");
+    assert.match(placed.message, /locked/u);
+    assert.equal((await call("canvas_update_frame", { id: loose.frame.id, groupId: target, x: 5000, y: 5000 })).status, "error");
+    assert.equal((await call("canvas_arrange", { frameIds: [loose.frame.id], groupId: target })).status, "error");
+  }
+  assert.deepEqual(await boxes(), before);
+  const after = await store.get("chat-1");
+  assert.ok(after.frames.every((frame) => frame.title !== "New"));
+  assert.equal(after.frames.find((frame) => frame.id === loose.frame.id)!.groupId, undefined);
+
+  // A member already inside can still move, naming its own group, without growing it.
+  const moved = await call("canvas_update_frame", { id: member.frame.id, groupId: group.frame.id, x: 3000, y: 3000 });
+  assert.equal(moved.status, "updated");
+  assert.equal(moved.frame.groupId, group.frame.id);
+  assert.deepEqual(await boxes(), before);
+
+  // Arranging it out of the group leaves the locked group's box as it was.
+  const out = await call("canvas_arrange", { frameIds: [member.frame.id], groupId: null, x: 6000, y: 0, focus: false });
+  assert.equal(out.status, "arranged");
+  assert.equal(out.frames[0].groupId, undefined);
+  assert.deepEqual(await boxes(), before);
+});

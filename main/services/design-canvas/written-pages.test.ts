@@ -224,6 +224,40 @@ test("deleted newest pages do not starve older surviving pages under limit, and 
   assert.deepEqual(broadcasts, ["chat-1:1"]);
 });
 
+test("leaving design mode while the page's save waits keeps the frame off the stored canvas", async (t) => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-written-pages-exit-"));
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const workspaceRoot = path.join(base, "workspace");
+  await fs.mkdir(path.join(workspaceRoot, "design"), { recursive: true });
+  await fs.writeFile(path.join(workspaceRoot, "design", "home.html"), "<!doctype html><title>Home</title>");
+  const store = new DesignCanvasStore({ root: () => path.join(base, "canvases") });
+  let designMode = true;
+  const broadcasts: number[] = [];
+  const placedIds = await placeWrittenPagesOnCanvas({
+    chatId: "chat-1",
+    workspaceRoot,
+    paths: ["design/home.html"],
+    // The person leaves design mode once the save is already under way.
+    store: {
+      update: (chatId, mutate, options) =>
+        store.update(
+          chatId,
+          (doc) => {
+            designMode = false;
+            return mutate(doc);
+          },
+          options,
+        ),
+    },
+    shouldSave: () => designMode,
+    broadcast: (update) => broadcasts.push(update.revision),
+    newId: ids(),
+  });
+  assert.deepEqual(placedIds, [] as string[]);
+  assert.deepEqual(broadcasts, [] as number[]);
+  assert.deepEqual((await store.get("chat-1")).frames, []);
+});
+
 test("a page's own width hint picks its design width; pages that do not say stay at 1280", () => {
   assert.equal(inferDesignWidth('<head><meta name="aiden-design-width" content="390"></head>'), 390);
   assert.equal(inferDesignWidth("<meta content='1440' name='aiden-design-width'>"), 1440);

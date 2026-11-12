@@ -264,15 +264,24 @@ async function checkedPath(root: string, value: unknown, kind: "file" | "image")
   return value;
 }
 
-function groupOf(doc: DesignCanvas, groupId: unknown, pageId: string): string | undefined {
+/**
+ * The group or artboard `groupId` names on the page. A locked one takes no new
+ * members, since joining it would grow or refit it; the frame's own current
+ * group (`currentGroupId`) still passes, as naming it changes nothing.
+ */
+function groupOf(doc: DesignCanvas, groupId: unknown, pageId: string, currentGroupId?: string): string | undefined {
   if (groupId === undefined || groupId === null || groupId === "") return undefined;
-  if (
-    typeof groupId !== "string" ||
-    !doc.frames.some((frame) => frame.id === groupId && isDesignContainer(frame.kind) && frame.pageId === pageId)
-  ) {
+  const group =
+    typeof groupId === "string"
+      ? doc.frames.find((frame) => frame.id === groupId && isDesignContainer(frame.kind) && frame.pageId === pageId)
+      : undefined;
+  if (!group) {
     throw new CanvasToolError("groupId must be the id of a group or frame (artboard) on the same page.");
   }
-  return groupId;
+  if (group.locked && group.id !== currentGroupId) {
+    throw new CanvasToolError(`${JSON.stringify(group.title || group.id)} is locked, so nothing can be put in it. Unlock it only if the person asked.`);
+  }
+  return group.id;
 }
 
 function color(value: unknown, field: string): DesignColor | undefined {
@@ -878,7 +887,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 if (isDesignContainer(current.kind)) {
                   throw new CanvasToolError("A group or frame (artboard) cannot be put inside another.");
                 }
-                const groupId = groupOf(baseDoc, p.groupId, current.pageId);
+                const groupId = groupOf(baseDoc, p.groupId, current.pageId, current.groupId);
                 const { groupId: _old, ...rest } = next;
                 next = groupId ? { ...rest, groupId } : rest;
               }
@@ -890,7 +899,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               frames = frames.map((entry) => (entry.id === current.id ? next : entry));
               // A group grows to hold a frame moved into it or past its edge.
               const group = next.groupId ? frames.find((entry) => entry.id === next.groupId) : undefined;
-              if (group?.kind === "group") {
+              if (group?.kind === "group" && !group.locked) {
                 const grown = growGroupToHold(group, next);
                 if (grown !== group) frames = frames.map((entry) => (entry.id === group.id ? grown : entry));
               }
@@ -1129,7 +1138,9 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               for (const frame of chosen) if (frame.groupId) affected.add(frame.groupId);
               if (target) affected.add(target);
               for (const id of affected) {
-                if (next.frames.find((entry) => entry.id === id)?.kind === "group") next = fitGroupToMembers(next, id);
+                const group = next.frames.find((entry) => entry.id === id);
+                // A locked group keeps its box even when frames leave it.
+                if (group?.kind === "group" && !group.locked) next = fitGroupToMembers(next, id);
               }
               for (const group of fitTargets) next = fitGroupToMembers(next, group.id);
               const fitted = [...new Set([...affected, ...fitTargets.map((group) => group.id)])]

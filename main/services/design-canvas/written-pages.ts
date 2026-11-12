@@ -245,7 +245,7 @@ export async function placeWrittenPagesOnCanvas(input: {
   onlyIfEmpty?: boolean;
   /** At most this many newest existing pages are placed, in chronological order. */
   limit?: number;
-  /** Re-checked after file reads settle so a deleted chat or exited mode is not saved. */
+  /** Checked on the canvas's own chain just before the save, so a deleted chat or exited mode is not saved. */
   shouldSave?: () => Promise<boolean> | boolean;
 }): Promise<string[]> {
   if (input.limit !== undefined && input.limit <= 0) return [];
@@ -269,17 +269,27 @@ export async function placeWrittenPagesOnCanvas(input: {
   }
   const showable = newestFirst.reverse();
   if (showable.length === 0) return [];
-  if (input.shouldSave && !(await input.shouldSave())) return [];
+  const shouldSave = input.shouldSave;
   let placedIds: string[] = [];
   try {
-    const saved = await input.store.update(input.chatId, (doc) => {
-      if (input.onlyIfEmpty && doc.frames.length > 0) throw UNCHANGED;
-      const placed = placeWrittenPageFrames(doc, showable, input.newId, widths);
-      if (!placed.changed) throw UNCHANGED;
-      placedIds = placed.placedIds;
-      return placed.doc;
-    });
-    if (input.shouldSave && !(await input.shouldSave())) return [];
+    const saved = await input.store.update(
+      input.chatId,
+      (doc) => {
+        if (input.onlyIfEmpty && doc.frames.length > 0) throw UNCHANGED;
+        const placed = placeWrittenPageFrames(doc, showable, input.newId, widths);
+        if (!placed.changed) throw UNCHANGED;
+        placedIds = placed.placedIds;
+        return placed.doc;
+      },
+      // Leaving design mode (or deleting the chat) while this waited keeps the frames off the stored canvas.
+      shouldSave
+        ? {
+            beforeWrite: async () => {
+              if (!(await shouldSave())) throw UNCHANGED;
+            },
+          }
+        : {},
+    );
     input.broadcast({ chatId: input.chatId, revision: saved.revision });
     return placedIds;
   } catch (error) {
