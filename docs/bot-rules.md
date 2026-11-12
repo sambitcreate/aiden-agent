@@ -31,8 +31,10 @@ implementation notes are in `.memory/bot-rules.md`.
   with a fresh card. Stopping a waiting turn withdraws its card without
   recording a decline. Once the person denies a card, the same call (same
   tool, request and arguments) is refused without another card for the rest
-  of that reply; a different call still asks. Identical calls waiting at the
-  same time share one card in the chat, and one answer covers them all.
+  of that reply; a call that differs in any argument still asks. Calls from
+  the same reply waiting at the same time share one card in the chat only
+  when they are the same call (same tool, request and arguments), and then one
+  answer covers them all; any other call gets its own card.
 - A rule that hands off shows a hand-off card ("Your turn: …") with Done and
   Skip; the Bot waits for the answer and never does the step itself.
 - On a routine or Telegram turn nobody is there to answer, so a step a rule

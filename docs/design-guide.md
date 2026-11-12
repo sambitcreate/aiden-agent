@@ -61,8 +61,11 @@ with screen-reader labels instead of relying on color. Specialized approvals
 (scheduled tasks, subagent grants, form fills, classifiers, hook proposals)
 keep their own review bodies inside the same card.
 
-Cards show one at a time with "1 of N", and identical calls waiting in the same
-run share one card that answers all of them. A card never blocks the composer.
+Cards show one at a time with "1 of N". Calls waiting in the same run share one
+card that answers all of them only when they are the same call: the same tool
+with the same arguments (and, in the browser, the same tab). Cards whose text
+matches but whose arguments differ stay separate. A card never blocks the
+composer.
 Once answered, the card collapses for a few seconds to one quiet status line
 where it was: **Allowed once**, **Allowed in this chat**, **Allowed in this
 workspace**, **Always allowed** or **Denied**, with a soft green check for an
