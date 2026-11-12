@@ -1,7 +1,7 @@
 # Simpler Bots and approvals: adopt Rakazo's model
 
 Date: 2026-11-12
-Status: **Proposed. The owner chose Rakazo's model on 2026-11-12 ("Ok lets use how rakazo does it"); this revision replaces the earlier hybrid. The owner answered the five open questions the same day (§9). Ready for Phase 1. No code written.**
+Status: **Phase 1 implemented on branch `claude/aiden-bot-ux-simplify-cdd73d` (2026-11-12); Phases 2–6 not started. The owner chose Rakazo's model on 2026-11-12 ("Ok lets use how rakazo does it"); this revision replaces the earlier hybrid. The owner answered the five open questions the same day (§9).**
 Baseline: `main` at `6f4d0385f` (after 0.65.0)
 Deliverable: product and engineering plan in six phases, each its own PR.
 Inputs: four explorer reports (Rakazo approvals, Rakazo bot UX, Aiden approvals inventory, Aiden bot UX inventory), spot-checked against this repo and `/Users/sambitbiswas/projects/opp/rakazo`.
@@ -346,6 +346,17 @@ Scope: extract `planActionGate` from `main/services/llm-client.ts:4298-4342` and
 Areas: `llm-client.ts`, `tool-approval.ts`, `coding-tools.ts`, `bot-rules/`, `renderer/components/chat-approval-card.tsx`, `renderer/main/bots/bot-chat-pane.tsx`, `main/services/analytics/analytics-events.ts`.
 Tests: decision table recorded from the old code (about 200 context and action pairs) asserted against the gate; rendered card tests per kind; analytics registry test.
 Risk: medium. Metric: baseline prompts per 100 turns.
+
+*Phase 1 notes (where the plan met the code):*
+
+- The gate (`main/services/approval-gate/gate.ts`) is pure and fact-based. Reads that cost something (a remembered workspace approval, a plan's cover, a Bot's allow list) come back as `lookup` at the step that needs them, and the caller asks again with the answer, so no read moves earlier than it used to. Today's workspace access stands in for the global mode until Phase 2.
+- Two pre-approvals that the plan files under "never ask" sit there: Full access, and the legacy routines "Go ahead without asking" switch (which may answer a rule's ask but never a hand-off, so hand-off rules are step 2). A plan's cover is also step 4. Computer Use on the Mac is never pre-approved there.
+- Subagent exact cards (a subagent without an implementer run grant) keep their own flow until Phase 2 removes them; the run grant itself goes through the gate.
+- Shared parallel cards live in `ToolApprovalCoordinator` for run-scoped cards. Bot waits carry their own durable ids, so a Bot chat groups identical waiting prompts in the renderer, and one answer goes to each wait id.
+- No re-ask after Deny is per stream in the coordinator (cleared when the run's stream is released) and, for Bots, in memory per reply (keyed by tool, summary and arguments). Neither survives a restart.
+- The card's "No longer active" line shows for a Bot card withdrawn while shown here. A workspace card that ends with its run still just leaves.
+- The analytics property naming the chat is `chat`, not `surface`: every event already carries a `surface` super property (desktop or server).
+- Phones are unchanged and keep their own headlines ("Run this command?") until Phase 6; the Remote approval projection is unchanged and needed no protocol revision.
 
 **Phase 2. Mode and Auto.**
 Scope: global Ask / Auto / Never ask, workspace Customize, composer chip only when customized. Tool classes, name heuristic, exempt set, Mac cards with their scopes, taint tracking, unattended refusal, the judge and the approval-model setting. Mode migration (§7). Repeat-approval nudge offers Auto.

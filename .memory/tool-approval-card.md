@@ -6,7 +6,7 @@ Branch `claude/project-thread-khrad6`. The owner asked for a better-looking Allo
   - The card is `composer-shell`, with `.approval-well` and `.approval-icon-tile` in `renderer/styles.css`.
   - `approvalHeadline` asks a plain question. `approvalCommand` strips "Run command: " from a paired host's summary.
   - Deny and Allow once are equal `size="large"` buttons. Deny keeps initial focus.
-  - The chevron menu lists "Allow for this chat" and "Always allow in this workspace", each with a one-line hint.
+  - The chevron menu lists "Allow for this chat" and "Always allow in this workspace", each with a one-line hint. (2026-11-12: renamed "Allow in this chat" / "Allow in this workspace", titles now "Run on your Mac?" etc., and Bot chats use this same card; see `approval-gate.md`.)
   - Hints must match `toolApprovalRuleTarget`: a command rule is the exact command, but a file rule is tool + path, so it covers any later edit/write to that file ("any edit to forecast.ts"). iOS/Android `scopeDetail(scope, toolName)` say the same. Pullfrog flagged the earlier "this exact action" wording as understating file grants.
   - Specialized approvals (schedule, classifier, subagent grants, form fill, MCP mutation) keep their own bodies inside the shell.
 - **Desktop-only preview** (`renderer/shared/tool-approval-preview.ts`):
