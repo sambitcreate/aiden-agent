@@ -63,6 +63,8 @@ type WatchFn = (
 type ChatWatch = {
   root: string;
   generation: number;
+  /** The pages this watch reports. */
+  paths: ReadonlySet<string>;
   folders: Array<{ close(): void }>;
   /** Each queued path → what the events that queued it say about it. */
   pending: Map<string, Queued>;
@@ -155,10 +157,17 @@ export class DesignFileWatcher {
     const byFolder = await this.groupByRealFolder(root, unique);
     // A newer `set` (or a `clear`) ran while we checked the disk.
     if (this.generations.get(chatId) !== generation) return;
+    // Changes queued under the old set and not reported yet still count for
+    // the pages that stay watched: a frame landing while Aiden edits another
+    // page must not swallow that edit.
+    const previous = this.chats.get(chatId);
+    const carried = previous && previous.root === root
+      ? [...previous.pending].filter(([relative]) => unique.includes(relative))
+      : [];
     this.close(chatId);
     if (!byFolder) return;
 
-    const entry: ChatWatch = { root, generation, folders: [], pending: new Map(), timer: null };
+    const entry: ChatWatch = { root, generation, paths: new Set(unique), folders: [], pending: new Map(), timer: null };
     for (const [folder, { paths, recursive }] of byFolder) {
       try {
         const handle = this.watch(folder, { recursive, persistent: false }, (_event, filename) => {
@@ -179,7 +188,12 @@ export class DesignFileWatcher {
         // The folder vanished between the check and the watch: nothing to watch there.
       }
     }
-    if (entry.folders.length > 0) this.chats.set(chatId, entry);
+    if (entry.folders.length === 0) return;
+    this.chats.set(chatId, entry);
+    if (carried.length > 0) {
+      for (const [relative, queued] of carried) entry.pending.set(relative, queued);
+      entry.timer = setTimeout(() => this.flush(chatId, entry), this.debounceMs);
+    }
   }
 
   clear(chatId: string): void {
@@ -374,8 +388,17 @@ export class DesignFileWatcher {
       }),
     )
       .then((paths) => {
-        if (this.chats.get(chatId) !== entry) return;
-        this.report(chatId, paths.filter((relative): relative is string => relative !== null));
+        // A newer set may have replaced this watch meanwhile; the pages it still watches are reported.
+        const current = this.chats.get(chatId);
+        if (!current || current.root !== entry.root) return;
+        if (this.deps.allowed && !this.deps.allowed(chatId, current.root)) {
+          this.clear(chatId);
+          return;
+        }
+        this.report(
+          chatId,
+          paths.filter((relative): relative is string => relative !== null && current.paths.has(relative)),
+        );
       })
       .finally(() => {
         const left = (this.flushing.get(chatId) ?? 1) - 1;

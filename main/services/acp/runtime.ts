@@ -33,7 +33,14 @@ import { getCurrentTools } from "@earendil-works/pi-ai";
 import path from "node:path";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
-import { AcpToolCallTracker, timelineStepFor, type AcpToolActivity } from "./activity.js";
+import {
+  AcpToolCallTracker,
+  canonicalDisplayPath,
+  relativeDisplayPath,
+  timelineStepFor,
+  type AcpToolActivity,
+} from "./activity.js";
+import { lineChangeCounts } from "../coding-tools.js";
 import { readClientTextFile, writeClientTextFile } from "./client-files.js";
 import { AcpConnection } from "./connection.js";
 import { AcpHarnessError, abortError, isAbortError } from "./errors.js";
@@ -88,6 +95,14 @@ interface PendingTool {
   timer: ReturnType<typeof setTimeout>;
 }
 
+interface WrittenFileEntry {
+  created: boolean;
+  bytes: number;
+  lineChanges: { additions: number; deletions: number };
+  /** The write or edit activity that was open on this path when the write landed, if any. */
+  activityId?: string;
+}
+
 interface Turn {
   completion: Promise<void>;
   controller: AbortController;
@@ -99,6 +114,10 @@ interface Turn {
   writeGrants: Set<string>;
   /** Approved edits whose request named no path; each allows one write. */
   unscopedWriteGrants: number;
+  /** Host-confirmed file writes in this turn, queued FIFO per workspace-relative path. */
+  writtenFiles: Map<string, WrittenFileEntry[]>;
+  /** Write and edit activities started but not finished, oldest first, with the path each names. */
+  openWriteActivities: Map<string, string>;
 }
 
 interface Binding {
@@ -128,7 +147,7 @@ interface Binding {
   bridge: AcpMcpBridge | undefined;
   tracker: AcpToolCallTracker;
   toolUpdatesSkipped: Map<string, number>;
-  startedActivities: Set<string>;
+  startedActivities: Map<string, string>;
   lastPlan: string | undefined;
   queue: Promise<void>;
   turn: Turn | undefined;
@@ -413,6 +432,8 @@ export class AcpHarnessRuntime {
         followUp: undefined,
         writeGrants: new Set(),
         unscopedWriteGrants: 0,
+        writtenFiles: new Map(),
+        openWriteActivities: new Map(),
       };
       binding.turn = turn;
       binding.hostInstructionsFingerprint = instructionFingerprint;
@@ -704,7 +725,18 @@ export class AcpHarnessRuntime {
           return writeClientTextFile(request, {
             roots: current.roots,
             canWrite: () => allowed && (current.permission() === "full" || current.permission() === "ask"),
-            onWrite: (file, before, after) => current.onFileWrite?.(file, before, after),
+            onWrite: (file, before, after) => {
+              const relativePath = relativeDisplayPath(file, current.roots);
+              if (relativePath) {
+                recordWrittenFile(turn, relativePath, {
+                  activityId: openWriteActivityFor(turn, relativePath),
+                  created: before === undefined,
+                  bytes: Buffer.byteLength(after, "utf8"),
+                  lineChanges: lineChangeCounts(before ?? "", after),
+                });
+              }
+              current.onFileWrite?.(file, before, after);
+            },
           });
         },
       },
@@ -772,7 +804,7 @@ export class AcpHarnessRuntime {
         bridge,
         tracker: new AcpToolCallTracker(),
         toolUpdatesSkipped: new Map(),
-        startedActivities: new Set(),
+        startedActivities: new Map(),
         lastPlan: undefined,
         queue: Promise.resolve(),
         turn: undefined,
@@ -917,18 +949,48 @@ export class AcpHarnessRuntime {
     const id = `acp:${binding.sessionId}:${activity.id}`;
     const step = timelineStepFor(activity, host.roots);
     if (!step) return;
+    const targetPath = typeof step.args.path === "string" ? step.args.path : undefined;
+    const writes = (step.toolName === "write_file" || step.toolName === "edit_file") && targetPath !== undefined;
+    const finished = activity.status === "completed" || activity.status === "failed";
+    if (writes && !finished) noteOpenWriteActivity(binding.turn, id, targetPath);
+    const written = writes && activity.status === "completed" ? takeWrittenFile(binding.turn, targetPath, id) : undefined;
+    if (finished) binding.turn?.openWriteActivities.delete(id);
     if (!binding.startedActivities.has(id)) {
-      binding.startedActivities.add(id);
+      if (written?.created && step.toolName === "edit_file") {
+        step.toolName = "write_file";
+      }
+      binding.startedActivities.set(id, step.toolName);
       host.activity.started(id, step.toolName, step.args);
     }
     if (activity.status === "running") host.activity.running(id);
     else if (activity.status === "completed") {
+      const startedToolName = binding.startedActivities.get(id) ?? step.toolName;
+      const lineChanges = activity.lineChanges ?? written?.lineChanges;
+      const producedFile =
+        written && targetPath && (startedToolName === "write_file" || startedToolName === "edit_file")
+          ? {
+              relativePath: targetPath,
+              operation: startedToolName === "write_file" ? ("written" as const) : ("edited" as const),
+              bytes: written.bytes,
+            }
+          : undefined;
       host.activity.finished(
         id,
         "completed",
-        activity.lineChanges ? { kind: "file_line_changes", version: 1, ...activity.lineChanges } : undefined,
+        lineChanges
+          ? {
+              kind: "file_line_changes",
+              version: 1,
+              ...lineChanges,
+              ...(producedFile ? { producedFile } : {}),
+            }
+          : undefined,
       );
-    } else if (activity.status === "failed") host.activity.finished(id, "failed");
+    } else if (activity.status === "failed") {
+      // Only this activity's own write is dropped; later writes to the path keep their provenance.
+      if (writes) dropWrittenFiles(binding.turn, targetPath, id);
+      host.activity.finished(id, "failed");
+    }
   }
 
   private async onPermission(
@@ -944,8 +1006,11 @@ export class AcpHarnessRuntime {
     const id = `acp:${binding.sessionId}:${activity.id}`;
     const step = classification.kind === "approval" ? timelineStepFor(activity, host.roots) : undefined;
     if (step && !binding.startedActivities.has(id)) {
-      binding.startedActivities.add(id);
+      binding.startedActivities.set(id, step.toolName);
       host.activity.started(id, step.toolName, step.args);
+    }
+    if (step && (step.toolName === "write_file" || step.toolName === "edit_file") && typeof step.args.path === "string") {
+      noteOpenWriteActivity(binding.turn, id, step.args.path);
     }
     const turn = binding.turn;
     const response = await answerPermission(request, classification, host, turn.controller.signal, step ? id : undefined);
@@ -955,13 +1020,17 @@ export class AcpHarnessRuntime {
         : undefined;
     if (chosen?.kind.startsWith("allow") && classification.kind === "approval" && isMutation(request.toolCall.kind)) {
       if (chosen.kind === "allow_always") binding.sessionWriteGrant = true;
-      const paths = (request.toolCall.locations ?? []).map((location) => path.resolve(location.path));
+      const paths = (request.toolCall.locations ?? []).map(
+        (location) => canonicalDisplayPath(location.path) ?? path.resolve(location.path),
+      );
       // Only a path-less edit may write an unnamed file; deletes and moves never do.
       if (paths.length === 0 && request.toolCall.kind === "edit") turn.unscopedWriteGrants += 1;
       for (const target of paths) turn.writeGrants.add(target);
     }
-    if (step && (!chosen || chosen.kind.startsWith("reject"))) {
-      host.activity.finished(id, chosen ? "blocked" : "cancelled");
+    if (!chosen || chosen.kind.startsWith("reject")) {
+      // A refused write makes no write, so a later write to its path is not tagged with it.
+      turn.openWriteActivities.delete(id);
+      if (step) host.activity.finished(id, chosen ? "blocked" : "cancelled");
     }
     return response;
   }
@@ -1099,6 +1168,70 @@ function isMutation(kind: string | null | undefined): boolean {
   return kind === "edit" || kind === "delete" || kind === "move";
 }
 
+const MAX_WRITTEN_FILES_PER_PATH = 32;
+const MAX_WRITTEN_FILE_PATHS = 512;
+
+function recordWrittenFile(turn: Turn, relativePath: string, entry: WrittenFileEntry): void {
+  const existing = turn.writtenFiles.get(relativePath);
+  if (existing) {
+    if (existing.length >= MAX_WRITTEN_FILES_PER_PATH) existing.shift();
+    existing.push(entry);
+    return;
+  }
+  if (turn.writtenFiles.size >= MAX_WRITTEN_FILE_PATHS) {
+    const oldest = turn.writtenFiles.keys().next().value;
+    if (oldest !== undefined) turn.writtenFiles.delete(oldest);
+  }
+  turn.writtenFiles.set(relativePath, [entry]);
+}
+
+const MAX_OPEN_WRITE_ACTIVITIES = 512;
+
+function noteOpenWriteActivity(turn: Turn | undefined, activityId: string, relativePath: string): void {
+  if (!turn || turn.openWriteActivities.has(activityId)) return;
+  if (turn.openWriteActivities.size >= MAX_OPEN_WRITE_ACTIVITIES) {
+    const oldest = turn.openWriteActivities.keys().next().value;
+    if (oldest !== undefined) turn.openWriteActivities.delete(oldest);
+  }
+  turn.openWriteActivities.set(activityId, relativePath);
+}
+
+/** The oldest open write or edit on `relativePath` that has no write of its own yet. */
+function openWriteActivityFor(turn: Turn, relativePath: string): string | undefined {
+  const queue = turn.writtenFiles.get(relativePath) ?? [];
+  for (const [activityId, target] of turn.openWriteActivities) {
+    if (target === relativePath && !queue.some((entry) => entry.activityId === activityId)) return activityId;
+  }
+  return undefined;
+}
+
+/**
+ * The write a finished activity made: the one landed while it was open, or
+ * else the oldest write no other open activity claimed (an agent may report a
+ * creation only once it is done).
+ */
+function takeWrittenFile(turn: Turn | undefined, relativePath: string, activityId: string): WrittenFileEntry | undefined {
+  const queue = turn?.writtenFiles.get(relativePath);
+  if (!queue) return undefined;
+  let index = queue.findIndex((entry) => entry.activityId === activityId);
+  if (index < 0) {
+    index = queue.findIndex((entry) => entry.activityId === undefined || !turn!.openWriteActivities.has(entry.activityId));
+  }
+  if (index < 0) return undefined;
+  const [next] = queue.splice(index, 1);
+  if (queue.length === 0) turn?.writtenFiles.delete(relativePath);
+  return next;
+}
+
+/** Forgets the writes a failed activity made on the path, and only those. */
+function dropWrittenFiles(turn: Turn | undefined, relativePath: string, activityId: string): void {
+  const queue = turn?.writtenFiles.get(relativePath);
+  if (!queue) return;
+  const kept = queue.filter((entry) => entry.activityId !== activityId);
+  if (kept.length === 0) turn?.writtenFiles.delete(relativePath);
+  else turn?.writtenFiles.set(relativePath, kept);
+}
+
 /**
  * Full permits any write inside the roots. Ask permits only writes the user
  * approved this turn (or "always" for the session). Read-only and no-access
@@ -1110,7 +1243,7 @@ function writeAllowed(binding: Binding, turn: Turn, host: AcpTurnHost, requested
   if (permission !== "ask") return false;
   if (binding.sessionWriteGrant) return true;
   // An "allow once" covers one write to that path.
-  if (turn.writeGrants.delete(path.resolve(requested))) return true;
+  if (turn.writeGrants.delete(canonicalDisplayPath(requested) ?? path.resolve(requested))) return true;
   if (turn.unscopedWriteGrants > 0) {
     turn.unscopedWriteGrants -= 1;
     return true;

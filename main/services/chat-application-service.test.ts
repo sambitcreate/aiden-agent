@@ -661,6 +661,67 @@ test("a chat's design grant ends when design mode turns off, the chat moves or t
   assert.equal(designGrants.resolve(bystander), null);
 });
 
+test("turning design mode on hands the chat and its folder to the canvas once, and a failure there never fails the switch", async () => {
+  const folderWorkspace: Workspace = {
+    id: "workspace-1",
+    name: "Workspace",
+    folderPath: "/work/site",
+    permission: "ask",
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  const togglingStore = () => {
+    let designMode = false;
+    return {
+      listRegular: async () => [],
+      list: async () => [],
+      get: async (id: string) => chat(id),
+      create: async () => chat(),
+      rename: async () => chat(),
+      setChatModelSelection: async () => chat(),
+      setDesignMode: async (id: string, enabled: boolean, assertCurrent?: (current: Chat) => void | Promise<void>) => {
+        const current: Chat = { ...chat(id, "workspace-1"), ...(designMode ? { designMode: true as const } : {}) };
+        await assertCurrent?.(current);
+        designMode = enabled;
+        return { ...current, ...(enabled ? { designMode: true as const } : {}) };
+      },
+      moveEmptyChatToWorkspace: async () => chat(),
+      remove: async () => undefined,
+    } as unknown as ChatApplicationDependencies["chatStore"];
+  };
+  const configStore = { getWorkspace: async (id: string) => (id === folderWorkspace.id ? folderWorkspace : undefined) };
+  const entries: { chatId: string; workspaceRoot: string }[] = [];
+  const { service } = fixture({
+    configStore,
+    chatStore: togglingStore(),
+    designPagesOnEntry: async (entered, workspaceRoot) => {
+      entries.push({ chatId: entered.id, workspaceRoot });
+    },
+  });
+  await service.setDesignMode("chat-1", true);
+  await service.setDesignMode("chat-1", true);
+  await service.setDesignMode("chat-1", false);
+  assert.deepEqual(entries, [{ chatId: "chat-1", workspaceRoot: "/work/site" }]);
+
+  const logged: string[] = [];
+  let finishPlacing!: () => void;
+  const placed = new Promise<void>((resolve) => { finishPlacing = resolve; });
+  const failing = fixture({
+    configStore,
+    chatStore: togglingStore(),
+    designPagesOnEntry: async () => {
+      finishPlacing();
+      throw new Error("disk failed");
+    },
+    logError: (_area, message) => logged.push(message),
+  });
+  const turnedOn = await failing.service.setDesignMode("chat-1", true);
+  assert.equal(turnedOn?.designMode, true);
+  await placed;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(logged.length, 1);
+});
+
 test("a canvas save or grant that lands while the chat is being deleted does not outlive it", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-delete-race-"));
   try {

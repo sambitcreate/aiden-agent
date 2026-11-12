@@ -177,6 +177,7 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
         // Undo must not take back what was changed elsewhere.
         history = EMPTY_HISTORY;
         emit();
+        if (announced > fetched.revision) refetch();
       },
       () => undefined,
     );
@@ -219,6 +220,7 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
       server = loaded;
       local = loaded;
       emit();
+      if (announced > loaded.revision) refetch();
     },
     () => {
       failed = true;

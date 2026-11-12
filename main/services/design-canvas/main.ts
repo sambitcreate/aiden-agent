@@ -8,6 +8,7 @@ import { DesignModeConsent } from "./design-mode-tool.js";
 import { DesignGrantRegistry } from "./grants.js";
 import { DesignCanvasStore } from "./store.js";
 import { DESIGN_FILES_CHANGED_CHANNEL, DesignFileWatcher } from "./watch.js";
+import { RecentWrittenPages } from "./written-pages.js";
 
 export const designCanvasStore = new DesignCanvasStore({
   root: () => path.join(app.getPath("userData"), "design-canvases"),
@@ -31,3 +32,6 @@ export const designModeConsent = new DesignModeConsent();
 
 /** Pending `canvas_read` snapshot requests. Memory only. */
 export const designCanvasSnapshots = new DesignCanvasSnapshots();
+
+/** HTML pages each chat's replies wrote in this run, for opening design mode mid-reply. Memory only. */
+export const recentWrittenPages = new RecentWrittenPages();

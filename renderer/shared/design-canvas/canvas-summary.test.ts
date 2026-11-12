@@ -97,3 +97,27 @@ test("Aiden reads which pages the person shows dark or tweaked, and which items 
   assert.equal(byId.get("gone")!.hidden, true);
   assert.deepEqual([byId.get("plain")!.dark, byId.get("plain")!.tweaks, byId.get("plain")!.hidden], [undefined, undefined, undefined]);
 });
+
+test("frames outside the view are listed one by one with their boxes, within the shared frame budget", () => {
+  const view = { x: 0, y: 0, w: 1000, h: 1000 };
+  const locked = note("far", 9000, 0, { locked: true, groupId: "g", text: "x".repeat(500) });
+  const board: DesignFrame = { id: "g", kind: "frame", title: "Board", x: 8800, y: -100, w: 1000, h: 800, radius: 12, guide: "grid-8", pageId: "page-1", createdBy: "person" };
+  const answer = describeCanvas(canvas([note("near", 0, 0), board, locked]), { view });
+  assert.deepEqual(
+    answer.outsideFrames.map((frame) => [frame.id, frame.box, frame.groupId]),
+    [
+      ["g", { x: 8800, y: -100, w: 1000, h: 800 }, undefined],
+      ["far", { x: 9000, y: 0, w: 240, h: 160 }, "g"],
+    ],
+  );
+  const [boardSummary, farSummary] = answer.outsideFrames;
+  assert.deepEqual([boardSummary!.radius, boardSummary!.guide], [12, "grid-8"]);
+  assert.equal(farSummary!.locked, true);
+  assert.ok(farSummary!.text!.length < 200, "long words outside the view are cut short");
+  assert.equal(answer.outsideOmitted, 0);
+
+  const crowded = Array.from({ length: CANVAS_READ_FRAME_LIMIT + 3 }, (_, index) => note(`o${index}`, 5000 + index * 300, 5000));
+  const full = describeCanvas(canvas([note("near", 0, 0), ...crowded]), { view });
+  assert.equal(full.inView.length + full.outsideFrames.length, CANVAS_READ_FRAME_LIMIT);
+  assert.equal(full.outsideOmitted, 4);
+});

@@ -523,7 +523,7 @@ import { chatProgressEvents } from "./chat-progress-events.js";
 import { GenerationDeltaCoalescer } from "./generation-delta-coalescer.js";
 import { randomUUID } from "node:crypto";
 import { designModeEnabled } from "./studio/feature-flags.js";
-import { designCanvasSnapshots, designCanvasStore, designGrants, designModeConsent } from "./design-canvas/main.js";
+import { designCanvasSnapshots, designCanvasStore, designGrants, designModeConsent, recentWrittenPages } from "./design-canvas/main.js";
 import {
   createDesignCanvasTools,
   DESIGN_MODE_PROMPT_SECTION,
@@ -534,6 +534,7 @@ import { createDesignModeTool, DESIGN_MODE_TOOL_NAME } from "./design-canvas/des
 import { chatSurface } from "../../renderer/shared/chat-visibility.js";
 import { canvasPromptLine } from "../../renderer/shared/design-canvas/canvas-summary.js";
 import { placeArtifactsOnCanvas, type CanvasArtifact } from "./design-canvas/artifact-frames.js";
+import { placeWrittenPagesOnCanvas, writtenPagePath } from "./design-canvas/written-pages.js";
 import { DESIGN_CANVAS_UPDATED_CHANNEL } from "../handlers/design-canvas.js";
 
 subagentRuntimeRegistry.setHealthMetrics(subagentHealthMetrics);
@@ -546,6 +547,17 @@ subagentRuntimeRegistry.setRuntimeFaultReporter((source) => {
 });
 
 type GenerationPermission = WorkspacePermission | "read-only";
+
+/** Transcript section carrying the design-mode prompt once design mode is entered mid-reply. */
+const DESIGN_MODE_SECTION = "design-mode";
+
+/** Canvas tools held back until the person enters design mode during the turn. */
+interface EnteredCanvasTools {
+  /** Adds the held canvas tools and the design-mode prompt section once design mode is on. */
+  prepare(context: AgentContext): Promise<AgentContext>;
+  /** The held canvas tools once entered, for codemode's late deferred tools. */
+  deferred(): readonly AgentTool[];
+}
 
 /**
  * Per stream, the command digest each allowed workspace_artifact approval card
@@ -1650,6 +1662,12 @@ async function prepareGeneration(
   const designModeToolOffered =
     !options.excludeToolNames?.has(DESIGN_MODE_TOOL_NAME) &&
     designModeToolAllowed({ ...designTurn, regularChat: chatSurface(chat) === "regular", inlineVisuals: params.inlineVisuals });
+  // Even when the design_mode card is not offered (for example while Inline
+  // visuals is automatic), the person can switch design mode on mid-reply.
+  const canvasHoldable =
+    !designCanvasOffered &&
+    !options.excludeToolNames?.has("canvas_place_frame") &&
+    designCanvasToolsAllowed({ ...designTurn, designMode: true });
   const offerWorkspaceArtifacts =
     !botContext &&
     !assistantMode &&
@@ -1680,7 +1698,7 @@ async function prepareGeneration(
   if (skillSnapshot && !offerHooksTool) {
     skillSnapshot = withoutSkills(skillSnapshot, DESKTOP_HOOK_SKILLS);
   }
-  if (skillSnapshot && !designCanvasOffered && !designModeToolOffered) {
+  if (skillSnapshot && !designCanvasOffered && !designModeToolOffered && !canvasHoldable) {
     skillSnapshot = withoutSkills(skillSnapshot, DESIGN_CANVAS_SKILLS);
   }
   let botSkillToolNames: ReadonlySet<string> = new Set();
@@ -2242,6 +2260,7 @@ async function prepareGeneration(
       existingChatHtmlCount: existingHtmlUsage.count + pendingHtmlAfterReconcile.count,
       preferArtifactThisTurn: visualize,
       ...(options.visualAudience ? { audience: options.visualAudience } : {}),
+      ...(designCanvasOffered ? { designCanvas: true } : {}),
       existingChatUiCount: displayedAssistantUiCount(chat.messages),
       onUiVisual: (visual, context) => {
         uiVisualPlacements.record(visual.id, context.toolCallId, visual.layout ?? "column");
@@ -2352,12 +2371,18 @@ async function prepareGeneration(
   }
   /** Set while this turn may use the canvas: puts its committed visuals there. */
   let placeCanvasArtifacts: ((artifacts: readonly CanvasArtifact[]) => Promise<void>) | undefined;
-  /** Canvas tools held back until the person enters design mode from Aiden's card mid-reply. */
+  /**
+   * Canvas tools held back until the person enters design mode mid-reply,
+   * from Aiden's card or with the toggle themselves.
+   */
   let heldCanvasTools: AgentTool[] = [];
   let enteredDesignModeThisTurn = false;
-  if (folderPath && (designCanvasOffered || designModeToolOffered)) {
+  // Held canvas tools exist whenever this turn could use the canvas, even when
+  // Aiden may not offer the design_mode card, since the person can switch
+  // design mode on themselves.
+  const designModeOn = async () => (await chatStore.getMeta(params.chatId))?.designMode === true;
+  if (folderPath && (designCanvasOffered || designModeToolOffered || canvasHoldable)) {
     const canvasRoot = folderPath;
-    const designModeOn = async () => (await chatStore.getMeta(params.chatId))?.designMode === true;
     const canvasTools = createDesignCanvasTools({
       chatId: params.chatId,
       workspaceRoot: canvasRoot,
@@ -2424,12 +2449,91 @@ async function prepareGeneration(
       if (designModeTool.length > 0) generationExtensions.push({ id: "aiden.design-mode", tools: designModeTool });
     }
   }
-  /** Declares the held canvas tools from the step after the person entered design mode. */
-  const withEnteredCanvasTools = (context: AgentContext): AgentContext => {
-    if (!enteredDesignModeThisTurn || heldCanvasTools.length === 0) return context;
-    const present = new Set(context.tools?.map((tool) => tool.name) ?? []);
-    const additions = heldCanvasTools.filter((tool) => !present.has(tool.name));
-    return additions.length > 0 ? { ...context, tools: [...(context.tools ?? []), ...additions] } : context;
+  /**
+   * Set when this turn could use the canvas: puts an HTML page Aiden just wrote
+   * or edited on it while design mode is on, so the person watches the design
+   * take shape. Design mode is checked at each write, so turning it on
+   * mid-reply works too. Writes are placed one after another.
+   */
+  let placeWrittenPage: ((relativePath: string) => void) | undefined;
+  if (
+    folderPath &&
+    !options.excludeToolNames?.has("canvas_place_frame") &&
+    designCanvasToolsAllowed({ ...designTurn, designMode: true })
+  ) {
+    const pageRoot = folderPath;
+    let pagesPlaced: Promise<void> = Promise.resolve();
+    const canSaveWrittenPage = async () => {
+      if ((await chatStore.getMeta(params.chatId))?.designMode !== true) return false;
+      const current = workspace ? await configStore.getWorkspace(workspace.id) : undefined;
+      return current?.folderPath === pageRoot && current.permission !== "none";
+    };
+    placeWrittenPage = (relativePath) => {
+      recentWrittenPages.note(params.chatId, relativePath);
+      pagesPlaced = pagesPlaced.then(async () => {
+        // The write already happened, so Stop does not drop it; design mode
+        // and the chat's workspace folder are checked as they are now.
+        if (!(await canSaveWrittenPage())) return;
+        const placedIds = await placeWrittenPagesOnCanvas({
+          chatId: params.chatId,
+          workspaceRoot: pageRoot,
+          paths: [relativePath],
+          shouldSave: canSaveWrittenPage,
+          store: designCanvasStore,
+          broadcast: (update) => ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, update),
+          newId: randomUUID,
+        });
+        if (placedIds.length > 0 && !browserOwner.isDestroyed()) {
+          browserOwner.send("designCanvas:focus", { chatId: params.chatId, frameIds: placedIds });
+        }
+      }).catch((error) => {
+        logger.warn("pi", "Could not put a written page on the design canvas.", error);
+      });
+    };
+  }
+  /**
+   * Declares the held canvas tools, and the design-mode prompt section, from
+   * the step after the person entered design mode: through Aiden's card, or by
+   * switching it on themselves mid-reply. Entering latches for the turn, so the
+   * chat is no longer read once it is on.
+   */
+  let canvasToolsEntered = false;
+  const canvasToolsEnteredNow = async (): Promise<boolean> => {
+    if (canvasToolsEntered) return true;
+    if (heldCanvasTools.length === 0) return false;
+    if (enteredDesignModeThisTurn || (await designModeOn())) canvasToolsEntered = true;
+    return canvasToolsEntered;
+  };
+  const enteredCanvasTools: EnteredCanvasTools = {
+    prepare: async (context) => {
+      if (!(await canvasToolsEnteredNow())) return context;
+      const present = new Set(context.tools?.map((tool) => tool.name) ?? []);
+      const additions = heldCanvasTools.filter((tool) => !present.has(tool.name));
+      // The prompt is read-only here: the section is patched into the
+      // transcript once, as browser discovery and MCP servers do.
+      const sectionPresent = context.messages.some(
+        (message) =>
+          message.role === "system" &&
+          typeof (message as { sections?: Record<string, unknown> }).sections?.[DESIGN_MODE_SECTION] === "string",
+      );
+      if (additions.length === 0 && sectionPresent) return context;
+      return {
+        ...context,
+        messages: sectionPresent
+          ? context.messages
+          : [
+              ...context.messages,
+              {
+                role: "system",
+                content: "",
+                sections: { [DESIGN_MODE_SECTION]: DESIGN_MODE_PROMPT_SECTION },
+                timestamp: Date.now(),
+              },
+            ],
+        tools: [...(context.tools ?? []), ...additions],
+      };
+    },
+    deferred: () => (canvasToolsEntered ? heldCanvasTools : []),
   };
   let googleWorkspaceSnapshot: string | undefined;
   if (
@@ -2471,7 +2575,8 @@ async function prepareGeneration(
     displayedImages,
     displayedHtmlArtifacts,
     placeCanvasArtifacts,
-    withEnteredCanvasTools,
+    placeWrittenPage,
+    enteredCanvasTools,
     appPanels,
     htmlArtifactPlacements,
     imagePlacements,
@@ -2868,7 +2973,8 @@ export const llmClient = {
       displayedImages,
       displayedHtmlArtifacts,
       placeCanvasArtifacts,
-      withEnteredCanvasTools,
+      placeWrittenPage,
+      enteredCanvasTools,
       appPanels,
       htmlArtifactPlacements,
       imagePlacements,
@@ -3956,6 +4062,8 @@ export const llmClient = {
               lateDeferredTools: () => [
                 ...lateMcpDiscovery.tools().filter((tool) => !options.excludeToolNames?.has(tool.name)),
                 ...onDemandCallable,
+                // Canvas tools held until the person entered design mode mid-reply.
+                ...enteredCanvasTools.deferred(),
               ],
             }
           : {}),
@@ -4112,7 +4220,7 @@ export const llmClient = {
                 : undefined,
               runtime.provider.modelMetadata?.[model.id]?.overrides,
             );
-            prepared = withEnteredCanvasTools(prepared);
+            prepared = await enteredCanvasTools.prepare(prepared);
             if (agentsInstructions) prepared = await agentsInstructions.apply(prepared, requestSignal);
             return mcpServersSection.apply(prepared);
           },
@@ -4932,6 +5040,11 @@ export const llmClient = {
             });
             // A failed command may still have written files, so only a denied call is skipped.
             if (!denied) notifyWorkspaceFilesTouched(workspaceId, event.toolName);
+            // A write or edit that finished before Stop took effect already changed the file on disk.
+            if (placeWrittenPage && !denied && !event.isError) {
+              const page = writtenPagePath(event.toolName, event.result?.details);
+              if (page) placeWrittenPage(page);
+            }
             break;
           }
           default:
@@ -5299,6 +5412,14 @@ export const llmClient = {
                 approvals.takeDecisionPayload(approvalStreamId, toolCallId)?.scope,
               requestQuestion: (toolCallId, questions, questionSignal) =>
                 questionnaires.request({ streamId, toolCallId, questions }, owner.documentId, questionSignal),
+              onFileWrite: (producedFile) => {
+                const toolName = producedFile.operation === "written" ? "write_file" : "edit_file";
+                notifyWorkspaceFilesTouched(workspaceId, toolName);
+                if (placeWrittenPage) {
+                  const page = writtenPagePath(toolName, { producedFile });
+                  if (page) placeWrittenPage(page);
+                }
+              },
             }),
           )
         : undefined;

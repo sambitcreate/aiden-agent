@@ -35,6 +35,7 @@ import {
   nodesFromCanvas,
   placeFrame,
   presentedFrameIds,
+  resolveCanvasFocus,
   type DesignNode,
   type PlaceFrameInput,
 } from "./canvas-adapter-core";
@@ -403,24 +404,29 @@ function LoadedDesignCanvas({
       setPendingFocus(null);
       return;
     }
-    const present = pendingFocus.ids.filter((id) => nodes.some((node) => node.id === id));
     // Frames Aiden just placed arrive with the next canvas read, and a canvas
     // that just opened has not measured them yet; wait briefly for both.
-    const waited = Date.now() - pendingFocus.at;
-    const measured = flow.current?.getNodes().some((node) => (node.measured?.width ?? 0) > 0) ?? false;
-    const arriving = present.length < pendingFocus.ids.length || (nodes.length > 0 && !measured);
-    if (arriving && waited < FOCUS_WAIT_MS) {
+    // Measurements live on React Flow's internal nodes; the controlled nodes it hands back never carry them.
+    const decision = resolveCanvasFocus({
+      requestedIds: pendingFocus.ids,
+      nodeIds: nodes.map((node) => node.id),
+      hiddenIds: nodes.filter((node) => node.hidden).map((node) => node.id),
+      isMeasured: (id) => (flow.current?.getInternalNode(id)?.measured?.width ?? 0) > 0,
+      waitedMs: Date.now() - pendingFocus.at,
+      maxWaitMs: FOCUS_WAIT_MS,
+    });
+    if (decision.action === "wait") {
       const timer = setTimeout(() => setPendingFocus((current) => (current ? { ...current } : current)), 200);
       return () => clearTimeout(timer);
     }
     setPendingFocus(null);
-    if (pendingFocus.ids.length > 0 && present.length === 0) return;
+    if (decision.action === "drop") return;
     // Never zoom past 100 %: a single note should not fill the canvas.
     void flow.current?.fitView({
       duration: prefersReducedMotion() ? 0 : 300,
       padding: 0.2,
       maxZoom: 1,
-      ...(present.length > 0 ? { nodes: present.map((id) => ({ id })) } : {}),
+      ...(decision.ids.length > 0 ? { nodes: decision.ids.map((id) => ({ id })) } : {}),
     });
   }, [pendingFocus, nodes]);
 
