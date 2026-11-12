@@ -125,8 +125,10 @@ export interface GateAction {
   /**
    * The rules page's decision for this call (§3.5): Block refuses at step 1,
    * Ask asks at step 5, Allow allows at step 7. Never covers the Mac.
+   * "unreadable": the rules file couldn't be read exactly, so the call asks
+   * once in every mode (step 3), since the rule it can't see may be a Block.
    */
-  pageRule?: "allow" | "ask" | "block";
+  pageRule?: "allow" | "ask" | "block" | "unreadable";
   /** The authority this call was admitted under changed. */
   stale?: boolean;
   /** The person declined this exact action earlier in this run. */
@@ -227,7 +229,8 @@ function decide(context: GateContext, action: GateAction): GateDecision {
   const attendance = context.attendance ?? "person";
   const unwatched = UNWATCHED.has(attendance);
   const mode = gateMode(context);
-  const needsAnswer = action.consequential === true || action.rule !== undefined || action.pageRule === "ask";
+  const needsAnswer =
+    action.consequential === true || action.rule !== undefined || action.pageRule === "ask" || action.pageRule === "unreadable";
   // The person's Mac with no grant covering it: asks in every mode.
   const macOpen = action.mac === true && action.granted !== true && action.macGranted !== true;
 
@@ -255,7 +258,9 @@ function decide(context: GateContext, action: GateAction): GateDecision {
   // 3. Explicit-only: asks once in every mode, Never ask included, and is
   // never judged. A hook's ask is one too.
   if (action.delegate) return { outcome: "delegate", step: "explicit-only", to: action.delegate };
-  if (action.explicitOnly || context.hook === "ask") return { outcome: "ask", step: "explicit-only", offer: "once" };
+  if (action.explicitOnly || context.hook === "ask" || action.pageRule === "unreadable") {
+    return { outcome: "ask", step: "explicit-only", offer: "once" };
+  }
 
   // 4. Never ask, and the run-scoped pre-approvals. The person's Mac is never
   // pre-approved this way; only its grant lets it run.

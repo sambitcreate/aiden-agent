@@ -15,6 +15,7 @@ import {
   approvalRuleOwnerKey,
   approvalRuleTargetKey,
   emptyApprovalRulesDocument,
+  parseApprovalRuleTarget,
   type ApprovalRule,
   type ApprovalRuleDecision,
   type ApprovalRuleOwner,
@@ -25,6 +26,27 @@ import {
 export interface ApprovalRuleStore {
   load(): Promise<ApprovalRulesDocument>;
   update<R>(mutation: (draft: ApprovalRulesDocument) => R | Promise<R>): Promise<R>;
+  /**
+   * False when the file on disk did not read back exactly (it doesn't parse,
+   * or holds a version or rule this release can't read). Writes are refused
+   * then, so it is never overwritten.
+   */
+  readable?(): Promise<boolean>;
+  /** Read the file again, after a hand edit. */
+  refresh?(): Promise<void>;
+  /** Put an unreadable file aside, keeping its bytes, and start with no rules. */
+  setAside?(): Promise<void>;
+}
+
+/**
+ * The rules file can't be read. Its Block rules may be the ones Aiden can't
+ * see, so callers fail closed: workspace calls ask, Bot calls are refused.
+ */
+export class ApprovalRulesUnreadableError extends Error {
+  constructor() {
+    super("Your approval rules couldn’t be read.");
+    this.name = "ApprovalRulesUnreadableError";
+  }
 }
 
 export class ApprovalRuleLimitError extends Error {
@@ -61,8 +83,29 @@ export class ApprovalRuleBook {
     private readonly newId: () => string = () => randomUUID(),
   ) {}
 
+  /** Every rule. Throws `ApprovalRulesUnreadableError` when the file can't be read exactly. */
   async list(): Promise<ApprovalRule[]> {
-    return structuredClone((await this.store.load()).rules);
+    const document = await this.store.load();
+    if (this.store.readable && !(await this.store.readable())) throw new ApprovalRulesUnreadableError();
+    return structuredClone(document.rules);
+  }
+
+  /** Whether the rules file reads back exactly. */
+  async readable(): Promise<boolean> {
+    return this.store.readable ? this.store.readable() : true;
+  }
+
+  /** Read the file again (Try again on the page, after a hand edit). */
+  async refresh(): Promise<void> {
+    await this.store.refresh?.();
+    this.notify();
+  }
+
+  /** Start over from no rules, keeping the unreadable file's bytes beside it. */
+  async setAside(): Promise<void> {
+    if (!this.store.setAside) throw new Error("These rules can’t be reset here.");
+    await this.store.setAside();
+    this.notify();
   }
 
   /**
@@ -70,9 +113,13 @@ export class ApprovalRuleBook {
    * the same owner and target. Returns the saved rule.
    */
   async add(input: ApprovalRuleAdd): Promise<ApprovalRule> {
-    if (!approvalRuleDecisionsFor(input.target).includes(input.decision)) throw new Error("Invalid rule.");
-    const key = keyOf(input.owner, input.target);
-    const handOff = input.handOff === true && input.decision === "ask" && input.target.kind === "text";
+    // The rule as it will read back: a target the reader would drop or change
+    // is refused here, so a rule is never saved that later reads as nothing.
+    const target = parseApprovalRuleTarget(input.target);
+    if (!target || approvalRuleTargetKey(target) !== approvalRuleTargetKey(input.target)) throw new Error("This rule can’t be saved as written.");
+    if (!approvalRuleDecisionsFor(target).includes(input.decision)) throw new Error("Invalid rule.");
+    const key = keyOf(input.owner, target);
+    const handOff = input.handOff === true && input.decision === "ask" && target.kind === "text";
     const saved = await this.store.update((draft) => {
       const existing = draft.rules.find((rule) => keyOf(rule.owner, rule.target) === key);
       if (existing) {
@@ -86,7 +133,7 @@ export class ApprovalRuleBook {
       if (draft.rules.length >= APPROVAL_RULES_MAX) throw new ApprovalRuleLimitError();
       const rule: ApprovalRule = {
         id: this.newId(),
-        target: structuredClone(input.target),
+        target,
         decision: input.decision,
         owner: structuredClone(input.owner),
         ...(handOff ? { handOff: true as const } : {}),

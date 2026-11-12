@@ -48,7 +48,7 @@ import {
   type BotApprovalRuleView,
   type ToolApprovalRuleView,
 } from "../../../renderer/shared/tool-approval-scope.js";
-import type { ApprovalRuleBook } from "./store.js";
+import { ApprovalRulesUnreadableError, type ApprovalRuleBook } from "./store.js";
 
 export interface ApprovalRulesPageBot {
   id: string;
@@ -70,7 +70,7 @@ export interface BotChatMacGrantView {
 }
 
 export interface ApprovalRulesPagePorts {
-  book: Pick<ApprovalRuleBook, "list" | "add" | "change" | "remove">;
+  book: Pick<ApprovalRuleBook, "list" | "add" | "change" | "remove" | "refresh" | "setAside">;
   /** A workspace's remembered exact commands and files. */
   workspaceExact: { list(): Promise<ToolApprovalRuleView[]>; revoke(id: string): Promise<boolean> };
   /** Bots' allow lists and folders; their receipts protect every removal. */
@@ -99,6 +99,10 @@ export interface ApprovalRulesPage {
   add(input: ApprovalRuleAddInput): Promise<ApprovalRule>;
   change(input: ApprovalRuleChangeInput): Promise<{ changed: boolean }>;
   remove(ref: ApprovalRuleRowRef): Promise<{ removed: boolean }>;
+  /** Read an unreadable rules file again, after a hand edit. */
+  refresh(): Promise<ApprovalRulesView>;
+  /** Put an unreadable rules file aside (its bytes kept) and start with no rules. */
+  setAside(): Promise<ApprovalRulesView>;
 }
 
 const MAC_GRANT_KIND: Readonly<Record<MacGrantClass, string>> = {
@@ -123,12 +127,31 @@ export function createApprovalRulesPage(ports: ApprovalRulesPagePorts): Approval
     }
   }
 
-  async function ruleRows(names: Map<string, string>, workspaces: Map<string, string>): Promise<ApprovalRuleRow[]> {
-    return (await ports.book.list()).flatMap((rule): ApprovalRuleRow[] => {
+  async function ruleRows(names: Map<string, string>, workspaces: Map<string, string>): Promise<ApprovalRuleRow[] | "unreadable"> {
+    let rules: ApprovalRule[];
+    try {
+      rules = await ports.book.list();
+    } catch (error) {
+      if (error instanceof ApprovalRulesUnreadableError) return "unreadable";
+      throw error;
+    }
+    return rules.flatMap((rule): ApprovalRuleRow[] => {
       const owner = rule.owner;
-      // A rule whose Bot or workspace is gone answers for nobody; it is not shown.
-      if (owner.kind === "bot" && !names.has(owner.botId)) return [];
-      if (owner.kind === "workspace" && !workspaces.has(owner.workspaceId)) return [];
+      // A rule whose Bot or workspace is gone answers for nobody; it is listed
+      // to remove, with nothing to change, until the owner's deletion forgets it.
+      const orphan = (owner.kind === "bot" && !names.has(owner.botId)) || (owner.kind === "workspace" && !workspaces.has(owner.workspaceId));
+      if (orphan) {
+        return [{
+          ref: { source: "rule", id: rule.id },
+          group: rule.decision,
+          title: describeApprovalRuleTarget(rule.target, rule.label),
+          kind: approvalRuleKindLabel(rule.target.kind),
+          scope: owner.kind === "bot" ? { kind: "bot", label: "a deleted Bot" } : { kind: "workspace", label: "a deleted workspace" },
+          legacy: true,
+          decisions: [],
+          createdAt: rule.createdAt,
+        }];
+      }
       return [{
         ref: { source: "rule", id: rule.id },
         group: rule.decision,
@@ -300,14 +323,25 @@ export function createApprovalRulesPage(ports: ApprovalRulesPagePorts): Approval
     async list() {
       const [names, workspaceList] = await Promise.all([botNames(), ports.workspaces()]);
       const workspaces = new Map(workspaceList.map((workspace) => [workspace.id, workspace.name]));
-      const groups = await Promise.all([
+      const [own, ...others] = await Promise.all([
         ruleRows(names, workspaces),
         workspaceExactRows(workspaces),
         botAllowedRows(names),
         botRuleRows(names),
         macRows(workspaceList, names),
       ]);
-      return { rows: groups.flat().sort(byNewest) };
+      const rows = [...(own === "unreadable" ? [] : own), ...others.flat()].sort(byNewest);
+      return own === "unreadable" ? { rows, unreadable: true } : { rows };
+    },
+
+    async refresh() {
+      await ports.book.refresh();
+      return page.list();
+    },
+
+    async setAside() {
+      await ports.book.setAside();
+      return page.list();
     },
 
     picker: () => ports.picker(),
@@ -335,8 +369,10 @@ export function createApprovalRulesPage(ports: ApprovalRulesPagePorts): Approval
           // Read the target first: once removed, the entry no longer names it.
           const target = decision === "block" ? await botAllowTarget(ref.botId, ref.entryId) : undefined;
           if (decision === "block" && !target) throw new Error("This allowance changed. Try again.");
-          const removed = await ports.botAllowed.remove(ref.botId, ref.entryId);
+          // The Block is saved before the allowance goes: a target the rule
+          // book can't hold throws here and the allowance stays as it was.
           if (target) await ports.book.add({ target, decision: "block", owner: { kind: "bot", botId: ref.botId } });
+          const removed = await ports.botAllowed.remove(ref.botId, ref.entryId);
           return { changed: removed || target !== undefined };
         }
         case "bot-rule": {

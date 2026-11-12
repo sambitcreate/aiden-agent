@@ -75,7 +75,7 @@ test("in Never ask only Block rules apply: the page says so and the other rows r
   assert.ok(screen.getByText(/In Never ask, only Block rules apply/u));
   const dimmed = (title: string) => screen.getByRole("group", { name: title }).className.includes("opacity-55");
   assert.equal(dimmed("Gmail"), true);
-  assert.equal(dimmed("Book a flight"), true);
+  assert.equal(dimmed("Book a flight"), false, "Do it myself still hands the step to the person in Never ask");
   assert.equal(dimmed("bank.example"), false);
   assert.equal(dimmed("Run commands"), false);
 });
@@ -153,4 +153,34 @@ test("approval cards offer broader scopes only when the approval can be allowed"
     describeToolApprovalRule({ toolName: "write_file", pattern: "out/report.txt" }),
     "Create or replace out/report.txt",
   );
+});
+
+test("a rules file that can't be read hides every rule, says what that means, and offers Try again or Start over", () => {
+  const calls = view({ unreadable: true, rows: [ROWS[4]!], onRefresh: () => calls.push("refresh"), onSetAside: () => calls.push("set aside") });
+  assert.match(screen.getByRole("alert").textContent ?? "", /every action asks first and Bots don’t act/u);
+  assert.equal(screen.queryByRole("heading", { name: "Always allow" }), null);
+  assert.equal(screen.queryByRole("heading", { name: "Blocked" }), null);
+  assert.equal(screen.queryAllByRole("button", { name: /Add a rule/u }).length, 0, "nothing can be added over a file that can't be read");
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  fireEvent.click(screen.getByRole("button", { name: "Start over" }));
+  assert.deepEqual(calls, ["refresh", "set aside"]);
+});
+
+test("Block on a Bot's site allowance asks first, because it blocks the whole site", async () => {
+  const calls = view();
+  const site = screen.getByRole("radiogroup", { name: "Decision for calendar.example" });
+  fireEvent.click(within(site).getByRole("radio", { name: "Block" }));
+  assert.deepEqual(calls, [], "nothing changes before the person confirms");
+  const dialog = await screen.findByRole("alertdialog");
+  assert.match(dialog.textContent ?? "", /Ada will be blocked from every action on this site and its subdomains/u);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  await waitFor(() => assert.equal(screen.queryByRole("alertdialog"), null));
+  assert.deepEqual(calls, []);
+
+  fireEvent.click(within(site).getByRole("radio", { name: "Block" }));
+  fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Block site" }));
+  assert.deepEqual(calls, ["decide calendar.example block"]);
+  // Ask needs no warning: it narrows nothing.
+  fireEvent.click(within(site).getByRole("radio", { name: "Ask" }));
+  assert.deepEqual(calls, ["decide calendar.example block", "decide calendar.example ask"]);
 });

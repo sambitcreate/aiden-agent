@@ -67,7 +67,7 @@ export interface WorkspaceToolApprovalInput {
    * run with an approval mode reads it, and never a Bot-bound turn, whose
    * authority is its Bot's.
    */
-  pageRule?: "allow" | "ask" | "block";
+  pageRule?: "allow" | "ask" | "block" | "unreadable";
 }
 
 export type WorkspaceToolApproval =

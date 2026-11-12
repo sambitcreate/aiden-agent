@@ -9,6 +9,7 @@ import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { ChevronRight, Lock, MoreHorizontal } from "lucide-react";
 import {
+  AlertDialog,
   Button,
   Callout,
   Command,
@@ -95,6 +96,15 @@ export interface ApprovalRulesSettingsViewProps {
   onAdd(decision: ApprovalRuleDecision): void;
   onOpenSection(section: SettingsSection): void;
   onRetry(): void;
+  /**
+   * The rules file couldn't be read exactly. Its rules aren't shown; every
+   * action asks and Bots don't act until it is read again or set aside.
+   */
+  unreadable?: boolean;
+  /** Read the rules file again (after fixing it by hand). */
+  onRefresh?(): void;
+  /** Keep the unreadable file's bytes beside it and start with no rules. */
+  onSetAside?(): void;
 }
 
 function RuleRow({ row, dimmed, pending, busy, onDecide, onHandOff, onRemove }: {
@@ -158,16 +168,23 @@ export function ApprovalRulesSettingsView(props: ApprovalRulesSettingsViewProps)
   const { rows, error, mode, pending } = props;
   const busy = pending !== null;
   const never = mode === "never";
+  /** A site allowance about to become a Block for every action on that site. */
+  const [widening, setWidening] = React.useState<ApprovalRuleRow | null>(null);
   const row = (item: ApprovalRuleRow) => {
     const key = approvalRuleRowKey(item.ref);
     return (
       <RuleRow
         key={key}
         row={item}
-        dimmed={never && item.group !== "block" && item.group !== "mac"}
+        // A "Do it myself" rule still hands the step over in Never ask.
+        dimmed={never && item.group !== "block" && item.group !== "mac" && item.handOff?.on !== true}
         pending={pending === key}
         busy={busy}
-        onDecide={(decision) => props.onDecide(item, decision)}
+        onDecide={(decision) => {
+          // A remembered action on one site becomes a Block for every action there: say so first.
+          if (item.ref.source === "bot-allow" && item.kind === "Site" && decision === "block") setWidening(item);
+          else props.onDecide(item, decision);
+        }}
         onHandOff={(on) => props.onHandOff(item, on)}
         onRemove={() => props.onRemove(item)}
       />
@@ -196,7 +213,25 @@ export function ApprovalRulesSettingsView(props: ApprovalRulesSettingsViewProps)
               In Never ask, only Block rules apply. The others take effect again in Ask and Auto.
             </Text>
           ) : null}
-          {GROUPS.map(({ group, title, empty, decision }) => {
+          {props.unreadable ? (
+            <FieldSet title="Rules">
+              <Field>
+                <div className="flex flex-col items-start gap-3">
+                  <Callout color="red" role="alert">
+                    Your rules file couldn’t be read, so its rules aren’t shown. Until it can be, every action asks first and Bots don’t act.
+                  </Callout>
+                  <Text as="p" variant="small" color="secondary" className="text-pretty">
+                    Fix approval-rules.json in Aiden’s data folder and try again, or start over. Starting over keeps the old file beside the new one.
+                  </Text>
+                  <div className="flex flex-wrap gap-2">
+                    <Button size="small" variant="filled" disabled={busy} onClick={props.onRefresh}>Try again</Button>
+                    <Button size="small" variant="transparent" disabled={busy} onClick={props.onSetAside}>Start over</Button>
+                  </div>
+                </div>
+              </Field>
+            </FieldSet>
+          ) : null}
+          {GROUPS.filter(() => !props.unreadable).map(({ group, title, empty, decision }) => {
             const items = rows.filter((item) => item.group === group);
             return (
               <FieldSet
@@ -247,6 +282,22 @@ export function ApprovalRulesSettingsView(props: ApprovalRulesSettingsViewProps)
           Passwords, two-factor codes and money always come to you, in every mode. No rule can change that.
         </Text>
       </Callout>
+      <AlertDialog
+        open={widening !== null}
+        onOpenChange={(open) => { if (!open) setWidening(null); }}
+        title="Block the whole site?"
+        description={widening
+          ? `${widening.scope.label ?? "This Bot"} will be blocked from every action on this site and its subdomains, not only “${widening.title}”.`
+          : undefined}
+        confirmLabel="Block site"
+        confirmVariant="destructive"
+        onConfirm={() => {
+          const target = widening;
+          setWidening(null);
+          if (!target) return;
+          props.onDecide(target, "block");
+        }}
+      />
     </>
   );
 }
@@ -378,12 +429,15 @@ export function ApprovalRulesSettings() {
   const [rows, setRows] = React.useState<ApprovalRuleRow[] | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [pending, setPending] = React.useState<string | null>(null);
+  const [unreadable, setUnreadable] = React.useState(false);
   const [adding, setAdding] = React.useState<ApprovalRuleDecision | null>(null);
   const [options, setOptions] = React.useState<ApprovalRulePickerOption[] | null>(null);
 
   const load = React.useCallback(async () => {
     try {
-      setRows((await approvalRulesApi.list()).rows);
+      const view = await approvalRulesApi.list();
+      setRows(view.rows);
+      setUnreadable(view.unreadable === true);
       setError(null);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Aiden couldn’t read your rules.");
@@ -427,6 +481,9 @@ export function ApprovalRulesSettings() {
         error={error}
         mode={mode}
         pending={pending}
+        unreadable={unreadable}
+        onRefresh={() => void run({ ref: { source: "rule", id: "unreadable" } } as ApprovalRuleRow, () => approvalRulesApi.refresh(), "Couldn’t read your rules.")}
+        onSetAside={() => void run({ ref: { source: "rule", id: "unreadable" } } as ApprovalRuleRow, () => approvalRulesApi.setAside(), "Couldn’t start over.")}
         onDecide={(row, decision) => {
           // Show the move at once; the list read after saving settles it.
           setRows((current) => current?.map((item) => item === row ? { ...item, group: decision } : item) ?? null);

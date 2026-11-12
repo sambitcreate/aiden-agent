@@ -3,6 +3,8 @@
 // - `chat:approvalRules:list` → every rule and Mac grant, in one list.
 // - `chat:approvalRules:picker` → Add rule's searchable options.
 // - `chat:approvalRules:add` / `change` / `remove`, strictly parsed.
+// - `chat:approvalRules:refresh` reads an unreadable rules file again;
+//   `chat:approvalRules:setAside` keeps its bytes beside it and starts over.
 // - `chat:approvalRules:changed` tells every window to read the list again,
 //   for instance after Always on a card added a row.
 //
@@ -35,5 +37,7 @@ export function registerApprovalRuleHandlers<Event = unknown>(deps: ApprovalRule
     if (!record || Object.keys(record).some((key) => key !== "ref")) throw new Error("Invalid rule.");
     return deps.page.remove(parseApprovalRuleRowRef(record.ref));
   });
+  deps.handle(APPROVAL_RULE_CHANNELS.refresh, async () => deps.page.refresh());
+  deps.handle(APPROVAL_RULE_CHANNELS.setAside, async () => deps.page.setAside());
   return deps.onChange(() => deps.broadcast(APPROVAL_RULE_CHANNELS.changed, {}));
 }

@@ -86,12 +86,23 @@ const MAX_TOOL_CHARS = 128;
 const MAX_LABEL_CHARS = 200;
 const RULE_ID = /^[A-Za-z0-9_-]{1,64}$/u;
 
+const STRICTNESS: Readonly<Record<ApprovalRuleDecision, number>> = { allow: 0, ask: 1, block: 2 };
+
 export function emptyApprovalRulesDocument(): ApprovalRulesDocument {
   return { version: 1, rules: [] };
 }
 
 function hasControl(value: string): boolean {
   return /[\p{Cc}\p{Cf}]/u.test(value);
+}
+
+/**
+ * Words may hold the format characters emoji and some scripts need (a
+ * zero-width joiner, a soft hyphen), as a Bot's rules do; never a control
+ * character or a bidirectional override, which could hide what a rule says.
+ */
+function hasHiddenText(value: string): boolean {
+  return /[\p{Cc}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(value);
 }
 
 function validId(value: unknown): value is string {
@@ -124,9 +135,11 @@ export function normalizeApprovalRuleHost(value: unknown): string | undefined {
 
 /** The person's words, as a natural-language rule stores them. */
 export function normalizeApprovalRuleText(value: unknown): string | undefined {
-  if (typeof value !== "string" || hasControl(value.replace(/\s/gu, " "))) return undefined;
+  if (typeof value !== "string" || hasHiddenText(value.replace(/\s/gu, " "))) return undefined;
   const text = normalizeBotRuleText(value);
-  return text.length > 0 && text.length <= BOT_RULE_TEXT_MAX_CHARS ? text : undefined;
+  // Counted in characters, as a Bot's own rules are, so an emoji is one.
+  const length = [...text].length;
+  return length > 0 && length <= BOT_RULE_TEXT_MAX_CHARS ? text : undefined;
 }
 
 export function parseApprovalRuleTarget(value: unknown): ApprovalRuleTarget | undefined {
@@ -218,20 +231,42 @@ export function approvalRuleOwnerKey(owner: ApprovalRuleOwner): string {
 export function normalizeApprovalRulesDocument(value: unknown): ApprovalRulesDocument {
   const record = value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
   if (!record || record.version !== 1 || !Array.isArray(record.rules)) return emptyApprovalRulesDocument();
-  const seen = new Set<string>();
+  const byKey = new Map<string, ApprovalRule>();
   const ids = new Set<string>();
   const rules: ApprovalRule[] = [];
   for (const candidate of record.rules) {
     const rule = parseApprovalRule(candidate);
     if (!rule || ids.has(rule.id)) continue;
     const key = `${approvalRuleOwnerKey(rule.owner)}\u0000${approvalRuleTargetKey(rule.target)}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
+    const earlier = byKey.get(key);
+    if (earlier) {
+      // Two rules for one owner and target: the stricter one stands, never the looser.
+      if (STRICTNESS[rule.decision] > STRICTNESS[earlier.decision]) {
+        earlier.decision = rule.decision;
+        delete earlier.handOff;
+      }
+      continue;
+    }
+    if (rules.length >= APPROVAL_RULES_MAX) continue;
+    byKey.set(key, rule);
     ids.add(rule.id);
     rules.push(rule);
-    if (rules.length >= APPROVAL_RULES_MAX) break;
   }
   return { version: 1, rules };
+}
+
+/**
+ * Whether a stored document reads back exactly, rule for rule. Anything else
+ * (a newer version, a rule this release can't read, a duplicate, too many)
+ * is not this release's to rewrite or to read around: its Block rules might
+ * be the ones it can't read.
+ */
+export function isApprovalRulesDocumentSafe(value: unknown): boolean {
+  const record = value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+  if (!record || record.version !== 1 || !Array.isArray(record.rules) || record.rules.length > APPROVAL_RULES_MAX) return false;
+  if (Object.keys(record).some((key) => key !== "version" && key !== "rules")) return false;
+  const normalized = normalizeApprovalRulesDocument(record);
+  return normalized.rules.length === record.rules.length;
 }
 
 // ---------------------------------------------------------------------------
@@ -256,8 +291,6 @@ const SPECIFICITY: Readonly<Record<Exclude<ApprovalRuleTargetKind, "text">, numb
   "connector-tool": 2,
   connector: 1,
 };
-
-const STRICTNESS: Readonly<Record<ApprovalRuleDecision, number>> = { allow: 0, ask: 1, block: 2 };
 
 /** Whether a rule's owner answers for this subject: the whole Mac, or its own workspace or Bot. */
 export function approvalRuleOwnerAnswers(owner: ApprovalRuleOwner, subject: Pick<ApprovalRuleSubject, "workspaceId" | "botId">): boolean {
@@ -395,6 +428,11 @@ export interface ApprovalRuleRow {
 
 export interface ApprovalRulesView {
   rows: ApprovalRuleRow[];
+  /**
+   * The rules file couldn't be read exactly: its rules are not shown, every
+   * workspace call asks and Bots refuse until it is fixed or set aside.
+   */
+  unreadable?: true;
 }
 
 /** One option in Add rule's searchable picker. */
@@ -427,6 +465,8 @@ export const APPROVAL_RULE_CHANNELS = {
   add: "chat:approvalRules:add",
   change: "chat:approvalRules:change",
   remove: "chat:approvalRules:remove",
+  refresh: "chat:approvalRules:refresh",
+  setAside: "chat:approvalRules:setAside",
   changed: "chat:approvalRules:changed",
 } as const;
 

@@ -12,14 +12,16 @@ import { approvalRules } from "./store-main.js";
 
 /**
  * The decision of the rule that answers for this call, if any. A rule book
- * that cannot be read asks: it may hold a Block.
+ * that can't be read exactly (it doesn't parse, or holds a version or rule
+ * this release can't read) is "unreadable": the gate then asks once in every
+ * mode, Never ask included, since a Block may be the rule it can't see.
  */
-export async function pageRuleFor(subject: ApprovalRuleSubject): Promise<ApprovalRuleDecision | undefined> {
+export async function pageRuleFor(subject: ApprovalRuleSubject): Promise<ApprovalRuleDecision | "unreadable" | undefined> {
   try {
     return resolveApprovalRule(await approvalRules.list(), subject)?.decision;
   } catch (error) {
     logger.warn("approvals", "Could not read the approval rules; asking instead.", error);
-    return "ask";
+    return "unreadable";
   }
 }
 

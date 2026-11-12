@@ -4,7 +4,10 @@
 // reaches the person's Mac; in Never ask only Block rules apply.
 
 import assert from "node:assert/strict";
-import test from "node:test";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import test, { type TestContext } from "node:test";
 
 import {
   normalizeApprovalRulesDocument,
@@ -19,7 +22,8 @@ import {
 } from "../../../renderer/shared/approval-rules.js";
 import type { ApprovalMode } from "../../../renderer/shared/approval-mode.js";
 import { planActionGate, type GateAction } from "../approval-gate/gate.js";
-import { ApprovalRuleBook, ApprovalRuleLimitError, memoryApprovalRuleStore } from "./store.js";
+import { ApprovalRuleBook, ApprovalRuleLimitError, ApprovalRulesUnreadableError, memoryApprovalRuleStore } from "./store.js";
+import { fileApprovalRuleStore } from "./file-store.js";
 
 const MAC: ApprovalRuleOwner = { kind: "mac" };
 let next = 0;
@@ -75,7 +79,7 @@ test("natural-language rules are for Bots, matched by their owner only", () => {
   assert.deepEqual(approvalTextRulesFor([mine, all], "jo").map((entry) => entry.id), [all.id]);
 });
 
-test("a stored document never widens: words cannot allow, Do it myself needs an Ask rule in words, duplicates collapse", () => {
+test("a stored document never widens: words cannot allow, Do it myself needs an Ask rule in words, duplicates keep the stricter rule", () => {
   const document = normalizeApprovalRulesDocument({
     version: 1,
     rules: [
@@ -89,7 +93,7 @@ test("a stored document never widens: words cannot allow, Do it myself needs an 
   });
   assert.deepEqual(document.rules.map((entry) => [entry.id, entry.decision, entry.handOff ?? false]), [
     ["b", "ask", false],
-    ["c", "allow", false],
+    ["c", "block", false],
   ]);
   assert.deepEqual(document.rules[1]!.target, { kind: "site", host: "shop.example" });
   assert.deepEqual(normalizeApprovalRulesDocument({ version: 2, rules: [] }).rules, []);
@@ -187,4 +191,71 @@ test("gate: an Allow rule runs a consequential action without a card, but never 
   assert.equal(short("never", { ...SHELL, pageRule: "allow" }), "ask@consequential");
   assert.equal(short("ask", { ...SEND, rule: { behavior: "hand_off", locked: true }, pageRule: "allow" }), "hand-off@money", "money stays with the person");
   assert.equal(short("ask", { ...SEND, rule: { behavior: "ask", locked: false }, pageRule: "allow" }), "ask@ask-rule", "a Bot's own Ask first rule still asks");
+});
+
+async function rulesDir(t: TestContext, contents?: string) {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "approval-rules-file-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  if (contents !== undefined) await writeFile(path.join(dir, "approval-rules.json"), contents);
+  return dir;
+}
+
+const BLOCK_BANK = { id: "r1", target: { kind: "site", host: "bank.example" }, decision: "block", owner: MAC, createdAt: "2026-11-12T00:00:00.000Z" };
+
+for (const [name, contents] of [
+  ["a file that doesn't parse", `{"version":1,"rules":[${JSON.stringify(BLOCK_BANK)}`],
+  ["a file from a newer Aiden", JSON.stringify({ version: 2, rules: [BLOCK_BANK], groups: [] })],
+  ["a file holding a rule this Aiden can't read", JSON.stringify({ version: 1, rules: [BLOCK_BANK, { ...BLOCK_BANK, id: "r2", target: { kind: "app", app: "Mail" } }] })],
+] as const) {
+  test(`${name} is never read around or written over, until the person sets it aside`, async (t) => {
+    const dir = await rulesDir(t, contents);
+    const book = new ApprovalRuleBook(fileApprovalRuleStore(() => dir, () => new Date("2026-11-12T10:00:00Z")));
+    await assert.rejects(book.list(), ApprovalRulesUnreadableError, "no rule list: its Blocks may be the ones missing");
+    assert.equal(await book.readable(), false);
+    await assert.rejects(book.add({ target: { kind: "tool", tool: "browser_click" }, decision: "allow", owner: MAC }));
+    await book.refresh();
+    await assert.rejects(book.list(), ApprovalRulesUnreadableError, "Try again reads the same file the same way");
+    assert.equal(await readFile(path.join(dir, "approval-rules.json"), "utf8"), contents, "the file is untouched");
+
+    await book.setAside();
+    assert.deepEqual(await book.list(), []);
+    const aside = (await readdir(dir)).filter((file) => file.startsWith("approval-rules.json.unreadable-"));
+    assert.equal(aside.length, 1);
+    assert.equal(await readFile(path.join(dir, aside[0]!), "utf8"), contents, "the bytes are kept beside it");
+    await book.add({ target: { kind: "site", host: "bank.example" }, decision: "block", owner: MAC });
+    assert.deepEqual((await new ApprovalRuleBook(fileApprovalRuleStore(() => dir)).list()).map((entry) => entry.decision), ["block"]);
+  });
+}
+
+test("a readable file is never set aside, and its rules come back on the next launch", async (t) => {
+  const dir = await rulesDir(t, JSON.stringify({ version: 1, rules: [BLOCK_BANK] }));
+  const book = new ApprovalRuleBook(fileApprovalRuleStore(() => dir));
+  await book.setAside();
+  assert.deepEqual((await book.list()).map((entry) => entry.target), [{ kind: "site", host: "bank.example" }]);
+  assert.deepEqual(await readdir(dir), ["approval-rules.json"]);
+});
+
+test("the book refuses a rule it couldn't read back, so nothing it saves is lost on the next launch", async () => {
+  const book = new ApprovalRuleBook(memoryApprovalRuleStore());
+  for (const target of [
+    { kind: "text", text: "pay \u202Ea bill" },
+    { kind: "text", text: "x".repeat(121) },
+    { kind: "site", host: "localhost" },
+    { kind: "tool", tool: "create event" },
+  ] as ApprovalRuleTarget[]) {
+    await assert.rejects(book.add({ target, decision: "block", owner: MAC }), /can’t be saved/u, JSON.stringify(target));
+  }
+  const family = await book.add({ target: { kind: "text", text: "message my family 👩‍👧" }, decision: "block", owner: MAC });
+  assert.deepEqual(family.target, { kind: "text", text: "message my family 👩‍👧" });
+  const long = await book.add({ target: { kind: "text", text: "🛫".repeat(120) }, decision: "ask", owner: MAC });
+  assert.equal([...(long.target as { text: string }).text].length, 120, "counted in characters, as a Bot's editor counts");
+});
+
+test("gate: a rules file that can't be read asks once in every mode, and an unattended run refuses", () => {
+  for (const mode of ["ask", "auto", "never"] as const) {
+    assert.equal(short(mode, { ...READ, pageRule: "unreadable" }), "ask@explicit-only", mode);
+    assert.equal(short(mode, { ...SEND, pageRule: "unreadable" }), "ask@explicit-only", mode);
+  }
+  const routine = planActionGate({ surface: "bot", access: "ask", mode: "never", attendance: "routine" }, { ...READ, pageRule: "unreadable" });
+  assert.equal(routine.outcome, "block");
 });

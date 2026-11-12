@@ -17,12 +17,13 @@ import { createBotApprovals } from "../services/bot-runtime/bot-approvals.js";
 import { createBotRuleStore } from "../services/bot-rules/store.js";
 import { emptyToolApprovalRulesDocument, ToolApprovalRuleBook, type ToolApprovalRuleStore } from "../services/tool-approval-rules.js";
 import { ApprovalRuleBook, memoryApprovalRuleStore } from "../services/approval-rules/store.js";
+import { fileApprovalRuleStore } from "../services/approval-rules/file-store.js";
 import { createApprovalRulesPage, type ApprovalRulesPageWorkspace } from "../services/approval-rules/rules-page.js";
 import { registerApprovalRuleHandlers } from "./approval-rules.js";
 
 const CAL = { kind: "connection", serverId: "calendar", tool: "create_event" } as const;
 
-async function setup(t: TestContext) {
+async function setup(t: TestContext, options: { fileBook?: true } = {}) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "approval-rules-ipc-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   let document = emptyToolApprovalRulesDocument(), tail: Promise<unknown> = Promise.resolve(), id = 0;
@@ -59,7 +60,10 @@ async function setup(t: TestContext) {
     log() {},
   });
   const botRules = createBotRuleStore({ profileDir: dir, knownBot: async (botId) => bots.has(botId) });
-  const book = new ApprovalRuleBook(memoryApprovalRuleStore(), () => new Date("2026-11-12T12:00:00Z"));
+  const clock = () => new Date("2026-11-12T12:00:00Z");
+  const book = new ApprovalRuleBook(options.fileBook ? fileApprovalRuleStore(() => dir) : memoryApprovalRuleStore(), clock);
+  // A fresh book over the same file, as the next launch reads it.
+  const reopen = () => new ApprovalRuleBook(fileApprovalRuleStore(() => dir), clock);
   const workspaces: ApprovalRulesPageWorkspace[] = [
     { id: "w-full", name: "Old project", permission: "full" },
     { id: "w-ask", name: "Site", permission: "ask", approvalMode: "ask", macGrants: { shell: true } },
@@ -96,7 +100,7 @@ async function setup(t: TestContext) {
   t.after(dispose);
   const invoke = <T>(channel: string, input?: unknown) => Promise.resolve().then(() => handlers.get(channel)!({}, input) as T);
   const list = async () => (await invoke<ApprovalRulesView>(APPROVAL_RULE_CHANNELS.list)).rows;
-  return { legacy, allowed, botRules, book, invoke, list, broadcasts, revokedMac, revokedFolders, bots, get everywhere() { return everywhere; } };
+  return { legacy, allowed, botRules, book, reopen, invoke, list, broadcasts, revokedMac, revokedFolders, bots, get everywhere() { return everywhere; } };
 }
 
 const brief = (row: ApprovalRuleRow) => [row.group, row.kind, row.title, row.scope.kind, row.scope.label ?? "", row.legacy === true];
@@ -221,4 +225,43 @@ test("malformed or forged requests are refused before any store is touched", asy
   assert.deepEqual(await f.book.list(), []);
   assert.deepEqual(f.revokedMac, []);
   assert.equal(f.everywhere, true);
+});
+
+test("Block on a Bot's rule in words keeps every character, emoji included, and survives the next launch", async (t) => {
+  const f = await setup(t, { fileBook: true });
+  const view = await f.botRules.get("bot:ada");
+  // A family emoji is one character to the Bot's editor but several code
+  // units, and is joined with a zero-width joiner.
+  const words = "message my family 👩‍👧";
+  await f.botRules.update("bot:ada", view.revision, { type: "add_custom", text: words, behavior: "ask" });
+  const row = (await f.list()).find((entry) => entry.ref.source === "bot-rule")!;
+  assert.deepEqual(await f.invoke(APPROVAL_RULE_CHANNELS.change, { ref: row.ref, decision: "block" }), { changed: true });
+
+  const after = await f.reopen().list();
+  assert.deepEqual(after.map((rule) => [rule.decision, rule.owner, rule.target]), [
+    ["block", { kind: "bot", botId: "bot:ada" }, { kind: "text", text: words }],
+  ]);
+  assert.equal((await f.botRules.get("bot:ada")).rules.some((rule) => rule.text === words), false);
+});
+
+test("a Block the rules page can't hold is refused, and the Bot's rule or allowance stays as it was", async (t) => {
+  const f = await setup(t, { fileBook: true });
+  // Hidden direction marks are kept by a Bot's editor but never by the page.
+  const words = "send money to \u202Eemoh";
+  const view = await f.botRules.get("bot:ada");
+  await f.botRules.update("bot:ada", view.revision, { type: "add_custom", text: words, behavior: "ask" });
+  // Allowances from cards can name a host or tool the page can't store.
+  await f.legacy.grantBot("bot:ada", { kind: "site", host: "localhost", action: "click" }, "localhost · Click", "ada-local");
+  await f.legacy.grantBot("bot:jo", { kind: "connection", serverId: "calendar", tool: "create event" }, "Calendar · create event", "jo-odd");
+
+  const rows = (await f.list()).filter((entry) => entry.ref.source === "bot-allow" || entry.kind === "When a Bot wants to");
+  assert.equal(rows.length, 3);
+  for (const row of rows) {
+    await assert.rejects(f.invoke(APPROVAL_RULE_CHANNELS.change, { ref: row.ref, decision: "block" }), /can’t be saved/u, row.title);
+  }
+
+  assert.ok((await f.botRules.get("bot:ada")).rules.some((rule) => rule.text === words), "the Bot's rule still asks");
+  assert.ok(await f.legacy.matchBot("bot:ada", { kind: "site", host: "localhost", action: "click" }), "the site allowance stays");
+  assert.ok(await f.legacy.matchBot("bot:jo", { kind: "connection", serverId: "calendar", tool: "create event" }), "the tool allowance stays");
+  assert.deepEqual(await f.reopen().list(), []);
 });

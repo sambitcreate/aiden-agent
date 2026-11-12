@@ -737,6 +737,8 @@ export const approvalRulesApi = {
   add: (input: ApprovalRuleAddInput) => invoke<ApprovalRule>(APPROVAL_RULE_CHANNELS.add, input),
   change: (input: ApprovalRuleChangeInput) => invoke<{ changed: boolean }>(APPROVAL_RULE_CHANNELS.change, input),
   remove: (ref: ApprovalRuleRowRef) => invoke<{ removed: boolean }>(APPROVAL_RULE_CHANNELS.remove, { ref }),
+  refresh: () => invoke<ApprovalRulesView>(APPROVAL_RULE_CHANNELS.refresh),
+  setAside: () => invoke<ApprovalRulesView>(APPROVAL_RULE_CHANNELS.setAside),
   onChanged: (handler: () => void) => onNotification(APPROVAL_RULE_CHANNELS.changed, () => handler()),
 };
 
