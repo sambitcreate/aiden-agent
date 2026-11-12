@@ -723,12 +723,16 @@ final class AidenShellUITests: XCTestCase {
         app.terminate()
     }
 
-    /// The tabs become a sidebar when the window has the width for one.
+    /// The tabs become a sidebar when the window has the width for one. It opens
+    /// on the tab strip, the system's default, and the sidebar is one tap away.
     func testIPadUsesASidebar() throws {
         try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .pad, "Needs a regular-width window")
         let app = AidenStateMatrix.launch(scenario: .busy)
         XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10))
         try AidenStateMatrix.widenTheWindow(of: app)
+        let toggle = app.buttons.matching(NSPredicate(format: "identifier ==[c] %@", "ToggleSidebar")).firstMatch
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5), "No sidebar button in a regular width")
+        if !AidenStateMatrix.sidebarRow("Inbox", in: app).exists { toggle.tap() }
         for title in ["Inbox", "Bots", "Workspaces", "Search"] {
             XCTAssertTrue(
                 AidenStateMatrix.sidebarRow(title, in: app).waitForExistence(timeout: 10),
@@ -1698,6 +1702,9 @@ final class AidenShellUITests: XCTestCase {
         let fadedEdges: [CGRect]
         /// The machine filter strip, when the screen has one.
         let strip: CGRect?
+        /// iPad's floating tab strip at the top of a regular-width window, when it
+        /// shows. It is glass too, so it is also one of `bars`.
+        let tabStrip: CGRect?
 
         /// For contrast: the element touches glass, or on iOS 26 a band the
         /// scroll-edge effect fades. The search field and the connection hint draw
@@ -1728,6 +1735,19 @@ final class AidenShellUITests: XCTestCase {
     /// accessory. iOS 27 draws no such band, so there it is 0.
     fileprivate static let scrollEdgeBand: CGFloat = majorSystemVersion < 27 ? 44 : 0
 
+    /// iPad's floating tab strip: the frame around its tabs, when they show. The
+    /// audit doesn't see it as a tab bar (`app.tabBars` is empty), so it's found
+    /// by its tabs' buttons. Nil in a chat or a Bot, which hide it, and with the
+    /// sidebar open in its place.
+    private static func tabStrip(in app: XCUIApplication) -> CGRect? {
+        let window = AidenStateMatrix.window(of: app).frame
+        let tabs = ["Inbox", "Bots", "Workspaces", "Search"]
+            .map { app.buttons.matching(NSPredicate(format: "label == %@", $0)).firstMatch }
+            .filter { $0.exists && $0.isHittable && $0.frame.maxY < window.minY + 120 }
+        guard !tabs.isEmpty else { return nil }
+        return tabs.map(\.frame).reduce(CGRect.null) { $0.union($1) }
+    }
+
     private static var majorSystemVersion: Int {
         Int(UIDevice.current.systemVersion.split(separator: ".").first ?? "") ?? 0
     }
@@ -1737,31 +1757,58 @@ final class AidenShellUITests: XCTestCase {
     /// screen it doesn't name gets none, so a new finding of a known kind fails.
     /// `ceilingOnIOS26` is for a rule iOS 26 finds more of: the iOS 27 gate keeps
     /// its own lower count, so a new finding there can't hide in 26's excess.
+    /// `ceilingInRegularWidth` is the same rule's ceiling in a regular-width
+    /// window (iPad's tab strip and split views), which shows more of each screen.
+    /// A rule without one excuses nothing there. `ceilingInRegularWidthOnIOS26`
+    /// is to it what `ceilingOnIOS26` is to `ceiling`.
     private struct AuditAllowance {
         let reason: String
         let ceiling: [String: Int]
         var ceilingOnIOS26: [String: Int]? = nil
+        var ceilingInRegularWidth: [String: Int] = [:]
+        var ceilingInRegularWidthOnIOS26: [String: Int]? = nil
         let matches: (AuditFinding) -> Bool
 
-        func ceiling(on screen: String) -> Int {
-            let ceilings = AidenShellUITests.majorSystemVersion < 27 ? ceilingOnIOS26 ?? ceiling : ceiling
+        func ceiling(on screen: String, regularWidth: Bool) -> Int {
+            let onIOS26 = AidenShellUITests.majorSystemVersion < 27
+            let ceilings = regularWidth
+                ? (onIOS26 ? ceilingInRegularWidthOnIOS26 ?? ceilingInRegularWidth : ceilingInRegularWidth)
+                : (onIOS26 ? ceilingOnIOS26 ?? ceiling : ceiling)
             return ceilings[screen] ?? 0
         }
     }
 
-    /// What the compact layout's gate lets through. Anything else fails the test,
+    /// What the gate lets through, in both layouts. Anything else fails the test,
     /// and so does a rule that excuses more than its ceiling. `option-a-accessibility.md`
-    /// lists these too, with what was checked by hand. The ceilings are the most
-    /// each rule excused in one appearance on iOS 27 or 26.5 (fix round 1 runs);
+    /// lists these too, with what was checked by hand. The compact ceilings are the
+    /// most each rule excused in one appearance on iOS 27 or 26.5 (fix round 1 runs);
     /// where 26.5 found more, it has its own (Task 35 fix round 1 runs,
-    /// `task-35-f1-full.log` and `task-35-f1-ios26.log`).
+    /// `task-35-f1-full.log` and `task-35-f1-ios26.log`). The regular-width ceilings
+    /// are the most on "Aiden iPad Audit" (iPad Pro 11-inch, iOS 27.0), light or dark,
+    /// and where iOS 26.5 found more, on "Aiden iPad Audit 26" (the same iPad).
     private static let auditAllowances: [AuditAllowance] = [
+        AuditAllowance(
+            // iPad's floating tab strip: the Inbox, Bots and Workspaces titles and
+            // the Inbox badge (the audit's own descriptions name three `UILabel`s
+            // and a `_UIBarBadgeView`). The system draws the strip at one size, as it
+            // does the phone's tab bar, and the app neither draws nor sizes it.
+            // XCTest can't resolve the strip's `_UIFloatingTabBarItemCell` to an
+            // element, so the findings come with none. With the strip hidden (a
+            // chat, a Bot) or the sidebar open in its place there are none.
+            reason: "Text size of the floating tab strip's titles and badge, which the audit can't name",
+            ceiling: [:],
+            ceilingInRegularWidth: [
+                "inbox": 4, "bots": 4, "machines": 4, "machine editor": 4, "settings": 4, "search": 4,
+            ],
+            matches: { $0.type == .dynamicType && $0.frame == nil && $0.tabStrip != nil }
+        ),
         AuditAllowance(
             // Bars keep their height at every text size. The status item and the
             // running accessory offer the Large Content Viewer, the search field
             // is the system's, and VoiceOver reads each one whole.
             reason: "Text size or clipping of text drawn in a bar (the status item, the Bot's title, the search field)",
             ceiling: ["inbox": 1, "search": 1, "bot": 1],
+            ceilingInRegularWidth: ["inbox": 1, "bot": 1],
             matches: { [.dynamicType, .textClipped].contains($0.type) && $0.liesInABar }
         ),
         AuditAllowance(
@@ -1772,7 +1819,9 @@ final class AidenShellUITests: XCTestCase {
             // let through, and the app's own colours on the other screens must
             // reach 4.5:1.
             reason: "System secondary text in a Form, between 3:1 and 4.5:1",
+            // A regular width shows more of each Form, so more of its footers.
             ceiling: ["settings": 6, "machines": 6, "machine editor": 4],
+            ceilingInRegularWidth: ["settings": 10, "machines": 6, "machine editor": 2],
             matches: { finding in
                 finding.type == .contrast && finding.summary.contains("nearly passed")
                     && finding.elementType == .staticText
@@ -1787,6 +1836,7 @@ final class AidenShellUITests: XCTestCase {
             // glyph in AidenMachineChromeTests.
             reason: "A machine filter chip, measured with its symbol tile, between 3:1 and 4.5:1",
             ceiling: ["inbox": 1, "bots": 1],
+            ceilingInRegularWidth: ["inbox": 1, "bots": 1],
             matches: { finding in
                 guard finding.type == .contrast, finding.summary.contains("nearly passed"),
                       let frame = finding.frame, let strip = finding.strip else { return false }
@@ -1797,8 +1847,13 @@ final class AidenShellUITests: XCTestCase {
             // Transcript text is selectable, so the audit counts it as a target.
             // Text isn't a control, and a long press selects it at any size.
             reason: "Selectable transcript text read as a tap target",
+            // In a regular width the reply's first line is one line, under 44 pt.
+            // iOS 26.5 counts the Bot chat's lines and the code block's here too, as
+            // it does on the phone ("Aiden iPad Audit 26").
             ceiling: ["chat": 2],
             ceilingOnIOS26: ["chat": 4, "bot": 5],
+            ceilingInRegularWidth: ["chat": 3],
+            ceilingInRegularWidthOnIOS26: ["chat": 5, "bot": 5],
             matches: { $0.type == .hitRegion && $0.elementType == .staticText }
         ),
         AuditAllowance(
@@ -1807,6 +1862,7 @@ final class AidenShellUITests: XCTestCase {
             // (47 pt here), and a tap anywhere on the field focuses it.
             reason: "The composer's text view inside its 44 pt field",
             ceiling: ["chat": 1, "bot": 1],
+            ceilingInRegularWidth: ["chat": 1, "bot": 1],
             matches: { $0.type == .hitRegion && [.textField, .textView].contains($0.elementType) }
         ),
         AuditAllowance(
@@ -1814,6 +1870,7 @@ final class AidenShellUITests: XCTestCase {
             // the system draws it at. The app doesn't draw or size it.
             reason: "The search field's system clear button",
             ceiling: ["search": 1],
+            ceilingInRegularWidth: ["search": 1],
             matches: { $0.type == .hitRegion && $0.elementType == .button && $0.label == "Clear text" }
         ),
         AuditAllowance(
@@ -1836,15 +1893,37 @@ final class AidenShellUITests: XCTestCase {
             // Each grows with the text size: the AX5 screenshots in
             // option-a-accessibility.md show them at full size. Larger text pushes
             // them below the bottom of the screen, and the audit reads text it can
-            // no longer see as text that stopped growing. All three are system text
-            // styles: a Form footer, a Form button's label and a footnote.
-            reason: "Text the larger sizes push below the screen (Machines footer and Pair a machine, Search's unsearched note)",
+            // no longer see as text that stopped growing. All are system text
+            // styles: Form headers, footers and rows, and a footnote. In a regular
+            // width the machine editor's lower sections and Settings' Read Aloud
+            // footer go the same way: none of them is on the screen at AX5 (the
+            // regular-width run record in option-a-accessibility.md). The editor's
+            // Hide from Inbox footer, the section above them, is reported in some
+            // runs and not others on iOS 27, and in every iOS 26.5 run.
+            reason: "Text the larger sizes push below the screen (Machines footer and Pair a machine, the machine editor's lower sections, Settings' Read Aloud note, Search's unsearched note)",
             ceiling: ["machines": 2, "search": 1],
+            ceilingInRegularWidth: ["machines": 2, "machine editor": 5, "settings": 1, "search": 1],
             matches: { finding in
                 finding.type == .dynamicType
-                    && [("machines", "Hiding a machine keeps it paired"), ("machines", "Pair a machine"),
-                        ("search", "Couldn’t search Bot conversations on ")]
-                    .contains { finding.screen == $0.0 && finding.label.hasPrefix($0.1) }
+                    && AidenShellUITests.textPushedBelowTheScreen
+                    .contains { finding.screen == $0.screen && finding.label.hasPrefix($0.label) }
+            }
+        ),
+        AuditAllowance(
+            // In a regular width the audit calls these "partially unsupported",
+            // though each grows at every one of the nine text sizes from Large to
+            // AX5 and stays on the screen (measured, in the regular-width run record
+            // in option-a-accessibility.md). The reply is MarkdownUI's, scaled with
+            // the body style; the Search rows are system text styles. The compact
+            // gate audits the same lines, where they wrap, and finds nothing, so a
+            // real limit on their size would fail there.
+            reason: "Transcript and Search result text measured growing at every text size",
+            ceiling: [:],
+            ceilingInRegularWidth: ["bot": 4, "chat": 3, "search": 3],
+            matches: { finding in
+                finding.type == .dynamicType && finding.elementType == .staticText
+                    && AidenShellUITests.textThatGrowsAtEverySize
+                    .contains { finding.screen == $0.screen && finding.label.hasPrefix($0.label) }
             }
         ),
         AuditAllowance(
@@ -1852,6 +1931,7 @@ final class AidenShellUITests: XCTestCase {
             // truncates past 240 pt, and the chip speaks the whole name.
             reason: "A machine chip in the filter strip",
             ceiling: ["inbox": 1, "bots": 1],
+            ceilingInRegularWidth: ["inbox": 1, "bots": 1],
             matches: { finding in
                 guard finding.type == .textClipped, let frame = finding.frame, let strip = finding.strip else { return false }
                 return strip.intersects(frame)
@@ -1869,64 +1949,48 @@ final class AidenShellUITests: XCTestCase {
             reason: "Contrast of text in or under glass (navigation bar, tab bar, bottom accessory, search field, Bot connection hint)",
             ceiling: ["inbox": 8, "search": 1, "bots": 1, "bot": 2, "machines": 1, "settings": 4],
             ceilingOnIOS26: ["inbox": 12, "search": 1, "bot": 2, "machine editor": 2, "settings": 6],
+            ceilingInRegularWidth: ["inbox": 1, "bot": 2],
             matches: { $0.type == .contrast && $0.touchesGlass }
         ),
     ]
 
-    /// The regular-width layout (iPad's tab strip and split views) isn't held to
-    /// the rules above yet: it reports Dynamic Type findings of its own, many with
-    /// no element, on every screen, and those are open work. Until then each
-    /// screen may have at most this many findings of any kind in one appearance,
-    /// of these types only, so nothing new gets in. Pinned from the fix round 1
-    /// run on "Aiden Lane iPad" (`task-34-fix1-ipad-c.log`): the larger of the
-    /// light and dark counts, every type either showed.
-    private static let wideBaseline: [String: (count: Int, types: Set<UInt64>)] = {
-        let contrast = XCUIAccessibilityAuditType.contrast.rawValue
-        let hitRegion = XCUIAccessibilityAuditType.hitRegion.rawValue
-        let dynamicType = XCUIAccessibilityAuditType.dynamicType.rawValue
-        let textClipped = XCUIAccessibilityAuditType.textClipped.rawValue
-        return [
-            "inbox": (7, [contrast, dynamicType, textClipped]),
-            "bots": (5, [contrast, dynamicType, textClipped]),
-            "bot": (8, [contrast, hitRegion, dynamicType]),
-            "chat": (9, [hitRegion, dynamicType, textClipped]),
-            "machines": (10, [contrast, dynamicType]),
-            "machine editor": (9, [contrast, dynamicType]),
-            // Re-pinned in the final review's fix (`final-fix-ipad.log`), from 13:
-            // the Connected machine row (M4) is gone, so the page rises 52 pt and
-            // three rows that sat below the audited screen come into it (contrast
-            // on the haptics note, Dynamic Type on "New workspace permission" and
-            // "Transcription"). The same findings the rows above them have; no
-            // new types.
-            "settings": (16, [contrast, dynamicType]),
-            // Re-pinned in Task 35 (`task-35-ipad-shell.log`), from 2: Search now
-            // keeps its bar while the field is up (the only way back to the other
-            // tabs). The two it had stay: the system field's Clear text button and
-            // the unsearched-machines note, a footnote that grows and is pushed under
-            // the keyboard (the compact rule's "below the screen"). The three new
-            // ones are Dynamic Type on no element, which came with the bar and its
-            // system controls. No new types.
-            "search": (5, [hitRegion, dynamicType]),
-        ]
-    }()
+    /// Text that larger sizes push below the bottom of the screen, by screen and
+    /// the start of its label.
+    private static let textPushedBelowTheScreen: [(screen: String, label: String)] = [
+        ("machines", "Hiding a machine keeps it paired"), ("machines", "Pair a machine"),
+        ("machine editor", "A hidden machine stays paired"), ("machine editor", "Connection"),
+        ("machine editor", "Identity"), ("machine editor", "Reconnect"),
+        ("settings", "Read Aloud is unavailable"),
+        ("search", "Couldn’t search Bot conversations on "),
+    ]
+
+    /// Text the regular-width audit calls partially unsupported that grows at
+    /// every size, by screen and the start of its label. The demo's Bot reply, the
+    /// first chat's reply, and Search's Bot result.
+    private static let textThatGrowsAtEverySize: [(screen: String, label: String)] = [
+        ("bot", "Here is a first pass at your week."), ("bot", "Monday: roadmap review"),
+        ("bot", "Wednesday: design critique"), ("bot", "Friday: release notes"),
+        ("chat", "I found the cause."), ("chat", "Advance the clock in the fixture"), ("chat", "Drop the fixed sleep"),
+        ("search", "Scout"), ("search", "Flagged the flaky upload test again this week"), ("search", "Bot conversation · "),
+    ]
 
     /// The system audit finds nothing on any main screen of the tab shell, in
-    /// light and in dark. Every audit type runs, and in the compact layout an issue
-    /// fails the test unless `auditAllowances` gives a reason for it, within that
-    /// rule's ceiling. In the regular-width layout each screen is held to
-    /// `wideBaseline`. All findings are listed, not just the first, and the allowed
-    /// ones are attached to the result.
+    /// light and in dark, in the compact layout and in a regular width. Every audit
+    /// type runs, and an issue fails the test unless `auditAllowances` gives a
+    /// reason for it, within that rule's ceiling for the layout. All findings are
+    /// listed, not just the first, and the allowed ones are attached to the result.
     func testEveryMainScreenPassesTheAudit() throws {
         var findings: [String] = []
         var allowed: [String] = []
         for appearance in AidenStateMatrix.Appearance.allCases {
             // No content size override, so the audit's Dynamic Type checks can change it.
             let app = AidenStateMatrix.launch(scenario: .four, appearance: appearance, contentSize: .system)
-            let isWide = AidenStateMatrix.window(of: app).frame.width > AidenStateMatrix.compactWidth
+            let regularWidth = AidenStateMatrix.window(of: app).frame.width > AidenStateMatrix.compactWidth
             var audited: [String] = []
             func audit(_ screen: String) throws {
                 // An empty or loading screen would pass an audit with nothing to
                 // find. The tab bar's own words don't count as content.
+                let tabStrip = regularWidth ? Self.tabStrip(in: app) : nil
                 let content = app.staticTexts.count + app.cells.count
                     - app.tabBars.descendants(matching: .staticText).count
                 XCTAssertGreaterThanOrEqual(content, 4, "Almost nothing on \(screen) (\(appearance)) to audit")
@@ -1935,7 +1999,7 @@ final class AidenShellUITests: XCTestCase {
                 let bottomBars = [app.tabBars.firstMatch, AidenStateMatrix.runningAccessory(in: app)].filter(\.exists)
                 let bars = ([navigationBar] + bottomBars + [
                     app.searchFields.firstMatch, app.otherElements["aiden.connection-hint"].firstMatch,
-                ]).filter(\.exists).map(\.frame)
+                ]).filter(\.exists).map(\.frame) + [tabStrip].compactMap { $0 }
                 let band = Self.scrollEdgeBand
                 let fadedEdges = band == 0 ? [] : (navigationBar.exists
                     ? [CGRect(x: navigationBar.frame.minX, y: navigationBar.frame.maxY, width: navigationBar.frame.width, height: band)]
@@ -1945,8 +2009,6 @@ final class AidenShellUITests: XCTestCase {
                     ? CGRect(x: 0, y: stripElement.frame.minY, width: .greatestFiniteMagnitude, height: stripElement.frame.height)
                     : nil
                 var excused: [String: Int] = [:]
-                var wide: [String] = []
-                var wideTypes: Set<UInt64> = []
                 // Every type runs, in two passes. The Dynamic Type checks change the
                 // text size and the screen lays itself out again, and checks that ran
                 // in the same pass then lost their element ("Contrast failed on no
@@ -1964,17 +2026,14 @@ final class AidenShellUITests: XCTestCase {
                             frame: element?.frame,
                             bars: bars,
                             fadedEdges: fadedEdges,
-                            strip: strip
+                            strip: strip,
+                            tabStrip: tabStrip
                         )
                         let place = element.map { "\($0.elementType.rawValue) '\($0.label)' at \($0.frame)" } ?? "no element"
                         let line = "\(screen) (\(appearance)): \(issue.compactDescription) on \(place)"
-                        if isWide {
-                            print("AUDIT WIDE: \(line)")
-                            wide.append(line)
-                            wideTypes.insert(issue.auditType.rawValue)
-                        } else if let allowance = Self.auditAllowances.first(where: { $0.matches(finding) }) {
+                        if let allowance = Self.auditAllowances.first(where: { $0.matches(finding) }) {
                             excused[allowance.reason, default: 0] += 1
-                            let ceiling = allowance.ceiling(on: screen)
+                            let ceiling = allowance.ceiling(on: screen, regularWidth: regularWidth)
                             if excused[allowance.reason]! <= ceiling {
                                 print("AUDIT ALLOWED: \(line) -- \(allowance.reason)")
                                 allowed.append("\(line) -- \(allowance.reason)")
@@ -1988,14 +2047,6 @@ final class AidenShellUITests: XCTestCase {
                         }
                         return true
                     }
-                }
-                if isWide {
-                    let baseline = Self.wideBaseline[screen] ?? (0, [])
-                    let newTypes = wideTypes.subtracting(baseline.types)
-                    if wide.count > baseline.count || !newTypes.isEmpty {
-                        findings.append("\(screen) (\(appearance)), regular width: \(wide.count) findings against a baseline of \(baseline.count), new types \(newTypes.sorted()):\n" + wide.joined(separator: "\n"))
-                    }
-                    print("AUDIT WIDE TALLY: \(screen) (\(appearance)) \(wide.count) of \(baseline.count), types \(wideTypes.sorted())")
                 }
                 audited.append(screen)
             }
