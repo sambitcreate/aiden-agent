@@ -7,6 +7,7 @@ import {
   canSteerQueuedMessage,
   committedRunInputNotice,
   deliverQueuedMessage,
+  steerDraftOrQueue,
   steerQueuedMessage,
   withCommittedRunInput,
   type QueuedChatMessage,
@@ -537,6 +538,198 @@ test("an unknown steer outcome keeps the message but stops auto-delivery", async
   assert.deepEqual(ids(queue), ["one"]);
   assert.equal(queue.getSnapshot().paused, true);
   assert.deepEqual((await drain(queue)).sent, []);
+});
+
+const unsavedNotActive = { admitted: false, reason: "run_not_active" as const, committed: false };
+
+function lateSteer(id: string): QueuedChatMessage {
+  return { id, text: `guidance ${id}`, attachments: [] };
+}
+
+test("a steer that misses a run finishing up is queued and sent once as the next turn", async () => {
+  // After agent_end the run stays open briefly (Stop hooks, saving), so the
+  // pane still offers Steer, but main refuses the guidance unsaved.
+  const queue = new ChatMessageQueue();
+  queue.add(message("earlier"));
+  let runOpen = true;
+  let attempts = 0;
+  const outcome = await steerDraftOrQueue({
+    queue,
+    message: lateSteer("late"),
+    streamId: "stream-1",
+    stopping: () => false,
+    admit: (_streamId, _text) =>
+      admitRunInputOnceStarted({
+        admit: async () => (attempts++, unsavedNotActive),
+        live: () => runOpen,
+        // The run settles while admission waits.
+        delay: async () => {
+          runOpen = false;
+        },
+      }),
+  });
+  assert.deepEqual(outcome, { kind: "queued", paused: false });
+  assert.equal(attempts, 1);
+  assert.deepEqual(ids(queue), ["earlier", "late"], "it waits behind earlier follow-ups");
+
+  // Two delivery passes race once the run settles; each message goes out once.
+  const input = delivery(queue);
+  await Promise.all([deliverQueuedMessage(input), deliverQueuedMessage(input)]);
+  for (let index = 0; index < 4; index++) await deliverQueuedMessage(input);
+  assert.deepEqual(input.sent, ["earlier", "late"]);
+  assert.deepEqual(ids(queue), []);
+});
+
+test("a steer after the run already ended is queued without asking the run", async () => {
+  const queue = new ChatMessageQueue();
+  let admissions = 0;
+  const outcome = await steerDraftOrQueue({
+    queue,
+    message: lateSteer("late"),
+    streamId: undefined,
+    stopping: () => false,
+    admit: async () => (admissions++, unsavedNotActive),
+  });
+  assert.deepEqual(outcome, { kind: "queued", paused: false });
+  assert.equal(admissions, 0);
+  assert.deepEqual((await drain(queue)).sent, ["late"]);
+});
+
+test("a late steer into a paused queue waits for Resume", async () => {
+  const queue = new ChatMessageQueue();
+  queue.pause();
+  const outcome = await steerDraftOrQueue({
+    queue,
+    message: lateSteer("late"),
+    streamId: "stream-1",
+    stopping: () => false,
+    admit: async () => unsavedNotActive,
+  });
+  assert.deepEqual(outcome, { kind: "queued", paused: true });
+  assert.deepEqual((await drain(queue)).sent, []);
+  queue.resume();
+  assert.deepEqual((await drain(queue)).sent, ["late"]);
+});
+
+test("a steer into a run the person is stopping keeps the draft and sends nothing", async () => {
+  // Stop pressed before Steer: nothing reaches main.
+  const before = new ChatMessageQueue();
+  let admissions = 0;
+  assert.deepEqual(
+    await steerDraftOrQueue({
+      queue: before,
+      message: lateSteer("late"),
+      streamId: "stream-1",
+      stopping: () => true,
+      admit: async () => (admissions++, unsavedNotActive),
+    }),
+    { kind: "rejected", reason: "cancelled" },
+  );
+  assert.equal(admissions, 0);
+  assert.deepEqual((await drain(before)).sent, []);
+
+  // Stop pressed while admission waits for the run.
+  const during = new ChatMessageQueue();
+  let stopping = false;
+  assert.deepEqual(
+    await steerDraftOrQueue({
+      queue: during,
+      message: lateSteer("late"),
+      streamId: "stream-1",
+      stopping: () => stopping,
+      admit: async () => {
+        stopping = true;
+        return unsavedNotActive;
+      },
+    }),
+    { kind: "rejected", reason: "cancelled" },
+  );
+  assert.deepEqual(ids(during), []);
+  assert.deepEqual((await drain(during)).sent, []);
+
+  // Stop pressed with no stream left to steer.
+  const ended = new ChatMessageQueue();
+  assert.equal(
+    (await steerDraftOrQueue({
+      queue: ended,
+      message: lateSteer("late"),
+      streamId: undefined,
+      stopping: () => true,
+      admit: async () => unsavedNotActive,
+    })).kind,
+    "rejected",
+  );
+  assert.deepEqual(ids(ended), []);
+});
+
+test("a late steer main already saved, or refused for another reason, is never queued", async () => {
+  const cases = [
+    {
+      receipt: { admitted: false, reason: "run_not_active" as const, committed: true, messageId: "m" },
+      expected: { kind: "committed", reason: "run_not_active" },
+    },
+    {
+      receipt: { admitted: false, reason: "capacity" as const, committed: false },
+      expected: { kind: "rejected", reason: "capacity" },
+    },
+    {
+      receipt: { admitted: false, reason: "cancelled" as const, committed: false },
+      expected: { kind: "rejected", reason: "cancelled" },
+    },
+  ];
+  for (const { receipt, expected } of cases) {
+    const queue = new ChatMessageQueue();
+    const outcome = await steerDraftOrQueue({
+      queue,
+      message: lateSteer("late"),
+      streamId: "stream-1",
+      stopping: () => false,
+      admit: async () => receipt,
+    });
+    assert.deepEqual(outcome, expected);
+    assert.deepEqual((await drain(queue)).sent, [], `${receipt.reason} is not sent as a turn`);
+  }
+  const queue = new ChatMessageQueue();
+  const error = new Error("outcome requires reconciliation");
+  assert.deepEqual(
+    await steerDraftOrQueue({
+      queue,
+      message: lateSteer("late"),
+      streamId: "stream-1",
+      stopping: () => false,
+      admit: async () => {
+        throw error;
+      },
+    }),
+    { kind: "unknown", error },
+  );
+  assert.deepEqual(ids(queue), []);
+});
+
+test("a queued row whose steer misses the run stays queued and sends once as the next turn", async () => {
+  const queue = new ChatMessageQueue();
+  queue.add(message("one"));
+  const outcome = await steerQueuedMessage({ queue, id: "one", admit: async () => unsavedNotActive });
+  assert.deepEqual(outcome, { kind: "rejected", reason: "run_not_active" });
+  assert.equal(queue.getSnapshot().paused, false);
+  assert.deepEqual((await drain(queue)).sent, ["one"]);
+});
+
+test("a queued row steered while the person presses Stop reports the stop, not a run that ended", async () => {
+  const queue = new ChatMessageQueue();
+  queue.add(message("one"));
+  let stopping = false;
+  const outcome = await steerQueuedMessage({
+    queue,
+    id: "one",
+    stopping: () => stopping,
+    admit: async () => {
+      stopping = true;
+      return unsavedNotActive;
+    },
+  });
+  assert.deepEqual(outcome, { kind: "rejected", reason: "cancelled" });
+  assert.deepEqual(ids(queue), ["one"], "the row stays queued for the person to resend or remove");
 });
 
 test("messages a run cannot take as guidance are never offered to admission", async () => {

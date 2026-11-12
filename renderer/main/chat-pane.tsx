@@ -64,6 +64,8 @@ import {
   chatMessageQueue,
   committedRunInputNotice,
   steerQueuedMessage,
+  steerDraftOrQueue,
+  lateSteerQueuedNotice,
   steerRejectionMessage,
   withCommittedRunInput,
 } from "../lib/chat-message-queue";
@@ -2447,30 +2449,34 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (text.length > MAX_RUN_INPUT_TEXT) {
         throw new Error("Guidance is too long to steer. Queue it as a follow-up instead.");
       }
-      const streamId = generationRef.current?.streamId ?? steerableDetachedProjection?.streamId;
-      if (!streamId || isStoppingGeneration || stopRequestedRef.current) {
-        throw new Error("The current response has ended. Send your message normally.");
-      }
       // The same main-owned admission as Remote and Telegram: the guidance is
-      // durable in the transcript before Pi reads it.
-      let receipt;
-      try {
-        receipt = await admitSteer(streamId, text);
-      } catch {
+      // durable in the transcript before Pi reads it. A run that already
+      // ended, or ends unsaved while admission waits, queues the draft as the
+      // next turn instead; a run the person is stopping keeps the draft.
+      const outcome = await steerDraftOrQueue({
+        queue: messageQueue,
+        message: { id: createChatTurnId(), text, attachments: [] },
+        streamId: generationRef.current?.streamId ?? steerableDetachedProjection?.streamId,
+        stopping: () => isStoppingGeneration || stopRequestedRef.current,
+        admit: (streamId, guidance) => admitSteer(streamId, guidance),
+      });
+      if (outcome.kind === "admitted") {
+        toast.info("Guidance sent. Aiden will read it at the next step.");
+      } else if (outcome.kind === "committed") {
+        // Main already saved it; resolving consumes the draft so it is not resent.
+        toast.info(committedRunInputNotice(outcome.reason));
+      } else if (outcome.kind === "queued") {
+        // Resolving consumes the draft: the queue now owns the only copy.
+        toast.info(lateSteerQueuedNotice(outcome.paused));
+      } else if (outcome.kind === "unknown") {
         throw new Error(
           "Aiden couldn't confirm the guidance. Check the conversation before sending it again.",
         );
-      }
-      if (receipt.admitted) {
-        toast.info("Guidance sent. Aiden will read it at the next step.");
-      } else if (receipt.committed) {
-        // Main already saved it; resolving consumes the draft so it is not resent.
-        toast.info(committedRunInputNotice(receipt.reason));
       } else {
-        throw new Error(steerRejectionMessage(receipt.reason));
+        throw new Error(steerRejectionMessage(outcome.reason));
       }
     },
-    [admitSteer, isStoppingGeneration, steerableDetachedProjection],
+    [admitSteer, isStoppingGeneration, messageQueue, steerableDetachedProjection],
   );
 
   const canSteerQueued =
@@ -2481,8 +2487,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const steerQueued = React.useCallback(
     async (id: string) => {
       const streamId = generationRef.current?.streamId ?? steerableDetachedProjection?.streamId;
-      if (!streamId || isStoppingGeneration || stopRequestedRef.current) {
-        toast.error("The current response has ended. The message stays queued.");
+      const stopping = () => isStoppingGeneration || stopRequestedRef.current;
+      if (stopping()) {
+        toast.error(`${steerRejectionMessage("cancelled")} The message stays queued.`);
+        return;
+      }
+      if (!streamId) {
+        // The row is already queued; it sends as the next turn once the run settles.
+        toast.info(lateSteerQueuedNotice(messageQueue.getSnapshot().paused));
         return;
       }
       const queuedSource = messageQueue
@@ -2492,11 +2504,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
         queue: messageQueue,
         id,
         admit: (text) => admitSteer(streamId, text, queuedSource),
+        stopping,
       });
       if (outcome.kind === "admitted") {
         toast.info("Guidance sent. Aiden will read it at the next step.");
       } else if (outcome.kind === "committed") {
         toast.info(committedRunInputNotice(outcome.reason));
+      } else if (outcome.kind === "rejected" && outcome.reason === "run_not_active") {
+        // Nothing was saved and the row stays queued, so the queue sends it
+        // as the next turn once the run settles.
+        toast.info(lateSteerQueuedNotice(messageQueue.getSnapshot().paused));
       } else if (outcome.kind === "rejected") {
         toast.error(`${steerRejectionMessage(outcome.reason)} The message stays queued.`);
       } else if (outcome.kind === "unknown") {
