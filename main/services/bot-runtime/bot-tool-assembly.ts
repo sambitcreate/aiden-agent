@@ -651,11 +651,11 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
       // Only when the judge will really be asked: with no judge the rule's
       // own card stands. A Bot's exempt tools (its computer, shell,
       // subagents) keep their rule, since exempt calls never reach the judge.
-      const judgedRule = judging && ruled === "ask" && rule !== undefined && matchingAsk.length > 0 &&
+      const judgedRuleWhen = (judge: boolean) => judge && ruled === "ask" && rule !== undefined && matchingAsk.length > 0 &&
         !BOT_EXEMPT_TOOL_NAMES.has(toolName) &&
         matchingAsk.every((candidate) => candidate.actionClass !== undefined && !candidate.locked && BOT_JUDGED_RULE_CLASSES.has(candidate.actionClass));
       const remembered = baseline && !rule && !computerUse ? botApprovalTargetOf(toolName, action) : undefined;
-      const gateAction: GateAction = {
+      const actionFor = (judgedRule: boolean): GateAction => ({
         toolName,
         ...(computerUse ? { mac: true } : {}),
         // The shell runs on the person's Mac: its first use asks in every mode.
@@ -670,7 +670,24 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
         ...(ports.plans && !call.skipPlanCoverage && call.executionId ? { planAvailable: true } : {}),
         ...(ports.allowList && !call.skipAllowList && remembered ? { allowListAvailable: true } : {}),
         ...(page ? { pageRule: page.decision } : {}),
+      });
+      const gateAction = actionFor(judgedRuleWhen(judging));
+      /**
+       * In Ask, whether this run's card would go to the judge in Auto instead,
+       * so the card may offer Switch to Auto: the same checks as `judging`,
+       * an owner-only request, and the Auto gate reaching its judge step
+       * once nothing pre-approved the call.
+       */
+      const autoWouldJudge = async (): Promise<boolean> => {
+        if (mode !== "ask" || !ports.judge || !ownerStarted || taintedRuns.has(run)) return false;
+        if (await runReadOutside(call, facts)) return false;
+        if ((await call.ownerRequest?.().catch(() => undefined)) === undefined) return false;
+        const inAuto = { ...actionFor(judgedRuleWhen(true)), plan: "not-covered" as const, allowList: "no-match" as const };
+        const planned = planActionGate({ ...gateContext, mode: "auto", judge: true }, inAuto);
+        return planned.outcome === "lookup" && planned.lookup === "judge";
       };
+      const withAutoOffer = async (value: BotApprovalRequirement): Promise<BotApprovalRequirement> =>
+        (await autoWouldJudge()) ? { ...value, autoWouldJudge: true } : value;
       /** Asks the judge when the gate says to, and plans again with its verdict. */
       const judged = async (planned: GateDecision, action: GateAction): Promise<GateDecision> => {
         if (planned.outcome !== "lookup" || planned.lookup !== "judge" || !ports.judge) return planned;
@@ -722,8 +739,8 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
         const fresh = await approvalRequirements(botId, toolName, call);
         if (!fresh || fresh.authorizationFingerprint !== requirements.authorizationFingerprint)
           return decidePolicy(botId, toolName, { ...call, skipPlanCoverage: true, skipAllowList: true });
-        return { allowed: true, approval: await ordinaryApproval(botId, toolName, call, original!, admission, facts, policy,
-          { ...approval, remember: { ...remembered, ...(offer ? { offer } : {}) }, requirements }) };
+        return { allowed: true, approval: await withAutoOffer(await ordinaryApproval(botId, toolName, call, original!, admission, facts, policy,
+          { ...approval, remember: { ...remembered, ...(offer ? { offer } : {}) }, requirements })) };
       }
       switch (decision.outcome) {
         case "block":
@@ -763,8 +780,8 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
         case "ask": {
           if (!approval) break;
           const described = call.skipAllowList && baseline && !rule ? botApprovalTargetOf(toolName, action) : undefined;
-          return { allowed: true, approval: await ordinaryApproval(botId, toolName, call, original!, admission, facts, policy,
-            described ? { ...approval, remember: described } : approval) };
+          return { allowed: true, approval: await withAutoOffer(await ordinaryApproval(botId, toolName, call, original!, admission, facts, policy,
+            described ? { ...approval, remember: described } : approval)) };
         }
         default:
           break;

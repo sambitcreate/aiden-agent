@@ -224,6 +224,8 @@ export interface BotApprovalRequirement {
   onAllow?(): void | Promise<void>;
   /** The rule that made (or also covers) this ask. */
   rule?: BotHandoffRule;
+  /** In Ask, Auto would hand this call to the judge rather than a card. */
+  autoWouldJudge?: true;
   /**
    * The person's Settings → Bots & Approvals lets this routine run go ahead: no card,
    * `onAllow` still runs before the tool.
@@ -327,6 +329,8 @@ export interface BotApprovalOwner {
 export interface BotApprovalRequest {
   authorizationFingerprint: string;
   always?: { key: string; count: number };
+  /** In Ask, Auto would hand this call to the judge: the desktop card may offer Auto. */
+  autoWouldJudge?: true;
   allowList?: Pick<BotApprovalRequirements, "target" | "requirementsFingerprint" | "consentRevision">;
   assertCurrent?(): Promise<void>;
   prepareAllowListRelease?(grant: BotAllowListRelease): Promise<BotApprovalDecision | undefined>;
@@ -1069,6 +1073,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
       argumentsHash: approvalHash({ toolName: call.name, args: call.arguments ?? null }), runHash: approvalHash(declineRun),
       authorizationFingerprint: fingerprint, owner, signal: context.abortSignal, assertCurrent: () => assertLive(api, context, owner),
       ...(capturedRemember?.offer && !approval.rule ? { always: { key: botApprovalRuleKey(capturedRemember.target), count: capturedRemember.offer.count } } : {}),
+      ...(approval.autoWouldJudge ? { autoWouldJudge: true as const } : {}),
       ...(capturedRequirements && capturedRemember && !approval.rule ? {
         allowList: { target: capturedRequirements.target, requirementsFingerprint: capturedRequirements.requirementsFingerprint,
           consentRevision: capturedRequirements.consentRevision },

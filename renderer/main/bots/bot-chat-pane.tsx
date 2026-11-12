@@ -220,9 +220,10 @@ export function BotApprovalCard({
   const [busy, setBusy] = React.useState(false);
   const inFlight = React.useRef(false);
   const [answerError, setAnswerError] = React.useState<string | null>(null);
-  // Allowed again and again in Ask: Auto is offered beside Always. Not on a
-  // device that may only deny.
-  const autoOffer = useSwitchToAutoOffer(prompt.always !== undefined && allowElsewhere === undefined);
+  // Allowed again and again in Ask: Auto is offered beside Always, but only
+  // where main said Auto would hand this call to the judge instead of a card.
+  // Not on a device that may only deny.
+  const autoOffer = useSwitchToAutoOffer(prompt.always !== undefined && prompt.autoWouldJudge === true && allowElsewhere === undefined);
   const respond = async (decision: "allow" | "deny", scope?: "always") => {
     if (inFlight.current) return;
     inFlight.current = true;

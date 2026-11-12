@@ -225,6 +225,18 @@ export function workspaceToolApproval(input: WorkspaceToolApprovalInput): Worksp
 }
 
 /**
+ * Whether switching this Ask-mode workspace call to Auto would hand it to the
+ * judge instead of a card: the card's offer of Auto shows only then. A
+ * command, a file change, an explicit-only review, a rules-page Ask or a new
+ * destination after outside content asks in Auto too, so it is never offered.
+ */
+export function workspaceAutoWouldJudge(input: WorkspaceToolApprovalInput): boolean {
+  if (input.approval?.mode !== "ask") return false;
+  const { judge: _judge, remembered: _remembered, ...call } = input;
+  return workspaceToolApproval({ ...call, approval: { ...input.approval, mode: "auto" }, judgeAvailable: true }).readsJudge === true;
+}
+
+/**
  * The site a rules-page site rule matches for a workspace call: the `url` it
  * names, or, for a click, typing or key press, the page its browser tab shows
  * now. A tab that can't be read names no site; the browser action itself then

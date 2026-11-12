@@ -24,6 +24,11 @@ export interface ToolApprovalPrompt {
    * broader than once is honored only when it was offered here.
    */
   scopes?: readonly ToolApprovalScope[];
+  /**
+   * In Ask, Auto would hand this call to the judge rather than a card, so the
+   * desktop card may offer Switch to Auto. Desktop only, like `preview`.
+   */
+  autoWouldJudge?: true;
 }
 
 interface PendingApproval {

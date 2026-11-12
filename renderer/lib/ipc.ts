@@ -2202,6 +2202,8 @@ export interface ApprovalPrompt {
   canAllow?: boolean;
   /** Allow scopes offered for this call; absent means allow once only. */
   scopes?: ToolApprovalScope[];
+  /** In Ask, Auto would hand this call to the judge; only then may the card offer Auto. */
+  autoWouldJudge?: true;
   source?: "remote";
 }
 

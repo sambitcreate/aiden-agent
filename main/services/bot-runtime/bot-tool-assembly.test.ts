@@ -2596,12 +2596,13 @@ async function judgedCheck(options: {
   botMessage?: true;
   ownerRequest?: string | undefined;
   runToolNames?: () => Promise<string[]>;
+  mode?: "ask" | "auto";
 }): Promise<string> {
   const state = { ...assemblyState(testAuthority({ mode: "full", home: botHome(), ...FULL_GRANTS, other: [...FULL_GRANTS.other, "computer"] })), hasComputer: true };
   const deps = assemblyDeps(state, {
     candidates: () => [{ tool: countingTool(options.toolName), ...(options.toolName === SEND_EMAIL_TOOL ? { mcp: true } : {}) }],
     rules: () => defaultBotRules(),
-    approvalMode: () => "auto",
+    approvalMode: () => options.mode ?? "auto",
     ...(options.judge ? { judge: options.judge } : {}),
     approvalFor: async () => ({ approval: { summary: "Do the thing" }, action: options.action }),
   });
@@ -2617,7 +2618,8 @@ async function judgedCheck(options: {
   if (!decision.allowed) return "refused";
   if (decision.handoff) return "hand off";
   if (!decision.approval) return "run";
-  return decision.approval.preapproved ? "run" : "card";
+  if (decision.approval.preapproved) return "run";
+  return decision.approval.autoWouldJudge ? "card, Auto would judge" : "card";
 }
 
 test("Auto never judges a purchase, Computer Use on the Mac or sharing an image", async () => {
@@ -2641,6 +2643,26 @@ test("Auto in a routine: a pass runs the step, and a deferral still refuses it",
 
 const BOT_MESSAGE_REQUEST = `${BOT_MESSAGE_REQUEST_PREFIX}0b8a3f5e-2c11-4d5f-9b7a-0123456789ac`;
 const DELETE_ON_COMPUTER: BotClassifiableAction = { surface: "computer", action: "click", intent: "Delete the old backups" };
+
+test("in Ask, a card says Auto would judge it only where Auto really would, and asking never calls the judge", async () => {
+  const plainClick: BotClassifiableAction = { surface: "computer_use", action: "click", app: "Notes", element: { role: "AXButton", label: "Bold" } };
+  const purchase: BotClassifiableAction = { surface: "computer_use", action: "click", app: "Safari", windowTitle: "Checkout", element: { role: "AXButton", label: "Place your order" } };
+  const { judge, calls } = recordingJudge("pass");
+  const ask = { mode: "ask" as const, judge };
+  assert.equal(await judgedCheck({ ...ask, toolName: SEND_EMAIL_TOOL, action: plainClick }), "card, Auto would judge");
+  // Auto would still show these cards, so switching would change nothing.
+  assert.equal(await judgedCheck({ ...ask, toolName: SEND_EMAIL_TOOL, action: purchase }), "card", "a purchase");
+  assert.equal(await judgedCheck({ ...ask, toolName: "share_image", action: plainClick }), "card", "sharing an image");
+  assert.equal(await judgedCheck({ ...ask, toolName: "computer_use", action: plainClick }), "card", "the Mac");
+  assert.equal(await judgedCheck({ ...ask, toolName: "computer_shell", action: DELETE_ON_COMPUTER }), "card", "a rule on the Bot's shell");
+  assert.equal(await judgedCheck({ ...ask, toolName: SEND_EMAIL_TOOL, action: plainClick, botMessage: true }), "card", "another Bot's message");
+  assert.equal(await judgedCheck({ ...ask, toolName: SEND_EMAIL_TOOL, action: plainClick, ownerRequest: undefined }), "card", "inputs not only the owner's");
+  assert.equal(await judgedCheck({ ...ask, toolName: SEND_EMAIL_TOOL, action: plainClick, runToolNames: async () => ["inspect_image"] }), "card", "a tainted run");
+  assert.equal(await judgedCheck({ mode: "ask", toolName: SEND_EMAIL_TOOL, action: plainClick }), "card", "no judge on this host");
+  assert.equal(calls.length, 0, "Ask never asks the judge");
+  // In Auto itself there is nothing to offer.
+  assert.equal(await judgedCheck({ judge: recordingJudge("defer").judge, toolName: SEND_EMAIL_TOOL, action: plainClick }), "card");
+});
 
 test("Auto keeps a built-in Ask rule on the Bot's own computer: a delete in its shell shows the card, judged or not", async () => {
   const { judge, calls } = recordingJudge("pass");

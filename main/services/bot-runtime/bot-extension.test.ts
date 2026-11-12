@@ -1344,6 +1344,37 @@ test('host-owned Bot inputs never qualify for routine preapproval',async()=>{
  } finally {await harness.close(ctx);}
 });
 
+for (const autoWouldJudge of [true, false]) {
+  test(`a card policy says Auto ${autoWouldJudge ? "would" : "wouldn't"} judge reaches the desktop card that way`, async () => {
+    const change = countingTool("change");
+    const published: unknown[] = [];
+    const approvals = createBotApprovals({ publish(prompt) { published.push(publicBotApprovalPrompt(prompt)); } });
+    const deps = {
+      ...recordingDeps({
+        tools: [{ tool: change, replay: "unsafe" }],
+        policy: () => ({ allowed: true, approval: { summary: "Change something", ...(autoWouldJudge ? { autoWouldJudge: true as const } : {}) } }),
+      }),
+      requestApprovalOutcome: approvals.requestOutcome,
+    };
+    const faux = createFauxModels([
+      fauxAssistantMessage([fauxToolCall("change", { text: "x" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage("Finished"),
+    ]);
+    const { harness, root } = await memoryHarness(deps, faux);
+    try {
+      const submission = await root.submit({ type: "input", content: "go" }, ctx);
+      await waitFor(() => approvals.pending().length === 1);
+      const [card] = published as Array<{ autoWouldJudge?: true }>;
+      assert.equal(card?.autoWouldJudge, autoWouldJudge ? true : undefined);
+      approvals.decide(approvals.pending()[0]!.waitId, "deny");
+      await submission.wait(ctx);
+      assert.equal(change.executions.length, 0);
+    } finally {
+      await harness.close(ctx);
+    }
+  });
+}
+
 for (const source of ["person", "expiry", "allow_list"] as const) {
   test(`host ${source} approval outcomes retain their source before the delivery deadline`, async () => {
     const change = countingTool("change");

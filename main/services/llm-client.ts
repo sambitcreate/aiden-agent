@@ -114,7 +114,7 @@ import {
 } from "./bot-runtime-authority-main.js";
 import type { BotRuntimeAuthorityAdmission } from "./bot-runtime-authority.js";
 import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
-import { workspaceRuleHost, workspaceToolApproval } from "./approval-gate/workspace-tool-approval.js";
+import { workspaceAutoWouldJudge, workspaceRuleHost, workspaceToolApproval } from "./approval-gate/workspace-tool-approval.js";
 import { pageRuleFor } from "./approval-rules/resolve-main.js";
 import { approvalRulesPageCouldName } from "../../renderer/shared/approval-rules.js";
 import { ApprovalAnalytics, approvalAnalyticsMode, type ApprovalAnalyticsMode } from "./approval-gate/approval-analytics.js";
@@ -4207,6 +4207,8 @@ export const llmClient = {
           let scopedRuleTarget: ToolApprovalRuleTarget | undefined;
           /** A Mac card's "Allow in this workspace" grant, when the card offers it. */
           let macGrantOffer: MacGrantClass | undefined;
+          /** In Ask, Auto would hand this call to the judge: the card may offer Auto. */
+          let autoWouldJudge = false;
           // The approval mode and Mac grants now, and what this call reaches
           // (plan §3.2): a connector's real name and declared hint, and
           // whether it is a new destination after outside content.
@@ -4532,6 +4534,7 @@ export const llmClient = {
               // that part of the Mac; the old exact-action scopes are only read.
               if (runApproval) macGrantOffer = workspaceDecision.macGrant;
               else scopedRuleTarget = workspaceDecision.ruleTarget;
+              autoWouldJudge = workspaceAutoWouldJudge(workspaceGateInput);
             }
             const memoryApproval = workspaceDecision.outcome === "memory";
             if (scheduleApproval && attendedAssistant) {
@@ -4766,6 +4769,7 @@ export const llmClient = {
                 })(),
                 ...(scopedRuleTarget ? { scopes: SCOPED_APPROVAL_OFFER } : {}),
                 ...(macGrantOffer ? { scopes: MAC_GRANT_OFFER } : {}),
+                ...(autoWouldJudge ? { autoWouldJudge: true as const } : {}),
               };
             })(),
             signal,

@@ -8,7 +8,7 @@ import test from "node:test";
 
 import type { ApprovalMode, MacGrantClass } from "../../../renderer/shared/approval-mode.js";
 import { approvalRuleHostOf, approvalRulesPageCouldName, resolveApprovalRule, type ApprovalRule } from "../../../renderer/shared/approval-rules.js";
-import { workspaceRuleHost, workspaceToolApproval, type WorkspaceToolApprovalInput } from "./workspace-tool-approval.js";
+import { workspaceAutoWouldJudge, workspaceRuleHost, workspaceToolApproval, type WorkspaceToolApprovalInput } from "./workspace-tool-approval.js";
 
 type Call = Pick<WorkspaceToolApprovalInput, "toolName" | "args" | "connector">;
 
@@ -66,6 +66,32 @@ for (const [name, call, expected] of CASES) {
     }
   });
 }
+
+test("an Ask card says Auto would judge it only where Auto really would, never where Auto asks too", () => {
+  const inMode = (mode: ApprovalMode, call: Call, extra: Partial<WorkspaceToolApprovalInput> = {}) =>
+    workspaceAutoWouldJudge({ ...call, permission: "ask", workspaceId: "w1", approval: { mode, macGrants: new Set() }, judgeAvailable: true, ...extra });
+  assert.equal(inMode("ask", gmail("gmail_send_message")), true);
+  assert.equal(inMode("ask", { toolName: "browser_click", args: { ref: "e1" } }), true);
+  for (const [name, call] of [
+    ["background_job command", { toolName: "background_job", args: { action: "start", command: "npm test" } }],
+    ["device_screenshot saving a file", { toolName: "device_screenshot", args: { saveTo: "shots/home.png" } }],
+    ["share_image", { toolName: "share_image", args: {} }],
+    ["generate_image", { toolName: "generate_image", args: { prompt: "a cat" } }],
+    ["run_command", { toolName: "run_command", args: { command: "ls" } }],
+    ["form_fill", { toolName: "form_fill", args: {} }],
+    ["read_file", { toolName: "read_file", args: { path: "a.txt" } }],
+  ] as const) {
+    assert.equal(inMode("ask", call), false, name);
+  }
+  // A rules-page Ask, a hook's ask or a new destination after outside content asks in Auto too.
+  assert.equal(inMode("ask", gmail("gmail_send_message"), { pageRule: "ask" }), false, "a rules-page Ask");
+  assert.equal(inMode("ask", gmail("gmail_send_message"), { hook: "ask" }), false, "a hook's ask");
+  assert.equal(inMode("ask", gmail("gmail_send_message"), { newDestination: true }), true, "a send to a new destination is still judged");
+  // Only Ask offers Auto.
+  assert.equal(inMode("auto", gmail("gmail_send_message")), false);
+  assert.equal(inMode("never", gmail("gmail_send_message")), false);
+  assert.equal(workspaceAutoWouldJudge({ ...gmail("gmail_send_message"), permission: "ask" }), false, "no approval mode at all");
+});
 
 test("a background job runs without a card once commands are allowed in this workspace, and not on a file grant", () => {
   const start: Call = { toolName: "background_job", args: { action: "start", command: "npm run dev" } };

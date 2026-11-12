@@ -2309,7 +2309,7 @@ test("in Ask, a repeated approval also offers Auto, which saves the Mac's mode t
     "settings:set": (patch) => { saved = patch; return { approvalMode: "auto" }; },
     "providers:list": () => USABLE,
   });
-  act(() => emitBotTestNotification("bots:approval", { botId: "bot-1", waitId: "w-1", toolCallId: "call-a", toolName: "send_email", summary: "Send the update.", always: { key: "k", count: 3 } }));
+  act(() => emitBotTestNotification("bots:approval", { botId: "bot-1", waitId: "w-1", toolCallId: "call-a", toolName: "send_email", summary: "Send the update.", always: { key: "k", count: 3 }, autoWouldJudge: true }));
   const card = await screen.findByRole("region", { name: "Review before Send email" });
   const offer = await within(card).findByRole("button", { name: "Switch to Auto" });
   await act(async () => fireEvent.click(offer));
@@ -2320,13 +2320,16 @@ test("in Ask, a repeated approval also offers Auto, which saves the Mac's mode t
   await waitFor(() => assert.equal(within(card).queryByRole("button", { name: "Switch to Auto" }), null));
 });
 
-test("Auto is offered only for a repeat, only in Ask, and only when a model could judge", async () => {
+test("Auto is offered only for a repeat, only in Ask, only where Auto would judge, and only when a model could", async () => {
   const USABLE = [{ id: "openai", models: ["fast"], hasKey: true, needsKey: true }];
-  const cases: Array<[string, { settings: unknown; providers: unknown[]; always: boolean }]> = [
+  const cases: Array<[string, { settings: unknown; providers: unknown[]; always: boolean; autoWouldJudge?: false }]> = [
     ["a first-time card", { settings: { approvalMode: "ask" }, providers: USABLE, always: false }],
     ["already in Never ask", { settings: { approvalMode: "never" }, providers: USABLE, always: true }],
     ["already in Auto", { settings: { approvalMode: "auto" }, providers: USABLE, always: true }],
     ["no model that could judge", { settings: { approvalMode: "ask" }, providers: [], always: true }],
+    ["only an agent-runtime provider", { settings: { approvalMode: "ask" }, providers: [{ id: "antigravity", models: ["gemini"], hasKey: false, needsKey: false }], always: true }],
+    // Main leaves the flag off where Auto would ask too (the Bot's shell, a rule it can't judge, a tainted run).
+    ["a card Auto would still show", { settings: { approvalMode: "ask" }, providers: USABLE, always: true, autoWouldJudge: false }],
   ];
   for (const [index, [name, setup]] of cases.entries()) {
     await mountChat({
@@ -2335,7 +2338,7 @@ test("Auto is offered only for a repeat, only in Ask, and only when a model coul
       "providers:list": () => setup.providers,
     });
     act(() => emitBotTestNotification("bots:approval", { botId: "bot-1", waitId: `wait-${index}`, toolCallId: "call-a", toolName: "send_email", summary: "Send the update.",
-      ...(setup.always ? { always: { key: "k", count: 3 } } : {}) }));
+      ...(setup.always ? { always: { key: "k", count: 3 } } : {}), ...(setup.autoWouldJudge === false ? {} : { autoWouldJudge: true }) }));
     const card = await screen.findByRole("region", { name: "Review before Send email" });
     // Give settings and providers a chance to land before checking it stayed out.
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });

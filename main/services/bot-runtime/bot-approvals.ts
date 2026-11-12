@@ -13,6 +13,8 @@ export interface BotApprovalPrompt {
   authorizationFingerprint?: string;
   allowList?: BotApprovalRequest["allowList"];
   always?: { key: string; count: number };
+  /** In Ask, Auto would hand this call to the judge: the desktop card may offer Auto. */
+  autoWouldJudge?: true;
   botId: string;
   waitId: string;
   toolCallId: string;
@@ -22,9 +24,10 @@ export interface BotApprovalPrompt {
   argumentsHash?: string;
   runHash?: string;
 }
-export function publicBotApprovalPrompt(prompt: BotApprovalPrompt): Pick<BotApprovalPrompt, "botId" | "waitId" | "toolCallId" | "toolName" | "summary" | "always" | "argumentsHash" | "runHash"> {
+export function publicBotApprovalPrompt(prompt: BotApprovalPrompt): Pick<BotApprovalPrompt, "botId" | "waitId" | "toolCallId" | "toolName" | "summary" | "always" | "autoWouldJudge" | "argumentsHash" | "runHash"> {
   return { botId: prompt.botId, waitId: prompt.waitId, toolCallId: prompt.toolCallId, toolName: prompt.toolName, summary: prompt.summary,
     ...(prompt.always ? { always: { key: prompt.always.key, count: prompt.always.count } } : {}),
+    ...(prompt.autoWouldJudge ? { autoWouldJudge: true as const } : {}),
     ...(prompt.argumentsHash ? { argumentsHash: prompt.argumentsHash } : {}), ...(prompt.runHash ? { runHash: prompt.runHash } : {}) };
 }
 export interface BotApprovals {
@@ -68,6 +71,7 @@ export function createBotApprovals(options: BotApprovalsOptions): BotApprovals {
       toolName: request.toolName, summary: request.summary, authorizationFingerprint: request.authorizationFingerprint,
       ...(request.argumentsHash ? { argumentsHash: request.argumentsHash } : {}), ...(request.runHash ? { runHash: request.runHash } : {}),
       ...(request.owner ? { owner: structuredClone(request.owner) } : {}), ...(request.always ? { always: { ...request.always } } : {}),
+      ...(request.autoWouldJudge ? { autoWouldJudge: true as const } : {}),
       ...(request.allowList ? { allowList: structuredClone(request.allowList) } : {}) };
     state.prompt = published; waiting.set(request.waitId, state);
     options.publish(published); changed(request.botId);

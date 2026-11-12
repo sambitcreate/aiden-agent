@@ -10,6 +10,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { installBotTestIpc } from "../main/bots/test-dom";
 import { createBotTestQueryClient } from "../main/bots/test-providers";
 import { ChatApprovalCard } from "../components/chat-approval-card";
+import { Toaster } from "../components/ui";
 import type { ApprovalPrompt } from "./ipc";
 import type { ApprovalWorkspaceFields } from "../shared/approval-mode";
 import { noteWorkspaceAllow, resetWorkspaceAllows, useWorkspaceRepeatNudge } from "./switch-to-auto";
@@ -18,23 +19,25 @@ afterEach(cleanup);
 beforeEach(resetWorkspaceAllows);
 
 const USABLE = [{ id: "openai", models: ["fast"], hasKey: true, needsKey: true }];
-const PROMPT: ApprovalPrompt = { approvalId: "a-1", toolCallId: "c-1", toolName: "gmail_send_email", summary: "Send the update." } as ApprovalPrompt;
+// Main marks a card Auto would hand to the judge.
+const PROMPT: ApprovalPrompt = { approvalId: "a-1", toolCallId: "c-1", toolName: "gmail_send_email", summary: "Send the update.", autoWouldJudge: true };
 const WORKSPACE = { id: "w-1", permission: "ask" } satisfies ApprovalWorkspaceFields & { id: string };
 
 function Card({ workspace, pending }: { workspace: ApprovalWorkspaceFields & { id: string }; pending: ApprovalPrompt }) {
   return <ChatApprovalCard pending={pending} deciding={false} onDecide={() => {}} {...useWorkspaceRepeatNudge(workspace, pending)} />;
 }
 
-async function mount(options: { settings?: unknown; workspace?: ApprovalWorkspaceFields & { id: string }; pending?: ApprovalPrompt } = {}) {
+async function mount(options: { settings?: unknown; workspace?: ApprovalWorkspaceFields & { id: string }; pending?: ApprovalPrompt; providers?: unknown[] } = {}) {
   const saved: unknown[] = [];
   installBotTestIpc({
     "settings:get": () => options.settings ?? { approvalMode: "ask" },
     "settings:set": (patch) => { saved.push(patch); return { approvalMode: "auto" }; },
-    "providers:list": () => USABLE,
+    "providers:list": () => options.providers ?? USABLE,
   });
   render(
     <QueryClientProvider client={createBotTestQueryClient()}>
       <Card workspace={options.workspace ?? WORKSPACE} pending={options.pending ?? PROMPT} />
+      <Toaster />
     </QueryClientProvider>,
   );
   // Settings and providers land before anything is checked.
@@ -50,10 +53,13 @@ const allow = (times: number, workspaceId = "w-1", toolName = PROMPT.toolName) =
 test("the third allow of the same action in a workspace offers Auto, and choosing it saves the Mac's mode", async () => {
   allow(3);
   const saved = await mount();
-  const card = screen.getByRole("region");
+  const card = screen.getByRole("region", { name: /^Review/u });
   assert.ok(within(card).getByText("You’ve allowed this 3 times since Aiden opened."));
   await act(async () => fireEvent.click(offer()!));
   assert.deepEqual(saved, [{ approvalMode: "auto" }]);
+  // Switching answers nothing: the person is told this card still waits on them.
+  assert.ok(await screen.findByText(/This card still needs your answer/u));
+  assert.ok(within(card).getByRole("button", { name: /Allow/u }), "the card is still there to answer");
   assert.equal(offer(), null, "once in Auto the offer goes");
 });
 
@@ -75,7 +81,10 @@ test("no offer in Auto or Never ask, for a workspace with its own mode or Chat o
     ["a legacy Full workspace", { workspace: { id: "w-1", permission: "full" } }],
     ["Chat only", { workspace: { id: "w-1", permission: "none" } }],
     ["a paired host's card", { pending: { ...PROMPT, source: "remote" } }],
-    ["a command", { pending: { ...PROMPT, preview: { kind: "command", command: "ls" } } as ApprovalPrompt }],
+    // Main leaves autoWouldJudge off where Auto asks too: a command, a file
+    // change, a background job, a saved screenshot, sharing or creating an image.
+    ["a card Auto would not spare", { pending: { ...PROMPT, autoWouldJudge: undefined } }],
+    ["only an agent-runtime provider, which can't judge", { providers: [{ id: "antigravity", models: ["gemini"], hasKey: false, needsKey: false }] }],
   ];
   for (const [name, options] of cases) {
     await mount(options);
