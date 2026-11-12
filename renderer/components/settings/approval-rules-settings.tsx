@@ -195,7 +195,7 @@ export function ApprovalRulesSettingsView(props: ApprovalRulesSettingsViewProps)
     <>
       {rows === null ? (
         <FieldSet title="Rules">
-          <Field>
+          <Field orientation="vertical">
             {error ? (
               <div className="flex flex-col items-start gap-2">
                 <Callout color="red" role="alert">{error}</Callout>
@@ -215,7 +215,7 @@ export function ApprovalRulesSettingsView(props: ApprovalRulesSettingsViewProps)
           ) : null}
           {props.unreadable ? (
             <FieldSet title="Rules">
-              <Field>
+              <Field orientation="vertical">
                 <div className="flex flex-col items-start gap-3">
                   <Callout color="red" role="alert">
                     Your rules file couldn’t be read, so its rules aren’t shown. Until it can be, every action asks first and Bots don’t act.
