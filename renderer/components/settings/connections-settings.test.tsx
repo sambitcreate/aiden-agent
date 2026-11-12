@@ -76,6 +76,14 @@ test("while searching with nothing found yet, the sheet says so and cannot resta
   assert.ok(buttons(body({ kind: "choose" }, { scanning: false, devices: [] })).includes("Search again"));
 });
 
+test("an empty scan explains a failed Tailscale read but an empty tailnet does not", () => {
+  const failed = body({ kind: "choose" }, { scanning: false, devices: [], tailscale: { status: "unavailable", reason: "timed-out" } });
+  assert.match(failed, /No computers found/u);
+  assert.match(failed, /Tailscale didn&#x27;t respond in time/u);
+  assert.ok(buttons(failed).includes("Search again"));
+  assert.doesNotMatch(body({ kind: "choose" }, { scanning: false, devices: [] }), /respond in time|device list/u);
+});
+
 test("re-pairing lists the replaced host and lets it be connected again", () => {
   const names = buttons(body({ kind: "choose" }, DISCOVERED, "install_saved"));
   assert.ok(names.includes("Connect to Office Mac"));
