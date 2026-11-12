@@ -523,7 +523,7 @@ import { chatProgressEvents } from "./chat-progress-events.js";
 import { GenerationDeltaCoalescer } from "./generation-delta-coalescer.js";
 import { randomUUID } from "node:crypto";
 import { designModeEnabled } from "./studio/feature-flags.js";
-import { designCanvasSnapshots, designCanvasStore, designGrants, designModeConsent } from "./design-canvas/main.js";
+import { designCanvasSnapshots, designCanvasStore, designGrants, designModeConsent, recentWrittenPages } from "./design-canvas/main.js";
 import {
   createDesignCanvasTools,
   DESIGN_MODE_PROMPT_SECTION,
@@ -2440,8 +2440,13 @@ async function prepareGeneration(
     const pageRoot = folderPath;
     let pagesPlaced: Promise<void> = Promise.resolve();
     placeWrittenPage = (relativePath) => {
+      recentWrittenPages.note(params.chatId, relativePath);
       pagesPlaced = pagesPlaced.then(async () => {
-        if (signal.aborted || (await chatStore.getMeta(params.chatId))?.designMode !== true) return;
+        // The write already happened, so Stop does not drop it; design mode
+        // and the chat's workspace folder are checked as they are now.
+        if ((await chatStore.getMeta(params.chatId))?.designMode !== true) return;
+        const current = workspace ? await configStore.getWorkspace(workspace.id) : undefined;
+        if (current?.folderPath !== pageRoot || current.permission === "none") return;
         const placedIds = await placeWrittenPagesOnCanvas({
           chatId: params.chatId,
           workspaceRoot: pageRoot,

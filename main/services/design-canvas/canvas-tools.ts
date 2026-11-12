@@ -458,7 +458,8 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                       }
                     : entry,
                 );
-                const next = { ...doc, frames };
+                // A new size moves the ends of connectors on the page's sides.
+                const next = syncConnectors({ ...doc, frames });
                 const frame = next.frames.find((entry) => entry.id === adopted.id)!;
                 return { doc: next, value: { status: "placed", units: "canvas", frame: summarizeFrame(frame) } };
               }
@@ -472,6 +473,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               }
               let placedDoc = placed.doc;
               if (adopted) {
+                // placeFrame synced connectors to the new box; the merge below keeps that box.
                 // Keep what the person set on the adopted frame (lock, tweaks, dark); take the new box and group.
                 placedDoc = {
                   ...placedDoc,

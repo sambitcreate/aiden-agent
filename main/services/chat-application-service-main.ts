@@ -17,8 +17,8 @@ import { spending } from "./spending-main.js";
 import { remoteAttachmentStore } from "./aiden-remote-attachments-main.js";
 import { toolOutputStore } from "./tool-output-store.js";
 import { chatPullRequestStore } from "./chat-pull-request-service-main.js";
-import { designCanvasStore, designGrants } from "./design-canvas/main.js";
-import { EARLIER_PAGES_LIMIT, pagesWrittenInChat, placeWrittenPagesOnCanvas } from "./design-canvas/written-pages.js";
+import { designCanvasStore, designGrants, recentWrittenPages } from "./design-canvas/main.js";
+import { pagesWrittenInChat, placeWrittenPagesOnCanvas } from "./design-canvas/written-pages.js";
 import { DESIGN_CANVAS_UPDATED_CHANNEL } from "../handlers/design-canvas.js";
 import { cancelVisualSnapshots } from "./visual-snapshot-service.js";
 import { beginFollowThroughMove, deleteChatFollowThrough, restoreChatFollowThrough } from "./follow-through/follow-through-main.js";
@@ -46,7 +46,8 @@ export const chatApplicationService = createChatApplicationService({
     const frameIds = await placeWrittenPagesOnCanvas({
       chatId: chat.id,
       workspaceRoot,
-      paths: pagesWrittenInChat(chat.messages).slice(-EARLIER_PAGES_LIMIT),
+      // A reply still running has not saved its activity yet; its pages come from this run's record.
+      paths: recentWrittenPages.merged(chat.id, pagesWrittenInChat(chat.messages)),
       store: designCanvasStore,
       broadcast: (update) => ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, update),
       newId: randomUUID,
@@ -60,6 +61,7 @@ export const chatApplicationService = createChatApplicationService({
   memoryStore,
   releaseChatContext: (chatId) => {
     forgetChatContextProfile(chatId);
+    recentWrittenPages.forget(chatId);
     void spending.forgetChat(chatId).catch(() => undefined);
     void interruptedWaits.forgetChat(chatId).catch(() => undefined);
     detachedPromptLog.clearChat(chatId);

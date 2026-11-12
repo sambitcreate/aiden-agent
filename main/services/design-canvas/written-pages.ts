@@ -109,6 +109,33 @@ export function pagesWrittenInChat(
   return ordered;
 }
 
+/**
+ * The HTML pages each chat's replies wrote in this app run, newest last. A
+ * reply's activity is saved only when it ends, so this is how opening design
+ * mode in the middle of a reply still finds the pages that reply wrote
+ * before. Memory only, and bounded per chat.
+ */
+export class RecentWrittenPages {
+  private readonly byChat = new Map<string, string[]>();
+
+  note(chatId: string, relativePath: string): void {
+    const paths = (this.byChat.get(chatId) ?? []).filter((entry) => entry !== relativePath);
+    paths.push(relativePath);
+    this.byChat.set(chatId, paths.slice(-EARLIER_PAGES_LIMIT));
+  }
+
+  /** The chat's pages from saved history, then from this run, each once, newest last, at most the limit. */
+  merged(chatId: string, saved: readonly string[]): string[] {
+    const recent = this.byChat.get(chatId) ?? [];
+    const ordered = [...saved.filter((entry) => !recent.includes(entry)), ...recent];
+    return ordered.slice(-EARLIER_PAGES_LIMIT);
+  }
+
+  forget(chatId: string): void {
+    this.byChat.delete(chatId);
+  }
+}
+
 const UNCHANGED = Symbol("unchanged");
 
 /**

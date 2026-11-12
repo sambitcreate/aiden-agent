@@ -95,6 +95,27 @@ test("placing a page that already landed on the canvas by itself moves that fram
   assert.equal(adopted.locked, true, "what the person set on the frame stays");
 });
 
+test("resizing a page that landed by itself keeps an arrow on it attached to its side", async (t) => {
+  const { store, call } = await setup(t);
+  await store.update("chat-1", (doc) => ({
+    ...doc,
+    frames: [
+      { id: "auto", kind: "file", title: "home.html", path: "design/home.html", x: 0, y: 0, w: 640, h: 436, designWidth: 1280, pageId: doc.activePageId, createdBy: "aiden" },
+    ],
+  }));
+  const note = await call("canvas_place_frame", { kind: "note", title: "Next", text: "Library", x: 1200, y: 100 });
+  const arrow = await call("canvas_place_frame", { kind: "connector", title: "Flow", from: { frameId: "auto" }, to: { frameId: note.frame.id } });
+  assert.equal(arrow.status, "placed");
+  await call("canvas_place_frame", { kind: "file", title: "Home", path: "design/home.html", w: 900, h: 600 });
+  const doc = await store.get("chat-1");
+  const page = doc.frames.find((frame) => frame.id === "auto")!;
+  const connector = doc.frames.find((frame) => frame.kind === "connector")!;
+  assert.deepEqual({ w: page.w, h: page.h }, { w: 900, h: 600 });
+  // The arrow leaves the page's right side, which moved with the new width.
+  assert.equal(connector.ends![0].frameId, "auto");
+  assert.equal(connector.ends![0].x, page.x + page.w);
+});
+
 test("a frame placed into a group sits inside it, and moving the group moves its frames", async (t) => {
   const { store, call } = await setup(t);
   const group = await call("canvas_place_frame", { kind: "group", title: "Direction A", x: 100, y: 100, w: 2000, h: 1200 });

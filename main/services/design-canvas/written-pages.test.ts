@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { emptyDesignCanvas, type DesignCanvas, type DesignFrame } from "../../../renderer/shared/design-canvas/schema.js";
 import {
+  RecentWrittenPages,
   pagesWrittenInChat,
   placeWrittenPageFrames,
   placeWrittenPagesOnCanvas,
@@ -133,4 +134,24 @@ test("only pages that exist are placed, the canvas is saved once per change, and
   const doc = await store.get("chat-1");
   assert.deepEqual(doc.frames.map((frame) => frame.path), ["design/home.html", "design/library.html"]);
   assert.deepEqual(broadcasts, [1, 2]);
+});
+
+test("pages a running reply wrote join the saved ones for design mode's entry, newest last and bounded", () => {
+  const recent = new RecentWrittenPages();
+  recent.note("chat-1", "design/a.html");
+  recent.note("chat-1", "design/b.html");
+  recent.note("chat-1", "design/a.html");
+  recent.note("chat-2", "design/other.html");
+  assert.deepEqual(
+    recent.merged("chat-1", ["design/old.html", "design/b.html"]),
+    ["design/old.html", "design/b.html", "design/a.html"],
+    "a page saved and written again counts once, at its newest place",
+  );
+  for (let index = 0; index < 20; index += 1) recent.note("chat-1", `design/p${index}.html`);
+  const merged = recent.merged("chat-1", ["design/old.html"]);
+  assert.equal(merged.length, 12);
+  assert.equal(merged[merged.length - 1], "design/p19.html");
+  recent.forget("chat-1");
+  assert.deepEqual(recent.merged("chat-1", ["design/old.html"]), ["design/old.html"]);
+  assert.deepEqual(recent.merged("chat-2", []), ["design/other.html"]);
 });
