@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { tagMcpAgentTool } from "./mcp-agent-tool-descriptor.js";
 import { markMcpAgentTool } from "./mcp-tool-identity.js";

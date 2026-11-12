@@ -4,7 +4,7 @@ A headless Aiden server for macOS and Linux. Run `aiden serve` on a box you reac
 
 There is no interactive terminal app. Since 2026-10-30, `aiden` has only `serve` and short admin commands for setting the server up (see [the serve-only plan](../../docs/plans/aiden-serve-only-cli.md)). Pi's terminal UI, `aiden -p` print mode, `--mode json|rpc`, `--list-models`, slash commands, themes and the first-run tour are gone. Bare `aiden` prints the command list; the old flags (`-p`, `--mode`, `--tui-mode`, `--theme`, `--list-models`) exit with an error that points to `aiden serve` and `aiden help`.
 
-Built on [pi](https://github.com/earendil-works/pi) (`@earendil-works/pi-coding-agent`, MIT, pinned `1.4.0`, the same line the Aiden desktop app uses). The server uses Pi's SDK for its chat sessions and bundles the desktop's own `main/services` cores for Bots, scheduling, Remote, MCP, memory and web search.
+Built on [pi](https://github.com/earendil-works/pi) (`@earendil-works/pi-coding-agent`, MIT, pinned `1.5.2`, the same line the Aiden desktop app uses). The server uses Pi's SDK for its chat sessions and bundles the desktop's own `main/services` cores for Bots, scheduling, Remote, MCP, memory and web search.
 
 ## Requirements
 
@@ -238,7 +238,7 @@ The build prefers architecture-verified prebuilt helpers from `prebuilt/native/<
 
 Pi reads its identity (`APP_NAME`, config dir, env var names) from the `package.json` nearest its running code. The build bundles Pi's code into `dist/app/cli.js` and writes a generated `dist/app/package.json` with `piConfig: { name: "aiden", configDir: ".aiden" }`. That is the whole rebrand mechanism, and `tests/bundle.test.mjs` pins it. The bundle script is a port of Pi's own `build-coding-agent-bundle.mjs` (same externals and lazy-loader emission); runtime externals resolve from this package's `node_modules`.
 
-`scripts/patch-branding.mjs` (run inside every build) rewrites Pi's installed dist so server chats use a system prompt that says "operating inside Aiden". The shipped bundle is asserted Pi-free by `tests/bundle.test.mjs`.
+`scripts/patch-branding.mjs` (run inside every build) rewrites Pi's installed dist so server chats use a system prompt that says "running inside Aiden". The shipped bundle is asserted Pi-free by `tests/bundle.test.mjs`.
 
 ## Development
 

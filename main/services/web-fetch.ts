@@ -9,7 +9,7 @@
  * arguments, the result or the transcript.
  */
 
-import { StringEnum, Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import {
   WEB_FETCH_TOOL_NAME,
@@ -131,7 +131,7 @@ function readParameters() {
 function extractParameters() {
   return Type.Object({
     url: URL_SCHEMA,
-    mode: Type.Optional(StringEnum(["read", "extract"])),
+    mode: Type.Optional(Type.Unsafe<"read" | "extract">({ type: "string", enum: ["read", "extract"] })),
     fields: Type.Optional(
       Type.Record(Type.String(), Type.String(), {
         description: `extract only. name -> "type: what to find"; types ${WEB_EXTRACT_FIELD_TYPE_HINT}.`,

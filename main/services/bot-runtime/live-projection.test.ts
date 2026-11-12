@@ -238,12 +238,12 @@ test("reopening the Bot's session starts a new epoch and re-sends a snapshot", a
     const sessionWatch = await (await live.service.conversation("bot:a")).watch(ctx);
     sessionWatch.start(async () => undefined);
     let watchEnd: string | undefined;
-    void sessionWatch.closed.then((end) => (watchEnd = end.reason));
+    void sessionWatch.closed.then((end) => (watchEnd = end.kind));
     const first = await live.service.send("bot:a", { text: "hi", requestId: "desk-1" });
     await live.service.awaitReply("bot:a", first.submissionId, new AbortController().signal);
     // Idle close ends the watch; the next send reopens the harness. (Polled: the idle timer is unref'd.)
     await waitFor(() => watchEnd !== undefined, { what: "the idle close" });
-    assert.equal(watchEnd, "session_closed");
+    assert.equal(watchEnd, "ended");
     const second = await live.service.send("bot:a", { text: "again", requestId: "desk-2" });
     await live.service.awaitReply("bot:a", second.submissionId, new AbortController().signal);
     await waitFor(() => visibleText(tape.view).includes("assistant:after reopen"), { what: "the reopened feed" });

@@ -82,14 +82,15 @@ test("onUpdate snapshots stream into the live tool output", async () => {
   ]);
   try {
     const submission = await root.submit({ type: "input", content: "go" }, ctx);
-    const view = await root.viewState(ctx);
+    const view = await root.watch(ctx);
+    view.start(async () => undefined);
     const slot = () => (view.value.docs["pi.live"] as { tools?: Array<{ output?: string; details?: unknown }> } | undefined)?.tools?.[0];
     await waitFor(() => slot()?.output === "line one\nline two\n" && JSON.stringify(slot()?.details) === '{"step":2}', {
       what: "streamed tool output",
     });
     release();
     assert.equal((await submission.wait(ctx)).status, "done");
-    view.dispose();
+    await view.stop();
   } finally {
     await harness.close(ctx);
   }

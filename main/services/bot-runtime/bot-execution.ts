@@ -1,7 +1,9 @@
 /** Pin-specific Pi 1.4 public RegistryReader adapter. No shared AgentDoc mutation. */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
-import type { Context, JsonValue } from "@earendil-works/chord";
+import { botResponseDigest } from "./bot-response-digest.js";
+import type { Context } from "@earendil-works/chord/context";
+import type { JsonValue } from "@earendil-works/chord/json";
 import { createAssistantMessageEventStream, lazyStream, type Api, type AssistantMessage, type Model, type Models } from "@earendil-works/pi-ai";
 import { CompactionTask, GenerationTask, ToolTask, LiveDoc, defineDoc, defineTask, type Harness, type RegistryReader, type RegistrySnapshot, type Task, type TaskId, type TaskRuntime, type Tx, type SubmissionId } from "@earendil-works/pi-durable";
 import { withBotConnectorTaskScope, type BotConnectorExecutionRestriction } from "../bot-connector-inventory-scope.js";
@@ -112,7 +114,7 @@ function responseFacts(botId: string, taskId: string, scopeId: string, memoKey: 
   if (!/^aiden\.execution\.response\.[a-f0-9]{64}$/u.test(memoKey) || !raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
   const receipt = raw as { version?: unknown; claimId?: unknown; requestId?: unknown; dispatchId?: unknown; message?: unknown };
   if (receipt.version !== 2 || !receipt.message || typeof receipt.message !== "object") return undefined;
-  try { return { version: 1, botId, taskId, scopeId, memoKey, claimId: parseBotRoutineModelId(receipt.claimId), requestId: parseBotRoutineModelId(receipt.requestId), dispatchId: parseBotRoutineModelId(receipt.dispatchId), envelopeDigest: fingerprint(raw), responseDigest: fingerprint(receipt.message) }; } catch { return undefined; }
+  try { return { version: 1, botId, taskId, scopeId, memoKey, claimId: parseBotRoutineModelId(receipt.claimId), requestId: parseBotRoutineModelId(receipt.requestId), dispatchId: parseBotRoutineModelId(receipt.dispatchId), envelopeDigest: fingerprint(raw), responseDigest: botResponseDigest(receipt.message as AssistantMessage) }; } catch { return undefined; }
 }
 export async function reconcileBotExecutionResponses(botId: string, taskId: string, scopeId: string, memos: Readonly<Record<string, JsonValue>> | undefined, port: BotExecutionPort): Promise<void> {
   await port.reconcileResponseCosts?.(botId,taskId,scopeId);
@@ -170,7 +172,9 @@ function executionModels<I, S, R, H extends object>(runtime: TaskRuntime<I, S, R
       if (!matching(saved) || !await verified(memoKey, saved)) throw new Error("The stored provider result has no authentic evidence for its exact request.");
       receipt = saved;
     } catch (error) { return block(error); }
-    const stored = receipt.message as AssistantMessage;
+    // Pi Durable 1.5 freezes stored values and stamps the requested thinking
+    // level onto the provider message it classifies, so hand it a copy.
+    const stored = structuredClone(receipt.message) as AssistantMessage;
     if (stored.deferred) { const key = fingerprint(stored.deferred); if (!deferred.has(key)) deferred.set(key, { dispatchId, polls: 0 }); }
     if (previousDispatch && (stored.stopReason === "error" || stored.stopReason === "aborted") && !botExecutionAccountableResponse(stored)) {
       const decision = (await runtime.snapshot(BotExecutionDoc, runtime.taskId, context))?.costDecision;

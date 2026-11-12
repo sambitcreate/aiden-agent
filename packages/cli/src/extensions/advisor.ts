@@ -14,7 +14,8 @@ import { recordUsage, recordUsageRecord } from "../usage-ledger.ts";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { join } from "node:path";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import { Type, type Api, type Model } from "@earendil-works/pi-ai";
+import { type Api, type Model } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { AdvisorAttemptStore } from "../../../../main/services/advisor-attempt-store.js";
 import type {
 	AdvisorCandidate,

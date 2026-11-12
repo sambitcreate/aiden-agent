@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Type, getCurrentSystemPrompt } from "@earendil-works/pi-ai";
+import { getCurrentSystemPrompt } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentContext, AgentTool } from "@earendil-works/pi-agent-core";
 import { createBrowserDiscovery } from "./browser-discovery.js";
 import { estimateStaticContextTokens } from "./generation-context.js";

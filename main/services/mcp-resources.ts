@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import {
   JSON_RPC_ERROR_CODES,

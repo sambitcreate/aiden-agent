@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
-import { StringEnum, Type, validateToolArguments } from "@earendil-works/pi-ai";
+import { validateToolArguments } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { parseBrowserRecordingRecap, type BrowserRecordingRecapV1 } from "../../renderer/shared/browser-recording.js";
 import {
@@ -90,7 +91,7 @@ const localFile = {
 };
 const schema = (properties: Parameters<typeof Type.Object>[0]) => Type.Object({ ...target, ...properties }, { additionalProperties: false });
 // `{type, enum}` validates the same as a union of literals in a fraction of the tokens.
-const enumType = <T extends string>(values: readonly T[]) => StringEnum(values);
+const enumType = <T extends string>(values: readonly T[]) => Type.Unsafe<T>({ type: "string", enum: [...values] });
 
 const ADVERTISED_OMITTED_KEYWORDS: ReadonlySet<string> = new Set([
   "minLength", "maxLength", "minItems", "maxItems", "minimum", "maximum", "default",

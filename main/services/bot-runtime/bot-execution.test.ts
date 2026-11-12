@@ -7,7 +7,8 @@ import path from "node:path";
 import test from "node:test";
 import { createHash, randomUUID } from "node:crypto";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { createAssistantMessageEventStream, createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, Type, type Models } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream, createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, type Models } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { AgentDoc, CompactionTask, Harness, createRegistry, defineExtension, defineTool, hook, type HarnessSettings } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { botExecutionScope, createBotBackgroundExecutionModels, createBotExecutionRegistry, reconcileBotExecutionResponses, type BotExecutionPort } from "./bot-execution.js";
@@ -23,7 +24,7 @@ import { DataStore } from "../data-store.js";
 import { createBotExecutionIssues } from "./bot-execution-issues.js";
 import { createBotIssueService } from "../bot-issues/service.js";
 import { createBotIssueStore } from "../bot-issues/store.js";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import { botConnectorExecutionRestriction, botConnectorInventoryServer, withBotConnectorExecutionRestriction } from "../bot-connector-inventory-scope.js";
 import { existingOrConnectMcpClient } from "../mcp-connector-client-boundary.js";
 import { assertBotExecutionConnectorSource } from "./bot-execution-source.js";
@@ -494,7 +495,10 @@ test("real SIGKILL around cost acknowledgement recovers only the saved exact sou
       await env.service.resume('bot:one','confirmed',{acknowledgeUnknownCost:true,expectedSubmissionId:sent.submissionId,expectedCostReceiptId:cost.costReceiptId});
       setInterval(()=>{},1000);
     `);
-    const env = await openConsentBoundaryFixture(folder); t.after(() => env.service.shutdown()); await env.service.initialize();
+    // Pi Durable 1.5 charges an attempt killed during its request as a failed
+    // attempt instead of resending it, so the reopened Bot finishes it with a
+    // retry, as a production Bot does.
+    const env = await openConsentBoundaryFixture(folder, { retry: true }); t.after(() => env.service.shutdown()); await env.service.initialize();
     const receiptsBefore = Object.values((await env.document.load()).dispatches!); assert.equal(receiptsBefore.length, 1); assert.equal(receiptsBefore[0]!.state, boundary === "before-ack" ? "pending" : "acknowledged_unknown");
     const proof = await env.spending.dispatchReceipt(receiptsBefore[0]!.dispatchId); assert.ok(proof); proof.owner.id = "forged"; assert.equal((await env.spending.dispatchReceipt(proof.dispatchId))?.owner.id, "bot:one");
     const submissionId = (await env.service.submissionForRequest("bot:one", "person"))!;
@@ -789,16 +793,19 @@ test("response proof publication and SQLite result publication preserve honest c
   for (const boundary of ["before-response-proof", "after-response-proof", "after-response-memo"] as const) await t.test(boundary, async (t) => {
     const folder = await mkdtemp(path.join(os.tmpdir(), "aiden-response-publication-")); t.after(() => rm(folder, { recursive: true, force: true }));
     await killAfterRoutineReceipt(t, `import {openConsentBoundaryFixture} from ${JSON.stringify(claimTestModule("main/services/bot-runtime/test-support/consent-boundary-fixture.ts"))}; const env=await openConsentBoundaryFixture(${JSON.stringify(folder)},{crash:${JSON.stringify(boundary)}});await env.service.send('bot:one',{requestId:'person',text:'actual provider response'});setInterval(()=>{},1000);`);
+    // Pi Durable 1.5 charges the killed attempt instead of resending it. With no
+    // retry left the run ends interrupted, and its saved answer is never re-sent.
     const env = await openConsentBoundaryFixture(folder); t.after(() => env.service.shutdown()); await env.service.initialize(); assert.deepEqual(await env.effects.load(), ["final answer"]);
     const status = await env.service.executionResumeStatus("bot:one"), rows = Object.values((await env.document.load()).dispatches!); assert.equal(rows.length, 1); assert.equal(env.providerCalls(), 0);
     if (boundary === "before-response-proof") { assert.equal(status.requiresUnknownCostAcknowledgement, true); assert.equal(rows[0]!.state, "pending"); await assert.rejects(env.service.resume("bot:one", "no-automatic-consent")); assert.equal(env.providerCalls(), 0); }
     else {
       assert.equal(status.requiresUnknownCostAcknowledgement, false); assert.equal(rows[0]!.state, "recorded"); assert.equal(rows[0]!.costUsd, 0.2);
       await env.service.resume("bot:one", "reuse-actual-sealed-response");
-      for (let n = 0; n < 100 && (await env.service.routineState("bot:one")).kind !== (boundary === "after-response-memo" ? "idle" : "interrupted"); n++) await new Promise((resolve) => setTimeout(resolve, 10));
-      assert.equal((await env.service.routineState("bot:one")).kind, boundary === "after-response-memo" ? "idle" : "interrupted"); assert.equal(env.providerCalls(), 0, "neither saved-body reuse nor a missing body may repeat the old provider effect"); assert.equal((await env.spending.status("bot", "bot:one"))?.spentUsd, 0.2); assert.equal(Object.values((await env.document.load()).dispatches!).length, 1);
+      const submissionId = (await env.service.submissionForRequest("bot:one", "person"))!, outcome = await env.service.awaitReply("bot:one", submissionId, new AbortController().signal);
+      assert.equal(outcome.kind, "failed"); if (outcome.kind === "failed") assert.equal(outcome.reason, "interrupted");
+      assert.equal((await env.service.routineState("bot:one")).kind, "idle"); assert.equal(env.providerCalls(), 0, "neither saved-body reuse nor a missing body may repeat the old provider effect"); assert.equal((await env.spending.status("bot", "bot:one"))?.spentUsd, 0.2); assert.equal(Object.values((await env.document.load()).dispatches!).length, 1);
       if (boundary === "after-response-proof") {
-        assert.deepEqual(await env.effects.load(), ["final answer"]); await env.service.dismiss("bot:one", "dismiss-missing-known-answer");
+        assert.deepEqual(await env.effects.load(), ["final answer"]);
         const fresh = await env.service.send("bot:one", { requestId: "fresh-owner-request", text: "send a new task after reviewing the unavailable saved answer" }); assert.equal((await env.service.awaitReply("bot:one", fresh.submissionId, new AbortController().signal)).kind, "completed");
         const finalRows = Object.values((await env.document.load()).dispatches!); assert.equal(finalRows.length, 2); assert.notEqual(finalRows[0]!.dispatchId, finalRows[1]!.dispatchId); assert.equal(finalRows.every((row) => row.state === "recorded"), true); assert.equal(env.providerCalls(), 1); assert.deepEqual(await env.effects.load(), ["final answer", "final answer"]); assert.equal((await env.spending.status("bot", "bot:one"))?.spentUsd, 0.4);
       }
@@ -811,12 +818,15 @@ test("a sealed response cannot be edited, moved to another memo key or retargete
     await killAfterRoutineReceipt(t, `import {openConsentBoundaryFixture} from ${JSON.stringify(claimTestModule("main/services/bot-runtime/test-support/consent-boundary-fixture.ts"))};const env=await openConsentBoundaryFixture(${JSON.stringify(folder)},{crash:'after-response-memo'});await env.service.send('bot:one',{requestId:'person',text:'provider response evidence'});setInterval(()=>{},1000);`);
     let memos: Record<string, JsonValue> = {}, taskId = "";
     editSavedMemos(await savedTaskFile(folder), (saved, id) => { const key = Object.keys(saved).find((name) => name.startsWith("aiden.execution.response.")); if (!key) return; taskId = id; if (variant === "message") { const envelope = saved[key] as unknown as { message: ReturnType<typeof fauxAssistantMessage> }; envelope.message = fauxAssistantMessage("forged zero after authentic result"); } if (variant === "memo-key") { saved[`aiden.execution.response.${"b".repeat(64)}`] = saved[key]!; delete saved[key]; } memos = structuredClone(saved); });
+    // Pi Durable 1.5 charges the killed attempt instead of resending it, so with no
+    // retry left the run ends interrupted without adopting the edited response.
     const env = await openConsentBoundaryFixture(folder); t.after(() => env.service.shutdown()); await env.service.initialize();
     if (variant === "task") { const conversation = await env.service.conversation("bot:one"), scopeId = await botCostReceiptScope(conversation); await reconcileBotExecutionResponses("bot:one", String(BigInt(taskId) + 1n), scopeId, memos, env.execution); assert.ok(await env.spending.pendingDispatch({ kind: "bot", id: "bot:one" })); assert.equal(env.providerCalls(), 0); }
     else {
       assert.equal((await env.service.executionResumeStatus("bot:one")).requiresUnknownCostAcknowledgement, false); assert.equal(await env.spending.pendingDispatch({ kind: "bot", id: "bot:one" }), undefined); assert.equal((await env.spending.status("bot", "bot:one"))?.spentUsd, 0.2);
-      await env.service.resume("bot:one", "ordinary-after-edited-response"); for (let n = 0; n < 100 && (await env.service.routineState("bot:one")).kind !== "interrupted"; n++) await new Promise((resolve) => setTimeout(resolve, 10)); assert.equal((await env.service.routineState("bot:one")).kind, "interrupted"); assert.equal(env.providerCalls(), 0, "tampered SQL cannot create a replacement effect under the consumed dispatch");
-      await env.service.dismiss("bot:one", "dismiss-edited-response"); const fresh = await env.service.send("bot:one", { requestId: "fresh-after-edited-hint", text: "new person request" }); assert.equal((await env.service.awaitReply("bot:one", fresh.submissionId, new AbortController().signal)).kind, "completed"); assert.equal(env.providerCalls(), 1, "only a new owner request can replace the unavailable answer"); const rows = Object.values((await env.document.load()).dispatches!); assert.equal(rows.length, 2); assert.equal(rows.every((row) => row.state === "recorded" && row.costUsd === 0.2), true); assert.equal((await env.spending.status("bot", "bot:one"))?.spentUsd, 0.4);
+      await env.service.resume("bot:one", "ordinary-after-edited-response"); const submissionId = (await env.service.submissionForRequest("bot:one", "person"))!, outcome = await env.service.awaitReply("bot:one", submissionId, new AbortController().signal);
+      assert.equal(outcome.kind, "failed"); if (outcome.kind === "failed") assert.equal(outcome.reason, "interrupted"); assert.equal((await env.service.routineState("bot:one")).kind, "idle"); assert.equal(env.providerCalls(), 0, "tampered SQL cannot create a replacement effect under the consumed dispatch");
+      const fresh = await env.service.send("bot:one", { requestId: "fresh-after-edited-hint", text: "new person request" }); assert.equal((await env.service.awaitReply("bot:one", fresh.submissionId, new AbortController().signal)).kind, "completed"); assert.equal(env.providerCalls(), 1, "only a new owner request can replace the unavailable answer"); const rows = Object.values((await env.document.load()).dispatches!); assert.equal(rows.length, 2); assert.equal(rows.every((row) => row.state === "recorded" && row.costUsd === 0.2), true); assert.equal((await env.spending.status("bot", "bot:one"))?.spentUsd, 0.4);
     }
   });
 });

@@ -11,7 +11,7 @@
 // moment its declaration is sent changes.
 
 import type { AgentContext, AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 
 export const LOAD_TOOLS_TOOL_NAME = "load_tools";

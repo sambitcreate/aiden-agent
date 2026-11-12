@@ -3,7 +3,8 @@ import * as fs from "node:fs/promises";
 import os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
-import { Type, fauxProvider, type Api, type Model } from "@earendil-works/pi-ai";
+import { fauxProvider, type Api, type Model } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AfterToolCallContext, AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import type {
   HookDispatchContext,

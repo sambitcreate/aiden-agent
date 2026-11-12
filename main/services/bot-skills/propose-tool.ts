@@ -1,7 +1,7 @@
 // The Bot's `propose_skill` tool (spec §7 L2). Offered only on turns the
 // person is present for; nothing loads until they press Add on the card.
 
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { BOT_SKILL_PROPOSAL_LIMITS } from "../../../renderer/shared/bot-skill-proposals.js";
 

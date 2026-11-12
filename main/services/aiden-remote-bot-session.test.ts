@@ -598,20 +598,32 @@ test("routine errors reach phones without local paths or key-shaped secrets", ()
   assert.equal(redactRemoteError("   "), "This routine failed.");
 });
 
-/** A conversation whose watch the test drives frame by frame. */
+/**
+ * A conversation whose watch the test drives frame by frame. Each frame is the
+ * whole active transcript, which is also what `context()` reads back, as a
+ * short Pi Durable 1.5 conversation's window shows it.
+ */
 function drivenConversation(initial: RawEntry[], initialDocs: Record<string, unknown> = {}) {
-  let listener: ((view: unknown) => Promise<void>) | undefined;
+  let listener: ((change: unknown) => Promise<void>) | undefined;
   let resolveClosed!: () => void;
   const closed = new Promise<void>((resolve) => { resolveClosed = resolve; });
+  let active: RawEntry[] = initial;
   const conversation = {
     async watch() {
       return {
         value: { entries: initial, docs: initialDocs },
-        start(next: (view: unknown) => Promise<void>) { listener = next; },
+        start(next: (change: unknown) => Promise<void>) { listener = next; },
         stop: async () => {},
         closed,
       };
     },
+    async context() {
+      return { entries: active };
+    },
+  };
+  const frame = async (entries: RawEntry[], docs: Record<string, unknown>) => {
+    active = entries;
+    await listener!({ kind: "value", value: { entries, docs }, ops: [] });
   };
   return {
     conversation,
@@ -619,11 +631,11 @@ function drivenConversation(initial: RawEntry[], initialDocs: Record<string, unk
       const docs = partial === undefined
         ? {}
         : { "pi.live": { generation: { message: { content: [{ type: "text", text: partial }] } } } };
-      await listener!({ entries, docs });
+      await frame(entries, docs);
     },
     /** One watch frame with exactly these docs (`pi.live`, `pi.inbox`). */
     async emitView(entries: RawEntry[], docs: Record<string, unknown>) {
-      await listener!({ entries, docs });
+      await frame(entries, docs);
     },
     /** What a harness close (idle close, delete, quit) does to every watch. */
     end: () => resolveClosed(),

@@ -6,7 +6,8 @@ import type {
   AgentToolResult,
   AgentToolUpdateCallback,
 } from "@earendil-works/pi-agent-core";
-import { Type, type AssistantMessage } from "@earendil-works/pi-ai";
+import { type AssistantMessage } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type {
   AskUserQuestionResponseV1,
   AskUserQuestionV1,

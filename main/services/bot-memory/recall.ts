@@ -12,7 +12,7 @@ import { isBotInputEntryKind } from "../bot-runtime/bot-input-entry.js";
 // cannot resurface as something the person said. The turn that is asking is
 // left out too; it is already in context.
 
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import type { BotToolEntry } from "../bot-runtime/bot-extension.js";

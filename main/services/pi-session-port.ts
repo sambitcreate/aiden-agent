@@ -186,7 +186,7 @@ class CurrentPiSessionPort<Metadata extends PiSessionMetadata>
       } else if (entry.customType === "aiden.pi-legacy.model_change" && typeof data.provider === "string" && typeof data.modelId === "string") {
         model = { provider: data.provider, modelId: data.modelId };
       } else if (entry.customType === "aiden.pi-legacy.active_tools_change" && Array.isArray(data.activeToolNames)) {
-        activeToolNames = data.activeToolNames.filter((name): name is string => typeof name === "string");
+        activeToolNames = data.activeToolNames.filter((name: unknown): name is string => typeof name === "string");
       }
     }
     let lastCompaction = -1;

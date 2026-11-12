@@ -6008,6 +6008,7 @@ test("a bubble's submissionId reaches only a device holding bot:activity, on a f
           stop: async () => {},
           closed: new Promise<void>(() => {}),
         }),
+        context: async () => ({ entries: [placedMessage] }),
       }) as never,
       quietInputs: async () => new Map(),
       placedSubmissions: async () => new Map([["1", "17"]]),

@@ -14,10 +14,11 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { BACKGROUND_CONTEXT, withCancel } from "@earendil-works/chord/context";
-import type { Context } from "@earendil-works/chord";
-import type { Models } from "@earendil-works/pi-ai";
+import type { Context } from "@earendil-works/chord/context";
+import { cleanupSessionResources, type Models } from "@earendil-works/pi-ai";
 import {
   Harness,
+  ProviderDoc,
   type Conversation,
   type HarnessInspection,
   type HarnessSettings,
@@ -34,9 +35,9 @@ export const BOT_SESSION_FILE = "session.sqlite";
 /**
  * Recovered work never runs until the person chooses Resume, so the person
  * already decides whether a task a crash cut off runs again. Pi Durable's
- * crash-loop guard (default 5, counted at each open) would instead park the
- * task, and nothing in Aiden runs a parked task again. A failed model request
- * retries as a chat's does (Pi Durable's own default is three retries).
+ * crash-loop guard (default 5, counted at each open) would instead end the
+ * task as `restart_limit` without asking. A failed model request retries as a
+ * chat's does (Pi Durable's own default is three retries).
  */
 export const BOT_HARNESS_SETTINGS: HarnessSettings = Object.freeze({
   restartLimit: Infinity,
@@ -267,7 +268,7 @@ export async function createBotHarnessHost(
           registry,
           settings: { ...BOT_HARNESS_SETTINGS, ...opts.settings },
           now,
-          onReport: (error) => opts.onReport?.(botId, error),
+          onReport: (report) => opts.onReport?.(botId, report.error),
         },
         ctx,
       );
@@ -352,7 +353,7 @@ export async function createBotHarnessHost(
       // pi-durable 1.2 closes a Session for good when any Storage call fails;
       // drop it so the next open reopens and recovers from what was committed.
       void entry.harness.closed.then((end) => {
-        if (end.reason !== "failed" || open.get(botId) !== entry) return;
+        if (end.kind !== "failed" || open.get(botId) !== entry) return;
         open.delete(botId);
         if (entry.idleTimer !== null) clearTimeout(entry.idleTimer);
         opts.onReport?.(botId, end.error);
@@ -369,7 +370,12 @@ export async function createBotHarnessHost(
     }
     closing.add(botId);
     if (entry.idleTimer !== null) clearTimeout(entry.idleTimer);
+    // pi-ai keeps per-session provider state (Anthropic thread state, strict
+    // tool limits) keyed by the conversation's provider session ID; release it
+    // with the harness, as a deleted chat does.
+    const provider = await entry.harness.snapshot(ProviderDoc, entry.conversation.id, ctx).catch(() => undefined);
     await entry.harness.close(ctx);
+    if (provider !== undefined) cleanupSessionResources(provider.sessionId);
     if (open.get(botId) === entry) open.delete(botId);
     closing.delete(botId);
   }

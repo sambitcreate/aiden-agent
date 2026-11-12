@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
-import { Type, type JsonObject } from "@earendil-works/pi-ai";
+import { type JsonObject } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { runToolCall, type AgentTool, type AgentToolCallOutcome } from "@earendil-works/pi-agent-core";
 import { McpClient } from "@earendil-works/pi-mcp";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";

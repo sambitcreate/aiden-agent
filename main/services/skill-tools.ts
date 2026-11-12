@@ -1,4 +1,4 @@
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { AgentHarnessResources } from "./pi-legacy-harness.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";

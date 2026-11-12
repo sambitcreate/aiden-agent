@@ -62,29 +62,20 @@ const patches = [
 	{
 		file: join(piAgentDir, "dist", "core", "system-prompt.js"),
 		replacements: [
+			// Pi 1.5 rewrote the default prompt: the identity sentence and the
+			// docs heading changed, and its other pi mentions were dropped
+			// upstream.
 			{
-				from: "You are an expert coding assistant operating inside pi, a coding agent harness.",
-				to: "You are an expert coding assistant operating inside Aiden, a coding agent harness.",
+				from: "You are a coding assistant running inside pi, a coding agent harness.",
+				to: "You are a coding assistant running inside Aiden, a coding agent harness.",
 			},
 			{
-				from: "Pi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):",
+				from: "Pi documentation (read only when the user asks about the harness itself, its SDK, extensions, themes, skills, or TUI):",
 				to: "Engine documentation (read only when the user asks about Aiden's engine itself, its SDK, extensions, themes, skills, or TUI):",
 			},
 			{
 				from: "- When reading pi docs or examples, resolve",
 				to: "- When reading engine docs or examples, resolve",
-			},
-			{
-				from: "custom providers (docs/custom-provider.md), adding models (docs/models.md), pi packages (docs/packages.md)",
-				to: "custom providers (docs/custom-provider.md), adding models (docs/models.md), packages (docs/packages.md)",
-			},
-			{
-				from: "- When working on pi topics, read the docs and examples, and follow",
-				to: "- When working on engine topics, read the docs and examples, and follow",
-			},
-			{
-				from: "- Always read pi .md files completely",
-				to: "- Always read documentation .md files completely",
 			},
 		],
 	},

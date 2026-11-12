@@ -1,4 +1,4 @@
-import { Type, type Static } from "@earendil-works/pi-ai";
+import { Type, type Static } from "typebox";
 
 const Action = Type.Union([
   Type.Literal("capture"),
@@ -25,22 +25,20 @@ const Action = Type.Union([
 const Coordinate = Type.Unsafe<[number, number]>(
   Type.Array(Type.Number({ minimum: 0 }), { minItems: 2, maxItems: 2 }),
 );
-const Modifier = Type.Union(
-  [
-    "cmd",
-    "command",
-    "shift",
-    "option",
-    "alt",
-    "ctrl",
-    "control",
-    "fn",
-    "win",
-    "windows",
-    "super",
-    "meta",
-  ].map((modifier) => Type.Literal(modifier)),
-);
+const Modifier = Type.Union([
+  Type.Literal("cmd"),
+  Type.Literal("command"),
+  Type.Literal("shift"),
+  Type.Literal("option"),
+  Type.Literal("alt"),
+  Type.Literal("ctrl"),
+  Type.Literal("control"),
+  Type.Literal("fn"),
+  Type.Literal("win"),
+  Type.Literal("windows"),
+  Type.Literal("super"),
+  Type.Literal("meta"),
+]);
 
 /** One verify_state predicate: exactly one of element or window (cua-driver 0.36.0). */
 const VerifyPredicate = Type.Object(

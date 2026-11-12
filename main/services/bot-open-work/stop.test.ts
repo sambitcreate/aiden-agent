@@ -9,7 +9,7 @@ import { recordingDeps } from "../bot-runtime/test-support/fixtures.js";
 import { Harness, MemoryStorage, createRegistry } from "@earendil-works/pi-durable";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { createFauxModels, FAUX_MODEL_REF, waitFor } from "../bot-runtime/test-support/faux.js";
 import { inspectLinkedBotWork, stopLinkedBotWork, readLinkedBotWorkEvidence } from "./stop.js";

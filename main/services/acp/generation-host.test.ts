@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 
 import type { GenerationTimeline } from "../../../renderer/shared/generation-timeline.js";
 import { GenerationTimelineProjector } from "../generation-timeline.js";

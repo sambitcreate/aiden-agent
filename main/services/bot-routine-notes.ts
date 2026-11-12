@@ -9,7 +9,7 @@
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { writeJsonAtomic } from "./durable-fs.js";
 import { botDirectoryName } from "./bot-runtime/harness-host.js";

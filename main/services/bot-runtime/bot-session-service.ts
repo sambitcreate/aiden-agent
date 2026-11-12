@@ -5,7 +5,8 @@ import { BOT_PERSON_INPUT_KIND, BOT_PEER_INPUT_KIND, BOT_ROUTINE_INPUT_KIND, isI
 import { BOT_EXECUTION_INPUT_KEY, BotExecutionDoc, botExecutionScope, botCostApprovalFacts, createBotExecutionRegistry, reconcileBotExecutionResponses, stampBotExecutionTask, withBotExecutionAdmission, type BotExecutionPort } from "./bot-execution.js";
 import type { BotExecutionClaim } from "../bot-routine-models.js";
 import { botConnectorExecutionRestriction, botConnectorInventoryServer } from "../bot-connector-inventory-scope.js";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
+import { botResponseDigest } from "./bot-response-digest.js";
 import { botCostReceiptScope, consumeBotResumeOperation } from "./bot-resume-operations.js";
 import type { BotExecutionResumeStatus, BotResumeAcknowledgement } from "../../../renderer/shared/bot-execution-resume.js";
 import { reportChatMessageSent } from "../analytics/analytics-feature-reports.js";
@@ -35,7 +36,7 @@ import { BOT_MESSAGE_INPUT_KIND, type BotMessageInputMetadata } from "./bot-inpu
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import { BACKGROUND_CONTEXT, withCancel } from "@earendil-works/chord/context";
 import type { AssistantMessage, ImageContent, Models, TextContent } from "@earendil-works/pi-ai";
 import {
@@ -49,6 +50,7 @@ import {
   HarnessInspection,
   HarnessSettings,
   ModelRef,
+  SessionFailed,
   type SettledSubmissionRecord,
   SubmissionId,
   SubmissionRecord,
@@ -750,7 +752,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
       const base = { submissionId: String(record.id), ...(record.entry === undefined ? {} : { entryId: String(record.entry) }) };
       if (record.status === "queued") return { ...base, state: "queued" };
       if (record.status === "unanswered") return { ...base, state: record.reason === "aborted" ? "cancelled" : "failed" };
-      if (record.status === "done") { const answer = await opened.conversation.commit((tx) => tx.entry(record.answer), ctx), message = answer?.model?.[0]; return { ...base, state: "completed", resultEntryId: String(record.answer), ...(message?.role === "assistant" ? { responseDigest: createHash("sha256").update(JSON.stringify(message)).digest("hex") } : {}) }; }
+      if (record.status === "done") { const answer = await opened.conversation.commit((tx) => tx.entry(record.answer), ctx), message = answer?.model?.[0]; return { ...base, state: "completed", resultEntryId: String(record.answer), ...(message?.role === "assistant" ? { responseDigest: botResponseDigest(message) } : {}) }; }
       const host = await requireHost().open(botId), exact = await inspectLinkedBotWork(host.harness, opened.conversation.id, String(record.id));
       return { ...base, state: exact.kind === "running" ? "running" : exact.kind === "queued" ? "queued" : "interrupted" };
     },
@@ -1176,8 +1178,8 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
               if (!task || task.state.status === "completing") resolve(true);
             };
             check(watch.value);
-            watch.start(async (graph) => {
-              check(graph);
+            watch.start(async (call) => {
+              if (call.kind === "value") check(call.value);
             });
             void watch.closed.then(() => resolve(false));
           });
@@ -1218,7 +1220,15 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
       } finally {
         signal.removeEventListener("abort", onAbort);
       }
-      return settledOutcome(opened.conversation, settled);
+      try {
+        return await settledOutcome(opened.conversation, settled);
+      } catch (error) {
+        // Pi Durable 1.5 settles a wait from the adopted commit while it is still
+        // being stored, so the store can fail after the wait returned: read the
+        // answer back from the reopened session, as for a wait the failure ended.
+        if (!(error instanceof SessionFailed)) throw error;
+        return await replyAfterFailedWait(botId, id, opened.harness);
+      }
     },
 
     compact(botId) {
@@ -1232,7 +1242,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
           await conversation.commit(async (tx) => {
             const taskId = await tx.createTask(CompactionTask, { reason: "manual" as const, ...(deps.compactionInstructions ? { instructions: deps.compactionInstructions } : {}) }, { ownership: { kind: "conversation" }, conversationId: conversation.id });
             await stampBotExecutionTask(tx, taskId, execution);
-            const live = await tx.doc(LiveDoc, conversation.id); live.compactions = [...live.compactions ?? [], { taskId, reason: "manual" as const, blocking: false, attempt: 1 }].sort((a, b) => a.taskId - b.taskId);
+            const live = await tx.doc(LiveDoc, conversation.id); live.compactions = [...live.compactions ?? [], { taskId, trigger: "manual" as const, blocking: false, attempt: 1 }].sort((a, b) => a.taskId - b.taskId);
           }, ctx);
           (await requireHost().open(botId)).harness.resume();
         } else {

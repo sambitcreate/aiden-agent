@@ -7,7 +7,7 @@
 
 import { randomUUID } from "node:crypto";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { declarePiRuntimeReplay } from "../pi-runtime-tool.js";
 import { canvasView, describeCanvas, summarizeFrame } from "../../../renderer/shared/design-canvas/canvas-summary.js";
 import { commentsWithoutFrames } from "../../../renderer/shared/design-canvas/comments.js";

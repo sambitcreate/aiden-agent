@@ -1,4 +1,5 @@
-import { Type, validateToolArguments } from "@earendil-works/pi-ai";
+import { validateToolArguments } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentContext, AgentTool } from "@earendil-works/pi-agent-core";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import { BROWSER_AGENT_GUIDANCE } from "./browser-tools.js";

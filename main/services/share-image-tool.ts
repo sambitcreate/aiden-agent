@@ -3,7 +3,7 @@ import { constants as fsConstants } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isPathInside } from "../shared/path-containment.js";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { MAX_IMAGE_BYTES, imageBytesMatchMime } from "./attachments.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";

@@ -1,6 +1,6 @@
 // Target-aware Telegram tools available only to Telegram-interactive Aiden generations.
 
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { getTelegramDirectRuntime } from "./telegram-direct-runtime.js";
 

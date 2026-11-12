@@ -1,6 +1,6 @@
 // Production wiring of Bot skill proposals and folder-skill review.
 
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import { app } from "../../platform.js";
 import {
   botManagedWorkspace,

@@ -1,5 +1,5 @@
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { PiAgentRuntimeExtension } from "../pi-agent-runtime-harness.js";
 import type { PiRuntimeEventEnvelope } from "../pi-runtime-events.js";
 import { declarePiRuntimeReplay } from "../pi-runtime-tool.js";

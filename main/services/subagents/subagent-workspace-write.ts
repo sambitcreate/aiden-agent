@@ -2,7 +2,7 @@ import { commitSubagentFileMutation } from "./subagent-file-mutation-transaction
 import { createHash } from "node:crypto";
 import { join as joinPath } from "node:path";
 import { types as utilTypes } from "node:util";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type {
   AgentTool,
   AgentToolResult,
