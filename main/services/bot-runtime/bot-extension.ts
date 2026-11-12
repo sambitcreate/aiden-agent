@@ -771,6 +771,16 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
   const executionApprovals = new Map<string, { approval: BotApprovalRequirement; invalid?: boolean; argsFingerprint?: string }>();
   const ordinaryExecutions = new Set<string>();
   const executedApprovals = new Map<string, { id: string; authorizationFingerprint: string; cacheKey: string }>();
+  /** Actions the person declined, by run: in-memory only, for the runs still going. */
+  const declinedInRuns = new Map<string, Set<string>>();
+  const rememberDecline = (runId: string, key: string) => {
+    const declined = declinedInRuns.get(runId) ?? new Set<string>();
+    declined.add(key);
+    declinedInRuns.delete(runId);
+    declinedInRuns.set(runId, declined);
+    // Keep only the most recent runs.
+    while (declinedInRuns.size > 64) declinedInRuns.delete(declinedInRuns.keys().next().value!);
+  };
 
   /**
    * A hook's ask gets a card of its own, ahead of the rule's flow: a remembered
@@ -959,6 +969,12 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
         authorizationFingerprint: evidence.authorizationFingerprint,
       }, context);
     };
+    // The person already declined this exact action in this run: never ask
+    // again (the approval gate's "declined in run" rule, plan §3.3).
+    // A run is the reply to one set of inputs, across all of its model steps.
+    const declineRun = `${api.conversationId}\u0000${owner.inputs.map(input => input.submissionId).join(",")}`;
+    const declineKey = `${call.name}\u0000${approval.summary}\u0000${JSON.stringify(call.arguments ?? null)}`;
+    if (declinedInRuns.get(declineRun)?.has(declineKey)) return { block: "The person declined this action." };
     let memo = await attemptMemo(approval);
     let fingerprint = evidenceOf(approval).authorizationFingerprint;
     let releaseProof: BotAllowListRelease | undefined;
@@ -1037,8 +1053,11 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
       }
       settlement = cache.result as BotApprovalSettlement;
     }
-    if (answer.answer === "deny") return { block: answer.source === "expiry" ? "The approval window expired. Nobody approved this action."
-      : answer.source === "person" ? "The person declined this action." : "This action was not approved." };
+    if (answer.answer === "deny") {
+      if (answer.source === "person") rememberDecline(declineRun, declineKey);
+      return { block: answer.source === "expiry" ? "The approval window expired. Nobody approved this action."
+        : answer.source === "person" ? "The person declined this action." : "This action was not approved." };
+    }
     const current = await fresh();
     const publication = releaseProof ?? settlement.publication;
     const same = current && evidenceOf(current).authorizationFingerprint === fingerprint;

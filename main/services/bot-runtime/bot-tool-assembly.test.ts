@@ -838,6 +838,34 @@ test("two identical rule-made calls each get their own card", async () => {
   }
 });
 
+test("an action the person declined is not asked again in the same run", async () => {
+  const state = assemblyState(full(botHome()));
+  const send = countingTool(SEND_EMAIL_TOOL);
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall(SEND_EMAIL_TOOL, { text: "hello" }, { id: "send-1" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall(SEND_EMAIL_TOOL, { text: "hello" }, { id: "send-2" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall(SEND_EMAIL_TOOL, { text: "a different note" }, { id: "send-3" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("done"),
+  ]);
+  const deps = assemblyDeps(state, {
+    candidates: () => [{ tool: send, mcp: true }],
+    rules: () => defaultBotRules(),
+    approve: async () => "deny",
+  });
+  const { harness, root } = await memoryHarness(deps, fauxModels);
+  try {
+    await (await root.submit({ type: "input", content: "send it" }, ctx)).wait(ctx);
+    assert.deepEqual(deps.approvals.map((request) => request.toolCallId), ["send-1", "send-3"],
+      "the retried identical call gets no second card; a different one still asks");
+    const results = await toolResults(root);
+    assert.equal(results.length, 3);
+    for (const result of results) assert.match(String(result.content[0]?.text), /Tool call blocked: The person declined this action\./);
+    assert.equal(send.executions.length, 0);
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
 test("a connection tool a built-in rule covers asks with the rule's name", async () => {
   const state = assemblyState(full(botHome()));
   const send = countingTool(SEND_EMAIL_TOOL);
