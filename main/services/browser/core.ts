@@ -310,6 +310,7 @@ export function browserLocalServers(output: string): Array<{ url: string; label:
 export class BrowserActionQueue {
   private tail: Promise<unknown> = Promise.resolve();
   private controller?: AbortController;
+  private source?: "user" | "agent";
   get signal(): AbortSignal | undefined {
     return this.controller?.signal;
   }
@@ -318,7 +319,14 @@ export class BrowserActionQueue {
     this.epoch += 1;
     this.controller?.abort(new Error("Browser action interrupted by user input or a closed tab."));
   }
-  async run<T>(operation: (check: () => void) => Promise<T>, signal?: AbortSignal): Promise<T> {
+  interruptForHumanInput(): void {
+    if (this.source !== "user") this.interrupt();
+  }
+  async run<T>(
+    operation: (check: () => void) => Promise<T>,
+    signal?: AbortSignal,
+    source: "user" | "agent" = "agent",
+  ): Promise<T> {
     const epoch = this.epoch;
     const check = () => {
       browserAbort(signal);
@@ -331,12 +339,16 @@ export class BrowserActionQueue {
         check();
         const controller = new AbortController();
         this.controller = controller;
+        this.source = source;
         try {
           const result = await operation(check);
           check();
           return result;
         } finally {
-          if (this.controller === controller) this.controller = undefined;
+          if (this.controller === controller) {
+            this.controller = undefined;
+            this.source = undefined;
+          }
         }
       });
     this.tail = next;

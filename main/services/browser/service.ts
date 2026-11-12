@@ -8,6 +8,7 @@ import {
   nativeImage,
   type Session,
 } from "electron";
+import { BrowserPrivateSession } from "./private-session.js";
 import { BrowserBackgroundThrottling } from "./background-throttling.js";
 import { PIP_FRAME_INTERVAL_MS, PIP_SCREENCAST, PipFeed } from "./pip-feed.js";
 import { randomUUID } from "node:crypto";
@@ -297,7 +298,7 @@ export class BrowserService {
   private defaults: BrowserDefaults = clone(DEFAULT_BROWSER_SETTINGS);
   private readonly workspaceAccess = new Map<string, BrowserAgentAccessOverride>();
   private loaded = false;
-  private incognitoGeneration = randomUUID();
+  private readonly privateSession = new BrowserPrivateSession(() => this.browserSession("incognito"));
   private persistence: Promise<unknown> = Promise.resolve();
 
   private storagePath(): string {
@@ -691,7 +692,7 @@ export class BrowserService {
     } else {
       const profile = this.profile(profileId);
       partition = browserPartition(
-        profile.kind === "incognito" ? `${profile.id}:${this.incognitoGeneration}` : profile.id,
+        profile.id,
         profile.kind === "incognito",
       );
     }
@@ -1009,7 +1010,7 @@ export class BrowserService {
         tab.expectedInputs.splice(index, 1);
         return true;
       }
-      tab.queue.interrupt();
+      tab.queue.interruptForHumanInput();
       return false;
     };
     wc.on("before-input-event", (event, input) => {
@@ -1181,87 +1182,99 @@ export class BrowserService {
     if (botId !== undefined) profileId = botBrowserProfileId(botId);
     else if (isBotBrowserProfileId(profileId)) throw new Error("This browser profile belongs to a Bot.");
     const normalized = browserUrl(url);
-    const browserSession = this.browserSession(profileId);
-    const view = new WebContentsView({
-      webPreferences: {
-        session: browserSession,
-        sandbox: true,
-        contextIsolation: true,
-        nodeIntegration: false,
-        nodeIntegrationInSubFrames: false,
-        webSecurity: true,
-        backgroundThrottling: true,
-      },
-    });
-    view.webContents.setUserAgent(browserSession.getUserAgent());
-    const state: BrowserTab = {
-      id: `browser-${randomUUID()}`,
-      workspaceId,
-      profileId,
-      url: browserDisplayUrl(normalized),
-      title: "New tab",
-      loading: false,
-      canGoBack: false,
-      canGoForward: false,
-      crashed: false,
-      audible: false,
-      muted: false,
-      viewport: clone(this.defaults.viewport),
-      appearance: this.defaults.appearance,
-      zoom: this.defaults.zoom,
-      recording: false,
-      agentControlling: false,
-      floating: false,
-    };
-    const tab: LiveTab = {
-      state,
-      view,
-      queue: new BrowserActionQueue(),
-      backgroundThrottling: new BrowserBackgroundThrottling(view.webContents),
-      diagnostics: [],
-      network: [],
-      timeline: [],
-      refs: new Map(),
-      referenceGeneration: 0,
-      visible: false,
-      activeHosts: 0,
-      closing: false,
-      expectedInputs: [],
-      crashTimes: [],
-      navigationSequence: 0,
-      committedNavigation: 0,
-      sensitiveFields: new SensitiveFieldMemory(),
-    };
-    this.tabs.set(state.id, tab);
-    workspace.state.tabs.push(state);
-    if (show) this.activateTab(tab);
-    view.setBounds({ x: 0, y: 0, width: state.viewport.width, height: state.viewport.height });
-    this.hide(tab);
-    this.observe(tab);
-    view.webContents.setZoomFactor(state.zoom);
-    this.emit(workspaceId);
-    if (show && !tab.state.floating) this.emit(workspaceId, { type: "show", workspaceId, tabId: state.id });
-    try { this.beginPreviewNavigation(tab, normalized); } catch (error) { this.close(tab); throw error; }
-    tab.initialLoad = view.webContents
-      .loadURL(normalized)
-      .then(() => {
-        if (!tab.closing && view.webContents.getURL() === normalized)
-          return this.applyEmulation(tab);
-      })
-      .catch((error) => {
-        if (
-          !tab.closing &&
-          !String(error).includes("ERR_ABORTED") &&
-          (view.webContents.getURL() === normalized || view.webContents.getURL() === "")
-        ) {
-          state.error = String(error);
-          this.emit(workspaceId);
-        }
-        throw error;
+    const owner = workspace.owner;
+    const open = (browserSession: Session): LiveTab => {
+      // Cleanup may have awaited while the window closed or other tabs opened.
+      if (this.workspaces.get(workspaceId) !== workspace || workspace.owner !== owner)
+        throw new Error("Open this workspace in Aiden before using its browser.");
+      this.mainWindow(workspaceId);
+      if (workspace.state.tabs.length >= BROWSER_MAX_TABS)
+        throw new Error(`Close a browser tab before opening more than ${BROWSER_MAX_TABS}.`);
+      const view = new WebContentsView({
+        webPreferences: {
+          session: browserSession,
+          sandbox: true,
+          contextIsolation: true,
+          nodeIntegration: false,
+          nodeIntegrationInSubFrames: false,
+          webSecurity: true,
+          backgroundThrottling: true,
+        },
       });
-    void tab.initialLoad.catch(() => {});
-    return tab;
+      view.webContents.setUserAgent(browserSession.getUserAgent());
+      const state: BrowserTab = {
+        id: `browser-${randomUUID()}`,
+        workspaceId,
+        profileId,
+        url: browserDisplayUrl(normalized),
+        title: "New tab",
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        crashed: false,
+        audible: false,
+        muted: false,
+        viewport: clone(this.defaults.viewport),
+        appearance: this.defaults.appearance,
+        zoom: this.defaults.zoom,
+        recording: false,
+        agentControlling: false,
+        floating: false,
+      };
+      const tab: LiveTab = {
+        state,
+        view,
+        queue: new BrowserActionQueue(),
+        backgroundThrottling: new BrowserBackgroundThrottling(view.webContents),
+        diagnostics: [],
+        network: [],
+        timeline: [],
+        refs: new Map(),
+        referenceGeneration: 0,
+        visible: false,
+        activeHosts: 0,
+        closing: false,
+        expectedInputs: [],
+        crashTimes: [],
+        navigationSequence: 0,
+        committedNavigation: 0,
+        sensitiveFields: new SensitiveFieldMemory(),
+      };
+      this.tabs.set(state.id, tab);
+      workspace.state.tabs.push(state);
+      if (show) this.activateTab(tab);
+      view.setBounds({ x: 0, y: 0, width: state.viewport.width, height: state.viewport.height });
+      this.hide(tab);
+      this.observe(tab);
+      view.webContents.setZoomFactor(state.zoom);
+      this.emit(workspaceId);
+      if (show && !tab.state.floating) this.emit(workspaceId, { type: "show", workspaceId, tabId: state.id });
+      try { this.beginPreviewNavigation(tab, normalized); } catch (error) { this.close(tab); throw error; }
+      tab.initialLoad = view.webContents
+        .loadURL(normalized)
+        .then(() => {
+          if (!tab.closing && view.webContents.getURL() === normalized)
+            return this.applyEmulation(tab);
+        })
+        .catch((error) => {
+          if (
+            !tab.closing &&
+            !String(error).includes("ERR_ABORTED") &&
+            (view.webContents.getURL() === normalized || view.webContents.getURL() === "")
+          ) {
+            state.error = String(error);
+            this.emit(workspaceId);
+          }
+          throw error;
+        });
+      void tab.initialLoad.catch(() => {});
+      return tab;
+    };
+    return profileId === "incognito"
+      ? this.privateSession.open(open)
+      : open(this.browserSession(profileId));
   }
+
   private detach(tab: LiveTab): void {
     if (tab.attached && !tab.attached.isDestroyed()) {
       try {
@@ -1383,15 +1396,7 @@ export class BrowserService {
       this.profiles.find((profile) => profile.id === tab.state.profileId)?.kind === "incognito" &&
       ![...this.tabs.values()].some((t) => t.state.profileId === tab.state.profileId)
     ) {
-      const partition = browserPartition(
-        `${tab.state.profileId}:${this.incognitoGeneration}`,
-        true,
-      );
-      const privateSession = this.sessions.get(partition);
-      this.sessions.delete(partition);
-      this.incognitoGeneration = randomUUID();
-      void privateSession?.clearStorageData().catch(() => {});
-      void privateSession?.clearCache().catch(() => {});
+      this.privateSession.clear();
     }
   }
   closeForWebContents(id: number): void {
@@ -3070,7 +3075,7 @@ export class BrowserService {
             tab.state.agentControlling = false;
             this.emit(workspaceId);
           }
-        }, signal);
+        }, signal, context.source);
       }
     }
     result.state = this.getState(workspaceId);

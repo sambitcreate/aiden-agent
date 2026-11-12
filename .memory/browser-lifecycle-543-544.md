@@ -1,0 +1,7 @@
+# Browser lifecycle fixes for #543 and #544
+
+BrowserActionQueue records the active command source. Physical human input only interrupts when the active command is not user-sourced. Explicit interruption from replacement commands and tab closure still cancels user operations.
+
+Incognito uses the fixed memory-only partition for the process lifetime. BrowserPrivateSession owns the cached Session and storage/cache cleanup barrier. Last close clears both; next opening waits for both to settle and rejects on cleanup failure. Open registration occurs synchronously after the latest barrier, and rechecks workspace owner and tab limit after waiting. The native lifecycle spec checks session identity and cookie/localStorage deletion across repeated cycles. Focused helper tests inject sessions to check cleanup delays, failure and last-close/open ordering.
+
+No remote protocol, native-client, onboarding capability or plan status changes. Validation: 269 browser tests, application/E2E TypeScript and scoped ESLint pass. Both new service Electron tests pass in the dedicated Cua Space. Against baseline BrowserService at 7b5b172c4, incognito fails because the second cycle's native Session differs, and the held-navigation test returns the reported interrupted-by-user-input error. Neither baseline failure is a timeout. Final source is rerun after the baseline control; hosted exact-head CI is tracked in the PR.
