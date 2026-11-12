@@ -323,6 +323,23 @@ export function resolveApprovalRule(rules: readonly ApprovalRule[], subject: App
   return best ? { decision: best.decision, rule: best } : undefined;
 }
 
+/**
+ * The site a call names in its `url` argument (navigate, fetch), if any. A
+ * site rule matches only calls that name the site this way.
+ */
+export function approvalRuleHostOf(args: unknown): string | undefined {
+  if (args === null || typeof args !== "object" || Array.isArray(args)) return undefined;
+  const url = (args as Record<string, unknown>).url;
+  if (typeof url !== "string" || url.length > 4096) return undefined;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return undefined;
+    return normalizeApprovalRuleHost(parsed.hostname);
+  } catch {
+    return undefined;
+  }
+}
+
 /** The natural-language rules that answer for this Bot. */
 export function approvalTextRulesFor(rules: readonly ApprovalRule[], botId: string): ApprovalRule[] {
   return rules.filter((rule) => rule.target.kind === "text" && approvalRuleOwnerAnswers(rule.owner, { botId }));

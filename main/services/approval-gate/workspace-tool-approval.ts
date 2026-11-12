@@ -62,10 +62,16 @@ export interface WorkspaceToolApprovalInput {
   judgeAvailable?: boolean;
   /** The judge's verdict, read only when `workspaceToolApproval(...).readsJudge` said so. */
   judge?: "pass" | "defer";
+  /**
+   * Settings → Approvals' rule for this call (`resolveApprovalRule`). Only a
+   * run with an approval mode reads it, and never a Bot-bound turn, whose
+   * authority is its Bot's.
+   */
+  pageRule?: "allow" | "ask" | "block";
 }
 
 export type WorkspaceToolApproval =
-  | { outcome: "block"; reason: "hook" }
+  | { outcome: "block"; reason: "hook" | "rule" }
   | { outcome: "allow"; via?: "remembered" | "hook-allow" }
   /** Memory proposals and removals go to the memory policy, which may show its own card. */
   | { outcome: "memory" }
@@ -137,6 +143,7 @@ export function workspaceGateAction(input: WorkspaceToolApprovalInput): GateActi
     toolName,
     ...(macClass ? { mac: true, macClass, ...(macGranted ? { macGranted: true } : {}) } : {}),
     ...(input.newDestination ? { newDestination: true } : {}),
+    ...(input.pageRule && !input.botBound && input.approval ? { pageRule: input.pageRule } : {}),
     ...(input.judge ? { judge: input.judge } : {}),
     ...(consequential ? { consequential: true } : {}),
     ...(explicitOnly ? { explicitOnly: true } : {}),
@@ -167,7 +174,7 @@ export function workspaceToolApproval(input: WorkspaceToolApprovalInput): Worksp
     : undefined;
   switch (decision.outcome) {
     case "block":
-      return { decision: { outcome: "block", reason: "hook" } };
+      return { decision: { outcome: "block", reason: decision.reason === "rule" ? "rule" : "hook" } };
     case "delegate":
       return { decision: { outcome: "memory" } };
     case "lookup":

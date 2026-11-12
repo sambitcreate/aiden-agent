@@ -63,6 +63,15 @@ import type {
 } from "./bot-extension.js";
 import { ruleAskUnattendedBlock, ruleUnattendedBlock } from "./bot-handoff-text.js";
 import { planActionGate, type GateAction, type GateAttendance, type GateContext } from "../approval-gate/gate.js";
+import {
+  approvalRuleHostOf,
+  approvalTextRulesFor,
+  describeApprovalRuleTarget,
+  resolveApprovalRule,
+  type ApprovalRule,
+  type ApprovalRuleDecision,
+  type ApprovalRuleSubject,
+} from "../../../renderer/shared/approval-rules.js";
 import { BOT_EXEMPT_TOOL_NAMES } from "../approval-gate/tool-classes.js";
 import type { ApprovalMode } from "../../../renderer/shared/approval-mode.js";
 import { botIngressAllowsTool, botToolApprovalSummary, botToolVerdict, botTurnOf, SUBAGENT_TOOL, type BotToolFacts } from "./bot-tool-policy.js";
@@ -144,6 +153,11 @@ export interface BotToolAssemblyPorts {
   /** The global approval mode, read fresh on every call. Absent: Ask. */
   approvalMode?(): Promise<ApprovalMode>;
   plans?: Pick<BotPlans, "cover" | "admit">;
+  /**
+   * Settings → Approvals' rules that answer for this Bot (the whole Mac's and
+   * its own), read fresh on every call. Absent: the page has no say.
+   */
+  pageRules?(botId: string): Promise<readonly ApprovalRule[]>;
 }
 
 export interface BotToolAssembly {
@@ -223,6 +237,33 @@ function operationIdentity(toolName: string, args: unknown, action: BotClassifia
   try { return createHash("sha256").update(canonical({ toolName, args, action, target })).digest("hex"); } catch { return undefined; }
 }
 
+const PAGE_RULE_BLOCK = "A Block rule in Settings → Approvals stops this. Don't try it another way; tell the person if it matters.";
+
+/** A natural-language page rule, as the Bot rules classifier reads one. */
+function pageTextBotRule(rule: ApprovalRule): BotRule {
+  return {
+    id: `custom.${rule.id}`,
+    text: rule.target.kind === "text" ? rule.target.text : "",
+    behavior: rule.decision === "ask" && rule.handOff ? "hand_off" : "ask",
+    locked: false,
+  };
+}
+
+/** What the call is to the rules page: its tool or connected app, and the site it names. */
+async function pageSubjectOf(botId: string, toolName: string, args: unknown, action: BotClassifiableAction | undefined,
+  facts: BotToolFacts): Promise<ApprovalRuleSubject> {
+  let connector: ApprovalRuleSubject["connector"];
+  if (action?.surface === "mcp" && action.serverId) connector = { serverId: action.serverId, tool: action.remoteName };
+  else {
+    const grant = (await facts.mcpTools()).get(toolName);
+    const connection = grant && facts.authority.connections.find((candidate) =>
+      candidate.tools.some((tool) => tool === grant || tool.toolId === grant.toolId));
+    if (grant && connection?.sourceId) connector = { serverId: connection.sourceId, tool: grant.name };
+  }
+  const host = action?.surface === "browser" && action.url ? approvalRuleHostOf({ url: action.url }) : approvalRuleHostOf(args);
+  return { botId, ...(connector ? { connector } : { tool: toolName }), ...(host ? { host } : {}) };
+}
+
 export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssembly {
   const offered = new Map<string, { connectionTools: readonly AgentTool[]; skillSnapshot?: SkillRegistrySnapshot }>();
 
@@ -249,17 +290,44 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
     const scopedWatch = botExecutionScope(botId)?.claim.connectorRestriction;
     const calendarRead = scopedWatch?.binding.adapter === "composio-calendar-v1" && calendarWatchCallAllowed(scopedWatch, call.args);
     const action = structuredClone(live !== undefined ? live.action : calendarRead ? undefined : await describeMcpAction(toolName, call.args, facts));
+    const pageOf = async () => {
+      if (!ports.pageRules) return undefined;
+      let page: ApprovalRule[];
+      try { page = structuredClone([...await ports.pageRules(botId)]); } catch { throw new Error(RULES_UNREADABLE); }
+      const text = approvalTextRulesFor(page, botId);
+      // Ask and "Do it myself" words join the Bot's own rules; Block words refuse.
+      const asks = text.filter((rule) => rule.decision === "ask").map(pageTextBotRule);
+      const blocks = text.filter((rule) => rule.decision === "block").map(pageTextBotRule);
+      const blocked = action !== undefined && blocks.length > 0
+        ? blocks.find((rule) => classifyBotAction(action, blocks).customRuleIds.has(rule.id)) : undefined;
+      const resolved = resolveApprovalRule(page, await pageSubjectOf(botId, toolName, call.args, action, facts));
+      const decision: ApprovalRuleDecision | undefined = blocked ? "block" : resolved?.decision;
+      const label = blocked ? blocked.text ?? "" : resolved ? describeApprovalRuleTarget(resolved.rule.target) : "";
+      return { asks, decision, label, key: decision ? canonical([blocked?.id ?? null, resolved?.rule.id ?? null, decision]) : undefined };
+    };
+    const readRules = async () => {
+      // The Bot's own rules classify actions only; a call with none never reads them.
+      const own = action !== undefined && ports.rules ? await ports.rules(botId) : [];
+      const page = await pageOf();
+      return { rules: [...own, ...(page?.asks ?? [])], page };
+    };
     let rules: readonly BotRule[] = [];
-    if (action !== undefined && (ports.rules || ports.plans || ports.allowList)) {
-      try { rules = structuredClone(ports.rules ? await ports.rules(botId) : []); } catch { throw new Error(RULES_UNREADABLE); }
+    let page: Awaited<ReturnType<typeof pageOf>>;
+    if (ports.pageRules || (action !== undefined && (ports.rules || ports.plans || ports.allowList))) {
+      try { ({ rules, page } = structuredClone(await readRules())); } catch { throw new Error(RULES_UNREADABLE); }
     }
-    const identity = ruleIdentity(rules);
-    const decision = action === undefined || !(ports.rules || ports.plans || ports.allowList) ? { ruled: botBaselineOf(baseline), rule: undefined, allMatchingAsk: [] }
+    // Unchanged from before the page while no page rule decides this call.
+    const identityOf = (read: { rules: readonly BotRule[]; page: Awaited<ReturnType<typeof pageOf>> }) =>
+      read.page?.key === undefined ? ruleIdentity(read.rules) : canonical([ruleIdentity(read.rules), read.page.key]);
+    const identity = identityOf({ rules, page });
+    const ruledByRules = action !== undefined && (ports.rules || ports.plans || ports.allowList || ports.pageRules);
+    const decision = !ruledByRules ? { ruled: botBaselineOf(baseline), rule: undefined, allMatchingAsk: [] }
       : decideBotRule(botBaselineOf(baseline), rules, classifyBotAction(action, rules));
     return { live, baseline, action, rule: decision.rule, ruled: decision.ruled, matchingAsk: decision.allMatchingAsk,
+      page: page?.decision ? { decision: page.decision, label: page.label } : undefined,
       rulesIdentity: identity,
       rulesCurrent: async () => {
-        try { return ruleIdentity(ports.rules ? await ports.rules(botId) : []) === identity; } catch { return false; }
+        try { return identityOf(await readRules()) === identity; } catch { return false; }
       } };
   }
 
@@ -500,14 +568,16 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
         if (!verdict.allowed) return verdict;
         if (call === undefined) return { allowed: true };
         const policy = await describePolicy(botId, toolName, call, facts);
-        const { live, baseline, action, rule, matchingAsk, ruled, rulesCurrent } = policy;
+        const { live, baseline, action, rule, matchingAsk, ruled, rulesCurrent, page } = policy;
         const label = rule ? botRuleLabel(rule) : "";
         const ruleRef = rule ? { id: rule.id, label } : undefined;
         const ownSummary = baseline?.summary ?? live?.summary ?? summarizeToolCall(toolName, call.args);
         const callSummary = rule?.locked && action ? lockedRuleSummary(action, ownSummary) : ownSummary;
         if (ruled === "hand_off" && (!rule || !ruleRef)) return { allowed: false, reason: RULES_UNREADABLE };
         // Build the approval only once, after rules have decided whether it may run.
-        const approval: BotApprovalRequirement | undefined = ruled === "hand_off" ? undefined : rule === undefined ? baseline : {
+        // A page Ask rule on a call that needed no card makes one.
+        const pageAsk = page?.decision === "ask" && baseline === undefined ? { summary: `Rule · ${page.label} — ${callSummary}` } : undefined;
+        const approval: BotApprovalRequirement | undefined = ruled === "hand_off" ? undefined : rule === undefined ? baseline ?? pageAsk : {
           ...baseline, summary: `Rule · ${label} — ${callSummary}`, rule: ruleRef,
         };
         const routineOnly = turns.length > 0 && turns.every(turn => turn.routine && !turn.telegram && !turn.peer);
@@ -534,6 +604,7 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
             : rule !== undefined ? { rule: { behavior: "ask" as const, locked: rule.locked === true } } : {}),
           ...(ports.plans && !call.skipPlanCoverage && call.executionId ? { planAvailable: true } : {}),
           ...(ports.allowList && !call.skipAllowList && remembered ? { allowListAvailable: true } : {}),
+          ...(page ? { pageRule: page.decision } : {}),
         };
         let decision = planActionGate(gateContext, gateAction);
         let permit: Awaited<ReturnType<NonNullable<BotToolAssemblyPorts["plans"]>["cover"]>> | undefined;
@@ -566,7 +637,8 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
         }
         switch (decision.outcome) {
           case "block":
-            return { allowed: false, reason: decision.reason === "needs-person" ? ruleUnattendedBlock(label)
+            return { allowed: false, reason: decision.reason === "rule" ? PAGE_RULE_BLOCK
+              : decision.reason === "needs-person" ? ruleUnattendedBlock(label)
               : decision.reason === "unattended-rule" ? ruleAskUnattendedBlock(label)
                 : decision.reason === "peer" ? "Peer work cannot obtain fresh person approval for this action."
                   : decision.reason === "unattended" ? ROUTINE_NEEDS_PERSON
@@ -589,7 +661,7 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
           }
           case "allow":
             if (!approval) return { allowed: true };
-            if (decision.via === "routine-go-ahead" || decision.via === "never-ask" || decision.via === "exempt") {
+            if (decision.via === "routine-go-ahead" || decision.via === "never-ask" || decision.via === "exempt" || decision.via === "rule") {
               return { allowed: true, approval: { ...approval, preapproved: true } };
             }
             if (decision.via === "plan" && permit) {

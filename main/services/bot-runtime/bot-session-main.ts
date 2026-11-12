@@ -123,6 +123,8 @@ import { BOT_COMPACTION_FOCUS, createBotCompactionSteering } from "../bot-memory
 import { renderBotMemorySection } from "../bot-memory/prompt.js";
 import { renderBotRulesSection } from "../bot-rules/prompt.js";
 import { botRules } from "../bot-rules/store-main.js";
+import { approvalRules } from "../approval-rules/store-main.js";
+import { pageTextRulesFor } from "../approval-rules/resolve-main.js";
 import { botIssues } from "../bot-issues/service-main.js";
 import { createBotMemoryReview, type BotMemoryAdmission } from "../bot-memory/review.js";
 import { BOT_MEMORY_TOOL_NAME, botMemoryToolEntry, withBotMemoryIngress } from "../bot-memory/tool.js";
@@ -330,15 +332,31 @@ const tools = createBotToolAssembly({
   routinesGoAhead: async () => botRoutinesGoAhead(await configStore.getSettings()),
   approvalMode: async () => effectiveApprovalMode(await configStore.getSettings(), true),
   plans: botPlans,
+  pageRules: async (botId) => (await approvalRules.list()).filter((rule) =>
+    rule.owner.kind === "mac" || (rule.owner.kind === "bot" && rule.owner.botId === botId)),
 });
 
 /** The Bot's rules for its prompt; the defaults when the file can't be read (calls still fail closed). */
 async function promptRules(botId: string) {
+  let own;
   try {
-    return await botRules.rules(botId);
+    own = await botRules.rules(botId);
   } catch (error) {
     logger.warn("bots", `Bot ${botId} rules could not be read for its prompt.`, error);
-    return defaultBotRules();
+    own = defaultBotRules();
+  }
+  try {
+    // Settings → Approvals' "When a Bot wants to …" rules ask (or hand off) the same way.
+    const words = (await pageTextRulesFor(botId)).filter((rule) => rule.decision === "ask");
+    return [...own, ...words.map((rule) => ({
+      id: `custom.${rule.id}`,
+      text: rule.target.kind === "text" ? rule.target.text : "",
+      behavior: rule.handOff ? "hand_off" as const : "ask" as const,
+      locked: false,
+    }))];
+  } catch (error) {
+    logger.warn("bots", "The approval rules could not be read for a Bot's prompt.", error);
+    return own;
   }
 }
 

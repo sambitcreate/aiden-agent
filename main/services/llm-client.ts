@@ -115,6 +115,8 @@ import {
 import type { BotRuntimeAuthorityAdmission } from "./bot-runtime-authority.js";
 import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
 import { workspaceToolApproval } from "./approval-gate/workspace-tool-approval.js";
+import { pageRuleFor } from "./approval-rules/resolve-main.js";
+import { approvalRuleHostOf } from "../../renderer/shared/approval-rules.js";
 import { ApprovalAnalytics, approvalAnalyticsMode, type ApprovalAnalyticsMode } from "./approval-gate/approval-analytics.js";
 import {
   hostRunRegistry,
@@ -4414,6 +4416,17 @@ export const llmClient = {
             }
             attendedScheduleApproval = scheduleApproval && attendedAssistant;
             let preparedStandardScheduleSummary: string | undefined;
+            // Settings → Approvals: the rule for this tool, connected app or
+            // site. A Bot-bound turn answers to its Bot's authority instead.
+            const pageRule = runApproval && !preparedBotContext
+              ? await pageRuleFor({
+                  ...(calledMcp
+                    ? { connector: { serverId: calledMcp.serverId, tool: calledMcp.toolName } }
+                    : { tool: context.toolCall.name }),
+                  ...(approvalRuleHostOf(context.args) ? { host: approvalRuleHostOf(context.args) } : {}),
+                  ...(workspaceId ? { workspaceId } : {}),
+                })
+              : undefined;
             const workspaceGateInput = {
               toolName: context.toolCall.name,
               args: context.args,
@@ -4437,6 +4450,7 @@ export const llmClient = {
                         }
                       : {}),
                     ...(runTaint?.isNewDestination(taintCall) ? { newDestination: true } : {}),
+                    ...(pageRule ? { pageRule } : {}),
                   }
                 : {}),
             };
@@ -4482,6 +4496,11 @@ export const llmClient = {
               }
             }
             const workspaceDecision = workspaceGate.decision;
+            if (workspaceDecision.outcome === "block" && workspaceDecision.reason === "rule") {
+              deniedToolCalls.add(context.toolCall.id);
+              timeline.toolFinished(context.toolCall.id, "blocked");
+              return { block: true, reason: "A Block rule in Settings → Approvals stops this. Do not try it another way." };
+            }
             if (workspaceDecision.outcome === "allow") {
               runTaint?.observeRunning(taintCall);
               if (!workspaceDecision.via) {

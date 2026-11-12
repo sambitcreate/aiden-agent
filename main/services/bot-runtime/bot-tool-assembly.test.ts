@@ -18,6 +18,7 @@ import { declarePiRuntimeReplay } from "../pi-runtime-tool.js";
 import { buildSkillTools, SKILL_TOOL_NAME } from "../skill-tools.js";
 import { LOAD_TOOLS_TOOL_NAME } from "../on-demand-tools.js";
 import { botRuleLabel, defaultBotRules, type BotRule } from "../../../renderer/shared/bot-rules.js";
+import type { ApprovalRule } from "../../../renderer/shared/approval-rules.js";
 import { BOT_HANDOFF_RESULT_ENTRY_KIND } from "../../../renderer/shared/bot-handoffs.js";
 import type { BotClassifiableAction } from "../bot-rules/classify.js";
 import { BOT_COMPUTER_TOOL_NAME } from "../bot-computers/types.js";
@@ -2378,4 +2379,83 @@ test("shipping messages and approved-peer exchanges offer distinct schemas and c
   assert.deepEqual(await namesFor("bot:sender:2:00112233-4455-4677-8899-aabbccddeeff"), []);
   assert.deepEqual(Object.keys((peer.tool.parameters as unknown as { properties: Record<string, unknown> }).properties), ["action", "peerId", "kind", "title", "text", "exchangeId"]);
   assert.deepEqual(Object.keys((message.parameters as unknown as { properties: Record<string, unknown> }).properties), ["bot", "message"]);
+});
+
+// --- Settings → Approvals' rules (plan §3.5) ---------------------------------
+
+function pageRule(id: string, target: ApprovalRule["target"], decision: ApprovalRule["decision"], owner: ApprovalRule["owner"] = { kind: "mac" }, handOff?: true): ApprovalRule {
+  return { id, target, decision, owner, ...(handOff ? { handOff } : {}), createdAt: "2026-11-12T00:00:00.000Z" };
+}
+
+async function mailTurnUnderPage(pageRules: () => readonly ApprovalRule[], botRules: () => readonly BotRule[] = () => defaultBotRules()) {
+  const state = assemblyState(full(botHome()));
+  const send = countingTool(SEND_EMAIL_TOOL);
+  const read = countingTool(READ_INBOX_TOOL);
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall(READ_INBOX_TOOL, { text: "r" }), fauxToolCall(SEND_EMAIL_TOOL, { text: "s" })], {
+      stopReason: "toolUse",
+    }),
+    fauxAssistantMessage("done"),
+  ]);
+  const deps = assemblyDeps(state, {
+    candidates: () => [{ tool: send, mcp: true }, { tool: read, mcp: true }],
+    rules: botRules,
+    pageRules,
+  });
+  const { harness, root } = await memoryHarness(deps, fauxModels);
+  try {
+    await (await root.submit({ type: "input", content: "go" }, ctx)).wait(ctx);
+    return { approvals: deps.approvals, sent: send.executions.length, read: read.executions.length, results: (await toolResults(root)).map(resultText) };
+  } finally {
+    await harness.close(ctx);
+  }
+}
+
+test("rules page: Block on a connected app refuses its reads and sends in every mode, with no card", async () => {
+  const outcome = await mailTurnUnderPage(() => [pageRule("r1", { kind: "connector", serverId: MAIL_SERVER.id }, "block")]);
+  assert.deepEqual(outcome.approvals, []);
+  assert.equal(outcome.sent, 0);
+  assert.equal(outcome.read, 0);
+  for (const text of outcome.results) assert.match(text, /Block rule in Settings → Approvals/u);
+});
+
+test("rules page: Always allow runs a send without a card, Always ask makes a card for a read that needed none", async () => {
+  const rules = () => [
+    pageRule("r1", { kind: "connector-tool", serverId: MAIL_SERVER.id, tool: "send_email" }, "allow"),
+    pageRule("r2", { kind: "connector-tool", serverId: MAIL_SERVER.id, tool: "read_inbox" }, "ask"),
+  ];
+  // With the "Send a message" rule switched off, Always allow is the only say.
+  const outcome = await mailTurnUnderPage(rules, () => defaultBotRules().filter((rule) => rule.actionClass !== "communicate"));
+  assert.deepEqual(outcome.approvals.map((request) => request.toolName), [READ_INBOX_TOOL]);
+  assert.match(outcome.approvals[0]!.summary, /^Rule · /u);
+  assert.equal(outcome.sent, 1);
+  assert.equal(outcome.read, 1);
+  // A Bot's own Ask rule still asks: Always allow never lowers it.
+  const withOwnRule = await mailTurnUnderPage(rules);
+  assert.deepEqual(withOwnRule.approvals.map((request) => request.toolName), [READ_INBOX_TOOL, SEND_EMAIL_TOOL]);
+});
+
+test("rules page: a rule owned by another Bot never answers for this one", async () => {
+  const outcome = await mailTurnUnderPage(() => [
+    pageRule("r1", { kind: "connector", serverId: MAIL_SERVER.id }, "block", { kind: "bot", botId: "bot-2" }),
+  ]);
+  assert.equal(outcome.read, 1);
+  assert.equal(outcome.sent, 1);
+  assert.deepEqual(outcome.approvals.map((request) => request.toolName), [SEND_EMAIL_TOOL]);
+});
+
+test("rules page: a 'When a Bot wants to' Block refuses the matching call only, and its Ask words make the card", async () => {
+  const blocked = await mailTurnUnderPage(() => [pageRule("r1", { kind: "text", text: "send an email" }, "block")]);
+  assert.equal(blocked.sent, 0);
+  assert.equal(blocked.read, 1);
+  const asked = await mailTurnUnderPage(() => [pageRule("r2", { kind: "text", text: "send an email" }, "ask")]);
+  assert.equal(asked.sent, 1);
+  assert.deepEqual(asked.approvals.map((request) => request.summary), [`Rule · Send a message or email to someone — ${SEND_EMAIL_TOOL}`]);
+});
+
+test("rules page: an unreadable rule book refuses the call instead of running it", async () => {
+  const outcome = await mailTurnUnderPage(() => { throw new Error("disk"); });
+  assert.equal(outcome.read, 0);
+  assert.equal(outcome.sent, 0);
+  assert.deepEqual(outcome.approvals, []);
 });

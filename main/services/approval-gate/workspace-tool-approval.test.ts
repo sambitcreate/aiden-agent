@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ApprovalMode, MacGrantClass } from "../../../renderer/shared/approval-mode.js";
+import { approvalRuleHostOf, resolveApprovalRule, type ApprovalRule } from "../../../renderer/shared/approval-rules.js";
 import { workspaceToolApproval, type WorkspaceToolApprovalInput } from "./workspace-tool-approval.js";
 
 type Call = Pick<WorkspaceToolApprovalInput, "toolName" | "args" | "connector">;
@@ -78,4 +79,51 @@ test("legacy access: Full runs a background job, Ask shows the Mac card", () => 
     workspaceToolApproval({ ...start, permission, workspaceId: "w1" }).decision.outcome;
   assert.equal(legacy("full"), "allow");
   assert.equal(legacy("ask"), "ask");
+});
+
+test("rules page: a rule from the book decides the real call, and never reaches the Mac or a Bot-bound turn", () => {
+  const rules: ApprovalRule[] = [
+    { id: "r1", target: { kind: "connector", serverId: "gmail" }, decision: "allow", owner: { kind: "mac" }, createdAt: "2026-11-12T00:00:00.000Z" },
+    { id: "r2", target: { kind: "connector-tool", serverId: "gmail", tool: "gmail_delete_message" }, decision: "block", owner: { kind: "mac" }, createdAt: "2026-11-12T00:00:00.000Z" },
+    { id: "r3", target: { kind: "site", host: "bank.example" }, decision: "block", owner: { kind: "mac" }, createdAt: "2026-11-12T00:00:00.000Z" },
+    { id: "r4", target: { kind: "tool", tool: "run_command" }, decision: "allow", owner: { kind: "mac" }, createdAt: "2026-11-12T00:00:00.000Z" },
+    { id: "r5", target: { kind: "tool", tool: "browser_navigate" }, decision: "ask", owner: { kind: "workspace", workspaceId: "w1" }, createdAt: "2026-11-12T00:00:00.000Z" },
+  ];
+  const withRule = (mode: ApprovalMode, call: Call & { serverId?: string }, extra: Partial<WorkspaceToolApprovalInput> = {}) => {
+    const resolved = resolveApprovalRule(rules, {
+      ...(call.serverId ? { connector: { serverId: call.serverId, tool: call.connector!.remoteName } } : { tool: call.toolName }),
+      ...(approvalRuleHostOf(call.args) ? { host: approvalRuleHostOf(call.args) } : {}),
+      workspaceId: "w1",
+    });
+    const result = workspaceToolApproval({
+      ...call,
+      permission: "ask",
+      workspaceId: "w1",
+      approval: { mode, macGrants: new Set() },
+      judgeAvailable: true,
+      ...(resolved ? { pageRule: resolved.decision } : {}),
+      ...extra,
+    });
+    if (result.readsJudge) return "judge";
+    const decision = result.decision;
+    if (decision.outcome === "block") return `block:${decision.reason}`;
+    if (decision.outcome === "allow") return "run";
+    return decision.outcome === "ask" && decision.macGrant ? `ask:mac=${decision.macGrant}` : decision.outcome;
+  };
+  const send = { ...gmail("gmail_send_message"), serverId: "gmail" };
+  const remove = { ...gmail("gmail_delete_message"), serverId: "gmail" };
+  // An Always-allow connector runs a send in Ask; the more specific Block on delete wins.
+  assert.equal(withRule("ask", send), "run");
+  for (const mode of ["ask", "auto", "never"] as const) assert.equal(withRule(mode, remove), "block:rule");
+  // A site Block stops a navigation to any of its subdomains, in every mode.
+  const nav = { toolName: "browser_navigate", args: { url: "https://login.bank.example/home" } };
+  for (const mode of ["ask", "auto", "never"] as const) assert.equal(withRule(mode, nav), "block:rule");
+  // The workspace's own Ask rule asks in Ask and Auto, and Never ask leaves it unread.
+  const docs = { toolName: "browser_navigate", args: { url: "https://docs.example/a" } };
+  assert.equal(withRule("auto", docs), "ask");
+  assert.equal(withRule("never", docs), "run");
+  // Always allow never reaches the Mac: the shell card still asks.
+  assert.equal(withRule("never", { toolName: "run_command", args: { command: "ls" } }), "ask:mac=shell");
+  // A Bot-bound turn answers to its Bot, not to the page.
+  assert.notEqual(withRule("ask", remove, { botBound: true }), "block:rule");
 });
