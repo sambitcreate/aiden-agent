@@ -1,11 +1,14 @@
 # Bot rules
 
 A Bot's rules say what it stops for: steps it asks about first, and steps it
-hands back to the person to do themselves. They live in the Bot's Profile →
-Rules, and main checks them at every tool call they cover. Rules only make a
-Bot stricter: the strictest of the Bot's own approval and every matching rule
-wins, so no rule can let through a step the Bot would otherwise ask about.
-You can approve a bounded plan for the current task, as described below.
+hands back to the person to do themselves. Every rule now lives on one page,
+**Settings → Bots & Approvals → Approvals**, under the mode (see
+[The rules page](#the-rules-page)); there is no Rules screen on a Bot's Profile
+any more. Main checks the rules at every tool call they cover. A Bot's
+built-in rules only make it stricter: the strictest of the Bot's own approval
+and every matching built-in or worded rule wins, so no worded rule can let
+through a step the Bot would otherwise ask about. You can approve a bounded
+plan for the current task, as described below.
 Settings → Bots & Approvals also has a routines-only go-ahead setting
 (see [Routines and the approval mode](#routines-and-the-approval-mode-settings--bots--approvals--approvals)).
 
@@ -19,7 +22,7 @@ implementation notes are in `.memory/bot-rules.md`.
 | Enter a password or 2FA code, or change account security | Hands off | No (locked) |
 | Move money or enter card details | Hands off | No (locked) |
 | Make a purchase or booking; Send a message or email to someone; Post or publish something publicly; Permanently delete something; Install software on your Mac | Asks first | Ask first or Hand off to me; never removed |
-| The person's own rules, "When <Bot> wants to …" (up to 20, 120 characters each) | Ask first or Hand off to me | Edited or deleted |
+| The person's own rules, "When a Bot wants to …" (120 characters each), added on the rules page for every Bot, or kept from a Bot's old Rules screen for that Bot | Ask first, or Do it myself (hand off) | Changed or removed on the rules page |
 
 - The locked rules are code, not settings: a missing, edited or corrupt rules
   file can never remove them.
@@ -35,8 +38,9 @@ implementation notes are in `.memory/bot-rules.md`.
   the same reply waiting at the same time share one card in the chat only
   when they are the same call (same tool, request and arguments), and then one
   answer covers them all; any other call gets its own card.
-- A rule that hands off shows a hand-off card ("Your turn: …") with Done and
-  Skip; the Bot waits for the answer and never does the step itself.
+- A rule that hands off shows a hand-off card ("Needs you: …") with Take
+  control, Skip and I'm done; the Bot waits for the answer and never does the
+  step itself.
 - On a routine or Telegram turn nobody is there to answer, so a step a rule
   would hand off doesn't run, nor does a step a rule would ask about that has
   no approval of its own. The Bot is told why. A step with an approval of its
@@ -143,15 +147,63 @@ the mode and the switch fresh at every tool call (`checkPolicy` in
 `bot-tool-assembly.ts`). The CLI's durable Bot host has no rules, runs in Ask
 and keeps asking for every MCP call.
 
-## Allowed without asking
+## The rules page
+
+Settings → Bots & Approvals → Approvals lists every rule under the mode, in
+three groups: **Always allow**, **Always ask** and **Blocked**. Each row has an
+Allow / Ask / Block control and Remove; **Add rule** in a group opens a
+searchable picker of Aiden's tools, connected apps and their tools, a website,
+or words ("When a Bot wants to …", Ask or Block only, never Allow).
+
+- **Resolution.** Block wins anywhere. Otherwise the most specific rule
+  decides: a site, then a tool, then a whole connector. A rule a workspace or
+  a Bot owns answers only for that owner and beats the Mac's rule at the same
+  specificity; a Mac Block still wins.
+- **Modes.** In Never ask only Block rules apply, so the page dims the other
+  rows and says so. In Ask and Auto an Ask rule shows the card even for a
+  read. An Allow rule runs a consequential action without a card but never
+  reaches the person's Mac (shell, file changes, Computer Use).
+- **Locked.** Passwords, 2FA codes, account security, purchases and money
+  always come to the person; the page says so and no rule changes it.
+- **Allowed on this Mac.** Mac grants ("Allowed in this workspace" from a Mac
+  card) and the folders a Bot may change are listed to read and remove.
+- **Also decides what runs.** Link rows open hook approvals, approved folders
+  and paired devices, which keep their own pages.
+- Rules are global to this Mac. A customized workspace's remembered commands
+  and files stay its own rows.
+- Site rules match calls that name the site in their address (navigate,
+  fetch, and a Bot's browser actions on a page with that address).
+
+### Rows kept from before
+
+Nothing is copied when the page first opens. Each older grant is shown where
+it is stored and answers only for its old owner:
+
+| Stored before | Row |
+| --- | --- |
+| A Bot's "Always allow for <Bot>" | Always allow, "Only for <Bot>" |
+| A Bot's own rule in words | Always ask, that Bot only |
+| A Bot's built-in rule set to Hand off to me | Always ask, with **Do it myself** checked in the row's menu |
+| A workspace's remembered command or file | Always allow, that workspace |
+| A folder a Bot may change | Allowed on this Mac, that Bot |
+
+Remove goes through the row's own store, so a Bot's allow list keeps its
+receipts, tombstones and counts: a removed entry is never brought back by a
+replayed decision, and the 50-per-Bot and 1,000-per-profile caps still hold.
+Turning a Bot's Allow row into Block removes the allowance and adds a Block
+owned by that Bot. The previous release reads every older file unchanged; the
+page's own rules live in `approval-rules.json`, which it ignores.
+
+## Allowed without asking (from cards)
 
 After you approve the same app action or website action three times in 14 days,
 with no denial in that period, the next eligible card offers **Always allow
 for <Bot>**. A class is one exact connected app tool, or one website host and
 action such as click, type or press. Website names ignore letter case and a
-leading `www.`; other subdomains and actions remain separate.
-
-Use **Allowed without asking** on a Bot's Profile to review and remove app actions, website actions and selected Custom folders. The desktop also lists every Bot in Settings → Bots & Approvals; paired iOS and Android clients show the profile list when the host grants `bot:allowed`. Each row names its scope.
+leading `www.`; other subdomains and actions remain separate. The row appears
+in Always allow on the rules page, and Remove there stops it on the next call.
+Paired iOS and Android clients still show the Bot's list when the host grants
+`bot:allowed`.
 
 Choosing Always saves that allowance for this Bot. Allow once keeps the card
 for next time; when an offer was present, the Bot may mention the option in
@@ -171,13 +223,10 @@ Aiden checks again before saving Always or running the action. If saving
 fails, the current one-time answer still applies; it does not promise a saved
 entry.
 
-**Allowed without asking** on the Bot's profile and in Settings → Bots & Approvals lists
-its remembered app/site actions and saved Custom folders. Remove stops that
-remembered allowance on the next call. A plan or the routines setting can still
-supply its own approval. Removing a folder deselects it for this Bot and keeps
-other Bots' selections and the approved folder itself. Full-access Bots have
-no extra Custom-folder rows. There are at most 50 remembered app/site entries
-per Bot and 1,000 across the profile; folders do not consume those limits.
+Removing a folder deselects it for this Bot and keeps other Bots' selections
+and the approved folder itself. Full-access Bots have no extra Custom-folder
+rows. There are at most 50 remembered app/site entries per Bot and 1,000
+across the profile; folders do not consume those limits.
 
 Folder cards use their separate **Always for this folder** choice and can show
 the repeat count and a short hint after Allow once. Whole-Mac requests never
@@ -219,7 +268,7 @@ data; a genuine storage-write failure still requires deletion to be retried.
 
 - **Shell commands.** `run_command` follows the Shell setting, and
   `computer_shell` in a Bot's own computer follows its Bot computer access.
-  The rules editor says so under the list.
+  The rules page says so in its locked note.
 - **File tools and web search.**
 - **Read-only connection tools.** A tool its server declares read-only
   (`readOnlyHint: true`, without `destructiveHint: true`) changes nothing a
@@ -263,8 +312,8 @@ reach cards, the Bot's own computer or browser, routines or subagents.
   typing. Its reason, and the Done the Bot reads, name the field instead
   ("was about to: type into the “Card number” field").
 - A card a rule opened for the Bot's browser or computer tools is a step on
-  the Bot's own screen: on the Mac it offers "Open in <Bot>’s browser" or
-  "Open <Bot>’s computer" (never the person's own browser), and on a phone
+  the Bot's own screen: on the Mac its Take control opens the Bot's browser
+  or its computer (never the person's own browser), and on a phone
   (a device holding `bot:handoff-on-mac`) Finish on your Mac opens it there.
   The Mac's Bot panel then shows that browser tab or the Computer tab, once
   per card and without moving keyboard focus. A browser step that names no
@@ -284,13 +333,12 @@ reach cards, the Bot's own computer or browser, routines or subagents.
   rule that isn't valid) fails closed: the defaults may be looser than what
   the person set, so the Bot doesn't run any step its rules would check, and
   is told "This Bot's rules couldn't be read, so this action didn't run." The
-  rules editor shows the defaults with an alert, and the next change starts
-  again from them and replaces the file. Before replacing it, Aiden keeps the
+  next change from the rules page starts again from the defaults and replaces
+  the file. Before replacing it, Aiden keeps the
   damaged bytes beside it as `rules.json.unreadable` (then
   `rules.json.unreadable.2`, and so on, never over an earlier copy), so rules
   the person wrote can be recovered by hand. A file that can't be read at all
-  (permissions, a directory in its place) fails closed the same way, and the
-  editor offers Try again.
+  (permissions, a directory in its place) fails closed the same way.
 - Deleting the Bot removes the file and its kept copies, and refuses later writes.
 - Phones don't show rules yet.
 

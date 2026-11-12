@@ -371,8 +371,8 @@ marked assumed until they are recorded on an Apple-silicon Mac:
 - **The VNC-lane gap.** Clicks are only coordinates, so the rules depend on the
   Bot's own description of each step. The tool's guidance tells the Bot to
   call `hand_off` for passwords, codes and payments and let the person do those
-  steps, and the rules editor says so. A rule's hand-off card in this lane
-  offers "Open <Bot>’s computer", which takes the computer over for the person,
+  steps. A rule's hand-off card in this lane offers **Take control**, which
+  takes the Bot's computer over for the person,
   and the Bot can hand a step over there itself with `hand_off`'s
   `where: "computer"`.
 - **Routines and Telegram.** Unlike the Bot's browser, which those turns never
@@ -507,7 +507,7 @@ Bot computers on this Mac, a computer given to the Bot, and an attended turn.
   or not offering sign-in on a computer whose base had these permissions
   allowed. Each is an owner
   decision and needs a Mac to confirm.
-- **Answering.** I'm signed in, Skip, or the card being withdrawn (the Bot was
+- **Answering.** I'm done (I'm signed in on a phone), Skip, or the card being withdrawn (the Bot was
   stopped or paused) gives the computer back, unless you already gave it back
   or took it again from the viewer, which keeps it with you. The Bot then takes
   a fresh capture. The guest driver starts again on the Bot's next element

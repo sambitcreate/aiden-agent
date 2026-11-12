@@ -21,7 +21,8 @@ folder**, at most once a week. Whole-Mac requests never count; folders without
 an Always choice never offer the reminder. Retries keep the original choice
 and count it once. If an earlier Always was saved before its acknowledgement
 arrived, a later retry records that earlier approval without restoring access
-you removed. See [Allowed without asking](bot-rules.md#allowed-without-asking).
+you removed. Saved folders appear under **Allowed on this Mac** on the rules
+page in Settings → Approvals; see [The rules page](bot-rules.md#the-rules-page).
 
 ## What an approval covers
 
