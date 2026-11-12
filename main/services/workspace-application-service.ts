@@ -62,6 +62,8 @@ export interface WorkspaceApplicationDependencies {
   followThrough?: { closeForWorkspace(workspaceId: string): Promise<FinishWorkspaceFollowThrough | void> };
   /** Drops the workspace's artifacts once its record is gone. */
   workspaceArtifacts?: { removeWorkspace(workspaceId: string): Promise<void> };
+  /** Drops the workspace's own rules on the rules page once its record is gone. */
+  approvalRules?: { forgetWorkspace(workspaceId: string): Promise<void> };
   /** Ends aiden-design grants that serve the removed workspace's folder. */
   designGrants?: { revokeRoot(workspaceRoot: string): void };
   workspaceMutationGate: Pick<typeof workspaceMutationGate, "begin">;
@@ -538,6 +540,9 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
             if (existing?.folderPath) deps.designGrants?.revokeRoot(existing.folderPath);
             await deps.workspaceArtifacts?.removeWorkspace(id).catch((error: unknown) => {
               deps.logError("workspace", "Could not remove the workspace's artifacts.", error);
+            });
+            await deps.approvalRules?.forgetWorkspace(id).catch((error: unknown) => {
+              deps.logError("workspace", "Could not remove the workspace's approval rules.", error);
             });
             deps.onChanged?.();
             keepPaused();

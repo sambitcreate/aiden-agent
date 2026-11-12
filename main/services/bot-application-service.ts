@@ -173,6 +173,11 @@ export interface BotApplicationDependencies {
   ) => Promise<void>;
   /** Bot delete: erase the Bot's canonical photo (every revision). Idempotent. */
   deleteBotPhoto?: (botId: string) => Promise<void>;
+  /**
+   * The Bot's own rules on the rules page go with it. A failure (an unreadable
+   * rules file) never stops the deletion; the page then lists them to remove.
+   */
+  forgetBotApprovalRules?: (botId: string) => Promise<void>;
   /** Bot delete: close the Bot's browser tabs and clear its browser profile (cookies, storage, cache). Idempotent. */
   deleteBotBrowserProfile?(botId: string): Promise<void>;
   /**
@@ -704,6 +709,7 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     const { botId } = operation;
     deps.capabilityStore.invalidateBotAuthority(botId);
     await deps.deleteBotPhoto?.(botId);
+    await deps.forgetBotApprovalRules?.(botId).catch(() => undefined);
     await deps.deleteBotBrowserProfile?.(botId);
     await deps.managedWorkspace.deleteHome(botId);
     await deps.capabilityStore.deleteBotAuthority(botId);

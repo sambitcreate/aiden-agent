@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import { BOT_PRESETS } from "../../renderer/shared/bot-presets.js";
+import { ApprovalRuleBook, memoryApprovalRuleStore } from "./approval-rules/store.js";
 import { analyticsSettled, captureAnalyticsEvents } from "./analytics/test-support.js";
 import * as fs from "node:fs/promises";
 import path from "node:path";
@@ -1860,6 +1861,28 @@ test("Bot delete erases photo, browser, home, access and chats, then the record 
   app.events.length = 0;
   await app.service.deleteBot({ botId: owner.id });
   assert.deepEqual(app.events, [], "deleting a deleted Bot changes nothing");
+});
+
+test("Bot delete forgets that Bot's own approval rules and nobody else's, and an unreadable rule book never stops it", async () => {
+  const owner = bot("bot:ruled");
+  const survivor = bot("bot:kept");
+  const app = fixture({ bots: [owner, survivor] });
+  const book = new ApprovalRuleBook(memoryApprovalRuleStore());
+  await book.add({ target: { kind: "tool", tool: "browser_click" }, decision: "block", owner: { kind: "bot", botId: owner.id } });
+  await book.add({ target: { kind: "tool", tool: "browser_click" }, decision: "block", owner: { kind: "bot", botId: survivor.id } });
+  await book.add({ target: { kind: "site", host: "shop.example" }, decision: "ask", owner: { kind: "mac" } });
+  (app.deps as { forgetBotApprovalRules?: (botId: string) => Promise<void> }).forgetBotApprovalRules = async (botId) => {
+    await book.forgetOwner({ kind: "bot", botId });
+  };
+  await app.service.initialize();
+  await app.service.deleteBot({ botId: owner.id });
+  assert.deepEqual((await book.list()).map((rule) => rule.owner), [{ kind: "bot", botId: survivor.id }, { kind: "mac" }]);
+
+  (app.deps as { forgetBotApprovalRules?: (botId: string) => Promise<void> }).forgetBotApprovalRules = async () => {
+    throw new Error("Your approval rules couldn’t be read.");
+  };
+  await app.service.deleteBot({ botId: survivor.id });
+  assert.deepEqual((await app.service.list()).map(({ id }) => id), [], "the Bot is deleted all the same");
 });
 
 test("an interrupted Bot delete keeps the Bot listed, and a retry finishes it", async () => {

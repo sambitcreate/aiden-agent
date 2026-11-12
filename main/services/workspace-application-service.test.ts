@@ -11,6 +11,7 @@ import { AIDEN_UI_CATALOG_VERSION } from "../../renderer/shared/aiden-ui/types.j
 import { DesignGrantRegistry } from "./design-canvas/grants.js";
 import { createScratchWorkspaceDirectory } from "./scratch-workspace.js";
 import { WorkspaceArtifactStore } from "./workspace-artifacts/store.js";
+import { ApprovalRuleBook, memoryApprovalRuleStore } from "./approval-rules/store.js";
 import type { Workspace } from "./types.js";
 import {
   createWorkspaceApplicationService,
@@ -344,6 +345,23 @@ test("removing a workspace drops its artifacts, and a failure there does not und
       throw new Error("disk full");
     },
   };
+  await failing.service.remove("workspace-1");
+  assert.ok(failing.events.includes("remove-record"));
+});
+
+test("removing a workspace forgets its own approval rules, and a failure there does not undo the removal", async () => {
+  const book = new ApprovalRuleBook(memoryApprovalRuleStore());
+  await book.add({ target: { kind: "tool", tool: "web_fetch" }, decision: "block", owner: { kind: "workspace", workspaceId: "workspace-1" } });
+  await book.add({ target: { kind: "tool", tool: "web_fetch" }, decision: "block", owner: { kind: "workspace", workspaceId: "workspace-2" } });
+  const application = fixture();
+  (application.deps as { approvalRules?: unknown }).approvalRules = {
+    forgetWorkspace: async (workspaceId: string) => void (await book.forgetOwner({ kind: "workspace", workspaceId })),
+  };
+  await application.service.remove("workspace-1");
+  assert.deepEqual((await book.list()).map((rule) => rule.owner), [{ kind: "workspace", workspaceId: "workspace-2" }]);
+
+  const failing = fixture();
+  (failing.deps as { approvalRules?: unknown }).approvalRules = { forgetWorkspace: async () => { throw new Error("unreadable"); } };
   await failing.service.remove("workspace-1");
   assert.ok(failing.events.includes("remove-record"));
 });
