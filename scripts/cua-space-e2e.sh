@@ -13,10 +13,14 @@
 # One run at a time per Space (a second run against a busy Space exits 75). New Spaces get CUA_SPACE_CPUS (4) and
 # CUA_SPACE_MEMORY (8GB); on a Mac all Linux Spaces share cua's runtime VM, so parallel shards need a bigger one
 # (`cua config set runtime.linux_cpus` / `runtime.linux_memory_gib`).
-# Needs the cua CLI (https://cua.ai/install.sh). Removes nothing on the host; `cua sb rm <name>` deletes the Space.
+# After a run the Space is suspended, keeping its dependencies for the next run. A custom-named Space this run created
+# is deleted instead, and free space goes back to macOS. CUA_SPACE_KEEP=1 or --watch skips this, and a Space another
+# run has taken is left to that run.
+# Needs the cua CLI (https://cua.ai/install.sh). `cua sb rm <name>` deletes a Space by hand.
 set -euo pipefail
 
-SPACE="${CUA_SPACE:-aiden-e2e}"
+DEFAULT_SPACE=aiden-e2e
+SPACE="${CUA_SPACE:-$DEFAULT_SPACE}"
 REF="local:$SPACE"
 CUA="${CUA_BIN:-$(command -v cua || echo "$HOME/.local/bin/cua")}"
 export CUA_TELEMETRY="${CUA_TELEMETRY:-0}" DO_NOT_TRACK="${DO_NOT_TRACK:-1}"
@@ -122,5 +126,26 @@ if "$CUA" sb cp "$REF:/home/cua/test-results-$RUN_ID.tgz" "$WORK/results.tgz" >/
 elif [ "${1:-}" != "--run" ]; then
   # --run never writes an archive; a Playwright run that left none (busy Space, failed setup or build) says so.
   echo "This run left no artifacts; $OUT still holds the previous run's." >&2
+fi
+
+# Teardown never changes the run's result. Only a Space this run created is deleted, so naming an existing one is safe.
+if [ "$status" != 75 ] && [ "${1:-}" != "--watch" ] && [ "${CUA_SPACE_KEEP:-}" != 1 ]; then
+  # Another run may have taken the Space since ours released the lock. If the lock can't be taken, leave the Space up.
+  if ! "$CUA" sb exec -i "$REF" -- flock -n /tmp/aiden-e2e.lock true </dev/null >/dev/null 2>&1; then
+    echo "Space $SPACE is in use or unreachable; leaving it running."
+  elif [ "$SPACE" != "$DEFAULT_SPACE" ] && [ "$SPACE_STATUS" = missing ]; then
+    "$CUA" sb rm -f "$REF" >/dev/null || echo "Could not delete Space $SPACE; remove it with: cua sb rm $SPACE" >&2
+  else
+    "$CUA" sb suspend "$REF" >/dev/null || echo "Could not suspend Space $SPACE; it is still running." >&2
+  fi
+  # On a Mac the Spaces live on a sparse disk that macOS only gets back after a trim, and the guest trims just weekly.
+  # This path is cua's internal layout, so a missing or failing limactl is ignored.
+  CUA_ROOT="${CUA_HOME:-$HOME/.cua}"
+  for LIMACTL in "$CUA_ROOT"/runtimes/linux/colima-*/lima/bin/limactl; do
+    if [ -x "$LIMACTL" ]; then
+      LIMA_HOME="$CUA_ROOT/runtimes/linux/vm/_lima" "$LIMACTL" shell --workdir / colima-cua \
+        sudo fstrim /mnt/lima-colima-cua </dev/null >/dev/null 2>&1 || true
+    fi
+  done
 fi
 exit $status
