@@ -8,7 +8,7 @@ import test from "node:test";
 
 import type { ApprovalMode, MacGrantClass } from "../../../renderer/shared/approval-mode.js";
 import { approvalRuleHostOf, resolveApprovalRule, type ApprovalRule } from "../../../renderer/shared/approval-rules.js";
-import { workspaceToolApproval, type WorkspaceToolApprovalInput } from "./workspace-tool-approval.js";
+import { workspaceRuleHost, workspaceToolApproval, type WorkspaceToolApprovalInput } from "./workspace-tool-approval.js";
 
 type Call = Pick<WorkspaceToolApprovalInput, "toolName" | "args" | "connector">;
 
@@ -124,6 +124,42 @@ test("rules page: a rule from the book decides the real call, and never reaches 
   assert.equal(withRule("never", docs), "run");
   // Always allow never reaches the Mac: the shell card still asks.
   assert.equal(withRule("never", { toolName: "run_command", args: { command: "ls" } }), "ask:mac=shell");
-  // A Bot-bound turn answers to its Bot, not to the page.
-  assert.notEqual(withRule("ask", remove, { botBound: true }), "block:rule");
+  // A Bot-bound turn answers to its Bot for Allow and Ask, but a Block still stops it.
+  assert.equal(withRule("ask", remove, { botBound: true }), "block:rule");
+  assert.notEqual(withRule("ask", { ...docs }, { botBound: true }), "ask", "the workspace's Ask rule is not the Bot's");
+});
+
+test("rules page: a Block applies where no approval mode runs (Assistant, no-workspace and scheduled chats); Allow and Ask don't", () => {
+  const legacy = (permission: WorkspaceToolApprovalInput["permission"], call: Call, pageRule: WorkspaceToolApprovalInput["pageRule"]) => {
+    const decision = workspaceToolApproval({ ...call, permission, ...(pageRule ? { pageRule } : {}) }).decision;
+    return decision.outcome === "block" ? `block:${decision.reason}` : decision.outcome === "allow" ? "run" : decision.outcome;
+  };
+  const read = { toolName: "read_file", args: { path: "a.txt" } };
+  const send = gmail("gmail_send_message");
+  for (const permission of ["full", "ask"] as const) {
+    assert.equal(legacy(permission, read, "block"), "block:rule", permission);
+    assert.equal(legacy(permission, send, "block"), "block:rule", permission);
+    // A rules file that can't be read asks, since its Blocks can't be seen.
+    assert.equal(legacy(permission, read, "unreadable"), "ask", permission);
+  }
+  assert.equal(legacy("ask", { toolName: "browser_click", args: {} }, "allow"), "ask", "an Allow rule widens nothing without a mode");
+  assert.equal(legacy("full", read, "ask"), "run", "nor does an Ask rule tighten one");
+});
+
+test("rules page: a workspace click or typing is on the site its tab shows, unless it names one", async () => {
+  const tab = async () => "https://login.bank.example/account";
+  assert.equal(await workspaceRuleHost("browser_click", { ref: "e1" }, tab), "login.bank.example");
+  assert.equal(await workspaceRuleHost("browser_type", { ref: "e2", text: "hi" }, tab), "login.bank.example");
+  assert.equal(await workspaceRuleHost("browser_navigate", { url: "https://www.shop.example/" }, tab), "shop.example");
+  assert.equal(await workspaceRuleHost("read_file", { path: "a" }, tab), undefined, "only browser actions read the tab");
+  assert.equal(await workspaceRuleHost("browser_click", {}, async () => { throw new Error("no tab"); }), undefined);
+  assert.equal(await workspaceRuleHost("browser_click", {}, async () => "file:///Users/me/a.html"), undefined);
+  // Through the gate: a site Block stops a click on that page in every mode.
+  const rules: ApprovalRule[] = [{ id: "r1", target: { kind: "site", host: "bank.example" }, decision: "block", owner: { kind: "mac" }, createdAt: "2026-11-12T00:00:00.000Z" }];
+  const host = await workspaceRuleHost("browser_click", { ref: "e1" }, tab);
+  const rule = resolveApprovalRule(rules, { tool: "browser_click", ...(host ? { host } : {}) });
+  for (const mode of ["ask", "auto", "never"] as const) {
+    const decision = workspaceToolApproval({ toolName: "browser_click", args: { ref: "e1" }, permission: "ask", approval: { mode, macGrants: new Set() }, ...(rule ? { pageRule: rule.decision } : {}) }).decision;
+    assert.equal(decision.outcome === "block" && decision.reason, "rule", mode);
+  }
 });

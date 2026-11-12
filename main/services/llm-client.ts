@@ -114,9 +114,8 @@ import {
 } from "./bot-runtime-authority-main.js";
 import type { BotRuntimeAuthorityAdmission } from "./bot-runtime-authority.js";
 import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
-import { workspaceToolApproval } from "./approval-gate/workspace-tool-approval.js";
+import { workspaceRuleHost, workspaceToolApproval } from "./approval-gate/workspace-tool-approval.js";
 import { pageRuleFor } from "./approval-rules/resolve-main.js";
-import { approvalRuleHostOf } from "../../renderer/shared/approval-rules.js";
 import { ApprovalAnalytics, approvalAnalyticsMode, type ApprovalAnalyticsMode } from "./approval-gate/approval-analytics.js";
 import {
   hostRunRegistry,
@@ -4417,16 +4416,25 @@ export const llmClient = {
             attendedScheduleApproval = scheduleApproval && attendedAssistant;
             let preparedStandardScheduleSummary: string | undefined;
             // Settings → Approvals: the rule for this tool, connected app or
-            // site. A Bot-bound turn answers to its Bot's authority instead.
-            const pageRule = runApproval && !preparedBotContext
-              ? await pageRuleFor({
-                  ...(calledMcp
-                    ? { connector: { serverId: calledMcp.serverId, tool: calledMcp.toolName } }
-                    : { tool: context.toolCall.name }),
-                  ...(approvalRuleHostOf(context.args) ? { host: approvalRuleHostOf(context.args) } : {}),
-                  ...(workspaceId ? { workspaceId } : {}),
-                })
-              : undefined;
+            // site. Every run reads it, since a Block applies wherever this
+            // gate runs; the gate input keeps Allow and Ask to runs with a
+            // mode that aren't Bot-bound (a Bot-bound turn answers to its Bot).
+            const pageHost = await workspaceRuleHost(context.toolCall.name, context.args, async () => {
+              if (!workspaceId) return undefined;
+              const { browserService } = await import("./browser/service.js");
+              const args = context.args as Record<string, unknown>;
+              const tabId = typeof args.tabId === "string" ? args.tabId
+                : browserSelection.initialized ? browserSelection.tabId : (await browserService.getState(workspaceId)).activeTabId ?? undefined;
+              return tabId ? browserService.getApprovalTarget(workspaceId, tabId).url : undefined;
+            });
+            const pageRule = await pageRuleFor({
+              ...(calledMcp
+                ? { connector: { serverId: calledMcp.serverId, tool: calledMcp.toolName } }
+                : { tool: context.toolCall.name }),
+              ...(pageHost ? { host: pageHost } : {}),
+              ...(workspaceId ? { workspaceId } : {}),
+              ...(preparedBotContext ? { botId: preparedBotContext.admission.authority.botId } : {}),
+            });
             const workspaceGateInput = {
               toolName: context.toolCall.name,
               args: context.args,
@@ -4450,9 +4458,9 @@ export const llmClient = {
                         }
                       : {}),
                     ...(runTaint?.isNewDestination(taintCall) ? { newDestination: true } : {}),
-                    ...(pageRule ? { pageRule } : {}),
                   }
                 : {}),
+              ...(pageRule ? { pageRule } : {}),
             };
             let workspaceGate = workspaceToolApproval(workspaceGateInput);
             // Only the parent's plain workspace tools can be remembered, and

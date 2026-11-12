@@ -252,14 +252,15 @@ function pageTextBotRule(rule: ApprovalRule): BotRule {
 /** What the call is to the rules page: its tool or connected app, and the site it names. */
 async function pageSubjectOf(botId: string, toolName: string, args: unknown, action: BotClassifiableAction | undefined,
   facts: BotToolFacts): Promise<ApprovalRuleSubject> {
+  // A connection tool is named as it was granted, whether it reads or
+  // changes something, so one name answers for both. (A server that renamed
+  // the tool has already made it unavailable, so the two never differ here.)
   let connector: ApprovalRuleSubject["connector"];
-  if (action?.surface === "mcp" && action.serverId) connector = { serverId: action.serverId, tool: action.remoteName };
-  else {
-    const grant = (await facts.mcpTools()).get(toolName);
-    const connection = grant && facts.authority.connections.find((candidate) =>
-      candidate.tools.some((tool) => tool === grant || tool.toolId === grant.toolId));
-    if (grant && connection?.sourceId) connector = { serverId: connection.sourceId, tool: grant.name };
-  }
+  const grant = (await facts.mcpTools()).get(toolName);
+  const connection = grant && facts.authority.connections.find((candidate) =>
+    candidate.tools.some((tool) => tool === grant || tool.toolId === grant.toolId));
+  if (grant && connection?.sourceId) connector = { serverId: connection.sourceId, tool: grant.name };
+  else if (action?.surface === "mcp" && action.serverId) connector = { serverId: action.serverId, tool: action.remoteName };
   const host = action?.surface === "browser" && action.url ? approvalRuleHostOf({ url: action.url }) : approvalRuleHostOf(args);
   return { botId, ...(connector ? { connector } : { tool: toolName }), ...(host ? { host } : {}) };
 }

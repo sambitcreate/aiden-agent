@@ -17,6 +17,7 @@ import {
 } from "../schedule-tool.js";
 import { toolApprovalRuleTarget, type ToolApprovalRuleTarget } from "../tool-approval-rules.js";
 import type { ApprovalMode, MacGrantClass } from "../../../renderer/shared/approval-mode.js";
+import { approvalRuleHostOf } from "../../../renderer/shared/approval-rules.js";
 import { planActionGate, type GateAction, type GateContext } from "./gate.js";
 import { connectorToolEffect, MAC_TOOL_CLASSES } from "./tool-classes.js";
 
@@ -63,9 +64,11 @@ export interface WorkspaceToolApprovalInput {
   /** The judge's verdict, read only when `workspaceToolApproval(...).readsJudge` said so. */
   judge?: "pass" | "defer";
   /**
-   * Settings → Approvals' rule for this call (`resolveApprovalRule`). Only a
-   * run with an approval mode reads it, and never a Bot-bound turn, whose
-   * authority is its Bot's.
+   * Settings → Approvals' rule for this call (`resolveApprovalRule`). A Block,
+   * or a rule book that can't be read, applies wherever this gate runs:
+   * Assistant and no-workspace chats, scheduled runs and Bot-bound turns
+   * included. Allow and Ask rules apply only to a run with an approval mode,
+   * and never to a Bot-bound turn, whose authority is its Bot's.
    */
   pageRule?: "allow" | "ask" | "block" | "unreadable";
 }
@@ -143,7 +146,9 @@ export function workspaceGateAction(input: WorkspaceToolApprovalInput): GateActi
     toolName,
     ...(macClass ? { mac: true, macClass, ...(macGranted ? { macGranted: true } : {}) } : {}),
     ...(input.newDestination ? { newDestination: true } : {}),
-    ...(input.pageRule && !input.botBound && input.approval ? { pageRule: input.pageRule } : {}),
+    ...(input.pageRule === "block" || input.pageRule === "unreadable" || (input.pageRule && !input.botBound && input.approval)
+      ? { pageRule: input.pageRule }
+      : {}),
     ...(input.judge ? { judge: input.judge } : {}),
     ...(consequential ? { consequential: true } : {}),
     ...(explicitOnly ? { explicitOnly: true } : {}),
@@ -202,5 +207,25 @@ export function workspaceToolApproval(input: WorkspaceToolApprovalInput): Worksp
     case "hand-off":
       // Workspace chats have no hand-off rules; refuse rather than run.
       return { decision: { outcome: "block", reason: "hook" } };
+  }
+}
+
+/**
+ * The site a rules-page site rule matches for a workspace call: the `url` it
+ * names, or, for a click, typing or key press, the page its browser tab shows
+ * now. A tab that can't be read names no site; the browser action itself then
+ * fails on the missing tab.
+ */
+export async function workspaceRuleHost(
+  toolName: string,
+  args: unknown,
+  currentTabUrl: () => Promise<string | undefined>,
+): Promise<string | undefined> {
+  const named = approvalRuleHostOf(args);
+  if (named || !BROWSER_MUTATION_TOOL_NAMES.has(toolName)) return named;
+  try {
+    return approvalRuleHostOf({ url: await currentTabUrl() });
+  } catch {
+    return undefined;
   }
 }
