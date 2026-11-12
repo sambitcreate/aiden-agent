@@ -6,7 +6,7 @@ import {
   parseAidenRemoteApprovalSchedule,
   type AidenRemoteApprovalSchedule,
 } from "./aiden-remote-approval-schedule.js";
-import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
+import { parseGenerationTimeline, type GenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import type {
   ChatRunInputMode,
   ChatRunInputRejectionReason,
@@ -306,7 +306,16 @@ export const AIDEN_REMOTE_BOT_PEERS_CONTRACT_REVISION = 59 as const;
  * Display-only, no capability; clients show "By voice" and older ones ignore it.
  */
 export const AIDEN_REMOTE_VOICE_INPUT_CONTRACT_REVISION = 60 as const;
-export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_VOICE_INPUT_CONTRACT_REVISION;
+/**
+ * Contract revision 61 (provisional; re-claim the next revision after
+ * `main`'s at merge by changing only this constant): a cancelled tool step may
+ * carry `stoppedByUser: true` when Aiden cancelled it because the person
+ * pressed Stop. Display-only, no capability: clients read such a step as
+ * "stopped", not as an issue, and older ones ignore the key and keep showing
+ * it as cancelled. A step cancelled for any other reason never carries it.
+ */
+export const AIDEN_REMOTE_STOPPED_BY_USER_CONTRACT_REVISION = 61 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_STOPPED_BY_USER_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -2272,6 +2281,8 @@ export interface AidenRemoteContractFixture {
   chatNewWorktree?: AidenRemoteChatNewWorktreeFixture;
   /** Revision 60: a user message Aiden Live sent ("By voice"), and values clients must ignore. */
   voiceInput?: AidenRemoteVoiceInputFixture;
+  /** Revision 61: which cancelled steps read as stopped by the person, and which stay issues. */
+  stoppedSteps?: AidenRemoteStoppedStepsFixture;
   taskProgress: AidenRemoteChatTaskProgress;
   agentRoster: AidenRemoteChatAgentRoster;
   agentInterrupt: AidenRemoteChatAgentInterruptFixture;
@@ -8369,6 +8380,13 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     }
     voiceInput = parseVoiceInputFixture(value.voiceInput);
   }
+  let stoppedSteps: AidenRemoteStoppedStepsFixture | undefined;
+  if (value.stoppedSteps !== undefined) {
+    if (contractRevision < AIDEN_REMOTE_STOPPED_BY_USER_CONTRACT_REVISION) {
+      throw new Error(`Stopped step fixtures require contract revision ${AIDEN_REMOTE_STOPPED_BY_USER_CONTRACT_REVISION}.`);
+    }
+    stoppedSteps = parseStoppedStepsFixture(value.stoppedSteps);
+  }
   let botAllowed: AidenRemoteBotAllowedFixture | undefined;
   if (value.botAllowed !== undefined) {
     if (contractRevision < AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION) throw new Error("Bot allowed fixtures require revision 57.");
@@ -8494,7 +8512,49 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     ...(rawUploads ? { rawUploads } : {}),
     ...(chatNewWorktree ? { chatNewWorktree } : {}),
     ...(voiceInput ? { voiceInput } : {}),
+    ...(stoppedSteps ? { stoppedSteps } : {}),
   };
+}
+
+/**
+ * Revision 61 fixture: a timeline the person stopped, with a step cancelled
+ * earlier for another reason. Every client must read `stoppedStepIds` as
+ * "stopped" and `issueStepIds` as issues.
+ */
+export interface AidenRemoteStoppedStepsFixture {
+  timeline: GenerationTimeline;
+  stoppedStepIds: string[];
+  issueStepIds: string[];
+}
+
+function parseStoppedStepsFixture(value: unknown): AidenRemoteStoppedStepsFixture {
+  if (!isRecord(value)) throw new Error("Stopped step fixture must be an object.");
+  assertExactKeys(value, ["timeline", "stoppedStepIds", "issueStepIds"], "Stopped step fixture");
+  const timeline = parseGenerationTimeline(value.timeline);
+  if (!timeline) throw new Error("Stopped step fixture timeline must be a valid timeline.");
+  const ids = (field: "stoppedStepIds" | "issueStepIds") => {
+    const list = value[field];
+    if (!Array.isArray(list) || !list.every((id) => typeof id === "string")) {
+      throw new Error(`Stopped step fixture ${field} must be strings.`);
+    }
+    return list as string[];
+  };
+  const stoppedStepIds = ids("stoppedStepIds");
+  const issueStepIds = ids("issueStepIds");
+  const named = new Set(timeline.claimCheck?.stepIds ?? []);
+  const stopped: string[] = [];
+  const issues: string[] = [];
+  for (const step of timeline.steps) {
+    if (step.kind !== "tool") continue;
+    if (step.status === "cancelled" && step.stoppedByUser === true && !named.has(step.id)) stopped.push(step.id);
+    else if (step.status === "failed" || step.status === "blocked" || step.status === "cancelled") issues.push(step.id);
+  }
+  const same = (left: string[], right: string[]) =>
+    left.length === right.length && left.every((id, index) => id === right[index]);
+  if (!same(stopped, stoppedStepIds) || !same(issues, issueStepIds)) {
+    throw new Error("Stopped step fixture marks different steps than the parser.");
+  }
+  return { timeline, stoppedStepIds, issueStepIds };
 }
 
 /** Revision 60 fixture: the chat as sent, and which of its messages read as "By voice". */

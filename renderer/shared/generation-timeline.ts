@@ -67,6 +67,13 @@ export interface AgentToolStep {
    * and size. Display-only; the bytes are read from the Mac by id.
    */
   recording?: BrowserRecordingRecapV1;
+  /**
+   * Set only on a cancelled step that Aiden itself cancelled because the
+   * person pressed Stop. A step cancelled for any other reason (a detached
+   * agent permission, chat deletion, shutdown) never carries it, even when a
+   * later Stop ends the same generation.
+   */
+  stoppedByUser?: true;
 }
 
 /** One uninterrupted stretch of model reasoning between tool calls. */
@@ -245,7 +252,9 @@ function parseToolStep(
         (lineChanges.additions as number) > MAX_LINE_CHANGE_COUNT ||
         !Number.isSafeInteger(lineChanges.deletions) ||
         (lineChanges.deletions as number) < 0 ||
-        (lineChanges.deletions as number) > MAX_LINE_CHANGE_COUNT))
+        (lineChanges.deletions as number) > MAX_LINE_CHANGE_COUNT)) ||
+    (step.stoppedByUser !== undefined &&
+      (!allowLineChanges || step.stoppedByUser !== true || step.status !== "cancelled"))
   ) {
     return undefined;
   }
@@ -267,6 +276,7 @@ function parseToolStep(
     ...(questionnaire ? { questionnaire } : {}),
     ...(extraction ? { extraction } : {}),
     ...(recording ? { recording } : {}),
+    ...(step.stoppedByUser === true ? { stoppedByUser: true as const } : {}),
     ...(lineChanges === undefined
       ? {}
       : {

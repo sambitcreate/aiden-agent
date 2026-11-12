@@ -6,6 +6,8 @@ struct AidenChronologicalTranscript: View {
     @Environment(\.aidenPalette) private var palette
     let rows: [AidenChronologicalRow]
     let active: Bool
+    /// Tool calls the person ended with Stop; see `AidenGenerationTimeline.isStoppedByUser`.
+    var stoppedStepIDs: Set<String> = []
     /// Draws a committed message's visual rows; the live stream has none.
     var visualContent: ((AidenChatVisual) -> AnyView)? = nil
     /// Present while the Mac serves browser recordings (revision 46).
@@ -26,7 +28,7 @@ struct AidenChronologicalTranscript: View {
                 case .row(let row):
                     rowView(row)
                 case .toolGroup(let group):
-                    AidenToolStepGroupView(group: group, active: active)
+                    AidenToolStepGroupView(group: group, active: active, stoppedStepIDs: stoppedStepIDs)
                         .equatable()
                 }
             }
@@ -49,7 +51,7 @@ struct AidenChronologicalTranscript: View {
                 }
             }
         case .tool:
-            AidenToolStepBox(steps: row.steps, active: active)
+            AidenToolStepBox(steps: row.steps, active: active, stoppedStepIDs: stoppedStepIDs)
         case .questionnaire:
             if let recap = row.steps.first?.questionnaire {
                 AidenQuestionnaireRecapView(recap: recap)
@@ -133,11 +135,16 @@ private struct AidenToolStepBox: View {
     @Environment(\.aidenPalette) private var palette
     let steps: [AidenAgentStep]
     let active: Bool
+    var stoppedStepIDs: Set<String> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(steps) { step in
-                AidenActivityStepLine(step: step, shimmer: active && step.isActive)
+                AidenActivityStepLine(
+                    step: step,
+                    stoppedByUser: stoppedStepIDs.contains(step.id),
+                    shimmer: active && step.isActive
+                )
             }
         }
         .padding(.horizontal, 12)
@@ -158,9 +165,10 @@ struct AidenToolStepGroupView: View, Equatable {
     @State private var toggles = 0
     let group: AidenToolStepGroup
     let active: Bool
+    var stoppedStepIDs: Set<String> = []
 
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.group == rhs.group && lhs.active == rhs.active
+        lhs.group == rhs.group && lhs.active == rhs.active && lhs.stoppedStepIDs == rhs.stoppedStepIDs
     }
 
     private var expansion: AidenToolStepGroupExpansion { sharedExpansion ?? ownExpansion }
@@ -171,7 +179,7 @@ struct AidenToolStepGroupView: View, Equatable {
         VStack(alignment: .leading, spacing: 4) {
             header(isExpanded: isExpanded)
             if isExpanded {
-                AidenToolStepBox(steps: group.steps.flatMap(\.steps), active: active)
+                AidenToolStepBox(steps: group.steps.flatMap(\.steps), active: active, stoppedStepIDs: stoppedStepIDs)
                     .transition(.opacity)
             }
         }

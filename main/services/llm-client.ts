@@ -3132,6 +3132,11 @@ export const llmClient = {
     const noteModelBecameReady = () => endLoadMonitor(loadHost, streamId, true);
     const generationCancelRequested = () =>
       initialization.cancelRequested || active.get(streamId)?.cancelRequested === true;
+    // A step cancelled because the person pressed Stop is marked as stopped,
+    // not failed. Any other cancellation keeps the issue treatment.
+    const generationStoppedByUser = () =>
+      generationCancelRequested() &&
+      (active.get(streamId)?.cancellationOrigin ?? initialization.cancellationOrigin) === "user_stop";
     const persistAssistant = async (
       content: string,
       reasoning: string,
@@ -3696,6 +3701,7 @@ export const llmClient = {
             activeCompactionStepId,
             event.aborted ? "cancelled" : event.result ? "completed" : "failed",
             event.result,
+            { stoppedByUser: event.aborted && generationStoppedByUser() },
           );
           activeCompactionStepId = undefined;
         }
@@ -4924,6 +4930,7 @@ export const llmClient = {
               terminalStatus === "completed"
                 ? event.result?.details
                 : safeToolIssueDetails(event.toolName, terminalStatus, event.result),
+              { stoppedByUser: terminalStatus === "cancelled" && generationStoppedByUser() },
             );
             sendGeneration(streamId, "chat:tool", {
               streamId,
@@ -5294,6 +5301,7 @@ export const llmClient = {
               scratchDir: await acpScratch.directoryFor(params.chatId),
               permission: () => permission,
               timeline,
+              stoppedByUser: generationStoppedByUser,
               requestApproval: (prompt, approvalSignal) => approvals.request(prompt, approvalSignal, owner.documentId),
               takeApprovalScope: (approvalStreamId, toolCallId) =>
                 approvals.takeDecisionPayload(approvalStreamId, toolCallId)?.scope,

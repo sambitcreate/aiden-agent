@@ -935,6 +935,10 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
     let extraction: AidenWebExtractRecap?
     /// Present only on a completed `browser_recording_stop` step (revision 46).
     let recording: AidenBrowserRecordingRecap?
+    /// Contract revision 61: `true` only on a cancelled tool step Aiden
+    /// cancelled because the person pressed Stop. Any other value, or the key
+    /// on a step that did not end cancelled, decodes as `nil`.
+    let stoppedByUser: Bool?
 
     init(
         id: String,
@@ -957,7 +961,8 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
         producedFile: AidenProducedFile? = nil,
         questionnaire: AidenQuestionnaireRecap? = nil,
         extraction: AidenWebExtractRecap? = nil,
-        recording: AidenBrowserRecordingRecap? = nil
+        recording: AidenBrowserRecordingRecap? = nil,
+        stoppedByUser: Bool? = nil
     ) {
         self.id = id
         self.order = order
@@ -980,6 +985,7 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
         self.questionnaire = questionnaire
         self.extraction = extraction
         self.recording = recording
+        self.stoppedByUser = stoppedByUser
     }
 
     init(from decoder: Decoder) throws {
@@ -1043,12 +1049,19 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
         } else {
             recording = nil
         }
+        if kind == .tool, status == .cancelled,
+           (try? values.decodeIfPresent(Bool.self, forKey: .stoppedByUser)) == true {
+            stoppedByUser = true
+        } else {
+            stoppedByUser = nil
+        }
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, order, kind, toolCallId, toolName, label, status, startedAt, updatedAt
         case finishedAt, contentOffset, reasoningStartOffset, reasoningEndOffset
         case durationMs, target, detail, lineChanges, producedFile, questionnaire, extraction, recording
+        case stoppedByUser
     }
 
     var isActive: Bool {
@@ -1424,8 +1437,30 @@ struct AidenGenerationTimeline: Codable, Equatable, Sendable {
         case cancellationOrigin, claimCheck
     }
 
+    /// Display-only: a tool call the person ended with Stop. The Mac marks
+    /// exactly the calls it cancelled because of Stop with `stoppedByUser`
+    /// (revision 61), so the call stopping is what they asked for, not a
+    /// problem to review. A call cancelled for any other reason (an earlier
+    /// agent detach, app shutdown, chat deletion, a scheduled task's cancel)
+    /// carries no mark and keeps the cancelled treatment, even in a run the
+    /// person later stopped, and so does a call the claim check names.
+    /// `isIssue` and the claim-check validation below still count every
+    /// cancelled call. Matches desktop's `isStoppedByUser`.
+    func isStoppedByUser(_ step: AidenAgentStep) -> Bool {
+        step.kind == .tool
+            && step.status == .cancelled
+            && step.stoppedByUser == true
+            && claimCheck?.stepIds.contains(step.id) != true
+    }
+
+    /// The steps `isStoppedByUser` matches, for rows drawn away from the timeline.
+    var userStoppedStepIDs: Set<String> {
+        Set(steps.filter(isStoppedByUser).map(\.id))
+    }
+
+    /// Issues the activity header counts; calls the person stopped are not issues.
     var issueCount: Int {
-        steps.filter { $0.kind == .tool && $0.status?.isIssue == true }.count
+        steps.filter { $0.kind == .tool && $0.status?.isIssue == true && !isStoppedByUser($0) }.count
     }
 
     var isRendererSafe: Bool {
@@ -1485,7 +1520,11 @@ struct AidenGenerationTimeline: Codable, Equatable, Sendable {
                           && step.status == .completed
                           && (0...100_000_000).contains(changes.additions)
                           && (0...100_000_000).contains(changes.deletions)
-                  }) ?? true else {
+                  }) ?? true,
+                  // Revision 61 marks stopped calls only in version 3
+                  // timelines; an older timeline carrying the mark is
+                  // invalid, as on desktop.
+                  step.stoppedByUser == nil || version == 3 else {
                 return false
             }
 
@@ -1747,7 +1786,24 @@ enum AidenAgentActivityPresentation {
             && questionnaireSteps(timeline).isEmpty
     }
 
-    static func line(for step: AidenAgentStep) -> String {
+    /// How an activity row is tinted. A call the person stopped reads as
+    /// ordinary secondary text, like desktop's neutral tone.
+    enum Tone: Equatable {
+        case normal
+        case warning
+        case danger
+    }
+
+    static func tone(for step: AidenAgentStep, stoppedByUser: Bool = false) -> Tone {
+        switch step.status {
+        case .failed: return .danger
+        case .cancelled: return stoppedByUser ? .normal : .warning
+        case .blocked, .awaitingApproval: return .warning
+        default: return .normal
+        }
+    }
+
+    static func line(for step: AidenAgentStep, stoppedByUser: Bool = false) -> String {
         if step.kind == .thinking {
             return step.isActive ? "Thinking" : "Thought \(duration(step.durationMs))"
         }
@@ -1769,7 +1825,7 @@ enum AidenAgentActivityPresentation {
         case .blocked:
             verb = "\(label) denied"
         case .cancelled:
-            verb = "\(label) cancelled"
+            verb = stoppedByUser ? "\(label) stopped" : "\(label) cancelled"
         case nil:
             verb = label
         }

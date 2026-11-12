@@ -11,6 +11,7 @@ import {
   activityLine,
   activityLineText,
   isCompactContextOnly,
+  isStoppedByUser,
   summarizeActivity,
   type ActivityLine,
 } from "../lib/agent-steps";
@@ -54,8 +55,8 @@ function LineChanges({ additions, deletions }: { additions: number; deletions: n
   );
 }
 
-function StepLine({ step }: { step: AgentStep }) {
-  const line = activityLine(step);
+function StepLine({ step, stopped }: { step: AgentStep; stopped: boolean }) {
+  const line = activityLine(step, { stoppedByUser: stopped });
   return (
     <>
       <span className={`${toneClass(line.tone)} font-medium`}>{line.verb}</span>
@@ -74,7 +75,7 @@ function StepLine({ step }: { step: AgentStep }) {
 // object between updates, so only the step that changed renders again.
 
 /** A single fixed-height ticker row. Height must stay in step with the CSS shift. */
-const TickerRow = React.memo(function TickerRow({ step }: { step: AgentStep }) {
+const TickerRow = React.memo(function TickerRow({ step, stopped }: { step: AgentStep; stopped: boolean }) {
   // A pending tool step is the model still writing the call's arguments, so
   // it shimmers like any other work in progress. Approval waits do not.
   const active = !isToolStep(step)
@@ -91,13 +92,13 @@ const TickerRow = React.memo(function TickerRow({ step }: { step: AgentStep }) {
           active ? "agent-thinking-shimmer" : ""
         }`}
       >
-        <StepLine step={step} />
+        <StepLine step={step} stopped={stopped} />
       </span>
     </div>
   );
 });
 
-const TrailRow = React.memo(function TrailRow({ step }: { step: AgentStep }) {
+const TrailRow = React.memo(function TrailRow({ step, stopped }: { step: AgentStep; stopped: boolean }) {
   return (
     <div
       className="flex min-h-5 min-w-0 items-start py-px"
@@ -105,7 +106,7 @@ const TrailRow = React.memo(function TrailRow({ step }: { step: AgentStep }) {
       data-activity-stage={activityLine(step).stage}
     >
       <span className="activity-feed-detail-label min-w-0 break-words text-mini text-secondary">
-        <StepLine step={step} />
+        <StepLine step={step} stopped={stopped} />
       </span>
     </div>
   );
@@ -180,11 +181,11 @@ export function ActivityFeed({
           data-masked={rows.length === TICKER_ROWS ? "true" : "false"}
           role={running ? "status" : undefined}
           aria-live={running ? "polite" : undefined}
-          aria-label={activityLineText(newest)}
+          aria-label={activityLineText(newest, { stoppedByUser: isStoppedByUser(visible, newest) })}
         >
           <div className="activity-feed-stack flex flex-col">
             {rows.map((step) => (
-              <TickerRow key={step.id} step={step} />
+              <TickerRow key={step.id} step={step} stopped={isStoppedByUser(visible, step)} />
             ))}
           </div>
         </div>
@@ -198,7 +199,7 @@ export function ActivityFeed({
           }`}
         >
           {stepInHeader && newest ? (
-            <StepLine step={newest} />
+            <StepLine step={newest} stopped={isStoppedByUser(visible, newest)} />
           ) : (
             summarizeActivity(visible)
           )}
@@ -263,7 +264,7 @@ export function ActivityFeed({
         {stepInHeader ? null : (
           <div className="flex flex-col" role="list">
             {visible.steps.map((step) => (
-              <TrailRow key={step.id} step={step} />
+              <TrailRow key={step.id} step={step} stopped={isStoppedByUser(visible, step)} />
             ))}
           </div>
         )}

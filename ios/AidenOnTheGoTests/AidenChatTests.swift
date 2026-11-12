@@ -7237,6 +7237,179 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(decoded.detail, step.detail)
     }
 
+    private func stopTimelineStep(
+        _ id: String,
+        order: Int,
+        toolName: String,
+        label: String,
+        status: AidenAgentStepStatus,
+        stoppedByUser: Bool? = nil
+    ) -> AidenAgentStep {
+        AidenAgentStep(
+            id: id, order: order, kind: .tool,
+            toolCallId: "call-" + id.dropFirst("tool-".count), toolName: toolName,
+            label: label, status: status, startedAt: 1_000,
+            updatedAt: 2_000, finishedAt: 2_000, contentOffset: 0,
+            durationMs: nil, target: nil, detail: nil, lineChanges: nil,
+            stoppedByUser: stoppedByUser
+        )
+    }
+
+    private func stopTimeline(
+        _ steps: [AidenAgentStep],
+        origin: AidenGenerationCancellationOrigin?,
+        claimCheck: AidenGenerationClaimCheck? = nil
+    ) -> AidenGenerationTimeline {
+        AidenGenerationTimeline(
+            version: 3, generationId: "stream-1", status: .cancelled,
+            startedAt: 1_000, finishedAt: 2_000, steps: steps,
+            cancellationOrigin: origin, claimCheck: claimCheck
+        )
+    }
+
+    func testCallThePersonStoppedReadsStoppedAndIsNotAnIssue() throws {
+        let compact = stopTimelineStep(
+            "tool-1", order: 0, toolName: "compact_context", label: "Compact context",
+            status: .cancelled, stoppedByUser: true
+        )
+        let timeline = stopTimeline([compact], origin: .userStop)
+        XCTAssertTrue(timeline.isStoppedByUser(compact))
+        XCTAssertEqual(timeline.issueCount, 0)
+        XCTAssertEqual(timeline.userStoppedStepIDs, ["tool-1"])
+        XCTAssertEqual(
+            AidenAgentActivityPresentation.line(for: compact, stoppedByUser: timeline.isStoppedByUser(compact)),
+            "Compact context stopped"
+        )
+        XCTAssertEqual(
+            AidenAgentActivityPresentation.tone(for: compact, stoppedByUser: timeline.isStoppedByUser(compact)),
+            .normal
+        )
+        // The decoder-level status is unchanged: a cancelled call is still an issue status.
+        XCTAssertTrue(compact.status?.isIssue == true)
+    }
+
+    func testOtherCancellationsAndFailuresStayIssues() throws {
+        let cancelled = stopTimelineStep("tool-1", order: 0, toolName: "run_command", label: "Run command", status: .cancelled)
+        for origin: AidenGenerationCancellationOrigin? in [.applicationShutdown, .chatDeletion, .scheduledTaskCancel, nil] {
+            let timeline = stopTimeline([cancelled], origin: origin)
+            XCTAssertFalse(timeline.isStoppedByUser(cancelled), String(describing: origin))
+            XCTAssertEqual(timeline.issueCount, 1, String(describing: origin))
+            XCTAssertEqual(
+                AidenAgentActivityPresentation.line(for: cancelled, stoppedByUser: timeline.isStoppedByUser(cancelled)),
+                "Run command cancelled"
+            )
+            XCTAssertEqual(AidenAgentActivityPresentation.tone(for: cancelled), .warning)
+        }
+
+        // A run the person stopped does not hide a call cancelled earlier for
+        // another reason: only the calls the Mac marked read as stopped.
+        let detached = stopTimelineStep("tool-1", order: 0, toolName: "edit_file", label: "Edit file", status: .cancelled)
+        let stopped = stopTimelineStep(
+            "tool-2", order: 1, toolName: "run_command", label: "Run command",
+            status: .cancelled, stoppedByUser: true
+        )
+        let mixed = stopTimeline([detached, stopped], origin: .userStop)
+        XCTAssertFalse(mixed.isStoppedByUser(detached))
+        XCTAssertTrue(mixed.isStoppedByUser(stopped))
+        XCTAssertEqual(mixed.userStoppedStepIDs, ["tool-2"])
+        XCTAssertEqual(mixed.issueCount, 1)
+
+        let failed = stopTimelineStep("tool-1", order: 0, toolName: "edit_file", label: "Edit file", status: .failed)
+        let failedStop = stopTimeline([failed], origin: .userStop)
+        XCTAssertFalse(failedStop.isStoppedByUser(failed))
+        XCTAssertEqual(failedStop.issueCount, 1)
+        XCTAssertEqual(AidenAgentActivityPresentation.tone(for: failed), .danger)
+    }
+
+    /// Contract revision 61: the shared fixture's stopped and issue steps read
+    /// the same here as on the Mac.
+    func testStoppedStepsFixtureMatchesTheMac() throws {
+        let fixtureURL = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
+        let root = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL)) as? [String: Any]
+        )
+        let section = try XCTUnwrap(root["stoppedSteps"] as? [String: Any])
+        let timelineData = try JSONSerialization.data(withJSONObject: try XCTUnwrap(section["timeline"]))
+        let timeline = try AidenRemoteJSONDecoder.decode(AidenGenerationTimeline.self, from: timelineData)
+        let stoppedIDs = try XCTUnwrap(section["stoppedStepIds"] as? [String])
+        let issueIDs = try XCTUnwrap(section["issueStepIds"] as? [String])
+
+        XCTAssertTrue(timeline.isRendererSafe)
+        XCTAssertEqual(timeline.steps.filter(timeline.isStoppedByUser).map(\.id), stoppedIDs)
+        XCTAssertEqual(
+            timeline.steps.filter { $0.status?.isIssue == true && !timeline.isStoppedByUser($0) }.map(\.id),
+            issueIDs
+        )
+        XCTAssertEqual(timeline.issueCount, issueIDs.count)
+    }
+
+    func testStopMarkIsValidOnlyInAVersionThreeTimeline() {
+        let stopped = stopTimelineStep(
+            "tool-1", order: 0, toolName: "run_command", label: "Run command",
+            status: .cancelled, stoppedByUser: true
+        )
+        let plain = stopTimelineStep(
+            "tool-1", order: 0, toolName: "run_command", label: "Run command", status: .cancelled
+        )
+        XCTAssertTrue(stopTimeline([stopped], origin: .userStop).isRendererSafe)
+        for version in [1, 2] {
+            func older(_ step: AidenAgentStep) -> AidenGenerationTimeline {
+                AidenGenerationTimeline(
+                    version: version, generationId: "stream-1", status: .cancelled,
+                    startedAt: 1_000, finishedAt: 2_000, steps: [step],
+                    cancellationOrigin: .userStop, claimCheck: nil
+                )
+            }
+            XCTAssertFalse(older(stopped).isRendererSafe, "version \(version) with the mark")
+            XCTAssertTrue(older(plain).isRendererSafe, "version \(version) without the mark")
+        }
+    }
+
+    func testStopMarkDecodesOnlyAsTrueOnACancelledToolStep() throws {
+        func decode(status: String, mark: String?) throws -> AidenAgentStep {
+            let markField = mark.map { ",\"stoppedByUser\":\($0)" } ?? ""
+            let json = """
+            {"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"run_command",\
+            "label":"Run command","status":"\(status)","startedAt":1000,"updatedAt":2000,\
+            "finishedAt":2000,"contentOffset":0\(markField)}
+            """
+            return try AidenRemoteJSONDecoder.decode(AidenAgentStep.self, from: Data(json.utf8))
+        }
+        let marked = try decode(status: "cancelled", mark: "true")
+        XCTAssertEqual(marked.stoppedByUser, true)
+        XCTAssertEqual(
+            try JSONDecoder().decode(AidenAgentStep.self, from: JSONEncoder().encode(marked)).stoppedByUser,
+            true,
+            "the mark survives a local round trip"
+        )
+        let unmarked = try decode(status: "cancelled", mark: nil)
+        XCTAssertNil(unmarked.stoppedByUser)
+        XCTAssertNil(
+            try JSONDecoder().decode(AidenAgentStep.self, from: JSONEncoder().encode(unmarked)).stoppedByUser
+        )
+        // An older or unexpected value never rejects the step; it reads as unmarked.
+        XCTAssertNil(try decode(status: "cancelled", mark: "false").stoppedByUser)
+        XCTAssertNil(try decode(status: "cancelled", mark: "\"yes\"").stoppedByUser)
+        XCTAssertNil(try decode(status: "failed", mark: "true").stoppedByUser)
+        XCTAssertNil(try decode(status: "completed", mark: "true").stoppedByUser)
+    }
+
+    func testStoppedCallNamedByAClaimCheckStaysAnIssueAndStillDecodes() throws {
+        let run = stopTimelineStep(
+            "tool-1", order: 0, toolName: "run_command", label: "Run command",
+            status: .cancelled, stoppedByUser: true
+        )
+        let timeline = stopTimeline(
+            [run],
+            origin: .userStop,
+            claimCheck: AidenGenerationClaimCheck(kind: .unverifiedSuccess, stepIds: ["tool-1"])
+        )
+        XCTAssertFalse(timeline.isStoppedByUser(run))
+        XCTAssertEqual(timeline.issueCount, 1)
+        // Claim-check validation still sees the stopped call as an issue step.
+        XCTAssertTrue(timeline.isRendererSafe)
+    }
+
     func testActivitySummaryMatchesMacCategories() throws {
         let timeline = AidenGenerationTimeline(
             version: 3,
