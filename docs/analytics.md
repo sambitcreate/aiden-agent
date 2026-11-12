@@ -49,6 +49,8 @@ Feature events fire once, at the moment the action succeeded, from the service t
 | `design_mode_exited` | A chat left design mode from the Design button, ⇧⌘L or `/design off` | none |
 | `design_mode_declined` | Not now on Aiden's "Open design mode?" card. A card that times out or stops with the reply is not counted. | none |
 | `design_comments_sent` | A desktop message carried design-canvas comments for Aiden | `count_bucket`: how many comments. Their notes, pages, files and elements stay on your device. |
+| `approval_shown` | An approval card was shown in a workspace chat, a subagent's run or a Bot chat. An identical card that is shared, or one Aiden refuses because you already denied it in the run, is not counted again. | `kind`: command, file, computer_use, form_fill, schedule, subagent, hook, classifier or tool; `mode`: the workspace access it was asked under (ask, full, read_only or none), or bot for a Bot's card; `chat`: workspace, subagent or bot |
+| `approval_answered` | You answered a shown card, on the Mac or a paired device. A card that expired, was withdrawn, or that a Bot's allow list answered is not counted. | The same `kind`, `mode` and `chat`, and `scope`: once, chat, workspace (always in this workspace), bot (always for that Bot) or deny. The command, file, tool arguments and summary never leave your device. |
 
 How the values are limited:
 

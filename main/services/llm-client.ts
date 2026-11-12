@@ -109,6 +109,7 @@ import {
 import type { BotRuntimeAuthorityAdmission } from "./bot-runtime-authority.js";
 import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
 import { workspaceToolApproval } from "./approval-gate/workspace-tool-approval.js";
+import { ApprovalAnalytics, approvalAnalyticsMode, type ApprovalAnalyticsMode } from "./approval-gate/approval-analytics.js";
 import {
   hostRunRegistry,
   recordRunAttentionResolved,
@@ -864,7 +865,10 @@ function settleGeneration<Entry extends GenerationOwnershipEntry>(
 ): void {
   settleGenerationOwnership(streamId, entry, owners, {
     forgetApprovedArtifacts: () => approvedWorkspaceArtifactCalls.delete(streamId),
-    releaseApprovals: () => approvals.releaseStream(streamId),
+    releaseApprovals: () => {
+      approvalModes.delete(streamId);
+      approvals.releaseStream(streamId);
+    },
     releaseQuestionnaires: () => questionnaires.releaseStream(streamId),
     broadcastSettled: () =>
       broadcastChatSettled(streamId, params.chatId, entry.workspaceId, params.workspaceId),
@@ -959,6 +963,8 @@ function recordShortCircuitedPrompt(streamId: string, prompt: HostRunPendingProm
   pendingAttentionRecorder.promptShortCircuited(streamId, prompt);
 }
 
+/** The workspace access each run's approval cards are asked under, for analytics. */
+const approvalModes = new Map<string, ApprovalAnalyticsMode>();
 const approvals = new ToolApprovalCoordinator(
   (prompt) => {
     if (!sendGeneration(prompt.streamId, "chat:approval", prompt)) {
@@ -991,6 +997,7 @@ const approvals = new ToolApprovalCoordinator(
       type: "approval_required",
       payload: { summary: prompt.summary },
     }),
+  new ApprovalAnalytics({ surface: "workspace", mode: (streamId) => approvalModes.get(streamId) ?? "ask" }),
 );
 const questionnaires = new AskUserQuestionCoordinator(
   (prompt) => {
@@ -1221,6 +1228,7 @@ async function prepareGeneration(
     await assertManagedWorktreeAdmission(workspace);
   }
   const permission: GenerationPermission = options.permission ?? workspace?.permission ?? "ask";
+  approvalModes.set(streamId, approvalAnalyticsMode(permission));
   const folderPath = workspace?.folderPath;
   // Connectors this workspace switched off. Bots keep their own grants.
   const workspaceDisabledMcpServerIds = botBound ? undefined : workspace?.disabledMcpServerIds;

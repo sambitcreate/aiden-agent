@@ -1,6 +1,7 @@
 // Profile-owned approval waits. Durable identity and provenance stay in main;
 // only the explicitly copied public card fields cross IPC.
 import { botApprovalRuleKey } from "../../../renderer/shared/tool-approval-scope.js";
+import { ApprovalAnalytics } from "../approval-gate/approval-analytics.js";
 import { ToolApprovalCoordinator, type ToolApprovalOutcome } from "../tool-approval.js";
 import type { BotApprovalDecision, BotApprovalOwner, BotApprovalRequest, BotAllowListRelease } from "./bot-extension.js";
 
@@ -71,7 +72,7 @@ export function createBotApprovals(options: BotApprovalsOptions): BotApprovals {
       clearCallbacks(state);
       options.withdraw?.(state.prompt, outcome); changed(state.prompt.botId);
     }
-  });
+  }, undefined, new ApprovalAnalytics({ surface: "bot", mode: () => "bot" }));
   async function request(input: BotApprovalRequest): Promise<BotApprovalDecision> {
     const captured = { ...input, owner: structuredClone(input.owner), always: structuredClone(input.always), allowList: structuredClone(input.allowList) };
     assertActive(captured);
@@ -149,7 +150,7 @@ export function createBotApprovals(options: BotApprovalsOptions): BotApprovals {
       if (!state || (state.claimed && !(source === "expiry" && decision === "deny"))) return false;
       state.claimed = true; state.source = source;
       if (state.prompt) state.prompt.decisionSource = source;
-      return coordinator.decideAsHost(id, decision === "allow", scope ? { scope } : undefined);
+      return coordinator.decideAsHost(id, decision === "allow", scope ? { scope } : undefined, source === "person");
     },
     async releaseFromAllowList(id, input) {
       const state = waiting.get(id), grant = structuredClone(input);
@@ -167,7 +168,7 @@ export function createBotApprovals(options: BotApprovalsOptions): BotApprovals {
         if (waiting.get(id) !== state || state.controller.signal.aborted) return false;
         state.replacement = structuredClone(result); state.source = "allow_list";
         if (state.prompt) state.prompt.decisionSource = "allow_list";
-        return coordinator.decideAsHost(id, true);
+        return coordinator.decideAsHost(id, true, undefined, false);
       } catch { return false; }
       finally { if (waiting.get(id) === state) state.claimed = false; }
     },

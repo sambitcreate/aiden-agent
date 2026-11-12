@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { ApprovalAnalytics } from "./approval-gate/approval-analytics.js";
 import type { ToolApprovalDetails } from "../../renderer/shared/assistant.js";
 import type { ToolApprovalPreview } from "../../renderer/shared/tool-approval-preview.js";
 import {
@@ -26,6 +27,7 @@ export interface ToolApprovalPrompt {
 }
 
 interface PendingApproval {
+  approvalId: string;
   streamId: string;
   toolCallId: string;
   ownerDocumentId?: string;
@@ -139,6 +141,8 @@ export class ToolApprovalCoordinator {
      * detached first: nobody saw it, and the model is told it is unavailable.
      */
     private readonly onShortCircuited?: (prompt: ToolApprovalPrompt) => void,
+    /** Counts the cards shown and the person's answers (enums only). */
+    private readonly analytics?: ApprovalAnalytics,
   ) {}
 
   private shortCircuited(prompt: ToolApprovalPrompt): void {
@@ -238,6 +242,7 @@ export class ToolApprovalCoordinator {
         const priorPhase = phase;
         phase = "settled";
         this.pending.delete(approvalId);
+        this.analytics?.forget(approvalId);
         if (effect !== undefined) {
           const streamShared = this.shared.get(descriptor.streamId);
           if (streamShared?.get(effect)?.entry === entry) {
@@ -256,6 +261,7 @@ export class ToolApprovalCoordinator {
         resolve(outcome);
       };
       entry = {
+        approvalId,
         streamId: descriptor.streamId,
         toolCallId: descriptor.toolCallId,
         ownerDocumentId,
@@ -295,7 +301,10 @@ export class ToolApprovalCoordinator {
       // Reaching here means this prompt was shown, so it owns the id from now on.
       // A replacement that was never shown leaves the enclosing prompt to withdraw.
       if (enclosing) enclosing.replaced = true;
-      if (settledWhilePublishing === undefined) phase = "published";
+      if (settledWhilePublishing === undefined) {
+        phase = "published";
+        this.analytics?.shown({ ...descriptor, approvalId });
+      }
       // Withdrawal goes by id, so a same-id replacement asked during publication
       // owns the id from then on, even if it has already settled and withdrawn.
       else if (!publication.replaced) withdrawPrompt(settledWhilePublishing);
@@ -316,7 +325,7 @@ export class ToolApprovalCoordinator {
   ): boolean {
     const entry = this.pending.get(approvalId);
     if (!entry || entry.ownerDocumentId !== ownerDocumentId) return false;
-    return this.settleDecision(entry, allowed, payload);
+    return this.settleDecision(entry, allowed, payload, true);
   }
 
   /**
@@ -328,17 +337,21 @@ export class ToolApprovalCoordinator {
     approvalId: string,
     allowed: boolean,
     payload?: ToolApprovalDecisionPayload,
+    /** False when the host answered on its own (an expiry, an allow list). */
+    byPerson = true,
   ): boolean {
     const entry = this.pending.get(approvalId);
     if (!entry) return false;
-    return this.settleDecision(entry, allowed, payload);
+    return this.settleDecision(entry, allowed, payload, byPerson);
   }
 
   private settleDecision(
     entry: PendingApproval,
     allowed: boolean,
-    payload?: ToolApprovalDecisionPayload,
+    payload: ToolApprovalDecisionPayload | undefined,
+    byPerson: boolean,
   ): boolean {
+    let answeredScope: ToolApprovalScope | undefined;
     if (payload) {
       const { scope: requestedScope, ...rest } = payload;
       const scope = parseToolApprovalScope(requestedScope);
@@ -347,6 +360,7 @@ export class ToolApprovalCoordinator {
         allowed && scope && scope !== "once" && entry.scopes.includes(scope)
           ? { ...rest, scope }
           : rest;
+      answeredScope = effective.scope;
       if (Object.keys(effective).length > 0) {
         // Calls sharing this card get the same answer, scope included.
         for (const toolCallId of [entry.toolCallId, ...entry.followers]) {
@@ -354,6 +368,7 @@ export class ToolApprovalCoordinator {
         }
       }
     }
+    if (byPerson) this.analytics?.answered(entry.approvalId, allowed, answeredScope);
     entry.settle(allowed ? "allowed" : "denied");
     return true;
   }
