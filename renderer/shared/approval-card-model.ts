@@ -424,6 +424,7 @@ export function buildApprovalCard(input: ApprovalCardInput): ApprovalCard {
       // The change itself is what the person allows: a diff the host had to
       // cut short, or one that does not fit, can only be allowed on the Mac.
       body = text(requireText(write.diffPreview, "Diff preview"), "command");
+      if (!write.diffPreview.trim()) complete = false;
       if (write.diffTruncated !== false) complete = false;
       break;
     }
@@ -433,6 +434,8 @@ export function buildApprovalCard(input: ApprovalCardInput): ApprovalCard {
         { key: "effect", value: mutation.destructive }, { key: "changes", value: mutation.classification === "declared_mutating" ? "declared" : "not proven read-only" });
       allowLabel = subagentMcpMutationAllowLabel(mutation);
       body = text(requireText(mutation.canonicalArguments, "Tool arguments"), "command");
+      // Arguments that show nothing can't be reviewed here.
+      if (!mutation.canonicalArguments.trim()) complete = false;
       break;
     }
     case "subagent-run-grant": {

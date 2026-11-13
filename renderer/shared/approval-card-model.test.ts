@@ -180,6 +180,9 @@ test("a sub-agent's file change shows its diff, and is allowable only when the w
 
   const oversize = buildApprovalCard({ toolName: "write_file", summary: "Edit docs/notes.md", canAllow: true, details: subagentWrite(`+${"x".repeat(APPROVAL_CARD_LIMITS.body)}`, false) });
   assert.equal(approvalCardAllows(oversize), false, "a diff that does not fit the card is allowed on the Mac");
+
+  const blank = buildApprovalCard({ toolName: "write_file", summary: "Edit docs/notes.md", canAllow: true, details: subagentWrite(" ", false) });
+  assert.equal(approvalCardAllows(blank), false, "a blank diff shows nothing to allow");
 });
 
 test("a sub-agent's connector call shows its arguments, and is allowable only when they fit", () => {
@@ -210,6 +213,12 @@ test("a sub-agent's connector call shows its arguments, and is allowable only wh
 
   const oversize = buildApprovalCard({ toolName: "mcp", summary: "Call linear:create_issue", canAllow: true, details: mutation(`"${"x".repeat(APPROVAL_CARD_LIMITS.body)}"`) });
   assert.equal(approvalCardAllows(oversize), false);
+
+  for (const blank of ["", "  \n "]) {
+    const empty = buildApprovalCard({ toolName: "mcp", summary: "Call linear:create_issue", canAllow: true, details: mutation(blank) });
+    assert.equal(approvalCardAllows(empty), false, "arguments that show nothing are allowed on the Mac");
+    assert.equal(empty.allowOnMac, "Allow it on your Mac.");
+  }
 });
 
 test("a sub-agent's run-wide grant is given on the Mac only, whatever it reaches", () => {
