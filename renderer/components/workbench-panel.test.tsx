@@ -198,6 +198,32 @@ test("Open tabs lists every tab and selects the one chosen", async () => {
   assert.equal(selected("Pinned"), "true");
 });
 
+test("the strip scrolls a selected tab past either edge back into view", () => {
+  // jsdom has no layout: the strip shows 0–200 and each tab sits 120px after the last.
+  const original = HTMLElement.prototype.getBoundingClientRect;
+  HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+    const list = this.closest('[role="tablist"]') as HTMLElement | null;
+    if (this.getAttribute("role") === "tablist") return DOMRect.fromRect({ x: 0, width: 200, height: 32 });
+    if (list && this.parentElement === list) {
+      const index = Array.from(list.children).indexOf(this);
+      return DOMRect.fromRect({ x: index * 120 - list.scrollLeft, width: 100, height: 32 });
+    }
+    return original.call(this);
+  };
+  try {
+    renderWithCommands(<StripHarness events={[]} />);
+    const list = screen.getByRole("tablist", { name: "Test views" });
+    assert.equal(list.scrollLeft, 0, "the first tab already shows");
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Notes" }), { key: "End" });
+    // Pinned spans 240–340: its right edge lines up with the strip's.
+    assert.equal(list.scrollLeft, 140);
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Pinned" }), { key: "Home" });
+    assert.equal(list.scrollLeft, 0);
+  } finally {
+    HTMLElement.prototype.getBoundingClientRect = original;
+  }
+});
+
 test("Close panel names the panel toggle shortcut", async () => {
   renderWithCommands(<StripHarness events={[]} />);
   const close = screen.getByRole("button", { name: "Close test panel" });

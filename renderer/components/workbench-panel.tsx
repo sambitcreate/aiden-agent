@@ -107,14 +107,27 @@ export function WorkbenchTabStrip<T extends WorkbenchTab>({
   const toggleShortcutBinding = useShortcutBinding("environment.toggle");
   const tabMenuSelectionRef = React.useRef(false);
   const headerRef = React.useRef<HTMLElement>(null);
+  const listRef = React.useRef<HTMLDivElement>(null);
   const trailingClearance = useTrailingWindowControlsClearance(headerRef);
+  const selectedId = tabs.find((entry) => entry.selected)?.id;
+  // The strip scrolls when its tabs outgrow the panel: keep the selected one in view, so a
+  // tab opened by a link or restored at launch is never hidden past the edge.
+  React.useLayoutEffect(() => {
+    const list = listRef.current;
+    const tab = activeTabRef.current?.closest<HTMLElement>('[role="tablist"] > *');
+    if (!list || !tab || selectedId === undefined) return;
+    const listBox = list.getBoundingClientRect();
+    const tabBox = tab.getBoundingClientRect();
+    if (tabBox.left < listBox.left) list.scrollLeft -= listBox.left - tabBox.left;
+    else if (tabBox.right > listBox.right) list.scrollLeft += tabBox.right - listBox.right;
+  }, [activeTabRef, selectedId, tabs.length]);
   return (
     <header
       ref={headerRef}
       className="drag-region flex h-13 shrink-0 items-center gap-1 border-b border-separator px-2"
       style={trailingClearance ? { paddingRight: trailingClearance + 4 } : undefined}
     >
-      <div className="no-drag flex min-w-0 flex-1 gap-1 overflow-x-auto py-1" role="tablist" aria-label={tabListLabel}>
+      <div ref={listRef} className="no-drag flex min-w-0 flex-1 gap-1 overflow-x-auto py-1" role="tablist" aria-label={tabListLabel}>
         {tabs.map((entry, index) => {
           const Icon = entry.icon;
           const closable = entry.closable !== false;

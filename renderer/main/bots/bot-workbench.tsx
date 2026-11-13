@@ -281,8 +281,8 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
         tabs={tabs}
         idPrefix={BOT_PANEL_ID}
         tabListLabel="Bot panel views"
-        // Five tabs always fit; with Browser or Computer shown, the list reveals any that scroll away.
-        tabMenu={shownTabs.length > 5}
+        // Four tabs fit the narrowest panel; past that, the list reveals any that scroll away.
+        tabMenu={shownTabs.length > 4}
         onSelectTab={(entry) => {
           const next = entry.viewId as BotPanelTab;
           // The person switching to Computer starts a stopped computer; a tab restored at launch never does.

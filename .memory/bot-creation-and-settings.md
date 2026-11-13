@@ -9,6 +9,7 @@ Branch `claude/aiden-bot-ux-simplify-cdd73d`, Phase 5 of `docs/plans/bot-ux-simp
 - `update_bot`: `main/services/bot-settings-changes/` (tool, service, service-main). Allowed: name, description, look, instructions, selfWakeUps, interruptions, model. Applied in an owner-started turn (receipt + CAS Undo → Restored), held otherwise (Needs-you card Apply/Edit/Dismiss). Phones drop the `settings_change` entry (remote projection default branch).
 
 ## Settings in the side panel
+- Five fixed tabs outgrow the 440px panel: the Bot panel shows the "Open tabs" list past four tabs, and `WorkbenchTabStrip` scrolls the selected tab into view (shared with the workspace panel).
 - `bot-advanced.tsx` `BotAdvancedTab` is the workbench's last tab (`BOT_PANEL_TABS` in `bot-panel-context.tsx` ends with "advanced"). `panel.show("advanced", { botId, section })` with section `instructions | quiet-hours | model` → `sectionRequest`, dropped when the routed Bot changes.
 - Header: look popover ("{name}’s look": `BotLookPicker`, Default look, Choose/Remove photo) and the name button "Rename {name}" → Input "Name".
 - Groups: Notifications (dailyLimit 0 ⇔ off; `lastDailyLimit` restores), Open work, Memory, Model (+ Routine models row → Routines tab, Health), Computer, Permissions (selfWakeUps; messaging via `botMessagingSwitchOn/Patch` in `bot-messaging-fields.tsx`; Approved Bot pairs → `BotPeerManagerDialog`; Approvals row), Replies (Telegram), Instructions dialog, How other Bots see it, Tools, Spending, Clear.

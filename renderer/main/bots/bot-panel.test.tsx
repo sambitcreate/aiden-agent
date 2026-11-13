@@ -641,7 +641,8 @@ test("the panel toggle opens the Bot panel with only Bot tabs, focused on the se
   );
   assert.equal(within(botPanel()).queryByRole("button", { name: /^Close .+ tab$/u }), null, "Bot tabs are fixed");
   assert.equal(within(botPanel()).queryByRole("button", { name: "New workspace tab" }), null);
-  assert.equal(within(botPanel()).queryByRole("button", { name: "Open tabs" }) === null, true, "five fixed tabs need no list");
+  // Five tabs outgrow the narrowest panel, so the list reaches any that scroll away.
+  assert.ok(within(botPanel()).getByRole("button", { name: "Open tabs" }));
   await waitFor(() => assert.equal(document.activeElement === panelTab("Activity"), true));
   assert.equal(
     shouldRestoreEnvironmentFocus(document.activeElement, "tools"),
