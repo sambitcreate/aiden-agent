@@ -514,8 +514,8 @@ struct AidenBotSessionChatView: View {
                         }
                         if let approval = model.approval {
                             approvalCard(approval, model: model)
-                        } else if let answered = model.approvalAnsweredLine {
-                            AidenApprovalAnsweredLine(text: answered)
+                        } else if let answered = model.approvalAnsweredButton {
+                            AidenApprovalAnsweredLine(button: answered)
                         }
                         AidenBotStatusLineView(model: model)
                     }

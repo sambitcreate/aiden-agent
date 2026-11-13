@@ -628,12 +628,16 @@ extension AidenChatViewModel {
             guard coordinator.isLive(context) else { return }
             if result.decision == decision {
                 coordinator.haptics.play(.selection, scope: hapticScope, dedupeKey: "approval-response:\(approval.id):\(decision.rawValue)")
+            } else {
+                retractApprovalAnsweredLine()
             }
         } catch let error where aidenIsCancellation(error) {
+            retractApprovalAnsweredLine()
             return
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard coordinator.isLive(context) else { return }
+            retractApprovalAnsweredLine()
             foreignRun?.answerUnconfirmed(approval.id)
             if let loser = AidenForeignRunResolution.loser(from: error) {
                 showForeignRunNotice(loser.notice)

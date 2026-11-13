@@ -19,6 +19,11 @@ struct AidenTypedApprovalCard: View {
     var sendableScopes: Set<AidenApprovalScope> = [.once]
     /// What to show instead of the buttons when `canRespond` is false.
     var readOnlyNote: String = "Answer this on your machine."
+    /// False when this phone may deny but not allow (a scheduled task without
+    /// schedule write access): only Deny shows, with `limitNote` beneath it.
+    var allowsHere: Bool = true
+    /// Why the allow buttons are missing when `allowsHere` is false.
+    var limitNote: String?
     let onAnswer: (AidenApprovalCardButton) -> Void
 
     private let shape = RoundedRectangle(cornerRadius: 24, style: .continuous)
@@ -98,7 +103,14 @@ struct AidenTypedApprovalCard: View {
 
             if canRespond {
                 buttons.padding(.top, 16)
-                if let allowOnMac = card.allowOnMac {
+                if !allowsHere, let limitNote {
+                    Label(limitNote, systemImage: "lock")
+                        .font(.footnote)
+                        .foregroundStyle(palette.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 10)
+                        .accessibilityIdentifier("aiden.approval-limit")
+                } else if let allowOnMac = card.allowOnMac {
                     Label(allowOnMac, systemImage: "desktopcomputer")
                         .font(.footnote)
                         .foregroundStyle(palette.secondary)
@@ -153,7 +165,7 @@ struct AidenTypedApprovalCard: View {
     }
 
     private var buttons: some View {
-        let allows = card.allowButtons(sendable: sendableScopes)
+        let allows = allowsHere ? card.allowButtons(sendable: sendableScopes) : []
         return HStack(spacing: 10) {
             Button { onAnswer(card.denyButton) } label: {
                 Text(card.denyButton.label)
@@ -225,14 +237,14 @@ struct AidenTypedApprovalCard: View {
     }
 }
 
-/// The line a typed card leaves after a tap ("Allowed once"), shown before the
-/// Mac confirms and taken back if it refuses.
+/// The line a typed card leaves after a tap ("Allowed once", "Denied"), shown
+/// before the Mac confirms and taken back if the answer doesn't land.
 struct AidenApprovalAnsweredLine: View {
     @Environment(\.aidenPalette) private var palette
-    let text: String
+    let button: AidenApprovalCardButton
 
     var body: some View {
-        Label(text, systemImage: "checkmark.circle")
+        Label(button.answered, systemImage: button.decision == .deny ? "xmark.circle" : "checkmark.circle")
             .font(.footnote)
             .foregroundStyle(palette.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)

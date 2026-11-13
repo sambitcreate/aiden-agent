@@ -240,16 +240,24 @@ struct AidenLiveResponseView: View {
                 // Revision 61: the Mac's own card, answered with exactly its buttons.
                 AidenTypedApprovalCard(
                     card: card,
-                    canRespond: approval.canRespond && approval.hasRequiredWriteCapability,
+                    canRespond: approval.canRespond,
                     sendableScopes: Set(approval.scopes),
+                    // Deny still goes from here; only an allow needs schedule write.
+                    allowsHere: approval.hasRequiredWriteCapability,
+                    limitNote: AidenApprovalPresentation.limit(
+                        kind: approval.kind,
+                        canRespond: approval.canRespond,
+                        hasRequiredWriteCapability: approval.hasRequiredWriteCapability,
+                        canAllow: card.canAllow
+                    )?.text,
                     onAnswer: { button in
                         Task { await model.respondToApproval(button: button, approvalID: approval.id) }
                     }
                 )
                 .disabled(!model.isConnected || model.isReadOnlyPresentation || model.isRespondingToApproval || model.isStopping)
                 .id(approval.id)
-            } else if model.pendingApproval == nil, let answered = model.approvalAnsweredLine {
-                AidenApprovalAnsweredLine(text: answered)
+            } else if model.pendingApproval == nil, let answered = model.approvalAnsweredButton {
+                AidenApprovalAnsweredLine(button: answered)
                     .transition(.opacity)
             } else if let approval = model.pendingApproval {
                 AidenApprovalCard(

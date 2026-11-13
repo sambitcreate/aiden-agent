@@ -1378,9 +1378,9 @@ final class AidenBotSessionModel {
     @ObservationIgnored private var retainedQuestion: (waitId: String, request: AidenQuestionRespondRequest, key: UUID)?
     var allowedSupported = false
     var approvalSuccessNotice: String?
-    /// Revision 61: the tapped button's `answered` line, shown at once in the
-    /// card's place and cleared if the Mac refuses the answer.
-    private(set) var approvalAnsweredLine: String?
+    /// Revision 61: the tapped button, whose `answered` line shows at once in
+    /// the card's place and goes if the answer doesn't land.
+    private(set) var approvalAnsweredButton: AidenApprovalCardButton?
     /// Revision 61: the Bot UX cards (settings changes, suggestions, lessons,
     /// tidy-ups) with an answer on its way, by entry id.
     private(set) var respondingBotUX: Set<String> = []
@@ -1814,7 +1814,7 @@ final class AidenBotSessionModel {
                 // entries leave it alone; the host clears it with `partial ""`.
                 if case let .message(message) = entry, message.role == .assistant {
                     partial = nil
-                    approvalAnsweredLine = nil
+                    approvalAnsweredButton = nil
                 }
             }
             storeTranscript()
@@ -1830,11 +1830,11 @@ final class AidenBotSessionModel {
             retainedApprovalKeys = retainedApprovalKeys.filter { next != nil && $0.key.hasPrefix("\(next!.waitId):") }
             approvalSuccessNotice = nil
             approval = next
-            if next != nil { approvalAnsweredLine = nil }
+            if next != nil { approvalAnsweredButton = nil }
             approvalWrites += 1
         case let .activity(next):
             activity = next
-            if next == nil { approvalAnsweredLine = nil }
+            if next == nil { approvalAnsweredButton = nil }
             // The Mac's own word now stands for a Stop or Resume it has heard,
             // and a new run (another `startedAt`, or a first activity after a Stop
             // pressed before any) has nothing to stop.
@@ -1967,7 +1967,7 @@ final class AidenBotSessionModel {
         stateView = view
         stateWrites += 1
         // A finished or interrupted turn retires the last approval's answered line.
-        if let view, view.state != .running { approvalAnsweredLine = nil }
+        if let view, view.state != .running { approvalAnsweredButton = nil }
         if view?.state != .running {
             stopIntent = .none
             resumeIntent = .none
@@ -2397,7 +2397,7 @@ final class AidenBotSessionModel {
             guard let button = card.buttons.first(where: {
                 $0.decision == decision && ($0.decision == .deny || $0.offeredScope == (scope ?? .once))
             }), button.decision == .deny || sendableScopes(for: current).contains(button.offeredScope) else { return }
-            await sendApprovalAnswer(current, decision: decision, scope: button.requestScope, answered: button.answered)
+            await sendApprovalAnswer(current, decision: decision, scope: button.requestScope, answered: button)
             return
         }
         if decision == .allow && !current.canAllow { return }
@@ -2423,7 +2423,7 @@ final class AidenBotSessionModel {
         _ current: AidenRemoteBotApproval,
         decision: AidenApprovalDecision,
         scope chosenScope: AidenApprovalScope?,
-        answered: String?
+        answered: AidenApprovalCardButton?
     ) async {
         let action = "\(current.waitId):\(decision.rawValue):\(chosenScope?.rawValue ?? "once")"
         let key = retainedApprovalKeys[action] ?? UUID()
@@ -2432,7 +2432,7 @@ final class AidenBotSessionModel {
         let generation = approvalGeneration
         approvalSuccessNotice = nil
         approval = nil
-        approvalAnsweredLine = answered
+        approvalAnsweredButton = answered
         inFlight.insert(.answerApproval)
         defer { if generation == approvalGeneration { inFlight.remove(.answerApproval) } }
         do {
@@ -2445,10 +2445,11 @@ final class AidenBotSessionModel {
         } catch {
             guard generation == approvalGeneration, !released else { return }
             if !aidenBotSessionFailureIsAmbiguous(error) { retainedApprovalKeys[action] = nil }
+            // Nothing the phone sent landed, so the answered line goes either way.
+            approvalAnsweredButton = nil
             if case let AidenRemoteClientError.server(_, body) = error,
                ["approval_expired", "approval_already_resolved"].contains(body.code.rawValue) { return }
             if approvalWrites == mark { approval = current }
-            approvalAnsweredLine = nil
             if error is CancellationError { return }
             errorMessage = "That answer wasn’t sent. Please try again."
         }
@@ -2790,7 +2791,7 @@ final class AidenBotSessionModel {
         pendingAttachments = []
         for attachment in attachments { attachmentImages[attachment.id] = nil }
         // A new turn retires the last approval's answered line.
-        approvalAnsweredLine = nil
+        approvalAnsweredButton = nil
         await runFlush()
         return true
     }

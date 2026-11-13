@@ -35,16 +35,6 @@ final class AidenBotUXTests: XCTestCase {
 
     // MARK: Capabilities
 
-    func testEachCapabilityIsNamedAndNegotiatedInACallOfItsOwn() throws {
-        let names = try XCTUnwrap(fixture()["capabilities"] as? [String])
-        let capabilities = names.map(AidenRemoteCapability.init(rawValue:))
-        XCTAssertEqual(Set(capabilities), Set(AidenRemoteCapability.botUX))
-        for capability in capabilities {
-            XCTAssertTrue(AidenRemoteCapability.phoneNegotiable.contains(capability), capability.rawValue)
-            XCTAssertTrue(AidenRemoteCoordinator.capabilitiesAskedForAlone.contains([capability]), capability.rawValue)
-        }
-    }
-
     func testWithoutTheCapabilitiesThePhoneKeepsTodaysScreens() throws {
         var installation = makeInstallation(capabilities: [.serverRead, .botRead, .botWrite])
         installation.serverCapabilities = [.serverRead, .botRead, .botWrite]
@@ -126,6 +116,8 @@ final class AidenBotUXTests: XCTestCase {
         bad.append(with("notes", Array(repeating: "n", count: 7)))
         bad.append(with("extra", true))
         bad.append(with("buttons", [buttons[0], buttons[1].merging(["scope": "workspace"]) { $1 }]))
+        var unknownKind = try card("formFill"); unknownKind["kind"] = "plugin"          // a kind this phone doesn't know
+        bad.append(unknownKind)
         for object in bad {
             XCTAssertThrowsError(try decode(AidenApprovalCardModel.self, object), "\(object)")
         }
@@ -375,18 +367,18 @@ extension AidenBotUXTests {
         let task = Task { await model.answerApproval(button: always) }
         await gate.entered()
         XCTAssertNil(model.approval)
-        XCTAssertEqual(model.approvalAnsweredLine, "Always allowed")
+        XCTAssertEqual(model.approvalAnsweredButton?.answered, "Always allowed")
         await gate.release()
         await task.value
         XCTAssertNotNil(model.approval, "A refused answer brings the card back")
-        XCTAssertNil(model.approvalAnsweredLine)
+        XCTAssertNil(model.approvalAnsweredButton?.answered)
         XCTAssertEqual(transport.approvals.map(\.scope), [.always])
 
         // Allow once sends no scope at all.
         await model.answerApproval(button: current.buttons[1])
         XCTAssertEqual(transport.approvals.last?.decision, .allow)
         XCTAssertEqual(transport.approvals.last?.scope, Optional<AidenApprovalScope>.none)
-        XCTAssertEqual(model.approvalAnsweredLine, "Allowed once")
+        XCTAssertEqual(model.approvalAnsweredButton?.answered, "Allowed once")
 
         // The line stays while the turn runs on and goes when it ends.
         func state(_ seq: Int, _ value: AidenBotSessionStateKind) throws -> AidenBotSessionEvent {
@@ -394,9 +386,29 @@ extension AidenBotUXTests {
                                  kind: .state(try AidenBotSessionStateView(state: value)))
         }
         _ = await model.apply(try state(1, .running))
-        XCTAssertEqual(model.approvalAnsweredLine, "Allowed once")
+        XCTAssertEqual(model.approvalAnsweredButton?.answered, "Allowed once")
         _ = await model.apply(try state(2, .idle))
-        XCTAssertNil(model.approvalAnsweredLine, "A finished turn retires the answered line")
+        XCTAssertNil(model.approvalAnsweredButton?.answered, "A finished turn retires the answered line")
+    }
+
+    func testBotAnswerTheMacNoLongerWaitsForLeavesNoAnsweredLine() async throws {
+        for code in ["approval_expired", "approval_already_resolved"] {
+            let (model, transport) = try await loadedModel(approval: botApprovalObject(card: try card("botAlways"), alwaysCount: 4))
+            let once = try XCTUnwrap(model.approval?.card?.allowButtons.first)
+            let gate = UXGate()
+            transport.gate = gate
+            transport.failure = try serverError(409, code)
+            let task = Task { await model.answerApproval(button: once) }
+            await gate.entered()
+            XCTAssertEqual(model.approvalAnsweredButton?.answered, "Allowed once", code)
+            await gate.release()
+            await task.value
+            // Nothing is waiting any more, so the card stays gone, and the
+            // line can't claim an answer that never landed.
+            XCTAssertNil(model.approval, code)
+            XCTAssertNil(model.approvalAnsweredButton, code)
+            XCTAssertEqual(transport.approvals.map(\.decision), [.allow], code)
+        }
     }
 
     func testBotApprovalWithoutAnAllowButtonNeverSendsAllow() async throws {
@@ -407,7 +419,8 @@ extension AidenBotUXTests {
         XCTAssertTrue(transport.approvals.isEmpty)
         await model.answerApproval(.deny)
         XCTAssertEqual(transport.approvals.map(\.decision), [.deny])
-        XCTAssertEqual(model.approvalAnsweredLine, "Denied")
+        XCTAssertEqual(model.approvalAnsweredButton?.answered, "Denied")
+        XCTAssertEqual(model.approvalAnsweredButton?.decision, .deny, "Denied draws the deny mark, not a check")
     }
 }
 

@@ -295,7 +295,7 @@ final class AidenChatViewModel {
             let isActive = streamState.map { !$0.isTerminal } ?? false
             guard wasActive != isActive else { return }
             // A run starting or ending retires the last approval's answered line.
-            approvalAnsweredLine = nil
+            approvalAnsweredButton = nil
             if !isActive { runInputMode = .queue }
             if reportsChanges { onChatActivityChanged(chat.id, isActive ? .active : .idle) }
         }
@@ -360,10 +360,11 @@ final class AidenChatViewModel {
     private(set) var isRenaming = false
     var pendingApproval: AidenPendingApproval? {
         // A card back on screen (a refusal, or the next request) replaces the answered line.
-        didSet { if pendingApproval != nil { approvalAnsweredLine = nil } }
+        didSet { if pendingApproval != nil { approvalAnsweredButton = nil } }
     }
-    /// Revision 61: the tapped button's `answered` line, shown at once in the card's place.
-    private(set) var approvalAnsweredLine: String?
+    /// Revision 61: the tapped button, whose `answered` line shows at once in
+    /// the card's place until the Mac confirms or the answer fails.
+    private(set) var approvalAnsweredButton: AidenApprovalCardButton?
     private var questionSnapshotGeneration: UInt64 = 0
     var pendingQuestion: AidenPendingQuestion?
     var isRespondingToQuestion = false
@@ -2727,10 +2728,15 @@ final class AidenChatViewModel {
         guard let approval = pendingApproval, approval.id == approvalID,
               let card = approval.card, card.buttons.contains(button),
               button.decision == .deny || button.offeredScope == .once || approval.scopes.contains(button.offeredScope) else { return }
-        let line = button.answered
         await respondToApproval(button.decision, approvalID: approvalID, scope: button.offeredScope) {
-            self.approvalAnsweredLine = line
+            self.approvalAnsweredButton = button
         }
+    }
+
+    /// An answer the Mac didn't confirm takes its answered line back; a card
+    /// the refresh restores would replace it anyway.
+    func retractApprovalAnsweredLine() {
+        approvalAnsweredButton = nil
     }
 
     func respondToApproval(
@@ -2789,6 +2795,7 @@ final class AidenChatViewModel {
                   streamState?.isTerminal != true else { return }
             guard response.approvalId == approval.id, response.decision == decision else {
                 presentedError = String(localized: "The approval response was not confirmed. Refreshing the current request from your machine.")
+                retractApprovalAnsweredLine()
                 if pendingApproval == nil {
                     await restorePendingApproval(streamID: streamID, context: context, isFallback: true)
                 }
@@ -2800,6 +2807,7 @@ final class AidenChatViewModel {
                   streamState?.isTerminal != true else { return }
             // The decision may already have reached the Mac. Resolve current
             // authority without resurrecting the captured card or showing an error.
+            retractApprovalAnsweredLine()
             if pendingApproval == nil {
                 await restorePendingApproval(streamID: streamID, context: context, isFallback: true)
             }
@@ -2808,6 +2816,7 @@ final class AidenChatViewModel {
             guard !isRemoved, coordinator.isLive(context), activeStreamID == streamID,
                   streamState?.isTerminal != true else { return }
             presentedError = String(localized: "The approval response was not confirmed. Refreshing the current request from your machine.")
+            retractApprovalAnsweredLine()
             if pendingApproval == nil {
                 await restorePendingApproval(streamID: streamID, context: context, isFallback: true)
             }
