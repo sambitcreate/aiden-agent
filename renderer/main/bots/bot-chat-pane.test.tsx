@@ -563,6 +563,25 @@ test("a Bot over its monthly spending limit sends nothing until Allow more", asy
   await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:send").length, 1));
 });
 
+test("the status slot shows one card: a spent limit outranks the person's pause, and a model problem outranks both", async () => {
+  const month = { ownerKind: "bot", ownerId: "bot-1", period: "month", limitUsd: 20, extraUsd: 0 } as const;
+  let state: BotLiveSnapshot["state"] = { kind: "paused", since: 1_000, by: "mac" };
+  await mountChat({
+    "bots:live:subscribe": () => snapshot({ state }),
+    "spending:status": () => ({ ...month, spentUsd: 20.4, state: "reached" }),
+  });
+  await screen.findByRole("button", { name: "Allow $20.00 more" });
+  assert.equal(screen.queryByRole("group", { name: /paused/u }), null, "the pause card waits behind the limit");
+  cleanup();
+  state = { kind: "model_error", message: "Sign in to Text Service again." };
+  await mountChat({
+    "bots:live:subscribe": () => snapshot({ state }),
+    "spending:status": () => ({ ...month, spentUsd: 20.4, state: "reached" }),
+  });
+  await screen.findByRole("alert", { name: "Planner can’t reach its AI model" });
+  assert.equal(screen.queryByRole("button", { name: "Allow $20.00 more" }), null);
+});
+
 test("a Bot at its monthly limit can send again once its month starts over, without Allow more", async () => {
   const month = { ownerKind: "bot", ownerId: "bot-1", period: "month", limitUsd: 20, extraUsd: 0 } as const;
   const periodEnd = Date.now() + 300;

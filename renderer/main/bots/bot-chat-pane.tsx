@@ -77,6 +77,7 @@ import { BOT_UNAVAILABLE_LABEL, type BotSessionState } from "./bot-session-state
 import { botRoutinesKey } from "./bot-routines";
 import { WakeUpChip } from "../../components/bots/wake-up-chip";
 import { ReceiptLine } from "../../components/bots/receipt-line";
+import { pickBotStatus } from "./bot-status-slot";
 import { FoldedSuggestion } from "../../components/bots/suggestion-card";
 import { useConnectionSetup } from "./use-connection-setup";
 import { useChatFind } from "../../components/chat-find-bar";
@@ -1733,21 +1734,19 @@ export function BotChatPane({ botId }: { botId: string }) {
   // A question waits, but another item is on show: the composer points at it.
   const questionElsewhere = question !== null && !askingQuestion;
 
+  const status = pickBotStatus({
+    model_error: state?.kind === "model_error",
+    spending_reached: spending.status?.state === "reached",
+    paused: state?.kind === "paused",
+    saved_resume: savedResumes.rows.length > 0,
+    interrupted: state?.kind === "interrupted" && hiddenInterruptedSubmission !== state.submissionId && !startingTurn,
+    usage_limit: running && usageLimitWait !== null && usageLimitWait !== undefined,
+    spending_nearing: spending.status?.state === "nearing",
+    plan: plan !== null && plan !== undefined && !pendingPlan,
+  });
+
   const footer = (
     <div className="flex flex-col">
-      {plan && !pendingPlan ? (
-        <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-2">
-          <PlanCard
-            plan={plan}
-            botName={current.name}
-            avatar={current.avatar}
-            onRespond={async (decision) => {
-              const { result } = await botsApi.respondPlan({ botId: current.id, planId: plan.planId, decision });
-              if (result === "not_waiting") throw new Error("That plan was already answered or closed.");
-            }}
-          />
-        </div>
-      ) : null}
       {slot.count > 0 || approvalStatus.status ? (
         <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-2" data-needs-you-slot>
           <NeedsYouHeader slot={slot} />
@@ -1914,7 +1913,8 @@ export function BotChatPane({ botId }: { botId: string }) {
       {statusActivity ? (
         <BotStatusLine activity={statusActivity} wording={chatActivity.wording} onLayoutChange={setStatusLayout} />
       ) : null}
-      {running && usageLimitWait ? (
+      {/* The one status slot (§4.7): only the most important status card shows. */}
+      {status === "usage_limit" && usageLimitWait ? (
         <BotUsageLimitCard
           name={current.name}
           wait={usageLimitWait}
@@ -1922,7 +1922,7 @@ export function BotChatPane({ botId }: { botId: string }) {
           onRetryNow={() => void retryUsageLimitNow("bot", botId)}
         />
       ) : null}
-      {spending.status ? (
+      {(status === "spending_reached" || status === "spending_nearing") && spending.status ? (
         <SpendingLimitNotice
           status={spending.status}
           name={current.name}
@@ -1930,19 +1930,31 @@ export function BotChatPane({ botId }: { botId: string }) {
           onAllowMore={() => void spending.allowMore()}
         />
       ) : null}
-      {state?.kind === "paused" ? <BotPausedCard bot={current} /> : null}
+      {status === "paused" ? <BotPausedCard bot={current} /> : null}
       {savedResumes.error && <Text as="p" variant="small" role="alert" className="px-4 py-3">{savedResumes.error}</Text>}
-      {savedResumes.rows.length > 0 && <div className="space-y-2 px-4 py-3">
+      {/* A saved Resume belongs to the interrupted turn, so it shows with that card too. */}
+      {(status === "saved_resume" || (status === "interrupted" && savedResumes.rows.length > 0)) && <div className="space-y-2 px-4 py-3">
         <Text as="p" variant="small" color="secondary" role="status">A saved Resume request is awaiting confirmation. Retry keeps its original request and cost acknowledgement.</Text>
         {savedResumes.rows.map((attempt) => <Button key={attempt.requestId} size="small" disabled={resumeSending} onClick={() => void performResume(attempt, true)}>Retry saved Resume</Button>)}
       </div>}
+      {status === "plan" && plan ? (
+        <PlanCard
+          plan={plan}
+          botName={current.name}
+          avatar={current.avatar}
+          onRespond={async (decision) => {
+            const { result } = await botsApi.respondPlan({ botId: current.id, planId: plan.planId, decision });
+            if (result === "not_waiting") throw new Error("That plan was already answered or closed.");
+          }}
+        />
+      ) : null}
       <AlertDialog open={costConsent !== null} onOpenChange={(open) => { if (!open) setCostConsent(null); }} title={`Resume ${current.name} with an unconfirmed charge?`} description={BOT_UNKNOWN_COST_CONFIRMATION} confirmLabel="Resume" onConfirm={() => {
         const consent = costConsent; setCostConsent(null);
         if (consent?.botId === current.id && state?.kind === "interrupted" && consent.submissionId === state.submissionId) void answerInterrupted("resume", true, consent.expectedSubmissionId, consent.expectedCostReceiptId);
       }} />
       {peerExchange?.botId === current.id && <BotPeerExchangeDialog key={`${peerExchange.botId}:${peerExchange.exchangeId}`} botId={current.id} exchangeId={peerExchange.exchangeId} onClose={() => setPeerExchange(null)} />}
       {/* A new message dismisses the interrupted turn, so the card leaves with the send and comes back if it fails. */}
-      {state?.kind === "interrupted" && hiddenInterruptedSubmission !== state.submissionId && !startingTurn ? (
+      {status === "interrupted" && state?.kind === "interrupted" ? (
         <BotInterruptedCard
           name={current.name}
           {...(state.blocked ? { blocked: state.blocked } : {})}
@@ -1952,7 +1964,7 @@ export function BotChatPane({ botId }: { botId: string }) {
           onReviewAccess={openAdvanced}
         />
       ) : null}
-      {state?.kind === "model_error" ? (
+      {status === "model_error" && state?.kind === "model_error" ? (
         <BotModelErrorCard
           name={current.name}
           message={state.message}
