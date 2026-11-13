@@ -87,6 +87,27 @@ const BOT_TAINT_SOURCE_TOOL_NAMES: ReadonlySet<string> = new Set(["computer", "c
 function botBringsOutsideContent(toolName: string): boolean {
   return bringsOutsideContent(toolName) || BOT_TAINT_SOURCE_TOOL_NAMES.has(toolName);
 }
+
+/**
+ * A Bot's own tools whose results never carry outside content: its memory and
+ * notes, its wake-ups, questions and hand-offs to the person, its plans and
+ * access requests, and files in its home (as a workspace's files don't taint).
+ */
+const BOT_NON_TAINTING_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "bot_memory", "bot_recall", "tidy_memory", "routine_notes", "wake_up", "ask_user_question", "hand_off", "sign_in",
+  "propose_plan", "request_access", "read_file", "write_file", "edit_file", "list_files",
+]);
+
+/**
+ * Whether a tool result already in the conversation's history taints it,
+ * judged from the name alone: grants change between turns (a connection
+ * removed, renamed or granted again), so a connector's earlier result must
+ * still count. Anything not known to be harmless counts, a connector's
+ * `<server>__<tool>` name above all.
+ */
+export function botHistoryToolTaints(toolName: string): boolean {
+  return botBringsOutsideContent(toolName) || toolName.includes("__") || !BOT_NON_TAINTING_TOOL_NAMES.has(toolName);
+}
 import type { ApprovalMode } from "../../../renderer/shared/approval-mode.js";
 import { botIngressAllowsTool, botToolApprovalSummary, botToolVerdict, botTurnOf, SUBAGENT_TOOL, type BotToolFacts } from "./bot-tool-policy.js";
 import type { BotToolCall, ToolReplay } from "./tool-adapter.js";
@@ -571,13 +592,10 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
    * brought outside content; this survives a restart. A conversation that
    * can't be read, or a host that can't say, counts as having read it.
    */
-  async function runReadOutside(call: BotToolCallCheck, facts: BotToolFacts): Promise<boolean> {
+  async function runReadOutside(call: BotToolCallCheck): Promise<boolean> {
     if (!call.contextToolNames) return true;
     try {
-      const names = await call.contextToolNames();
-      if (names.length === 0) return false;
-      const mcp = await facts.mcpTools();
-      return names.some((name) => botBringsOutsideContent(name) || mcp.has(name));
+      return (await call.contextToolNames()).some(botHistoryToolTaints);
     } catch {
       return true;
     }
@@ -642,7 +660,7 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
       // an earlier turn, in this process or before a restart, is never judged.
       const ownerStarted = turns.length > 0 && turns.every((turn) => !turn.botMessage && !turn.telegram && !turn.peer && !turn.intro);
       const judging = mode === "auto" && ports.judge !== undefined && ownerStarted &&
-        !taintedRuns.has(run) && !(await runReadOutside(call, facts));
+        !taintedRuns.has(run) && !(await runReadOutside(call));
       const gateContext: GateContext = { surface: "bot", access: "ask", mode, attendance,
         ...(routineGoAhead ? { routineGoAhead } : {}), ...(judging ? { judge: true } : {}) };
       // A built-in rule that only asks (send a message, delete, publish,
@@ -681,7 +699,7 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
        */
       const autoWouldJudge = async (): Promise<boolean> => {
         if (mode !== "ask" || !ports.judge || !ownerStarted || taintedRuns.has(run)) return false;
-        if (await runReadOutside(call, facts)) return false;
+        if (await runReadOutside(call)) return false;
         if ((await call.ownerRequest?.().catch(() => undefined)) === undefined) return false;
         const inAuto = { ...actionFor(judgedRuleWhen(true)), plan: "not-covered" as const, allowList: "no-match" as const };
         const planned = planActionGate({ ...gateContext, mode: "auto", judge: true }, inAuto);

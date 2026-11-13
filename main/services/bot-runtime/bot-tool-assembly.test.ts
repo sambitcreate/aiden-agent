@@ -2711,6 +2711,20 @@ test("Auto: outside content the conversation read, in an earlier turn or before 
   assert.equal(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: plainClick, judge: clean.judge, ownerRequest: "Email Sam", contextToolNames: async () => ["bot_memory"] }), "run");
 });
 
+test("Auto: a connection's earlier result still taints after its grant is gone, and an unknown tool counts too", async () => {
+  const plainClick: BotClassifiableAction = { surface: "computer_use", action: "click", app: "Notes", element: { role: "AXButton", label: "Bold" } };
+  // A Slack read in turn 1; Slack was disconnected (or renamed) before turn 2, so it is no longer among the Bot's tools.
+  for (const earlier of ["slack__read_channel", "old_server__list_messages_3fa2", "a_tool_this_release_does_not_know"]) {
+    const { judge, calls } = recordingJudge("pass");
+    assert.equal(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: plainClick, judge, contextToolNames: async () => ["bot_memory", earlier] }), "card", earlier);
+    assert.equal(calls.length, 0, earlier);
+  }
+  // The Bot's own memory, notes, questions and home files never taint.
+  const clean = recordingJudge("pass");
+  assert.equal(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: plainClick, judge: clean.judge,
+    contextToolNames: async () => ["bot_memory", "bot_recall", "routine_notes", "ask_user_question", "read_file", "write_file"] }), "run");
+});
+
 test("Auto fails closed when the host can't say what the run read or what the owner asked", async () => {
   const plainClick: BotClassifiableAction = { surface: "computer_use", action: "click", app: "Notes", element: { role: "AXButton", label: "Bold" } };
   const state = assemblyState(full(botHome()));

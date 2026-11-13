@@ -31,7 +31,7 @@ import { botTranscriptRows } from "../../../renderer/main/bots/bot-transcript-ro
 import { BOT_HANDOFF_RESULT_ENTRY_KIND } from "../../../renderer/shared/bot-handoffs.js";
 import { MAX_STOP_HOOK_CONTINUATIONS } from "../agent-surface-hooks.js";
 import type { HookDispatcher, HookEvent, HookOutcome, HookPayload, HookScope } from "../hooks/hook-types.js";
-import { createBotRegistry, type BotExtensionDeps, type BotPolicyDecision, type BotRegistry } from "./bot-extension.js";
+import { createBotRegistry, scanContextToolNames, type BotExtensionDeps, type BotPolicyDecision, type BotRegistry, type ContextEntryScan } from "./bot-extension.js";
 import { handoffSkippedText, ruleHandoffDoneBlock, ruleUnattendedBlock } from "./bot-handoff-text.js";
 import { recordRuleHandoffEntry } from "./bot-handoffs.js";
 import { createBotSessionService } from "./bot-session-service.js";
@@ -1342,6 +1342,35 @@ test('host-owned Bot inputs never qualify for routine preapproval',async()=>{
   await (await root.submit({type:'input',content:'Bot message',requestId:'bot:J:1:00112233-4455-4677-8899-aabbccddeeff',entry:{kind:'aiden.bot-message-input',data:{kind:'request',botId:'J',botName:'Jester',text:'message',deliveryId:'00112233-4455-4677-8899-aabbccddeeff',deadline:Date.now()+60_000}}},ctx)).wait(ctx);
   assert.equal(routine,false);assert.equal(tool.executions.length,1);
  } finally {await harness.close(ctx);}
+});
+
+test("the taint scan continues from its mark, and starts over when the conversation was cleared or replaced", async () => {
+  let entries: Array<{ id: number; model?: { role: string; toolName?: string }[] }> = [];
+  const reads: Array<number | undefined> = [];
+  // Two entries a page, like a store that pages its scans.
+  const scan: ContextEntryScan = async (minEntryId, cursor) => {
+    if (cursor === undefined) reads.push(minEntryId);
+    const from = typeof cursor === "number" ? cursor : 0;
+    const visible = entries.filter((entry) => minEntryId === undefined || entry.id >= minEntryId);
+    const items = visible.slice(from, from + 2);
+    return { items, ...(from + 2 < visible.length ? { next: from + 2 } : {}) };
+  };
+  const result = (name: string) => [{ role: "toolResult", toolName: name }];
+  entries = [{ id: 1 }, { id: 2, model: result("gmail__read_inbox") }, { id: 3 }];
+  const first = await scanContextToolNames(scan);
+  assert.deepEqual(first, { through: 3, names: ["gmail__read_inbox"] });
+  entries.push({ id: 4, model: result("bot_memory") });
+  assert.deepEqual(await scanContextToolNames(scan, first), { through: 4, names: ["gmail__read_inbox", "bot_memory"] });
+  assert.deepEqual(reads, [undefined, 3], "the second scan reads only from its mark");
+  // Cleared and refilled under the same id: the old mark's entry is gone, so nothing old is kept or skipped.
+  entries = [{ id: 7, model: result("web_fetch") }];
+  assert.deepEqual(await scanContextToolNames(scan, { through: 4, names: ["gmail__read_inbox", "bot_memory"] }), { through: 7, names: ["web_fetch"] });
+  // Cleared and refilled with ids that pass the mark: the mark's own entry is gone too.
+  entries = [{ id: 1 }, { id: 2 }, { id: 5, model: result("slack__read") }, { id: 6 }];
+  assert.deepEqual((await scanContextToolNames(scan, { through: 4, names: [] })).names, ["slack__read"], "entries before the old mark are read again");
+  // Emptied: a scan from the mark finds nothing, and so does the fresh scan.
+  entries = [];
+  assert.deepEqual(await scanContextToolNames(scan, { through: 6, names: ["slack__read"] }), { through: undefined, names: [] });
 });
 
 test("the judge's taint read covers the whole conversation: an inbox read in one turn still counts in the next", async () => {

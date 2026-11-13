@@ -209,6 +209,45 @@ export interface BotApprovalSettlement {
   hint?: string;
   publication?: BotAllowListRelease;
 }
+/** A page of a conversation's entries, oldest first, from `minEntryId` (inclusive) on. */
+export type ContextEntryScan = (minEntryId: number | undefined, cursor: unknown) => Promise<{
+  items: readonly { id: unknown; model?: readonly { role: string; toolName?: unknown }[] }[];
+  next?: unknown;
+}>;
+
+/**
+ * Every tool result name a conversation holds, continuing from `known` (the
+ * last entry an earlier scan read, and the names up to it) when that entry is
+ * still there. A mark whose own entry is gone (the conversation was cleared,
+ * reset or replaced under the same id) is dropped and the scan starts over.
+ */
+export async function scanContextToolNames(
+  scan: ContextEntryScan, known?: { through: number; names: readonly string[] },
+): Promise<{ through: number | undefined; names: string[] }> {
+  const from = async (mark: typeof known) => {
+    const names = new Set(mark?.names);
+    let through = mark?.through;
+    let cursor: unknown;
+    let first = true;
+    do {
+      const page = await scan(mark?.through, cursor);
+      // The mark's own entry comes back first, or the mark is stale.
+      if (first && mark !== undefined && Number(page.items[0]?.id) !== mark.through) return undefined;
+      first = false;
+      for (const entry of page.items) {
+        if (mark !== undefined && Number(entry.id) <= mark.through) continue;
+        for (const message of entry.model ?? []) {
+          if (message.role === "toolResult" && typeof message.toolName === "string") names.add(message.toolName);
+        }
+        through = Number(entry.id);
+      }
+      cursor = page.next;
+    } while (cursor !== undefined);
+    return { through, names: [...names] };
+  };
+  return (known === undefined ? undefined : await from(known)) ?? (await from(undefined))!;
+}
+
 /** Conversations whose scanned tool names `contextToolNames` keeps. */
 const CONTEXT_TOOL_NAMES_KEPT = 64;
 
@@ -737,31 +776,25 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
         const conversation = await harness.conversation(api.conversationId, context);
         if (!conversation) throw new Error("The conversation could not be read.");
         // Entries are only appended, so each conversation is scanned once
-        // from its start and then only past the last entry already seen.
+        // from its start and then only past the last entry already seen. The
+        // marks belong to this harness (a new store starts over), and a mark
+        // whose own entry is gone (the conversation was cleared, reset or
+        // replaced under the same id) is dropped and the scan starts over.
+        const marks = contextToolNamesSeen.get(harness) ?? new Map<string, { through: number; names: string[] }>();
+        contextToolNamesSeen.set(harness, marks);
         const key = String(api.conversationId);
-        const known = contextToolNamesSeen.get(key);
-        const seen = { through: known?.through, names: new Set(known?.names) };
-        await conversation.commit(async (tx) => {
-          let cursor: Parameters<typeof tx.scanEntries>[2];
-          do {
-            const page = await tx.scanEntries({
-              conversationId: api.conversationId, order: "ascending",
-              ...(seen.through === undefined ? {} : { minEntryId: seen.through as never }),
-            }, 500, cursor);
-            for (const entry of page.items) {
-              if (seen.through !== undefined && Number(entry.id) <= seen.through) continue;
-              for (const message of entry.model ?? []) {
-                if (message.role === "toolResult" && typeof message.toolName === "string") seen.names.add(message.toolName);
-              }
-              seen.through = Number(entry.id);
-            }
-            cursor = page.next;
-          } while (cursor !== undefined);
-        }, context);
-        contextToolNamesSeen.delete(key);
-        contextToolNamesSeen.set(key, { through: seen.through, names: [...seen.names] });
-        while (contextToolNamesSeen.size > CONTEXT_TOOL_NAMES_KEPT) contextToolNamesSeen.delete(contextToolNamesSeen.keys().next().value!);
-        return [...seen.names];
+        const known = marks.get(key);
+        marks.delete(key);
+        const seen = await conversation.commit((tx) => scanContextToolNames(
+          (minEntryId, cursor) => tx.scanEntries({
+            conversationId: api.conversationId, order: "ascending",
+            ...(minEntryId === undefined ? {} : { minEntryId: minEntryId as never }),
+          }, 500, cursor as never),
+          known,
+        ), context);
+        if (seen.through !== undefined) marks.set(key, { through: seen.through, names: seen.names });
+        while (marks.size > CONTEXT_TOOL_NAMES_KEPT) marks.delete(marks.keys().next().value!);
+        return seen.names;
       },
     };
   }
@@ -875,8 +908,8 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
   const executedApprovals = new Map<string, { id: string; authorizationFingerprint: string; cacheKey: string }>();
   /** Actions the person declined, by run: in-memory only, for the runs still going. */
   const declinedInRuns = new Map<string, Set<string>>();
-  /** Per conversation: the last entry `contextToolNames` read, and every tool result name up to it. */
-  const contextToolNamesSeen = new Map<string, { through: number | undefined; names: string[] }>();
+  /** Per harness and conversation: the last entry `contextToolNames` read, and every tool result name up to it. */
+  const contextToolNamesSeen = new WeakMap<object, Map<string, { through: number; names: string[] }>>();
   const rememberDecline = (runId: string, key: string) => {
     const declined = declinedInRuns.get(runId) ?? new Set<string>();
     declined.add(key);
