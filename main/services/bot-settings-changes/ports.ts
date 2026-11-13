@@ -119,19 +119,17 @@ export function createBotSettingsPorts(deps: BotSettingsPortDeps): BotSettingsPo
       const view = patch.model ? await deps.getBotAccess(botId) : undefined;
       if (view && view.revision !== expected.access) throw new BotSettingsConflictError();
 
-      // The model goes first: its write (bindings, catalog, drifted grants)
-      // is the one most likely to be refused, and a refusal there leaves
-      // nothing written. The identity write cannot move the access revision,
-      // nor the model write the Bot's, so neither invalidates the other's check.
-      // Left open: a desktop identity edit landing between the model write and
-      // the identity write refuses the identity half after the model landed.
+      // A change is all or nothing. The identity half goes first because it
+      // can be put back exactly: if the model half is then refused, the
+      // identity write is undone (compare-and-swap on the revision it just
+      // made), so a refused change leaves both stores as they were. The model
+      // can't go first, since a Bot with no model before has nothing to put
+      // back. The identity write cannot move the access revision, nor the
+      // model write the Bot's, so neither invalidates the other's check.
       let wrote = false;
       let done = false;
       try {
-        if (patch.model && view) {
-          await writeModel(botId, patch.model, view);
-          wrote = true;
-        }
+        let writtenRevision: string | undefined;
         if (identity) {
           const description = patch.description ?? bot.description ?? "";
           await deps.updateBot({
@@ -147,8 +145,31 @@ export function createBotSettingsPorts(deps: BotSettingsPortDeps): BotSettingsPo
             throw error instanceof BotIdentityRevisionConflictError ? new BotSettingsConflictError() : error;
           });
           wrote = true;
-          if (patch.dailyCheckIns === false) await deps.cancelWakeUps(botId);
+          if (patch.model) writtenRevision = (await botOf(botId)).revision;
         }
+        if (patch.model && view) {
+          try {
+            await writeModel(botId, patch.model, view);
+          } catch (error) {
+            if (writtenRevision !== undefined) {
+              // Put the identity half back; if someone edited the Bot in the
+              // meantime their edit stands and this change still reports refused.
+              await deps.updateBot({
+                id: botId,
+                expectedRevision: writtenRevision,
+                name: bot.name,
+                ...(bot.description ? { description: bot.description } : {}),
+                instructions: bot.instructions,
+                avatar: bot.avatar,
+                interruptions: resolveBotInterruptions(bot.interruptions),
+                selfWakeUps: bot.selfWakeUps !== false,
+              }).then(() => { wrote = false; }, () => undefined);
+            }
+            throw error;
+          }
+          wrote = true;
+        }
+        if (identity && patch.dailyCheckIns === false) await deps.cancelWakeUps(botId);
         done = true;
       } finally {
         // Whatever landed is shown, even when a later half was refused.

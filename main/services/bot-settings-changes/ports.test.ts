@@ -30,6 +30,8 @@ function stores(accessMode: "full" | "custom" = "full") {
   let accessReadable = true;
   /** Runs once, inside the next access write, before its revision check. */
   let duringAccessWrite: (() => void) | undefined;
+  /** Runs once, inside the next identity write, before its revision check. */
+  let duringIdentityWrite: (() => void) | undefined;
   let botRevision = 1;
   const view = (): BotAccessView => {
     const base = { botId: BOT, revision: `access-${accessRevision}`, policyEpoch: "1", summary: "" };
@@ -64,6 +66,9 @@ function stores(accessMode: "full" | "custom" = "full") {
       accessRevision += 1;
     },
     updateBot: async (input) => {
+      const hook = duringIdentityWrite;
+      duringIdentityWrite = undefined;
+      hook?.();
       if (input.expectedRevision !== bot.revision) throw new BotIdentityRevisionConflictError(bot.revision);
       botRevision += 1;
       bot = { ...bot, name: input.name, description: input.description, instructions: input.instructions, avatar: input.avatar, revision: `bot-${botRevision}` };
@@ -78,6 +83,12 @@ function stores(accessMode: "full" | "custom" = "full") {
     bumpAccess() { accessRevision += 1; },
     setAccessReadable(readable: boolean) { accessReadable = readable; },
     raceAccessWrite(edit: () => void) { duringAccessWrite = edit; },
+    raceIdentityWrite(edit: () => void) { duringIdentityWrite = edit; },
+    /** A desktop identity edit: moves only the Bot's revision. */
+    renameOnDesktop(name: string) {
+      botRevision += 1;
+      bot = { ...bot, name, revision: `bot-${botRevision}` };
+    },
     current: () => ports.read(BOT).then(({ values }) => values),
   };
 }
@@ -147,5 +158,20 @@ test("an uncontested name and model change lands both", async () => {
     const after = await fake.current();
     assert.equal(after.name, "Planner", mode);
     assert.deepEqual(after.model, FAST, mode);
+  }
+});
+
+test("a name and model change whose name write loses a race to a desktop edit changes neither", async () => {
+  for (const mode of ["full", "custom"] as const) {
+    const fake = stores(mode);
+    const { revision } = await fake.ports.read(BOT);
+    // The desktop renames the Bot after the up-front check, just before the store's own check.
+    fake.raceIdentityWrite(() => fake.renameOnDesktop("Desk name"));
+
+    await assert.rejects(fake.ports.write(BOT, { name: "Planner", model: FAST }, revision), BotSettingsConflictError);
+
+    const after = await fake.current();
+    assert.equal(after.name, "Desk name", mode);
+    assert.deepEqual(after.model, { providerId: "provider:a", modelId: "model:slow" }, mode);
   }
 });
