@@ -48,6 +48,11 @@ Initial capability IDs:
 | `bot:write` | Mutate Bot-classified chats and operate their turns, attachments, streams, and approvals. Requires `bot:read` as well as the existing route capability. |
 | `bot:activity` | Opt-in, no authority (contract revision 30). Delivers the Bot session `activity` and `queued` frames and snapshot keys, the person's `submissionId` on their own user entries, and Bot detail `chatActivity`. Negotiable post-pairing by any device type through `POST /device/capabilities` while `/server.features` lists `bot-activity-v1` (`404 not_found` otherwise), advertised in `serverCapabilities` only then, never issued by pairing. See "Bot chat activity, revision 30". |
 | `bot:allowed` | Opt-in, provisional revision 57. Reads and removes the Bot’s combined remembered-rule/folder list with the existing Bot grants, and permits an offered Always response. Only wired desktop hosts advertise it. Negotiated separately after pairing; no feature token or CLI port. Approval counts reach holders only. |
+| `approval:cards` | Opt-in, provisional revision 61. Adds the typed `card` to every pending approval the device is sent (stream approvals, a phone's run `approval_required` events and snapshots, Bot session approvals) and lets the device allow exactly what the card's buttons offer. Answers still need `approval:respond` (and the Bot grants for a Bot card). Any device type; offered while stream, run or Bot approvals are served. See "Bot UX on phones, revision 61". |
+| `approvals:settings` | Opt-in, provisional revision 61. Opens `GET`/`PUT /approvals/mode` and the rules page routes (`/approvals/rules…`), which also need `approval:respond`. Desktop hosts only (no CLI port). |
+| `bot:settings-changes` | Opt-in, provisional revision 61. Delivers `settings_change` Bot session entries (held `update_bot` cards and applied-change receipts) and opens their answer route with `bot:read` and `bot:write`. Desktop hosts only. |
+| `bot:suggestions` | Opt-in, provisional revision 61. Delivers `skill_proposal`, `lesson` and `memory_tidy` Bot session entries and opens their answer and Undo routes with `bot:read` and `bot:write`. Desktop hosts only. |
+| `bot:templates` | Opt-in, provisional revision 61. Adds each template's `version`, `instructions`, `sample` and `existingBotId` to `GET /bot-presets`, the version check on `POST /bots/from-preset`, and one-field `POST /bots`. Desktop hosts only. |
 | `bot:plans` | Opt-in, contract revision 56. Delivers the public plan snapshot and frame, and opens the plan response route with `bot:read` and `bot:write`. Offered only by a wired desktop host. Phones negotiate it separately when advertised in `serverCapabilities`; no pairing grant, global feature token, CLI hosting or paired-Mac plan card. |
 | `bot:access-requests` | Opt-in, contract revision 55. Delivers public access cards and opens their answer route with `bot:read` and `bot:write`. Alongside `bot:issues`, delivers access issues, counts and alerts. Offered only by a wired desktop host; no feature token or CLI hosting. Phones negotiate in a separate capability update; paired desktops use legacy notice lines. |
 | `bot:messaging` | Opt-in, no authority by itself, contract revision 54. Delivers per-Bot `botMessaging`, list `messaging`, and `kind: "message"` notification items. Opens `PUT /bots/messaging`, which also needs `bot:write`. Negotiable through `POST /device/capabilities` only when listed in `serverCapabilities`; no feature token and never issued by pairing. |
@@ -1317,3 +1322,106 @@ A user message may carry an optional `inputSource: "voice"`. The host sets it on
 The marker is display-only. It grants nothing, is not accepted on any Remote write route, and a phone's own sends never carry it. On the desktop it rides the existing `chat:append` meta, first-message and `chat:admitRunInput` IPC as an optional `inputSource`, which accepts only `"voice"`.
 
 **Fixtures.** `protocol/aiden-remote/v1/fixtures/contract.json` adds `voiceInput`: a chat whose user message is marked, whose assistant message carries a stray marker that clients drop, and whose second user message carries an unknown value that reads as typed. `voiceMessageIds` lists the one message a client should label.
+
+## Bot UX on phones, revision 61 (provisional)
+
+Revision 61 is provisional: it was written when `main` was at 60, and is claimed when the PR merges (take the next revision after `main` then, and move iOS, Android and the fixtures with it). The host keeps it in one constant (`AIDEN_REMOTE_BOT_UX_CONTRACT_REVISION`). It brings Phase 6 of the Bot UX simplification (`docs/plans/bot-ux-simplification.md`) to the wire. There is no new `/server` feature token. Five opt-ins, each advertised in `serverCapabilities` only where the host wires it, negotiated through `POST /device/capabilities` (`404 not_found` where not wired) and never issued at pairing. A client asks for each in a call of its own, so an older host that refuses one name leaves the rest in place. The serve-only CLI wires none of them: `approval:cards` is the only one an `aiden serve` host can offer (its approvals keep the Ask behaviour and the same card model), and the other four are desktop-only. Older clients keep every shape they had.
+
+The shared fixture is `protocol/aiden-remote/v1/fixtures/bot-ux-revision-61.json`. `main/services/aiden-remote-bot-ux.test.ts` rebuilds it with the host's own serializers and fails when the file differs (`AIDEN_WRITE_FIXTURES=1` writes it).
+
+### Approval cards (`approval:cards`)
+
+A holder receives `card` beside the existing fields on `GET /streams/{streamId}/approval`, on run `approval_required` payloads and gap snapshots (phones), and on the Bot session `approval`. The card is built by one model shared with the desktop card (`renderer/shared/approval-card-model.ts`):
+
+```json
+{
+  "kind": "generic | explicit | mac | batch | held_change | schedule",
+  "mac": "shell | files | computer_use",
+  "title": "Run on your Mac?",
+  "arguments": [{ "key": "tool", "value": "Run command" }],
+  "body": { "format": "command | text", "text": "npm test" },
+  "previous": { "format": "command", "text": "…" },
+  "rows": [{ "label": "Name", "value": "Ada Lovelace" }],
+  "notes": ["You’ve allowed this 4 times in the last 2 weeks."],
+  "buttons": [
+    { "label": "Deny", "decision": "deny", "answered": "Denied" },
+    { "label": "Allow once", "decision": "allow", "answered": "Allowed once" },
+    { "label": "Allow in this chat", "decision": "allow", "scope": "chat", "answered": "Allowed in this chat" }
+  ],
+  "allowOnMac": "Allow it on your Mac."
+}
+```
+
+- `arguments` are in Rakazo order: shorter values first. At most 16; keys at most 40 characters, values at most 500. `title` at most 200, `body` and `previous` at most 16,000, `rows` at most 60 (`batch`), `notes` at most 6 of 400.
+- `buttons` start with the deny button, then the allow buttons the desktop offers: Allow once (Apply on a held change, Fill N fields on a batch, Allow for run on a sub-agent run grant), Allow in this chat (`scope: "chat"`), Allow in this workspace or, for a Bot holding `bot:allowed`, Always allow this tool (`scope: "always"`). `answered` is the status line to show after that answer. Remembered scopes appear only on plain cards, never on a specialized card.
+- A card is complete or deny-only. When anything under review would not fit these bounds, when the host kept no details (`detailsOmitted`), when details are malformed or of a kind the model does not know, for a plain Computer Use call and for the disclosure tools (`classify`, `generate_image`), the card has only the deny button and `allowOnMac`. `allowOnMac` is present exactly when no allow button is. The Computer Use access grant is answerable; its note says macOS permissions are set up on the Mac.
+- Mac cards carry the full command (`body.format: "command"`). A hook the agent proposed is a `held_change` with Apply and Dismiss, its hook as `body` and the hook it replaces as `previous`.
+- Host-only, never on a card: macOS privacy prompts, pairing code match, Approve Home Folder, and the MCP connect launch review (a native dialog on the Mac; the kind is reserved for a later revision).
+- The respond routes are unchanged. For a holder, the host allows exactly what the card offers: `canAllow` equals "the card has an allow button", and an allow whose `scope` is not on a button is `403 capability_denied`. Non-holders keep the pre-61 rules.
+- Telegram never answers approvals. A reply there is a message to the Bot.
+
+### Settings changes (`bot:settings-changes`)
+
+A holder's Bot session (snapshot, page and SSE `entry`) includes `settings_change` entries; other devices never see them:
+
+```json
+{
+  "type": "settings_change", "id": "…", "changeId": "…",
+  "mode": "held | applied",
+  "status": "pending | restored | undo_refused | applied | edited | dismissed",
+  "title": "Update instructions?", "fields": ["instructions"], "lines": ["Instructions: 2 lines changed"],
+  "heldReason": "not_owner | outside_content | widens",
+  "instructions": "…", "previousInstructions": "…",
+  "instructionsDiff": [{ "kind": "same | added | removed", "text": "…" }],
+  "undoable": true, "createdAt": "…"
+}
+```
+
+`held` is the card a run the person did not start produced (Apply, Edit on the Mac, Dismiss); it carries the full proposed and previous instructions (at most 32,000 characters each) and a line diff when it fits (2,000 lines). `applied` is a receipt with Undo when `undoable`. `lines` holds at most 10 lines of 400.
+
+`POST /bots/{botId}/settings-changes/{changeId}/respond` with exactly `{"decision":"apply"|"dismiss"|"undo"}` (no query, no Idempotency-Key; the desktop service serializes and compare-and-swaps). It needs `bot:read`, `bot:write` and `bot:settings-changes`. `200 {changeId, status, message?}`; an Undo the Mac cannot make answers `200` with `status: "undo_refused"`. `409 revision_conflict` with the Mac's message when the Bot's settings moved or the change is no longer waiting; `400 invalid_request` for any other body (`edit` included: Edit happens on the Mac).
+
+### Suggestions and learning (`bot:suggestions`)
+
+A holder's Bot session includes:
+
+- `{type: "skill_proposal", id, proposalId, name, description, reason?, update, preview, status: "pending"|"added"|"dismissed", createdAt?}`; `preview` is the new file or the diff, at most 16,000 characters.
+- `{type: "lesson", id, lessonId, kind: "proposal"|"learned", text, routineName?, runs?, status: "pending"|"active"|"dismissed"|"retired", createdAt?}`.
+- `{type: "memory_tidy", id, changeId?, createdAt?}`: a receipt with Undo when `changeId` is present.
+
+Routes, each needing `bot:read`, `bot:write` and `bot:suggestions`, with no query:
+
+- `POST /bots/{botId}/skill-proposals/{proposalId}/respond` `{"decision":"add"|"dismiss"}` → `{proposalId, status}`.
+- `POST /bots/{botId}/lessons/{lessonId}/respond` `{"decision":"keep"|"dismiss"}` → `{lessonId, status}`.
+- `POST /bots/{botId}/lessons/{lessonId}/remove` `{}` → `{lessonId, status: "retired"}` (Undo on a Learned line).
+- `POST /bots/{botId}/learning/{changeId}/undo` `{}` → `{changeId, undone: true}`; `409 revision_conflict` when the memory changed since.
+
+A suggestion or lesson that is no longer waiting answers `404 not_found`.
+
+### Templates and one-field create (`bot:templates`)
+
+For a holder, each `GET /bot-presets` row adds `version` (positive integer), `instructions`, `sample` (at most 8 lines of 280) and, when that template already made a live Bot, `existingBotId`: show Open instead of Create bot. `POST /bots/from-preset` from a holder may send `{presetId, version}`; another version is `409 revision_conflict` with "This template changed. Close it and open it again." A template's routine is created paused. Older bodies (`{presetId}`) keep working.
+
+One-field create: a holder may leave `instructions` out of `POST /bots` (`{name, avatar}`, plus the optional fields as before). The Mac uses its starter instructions and the Bot introduces itself once, asking what to help with.
+
+### Approval mode and rules (`approvals:settings`)
+
+Person-only: no Bot or agent reaches these routes. Each needs `approval:respond` and `approvals:settings`, takes no query, and is offered only by a desktop host.
+
+- `GET /approvals/mode` → `{mode: "auto"|"ask"|"never", autoAvailable}`. Auto without a usable model reads `ask`.
+- `PUT /approvals/mode` with exactly `{mode}` → the mode as it now is. `auto` while `autoAvailable` is false is `400 invalid_request`.
+- `GET /approvals/rules` → `{rows, unreadable?}`, the desktop rules page. A row is `{ref, group: "allow"|"ask"|"block"|"mac", title, kind, scope: {kind: "mac"|"workspace"|"bot"|"chat", label?}, legacy?, decisions, handOff?: {on}, createdAt?}`. `decisions` lists the segments the row offers; empty means read and remove only. `ref` is opaque to clients: send it back as is.
+- `GET /approvals/rules/picker` → `{options: [{target, label, group, description?}]}`: Aiden's built-in tools, then each connected app.
+- `POST /approvals/rules` with `{target, decision, owner?, handOff?, label?}` adds a rule (or changes the existing one for that target). A rule in the person's own words (`target.kind: "text"`) can only ask or block.
+- `POST /approvals/rules/change` with `{ref, decision?, handOff?}` (at least one).
+- `POST /approvals/rules/remove` with exactly `{ref}`.
+
+Every write returns the rules page as it now is. They fail closed: while `unreadable` is set every write is `409 revision_conflict` ("Your approval rules couldn’t be read. Fix them on your Mac first."); a row that is gone is `404 not_found`; anything else the Mac refuses is `409 revision_conflict` with a generic message. Disable a tool is the Bot's access (`PATCH /bots/{botId}/capabilities`, unchanged).
+
+### What stays on the client
+
+No wire change, the clients decide:
+
+- Two-step Take control answers the existing hand-off route with `done` or `skipped`.
+- "Can message other Bots" is one switch, on only when both directions (revision 54 `botMessaging`) are on, and it writes both.
+- Per-Bot chat activity levels: phones use their own per-device Show tool activity switch. `chatActivity` stays on the wire (revision 30) so older clients keep working.

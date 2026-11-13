@@ -130,6 +130,10 @@ With a host offering revision 59 and `bot:peers`, iPhone and Android can manage 
 
 When Aiden Live on the Mac sends to a chat, that message shows a small "By voice" label on iPhone and Android too (contract revision 60, `inputSource: "voice"`). It is a display label only; phones never send it.
 
+## Approval cards, approval settings and Bot templates (revision 61, in progress)
+
+A desktop host offering provisional contract revision 61 can send a phone the same approval card the Mac shows (`approval:cards`): its title, arguments, the command or change in full, and only the buttons that card offers. A card that does not fit on a phone, or one only the Mac may allow, offers Deny and says to allow it on the Mac. The same host can let a paired phone read and set the Mac's approval mode and its rules page (`approvals:settings`), show a Bot's held settings changes and suggestions as Needs-you items, and offer versioned Templates and one-field New bot. `aiden serve` offers the approval card only. The host side is in place; the iPhone and Android screens that use it are still being built, and until then phones keep their existing cards. See [the API reference](aiden-remote-api-v1.md#bot-ux-on-phones-revision-61-provisional).
+
 ## Images a Bot shares
 
 When a Bot shares an image (a chart it drew, a screenshot it took), the paired Mac (contract revision 45) sends it to Aiden On The Go for iPhone and Android, which shows it in the Bot's chat like a photo in any other chat: tap it to see it full screen and save it. The phone reads the picture from the Mac when it is shown and keeps a limited number of pictures only while the chat is open; one it let go is read again when you scroll back to it. Another Mac viewing the Bot shows the picture too (see [Use a paired computer](#use-a-paired-computer)). With an older phone or Mac, the chat says "I shared an image: NAME. Open this chat on your Mac to see it."
