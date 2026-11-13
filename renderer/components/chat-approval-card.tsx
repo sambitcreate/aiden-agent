@@ -572,7 +572,8 @@ export function ChatApprovalCard({
         ) : null}
         <ApprovalActions
           denyRef={denyRef}
-          denyLabel={pendingFormFill ? "Cancel" : "Deny"}
+          // A held change (a hook the agent proposed) is applied or dismissed, never "allowed".
+          denyLabel={pendingFormFill ? "Cancel" : pendingHook ? "Dismiss" : "Deny"}
           onDeny={() => onDecide("deny")}
           {...(pendingCanAllow
             ? {
@@ -584,7 +585,9 @@ export function ChatApprovalCard({
                       ? subagentMcpMutationAllowLabel(pendingMcpMutation)
                       : pendingRunGrant
                         ? "Allow for run"
-                        : "Allow once",
+                        : pendingHook
+                          ? "Apply"
+                          : "Allow once",
                 onAllow: () => onDecide("allow", pendingFormFill ? { formFillExcludedOrders } : undefined),
               }
             : {})}

@@ -13,6 +13,7 @@ import {
   Text,
 } from "./ui";
 import { cn } from "../lib/ui-utils";
+import { LiveGuard } from "./live-guard";
 import { approvalAriaKeyShortcut, approvalShortcutLabel, type ApprovalShortcut } from "../lib/approval-shortcuts";
 import { detectedKeyboardPlatform } from "../shared/keybindings";
 import type { ToolApprovalScope } from "../shared/tool-approval-scope";
@@ -176,3 +177,68 @@ export function ApprovalStatusLine({ status }: { status: ApprovalStatus }) {
   );
 }
 
+
+/**
+ * The ask card's frame for cards that are not tool approvals but ask the same
+ * way (docs/plans/bot-ux-simplification.md §3.3): a Bot's folder or Mac
+ * request, and the batch card that approves a plan. The tile, an optional
+ * quiet line above the question, the question, the body, and Deny and Allow
+ * at the foot. Aiden Live never presses anything in it.
+ */
+export function AskCard({
+  label,
+  tile,
+  eyebrow,
+  title,
+  titleId,
+  children,
+  error,
+  actions,
+  className,
+}: {
+  /** The card's accessible name. */
+  label: string;
+  tile: React.ReactNode;
+  eyebrow?: React.ReactNode;
+  title: React.ReactNode;
+  titleId?: string;
+  children?: React.ReactNode;
+  /** The last answer could not be sent. */
+  error?: string | null;
+  /** `ApprovalActions`, usually. */
+  actions: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <LiveGuard guard="you" wrap={false}>
+      <section
+        data-live-guard="you"
+        role="group"
+        aria-label={label}
+        className={cn(
+          "approval-shell composer-shell min-h-0 overflow-y-auto overscroll-contain bg-popover p-4 shadow-composer [overflow-wrap:anywhere]",
+          className,
+        )}
+      >
+        <div className="flex shrink-0 flex-col items-center text-center">
+          {tile}
+          {eyebrow ? (
+            <Text variant="small" color="tertiary" as="p" className="mt-2.5 text-balance">
+              {eyebrow}
+            </Text>
+          ) : null}
+          <Text variant="strong" as="p" id={titleId} className={cn(eyebrow ? "mt-0.5" : "mt-2.5", "text-balance")}>
+            {title}
+          </Text>
+        </div>
+        {children}
+        {error ? (
+          <Text variant="small" as="p" role="alert" className="mt-1.5 shrink-0 text-center text-status-red">
+            {error}
+          </Text>
+        ) : null}
+        {actions}
+      </section>
+    </LiveGuard>
+  );
+}

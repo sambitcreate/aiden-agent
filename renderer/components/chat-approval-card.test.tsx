@@ -627,7 +627,7 @@ function mountHook(details: HookProposalApprovalDetails | Record<string, unknown
   });
 }
 
-test("a proposed hook shows where and when it runs and its whole command, and can only be allowed once", () => {
+test("a proposed hook shows where and when it runs and its whole command, and is a held change: Apply once or Dismiss", () => {
   // Even if remembered scopes reached the card, saving a hook stays a one-time decision.
   const { card, decisions } = mountHook(hookProposal(), { scopes: ["once", "chat", "always"] });
 
@@ -648,10 +648,11 @@ test("a proposed hook shows where and when it runs and its whole command, and ca
   );
   assert.deepEqual(
     within(card).getAllByRole("button").map((button) => button.getAttribute("aria-label") ?? button.textContent),
-    ["Deny", "Allow once"],
+    ["Dismiss", "Apply"],
   );
-  fireEvent.click(within(card).getByRole("button", { name: "Allow once" }));
-  assert.deepEqual(decisions, [["allow", undefined]]);
+  fireEvent.click(within(card).getByRole("button", { name: "Apply" }));
+  fireEvent.click(within(card).getByRole("button", { name: "Dismiss" }));
+  assert.deepEqual(decisions, [["allow", undefined], ["deny", undefined]], "Apply and Dismiss send the same answers Allow and Deny did");
 });
 
 test("a proposed hook shows a matcher only for events that filter on it", () => {
@@ -708,7 +709,7 @@ test("a proposed repo hook names the script files its approval covers, and warns
   const files = within(card).getByRole("list", { name: "Script files" });
   assert.deepEqual(within(files).getAllByRole("listitem").map((item) => item.textContent), ["scripts/lint.sh"]);
   assert.match(within(card).getByRole("note").textContent ?? "", /can’t check every file this command runs/u);
-  assert.ok(within(card).getByRole("button", { name: "Allow once" }), "a partial check still lets the owner decide");
+  assert.ok(within(card).getByRole("button", { name: "Apply" }), "a partial check still lets the owner decide");
   cleanup();
 
   const { card: plain } = mountHook(hookProposal());
@@ -728,6 +729,7 @@ test("a malformed hook proposal is blocked instead of shown", () => {
     const { card } = mountHook(details);
     assert.ok(within(card).getByText("Invalid privileged approval blocked"));
     assert.equal(within(card).queryByRole("button", { name: "Allow once" }), null);
+    assert.equal(within(card).queryByRole("button", { name: "Apply" }), null);
     assert.equal(within(card).queryByRole("group", { name: "Complete command" }), null);
     cleanup();
   }

@@ -1,7 +1,7 @@
 import "../../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { BotAccessChoice, BotPendingAccessRequest } from "../../shared/bot-access-requests";
 import { AccessRequestCard } from "./access-request-card";
 
@@ -15,30 +15,42 @@ function mount(request = REQUEST, busy = false) {
   render(<AccessRequestCard request={request} botName="Ada" busy={busy} onAnswer={(choice) => answers.push(choice)} />);
   return answers;
 }
-test("a folder card shows its title, place and why, and three buttons in order", () => {
+const buttonNames = () => screen.getAllByRole("button").map((button) => button.getAttribute("aria-label") ?? button.textContent);
+
+/** Radix opens its menu on a pointer press, or Enter from the keyboard. */
+function openMoreWays() {
+  const trigger = screen.getByRole("button", { name: "More ways to allow" });
+  act(() => {
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: "Enter" });
+  });
+}
+
+test("a folder card asks like an approval: its title, place and why, then Deny, Allow once and the menu with Always", () => {
   mount();
   screen.getByRole("group", { name: "Ada wants to use Taxes" });
   screen.getByText("Ada wants to use Taxes");
   screen.getByText("~/Documents/Taxes");
   screen.getByText("Prepare your return.");
-  assert.deepEqual(screen.getAllByRole("button").map((button) => button.textContent), ["Not now", "Always for this folder", "Allow once"]);
+  assert.deepEqual(buttonNames(), ["Deny", "Allow once", "More ways to allow"]);
 });
 test("a whole-Mac card has no Always or folder place", () => {
   mount({ ...REQUEST, target: "whole_mac", label: "your whole Mac", choices: ["not_now", "once"] });
   screen.getByText("Ada wants to use your whole Mac");
   assert.equal(screen.queryByText("~/Documents/Taxes"), null);
-  assert.deepEqual(screen.getAllByRole("button").map((button) => button.textContent), ["Not now", "Allow once"]);
+  assert.deepEqual(buttonNames(), ["Deny", "Allow once"]);
 });
-test("buttons are native keyboard controls in choice order, and clicking Always reports only that choice", () => {
+test("each choice sends the answer it always did: Deny is not now, Allow once is once, Always for this folder is always", () => {
   const answers = mount();
   for (const button of screen.getAllByRole("button") as HTMLButtonElement[]) {
     assert.equal(button.disabled, false);
     assert.equal(button.tabIndex, 0);
-    button.focus();
-    assert.equal(document.activeElement, button);
   }
-  fireEvent.click(screen.getByRole("button", { name: "Always for this folder" }));
-  assert.deepEqual(answers, ["always"]);
+  fireEvent.click(screen.getByRole("button", { name: "Deny" }));
+  fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
+  openMoreWays();
+  fireEvent.click(screen.getByRole("menuitem", { name: /Always for this folder/u }));
+  assert.deepEqual(answers, ["not_now", "once", "always"]);
 });
 test("every choice is disabled while busy", () => {
   const answers = mount(REQUEST, true);

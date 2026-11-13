@@ -85,18 +85,18 @@ test("plan approval waits for the host, then becomes a stoppable checklist", asy
     }, mode);
     await aiden.app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0]!.setSize(size, 900), width);
     await expect(page.locator("html")).toHaveAttribute("data-appearance-scheme", mode);
-    await expect(page.getByRole("button", { name: "Approve plan", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Allow once", exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath(`plan-pending-${mode}.png`) });
   }
-  const approve = page.getByRole("button", { name: "Approve plan", exact: true });
-  await approve.focus();
+  await expect(page.getByText("Approve this plan?", { exact: true })).toBeVisible();
+  const approve = page.getByRole("button", { name: "Allow once", exact: true });
+  await page.getByRole("button", { name: "Deny", exact: true }).focus();
   await page.keyboard.press("Tab");
-  await expect(page.getByRole("button", { name: "Not now", exact: true })).toBeFocused();
-  await page.keyboard.press("Shift+Tab");
+  await expect(approve).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(approve).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Not now", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Deny", exact: true })).toBeDisabled();
   await aiden.app.evaluate(() => (globalThis as unknown as { planE2e: PlanE2eState }).planE2e.release());
   await expect(page.getByText("That answer could not be sent. Please try again.", { exact: false }).first()).toBeVisible();
   await expect(approve).toBeEnabled();
@@ -122,8 +122,8 @@ test("plan approval waits for the host, then becomes a stoppable checklist", asy
   const declined = { ...plan, planId: "declined-report", from: undefined };
   await aiden.app.evaluate((_electron, next) => (globalThis as unknown as { planE2e: PlanE2eState }).planE2e.replace(next), declined);
   await expect(page.getByText("Planner has a plan", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Not now", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Approve plan", exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "Deny", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Allow once", exact: true })).toBeDisabled();
   await aiden.app.evaluate(() => (globalThis as unknown as { planE2e: PlanE2eState }).planE2e.release());
   await expect(page.getByText(plan.title, { exact: true })).toBeHidden();
   expect(await aiden.app.evaluate(() => (globalThis as unknown as { planE2e: PlanE2eState }).planE2e.answers)).toEqual([
@@ -148,7 +148,7 @@ test("plan approval waits for the host, then becomes a stoppable checklist", asy
   await expect(page.getByText(longPlan.steps[0]!.text, { exact: true })).toBeInViewport();
   await page.getByText(longPlan.steps[9]!.text, { exact: true }).scrollIntoViewIfNeeded();
   await expect(page.getByText(longPlan.steps[9]!.text, { exact: true })).toBeInViewport();
-  await expect(page.getByRole("button", { name: "Approve plan", exact: true })).toBeInViewport();
+  await expect(page.getByRole("button", { name: "Allow once", exact: true })).toBeInViewport();
   await expect(draft).toHaveValue("Keep this draft while the plan waits");
   await page.screenshot({ path: testInfo.outputPath("plan-long-review-dark.png") });
   expect(aiden.lmStudio.requests.filter(request => request.url === "/v1/chat/completions")).toHaveLength(0);

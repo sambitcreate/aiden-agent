@@ -2128,7 +2128,12 @@ test("an access request sits above the unchanged composer, preserves failed gran
     const card = await screen.findByRole("group", { name: "Planner wants to use Taxes" });
     const composer = screen.getByPlaceholderText("Ask Planner");
     assert.ok(card.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING);
-    fireEvent.click(within(card).getByRole("button", { name: "Always for this folder" }));
+    const more = within(card).getByRole("button", { name: "More ways to allow" });
+    act(() => {
+      more.focus();
+      fireEvent.keyDown(more, { key: "Enter" });
+    });
+    fireEvent.click(screen.getByRole("menuitem", { name: /Always for this folder/u }));
     await waitFor(() => assert.deepEqual(errors.shown, ["This Bot's access changed. Ask for access again."]));
     assert.equal(screen.getByRole("group", { name: "Planner wants to use Taxes" }), card);
     assert.equal((within(card).getByRole("button", { name: "Allow once" }) as HTMLButtonElement).disabled, false);
@@ -2218,7 +2223,7 @@ test("a pile-up waits in one Needs-you slot: take control first, then each ask c
   fireEvent.change(composer, { target: { value: "Do something else" } });
   fireEvent.keyDown(composer, { key: "Enter" });
   assert.equal(calls.some((call) => call.channel === "bots:send" || call.channel === "bots:answerHandoff"), false);
-  const approve = within(plan).getByRole("button", { name: "Approve plan" });
+  const approve = within(plan).getByRole("button", { name: "Allow once" });
   fireEvent.click(approve);
   fireEvent.click(approve);
   await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:plans:respond").length, 1));
@@ -2259,7 +2264,7 @@ test("only a pending plan gates the composer; active, ended and cleared host eve
     "bots:live:subscribe": () => snapshot({ plan: CHAT_PLAN }),
     "bots:send": () => ({ submissionId: "s1", deduped: false }),
   });
-  await screen.findByRole("button", { name: "Approve plan" });
+  await screen.findByRole("button", { name: "Allow once" });
   assert.equal((screen.getByRole("button", { name: "Send message" }) as HTMLButtonElement).disabled, true);
   emitPlan({ ...CHAT_PLAN, status: "active", revision: 2, expiresAt: Date.now() + 600_000 }, 1);
   const box = await screen.findByPlaceholderText("Ask Planner") as HTMLTextAreaElement;
@@ -2290,9 +2295,9 @@ test("a not_waiting plan answer stays truthful, keeps the card and can be retrie
       return { result: "done" };
     },
   });
-  fireEvent.click(await screen.findByRole("button", { name: "Approve plan" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Allow once" }));
   assert.equal((await screen.findByRole("alert")).textContent, "That plan was already answered or closed.");
-  const approve = screen.getByRole("button", { name: "Approve plan" }) as HTMLButtonElement;
+  const approve = screen.getByRole("button", { name: "Allow once" }) as HTMLButtonElement;
   assert.equal(approve.disabled, false);
   fireEvent.click(approve);
   await waitFor(() => assert.equal(screen.getByRole("alert").textContent, "Access changed. Ask for a new plan."));
@@ -2300,12 +2305,12 @@ test("a not_waiting plan answer stays truthful, keeps the card and can be retrie
   await act(async () => fireEvent.click(approve));
   assert.equal(screen.queryByRole("alert"), null);
   assert.equal(attempts, 3);
-  assert.ok(screen.getByRole("button", { name: "Not now" }));
+  assert.ok(screen.getByRole("button", { name: "Deny" }));
   assert.equal((screen.getByRole("button", { name: "Send message" }) as HTMLButtonElement).disabled, true);
   assert.equal(calls.some((call) => call.channel === "bots:send"), false);
 });
 
-for (const [label, decision, status] of [["Not now", "not_now", "pending"], ["Stop plan", "stop", "active"]] as const) {
+for (const [label, decision, status] of [["Deny", "not_now", "pending"], ["Stop plan", "stop", "active"]] as const) {
   test(`the plan's ${label} forwards the exact IPC decision and waits for the host event`, async () => {
     const calls = await mountChat({
       "bots:live:subscribe": () => snapshot({ plan: { ...CHAT_PLAN, status } }),

@@ -71,12 +71,12 @@ test("access cards keep their scope visible and wait for the host's answer", asy
   await expect(card).toBeVisible();
   await expect(card).toContainText(request.place!);
   await expect(card).toContainText(request.why);
-  await expect(card.getByRole("button")).toHaveText(["Not now", "Always for this folder", "Allow once"]);
-  await card.getByRole("button", {name: "Not now", exact: true}).focus();
-  await page.keyboard.press("Tab");
-  await expect(card.getByRole("button", {name: "Always for this folder", exact: true})).toBeFocused();
+  // The ask card: Deny, Allow once, then the menu that holds Always for this folder.
+  await card.getByRole("button", {name: "Deny", exact: true}).focus();
   await page.keyboard.press("Tab");
   await expect(card.getByRole("button", {name: "Allow once", exact: true})).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(card.getByRole("button", {name: "More ways to allow", exact: true})).toBeFocused();
   await expect(page.getByText("LM Studio (local) added.", {exact: true})).toBeHidden();
   for (const [mode, width] of [["light", 1280], ["dark", 600]] as const) {
     await page.evaluate(async scheme => {
@@ -89,14 +89,15 @@ test("access cards keep their scope visible and wait for the host's answer", asy
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({path: testInfo.outputPath(`access-card-${mode}.png`)});
   }
-  await card.getByRole("button", {name: "Always for this folder", exact: true}).click();
+  await card.getByRole("button", {name: "More ways to allow", exact: true}).click();
+  await page.getByRole("menuitem", {name: /Always for this folder/u}).click();
   for (const button of await card.getByRole("button").all()) await expect(button).toBeDisabled();
   expect(await aiden.app.evaluate(() => (globalThis as unknown as {accessRequestE2e: AccessE2eState}).accessRequestE2e.answers)).toEqual([{botId: bot.id, waitId: request.waitId, choice: "always"}]);
   await aiden.app.evaluate(() => (globalThis as unknown as {accessRequestE2e: AccessE2eState}).accessRequestE2e.release());
   await expect(page.getByText("The folder could not be saved. Please try again.", {exact: false}).first()).toBeVisible();
   await expect(card.getByRole("button", {name: "Allow once", exact: true})).toBeEnabled();
   await card.getByRole("button", {name: "Allow once", exact: true}).click();
-  await expect(card.getByRole("button", {name: "Not now", exact: true})).toBeDisabled();
+  await expect(card.getByRole("button", {name: "Deny", exact: true})).toBeDisabled();
   await aiden.app.evaluate(() => (globalThis as unknown as {accessRequestE2e: AccessE2eState}).accessRequestE2e.release());
   await expect(card).toBeHidden();
   await expect(page.getByPlaceholder("Ask Planner")).toBeVisible();
@@ -106,8 +107,8 @@ test("access cards keep their scope visible and wait for the host's answer", asy
   await aiden.app.evaluate((_electron, next) => (globalThis as unknown as {accessRequestE2e: AccessE2eState}).accessRequestE2e.replace(next), wholeMacRequest);
   const wholeCard = page.getByRole("group", {name: "Planner wants to use your whole Mac", exact: true});
   await expect(wholeCard).toBeVisible();
-  await expect(wholeCard.getByRole("button", {name: "Always for this folder", exact: true})).toHaveCount(0);
-  await wholeCard.getByRole("button", {name: "Not now", exact: true}).click();
+  await expect(wholeCard.getByRole("button", {name: "More ways to allow", exact: true})).toHaveCount(0);
+  await wholeCard.getByRole("button", {name: "Deny", exact: true}).click();
   await expect(wholeCard.getByRole("button", {name: "Allow once", exact: true})).toBeDisabled();
   await aiden.app.evaluate(() => (globalThis as unknown as {accessRequestE2e: AccessE2eState}).accessRequestE2e.release());
   await expect(wholeCard).toBeHidden();
@@ -119,8 +120,9 @@ test("access cards keep their scope visible and wait for the host's answer", asy
   }, futureRequest);
   const futureCard = page.getByRole("group", {name: "Planner wants to use Taxes", exact: true});
   await expect(futureCard).toBeVisible();
-  await futureCard.getByRole("button", {name: "Always for this folder", exact: true}).click();
-  await expect(futureCard.getByRole("button", {name: "Not now", exact: true})).toBeDisabled();
+  await futureCard.getByRole("button", {name: "More ways to allow", exact: true}).click();
+  await page.getByRole("menuitem", {name: /Always for this folder/u}).click();
+  await expect(futureCard.getByRole("button", {name: "Deny", exact: true})).toBeDisabled();
   await aiden.app.evaluate(() => (globalThis as unknown as {accessRequestE2e: AccessE2eState}).accessRequestE2e.release());
   await expect(futureCard).toBeHidden();
   await expect(page.getByText("Folder approval recorded.", {exact: true})).toBeVisible();
