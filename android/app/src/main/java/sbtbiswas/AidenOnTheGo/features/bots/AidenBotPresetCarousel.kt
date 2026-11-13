@@ -32,6 +32,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 fun AidenMeetYourFirstBot(
     presets: List<AidenBotPreset>,
     startingPresetId: String?,
+    notice: String? = null,
     onStartChat: (AidenBotPreset) -> Unit,
     onCreateMyOwn: () -> Unit,
     modifier: Modifier = Modifier
@@ -71,8 +72,12 @@ fun AidenMeetYourFirstBot(
             Modifier.fillMaxWidth().padding(horizontal = AidenUi.ScreenGutter),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            if (notice != null) {
+                Text(notice, style = MaterialTheme.typography.bodySmall, color = palette.danger, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+            }
             AidenPrimaryButton(
-                text = stringResource(R.string.bot_presets_start_chat),
+                // A template that already made a live Bot opens it instead of making another.
+                text = stringResource(if (current?.existingBotId != null) R.string.bot_presets_open else R.string.bot_presets_start_chat),
                 enabled = current != null && startingPresetId == null,
                 onClick = { current?.let(onStartChat) },
                 modifier = Modifier.fillMaxWidth()
@@ -111,12 +116,30 @@ private fun AidenBotPresetCard(preset: AidenBotPreset) {
                     }
                 }
             }
+            preset.sample?.takeIf { it.isNotEmpty() }?.let { lines ->
+                // A made-up sample of what the Bot says, shown faded so it never reads as real.
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    lines.take(3).forEach { line ->
+                        Text(
+                            line,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = palette.secondary.copy(alpha = 0.7f),
+                            textAlign = TextAlign.Center,
+                            maxLines = 2,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            }
             preset.suggestedRoutine?.let { routine ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.Schedule, contentDescription = null, tint = palette.secondary, modifier = Modifier.size(14.dp))
                     Spacer(Modifier.width(4.dp))
                     Text(stringResource(R.string.bot_presets_routine, routine.name, routine.label), style = MaterialTheme.typography.labelMedium, color = palette.secondary)
                 }
+            }
+            preset.version?.let { version ->
+                Text(stringResource(R.string.bot_presets_version, version), style = MaterialTheme.typography.labelSmall, color = palette.secondary)
             }
         }
     }

@@ -40,4 +40,7 @@
     <string name="bot_ux_learned">Learned: %1$s</string>
     <string name="bot_ux_tidied_memory">Tidied memory</string>
     <string name="bot_ux_undone">%1$s (undone)</string>
+    <string name="bot_presets_open">Open</string>
+    <string name="bot_presets_version">Version %1$d</string>
+    <string name="bot_editor_one_field_hint">It introduces itself in its first chat and asks what to help with. You can change anything later.</string>
 </resources>
