@@ -1,4 +1,4 @@
-import type { SettingsSection } from "../shared/settings-section";
+import { isSettingsAnchor, type SettingsSection } from "../shared/settings-section";
 
 export * from "../shared/settings-section";
 
@@ -15,6 +15,6 @@ export function settingsLocation(
     search: { section },
     // Settings is one history entry, so Back to app leaves it from any page.
     ...(from?.pathname === "/settings" ? { replace: true } : {}),
-    ...(section === "links" ? { state: { aidenSettingsAnchor: Date.now() } } : {}),
+    ...(isSettingsAnchor(section) ? { state: { aidenSettingsAnchor: Date.now() } } : {}),
   };
 }

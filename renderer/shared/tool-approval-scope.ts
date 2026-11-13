@@ -7,7 +7,7 @@
  *   (exact command or exact workspace-relative path) for the rest of this chat
  *   while the app stays open.
  * - `always`: persists that same narrow rule for the workspace until the user
- *   revokes it from Settings → Bots & Approvals → Approvals.
+ *   revokes it from Settings → Approvals.
  * - `workspace`: a Mac card's "Allow in this workspace" under an approval
  *   mode: that part of the Mac (commands, file changes) in this workspace,
  *   removable in Workspace settings. Desktop only: Remote projections strip

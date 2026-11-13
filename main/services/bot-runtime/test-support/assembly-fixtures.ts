@@ -271,7 +271,7 @@ export interface AssemblyDepsOptions {
   /** Answers rule hand-off cards. Absent: no one to ask (rule hand-offs block). */
   requestHandoff?: (request: BotRuleHandoffRequest) => Promise<BotHandoffAnswer>;
   botName?: string;
-  /** Settings → Bots & Approvals: routine runs go ahead without asking, read on every call. Absent: no port. */
+  /** Settings → Approvals → Advanced: routine runs go ahead without asking, read on every call. Absent: no port. */
   routinesGoAhead?: () => boolean;
   /** Settings → Approvals' rules, read on every call; a throw is an unreadable rule book. Absent: no port. */
   pageRules?: () => readonly ApprovalRule[];

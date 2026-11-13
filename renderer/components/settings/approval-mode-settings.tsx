@@ -17,10 +17,13 @@ import {
   toast,
 } from "../ui";
 import { InfoHint } from "../ui-info-hint";
+import { SettingsAnchorContext } from "./settings-page";
 import { settingsApi } from "../../lib/ipc";
 import { isUsable } from "../../lib/model-picker-data";
 import { queryKeys, useProviders, useSettings } from "../../lib/queries";
 import type { AppSettings } from "../../lib/types";
+import { prefersReducedMotion } from "../../lib/appearance-runtime";
+import { botMessagingEnabled } from "../../shared/bot-messages";
 import { botRoutinesGoAhead } from "../../shared/bot-rules";
 import {
   APPROVAL_MODE_HELP,
@@ -61,8 +64,9 @@ function useSettingsPatch() {
 /**
  * Settings → Approvals (plan §3.1): one mode for the whole Mac. Auto shows only
  * when a usable model exists. A one-time note explains what changed for an
- * install that was already in use, and Advanced holds the approval model and
- * the legacy routines switch for people who had it on.
+ * install that was already in use, and Advanced holds the approval model, Bot
+ * messaging for every Bot (its `bots` anchor scrolls there) and the legacy
+ * routines switch for people who had it on.
  */
 export function ApprovalModeSettings({ children }: { /** The rules page, under the mode and above Advanced. */ children?: React.ReactNode } = {}) {
   const settings = useSettings();
@@ -76,6 +80,13 @@ export function ApprovalModeSettings({ children }: { /** The rules page, under t
   const legacyRoutines = botRoutinesGoAhead(settings.data);
   const approvalModel = parseApprovalModel(settings.data?.approvalModel);
   const modelChoice = approvalModel ? modelValue(approvalModel.providerId, approvalModel.model) : CHAT_MODEL;
+  const anchor = React.useContext(SettingsAnchorContext);
+  const scrollRequest = anchor?.section === "bots" ? anchor.request : null;
+  const messagingRow = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    if (scrollRequest === null) return;
+    messagingRow.current?.scrollIntoView({ block: "center", behavior: prefersReducedMotion() ? "auto" : "smooth" });
+  }, [scrollRequest]);
 
   const choose = (next: ApprovalMode) => {
     if (next === mode && settings.data?.approvalMode !== undefined) return;
@@ -178,6 +189,19 @@ export function ApprovalModeSettings({ children }: { /** The rules page, under t
               ) : null}
             </SelectContent>
           </Select>
+        </Field>
+        <Field
+          label="Bot messaging"
+          description="Bots can ask each other for help and bring the answer back to their chat. Each Bot can still be turned off in its own Advanced tab."
+        >
+          <div ref={messagingRow} className="flex">
+            <Switch
+              aria-label="Bot messaging"
+              checked={botMessagingEnabled(settings.data)}
+              disabled={settings.isLoading || saving}
+              onCheckedChange={(next) => void save({ botMessaging: next }, "Couldn't change Bot messaging.")}
+            />
+          </div>
         </Field>
         {legacyRoutines ? (
           <Field

@@ -1,7 +1,8 @@
 // Settings → Approvals and Workspace settings → Approvals, rendered (plan §3.1):
 // one mode, Auto only with a usable model, a one-time note for upgraded
-// installs, the legacy routines switch only for someone who had it on, and a
-// workspace that follows the global mode until the person customizes it.
+// installs, the legacy routines switch only for someone who had it on, Bot
+// messaging for every Bot under Advanced, and a workspace that follows the
+// global mode until the person customizes it.
 
 import "../../main/bots/test-dom";
 import assert from "node:assert/strict";
@@ -14,6 +15,7 @@ import type { AppSettings, Provider, Workspace } from "../../lib/types";
 import { TooltipProvider } from "../ui";
 import { WorkspaceApprovalFields } from "../workspace-settings-dialog";
 import { ApprovalModeSettings } from "./approval-mode-settings";
+import { SettingsAnchorContext } from "./settings-page";
 
 afterEach(cleanup);
 
@@ -27,7 +29,7 @@ const MODEL: Provider = {
   hasKey: true,
 } as Provider;
 
-function mount(settings: Partial<AppSettings>, providers: Provider[] = [MODEL], options: { failSave?: boolean } = {}) {
+function mount(settings: Partial<AppSettings>, providers: Provider[] = [MODEL], options: { failSave?: boolean; anchor?: "bots" } = {}) {
   let current: Partial<AppSettings> = { ...settings };
   const calls = installBotTestIpc({
     "settings:get": () => current,
@@ -41,7 +43,9 @@ function mount(settings: Partial<AppSettings>, providers: Provider[] = [MODEL], 
   render(
     <TooltipProvider>
       <QueryClientProvider client={createBotTestQueryClient()}>
-        <ApprovalModeSettings />
+        <SettingsAnchorContext.Provider value={options.anchor ? { section: options.anchor, request: 1 } : null}>
+          <ApprovalModeSettings />
+        </SettingsAnchorContext.Provider>
       </QueryClientProvider>
     </TooltipProvider>,
   );
@@ -109,6 +113,51 @@ test("the routines switch appears only for someone who had it on, and only turns
   fireEvent.click(toggle);
   await waitFor(() => assert.deepEqual(saves(), [{ botRoutinesGoAhead: false }]));
   await waitFor(() => assert.equal(screen.queryByRole("switch", { name: "Let routines go ahead without asking" }), null));
+});
+
+test("Bot messaging is one switch under Advanced: on unless turned off, and it saves botMessaging", async () => {
+  const { saves } = mount({ approvalMode: "ask" });
+  const toggle = await screen.findByRole("switch", { name: "Bot messaging" });
+  await waitFor(() => assert.equal(toggle.hasAttribute("disabled"), false));
+  assert.equal(toggle.getAttribute("aria-checked"), "true");
+  fireEvent.click(toggle);
+  await waitFor(() => assert.deepEqual(saves(), [{ botMessaging: false }]));
+  await waitFor(() => assert.equal(toggle.getAttribute("aria-checked"), "false"));
+  cleanup();
+  mount({ approvalMode: "ask", botMessaging: false });
+  const off = await screen.findByRole("switch", { name: "Bot messaging" });
+  await waitFor(() => assert.equal(off.getAttribute("aria-checked"), "false"));
+});
+
+test("a failed Bot messaging save puts the switch back", async () => {
+  const { saves } = mount({ approvalMode: "ask" }, [MODEL], { failSave: true });
+  const toggle = await screen.findByRole("switch", { name: "Bot messaging" });
+  await waitFor(() => assert.equal(toggle.hasAttribute("disabled"), false));
+  fireEvent.click(toggle);
+  await waitFor(() => assert.deepEqual(saves(), [{ botMessaging: false }]));
+  await waitFor(() => assert.equal(toggle.hasAttribute("disabled"), false));
+  assert.equal(toggle.getAttribute("aria-checked"), "true");
+});
+
+test("opening Settings at Bot messaging scrolls its switch into view", async () => {
+  const scrolled: Element[] = [];
+  const original = HTMLElement.prototype.scrollIntoView;
+  HTMLElement.prototype.scrollIntoView = function (this: HTMLElement) {
+    scrolled.push(this);
+  };
+  try {
+    mount({ approvalMode: "ask" }, [MODEL], { anchor: "bots" });
+    const toggle = await screen.findByRole("switch", { name: "Bot messaging" });
+    await waitFor(() => assert.equal(scrolled.length, 1));
+    assert.ok(scrolled[0]!.contains(toggle));
+    cleanup();
+    scrolled.length = 0;
+    mount({ approvalMode: "ask" });
+    await screen.findByRole("switch", { name: "Bot messaging" });
+    assert.equal(scrolled.length, 0);
+  } finally {
+    HTMLElement.prototype.scrollIntoView = original;
+  }
 });
 
 function mountWorkspace(workspace: Workspace, settings: Partial<AppSettings>) {

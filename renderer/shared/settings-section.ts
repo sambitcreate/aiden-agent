@@ -184,8 +184,8 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
   },
   {
     id: "bots",
-    title: "Bots",
-    keywords: ["bot", "routines", "allow", "go ahead", "ask first", "approvals", "permissions", "stop asking me", "unattended"],
+    title: "Bot messaging",
+    keywords: ["bot", "bots", "message each other", "other bots", "bot to bot", "peers", "ask another bot"],
   },
   {
     id: "botComputers",
@@ -292,7 +292,7 @@ export type SettingsPageId =
   | "websearch"
   | "imageGeneration"
   | "memory"
-  | "botsApprovals"
+  | "approvals"
   | "scheduledTasks"
   | "computers"
   | "simulator"
@@ -324,7 +324,7 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
   { id: "websearch", title: "Web Search", group: "Capabilities", tabs: ["websearch"] },
   { id: "imageGeneration", title: "Image Generation", group: "Capabilities", tabs: ["imageGeneration"] },
   { id: "memory", title: "Memory", group: "Capabilities", tabs: ["memory"] },
-  { id: "botsApprovals", title: "Bots & Approvals", group: "Autonomy & Devices", tabs: ["bots", "approvals", "appControls"] },
+  { id: "approvals", title: "Approvals", group: "Autonomy & Devices", tabs: ["approvals", "appControls"], anchors: ["bots"] },
   { id: "scheduledTasks", title: "Scheduled tasks", group: "Autonomy & Devices", tabs: ["scheduledTasks"] },
   { id: "computers", title: "Computers & VMs", group: "Autonomy & Devices", tabs: ["computerUse", "botComputers"] },
   { id: "simulator", title: "Simulator", group: "Autonomy & Devices", tabs: ["simulator"] },
@@ -383,6 +383,16 @@ export function pageFor(section: SettingsSection): SettingsPageEntry {
   )!;
 }
 
+/** A section that opens a spot on its page (scrolled into view) rather than a tab. */
+export function isSettingsAnchor(section: SettingsSection): boolean {
+  return pageFor(section).anchors?.includes(section) === true;
+}
+
+/** The tab a section shows: itself, or for an anchor the page's first tab. */
+export function settingsTabFor(page: SettingsPageEntry, section: SettingsSection): SettingsSection {
+  return page.tabs.includes(section) ? section : page.tabs[0]!;
+}
+
 /** What a section's tab says. */
 export function settingsTabLabel(section: SettingsSection): string {
   const destination = destinationFor(section);
@@ -420,8 +430,8 @@ export function resolveSettingsSection(
 
 /**
  * The section a sidebar row opens for a search, or undefined when the page doesn't match.
- * A tab that matches on its own wins, so "approvals" opens Approvals and not the
- * first tab of Bots & Approvals. The page title counts only after that.
+ * A tab that matches on its own wins, so "controls in chat" opens that tab and not the
+ * first tab of Approvals. The page title counts only after that.
  */
 export function firstMatchingSettingsSection(
   page: SettingsPageEntry,

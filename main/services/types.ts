@@ -835,7 +835,7 @@ export interface AppSettings extends AidenLiveSettingsFields {
   /** Longest wait, in hours, for a usage limit to clear before a reply fails; 0 turns waiting off. Absent means 6. */
   usageLimitWaitHours?: import("../../renderer/shared/usage-limits.js").UsageLimitWaitHours;
   /**
-   * Settings → Bots & Approvals: routine runs go ahead with Ask first steps and connected-app
+   * Settings → Approvals → Advanced: routine runs go ahead with Ask first steps and connected-app
    * changes instead of waiting for the person. Never lowers Hand off to me rules,
    * the password and money rules, or chat turns. Absent means off.
    */

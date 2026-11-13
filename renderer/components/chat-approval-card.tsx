@@ -265,7 +265,7 @@ function rememberScopeHint(
     return `Won't ask again before ${reach} in this workspace. Remove it in Workspace settings.`;
   }
   return scope === "always"
-    ? `Won't ask again for ${target} here. Undo in Settings → Bots & Approvals → Approvals.`
+    ? `Won't ask again for ${target} here. Undo in Settings → Approvals.`
     : `Won't ask again for ${target} until Aiden quits.`;
 }
 

@@ -269,7 +269,7 @@ export interface BotApprovalRequirement {
   /** In Ask, Auto would hand this call to the judge rather than a card. */
   autoWouldJudge?: true;
   /**
-   * The person's Settings → Bots & Approvals lets this routine run go ahead: no card,
+   * The person's Settings → Approvals → Advanced lets this routine run go ahead: no card,
    * `onAllow` still runs before the tool.
    */
   preapproved?: true;
