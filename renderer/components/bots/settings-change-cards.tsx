@@ -69,11 +69,14 @@ export function SettingsChangeReceipt({
 export function HeldSettingsCard({
   change,
   botName,
+  currentInstructions,
   onRespond,
   onEdit,
 }: {
   change: BotSettingsChangeEntryData;
   botName: string;
+  /** The Bot's instructions now: what the marks compare against, since the person may have edited them since. */
+  currentInstructions?: string;
   onRespond(decision: "apply" | "dismiss"): Promise<void>;
   /** Opens the instructions editor seeded with the proposed text; shown when the change has instructions. */
   onEdit?(instructions: string): void;
@@ -117,7 +120,12 @@ export function HeldSettingsCard({
         </Text>
       ) : null}
       {change.instructions !== undefined ? (
-        <ProposedInstructions proposed={change.instructions} previous={change.previousInstructions} />
+        <>
+          <Text as="p" variant="small" color="secondary">
+            Apply replaces {botName}&apos;s instructions with this text.
+          </Text>
+          <ProposedInstructions proposed={change.instructions} previous={currentInstructions ?? change.previousInstructions} />
+        </>
       ) : null}
     </BotNoticeCard>
   );
@@ -136,7 +144,8 @@ function heldReasonText(botName: string, reason: BotSettingsHeldReason): string 
 
 /**
  * The whole proposed instructions in a bounded scroller, so every line can be
- * read before Apply. With the earlier text, added and removed lines are marked.
+ * read before Apply. Against the instructions as they are now (or, when those
+ * can't be read, as they were when proposed), added and removed lines are marked.
  */
 function ProposedInstructions({ proposed, previous }: { proposed: string; previous?: string }) {
   const lines = previous === undefined

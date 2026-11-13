@@ -1783,6 +1783,7 @@ export function BotChatPane({ botId }: { botId: string }) {
         <HeldSettingsCard
           change={change}
           botName={current.name}
+          currentInstructions={current.instructions}
           onRespond={async (decision) => {
             await respondToSettings(change.changeId, decision);
           }}

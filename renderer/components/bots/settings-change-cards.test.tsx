@@ -98,3 +98,21 @@ test("a held change that would reach out more says so", () => {
   screen.getByText("Daily check-ins: On");
   assert.equal(screen.queryByRole("region", { name: "Proposed instructions" }), null);
 });
+
+test("the held card marks changes against the instructions as they are now, and says Apply replaces them", () => {
+  // Proposed against "Keep it short.", but the person has since rewritten the instructions.
+  render(
+    <HeldSettingsCard
+      change={{ ...HELD, fields: ["instructions"], lines: ["Instructions"], instructions: "Keep it short.\nList travel first.", previousInstructions: "Keep it short." }}
+      botName="Chief"
+      currentInstructions={"List travel first.\nBook window seats."}
+      onRespond={async () => undefined}
+    />,
+  );
+  screen.getByText("Apply replaces Chief's instructions with this text.");
+  const region = screen.getByRole("region", { name: "Proposed instructions" });
+  const kind = (text: string) => within(region).getByText(text).closest("[data-line]")?.getAttribute("data-line");
+  assert.equal(kind("Keep it short."), "added", "added against today's text, not the text at proposal time");
+  assert.equal(kind("List travel first."), "same");
+  assert.equal(kind("Book window seats."), "removed", "the person's own line that Apply would drop is shown");
+});
