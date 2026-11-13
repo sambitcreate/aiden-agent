@@ -116,7 +116,6 @@ import type { BotRuntimeAuthorityAdmission } from "./bot-runtime-authority.js";
 import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
 import { workspaceAutoWouldJudge, workspaceRuleHost, workspaceToolApproval } from "./approval-gate/workspace-tool-approval.js";
 import { pageRuleFor } from "./approval-rules/resolve-main.js";
-import { approvalRulesPageCouldName } from "../../renderer/shared/approval-rules.js";
 import { ApprovalAnalytics, approvalAnalyticsMode, type ApprovalAnalyticsMode } from "./approval-gate/approval-analytics.js";
 import {
   hostRunRegistry,
@@ -4430,15 +4429,14 @@ export const llmClient = {
                 : browserSelection.initialized ? browserSelection.tabId : (await browserService.getState(workspaceId)).activeTabId ?? undefined;
               return tabId ? browserService.getApprovalTarget(workspaceId, tabId).url : undefined;
             });
-            const pageRuleSubject = {
+            const pageRule = await pageRuleFor({
               ...(calledMcp
                 ? { connector: { serverId: calledMcp.serverId, tool: calledMcp.toolName } }
                 : { tool: context.toolCall.name }),
               ...(pageHost ? { host: pageHost } : {}),
               ...(workspaceId ? { workspaceId } : {}),
               ...(preparedBotContext ? { botId: preparedBotContext.admission.authority.botId } : {}),
-            };
-            const pageRule = await pageRuleFor(pageRuleSubject);
+            });
             const workspaceGateInput = {
               toolName: context.toolCall.name,
               args: context.args,
@@ -4452,7 +4450,8 @@ export const llmClient = {
               ...(runApproval
                 ? {
                     approval: { mode: runApproval.mode, macGrants: runApproval.macGrants },
-                    judgeAvailable: true,
+                    // An ACP agent's run has no model Aiden can ask (`runApprovalJudge`).
+                    ...(harnessProvider ? {} : { judgeAvailable: true }),
                     ...(calledMcp && !preparedBotContext
                       ? {
                           connector: {
@@ -4465,7 +4464,6 @@ export const llmClient = {
                   }
                 : {}),
               ...(pageRule ? { pageRule } : {}),
-              ...(approvalRulesPageCouldName(pageRuleSubject) ? { pageRuleCouldName: true } : {}),
             };
             let workspaceGate = workspaceToolApproval(workspaceGateInput);
             // Only the parent's plain workspace tools can be remembered, and

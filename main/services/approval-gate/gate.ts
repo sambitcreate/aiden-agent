@@ -127,8 +127,7 @@ export interface GateAction {
    * Ask asks at step 5, Allow allows at step 7. Never covers the Mac.
    * "unreadable": the rules file couldn't be read exactly, so the call asks
    * once in every mode (step 3), since the rule it can't see may be a Block.
-   * The workspace caller sets it only for a call that changes or sends
-   * something or that a page rule could name; a plain read goes by the mode.
+   * The workspace caller sets it for every call but a question to the person.
    */
   pageRule?: "allow" | "ask" | "block" | "unreadable";
   /** The authority this call was admitted under changed. */

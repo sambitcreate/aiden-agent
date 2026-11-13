@@ -3,10 +3,9 @@
 // A file this release can't read back exactly (it doesn't parse, or holds a
 // newer version, a rule this release can't read or a duplicate) is never read
 // around and never written over: its Block rules may be the ones Aiden can't
-// see. The book then reports it unreadable, so a workspace call that changes
-// or sends something, uses a connected app or reaches a site (anything a page
-// rule could name) asks, and Bots refuse, until the person fixes it or sets it
-// aside from the page. A plain local read goes by the approval mode.
+// see (a newer release's file can Block any tool by name). The book then
+// reports it unreadable, so every workspace call asks once and Bots refuse,
+// until the person fixes it or sets it aside from the page.
 
 import fs from "node:fs/promises";
 import path from "node:path";

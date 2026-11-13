@@ -97,9 +97,8 @@ export interface ApprovalRulesSettingsViewProps {
   onOpenSection(section: SettingsSection): void;
   onRetry(): void;
   /**
-   * The rules file couldn't be read exactly. Its rules aren't shown; until it
-   * is read again or set aside, anything that changes or sends something,
-   * uses a connected app or reaches the web asks first, and Bots don't act.
+   * The rules file couldn't be read exactly. Its rules aren't shown; every
+   * action asks and Bots don't act until it is read again or set aside.
    */
   unreadable?: boolean;
   /** Read the rules file again (after fixing it by hand). */
@@ -219,7 +218,7 @@ export function ApprovalRulesSettingsView(props: ApprovalRulesSettingsViewProps)
               <Field orientation="vertical">
                 <div className="flex flex-col items-start gap-3">
                   <Callout color="red" role="alert">
-                    Your rules file couldn’t be read, so its rules aren’t shown. Until it can be, anything that changes or sends something, uses a connected app or reaches the web asks first, and Bots don’t act.
+                    Your rules file couldn’t be read, so its rules aren’t shown. Until it can be, every action asks first and Bots don’t act.
                   </Callout>
                   <Text as="p" variant="small" color="secondary" className="text-pretty">
                     Fix approval-rules.json in Aiden’s data folder and try again, or start over. Starting over keeps the old file beside the new one.

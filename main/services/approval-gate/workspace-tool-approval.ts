@@ -18,6 +18,7 @@ import {
 import { toolApprovalRuleTarget, type ToolApprovalRuleTarget } from "../tool-approval-rules.js";
 import type { ApprovalMode, MacGrantClass } from "../../../renderer/shared/approval-mode.js";
 import { approvalRuleHostOf } from "../../../renderer/shared/approval-rules.js";
+import { ASK_USER_QUESTION_TOOL_NAME } from "../../../renderer/shared/ask-user-question.js";
 import { planActionGate, type GateAction, type GateContext } from "./gate.js";
 import { connectorToolEffect, MAC_TOOL_CLASSES } from "./tool-classes.js";
 
@@ -69,17 +70,11 @@ export interface WorkspaceToolApprovalInput {
    * scheduled runs and Bot-bound turns included. Allow and Ask rules apply
    * only to a run with an approval mode, and never to a Bot-bound turn, whose
    * authority is its Bot's. A rules file that can't be read ("unreadable")
-   * asks once, everywhere, but only for a call that changes or sends
-   * something or that a page rule could name (`pageRuleCouldName`); any
-   * other call (a plain local read) goes by the mode.
+   * asks once before every call, everywhere: a newer release's file can
+   * Block any tool by name. Only a question Aiden asks the person, which is
+   * already a card and does nothing, goes ahead.
    */
   pageRule?: "allow" | "ask" | "block" | "unreadable";
-  /**
-   * A rule made on the rules page could name this call
-   * (`approvalRulesPageCouldName`): an Aiden action Add rule offers, a
-   * connected app's tool, or an action on a site.
-   */
-  pageRuleCouldName?: boolean;
 }
 
 export type WorkspaceToolApproval =
@@ -151,10 +146,8 @@ export function workspaceGateAction(input: WorkspaceToolApprovalInput): GateActi
   const ruleTarget = !input.botBound && APPROVAL_TOOL_NAMES.has(toolName)
     ? toolApprovalRuleTarget(toolName, args, input.workspaceId)
     : undefined;
-  // A rules file that can't be read may hide a Block, so a call it could
-  // name, or one that changes or sends something, asks; a plain read doesn't.
-  const unreadableAsks = input.pageRule === "unreadable" &&
-    (consequential || explicitOnly || macClass !== undefined || input.pageRuleCouldName === true);
+  // A rules file that can't be read may hide a Block on any tool.
+  const unreadableAsks = input.pageRule === "unreadable" && toolName !== ASK_USER_QUESTION_TOOL_NAME;
   return {
     toolName,
     ...(macClass ? { mac: true, macClass, ...(macGranted ? { macGranted: true } : {}) } : {}),
@@ -227,13 +220,14 @@ export function workspaceToolApproval(input: WorkspaceToolApprovalInput): Worksp
 /**
  * Whether switching this Ask-mode workspace call to Auto would hand it to the
  * judge instead of a card: the card's offer of Auto shows only then. A
- * command, a file change, an explicit-only review, a rules-page Ask or a new
- * destination after outside content asks in Auto too, so it is never offered.
+ * command, a file change, an explicit-only review or a rules-page Ask asks in
+ * Auto too, and so does every call of a run with no judge (an ACP agent's),
+ * so none of them is offered.
  */
 export function workspaceAutoWouldJudge(input: WorkspaceToolApprovalInput): boolean {
-  if (input.approval?.mode !== "ask") return false;
+  if (input.approval?.mode !== "ask" || input.judgeAvailable !== true) return false;
   const { judge: _judge, remembered: _remembered, ...call } = input;
-  return workspaceToolApproval({ ...call, approval: { ...input.approval, mode: "auto" }, judgeAvailable: true }).readsJudge === true;
+  return workspaceToolApproval({ ...call, approval: { ...input.approval, mode: "auto" } }).readsJudge === true;
 }
 
 /**
