@@ -2595,7 +2595,7 @@ async function judgedCheck(options: {
   routine?: true;
   botMessage?: true;
   ownerRequest?: string | undefined;
-  runToolNames?: () => Promise<string[]>;
+  contextToolNames?: () => Promise<string[]>;
   mode?: "ask" | "auto";
 }): Promise<string> {
   const state = { ...assemblyState(testAuthority({ mode: "full", home: botHome(), ...FULL_GRANTS, other: [...FULL_GRANTS.other, "computer"] })), hasComputer: true };
@@ -2613,7 +2613,7 @@ async function judgedCheck(options: {
     requestIds: [options.routine ? "routine:daily:fire-1" : options.botMessage ? BOT_MESSAGE_REQUEST : "req-1"],
     ...(options.routine ? { hasRoutineInputs: async () => true } : {}),
     ownerRequest: async () => ("ownerRequest" in options ? options.ownerRequest : "Email Sam"),
-    runToolNames: options.runToolNames ?? (async () => []),
+    contextToolNames: options.contextToolNames ?? (async () => []),
   });
   if (!decision.allowed) return "refused";
   if (decision.handoff) return "hand off";
@@ -2657,7 +2657,7 @@ test("in Ask, a card says Auto would judge it only where Auto really would, and 
   assert.equal(await judgedCheck({ ...ask, toolName: "computer_shell", action: DELETE_ON_COMPUTER }), "card", "a rule on the Bot's shell");
   assert.equal(await judgedCheck({ ...ask, toolName: SEND_EMAIL_TOOL, action: plainClick, botMessage: true }), "card", "another Bot's message");
   assert.equal(await judgedCheck({ ...ask, toolName: SEND_EMAIL_TOOL, action: plainClick, ownerRequest: undefined }), "card", "inputs not only the owner's");
-  assert.equal(await judgedCheck({ ...ask, toolName: SEND_EMAIL_TOOL, action: plainClick, runToolNames: async () => ["inspect_image"] }), "card", "a tainted run");
+  assert.equal(await judgedCheck({ ...ask, toolName: SEND_EMAIL_TOOL, action: plainClick, contextToolNames: async () => ["inspect_image"] }), "card", "a tainted run");
   assert.equal(await judgedCheck({ mode: "ask", toolName: SEND_EMAIL_TOOL, action: plainClick }), "card", "no judge on this host");
   assert.equal(calls.length, 0, "Ask never asks the judge");
   // In Auto itself there is nothing to offer.
@@ -2697,18 +2697,18 @@ test("Auto never judges a run whose inputs carry words the owner didn't write, o
   assert.equal(injected.calls.length + peer.calls.length, 0);
 });
 
-test("Auto: outside content the run read before a restart still stops judging", async () => {
+test("Auto: outside content the conversation read, in an earlier turn or before a restart, still stops judging", async () => {
   const plainClick: BotClassifiableAction = { surface: "computer_use", action: "click", app: "Notes", element: { role: "AXButton", label: "Bold" } };
   for (const earlier of ["computer_shell", "computer", "browser", "inspect_image", READ_INBOX_TOOL]) {
     const { judge, calls } = recordingJudge("pass");
-    assert.equal(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: plainClick, judge, ownerRequest: "Email Sam", runToolNames: async () => ["bot_memory", earlier] }), "card", earlier);
+    assert.equal(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: plainClick, judge, ownerRequest: "Email Sam", contextToolNames: async () => ["bot_memory", earlier] }), "card", earlier);
     assert.equal(calls.length, 0, earlier);
   }
   const unreadable = recordingJudge("pass");
   assert.equal(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: plainClick, judge: unreadable.judge, ownerRequest: "Email Sam",
-    runToolNames: async () => { throw new Error("unreadable"); } }), "card", "a run that can't be read counts as tainted");
+    contextToolNames: async () => { throw new Error("unreadable"); } }), "card", "a run that can't be read counts as tainted");
   const clean = recordingJudge("pass");
-  assert.equal(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: plainClick, judge: clean.judge, ownerRequest: "Email Sam", runToolNames: async () => ["bot_memory"] }), "run");
+  assert.equal(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: plainClick, judge: clean.judge, ownerRequest: "Email Sam", contextToolNames: async () => ["bot_memory"] }), "run");
 });
 
 test("Auto fails closed when the host can't say what the run read or what the owner asked", async () => {
@@ -2723,7 +2723,7 @@ test("Auto fails closed when the host can't say what the run read or what the ow
   const base = { callId: "call-1", args: { action: "click" }, signal: undefined, requestIds: ["req-1"] };
   for (const [name, extra] of [
     ["no record of the run's tools", { ownerRequest: async () => "Email Sam" }],
-    ["no owner request", { runToolNames: async () => [] }],
+    ["no owner request", { contextToolNames: async () => [] }],
   ] as const) {
     const decision = await deps.checkPolicy("bot-1", SEND_EMAIL_TOOL, { ...base, ...extra });
     assert.ok(decision.allowed && decision.approval && !decision.approval.preapproved, name);

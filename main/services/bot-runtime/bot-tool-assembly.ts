@@ -566,14 +566,15 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
   }
 
   /**
-   * Whether the run's committed tool results already brought outside content,
-   * which survives a restart. A run that can't be read, or a host that can't
-   * say, counts as having read it.
+   * Whether the conversation's committed tool results (earlier turns and
+   * compacted history included, which the model may still see) already
+   * brought outside content; this survives a restart. A conversation that
+   * can't be read, or a host that can't say, counts as having read it.
    */
   async function runReadOutside(call: BotToolCallCheck, facts: BotToolFacts): Promise<boolean> {
-    if (!call.runToolNames) return true;
+    if (!call.contextToolNames) return true;
     try {
-      const names = await call.runToolNames();
+      const names = await call.contextToolNames();
       if (names.length === 0) return false;
       const mcp = await facts.mcpTools();
       return names.some((name) => botBringsOutsideContent(name) || mcp.has(name));
@@ -637,8 +638,8 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
       const run = botJudgeRun(botId, call);
       // Only a run the person (or a routine they accepted) started is judged:
       // a Bot message, Telegram, a peer or a self-intro carries words nobody
-      // here wrote. A run that already read outside content, in this process
-      // or before a restart, is never judged either.
+      // here wrote. A run whose conversation already read outside content, in
+      // an earlier turn, in this process or before a restart, is never judged.
       const ownerStarted = turns.length > 0 && turns.every((turn) => !turn.botMessage && !turn.telegram && !turn.peer && !turn.intro);
       const judging = mode === "auto" && ports.judge !== undefined && ownerStarted &&
         !taintedRuns.has(run) && !(await runReadOutside(call, facts));

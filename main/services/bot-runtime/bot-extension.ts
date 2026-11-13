@@ -209,6 +209,9 @@ export interface BotApprovalSettlement {
   hint?: string;
   publication?: BotAllowListRelease;
 }
+/** Conversations whose scanned tool names `contextToolNames` keeps. */
+const CONTEXT_TOOL_NAMES_KEPT = 64;
+
 export interface BotApprovalRequirement {
   evidence?: BotApprovalEvidence;
   allowFromList?(grant: BotAllowListRelease): Promise<void>;
@@ -315,8 +318,12 @@ export interface BotToolCallCheck {
    * write (`ownerRequestOf`).
    */
   ownerRequest?(): Promise<string | undefined>;
-  /** Tools whose results the calling run has already committed, oldest first. */
-  runToolNames?(): Promise<string[]>;
+  /**
+   * Every tool whose result this Bot's conversation has committed, earlier
+   * turns and compacted history included, since the model's context (or a
+   * compaction summary of it) may still hold what those tools brought in.
+   */
+  contextToolNames?(): Promise<string[]>;
 }
 
 export type BotReadmission = { ok: true } | { ok: false; reason: "access_changed" | "bot_missing" };
@@ -719,33 +726,42 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
   /** What the Auto judge reads about the calling run: the owner's words, and the tools it already ran. */
   function judgeReads(
     api: Pick<DocumentReader, "snapshot"> & { readonly conversationId: ConversationId }, context: Context,
-  ): Pick<BotToolCallCheck, "ownerRequest" | "runToolNames"> {
+  ): Pick<BotToolCallCheck, "ownerRequest" | "contextToolNames"> {
     return {
       ownerRequest: async () => {
         const inputs = await readRunInputEntries(api, context);
         return inputs === undefined ? undefined : ownerRequestOf(inputs.map(({ input }) => input));
       },
-      runToolNames: async () => {
-        const inputs = await readRunInputEntries(api, context);
-        if (inputs === undefined) throw new Error("The run's inputs could not be read.");
-        const first = inputs.reduce<number | undefined>((min, { entryId }) => (min === undefined || entryId < min ? entryId : min), undefined);
-        if (first === undefined) return [];
-        const conversation = await harness!.conversation(api.conversationId, context);
+      contextToolNames: async () => {
+        if (!harness) throw new Error("The conversation could not be read.");
+        const conversation = await harness.conversation(api.conversationId, context);
         if (!conversation) throw new Error("The conversation could not be read.");
-        return conversation.commit(async (tx) => {
-          const names: string[] = [];
+        // Entries are only appended, so each conversation is scanned once
+        // from its start and then only past the last entry already seen.
+        const key = String(api.conversationId);
+        const known = contextToolNamesSeen.get(key);
+        const seen = { through: known?.through, names: new Set(known?.names) };
+        await conversation.commit(async (tx) => {
           let cursor: Parameters<typeof tx.scanEntries>[2];
           do {
-            const page = await tx.scanEntries({ conversationId: api.conversationId, minEntryId: first as never, order: "ascending" }, 500, cursor);
+            const page = await tx.scanEntries({
+              conversationId: api.conversationId, order: "ascending",
+              ...(seen.through === undefined ? {} : { minEntryId: seen.through as never }),
+            }, 500, cursor);
             for (const entry of page.items) {
+              if (seen.through !== undefined && Number(entry.id) <= seen.through) continue;
               for (const message of entry.model ?? []) {
-                if (message.role === "toolResult" && typeof message.toolName === "string") names.push(message.toolName);
+                if (message.role === "toolResult" && typeof message.toolName === "string") seen.names.add(message.toolName);
               }
+              seen.through = Number(entry.id);
             }
             cursor = page.next;
           } while (cursor !== undefined);
-          return names;
         }, context);
+        contextToolNamesSeen.delete(key);
+        contextToolNamesSeen.set(key, { through: seen.through, names: [...seen.names] });
+        while (contextToolNamesSeen.size > CONTEXT_TOOL_NAMES_KEPT) contextToolNamesSeen.delete(contextToolNamesSeen.keys().next().value!);
+        return [...seen.names];
       },
     };
   }
@@ -859,6 +875,8 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
   const executedApprovals = new Map<string, { id: string; authorizationFingerprint: string; cacheKey: string }>();
   /** Actions the person declined, by run: in-memory only, for the runs still going. */
   const declinedInRuns = new Map<string, Set<string>>();
+  /** Per conversation: the last entry `contextToolNames` read, and every tool result name up to it. */
+  const contextToolNamesSeen = new Map<string, { through: number | undefined; names: string[] }>();
   const rememberDecline = (runId: string, key: string) => {
     const declined = declinedInRuns.get(runId) ?? new Set<string>();
     declined.add(key);
