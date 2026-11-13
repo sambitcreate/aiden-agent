@@ -121,14 +121,19 @@ There is no per-Bot mode.
   secrets left out. If it is sure the step is what the owner asked for, the
   step runs; otherwise the card shows as in Ask. "What the owner asked for"
   is only words the owner wrote: your own message, or the prompt of a routine
-  you accepted. A turn whose input also carries other text (an event's
-  payload such as an email, the notes a routine kept, a wake-up the Bot set,
-  another Bot's message, Telegram or a peer) is never judged. No model (an
-  ACP agent), an error, a slow or unsure reply, or a turn that has already
-  read outside content all show the card. For a Bot, outside content is a
-  connection's data, a web page, its browser, its own computer or shell, or
-  an image it inspected, and it is read from the turn's saved results, so a
-  turn resumed after a restart still counts as having read it. Rules you
+  you accepted. Auto takes an accepted routine's prompt as your words even
+  when the Bot proposed it, so read a proposed routine's prompt before you
+  accept it. A turn whose input also carries other text (an event's payload
+  such as an email, the notes a routine kept, a wake-up the Bot set, another
+  Bot's message or a peer) is never judged. Telegram is never judged either
+  for now: a Bot turn started from Telegram in Auto still shows its cards.
+  No model (an ACP agent), an error, a slow or unsure reply, or a
+  conversation that has already read outside content all show the card. For
+  a Bot, outside content is a connection's data, a web page, its browser,
+  its own computer or shell, or an image it inspected. It is read from the
+  Bot's whole saved conversation, earlier turns and compacted history
+  included, so asking "OK, take care of it" after a turn that read your
+  inbox, or resuming after a restart, still shows the card. Rules you
   wrote, page rules, sharing an image, purchases, hand-offs and your Mac are
   never judged, and neither is a built-in Ask first rule on the Bot's own
   computer or shell (a delete there keeps its card). A routine still refuses
@@ -200,11 +205,10 @@ or words ("When a Bot wants to …", Ask or Block only, never Allow).
 - **A rules file Aiden can't read.** If `approval-rules.json` doesn't parse,
   was written by a newer release, or holds a rule this release can't read,
   Aiden never reads around it or writes over it, since its Block rules may be
-  the ones it can't see. Until it is fixed, a workspace action that changes
-  or sends something, uses a connected app, reaches a site or is one of the
-  actions Add rule offers asks once first, in every mode (Never ask included,
-  and never judged), and Bots don't act. A plain local read, such as reading,
-  listing or searching files, goes by the approval mode. The page hides the rules, says so, and offers **Try
+  the ones it can't see (a newer release's file can block any tool by name).
+  Until it is fixed, every workspace action, reads included, asks once first
+  in every mode (Never ask included, and never judged), and Bots don't act.
+  Only a question Aiden asks you goes ahead. The page hides the rules, says so, and offers **Try
   again** or **Start over**, which renames the file to
   `approval-rules.json.unreadable-<time>` beside it and starts empty.
 - Deleting a Bot or removing a workspace removes the rules only it owned.
