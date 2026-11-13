@@ -1,5 +1,5 @@
 import { BotRoutineModelButton } from "./bot-routine-models";
-// Profile → When something happens (spec §6 P1): routines that run on a file
+// When something happens, in the Bot panel's Routines tab (spec §6 P1): routines that run on a file
 // change in the Bot's folder, when the routine's own link is called on this
 // Mac's network, or when a page or script the person chose gives a different
 // answer than last time (a watch). A link is shown once, right after it is
