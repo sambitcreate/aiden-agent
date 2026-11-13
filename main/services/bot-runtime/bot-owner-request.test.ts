@@ -9,7 +9,7 @@ import test from "node:test";
 import { BOT_ROUTINE_NOTES_HEADER } from "../bot-routine-notes.js";
 import { botRoutineEventBlock, botRoutineMessage, botWakeUpPrompt } from "../scheduled-bot-routines.js";
 import { BOT_MESSAGE_INPUT_KIND, BOT_PEER_INPUT_KIND, BOT_PERSON_INPUT_KIND, BOT_ROUTINE_INPUT_KIND } from "./bot-input-entry.js";
-import { ownerRequestOf, type BotRunInputForJudge } from "./bot-owner-request.js";
+import { botRunStartedByOwner, ownerRequestOf, type BotRunInputForJudge } from "./bot-owner-request.js";
 
 const origin = (kind: "scheduled" | "manual" | "event" | "retry" | "catch_up", runId = "routine:r1:1") =>
   ({ routineOrigin: { version: 1, botId: "bot-1", routineId: "r1", runId, kind } });
@@ -48,4 +48,24 @@ test("notes the Bot kept, a wake-up it set, another Bot, a peer or Telegram neve
     assert.equal(ownerRequestOf([person("Email Sam"), input]), undefined, `${name} beside the person's own message`);
   }
   assert.equal(ownerRequestOf([]), undefined, "a run with no inputs has no owner request");
+});
+
+test("only a run started by the person's own messages counts as one the owner started; routines, events and anyone else never do", () => {
+  assert.equal(botRunStartedByOwner(["req-1"]), true);
+  assert.equal(botRunStartedByOwner(["req-1", "req-2"]), true, "a steer the person added joins the run");
+  for (const requestId of [
+    "routine:r1:1", // a routine, even one the person accepted
+    "routine:r1:event-1", // an event routine
+    "routine:w1:1", // a wake-up the Bot set, as a routine run
+    "wake:w1", // a wake-up the Bot set
+    "tg:42", // Telegram
+    "bot:0b8a3f5e-2c11-4d5f-9b7a-0123456789ac", // another Bot
+    "peer:x", // a paired Bot
+  ]) {
+    assert.equal(botRunStartedByOwner([requestId]), false, requestId);
+    assert.equal(botRunStartedByOwner(["req-1", requestId]), false, `the person's message plus ${requestId}`);
+  }
+  assert.equal(botRunStartedByOwner([]), false, "a run with no inputs");
+  assert.equal(botRunStartedByOwner(undefined), false, "no run at all");
+  assert.equal(botRunStartedByOwner([undefined]), false, "an input of unknown origin");
 });

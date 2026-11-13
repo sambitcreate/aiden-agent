@@ -78,3 +78,32 @@ test("the count survives a restart, and offers made at once never get past the l
   assert.deepEqual(results.filter(Boolean).length, 2);
   assert.equal(h.shown.length, 3, "the one shown before the restart and two more");
 });
+
+test("moving the clock back never refills the budget: suggestions stamped in the future stay counted", async () => {
+  const h = harness();
+  for (const label of ["one", "two", "three"]) assert.equal(await h.offer("bot-a", label), true);
+  // The system clock is set back two days.
+  h.clock.at -= 48 * HOUR;
+  assert.equal(await h.budget.remaining("bot-a"), 0);
+  assert.equal(await h.offer("bot-a", "after the change"), false);
+  // A day on the new clock is not enough: they were stamped two days ahead of it.
+  h.clock.at += 24 * HOUR + 1;
+  assert.equal(await h.offer("bot-a", "a day later"), false);
+  // Back past the time they were shown, the window rolls as usual.
+  h.clock.at += 48 * HOUR;
+  assert.equal(await h.offer("bot-a", "once the clock caught up"), true);
+  assert.deepEqual(h.shown, ["one", "two", "three", "once the clock caught up"]);
+});
+
+test("one the person asked for shows even with the window full, and still counts", async () => {
+  const h = harness();
+  for (const label of ["one", "two"]) assert.equal(await h.offer("bot-a", label), true);
+  const always = (label: string) => h.budget.offer("bot-a", "routine", async () => {
+    h.shown.push(label);
+    return true;
+  }, { always: true });
+  assert.equal(await always("asked"), true);
+  assert.equal(await h.offer("bot-a", "own idea"), false, "the asked-for one used the last slot");
+  assert.equal(await always("asked again"), true);
+  assert.deepEqual(h.shown, ["one", "two", "asked", "asked again"]);
+});

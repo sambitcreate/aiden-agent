@@ -23,10 +23,28 @@ export interface BotRunInputForJudge {
 /** A routine's event block, as `botRoutineEventBlock` writes it. */
 const EVENT_BLOCK = /<event source="/u;
 
+/** Whether a request id can carry the owner's words: not another Bot, Telegram, a peer, a self-introduction or a wake-up the Bot set. */
+function ownerRequestId(requestId: string | undefined): boolean {
+  const turn = botTurnOf(requestId);
+  return !(turn.botMessage || turn.telegram || turn.peer || turn.intro || requestId?.startsWith("wake:"));
+}
+
+/**
+ * Whether a run was started only by the owner's own messages: every input is
+ * one the person sent, never a routine (even one they accepted), an event,
+ * another Bot, Telegram, a peer, a self-introduction or a wake-up. A run with
+ * no known inputs is not. A Bot's claim that "the person asked" for something
+ * counts only in such a run.
+ */
+export function botRunStartedByOwner(requestIds: readonly (string | undefined)[] | undefined): boolean {
+  if (!requestIds || requestIds.length === 0) return false;
+  return requestIds.every((requestId) => requestId !== undefined && ownerRequestId(requestId) && !botTurnOf(requestId).routine);
+}
+
 /** The owner's own words in one input, or `undefined` when the input carries anyone else's. */
 export function ownerWordsOf(input: BotRunInputForJudge): string | undefined {
   const turn = botTurnOf(input.requestId);
-  if (turn.botMessage || turn.telegram || turn.peer || turn.intro || input.requestId?.startsWith("wake:")) return undefined;
+  if (!ownerRequestId(input.requestId)) return undefined;
   if (input.kind === BOT_ROUTINE_INPUT_KIND) {
     const data = input.data as { routineOrigin?: unknown } | undefined;
     const origin = parseBotRoutineInputOrigin(data?.routineOrigin);
