@@ -51,6 +51,8 @@ import type { BotRuntimeEffectiveAuthority } from "../bot-runtime-authority.js";
 import { summarizeToolCall } from "../coding-tools.js";
 import { COMPUTER_USE_TOOL_NAME } from "../computer-use/tool.js";
 import { renderMcpServersSection } from "../mcp-server-instructions.js";
+import { hasMcpAgentToolNameShape } from "../mcp-tool-identity.js";
+import { BOT_FILE_TOOL_NAMES } from "../bot-file-tool-router.js";
 import { piRuntimeReplayPolicy } from "../pi-runtime-tool.js";
 import type { SkillRegistrySnapshot } from "../skill-registry.js";
 import type {
@@ -91,11 +93,12 @@ function botBringsOutsideContent(toolName: string): boolean {
 /**
  * A Bot's own tools whose results never carry outside content: its memory and
  * notes, its wake-ups, questions and hand-offs to the person, its plans and
- * access requests, and files in its home (as a workspace's files don't taint).
+ * access requests, and files in its home or selected folders (as a workspace's
+ * files don't taint).
  */
 const BOT_NON_TAINTING_TOOL_NAMES: ReadonlySet<string> = new Set([
   "bot_memory", "bot_recall", "tidy_memory", "routine_notes", "wake_up", "ask_user_question", "hand_off", "sign_in",
-  "propose_plan", "request_access", "read_file", "write_file", "edit_file", "list_files",
+  "propose_plan", "request_access", ...BOT_FILE_TOOL_NAMES,
 ]);
 
 /**
@@ -106,7 +109,7 @@ const BOT_NON_TAINTING_TOOL_NAMES: ReadonlySet<string> = new Set([
  * `<server>__<tool>` name above all.
  */
 export function botHistoryToolTaints(toolName: string): boolean {
-  return botBringsOutsideContent(toolName) || toolName.includes("__") || !BOT_NON_TAINTING_TOOL_NAMES.has(toolName);
+  return botBringsOutsideContent(toolName) || hasMcpAgentToolNameShape(toolName) || !BOT_NON_TAINTING_TOOL_NAMES.has(toolName);
 }
 import type { ApprovalMode } from "../../../renderer/shared/approval-mode.js";
 import { botIngressAllowsTool, botToolApprovalSummary, botToolVerdict, botTurnOf, SUBAGENT_TOOL, type BotToolFacts } from "./bot-tool-policy.js";

@@ -11,6 +11,7 @@
 // their own content and do not taint the run. `bringsOutsideContent` lists the
 // sources.
 
+import { hasMcpAgentToolNameShape } from "../mcp-tool-identity.js";
 import { bringsOutsideContent, FETCH_TOOL_NAMES } from "./tool-classes.js";
 
 const URL_PATTERN = /\bhttps?:\/\/[^\s<>"'`)\]]+/gi;
@@ -116,7 +117,13 @@ export class RunTaint {
     for (const entry of input.history ?? []) {
       if (entry.outside) this.outside = true;
       if (entry.role !== "toolResult" || entry.toolName === undefined) continue;
-      if (bringsOutsideContent(entry.toolName) || input.isConnectorTool?.(entry.toolName)) this.outside = true;
+      // A connection's earlier result counts by its name's shape too: the
+      // connection may have been removed or renamed since that turn.
+      if (
+        bringsOutsideContent(entry.toolName)
+        || hasMcpAgentToolNameShape(entry.toolName)
+        || input.isConnectorTool?.(entry.toolName)
+      ) this.outside = true;
     }
   }
 

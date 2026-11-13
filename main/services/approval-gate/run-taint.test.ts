@@ -46,6 +46,24 @@ test("a taint carried in from an earlier turn's subagent or browser result still
   }
 });
 
+test("an earlier connection result still taints after the connection is removed or renamed; the person's own tools don't", () => {
+  const noConnectorsNow = () => false;
+  for (const toolName of ["srv__read", "old_notion__search_3fa2c1d0"]) {
+    const taint = new RunTaint({
+      personText: [],
+      history: [{ role: "toolResult", toolName }],
+      isConnectorTool: noConnectorsNow,
+    });
+    assert.equal(taint.isNewDestination(UNNAMED_FETCH), true, toolName);
+  }
+  const clean = new RunTaint({
+    personText: [],
+    history: [{ role: "toolResult", toolName: "read_file" }, { role: "toolResult", toolName: "grep" }],
+    isConnectorTool: noConnectorsNow,
+  });
+  assert.equal(clean.isNewDestination(UNNAMED_FETCH), false);
+});
+
 test("outside content a compaction folded away still taints the next turn, and a summary that can't be checked counts too", async () => {
   const { createInMemoryPiSession } = await import("../pi-session-repository-port.js");
   const { workspaceToolApproval } = await import("./workspace-tool-approval.js");
