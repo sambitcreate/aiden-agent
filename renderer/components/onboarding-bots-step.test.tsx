@@ -39,21 +39,30 @@ function mountOnboarding({
   botsCapability = true,
   overrides = {},
   onOpenBotChat,
+  notice = "pending",
 }: {
   bots: ReturnType<typeof botFixture>[];
   botsCapability?: boolean;
+  /** The Full-access notice as main has it before onboarding. */
+  notice?: "pending" | "customize_first";
   overrides?: Record<string, (...args: unknown[]) => unknown>;
   onOpenBotChat?(botId: string): void;
 }) {
   let created = false;
-  // Like main: until the Full-access notice is accepted, a Full-access Bot can't act.
-  let noticeAccepted = false;
+  let decision: "continue_full" | "customize_first" | undefined = notice === "customize_first" ? notice : undefined;
+  const catalog = () => {
+    const base = catalogFixture({ accepted: decision !== undefined });
+    return decision === "customize_first"
+      ? { ...base, notice: { ...base.notice, acceptedDecision: "customize_first" as const } }
+      : base;
+  };
   const calls: BotTestIpcCall[] = installBotTestIpc({
-    "bots:getCapabilityCatalog": () => catalogFixture({ accepted: noticeAccepted }),
+    "bots:getCapabilityCatalog": catalog,
     "bots:acknowledgeAccessNotice": (acknowledgement: unknown) => {
-      noticeAccepted = (acknowledgement as { decision?: unknown }).decision === "continue_full";
-      return catalogFixture({ accepted: noticeAccepted }).notice;
+      decision = (acknowledgement as { decision: "continue_full" | "customize_first" }).decision;
+      return catalog().notice;
     },
+    "bots:introduce": () => true,
     "app:getOnboardingState": () => resumeAfterProvider,
     "app:setOnboardingProgress": (step: unknown) => ({
       ...resumeAfterProvider,
@@ -66,7 +75,6 @@ function mountOnboarding({
     "bots:createFirst": async () => {
       // Making it takes a moment; main makes it once however often it is asked.
       await new Promise((resolve) => setTimeout(resolve, 20));
-      if (!noticeAccepted) throw new Error("Review the current Bot access notice before this Bot acts.");
       const first = !created;
       created = true;
       return { bot: botFixture({ id: "bot-chief", name: "Chief" }), created: first };
@@ -102,11 +110,33 @@ test("a first run makes the first Bot silently and says what a Bot is, with no s
 
 test("finishing onboarding opens the first Bot's chat, where it asks what it should help with", async () => {
   const opened: string[] = [];
-  mountOnboarding({ bots: [], onOpenBotChat: (botId) => opened.push(botId) });
+  const calls = mountOnboarding({ bots: [], onOpenBotChat: (botId) => opened.push(botId) });
   await screen.findByText("Chief is ready");
+  screen.getByText(/Chief gets Full access: .*Starting accepts this/u);
   assert.deepEqual(opened, [], "the chat waits until onboarding is done");
+  await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+  const channels = () => calls.map((call) => call.channel);
+  assert.equal(channels().includes("bots:acknowledgeAccessNotice"), false, "showing the step accepts nothing");
+  assert.equal(channels().includes("bots:introduce"), false);
+
   fireEvent.click(screen.getByRole("button", { name: /Start using Aiden/u }));
   await waitFor(() => assert.deepEqual(opened, ["bot-chief"]));
+  await waitFor(() => assert.ok(channels().includes("bots:introduce")));
+  const acknowledgement = calls.find((call) => call.channel === "bots:acknowledgeAccessNotice");
+  assert.equal((acknowledgement?.args[0] as { decision?: string } | undefined)?.decision, "continue_full");
+  assert.ok(channels().indexOf("bots:acknowledgeAccessNotice") < channels().indexOf("bots:introduce"), "it greets only once Full access is accepted");
+});
+
+test("a person who chose to review Bot access first keeps that choice through onboarding", async () => {
+  const opened: string[] = [];
+  const calls = mountOnboarding({ bots: [], notice: "customize_first", onOpenBotChat: (botId) => opened.push(botId) });
+  await screen.findByText("Chief is ready");
+  screen.getByText(/You chose to review a Bot’s access first/u);
+  fireEvent.click(screen.getByRole("button", { name: /Start using Aiden/u }));
+  await waitFor(() => assert.deepEqual(opened, ["bot-chief"]));
+  await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+  assert.equal(calls.some((call) => call.channel === "bots:acknowledgeAccessNotice"), false);
+  assert.equal(calls.some((call) => call.channel === "bots:introduce"), false);
 });
 
 test("the first Bot is never made when Bots already exist", async () => {

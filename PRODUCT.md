@@ -24,7 +24,7 @@ The primary application is an Electron desktop app for macOS and Linux. People w
 
 ## Capabilities and Constraints
 
-First-run setup and Settings → Providers share an account, API key and local-model chooser. Providers lists saved connections first. Advanced contains private endpoints, chat-title routing and manual catalog updates. The final setup stage makes the first Bot, Chief, by itself (its chat opens when setup finishes and its first message asks what it should help with) and offers the feature tour alongside the usage-data choice.
+First-run setup and Settings → Providers share an account, API key and local-model chooser. Providers lists saved connections first. Advanced contains private endpoints, chat-title routing and manual catalog updates. The final setup stage makes the first Bot, Chief, by itself and says it gets Full access; pressing Start using Aiden accepts that (an earlier choice to review Bot access first is kept), opens its chat, and its first message asks what it should help with and offers the feature tour alongside the usage-data choice.
 
 - Supports local and hosted model providers without making one provider the product authority.
 - Reuses local skill folders and explicitly enabled installed plugin skills under the active workspace permission.

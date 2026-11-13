@@ -184,11 +184,11 @@ export function registerBotHandlers(): void {
     return { bot, created };
   });
   // Onboarding's silent first Bot (plan §4.1): made once, a repeat returns it.
+  // It introduces itself only after the person presses Start using Aiden,
+  // which accepts its Full access (`bots:introduce`).
   ipcMain.handle("bots:createFirst", async (_event, input: unknown) => {
     if (input !== undefined) throw new Error("Invalid first Bot request.");
-    const starter = botStarter();
-    const { bot, created } = await starter.startFirst({ introduce: false });
-    if (created) void starter.introduce(bot.id);
+    const { bot, created } = await botStarter().startFirst({ introduce: false });
     return { bot, created };
   });
   // Templates: which ones already made a Bot, so their detail offers Open.
