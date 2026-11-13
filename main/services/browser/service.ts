@@ -52,6 +52,7 @@ import {
   browserDisplayUrl,
   browserRedactPreviewUrls,
   browserPageCaptureBounds,
+  browserMeasuredViewport,
   applyBrowserGuestIdentityHeaders,
   browserGuestUserAgent,
   browserLocalServers,
@@ -1490,31 +1491,42 @@ export class BrowserService {
   ): Promise<any> {
     let contextId: number | undefined;
     if (isolated) {
-      if (!tab.contextId) {
+      contextId = tab.contextId;
+      if (!contextId) {
         const tree = await this.send(tab, "Page.getFrameTree", {}, signal);
+        const frame = tree.frameTree.frame;
         const world = await this.send(
           tab,
           "Page.createIsolatedWorld",
           {
-            frameId: tree.frameTree.frame.id,
+            frameId: frame.id,
             worldName: "aiden-browser",
             grantUniveralAccess: false,
           },
           signal,
         );
-        tab.contextId = world.executionContextId;
+        contextId = world.executionContextId;
+        if (typeof contextId !== "number" || !Number.isSafeInteger(contextId) || contextId <= 0)
+          throw new Error("The browser isolated context is unavailable.");
         await this.send(
           tab,
           "Runtime.evaluate",
           {
             expression: `(() => { const module = {exports:{}}; ${playwrightInjectedSource}\n globalThis.__aidenPlaywright = new (module.exports.InjectedScript())(globalThis, ${JSON.stringify(PLAYWRIGHT_OPTIONS)}); })()`,
-            contextId: tab.contextId,
+            contextId,
             returnByValue: true,
           },
           signal,
         );
+        const current = (await this.send(tab, "Page.getFrameTree", {}, signal)).frameTree.frame;
+        // Native commit events may be delivered after getFrameTree already
+        // observed that document. Compare Chromium's document identity itself.
+        if (current.id !== frame.id || current.loaderId !== frame.loaderId)
+          throw new Error("The browser page changed before isolated evaluation. Try again.");
+        // Publish only a fully initialized context for this same document.
+        // Never re-read a cache navigation may have cleared during an await.
+        tab.contextId = contextId;
       }
-      contextId = tab.contextId;
     }
     const result = await this.send(
       tab,
@@ -1560,8 +1572,10 @@ export class BrowserService {
           : [{ name: "prefers-color-scheme", value: tab.state.appearance }],
     });
     if (viewport.mode === "fill") {
-      const measured = await this.evaluate(tab, "({width:innerWidth,height:innerHeight})");
-      if (measured?.width > 0 && measured?.height > 0) {
+      const measured = browserMeasuredViewport(
+        await this.evaluate(tab, "({width:innerWidth,height:innerHeight})", undefined, true),
+      );
+      if (measured) {
         tab.state.viewport.width = measured.width;
         tab.state.viewport.height = measured.height;
       }
@@ -1618,7 +1632,10 @@ export class BrowserService {
     let captureBounds = pageBounds;
     if (bounds) {
       const region = boundedBounds(bounds);
-      const measured = await this.evaluate(tab, "({width:innerWidth,height:innerHeight})", signal);
+      const measured = browserMeasuredViewport(
+        await this.evaluate(tab, "({width:innerWidth,height:innerHeight})", signal, true),
+      );
+      if (!measured) throw new Error("The browser viewport cannot be measured safely. Try resizing the browser.");
       const scaleX = pageBounds.width / measured.width,
         scaleY = pageBounds.height / measured.height;
       captureBounds = {
@@ -1629,7 +1646,11 @@ export class BrowserService {
       };
       captureBounds.width = Math.min(captureBounds.width, pageBounds.width - captureBounds.x);
       captureBounds.height = Math.min(captureBounds.height, pageBounds.height - captureBounds.y);
-      if (captureBounds.width <= 0 || captureBounds.height <= 0)
+      if (!Object.values(captureBounds).every(Number.isSafeInteger) ||
+          captureBounds.x < 0 || captureBounds.y < 0 ||
+          captureBounds.width <= 0 || captureBounds.height <= 0 ||
+          captureBounds.x + captureBounds.width > pageBounds.width ||
+          captureBounds.y + captureBounds.height > pageBounds.height)
         throw new Error("The capture region is outside the browser viewport.");
     }
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -2369,7 +2390,16 @@ export class BrowserService {
         signal,
       );
       if (!picked) return undefined;
-      const annotation = this.sanitizeAnnotation(picked);
+      // Page context is evidence, never the person's comment, edits or drawing.
+      // The picker runs alongside page scripts to retain framework source hints.
+      const annotation = this.sanitizeAnnotation({
+        url: browserDisplayUrl(tab.view.webContents.getURL()),
+        elements: picked.elements,
+        selectedText: picked.selectedText,
+        comment: "",
+        regions: [],
+        strokes: [],
+      });
       try {
         annotation.image = await this.capture(tab, false, undefined, signal);
       } catch {

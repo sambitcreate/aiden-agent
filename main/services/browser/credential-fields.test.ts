@@ -655,7 +655,14 @@ test("Chromium: a Bot's snapshot names no element with what a field holds; names
     const before = names(tree.nodes as Node[]).join("\n"), after = names((scrubbed.accessibilityTree as { nodes: Node[] }).nodes).join("\n");
     const secrets = ["\u2022".repeat(10), "550071", "4000123412341234", "5555444433332222", "1229", "4242424242424242", "7373", "482913"];
     for (const secret of secrets) assert.ok(before.includes(secret), `Chromium names an element with ${secret}:\n${before}`);
-    assert.doesNotMatch(JSON.stringify(scrubbed.accessibilityTree), /hunter2xyz|\u2022\u2022|550071|4000123412341234|5555444433332222|1229|4242424242424242|7373|482913|4111111111111111/u);
+    // Deterministically cover a protocol identity containing fixture digits.
+    (scrubbed.accessibilityTree as { nodes: Array<{ frameId?: string }> }).nodes[0].frameId = "opaque-1229-7373";
+    // Opaque Chromium identities can coincidentally contain a short secret's
+    // digits. Keep every content-bearing field, including sources and related
+    // text, in the oracle; protocol identities carry no rendered field value.
+    const content = JSON.stringify(scrubbed.accessibilityTree, (key, value: unknown) =>
+      ["nodeId", "parentId", "childIds", "backendDOMNodeId", "frameId"].includes(key) ? undefined : value);
+    assert.doesNotMatch(content, /hunter2xyz|\u2022\u2022|550071|4000123412341234|5555444433332222|1229|4242424242424242|7373|482913|4111111111111111/u);
     // Names from the page's own text, labels and attributes stay.
     for (const name of ['form "Checkout"', 'dialog "Payment"', 'LayoutTableCell "Password"', 'textbox "Card number "', 'button "Pay"', 'button "Resend"']) {
       assert.ok(after.includes(name), `${name} stays:\n${after}`);
