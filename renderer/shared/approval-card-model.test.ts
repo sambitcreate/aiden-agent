@@ -147,3 +147,113 @@ test("a Bot's Always button uses the label the host gives it", () => {
   assert.equal(approvalCardAllows(card, "always"), true);
   assert.deepEqual(card.notes, ["You’ve allowed this 4 times in the last 2 weeks."]);
 });
+
+function subagentWrite(diffPreview: string, diffTruncated: boolean) {
+  return {
+    kind: "subagent-workspace-write",
+    operation: "edit",
+    childLabel: "Research helper",
+    path: "docs/notes.md",
+    workspaceLabel: "Docs",
+    worktreeLabel: null,
+    isManagedWorktree: false,
+    preDigestPrefix: "aa11",
+    postDigestPrefix: "bb22",
+    beforeBytes: 10,
+    afterBytes: 20,
+    diffPreview,
+    diffTruncated,
+    commandWillRun: false,
+    refuseIfChanged: true,
+  };
+}
+
+test("a sub-agent's file change shows its diff, and is allowable only when the whole diff is there", () => {
+  const diff = "--- a/docs/notes.md\n+++ b/docs/notes.md\n-old\n+new";
+  const small = buildApprovalCard({ toolName: "write_file", summary: "Edit docs/notes.md", canAllow: true, details: subagentWrite(diff, false) });
+  assert.deepEqual(small.body, { format: "command", text: diff });
+  assert.equal(approvalCardAllows(small), true);
+
+  const truncated = buildApprovalCard({ toolName: "write_file", summary: "Edit docs/notes.md", canAllow: true, details: subagentWrite(diff, true) });
+  assert.equal(approvalCardAllows(truncated), false, "a diff the host cut short is allowed on the Mac");
+  assert.equal(truncated.allowOnMac, "Allow it on your Mac.");
+
+  const oversize = buildApprovalCard({ toolName: "write_file", summary: "Edit docs/notes.md", canAllow: true, details: subagentWrite(`+${"x".repeat(APPROVAL_CARD_LIMITS.body)}`, false) });
+  assert.equal(approvalCardAllows(oversize), false, "a diff that does not fit the card is allowed on the Mac");
+});
+
+test("a sub-agent's connector call shows its arguments, and is allowable only when they fit", () => {
+  const mutation = (canonicalArguments: string) => ({
+    kind: "subagent-mcp-mutation",
+    childLabel: "Research helper",
+    serverId: "linear",
+    toolName: "create_issue",
+    connectionDigestPrefix: "c1",
+    schemaDigestPrefix: "s1",
+    profileDigestPrefix: "p1",
+    argumentDigestPrefix: "a1",
+    classification: "declared_mutating",
+    destructive: "additive",
+    idempotency: "not_declared",
+    openWorld: "closed",
+    taskSupport: "forbidden",
+    timeoutMs: 30_000,
+    canonicalArguments,
+    priorUnknownEffect: false,
+    automaticRetry: false,
+    rollbackAvailable: false,
+  });
+  const args = '{"title":"Fix the login bug","team":"ENG"}';
+  const small = buildApprovalCard({ toolName: "mcp", summary: "Call linear:create_issue", canAllow: true, details: mutation(args) });
+  assert.deepEqual(small.body, { format: "command", text: args });
+  assert.equal(approvalCardAllows(small), true);
+
+  const oversize = buildApprovalCard({ toolName: "mcp", summary: "Call linear:create_issue", canAllow: true, details: mutation(`"${"x".repeat(APPROVAL_CARD_LIMITS.body)}"`) });
+  assert.equal(approvalCardAllows(oversize), false);
+});
+
+test("a sub-agent's run-wide grant is given on the Mac only, whatever it reaches", () => {
+  for (const fullHostAccess of [false, true]) {
+    const card = buildApprovalCard({
+      toolName: "subagent",
+      summary: "Allow writes for this run",
+      canAllow: true,
+      details: {
+        kind: "subagent-run-grant",
+        lane: "write",
+        runId: "run-1",
+        childLabel: "Research helper",
+        workspaceLabel: "Docs",
+        worktreeLabel: null,
+        isManagedWorktree: false,
+        workspaceRevisionPrefix: "r1",
+        fullHostAccess,
+        noRollback: false,
+      },
+    });
+    assert.deepEqual(card.buttons.map((button) => button.decision), ["deny"], `fullHostAccess ${fullHostAccess}`);
+    assert.equal(card.allowOnMac, "Allow it on your Mac.");
+  }
+});
+
+test("a hook proposal can be applied from a device only when its event, matcher and command are all shown", () => {
+  const proposal = (overrides: Record<string, unknown>) => ({
+    kind: "hook-proposal",
+    action: "create",
+    name: "Lint",
+    scopeLabel: "This workspace (docs)",
+    warnings: [],
+    digestPrefix: "abc123",
+    ...hook("npm run lint"),
+    ...overrides,
+  });
+  const whole = buildApprovalCard({ toolName: "hooks", summary: "Add hook", canAllow: true, details: proposal({ matcher: "Bash" }) });
+  assert.match(whole.body?.text ?? "", /event: PreToolUse\nmatcher: Bash\ncommand: npm run lint/u);
+  assert.equal(approvalCardAllows(whole), true);
+
+  const long = buildApprovalCard({ toolName: "hooks", summary: "Add hook", canAllow: true, details: proposal({ command: `echo ${"x".repeat(APPROVAL_CARD_LIMITS.body)}` }) });
+  assert.equal(approvalCardAllows(long), false, "a command clipped to fit is applied on the Mac");
+
+  const noMatcher = buildApprovalCard({ toolName: "hooks", summary: "Add hook", canAllow: true, details: proposal({ matcher: undefined }) });
+  assert.equal(approvalCardAllows(noMatcher), false);
+});

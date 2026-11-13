@@ -310,7 +310,17 @@ function kindOf(details: unknown): string | undefined {
     : undefined;
 }
 
+function requireText(value: unknown, label: string): string {
+  if (typeof value !== "string") throw new Error(`${label} is missing.`);
+  return value;
+}
+
 function hookText(hook: HookProposalApprovalHook): string {
+  // The event, matcher and command are what the person approves: a hook
+  // missing any of them is not shown, so the card fails closed.
+  requireText(hook.event, "Hook event");
+  requireText(hook.matcher, "Hook matcher");
+  requireText(hook.command, "Hook command");
   return [
     `event: ${hook.event}`,
     `matcher: ${hook.matcher === "" ? "Everything" : hook.matcher}`,
@@ -326,7 +336,8 @@ function hookText(hook: HookProposalApprovalHook): string {
  * The typed card for one pending approval. It is complete or deny-only: when
  * any part under review would not fit the wire bounds, or the host kept no
  * details, the card offers only Deny and says to allow it on the Mac, so a
- * device never allows something it could not see. Disclosure
+ * device never allows something it could not see. A sub-agent's run-wide
+ * grant is given on the Mac only. Disclosure
  * tools (`classify`, `generate_image`) stay allow-on-Mac in this revision. A
  * plain `computer_use` call (a Bot's) acts on the Mac's screen and is allowed
  * there; the Computer Use access grant card can be answered anywhere.
@@ -410,6 +421,10 @@ export function buildApprovalCard(input: ApprovalCardInput): ApprovalCard {
       args.push({ key: "who", value: write.childLabel }, { key: "path", value: write.path },
         { key: "workspace", value: write.worktreeLabel ?? write.workspaceLabel },
         { key: "size", value: `${write.beforeBytes} → ${write.afterBytes} bytes` });
+      // The change itself is what the person allows: a diff the host had to
+      // cut short, or one that does not fit, can only be allowed on the Mac.
+      body = text(requireText(write.diffPreview, "Diff preview"), "command");
+      if (write.diffTruncated !== false) complete = false;
       break;
     }
     case "subagent-mcp-mutation": {
@@ -417,6 +432,7 @@ export function buildApprovalCard(input: ApprovalCardInput): ApprovalCard {
       args.push({ key: "who", value: mutation.childLabel }, { key: "server", value: mutation.serverId }, { key: "tool", value: mutation.toolName },
         { key: "effect", value: mutation.destructive }, { key: "changes", value: mutation.classification === "declared_mutating" ? "declared" : "not proven read-only" });
       allowLabel = subagentMcpMutationAllowLabel(mutation);
+      body = text(requireText(mutation.canonicalArguments, "Tool arguments"), "command");
       break;
     }
     case "subagent-run-grant": {
@@ -426,6 +442,8 @@ export function buildApprovalCard(input: ApprovalCardInput): ApprovalCard {
       args.push({ key: "who", value: grant.childLabel }, { key: "workspace", value: grant.worktreeLabel ?? grant.workspaceLabel },
         { key: "reach", value: grant.fullHostAccess ? "Full host" : "This workspace" });
       if (grant.noRollback) notes.push("Changes in this run can’t be rolled back.");
+      // A run-wide grant reaches more than one call; it is given on the Mac.
+      hostOnly = true;
       break;
     }
     case "form-fill-batch": {
