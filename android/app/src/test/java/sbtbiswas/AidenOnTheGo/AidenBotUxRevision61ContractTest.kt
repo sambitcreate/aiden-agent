@@ -500,11 +500,8 @@ class AidenBotUxRevision61ContractTest {
         val avatar = wire.decodeFromJsonElement(AidenBotSemanticAvatar.serializer(), expected.getValue("avatar"))
         val request = AidenBotCreateRequest.oneField(expected.getValue("name").jsonPrimitive.content, avatar)
         val sent = wire.encodeToJsonElement(AidenBotCreateRequest.serializer(), request).jsonObject
-        assertFalse("instructions" in sent)
-        assertEquals(expected.getValue("name"), sent.getValue("name"))
-        assertEquals(expected.getValue("avatar"), sent.getValue("avatar"))
-        // The Mac's create parser still requires `purpose`, so it goes out empty.
-        assertEquals(JsonPrimitive(""), sent.getValue("purpose"))
+        // Exactly the fixture's body: the name and look, nothing else.
+        assertEquals(expected, sent)
     }
 
     @Test

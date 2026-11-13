@@ -9,7 +9,7 @@
     <string name="approvals_mode_ask_helper">Asks before sending, spending or changing anything.</string>
     <string name="approvals_mode_auto">Auto</string>
     <string name="approvals_mode_auto_helper">A model approves routine actions and asks you about the rest.</string>
-    <string name="approvals_mode_auto_unavailable">Auto appears once a model is connected in Providers.</string>
+    <string name="approvals_mode_auto_unavailable">Auto needs an approval model. Choose one on your Mac.</string>
     <string name="approvals_mode_never">Never ask</string>
     <string name="approvals_mode_never_helper">Asks only before purchases, sharing your data and the first use of your Mac. Only Block rules apply.</string>
     <string name="approvals_mode_unavailable">Couldn’t load approvals from your Mac.</string>

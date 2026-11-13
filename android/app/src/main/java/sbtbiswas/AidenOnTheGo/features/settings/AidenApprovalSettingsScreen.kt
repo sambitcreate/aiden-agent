@@ -67,8 +67,8 @@ private fun aidenApprovalDecisionLabels(): Map<AidenApprovalRuleDecision, String
     AidenApprovalRuleDecision.BLOCK to stringResource(R.string.approvals_decision_block)
 )
 
-/** The order the page offers the modes in: the safe default first. */
-private val ModeOrder = listOf(AidenApprovalMode.ASK, AidenApprovalMode.AUTO, AidenApprovalMode.NEVER)
+/** The order the page offers the modes in, as on the Mac (`APPROVAL_MODES`). */
+private val ModeOrder = listOf(AidenApprovalMode.AUTO, AidenApprovalMode.ASK, AidenApprovalMode.NEVER)
 
 /** The root Settings row. It shows only when this phone holds `approvals:settings`. */
 @Composable

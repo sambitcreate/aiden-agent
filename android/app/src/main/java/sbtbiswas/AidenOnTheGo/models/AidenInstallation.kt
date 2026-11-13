@@ -402,9 +402,12 @@ data class AidenInstallation(
         get() = isBotsEligible && hasNegotiatedAccess(AidenRemoteCapability.BOT_WRITE)
 
     /**
-     * Revision 61: the Mac offers the new Bot UX (it advertises `approval:cards`), so this phone
-     * uses the client-only pieces that go with it: two-step Take control, the single messaging
-     * switch, the per-device Show tool activity switch and Disable a tool.
+     * Revision 61: the host advertises `approval:cards`, so this phone uses the client-only pieces
+     * that go with the new Bot UX: two-step Take control, the single messaging switch, the
+     * per-device Show tool activity switch and Disable a tool. An `aiden serve` host advertises
+     * `approval:cards` too, so this is true there as well; that is safe, because each piece uses
+     * only routes and fields older hosts already have (the `done` / `skipped` hand-off answers,
+     * the two stored messaging directions, `PATCH /bots/{botId}/capabilities`).
      */
     val offersBotUx: Boolean
         get() = serverCapabilities?.contains(AidenRemoteCapability.APPROVAL_CARDS) == true

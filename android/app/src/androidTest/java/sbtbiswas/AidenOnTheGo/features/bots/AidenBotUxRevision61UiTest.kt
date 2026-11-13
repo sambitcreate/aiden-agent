@@ -13,6 +13,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -154,7 +155,7 @@ class AidenBotUxRevision61UiTest {
         val controller = AidenApprovalSettingsController(scope).apply { bind(remote) }
         compose.setContent { AidenTheme { AidenApprovalSettingsScreen(controller, available = true, onOpenRules = {}, onNavigateBack = {}) } }
         compose.waitUntil(5_000) { controller.state.value.mode != null }
-        compose.onNodeWithText("Auto appears once a model is connected in Providers.").assertExists()
+        compose.onNodeWithText("Auto needs an approval model. Choose one on your Mac.").assertExists()
         compose.onNodeWithText("Auto").assertIsNotEnabled()
         capture("approvals-mode")
     }
@@ -213,8 +214,10 @@ class AidenBotUxRevision61UiTest {
         val store = AidenAppearanceStore(File(instrumentation.targetContext.cacheDir, "phase6c-appearance").apply { deleteRecursively() })
         compose.setContent { AidenTheme { AidenAppearanceSettingsScreen(store, onNavigateBack = {}, showsToolActivity = true) } }
         compose.onNode(hasScrollAction()).performScrollToNode(hasText("Show tool activity"))
+        // Off until the person turns it on.
+        compose.onNodeWithText("Show tool activity").assertIsOff()
         compose.onNodeWithText("Show tool activity").performClick()
-        compose.runOnIdle { assertEquals(false, store.config.value.showToolActivity) }
+        compose.runOnIdle { assertEquals(true, store.config.value.showToolActivity) }
         capture("appearance-tool-activity")
     }
 }

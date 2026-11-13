@@ -263,10 +263,10 @@ data class AidenAppearanceConfig(
     val reduceMotion: Boolean = false,
     val privacyMaskExcerpts: Boolean = false,
     /**
-     * Revision 61: Show tool activity in Bot chats on this phone. Null until the person sets it,
-     * so a Bot keeps the wording it was given; it applies only on a Mac that offers the new cards.
+     * Revision 61: Show tool activity in Bot chats on this phone. Off by default, as on the Mac
+     * and iPhone; it applies only on a Mac that offers the new cards.
      */
-    val showToolActivity: Boolean? = null
+    val showToolActivity: Boolean = false
 )
 
 class AidenAppearanceStore(private val storageDir: File) {

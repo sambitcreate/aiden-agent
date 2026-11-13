@@ -14,6 +14,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.res.stringResource
 import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.models.AidenBotCapabilityCatalog
+import sbtbiswas.AidenOnTheGo.models.AidenBotCapabilityOption
 import sbtbiswas.AidenOnTheGo.models.AidenBotFileScopeKind
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
 
@@ -34,9 +35,18 @@ fun aidenBotAvailableTools(catalog: AidenBotCapabilityCatalog, shellLabel: Strin
 }
 
 /**
- * Disable a tool, as on the Mac. A Bot on Full access first becomes Custom with everything
- * available on and the widest file access (the whole Mac, else its own folder and the approved
- * places), so only [tool] goes. The draft saves through the existing capabilities route; Full
+ * Web search, which Full access grants only while the Mac's own web search switch is on. The wire
+ * carries neither that switch nor a capability's kind, so the host's fixed label identifies it.
+ */
+internal fun aidenBotIsWebSearch(option: AidenBotCapabilityOption): Boolean =
+    option.label.trim().let { it.equals("Web search", ignoreCase = true) || it.equals("Web", ignoreCase = true) }
+
+/**
+ * Disable a tool, as on the Mac. A Bot on Full access first becomes Custom with everything Full
+ * certainly grants and the widest file access (the whole Mac, else its own folder and the approved
+ * places), so only [tool] goes. The conversion only narrows: web search is left off, because Full
+ * grants it only when the Mac's web search switch is on, which this phone can't see; the person
+ * can turn it back on in Custom. The draft saves through the existing capabilities route; Full
  * access again is the selector's Full choice.
  */
 fun AidenBotAdvancedDraft.disabling(tool: AidenBotTool, catalog: AidenBotCapabilityCatalog): AidenBotAdvancedDraft {
@@ -54,7 +64,7 @@ fun AidenBotAdvancedDraft.disabling(tool: AidenBotTool, catalog: AidenBotCapabil
             shellEnabled = catalog.shellAvailable,
             connectionIDs = catalog.connections.filter { it.available }.map { it.id }.toSet(),
             skillIDs = catalog.skills.filter { it.available || !catalog.skillsEnabled }.map { it.id }.toSet(),
-            otherCapabilityIDs = catalog.otherCapabilities.filter { it.available }.map { it.id }.toSet()
+            otherCapabilityIDs = catalog.otherCapabilities.filter { it.available && !aidenBotIsWebSearch(it) }.map { it.id }.toSet()
         )
     }
     custom = when (tool) {

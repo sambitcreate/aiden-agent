@@ -381,7 +381,14 @@ object AidenBotDetailSerializer : AidenBotRetiredGreetingSerializer<AidenBotDeta
         if ((it as? JsonObject)?.get("botMessaging") is JsonNull) throw AidenBotContractException.InvalidField("botMessaging")
     }
 }
-object AidenBotCreateRequestSerializer : AidenBotRetiredGreetingSerializer<AidenBotCreateRequest>(AidenBotCreateRequest.generatedSerializer())
+object AidenBotCreateRequestSerializer : AidenBotRetiredGreetingSerializer<AidenBotCreateRequest>(AidenBotCreateRequest.generatedSerializer()) {
+    /** A one-field create (no instructions, empty purpose) sends only the name and look. */
+    override fun transformSerialize(element: JsonElement): JsonElement {
+        val body = element as? JsonObject ?: return element
+        val purpose = body["purpose"] as? JsonPrimitive
+        return if ("instructions" !in body && purpose?.isString == true && purpose.content.isEmpty()) JsonObject(body - "purpose") else body
+    }
+}
 object AidenBotIdentityPatchSerializer : AidenBotRetiredGreetingSerializer<AidenBotIdentityPatch>(AidenBotIdentityPatch.generatedSerializer()) {
     override fun transformDeserialize(element: JsonElement): JsonElement = super.transformDeserialize(element).also {
         if ((it as? JsonObject)?.get("botMessaging") is JsonNull) throw AidenBotContractException.InvalidField("botMessaging")
@@ -532,8 +539,8 @@ data class AidenBotCreateRequest(
 
     companion object {
         /**
-         * One-field create: the name and a look. `purpose` is sent empty because the Mac's create
-         * parser still requires the key; `instructions` is left out.
+         * One-field create: the name and a look. Neither `purpose` nor `instructions` goes out; the
+         * Mac starts the Bot from its starter instructions.
          */
         fun oneField(name: String, avatar: AidenBotSemanticAvatar): AidenBotCreateRequest =
             AidenBotCreateRequest(name = name, purpose = "", instructions = null, avatar = avatar)

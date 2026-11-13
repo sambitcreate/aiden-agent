@@ -112,8 +112,7 @@ fun AidenAppearanceSettingsScreen(
                     row {
                         AidenSettingsSwitchRow(
                             headline = stringResource(R.string.appearance_show_tool_activity),
-                            // Unset, a Bot keeps its own wording, which follows its tools by default.
-                            checked = config.showToolActivity ?: true,
+                            checked = config.showToolActivity,
                             leadingIcon = Icons.Outlined.Build,
                             onCheckedChange = appearanceStore::updateShowToolActivity
                         )
