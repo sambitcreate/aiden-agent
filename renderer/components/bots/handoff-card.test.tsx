@@ -68,6 +68,7 @@ test("Take control opens the page and only then offers I'm done and Skip, with t
   assert.equal(opens(), 1);
   assert.deepEqual(answers, [], "taking control answers nothing");
   assert.deepEqual(buttonNames(), ["Open again: Take control at bank.example", "Skip", "I’m done"]);
+  assert.equal(document.activeElement, screen.getByRole("button", { name: "I’m done" }), "focus moves on to the answer, not to the page body");
   fireEvent.click(screen.getByRole("button", { name: "Open again: Take control at bank.example" }));
   assert.equal(opens(), 2);
 });
@@ -121,6 +122,7 @@ test("on a Bot that lives on another Mac, a sign-in offers Finish there, then Sk
   assert.equal(screen.queryByText(/^Opens /u), null, "the page opens over there, not here");
   fireEvent.click(screen.getByRole("button", { name: "Finish on Studio" }));
   assert.deepEqual(buttonNames(), ["Finish on Studio", "Skip"], "the sign-in is answered over there, so only Skip here");
+  assert.equal(document.activeElement, screen.getByRole("button", { name: "Skip" }), "focus moves to the one answer left here");
   fireEvent.click(screen.getByRole("button", { name: "Skip" }));
   assert.equal(finishes, 1);
   assert.deepEqual(answers, ["skipped"]);

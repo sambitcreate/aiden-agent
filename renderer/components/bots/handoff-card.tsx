@@ -24,6 +24,7 @@
 // there (`onMac`, Remote contract revision 43) offers "Finish on <Mac>", then
 // Skip and I'm done.
 
+import * as React from "react";
 import { ExternalLink, Globe, Laptop, LogIn, Monitor } from "lucide-react";
 import { BotAvatar } from "../bot-avatar";
 import { Button } from "../ui";
@@ -135,13 +136,28 @@ export function HandoffActions({
   const signIn = handoff.kind === "sign_in";
   const host = handoff.open && !signIn ? linkHost(handoff.open.url) : undefined;
   const elsewhere = finishOn !== undefined && (signIn || onBotScreen(handoff));
+  // Take control replaces its own button, so the press that took control here
+  // moves focus on to the second step's answer: I'm done, or Skip where that
+  // is the only answer this device can give.
+  const answerAfterTake = React.useRef<HTMLButtonElement>(null);
+  const tookHere = React.useRef(false);
+  React.useEffect(() => {
+    if (!taken || !tookHere.current) return;
+    tookHere.current = false;
+    answerAfterTake.current?.focus();
+  }, [taken]);
+  const take = () => {
+    tookHere.current = true;
+    onTake();
+  };
+  const doneFirst = !(elsewhere && signIn);
   const done = (
-    <Button variant="accent" size="small" disabled={busy} onClick={() => onAnswer("done")}>
+    <Button ref={doneFirst ? answerAfterTake : undefined} variant="accent" size="small" disabled={busy} onClick={() => onAnswer("done")}>
       {IM_DONE}
     </Button>
   );
   const skip = (
-    <Button variant="transparent" size="small" disabled={busy} onClick={() => onAnswer("skipped")}>
+    <Button ref={doneFirst ? undefined : answerAfterTake} variant="transparent" size="small" disabled={busy} onClick={() => onAnswer("skipped")}>
       Skip
     </Button>
   );
@@ -152,7 +168,8 @@ export function HandoffActions({
         size="small"
         disabled={busy}
         onClick={() => {
-          onTake();
+          if (taken) onTake();
+          else take();
           onFinish?.();
         }}
       >
@@ -189,7 +206,7 @@ export function HandoffActions({
         disabled={busy}
         aria-label={takeLabel}
         onClick={() => {
-          onTake();
+          take();
           if (opens) onOpen();
         }}
       >
