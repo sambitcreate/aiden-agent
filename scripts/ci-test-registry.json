@@ -333,6 +333,7 @@
         "main/services/design-canvas/text-write.test.ts",
         "main/services/close-guard-prompt.test.ts",
         "main/services/design-canvas/artifact-frames.test.ts",
+        "main/services/design-canvas/written-pages.test.ts",
         "main/services/design-canvas/skill.test.ts",
         "main/services/design-canvas/design-mode-tool.test.ts",
         "main/services/design-canvas/canvas-snapshots.test.ts",

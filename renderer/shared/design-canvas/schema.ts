@@ -211,6 +211,25 @@ export const DESIGN_CANVAS_LIMITS = {
 
 export const DESIGN_WIDTHS = [390, 768, 1280, 1440] as const;
 
+/** The design width a page frame gets when none is chosen. */
+export const DESIGN_DEFAULT_FILE_WIDTH: DesignWidth = 1280;
+
+/**
+ * The box a page frame gets on the canvas at each design width: a phone at
+ * full size and a whole screen, a tablet and desktops scaled to fit beside
+ * other frames. 1280 keeps the long-standing 640 × 436.
+ */
+const DEFAULT_FILE_BOXES: Record<DesignWidth, { w: number; h: number }> = {
+  390: { w: 390, h: 844 },
+  768: { w: 576, h: 768 },
+  1280: { w: 640, h: 436 },
+  1440: { w: 720, h: 486 },
+};
+
+export function defaultFileBox(designWidth: DesignWidth = DESIGN_DEFAULT_FILE_WIDTH): { w: number; h: number } {
+  return { ...(DEFAULT_FILE_BOXES[designWidth] ?? DEFAULT_FILE_BOXES[DESIGN_DEFAULT_FILE_WIDTH]) };
+}
+
 const FRAME_KINDS: ReadonlySet<string> = new Set<DesignFrameKind>([
   "file",
   "artifact",

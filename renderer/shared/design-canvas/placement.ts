@@ -92,6 +92,50 @@ export function placeFrame(
     w,
     h,
   };
+  // A group (not an artboard, which keeps the size the person drew) grows to
+  // hold a member placed past its right or bottom edge.
+  const frames = [...doc.frames, placed].map((entry) =>
+    group && entry.id === group.id && group.kind === "group" ? growGroupToHold(entry, placed) : entry,
+  );
   // A new arrow takes its place on the frames it joins.
-  return { id, doc: syncConnectors({ ...doc, frames: [...doc.frames, placed] }) };
+  return { id, doc: syncConnectors({ ...doc, frames }) };
+}
+
+/** Space a group keeps around its members when it grows or is fitted to them. */
+export const GROUP_PADDING = { left: 32, top: 48, right: 32, bottom: 32 } as const;
+
+/** A group grown right and down, if needed, to hold `member` with `GROUP_PADDING` to spare. */
+export function growGroupToHold(group: DesignFrame, member: DesignFrame): DesignFrame {
+  const right = member.x + member.w + GROUP_PADDING.right;
+  const bottom = member.y + member.h + GROUP_PADDING.bottom;
+  const w = right > group.x + group.w ? clampSize(right - group.x, group.kind) : group.w;
+  const h = bottom > group.y + group.h ? clampSize(bottom - group.y, group.kind) : group.h;
+  return w === group.w && h === group.h ? group : { ...group, w, h };
+}
+
+/**
+ * Fits a group or artboard snugly around its members, `GROUP_PADDING` in from
+ * each edge. The members stay where they are; the container moves and
+ * resizes. A container with no members is left as it is.
+ */
+export function fitGroupToMembers(doc: DesignCanvas, groupId: string): DesignCanvas {
+  const group = doc.frames.find((entry) => entry.id === groupId && isDesignContainer(entry.kind));
+  if (!group) return doc;
+  const members = doc.frames.filter((entry) => entry.groupId === groupId && entry.pageId === group.pageId);
+  if (members.length === 0) return doc;
+  const left = Math.min(...members.map((entry) => entry.x)) - GROUP_PADDING.left;
+  const top = Math.min(...members.map((entry) => entry.y)) - GROUP_PADDING.top;
+  const right = Math.max(...members.map((entry) => entry.x + entry.w)) + GROUP_PADDING.right;
+  const bottom = Math.max(...members.map((entry) => entry.y + entry.h)) + GROUP_PADDING.bottom;
+  const next = {
+    x: clampCoord(left),
+    y: clampCoord(top),
+    w: clampSize(right - left, group.kind),
+    h: clampSize(bottom - top, group.kind),
+  };
+  if (next.x === group.x && next.y === group.y && next.w === group.w && next.h === group.h) return doc;
+  return syncConnectors({
+    ...doc,
+    frames: doc.frames.map((entry) => (entry.id === groupId ? { ...entry, ...next } : entry)),
+  });
 }

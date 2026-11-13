@@ -7,6 +7,7 @@
  * (Aiden would execute them again); they become generation-timeline steps,
  * which persist on the assistant message and reach both native clients.
  */
+import { lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { createHash, type Hash } from "node:crypto";
 import type {
@@ -298,12 +299,48 @@ export class AcpToolCallTracker {
   }
 }
 
+/**
+ * Resolve symlinks in an absolute path (or its nearest existing ancestor when
+ * the file itself does not exist yet) so symlinked workspace roots and paths
+ * correlate with `realpath`'d file writes.
+ */
+export function canonicalDisplayPath(target: string): string | undefined {
+  if (typeof target !== "string" || !target || target.includes("\0") || !path.isAbsolute(target)) {
+    return undefined;
+  }
+  const normalized = path.resolve(target);
+  const missing: string[] = [];
+  let current = normalized;
+  for (;;) {
+    try {
+      const resolved = realpathSync(current);
+      return missing.length > 0 ? path.join(resolved, ...missing) : resolved;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return undefined;
+      try {
+        // An existing broken symlink throws ENOENT from realpath; do not treat its name as inside the root.
+        lstatSync(current);
+        return undefined;
+      } catch (statError) {
+        if ((statError as NodeJS.ErrnoException).code !== "ENOENT") return undefined;
+      }
+      const parent = path.dirname(current);
+      if (parent === current) return normalized;
+      missing.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
 /** A workspace-relative display path, or undefined when outside every root. */
 export function relativeDisplayPath(absolute: string, roots: readonly AcpRoot[]): string | undefined {
+  const target = canonicalDisplayPath(absolute);
+  if (!target) return undefined;
   for (const entry of roots) {
-    const root = rootPath(entry);
+    const rawRoot = rootPath(entry);
+    const root = rawRoot ? canonicalDisplayPath(rawRoot) : undefined;
     if (!root) continue;
-    const relative = path.relative(root, absolute);
+    const relative = path.relative(root, target);
     if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
       return relative.split(path.sep).join("/");
     }

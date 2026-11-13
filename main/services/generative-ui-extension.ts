@@ -104,7 +104,16 @@ export interface GenerativeUiExtensionOptions {
   existingChatUiCount?: number;
   /** The turn came from a paired device, which shows each visual as a snapshot. */
   audience?: "remote";
+  /**
+   * The design canvas is offered this turn: pages, screens and UI mockups go
+   * in `design/*.html` files there, so inline visuals stay small in-reply
+   * charts and widgets.
+   */
+  designCanvas?: boolean;
 }
+
+const DESIGN_CANVAS_VISUALS_NOTE =
+  " Design mode is on: pages, screens, dashboards laid out as pages, and UI mockups belong on the design canvas as design/*.html files, never in an inline visual. Use inline visuals only for small charts or widgets that support your reply.";
 
 function resolveWorkspaceHtml(
   root: string,
@@ -165,13 +174,18 @@ export function createGenerativeUiExtensionRuntime(
   let displayedBytes = 0;
   let serial = Promise.resolve();
   const titlesInGeneration = new Map<string, { mediaId: string; size: number; toolCallId: string }>();
+  const designCanvas = options.designCanvas === true;
 
   const tool: AgentTool = declarePiRuntimeReplay(
     {
       name: GENERATIVE_UI_TOOL_NAME,
       label: "Render Artifact",
       description:
-        "Render an interactive HTML/CSS/JS visualization inline in the current Aiden chat, inside the reply at the point you call it. Use this for charts, diagrams, dashboards, interactive explainers, or UI mockups instead of huge Markdown tables. Provide either `html` (preferred) or a workspace-relative `.html` path. Vanilla HTML/CSS/JS only. Chart.js (`Chart`), Plotly (`Plotly`), and KaTeX (`katex`) are injected by Aiden—do not load CDN scripts or call network APIs. Do not use this for ordinary prose or raster images (use display_image).",
+        "Render an interactive HTML/CSS/JS visualization inline in the current Aiden chat, inside the reply at the point you call it. " +
+        (designCanvas
+          ? "Use this only for small charts, diagrams, or widgets that support the reply; pages, screens, and UI mockups go on the design canvas as design/*.html files instead. "
+          : "Use this for charts, diagrams, dashboards, interactive explainers, or UI mockups instead of huge Markdown tables. ") +
+        "Provide either `html` (preferred) or a workspace-relative `.html` path. Vanilla HTML/CSS/JS only. Chart.js (`Chart`), Plotly (`Plotly`), and KaTeX (`katex`) are injected by Aiden—do not load CDN scripts or call network APIs. Do not use this for ordinary prose or raster images (use display_image).",
       parameters: Type.Object({
         title: Type.String({
           description: "Short visible title for the artifact frame.",
@@ -181,7 +195,10 @@ export function createGenerativeUiExtensionRuntime(
         layout: Type.Optional(
           Type.Union([Type.Literal("column"), Type.Literal("wide")], {
             description:
-              "Set before html. column (default): the reading column, about 690px wide, for charts, cards, diagrams, and small tools. wide: spans the whole chat pane (up to about 1280px) and follows the window size, for dashboards, UI mockups, multi-panel layouts, and wide tables.",
+              "Set before html. column (default): the reading column, about 690px wide, for charts, cards, diagrams, and small tools. wide: spans the whole chat pane (up to about 1280px) and follows the window size, " +
+              (designCanvas
+                ? "for multi-panel charts and wide tables."
+                : "for dashboards, UI mockups, multi-panel layouts, and wide tables."),
           }),
         ),
         html: Type.Optional(
@@ -347,9 +364,14 @@ export function createGenerativeUiExtensionRuntime(
         (options.onUiVisual
           ? "Aiden can draw inline visuals in this chat. Prefer render_ui, which composes Aiden's own native components (charts, stats, tables, comparisons, checklists, steps, simple filters and tabs); use render_artifact (sandboxed HTML) only for custom drawing or scripting. "
           : "Aiden can draw inline visuals in this chat with render_artifact. ") +
-        "Use one when a comparison, trend, structure, process, or interactive what-if is clearer as a visual than as prose — not for plain answers or raster images (use display_image), and usually at most one per reply. Each visual appears inside your reply in the Aiden desktop chat, at the point you call the tool, on the chat's own background (no frame or border), with its height following its content. It defaults to the reading column (about 690px wide); pass layout \"wide\" (before the markup or html) when it needs room, such as a dashboard, UI mockup, multi-panel layout, or wide table, and it will span the chat pane and follow the window size. Either way its width changes with the window, so build it fluid. Before your first visual in a conversation, call visualize_guide with the modules you need (catalog for render_ui; design, html, charts, interactive for render_artifact). Keep the reply complete without the visual: state the key takeaway in a sentence. Never load remote scripts or call network APIs from a visual, and do not claim inline visuals are unavailable while these tools are present." +
+        "Use one when a comparison, trend, structure, process, or interactive what-if is clearer as a visual than as prose — not for plain answers or raster images (use display_image), and usually at most one per reply. Each visual appears inside your reply in the Aiden desktop chat, at the point you call the tool, on the chat's own background (no frame or border), with its height following its content. It defaults to the reading column (about 690px wide); pass layout \"wide\" (before the markup or html) when it needs room, such as " +
+        (designCanvas ? "a multi-panel chart or wide table" : "a dashboard, UI mockup, multi-panel layout, or wide table") +
+        ", and it will span the chat pane and follow the window size. Either way its width changes with the window, so build it fluid. Before your first visual in a conversation, call visualize_guide with the modules you need (catalog for render_ui; design, html, charts, interactive for render_artifact). Keep the reply complete without the visual: state the key takeaway in a sentence. Never load remote scripts or call network APIs from a visual, and do not claim inline visuals are unavailable while these tools are present." +
+        (designCanvas ? DESIGN_CANVAS_VISUALS_NOTE : "") +
         (options.preferArtifactThisTurn
-          ? " The user invoked /visualize for this turn; prefer render_artifact when a chart, diagram, dashboard, or interactive mockup would help."
+          ? designCanvas
+            ? " The user invoked /visualize for this turn; prefer render_artifact when a chart or diagram would help."
+            : " The user invoked /visualize for this turn; prefer render_artifact when a chart, diagram, dashboard, or interactive mockup would help."
           : "") +
         (options.audience === "remote"
           ? " This message was sent from a paired device such as a phone. There the user sees each visual as a still image (a snapshot of the column layout) with its text description, so its controls do nothing until they open the chat on this computer: make the first view carry the answer, keep text legible at phone width, and prefer the column layout."
