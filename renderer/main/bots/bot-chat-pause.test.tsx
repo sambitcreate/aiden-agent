@@ -130,8 +130,8 @@ test("routines skipped while paused are listed, and Run now runs that one routin
     },
   });
   const card = await screen.findByRole("group", { name: "2 routines skipped while paused" });
-  assert.ok(within(card).getByText("Skipped 3 times"));
-  assert.ok(within(card).getByText("Skipped once"));
+  assert.ok(within(card).getByText("Skipped while paused (3 times): Morning brief"));
+  assert.ok(within(card).getByText("Skipped while paused (once): Inbox sweep"));
 
   // Label in name: the accessible name starts with the words on the button, so
   // a voice-control user saying "Run now" reaches it.
@@ -143,7 +143,7 @@ test("routines skipped while paused are listed, and Run now runs that one routin
   await waitFor(() => assert.equal(runBrief.hasAttribute("disabled"), false));
 
   fireEvent.click(runBrief);
-  await waitFor(() => assert.ok(within(card).getByText("Started")));
+  await waitFor(() => assert.ok(within(card).getByText("Started: Morning brief")));
   assert.equal(within(card).queryByRole("button", { name: "Run now: Morning brief" }), null);
   assert.ok(within(card).getByRole("button", { name: "Run now: Inbox sweep" }), "the other routine is untouched");
   assert.deepEqual(

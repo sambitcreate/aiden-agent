@@ -15,6 +15,7 @@
 // conversation entry (`aiden.routine-proposal`, `aiden.routine-proposal-status`)
 // that the live projection folds into one card.
 
+import { BOT_SUGGESTION_LIMIT_MESSAGE as SUGGESTION_LIMIT, type BotSuggestionBudget } from "./bot-runtime/bot-suggestion-budget.js";
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -79,7 +80,7 @@ export type BotRoutineProposalRecord = BotRoutineProposalEntryData & {
 
 export type BotRoutineProposeResult =
   | { ok: true; proposal: BotRoutineProposalEntryData }
-  | { ok: false; code: "too_many_pending" | "invalid" | "cooling_off" | "declined_before"; error: string; until?: number };
+  | { ok: false; code: "too_many_pending" | "invalid" | "cooling_off" | "declined_before" | "suggestion_limit"; error: string; until?: number };
 
 export type BotRoutineReviseResult =
   | { ok: true; proposal: BotRoutineProposalEntryData; replaced: string }
@@ -161,6 +162,8 @@ export interface BotRoutineProposalServiceDependencies {
   onSettled?(botId: string, proposalId: string, status: Exclude<BotRoutineProposalStatus, "pending">): void;
   /** A waiting card was revised into a new one (`replacement`); it was not answered. */
   onRevised?(botId: string, replacedId: string, replacement: BotRoutineProposalEntryData): void;
+  /** The shared cap on a Bot's own suggestions; asked-for and host follow-up cards skip it. */
+  suggestionBudget?: BotSuggestionBudget;
   now?(): number;
   newId?(): string;
 }
@@ -589,9 +592,16 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
           };
         }
         const record = recordOf(content, reason, now());
-        await save(botId, [...records, record]);
         const proposal = entryData(record);
-        await append(BOT_ROUTINE_PROPOSAL_ENTRY_KIND, { ...proposal });
+        const show = async () => {
+          await save(botId, [...records, record]);
+          await append(BOT_ROUTINE_PROPOSAL_ENTRY_KIND, { ...proposal });
+          return true;
+        };
+        const counted = dependencies.suggestionBudget && !input.requested && !input.hostFollowUp;
+        if (counted ? !(await dependencies.suggestionBudget!.offer(botId, "routine", show)) : !(await show())) {
+          return { ok: false, code: "suggestion_limit", error: SUGGESTION_LIMIT };
+        }
         return { ok: true, proposal };
       });
     },
@@ -678,6 +688,21 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
         const created = await createdFrom(input.botId, record.proposalId);
         if (created) return settled(await settle(input.botId, records, index, "accepted", { routineId: created.id }));
         if (record.supersededBy !== undefined) throw new BotRoutineProposalNotFoundError();
+        if (
+          record.status === "dismissed" &&
+          input.decision === "dismiss" &&
+          input.reason !== undefined &&
+          record.declineReason === undefined &&
+          record.settledBy !== "host"
+        ) {
+          // "Why not?" on the dismissed line: the person adds a reason to a
+          // card they turned down. The card stays dismissed; only the reason
+          // the Bot reads next time is recorded, once.
+          const next = { ...record, declineReason: input.reason } as BotRoutineProposalRecord;
+          records[index] = next;
+          await save(input.botId, records);
+          return settled(next);
+        }
         if (record.status !== "pending") return settled(record);
         if (input.decision === "dismiss") {
           return settled(await settle(input.botId, records, index, "dismissed", {

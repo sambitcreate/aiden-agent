@@ -42,12 +42,12 @@ test("the empty state shows when nothing was learned", async () => {
   await waitFor(() => assert.ok(screen.getByText("Nothing yet")));
 });
 
-test("a lesson card shows the routine and its evidence; Keep this responds keep", async () => {
+test("a lesson card shows the routine and its evidence; Add responds keep and settles to a receipt", async () => {
   const answers: string[] = [];
   render(<LessonProposalCard lesson={{ lessonId: "l2", lesson: "Lead with the calendar.", routineName: "Briefing", runs: 3 }} status="pending" onRespond={async (decision) => { answers.push(decision); return "active"; }} />);
   assert.ok(screen.getByText("I learned something about Briefing"));
   assert.ok(screen.getByText("Based on 3 recent runs"));
-  fireEvent.click(screen.getByRole("button", { name: "Keep this" }));
-  await waitFor(() => assert.ok(screen.getByText("Kept ✓")));
+  fireEvent.click(screen.getByRole("button", { name: "Add" }));
+  await waitFor(() => assert.ok(screen.getByText("Added lesson: Lead with the calendar.")));
   assert.deepEqual(answers, ["keep"]);
 });

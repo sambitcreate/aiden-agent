@@ -1,7 +1,9 @@
-// A routine the Bot suggested. The Bot never starts recurring work on its own:
-// the person adds it here (Add routine) or turns it down (Not now). Once
-// answered, on this Mac or a phone, the card settles to one quiet line. A card
-// the Bot revised settles as replaced, and the new card follows it.
+// A routine the Bot suggested, as a suggestion card. The Bot never starts
+// recurring work on its own: the person adds it here (Add) or turns it down
+// (Not now). Once answered, on this Mac or a phone, the card settles to a
+// receipt line; a card turned down here offers an optional "Why not?" link
+// that records one reason. A card the Bot revised settles as replaced, and the
+// new card follows it.
 //
 // A link routine's link is shown here once, right after Add routine, the same
 // way the Bot's profile shows it; the Bot never sees it.
@@ -10,6 +12,8 @@ import * as React from "react";
 import { CalendarClock, Check, Copy, Eye, FolderOpen, Link2 } from "lucide-react";
 import { Button, toast } from "../ui";
 import { BotNoticeCard } from "./bot-notice-card";
+import { ReceiptLine } from "./receipt-line";
+import { SuggestionCard } from "./suggestion-card";
 import {
   BOT_ROUTINE_PROPOSAL_DECLINE_LABELS,
   BOT_ROUTINE_PROPOSAL_DECLINE_REASONS,
@@ -54,8 +58,8 @@ export function RoutineProposalCard({
   /** A new link for an added link routine; the old one stops working. */
   onNewLink?(routineId: string): Promise<string | null>;
 }) {
-  // Not now first asks why, in one optional step; Skip answers without a reason.
-  const [askingWhy, setAskingWhy] = React.useState(false);
+  // After Not now here, "Why not?" offers the reasons once; choosing one records it.
+  const [whyNot, setWhyNot] = React.useState<"offered" | "asking" | "given" | null>(null);
   // The answer shows at once; the live transcript confirms it moments later.
   const [answered, setAnswered] = React.useState<BotRoutineProposalRespondResult | null>(null);
   const [busy, setBusy] = React.useState<BotRoutineProposalDecision | "link" | null>(null);
@@ -65,8 +69,9 @@ export function RoutineProposalCard({
   const when = botRoutineProposalWhen(proposal);
   const addedRoutine = routineId ?? answered?.routineId;
 
-  const respond = async (decision: BotRoutineProposalDecision, reason?: BotRoutineProposalDeclineReason) => {
-    if (busy) return;
+  /** True once the answer was taken. */
+  const respond = async (decision: BotRoutineProposalDecision, reason?: BotRoutineProposalDeclineReason): Promise<boolean> => {
+    if (busy) return false;
     setBusy(decision);
     try {
       const result = await onRespond(decision, reason);
@@ -74,8 +79,10 @@ export function RoutineProposalCard({
         setAnswered(result);
         if (result.link !== undefined) setLink({ value: result.link });
       }
+      return result !== null;
     } catch {
       // The caller reports the failure; the card stays answerable.
+      return false;
     } finally {
       setBusy(null);
     }
@@ -94,17 +101,44 @@ export function RoutineProposalCard({
   };
 
   if (settled === "dismissed" && supersededBy) {
+    return <ReceiptLine icon={<ProposalIcon proposal={proposal} />} text={`${proposal.name} · replaced by a newer suggestion`} />;
+  }
+  const linkRoutine = settled === "accepted" && proposal.trigger?.kind === "webhook";
+  if (settled === "accepted" && !linkRoutine) {
+    return <ReceiptLine icon={<Check className="text-status-green" />} text={`Added ${proposal.name} · ${when}`} />;
+  }
+  if (settled === "dismissed") {
+    if (whyNot === "asking") {
+      return (
+        <div role="group" aria-label={`Why not ${proposal.name}?`} className="flex flex-wrap items-center justify-center gap-1.5 py-1">
+          {BOT_ROUTINE_PROPOSAL_DECLINE_REASONS.map((reason) => (
+            <Button
+              key={reason}
+              variant="filled"
+              size="small"
+              disabled={busy !== null}
+              onClick={() => {
+                void respond("dismiss", reason).then((taken) => setWhyNot(taken ? "given" : "offered"));
+              }}
+            >
+              {BOT_ROUTINE_PROPOSAL_DECLINE_LABELS[reason]}
+            </Button>
+          ))}
+        </div>
+      );
+    }
     return (
-      <BotNoticeCard label={`Routine suggestion: ${proposal.name}`} icon={<ProposalIcon proposal={proposal} />} title={proposal.name}>
-        <p>Replaced by a newer suggestion</p>
-      </BotNoticeCard>
+      <ReceiptLine
+        icon={<ProposalIcon proposal={proposal} />}
+        text={whyNot === "given" ? `Not added: ${proposal.name}. Noted, thanks.` : `Not added: ${proposal.name}`}
+        actions={whyNot === "offered" ? [{ label: "Why not?", ariaLabel: `Why not ${proposal.name}?`, onClick: () => setWhyNot("asking") }] : []}
+      />
     );
   }
   if (settled) {
-    const linkRoutine = settled === "accepted" && proposal.trigger?.kind === "webhook";
     const copy = link?.value;
     let actions: React.ReactNode;
-    if (linkRoutine && copy) {
+    if (copy) {
       actions = (
         <Button
           size="small"
@@ -114,77 +148,45 @@ export function RoutineProposalCard({
           <Copy /> Copy link
         </Button>
       );
-    } else if (linkRoutine && !link && onNewLink && addedRoutine) {
+    } else if (!link && onNewLink && addedRoutine) {
       actions = (
         <Button size="small" variant="filled" disabled={busy !== null} onClick={() => void newLink()}>
           {busy === "link" ? "Making…" : "New link"}
         </Button>
       );
     }
+    // A link routine's link is shown once, so its receipt keeps the card's room for it.
     return (
       <BotNoticeCard
         label={`Routine suggestion: ${proposal.name}`}
-        icon={settled === "accepted" ? <Check /> : <ProposalIcon proposal={proposal} />}
-        iconTone={settled === "accepted" ? "green" : "neutral"}
+        icon={<Check />}
+        iconTone="green"
         title={proposal.name}
         actions={actions}
       >
-        <p>{settled === "accepted" ? `Added ✓ · ${when}` : "Not added"}</p>
-        {linkRoutine && link ? (
+        <p>{`Added ✓ · ${when}`}</p>
+        {link ? (
           <p className="mt-0.5">{link.value ? ROUTINE_LINK_DESCRIPTION : ROUTINE_LINK_OFF_DESCRIPTION}</p>
-        ) : linkRoutine && actions ? (
+        ) : actions ? (
           <p className="mt-0.5">Its link is shown once. New link makes one here and stops any earlier one.</p>
         ) : null}
       </BotNoticeCard>
     );
   }
-  if (askingWhy) {
-    return (
-      <BotNoticeCard
-        label={`Routine suggestion: ${proposal.name}`}
-        icon={<ProposalIcon proposal={proposal} />}
-        title="Why not?"
-        actions={
-          <>
-            {BOT_ROUTINE_PROPOSAL_DECLINE_REASONS.map((reason) => (
-              <Button
-                key={reason}
-                variant="filled"
-                size="small"
-                disabled={busy !== null}
-                onClick={() => void respond("dismiss", reason)}
-              >
-                {BOT_ROUTINE_PROPOSAL_DECLINE_LABELS[reason]}
-              </Button>
-            ))}
-            <Button variant="transparent" size="small" disabled={busy !== null} onClick={() => void respond("dismiss")}>
-              Skip
-            </Button>
-          </>
-        }
-      >
-        <p>Optional. It helps the Bot suggest better routines.</p>
-      </BotNoticeCard>
-    );
-  }
   return (
-    <BotNoticeCard
+    <SuggestionCard
       label={`Routine suggestion: ${proposal.name}`}
       icon={<ProposalIcon proposal={proposal} />}
       title="Add a routine?"
-      actions={
-        <>
-          <Button variant="transparent" size="small" disabled={busy !== null} onClick={() => setAskingWhy(true)}>
-            Not now
-          </Button>
-          <Button variant="accent" size="small" disabled={busy !== null} onClick={() => void respond("accept")}>
-            {busy === "accept" ? "Adding…" : "Add routine"}
-          </Button>
-        </>
-      }
+      busy={busy !== null}
+      adding={busy === "accept"}
+      onAdd={() => void respond("accept")}
+      onNotNow={() => {
+        void respond("dismiss").then((taken) => taken && setWhyNot("offered"));
+      }}
     >
       <p className="text-primary">{`${proposal.name} · ${when}`}</p>
       <p className="mt-0.5 line-clamp-2 whitespace-pre-wrap">{proposal.prompt}</p>
-    </BotNoticeCard>
+    </SuggestionCard>
   );
 }

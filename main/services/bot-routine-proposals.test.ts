@@ -23,6 +23,7 @@ import { createBotRoutineService } from "./scheduled-bot-routines.js";
 import { projectBotTranscript } from "./bot-runtime/live-projection.js";
 import { BOT_ROUTINE_PROPOSALS_FILE } from "./bot-routine-proposals.js";
 import { botSessionDirectory } from "./bot-routine-notes.js";
+import { createBotSuggestionBudget, type BotSuggestionBudget } from "./bot-runtime/bot-suggestion-budget.js";
 
 const roots: string[] = [];
 after(() => {
@@ -42,7 +43,7 @@ class MemoryPersistence<T> {
   }
 }
 
-function harness() {
+function harness(options: { suggestionBudget?: BotSuggestionBudget } = {}) {
   const root = mkdtempSync(path.join(os.tmpdir(), "aiden-routine-proposals-"));
   roots.push(root);
   const store = createScheduleStore(new MemoryPersistence<unknown[]>([]), new MemoryPersistence<unknown[]>([]));
@@ -83,6 +84,7 @@ function harness() {
       routines,
       eventRoutines: events,
       onRevised: (botId, replacedId, replacement) => void revisions.push([botId, replacedId, replacement.proposalId]),
+      ...(options.suggestionBudget ? { suggestionBudget: options.suggestionBudget } : {}),
       defaultTimezone: () => "UTC",
       appendEntry: async (botId, kind, data) => {
         if (failures.statusAppend && kind === BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND) throw new Error("disk full");
@@ -383,6 +385,42 @@ test("a dismissal keeps its reason, and recentDecisions lists it", async () => {
   assert.equal(decision?.name, "Morning stretch");
   assert.equal(decision?.status, "dismissed");
   assert.equal(decision?.reason, "wrong_time");
+});
+
+test("Why not? after Not now adds the reason once; a second reason or one on a host-settled card changes nothing", async () => {
+  const h = harness();
+  await decline(h, "Evening review");
+  const [plain] = await h.proposals.recentDecisions("bot-a");
+  assert.equal(plain?.reason, undefined);
+  const proposalId = (await h.proposals.list("bot-a")).find((record) => record.name === "Evening review")!.proposalId;
+  const answer = await h.proposals.respond({ botId: "bot-a", proposalId, decision: "dismiss", reason: "wrong_time" });
+  assert.equal(answer.status, "dismissed", "the card stays turned down");
+  await h.proposals.respond({ botId: "bot-a", proposalId, decision: "dismiss", reason: "not_useful" });
+  assert.equal((await h.proposals.recentDecisions("bot-a"))[0]?.reason, "wrong_time", "the first reason stands");
+  const accepted = await h.proposals.respond({ botId: "bot-a", proposalId, decision: "accept" });
+  assert.equal(accepted.status, "dismissed", "a reason never reopens the card");
+});
+
+test("the Bot's own routine ideas share the daily suggestion budget with skills and lessons; an asked-for one always shows", async () => {
+  const clock = { at: Date.UTC(2026, 9, 9, 12) };
+  const budgetRoot = mkdtempSync(path.join(os.tmpdir(), "aiden-routine-budget-"));
+  roots.push(budgetRoot);
+  const budget = createBotSuggestionBudget({ profileDir: () => budgetRoot, now: () => clock.at });
+  const h = harness({ suggestionBudget: budget });
+  h.clock.at = clock.at;
+  // A skill and a lesson were offered earlier today.
+  await budget.offer("bot-a", "skill", async () => true);
+  await budget.offer("bot-a", "lesson", async () => true);
+  const first = await h.proposals.propose("bot-a", { ...dailyPlan, name: "Morning stretch" });
+  assert.equal(first.ok, true);
+  const shownBefore = h.cards().length;
+  const over = await h.proposals.propose("bot-a", { ...dailyPlan, name: "Evening walk" });
+  assert.equal(over.ok, false);
+  assert.equal(!over.ok && over.code, "suggestion_limit");
+  assert.equal(h.cards().length, shownBefore, "no card for the idea over the limit");
+  const asked = await h.proposals.propose("bot-a", { ...dailyPlan, name: "Evening walk", requested: true });
+  assert.equal(asked.ok, true, "the person asked for it, so it is never held back");
+  assert.equal(await budget.remaining("bot-a"), 0, "and it costs nothing");
 });
 
 test("three dismissals in the last five refuse new proposals for 7 days, with or without reasons", async () => {

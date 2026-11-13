@@ -1,11 +1,10 @@
 // The routines that came due while the person had paused the Bot. Nothing is
-// caught up on its own (plan §7, decision 4): each routine gets Run now, which
-// runs it once, now. A routine that started settles to a quiet line.
+// caught up on its own (plan §7, decision 4): each routine is a receipt line
+// with Run now, which runs it once, now, and then reads Started.
 
 import * as React from "react";
 import { CalendarClock, Check } from "lucide-react";
-import { Button } from "../ui";
-import { BotNoticeCard } from "./bot-notice-card";
+import { ReceiptLine } from "./receipt-line";
 
 export interface SkippedRoutine {
   routineId: string;
@@ -20,7 +19,7 @@ export function routinesSkippedTitle(routines: readonly SkippedRoutine[]): strin
 }
 
 function skippedTimes(count: number): string {
-  return count === 1 ? "Skipped once" : `Skipped ${count} times`;
+  return count === 1 ? "once" : `${count} times`;
 }
 
 export function RoutinesSkippedCard({
@@ -53,38 +52,31 @@ export function RoutinesSkippedCard({
 
   const title = routinesSkippedTitle(routines);
   return (
-    <BotNoticeCard label={title} icon={<CalendarClock />} title={title}>
-      <ul className="mt-1.5 flex flex-col">
-        {routines.map((routine) => {
-          const isStarted = started.has(routine.routineId);
-          const isRunning = running.has(routine.routineId);
-          return (
-            <li key={routine.routineId} className="flex min-h-8 min-w-0 items-center gap-2">
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-primary">{routine.name}</span>
-                <span className="block text-tertiary">{skippedTimes(routine.count)}</span>
-              </span>
-              {isStarted ? (
-                <span role="status" className="flex shrink-0 items-center gap-1 text-secondary">
-                  <Check aria-hidden="true" className="size-3.5 text-status-green" />
-                  Started
-                </span>
-              ) : (
-                <Button
-                  variant="transparent"
-                  size="small"
-                  className="shrink-0"
-                  disabled={isRunning}
-                  aria-label={`Run now: ${routine.name}`}
-                  onClick={() => void runNow(routine.routineId)}
-                >
-                  {isRunning ? "Starting…" : "Run now"}
-                </Button>
-              )}
-            </li>
-          );
-        })}
-      </ul>
-    </BotNoticeCard>
+    <div role="group" aria-label={title} className="flex flex-col">
+      {routines.map((routine) => {
+        const isStarted = started.has(routine.routineId);
+        const isRunning = running.has(routine.routineId);
+        return (
+          <ReceiptLine
+            key={routine.routineId}
+            icon={isStarted ? <Check className="text-status-green" /> : <CalendarClock />}
+            text={isStarted ? `Started: ${routine.name}` : `Skipped while paused (${skippedTimes(routine.count)}): ${routine.name}`}
+            {...(isStarted ? { role: "status" as const } : {})}
+            actions={
+              isStarted
+                ? []
+                : [
+                    {
+                      label: isRunning ? "Starting…" : "Run now",
+                      ariaLabel: `Run now: ${routine.name}`,
+                      disabled: isRunning,
+                      onClick: () => void runNow(routine.routineId),
+                    },
+                  ]
+            }
+          />
+        );
+      })}
+    </div>
   );
 }

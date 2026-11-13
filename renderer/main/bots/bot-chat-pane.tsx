@@ -76,6 +76,8 @@ import { botTranscriptRows } from "./bot-transcript-rows";
 import { BOT_UNAVAILABLE_LABEL, type BotSessionState } from "./bot-session-state";
 import { botRoutinesKey } from "./bot-routines";
 import { WakeUpChip } from "../../components/bots/wake-up-chip";
+import { ReceiptLine } from "../../components/bots/receipt-line";
+import { FoldedSuggestion } from "../../components/bots/suggestion-card";
 import { useConnectionSetup } from "./use-connection-setup";
 import { useChatFind } from "../../components/chat-find-bar";
 import { retryUsageLimitNow, useUsageLimitNow, useUsageLimitWait } from "../../lib/use-usage-limit-wait";
@@ -403,21 +405,9 @@ function BotFileChip({ path, operation, onOpen }: { path: string; operation: "wr
   );
 }
 
-/** "Memory updated": a quiet, centred caption that opens the panel's Memory tab. */
+/** "Memory updated · Open": a receipt line that opens the panel's Memory tab. */
 function BotMemoryUpdatedCaption({ onOpen }: { onOpen(): void }) {
-  return (
-    <div className="flex justify-center py-1">
-      <button
-        type="button"
-        aria-label="Memory updated. Open Memory"
-        className="inline-flex items-center gap-1.5 rounded-button px-2 py-1 text-small text-tertiary outline-none transition-colors duration-(--motion-duration) ease-standard hover:bg-list-hover hover:text-secondary focus-visible:bg-list-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring motion-reduce:transition-none"
-        onClick={onOpen}
-      >
-        <MemoryCardIcon aria-hidden="true" className="size-3.5" />
-        Memory updated
-      </button>
-    </div>
-  );
+  return <ReceiptLine icon={<MemoryCardIcon />} text="Memory updated" actions={[{ label: "Open", ariaLabel: "Memory updated. Open Memory", onClick: onOpen }]} />;
 }
 
 /** The person's answer to a hand-off card, on their side of the chat: what they did, then their note. */
@@ -775,6 +765,21 @@ export function TranscriptEntries({
   connecting?: boolean;
 }) {
   const rows = botTranscriptRows(entries, partial, { running, level, queued });
+  // One suggestion in full per chat (§4.7): the newest one waiting, or the one
+  // the person chose to see; earlier ones fold to a line with Show.
+  const [chosenSuggestion, setChosenSuggestion] = React.useState<string | null>(null);
+  const waitingSuggestions = rows
+    .filter((row) =>
+      (row.kind === "routine_proposal" && row.status === "pending" && !row.supersededBy && onRespondToProposal !== undefined) ||
+      (row.kind === "skill_proposal" && row.status === "pending" && onRespondToSkill !== undefined) ||
+      (row.kind === "lesson_proposal" && row.status === "pending" && onRespondToLesson !== undefined))
+    .map((row) => row.id);
+  const shownSuggestion =
+    chosenSuggestion !== null && waitingSuggestions.includes(chosenSuggestion) ? chosenSuggestion : waitingSuggestions[waitingSuggestions.length - 1];
+  const folded = (id: string, label: string) =>
+    waitingSuggestions.includes(id) && id !== shownSuggestion ? (
+      <FoldedSuggestion key={id} label={label} onShow={() => setChosenSuggestion(id)} />
+    ) : null;
   const workDetails = useAppearancePreference("workDetails");
   const collapseTiming = useAppearancePreference("workDetailsCollapseTiming");
   const retainedRecaps = React.useMemo(() => {
@@ -909,7 +914,7 @@ export function TranscriptEntries({
           case "routines_skipped":
             return onRunRoutine ? <RoutinesSkippedCard key={row.id} routines={row.routines} onRunNow={onRunRoutine} /> : null;
           case "routine_proposal":
-            return onRespondToProposal ? (
+            return folded(row.id, `Routine suggestion: ${row.proposal.name}`) ?? (onRespondToProposal ? (
               <RoutineProposalCard
                 key={row.id}
                 proposal={row.proposal}
@@ -919,16 +924,16 @@ export function TranscriptEntries({
                 onRespond={(decision, reason) => onRespondToProposal(row.proposal.proposalId, decision, reason)}
                 {...(onNewRoutineLink ? { onNewLink: onNewRoutineLink } : {})}
               />
-            ) : null;
+            ) : null);
           case "lesson_proposal":
-            return onRespondToLesson ? (
+            return folded(row.id, `Lesson: ${row.lesson.lesson}`) ?? (onRespondToLesson ? (
               <LessonProposalCard
                 key={row.id}
                 lesson={row.lesson}
                 status={row.status}
                 onRespond={(decision) => onRespondToLesson(row.lesson.lessonId, decision)}
               />
-            ) : null;
+            ) : null);
           case "lesson_learned":
             return onUndoLearning ? (
               <LearnedLine
@@ -952,14 +957,14 @@ export function TranscriptEntries({
               />
             );
           case "skill_proposal":
-            return onRespondToSkill ? (
+            return folded(row.id, `Skill: ${row.proposal.name}`) ?? (onRespondToSkill ? (
               <SkillProposalCard
                 key={row.id}
                 proposal={row.proposal}
                 status={row.status}
                 onRespond={(decision) => onRespondToSkill(row.proposal.proposalId, decision)}
               />
-            ) : null;
+            ) : null);
           case "issue":
             return onActOnIssue ? (
               <BotIssueCard
