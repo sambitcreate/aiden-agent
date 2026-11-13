@@ -2316,6 +2316,31 @@ test("a pile-up waits in one Needs-you slot: take control first, then each ask c
   assert.ok(within(slot()).getByRole("group", { name: "Planner needs you" }));
 });
 
+test("a hand-off that arrives while a question is half answered waits behind it: the question and its draft stay on show", async () => {
+  await mountChat({
+    "bots:live:subscribe": () => snapshot({
+      state: RUNNING,
+      question: { botId: "bot-1", waitId: "wait-q", toolCallId: "tool-q", questions: [COLOUR_QUESTION] },
+    }),
+  });
+  assert.ok(await screen.findByRole("heading", { name: COLOUR_QUESTION.question }));
+  fireEvent.click(screen.getByRole("button", { name: /Type your own answer/u }));
+  const draft = screen.getByRole("textbox", { name: `Custom answer for ${COLOUR_QUESTION.question}` });
+  fireEvent.change(draft, { target: { value: "Teal, like the logo" } });
+  // The Bot hands the person a step; nobody has touched Previous or Next.
+  act(() => emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: 1, type: "handoff", handoff: BANK_HANDOFF }));
+  await waitFor(() => assert.equal(slotPosition(), "2 of 2"));
+  assert.ok(screen.getByRole("heading", { name: COLOUR_QUESTION.question }), "the question stays on show");
+  assert.equal(
+    (screen.getByRole("textbox", { name: `Custom answer for ${COLOUR_QUESTION.question}` }) as HTMLTextAreaElement).value,
+    "Teal, like the logo",
+    "what the person typed survives",
+  );
+  assert.equal(screen.queryByRole("group", { name: "Planner needs you" }), null, "the hand-off waits its turn");
+  fireEvent.click(within(screen.getByRole("navigation", { name: "Needs you" })).getByRole("button", { name: "Previous" }));
+  assert.ok(await screen.findByRole("group", { name: "Planner needs you" }));
+});
+
 test("when the card on show is answered, the slot goes back to the first item still waiting", async () => {
   await mountChat({
     "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: BANK_HANDOFF }),

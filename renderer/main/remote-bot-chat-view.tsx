@@ -10,7 +10,7 @@ import { Ellipsis, Pause, Play, Square } from "lucide-react";
 import { AskUserQuestionComposer } from "../components/ask-user-question-composer";
 import { HandoffCard, handoffNoNoteComposerText } from "../components/bots/handoff-card";
 import { handoffTakenKey, useHandoffTaken } from "../components/bots/handoff-taken";
-import { NeedsYouHeader, needsYouSlotState, type NeedsYouItem } from "../components/bots/needs-you-slot";
+import { NeedsYouAnnouncer, NeedsYouFocusScope, NeedsYouHeader, needsYouSlotState, type NeedsYouItem } from "../components/bots/needs-you-slot";
 import { Composer } from "../components/composer";
 import { MessageAttachmentPreviewProvider } from "../components/message-attachments";
 import {
@@ -624,12 +624,15 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
   const questionElsewhere = question !== null && !askingQuestion;
 
   const footer = (
-    <div className="flex flex-col">
+    <NeedsYouFocusScope currentKey={slot.current?.key} className="flex flex-col">
+      <NeedsYouAnnouncer slot={slot} />
       {slot.count > 0 || approvalStatus.status ? (
         <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-2" data-needs-you-slot>
           <NeedsYouHeader slot={slot} />
           {slot.current?.render ? (
-            slot.current.render()
+            <div key={slot.current.key} className="contents" data-needs-you-card>
+              {slot.current.render()}
+            </div>
           ) : !slot.current && approvalStatus.status ? (
             <ApprovalStatusLine status={approvalStatus.status} />
           ) : null}
@@ -637,12 +640,14 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
       ) : null}
       {question && askingQuestion ? (
         <>
-          <AskUserQuestionComposer
-            key={question.waitId}
-            prompt={questionPrompt(question)}
-            submitting={busy("answer")}
-            onRespond={(response) => answerQuestion(question, response)}
-          />
+          <div className="contents" data-needs-you-card>
+            <AskUserQuestionComposer
+              key={question.waitId}
+              prompt={questionPrompt(question)}
+              submitting={busy("answer")}
+              onRespond={(response) => answerQuestion(question, response)}
+            />
+          </div>
           <div className="aiden-dock-inset chat-content-column flex justify-end pb-4 pt-2">
             <Button variant="filled" size="small" onClick={stop}>
               <Square aria-hidden="true" />
@@ -694,7 +699,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
           </Button>
         </div>
       ) : null}
-    </div>
+    </NeedsYouFocusScope>
   );
 
   // A Bot's transcript is data, never instructions: Aiden Live sees only how many rows it has.

@@ -2,19 +2,33 @@ import "../../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { NeedsYouHeader, useNeedsYouSlot, type NeedsYouItem } from "./needs-you-slot";
+import { NeedsYouAnnouncer, NeedsYouFocusScope, NeedsYouHeader, useNeedsYouSlot, type NeedsYouItem } from "./needs-you-slot";
 
 afterEach(cleanup);
 
 type Item = NeedsYouItem & { text: string };
 
-/** A chat footer in miniature: the header, then the one item on show. */
+/**
+ * A chat footer in miniature: the announcer, the header, then the one item on
+ * show as a named card with its answer button, and a control outside the slot.
+ */
 function Slot({ items }: { items: readonly Item[] }) {
   const slot = useNeedsYouSlot(items);
   return (
     <div>
-      <NeedsYouHeader slot={slot} />
-      {slot.current ? <p data-testid="shown">{slot.current.text}</p> : null}
+      <button type="button">Elsewhere in the chat</button>
+      <NeedsYouFocusScope currentKey={slot.current?.key}>
+        <NeedsYouAnnouncer slot={slot} />
+        <NeedsYouHeader slot={slot} />
+        {slot.current ? (
+          <div key={slot.current.key} className="contents" data-needs-you-card>
+            <div role="group" aria-label={slot.current.text}>
+              <p data-testid="shown">{slot.current.text}</p>
+              <button type="button">{`Answer: ${slot.current.text}`}</button>
+            </div>
+          </div>
+        ) : null}
+      </NeedsYouFocusScope>
     </div>
   );
 }
@@ -98,4 +112,34 @@ test("Previous and Next are named buttons a keyboard reaches", () => {
   const buttons = within(header).getAllByRole("button");
   assert.deepEqual(buttons.map((button) => button.getAttribute("aria-label")), ["Previous", "Next"]);
   for (const button of buttons) assert.notEqual(button.getAttribute("tabindex"), "-1");
+});
+
+test("the card on show stays while others arrive, even before the person moves: an arrival only raises the count, unannounced", () => {
+  const question: Item = { key: "q", kind: "question", text: "Which colour?" };
+  const take: Item = { key: "h", kind: "take_control", text: "Enter the code" };
+  const approval: Item = { key: "a", kind: "approval", text: "Send email" };
+  const { rerender } = render(<Slot items={[question]} />);
+  assert.equal(shown(), "Which colour?");
+  rerender(<Slot items={[question, approval]} />);
+  rerender(<Slot items={[question, approval, take]} />);
+  assert.equal(shown(), "Which colour?", "the half-answered question is never swapped away");
+  assert.equal(position(), "3 of 3", "it keeps its place in the order; the count says more wait");
+  assert.equal(screen.getByRole("status").textContent, "", "nothing is announced while the card on show stays");
+  rerender(<Slot items={[approval, take]} />);
+  assert.equal(shown(), "Enter the code", "once it is answered, the first still waiting comes up");
+  assert.equal(screen.getByRole("status").textContent, "Needs you, 1 of 2", "and that change is announced");
+});
+
+test("answering the card that held focus moves focus to the card that takes its place; focus the person put elsewhere stays", () => {
+  const take: Item = { key: "h", kind: "take_control", text: "Enter the code" };
+  const approval: Item = { key: "a", kind: "approval", text: "Send email" };
+  const plan: Item = { key: "p", kind: "plan", text: "Approve this plan?" };
+  const { rerender } = render(<Slot items={[take, approval, plan]} />);
+  screen.getByRole("button", { name: "Answer: Enter the code" }).focus();
+  // The answer lands: that card, and the button focus was on, go away.
+  rerender(<Slot items={[approval, plan]} />);
+  assert.equal(document.activeElement, screen.getByRole("group", { name: "Send email" }), "focus lands on the next card, not the page");
+  screen.getByRole("button", { name: "Elsewhere in the chat" }).focus();
+  rerender(<Slot items={[plan]} />);
+  assert.equal(document.activeElement, screen.getByRole("button", { name: "Elsewhere in the chat" }));
 });

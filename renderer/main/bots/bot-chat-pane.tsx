@@ -20,7 +20,7 @@ import { SkillProposalCard } from "../../components/bots/skill-proposal-card";
 import { LearnedLine, LessonProposalCard } from "../../components/bots/lesson-cards";
 import { BotIssueCard } from "../../components/bots/bot-issue-card";
 import { HandoffCard, handoffNoNoteComposerText, handoffSignInComposerText } from "../../components/bots/handoff-card";
-import { NeedsYouHeader, needsYouSlotState, type NeedsYouItem } from "../../components/bots/needs-you-slot";
+import { NeedsYouAnnouncer, NeedsYouFocusScope, NeedsYouHeader, needsYouSlotState, type NeedsYouItem } from "../../components/bots/needs-you-slot";
 import { PlanCard } from "../../components/bots/plan-card";
 import { MemoryCardIcon } from "../../components/memory-card-icon";
 import { ApprovalStatusLine, ChatApprovalCard } from "../../components/chat-approval-card";
@@ -183,6 +183,13 @@ function mergePrompts(current: BotApprovalPrompt[], next: BotApprovalPrompt[]): 
   return [...byId.values()];
 }
 
+/** Which shared card a pending approval belongs to: the same for every identical call, the wait itself otherwise. */
+export function botApprovalGroupKey(prompt: BotApprovalPrompt): string {
+  return prompt.argumentsHash && prompt.runHash
+    ? JSON.stringify([prompt.botId, prompt.runHash, prompt.argumentsHash, prompt.toolName, prompt.summary, prompt.always?.key ?? null])
+    : JSON.stringify(["wait", prompt.botId, prompt.waitId]);
+}
+
 /**
  * Identical pending approvals in one reply (same tool, card and exact
  * arguments) share one card. A wait without its arguments and run hashes is
@@ -191,10 +198,7 @@ function mergePrompts(current: BotApprovalPrompt[], next: BotApprovalPrompt[]): 
 export function groupBotApprovalPrompts(prompts: readonly BotApprovalPrompt[]): BotApprovalPrompt[][] {
   const groups = new Map<string, BotApprovalPrompt[]>();
   for (const prompt of prompts) {
-    const key =
-      prompt.argumentsHash && prompt.runHash
-        ? JSON.stringify([prompt.botId, prompt.runHash, prompt.argumentsHash, prompt.toolName, prompt.summary, prompt.always?.key ?? null])
-        : JSON.stringify(["wait", prompt.botId, prompt.waitId]);
+    const key = botApprovalGroupKey(prompt);
     const group = groups.get(key);
     if (group) group.push(prompt);
     else groups.set(key, [prompt]);
@@ -1693,7 +1697,8 @@ export function BotChatPane({ botId }: { botId: string }) {
   for (const group of approvalGroups) {
     const first = group[0]!;
     slotItems.push({
-      key: `approval:${first.waitId}`,
+      // The group's own identity, so answering one of its waits elsewhere keeps the card on show.
+      key: `approval:${botApprovalGroupKey(first)}`,
       kind: "approval",
       render: () => (
         <BotApprovalCard
@@ -1753,12 +1758,15 @@ export function BotChatPane({ botId }: { botId: string }) {
   });
 
   const footer = (
-    <div className="flex flex-col">
+    <NeedsYouFocusScope currentKey={slot.current?.key} className="flex flex-col">
+      <NeedsYouAnnouncer slot={slot} />
       {slot.count > 0 || approvalStatus.status ? (
         <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-2" data-needs-you-slot>
           <NeedsYouHeader slot={slot} />
           {slot.current?.render ? (
-            slot.current.render()
+            <div key={slot.current.key} className="contents" data-needs-you-card>
+              {slot.current.render()}
+            </div>
           ) : !slot.current && approvalStatus.status ? (
             <ApprovalStatusLine status={approvalStatus.status} />
           ) : null}
@@ -1767,12 +1775,14 @@ export function BotChatPane({ botId }: { botId: string }) {
       {/* The question takes the composer's place, as in workspace chats, while the slot shows it. */}
       {question && askingQuestion ? (
         <>
-          <AskUserQuestionComposer
-            key={question.waitId}
-            prompt={questionPrompt(question)}
-            submitting={answering}
-            onRespond={(response) => answerQuestion(question, response)}
-          />
+          <div className="contents" data-needs-you-card>
+            <AskUserQuestionComposer
+              key={question.waitId}
+              prompt={questionPrompt(question)}
+              submitting={answering}
+              onRespond={(response) => answerQuestion(question, response)}
+            />
+          </div>
           {/* The card replaces the composer, so Stop lives here while it waits. */}
           <div className="aiden-dock-inset chat-content-column flex justify-end pb-4 pt-2">
             <Button variant="filled" size="small" onClick={stop}>
@@ -1832,7 +1842,7 @@ export function BotChatPane({ botId }: { botId: string }) {
           </Button>
         </div>
       ) : null}
-    </div>
+    </NeedsYouFocusScope>
   );
 
   // A Bot's transcript is data, never instructions: Aiden Live sees only how many rows it has.
