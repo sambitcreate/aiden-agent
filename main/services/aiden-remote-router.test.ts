@@ -23,6 +23,7 @@ import {
   parseAidenRemoteSpendingStatus,
   parseAidenRemoteBackgroundJobs,
   parseAidenRemoteChatNewWorktreeResponse,
+  parseAidenRemoteBotCreateRequest,
   type AidenRemoteCapability,
   type AidenRemoteStreamInputResult,
 } from "./aiden-remote-protocol.js";
@@ -30,6 +31,7 @@ import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import { AidenOperationNotExecutedError } from "./aiden-remote-operation-contract.js";
 import type { BackgroundJobView } from "../../renderer/shared/background-jobs.js";
 import { VISUAL_VIEWER_CSP } from "../../renderer/shared/visual-viewer.js";
+import { BOT_STARTER_INSTRUCTIONS } from "../../renderer/shared/bot-presets.js";
 import { AidenRemoteBotSessionService } from "./aiden-remote-bot-session.js";
 import { AidenRemoteBotService } from "./aiden-remote-bots.js";
 import { BotSessionError, type BotSessionState } from "./bot-runtime/bot-session-service.js";
@@ -7402,12 +7404,15 @@ test("revision 61 templates: holders read versions, name the version on create, 
       const presets = await (await fetch(`${app.base}/bot-presets`, { headers: REV61_HEADERS })).json();
       assert.deepEqual(presets, holder ? { presets: [{ id: "chief", version: 3 }] } : { presets: [] });
       await fetch(`${app.base}/bots/from-preset`, { method: "POST", headers: { ...REV61_HEADERS, "idempotency-key": "template-key-0000000061" }, body: JSON.stringify({ presetId: "chief", version: 3 }) });
-      const response = await fetch(`${app.base}/bots`, { method: "POST", headers: { ...REV61_HEADERS, "idempotency-key": "one-field-key-000000061" }, body: JSON.stringify({ name: "Scout", avatar: null }) });
+      // The shared fixture's one-field body, decoded by the real parser the Bot service uses.
+      const oneField = JSON.parse(readFileSync(new URL("../../protocol/aiden-remote/v1/fixtures/bot-ux-revision-61.json", import.meta.url), "utf8")).requests.oneFieldCreate;
+      const response = await fetch(`${app.base}/bots`, { method: "POST", headers: { ...REV61_HEADERS, "idempotency-key": "one-field-key-000000061" }, body: JSON.stringify(oneField) });
       assert.equal(response.status, 201);
-      const body = app.createBodies[app.createBodies.length - 1] as Record<string, unknown>;
-      assert.equal(typeof body.instructions === "string" && body.instructions.length > 0, holder, "only a holder's create without instructions gets the starter text");
+      const parsed = parseAidenRemoteBotCreateRequest(app.createBodies[app.createBodies.length - 1]);
+      assert.equal(parsed.purpose, "");
+      assert.equal(parsed.instructions, BOT_STARTER_INSTRUCTIONS, "no instructions start the Bot from the starter text");
     } finally { await app.close(); }
   }
   assert.deepEqual(created.map((args) => args[3]), [{ templates: true }, { templates: false }]);
-  assert.equal(introduced.length, 1, "the one-field Bot introduces itself once");
+  assert.deepEqual(introduced, ["bot-1"], "only a holder's one-field Bot introduces itself, once");
 });

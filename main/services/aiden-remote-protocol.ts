@@ -1,4 +1,5 @@
 import { parseChatInputSource } from "../../renderer/shared/chat-input-source.js";
+import { BOT_STARTER_INSTRUCTIONS } from "../../renderer/shared/bot-presets.js";
 import {
   AIDEN_REMOTE_BOT_SETTINGS_CHANGE_ENTRY_TYPES,
   AIDEN_REMOTE_BOT_SUGGESTION_ENTRY_TYPES,
@@ -1381,7 +1382,9 @@ export interface AidenRemoteBotList {
 
 export interface AidenRemoteBotCreateRequest {
   name: string;
+  /** Optional on the wire (revision 61); absent reads as "". */
   purpose: string;
+  /** Optional on the wire (revision 61); absent reads as `BOT_STARTER_INSTRUCTIONS`. */
   instructions: string;
   avatar: AidenRemoteBotSemanticAvatar;
   /** Omitted means Full access (contract revision 25 dropped the notice wall). */
@@ -3385,8 +3388,11 @@ export function parseAidenRemoteBotCreateRequest(value: unknown): AidenRemoteBot
   ignoreRetiredBotGreeting(value, "Bot create");
   return {
     name: boundedText(value.name, "Bot create name", 80),
-    purpose: boundedText(value.purpose, "Bot create purpose", 280, true),
-    instructions: boundedText(value.instructions, "Bot create instructions", 32_000),
+    // Revision 61 one-field create: `{name, avatar}` is a whole request. No
+    // purpose is an empty one; no instructions are the starter text, with
+    // which the Bot asks what to help with.
+    purpose: hasOwn(value, "purpose") ? boundedText(value.purpose, "Bot create purpose", 280, true) : "",
+    instructions: hasOwn(value, "instructions") ? boundedText(value.instructions, "Bot create instructions", 32_000) : BOT_STARTER_INSTRUCTIONS,
     avatar: parseBotSemanticAvatar(value.avatar, true),
     ...(hasOwn(value, "access")
       ? { access: parseAidenRemoteBotAccessUpdateRequest(value.access) }

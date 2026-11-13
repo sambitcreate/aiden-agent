@@ -157,7 +157,6 @@ import type { AidenRemoteSpendingService } from "./aiden-remote-spending.js";
 import type { AidenRemoteBackgroundJobService } from "./aiden-remote-background-jobs.js";
 import type { AidenRemoteBotService } from "./aiden-remote-bots.js";
 import type { AidenRemoteApprovalSettingsService } from "./aiden-remote-approval-settings.js";
-import { BOT_STARTER_INSTRUCTIONS } from "../../renderer/shared/bot-presets.js";
 import type { UsageDateRange, UsageSummary } from "./types.js";
 import { MAX_AIDEN_REMOTE_ATTACHMENT_REQUEST_BYTES } from "./aiden-remote-attachments.js";
 import { MAX_IMAGE_BYTES } from "./attachments.js";
@@ -2909,10 +2908,11 @@ export function createAidenRemoteRequestHandler(
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-        // Revision 61 one-field create: a `bot:templates` holder may leave out
-        // instructions; the Bot starts from the starter text and asks what to help with.
+        // Revision 61 one-field create: a request without instructions gets the
+        // starter text (the parser's default); a `bot:templates` holder's Bot
+        // then introduces itself and asks what to help with.
         const oneField = holdsBotTemplates(device, dependencies) && isPlainRecord(body) && !Object.prototype.hasOwnProperty.call(body, "instructions");
-        const created = await dependencies.bots.create(device.id, key, oneField ? { ...(body as Record<string, unknown>), instructions: BOT_STARTER_INSTRUCTIONS } : body);
+        const created = await dependencies.bots.create(device.id, key, body);
         if (oneField) dependencies.botSessions!.introduceCreated!(created.id);
         await writeBotDetail(response, 201, created, device, dependencies);
         return;

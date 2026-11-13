@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import test from "node:test";
 import { buildApprovalCard } from "../../renderer/shared/approval-card-model.ts";
-import { BOT_TEMPLATE_STALE_MESSAGE } from "../../renderer/shared/bot-presets.ts";
+import { BOT_STARTER_INSTRUCTIONS, BOT_TEMPLATE_STALE_MESSAGE } from "../../renderer/shared/bot-presets.ts";
 import type { BotTranscriptEntry } from "../../renderer/shared/bot-live.ts";
 import {
   AidenRemoteApprovalSettingsService,
@@ -35,6 +35,7 @@ import {
   AIDEN_REMOTE_BOT_SUGGESTION_CAPABILITIES,
   AIDEN_REMOTE_BOT_TEMPLATE_CAPABILITIES,
   AIDEN_REMOTE_BOT_UX_CONTRACT_REVISION,
+  parseAidenRemoteBotCreateRequest,
   parseAidenRemoteBotSessionEntry,
   parseAidenRemotePhoneRunApproval,
   parseAidenRemotePhoneStreamApproval,
@@ -232,6 +233,12 @@ test("every fixture shape round-trips through the strict parsers clients mirror"
   assert.deepEqual(parseAidenRemoteApprovalRulesView(fixture.approvalRules), fixture.approvalRules);
   assert.deepEqual(parseAidenRemoteBotTemplateCreateRequest(fixture.requests.templateCreate), fixture.requests.templateCreate);
   assert.equal(parseAidenRemoteApprovalModeRequest(fixture.requests.approvalMode), "never");
+  // One-field create decodes through the real Bot create parser: no purpose, the starter instructions.
+  const oneField = parseAidenRemoteBotCreateRequest(fixture.requests.oneFieldCreate);
+  assert.equal(oneField.name, "Scout");
+  assert.equal(oneField.purpose, "");
+  assert.equal(oneField.instructions, BOT_STARTER_INSTRUCTIONS);
+  assert.deepEqual(oneField.avatar, fixture.requests.oneFieldCreate.avatar);
 
   const held = fixture.botSessionEntries[0];
   assert.equal(held.mode, "held");
