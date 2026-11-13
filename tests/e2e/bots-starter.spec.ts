@@ -133,9 +133,14 @@ test("an empty Bots list opens a starter Bot chat, sends to it, and answers its 
   await expect(page.getByRole("heading", { name: "Which area matters most this week?" })).toBeVisible();
   await expect(composer).toBeHidden();
 
+  // The person starts answering: Family is picked but not yet submitted.
+  await page.getByRole("button", { name: /Family/u }).click();
+  await expect(page.getByRole("button", { name: /Family/u })).toHaveAttribute("aria-pressed", "true");
+
   // While the question waits, the Bot also hands the person a step. Both pile
-  // up in the one Needs-you slot: Take control comes first, the question waits
-  // behind it, and the header moves between them.
+  // up in the one Needs-you slot, but the question on show stays put: the
+  // arrival only raises the count, and the half-made answer is kept. The step
+  // ranks first, so Previous reaches it.
   await aiden.app.evaluate(({ BrowserWindow }, botId) => {
     for (const window of BrowserWindow.getAllWindows()) {
       window.webContents.send("bots:live:event", {
@@ -157,14 +162,24 @@ test("an empty Bots list opens a starter Bot chat, sends to it, and answers its 
   }, bot.id);
   const card = page.getByRole("group", { name: "Chief of Staff needs you" });
   const needsYou = page.getByRole("navigation", { name: "Needs you" });
-  await expect(card.getByText("Needs you: Approve the calendar invite from Sam")).toBeVisible();
+  await expect(needsYou).toContainText("2 of 2");
+  await expect(page.getByRole("heading", { name: "Which area matters most this week?" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Family/u })).toHaveAttribute("aria-pressed", "true");
+  await expect(card).toHaveCount(0);
+  await needsYou.getByRole("button", { name: "Previous" }).click();
   await expect(needsYou).toContainText("1 of 2");
+  await expect(card.getByText("Needs you: Approve the calendar invite from Sam")).toBeVisible();
+  await expect(card.getByRole("button", { name: "Take control" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Which area matters most this week?" })).toHaveCount(0);
+  // Back to the question to finish it. Moving away from it let go of the pick
+  // (only an arrival keeps it), so Family is chosen again.
   await needsYou.getByRole("button", { name: "Next" }).click();
   await expect(needsYou).toContainText("2 of 2");
   await expect(page.getByRole("heading", { name: "Which area matters most this week?" })).toBeVisible();
-  await page.getByRole("button", { name: /Family/u }).click();
-  await expect(page.getByRole("button", { name: /Family/u })).toHaveAttribute("aria-pressed", "true");
+  const family = page.getByRole("button", { name: /Family/u });
+  await expect(family).toHaveAttribute("aria-pressed", "false");
+  await family.click();
+  await expect(family).toHaveAttribute("aria-pressed", "true");
   await page.getByRole("button", { name: "Submit" }).click();
 
   await expect
