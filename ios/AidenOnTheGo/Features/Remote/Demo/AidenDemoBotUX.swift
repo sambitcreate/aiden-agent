@@ -21,7 +21,6 @@ enum AidenDemoBotUX {
             "action": "Approve the payment in your bank's app",
             "why": "Only you can confirm a payment.",
             "open": ["url": "https://bank.example.com/approve"],
-            "takesNote": true, "onMac": false,
         ]
     }
 
@@ -84,7 +83,7 @@ enum AidenDemoBotUX {
         [
             "waitId": "8d1e2f3a-4b5c-4d6e-9f70-a1b2c3d4e5f7",
             "toolCallId": "call_demo_ux", "toolName": "web_fetch",
-            "summary": "Fetch https://example.com/menu", "canAllow": true,
+            "summary": "Fetch https://example.com/menu", "canAllow": true, "alwaysCount": 4,
             "card": [
                 "kind": "generic", "title": "Review before Fetch web page → example.com",
                 "arguments": [["key": "site", "value": "example.com"], ["key": "tool", "value": "Fetch web page"]],

@@ -11,7 +11,15 @@ final class AidenBotUXUITests: XCTestCase {
     func testCaptureBotUXScreensDark() { walk(.dark) }
 
     private func walk(_ appearance: AidenStateMatrix.Appearance) {
-        func shoot(_ name: String) { AidenStateMatrix.capture("phase6b-\(appearance.rawValue)-\(name)", in: self) }
+        func shoot(_ name: String) {
+            let full = "phase6b-\(appearance.rawValue)-\(name)"
+            AidenStateMatrix.capture(full, in: self)
+            // Run with TEST_RUNNER_AIDEN_SCREENSHOT_DIR=<folder> to also get the PNGs on disk.
+            if let folder = ProcessInfo.processInfo.environment["AIDEN_SCREENSHOT_DIR"], !folder.isEmpty {
+                let url = URL(fileURLWithPath: folder).appendingPathComponent("\(full).png")
+                try? XCUIScreen.main.screenshot().pngRepresentation.write(to: url)
+            }
+        }
 
         // The Bot's chat: the new cards and the typed approval card.
         var app = AidenStateMatrix.launch(scenario: .one, appearance: appearance, extraArguments: ["-AidenDemoBotUX"])
@@ -87,6 +95,8 @@ final class AidenBotUXUITests: XCTestCase {
         XCTAssertTrue(approvals.waitForExistence(timeout: 10), "No Approvals in Settings")
         app.swipeUp()
         shoot("app-settings")
+        app.swipeDown()
+        if !approvals.isHittable { app.swipeUp() }
         approvals.tap()
         XCTAssertTrue(app.staticTexts["When Aiden asks"].firstMatch.waitForExistence(timeout: 10), "Approvals did not open")
         XCTAssertTrue(app.staticTexts["Send email"].firstMatch.waitForExistence(timeout: 10), "No rules")
