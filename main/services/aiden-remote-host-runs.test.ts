@@ -742,3 +742,28 @@ test("a Mac card left with only a one-time allow carries no scopes to any Remote
     assert.equal("scopes" in prompt, false, device.id);
   }
 });
+
+test("revision 61: a phone holding approval:cards gets the typed card and may allow exactly what it offers", async () => {
+  const { registry, service, access, effects } = harness();
+  registry.publish("run-1", "chat:approval", approval("approval-1", { summary: "Run command: npm test", details: undefined }));
+  registry.publish("run-1", "chat:approval", approval("approval-2", { details: { kind: "unrecognized" } }));
+  const carded = { ...phone("device-cards"), capabilities: new Set<AidenRemoteCapability>(["runs:observe", "runs:control", "approval:cards"]) };
+  const prompts = open(service, carded, "run-1").frames().filter((frame) => frame.event === "approval_required").map((frame) => frame.data.payload as Record<string, any>);
+  assert.equal(prompts[0]!.card.kind, "mac");
+  assert.deepEqual(prompts[0]!.card.body, { format: "command", text: "npm test" });
+  assert.deepEqual(prompts[0]!.card.buttons.map((button: { label: string }) => button.label), ["Deny", "Allow once", "Allow in this chat"]);
+  assert.equal(prompts[0]!.canAllow, true);
+  // A kind the card model does not know is deny-only, on the card and in canAllow.
+  assert.deepEqual(prompts[1]!.card.buttons.map((button: { decision: string }) => button.decision), ["deny"]);
+  assert.equal(prompts[1]!.canAllow, false);
+  // A phone without the opt-in sees no card.
+  assert.equal(open(service, phone("device-plain"), "run-1").frames().some((frame) => frame.event === "approval_required" && "card" in (frame.data.payload as object)), false);
+
+  const always = await rejection(service.respondApproval("device-cards", "run-1", "approval-1", { decision: "allow", scope: "always" }, KEY_A, access, { phoneScoped: true, capabilities: carded.capabilities }));
+  assert.equal(always.code, "capability_denied", "a scope the card does not offer is refused");
+  const refused = await rejection(service.respondApproval("device-cards", "run-1", "approval-2", { decision: "allow" }, KEY_B, access, { phoneScoped: true, capabilities: carded.capabilities }));
+  assert.equal(refused.code, "capability_denied");
+  assert.deepEqual(effects.approvals, []);
+  await service.respondApproval("device-cards", "run-1", "approval-1", { decision: "allow", scope: "chat" }, "key-controller-c-0001", access, { phoneScoped: true, capabilities: carded.capabilities });
+  assert.deepEqual(effects.approvals, ["approval-1:allow"]);
+});

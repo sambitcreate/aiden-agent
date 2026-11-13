@@ -844,6 +844,7 @@
         "main/services/bot-routine-events/composio-calendar-host.test.ts",
         "main/services/bot-routine-events/imcp-mail-host.test.ts",
         "main/services/aiden-remote-bot-allowed.test.ts",
+        "main/services/aiden-remote-bot-ux.test.ts",
         "main/services/bot-runtime/bot-approval-tallies.test.ts",
         "main/services/bot-runtime/bot-allow-target.test.ts",
         "main/services/bot-runtime/bot-approvals.test.ts",

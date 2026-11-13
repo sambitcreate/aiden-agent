@@ -23,7 +23,7 @@ import * as path from "node:path";
 import test, { after } from "node:test";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { BOT_ACTIVITY_PHASES } from "../../renderer/shared/bot-activity.js";
-import { BOT_PRESETS } from "../../renderer/shared/bot-presets.js";
+import { BOT_PRESETS, BOT_TEMPLATE_STALE_MESSAGE } from "../../renderer/shared/bot-presets.js";
 import type { BotDefinition } from "../../renderer/shared/bots.js";
 import { AidenRemoteAttachmentStore } from "./aiden-remote-attachments.js";
 import { AidenRemoteBotService } from "./aiden-remote-bots.js";
@@ -4667,5 +4667,121 @@ test("D Always refuses unoffered and Computer Use scopes without consuming the w
       assert.equal(approvals.pending().length, 1);
       await service.respondApproval(DEVICE_ID, "not-offered-57", "deny", "deny-key-0000000057"); assert.equal((await wait).answer, "deny");
     } finally { approvals.decide("not-offered-57", "deny"); await service.close(); }
+  }
+});
+
+test("revision 61: settings changes and suggestions reach only devices that opted in, and answers go through the Bot's services", async () => {
+  const { BOT_SETTINGS_CHANGE_ENTRY_KIND } = await import("../../renderer/shared/bot-settings-changes.js");
+  const { BOT_LESSON_LEARNED_ENTRY_KIND } = await import("../../renderer/shared/bot-lessons.js");
+  const driven = drivenConversation([
+    user(1, "Rename yourself Planner."),
+    { id: 2, kind: BOT_SETTINGS_CHANGE_ENTRY_KIND, data: { changeId: "change_61", mode: "held", fields: ["name"], lines: ["Name: Chief → Planner"] } },
+    { id: 3, kind: BOT_LESSON_LEARNED_ENTRY_KIND, data: { lessonId: "lesson_61", lesson: "Prices in euros." } },
+  ]);
+  const fake = fakeRuntime({ kind: "idle" });
+  const answers: unknown[][] = [];
+  const service = new AidenRemoteBotSessionService({
+    bots: botService(),
+    runtime: async () => ({ ...fake.runtime, conversation: async () => driven.conversation as never }),
+    presets: { list: () => [], create: async () => ({ botId: BOT_ID, created: true }) },
+    settingsChanges: {
+      respond: async (...args) => {
+        answers.push(["settings", ...args]);
+        return args[2] === "undo" ? { ok: false, message: "This setting changed since. Undo it in Settings." } : { ok: true, status: "applied" };
+      },
+    },
+    suggestions: {
+      respondSkill: async () => ({ status: "added" }),
+      respondLesson: async () => { throw new Error("This lesson is no longer there."); },
+      removeLesson: async (...args) => { answers.push(["remove", ...args]); },
+      undoLearning: async () => ({ ok: false, code: "changed" }),
+    },
+    notifyBotsChanged: () => {},
+    projectorIdleMs: 60_000,
+  });
+  try {
+    const types = async (options: Parameters<typeof service.session>[1]) => (await service.session(BOT_ID, options)).entries.map((entry) => entry.type);
+    assert.deepEqual(await types({}), ["message"], "an older phone sees neither card");
+    assert.deepEqual(await types({ settingsChanges: true }), ["message", "settings_change"]);
+    assert.deepEqual(await types({ suggestions: true }), ["message", "lesson"]);
+    const session = await service.session(BOT_ID, { settingsChanges: true, suggestions: true });
+    assert.deepEqual(parseAidenRemoteBotSession(session), session);
+
+    assert.deepEqual(await service.respondSettingsChange(BOT_ID, "change_61", { decision: "apply" }), { changeId: "change_61", status: "applied" });
+    await assert.rejects(service.respondSettingsChange(BOT_ID, "change_61", { decision: "undo" }), isError("revision_conflict", 409));
+    await assert.rejects(service.respondSettingsChange(BOT_ID, "change_61", { decision: "edit" }), isError("invalid_request", 400), "Edit happens on the desktop");
+    await assert.rejects(service.respondLesson(BOT_ID, "lesson_61", { decision: "keep" }), isError("not_found", 404));
+    await assert.rejects(service.undoLearning(BOT_ID, "learning_61", {}), isError("revision_conflict", 409));
+    await assert.rejects(service.removeLesson(BOT_ID, "lesson_61", { extra: true }), isError("invalid_request", 400));
+    assert.deepEqual(await service.removeLesson(BOT_ID, "lesson_61", {}), { lessonId: "lesson_61", status: "retired" });
+    assert.deepEqual(answers, [["settings", BOT_ID, "change_61", "apply"], ["settings", BOT_ID, "change_61", "undo"], ["remove", BOT_ID, "lesson_61"]]);
+  } finally {
+    await service.close();
+  }
+});
+
+test("revision 61 templates: holders see versions and Open, and a stale version is refused", async () => {
+  const fake = fakeRuntime({ kind: "idle" });
+  const created: unknown[] = [];
+  const preset = BOT_PRESETS[0]!;
+  const service = new AidenRemoteBotSessionService({
+    bots: botService(),
+    runtime: async () => fake.runtime,
+    presets: {
+      list: () => BOT_PRESETS,
+      create: async (presetId, options) => {
+        created.push({ presetId, ...options });
+        if (options.version !== undefined && options.version !== preset.version) throw new Error(BOT_TEMPLATE_STALE_MESSAGE);
+        return { botId: BOT_ID, created: false };
+      },
+      presetBots: async () => ({ [preset.id]: BOT_ID }),
+    },
+    notifyBotsChanged: () => {},
+    projectorIdleMs: 60_000,
+  });
+  try {
+    assert.equal(service.supportsTemplates, true);
+    const listed = (await service.templates()).presets.find((row) => row.id === preset.id)!;
+    assert.equal(listed.version, preset.version);
+    assert.equal(listed.existingBotId, BOT_ID, "a template that already made a Bot offers Open");
+    assert.equal(listed.instructions, preset.instructions);
+    await assert.rejects(
+      service.createFromPreset(DEVICE_ID, "template-key-0000000061a", { presetId: preset.id, version: preset.version + 1 }, { templates: true }),
+      (error: unknown) => isError("revision_conflict", 409)(error as never) && (error as Error).message === BOT_TEMPLATE_STALE_MESSAGE,
+    );
+    await assert.rejects(
+      service.createFromPreset(DEVICE_ID, "template-key-0000000061b", { presetId: preset.id, version: preset.version }),
+      isError("invalid_request", 400),
+      "an older client's body never carries a version",
+    );
+    const opened = await service.createFromPreset(DEVICE_ID, "template-key-0000000061c", { presetId: preset.id, version: preset.version }, { templates: true });
+    assert.equal(opened.created, false);
+    assert.deepEqual(created.map((entry) => (entry as { version?: number }).version), [preset.version + 1, preset.version]);
+  } finally {
+    await service.close();
+  }
+});
+
+test("revision 61: a Bot approval carries the typed card only for approval:cards holders, and Computer Use stays allow-on-Mac", async () => {
+  for (const toolName of ["send_note", "computer_use"]) {
+    const { runtime, service, approvals } = await approvalGatedBot(toolName);
+    try {
+      const sent = await runtime.send(BOT_ID, { text: "go", requestId: `send-request-61-${toolName}` });
+      await waitFor(() => approvals.pending(BOT_ID).length === 1, { what: "the approval prompt" });
+      assert.equal("card" in (await service.session(BOT_ID)).approval!, false, "an older phone gets no card");
+      const carded = (await service.session(BOT_ID, { approvalCards: true })).approval!;
+      assert.equal(carded.card?.buttons[0]?.decision, "deny");
+      const allows = carded.card!.buttons.some((button) => button.decision === "allow");
+      assert.equal(allows, toolName !== "computer_use");
+      assert.equal(allows, carded.canAllow, "the card and canAllow agree");
+      if (toolName === "computer_use") assert.equal(carded.card?.allowOnMac, "Allow it on your Mac.");
+      const session = await service.session(BOT_ID, { approvalCards: true });
+      assert.deepEqual(parseAidenRemoteBotSession(session), session);
+      await service.respondApproval(DEVICE_ID, carded.waitId, "deny", `approve-request-61-${toolName}`);
+      await runtime.awaitReply(BOT_ID, sent.submissionId, new AbortController().signal);
+    } finally {
+      await service.close();
+      await runtime.shutdown();
+    }
   }
 });

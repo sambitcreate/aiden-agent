@@ -8730,6 +8730,629 @@
           }
         }
       }
+    },
+    "/approvals/mode": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "getApprovalMode",
+        "x-aiden-capability": "approval:respond",
+        "x-aiden-capabilities": [
+          "approval:respond",
+          "approvals:settings"
+        ],
+        "description": "Revision 61. The Mac's approval mode ({mode: auto|ask|never, autoAvailable}). Auto without a usable model reads ask. Shapes, errors and the shared fixture: docs/aiden-remote-api-v1.md, Bot UX on phones (revision 61); protocol/aiden-remote/v1/fixtures/bot-ux-revision-61.json.",
+        "responses": {
+          "200": {
+            "description": "The mode.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "put": {
+        "operationId": "setApprovalMode",
+        "x-aiden-capability": "approval:respond",
+        "x-aiden-capabilities": [
+          "approval:respond",
+          "approvals:settings"
+        ],
+        "description": "Revision 61. Set the Mac's approval mode, exactly {mode}. auto without a usable model is 400 invalid_request. Returns the mode as it now is. Shapes, errors and the shared fixture: docs/aiden-remote-api-v1.md, Bot UX on phones (revision 61); protocol/aiden-remote/v1/fixtures/bot-ux-revision-61.json.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "auto",
+                      "ask",
+                      "never"
+                    ]
+                  }
+                },
+                "required": [
+                  "mode"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The mode.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/approvals/rules": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "listApprovalRules",
+        "x-aiden-capability": "approval:respond",
+        "x-aiden-capabilities": [
+          "approval:respond",
+          "approvals:settings"
+        ],
+        "description": "Revision 61. The rules page: {rows, unreadable?}. unreadable means the rules file could not be read; every change is refused until it is fixed on the Mac. Shapes, errors and the shared fixture: docs/aiden-remote-api-v1.md, Bot UX on phones (revision 61); protocol/aiden-remote/v1/fixtures/bot-ux-revision-61.json.",
+        "responses": {
+          "200": {
+            "description": "The rules page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "addApprovalRule",
+        "x-aiden-capability": "approval:respond",
+        "x-aiden-capabilities": [
+          "approval:respond",
+          "approvals:settings"
+        ],
+        "description": "Revision 61. Add a rule ({target, decision, owner?, handOff?, label?}), or change the decision of the rule that already exists for that target. 409 revision_conflict while the rules file is unreadable or when the Mac refuses it. Returns the rules page. Shapes, errors and the shared fixture: docs/aiden-remote-api-v1.md, Bot UX on phones (revision 61); protocol/aiden-remote/v1/fixtures/bot-ux-revision-61.json.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The rules page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/approvals/rules/picker": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "listApprovalRulePicker",
+        "x-aiden-capability": "approval:respond",
+        "x-aiden-capabilities": [
+          "approval:respond",
+          "approvals:settings"
+        ],
+        "description": "Revision 61. Add rule's options: {options: [{target, label, group, description?}]}: Aiden's built-in tools, and each connected app. Shapes, errors and the shared fixture: docs/aiden-remote-api-v1.md, Bot UX on phones (revision 61); protocol/aiden-remote/v1/fixtures/bot-ux-revision-61.json.",
+        "responses": {
+          "200": {
+            "description": "The options.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/approvals/rules/change": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "changeApprovalRule",
+        "x-aiden-capability": "approval:respond",
+        "x-aiden-capabilities": [
+          "approval:respond",
+          "approvals:settings"
+        ],
+        "description": "Revision 61. Change one row: {ref, decision?, handOff?}, at least one of the two. 404 not_found when the row is gone; 409 revision_conflict when unreadable or refused. Returns the rules page. Shapes, errors and the shared fixture: docs/aiden-remote-api-v1.md, Bot UX on phones (revision 61); protocol/aiden-remote/v1/fixtures/bot-ux-revision-61.json.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The rules page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/approvals/rules/remove": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "removeApprovalRule",
+        "x-aiden-capability": "approval:respond",
+        "x-aiden-capabilities": [
+          "approval:respond",
+          "approvals:settings"
+        ],
+        "description": "Revision 61. Remove one row: exactly {ref}. 404 not_found when the row is gone; 409 revision_conflict when unreadable or refused. Returns the rules page. Shapes, errors and the shared fixture: docs/aiden-remote-api-v1.md, Bot UX on phones (revision 61); protocol/aiden-remote/v1/fixtures/bot-ux-revision-61.json.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The rules page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bots/{botId}/settings-changes/{changeId}/respond": {
+      "parameters": [
+        {
+          "name": "botId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          }
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        },
+        {
+          "name": "changeId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "respondBotSettingsChange",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write",
+          "bot:settings-changes"
+        ],
+        "description": "Revision 61. Apply or Dismiss a held update_bot card, or Undo an applied-change receipt: exactly {decision}. Edit happens on the Mac. 409 revision_conflict with the Mac's message when the Bot's settings moved; an Undo the Mac cannot make answers 200 with status undo_refused. Returns {changeId, status, message?}. Shapes, errors and the shared fixture: docs/aiden-remote-api-v1.md, Bot UX on phones (revision 61); protocol/aiden-remote/v1/fixtures/bot-ux-revision-61.json.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "decision": {
+                    "type": "string",
+                    "enum": [
+                      "apply",
+                      "dismiss",
+                      "undo"
+                    ]
+                  }
+                },
+                "required": [
+                  "decision"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bots/{botId}/skill-proposals/{proposalId}/respond": {
+      "parameters": [
+        {
+          "name": "botId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          }
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        },
+        {
+          "name": "proposalId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "respondBotSkillProposal",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write",
+          "bot:suggestions"
+        ],
+        "description": "Revision 61. Add or Not now on a skill suggestion: exactly {decision}. 404 not_found when it is no longer waiting. Returns {proposalId, status}. Shapes, errors and the shared fixture: docs/aiden-remote-api-v1.md, Bot UX on phones (revision 61); protocol/aiden-remote/v1/fixtures/bot-ux-revision-61.json.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "decision": {
+                    "type": "string",
+                    "enum": [
+                      "add",
+                      "dismiss"
+                    ]
+                  }
+                },
+                "required": [
+                  "decision"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bots/{botId}/lessons/{lessonId}/respond": {
+      "parameters": [
+        {
+          "name": "botId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          }
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        },
+        {
+          "name": "lessonId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "respondBotLesson",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write",
+          "bot:suggestions"
+        ],
+        "description": "Revision 61. Keep or Not now on a lesson card: exactly {decision}. Returns {lessonId, status}. Shapes, errors and the shared fixture: docs/aiden-remote-api-v1.md, Bot UX on phones (revision 61); protocol/aiden-remote/v1/fixtures/bot-ux-revision-61.json.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "decision": {
+                    "type": "string",
+                    "enum": [
+                      "keep",
+                      "dismiss"
+                    ]
+                  }
+                },
+                "required": [
+                  "decision"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bots/{botId}/lessons/{lessonId}/remove": {
+      "parameters": [
+        {
+          "name": "botId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          }
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        },
+        {
+          "name": "lessonId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "removeBotLesson",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write",
+          "bot:suggestions"
+        ],
+        "description": "Revision 61. Undo on a Learned line: the lesson is retired. Exact empty body. Returns {lessonId, status: retired}. Shapes, errors and the shared fixture: docs/aiden-remote-api-v1.md, Bot UX on phones (revision 61); protocol/aiden-remote/v1/fixtures/bot-ux-revision-61.json.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bots/{botId}/learning/{changeId}/undo": {
+      "parameters": [
+        {
+          "name": "botId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          }
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        },
+        {
+          "name": "changeId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "undoBotLearning",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write",
+          "bot:suggestions"
+        ],
+        "description": "Revision 61. Undo on a memory tidy line. Exact empty body. 409 revision_conflict when the memory changed since. Returns {changeId, undone: true}. Shapes, errors and the shared fixture: docs/aiden-remote-api-v1.md, Bot UX on phones (revision 61); protocol/aiden-remote/v1/fixtures/bot-ux-revision-61.json.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -9500,7 +10123,12 @@
                 "schedule:cards",
                 "chat:jobs",
                 "attachments:raw",
-                "chat:new-worktree"
+                "chat:new-worktree",
+                "bot:settings-changes",
+                "bot:suggestions",
+                "bot:templates",
+                "approval:cards",
+                "approvals:settings"
               ]
             },
             "uniqueItems": true
@@ -9554,7 +10182,12 @@
                 "schedule:cards",
                 "chat:jobs",
                 "attachments:raw",
-                "chat:new-worktree"
+                "chat:new-worktree",
+                "bot:settings-changes",
+                "bot:suggestions",
+                "bot:templates",
+                "approval:cards",
+                "approvals:settings"
               ]
             },
             "uniqueItems": true
@@ -9711,7 +10344,12 @@
                 "schedule:cards",
                 "chat:jobs",
                 "attachments:raw",
-                "chat:new-worktree"
+                "chat:new-worktree",
+                "bot:settings-changes",
+                "bot:suggestions",
+                "bot:templates",
+                "approval:cards",
+                "approvals:settings"
               ]
             },
             "uniqueItems": true
@@ -9758,9 +10396,13 @@
                 "simulators:mobile",
                 "bot:cards",
                 "bot:activity",
+                "bot:messaging",
                 "bot:handoffs",
                 "bot:handoff-notes",
                 "bot:handoff-on-mac",
+                "bot:access-requests",
+                "bot:plans",
+                "bot:allowed",
                 "bot:images",
                 "bot:issues",
                 "bot:watches",
@@ -9771,10 +10413,11 @@
                 "chat:jobs",
                 "attachments:raw",
                 "chat:new-worktree",
-                "bot:messaging",
-                "bot:access-requests",
-                "bot:plans",
-                "bot:allowed"
+                "bot:settings-changes",
+                "bot:suggestions",
+                "bot:templates",
+                "approval:cards",
+                "approvals:settings"
               ]
             },
             "uniqueItems": true

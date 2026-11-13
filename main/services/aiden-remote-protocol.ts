@@ -1,4 +1,12 @@
 import { parseChatInputSource } from "../../renderer/shared/chat-input-source.js";
+import {
+  AIDEN_REMOTE_BOT_SETTINGS_CHANGE_ENTRY_TYPES,
+  AIDEN_REMOTE_BOT_SUGGESTION_ENTRY_TYPES,
+  parseAidenRemoteApprovalCard,
+  parseAidenRemoteBotUxEntry,
+  type AidenRemoteBotUxEntry,
+} from "./aiden-remote-bot-ux.js";
+import type { ApprovalCard } from "../../renderer/shared/approval-card-model.js";
 import { botPendingAccessRequestOf, parseBotAccessChoice, type BotAccessChoice } from "../../renderer/shared/bot-access-requests.js";
 import { parseAppControlPanels } from "../../renderer/shared/app-controls.js";
 import { parseBotPeerId } from "../../renderer/shared/bot-peers.js";
@@ -306,7 +314,18 @@ export const AIDEN_REMOTE_BOT_PEERS_CONTRACT_REVISION = 59 as const;
  * Display-only, no capability; clients show "By voice" and older ones ignore it.
  */
 export const AIDEN_REMOTE_VOICE_INPUT_CONTRACT_REVISION = 60 as const;
-export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_VOICE_INPUT_CONTRACT_REVISION;
+/**
+ * Contract revision 61 (provisional; re-claim the next revision after
+ * `main`'s at merge by changing only this constant): Phase 6 of the Bot UX
+ * simplification. Four opt-ins, each negotiated on its own and advertised only
+ * where wired: `approval:cards` (the typed approval card), `approvals:settings`
+ * (the global approval mode and the rules page), `bot:settings-changes` and
+ * `bot:suggestions` (held and applied settings changes, skill and lesson
+ * suggestions and their receipts) and `bot:templates` (versioned Templates and
+ * one-field create).
+ */
+export const AIDEN_REMOTE_BOT_UX_CONTRACT_REVISION = 61 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BOT_UX_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -543,6 +562,12 @@ export const AIDEN_REMOTE_BOT_ACCESS_REQUEST_CAPABILITIES = ["bot:access-request
 
 export const AIDEN_REMOTE_BOT_PLAN_CAPABILITIES = ["bot:plans"] as const;
 export const AIDEN_REMOTE_BOT_ALLOWED_CAPABILITIES = ["bot:allowed"] as const;
+/** Revision 61: held `update_bot` cards, applied-change receipts and their answer route. */
+export const AIDEN_REMOTE_BOT_SETTINGS_CHANGE_CAPABILITIES = ["bot:settings-changes"] as const;
+/** Revision 61: skill and lesson suggestion cards, learning receipts and their answer routes. */
+export const AIDEN_REMOTE_BOT_SUGGESTION_CAPABILITIES = ["bot:suggestions"] as const;
+/** Revision 61: template versions, samples and Open on the preset list, and one-field create. */
+export const AIDEN_REMOTE_BOT_TEMPLATE_CAPABILITIES = ["bot:templates"] as const;
 
 export const AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
@@ -558,7 +583,26 @@ export const AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ROUTINE_MODEL_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_PEER_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_SETTINGS_CHANGE_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_SUGGESTION_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_TEMPLATE_CAPABILITIES,
 ] as const;
+
+/**
+ * Contract revision 61: a device holding `approval:cards` receives the typed
+ * `card` on every pending approval it is sent (stream approvals, phone run
+ * approvals and Bot approvals) and may allow a specialized card the card shows
+ * in full. It widens no grant: answers still need `approval:respond` (and the
+ * Bot grants for a Bot card).
+ */
+export const AIDEN_REMOTE_APPROVAL_CARD_CAPABILITIES = ["approval:cards"] as const;
+
+/**
+ * Contract revision 61: a device holding `approvals:settings` may read and set
+ * the Mac's approval mode and read and change the rules page. Person-only
+ * routes: no Bot or agent path reaches them.
+ */
+export const AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES = ["approvals:settings"] as const;
 
 /**
  * Contract revision 39: a device holding `schedule:cards` (with
@@ -607,6 +651,8 @@ export const AIDEN_REMOTE_OPT_IN_CAPABILITIES = [
   ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
   ...AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES,
+  ...AIDEN_REMOTE_APPROVAL_CARD_CAPABILITIES,
+  ...AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES,
 ] as const;
 
 /** Vocabulary a paired device may add after pairing through `POST /device/capabilities`. */
@@ -632,6 +678,11 @@ export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
   ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
   ...AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_SETTINGS_CHANGE_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_SUGGESTION_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_TEMPLATE_CAPABILITIES,
+  ...AIDEN_REMOTE_APPROVAL_CARD_CAPABILITIES,
+  ...AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteNegotiableCapability =
@@ -661,6 +712,11 @@ export const AIDEN_REMOTE_CAPABILITIES = [
   ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
   ...AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_SETTINGS_CHANGE_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_SUGGESTION_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_TEMPLATE_CAPABILITIES,
+  ...AIDEN_REMOTE_APPROVAL_CARD_CAPABILITIES,
+  ...AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteCapability = (typeof AIDEN_REMOTE_CAPABILITIES)[number];
@@ -1558,7 +1614,13 @@ export type AidenRemoteBotSessionEntry =
       mimeType: AidenRemoteBotSharedImageMimeType;
       /** Bytes, at most `AIDEN_REMOTE_BOT_SHARED_IMAGE_MAX_BYTES`. */
       size: number;
-    };
+    }
+  /**
+   * Contract revision 61: `settings_change` only for `bot:settings-changes`
+   * devices; `skill_proposal`, `lesson` and `memory_tidy` only for
+   * `bot:suggestions` devices (`aiden-remote-bot-ux.ts`).
+   */
+  | AidenRemoteBotUxEntry;
 
 /** Revision 45: the image types a Bot can share (`share_image` accepts PNG and JPEG). */
 export const AIDEN_REMOTE_BOT_SHARED_IMAGE_MIME_TYPES = ["image/png", "image/jpeg"] as const;
@@ -1777,6 +1839,8 @@ export interface AidenRemoteBotApproval {
   canAllow: boolean;
   /** Only bot:allowed holders, on an offered card. Never the private class key. */
   alwaysCount?: number;
+  /** Contract revision 61, only for `approval:cards` holders: the typed card. Its Always button only for `bot:allowed` holders. */
+  card?: ApprovalCard;
 }
 
 /**
@@ -5975,6 +6039,12 @@ const BOT_SESSION_ENTRY_ID = /^[A-Za-z0-9._:-]{1,128}$/u;
 
 export function parseAidenRemoteBotSessionEntry(value: unknown): AidenRemoteBotSessionEntry {
   if (!isRecord(value)) throw new Error("Bot session entry must be an object.");
+  if (
+    (AIDEN_REMOTE_BOT_SETTINGS_CHANGE_ENTRY_TYPES as readonly unknown[]).includes(value.type) ||
+    (AIDEN_REMOTE_BOT_SUGGESTION_ENTRY_TYPES as readonly unknown[]).includes(value.type)
+  ) {
+    return parseAidenRemoteBotUxEntry(value);
+  }
   const id = boundedText(value.id, "Bot session entry id", 128);
   if (!BOT_SESSION_ENTRY_ID.test(id)) throw new Error("Bot session entry id is invalid.");
   switch (value.type) {
@@ -6589,7 +6659,7 @@ export function parseAidenRemoteBotAllowedList(value: unknown): AidenRemoteBotAl
 
 export function parseAidenRemoteBotApproval(value: unknown): AidenRemoteBotApproval {
   if (!isRecord(value)) throw new Error("Bot approval must be an object.");
-  assertExactKeys(value, ["waitId", "toolCallId", "toolName", "summary", "canAllow", "alwaysCount"], "Bot approval");
+  assertExactKeys(value, ["waitId", "toolCallId", "toolName", "summary", "canAllow", "alwaysCount", "card"], "Bot approval");
   if (hasOwn(value, "alwaysCount") && value.canAllow !== true) throw new Error("This Bot approval cannot offer Always.");
   return {
     waitId: parseBotQuestionWaitId(value.waitId, "Bot approval waitId"),
@@ -6598,6 +6668,7 @@ export function parseAidenRemoteBotApproval(value: unknown): AidenRemoteBotAppro
     summary: boundedText(value.summary, "Bot approval summary", 2_000),
     canAllow: requiredBooleanValue(value.canAllow, "Bot approval canAllow"),
     ...(hasOwn(value, "alwaysCount") ? { alwaysCount: parseBotApprovalCount(value.alwaysCount) } : {}),
+    ...(hasOwn(value, "card") ? { card: parseAidenRemoteApprovalCard(value.card) } : {}),
   };
 }
 

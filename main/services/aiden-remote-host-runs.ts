@@ -1,4 +1,5 @@
 import type { ServerResponse } from "node:http";
+import { approvalCardAllows, buildApprovalCard, type ApprovalCard } from "../../renderer/shared/approval-card-model.js";
 import {
   parseRemoteToolApprovalScope,
   remoteOfferedScopes,
@@ -183,7 +184,7 @@ function ownRecord(value: unknown): Record<string, unknown> | undefined {
  * holding `schedule:cards` and `schedule:read` (contract revision 39): it adds
  * the display-only `schedule` card to scheduled-task approvals.
  */
-export type RunProjection = "full" | "observer" | "phone" | "phone-schedule";
+export type RunProjection = "full" | "observer" | "phone" | "phone-schedule" | "phone-cards" | "phone-schedule-cards";
 
 function projectPayload(
   type: string,
@@ -200,22 +201,41 @@ function projectPayload(
   if (projection === "observer") return scopes === undefined ? summary : { ...summary, scopes };
   // The phone projection matches the phone's own stream approvals: a summary,
   // whether it may allow from the phone, and allow scopes only when it may.
-  const canAllow = phoneMayAllow(payload);
-  const schedule = projection === "phone-schedule" ? approvalScheduleCard(payload.details) : undefined;
+  const card = projection.endsWith("-cards") ? runApprovalCard(payload) : undefined;
+  const canAllow = card ? approvalCardAllows(card) : phoneMayAllow(payload);
+  const schedule = projection.startsWith("phone-schedule") ? approvalScheduleCard(payload.details) : undefined;
   return {
     ...summary,
     canAllow,
     ...(canAllow && scopes !== undefined ? { scopes } : {}),
     ...(schedule ? { schedule } : {}),
+    ...(card ? { card } : {}),
   };
+}
+
+/**
+ * The typed card for a run's approval (contract revision 61): built from the
+ * journaled payload with the one card model. Details too large to journal
+ * leave a deny-only card.
+ */
+function runApprovalCard(payload: Record<string, unknown>): ApprovalCard {
+  const offered = remoteOfferedScopes(payload.scopes);
+  return buildApprovalCard({
+    toolName: typeof payload.toolName === "string" ? payload.toolName : "tool",
+    summary: typeof payload.summary === "string" ? payload.summary : "",
+    canAllow: payload.canAllow !== false,
+    ...(offered ? { scopes: offered.map((scope) => parseRemoteToolApprovalScope(scope)).filter((scope) => scope !== undefined) } : {}),
+    ...(payload.details !== undefined ? { details: payload.details } : {}),
+    ...(payload.detailsOmitted === true ? { detailsOmitted: true } : {}),
+  });
 }
 
 /** The run projection for a reader, from its device type and grants. */
 export function runProjectionForDevice(device: AidenRemoteHostRunDevice): RunProjection {
   if (isPhoneRunDevice(device)) {
-    return device.capabilities.has("schedule:cards") && device.capabilities.has("schedule:read")
-      ? "phone-schedule"
-      : "phone";
+    const schedule = device.capabilities.has("schedule:cards") && device.capabilities.has("schedule:read");
+    const cards = device.capabilities.has("approval:cards");
+    return schedule ? (cards ? "phone-schedule-cards" : "phone-schedule") : cards ? "phone-cards" : "phone";
   }
   return device.capabilities.has("runs:control") ? "full" : "observer";
 }
@@ -565,7 +585,11 @@ export class AidenRemoteHostRunService {
         return access(summary.chatId, async () => {
           const prompt = this.options.registry.pendingPrompt(approvalId);
           if (prompt && decision === "allow") {
-            if (options.phoneScoped === true && !phoneMayAllow(prompt.payload)) {
+            // A phone holding `approval:cards` may allow exactly what its card offers (revision 61).
+            const card = options.phoneScoped === true && options.capabilities?.has("approval:cards") === true
+              ? runApprovalCard(prompt.payload)
+              : undefined;
+            if (card ? !approvalCardAllows(card, scope) : options.phoneScoped === true && !phoneMayAllow(prompt.payload)) {
               throw new AidenRemoteServiceError(
                 "capability_denied",
                 "This approval can only be allowed from the Aiden desktop app.",
