@@ -16,7 +16,7 @@ import type { BotChatActivityLevel } from "../../shared/bots";
 import type { ConnectCardEntry } from "../../shared/bot-connections";
 import type { BotRoutineProposalEntryData, BotRoutineProposalStatus } from "../../shared/bot-routine-proposals";
 import type { BotIssue, BotIssueResolution } from "../../shared/bot-issues";
-import { botSettleSteps, type BotRecapStep } from "./bot-activity-steps";
+import { botRecapIssues, botSettleSteps, type BotRecapStep } from "./bot-activity-steps";
 import { walkBotTurns, type BotTurn } from "./bot-turns";
 
 export interface BotTranscriptRowOptions {
@@ -95,11 +95,16 @@ export function botTranscriptRows(
   walkBotTurns(entries, running, {
     end(turn, live) {
       const steps = turn.steps.filter((step) => step.kind !== "waiting");
-      if (steps.length > 0 && (level === "detailed" || (level === "summary" && !live))) {
+      const settled = live ? steps : botSettleSteps(steps, turn.stopped || turn.interrupted);
+      // With tool activity off, a finished turn still keeps its one line when
+      // a step failed or was blocked: that is something the person may need to act on.
+      const issues = botRecapIssues(settled);
+      const needsSaying = !live && (issues.failed > 0 || issues.blocked > 0);
+      if (steps.length > 0 && (level === "detailed" || (level === "summary" && !live) || needsSaying)) {
         const recap: BotTranscriptRow = {
           kind: "recap",
           id: `${turn.start.id}:recap`,
-          steps: live ? steps : botSettleSteps(steps, turn.stopped || turn.interrupted),
+          steps: settled,
           durationMs: Math.max(0, (turn.lastAt ?? 0) - (turn.startAt ?? turn.lastAt ?? 0)),
           live,
         };

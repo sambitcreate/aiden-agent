@@ -564,7 +564,7 @@ export function AppearanceSettings() {
         />
         <Field
           label="Show tool activity"
-          description="In Bot chats on this Mac, show the steps a Bot takes while it works. They fold to one line when it finishes."
+          description="In Bot chats on this computer, show the steps a Bot takes while it works. They fold to one line when it finishes."
         >
           <Switch
             checked={showToolActivity}

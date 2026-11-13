@@ -185,8 +185,11 @@ opens/closes win over automatic timing. Completed work never keeps live shimmer 
 Answers, visuals, approvals and question recaps keep their normal placement.
 Bot chats on this device show tool activity only while **Show tool activity**
 is on (a switch in the same Chat group, stored with the device's appearance;
-until it is set, a Mac where any Bot was Detailed keeps it on). When shown, the
-global mode and timing adjust the recaps without adding hidden steps.
+until it is set, a computer where any Bot was Detailed keeps it on, while Bots
+that were Summary lose their finished-turn recaps). With it off, a finished
+turn whose step failed or was blocked still shows its one recap line, since
+that may need the person. When shown, the global mode and timing adjust the
+recaps without adding hidden steps.
 
 The link row edits the browser-service preference, including Ask each time, Aiden browser and System browser. Local-file checks,
 loopback rules, modifier-click and restricted-content confirmation still apply.

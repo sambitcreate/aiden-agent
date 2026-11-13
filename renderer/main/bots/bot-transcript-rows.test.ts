@@ -52,7 +52,7 @@ test("a running reply streams as a bubble, and nothing is shown before it has wo
   assert.deepEqual(kinds(botTranscriptRows([user("u1", "Hi")], null, { running: true, level: "quiet" })), ["user"]);
 });
 
-test("Quiet never adds a recap; Summary puts one recap of the turn right above its answer", () => {
+test("Quiet adds no recap to a turn whose steps all worked; Summary puts one recap of the turn right above its answer", () => {
   const entries = [
     userAt("u1", "Find flights", 1_000),
     step("a1", ""),
@@ -68,6 +68,20 @@ test("Quiet never adds a recap; Summary puts one recap of the turn right above i
   assert.equal(recap.live, false);
   assert.equal(recap.durationMs, 18_000);
   assert.deepEqual(recap.steps.map((s) => [s.kind, s.status]), [["searching", "ok"]]);
+});
+
+test("with tool activity off, a finished turn still shows its line when a step was blocked or failed, and only then", () => {
+  const blockedResult = { ...result("a1"), status: "blocked", isError: true } as BotTranscriptEntry;
+  const blocked = botTranscriptRows([user("u1", "Send it"), step("a1", ""), blockedResult, answer("a2", "I couldn't send it.")], null, quiet);
+  const blockedRecap = blocked.find((row) => row.kind === "recap");
+  assert.ok(blockedRecap?.kind === "recap", "a blocked step is something the person may need to act on");
+  assert.deepEqual(blockedRecap.steps.map((s) => s.status), ["blocked"]);
+  const unanswered = botTranscriptRows([user("u1", "go"), step("a1", ""), answer("a2", "Done.")], null, quiet);
+  assert.ok(unanswered.some((row) => row.kind === "recap"), "a step that never finished reads as failed and keeps its line");
+  const running = botTranscriptRows([user("u1", "go"), step("a1", ""), blockedResult], null, { running: true, level: "quiet" });
+  assert.equal(kinds(running).includes("recap"), false, "nothing shows while the turn is still going");
+  const stopped = botTranscriptRows([user("u1", "go"), step("a1", ""), { ...result("a1"), status: "stopped", isError: true } as BotTranscriptEntry], null, quiet);
+  assert.equal(kinds(stopped).includes("recap"), false, "a step the person stopped needs nothing more than the stopped line");
 });
 
 test("while running, Summary shows no recap yet and Detailed shows a live one at the end", () => {
