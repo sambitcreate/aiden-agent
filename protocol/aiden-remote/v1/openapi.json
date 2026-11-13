@@ -13313,7 +13313,7 @@
           "purpose": {
             "type": "string",
             "maxLength": 280,
-            "description": "Optional from contract revision 61; absent means empty."
+            "description": "Optional from contract revision 61 for a device holding bot:templates; absent means empty. Other devices must send it."
           },
           "openingGreeting": {
             "type": "string",
@@ -13325,7 +13325,7 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 32000,
-            "description": "Optional from contract revision 61; absent means the starter instructions. An empty string is still refused."
+            "description": "Optional from contract revision 61 for a device holding bot:templates; absent means the starter instructions. Other devices must send it, and an empty string is still refused."
           },
           "avatar": {
             "$ref": "#/components/schemas/BotSemanticAvatar"

@@ -5955,7 +5955,7 @@ test("only a device holding bot:activity is served activity frames and a Bot's c
     ["create", () => fetch(`${base}/bots`, {
       method: "POST",
       headers: { ...write, "idempotency-key": "bot-create-key-0000001" },
-      body: JSON.stringify({ name: "Planner" }),
+      body: JSON.stringify({ name: "Planner", purpose: "", instructions: "Help me plan." }),
     })],
     ["patch", () => fetch(`${base}/bots/bot-1`, { method: "PATCH", headers: write, body: JSON.stringify({ name: "Planner" }) })],
     ["avatar delete", () => fetch(`${base}/bots/bot-1/avatar`, { method: "DELETE", headers: write })],
@@ -6432,7 +6432,7 @@ test("a paused Bot reads paused only to a device holding bot:handoffs, on every 
     ["create", () => fetch(`${base}/bots`, {
       method: "POST",
       headers: { ...write, "idempotency-key": "bot-create-key-0000036" },
-      body: JSON.stringify({ name: "Planner" }),
+      body: JSON.stringify({ name: "Planner", purpose: "", instructions: "Help me plan." }),
     }), (body) => body],
     ["patch", () => fetch(`${base}/bots/bot-1`, { method: "PATCH", headers: write, body: JSON.stringify({ name: "Planner" }) }), (body) => body],
     ["avatar delete", () => fetch(`${base}/bots/bot-1/avatar`, { method: "DELETE", headers: write }), (body) => body],
@@ -7407,6 +7407,15 @@ test("revision 61 templates: holders read versions, name the version on create, 
       // The shared fixture's one-field body, decoded by the real parser the Bot service uses.
       const oneField = JSON.parse(readFileSync(new URL("../../protocol/aiden-remote/v1/fixtures/bot-ux-revision-61.json", import.meta.url), "utf8")).requests.oneFieldCreate;
       const response = await fetch(`${app.base}/bots`, { method: "POST", headers: { ...REV61_HEADERS, "idempotency-key": "one-field-key-000000061" }, body: JSON.stringify(oneField) });
+      if (!holder) {
+        // Without the opt-in, the earlier rule stands: purpose and instructions are required.
+        assert.equal(response.status, 400);
+        const before = app.createBodies.length;
+        const full = await fetch(`${app.base}/bots`, { method: "POST", headers: { ...REV61_HEADERS, "idempotency-key": "full-create-key-0000061" }, body: JSON.stringify({ ...oneField, purpose: "Plans my week", instructions: "Help me plan." }) });
+        assert.equal(full.status, 201, "a complete request still creates the Bot");
+        assert.equal(app.createBodies.length, before + 1);
+        continue;
+      }
       assert.equal(response.status, 201);
       const parsed = parseAidenRemoteBotCreateRequest(app.createBodies[app.createBodies.length - 1]);
       assert.equal(parsed.purpose, "");

@@ -2908,10 +2908,17 @@ export function createAidenRemoteRequestHandler(
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-        // Revision 61 one-field create: a request without instructions gets the
-        // starter text (the parser's default); a `bot:templates` holder's Bot
-        // then introduces itself and asks what to help with.
-        const oneField = holdsBotTemplates(device, dependencies) && isPlainRecord(body) && !Object.prototype.hasOwnProperty.call(body, "instructions");
+        // Revision 61 one-field create: only a device that negotiated
+        // `bot:templates` may leave out `purpose` or `instructions` (the parser
+        // fills in an empty purpose and the starter text, and the new Bot then
+        // introduces itself). Every other device keeps the earlier rule that
+        // both are required.
+        const omitsLegacyField = isPlainRecord(body)
+          && (!Object.prototype.hasOwnProperty.call(body, "purpose") || !Object.prototype.hasOwnProperty.call(body, "instructions"));
+        if (omitsLegacyField && !holdsBotTemplates(device, dependencies)) {
+          throw new AidenRemoteServiceError("invalid_request", "A Bot needs a purpose and instructions.", 400);
+        }
+        const oneField = omitsLegacyField && isPlainRecord(body) && !Object.prototype.hasOwnProperty.call(body, "instructions");
         const created = await dependencies.bots.create(device.id, key, body);
         if (oneField) dependencies.botSessions!.introduceCreated!(created.id);
         await writeBotDetail(response, 201, created, device, dependencies);
