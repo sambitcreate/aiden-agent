@@ -134,6 +134,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Workspace/AidenWorkspaceDirectoryView.swift",
   "AidenOnTheGo/Features/Remote/AidenBotChatToolsView.swift",
   "AidenOnTheGo/Features/Remote/Demo/AidenDemoHosts.swift",
+  "AidenOnTheGo/Features/Remote/Demo/AidenDemoBotUX.swift",
   "AidenOnTheGo/Features/Remote/Hosts/AidenHostConnectScheduler.swift",
   "AidenOnTheGo/Features/Shell/AidenAppNavigation.swift",
   "AidenOnTheGo/Features/Shell/AidenAppShellView.swift",
@@ -339,6 +340,7 @@ const testSources = [
 // UI tests never ship. They launch the Debug app against demo machines.
 const uiTestSources = [
   "AidenShellUITests.swift",
+  "AidenBotUXUITests.swift",
   "AidenStateMatrix.swift",
 ];
 
