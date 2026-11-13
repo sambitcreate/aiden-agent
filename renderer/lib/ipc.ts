@@ -2129,6 +2129,14 @@ export const botsApi = {
     respond: (input: { botId: string; proposalId: string; decision: "add" | "dismiss" }) =>
       invoke<{ status: "added" | "dismissed" }>("bots:skillProposals:respond", input),
   },
+  /** Changes a Bot made to its own settings from chat, and the person's answer. */
+  settingsChanges: {
+    respond: (input: { botId: string; changeId: string; decision: import("../shared/bot-settings-changes").BotSettingsChangeDecision }) =>
+      invoke<{ ok: true; status: import("../shared/bot-settings-changes").BotSettingsChangeStatus; message?: string } | { ok: false; message: string }>(
+        "bots:settingsChanges:respond",
+        input,
+      ),
+  },
   /** A Bot's health checks: the newest report, and Check now. */
   health: {
     report: (botId: string) =>

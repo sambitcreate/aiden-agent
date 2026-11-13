@@ -18,6 +18,7 @@ import { botExecutionScope } from "./bot-execution.js";
 import { BOT_PEER_TOOL } from "../bot-peers/tool.js";
 import { botPeerIngress } from "../bot-peers/ingress.js";
 import { BOT_OPEN_WORK_TOOL } from "../bot-open-work/tool.js";
+import { UPDATE_BOT_TOOL_NAME } from "../../../renderer/shared/bot-settings-changes.js";
 import { BOT_ROUTINES_TOOL_NAME } from "../../../renderer/shared/bot-routine-proposals.js";
 import { composioServiceCallRequiresForeground, isComposioServiceToolDescriptor } from "../composio-service-tool.js";
 import { BOT_FILE_TOOL_NAMES } from "../bot-file-tool-router.js";
@@ -193,6 +194,9 @@ export async function botToolVerdict(
     return verdict(!facts.supportsImages && authority.visionProvider !== undefined, "Image understanding is off for this Bot.");
   }
   if (name === BOT_OPEN_WORK_TOOL) return verdict(hasCapability(facts, "tasks"), "Task tracking is off for this Bot.");
+  // Its own name, look, instructions, check-ins, notifications and model only;
+  // outside a run the owner started, every change waits on a card (§4.6).
+  if (name === UPDATE_BOT_TOOL_NAME) return { allowed: true };
   if (name === WEB_SEARCH_TOOL) return verdict(hasCapability(facts, "web"), "Web search is off for this Bot.");
   if (isComputerUseCapabilityTool(name)) {
     return verdict(hasCapability(facts, "computer_use"), "Computer Use is off for this Bot.");
@@ -287,7 +291,8 @@ export async function botToolApprovalSummary(
   facts: BotToolFacts,
 ): Promise<string | undefined> {
   if (name === SHARE_IMAGE_TOOL_NAME) return summarizeToolCall(name, args);
-  if (FILE_TOOLS.has(name) || name === "run_command" || name === WEB_SEARCH_TOOL || name === BOT_OPEN_WORK_TOOL) return undefined;
+  // `update_bot` asks through its own receipt (Undo) or held card (Apply).
+  if (FILE_TOOLS.has(name) || name === "run_command" || name === WEB_SEARCH_TOOL || name === BOT_OPEN_WORK_TOOL || name === UPDATE_BOT_TOOL_NAME) return undefined;
   // The browser asks through its live tab and page (`bot-browser-approval.ts`).
   if (name === BOT_BROWSER_GATEWAY_TOOL || isBrowserToolName(name)) return undefined;
   // Inside the Bot's own computer the baseline is allowed; rules read the intent (§8.7).

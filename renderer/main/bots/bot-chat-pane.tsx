@@ -18,6 +18,9 @@ import { RoutinesSkippedCard } from "../../components/bots/routines-skipped-card
 import { RoutineProposalCard } from "../../components/bots/routine-proposal-card";
 import { SkillProposalCard } from "../../components/bots/skill-proposal-card";
 import { LearnedLine, LessonProposalCard } from "../../components/bots/lesson-cards";
+import { HeldSettingsCard, SettingsChangeReceipt } from "../../components/bots/settings-change-cards";
+import type { BotSettingsChangeStatus } from "../../shared/bot-settings-changes";
+import { BotInstructionsDialog } from "./bot-instructions-editor";
 import { BotIssueCard } from "../../components/bots/bot-issue-card";
 import { HandoffCard, handoffNoNoteComposerText, handoffSignInComposerText } from "../../components/bots/handoff-card";
 import { NeedsYouAnnouncer, NeedsYouFocusScope, NeedsYouHeader, needsYouSlotState, type NeedsYouItem } from "../../components/bots/needs-you-slot";
@@ -720,6 +723,7 @@ export function TranscriptEntries({
   onRespondToLesson,
   onUndoLearning,
   onActOnIssue,
+  onUndoSettings,
   wakeUpPending,
   onCancelWakeUp,
   connectLabel,
@@ -754,6 +758,8 @@ export function TranscriptEntries({
   onNewRoutineLink?(routineId: string): Promise<string | null>;
   /** One action on a "Needs you" issue card. */
   onActOnIssue?(issueId: string, action: BotIssueAction): Promise<void>;
+  /** Undo on a "Settings updated" receipt; resolves to its settled status. */
+  onUndoSettings?(changeId: string): Promise<BotSettingsChangeStatus>;
   /** Keep or decline a lesson from a routine's runs. */
   onRespondToLesson?(lessonId: string, decision: "keep" | "dismiss"): Promise<"active" | "dismissed" | null>;
   /** Undo a correction lesson or the newest memory tidy. */
@@ -970,6 +976,15 @@ export function TranscriptEntries({
                 onRespond={(decision) => onRespondToSkill(row.proposal.proposalId, decision)}
               />
             ) : null);
+          case "settings_change":
+            return (
+              <SettingsChangeReceipt
+                key={row.id}
+                change={row.change}
+                status={row.change.mode === "applied" ? row.status : row.status === "pending" ? "applied" : row.status}
+                onUndo={onUndoSettings ? () => onUndoSettings(row.change.changeId) : () => Promise.reject(new Error("Undo isn’t available here."))}
+              />
+            );
           case "issue":
             return onActOnIssue ? (
               <BotIssueCard
@@ -1117,6 +1132,8 @@ export function BotChatPane({ botId }: { botId: string }) {
   const findBar = useChatFind(botId);
   // The Needs-you item the person moved to with Previous or Next, by key.
   const [needsYouChoice, setNeedsYouChoice] = React.useState<string | null>(null);
+  // Edit on a held "Update instructions?" card: the editor, seeded with the proposed text.
+  const [instructionsEdit, setInstructionsEdit] = React.useState<{ changeId: string; seed: string } | null>(null);
   const accessRequestActions = useBotAccessRequestActions(botId, live.snapshot?.accessRequest?.waitId);
   const handoffActions = useBotHandoffActions(botId, live.snapshot?.handoff?.waitId);
 
@@ -1560,6 +1577,22 @@ export function BotChatPane({ botId }: { botId: string }) {
       throw error;
     }
   };
+  const respondToSettings = async (changeId: string, decision: "undo" | "apply" | "edited" | "dismiss"): Promise<BotSettingsChangeStatus> => {
+    let result: Awaited<ReturnType<typeof botsApi.settingsChanges.respond>>;
+    try {
+      result = await botsApi.settingsChanges.respond({ botId: current.id, changeId, decision });
+    } catch (error) {
+      toast.error(userFacingErrorMessage(error, "Aiden couldn’t save that choice."));
+      throw error;
+    }
+    if (!result.ok) {
+      toast.error(result.message);
+      throw new Error(result.message);
+    }
+    if (result.message) toast(result.message);
+    void qc.invalidateQueries({ queryKey: queryKeys.bots });
+    return result.status;
+  };
   const newRoutineLink = async (routineId: string) => {
     try {
       return (await botsApi.eventRoutines.rotateLink({ botId: current.id, id: routineId })).link;
@@ -1734,6 +1767,25 @@ export function BotChatPane({ botId }: { botId: string }) {
             const { result } = await botsApi.respondPlan({ botId: current.id, planId: plan.planId, decision });
             if (result === "not_waiting") throw new Error("That plan was already answered or closed.");
           }}
+        />
+      ),
+    });
+  }
+  // A change the Bot asked for in a run the person didn't start (§4.6).
+  for (const entry of snapshot.entries) {
+    if (entry.type !== "settings_change" || entry.change.mode !== "held" || entry.status !== "pending") continue;
+    const change = entry.change;
+    slotItems.push({
+      key: `change:${change.changeId}`,
+      kind: "change",
+      render: () => (
+        <HeldSettingsCard
+          change={change}
+          botName={current.name}
+          onRespond={async (decision) => {
+            await respondToSettings(change.changeId, decision);
+          }}
+          onEdit={(instructions) => setInstructionsEdit({ changeId: change.changeId, seed: instructions })}
         />
       ),
     });
@@ -1914,6 +1966,7 @@ export function BotChatPane({ botId }: { botId: string }) {
             }
           }}
           onActOnIssue={actOnIssue}
+          onUndoSettings={(changeId) => respondToSettings(changeId, "undo")}
         />
         {shownSends.map((send) => {
           const morphFrom = sendMorphs.current.get(send.requestId);
@@ -1971,6 +2024,20 @@ export function BotChatPane({ botId }: { botId: string }) {
         const consent = costConsent; setCostConsent(null);
         if (consent?.botId === current.id && state?.kind === "interrupted" && consent.submissionId === state.submissionId) void answerInterrupted("resume", true, consent.expectedSubmissionId, consent.expectedCostReceiptId);
       }} />
+      {instructionsEdit ? (
+        <BotInstructionsDialog
+          key={instructionsEdit.changeId}
+          bot={current}
+          open
+          seed={instructionsEdit.seed}
+          onOpenChange={(open) => {
+            if (!open) setInstructionsEdit(null);
+          }}
+          onSaved={async () => {
+            await respondToSettings(instructionsEdit.changeId, "edited").catch(() => undefined);
+          }}
+        />
+      ) : null}
       {peerExchange?.botId === current.id && <BotPeerExchangeDialog key={`${peerExchange.botId}:${peerExchange.exchangeId}`} botId={current.id} exchangeId={peerExchange.exchangeId} onClose={() => setPeerExchange(null)} />}
       {/* A new message dismisses the interrupted turn, so the card leaves with the send and comes back if it fails. */}
       {status === "interrupted" && state?.kind === "interrupted" ? (

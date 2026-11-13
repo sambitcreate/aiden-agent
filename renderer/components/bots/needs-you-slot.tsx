@@ -1,7 +1,7 @@
 // The Needs-you slot (docs/plans/bot-ux-simplification.md §4.7): one place
 // above a Bot chat's composer for everything waiting on the person, one item
 // at a time. Take control comes first, then the ask cards (approvals, a folder
-// or Mac request, a plan), then the Bot's A–E question, which is answered in
+// or Mac request, a plan, a held settings change), then the Bot's A–E question, which is answered in
 // the composer's place. With more than one item a quiet header reads
 // "Needs you · 1 of 3" with Previous and Next. The card on show stays on show
 // while others arrive: an arrival only raises the count, so a half-answered
@@ -13,15 +13,16 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Button, Text } from "../ui";
 
 /** What an item is, which fixes its place in the slot. */
-export type NeedsYouKind = "take_control" | "approval" | "access" | "plan" | "question";
+export type NeedsYouKind = "take_control" | "approval" | "access" | "plan" | "change" | "question";
 
-/** Take control, then the ask cards (approval, folder or Mac request, plan), then the question. */
+/** Take control, then the ask cards (approval, folder or Mac request, plan, a held settings change), then the question. */
 const NEEDS_YOU_ORDER: Record<NeedsYouKind, number> = {
   take_control: 0,
   approval: 1,
   access: 2,
   plan: 3,
-  question: 4,
+  change: 4,
+  question: 5,
 };
 
 export interface NeedsYouItem {

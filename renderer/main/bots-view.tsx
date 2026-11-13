@@ -12,7 +12,7 @@ import { BotInterruptionsPage } from "./bots/bot-interruptions-page";
 import { BotLearningPage } from "./bots/bot-learning-page";
 import { BotCreateFlow } from "./bots/bot-create-flow";
 import { BotDeleteDialog } from "./bots/bot-delete-dialog";
-import { BotInstructionsEditor } from "./bots/bot-instructions-editor";
+import { BotInstructionsDialog } from "./bots/bot-instructions-editor";
 import { useBotRows } from "./bots/bot-sidebar-rows";
 import { BotMemoryPage } from "./bots/bot-memory-page";
 import { BotOpenWorkPage } from "./bots/bot-open-work-page";
@@ -152,9 +152,8 @@ function BotPage({ botId }: { botId: string }) {
   const back = () => openPage(null);
   return (
     <>
-      {page === "instructions" ? (
-        <BotInstructionsEditor key={`${current.id}:instructions`} bot={current} onClose={back} />
-      ) : page === "advanced" ? (
+      <BotInstructionsDialog bot={current} open={page === "instructions"} onOpenChange={(open) => !open && back()} />
+      {page === "advanced" ? (
         <BotAdvanced
           key={`${current.id}:advanced`}
           bot={current}

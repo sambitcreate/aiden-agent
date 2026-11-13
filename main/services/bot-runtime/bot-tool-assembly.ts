@@ -93,12 +93,12 @@ function botBringsOutsideContent(toolName: string): boolean {
 /**
  * A Bot's own tools whose results never carry outside content: its memory and
  * notes, its wake-ups, questions and hand-offs to the person, its plans and
- * access requests, and files in its home or selected folders (as a workspace's
+ * access requests, its own settings (`update_bot`), and files in its home or selected folders (as a workspace's
  * files don't taint).
  */
 const BOT_NON_TAINTING_TOOL_NAMES: ReadonlySet<string> = new Set([
   "bot_memory", "bot_recall", "tidy_memory", "routine_notes", "wake_up", "ask_user_question", "hand_off", "sign_in",
-  "propose_plan", "request_access", ...BOT_FILE_TOOL_NAMES,
+  "propose_plan", "request_access", "update_bot", ...BOT_FILE_TOOL_NAMES,
 ]);
 
 /**

@@ -72,6 +72,7 @@ import {
   parseBotSessionAction,
   parseBotUpdate,
   parseBotWithdraw,
+  parseBotSettingsChangeResponse,
 } from "./bot-params.js";
 
 async function desktopAvatarAdapter() {
@@ -317,6 +318,12 @@ export function registerBotHandlers(): void {
     if (typeof fields.proposalId !== "string" || !/^[0-9a-f-]{36}$/iu.test(fields.proposalId)) throw new Error("Invalid skill response.");
     const { botSkillProposals } = await import("../services/bot-skills/skill-proposals-main.js");
     return botSkillProposals.respond({ botId: parseBotId(fields.botId), proposalId: fields.proposalId, decision: fields.decision });
+  });
+  // Settings from chat (§4.6): Undo a receipt, or Apply / Edit / Dismiss a held change.
+  ipcMain.handle("bots:settingsChanges:respond", async (_event, input: unknown) => {
+    const { botId, changeId, decision } = parseBotSettingsChangeResponse(input);
+    const { botSettingsChanges } = await import("../services/bot-settings-changes/service-main.js");
+    return botSettingsChanges.respond(botId, changeId, decision);
   });
   // Profile → What I've learned, and the chat's lesson cards and Undo lines.
   const learning = () => import("../services/bot-learning/learning-main.js");

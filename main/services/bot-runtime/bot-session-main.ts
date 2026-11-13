@@ -74,7 +74,7 @@ import { assertBoundBotProviderModelCurrent } from "../bot-capability-bindings.j
 import type { BotRoutineThinkingLevel } from "../../../renderer/shared/bot-routine-models.js";
 import { acknowledgeBotExecutionUnknown, botExecutionAccountableResponse, botExecutionInputSpendingRefusal, botExecutionSpendingOwner, botExecutionUnknownCostReceipt, isBotExecutionDispatchSettled, recordKnownBotExecutionResponse, recordKnownBotExecutionCost } from "./bot-execution-spending.js";
 import { botStore } from "../bot-store.js";
-import { botRoutineGuidance, withBotManagedWorkspace, withBotPersona, type BotWorkspacePromptAuthority } from "../bot-system-prompt.js";
+import { botRoutineGuidance, botSettingsGuidance, withBotManagedWorkspace, withBotPersona, type BotWorkspacePromptAuthority } from "../bot-system-prompt.js";
 import { buildSystemPrompt } from "../chat-system-prompt.js";
 import { runtimeSupportsImages } from "../generation-runtime.js";
 import { resolveBotModelRuntime, resolveModelRuntime, type ResolvedModelRuntime } from "../model-runtime.js";
@@ -683,6 +683,7 @@ const extension: BotExtensionDeps = {
           .join("\n\n"),
         [
           botRoutineGuidance(toolNames),
+          botSettingsGuidance(toolNames, bot),
           openWorkSummary,
           tools.guidance(bot.id, offered.toolNames),
           // How-to lessons from the person's corrections: below authority, as data.

@@ -524,3 +524,16 @@ export function parseBotRulesUpdate(value: unknown): BotRulesUpdateInput {
   }
   return { botId: parseBotId(record.botId), revision, change: ruleChange(record.change) };
 }
+
+/** The person's answer to a settings change from chat (§4.6): exact keys, a known decision. */
+export function parseBotSettingsChangeResponse(input: unknown): { botId: string; changeId: string; decision: "undo" | "apply" | "edited" | "dismiss" } {
+  const fail = (): never => {
+    throw new Error("Invalid settings response.");
+  };
+  if (!input || typeof input !== "object" || Array.isArray(input)) return fail();
+  const fields = input as Record<string, unknown>;
+  if (Object.keys(fields).some((key) => key !== "botId" && key !== "changeId" && key !== "decision")) return fail();
+  if (fields.decision !== "undo" && fields.decision !== "apply" && fields.decision !== "edited" && fields.decision !== "dismiss") return fail();
+  if (typeof fields.changeId !== "string" || !/^[0-9a-f-]{36}$/iu.test(fields.changeId)) return fail();
+  return { botId: parseBotId(fields.botId), changeId: fields.changeId, decision: fields.decision };
+}

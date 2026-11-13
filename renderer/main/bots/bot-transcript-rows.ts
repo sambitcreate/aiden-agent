@@ -57,6 +57,13 @@ export type BotTranscriptRow =
       routineId?: string;
       supersededBy?: string;
     }
+  /** "Settings updated · Undo", or a held change the person applied. */
+  | {
+      kind: "settings_change";
+      id: string;
+      change: import("../../shared/bot-settings-changes").BotSettingsChangeEntryData;
+      status: "pending" | import("../../shared/bot-settings-changes").BotSettingsChangeStatus;
+    }
   | {
       kind: "skill_proposal";
       id: string;
@@ -195,6 +202,12 @@ export function botTranscriptRows(
           break;
         case "skill_proposal":
           rows.push({ kind: "skill_proposal", id: entry.id, proposal: entry.proposal, status: entry.status });
+          break;
+        // A held change waits in the Needs-you slot; once applied it reads as a receipt.
+        case "settings_change":
+          if (entry.change.mode === "applied" || entry.status === "applied" || entry.status === "edited") {
+            rows.push({ kind: "settings_change", id: entry.id, change: entry.change, status: entry.status });
+          }
           break;
         case "routines_skipped":
           rows.push({ kind: "routines_skipped", id: entry.id, since: entry.since, routines: entry.routines });
