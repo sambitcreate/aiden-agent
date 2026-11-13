@@ -47,6 +47,8 @@ import type { BotDefinition } from "../../../renderer/shared/bots.js";
 import type { ConnectCardEntry } from "../../../renderer/shared/bot-connections.js";
 import { connectionSourceIdFor, resolveConnectCardStatus } from "../bot-runtime-tools/suggest-connection.js";
 import { botRoutinesGoAhead, defaultBotRules } from "../../../renderer/shared/bot-rules.js";
+import { effectiveApprovalMode, parseApprovalModel } from "../../../renderer/shared/approval-mode.js";
+import { createBotApprovalJudge } from "./bot-approval-judge.js";
 import { botApplicationService } from "../bot-application-service-main.js";
 import { botCapabilityCatalog, botCapabilityStore, botManagedWorkspace, botServiceRoot } from "../bot-capability-services-main.js";
 import { desktopBotProtectedRoots } from "../bot-desktop-protected-settings.js";
@@ -72,10 +74,10 @@ import { assertBoundBotProviderModelCurrent } from "../bot-capability-bindings.j
 import type { BotRoutineThinkingLevel } from "../../../renderer/shared/bot-routine-models.js";
 import { acknowledgeBotExecutionUnknown, botExecutionAccountableResponse, botExecutionInputSpendingRefusal, botExecutionSpendingOwner, botExecutionUnknownCostReceipt, isBotExecutionDispatchSettled, recordKnownBotExecutionResponse, recordKnownBotExecutionCost } from "./bot-execution-spending.js";
 import { botStore } from "../bot-store.js";
-import { botRoutineGuidance, withBotManagedWorkspace, withBotPersona, type BotWorkspacePromptAuthority } from "../bot-system-prompt.js";
+import { botRoutineGuidance, botSettingsGuidance, withBotManagedWorkspace, withBotPersona, type BotWorkspacePromptAuthority } from "../bot-system-prompt.js";
 import { buildSystemPrompt } from "../chat-system-prompt.js";
 import { runtimeSupportsImages } from "../generation-runtime.js";
-import { resolveBotModelRuntime, type ResolvedModelRuntime } from "../model-runtime.js";
+import { resolveBotModelRuntime, resolveModelRuntime, type ResolvedModelRuntime } from "../model-runtime.js";
 import { registerSubagentProviderAuthority } from "../subagents/subagent-runtime-authority.js";
 import { telegramBotBindingAuthority, telegramBotBindings } from "../telegram/telegram-bot-bindings.js";
 import { botApprovals, configureBotApprovalDecisionLookup } from "./bot-approvals-main.js";
@@ -122,6 +124,8 @@ import { BOT_COMPACTION_FOCUS, createBotCompactionSteering } from "../bot-memory
 import { renderBotMemorySection } from "../bot-memory/prompt.js";
 import { renderBotRulesSection } from "../bot-rules/prompt.js";
 import { botRules } from "../bot-rules/store-main.js";
+import { approvalRules } from "../approval-rules/store-main.js";
+import { pageTextRulesFor } from "../approval-rules/resolve-main.js";
 import { botIssues } from "../bot-issues/service-main.js";
 import { createBotMemoryReview, type BotMemoryAdmission } from "../bot-memory/review.js";
 import { BOT_MEMORY_TOOL_NAME, botMemoryToolEntry, withBotMemoryIngress } from "../bot-memory/tool.js";
@@ -320,6 +324,31 @@ const planAuthority = createBotPlanAuthority({
 });
 configureBotPlanAuthority({ revalidate: planAuthority.revalidate, revokeAccess: planAuthority.revokeAccess });
 
+// The Auto judge for Bots: the approval model named in Advanced, else the
+// Bot's own model, never another provider Aiden picks itself. An ACP agent
+// can't judge, so its Bot's calls show their cards.
+const botApprovalJudge = createBotApprovalJudge({
+  job: async (botId) => (await botStore.get(botId))?.instructions,
+  runtime: async (botId, signal) => {
+    const configured = parseApprovalModel((await configStore.getSettings()).approvalModel);
+    const runtime = configured
+      ? await resolveModelRuntime(configured.providerId, configured.model, signal, `bot:${botId}`)
+      : await withAdmission(botId, ({ authority }) =>
+          resolveBotModelRuntime(authority.provider.sourceProviderId, authority.provider.sourceModelId, signal, botId));
+    if (isAcpHarnessProvider(runtime.provider.id)) return undefined;
+    return {
+      judge: { model: runtime.model, provider: runtime.provider, apiKey: runtime.apiKey, ...(runtime.headers ? { headers: runtime.headers } : {}), streams: runtime.streams },
+      countsSpend: () => spendCounts({ local: isLocalModelProvider(runtime.provider), provider: runtime.provider, models: runtime.models }),
+    };
+  },
+  recordUsage: async (record) => {
+    const { usageStore } = await import("../usage-store.js");
+    await usageStore.record(record);
+  },
+  recordSpend: (botId, requestIds, usd) => spending.record(botSpendingOwner(botId, requestIds), usd),
+  onSpendError: (botId, error) => logger.warn("bots", `Bot ${botId} approval judge spending could not be counted.`, error),
+});
+
 const tools = createBotToolAssembly({
   allowList: botAllowList,
   admit,
@@ -327,16 +356,34 @@ const tools = createBotToolAssembly({
   rules: (botId) => botRules.rules(botId),
   botName: async (botId) => (await botStore.get(botId))?.name,
   routinesGoAhead: async () => botRoutinesGoAhead(await configStore.getSettings()),
+  approvalMode: async () => effectiveApprovalMode(await configStore.getSettings(), true),
   plans: botPlans,
+  pageRules: async (botId) => (await approvalRules.list()).filter((rule) =>
+    rule.owner.kind === "mac" || (rule.owner.kind === "bot" && rule.owner.botId === botId)),
+  judge: botApprovalJudge,
 });
 
 /** The Bot's rules for its prompt; the defaults when the file can't be read (calls still fail closed). */
 async function promptRules(botId: string) {
+  let own;
   try {
-    return await botRules.rules(botId);
+    own = await botRules.rules(botId);
   } catch (error) {
     logger.warn("bots", `Bot ${botId} rules could not be read for its prompt.`, error);
-    return defaultBotRules();
+    own = defaultBotRules();
+  }
+  try {
+    // Settings → Approvals' "When a Bot wants to …" rules ask (or hand off) the same way.
+    const words = (await pageTextRulesFor(botId)).filter((rule) => rule.decision === "ask");
+    return [...own, ...words.map((rule) => ({
+      id: `custom.${rule.id}`,
+      text: rule.target.kind === "text" ? rule.target.text : "",
+      behavior: rule.handOff ? "hand_off" as const : "ask" as const,
+      locked: false,
+    }))];
+  } catch (error) {
+    logger.warn("bots", "The approval rules could not be read for a Bot's prompt.", error);
+    return own;
   }
 }
 
@@ -636,6 +683,7 @@ const extension: BotExtensionDeps = {
           .join("\n\n"),
         [
           botRoutineGuidance(toolNames),
+          botSettingsGuidance(toolNames, bot),
           openWorkSummary,
           tools.guidance(bot.id, offered.toolNames),
           // How-to lessons from the person's corrections: below authority, as data.

@@ -2206,6 +2206,123 @@ final class AidenChatTests: XCTestCase {
         try await exerciseControlResponse(stop: false, nextApproval: "approval-next", mode: .cancelledControls)
     }
 
+    /// Revision 61: a typed card's host, recording each answer the phone sends
+    /// and whether the Mac still holds the approval.
+    private final class TypedApprovalHost: @unchecked Sendable {
+        private let lock = NSLock()
+        private var decisions: [String] = []
+        private var resolved = false
+        let toolName: String
+        let card: String
+        let answer: (String) -> (Int, Data)
+
+        init(toolName: String, card: String, answer: @escaping (String) -> (Int, Data)) {
+            self.toolName = toolName
+            self.card = card
+            self.answer = answer
+        }
+
+        var sent: [String] { lock.withLock { decisions } }
+
+        func respond(_ request: URLRequest) -> (Int, String, Data)? {
+            let path = request.url?.path ?? ""
+            if path == "/api/aiden/v1/streams/stream-control/approval" {
+                if lock.withLock({ resolved }) {
+                    return (200, "application/json", Data(#"{"approval":null}"#.utf8))
+                }
+                return (200, "application/json", Data("""
+                    {"approval":{"approvalId":"approval-current","streamId":"stream-control","chatId":"chat-progress-lifecycle","summary":"Review","toolCallId":"tool-control","toolName":"\(toolName)","expiresAt":"2099-01-01T00:00:00Z","canAllow":true,"card":\(card)}}
+                    """.utf8))
+            }
+            guard path == "/api/aiden/v1/approvals/approval-current/respond" else { return nil }
+            var body = request.httpBody ?? Data()
+            if body.isEmpty, let stream = request.httpBodyStream {
+                stream.open()
+                var buffer = [UInt8](repeating: 0, count: 1024)
+                while stream.hasBytesAvailable {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    guard count > 0 else { break }
+                    body.append(buffer, count: count)
+                }
+                stream.close()
+            }
+            let decision = ((try? JSONSerialization.jsonObject(with: body)) as? [String: Any])?["decision"] as? String ?? "?"
+            lock.withLock {
+                decisions.append(decision)
+                // The Mac settles the approval either way; a later read finds none.
+                resolved = true
+            }
+            let (status, data) = answer(decision)
+            return (status, "application/json", data)
+        }
+    }
+
+    @MainActor
+    private func typedApprovalModel(_ host: TypedApprovalHost, root: URL) async throws -> AidenChatViewModel {
+        let cache = AidenChatCache(root: root)
+        let model = try await makeProgressLifecycleModel(mode: .controls, cache: cache, responseOverride: host.respond)
+        try await cache.saveActiveStream(.init(deviceId: "device-progress-lifecycle", streamId: "stream-control", turnId: "turn-control", lastSequence: 0), instanceId: "instance-progress-lifecycle", chatId: model.chat.id, chatWriteToken: cache.reserveChatWrite())
+        await model.load(observeProgress: false)
+        return model
+    }
+
+    @MainActor
+    func testTypedScheduleCardStillDeniesWithoutScheduleWrite() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-typed-schedule-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let card = #"{"kind":"schedule","title":"Schedule this task?","arguments":[{"key":"tool","value":"Schedule task"}],"rows":[{"label":"When","value":"Weekdays at 9:00"}],"buttons":[{"label":"Cancel","decision":"deny","answered":"Denied"},{"label":"Approve task","decision":"allow","answered":"Approved"}]}"#
+        let host = TypedApprovalHost(toolName: "schedule_task", card: card) { decision in
+            (200, Data(#"{"approvalId":"approval-current","decision":"\#(decision)","resolvedAt":"2026-09-22T12:00:00Z"}"#.utf8))
+        }
+        let model = try await typedApprovalModel(host, root: root)
+        // This device was granted approval:respond but not schedule:write.
+        let approval = try XCTUnwrap(model.pendingApproval)
+        let typed = try XCTUnwrap(approval.card)
+        XCTAssertTrue(approval.canRespond, "The card still answers here")
+        XCTAssertFalse(approval.hasRequiredWriteCapability)
+        XCTAssertEqual(
+            AidenApprovalPresentation.limit(kind: approval.kind, canRespond: approval.canRespond,
+                                            hasRequiredWriteCapability: approval.hasRequiredWriteCapability,
+                                            canAllow: typed.canAllow)?.text,
+            "Schedule write access is required to approve this task."
+        )
+
+        // Approve is refused before anything is sent.
+        await model.respondToApproval(button: typed.allowButtons[0], approvalID: "approval-current")
+        XCTAssertEqual(host.sent, [])
+
+        // Cancel (Deny) still reaches the Mac and leaves its own answered line.
+        let reloaded = try XCTUnwrap(model.pendingApproval?.card)
+        await model.respondToApproval(button: reloaded.denyButton, approvalID: "approval-current")
+        XCTAssertEqual(host.sent, ["deny"])
+        XCTAssertNil(model.pendingApproval)
+        XCTAssertEqual(model.approvalAnsweredButton?.answered, "Denied")
+        XCTAssertEqual(model.approvalAnsweredButton?.decision, .deny)
+    }
+
+    @MainActor
+    func testTypedAnswerTheMacNeverConfirmedTakesItsAnsweredLineBack() async throws {
+        let card = #"{"kind":"mac","mac":"shell","title":"Run on your Mac?","arguments":[{"key":"tool","value":"Run command"}],"body":{"format":"command","text":"npm test"},"buttons":[{"label":"Deny","decision":"deny","answered":"Denied"},{"label":"Allow once","decision":"allow","answered":"Allowed once"}]}"#
+        let failures: [(String, (String) -> (Int, Data))] = [
+            ("unconfirmed", { _ in (503, Data(#"{"error":{"code":"internal_error","message":"Unconfirmed","requestId":"request-control","retryable":true}}"#.utf8)) }),
+            ("mismatched", { _ in (200, Data(#"{"approvalId":"approval-other","decision":"allow","resolvedAt":"2026-09-22T12:00:00Z"}"#.utf8)) }),
+        ]
+        for (name, answer) in failures {
+            let root = FileManager.default.temporaryDirectory.appending(path: "aiden-typed-unconfirmed-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+            let host = TypedApprovalHost(toolName: "run_command", card: card, answer: answer)
+            let model = try await typedApprovalModel(host, root: root)
+            let typed = try XCTUnwrap(model.pendingApproval?.card, name)
+            await model.respondToApproval(button: typed.allowButtons[0], approvalID: "approval-current")
+            XCTAssertEqual(host.sent, ["allow"], name)
+            // The refresh finds nothing waiting, so no card returns to replace
+            // the line; the line must not claim an answer that never landed.
+            XCTAssertNil(model.pendingApproval, name)
+            XCTAssertNil(model.approvalAnsweredButton, name)
+            XCTAssertNotNil(model.presentedError, name)
+        }
+    }
+
     @MainActor
     func testCancelledStopPreservesCurrentRunAndApproval() async throws {
         try await exerciseControlResponse(stop: true, nextApproval: "approval-current", mode: .cancelledControls)

@@ -4,7 +4,7 @@
 // `kind: "sign_in"`.
 //
 // - Site: normalized to a public `https://` origin (`sign-in-origin.ts`), so
-//   the card names exactly what opens. The card's Open sign-in opens that
+//   the card names exactly what opens. The card's Take control opens that
 //   origin in a new tab of the Bot's browser, held for the person until the
 //   card settles (`bot-browser-handoff.ts`); the Bot can't read or drive that
 //   tab meanwhile, and never sees the password.
@@ -51,16 +51,16 @@ const ACTION_PREFIX = "Sign in to ";
 const DESCRIPTION =
   "Ask the person to sign in to one website for you, in your own browser, when a site you need asks for an " +
   "account. `site` is the site's name or https address (\"github.com\"); `why` says in a sentence why you need " +
-  "it. The app shows a card: the person signs in in a new tab of your browser, which you can't see or use until " +
-  "they finish, then answers I'm signed in or Skip. Their answer comes back as this tool's result: wait for it. " +
+  "it. The app shows a card: the person takes control and signs in in a new tab of your browser, which you can't " +
+  "see or use until they finish, then answers I'm done or Skip. Their answer comes back as this tool's result: wait for it. " +
   "You never see or type their password, so never ask for it in the chat. Afterwards your browser has their " +
   "sign-in: call `browser` to find the tab they used, and check with browser_snapshot.";
 
 const COMPUTER_DESCRIPTION =
   "Ask the person to sign in to one website for you on your own computer, when a site you need there asks for an " +
   "account. `site` is the site's name or https address (\"github.com\"); `why` says in a sentence why you need " +
-  "it. The app shows a card: the person takes over your computer, signs in in Safari there, then answers I'm " +
-  "signed in or Skip. You can't see or use the computer until they give it back. Their answer comes back as this " +
+  "it. The app shows a card: the person takes control of your computer, signs in in Safari there, then answers " +
+  "I'm done or Skip. You can't see or use the computer until they give it back. Their answer comes back as this " +
   "tool's result: wait for it. You never see or type their password, so never ask for it in the chat. Afterwards " +
   "take a fresh computer capture to check.";
 

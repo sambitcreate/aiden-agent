@@ -25,7 +25,7 @@ export interface BotConnectionSuggestion {
 /**
  * `needs_access` is derived for the desktop only, never stored or sent to
  * phones: the app is connected in Aiden, but this Bot's Custom access leaves
- * it out, so the card offers "Add to this Bot".
+ * it out, so the card's Connect adds it to this Bot.
  */
 export type ConnectCardStatus = "pending" | "connected" | "dismissed" | "needs_access";
 

@@ -32,6 +32,8 @@ const MAX_WORKSPACE_LABEL_CHARS = 200;
 
 /** The scopes offered for a call that has a safe rule target. */
 export const SCOPED_APPROVAL_OFFER: readonly ToolApprovalScope[] = ["once", "chat", "always"];
+/** A Mac card under an approval mode: Allow once, or this part of the Mac in this workspace. */
+export const MAC_GRANT_OFFER: readonly ToolApprovalScope[] = ["once", "workspace"];
 
 export interface ToolApprovalRuleTarget {
   toolName: ScopedApprovalToolName;
@@ -333,7 +335,8 @@ export interface ToolApprovalRuleStore {
   update<R>(mutation: (draft: ToolApprovalRulesDocument) => R | Promise<R>): Promise<R>;
 }
 
-export type ToolApprovalRuleMatch = Exclude<ToolApprovalScope, "once">;
+/** The exact-action rules this book holds. A Mac grant ("workspace") lives on the workspace. */
+export type ToolApprovalRuleMatch = Exclude<ToolApprovalScope, "once" | "workspace">;
 
 /** Quarantine is distinct from a failed filesystem publication. */
 class BotApprovalReceiptsUnreadableError extends Error {
@@ -405,7 +408,7 @@ export class ToolApprovalRuleBook {
       if (draft.rules.some((rule) => targetKey(rule) === key)) return false;
       if (draft.rules.length >= MAX_PERSISTED_TOOL_APPROVAL_RULES) {
         throw new Error(
-          `Aiden keeps at most ${MAX_PERSISTED_TOOL_APPROVAL_RULES} always-allow rules. Remove some in Settings → Bots & Approvals → Tool approvals.`,
+          `Aiden keeps at most ${MAX_PERSISTED_TOOL_APPROVAL_RULES} always-allow rules. Remove some in Settings → Approvals.`,
         );
       }
       draft.rules.push({

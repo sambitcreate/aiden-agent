@@ -190,7 +190,7 @@ struct AidenApprovalCard: View {
 /// A request, instructions or script on an approval card. Past six lines it
 /// folds behind Show all; expanded, it scrolls in a bounded box (the Bot chat
 /// keeps the card in its footer) with a Scroll for more cue while text is hidden.
-private struct AidenApprovalFoldingText: View {
+struct AidenApprovalFoldingText: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
     @State private var isExpanded = false
@@ -696,7 +696,7 @@ struct AidenQuestionCard: View {
     }
 }
 
-private struct AidenApprovalActionGlassModifier: ViewModifier {
+struct AidenApprovalActionGlassModifier: ViewModifier {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.aidenPalette) private var palette
 
@@ -720,7 +720,7 @@ private struct AidenApprovalActionGlassModifier: ViewModifier {
     }
 }
 
-private extension View {
+extension View {
     func aidenApprovalActionGlass(tint: Color? = nil) -> some View {
         modifier(AidenApprovalActionGlassModifier(tint: tint))
     }

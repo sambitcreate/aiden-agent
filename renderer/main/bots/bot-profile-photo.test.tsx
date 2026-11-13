@@ -1,7 +1,7 @@
 import { installBotTestIpc, type BotTestIpcCall } from "./test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import type { BotRendererCanonicalPhoto } from "../../shared/bots";
 import { BotsView } from "../bots-view";
 import { mountWithBotRouter } from "./test-providers";
@@ -21,7 +21,7 @@ const EXISTING_PHOTO: BotRendererCanonicalPhoto = {
 };
 
 /**
- * The Profile photo menu over an in-memory photo store: the fake IPC answers
+ * The look popover in a Bot's settings over an in-memory photo store: the fake IPC answers
  * reads from the store, so the avatar only changes when the write lands.
  */
 function photoIpc(initial: BotRendererCanonicalPhoto | null) {
@@ -52,15 +52,15 @@ function photoIpc(initial: BotRendererCanonicalPhoto | null) {
   return { calls, avatarSrc: () => document.querySelector<HTMLImageElement>("img")?.getAttribute("src") ?? null };
 }
 
+/** Opens the look popover at the top of the Bot's settings and returns its photo buttons. */
 async function openPhotoMenu() {
-  fireEvent.keyDown(await screen.findByRole("button", { name: "Photo options for Planner" }), {
-    key: "Enter",
-  });
-  return screen.findAllByRole("menuitem");
+  fireEvent.click(await screen.findByRole("button", { name: "Change Planner’s look" }));
+  const popover = await screen.findByRole("dialog", { name: "Planner’s look" });
+  return within(popover).getAllByRole("button").filter((button) => /photo/u.test(button.textContent ?? ""));
 }
 
 function pickFile(file: File) {
-  const input = document.querySelector<HTMLInputElement>('input[type="file"]');
+  const input = document.querySelector<HTMLInputElement>('[data-bot-settings-header] input[type="file"]');
   assert.ok(input, "the photo picker is mounted");
   fireEvent.change(input, { target: { files: [file] } });
 }
@@ -72,7 +72,7 @@ test("Choose photo sends the picked PNG to the Bot and the avatar shows it", asy
 
   const items = await openPhotoMenu();
   assert.deepEqual(items.map((item) => item.textContent), ["Choose photo", "Remove photo"]);
-  fireEvent.click(screen.getByRole("menuitem", { name: "Choose photo" }));
+  fireEvent.click(screen.getByRole("button", { name: "Choose photo" }));
   pickFile(new File([PNG_BYTES], "planner.png", { type: "image/png" }));
 
   await waitFor(() => assert.equal(ipc.avatarSrc(), CHOSEN_PHOTO.dataUrl));
@@ -87,7 +87,7 @@ test("Remove photo removes the Bot's photo and the avatar falls back to its face
   await waitFor(() => assert.equal(ipc.avatarSrc(), EXISTING_PHOTO.dataUrl));
 
   await openPhotoMenu();
-  fireEvent.click(screen.getByRole("menuitem", { name: "Remove photo" }));
+  fireEvent.click(screen.getByRole("button", { name: "Remove photo" }));
 
   await waitFor(() => assert.equal(ipc.avatarSrc(), null));
   const removals = ipc.calls.filter((call) => call.channel === "bots:photo:remove");
@@ -101,7 +101,7 @@ test("a file that is not a PNG or JPEG is refused before any write", async () =>
   await waitFor(() => assert.equal(ipc.avatarSrc(), EXISTING_PHOTO.dataUrl));
 
   await openPhotoMenu();
-  fireEvent.click(screen.getByRole("menuitem", { name: "Choose photo" }));
+  fireEvent.click(screen.getByRole("button", { name: "Choose photo" }));
   pickFile(new File(["gif"], "planner.gif", { type: "image/gif" }));
 
   // The refusal is a toast and the handler returns before any read or write.

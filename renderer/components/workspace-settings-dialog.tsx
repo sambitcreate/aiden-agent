@@ -39,6 +39,7 @@ import {
   queryKeys,
   useMcpLiveStatus,
   useMcpServers,
+  useProviders,
   useSettings,
   useWorkspaceSkillChoices,
   useWorkspaces,
@@ -56,6 +57,18 @@ import {
   type WorkspaceSettingsTab,
 } from "../lib/workspace-settings-view";
 import type { Workspace, WorkspacePermission } from "../lib/types";
+import { isUsable } from "../lib/model-picker-data";
+import {
+  APPROVAL_MODE_HELP,
+  APPROVAL_MODE_LABELS,
+  APPROVAL_MODES,
+  MAC_GRANT_CLASSES,
+  MAC_GRANT_LABELS,
+  applyWorkspaceApprovalChange,
+  effectiveApprovalMode,
+  workspaceApprovalPolicy,
+  type ApprovalMode,
+} from "../shared/approval-mode";
 
 const IS_MAC = typeof navigator !== "undefined" && /Mac/u.test(navigator.userAgent);
 
@@ -77,13 +90,28 @@ const TABS: ReadonlyArray<{ id: WorkspaceSettingsTab; title: string; icon: React
   { id: "connectors", title: "Connectors", icon: <Plug className="size-4" /> },
 ];
 
-const PERMISSION_OPTIONS: ReadonlyArray<{ value: WorkspacePermission; label: string; description: string }> = [
-  { value: "full", label: "Full access", description: "Edits files and runs commands without asking." },
-  { value: "ask", label: "Ask first", description: "Asks before changing files or running commands." },
-  { value: "none", label: "No access", description: "Can't read or change this folder." },
+// Access is separate from approvals (plan §3.1): a workspace either lets its
+// chats work in the folder, under the approval mode, or is Chat only.
+const ACCESS_OPTIONS: ReadonlyArray<{ value: "work" | "none"; label: string; description: string }> = [
+  { value: "work", label: "Work in this folder", description: "Chats can read, change files and run commands here, as Approvals allow." },
+  { value: "none", label: "Chat only", description: "Chats can't read or change this folder." },
 ];
 
+/** The approvals control's value: this workspace's own mode, or the global one. */
+type WorkspaceModeChoice = ApprovalMode | "global";
+
 type WorkspacePatch = Parameters<typeof workspacesApi.update>[1];
+
+/** The workspace as it will be saved, for the change shown before the save returns. */
+function patchedWorkspace(workspace: Workspace, patch: WorkspacePatch): Workspace {
+  const { approvalMode, revokeMacGrant, ...rest } = patch;
+  const next: Workspace = { ...workspace, ...rest };
+  if (approvalMode === undefined && revokeMacGrant === undefined) return next;
+  return applyWorkspaceApprovalChange(next, {
+    ...(approvalMode !== undefined ? { mode: approvalMode } : {}),
+    ...(revokeMacGrant ? { revokeMac: revokeMacGrant } : {}),
+  });
+}
 
 /** Saves a change at once on screen, then rolls it back if saving fails. */
 function useWorkspacePatch(workspaceId: string | undefined) {
@@ -93,7 +121,7 @@ function useWorkspacePatch(workspaceId: string | undefined) {
       if (!workspaceId) return;
       const previous = qc.getQueryData<Workspace[]>(queryKeys.workspaces);
       qc.setQueryData<Workspace[]>(queryKeys.workspaces, (list) =>
-        list?.map((workspace) => (workspace.id === workspaceId ? { ...workspace, ...patch } : workspace)),
+        list?.map((workspace) => (workspace.id === workspaceId ? patchedWorkspace(workspace, patch) : workspace)),
       );
       try {
         await workspacesApi.update(workspaceId, patch);
@@ -271,8 +299,77 @@ function WorkspaceSettingsBody({
   );
 }
 
+/**
+ * Customize (plan §3.1): follow Settings → Approvals, or keep a mode of this
+ * workspace's own. Mac grants a card allowed here are listed with Remove.
+ */
+export function WorkspaceApprovalFields({
+  workspace,
+  onPatch,
+}: {
+  workspace: Workspace;
+  onPatch: (patch: WorkspacePatch, failure: string) => void | Promise<void>;
+}) {
+  const settings = useSettings();
+  const providers = useProviders();
+  const usableModel = (providers.data ?? []).some(isUsable);
+  const globalMode = effectiveApprovalMode(settings.data, usableModel);
+  const policy = workspaceApprovalPolicy(workspace, globalMode);
+  const choice: WorkspaceModeChoice = policy.customized ? policy.mode : "global";
+  const modes = APPROVAL_MODES.filter((mode) => mode !== "auto" || usableModel || policy.mode === "auto");
+  const grants = MAC_GRANT_CLASSES.filter((kind) => policy.macGrants.has(kind));
+  return (
+    <>
+      <Field
+        label="Approvals"
+        description={
+          policy.customized
+            ? APPROVAL_MODE_HELP[policy.mode]
+            : `Follows Settings → Approvals. ${APPROVAL_MODE_HELP[policy.mode]}`
+        }
+      >
+        <Select
+          value={choice}
+          onValueChange={(value) => {
+            if (value === choice) return;
+            void onPatch(
+              { approvalMode: value === "global" ? null : (value as ApprovalMode) },
+              "Couldn't change approvals for this workspace.",
+            );
+          }}
+        >
+          <SelectTrigger aria-label="Approvals in this workspace">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="global">{`Use Settings (${APPROVAL_MODE_LABELS[globalMode]})`}</SelectItem>
+            {modes.map((mode) => (
+              <SelectItem key={mode} value={mode}>
+                {APPROVAL_MODE_LABELS[mode]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </Field>
+      {grants.map((kind) => (
+        <Field key={kind} label={MAC_GRANT_LABELS[kind]} description="Allowed in this workspace without asking.">
+          <Button
+            variant="transparent"
+            size="small"
+            aria-label={`Remove: ${MAC_GRANT_LABELS[kind]}`}
+            onClick={() => void onPatch({ revokeMacGrant: kind }, "Couldn't remove that permission.")}
+          >
+            Remove
+          </Button>
+        </Field>
+      ))}
+    </>
+  );
+}
+
 function GeneralTab({ workspace }: { workspace: Workspace }) {
   const patch = useWorkspacePatch(workspace.id);
+  const access = workspace.permission === "none" ? "none" : "work";
   const [name, setName] = React.useState(workspace.name);
   React.useEffect(() => setName(workspace.name), [workspace.name]);
   const commitName = () => {
@@ -332,19 +429,21 @@ function GeneralTab({ workspace }: { workspace: Workspace }) {
       ) : null}
       <Field
         label="Access"
-        description={PERMISSION_OPTIONS.find((option) => option.value === workspace.permission)?.description}
+        description={ACCESS_OPTIONS.find((option) => option.value === access)?.description}
       >
         <Select
-          value={workspace.permission}
-          onValueChange={(value) =>
-            void patch({ permission: value as WorkspacePermission }, "Couldn't change access.")
-          }
+          value={access}
+          onValueChange={(value) => {
+            if (value === access) return;
+            const permission: WorkspacePermission = value === "none" ? "none" : "ask";
+            void patch({ permission }, "Couldn't change access.");
+          }}
         >
           <SelectTrigger aria-label="Folder access">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {PERMISSION_OPTIONS.map((option) => (
+            {ACCESS_OPTIONS.map((option) => (
               <SelectItem key={option.value} value={option.value}>
                 {option.label}
               </SelectItem>
@@ -352,6 +451,7 @@ function GeneralTab({ workspace }: { workspace: Workspace }) {
           </SelectContent>
         </Select>
       </Field>
+      {access === "work" ? <WorkspaceApprovalFields workspace={workspace} onPatch={patch} /> : null}
       <Field
         label={
           <span className="inline-flex items-center gap-1.5">

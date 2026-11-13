@@ -5,7 +5,7 @@ import { expect, finishLmStudioOnboarding, test } from "./fixtures";
 
 const models = JSON.parse(readFileSync(new URL("../../protocol/aiden-remote/v1/fixtures/bot-routine-models.json", import.meta.url), "utf8"));
 
-test("a routine model and its explicit fallback can be saved from the routed Profile with responsive controls", async ({ aiden }) => {
+test("a routine model and its explicit fallback can be saved from the Routines tab with responsive controls", async ({ aiden }) => {
   const { page } = aiden, bot = botFixture({ id: "bot_model", name: "Model Helper" });
   await finishLmStudioOnboarding(page);
   await aiden.app.evaluate(({ ipcMain }, data) => {
@@ -33,7 +33,9 @@ test("a routine model and its explicit fallback can be saved from the routed Pro
   }, { bot, rules: defaultBotRulesView(bot.id), models });
   await page.reload();
   await page.getByRole("button", { name: "Bots", exact: true }).click();
-  await page.getByRole("button", { name: "Model Helper profile" }).click();
+  // Routine models stay on each routine's row in the side panel's Routines tab.
+  await page.getByRole("button", { name: "Model Helper settings" }).click();
+  await page.getByRole("tab", { name: "Routines", exact: true }).click();
   await page.getByRole("button", { name: "Model for Morning review", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Model for Morning review" });
   await dialog.getByRole("combobox", { name: "Model choice", exact: true }).click();

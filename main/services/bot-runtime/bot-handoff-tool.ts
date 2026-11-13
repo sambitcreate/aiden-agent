@@ -40,8 +40,8 @@ const DESCRIPTION =
   "Hand one step of the task to the person when you must not or cannot do it yourself: entering a password or " +
   "2FA code, changing account security, a payment, a CAPTCHA, a legal sign-off, or anything your rules hand to " +
   "them. `action` is the step as a short imperative (\"Enter the 2FA code for your bank\"); `why` says in a " +
-  "sentence why it needs them; `open.url` is an https page that helps them do it. The app shows a card with Done " +
-  "and Skip, and their answer comes back as this tool's result: wait for it, then check the result before you " +
+  "sentence why it needs them; `open.url` is an https page that helps them do it. The app shows a card: the person " +
+  "takes control, then answers I'm done or Skip, and their answer comes back as this tool's result: wait for it, then check the result before you " +
   "continue. Never ask for passwords or codes in the chat.";
 
 /** Where this Bot can hand a step over in its own browser or on its own computer, this turn. */

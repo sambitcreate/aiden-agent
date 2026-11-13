@@ -16,7 +16,7 @@ seeing and taking over a Bot's computer, and the tools a Bot uses inside it.
   Computers & VMs → Bot computers explains why and offers nothing to set up.
 - **Not on Intel Macs or Linux.** The `botComputers` platform capability
   (`main/services/host-platform-capabilities.ts`) is true only on darwin with
-  arm64. Elsewhere the Settings page, its search entry and the Bot profile's
+  arm64. Elsewhere the Settings page, its search entry and the Bot Advanced tab's
   Computer section do not appear, the `botComputers:*` IPC handlers are not
   registered, and no Lume code runs. Computer Use, which controls the person's
   own Mac, is separate and keeps its own availability.
@@ -46,7 +46,7 @@ seeing and taking over a Bot's computer, and the tools a Bot uses inside it.
    screen, shown in Settings (or choose **Skip**; see "Guest driver lane"),
    and shuts the base down. The restore image is deleted once the base is
    ready.
-4. **Give a Bot a computer.** In the Bot's profile, **Computer → Give a
+4. **Give a Bot a computer.** In the Bot's Advanced tab, **Computer → Give a
    computer** makes the Bot its own copy of the base (`aiden-bot-<id>`). It
    stays off until it is needed, and stops again when idle.
 
@@ -129,7 +129,7 @@ Bot computer that was interrupted while it was being made is marked for
   that comes up even later is turned off by its next start (which then fails
   once) or at Aiden's next launch. If Lume can't turn it off, it stays shown as
   running, keeps its place and has no screen to use: its Computer tab says it
-  isn't running. Its idle timer, Stop in the Bot's profile, Pause or quit tries
+  isn't running. Its idle timer, Stop in the Bot's Advanced tab, Pause or quit tries
   again, and the Bot's next computer call turns it off before starting it
   afresh. Until one of them works, a start that needs its place (that Bot's,
   or another Bot's at the limit) fails with "Aiden couldn't stop Ada's
@@ -251,7 +251,7 @@ the screen keeps working.
 
 ## Removal
 
-- **Remove** in a Bot's profile stops and deletes that Bot's computer. Files in
+- **Remove** in a Bot's Advanced tab stops and deletes that Bot's computer. Files in
   the Bot's `Computer` folder stay, and you can give the Bot a new computer
   later.
 - **Reset** deletes the Bot's computer and makes a fresh copy of the current
@@ -308,7 +308,7 @@ marked assumed until they are recorded on an Apple-silicon Mac:
 
 - **Offered when.** A Bot gets its computer's tools when its access includes
   **Bot computer** (Full access includes it once Bot computers are set up) and
-  it has been given a computer in its profile. Neither is offered on Linux or
+  it has been given a computer in its Advanced tab. Neither is offered on Linux or
   Intel Macs, or to a Bot without a computer of its own. The `computer` tool is
   separate from `computer_use`: Computer Use drives the person's Mac, while
   `computer` drives only the Bot's own virtual machine.
@@ -371,8 +371,8 @@ marked assumed until they are recorded on an Apple-silicon Mac:
 - **The VNC-lane gap.** Clicks are only coordinates, so the rules depend on the
   Bot's own description of each step. The tool's guidance tells the Bot to
   call `hand_off` for passwords, codes and payments and let the person do those
-  steps, and the rules editor says so. A rule's hand-off card in this lane
-  offers "Open <Bot>’s computer", which takes the computer over for the person,
+  steps. A rule's hand-off card in this lane offers **Take control**, which
+  takes the Bot's computer over for the person,
   and the Bot can hand a step over there itself with `hand_off`'s
   `where: "computer"`.
 - **Routines and Telegram.** Unlike the Bot's browser, which those turns never
@@ -507,7 +507,7 @@ Bot computers on this Mac, a computer given to the Bot, and an attended turn.
   or not offering sign-in on a computer whose base had these permissions
   allowed. Each is an owner
   decision and needs a Mac to confirm.
-- **Answering.** I'm signed in, Skip, or the card being withdrawn (the Bot was
+- **Answering.** I'm done (I'm signed in on a phone), Skip, or the card being withdrawn (the Bot was
   stopped or paused) gives the computer back, unless you already gave it back
   or took it again from the viewer, which keeps it with you. The Bot then takes
   a fresh capture. The guest driver starts again on the Bot's next element

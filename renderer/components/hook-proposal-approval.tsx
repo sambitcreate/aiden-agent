@@ -5,9 +5,7 @@ import { ApprovalCodeWell } from "./approval-code-well";
 import { HookScriptCoverage } from "./hook-script-coverage";
 import { Text } from "./ui";
 
-export function hookProposalHeadline(details: HookProposalApprovalDetails): string {
-  return details.action === "delete" ? "Delete this hook?" : details.action === "update" ? "Change this hook?" : "Add this hook?";
-}
+export { hookProposalHeadline } from "../shared/approval-card-model";
 
 export const HOOK_PROPOSAL_APPROVAL_FOOTER =
   "Review this exact hook. Once saved, it runs on every matching event until you turn it off in Settings → Hooks.";

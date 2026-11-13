@@ -5,7 +5,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { QueryClientProvider } from "@tanstack/react-query";
 import { AppCapabilitiesProvider, DISABLED_APP_CAPABILITIES } from "../lib/app-capabilities";
 import { emitBotTestNotification, installBotTestIpc, type BotTestIpcCall } from "../main/bots/test-dom";
-import { botFixture } from "../main/bots/test-fixtures";
+import { botFixture, catalogFixture } from "../main/bots/test-fixtures";
 import { createBotTestQueryClient } from "../main/bots/test-providers";
 import { OnboardingFlow } from "./onboarding-flow";
 import type { OnboardingSnapshot } from "../shared/onboarding";
@@ -39,14 +39,32 @@ function mountOnboarding({
   botsCapability = true,
   overrides = {},
   onOpenBotChat,
+  notice = "pending",
 }: {
   bots: ReturnType<typeof botFixture>[];
   botsCapability?: boolean;
+  /** The Full-access notice as main has it before onboarding. */
+  notice?: "pending" | "customize_first";
   overrides?: Record<string, (...args: unknown[]) => unknown>;
   onOpenBotChat?(botId: string): void;
 }) {
   let created = false;
+  let decision: "continue_full" | "customize_first" | undefined = notice === "customize_first" ? notice : undefined;
+  const catalog = () => {
+    const base = catalogFixture({ accepted: decision !== undefined });
+    return decision === "customize_first"
+      ? { ...base, notice: { ...base.notice, acceptedDecision: "customize_first" as const } }
+      : base;
+  };
   const calls: BotTestIpcCall[] = installBotTestIpc({
+    "bots:getCapabilityCatalog": catalog,
+    "bots:getAccessNotice": () => catalog().notice,
+    // Like main: one step that keeps a review-first choice.
+    "bots:acceptFirstBotAccess": () => {
+      if (decision !== "customize_first") decision = "continue_full";
+      return catalog().notice;
+    },
+    "bots:introduce": () => true,
     "app:getOnboardingState": () => resumeAfterProvider,
     "app:setOnboardingProgress": (step: unknown) => ({
       ...resumeAfterProvider,
@@ -55,15 +73,17 @@ function mountOnboarding({
     "app:setOnboardingOutcome": () => ({ ...resumeAfterProvider, outcome: "completed", lastSatisfiedStep: "tour" }),
     "profile:get": () => ({ name: "Sam" }),
     "providers:list": () => [readyProvider],
-    "bots:list": () => (created ? [botFixture({ id: "bot-chief", name: "Chief of Staff" })] : bots),
-    "bots:createFromPreset": async () => {
-      // Creating takes a moment, so a second click lands while it runs.
+    "bots:list": () => (created ? [botFixture({ id: "bot-chief", name: "Chief" })] : bots),
+    "bots:createFirst": async () => {
+      // Making it takes a moment; main makes it once however often it is asked.
       await new Promise((resolve) => setTimeout(resolve, 20));
+      const first = !created;
       created = true;
-      return { bot: botFixture({ id: "bot-chief", name: "Chief of Staff" }), created: true };
+      return { bot: botFixture({ id: "bot-chief", name: "Chief" }), created: first };
     },
     ...overrides,
   });
+  const chooseReviewFirstElsewhere = () => { decision = "customize_first"; };
   render(
     <QueryClientProvider client={createBotTestQueryClient()}>
       <AppCapabilitiesProvider
@@ -73,126 +93,147 @@ function mountOnboarding({
       </AppCapabilitiesProvider>
     </QueryClientProvider>,
   );
-  return calls;
+  return Object.assign(calls, { chooseReviewFirstElsewhere });
 }
 
 const tourHeading = "Finish setup";
-async function openStarters() {
-  fireEvent.click(await screen.findByText("Choose your first Bot", { exact: true }));
-}
 
-test("a first run offers the starter Bots as an optional part of Finish setup", async () => {
-  mountOnboarding({ bots: [] });
-  await openStarters();
-  assert.ok(await screen.findByRole("heading", { name: "Meet your first Bot" }));
-  const stepper = screen.getByRole("list", { name: "Setup progress" });
-  assert.ok(within(stepper).getByText("Finish setup"));
-  // Explain hand-offs, rules, and whole-plan approval at the first Bot setup.
-  assert.ok(screen.getByText("Bots track accepted tasks in Open work, follow your rules, hand you the steps only you should do, and can ask you to approve a whole plan."));
-  assert.ok(screen.getByText("Bots can message each other when it helps; turn it off in Settings → Bots & Approvals."));
-});
-
-test("Start chat creates exactly one starter Bot and moves on to the tour", async () => {
+test("a first run makes the first Bot silently and says what a Bot is, with no starter carousel", async () => {
   const calls = mountOnboarding({ bots: [] });
-  await openStarters();
-  const starters = await screen.findByRole("list", { name: "Starter Bots" });
-  fireEvent.click(within(starters).getAllByRole("button", { name: "Start chat" })[0]!);
-
-  await screen.findByText("Your Bot’s chat will open when you finish.");
-  const creates = calls.filter((call) => call.channel === "bots:createFromPreset");
-  assert.equal(creates.length, 1);
-  assert.deepEqual(creates[0]!.args[0], { presetId: "chief-of-staff" });
-  assert.ok(
-    calls.some(
-      (call) => call.channel === "app:setOnboardingProgress" && call.args[0] === "bots",
-    ),
+  await screen.findByText("Chief is ready");
+  assert.ok(screen.getByText(/A Bot is a helper with its own chat, memory and routines\./u));
+  assert.equal(screen.queryByRole("list", { name: "Starter Bots" }), null);
+  assert.equal(screen.queryByRole("button", { name: "Skip" }), null, "nothing to choose");
+  assert.equal(calls.filter((call) => call.channel === "bots:createFirst").length >= 1, true);
+  assert.equal(calls.some((call) => call.channel === "bots:createFromPreset"), false);
+  await waitFor(() =>
+    assert.ok(calls.some((call) => call.channel === "app:setOnboardingProgress" && call.args[0] === "bots")),
   );
 });
 
-test("finishing onboarding after Start chat opens the new Bot's chat", async () => {
-  const opened: string[] = [];
-  mountOnboarding({ bots: [], onOpenBotChat: (botId) => opened.push(botId) });
-  await openStarters();
-  const starters = await screen.findByRole("list", { name: "Starter Bots" });
-  fireEvent.click(within(starters).getAllByRole("button", { name: "Start chat" })[0]!);
-  await screen.findByText("Your Bot’s chat will open when you finish.");
-  assert.deepEqual(opened, [], "the chat waits until onboarding is done");
-  fireEvent.click(screen.getByRole("button", { name: /Start using Aiden/u }));
-  await waitFor(() => assert.deepEqual(opened, ["bot-chief"]));
-});
-
-test("finishing onboarding after Skip opens no Bot chat", async () => {
+test("finishing onboarding opens the first Bot's chat, where it asks what it should help with", async () => {
   const opened: string[] = [];
   const calls = mountOnboarding({ bots: [], onOpenBotChat: (botId) => opened.push(botId) });
-  await openStarters();
-  fireEvent.click(await screen.findByRole("button", { name: "Skip" }));
-  assert.ok(await screen.findByRole("heading", { name: tourHeading }));
+  await screen.findByText("Chief is ready");
+  screen.getByText(/Chief gets Full access: .*Starting accepts this/u);
+  assert.deepEqual(opened, [], "the chat waits until onboarding is done");
+  await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+  const channels = () => calls.map((call) => call.channel);
+  assert.equal(channels().includes("bots:acceptFirstBotAccess"), false, "showing the step accepts nothing");
+  assert.equal(channels().includes("bots:introduce"), false);
+
   fireEvent.click(screen.getByRole("button", { name: /Start using Aiden/u }));
-  await waitFor(() => assert.ok(calls.some((call) => call.channel === "app:setOnboardingOutcome")));
-  assert.deepEqual(opened, []);
+  await waitFor(() => assert.deepEqual(opened, ["bot-chief"]));
+  await waitFor(() => assert.ok(channels().includes("bots:introduce")));
+  const acknowledgement = calls.find((call) => call.channel === "bots:acceptFirstBotAccess");
+  assert.equal((acknowledgement?.args[0] as { decision?: string } | undefined)?.decision, "continue_full");
+  assert.ok(channels().indexOf("bots:acceptFirstBotAccess") < channels().indexOf("bots:introduce"), "it greets only once Full access is accepted");
 });
 
-test("Skip leaves onboarding on the tour without creating a Bot", async () => {
-  const calls = mountOnboarding({ bots: [] });
-  await openStarters();
-  fireEvent.click(await screen.findByRole("button", { name: "Skip" }));
+test("a person who chose to review Bot access first keeps that choice through onboarding", async () => {
+  const opened: string[] = [];
+  const calls = mountOnboarding({ bots: [], notice: "customize_first", onOpenBotChat: (botId) => opened.push(botId) });
+  await screen.findByText("Chief is ready");
+  screen.getByText(/You chose to review a Bot’s access first/u);
+  fireEvent.click(screen.getByRole("button", { name: /Start using Aiden/u }));
+  await waitFor(() => assert.deepEqual(opened, ["bot-chief"]));
+  await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+  assert.equal(calls.some((call) => call.channel === "bots:acceptFirstBotAccess"), false);
+  assert.equal(calls.some((call) => call.channel === "bots:introduce"), false);
+});
 
+test("a review-first choice made elsewhere after the step showed stands, and the Bot doesn't greet", async () => {
+  const opened: string[] = [];
+  const calls = mountOnboarding({ bots: [], onOpenBotChat: (botId) => opened.push(botId) });
+  await screen.findByText("Chief is ready");
+  screen.getByText(/Chief gets Full access/u);
+  calls.chooseReviewFirstElsewhere();
+  fireEvent.click(screen.getByRole("button", { name: /Start using Aiden/u }));
+  await waitFor(() => assert.deepEqual(opened, ["bot-chief"]));
+  await waitFor(() => assert.ok(calls.some((call) => call.channel === "bots:acceptFirstBotAccess")));
+  await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+  assert.equal(calls.some((call) => call.channel === "bots:introduce"), false);
+});
+
+test("an access notice that can't be read still lets the first Bot be ready and greet after Start", async () => {
+  const opened: string[] = [];
+  const calls = mountOnboarding({
+    bots: [],
+    onOpenBotChat: (botId) => opened.push(botId),
+    overrides: { "bots:getAccessNotice": () => Promise.reject(new Error("Bot access is unavailable.")) },
+  });
+  await screen.findByText("Chief is ready");
+  screen.getByText(/Unless you chose to review a Bot’s access first, Chief gets Full access/u);
+  fireEvent.click(screen.getByRole("button", { name: /Start using Aiden/u }));
+  await waitFor(() => assert.deepEqual(opened, ["bot-chief"]));
+  await waitFor(() => assert.ok(calls.some((call) => call.channel === "bots:introduce")));
+});
+
+test("an unreadable notice over a stored review-first choice claims no Full access, and Start keeps the choice", async () => {
+  const opened: string[] = [];
+  const calls = mountOnboarding({
+    bots: [],
+    notice: "customize_first",
+    onOpenBotChat: (botId) => opened.push(botId),
+    overrides: { "bots:getAccessNotice": () => Promise.reject(new Error("Bot access is unavailable.")) },
+  });
+  await screen.findByText("Chief is ready");
+  assert.equal(screen.queryByText(/^Chief gets Full access/u), null, "the card doesn't say the choice was Full access");
+  screen.getByText(/Unless you chose to review a Bot’s access first/u);
+  fireEvent.click(screen.getByRole("button", { name: /Start using Aiden/u }));
+  await waitFor(() => assert.deepEqual(opened, ["bot-chief"]));
+  await waitFor(() => assert.ok(calls.some((call) => call.channel === "bots:acceptFirstBotAccess")));
+  await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+  assert.equal(calls.some((call) => call.channel === "bots:introduce"), false, "main kept review-first, so no greeting");
+});
+
+test("the first Bot is never made when Bots already exist", async () => {
+  const calls = mountOnboarding({ bots: [botFixture()] });
   assert.ok(await screen.findByRole("heading", { name: tourHeading }));
-  assert.deepEqual(
-    calls.filter((call) => call.channel === "bots:createFromPreset"),
-    [],
-  );
+  await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+  assert.equal(screen.queryByRole("region", { name: "Your first Bot" }), null);
+  assert.equal(calls.some((call) => call.channel === "bots:createFirst"), false);
 });
 
-test("the step is skipped when Bots already exist", async () => {
-  mountOnboarding({ bots: [botFixture()] });
-  assert.ok(await screen.findByRole("heading", { name: tourHeading }));
-  assert.equal(screen.queryByRole("heading", { name: "Meet your first Bot" }), null);
-});
-
-test("the step is not offered without the Bots capability, and the Bot store is not read", async () => {
+test("without the Bots capability no Bot is made and the Bot store is not read", async () => {
   const calls = mountOnboarding({ bots: [], botsCapability: false });
   assert.ok(await screen.findByRole("heading", { name: tourHeading }));
-  assert.equal(screen.queryByRole("heading", { name: "Meet your first Bot" }), null);
   assert.equal(calls.some((call) => call.channel === "bots:list"), false);
+  assert.equal(calls.some((call) => call.channel === "bots:createFirst"), false);
   const stepper = screen.getByRole("list", { name: "Setup progress" });
   assert.equal(within(stepper).queryByText("Your first Bot"), null);
 });
 
-test("the step is not offered when the Bot store can't be read", async () => {
-  mountOnboarding({
+test("no Bot is made when the Bot store can't be read", async () => {
+  const calls = mountOnboarding({
     bots: [],
     overrides: { "bots:list": () => Promise.reject(new Error("Bots are open in another Aiden window.")) },
   });
   assert.ok(await screen.findByRole("heading", { name: tourHeading }));
-  assert.equal(screen.queryByRole("heading", { name: "Meet your first Bot" }), null);
+  await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+  assert.equal(calls.some((call) => call.channel === "bots:createFirst"), false);
 });
 
-test("Start chat clicked twice while the Bot is being made sends one create", async () => {
-  const calls = mountOnboarding({ bots: [] });
-  await openStarters();
-  const starters = await screen.findByRole("list", { name: "Starter Bots" });
-  const start = within(starters).getAllByRole("button", { name: "Start chat" })[0]!;
-  fireEvent.click(start);
-  fireEvent.click(start);
-  assert.ok(await screen.findByRole("heading", { name: tourHeading }));
-  assert.equal(calls.filter((call) => call.channel === "bots:createFromPreset").length, 1);
-});
-
-test("a Start chat that fails stays on the step so the person can try again or skip", async () => {
+test("making the first Bot that fails offers only Try again, which makes it", async () => {
+  let fail = true;
+  const opened: string[] = [];
   const calls = mountOnboarding({
     bots: [],
-    overrides: { "bots:createFromPreset": () => Promise.reject(new Error("Bots are open in another Aiden window.")) },
+    onOpenBotChat: (botId) => opened.push(botId),
+    overrides: {
+      "bots:createFirst": () => {
+        if (fail) return Promise.reject(new Error("Bots are open in another Aiden window."));
+        return { bot: botFixture({ id: "bot-chief", name: "Chief" }), created: true };
+      },
+    },
   });
-  await openStarters();
-  const starters = await screen.findByRole("list", { name: "Starter Bots" });
-  fireEvent.click(within(starters).getAllByRole("button", { name: "Start chat" })[0]!);
-  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:createFromPreset").length, 1));
-  await waitFor(() =>
-    assert.equal(within(starters).getAllByRole("button", { name: "Start chat" })[0]!.hasAttribute("disabled"), false),
-  );
-  assert.ok(screen.getByRole("heading", { name: "Meet your first Bot" }));
+  const retry = await screen.findByRole("button", { name: "Try again" });
   assert.equal(calls.some((call) => call.channel === "app:setOnboardingProgress" && call.args[0] === "bots"), false);
+  fail = false;
+  fireEvent.click(retry);
+  await screen.findByText("Chief is ready");
+  fireEvent.click(screen.getByRole("button", { name: /Start using Aiden/u }));
+  await waitFor(() => assert.deepEqual(opened, ["bot-chief"]));
 });
 
 test("onboarding validates the chosen key, records a usable model and waits for Finish", async () => {

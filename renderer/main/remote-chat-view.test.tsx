@@ -254,7 +254,7 @@ test("a run started on the host streams into the open chat, and its composer can
   assert.equal(stop.hasAttribute("disabled"), false);
   assert.ok(view.button(/Queue message|Steer response/), "typing while it runs goes to the host's run");
   // Nothing on this Mac is offered for a chat that runs elsewhere.
-  for (const label of [/Attach files/i, /Workspace access/i, /terminal/i, /Open in/i, /Reveal/i]) {
+  for (const label of [/Attach files/i, /^Approvals:/i, /terminal/i, /Open in/i, /Reveal/i]) {
     assert.equal(view.button(label), undefined, `unexpected ${label} control`);
   }
   assert.doesNotMatch(view.text, /last-known transcript/);
@@ -457,7 +457,7 @@ test("a host that does not grant run control shows its prompts read-only, to be 
     chat: session(online, ["messagesWindow", "observe"]).chat(),
   });
 
-  assert.match(view.text, /Allow Run shell\?/);
+  assert.match(view.text, /Review before Run shell/);
   assert.match(view.text, /Run the release script/);
   assert.match(view.text, /Approve or deny it on Studio\./);
   assert.match(view.text, /Which branch should I tag\?/);

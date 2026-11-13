@@ -10,7 +10,7 @@ import { useBotAccessRequestActions } from "./use-bot-access-request-actions";
 import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { CircleAlert, CircleCheck, CircleSlash, FileText, Hourglass, LogIn, Pause, RotateCcw, ShieldQuestion, Square } from "lucide-react";
+import { CircleAlert, CircleCheck, CircleSlash, FileText, Hourglass, LogIn, Pause, RotateCcw, Square } from "lucide-react";
 import { AskUserQuestionComposer } from "../../components/ask-user-question-composer";
 import { Composer } from "../../components/composer";
 import { ConnectCard } from "../../components/bots/connect-card";
@@ -18,30 +18,29 @@ import { RoutinesSkippedCard } from "../../components/bots/routines-skipped-card
 import { RoutineProposalCard } from "../../components/bots/routine-proposal-card";
 import { SkillProposalCard } from "../../components/bots/skill-proposal-card";
 import { LearnedLine, LessonProposalCard } from "../../components/bots/lesson-cards";
+import { HeldSettingsCard, SettingsChangeReceipt } from "../../components/bots/settings-change-cards";
+import type { BotSettingsChangeStatus } from "../../shared/bot-settings-changes";
+import { BotInstructionsDialog } from "./bot-instructions-editor";
 import { BotIssueCard } from "../../components/bots/bot-issue-card";
 import { HandoffCard, handoffNoNoteComposerText, handoffSignInComposerText } from "../../components/bots/handoff-card";
+import { NeedsYouAnnouncer, NeedsYouFocusScope, NeedsYouHeader, needsYouSlotState, type NeedsYouItem } from "../../components/bots/needs-you-slot";
 import { PlanCard } from "../../components/bots/plan-card";
 import { MemoryCardIcon } from "../../components/memory-card-icon";
-import { toolLabel } from "../../components/chat-approval-card";
-import { detectedKeyboardPlatform } from "../../shared/keybindings";
-import {
-  approvalAriaKeyShortcut,
-  approvalShortcutLabel,
-  useApprovalShortcuts,
-  type ApprovalShortcut,
-} from "../../lib/approval-shortcuts";
+import { ApprovalStatusLine, ChatApprovalCard } from "../../components/chat-approval-card";
+import { useApprovalStatusLine } from "../../lib/use-approval-status-line";
 import { SafeMessageBubble } from "../../components/message-bubble";
 import { MessageAttachmentPreviewProvider, MessageAttachments } from "../../components/message-attachments";
 import { insertTextIntoTextarea } from "../../lib/composer-type-focus";
 import { AlertDialog, Button, Callout, EmptyState, ScrollArea, Text, toast } from "../../components/ui";
 import { BotNoticeCard } from "../../components/bots/bot-notice-card";
-import { botAllowedLocation, botListLocation } from "../../lib/bot-routes";
+import { botListLocation } from "../../lib/bot-routes";
+import { settingsLocation } from "../../lib/settings-section";
 import { botAlwaysAllowLabel } from "../../shared/tool-approval-scope";
 import { botsApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import type { Attachment } from "../../lib/types";
-import { resolveBotChatActivity, type BotChatActivityLevel } from "../../shared/bots";
-import { queryKeys, useBot } from "../../lib/queries";
+import { botChatActivityOnDevice, showsBotToolActivity, type BotChatActivityLevel } from "../../shared/bots";
+import { queryKeys, useBot, useBots } from "../../lib/queries";
 import { useBotLive } from "../../lib/use-bot-live";
 import { prefersReducedMotion } from "../../lib/appearance-runtime";
 import {
@@ -80,6 +79,9 @@ import { botTranscriptRows } from "./bot-transcript-rows";
 import { BOT_UNAVAILABLE_LABEL, type BotSessionState } from "./bot-session-state";
 import { botRoutinesKey } from "./bot-routines";
 import { WakeUpChip } from "../../components/bots/wake-up-chip";
+import { ReceiptLine } from "../../components/bots/receipt-line";
+import { pickBotStatus } from "./bot-status-slot";
+import { FoldedSuggestion } from "../../components/bots/suggestion-card";
 import { useConnectionSetup } from "./use-connection-setup";
 import { useChatFind } from "../../components/chat-find-bar";
 import { retryUsageLimitNow, useUsageLimitNow, useUsageLimitWait } from "../../lib/use-usage-limit-wait";
@@ -87,7 +89,7 @@ import { formatUsageLimitTime, type UsageLimitWaitView } from "../../shared/usag
 import { useSpendingStatus } from "../../lib/use-spending-status";
 import { SpendingLimitNotice } from "../../components/spending/spending-limit-notice";
 import { spendingNotice } from "../../shared/spending";
-import { LiveGuard } from "../../components/live-guard";
+import { switchToAutoSuggestion, useSwitchToAutoOffer } from "../../lib/switch-to-auto";
 
 export const BOT_INTERRUPTED_TEXT = "I got interrupted while working on this.";
 export const BOT_ACCESS_CHANGED_TEXT = "This Bot's access changed. Review it in Advanced.";
@@ -138,8 +140,12 @@ export function BotInterruptedCard({
 }
 
 /** Tool approvals a Bot is waiting on, live: pushed prompts and withdrawals, plus a read on mount. */
-function useBotApprovals(botId: string | undefined) {
+function useBotApprovals(botId: string | undefined, onWithdrawn?: (waitId: string) => void) {
   const [prompts, setPrompts] = React.useState<BotApprovalPrompt[]>([]);
+  const withdrawn = React.useRef(onWithdrawn);
+  withdrawn.current = onWithdrawn;
+  const shown = React.useRef(prompts);
+  shown.current = prompts;
   React.useEffect(() => {
     if (!botId) return;
     let active = true;
@@ -151,6 +157,8 @@ function useBotApprovals(botId: string | undefined) {
     });
     const offSettled = botsApi.onApprovalSettled((settled) => {
       if (settled.botId === botId) {
+        // Still shown here, so nobody answered it on this device: it went away (answered elsewhere, expired, the run ended).
+        if (shown.current.some((prompt) => prompt.waitId === settled.waitId)) withdrawn.current?.(settled.waitId);
         setPrompts((current) => current.filter((prompt) => prompt.waitId !== settled.waitId));
       }
     });
@@ -178,13 +186,37 @@ function mergePrompts(current: BotApprovalPrompt[], next: BotApprovalPrompt[]): 
   return [...byId.values()];
 }
 
-/** A Bot's tool call that needs the person's yes or no before it runs. */
+/** Which shared card a pending approval belongs to: the same for every identical call, the wait itself otherwise. */
+export function botApprovalGroupKey(prompt: BotApprovalPrompt): string {
+  return prompt.argumentsHash && prompt.runHash
+    ? JSON.stringify([prompt.botId, prompt.runHash, prompt.argumentsHash, prompt.toolName, prompt.summary, prompt.always?.key ?? null])
+    : JSON.stringify(["wait", prompt.botId, prompt.waitId]);
+}
+
+/**
+ * Identical pending approvals in one reply (same tool, card and exact
+ * arguments) share one card. A wait without its arguments and run hashes is
+ * never grouped: equal text is not the same action.
+ */
+export function groupBotApprovalPrompts(prompts: readonly BotApprovalPrompt[]): BotApprovalPrompt[][] {
+  const groups = new Map<string, BotApprovalPrompt[]>();
+  for (const prompt of prompts) {
+    const key = botApprovalGroupKey(prompt);
+    const group = groups.get(key);
+    if (group) group.push(prompt);
+    else groups.set(key, [prompt]);
+  }
+  return [...groups.values()];
+}
+
+/** A Bot's tool call that needs the person's yes or no before it runs: the shared approval card. */
 export function BotApprovalCard({
   name,
   prompt,
   onAnswer,
   allowElsewhere,
   keyboardShortcuts = false,
+  pendingCount = 1,
 }: {
   name: string;
   prompt: BotApprovalPrompt;
@@ -193,10 +225,16 @@ export function BotApprovalCard({
   allowElsewhere?: string;
   /** ⌘↩ allows and ⌘⌫ denies while the message box is empty; only the first card takes them. */
   keyboardShortcuts?: boolean;
+  /** Cards waiting in this chat, this one first. */
+  pendingCount?: number;
 }) {
   const [busy, setBusy] = React.useState(false);
   const inFlight = React.useRef(false);
   const [answerError, setAnswerError] = React.useState<string | null>(null);
+  // Allowed again and again in Ask: Auto is offered beside Always, but only
+  // where main said Auto would hand this call to the judge instead of a card.
+  // Not on a device that may only deny.
+  const autoOffer = useSwitchToAutoOffer(prompt.always !== undefined && prompt.autoWouldJudge === true && allowElsewhere === undefined);
   const respond = async (decision: "allow" | "deny", scope?: "always") => {
     if (inFlight.current) return;
     inFlight.current = true;
@@ -211,69 +249,26 @@ export function BotApprovalCard({
       setBusy(false);
     }
   };
-  const platform = detectedKeyboardPlatform();
-  useApprovalShortcuts({ enabled: keyboardShortcuts && !busy, canAllow: !allowElsewhere, onShortcut: (decision) => void respond(decision) });
-  const hint = (shortcut: ApprovalShortcut) =>
-    keyboardShortcuts ? (
-      <span aria-hidden="true" data-approval-shortcut={shortcut} className="ml-1.5 shrink-0 font-normal tabular-nums opacity-65">
-        {approvalShortcutLabel(shortcut, platform)}
-      </span>
-    ) : null;
   return (
-    <>
-      {/* The first card says it arrived, as the workspace approval card does. */}
-      {keyboardShortcuts ? (
-        <p className="sr-only" role="status">{`${name} needs approval to use ${toolLabel(prompt.toolName)}`}</p>
-      ) : null}
-      <BotNoticeCard
-        label={`${name} needs approval`}
-        elevated
-        icon={<ShieldQuestion />}
-        iconTone="warning"
-        title={`${name} wants to use ${toolLabel(prompt.toolName)}.`}
-        actions={
-          // Approvals are the user's: Aiden Live can never answer them by pressing.
-          <LiveGuard guard="you">
-            <Button
-              variant="transparent"
-              size="small"
-              disabled={busy}
-              aria-keyshortcuts={keyboardShortcuts ? approvalAriaKeyShortcut("deny", platform) : undefined}
-              onClick={() => void respond("deny")}
-            >
-              Deny
-              {hint("deny")}
-            </Button>
-            {prompt.always && !allowElsewhere ? (
-              <Button variant="transparent" size="small" disabled={busy} onClick={() => void respond("allow", "always")}>
-                {botAlwaysAllowLabel(name)}
-              </Button>
-            ) : null}
-            {allowElsewhere ? null : (
-              <Button
-                variant="accent"
-                size="small"
-                disabled={busy}
-                aria-keyshortcuts={keyboardShortcuts ? approvalAriaKeyShortcut("allow", platform) : undefined}
-                onClick={() => void respond("allow")}
-              >
-                Allow
-                {hint("allow")}
-              </Button>
-            )}
-          </LiveGuard>
-        }
-      >
-        {prompt.always ? <p className="text-tertiary">{`You’ve allowed this ${prompt.always.count} times in the last 2 weeks.`}</p> : null}
-        {allowElsewhere ? <p>{`Allow it on ${allowElsewhere}.`}</p> : null}
-        {prompt.summary ? (
-          <p className="mt-1.5 max-h-24 select-text overflow-y-auto whitespace-pre-wrap break-words rounded-control bg-well px-3 py-2 text-primary">
-            {prompt.summary}
-          </p>
-        ) : null}
-        {answerError ? <p role="alert" className="mt-1 text-status-red">{answerError}</p> : null}
-      </BotNoticeCard>
-    </>
+    <ChatApprovalCard
+      pending={{
+        approvalId: prompt.waitId,
+        toolCallId: prompt.toolCallId,
+        toolName: prompt.toolName,
+        summary: prompt.summary,
+        ...(prompt.always ? { scopes: ["once", "always"] } : {}),
+      }}
+      deciding={busy}
+      onDecide={(decision, options) => void respond(decision, options?.scope === "always" ? "always" : undefined)}
+      requester={name}
+      alwaysOption={{ label: botAlwaysAllowLabel(name), hint: `${name} won’t ask again for this. Undo in Settings → Approvals.` }}
+      notes={prompt.always ? [`You’ve allowed this ${prompt.always.count} times in the last 2 weeks.`] : []}
+      {...(autoOffer ? { suggestion: switchToAutoSuggestion(autoOffer) } : {})}
+      {...(allowElsewhere ? { allowElsewhere } : {})}
+      error={answerError}
+      keyboardShortcuts={keyboardShortcuts}
+      pendingCount={pendingCount}
+    />
   );
 }
 
@@ -418,21 +413,9 @@ function BotFileChip({ path, operation, onOpen }: { path: string; operation: "wr
   );
 }
 
-/** "Memory updated": a quiet, centred caption that opens the panel's Memory tab. */
+/** "Memory updated · Open": a receipt line that opens the panel's Memory tab. */
 function BotMemoryUpdatedCaption({ onOpen }: { onOpen(): void }) {
-  return (
-    <div className="flex justify-center py-1">
-      <button
-        type="button"
-        aria-label="Memory updated. Open Memory"
-        className="inline-flex items-center gap-1.5 rounded-button px-2 py-1 text-small text-tertiary outline-none transition-colors duration-(--motion-duration) ease-standard hover:bg-list-hover hover:text-secondary focus-visible:bg-list-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring motion-reduce:transition-none"
-        onClick={onOpen}
-      >
-        <MemoryCardIcon aria-hidden="true" className="size-3.5" />
-        Memory updated
-      </button>
-    </div>
-  );
+  return <ReceiptLine icon={<MemoryCardIcon />} text="Memory updated" actions={[{ label: "Open", ariaLabel: "Memory updated. Open Memory", onClick: onOpen }]} />;
 }
 
 /** The person's answer to a hand-off card, on their side of the chat: what they did, then their note. */
@@ -740,6 +723,7 @@ export function TranscriptEntries({
   onRespondToLesson,
   onUndoLearning,
   onActOnIssue,
+  onUndoSettings,
   wakeUpPending,
   onCancelWakeUp,
   connectLabel,
@@ -756,7 +740,7 @@ export function TranscriptEntries({
   onRemoveQueued?(submissionId: string, button: HTMLButtonElement): void;
   onConnect(pluginId: string): void;
   onDismissConnection?(pluginId: string): void;
-  /** "Add to this Bot" for an app connected in Aiden but left out of the Bot's access. */
+  /** Connect on an app connected in Aiden but left out of the Bot's access. */
   onAddConnection?(pluginId: string): void;
   onOpenFile?(path: string): void;
   onReply(text: string): void;
@@ -774,6 +758,8 @@ export function TranscriptEntries({
   onNewRoutineLink?(routineId: string): Promise<string | null>;
   /** One action on a "Needs you" issue card. */
   onActOnIssue?(issueId: string, action: BotIssueAction): Promise<void>;
+  /** Undo on a "Settings updated" receipt; resolves to its settled status. */
+  onUndoSettings?(changeId: string): Promise<BotSettingsChangeStatus>;
   /** Keep or decline a lesson from a routine's runs. */
   onRespondToLesson?(lessonId: string, decision: "keep" | "dismiss"): Promise<"active" | "dismissed" | null>;
   /** Undo a correction lesson or the newest memory tidy. */
@@ -790,6 +776,21 @@ export function TranscriptEntries({
   connecting?: boolean;
 }) {
   const rows = botTranscriptRows(entries, partial, { running, level, queued });
+  // One suggestion in full per chat (§4.7): the newest one waiting, or the one
+  // the person chose to see; earlier ones fold to a line with Show.
+  const [chosenSuggestion, setChosenSuggestion] = React.useState<string | null>(null);
+  const waitingSuggestions = rows
+    .filter((row) =>
+      (row.kind === "routine_proposal" && row.status === "pending" && !row.supersededBy && onRespondToProposal !== undefined) ||
+      (row.kind === "skill_proposal" && row.status === "pending" && onRespondToSkill !== undefined) ||
+      (row.kind === "lesson_proposal" && row.status === "pending" && onRespondToLesson !== undefined))
+    .map((row) => row.id);
+  const shownSuggestion =
+    chosenSuggestion !== null && waitingSuggestions.includes(chosenSuggestion) ? chosenSuggestion : waitingSuggestions[waitingSuggestions.length - 1];
+  const folded = (id: string, label: string) =>
+    waitingSuggestions.includes(id) && id !== shownSuggestion ? (
+      <FoldedSuggestion key={id} label={label} onShow={() => setChosenSuggestion(id)} />
+    ) : null;
   const workDetails = useAppearancePreference("workDetails");
   const collapseTiming = useAppearancePreference("workDetailsCollapseTiming");
   const retainedRecaps = React.useMemo(() => {
@@ -924,7 +925,7 @@ export function TranscriptEntries({
           case "routines_skipped":
             return onRunRoutine ? <RoutinesSkippedCard key={row.id} routines={row.routines} onRunNow={onRunRoutine} /> : null;
           case "routine_proposal":
-            return onRespondToProposal ? (
+            return folded(row.id, `Routine suggestion: ${row.proposal.name}`) ?? (onRespondToProposal ? (
               <RoutineProposalCard
                 key={row.id}
                 proposal={row.proposal}
@@ -934,16 +935,16 @@ export function TranscriptEntries({
                 onRespond={(decision, reason) => onRespondToProposal(row.proposal.proposalId, decision, reason)}
                 {...(onNewRoutineLink ? { onNewLink: onNewRoutineLink } : {})}
               />
-            ) : null;
+            ) : null);
           case "lesson_proposal":
-            return onRespondToLesson ? (
+            return folded(row.id, `Lesson: ${row.lesson.lesson}`) ?? (onRespondToLesson ? (
               <LessonProposalCard
                 key={row.id}
                 lesson={row.lesson}
                 status={row.status}
                 onRespond={(decision) => onRespondToLesson(row.lesson.lessonId, decision)}
               />
-            ) : null;
+            ) : null);
           case "lesson_learned":
             return onUndoLearning ? (
               <LearnedLine
@@ -967,14 +968,23 @@ export function TranscriptEntries({
               />
             );
           case "skill_proposal":
-            return onRespondToSkill ? (
+            return folded(row.id, `Skill: ${row.proposal.name}`) ?? (onRespondToSkill ? (
               <SkillProposalCard
                 key={row.id}
                 proposal={row.proposal}
                 status={row.status}
                 onRespond={(decision) => onRespondToSkill(row.proposal.proposalId, decision)}
               />
-            ) : null;
+            ) : null);
+          case "settings_change":
+            return (
+              <SettingsChangeReceipt
+                key={row.id}
+                change={row.change}
+                status={row.change.mode === "applied" ? row.status : row.status === "pending" ? "applied" : row.status}
+                onUndo={onUndoSettings ? () => onUndoSettings(row.change.changeId) : () => Promise.reject(new Error("Undo isn’t available here."))}
+              />
+            );
           case "issue":
             return onActOnIssue ? (
               <BotIssueCard
@@ -1006,6 +1016,9 @@ export function BotChatPane({ botId }: { botId: string }) {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const bot = useBot(botId);
+  // Show tool activity is per device (§4.5); until it is set, the Bots' old levels decide.
+  const toolActivitySetting = useAppearancePreference("showToolActivity");
+  const otherBots = useBots(false, toolActivitySetting === undefined);
   const live = useBotLive(botId);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   const panel = useBotPanelActions();
@@ -1107,9 +1120,20 @@ export function BotChatPane({ botId }: { botId: string }) {
 
   const connectionSetup = useConnectionSetup(() => live.reload());
   const [addingConnection, setAddingConnection] = React.useState(false);
-  const approvals = useBotApprovals(botId);
+  const approvalStatus = useApprovalStatusLine(botId);
+  const showApprovalStatus = approvalStatus.show;
+  // Cards this device is answering: their settlement is this answer, not a stale card.
+  const answeringApprovals = React.useRef(new Set<string>());
+  const approvals = useBotApprovals(botId, (waitId) => {
+    if (!answeringApprovals.current.has(waitId)) showApprovalStatus({ decision: "stale" });
+  });
+  const approvalGroups = groupBotApprovalPrompts(approvals.prompts);
   const [answering, setAnswering] = React.useState(false);
   const findBar = useChatFind(botId);
+  // The Needs-you item the person moved to with Previous or Next, by key.
+  const [needsYouChoice, setNeedsYouChoice] = React.useState<string | null>(null);
+  // Edit on a held "Update instructions?" card: the editor, seeded with the proposed text.
+  const [instructionsEdit, setInstructionsEdit] = React.useState<{ changeId: string; seed: string } | null>(null);
   const accessRequestActions = useBotAccessRequestActions(botId, live.snapshot?.accessRequest?.waitId);
   const handoffActions = useBotHandoffActions(botId, live.snapshot?.handoff?.waitId);
 
@@ -1144,7 +1168,8 @@ export function BotChatPane({ botId }: { botId: string }) {
   const current = bot.data ?? null;
   // A Bot over its spending limit sends nothing until the person allows more.
   const spendingReached = spending.status?.state === "reached" ? spendingNotice(spending.status, current?.name)?.title : undefined;
-  const openAdvanced = () => void navigate({ to: "/bots/$botId", params: { botId }, search: { page: "advanced" } });
+  // A Bot's settings live in the side panel's Advanced tab (plan §4.4).
+  const openAdvanced = () => panel.show("advanced", { botId, section: "model" });
   // Memory, Files and Routines live in the side panel beside the chat (spec §8).
   const openMemory = () => panel.show("memory");
 
@@ -1160,7 +1185,7 @@ export function BotChatPane({ botId }: { botId: string }) {
           <BotChatNamePill
             bot={current}
             working={running}
-            onOpenProfile={() => void navigate({ to: "/bots/$botId", params: { botId: current.id } })}
+            onOpenProfile={() => panel.show("advanced", { botId: current.id })}
           />
         ) : bot.isLoading ? (
           <span className="block h-4 w-28 rounded-full bg-control motion-safe:animate-pulse" aria-hidden="true" />
@@ -1176,7 +1201,7 @@ export function BotChatPane({ botId }: { botId: string }) {
               bot={current}
               pinned={pinned}
               paused={state?.kind === "paused"}
-              onAction={(action, returnFocus) => menuAction(current, action, returnFocus)}
+              onAction={(action) => menuAction(current, action)}
             />
           </>
         ) : null
@@ -1188,6 +1213,7 @@ export function BotChatPane({ botId }: { botId: string }) {
         snapshot?.partial,
         state?.kind,
         approvals.prompts.length,
+        needsYouChoice,
         snapshot?.question?.waitId,
         snapshot?.handoff?.waitId,
         snapshot?.accessRequest?.waitId,
@@ -1252,7 +1278,7 @@ export function BotChatPane({ botId }: { botId: string }) {
     return shell(<BotNeedsModel bot={current} onSetUp={openProviders} />);
   }
 
-  const question = snapshot.question;
+  const question = snapshot.question ?? null;
   const plan = snapshot.plan ?? null;
   const pendingPlan = plan?.status === "pending";
   const accessRequest = snapshot.accessRequest ?? null;
@@ -1260,7 +1286,11 @@ export function BotChatPane({ botId }: { botId: string }) {
   const signInWaits = handoff?.kind === "sign_in";
   // A sign-in or a password-or-code card is answered on the card alone: whatever is typed here would reach the Bot.
   const noteRefused = signInWaits || (handoff !== null && !botHandoffTakesNote(handoff));
-  const chatActivity = resolveBotChatActivity(current.chatActivity);
+  // Tool activity follows this device's Show tool activity switch, not the Bot (§4.5).
+  const chatActivity = botChatActivityOnDevice(
+    showsBotToolActivity(toolActivitySetting, [current, ...(otherBots.data ?? [])]),
+    current.chatActivity,
+  );
   // While the reply's visible words stream, the words are the signal (§5.2). The
   // partial text can outlast narration into a tool call, so a running step keeps the line.
   const activityPhase = snapshot.activity?.phase;
@@ -1455,7 +1485,7 @@ export function BotChatPane({ botId }: { botId: string }) {
    */
   const answerHandoffWithNote = async (pending: BotPendingHandoff, text: string, attachments: Attachment[]) => {
     // Never a note for a sign-in or a password-or-code card: whatever is typed here reaches the Bot.
-    if (pending.kind === "sign_in") throw new Error(handoffSignInComposerText(current.name, pending));
+    if (pending.kind === "sign_in") throw new Error(handoffSignInComposerText(current.name));
     if (!botHandoffTakesNote(pending)) throw new Error(handoffNoNoteComposerText(current.name));
     if (attachments.length > 0) {
       throw new Error(
@@ -1548,6 +1578,22 @@ export function BotChatPane({ botId }: { botId: string }) {
       throw error;
     }
   };
+  const respondToSettings = async (changeId: string, decision: "undo" | "apply" | "edited" | "dismiss"): Promise<BotSettingsChangeStatus> => {
+    let result: Awaited<ReturnType<typeof botsApi.settingsChanges.respond>>;
+    try {
+      result = await botsApi.settingsChanges.respond({ botId: current.id, changeId, decision });
+    } catch (error) {
+      toast.error(userFacingErrorMessage(error, "Aiden couldn’t save that choice."));
+      throw error;
+    }
+    if (!result.ok) {
+      toast.error(result.message);
+      throw new Error(result.message);
+    }
+    if (result.message) toast(result.message);
+    void qc.invalidateQueries({ queryKey: queryKeys.bots });
+    return result.status;
+  };
   const newRoutineLink = async (routineId: string) => {
     try {
       return (await botsApi.eventRoutines.rotateLink({ botId: current.id, id: routineId })).link;
@@ -1588,7 +1634,7 @@ export function BotChatPane({ botId }: { botId: string }) {
     }
   };
 
-  /** "Add to this Bot": only this tap adds the app to the Bot's access. */
+  /** Connect on an app connected in Aiden that this Bot leaves out: only this tap adds the app to the Bot's access. */
   const addConnection = async (pluginId: string) => {
     setAddingConnection(true);
     try {
@@ -1626,66 +1672,171 @@ export function BotChatPane({ botId }: { botId: string }) {
     }
   };
 
+  /** One answer for a group of identical waiting calls; only the waits it decided leave. */
+  const answerApprovalGroup = async (group: readonly BotApprovalPrompt[], decision: "allow" | "deny", scope?: "always") => {
+    for (const prompt of group) answeringApprovals.current.add(prompt.waitId);
+    const results = await Promise.allSettled(
+      group.map((prompt, index) => botsApi.approve(prompt.waitId, decision, index === 0 ? scope : undefined)),
+    ).finally(() => {
+      for (const prompt of group) answeringApprovals.current.delete(prompt.waitId);
+    });
+    const decided = (index: number) => {
+      const result = results[index];
+      return result?.status === "fulfilled" && result.value.decided;
+    };
+    if (!group.some((_prompt, index) => decided(index))) {
+      const failed = results.find((result) => result.status === "rejected");
+      if (failed) throw failed.reason;
+      throw new Error("That approval was already answered or closed.");
+    }
+    // Only the waits this answer reached leave; any other stays to be answered.
+    group.forEach((prompt, index) => {
+      if (decided(index)) approvals.remove(prompt.waitId);
+    });
+    // Always rides on the first wait only, so it counts only when that one was decided.
+    const always = scope === "always" && decided(0) ? scope : undefined;
+    approvalStatus.show(decision === "deny" ? { decision: "deny" } : { decision: "allow", ...(always ? { scope: always } : {}) });
+    if (always) {
+      toast.success("Always allow requested.", {
+        action: { label: "Manage", onClick: () => void navigate(settingsLocation("approvals")) },
+      });
+    }
+  };
+
+  // Everything waiting on the person, one at a time in the Needs-you slot:
+  // take control, then the ask cards, then the question (§4.7).
+  type SlotItem = NeedsYouItem & { render?(): React.ReactNode };
+  const slotItems: SlotItem[] = [];
+  if (handoff) {
+    slotItems.push({
+      key: `handoff:${handoff.waitId}`,
+      kind: "take_control",
+      render: () => (
+        <HandoffCard
+          key={handoff.waitId}
+          botId={current.id}
+          name={current.name}
+          avatar={current.avatar}
+          handoff={handoff}
+          busy={handoffActions.busy}
+          taken={handoffActions.taken}
+          onTake={handoffActions.take}
+          onOpen={() => void handoffActions.open(handoff)}
+          onAnswer={(outcome) => void handoffActions.answer(handoff, outcome)}
+        />
+      ),
+    });
+  }
+  // Identical waiting calls share one card, and it answers all of them.
+  for (const group of approvalGroups) {
+    const first = group[0]!;
+    slotItems.push({
+      // The group's own identity, so answering one of its waits elsewhere keeps the card on show.
+      key: `approval:${botApprovalGroupKey(first)}`,
+      kind: "approval",
+      render: () => (
+        <BotApprovalCard
+          key={`${first.botId}:${first.waitId}`}
+          name={current.name}
+          prompt={first}
+          keyboardShortcuts
+          onAnswer={(decision, scope) => answerApprovalGroup(group, decision, scope)}
+        />
+      ),
+    });
+  }
+  if (accessRequest) {
+    slotItems.push({
+      key: `access:${accessRequest.waitId}`,
+      kind: "access",
+      render: () => (
+        <AccessRequestCard key={accessRequest.waitId} request={accessRequest} botName={current.name} avatar={current.avatar}
+          busy={accessRequestActions.busy} onAnswer={(choice) => void accessRequestActions.answer(accessRequest, choice)} />
+      ),
+    });
+  }
+  if (plan && pendingPlan) {
+    slotItems.push({
+      key: `plan:${plan.planId}:${plan.revision}`,
+      kind: "plan",
+      render: () => (
+        <PlanCard
+          plan={plan}
+          botName={current.name}
+          avatar={current.avatar}
+          onRespond={async (decision) => {
+            const { result } = await botsApi.respondPlan({ botId: current.id, planId: plan.planId, decision });
+            if (result === "not_waiting") throw new Error("That plan was already answered or closed.");
+          }}
+        />
+      ),
+    });
+  }
+  // A change the Bot asked for in a run the person didn't start (§4.6).
+  for (const entry of snapshot.entries) {
+    if (entry.type !== "settings_change" || entry.change.mode !== "held" || entry.status !== "pending") continue;
+    const change = entry.change;
+    slotItems.push({
+      key: `change:${change.changeId}`,
+      kind: "change",
+      render: () => (
+        <HeldSettingsCard
+          change={change}
+          botName={current.name}
+          currentInstructions={current.instructions}
+          onRespond={async (decision) => {
+            await respondToSettings(change.changeId, decision);
+          }}
+          onEdit={(instructions) => setInstructionsEdit({ changeId: change.changeId, seed: instructions })}
+        />
+      ),
+    });
+  }
+  if (question) {
+    slotItems.push({ key: `question:${question.waitId}`, kind: "question" });
+  }
+  const slot = needsYouSlotState(slotItems, needsYouChoice, setNeedsYouChoice);
+  const askingQuestion = question !== null && slot.current?.kind === "question";
+  // A question waits, but another item is on show: the composer points at it.
+  const questionElsewhere = question !== null && !askingQuestion;
+
+  const status = pickBotStatus({
+    model_error: state?.kind === "model_error",
+    spending_reached: spending.status?.state === "reached",
+    paused: state?.kind === "paused",
+    saved_resume: savedResumes.rows.length > 0,
+    interrupted: state?.kind === "interrupted" && hiddenInterruptedSubmission !== state.submissionId && !startingTurn,
+    usage_limit: running && usageLimitWait !== null && usageLimitWait !== undefined,
+    spending_nearing: spending.status?.state === "nearing",
+    plan: plan !== null && plan !== undefined && !pendingPlan,
+  });
+
   const footer = (
-    <div className="flex flex-col">
-      {plan || approvals.prompts.length > 0 || handoff || accessRequest ? (
-        <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-2">
-          {plan ? (
-            <PlanCard
-              plan={plan}
-              botName={current.name}
-              avatar={current.avatar}
-              onRespond={async (decision) => {
-                const { result } = await botsApi.respondPlan({ botId: current.id, planId: plan.planId, decision });
-                if (result === "not_waiting") throw new Error("That plan was already answered or closed.");
-              }}
-            />
+    <NeedsYouFocusScope currentKey={slot.current?.key} className="flex flex-col">
+      <NeedsYouAnnouncer slot={slot} />
+      {slot.count > 0 || approvalStatus.status ? (
+        <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-2" data-needs-you-slot>
+          <NeedsYouHeader slot={slot} />
+          {slot.current?.render ? (
+            <div key={slot.current.key} className="contents" data-needs-you-card>
+              {slot.current.render()}
+            </div>
+          ) : !slot.current && approvalStatus.status ? (
+            <ApprovalStatusLine status={approvalStatus.status} />
           ) : null}
-          {accessRequest ? (
-            <AccessRequestCard key={accessRequest.waitId} request={accessRequest} botName={current.name} avatar={current.avatar}
-              busy={accessRequestActions.busy} onAnswer={(choice) => void accessRequestActions.answer(accessRequest, choice)} />
-          ) : null}
-          {handoff ? (
-            <HandoffCard
-              key={handoff.waitId}
-              botId={current.id}
-              name={current.name}
-              avatar={current.avatar}
-              handoff={handoff}
-              busy={handoffActions.busy}
-              onOpen={() => void handoffActions.open(handoff)}
-              onAnswer={(outcome) => void handoffActions.answer(handoff, outcome)}
-            />
-          ) : null}
-          {approvals.prompts.map((prompt, index) => (
-            <BotApprovalCard
-              key={`${prompt.botId}:${prompt.waitId}`}
-              name={current.name}
-              prompt={prompt}
-              keyboardShortcuts={index === 0}
-              onAnswer={async (decision, scope) => {
-                const { decided } = await botsApi.approve(prompt.waitId, decision, scope);
-                if (!decided) throw new Error("That approval was already answered or closed.");
-                approvals.remove(prompt.waitId);
-                if (scope === "always") {
-                  toast.success("Always allow requested.", {
-                    action: { label: "Manage", onClick: () => void navigate(botAllowedLocation(current.id)) },
-                  });
-                }
-              }}
-            />
-          ))}
         </div>
       ) : null}
-      {/* A waiting A–E question takes the composer's place, as in workspace chats. */}
-      {question ? (
+      {/* The question takes the composer's place, as in workspace chats, while the slot shows it. */}
+      {question && askingQuestion ? (
         <>
-          <AskUserQuestionComposer
-            key={question.waitId}
-            prompt={questionPrompt(question)}
-            submitting={answering}
-            onRespond={(response) => answerQuestion(question, response)}
-          />
+          <div className="contents" data-needs-you-card>
+            <AskUserQuestionComposer
+              key={question.waitId}
+              prompt={questionPrompt(question)}
+              submitting={answering}
+              onRespond={(response) => answerQuestion(question, response)}
+            />
+          </div>
           {/* The card replaces the composer, so Stop lives here while it waits. */}
           <div className="aiden-dock-inset chat-content-column flex justify-end pb-4 pt-2">
             <Button variant="filled" size="small" onClick={stop}>
@@ -1698,16 +1849,20 @@ export function BotChatPane({ botId }: { botId: string }) {
         <Composer
           key={`bot:${current.id}`}
           // A sign-in or a password-or-code card is answered on the card: a password typed here would reach the Bot.
-          ready={!pendingPlan && !noteRefused && !spendingReached && (!state || (state.kind !== "unavailable" && state.kind !== "paused"))}
+          ready={!pendingPlan && !noteRefused && !questionElsewhere && !spendingReached && (!state || (state.kind !== "unavailable" && state.kind !== "paused"))}
           readinessMessage={
             pendingPlan
-              ? "Answer the plan above, then send a message."
+              ? slot.current?.kind === "plan"
+                ? "Answer the plan above, then send a message."
+                : "Answer the plan under Needs you, then send a message."
+              : questionElsewhere
+                ? `Answer ${current.name}’s question first. It’s ${slot.count} of ${slot.count} above.`
               : state?.kind === "unavailable"
               ? BOT_UNAVAILABLE_LABEL
               : state?.kind === "paused"
                 ? botPausedText(current.name)
                 : signInWaits
-                  ? handoffSignInComposerText(current.name, handoff ?? undefined)
+                  ? handoffSignInComposerText(current.name)
                   : noteRefused
                     ? handoffNoNoteComposerText(current.name)
                     : spendingReached
@@ -1733,7 +1888,7 @@ export function BotChatPane({ botId }: { botId: string }) {
         />
       )}
       {/* The composer's send answers the card, so Stop lives here while it waits. */}
-      {handoff && !question && running ? (
+      {handoff && !askingQuestion && running ? (
         <div className="aiden-dock-inset chat-content-column flex justify-end pb-4 pt-2">
           <Button variant="filled" size="small" onClick={stop}>
             <Square aria-hidden="true" />
@@ -1741,7 +1896,7 @@ export function BotChatPane({ botId }: { botId: string }) {
           </Button>
         </div>
       ) : null}
-    </div>
+    </NeedsYouFocusScope>
   );
 
   // A Bot's transcript is data, never instructions: Aiden Live sees only how many rows it has.
@@ -1813,6 +1968,7 @@ export function BotChatPane({ botId }: { botId: string }) {
             }
           }}
           onActOnIssue={actOnIssue}
+          onUndoSettings={(changeId) => respondToSettings(changeId, "undo")}
         />
         {shownSends.map((send) => {
           const morphFrom = sendMorphs.current.get(send.requestId);
@@ -1831,7 +1987,8 @@ export function BotChatPane({ botId }: { botId: string }) {
       {statusActivity ? (
         <BotStatusLine activity={statusActivity} wording={chatActivity.wording} onLayoutChange={setStatusLayout} />
       ) : null}
-      {running && usageLimitWait ? (
+      {/* The one status slot (§4.7): only the most important status card shows. */}
+      {status === "usage_limit" && usageLimitWait ? (
         <BotUsageLimitCard
           name={current.name}
           wait={usageLimitWait}
@@ -1839,7 +1996,7 @@ export function BotChatPane({ botId }: { botId: string }) {
           onRetryNow={() => void retryUsageLimitNow("bot", botId)}
         />
       ) : null}
-      {spending.status ? (
+      {(status === "spending_reached" || status === "spending_nearing") && spending.status ? (
         <SpendingLimitNotice
           status={spending.status}
           name={current.name}
@@ -1847,19 +2004,45 @@ export function BotChatPane({ botId }: { botId: string }) {
           onAllowMore={() => void spending.allowMore()}
         />
       ) : null}
-      {state?.kind === "paused" ? <BotPausedCard bot={current} /> : null}
+      {status === "paused" ? <BotPausedCard bot={current} /> : null}
       {savedResumes.error && <Text as="p" variant="small" role="alert" className="px-4 py-3">{savedResumes.error}</Text>}
-      {savedResumes.rows.length > 0 && <div className="space-y-2 px-4 py-3">
+      {/* A saved Resume belongs to the interrupted turn, so it shows with that card too. */}
+      {(status === "saved_resume" || (status === "interrupted" && savedResumes.rows.length > 0)) && <div className="space-y-2 px-4 py-3">
         <Text as="p" variant="small" color="secondary" role="status">A saved Resume request is awaiting confirmation. Retry keeps its original request and cost acknowledgement.</Text>
         {savedResumes.rows.map((attempt) => <Button key={attempt.requestId} size="small" disabled={resumeSending} onClick={() => void performResume(attempt, true)}>Retry saved Resume</Button>)}
       </div>}
+      {status === "plan" && plan ? (
+        <PlanCard
+          plan={plan}
+          botName={current.name}
+          avatar={current.avatar}
+          onRespond={async (decision) => {
+            const { result } = await botsApi.respondPlan({ botId: current.id, planId: plan.planId, decision });
+            if (result === "not_waiting") throw new Error("That plan was already answered or closed.");
+          }}
+        />
+      ) : null}
       <AlertDialog open={costConsent !== null} onOpenChange={(open) => { if (!open) setCostConsent(null); }} title={`Resume ${current.name} with an unconfirmed charge?`} description={BOT_UNKNOWN_COST_CONFIRMATION} confirmLabel="Resume" onConfirm={() => {
         const consent = costConsent; setCostConsent(null);
         if (consent?.botId === current.id && state?.kind === "interrupted" && consent.submissionId === state.submissionId) void answerInterrupted("resume", true, consent.expectedSubmissionId, consent.expectedCostReceiptId);
       }} />
+      {instructionsEdit ? (
+        <BotInstructionsDialog
+          key={instructionsEdit.changeId}
+          bot={current}
+          open
+          seed={instructionsEdit.seed}
+          onOpenChange={(open) => {
+            if (!open) setInstructionsEdit(null);
+          }}
+          onSaved={async () => {
+            await respondToSettings(instructionsEdit.changeId, "edited").catch(() => undefined);
+          }}
+        />
+      ) : null}
       {peerExchange?.botId === current.id && <BotPeerExchangeDialog key={`${peerExchange.botId}:${peerExchange.exchangeId}`} botId={current.id} exchangeId={peerExchange.exchangeId} onClose={() => setPeerExchange(null)} />}
       {/* A new message dismisses the interrupted turn, so the card leaves with the send and comes back if it fails. */}
-      {state?.kind === "interrupted" && hiddenInterruptedSubmission !== state.submissionId && !startingTurn ? (
+      {status === "interrupted" && state?.kind === "interrupted" ? (
         <BotInterruptedCard
           name={current.name}
           {...(state.blocked ? { blocked: state.blocked } : {})}
@@ -1869,7 +2052,7 @@ export function BotChatPane({ botId }: { botId: string }) {
           onReviewAccess={openAdvanced}
         />
       ) : null}
-      {state?.kind === "model_error" ? (
+      {status === "model_error" && state?.kind === "model_error" ? (
         <BotModelErrorCard
           name={current.name}
           message={state.message}

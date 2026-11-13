@@ -551,6 +551,23 @@ test("a routine proposal is one card that shows its newest decision", () => {
   );
 });
 
+test("a settings change from chat is one row that shows its newest answer; a malformed one never shows", () => {
+  const entries = projectBotTranscript([
+    { id: 1, kind: "aiden.bot-settings-change", data: { changeId: "c-1", mode: "applied", fields: ["name"], lines: ["Name: Chief → Planner"] } },
+    { id: 2, kind: "aiden.bot-settings-change", data: { changeId: "c-2", mode: "held", fields: ["instructions"], lines: ["Instructions"], instructions: "Be terse." } },
+    { id: 3, kind: "aiden.bot-settings-change", data: { changeId: "c-3", mode: "held", fields: ["access"], lines: [] } },
+    { id: 4, kind: "aiden.bot-settings-change-status", data: { changeId: "c-1", status: "restored" } },
+    { id: 5, kind: "aiden.bot-settings-change-status", data: { changeId: "c-2", status: "bogus" } },
+  ] as never);
+  assert.deepEqual(
+    entries.map((entry) => (entry.type === "settings_change" ? [entry.id, entry.change.mode, entry.status] : entry.type)),
+    [
+      ["1", "applied", "restored"],
+      ["2", "held", "pending"],
+    ],
+  );
+});
+
 test("a host-raised issue is one card that settles by its newest status", () => {
   const issue = (id: string, extra: Record<string, unknown> = {}) => ({
     id,

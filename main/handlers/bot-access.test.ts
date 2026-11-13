@@ -93,7 +93,7 @@ test("Bot creation acts as the desktop audience and refuses a renderer-named aud
   assert.deepEqual(calls, [
     {
       method: "createBot",
-      args: [{ audienceId: DESKTOP, bot: BOT_FIELDS, access: FULL_ACCESS }],
+      args: [{ audienceId: DESKTOP, bot: BOT_FIELDS, access: FULL_ACCESS, source: "new" }],
     },
   ]);
 
@@ -250,4 +250,17 @@ test("Telegram notices belong to the paired owner of a main-resolved profile", a
     );
   }
   assert.deepEqual(calls, [], "no unpaired or malformed principal reaches the notice store");
+});
+
+test("onboarding's first-Bot acceptance asks main to keep a review-first choice, for the desktop audience only", async () => {
+  const { invoke, invokeFrom, calls } = setup();
+  await invoke("bots:acceptFirstBotAccess", ACKNOWLEDGEMENT);
+  const call = calls.find((entry) => entry.method === "acknowledgeNotice");
+  assert.equal(call?.args[0], DESKTOP);
+  assert.deepEqual(call?.args[3], { keepReviewFirst: true });
+  await assert.rejects(invoke("bots:acceptFirstBotAccess", { ...ACKNOWLEDGEMENT, decision: "customize_first" }), /Invalid first Bot access/u);
+  await assert.rejects(
+    invokeFrom({ document: { destroyed: true } }, "bots:acceptFirstBotAccess", ACKNOWLEDGEMENT),
+    /changed before Bot access was confirmed/u,
+  );
 });

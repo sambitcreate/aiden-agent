@@ -64,7 +64,7 @@ async function mountBotChat(state: () => BrowserState, handlers: Record<string, 
     ...handlers,
   });
   const mounted = await mountWithBotRouter(null, { initialPath: "/bots/bot-1/chat" });
-  await screen.findByRole("button", { name: "Planner profile" });
+  await screen.findByRole("button", { name: "Planner settings" });
   return { calls, ...mounted };
 }
 
@@ -83,11 +83,11 @@ test("Browser joins the Bot panel once its browser has a tab; a saved Browser ta
   let tabs: BrowserTab[] = [];
   await mountBotChat(() => browserState(tabs));
   await waitFor(() => assert.equal(selectedTab(), "Activity"));
-  assert.deepEqual(tabNames(), ["Activity", "Files", "Memory", "Routines"]);
+  assert.deepEqual(tabNames(), ["Activity", "Files", "Memory", "Routines", "Advanced"]);
 
   tabs = [browserTab()];
   await act(async () => emitBotTestNotification("browser:event", { type: "state", state: browserState(tabs) }));
-  await waitFor(() => assert.deepEqual(tabNames(), ["Activity", "Files", "Memory", "Routines", "Browser"]));
+  await waitFor(() => assert.deepEqual(tabNames(), ["Activity", "Files", "Memory", "Routines", "Browser", "Advanced"]));
   assert.equal(selectedTab(), "Browser", "the saved choice comes back once there is something to show");
 
   // Closing the last tab keeps the Browser view where the person is.
@@ -152,7 +152,7 @@ test("a tab the person holds says so and names the Bot, and an empty Bot browser
   let state = browserState([browserTab({ heldForPerson: { reason: "sign_in" } })]);
   installBotTestIpc(browserIpc(() => state));
   const view = render(<BrowserPanel workspaceId={WORKSPACE} active variant="bot" agentName="Planner" />);
-  const notice = await screen.findByText(/This tab is yours: sign in, then choose I’m signed in on Planner’s card/u);
+  const notice = await screen.findByText(/This tab is yours: sign in, then choose I’m done on Planner’s card/u);
   assert.equal(notice.getAttribute("role"), "status");
   view.unmount();
 
@@ -205,12 +205,12 @@ test("Open sign-in on the Mac moves the person into the Bot's Browser tab, where
   });
   assert.equal(botPanel().getAttribute("data-state"), "closed");
   const card = await screen.findByRole("group", { name: "Planner needs you" });
-  const open = within(card).getByRole("button", { name: "Open sign-in" });
+  const open = within(card).getByRole("button", { name: "Take control to sign in" });
   open.focus();
   await act(async () => fireEvent.click(open));
 
   await waitFor(() => assert.equal(selectedTab(), "Browser"));
-  assert.ok(await within(botPanel()).findByText(/This tab is yours: sign in, then choose I’m signed in on Planner’s card/u));
+  assert.ok(await within(botPanel()).findByText(/This tab is yours: sign in, then choose I’m done on Planner’s card/u));
   // The person asked for it, so focus follows them there; a tab the Bot opens leaves focus alone.
   await waitFor(() => assert.equal(document.activeElement?.textContent, "Browser"));
   assert.ok(botPanel().contains(document.activeElement));

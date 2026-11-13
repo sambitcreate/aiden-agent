@@ -72,6 +72,18 @@ class AidenBotModelChoiceTest {
     }
 
     @Test
+    fun oneFieldNewBotSendsOnlyTheNameAndLookWithNoCatalog() {
+        val request = AidenBotCreateDraft(name = "  Scout  ", help = "ignored", oneField = true).request(null)!!
+        assertEquals("Scout", request.name)
+        assertEquals("", request.purpose)
+        assertNull(request.instructions)
+        assertNull(request.access)
+        assertNull(AidenBotCreateDraft(name = " ", oneField = true).request(null))
+        // The full form still needs its answers and keeps writing instructions.
+        assertTrue(AidenBotCreateDraft(name = "Scout").request(null)!!.instructions!!.isNotBlank())
+    }
+
+    @Test
     fun aChosenModelThatVanishedFromTheCatalogIsFlaggedAndBlocksCreate() {
         val chosen = AidenBotCreateDraft(name = "Seer", model = AidenModelRoute("provider_fixture", "vision_model_fixture"))
         assertFalse(chosen.modelIsGone(catalog))

@@ -8,8 +8,9 @@ A message shows who asked or replied. The message and final answer cross between
 
 Messaging starts on. You can change it on desktop, iOS and Android:
 
-- **Settings → Bots & Approvals → Bots can message each other** controls the profile. On a phone, use the same switch on the Bots page.
-- A Bot's **Advanced → Other Bots** has **Other Bots can message {name}** and **{name} can message other Bots**.
+- **Bot messaging** in **Settings → Approvals → Advanced** controls the profile. On a phone, use **Bots can message each other** on the Bots page; it is the same setting.
+- On the desktop, a Bot's **Advanced → Permissions** has one **Can message other Bots** switch. It is on only when the Bot may both send and receive; turning it on allows both, turning it off stops both. The stored settings are still the two directions, so a phone's **Other Bots can message {name}** and **{name} can message other Bots** switches keep working, and a Bot with only one direction on shows the desktop switch off until someone turns it on. Nothing changes until someone flips a switch.
+- **Approved Bot pairs** under the same group opens the Bot's [approved pairs](bot-peers.md).
 - Turning messaging off for all Bots disables the per-Bot controls. Older paired hosts without messaging support show no messaging controls.
 
 A switch prevents new sends. An already accepted exchange keeps its original deadline. Deleting a Bot removes its private message work and prevents it from being recreated by recovery.

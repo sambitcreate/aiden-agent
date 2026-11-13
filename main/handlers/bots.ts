@@ -72,6 +72,7 @@ import {
   parseBotSessionAction,
   parseBotUpdate,
   parseBotWithdraw,
+  parseBotSettingsChangeResponse,
 } from "./bot-params.js";
 
 async function desktopAvatarAdapter() {
@@ -171,13 +172,27 @@ export function registerBotHandlers(): void {
     return stopWithIntents(botTurnIntents, botId, async () => (await botSessionRuntime()).stop(botId));
   });
   ipcMain.handle("bots:createFromPreset", async (_event, input: unknown) => {
-    const { presetId, access } = parseBotCreateFromPreset(input);
+    const { presetId, version, access } = parseBotCreateFromPreset(input);
     // The chat opens as soon as the Bot exists; its self-intro arrives in that chat.
     const starter = botStarter();
-    const { bot, created } = await starter.startFromPreset(presetId, { ...(access === undefined ? {} : { access }), introduce: false });
+    const { bot, created } = await starter.startFromPreset(presetId, {
+      ...(access === undefined ? {} : { access }),
+      ...(version === undefined ? {} : { version }),
+      introduce: false,
+    });
     if (created) void starter.introduce(bot.id);
     return { bot, created };
   });
+  // Onboarding's silent first Bot (plan §4.1): made once, a repeat returns it.
+  // It introduces itself only after the person presses Start using Aiden,
+  // which accepts its Full access (`bots:introduce`).
+  ipcMain.handle("bots:createFirst", async (_event, input: unknown) => {
+    if (input !== undefined) throw new Error("Invalid first Bot request.");
+    const { bot, created } = await botStarter().startFirst({ introduce: false });
+    return { bot, created };
+  });
+  // Templates: which ones already made a Bot, so their detail offers Open.
+  ipcMain.handle("bots:presetBots", async () => botStarter().presetBots());
   ipcMain.handle("bots:introduce", async (_event, id: unknown) => {
     // The create flow's one-time self-intro; deduped per Bot by the runtime.
     return botStarter().introduce(parseBotId(id));
@@ -304,15 +319,25 @@ export function registerBotHandlers(): void {
     const { botSkillProposals } = await import("../services/bot-skills/skill-proposals-main.js");
     return botSkillProposals.respond({ botId: parseBotId(fields.botId), proposalId: fields.proposalId, decision: fields.decision });
   });
+  // Settings from chat (§4.6): Undo a receipt, or Apply / Edit / Dismiss a held change.
+  ipcMain.handle("bots:settingsChanges:respond", async (_event, input: unknown) => {
+    const { botId, changeId, decision } = parseBotSettingsChangeResponse(input);
+    const { botSettingsChanges } = await import("../services/bot-settings-changes/service-main.js");
+    return botSettingsChanges.respond(botId, changeId, decision);
+  });
   // Profile → What I've learned, and the chat's lesson cards and Undo lines.
   const learning = () => import("../services/bot-learning/learning-main.js");
   registerBotLearningHandlers<Electron.IpcMainInvokeEvent>({
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     overview: async (botId) => (await learning()).botLearningOverview(botId),
     undo: async (botId, changeId) => (await learning()).undoBotLearning(botId, changeId),
-    undoLesson: async (botId, lessonId) => (await learning()).removeLesson(botId, lessonId),
+    undoLesson: async (botId, lessonId) => {
+      await (await learning()).removeLesson(botId, lessonId);
+    },
     respondLesson: async (botId, lessonId, decision) => (await learning()).respondToLesson(botId, lessonId, decision),
-    removeLesson: async (botId, lessonId) => (await learning()).removeLesson(botId, lessonId),
+    removeLesson: async (botId, lessonId) => {
+      await (await learning()).removeLesson(botId, lessonId);
+    },
   });
   // Profile → Health: the newest check, and Check now.
   registerBotHealthHandlers<Electron.IpcMainInvokeEvent>({

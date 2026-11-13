@@ -77,8 +77,22 @@ fun aidenBotActivitySupported(server: AidenServer?, cachedSupport: Boolean): Boo
  * Advanced offers Chat activity on a Mac that announces `bot-activity-v1` to a phone that
  * holds `bot:activity`, once a Bot's detail (cached or fresh) is on screen.
  */
-fun aidenBotShowsChatActivity(server: AidenServer?, hasBaseline: Boolean, cachedSupport: Boolean = false): Boolean =
-    hasBaseline && aidenBotActivitySupported(server, cachedSupport)
+fun aidenBotShowsChatActivity(server: AidenServer?, hasBaseline: Boolean, cachedSupport: Boolean = false, offersBotUx: Boolean = false): Boolean =
+    hasBaseline && !offersBotUx && aidenBotActivitySupported(server, cachedSupport)
+
+/**
+ * The status line's wording on this phone. On a Mac with the revision 61 Bot UX, this phone's
+ * Show tool activity switch decides it: on follows the tools, off (the default) reads Thinking.
+ * On older Macs the Bot's own stored wording stands.
+ */
+fun aidenBotStatusWording(
+    botWording: AidenBotChatActivityWording?,
+    hostOffersBotUx: Boolean,
+    showToolActivity: Boolean
+): AidenBotChatActivityWording {
+    if (!hostOffersBotUx) return botWording ?: AidenBotChatActivityWording.FOLLOWS
+    return if (showToolActivity) AidenBotChatActivityWording.FOLLOWS else AidenBotChatActivityWording.THINKING
+}
 
 // --- The previews' script: what each level shows on the Mac ---
 

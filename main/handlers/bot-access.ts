@@ -71,6 +71,15 @@ export function registerBotAccessHandlers<Event>(deps: BotAccessHandlerDependenc
       assertCurrent,
     );
   });
+  // Onboarding's Start using Aiden: accepts Full access for the first Bot
+  // unless the person chose to review access first, checked in the same step
+  // as the write so a review-first choice is never overwritten.
+  deps.handle("bots:acceptFirstBotAccess", async (event, input: unknown) => {
+    const assertCurrent = ownerCheck(event);
+    const acknowledgement = parseBotNoticeAcknowledgement(input);
+    if (acknowledgement.decision !== "continue_full") throw new Error("Invalid first Bot access acceptance.");
+    return service.acknowledgeNotice(desktopAudienceId, acknowledgement, assertCurrent, { keepReviewFirst: true });
+  });
   deps.handle("bots:getTelegramAccessNotice", async (_event, profile: unknown) => {
     const principal = await pairedTelegramAudience(profile);
     return service.noticeStatus(principal.audienceId);
@@ -101,6 +110,8 @@ export function registerBotAccessHandlers<Event>(deps: BotAccessHandlerDependenc
         audienceId: desktopAudienceId,
         bot: parsed.bot,
         access: parsed.access,
+        // The desktop's one-field New bot.
+        source: "new",
       });
     } catch (error) {
       deps.warn("Bot creation failed.", error);

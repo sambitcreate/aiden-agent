@@ -1,10 +1,11 @@
-// A skill the Bot proposed, or one found in its folder. Nothing loads until the
-// person presses Add skill; once answered the card settles to one quiet line.
+// A skill the Bot proposed, or one found in its folder, as a suggestion card.
+// Nothing loads until the person presses Add; once answered the card settles
+// to a receipt line.
 
 import * as React from "react";
 import { Check, Sparkles } from "lucide-react";
-import { Button } from "../ui";
-import { BotNoticeCard } from "./bot-notice-card";
+import { ReceiptLine } from "./receipt-line";
+import { SuggestionCard } from "./suggestion-card";
 import type { BotSkillProposalEntryData, BotSkillProposalStatus } from "../../shared/bot-skill-proposals";
 
 function DiffLines({ text }: { text: string }) {
@@ -51,32 +52,26 @@ export function SkillProposalCard({
     }
   };
   if (settled) {
-    return (
-      <BotNoticeCard label={label} icon={settled === "added" ? <Check /> : <Sparkles />} iconTone={settled === "added" ? "green" : "neutral"} title={proposal.name}>
-        <p>{settled === "added" ? "Added ✓" : "Not added"}</p>
-      </BotNoticeCard>
+    return settled === "added" ? (
+      <ReceiptLine icon={<Check className="text-status-green" />} text={`Added skill: ${proposal.name}`} />
+    ) : (
+      <ReceiptLine icon={<Sparkles />} text={`Not added: ${proposal.name}`} />
     );
   }
   return (
-    <BotNoticeCard
+    <SuggestionCard
       label={label}
       icon={<Sparkles />}
       title={proposal.origin === "folder" ? "Use this skill?" : proposal.update ? "Update a skill?" : "Add a skill?"}
-      actions={
-        <>
-          <Button variant="transparent" size="small" disabled={busy !== null} onClick={() => void respond("dismiss")}>
-            Not now
-          </Button>
-          <Button variant="accent" size="small" disabled={busy !== null} onClick={() => void respond("add")}>
-            {busy === "add" ? "Adding…" : proposal.origin === "folder" ? "Use skill" : "Add skill"}
-          </Button>
-        </>
-      }
+      busy={busy !== null}
+      adding={busy === "add"}
+      onAdd={() => void respond("add")}
+      onNotNow={() => void respond("dismiss")}
     >
       <p className="text-primary">{`${proposal.name} · ${proposal.description}`}</p>
       {proposal.reason ? <p className="mt-0.5">{proposal.reason}</p> : null}
       {proposal.origin === "folder" ? <p className="mt-0.5">Found in this Bot’s folder. It won’t be used until you say so.</p> : null}
       <DiffLines text={proposal.preview} />
-    </BotNoticeCard>
+    </SuggestionCard>
   );
 }

@@ -14,6 +14,7 @@ import type { BotDefinition, BotUpdateInput } from "../../shared/bots";
 import { botWakeUpWhen } from "../../shared/bot-wake-ups";
 import { BotChatRoute } from "../bot-chat-route";
 import { BotsView } from "../bots-view";
+import { BOT_PANEL_OPEN_KEY, BOT_PANEL_TAB_KEY } from "./bot-panel-context";
 import { mountWithBotRouter } from "./test-providers";
 import { botFixture, catalogFixture } from "./test-fixtures";
 
@@ -126,7 +127,7 @@ test("a wake-up that already fired or was cancelled elsewhere has no Cancel in t
   assert.equal(screen.queryByRole("button", { name: /Cancel wake-up/u }), null);
 });
 
-test("the profile lists a wake-up with its note and when, and Cancel removes it without opening the editor", async () => {
+test("the Routines tab lists a wake-up with its note and when, and Cancel removes it without opening the editor", async () => {
   const daily: BotRoutine = {
     ...wakeUpRoutine({
       id: "r-daily",
@@ -140,9 +141,10 @@ test("the profile lists a wake-up with its note and when, and Cancel removes it 
   const calls = installBotTestIpc({
     "bots:list": () => [botFixture()],
     "bots:get": () => botFixture(),
+    "bots:live:subscribe": () => snapshot(),
     ...routinesIpc([daily, wakeUpRoutine()]),
   });
-  await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot-1" });
+  await mountRoutinesTab();
 
   const list = await screen.findByRole("list", { name: "Routines" });
   assert.ok(within(list).getByText("Ask whether the flight got rebooked."));
@@ -172,16 +174,17 @@ test("the profile lists a wake-up with its note and when, and Cancel removes it 
   );
 });
 
-test("a wake-up turned off before it fired can still be cancelled from the profile, but not one mid-fire", async () => {
+test("a wake-up turned off before it fired can still be cancelled from the Routines tab, but not one mid-fire", async () => {
   const calls = installBotTestIpc({
     "bots:list": () => [botFixture()],
     "bots:get": () => botFixture(),
+    "bots:live:subscribe": () => snapshot(),
     ...routinesIpc([
       wakeUpRoutine({ id: "wake-off", prompt: "Turned off early.", enabled: false, nextRunAt: undefined }),
       wakeUpRoutine({ id: "wake-firing", prompt: "Firing now.", enabled: false, nextRunAt: undefined, pendingFireCount: 1 }),
     ]),
   });
-  await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot-1" });
+  await mountRoutinesTab();
 
   const list = await screen.findByRole("list", { name: "Routines" });
   assert.ok(within(list).getByText("Firing now."));
@@ -196,7 +199,14 @@ test("a wake-up turned off before it fired can still be cancelled from the profi
   );
 });
 
-test("Advanced has a switch, on by default, that turns the Bot's own wake-ups off at once", async () => {
+/** The Bot's chat with its panel open on Routines. */
+async function mountRoutinesTab() {
+  localStorage.setItem(BOT_PANEL_OPEN_KEY, "true");
+  localStorage.setItem(BOT_PANEL_TAB_KEY, "routines");
+  await mountWithBotRouter(null, { initialPath: "/bots/bot-1/chat" });
+}
+
+test("the Advanced tab's daily check-ins switch, on by default, turns the Bot's own wake-ups off at once", async () => {
   let bot: BotDefinition = botFixture();
   const updates: BotUpdateInput[] = [];
   installBotTestIpc({
@@ -223,15 +233,10 @@ test("Advanced has a switch, on by default, that turns the Bot's own wake-ups of
     "bots:getTelegramBinding": () => null,
     "bots:routines:list": () => [],
   });
-  await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot-1" });
-  fireEvent.keyDown(
-    await screen.findByRole("button", { name: "More for Planner" }),
-    { key: "Enter" },
-  );
-  fireEvent.click(await screen.findByRole("menuitem", { name: "Advanced" }));
+  await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot-1?page=advanced" });
 
   const toggle = await screen.findByRole("switch", {
-    name: "Let Planner set its own wake-ups",
+    name: "Daily check-ins on unfinished work",
   });
   assert.equal(toggle.getAttribute("aria-checked"), "true");
   fireEvent.click(toggle);
@@ -241,15 +246,10 @@ test("Advanced has a switch, on by default, that turns the Bot's own wake-ups of
   await waitFor(() =>
     assert.equal(
       screen
-        .getByRole("switch", { name: "Let Planner set its own wake-ups" })
+        .getByRole("switch", { name: "Daily check-ins on unfinished work" })
         .getAttribute("aria-checked"),
       "false",
     ),
   );
-  assert.equal(
-    (screen.getByRole("button", { name: "Save" }) as HTMLButtonElement)
-      .disabled,
-    true,
-    "it saves on its own",
-  );
+  assert.equal(screen.queryByRole("region", { name: "Unsaved changes" }), null, "it saves on its own, with no Save to press");
 });

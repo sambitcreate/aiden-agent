@@ -198,6 +198,43 @@ test("Open tabs lists every tab and selects the one chosen", async () => {
   assert.equal(selected("Pinned"), "true");
 });
 
+test("the strip scrolls a selected tab past either edge back into view, clear of the faded edges", () => {
+  // jsdom has no layout: the strip shows 200px of 340px of tabs, each tab 100px wide and 120px after the last.
+  const original = HTMLElement.prototype.getBoundingClientRect;
+  const widths = ["clientWidth", "scrollWidth"] as const;
+  const saved = widths.map((key) => Object.getOwnPropertyDescriptor(HTMLElement.prototype, key));
+  HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+    const list = this.closest('[role="tablist"]') as HTMLElement | null;
+    if (this.getAttribute("role") === "tablist") return DOMRect.fromRect({ x: 0, width: 200, height: 32 });
+    if (list && this.parentElement === list) {
+      const index = Array.from(list.children).indexOf(this);
+      return DOMRect.fromRect({ x: index * 120 - list.scrollLeft, width: 100, height: 32 });
+    }
+    return original.call(this);
+  };
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get() { return this.getAttribute("role") === "tablist" ? 200 : 0; } });
+  Object.defineProperty(HTMLElement.prototype, "scrollWidth", { configurable: true, get() { return this.getAttribute("role") === "tablist" ? 340 : 0; } });
+  try {
+    renderWithCommands(<StripHarness events={[]} />);
+    const list = screen.getByRole("tablist", { name: "Test views" });
+    assert.equal(list.scrollLeft, 0, "the first tab already shows");
+    assert.deepEqual([list.dataset.fadeStart, list.dataset.fadeEnd], [undefined, "true"], "only the edge with more tabs past it fades");
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Notes" }), { key: "End" });
+    // Pinned spans 240–340: it ends 16px inside the strip's right edge, clear of the fade.
+    assert.equal(list.scrollLeft, 156);
+    assert.equal(list.dataset.fadeStart, "true");
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Pinned" }), { key: "Home" });
+    assert.equal(list.scrollLeft, 0);
+    assert.equal(list.dataset.fadeStart, undefined);
+  } finally {
+    HTMLElement.prototype.getBoundingClientRect = original;
+    widths.forEach((key, index) => {
+      if (saved[index]) Object.defineProperty(HTMLElement.prototype, key, saved[index]!);
+      else delete (HTMLElement.prototype as unknown as Record<string, unknown>)[key];
+    });
+  }
+});
+
 test("Close panel names the panel toggle shortcut", async () => {
   renderWithCommands(<StripHarness events={[]} />);
   const close = screen.getByRole("button", { name: "Close test panel" });

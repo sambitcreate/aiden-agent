@@ -19,7 +19,7 @@ async function target(authority: RemoteAppControlAuthority, chatId: string, pane
   if (!authority.current() || (await configStore.getSettings()).remoteAppControlsEnabled !== true)
     throw new AidenRemoteServiceError(
       "capability_denied",
-      "Allow paired-device chat controls in Settings → Bots & Approvals → Controls in chat on the desktop first.",
+      "Allow paired-device chat controls in Settings → Approvals → Controls in chat on the desktop first.",
       403,
     );
   const chat = await chatStore.get(chatId);

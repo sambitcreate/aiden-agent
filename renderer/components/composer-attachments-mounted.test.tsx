@@ -38,7 +38,8 @@ async function loadComposer() {
     "../lib/use-voice-recorder":
       "export const useVoiceRecorder=()=>({liveTranscript:{committed:\"\",tentative:\"\"}});",
     "../lib/queries":
-      "export const useSettings=()=>({ data: globalThis.__composerSettings }); export const useDiscoveredSkills=(scope)=>{ (globalThis.__composerSkillScopes ??= []).push(scope ?? null); return {}; };",
+      "export const useSettings=()=>({ data: globalThis.__composerSettings }); export const useProviders=()=>({ data: [] }); export const useDiscoveredSkills=(scope)=>{ (globalThis.__composerSkillScopes ??= []).push(scope ?? null); return {}; };",
+    "./workspace-settings-dialog": "export const openWorkspaceSettings=()=>{};",
     "../lib/command-system":
       "export const useCommandSystem=()=>({canExecute:()=>false,execute:()=>false,binding:()=>null}); export const useCommandHandler=()=>{};",
     "../lib/ipc":
@@ -395,6 +396,7 @@ test("mounted Composer for a remote chat offers no local attachment or workspace
     surfaces: React.ComponentProps<typeof Composer>["surfaces"],
     onSend: React.ComponentProps<typeof Composer>["onSend"],
     chatId = "host-b/chat-1",
+    workspace?: React.ComponentProps<typeof Composer>["workspace"],
   ) =>
     React.act(async () =>
       root.render(
@@ -408,23 +410,28 @@ test("mounted Composer for a remote chat offers no local attachment or workspace
           isGenerating={false}
           onStop={() => {}}
           surfaces={surfaces}
+          workspace={workspace}
           onSend={onSend}
         />,
       ),
     );
+  // A workspace with its own approval mode, so this Mac's composer shows the approvals chip.
+  const customized = { id: "ws", name: "Site", folderPath: "/tmp/site", permission: "ask", approvalMode: "ask" } as React.ComponentProps<
+    typeof Composer
+  >["workspace"];
   try {
-    // This Mac's own chats keep the attachment button and workspace access control.
-    await render(LOCAL_COMPOSER_SURFACES, async () => {});
+    // This Mac's own chats keep the attachment button and the approvals chip.
+    await render(LOCAL_COMPOSER_SURFACES, async () => {}, undefined, customized);
     assert.ok(labels().includes("Attach files or images"));
-    assert.ok(labels().some((label) => label?.startsWith("Workspace access")));
+    assert.ok(labels().some((label) => label?.startsWith("Approvals:")));
 
     const sent: Array<{ text: string; attachments: number }> = [];
     const remoteCapabilities = new Set<HostChatCapability>(["send", "cancel", "respondApproval"]);
     await render(composerSurfacesFor(remoteCapabilities), async (value, attachments) => {
       sent.push({ text: value, attachments: attachments.length });
-    });
+    }, undefined, customized);
     assert.equal(labels().includes("Attach files or images"), false);
-    assert.equal(labels().some((label) => label?.startsWith("Workspace access")), false);
+    assert.equal(labels().some((label) => label?.startsWith("Approvals:")), false);
     // A Finder drop is neither accepted nor read from this Mac.
     const dropZone = Array.from(mounted.container.getElementsByTagName("div")).find(
       (element) => handlers(element).onDrop,
@@ -463,7 +470,7 @@ test("mounted Composer for a remote chat offers no local attachment or workspace
     assert.deepEqual(sent, [{ text: "Ship it", attachments: 0 }]);
     assert.deepEqual(calls, { picker: 0, drop: 0, clipboard: 0 });
 
-    // A host that stages uploads gets the attach button, still without this Mac's workspace access control.
+    // A host that stages uploads gets the attach button, still without this Mac's approvals chip.
     picked = [text("notes")];
     const attaching = new Set<HostChatCapability>(["send", "attach", "createChat"]);
     const uploaded: Attachment[][] = [];
@@ -473,9 +480,10 @@ test("mounted Composer for a remote chat offers no local attachment or workspace
         uploaded.push(attachments);
       },
       "host-b/draft:new-chat",
+      customized,
     );
     assert.ok(labels().includes("Attach files or images"));
-    assert.equal(labels().some((label) => label?.startsWith("Workspace access")), false);
+    assert.equal(labels().some((label) => label?.startsWith("Approvals:")), false);
     await React.act(async () => {
       await handlers(button(mounted.container, "Attach files or images")).onClick();
     });

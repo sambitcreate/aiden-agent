@@ -1,5 +1,7 @@
 # Pause a Bot (plan §7, package P2) — 2026-10-20
 
+> 2026-11-12 (bot UX Phase 5): the Profile is gone; the Bot ••• menu (chat header, sidebar rows) is only Pin, Pause/Resume and Delete. See `.memory/bot-creation-and-settings.md`.
+
 Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §7. Code names say *pause/unpause*; the button reads **Resume** because `resume` already means "continue an interrupted turn".
 
 ## Layout

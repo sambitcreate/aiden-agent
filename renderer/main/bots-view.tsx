@@ -1,26 +1,19 @@
 import * as React from "react";
 import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
-import { Plus, RotateCcw } from "lucide-react";
+import { LayoutTemplate, Plus, RotateCcw } from "lucide-react";
 import { Button, Callout, EmptyState, ScrollArea, Text } from "../components/ui";
-import { botAllowedLocation, botChatPath, botListLocation } from "../lib/bot-routes";
+import { botChatPath, botListLocation } from "../lib/bot-routes";
+import { settingsLocation } from "../lib/settings-section";
 import { lastViewedBotId } from "../lib/bot-sidebar-preferences";
 import { useBot } from "../lib/queries";
 import type { BotDefinition } from "../shared/bots";
-import { BotAdvanced } from "./bots/bot-advanced";
-import { BotChatActivityPage } from "./bots/bot-chat-activity-page";
-import { BotInterruptionsPage } from "./bots/bot-interruptions-page";
 import { BotLearningPage } from "./bots/bot-learning-page";
-import { BotCreateFlow } from "./bots/bot-create-flow";
-import { BotDeleteDialog } from "./bots/bot-delete-dialog";
-import { BotInstructionsEditor } from "./bots/bot-instructions-editor";
+import { BotCreateMenu, useBotCreateDialogs } from "./bots/bot-create-menu";
 import { useBotRows } from "./bots/bot-sidebar-rows";
-import { BotMemoryPage } from "./bots/bot-memory-page";
 import { BotOpenWorkPage } from "./bots/bot-open-work-page";
-import { BotAllowedPage } from "./bots/bot-allowed-page";
 import { BotPageShell, BotPageSkeleton } from "./bots/bot-page-shell";
-import { parseBotPageSearch, type BotSubpage } from "./bots/bot-page-search";
-import { BotProfile } from "./bots/bot-profile";
-import { BotStarterCarousel } from "./bots/bot-starter-carousel";
+import { botPageTarget, parseBotPageSearch, type BotPageTarget } from "./bots/bot-page-search";
+import { useBotPanelActions } from "./bots/bot-panel-context";
 import { useBotSidebarPreferences } from "./bots/use-bot-sidebar-preferences";
 
 /** How long /bots waits for chat-activity summaries before ordering Bots by their own updatedAt. */
@@ -31,15 +24,16 @@ const CACHED_LIST_TRUST_MS = 5 * 60 * 1000;
 /**
  * `/bots` with no Bot selected (spec §9): the Bot list lives in the sidebar, so
  * this opens the chat of the Bot last viewed on this Mac, else the one with the
- * newest activity. With no Bots it is "Meet your first Bot".
+ * newest activity. With no Bots it points at New bot and Templates.
  */
 function BotsIndex() {
   const navigate = useNavigate();
   const { bots, rows, summariesSettled } = useBotRows();
   const { preferences } = useBotSidebarPreferences();
-  const [creating, setCreating] = React.useState(false);
   const [summariesGraceOver, setSummariesGraceOver] = React.useState(false);
   const openChat = (bot: BotDefinition) => void navigate(botChatPath(bot.id));
+  const create = useBotCreateDialogs(openChat);
+  const creating = create.creating || create.templates;
   // A settled, successful load names a Bot to open. A list read recently enough
   // (this launch's own read, refreshing in the background) may name the Bot the
   // person last looked at without waiting: that Bot's chat shows at once from
@@ -79,11 +73,7 @@ function BotsIndex() {
     <ScrollArea
       scrollRestorationId="bots-home"
       title="Bots"
-      actions={
-        <Button variant="toolbar" size="medium" onClick={() => setCreating(true)}>
-          <Plus /> New Bot
-        </Button>
-      }
+      actions={<BotCreateMenu variant="toolbar" onNewBot={create.newBot} onTemplates={create.openTemplates} />}
     >
       <main className="mx-auto w-full max-w-3xl px-5 pb-10 pt-4">
         {bots.isError ? (
@@ -103,36 +93,61 @@ function BotsIndex() {
         ) : bots.isLoading ? (
           <BotPageSkeleton label="Loading Bots" groups={[3]} />
         ) : (
-          <BotStarterCarousel onCreateOwn={() => setCreating(true)} onOpenChat={openChat} />
+          <EmptyState
+            title="No Bots yet"
+            description="A Bot is a helper with its own chat, memory and routines. Name one and tell it what you need, or start from a template."
+            action={
+              <div className="flex flex-wrap justify-center gap-2">
+                <Button variant="accent" onClick={create.newBot}>
+                  <Plus /> New bot
+                </Button>
+                <Button variant="filled" onClick={create.openTemplates}>
+                  <LayoutTemplate /> Templates
+                </Button>
+              </div>
+            }
+          />
         )}
       </main>
-      <BotCreateFlow open={creating} onOpenChange={setCreating} onCreated={(bot) => openChat(bot)} />
+      {create.dialogs}
     </ScrollArea>
   );
 }
 
 function BotPage({ botId }: { botId: string }) {
   const navigate = useNavigate();
+  const panel = useBotPanelActions();
   const bot = useBot(botId);
-  // `?page=advanced` opens a sub-page directly (the chat's "Choose a model");
-  // moving between Profile and its sub-pages after that is local.
-  const initialPage = parseBotPageSearch(useSearch({ strict: false }) as Record<string, unknown>).page ?? null;
-  const [page, setPage] = React.useState<BotSubpage | null>(initialPage);
-  const [deleting, setDeleting] = React.useState(false);
-  React.useEffect(() => setPage(initialPage), [botId, initialPage]);
-  const openPage = setPage;
+  const target = botPageTarget(parseBotPageSearch(useSearch({ strict: false }) as Record<string, unknown>).page);
+  const targetKey = JSON.stringify(target);
+  // The Profile and Advanced pages are gone: their links open the Bot's chat
+  // with its settings in the side panel.
+  React.useEffect(() => {
+    const next = JSON.parse(targetKey) as BotPageTarget;
+    if (next.kind === "settings") {
+      void navigate({ ...settingsLocation(next.section), replace: true });
+    } else if (next.kind === "panel") {
+      panel.show(next.tab, next.section ? { botId, section: next.section } : { botId });
+      void navigate({ ...botChatPath(botId), replace: true });
+    }
+  }, [botId, navigate, panel, targetKey]);
   const allBots = () => void navigate(botListLocation());
+  // Back from Open work or What I've learned: the chat, with the settings they were opened from.
+  const backToSettings = () => {
+    panel.show("advanced", { botId });
+    void navigate(botChatPath(botId));
+  };
 
-  if (bot.isLoading) {
+  if (target.kind !== "page" || bot.isLoading) {
     return (
-      <BotPageShell scrollId={`bot-profile:${botId}`} title="" backLabel="All Bots" onBack={allBots}>
+      <BotPageShell scrollId={`bot-page:${botId}`} title="" backLabel="All Bots" onBack={allBots}>
         <BotPageSkeleton label="Loading Bot" groups={[3, 2]} />
       </BotPageShell>
     );
   }
   if (!bot.data) {
     return (
-      <BotPageShell scrollId={`bot-profile:${botId}`} title="Bot" backLabel="All Bots" onBack={allBots}>
+      <BotPageShell scrollId={`bot-page:${botId}`} title="Bot" backLabel="All Bots" onBack={allBots}>
         <EmptyState
           title="Bot not found"
           description="This Bot may have been deleted."
@@ -146,54 +161,14 @@ function BotPage({ botId }: { botId: string }) {
     );
   }
   const current = bot.data;
-  const back = () => {
-    if (initialPage === "allowed") void navigate({ to: "/bots/$botId", params: { botId }, search: {} });
-    openPage(null);
-  };
-  return (
-    <>
-      {page === "instructions" ? (
-        <BotInstructionsEditor key={`${current.id}:instructions`} bot={current} onClose={back} />
-      ) : page === "advanced" ? (
-        <BotAdvanced
-          key={`${current.id}:advanced`}
-          bot={current}
-          onClose={back}
-          onOpenChatActivity={() => openPage("chat-activity")}
-          onOpenInterruptions={() => openPage("interruptions")}
-        />
-      ) : page === "interruptions" ? (
-        <BotInterruptionsPage key={`${current.id}:interruptions`} bot={current} onClose={() => openPage("advanced")} />
-      ) : page === "chat-activity" ? (
-        <BotChatActivityPage key={`${current.id}:chat-activity`} bot={current} onClose={() => openPage("advanced")} />
-      ) : page === "open-work" ? (
-        <BotOpenWorkPage key={current.id + ":open-work"} bot={current} onClose={back} />
-      ) : page === "learning" ? (
-        <BotLearningPage key={`${current.id}:learning`} bot={current} onClose={back} />
-      ) : page === "memory" ? (
-        <BotMemoryPage key={`${current.id}:memory`} bot={current} onClose={back} />
-      ) : page === "allowed" ? (
-        <BotAllowedPage key={`${current.id}:allowed`} bot={current} onClose={back} />
-      ) : (
-        <BotProfile
-          bot={current}
-          onBack={() => void navigate(botChatPath(current.id))}
-          onOpenChat={() => void navigate(botChatPath(current.id))}
-          onOpenInstructions={() => openPage("instructions")}
-          onOpenAdvanced={() => openPage("advanced")}
-          onOpenMemory={() => openPage("memory")}
-          onOpenLearning={() => openPage("learning")}
-          onOpenWork={() => openPage("open-work")}
-          onOpenAllowed={() => void navigate(botAllowedLocation(current.id))}
-          onDelete={() => setDeleting(true)}
-        />
-      )}
-      <BotDeleteDialog bot={current} open={deleting} onOpenChange={setDeleting} />
-    </>
+  return target.page === "open-work" ? (
+    <BotOpenWorkPage key={`${current.id}:open-work`} bot={current} onClose={backToSettings} />
+  ) : (
+    <BotLearningPage key={`${current.id}:learning`} bot={current} onClose={backToSettings} />
   );
 }
 
-/** Routes `/bots` to the most recent Bot's chat (or the starter Bots), `/bots/$botId` to a Bot's Profile and `/bots/$botId/chat` to its chat. */
+/** Routes `/bots` to the most recent Bot's chat (or New bot and Templates), and `/bots/$botId` to a Bot's Open work or What I've learned, or (old links) its chat with its settings beside it. */
 export function BotsView() {
   const params = useParams({ strict: false }) as { botId?: string };
   if (params.botId) return <BotPage botId={params.botId} />;

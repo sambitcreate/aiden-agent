@@ -15,6 +15,7 @@
 // conversation entry (`aiden.routine-proposal`, `aiden.routine-proposal-status`)
 // that the live projection folds into one card.
 
+import { BOT_SUGGESTION_LIMIT_MESSAGE as SUGGESTION_LIMIT, type BotSuggestionBudget } from "./bot-runtime/bot-suggestion-budget.js";
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -79,7 +80,7 @@ export type BotRoutineProposalRecord = BotRoutineProposalEntryData & {
 
 export type BotRoutineProposeResult =
   | { ok: true; proposal: BotRoutineProposalEntryData }
-  | { ok: false; code: "too_many_pending" | "invalid" | "cooling_off" | "declined_before"; error: string; until?: number };
+  | { ok: false; code: "too_many_pending" | "invalid" | "cooling_off" | "declined_before" | "suggestion_limit"; error: string; until?: number };
 
 export type BotRoutineReviseResult =
   | { ok: true; proposal: BotRoutineProposalEntryData; replaced: string }
@@ -161,6 +162,16 @@ export interface BotRoutineProposalServiceDependencies {
   onSettled?(botId: string, proposalId: string, status: Exclude<BotRoutineProposalStatus, "pending">): void;
   /** A waiting card was revised into a new one (`replacement`); it was not answered. */
   onRevised?(botId: string, replacedId: string, replacement: BotRoutineProposalEntryData): void;
+  /**
+   * The shared cap on a Bot's own suggestions. One the person asked for is
+   * never held back but still counts; a host follow-up skips it.
+   */
+  suggestionBudget?: BotSuggestionBudget;
+  /**
+   * Whether the calling turn was started by the owner's own message. The
+   * Bot's `requested` claim counts only then; without this port it never does.
+   */
+  ownerAsked?(botId: string): boolean;
   now?(): number;
   newId?(): string;
 }
@@ -270,6 +281,9 @@ function settled(record: BotRoutineProposalRecord): BotRoutineProposalRespondRes
 }
 
 export function createBotRoutineProposalService(dependencies: BotRoutineProposalServiceDependencies) {
+  /** The Bot says the person asked for it, and the person's own message started this turn. */
+  const askedByOwner = (botId: string, input: { requested?: boolean }): boolean =>
+    input.requested === true && dependencies.ownerAsked?.(botId) === true;
   const now = dependencies.now ?? Date.now;
   const newId = dependencies.newId ?? randomUUID;
   const serial = createKeyedSerial();
@@ -565,11 +579,13 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
           return { ok: false, code: "invalid", error: error instanceof Error ? error.message : "Invalid routine." };
         }
         const records = await reconcile(botId, await load(botId), append, entries);
+        const requested = askedByOwner(botId, input);
         // Back-off is for the Bot's own ideas. A follow-up the host queued for a
-        // promise always gets its card. The model's own "the person asked"
-        // claim only gets past a same-name decline, never cooling off.
+        // promise always gets its card. "The person asked" counts only in a
+        // turn the owner's own message started, and only gets past a
+        // same-name decline, never cooling off.
         const found = input.hostFollowUp ? undefined : proposalBackoff(records, content.name, now());
-        const backoff = found?.code === "declined_before" && input.requested ? undefined : found;
+        const backoff = found?.code === "declined_before" && requested ? undefined : found;
         if (backoff?.code === "cooling_off") {
           return {
             ok: false,
@@ -589,9 +605,16 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
           };
         }
         const record = recordOf(content, reason, now());
-        await save(botId, [...records, record]);
         const proposal = entryData(record);
-        await append(BOT_ROUTINE_PROPOSAL_ENTRY_KIND, { ...proposal });
+        const show = async () => {
+          await save(botId, [...records, record]);
+          await append(BOT_ROUTINE_PROPOSAL_ENTRY_KIND, { ...proposal });
+          return true;
+        };
+        const counted = dependencies.suggestionBudget && !input.hostFollowUp;
+        if (counted ? !(await dependencies.suggestionBudget!.offer(botId, "routine", show, { always: requested })) : !(await show())) {
+          return { ok: false, code: "suggestion_limit", error: SUGGESTION_LIMIT };
+        }
         return { ok: true, proposal };
       });
     },
@@ -633,7 +656,7 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
         }
         // Renaming a card into something the person turned down is a new idea.
         const renamed = normalizedProposalName(content.name) !== normalizedProposalName(current.name);
-        if (renamed && !input.requested && !input.hostFollowUp && proposalBackoff(records, content.name, now())?.code === "declined_before") {
+        if (renamed && !askedByOwner(botId, input) && !input.hostFollowUp && proposalBackoff(records, content.name, now())?.code === "declined_before") {
           return { ok: false, code: "declined_before", error: DECLINED_BEFORE };
         }
         // The new card names the card it replaces before either is shown,
@@ -678,6 +701,21 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
         const created = await createdFrom(input.botId, record.proposalId);
         if (created) return settled(await settle(input.botId, records, index, "accepted", { routineId: created.id }));
         if (record.supersededBy !== undefined) throw new BotRoutineProposalNotFoundError();
+        if (
+          record.status === "dismissed" &&
+          input.decision === "dismiss" &&
+          input.reason !== undefined &&
+          record.declineReason === undefined &&
+          record.settledBy !== "host"
+        ) {
+          // "Why not?" on the dismissed line: the person adds a reason to a
+          // card they turned down. The card stays dismissed; only the reason
+          // the Bot reads next time is recorded, once.
+          const next = { ...record, declineReason: input.reason } as BotRoutineProposalRecord;
+          records[index] = next;
+          await save(input.botId, records);
+          return settled(next);
+        }
         if (record.status !== "pending") return settled(record);
         if (input.decision === "dismiss") {
           return settled(await settle(input.botId, records, index, "dismissed", {

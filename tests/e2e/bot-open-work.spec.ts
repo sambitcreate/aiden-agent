@@ -26,8 +26,9 @@ test("Open work keeps source evidence readable and its editor usable at narrow w
     for (const [channel, handler] of Object.entries(handlers)) { ipcMain.removeHandler(channel); ipcMain.handle(channel, handler); }
   }, { bot, rules: defaultBotRulesView(bot.id), snapshot });
   await page.getByRole("button", { name: "Bots", exact: true }).click();
-  await page.getByRole("button", { name: "Work Helper profile" }).click();
-  await page.getByRole("button", { name: /Open work/ }).click();
+  // The Bot's name opens its Advanced tab, whose Open work row opens the page.
+  await page.getByRole("button", { name: "Work Helper settings" }).click();
+  await page.getByRole("tabpanel", { name: "Advanced" }).getByRole("button", { name: /^Open work/u }).click();
   await expect(page.getByText("Waiting · Waiting for the receipt", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "View request", exact: true }).click();
   const evidence = page.getByRole("dialog", { name: "Original invoice request" });

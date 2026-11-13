@@ -349,7 +349,9 @@ sealed class AidenBotSessionEntry {
         /** The entry types this build reads. Any other `type` is skipped (revision 27). */
         val KNOWN_TYPES: Set<String> = setOf(
             "message", "connect_card", "notice", "failed_turn", "memory_update", "routine_proposal",
-            "shared_image", "peer"
+            "shared_image", "peer",
+            // Revision 61: `bot:settings-changes` and `bot:suggestions`.
+            "settings_change", "skill_proposal", "lesson", "memory_tidy"
         )
 
         /**
@@ -470,7 +472,12 @@ data class AidenBotApproval(
     val toolName: String,
     val summary: String,
     val canAllow: Boolean,
-    val alwaysCount: Int? = null
+    val alwaysCount: Int? = null,
+    /**
+     * Revision 61 (`approval:cards`): the typed card. Its Always button reaches only a
+     * `bot:allowed` holder; the Mac drops it for everyone else.
+     */
+    val card: AidenApprovalCard? = null
 ) {
     init {
         require(alwaysCount == null || (canAllow && alwaysCount in 3..20))
@@ -488,6 +495,7 @@ data class AidenBotApproval(
         put("summary", JsonPrimitive(summary))
         put("canAllow", JsonPrimitive(canAllow))
         alwaysCount?.let { put("alwaysCount", JsonPrimitive(it)) }
+        card?.let { put("card", it.toJson()) }
     }
 
     companion object {
@@ -500,7 +508,7 @@ data class AidenBotApproval(
 
         fun parse(element: JsonElement): AidenBotApproval {
             val obj = element as? JsonObject ?: throw AidenBotContractException.InvalidField("approval")
-            if (!obj.keys.containsAll(KEYS) || (obj.keys - (KEYS + "alwaysCount")).isNotEmpty()) throw AidenBotContractException.InvalidField("approval")
+            if (!obj.keys.containsAll(KEYS) || (obj.keys - (KEYS + "alwaysCount" + "card")).isNotEmpty()) throw AidenBotContractException.InvalidField("approval")
             fun string(key: String) = (obj[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
                 ?: throw AidenBotContractException.InvalidField(key)
             val canAllow = (obj["canAllow"] as? JsonPrimitive)?.takeIf { !it.isString && it !is JsonNull }?.content
@@ -510,6 +518,14 @@ data class AidenBotApproval(
                 toolName = string("toolName"),
                 summary = string("summary"),
                 alwaysCount = aidenBotApprovalCount(obj, "alwaysCount"),
+                card = obj["card"]?.let {
+                    try {
+                        // Only buttons the Bot route can send are kept (see forBotRoute).
+                        AidenApprovalCard.parse(it).forBotRoute()
+                    } catch (_: AidenBotUxContractException) {
+                        throw AidenBotContractException.InvalidField("approval.card")
+                    }
+                },
                 canAllow = when (canAllow) {
                     "true" -> true
                     "false" -> false

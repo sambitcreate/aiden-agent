@@ -1,0 +1,693 @@
+{
+  "contractRevision": 61,
+  "capabilities": [
+    "approval:cards",
+    "approvals:settings",
+    "bot:settings-changes",
+    "bot:suggestions",
+    "bot:templates"
+  ],
+  "approvalCards": {
+    "macCommand": {
+      "kind": "mac",
+      "mac": "shell",
+      "title": "Run on your Mac?",
+      "arguments": [
+        {
+          "key": "tool",
+          "value": "Run command"
+        }
+      ],
+      "body": {
+        "format": "command",
+        "text": "npm test -- --watch=false"
+      },
+      "buttons": [
+        {
+          "label": "Deny",
+          "decision": "deny",
+          "answered": "Denied"
+        },
+        {
+          "label": "Allow once",
+          "decision": "allow",
+          "answered": "Allowed once"
+        },
+        {
+          "label": "Allow in this chat",
+          "decision": "allow",
+          "scope": "chat",
+          "answered": "Allowed in this chat"
+        },
+        {
+          "label": "Allow in this workspace",
+          "decision": "allow",
+          "scope": "always",
+          "answered": "Allowed in this workspace"
+        }
+      ]
+    },
+    "hookProposal": {
+      "kind": "held_change",
+      "title": "Change this hook?",
+      "arguments": [
+        {
+          "key": "event",
+          "value": "PreToolUse"
+        },
+        {
+          "key": "name",
+          "value": "Lint before commit"
+        },
+        {
+          "key": "where",
+          "value": "This workspace (site)"
+        }
+      ],
+      "body": {
+        "format": "command",
+        "text": "event: PreToolUse\nmatcher: run_command\ncommand: npm run lint -- --fix\ntimeout: 30s\nruns: before the chat goes on\nif it fails: block"
+      },
+      "previous": {
+        "format": "command",
+        "text": "event: PreToolUse\nmatcher: run_command\ncommand: npm run lint\ntimeout: 30s\nruns: before the chat goes on\nif it fails: block"
+      },
+      "buttons": [
+        {
+          "label": "Dismiss",
+          "decision": "deny",
+          "answered": "Denied"
+        },
+        {
+          "label": "Apply",
+          "decision": "allow",
+          "answered": "Applied"
+        }
+      ]
+    },
+    "formFill": {
+      "kind": "batch",
+      "title": "Review before Form fill",
+      "arguments": [
+        {
+          "key": "app",
+          "value": "Safari"
+        },
+        {
+          "key": "window",
+          "value": "Checkout"
+        },
+        {
+          "key": "from",
+          "value": "address.txt"
+        }
+      ],
+      "rows": [
+        {
+          "label": "Name",
+          "value": "Ada Lovelace"
+        }
+      ],
+      "buttons": [
+        {
+          "label": "Cancel",
+          "decision": "deny",
+          "answered": "Denied"
+        },
+        {
+          "label": "Fill 1 field",
+          "decision": "allow",
+          "answered": "Allowed once"
+        }
+      ]
+    },
+    "allowOnMac": {
+      "kind": "mac",
+      "mac": "computer_use",
+      "title": "Use your Mac with Computer Use?",
+      "arguments": [
+        {
+          "key": "tool",
+          "value": "Computer Use"
+        }
+      ],
+      "body": {
+        "format": "text",
+        "text": "Click Send in Mail"
+      },
+      "buttons": [
+        {
+          "label": "Deny",
+          "decision": "deny",
+          "answered": "Denied"
+        }
+      ],
+      "allowOnMac": "Allow it on your Mac."
+    },
+    "botAlways": {
+      "kind": "generic",
+      "title": "Review before Fetch web page → example.com",
+      "arguments": [
+        {
+          "key": "site",
+          "value": "example.com"
+        },
+        {
+          "key": "tool",
+          "value": "Fetch web page"
+        }
+      ],
+      "body": {
+        "format": "text",
+        "text": "Fetch https://example.com/menu"
+      },
+      "notes": [
+        "You’ve allowed this 4 times in the last 2 weeks."
+      ],
+      "buttons": [
+        {
+          "label": "Deny",
+          "decision": "deny",
+          "answered": "Denied"
+        },
+        {
+          "label": "Allow once",
+          "decision": "allow",
+          "answered": "Allowed once"
+        },
+        {
+          "label": "Always allow this tool",
+          "decision": "allow",
+          "scope": "always",
+          "answered": "Always allowed"
+        }
+      ]
+    },
+    "botWithoutAllowed": {
+      "kind": "generic",
+      "title": "Review before Fetch web page → example.com",
+      "arguments": [
+        {
+          "key": "site",
+          "value": "example.com"
+        },
+        {
+          "key": "tool",
+          "value": "Fetch web page"
+        }
+      ],
+      "body": {
+        "format": "text",
+        "text": "Fetch https://example.com/menu"
+      },
+      "notes": [
+        "You’ve allowed this 4 times in the last 2 weeks."
+      ],
+      "buttons": [
+        {
+          "label": "Deny",
+          "decision": "deny",
+          "answered": "Denied"
+        },
+        {
+          "label": "Allow once",
+          "decision": "allow",
+          "answered": "Allowed once"
+        }
+      ]
+    }
+  },
+  "streamApprovals": {
+    "complete": {
+      "approvalId": "approval_fixture_61a",
+      "streamId": "stream_fixture_61",
+      "chatId": "chat_fixture_61",
+      "summary": "Run command: npm test",
+      "toolCallId": "call_approval_fixture_61a",
+      "toolName": "run_command",
+      "expiresAt": "2026-11-13T09:00:00.000Z",
+      "canAllow": true,
+      "scopes": [
+        "once",
+        "chat"
+      ],
+      "card": {
+        "kind": "mac",
+        "mac": "shell",
+        "title": "Run on your Mac?",
+        "arguments": [
+          {
+            "key": "tool",
+            "value": "Run command"
+          }
+        ],
+        "body": {
+          "format": "command",
+          "text": "npm test"
+        },
+        "buttons": [
+          {
+            "label": "Deny",
+            "decision": "deny",
+            "answered": "Denied"
+          },
+          {
+            "label": "Allow once",
+            "decision": "allow",
+            "answered": "Allowed once"
+          },
+          {
+            "label": "Allow in this chat",
+            "decision": "allow",
+            "scope": "chat",
+            "answered": "Allowed in this chat"
+          }
+        ]
+      }
+    },
+    "denyOnly": {
+      "approvalId": "approval_fixture_61b",
+      "streamId": "stream_fixture_61",
+      "chatId": "chat_fixture_61",
+      "summary": "Click Send in Mail",
+      "toolCallId": "call_approval_fixture_61b",
+      "toolName": "computer_use",
+      "expiresAt": "2026-11-13T09:00:00.000Z",
+      "canAllow": false,
+      "card": {
+        "kind": "mac",
+        "mac": "computer_use",
+        "title": "Use your Mac with Computer Use?",
+        "arguments": [
+          {
+            "key": "tool",
+            "value": "Computer Use"
+          }
+        ],
+        "body": {
+          "format": "text",
+          "text": "Click Send in Mail"
+        },
+        "buttons": [
+          {
+            "label": "Deny",
+            "decision": "deny",
+            "answered": "Denied"
+          }
+        ],
+        "allowOnMac": "Allow it on your Mac."
+      }
+    }
+  },
+  "phoneRunApprovalEvents": {
+    "complete": {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_61",
+      "sequence": 2,
+      "timestamp": "2026-11-13T09:00:00.000Z",
+      "type": "approval_required",
+      "terminal": false,
+      "payload": {
+        "approvalId": "approval_fixture_61c",
+        "summary": "Run command: git status",
+        "toolCallId": "call_approval_fixture_61c",
+        "toolName": "run_command",
+        "canAllow": true,
+        "scopes": [
+          "once",
+          "chat"
+        ],
+        "card": {
+          "kind": "mac",
+          "mac": "shell",
+          "title": "Run on your Mac?",
+          "arguments": [
+            {
+              "key": "tool",
+              "value": "Run command"
+            }
+          ],
+          "body": {
+            "format": "command",
+            "text": "git status"
+          },
+          "buttons": [
+            {
+              "label": "Deny",
+              "decision": "deny",
+              "answered": "Denied"
+            },
+            {
+              "label": "Allow once",
+              "decision": "allow",
+              "answered": "Allowed once"
+            },
+            {
+              "label": "Allow in this chat",
+              "decision": "allow",
+              "scope": "chat",
+              "answered": "Allowed in this chat"
+            }
+          ]
+        }
+      }
+    },
+    "denyOnly": {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_61",
+      "sequence": 3,
+      "timestamp": "2026-11-13T09:00:00.000Z",
+      "type": "approval_required",
+      "terminal": false,
+      "payload": {
+        "approvalId": "approval_fixture_61d",
+        "summary": "Click Send in Mail",
+        "toolCallId": "call_approval_fixture_61d",
+        "toolName": "computer_use",
+        "canAllow": false,
+        "card": {
+          "kind": "mac",
+          "mac": "computer_use",
+          "title": "Use your Mac with Computer Use?",
+          "arguments": [
+            {
+              "key": "tool",
+              "value": "Computer Use"
+            }
+          ],
+          "body": {
+            "format": "text",
+            "text": "Click Send in Mail"
+          },
+          "buttons": [
+            {
+              "label": "Deny",
+              "decision": "deny",
+              "answered": "Denied"
+            }
+          ],
+          "allowOnMac": "Allow it on your Mac."
+        }
+      }
+    }
+  },
+  "botSessionEntries": [
+    {
+      "type": "settings_change",
+      "id": "entry_fixture_60",
+      "changeId": "change_fixture_held",
+      "mode": "held",
+      "status": "pending",
+      "title": "Update instructions?",
+      "fields": [
+        "instructions"
+      ],
+      "lines": [
+        "Instructions: 2 lines changed"
+      ],
+      "heldReason": "outside_content",
+      "instructions": "Plan my meals.\nKeep it vegetarian.\nShop on Saturdays.",
+      "previousInstructions": "Plan my meals.\nKeep it vegetarian.",
+      "instructionsDiff": [
+        {
+          "kind": "same",
+          "text": "Plan my meals."
+        },
+        {
+          "kind": "same",
+          "text": "Keep it vegetarian."
+        },
+        {
+          "kind": "added",
+          "text": "Shop on Saturdays."
+        }
+      ],
+      "undoable": true,
+      "createdAt": "2026-11-13T09:00:00.000Z"
+    },
+    {
+      "type": "settings_change",
+      "id": "entry_fixture_61",
+      "changeId": "change_fixture_applied",
+      "mode": "applied",
+      "status": "pending",
+      "title": "Settings updated",
+      "fields": [
+        "name"
+      ],
+      "lines": [
+        "Name: Chief → Planner"
+      ],
+      "undoable": true,
+      "createdAt": "2026-11-13T09:00:00.000Z"
+    },
+    {
+      "type": "skill_proposal",
+      "id": "entry_fixture_62",
+      "proposalId": "8d0c5c8e-2f0b-4c4e-9a59-3b6f1f0e9a61",
+      "name": "Weekly shop",
+      "description": "Build the Saturday shopping list.",
+      "reason": "You asked for this three weeks running.",
+      "update": false,
+      "preview": "# Weekly shop\n\nList what the week's meals need.",
+      "status": "pending",
+      "createdAt": "2026-11-13T09:00:00.000Z"
+    },
+    {
+      "type": "lesson",
+      "id": "entry_fixture_63",
+      "lessonId": "lesson_fixture_01",
+      "kind": "proposal",
+      "text": "Skip recipes with mushrooms.",
+      "routineName": "Weekly meal plan",
+      "runs": 3,
+      "status": "pending",
+      "createdAt": "2026-11-13T09:00:00.000Z"
+    },
+    {
+      "type": "lesson",
+      "id": "entry_fixture_64",
+      "lessonId": "lesson_fixture_02",
+      "kind": "learned",
+      "text": "Prices in euros.",
+      "status": "active",
+      "createdAt": "2026-11-13T09:00:00.000Z"
+    },
+    {
+      "type": "memory_tidy",
+      "id": "entry_fixture_65",
+      "changeId": "learning_fixture_01",
+      "createdAt": "2026-11-13T09:00:00.000Z"
+    },
+    {
+      "type": "skill_proposal",
+      "id": "entry_fixture_66",
+      "proposalId": "6a1f3e2d-9c4b-4e8a-b1d2-7f0e5c3a9b61",
+      "name": "House rules",
+      "description": "Everything the house agreed on.",
+      "update": false,
+      "preview": "# House rules\n\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dish…",
+      "previewTruncated": true,
+      "status": "pending",
+      "createdAt": "2026-11-13T09:00:00.000Z"
+    }
+  ],
+  "templates": {
+    "presets": [
+      {
+        "id": "meal-planner",
+        "name": "Meal planner",
+        "subtitle": "Plans the week's meals",
+        "avatar": {
+          "version": 1,
+          "shape": "hex",
+          "color": "periwinkle"
+        },
+        "suggestedConnections": [],
+        "suggestedRoutine": {
+          "name": "Weekly meal plan",
+          "label": "Every Sunday at 9:00 AM"
+        },
+        "version": 2,
+        "instructions": "Plan the week's meals around what I like.",
+        "sample": [
+          "What should we eat this week?",
+          "Here's a plan for seven dinners."
+        ],
+        "existingBotId": "bot:00000000-0000-4000-8000-000000000061"
+      }
+    ]
+  },
+  "approvalMode": {
+    "mode": "ask",
+    "autoAvailable": true
+  },
+  "approvalRules": {
+    "rows": [
+      {
+        "ref": {
+          "source": "rule",
+          "id": "rule_fixture_01"
+        },
+        "group": "allow",
+        "title": "github.com",
+        "kind": "Site",
+        "scope": {
+          "kind": "mac"
+        },
+        "decisions": [
+          "allow",
+          "ask",
+          "block"
+        ],
+        "createdAt": "2026-11-13T09:00:00.000Z"
+      },
+      {
+        "ref": {
+          "source": "rule",
+          "id": "rule_fixture_02"
+        },
+        "group": "block",
+        "title": "Send email",
+        "kind": "Tool",
+        "scope": {
+          "kind": "workspace",
+          "label": "Docs"
+        },
+        "decisions": [
+          "allow",
+          "ask",
+          "block"
+        ]
+      },
+      {
+        "ref": {
+          "source": "rule",
+          "id": "rule_fixture_03"
+        },
+        "group": "ask",
+        "title": "When a Bot wants to post in public channels",
+        "kind": "When a Bot wants to",
+        "scope": {
+          "kind": "mac"
+        },
+        "decisions": [
+          "ask",
+          "block"
+        ],
+        "handOff": {
+          "on": true
+        }
+      },
+      {
+        "ref": {
+          "source": "bot-allow",
+          "botId": "bot_fixture_01",
+          "entryId": "entry_fixture_01"
+        },
+        "group": "allow",
+        "title": "Google Calendar · Create event",
+        "kind": "Connector",
+        "scope": {
+          "kind": "bot",
+          "label": "Chief"
+        },
+        "legacy": true,
+        "decisions": []
+      },
+      {
+        "ref": {
+          "source": "workspace-mac",
+          "workspaceId": "workspace_fixture_01",
+          "grant": "shell"
+        },
+        "group": "mac",
+        "title": "Run commands",
+        "kind": "Mac",
+        "scope": {
+          "kind": "workspace",
+          "label": "Site"
+        },
+        "decisions": []
+      }
+    ]
+  },
+  "approvalRulePicker": {
+    "options": [
+      {
+        "target": {
+          "kind": "tool",
+          "tool": "send_email"
+        },
+        "label": "Send email",
+        "group": "Aiden"
+      },
+      {
+        "target": {
+          "kind": "connector",
+          "serverId": "calendar"
+        },
+        "label": "Calendar",
+        "group": "Connected apps",
+        "description": "Every tool of this app"
+      }
+    ]
+  },
+  "requests": {
+    "settingsChangeRespond": {
+      "decision": "apply"
+    },
+    "skillProposalRespond": {
+      "decision": "add"
+    },
+    "lessonRespond": {
+      "decision": "keep"
+    },
+    "lessonRemove": {},
+    "learningUndo": {},
+    "templateCreate": {
+      "presetId": "meal-planner",
+      "version": 2
+    },
+    "oneFieldCreate": {
+      "name": "Scout",
+      "avatar": {
+        "version": 1,
+        "shape": "hex",
+        "color": "periwinkle"
+      }
+    },
+    "approvalMode": {
+      "mode": "never"
+    },
+    "ruleAdd": {
+      "target": {
+        "kind": "site",
+        "host": "github.com"
+      },
+      "decision": "allow"
+    },
+    "ruleChange": {
+      "ref": {
+        "source": "rule",
+        "id": "rule_fixture_02"
+      },
+      "decision": "ask"
+    },
+    "ruleRemove": {
+      "ref": {
+        "source": "rule",
+        "id": "rule_fixture_01"
+      }
+    }
+  },
+  "errors": {
+    "templateStale": {
+      "error": {
+        "code": "revision_conflict",
+        "message": "This template changed. Close it and open it again.",
+        "retryable": false
+      }
+    }
+  }
+}

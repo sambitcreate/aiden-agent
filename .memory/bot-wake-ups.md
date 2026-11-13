@@ -17,8 +17,8 @@ Plan: `docs/plans/bot-wake-sources-plan.md` step 2, branch `feature/bot-self-wak
 
 ## UI
 - Chat: `live-projection.ts` maps the entry to `{type:"wake_up", wakeUpId, fireAt}` (outlives a `[SILENT]` turn). `renderer/components/bots/wake-up-chip.tsx` shows "Wake-up at 3:10 PM · Cancel". Cancel appears only while the routine is still pending (from the `botRoutinesKey` query, loaded only when the transcript has a chip) and the minute has not arrived. Clicking it removes the routine optimistically, then `bots:routines:delete`; on failure it restores and toasts.
-- Profile routines list (`bot-routines.tsx`): a wake-up row is not a button (no editor), with an AlarmClock icon, "Wake-up at …", the note, and a small Cancel (shown while enabled, or disabled with no fire pending, e.g. paused by the routines tool).
-- Advanced → Chat (`bot-advanced.tsx` `SelfWakeUpsField`): "Let <Bot> set its own wake-ups" switch, saves on its own.
+- Routines list (`bot-routines.tsx`, the side panel's Routines tab since Phase 5): a wake-up row is not a button (no editor), with an AlarmClock icon, "Wake-up at …", the note, and a small Cancel (shown while enabled, or disabled with no fire pending, e.g. paused by the routines tool).
+- Advanced tab → Permissions (`bot-advanced.tsx` `PermissionsSection`, since bot UX Phase 5): "Daily check-ins on unfinished work" switch, saves on its own. (Was Advanced → Chat "Let <Bot> set its own wake-ups".)
 
 ## Remote / native clients
 - No wire change and no revision: the unknown `wake_up` transcript entry is dropped by the projection's default branch. Phones see the wake-up as an ordinary one-time routine named Wake-up (and can delete it), and its fire arrives like any routine message.

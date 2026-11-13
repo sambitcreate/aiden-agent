@@ -30,7 +30,7 @@ import {
   type BotMemoryView,
 } from "../../shared/bot-memory";
 import type { BotDefinition } from "../../shared/bots";
-import { BotPageShell, BotPageSkeleton } from "./bot-page-shell";
+import { BotPageSkeleton } from "./bot-page-shell";
 import { botMemoryCount, storeBotMemoryView, useBotMemory } from "./use-bot-memory";
 
 const numberFormat = new Intl.NumberFormat();
@@ -483,23 +483,3 @@ export function BotMemoryContent({
 }
 
 /** Profile → Memory: the same content as the side panel's Memory tab, as a full page. */
-export function BotMemoryPage({
-  bot,
-  onClose,
-}: {
-  bot: Pick<BotDefinition, "id" | "name">;
-  onClose(): void;
-}) {
-  return (
-    <BotPageShell
-      scrollId={`bot-memory:${bot.id}`}
-      title={bot.name}
-      backLabel="Back"
-      onBack={onClose}
-      heading="Memory"
-      description={`What ${bot.name} remembers about you and its work. It’s stored on this Mac, and ${bot.name} uses it in every chat.`}
-    >
-      <BotMemoryContent bot={bot} />
-    </BotPageShell>
-  );
-}

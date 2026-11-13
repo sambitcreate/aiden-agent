@@ -19,9 +19,18 @@ struct AidenBotHandoffCard: View {
     let onDone: () -> Void
     let onSkip: () -> Void
     let onFinishOnMac: () -> Void
+    /// Revision 61 Macs: Take control first, then I'm done and Skip (the
+    /// answers are the same `done` and `skipped`).
+    var twoStep: Bool = false
 
     @Environment(\.aidenPalette) private var palette
     @Environment(\.openURL) private var openURL
+    @State private var tookControl = false
+    @FocusState private var answerFocused: Bool
+
+    private var showsTakeControl: Bool {
+        twoStep && !tookControl && !AidenBotHandoffTaken.contains(handoff.waitId)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -51,9 +60,24 @@ struct AidenBotHandoffCard: View {
                     .font(.footnote)
                     .foregroundStyle(palette.secondary)
             }
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 10) { actions }
-                VStack(alignment: .leading, spacing: 8) { actions }
+            if showsTakeControl {
+                Button(AidenBotSessionCopy.takeControl) {
+                    takeControl()
+                }
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.capsule)
+                .aidenSolidFillTint()
+                .disabled(!canAnswer || isFinishing)
+            } else if twoStep {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) { secondStep }
+                    VStack(alignment: .leading, spacing: 8) { secondStep }
+                }
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) { actions }
+                    VStack(alignment: .leading, spacing: 8) { actions }
+                }
             }
         }
         .padding(16)
@@ -95,6 +119,57 @@ struct AidenBotHandoffCard: View {
                 .buttonBorderShape(.capsule)
                 .aidenSolidFillTint()
                 .disabled(!canAnswer)
+        }
+    }
+
+    /// Opens what the step needs: the Bot's browser or computer on the Mac, or
+    /// the page it names. Then the answers show, with focus on the first.
+    private func takeControl() {
+        AidenBotHandoffTaken.insert(handoff.waitId)
+        tookControl = true
+        open()
+        answerFocused = true
+    }
+
+    private func open() {
+        if handoff.kind == .signIn || handoff.onMac {
+            onFinishOnMac()
+        } else if let url = openURLValue {
+            openURL(url)
+        }
+    }
+
+    private var canOpenAgain: Bool {
+        handoff.kind == .signIn || handoff.onMac || openURLValue != nil
+    }
+
+    @ViewBuilder
+    private var secondStep: some View {
+        if handoff.kind == .signIn {
+            // A sign-in finishes on the Mac; Skip is its only answer here.
+            Button(AidenBotSessionCopy.handoffSkip, action: onSkip)
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.capsule)
+                .aidenSolidFillTint()
+                .disabled(!canAnswer)
+                .focused($answerFocused)
+        } else {
+            Button(AidenBotSessionCopy.handoffImDone, action: onDone)
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.capsule)
+                .aidenSolidFillTint()
+                .disabled(!canAnswer)
+                .focused($answerFocused)
+            Button(AidenBotSessionCopy.handoffSkip, action: onSkip)
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+                .disabled(!canAnswer)
+        }
+        if canOpenAgain {
+            Button(AidenBotSessionCopy.openAgain) { open() }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+                .disabled(!canAnswer || isFinishing)
         }
     }
 
@@ -278,5 +353,19 @@ struct AidenBotPlanCard: View {
         Button(detailsShown ? "Hide details" : "Show details") { detailsShown.toggle() }
             .buttonStyle(.bordered).buttonBorderShape(.roundedRectangle(radius: 16))
             .accessibilityValue(detailsShown ? "Expanded" : "Collapsed")
+    }
+}
+
+/// Revision 61: which hand-offs this phone took control of, kept for the
+/// app's life so the card stays on its second step when it is drawn again.
+@MainActor
+enum AidenBotHandoffTaken {
+    private static var taken: Set<String> = []
+
+    static func contains(_ waitId: String) -> Bool { taken.contains(waitId) }
+
+    static func insert(_ waitId: String) {
+        if taken.count > 200 { taken.removeAll() }
+        taken.insert(waitId)
     }
 }

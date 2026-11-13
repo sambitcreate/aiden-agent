@@ -4,6 +4,7 @@ import { BotConnectionSetupHost } from "./bot-connection-setup-host";
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { useRouterState } from "@tanstack/react-router";
 import { BotsView } from "../bots-view";
 import { QueryClient } from "@tanstack/react-query";
 import { queryKeys } from "../../lib/queries";
@@ -162,14 +163,14 @@ test("an open create flow keeps /bots in place even when the list becomes non-em
     "bots:pendingApprovals": () => [],
   });
   const { router, queryClient } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
-  fireEvent.click(await screen.findByRole("button", { name: "Create my own" }));
-  assert.ok(await screen.findByRole("dialog", { name: "New Bot" }));
+  fireEvent.click(await screen.findByRole("button", { name: "New bot" }));
+  assert.ok(await screen.findByRole("dialog", { name: "New bot" }));
   // Another window (or a phone) adds a Bot while the dialog is open.
   bots = [PLANNER];
   await queryClient.invalidateQueries({ queryKey: queryKeys.bots });
   await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
   assert.equal(router.state.location.pathname, "/bots");
-  assert.ok(screen.getByRole("dialog", { name: "New Bot" }));
+  assert.ok(screen.getByRole("dialog", { name: "New bot" }));
 });
 
 test("a stale cached Bots list does not navigate until the refetch settles", async () => {
@@ -191,11 +192,13 @@ test("a stale cached Bots list does not navigate until the refetch settles", asy
   await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-1/chat"));
 });
 
-test("/bots with no Bots stays put and offers to create one", async () => {
+test("/bots with no Bots stays put and points at New bot and Templates", async () => {
   installBotTestIpc({ "bots:list": () => [] });
   const { router } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
-  assert.ok(await screen.findByRole("heading", { name: "Meet your first Bot" }));
-  assert.ok(screen.getByRole("button", { name: "New Bot" }));
+  assert.ok(await screen.findByText("No Bots yet"));
+  assert.ok(screen.getByRole("button", { name: "New bot" }));
+  assert.ok(screen.getByRole("button", { name: "Templates" }));
+  assert.equal(screen.queryByRole("list", { name: "Starter Bots" }), null, "no starter carousel");
   assert.equal(router.state.location.pathname, "/bots");
 });
 
@@ -226,57 +229,54 @@ test("a Bots list that fails to load offers Try again, then opens the Bot once i
   await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-1/chat"));
 });
 
-test("Profile's back returns to the Bot's chat", async () => {
+/** The Bot panel's selected tab, or null while it is closed. */
+function openPanelTab(): string | null {
+  const panel = document.getElementById("bot-panel");
+  if (!panel || panel.getAttribute("data-state") !== "open") return null;
+  // A dialog the link opened hides the rest of the page from the accessibility tree.
+  return within(panel).getAllByRole("tab", { hidden: true }).find((tab) => tab.getAttribute("aria-selected") === "true")?.textContent ?? null;
+}
+
+test("old Profile, Advanced and settings links open the Bot's chat with its settings beside it", async () => {
+  const cases: [query: string, tab: string, dialog?: string][] = [
+    ["", "Advanced"],
+    ["?page=profile", "Advanced"],
+    ["?page=advanced", "Advanced"],
+    ["?page=chat-activity", "Advanced"],
+    ["?page=instructions", "Advanced", "Instructions"],
+    ["?page=interruptions", "Advanced", "Quiet hours"],
+    ["?page=memory", "Memory"],
+  ];
+  for (const [query, tab, dialog] of cases) {
+    localStorage.clear();
+    twoBots({});
+    const { router } = await mountWithBotRouter(<BotsView />, { initialPath: `/bots/bot-2${query}` });
+    await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-2/chat", query));
+    await waitFor(() => assert.equal(openPanelTab(), tab, query));
+    if (dialog) assert.ok(await screen.findByRole("dialog", { name: dialog }), query);
+    cleanup();
+  }
+});
+
+/** The Bots page on Bots paths only: the harness mounts its children on every path, Settings too. */
+function BotsPagesOnly() {
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  return pathname.startsWith("/bots") ? <BotsView /> : null;
+}
+
+test("the old Allowed without asking link opens Settings → Approvals", async () => {
   twoBots({});
-  const { router } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot-2" });
-  fireEvent.click(await screen.findByRole("button", { name: "Chat" }));
+  const { router } = await mountWithBotRouter(<BotsPagesOnly />, { initialPath: "/bots/bot-2?page=allowed" });
+  await waitFor(() => assert.equal(router.state.location.pathname, "/settings"));
+  assert.equal((router.state.location.search as { section?: string }).section, "approvals");
+});
+
+test("Open work is still a page, and its back goes to the chat with the Bot's settings open", async () => {
+  twoBots({});
+  const { router } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot-2?page=open-work" });
+  fireEvent.click(await screen.findByRole("button", { name: "Inbox" }));
   await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-2/chat"));
-});
-
-test("Start chat on a starter Bot sends one create request and opens its chat", async () => {
-  let created = false;
-  const calls = installBotTestIpc({
-    "bots:list": () => (created ? [botFixture({ id: "bot-chief", name: "Chief of Staff" })] : []),
-    "bots:live:summary": () => idle,
-    "bots:createFromPreset": () => {
-      const firstTime = !created;
-      created = true;
-      return { bot: botFixture({ id: "bot-chief", name: "Chief of Staff" }), created: firstTime };
-    },
-    "bots:live:subscribe": () => ({
-      botId: "bot-chief",
-      epoch: "e1",
-      seq: 0,
-      entries: [],
-      partial: null,
-      state: { kind: "idle" },
-      question: null,
-      activity: null,
-      queued: [],
-    }),
-  });
-  const { router } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
-  const heading = await screen.findByRole("heading", { name: "Meet your first Bot" });
-  assert.ok(heading);
-  const starters = screen.getByRole("list", { name: "Starter Bots" });
-  const startChat = within(starters).getAllByRole("button", { name: "Start chat" })[0]!;
-
-  // A second tap while the first is still answering is ignored; the same Bot opens.
-  fireEvent.click(startChat);
-  fireEvent.click(startChat);
-  await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-chief/chat"));
-  const presetCalls = calls.filter((call) => call.channel === "bots:createFromPreset");
-  assert.equal(presetCalls.length, 1);
-  assert.deepEqual(presetCalls[0]!.args[0], { presetId: "chief-of-staff" });
-});
-
-test("Create my own from the first run opens the create flow", async () => {
-  installBotTestIpc({
-    "bots:list": () => [],
-  });
-  await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
-  fireEvent.click(await screen.findByRole("button", { name: "Create my own" }));
-  assert.ok(await screen.findByRole("dialog", { name: "New Bot" }));
+  await waitFor(() => assert.equal(openPanelTab(), "Advanced"));
 });
 
 test("a phone's Finish on your Mac opens the connection setup even with the Bots list closed", async () => {

@@ -85,18 +85,18 @@ test("plan approval waits for the host, then becomes a stoppable checklist", asy
     }, mode);
     await aiden.app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0]!.setSize(size, 900), width);
     await expect(page.locator("html")).toHaveAttribute("data-appearance-scheme", mode);
-    await expect(page.getByRole("button", { name: "Approve plan", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Allow once", exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath(`plan-pending-${mode}.png`) });
   }
-  const approve = page.getByRole("button", { name: "Approve plan", exact: true });
-  await approve.focus();
+  await expect(page.getByText("Approve this plan?", { exact: true })).toBeVisible();
+  const approve = page.getByRole("button", { name: "Allow once", exact: true });
+  await page.getByRole("button", { name: "Deny", exact: true }).focus();
   await page.keyboard.press("Tab");
-  await expect(page.getByRole("button", { name: "Not now", exact: true })).toBeFocused();
-  await page.keyboard.press("Shift+Tab");
+  await expect(approve).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(approve).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Not now", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Deny", exact: true })).toBeDisabled();
   await aiden.app.evaluate(() => (globalThis as unknown as { planE2e: PlanE2eState }).planE2e.release());
   await expect(page.getByText("That answer could not be sent. Please try again.", { exact: false }).first()).toBeVisible();
   await expect(approve).toBeEnabled();
@@ -122,8 +122,8 @@ test("plan approval waits for the host, then becomes a stoppable checklist", asy
   const declined = { ...plan, planId: "declined-report", from: undefined };
   await aiden.app.evaluate((_electron, next) => (globalThis as unknown as { planE2e: PlanE2eState }).planE2e.replace(next), declined);
   await expect(page.getByText("Planner has a plan", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Not now", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Approve plan", exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "Deny", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Allow once", exact: true })).toBeDisabled();
   await aiden.app.evaluate(() => (globalThis as unknown as { planE2e: PlanE2eState }).planE2e.release());
   await expect(page.getByText(plan.title, { exact: true })).toBeHidden();
   expect(await aiden.app.evaluate(() => (globalThis as unknown as { planE2e: PlanE2eState }).planE2e.answers)).toEqual([
@@ -148,30 +148,20 @@ test("plan approval waits for the host, then becomes a stoppable checklist", asy
   await expect(page.getByText(longPlan.steps[0]!.text, { exact: true })).toBeInViewport();
   await page.getByText(longPlan.steps[9]!.text, { exact: true }).scrollIntoViewIfNeeded();
   await expect(page.getByText(longPlan.steps[9]!.text, { exact: true })).toBeInViewport();
-  await expect(page.getByRole("button", { name: "Approve plan", exact: true })).toBeInViewport();
+  await expect(page.getByRole("button", { name: "Allow once", exact: true })).toBeInViewport();
   await expect(draft).toHaveValue("Keep this draft while the plan waits");
   await page.screenshot({ path: testInfo.outputPath("plan-long-review-dark.png") });
   expect(aiden.lmStudio.requests.filter(request => request.url === "/v1/chat/completions")).toHaveLength(0);
 });
 
 
-test("onboarding explains plan approvals and draws the checklist in its Bots tile", async ({ aiden }, testInfo) => {
+test("onboarding's Bots tile draws the first Bot's chat and explains plan approvals", async ({ aiden }, testInfo) => {
   const { page } = aiden;
-  await aiden.app.evaluate(({ ipcMain }) => {
-    ipcMain.removeHandler("bots:list");
-    ipcMain.handle("bots:list", () => []);
-  });
   const onboarding = page.locator('section[aria-label="Set up Aiden"]');
   await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
   const next = onboarding.getByRole("button", { name: /^Next/u });
   await next.click();
   await connectOnboardingLmStudio(onboarding);
-  await onboarding.getByText("Choose your first Bot", { exact: true }).click();
-  await expect(onboarding.getByRole("heading", { name: "Meet your first Bot" })).toBeVisible();
-  await expect(onboarding.getByText(/approve a whole plan/u)).toBeVisible();
-  await expect(onboarding.getByText(/track accepted tasks in Open work/u)).toBeVisible();
-  await onboarding.getByRole("button", { name: "Skip", exact: true }).click();
-  await expect(onboarding.getByRole("heading", { name: "Finish setup" })).toBeVisible();
   await onboarding.getByText("Explore Aiden’s features", { exact: true }).click();
   const botsTile = onboarding.locator('article[data-onboarding-feature="bots"]');
   for (const [mode, width] of [["light", 1280], ["dark", 600]] as const) {
@@ -183,7 +173,7 @@ test("onboarding explains plan approvals and draws the checklist in its Bots til
     await expect(page.locator("html")).toHaveAttribute("data-appearance-scheme", mode);
     await page.mouse.move(0, 0);
     await botsTile.scrollIntoViewIfNeeded();
-    await expect(botsTile.getByText("Stop plan", { exact: true })).toBeVisible();
+    await expect(botsTile.getByText("What should I help with?", { exact: true })).toBeVisible();
     await botsTile.screenshot({ path: testInfo.outputPath(`bots-plan-tour-${mode}.png`) });
     await botsTile.focus();
     await expect(botsTile).toBeFocused();

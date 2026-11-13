@@ -1,6 +1,6 @@
 # Bot peers
 
-Open a Bot’s **Profile → Bot messaging** on desktop, or **Profile → Bot peers** on iPhone or Android. Write a routing description to explain when another Bot should ask it for help. A description helps route a request; it grants no access.
+Open **Approved Bot pairs** under **Advanced → Permissions** in a Bot's side panel on desktop, or **Profile → Bot peers** on iPhone or Android. Write a routing description to explain when another Bot should ask it for help. A description helps route a request; it grants no access.
 
 Choose another Bot, review both names, then approve the pair in both directions. Approval applies to these two Bots in the same Aiden profile. Each recipient keeps its own model, connected-app access, action rules and spending limit. Changing a description, approving a pair or revoking one does not discard a separately edited description. Save that description explicitly.
 

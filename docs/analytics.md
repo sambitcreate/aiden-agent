@@ -30,7 +30,7 @@ Feature events fire once, at the moment the action succeeded, from the service t
 | `chat_created` | A new chat from the sidebar, a phone, the first message of a draft, or the Assistant. Bots, schedules and forks are not counted. | `workspace_kind`: folder, scratch, worktree or none |
 | `provider_connected` | A sign-in or key was saved for a built-in provider, or a custom provider was added | `provider_id`, `auth`: key, oauth or local (a custom provider on this machine or one with no key) |
 | `workspace_added` | A folder, named or scratch workspace was added. A hidden No workspace folder is not. | `kind`: folder, scratch or path (a typed path or a clone) |
-| `bot_created` | A Bot was created | `preset_id`, `bot_count` bucket |
+| `bot_created` | A Bot was created | `preset_id`, `bot_count` bucket, and on the Mac `source`: new (New bot), template (a Template's Create bot) or onboarding (the first Bot) |
 | `bot_routine_ran` | A Bot routine finished with a result | `trigger`, `result`: success or failed |
 | `scheduled_task_ran` | A scheduled task finished with a result. A cancelled or skipped run is not counted; one blocked by a permission is `failed`. | `trigger`, `result`: success, silent or failed |
 | `subagent_launched` | A subagent started | `role` |
@@ -49,6 +49,9 @@ Feature events fire once, at the moment the action succeeded, from the service t
 | `design_mode_exited` | A chat left design mode from the Design button, ⇧⌘L or `/design off` | none |
 | `design_mode_declined` | Not now on Aiden's "Open design mode?" card. A card that times out or stops with the reply is not counted. | none |
 | `design_comments_sent` | A desktop message carried design-canvas comments for Aiden | `count_bucket`: how many comments. Their notes, pages, files and elements stay on your device. |
+| `approval_shown` | An approval card was shown in a workspace chat, a subagent's run or a Bot chat. An identical card that is shared, or one Aiden refuses because you already denied it in the run, is not counted again. | `kind`: command, file, computer_use, form_fill, schedule, subagent, hook, classifier or tool; `mode`: the approval mode it was asked under (ask, auto or never), the workspace access for a chat that predates modes (ask, full, read_only or none), or bot for a Bot's card; `chat`: workspace, subagent or bot |
+| `approval_answered` | You answered a shown card, on the Mac or a paired device. A card that expired, was withdrawn, or that a Bot's allow list answered is not counted. | The same `kind`, `mode` and `chat`, and `scope`: once, chat, workspace (always in this workspace), bot (always for that Bot) or deny. The command, file, tool arguments and summary never leave your device. |
+| `approval_mode_changed` | You chose an approval mode in Settings → Approvals (or with **Switch to Auto** on an approval card, which saves the same setting), or gave one workspace its own mode or set it back to the global one in Workspace settings. Saving the mode it already had is not counted. | `mode`: ask, auto, never, or global (a workspace went back to following this Mac's mode); `scope`: global or workspace. Which workspace it was never leaves your device. |
 
 How the values are limited:
 

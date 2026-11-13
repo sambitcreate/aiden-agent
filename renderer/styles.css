@@ -3170,6 +3170,13 @@ textarea {
 [data-app-focus-root]:has(> .aiden-live-dock) .environment-panel[data-surface-mode="tools-floating"] {
   bottom: calc(var(--aiden-live-edge-inset) + var(--aiden-live-trigger-size) + var(--spacing) * 3);
 }
+/* A pinned Bot panel's sticky Save bar meets the window's bottom-right corner,
+   where the pill sits. While the pill shows, the bar keeps Save and Revert
+   above it. A floating panel is already lifted clear by the rule above. */
+[data-app-focus-root]:has(> .aiden-live-dock > .aiden-live-trigger)
+  .environment-panel[data-surface-mode="tools-pinned"] [data-bot-settings-save] {
+  padding-bottom: calc(var(--aiden-live-edge-inset) + var(--aiden-live-trigger-size) + var(--spacing) * 3);
+}
 .aiden-live-trigger {
   position: relative;
   display: inline-flex;

@@ -16,25 +16,10 @@ import {
 } from "lucide-react";
 import { Badge, Text } from "./ui";
 import { cn } from "../lib/ui-utils";
-import type { AssistantAutomationApprovalDetails, ScheduledTaskApprovalDetails } from "../shared/assistant";
 import { formatScheduledTaskCadence, scheduledTaskEnabledAfterApproval } from "../shared/scheduled-task-presentation";
+import type { ScheduleApprovalDetails } from "../shared/approval-card-model";
 
-export type ScheduleApprovalDetails = ScheduledTaskApprovalDetails | AssistantAutomationApprovalDetails;
-
-const HEADLINES: Record<ScheduledTaskApprovalDetails["action"], string> = {
-  create: "Save this scheduled task?",
-  update: "Update this scheduled task?",
-  pause: "Pause this scheduled task?",
-  resume: "Resume this scheduled task?",
-  remove: "Delete this scheduled task?",
-  run_now: "Run this scheduled task now?",
-};
-
-/** The card's question for a schedule approval, by what saving it would do. */
-export function scheduleApprovalHeadline(details: ScheduleApprovalDetails): string {
-  if (details.kind === "scheduled-task") return HEADLINES[details.action];
-  return details.action === "create" ? HEADLINES.create : "Change this automation?";
-}
+export { scheduleApprovalHeadline, type ScheduleApprovalDetails } from "../shared/approval-card-model";
 
 export const SCHEDULE_APPROVAL_FOOTER = "Scheduled work runs on your desktop while Aiden is open and the computer is awake.";
 

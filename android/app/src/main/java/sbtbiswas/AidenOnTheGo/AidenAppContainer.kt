@@ -9,6 +9,8 @@ import sbtbiswas.AidenOnTheGo.auth.AndroidAidenSecureStore
 import sbtbiswas.AidenOnTheGo.config.AidenAppearanceStore
 import sbtbiswas.AidenOnTheGo.config.AidenVoiceInputStore
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
+import sbtbiswas.AidenOnTheGo.features.settings.AidenApprovalSettingsController
+import sbtbiswas.AidenOnTheGo.features.settings.AidenRemoteClientApprovalSettings
 import sbtbiswas.AidenOnTheGo.features.settings.AidenRemoteClientSettings
 import sbtbiswas.AidenOnTheGo.features.settings.AidenSettingsStore
 import sbtbiswas.AidenOnTheGo.intents.AidenIntentCatalogStore
@@ -55,12 +57,14 @@ class AidenAppContainer(context: Context) {
     )
     private val settingsCache = AidenSettingsCache(File(filesDir, "settings_cache"))
     val settingsStore = AidenSettingsStore(settingsCache, scope)
+    val approvalSettings = AidenApprovalSettingsController(scope)
 
     init {
         // Settings follows the active client; its cache is dropped with the pairing.
         scope.launch {
             coordinator.client.collect { client ->
                 settingsStore.bind(installationStore.activeInstallation?.instanceId, client?.let(::AidenRemoteClientSettings))
+                approvalSettings.bind(client?.let(::AidenRemoteClientApprovalSettings))
             }
         }
         scope.launch(Dispatchers.IO) {

@@ -106,21 +106,6 @@ const rowOrder = () =>
 
 const noUnread = (name: string) => within(rowButton(name)).queryByRole("img", { name: "Unread" }) === null;
 
-const FILE_HANDLERS = {
-  "bots:files:list": () => ({
-    entries: [{ path: "notes.md", name: "notes.md", parentPath: "", depth: 0, kind: "file" }],
-    truncated: false,
-    skippedDirectories: 0,
-  }),
-  "bots:routines:list": () => [],
-};
-
-const botPanel = (): HTMLElement => {
-  const panel = document.getElementById("bot-panel");
-  assert.ok(panel, "the Bot panel is mounted");
-  return panel;
-};
-
 test("rows show each Bot's last message, newest activity first, in plain words", async () => {
   sidebarIpc([PLANNER, INBOX, SCOUT], {
     "bot-1": summary("bot-1", { preview: "Lisbon in May", updatedAt: 100 }),
@@ -187,7 +172,7 @@ test("a reply since the person last looked shows an unread dot, but not on the o
 
   fireEvent.click(rowButton("Inbox Helper"));
   await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-2/chat"));
-  await screen.findByRole("button", { name: "Inbox Helper profile" });
+  await screen.findByRole("button", { name: "Inbox Helper settings" });
   await act(() => router.navigate({ to: "/bots/$botId", params: { botId: "bot-1" } }));
   await waitFor(() => assert.equal(rowButton("Planner").getAttribute("aria-current"), "page"));
   assert.ok(noUnread("Inbox Helper"), "viewing its chat marked it read");
@@ -222,7 +207,7 @@ test("leaving a chat while a reply still streams shows that reply as unread once
   // The person leaves while Tuesday's reply is still streaming.
   fireEvent.click(rowButton("Inbox Helper"));
   await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-2/chat"));
-  await screen.findByRole("button", { name: "Inbox Helper profile" });
+  await screen.findByRole("button", { name: "Inbox Helper settings" });
   assert.ok(noUnread("Planner"), "nothing new yet");
   // It finishes. Main times it from when it started streaming: before the person left.
   plannerReplyAt = streamStarted;
@@ -314,80 +299,14 @@ test("tapping a row opens that Bot's chat, and its context menu and ••• of
 
   fireEvent.contextMenu(rowButton("Planner"));
   const items = await screen.findAllByRole("menuitem");
-  assert.deepEqual(items.map((item) => item.textContent), ["Profile", "Files", "Memory", "Routines", "Advanced", "Pin to top", "Pause Bot", "Delete Bot"]);
-  fireEvent.click(screen.getByRole("menuitem", { name: "Advanced" }));
-  await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-1"));
-  assert.equal((router.state.location.search as { page?: string }).page, "advanced");
+  assert.deepEqual(items.map((item) => item.textContent), ["Pin to top", "Pause Bot", "Delete Bot"]);
+  fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
 
-  fireEvent.keyDown(screen.getByRole("button", { name: "More for Inbox Helper" }), { key: "Enter" });
+  const inboxRow = rowButton("Inbox Helper").closest("li")!;
+  fireEvent.keyDown(within(inboxRow).getByRole("button", { name: "More for Inbox Helper" }), { key: "Enter" });
   fireEvent.click(await screen.findByRole("menuitem", { name: "Delete Bot" }));
   const confirm = await screen.findByRole("alertdialog");
   assert.ok(within(confirm).getByRole("heading", { name: "Delete Inbox Helper?" }));
-});
-
-test("Memory in a row's menu opens that Bot's chat with the panel on that Bot's Memory", async () => {
-  const store = (text: string, limitChars: number) => ({
-    entries: [{ id: `${text}-id`, text }],
-    usedChars: text.length,
-    limitChars,
-    overBudget: false,
-  });
-  const memories: Record<string, string> = { "bot-1": "Lives in Lisbon", "bot-2": "Prefers short replies" };
-  const calls = sidebarIpc([PLANNER, INBOX], {}, {
-    "bots:memory:get": (botId) => ({
-      botId,
-      revision: "r1",
-      readable: true,
-      user: store(memories[botId as string]!, 1_375),
-      memory: { entries: [], usedChars: 0, limitChars: 2_200, overBudget: false },
-      updatedAt: 1,
-    }),
-  });
-  const { router } = await mountSidebar("/bots/bot-1/chat");
-  fireEvent.keyDown(await screen.findByRole("button", { name: "More for Inbox Helper" }), { key: "Enter" });
-  fireEvent.click(await screen.findByRole("menuitem", { name: "Memory" }));
-  await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-2/chat"));
-  await screen.findByRole("button", { name: "Inbox Helper profile" });
-  const panel = await screen.findByRole("complementary", { name: "Bot panel" });
-  assert.equal(within(panel).getByRole("tab", { name: "Memory" }).getAttribute("aria-selected"), "true");
-  assert.ok(await within(panel).findByText("Prefers short replies"));
-  assert.equal(within(panel).queryByText("Lives in Lisbon") === null, true);
-  const memoryReads = calls.filter((call) => call.channel === "bots:memory:get");
-  assert.equal(memoryReads[memoryReads.length - 1]?.args[0], "bot-2");
-});
-
-test("Files from a row's right-click menu opens the panel, and closing the panel returns focus to that row", async () => {
-  sidebarIpc([PLANNER, INBOX], {}, FILE_HANDLERS);
-  await mountSidebar("/bots/bot-1/chat");
-  await screen.findByRole("button", { name: "Planner profile" });
-  const row = rowButton("Planner");
-  row.focus();
-  fireEvent.contextMenu(row);
-  fireEvent.click(await screen.findByRole("menuitem", { name: "Files" }));
-  const filesTab = () => within(botPanel()).getByRole("tab", { name: "Files" });
-  await waitFor(() => assert.equal(document.activeElement === filesTab(), true));
-  // The menu's own close must not pull focus back out of the panel.
-  await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
-  assert.equal(document.activeElement === filesTab(), true);
-  fireEvent.click(within(botPanel()).getByRole("button", { name: "Close Bot panel" }));
-  await waitFor(() => assert.equal(document.activeElement === rowButton("Planner"), true));
-});
-
-test("when the row the panel was opened from is gone, closing the panel puts focus on the panel toggle", async () => {
-  sidebarIpc([PLANNER, INBOX], {}, FILE_HANDLERS);
-  await mountSidebar("/bots/bot-1/chat");
-  await screen.findByRole("button", { name: "Planner profile" });
-  fireEvent.contextMenu(rowButton("Planner"));
-  fireEvent.click(await screen.findByRole("menuitem", { name: "Files" }));
-  const filesTab = () => within(botPanel()).getByRole("tab", { name: "Files" });
-  await waitFor(() => assert.equal(document.activeElement === filesTab(), true));
-  // Searching unmounts the row the panel would hand focus back to.
-  fireEvent.click(screen.getByRole("button", { name: "Search Bots" }));
-  fireEvent.change(screen.getByRole("searchbox", { name: "Search Bots" }), { target: { value: "inbox" } });
-  assert.deepEqual(rowOrder(), ["Inbox Helper"]);
-  filesTab().focus();
-  fireEvent.click(within(botPanel()).getByRole("button", { name: "Close Bot panel" }));
-  await waitFor(() => assert.equal(document.activeElement === screen.getByRole("button", { name: "Show panel" }), true));
 });
 
 test("Pin to top shows the Bot large above the rows, Unpin puts it back, and a deleted pinned Bot leaves no hero", async () => {
@@ -526,17 +445,17 @@ test("a Bot's state change re-reads only that Bot's row; other changes to a Bot 
 
 test("Shift+F10 on a focused row opens its menu from the keyboard", async () => {
   sidebarIpc([PLANNER, INBOX]);
-  const { router } = await mountSidebar();
+  await mountSidebar();
   const row = await screen.findByRole("button", { name: /^Inbox Helper/u });
   row.focus();
   fireEvent.keyDown(row, { key: "F10", shiftKey: true });
   const items = await screen.findAllByRole("menuitem");
-  assert.deepEqual(items.map((item) => item.textContent), ["Profile", "Files", "Memory", "Routines", "Advanced", "Pin to top", "Pause Bot", "Delete Bot"]);
-  fireEvent.click(screen.getByRole("menuitem", { name: "Profile" }));
-  await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-2"));
+  assert.deepEqual(items.map((item) => item.textContent), ["Pin to top", "Pause Bot", "Delete Bot"]);
+  fireEvent.click(screen.getByRole("menuitem", { name: "Delete Bot" }));
+  assert.ok(within(await screen.findByRole("alertdialog")).getByRole("heading", { name: "Delete Inbox Helper?" }));
 });
 
-test("deleting a row's Bot leaves focus on the next row, and deleting the last Bot leaves it on New Bot", async () => {
+test("deleting a row's Bot leaves focus on the next row, and deleting the last Bot leaves it on Create", async () => {
   let bots = [PLANNER, INBOX, SCOUT];
   sidebarIpc([], {
     "bot-1": summary("bot-1", { updatedAt: 300 }),
@@ -565,7 +484,7 @@ test("deleting a row's Bot leaves focus on the next row, and deleting the last B
   // None below: the row above.
   await waitFor(() => assert.equal(document.activeElement === rowButton("Planner"), true));
   await remove("Planner");
-  await waitFor(() => assert.equal(document.activeElement === screen.getByRole("button", { name: "New Bot" }), true));
+  await waitFor(() => assert.equal(document.activeElement === screen.getByRole("button", { name: "Create" }), true));
 });
 
 test("deleting a Bot from its own chat leaves nothing behind for it, not even a last-viewed time", async () => {
@@ -578,7 +497,7 @@ test("deleting a Bot from its own chat leaves nothing behind for it, not even a 
     },
   });
   const { router } = await mountSidebar("/bots/bot-2/chat");
-  await screen.findByRole("button", { name: "Inbox Helper profile" });
+  await screen.findByRole("button", { name: "Inbox Helper settings" });
   await waitFor(() =>
     assert.ok(parseBotSidebarPreferences(localStorage.getItem(BOT_SIDEBAR_PREFERENCES_KEY), Date.now()).lastViewed["bot-2"]),
   );
@@ -698,13 +617,14 @@ test("Cancel in a row's Delete puts focus back on that row", async () => {
 
 test("the Menu key on a focused row opens that row's menu", async () => {
   sidebarIpc([PLANNER, INBOX]);
-  const { router } = await mountSidebar();
+  await mountSidebar();
   const row = await screen.findByRole("button", { name: /^Planner/u });
   row.focus();
   fireEvent.keyDown(row, { key: "ContextMenu" });
-  fireEvent.click(await screen.findByRole("menuitem", { name: "Advanced" }));
-  await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-1"));
-  assert.equal(router.state.location.searchStr, "?page=advanced");
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Pin to top" }));
+  await waitFor(() =>
+    assert.equal(parseBotSidebarPreferences(localStorage.getItem(BOT_SIDEBAR_PREFERENCES_KEY), 0).pinnedBotId, "bot-1"),
+  );
 });
 
 test("deleting the pinned Bot leaves focus on the row below it on screen, not the next by activity", async () => {
@@ -763,11 +683,11 @@ test("opening another Bot redraws only the two rows whose selection changed", as
   });
   const { router } = await mountSidebar("/bots/bot-1/chat");
   await waitFor(() => assert.deepEqual(rowOrder(), ["Planner", "Inbox Helper", "Scout", "Moss"]));
-  await screen.findByRole("button", { name: "Planner profile" });
+  await screen.findByRole("button", { name: "Planner settings" });
   await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
   const before = rowRenders();
   await act(() => router.navigate({ to: "/bots/$botId/chat", params: { botId: "bot-3" } }));
-  await screen.findByRole("button", { name: "Scout profile" });
+  await screen.findByRole("button", { name: "Scout settings" });
   await waitFor(() => assert.equal(rowButton("Scout").getAttribute("aria-current"), "page"));
   await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
   assert.equal(rowRenders() - before, 2, "Planner and Scout, not every row");

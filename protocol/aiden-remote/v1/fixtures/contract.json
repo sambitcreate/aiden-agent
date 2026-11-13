@@ -1,5 +1,5 @@
 {
-  "contractRevision": 60,
+  "contractRevision": 61,
   "peerRouteAdvertisement": {
     "feature": "peer-routes-v1",
     "routes": [
@@ -2299,7 +2299,7 @@
     "instanceId": "instance_fixture_01",
     "displayName": "Fixture Aiden",
     "platform": "mac",
-    "contractRevision": 60,
+    "contractRevision": 61,
     "pairingRequests": true
   },
   "hostFeedEvents": [

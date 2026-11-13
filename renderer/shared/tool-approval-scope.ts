@@ -7,14 +7,35 @@
  *   (exact command or exact workspace-relative path) for the rest of this chat
  *   while the app stays open.
  * - `always`: persists that same narrow rule for the workspace until the user
- *   revokes it from Settings → Bots & Approvals → Tool approvals.
+ *   revokes it from Settings → Approvals.
+ * - `workspace`: a Mac card's "Allow in this workspace" under an approval
+ *   mode: that part of the Mac (commands, file changes) in this workspace,
+ *   removable in Workspace settings. Desktop only: Remote projections strip
+ *   it and a Remote answer naming it is refused (`parseRemoteToolApprovalScope`).
  */
-export const TOOL_APPROVAL_SCOPES = ["once", "chat", "always"] as const;
+export const TOOL_APPROVAL_SCOPES = ["once", "chat", "always", "workspace"] as const;
 
 export type ToolApprovalScope = (typeof TOOL_APPROVAL_SCOPES)[number];
 
 export function parseToolApprovalScope(value: unknown): ToolApprovalScope | undefined {
-  return value === "once" || value === "chat" || value === "always" ? value : undefined;
+  return value === "once" || value === "chat" || value === "always" || value === "workspace" ? value : undefined;
+}
+
+/** A scope a Remote device may answer with: any but the desktop-only `workspace`. */
+export function parseRemoteToolApprovalScope(value: unknown): Exclude<ToolApprovalScope, "workspace"> | undefined {
+  const scope = parseToolApprovalScope(value);
+  return scope === "workspace" ? undefined : scope;
+}
+
+/**
+ * The scopes a Remote device may be offered: the list without `workspace`, or
+ * undefined (omit the field) when only a one-time allow is left, as the Remote
+ * API says. Both native clients reject an empty list and accept a missing one.
+ */
+export function remoteOfferedScopes(value: unknown): unknown[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const offered = value.filter((scope) => scope !== "workspace");
+  return offered.some((scope) => scope !== "once") ? offered : undefined;
 }
 
 /** Tools whose calls can be remembered by an approval rule. */
@@ -61,7 +82,7 @@ export function rememberableApprovalScopes(
 ): Exclude<ToolApprovalScope, "once">[] {
   if (!canAllow || !scopes) return [];
   const offered = new Set(scopes.map(parseToolApprovalScope));
-  return (["chat", "always"] as const).filter((scope) => offered.has(scope));
+  return (["chat", "always", "workspace"] as const).filter((scope) => offered.has(scope));
 }
 
 export function toolApprovalScopeLabel(scope: ToolApprovalScope): string {
@@ -69,9 +90,11 @@ export function toolApprovalScopeLabel(scope: ToolApprovalScope): string {
     case "once":
       return "Allow once";
     case "chat":
-      return "Allow for this chat";
+      return "Allow in this chat";
     case "always":
-      return "Always allow";
+      return "Allow in this workspace";
+    case "workspace":
+      return "Allow in this workspace";
   }
 }
 

@@ -7,6 +7,9 @@ struct AidenBotCreateInput: Codable, Equatable, Sendable {
     var purpose: String
     /// The model the person picked; nil uses the Mac's recommended one.
     var draft: AidenBotEditorDraft?
+    /// Revision 61 (`bot:templates`): New Bot was one field, so the request
+    /// leaves instructions out and the Mac's starter ones apply.
+    var oneField: Bool? = nil
 }
 
 /// A New Bot on its way, kept on disk per pairing (in `AidenBotOutboxStore`, with the
@@ -485,6 +488,15 @@ final class AidenBotCreateFlow {
         _ input: AidenBotCreateInput,
         operations: AidenBotCreateOperations
     ) async throws -> (AidenBotCreateRequest, AidenBotEditorDraft?) {
+        let resolved = try await resolveSeeded(input, operations: operations)
+        guard input.oneField == true else { return resolved }
+        return (try resolved.0.withoutInstructions(), resolved.1)
+    }
+
+    private func resolveSeeded(
+        _ input: AidenBotCreateInput,
+        operations: AidenBotCreateOperations
+    ) async throws -> (AidenBotCreateRequest, AidenBotEditorDraft?) {
         let name = input.name.trimmingCharacters(in: .whitespacesAndNewlines)
         let purpose = input.purpose.trimmingCharacters(in: .whitespacesAndNewlines)
         let catalog = try await bounded { try await operations.catalog() }
@@ -600,7 +612,16 @@ struct AidenBotCreateView: View {
         )
     }
 
+    /// Revision 61 (`bot:templates`): New Bot is one field, as on the Mac. The
+    /// Mac's starter instructions apply and the Bot asks what to help with.
+    private var isOneField: Bool {
+        installation?.hasNegotiatedAccess(to: .botTemplates) == true
+    }
+
     private var input: AidenBotCreateInput {
+        if isOneField {
+            return AidenBotCreateInput(name: name, purpose: "", draft: nil, oneField: true)
+        }
         var picked = draft
         picked?.name = name
         picked?.purpose = purpose
@@ -618,6 +639,7 @@ struct AidenBotCreateView: View {
                   avatar: .recipe(AidenBotEditorDraft.defaultAvatar),
                   access: nil
               )) != nil else { return false }
+        if isOneField { return true }
         if let catalog, let draft {
             var named = draft
             named.name = name
@@ -668,17 +690,33 @@ struct AidenBotCreateView: View {
             if picker.showsPicker || picker.refusalMessage != nil {
                 Section { AidenNewWorkMachinePicker(picker: picker) }
             }
-            Section {
-                TextField("Name", text: $name)
-                    .textContentType(.name)
-                    .submitLabel(.next)
-                    .focused($nameIsFocused)
-                TextField("What should it help with?", text: $purpose, axis: .vertical)
-                    .lineLimit(2...5)
-            } footer: {
-                Text(accessNote)
+            if isOneField {
+                Section {
+                    TextField("Name your Bot", text: $name)
+                        .textContentType(.name)
+                        .submitLabel(.done)
+                        .focused($nameIsFocused)
+                        .onSubmit {
+                            guard canCreate else { return }
+                            onCreate(input, picker.target)
+                            dismiss()
+                        }
+                } footer: {
+                    Text("It asks what you want help with in its first message.")
+                }
+            } else {
+                Section {
+                    TextField("Name", text: $name)
+                        .textContentType(.name)
+                        .submitLabel(.next)
+                        .focused($nameIsFocused)
+                    TextField("What should it help with?", text: $purpose, axis: .vertical)
+                        .lineLimit(2...5)
+                } footer: {
+                    Text(accessNote)
+                }
+                modelSection
             }
-            modelSection
         }
         .scrollContentBackground(.hidden)
         .background(palette.canvas)

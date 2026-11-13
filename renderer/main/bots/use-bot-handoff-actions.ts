@@ -8,6 +8,7 @@ import { botsApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import type { BotHandoffOutcome, BotPendingHandoff } from "../../shared/bot-handoffs";
 import { useBotPanelActions } from "./bot-panel-context";
+import { handoffTakenKey, useHandoffTaken } from "../../components/bots/handoff-taken";
 
 export interface BotHandoffActions {
   /** An answer or Open is on its way: the buttons wait for it. */
@@ -22,6 +23,10 @@ export interface BotHandoffActions {
    * tab comes forward with focus, so the person can sign in there.
    */
   open(pending: BotPendingHandoff): Promise<void>;
+  /** The person pressed Take control on this card (here or in the panel): it offers I'm done and Skip. */
+  taken: boolean;
+  /** Records Take control for the card shown now. */
+  take(): void;
 }
 
 /**
@@ -91,5 +96,7 @@ export function useBotHandoffActions(botId: string, waitId: string | undefined):
     }
   };
 
-  return { busy: inFlight > 0, send, answer, open };
+  const [taken, take] = useHandoffTaken(waitId === undefined ? undefined : handoffTakenKey(botId, waitId));
+
+  return { busy: inFlight > 0, send, answer, open, taken, take };
 }

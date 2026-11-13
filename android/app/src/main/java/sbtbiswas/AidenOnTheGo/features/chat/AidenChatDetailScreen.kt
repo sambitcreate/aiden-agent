@@ -183,6 +183,7 @@ fun AidenChatDetailScreen(
     }
     val showsLiveCard = AidenChatScroll.showsLiveCard(streamState, hasLiveOutput)
     val pendingApproval by viewModel.pendingApproval.collectAsStateWithLifecycle()
+    val answeredApproval by viewModel.answeredApproval.collectAsStateWithLifecycle()
     val isStopping by viewModel.isStopping.collectAsStateWithLifecycle()
     val isSubmittingRunInput by viewModel.isSubmittingRunInput.collectAsStateWithLifecycle()
     val runInputMode by viewModel.runInputMode.collectAsStateWithLifecycle()
@@ -646,6 +647,22 @@ fun AidenChatDetailScreen(
                                 modifier = Modifier.padding(16.dp)
                             )
                         }
+                    }
+                }
+
+                // Revision 61: a typed card's answered line, in the card's place while the run goes on.
+                val answeredLine = answeredApproval?.takeIf { pendingApproval == null && streamState?.isTerminal != true }
+                AnimatedVisibility(
+                    visible = answeredLine != null,
+                    enter = aidenBannerEnter(reduceMotion),
+                    exit = aidenBannerExit(reduceMotion)
+                ) {
+                    answeredLine?.let { line ->
+                        AidenApprovalAnsweredRow(
+                            title = line.title,
+                            answered = line.answered,
+                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp)
+                        )
                     }
                 }
 

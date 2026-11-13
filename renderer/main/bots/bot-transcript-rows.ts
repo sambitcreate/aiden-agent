@@ -16,7 +16,7 @@ import type { BotChatActivityLevel } from "../../shared/bots";
 import type { ConnectCardEntry } from "../../shared/bot-connections";
 import type { BotRoutineProposalEntryData, BotRoutineProposalStatus } from "../../shared/bot-routine-proposals";
 import type { BotIssue, BotIssueResolution } from "../../shared/bot-issues";
-import { botSettleSteps, type BotRecapStep } from "./bot-activity-steps";
+import { botRecapIssues, botSettleSteps, type BotRecapStep } from "./bot-activity-steps";
 import { walkBotTurns, type BotTurn } from "./bot-turns";
 
 export interface BotTranscriptRowOptions {
@@ -57,6 +57,13 @@ export type BotTranscriptRow =
       routineId?: string;
       supersededBy?: string;
     }
+  /** "Settings updated · Undo", or a held change the person applied. */
+  | {
+      kind: "settings_change";
+      id: string;
+      change: import("../../shared/bot-settings-changes").BotSettingsChangeEntryData;
+      status: "pending" | import("../../shared/bot-settings-changes").BotSettingsChangeStatus;
+    }
   | {
       kind: "skill_proposal";
       id: string;
@@ -95,11 +102,16 @@ export function botTranscriptRows(
   walkBotTurns(entries, running, {
     end(turn, live) {
       const steps = turn.steps.filter((step) => step.kind !== "waiting");
-      if (steps.length > 0 && (level === "detailed" || (level === "summary" && !live))) {
+      const settled = live ? steps : botSettleSteps(steps, turn.stopped || turn.interrupted);
+      // With tool activity off, a finished turn still keeps its one line when
+      // a step failed or was blocked: that is something the person may need to act on.
+      const issues = botRecapIssues(settled);
+      const needsSaying = !live && (issues.failed > 0 || issues.blocked > 0);
+      if (steps.length > 0 && (level === "detailed" || (level === "summary" && !live) || needsSaying)) {
         const recap: BotTranscriptRow = {
           kind: "recap",
           id: `${turn.start.id}:recap`,
-          steps: live ? steps : botSettleSteps(steps, turn.stopped || turn.interrupted),
+          steps: settled,
           durationMs: Math.max(0, (turn.lastAt ?? 0) - (turn.startAt ?? turn.lastAt ?? 0)),
           live,
         };
@@ -190,6 +202,12 @@ export function botTranscriptRows(
           break;
         case "skill_proposal":
           rows.push({ kind: "skill_proposal", id: entry.id, proposal: entry.proposal, status: entry.status });
+          break;
+        // A held change waits in the Needs-you slot; once applied it reads as a receipt.
+        case "settings_change":
+          if (entry.change.mode === "applied" || entry.status === "applied" || entry.status === "edited") {
+            rows.push({ kind: "settings_change", id: entry.id, change: entry.change, status: entry.status });
+          }
           break;
         case "routines_skipped":
           rows.push({ kind: "routines_skipped", id: entry.id, since: entry.since, routines: entry.routines });

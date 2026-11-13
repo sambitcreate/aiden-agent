@@ -322,6 +322,19 @@ struct AidenBotAdvancedView: View {
                 Text("Only what I pick").tag(false)
             }
             .pickerStyle(.segmented)
+            if draft?.usesFullAccess == true, coordinator.botInstallation(on: machine)?.offersBotUX == true {
+                // Revision 61: turn one tool off without picking everything else.
+                let tools = AidenBotTool.available(in: catalog)
+                if !tools.isEmpty {
+                    Menu {
+                        ForEach(tools, id: \.tool) { entry in
+                            Button(entry.label) { draft = draft?.disabling(entry.tool, catalog: catalog) }
+                        }
+                    } label: {
+                        Label("Disable a Tool", systemImage: "minus.circle")
+                    }
+                }
+            }
         } header: {
             Text("What it can use")
         } footer: {
@@ -358,7 +371,7 @@ struct AidenBotAdvancedView: View {
                 .buttonStyle(.plain)
                 .disabled(isDirty)
             } footer: {
-                Text(isDirty ? "Save or cancel your changes first." : "What you see in its chat on your machine while it works.")
+                Text(isDirty ? "Save or cancel your changes first." : "How its status line reads while it works. Each computer’s Show tool activity switch decides whether to show the steps.")
             }
         }
     }
@@ -825,7 +838,8 @@ struct AidenBotModelListView: View {
 /// holds `bot:activity`, once a Bot's detail (cached or fresh) is on screen. Offline, the
 /// pairing's last-known capabilities decide (R21).
 func aidenBotShowsChatActivity(server: AidenServer?, installation: AidenInstallation?, hasBaseline: Bool) -> Bool {
-    hasBaseline && aidenBotActivitySupported(server: server, installation: installation)
+    // Revision 61: Settings → Show tool activity replaces the per-Bot page on this phone.
+    hasBaseline && installation?.offersBotUX != true && aidenBotActivitySupported(server: server, installation: installation)
 }
 
 /// The Bot changed on the Mac since this phone read it (a stale `If-Match`).
@@ -928,7 +942,7 @@ enum AidenBotChatActivityCopy {
     }
 
     static func description(botName: String) -> String {
-        "What you see in \(botName)’s chat on your machine while it works. Changes save as you pick them."
+        "How \(botName)’s status line reads while it works. Each computer’s Show tool activity switch decides whether its chats show the steps; Detailed turns them on for a computer that hasn’t chosen. Changes save as you pick them."
     }
 }
 
@@ -1531,12 +1545,20 @@ struct AidenBotMessagingSection: View {
     var body: some View {
         Section {
             if let value = optimistic ?? bot.botMessaging {
-                Toggle("Other Bots can message \(bot.name)", isOn: Binding(
-                    get: { value.receive }, set: { save(receive: $0) }
-                ))
-                Toggle("\(bot.name) can message other Bots", isOn: Binding(
-                    get: { value.send }, set: { save(send: $0) }
-                ))
+                if coordinator.botInstallation(on: machine)?.offersBotUX == true {
+                    // Revision 61: one switch, as on the Mac. It reads on only when
+                    // both stored directions are on, and writes both.
+                    Toggle("Can message other Bots", isOn: Binding(
+                        get: { aidenBotMessagingSingleSwitch(value) }, set: { save(receive: $0, send: $0) }
+                    ))
+                } else {
+                    Toggle("Other Bots can message \(bot.name)", isOn: Binding(
+                        get: { value.receive }, set: { save(receive: $0) }
+                    ))
+                    Toggle("\(bot.name) can message other Bots", isOn: Binding(
+                        get: { value.send }, set: { save(send: $0) }
+                    ))
+                }
             }
             if let saveError { Text(saveError).foregroundStyle(.secondary) }
         } header: {
@@ -1588,4 +1610,10 @@ struct AidenBotMessagingSection: View {
             isSaving = false
         }
     }
+}
+
+/// Revision 61: the single Can message other Bots switch reads on only when
+/// the Bot both receives and sends.
+func aidenBotMessagingSingleSwitch(_ value: AidenBotMessaging) -> Bool {
+    value.receive && value.send
 }

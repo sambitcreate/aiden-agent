@@ -204,6 +204,18 @@ export type BotTranscriptEntry =
   | { id: string; type: "memory_tidy"; changeId?: string; at?: number }
   /** A wake-up the Bot set for itself (`wake_up`); the chip reads from the Bot's routines whether it is still waiting. */
   | { id: string; type: "wake_up"; wakeUpId: string; fireAt: number; at?: number }
+  /**
+   * A change the Bot made to its own settings (`update_bot`): a receipt with
+   * Undo when the person started the run, else a held card with Apply / Edit /
+   * Dismiss. `status` is `pending` until answered.
+   */
+  | {
+      id: string;
+      type: "settings_change";
+      change: import("./bot-settings-changes.js").BotSettingsChangeEntryData;
+      status: "pending" | import("./bot-settings-changes.js").BotSettingsChangeStatus;
+      at?: number;
+    }
   /** A skill the Bot proposed, or one found in its folder, waiting for Add. */
   | {
       id: string;

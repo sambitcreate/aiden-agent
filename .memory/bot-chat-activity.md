@@ -1,5 +1,7 @@
 # Bot chat activity (2026-10-14)
 
+> 2026-11-12 (bot UX Phase 4): the desktop Advanced → Chat activity page is gone. Bot chats on a device follow one `showToolActivity` appearance switch (Settings → Appearance → Chat); per-Bot `chatActivity` stays stored and on the wire for phones. See `.memory/approval-gate.md` Phase 4. With the switch off, a finished turn whose step failed or was blocked still shows its one recap line. Phone Chat activity copy says it sets the wording; each computer's switch decides, and Detailed turns steps on for a computer that hasn't chosen.
+
 ## Timeout race follow-up (2026-10-15)
 - In `AidenBotRequestRace`, publish `AidenBotRequestTimedOut` before cancelling the request. Cancelling first could let a sleeping request throw `CancellationError` and win the race, so Chat Activity cleared a choice made during a timed-out save instead of reconciling it after refresh. Hosted PR #498 run 38816353400 exposed this in `AidenBotChatActivityTests/testAPickMadeWhileASaveTimedOutGoesOutOnceTheRefreshShowsThatSaveLanded()`; the focused 23-test simulator suite passed after the ordering fix. No timeout or retry policy changed.
 

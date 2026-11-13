@@ -3147,9 +3147,12 @@ struct AidenStreamPendingApproval: Codable, Equatable, Sendable {
     /// Contract revision 39 (`schedule:cards`): the display-only card on a
     /// scheduled-task approval. Nil when absent or when it fails validation.
     var schedule: AidenApprovalSchedule? = nil
+    /// Contract revision 61 (`approval:cards`): the typed card. When present,
+    /// `canAllow` and `scopes` agree with its buttons, or the snapshot is refused.
+    var card: AidenApprovalCardModel? = nil
 
     private enum CodingKeys: String, CodingKey {
-        case approvalId, streamId, chatId, summary, toolCallId, toolName, expiresAt, canAllow, scopes, schedule
+        case approvalId, streamId, chatId, summary, toolCallId, toolName, expiresAt, canAllow, scopes, schedule, card
     }
 }
 
@@ -3167,6 +3170,9 @@ extension AidenStreamPendingApproval {
         scopes = try values.decodeIfPresent([String].self, forKey: .scopes)
         // A card that fails validation is dropped; the approval still decodes.
         schedule = try? values.decodeIfPresent(AidenApprovalSchedule.self, forKey: .schedule)
+        // Revision 61: strict, like the host's `parseAidenRemotePhoneStreamApproval`.
+        card = try values.decodeIfPresent(AidenApprovalCardModel.self, forKey: .card)
+        try card?.validateSummary(canAllow: canAllow, scopes: scopes)
     }
 }
 
@@ -3374,6 +3380,9 @@ struct AidenPendingApproval: Identifiable, Equatable, Sendable {
     /// Contract revision 39: the structured card for a `schedule_task` approval.
     /// Display-only; it never changes `canAllow` or `scopes`.
     var schedule: AidenApprovalSchedule? = nil
+    /// Contract revision 61 (`approval:cards`): the typed card. With it, the
+    /// buttons are the card's and only what they offer is ever sent.
+    var card: AidenApprovalCardModel? = nil
 }
 
 enum AidenApprovalKind: Equatable, Sendable {
@@ -3766,7 +3775,8 @@ enum AidenPendingApprovalResolution {
             canAllow: canAllow,
             scopes: canAllow && kind == .action ? AidenApprovalScope.offered(approval.scopes) : [.once],
             toolName: approval.toolName,
-            schedule: AidenApprovalSchedule.card(approval.schedule, toolName: approval.toolName)
+            schedule: AidenApprovalSchedule.card(approval.schedule, toolName: approval.toolName),
+            card: approval.card
         )
     }
 }

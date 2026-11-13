@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import { BOT_PRESETS } from "../../renderer/shared/bot-presets.js";
+import { ApprovalRuleBook, memoryApprovalRuleStore } from "./approval-rules/store.js";
 import { analyticsSettled, captureAnalyticsEvents } from "./analytics/test-support.js";
 import * as fs from "node:fs/promises";
 import path from "node:path";
@@ -1862,6 +1863,28 @@ test("Bot delete erases photo, browser, home, access and chats, then the record 
   assert.deepEqual(app.events, [], "deleting a deleted Bot changes nothing");
 });
 
+test("Bot delete forgets that Bot's own approval rules and nobody else's, and an unreadable rule book never stops it", async () => {
+  const owner = bot("bot:ruled");
+  const survivor = bot("bot:kept");
+  const app = fixture({ bots: [owner, survivor] });
+  const book = new ApprovalRuleBook(memoryApprovalRuleStore());
+  await book.add({ target: { kind: "tool", tool: "browser_click" }, decision: "block", owner: { kind: "bot", botId: owner.id } });
+  await book.add({ target: { kind: "tool", tool: "browser_click" }, decision: "block", owner: { kind: "bot", botId: survivor.id } });
+  await book.add({ target: { kind: "site", host: "shop.example" }, decision: "ask", owner: { kind: "mac" } });
+  (app.deps as { forgetBotApprovalRules?: (botId: string) => Promise<void> }).forgetBotApprovalRules = async (botId) => {
+    await book.forgetOwner({ kind: "bot", botId });
+  };
+  await app.service.initialize();
+  await app.service.deleteBot({ botId: owner.id });
+  assert.deepEqual((await book.list()).map((rule) => rule.owner), [{ kind: "bot", botId: survivor.id }, { kind: "mac" }]);
+
+  (app.deps as { forgetBotApprovalRules?: (botId: string) => Promise<void> }).forgetBotApprovalRules = async () => {
+    throw new Error("Your approval rules couldn’t be read.");
+  };
+  await app.service.deleteBot({ botId: survivor.id });
+  assert.deepEqual((await app.service.list()).map(({ id }) => id), [], "the Bot is deleted all the same");
+});
+
 test("an interrupted Bot delete keeps the Bot listed, and a retry finishes it", async () => {
   const owner = bot("bot:interrupted");
   const app = fixture({ bots: [owner] });
@@ -2053,6 +2076,41 @@ test("only a creator that discloses Web Search grants it to a new Full Access Bo
   const web = app.policyAccesses.map((access) =>
     access.accessMode === "full" ? access.webSearchEnabled : "custom");
   assert.deepEqual(web, [undefined, true, false]);
+});
+
+test("a paired device moving a Full Bot to Custom never adds Web search that Full did not grant", async () => {
+  for (const fullWeb of [false, true]) {
+    const app = fixture({ bots: [bot("bot:web")] });
+    await app.service.initialize();
+    // The catalog offers Web search (kind "web") beside another ordinary capability.
+    const other = (id: string, kind: "web" | "browser") => ({
+      option: { id, label: id === "other:web" ? "Web search" : "Browser", available: true },
+      kind,
+      capabilityFingerprint: "f".repeat(64),
+      exactFingerprint: "e".repeat(64),
+    });
+    const snapshot = app.deps.catalog.snapshot.bind(app.deps.catalog);
+    app.deps.catalog.snapshot = async (...args: Parameters<typeof snapshot>) => {
+      const value = await snapshot(...args);
+      value.resources.otherCapabilities = [other("other:browser", "browser"), other("other:web", "web")];
+      value.catalog.otherCapabilities = value.resources.otherCapabilities.map(({ option }) => option);
+      return value;
+    };
+    app.deps.capabilityStore.getBotWebSearchEnabled = async () => fullWeb;
+    const custom = { providerId: "provider:opaque", modelId: "model:opaque", fileScopeIds: ["scope:home"], shellEnabled: true, connectionIds: [], skillIds: [], otherCapabilityIds: ["other:browser", "other:web"] };
+    const update = (noWiderThanFull?: true) => app.service.updateBotAccess({
+      audienceId: "device:phone",
+      botId: "bot:web",
+      expectedRevision: app.policies.get("bot:web")!.revision,
+      access: { accessMode: "custom", catalogRevision: CATALOG_REVISION, custom },
+      ...(noWiderThanFull ? { noWiderThanFull } : {}),
+    });
+    const saved = await update(true);
+    assert.deepEqual(saved.custom?.otherCapabilityIds, fullWeb ? ["other:browser", "other:web"] : ["other:browser"], `Full with web ${fullWeb ? "on" : "off"}`);
+    // Already Custom: a device's later change is not a Full conversion, so its explicit choice stands.
+    const again = await update(true);
+    assert.deepEqual(again.custom?.otherCapabilityIds, ["other:browser", "other:web"]);
+  }
 });
 
 test("Bot creation retries its policy after a runtime inventory invalidation", async () => {
@@ -2766,10 +2824,12 @@ test("a created Bot counts once with its preset and how many there are, and a fa
   await shipped.service.createBot({
     audienceId: "device:a",
     presetId: preset.id,
+    source: "template",
     bot: { name: "Planner", instructions: "Plan.", avatar: { version: 1, shape: "wisp", color: "lilac" } },
   });
   await analyticsSettled();
   assert.equal(sent[0]?.props?.preset_id, preset.id);
+  assert.equal(sent[0]?.props?.source, "template", "how the Bot was made travels with it");
 
   sent.length = 0;
   const failing = fixture({ failIdentityCreate: true });

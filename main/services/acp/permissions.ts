@@ -2,9 +2,9 @@
  * Answer an agent's `session/request_permission` with Aiden's policy.
  *
  * Local read-like operations are allowed in every mode (T3 Code
- * AcpClientPolicy.ts @ f870c419fc, MIT). Mutations and network fetches follow the generation's
- * workspace permission: Full allows, Ask shows Aiden's approval card, and
- * read-only or no-access refuses. A dismissed or failed approval is always a
+ * AcpClientPolicy.ts @ f870c419fc, MIT). Mutations and network fetches go
+ * through the approval gate with the generation's workspace permission: Full
+ * allows, Ask shows Aiden's approval card, and read-only or no-access refuses. A dismissed or failed approval is always a
  * refusal, never an implicit allow.
  */
 import type {
@@ -15,6 +15,7 @@ import type {
   ToolKind,
 } from "@agentclientprotocol/sdk";
 
+import { planActionGate } from "../approval-gate/gate.js";
 import { relativeDisplayPath } from "./activity.js";
 import type { AcpPermissionClassification } from "./harness.js";
 import type { AcpApprovalRequest, AcpTurnHost } from "./host.js";
@@ -97,10 +98,13 @@ export async function answerPermission(
   }
 
   const kind = request.toolCall.kind ?? undefined;
-  if (kind && READ_LIKE.has(kind)) return allow(request);
-  const permission = host.permission();
-  if (permission === "full") return allow(request);
-  if (permission === "read-only" || permission === "none") return reject(request);
+  const readLike = kind !== undefined && READ_LIKE.has(kind);
+  const gate = planActionGate(
+    { surface: "acp", access: host.permission() },
+    { toolName: `acp:${kind ?? "other"}`, ...(readLike ? {} : { consequential: true }) },
+  );
+  if (gate.outcome === "allow") return allow(request);
+  if (gate.outcome !== "ask") return reject(request);
 
   const paths = (request.toolCall.locations ?? [])
     .map((location) => relativeDisplayPath(location.path, host.roots))

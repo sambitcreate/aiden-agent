@@ -5,6 +5,7 @@ import {
   availableSettingsDestinations,
   availableSettingsPages,
   firstMatchingSettingsSection,
+  isSettingsAnchor,
   matchesSettingsSearch,
   pageFor,
   parseSettingsSearch,
@@ -15,6 +16,7 @@ import {
   SETTINGS_GROUPS,
   SETTINGS_PAGES,
   SETTINGS_SECTIONS,
+  settingsTabFor,
   settingsTabLabel,
 } from "./settings-section.js";
 
@@ -222,7 +224,8 @@ test("every sidebar group holds a page", () => {
 });
 
 test("old deep links reach their merged page", () => {
-  assert.equal(pageFor("approvals").title, "Bots & Approvals");
+  assert.equal(pageFor("approvals").title, "Approvals");
+  assert.equal(pageFor("bots").title, "Approvals");
   assert.equal(pageFor("botComputers").title, "Computers & VMs");
   assert.equal(pageFor("tts").title, "Voice & Speech");
   assert.equal(pageFor("telegram").title, "Connections");
@@ -233,6 +236,19 @@ test("links opens Appearance as a spot on the page, not a tab", () => {
   assert.equal(pageFor("links").id, "appearance");
   assert.deepEqual(pageFor("links").tabs, ["appearance"]);
   assert.equal(resolveSettingsSection("links", LINUX), "links");
+});
+
+test("Bot messaging is a spot on Approvals, which shows its Approvals tab", () => {
+  const page = pageFor("bots");
+  assert.deepEqual(page.tabs, ["approvals", "appControls"]);
+  assert.equal(isSettingsAnchor("bots"), true);
+  assert.equal(isSettingsAnchor("approvals"), false);
+  assert.equal(settingsTabFor(page, "bots"), "approvals");
+  assert.equal(settingsTabFor(page, "appControls"), "appControls");
+  assert.equal(resolveSettingsSection("bots", LINUX), "bots");
+  // Asking for the spot again scrolls again; a tab carries no scroll request.
+  assert.equal(typeof (settingsLocation("bots") as { state?: { aidenSettingsAnchor?: number } }).state?.aidenSettingsAnchor, "number");
+  assert.equal((settingsLocation("approvals") as { state?: unknown }).state, undefined);
 });
 
 test("Connections names its tabs for what they do", () => {
@@ -264,7 +280,7 @@ test("a section this host can't show opens the next tab on its page, then Provid
 
 test("the assistant names pages as people see them, and none this host hides", () => {
   const pages = assistantSettingsPages(APPLE_SILICON);
-  assert.ok(pages.includes("Bots & Approvals (Bots, Tool approvals, Controls in chat)"));
+  assert.ok(pages.includes("Approvals (Approvals, Controls in chat, Bot messaging)"));
   assert.ok(pages.includes("Connections (Control this device, Control other devices, Telegram)"));
   assert.ok(pages.includes("Appearance (Links)"));
   assert.ok(pages.includes("Memory"));
@@ -291,9 +307,8 @@ function searchSidebar(search: string, capabilities = APPLE_SILICON) {
 
 test("sidebar search opens the tab that matched", () => {
   assert.deepEqual(searchSidebar("read aloud"), [{ page: "voiceSpeech", target: "tts" }]);
-  assert.deepEqual(searchSidebar("stop asking me"), [
-    { page: "botsApprovals", target: "bots" },
-  ]);
+  assert.deepEqual(searchSidebar("stop asking me"), [{ page: "approvals", target: "approvals" }]);
+  assert.deepEqual(searchSidebar("message each other"), [{ page: "approvals", target: "bots" }]);
   assert.ok(searchSidebar("chat controls").some((row) => row.target === "appControls"));
   assert.ok(searchSidebar("multiple computers").some((row) => row.target === "peerHosts"));
 });

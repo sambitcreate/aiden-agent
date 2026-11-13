@@ -31,10 +31,12 @@ import { botSidebarPreferenceActions } from "./use-bot-sidebar-preferences";
 import { shouldRestoreEnvironmentFocus } from "../../lib/environment-panel-state";
 import { botFixture } from "./test-fixtures";
 import { mountWithBotRouter } from "./test-providers";
+import { clearHandoffTaken } from "../../components/bots/handoff-taken";
 
 beforeEach(() => {
   installBotTestIpc();
   localStorage.clear();
+  clearHandoffTaken();
 });
 afterEach(cleanup);
 
@@ -613,7 +615,7 @@ async function mountBotChat(handlers: Record<string, (...args: unknown[]) => unk
     ...handlers,
   });
   const mounted = await mountWithBotRouter(null, { initialPath: "/bots/bot-1/chat" });
-  await screen.findByRole("button", { name: "Planner profile" });
+  await screen.findByRole("button", { name: "Planner settings" });
   return { calls, ...mounted };
 }
 
@@ -635,11 +637,12 @@ test("the panel toggle opens the Bot panel with only Bot tabs, focused on the se
   assert.equal(screen.getByRole("complementary", { name: "Bot panel" }) === botPanel(), true);
   assert.deepEqual(
     within(botPanel()).getAllByRole("tab").map((tab) => tab.textContent),
-    ["Activity", "Files", "Memory", "Routines"],
+    ["Activity", "Files", "Memory", "Routines", "Advanced"],
   );
   assert.equal(within(botPanel()).queryByRole("button", { name: /^Close .+ tab$/u }), null, "Bot tabs are fixed");
   assert.equal(within(botPanel()).queryByRole("button", { name: "New workspace tab" }), null);
-  assert.equal(within(botPanel()).queryByRole("button", { name: "Open tabs" }) === null, true, "four fixed tabs need no list");
+  // Five tabs outgrow the narrowest panel, so the list reaches any that scroll away.
+  assert.ok(within(botPanel()).getByRole("button", { name: "Open tabs" }));
   await waitFor(() => assert.equal(document.activeElement === panelTab("Activity"), true));
   assert.equal(
     shouldRestoreEnvironmentFocus(document.activeElement, "tools"),
@@ -826,42 +829,20 @@ test("a file the Bot wrote is a chip that opens the panel's Files tab on that fi
   assert.equal(screen.queryByRole("dialog"), null, "no Files dialog any more");
 });
 
-test("Files and Memory in the chat's ••• menu open the panel on that tab", async () => {
-  await mountBotChat({ ...FILE_HANDLERS, "bots:memory:get": () => memoryView([]) });
-  fireEvent.keyDown(screen.getByRole("button", { name: "More for Planner" }), { key: "Enter" });
-  fireEvent.click(await screen.findByRole("menuitem", { name: "Files" }));
-  assert.equal(panelTab("Files").getAttribute("aria-selected"), "true");
-  assert.ok(await within(botPanel()).findByRole("button", { name: "groceries.md" }));
-  fireEvent.keyDown(screen.getByRole("button", { name: "More for Planner" }), { key: "Enter" });
-  fireEvent.click(await screen.findByRole("menuitem", { name: "Memory" }));
-  assert.equal(panelTab("Memory").getAttribute("aria-selected"), "true");
-});
-
-test("Routines in the chat's ••• menu opens the panel on Routines, and Pin to top pins the Bot", async () => {
+test("the Bot's name opens the panel on its settings, and Pin to top in ••• pins the Bot", async () => {
   await mountBotChat();
+  const name = screen.getByRole("button", { name: "Planner settings" });
+  assert.equal(name.getAttribute("aria-controls"), "bot-panel");
+  fireEvent.click(name);
+  assert.equal(botPanel().getAttribute("data-state"), "open");
+  assert.equal(panelTab("Advanced").getAttribute("aria-selected"), "true");
+  await waitFor(() => assert.equal(document.activeElement === panelTab("Advanced"), true));
   const more = () => screen.getByRole("button", { name: "More for Planner" });
-  fireEvent.keyDown(more(), { key: "Enter" });
-  fireEvent.click(await screen.findByRole("menuitem", { name: "Routines" }));
-  assert.equal(panelTab("Routines").getAttribute("aria-selected"), "true");
   fireEvent.keyDown(more(), { key: "Enter" });
   fireEvent.click(await screen.findByRole("menuitem", { name: "Pin to top" }));
   assert.equal(parseBotSidebarPreferences(localStorage.getItem(BOT_SIDEBAR_PREFERENCES_KEY), 0).pinnedBotId, "bot-1");
   fireEvent.keyDown(more(), { key: "Enter" });
   assert.ok(await screen.findByRole("menuitem", { name: "Unpin" }));
-});
-
-test("opening the panel from ••• → Files focuses the panel's tab, and closing it returns focus to the ••• button", async () => {
-  await mountBotChat(FILE_HANDLERS);
-  const more = screen.getByRole("button", { name: "More for Planner" });
-  more.focus();
-  fireEvent.keyDown(more, { key: "Enter" });
-  fireEvent.click(await screen.findByRole("menuitem", { name: "Files" }));
-  await waitFor(() => assert.equal(document.activeElement === panelTab("Files"), true));
-  // Radix restores focus when the menu closes; that must not outlast the panel's own focus.
-  await new Promise((resolve) => setTimeout(resolve, 50));
-  assert.equal(document.activeElement === panelTab("Files"), true);
-  fireEvent.click(within(botPanel()).getByRole("button", { name: /^Close/ }));
-  await waitFor(() => assert.equal(document.activeElement === more, true));
 });
 
 test("Delete Bot in the chat's ••• menu asks first and deletes nothing until confirmed", async () => {
@@ -885,7 +866,7 @@ function memoryView(entries: { id: string; text: string }[]): BotMemoryView {
   return { botId: "bot-1", revision: `rev-${entries.length}`, readable: true, user: store(entries, 1_375), memory: store([], 2_200), updatedAt: 1 };
 }
 
-test("Memory in the panel edits an entry exactly as Profile → Memory does", async () => {
+test("Memory in the panel edits an entry", async () => {
   const edits: unknown[] = [];
   await mountBotChat({
     "bots:memory:get": () => memoryView([{ id: "u-short", text: "Prefers short answers." }]),
@@ -937,9 +918,9 @@ test("Home and End in the tab strip jump to the first and last tab, and focus fo
   fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
   await waitFor(() => assert.equal(document.activeElement === panelTab("Activity"), true));
   fireEvent.keyDown(panelTab("Activity"), { key: "End" });
-  await waitFor(() => assert.equal(document.activeElement === panelTab("Routines"), true));
-  assert.equal(panelTab("Routines").getAttribute("aria-selected"), "true");
-  fireEvent.keyDown(panelTab("Routines"), { key: "Home" });
+  await waitFor(() => assert.equal(document.activeElement === panelTab("Advanced"), true));
+  assert.equal(panelTab("Advanced").getAttribute("aria-selected"), "true");
+  fireEvent.keyDown(panelTab("Advanced"), { key: "Home" });
   await waitFor(() => assert.equal(document.activeElement === panelTab("Activity"), true));
   assert.equal(panelTab("Activity").getAttribute("aria-selected"), "true");
 });

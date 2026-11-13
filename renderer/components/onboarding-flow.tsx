@@ -39,7 +39,7 @@ import {
 } from "../shared/onboarding";
 import { useAppCapabilities } from "../lib/app-capabilities";
 import { focusRegionWhenShown } from "../lib/focus-regions";
-import { OnboardingBotsStep } from "./onboarding-bots-step";
+import { acceptFirstBotAccess, OnboardingBotsStep, type FirstBotAccess } from "./onboarding-bots-step";
 import { OnboardingFeatureGallery, onboardingFeatures } from "./onboarding-feature-gallery";
 
 const visibleSteps = ["profile", "provider", "tour"] as const;
@@ -101,7 +101,10 @@ export function OnboardingFlow({
   const [stateReady, setStateReady] = React.useState(false);
   const [onboardingLoadError, setOnboardingLoadError] = React.useState<string | null>(null);
   const [index, setIndex] = React.useState(0);
-  const [botsStepVisible, setBotsStepVisible] = React.useState(false);
+  // The first Bot's step; its hand-off stays on show after the step is saved.
+  const [firstBotShown, setFirstBotShown] = React.useState(false);
+  // Finish waits while the first Bot is being made, so its chat can open.
+  const [creatingBot, setCreatingBot] = React.useState(false);
   const capabilitiesRef = React.useRef(capabilities);
   capabilitiesRef.current = capabilities;
   const [name, setName] = React.useState("");
@@ -110,7 +113,6 @@ export function OnboardingFlow({
   const [connected, setConnected] = React.useState<{ id: string; label: string; model: string } | null>(null);
   const [googleScope, setGoogleScope] = React.useState<GeminiUsageScope | null>(null);
   const [saving, setSaving] = React.useState(false);
-  const [creatingBot, setCreatingBot] = React.useState(false);
   const [providerError, setProviderError] = React.useState<string | null>(null);
   const [providerSkipped, setProviderSkipped] = React.useState(false);
   const onboardingSnapshotRef = React.useRef<OnboardingSnapshot | null>(null);
@@ -149,7 +151,7 @@ export function OnboardingFlow({
             () => false,
           ));
         if (loadGenerationRef.current !== generation) return;
-        setBotsStepVisible(botsVisible && snapshot.lastSatisfiedStep !== "bots");
+        setFirstBotShown(botsVisible && snapshot.lastSatisfiedStep !== "bots");
         setIndex(onboardingStepIndex(snapshot));
         setProviderSkipped(!snapshot.selectedProviderId && snapshot.lastSatisfiedStep === "bots");
         setConnected(null);
@@ -193,8 +195,10 @@ export function OnboardingFlow({
     return () => cancelAnimationFrame(frame);
   }, [index, open]);
 
-  /** The starter Bot Start Chat made; its chat opens when onboarding finishes. */
+  /** The first Bot onboarding made; its chat opens when onboarding finishes. */
   const startedBotIdRef = React.useRef<string | null>(null);
+  /** How the first Bot may act; accepted only when the person presses Start using Aiden. */
+  const firstBotAccessRef = React.useRef<FirstBotAccess | null>(null);
 
   // While this overlay is drawn over the app, links behind it (e.g. in a
   // provider editor) must go straight to the system browser, never prompt or
@@ -226,10 +230,10 @@ export function OnboardingFlow({
     finally { savingRef.current = false; setSaving(false); }
   };
 
-  const finishBotsStep = async (startedBotId?: string) => {
+  const finishBotsStep = async (startedBotId?: string, access?: FirstBotAccess) => {
     if (savingRef.current) return;
     startedBotIdRef.current = startedBotId ?? null;
-    setBotsStepVisible(false);
+    firstBotAccessRef.current = access ?? null;
     savingRef.current = true;
     setSaving(true);
     try {
@@ -337,8 +341,18 @@ export function OnboardingFlow({
       markOnboardingComplete();
       setOpen(false);
       const startedBotId = startedBotIdRef.current;
+      const firstBotAccess = firstBotAccessRef.current;
       startedBotIdRef.current = null;
-      if (startedBotId) onOpenBotChat?.(startedBotId);
+      firstBotAccessRef.current = null;
+      if (startedBotId) {
+        onOpenBotChat?.(startedBotId);
+        // This press is the person's go-ahead for the Full access the step described.
+        if (firstBotAccess) {
+          void acceptFirstBotAccess(startedBotId, firstBotAccess).catch((error: unknown) =>
+            toast.error(error instanceof Error ? error.message : "Your Bot couldn’t start yet."),
+          );
+        }
+      }
       // Ready to type: the message box takes focus once it's on screen.
       focusRegionWhenShown("composer");
     } catch (error) {
@@ -569,11 +583,7 @@ export function OnboardingFlow({
                   </div>
                 </div>
                 <UsageDataOnboardingRow onDisplay={setUsageShownEnabled} />
-                {botsStepVisible && <details className="settings-card mt-4 px-4 py-3">
-                  <summary className="cursor-pointer text-small-strong">Choose your first Bot</summary>
-                  <OnboardingBotsStep busy={creatingBot} onBusyChange={setCreatingBot} onStarted={bot => void finishBotsStep(bot.id)} onSkip={() => void finishBotsStep()} />
-                </details>}
-                {startedBotIdRef.current && <Text as="p" role="status" variant="small">Your Bot’s chat will open when you finish.</Text>}
+                {firstBotShown ? <OnboardingBotsStep onBusyChange={setCreatingBot} onReady={(bot, access) => void finishBotsStep(bot.id, access)} /> : null}
                 <details className="settings-card mt-3 px-4 py-3">
                   <summary className="cursor-pointer text-small-strong">Explore Aiden’s features</summary>
                   <OnboardingFeatureGallery features={visibleFeatureBentos} platform={capabilities.platform} />

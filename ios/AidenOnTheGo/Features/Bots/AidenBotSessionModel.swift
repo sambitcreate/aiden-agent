@@ -54,7 +54,7 @@ func aidenBotActivitySupported(server: AidenServer?, installation: AidenInstalla
 /// the chat reopens a feed that opened without one
 /// (`AidenBotSessionModel.reopenFeed()`; Android parity).
 func aidenBotSessionFeedGrants(_ installation: AidenInstallation?) -> Set<AidenRemoteCapability> {
-    Set([AidenRemoteCapability.botCards, .botActivity, .botHandoffs, .botHandoffNotes, .botHandoffOnMac, .botImages, .botPeers, .botIssues, .botAccessRequests, .botPlans, .botAllowed].filter { installation?.hasNegotiatedAccess(to: $0) == true })
+    Set([AidenRemoteCapability.botCards, .botActivity, .botHandoffs, .botHandoffNotes, .botHandoffOnMac, .botImages, .botPeers, .botIssues, .botAccessRequests, .botPlans, .botAllowed, .approvalCards, .botSettingsChanges, .botSuggestions].filter { installation?.hasNegotiatedAccess(to: $0) == true })
 }
 
 /// How a Bot chat is opened. A host advertising `bot-durable-session-v1`
@@ -154,6 +154,16 @@ protocol AidenBotSessionTransport: Sendable {
         request: AidenBotIssueActRequest,
         idempotencyKey: UUID
     ) async throws -> AidenBotIssueActReceipt
+    /// Revision 61 (`bot:settings-changes`): Apply, Dismiss or Undo one settings change.
+    func respondBotSettingsChange(botId: String, changeId: String, decision: AidenBotSettingsChangeDecision) async throws -> AidenBotSettingsChangeReceipt
+    /// Revision 61 (`bot:suggestions`): answer a skill proposal.
+    func respondBotSkillProposal(botId: String, proposalId: String, decision: AidenBotSkillProposalDecision) async throws -> AidenBotSkillProposalReceipt
+    /// Revision 61 (`bot:suggestions`): Keep or Not now on a proposed lesson.
+    func respondBotLesson(botId: String, lessonId: String, decision: AidenBotLessonDecision) async throws -> AidenBotLessonReceipt
+    /// Revision 61 (`bot:suggestions`): Undo on a Learned line.
+    func removeBotLesson(botId: String, lessonId: String) async throws -> AidenBotLessonReceipt
+    /// Revision 61 (`bot:suggestions`): Undo on a memory tidy-up receipt.
+    func undoBotLearning(botId: String, changeId: String) async throws -> AidenBotLearningUndoReceipt
 }
 
 extension AidenBotSessionTransport {
@@ -216,6 +226,23 @@ extension AidenBotSessionTransport {
     ) async throws -> AidenBotIssueActReceipt {
         throw AidenRemoteClientError.invalidResponse
     }
+
+    /// A transport without revision 61 refuses its answers, as an older Mac does.
+    func respondBotSettingsChange(botId: String, changeId: String, decision: AidenBotSettingsChangeDecision) async throws -> AidenBotSettingsChangeReceipt {
+        throw AidenRemoteClientError.invalidResponse
+    }
+    func respondBotSkillProposal(botId: String, proposalId: String, decision: AidenBotSkillProposalDecision) async throws -> AidenBotSkillProposalReceipt {
+        throw AidenRemoteClientError.invalidResponse
+    }
+    func respondBotLesson(botId: String, lessonId: String, decision: AidenBotLessonDecision) async throws -> AidenBotLessonReceipt {
+        throw AidenRemoteClientError.invalidResponse
+    }
+    func removeBotLesson(botId: String, lessonId: String) async throws -> AidenBotLessonReceipt {
+        throw AidenRemoteClientError.invalidResponse
+    }
+    func undoBotLearning(botId: String, changeId: String) async throws -> AidenBotLearningUndoReceipt {
+        throw AidenRemoteClientError.invalidResponse
+    }
 }
 
 extension AidenRemoteClient: AidenBotSessionTransport {}
@@ -270,6 +297,10 @@ enum AidenBotSessionCopy {
     // Revision 37 (`bot:handoffs`), shared with desktop and Android.
     static func handoffTitle(_ action: String) -> String { "Your turn: \(action)" }
     static let handoffDone = "Done"
+    /// Revision 61: the two-step Needs-you card.
+    static let takeControl = "Take Control"
+    static let handoffImDone = "I’m Done"
+    static let openAgain = "Open Again"
     static let handoffSkip = "Skip"
     static let handoffOpen = "Open"
     static let handoffNotePlaceholder = "Add a note and send to mark it done"
@@ -1347,6 +1378,14 @@ final class AidenBotSessionModel {
     @ObservationIgnored private var retainedQuestion: (waitId: String, request: AidenQuestionRespondRequest, key: UUID)?
     var allowedSupported = false
     var approvalSuccessNotice: String?
+    /// Revision 61: the tapped button, whose `answered` line shows at once in
+    /// the card's place and goes if the answer doesn't land.
+    private(set) var approvalAnsweredButton: AidenApprovalCardButton?
+    /// Revision 61: the Bot UX cards (settings changes, suggestions, lessons,
+    /// tidy-ups) with an answer on its way, by entry id.
+    private(set) var respondingBotUX: Set<String> = []
+    /// Revision 61: what the Mac said about the last settings change answer (an Undo it couldn't make).
+    private(set) var botUXNotice: String?
     @ObservationIgnored private var approvalGeneration = 0
     @ObservationIgnored private var retainedApprovalKeys: [String: UUID] = [:]
     @ObservationIgnored private var retainedAccessAnswers: [String: UUID] = [:]
@@ -1773,7 +1812,10 @@ final class AidenBotSessionModel {
                 }
                 // A new assistant answer replaces the streamed partial. Other
                 // entries leave it alone; the host clears it with `partial ""`.
-                if case let .message(message) = entry, message.role == .assistant { partial = nil }
+                if case let .message(message) = entry, message.role == .assistant {
+                    partial = nil
+                    approvalAnsweredButton = nil
+                }
             }
             storeTranscript()
         case .unknownEntry:
@@ -1788,9 +1830,11 @@ final class AidenBotSessionModel {
             retainedApprovalKeys = retainedApprovalKeys.filter { next != nil && $0.key.hasPrefix("\(next!.waitId):") }
             approvalSuccessNotice = nil
             approval = next
+            if next != nil { approvalAnsweredButton = nil }
             approvalWrites += 1
         case let .activity(next):
             activity = next
+            if next == nil { approvalAnsweredButton = nil }
             // The Mac's own word now stands for a Stop or Resume it has heard,
             // and a new run (another `startedAt`, or a first activity after a Stop
             // pressed before any) has nothing to stop.
@@ -1922,6 +1966,8 @@ final class AidenBotSessionModel {
         let wasBlocked = stateView?.blocked == .accessChanged
         stateView = view
         stateWrites += 1
+        // A finished or interrupted turn retires the last approval's answered line.
+        if let view, view.state != .running { approvalAnsweredButton = nil }
         if view?.state != .running {
             stopIntent = .none
             resumeIntent = .none
@@ -2346,9 +2392,39 @@ final class AidenBotSessionModel {
     /// is waiting any more (expired or already answered), the card stays gone.
     func answerApproval(_ decision: AidenApprovalDecision, scope: AidenApprovalScope? = nil) async {
         guard canAnswerApproval, !released, let current = approval else { return }
+        if let card = current.card {
+            // Revision 61: only what a button offers, with its scope.
+            guard let button = card.buttons.first(where: {
+                $0.decision == decision && ($0.decision == .deny || $0.offeredScope == (scope ?? .once))
+            }), button.decision == .deny || sendableScopes(for: current).contains(button.offeredScope) else { return }
+            await sendApprovalAnswer(current, decision: decision, scope: button.requestScope, answered: button)
+            return
+        }
         if decision == .allow && !current.canAllow { return }
         let chosenScope: AidenApprovalScope? = scope == .always ? .always : nil
         guard scope == nil || scope == .once || (decision == .allow && allowedSupported && current.alwaysCount != nil && scope == .always) else { return }
+        await sendApprovalAnswer(current, decision: decision, scope: chosenScope, answered: nil)
+    }
+
+    /// The scopes `POST /approvals/{waitId}/respond` takes for a Bot approval:
+    /// once, and Always only with `bot:allowed` and the Mac's approval count.
+    func sendableScopes(for approval: AidenRemoteBotApproval) -> Set<AidenApprovalScope> {
+        allowedSupported && approval.alwaysCount != nil ? [.once, .always] : [.once]
+    }
+
+    /// Revision 61: answers with one of the card's buttons, exactly as offered.
+    func answerApproval(button: AidenApprovalCardButton) async {
+        guard let current = approval, let card = current.card, card.buttons.contains(button),
+              button.decision == .deny || sendableScopes(for: current).contains(button.offeredScope) else { return }
+        await answerApproval(button.decision, scope: button.decision == .allow ? button.offeredScope : nil)
+    }
+
+    private func sendApprovalAnswer(
+        _ current: AidenRemoteBotApproval,
+        decision: AidenApprovalDecision,
+        scope chosenScope: AidenApprovalScope?,
+        answered: AidenApprovalCardButton?
+    ) async {
         let action = "\(current.waitId):\(decision.rawValue):\(chosenScope?.rawValue ?? "once")"
         let key = retainedApprovalKeys[action] ?? UUID()
         retainedApprovalKeys[action] = key
@@ -2356,6 +2432,7 @@ final class AidenBotSessionModel {
         let generation = approvalGeneration
         approvalSuccessNotice = nil
         approval = nil
+        approvalAnsweredButton = answered
         inFlight.insert(.answerApproval)
         defer { if generation == approvalGeneration { inFlight.remove(.answerApproval) } }
         do {
@@ -2368,6 +2445,8 @@ final class AidenBotSessionModel {
         } catch {
             guard generation == approvalGeneration, !released else { return }
             if !aidenBotSessionFailureIsAmbiguous(error) { retainedApprovalKeys[action] = nil }
+            // Nothing the phone sent landed, so the answered line goes either way.
+            approvalAnsweredButton = nil
             if case let AidenRemoteClientError.server(_, body) = error,
                ["approval_expired", "approval_already_resolved"].contains(body.code.rawValue) { return }
             if approvalWrites == mark { approval = current }
@@ -2711,6 +2790,8 @@ final class AidenBotSessionModel {
               enqueue(text, mode: offersBusyModes ? mode ?? .queue : nil, retryOf: nil, attachments: attachments) else { return false }
         pendingAttachments = []
         for attachment in attachments { attachmentImages[attachment.id] = nil }
+        // A new turn retires the last approval's answered line.
+        approvalAnsweredButton = nil
         await runFlush()
         return true
     }
@@ -3141,6 +3222,134 @@ final class AidenBotSessionModel {
             return false
         }
     }
+
+    // MARK: Revision 61 cards (settings changes, suggestions, learning)
+
+    /// Apply or Dismiss a held settings change, or Undo an applied one. The
+    /// card shows the answer at once and goes back if the Mac refuses; a 404
+    /// means the card is gone. An Undo the Mac can't make comes back as
+    /// `undo_refused` with its reason.
+    @discardableResult
+    func respondToSettingsChange(_ change: AidenBotSettingsChangeEntry, decision: AidenBotSettingsChangeDecision) async -> Bool {
+        switch decision {
+        case .apply, .dismiss: guard change.isHeld, change.isWaiting else { return false }
+        // A receipt reads `pending` until it is undone.
+        case .undo: guard change.mode == .applied, change.undoable, change.status == .pending else { return false }
+        }
+        var optimistic = change
+        optimistic.status = switch decision {
+        case .apply: .applied
+        case .dismiss: .dismissed
+        case .undo: .restored
+        }
+        botUXNotice = nil
+        return await sendBotUX(id: change.id, optimistic: .settingsChange(optimistic), original: .settingsChange(change)) { [transport, botID] in
+            let receipt = try await transport.respondBotSettingsChange(botId: botID, changeId: change.changeId, decision: decision)
+            var settled = change
+            settled.status = receipt.status
+            return (.settingsChange(settled), receipt.status == .undoRefused ? (receipt.message ?? "This change can’t be undone now.") : nil)
+        }
+    }
+
+    /// Add or Not now on a skill the Bot proposes. A skill too long to show
+    /// in full can only be put off here; it is added on the Mac.
+    @discardableResult
+    func respondToSkillProposal(_ proposal: AidenBotSkillProposalEntry, decision: AidenBotSkillProposalDecision) async -> Bool {
+        guard proposal.status == .pending, decision == .dismiss || proposal.canAddHere else { return false }
+        var optimistic = proposal
+        optimistic.status = decision == .add ? .added : .dismissed
+        return await sendBotUX(id: proposal.id, optimistic: .skillProposal(optimistic), original: .skillProposal(proposal)) { [transport, botID] in
+            let receipt = try await transport.respondBotSkillProposal(botId: botID, proposalId: proposal.proposalId, decision: decision)
+            var settled = proposal
+            settled.status = receipt.status
+            return (.skillProposal(settled), nil)
+        }
+    }
+
+    /// Keep or Not now on a proposed lesson.
+    @discardableResult
+    func respondToLesson(_ lesson: AidenBotLessonEntry, decision: AidenBotLessonDecision) async -> Bool {
+        guard lesson.kind == .proposal, lesson.status == .pending else { return false }
+        var optimistic = lesson
+        optimistic.status = decision == .keep ? .active : .dismissed
+        return await sendBotUX(id: lesson.id, optimistic: .lesson(optimistic), original: .lesson(lesson)) { [transport, botID] in
+            let receipt = try await transport.respondBotLesson(botId: botID, lessonId: lesson.lessonId, decision: decision)
+            var settled = lesson
+            settled.status = receipt.status
+            return (.lesson(settled), nil)
+        }
+    }
+
+    /// Undo on a Learned line: the lesson is retired.
+    @discardableResult
+    func removeLesson(_ lesson: AidenBotLessonEntry) async -> Bool {
+        guard lesson.status == .active else { return false }
+        var optimistic = lesson
+        optimistic.status = .retired
+        return await sendBotUX(id: lesson.id, optimistic: .lesson(optimistic), original: .lesson(lesson)) { [transport, botID] in
+            let receipt = try await transport.removeBotLesson(botId: botID, lessonId: lesson.lessonId)
+            var settled = lesson
+            settled.status = receipt.status
+            return (.lesson(settled), nil)
+        }
+    }
+
+    /// Undo on a memory tidy-up receipt: the receipt loses its Undo.
+    @discardableResult
+    func undoMemoryTidy(_ tidy: AidenBotMemoryTidyEntry) async -> Bool {
+        guard let changeId = tidy.changeId else { return false }
+        var optimistic = tidy
+        optimistic.changeId = nil
+        return await sendBotUX(id: tidy.id, optimistic: .memoryTidy(optimistic), original: .memoryTidy(tidy)) { [transport, botID] in
+            _ = try await transport.undoBotLearning(botId: botID, changeId: changeId)
+            return (.memoryTidy(optimistic), nil)
+        }
+    }
+
+    /// The shared optimistic path: show `optimistic` now, keep the Mac's
+    /// answer, put `original` back on a refusal, and drop the card on 404.
+    private func sendBotUX(
+        id: String,
+        optimistic: AidenBotSessionEntry,
+        original: AidenBotSessionEntry,
+        send: @escaping @Sendable () async throws -> (AidenBotSessionEntry, String?)
+    ) async -> Bool {
+        guard hasLoaded, !released, !respondingBotUX.contains(id),
+              let index = entries.firstIndex(where: { $0.id == id }), entries[index] == original else { return false }
+        entries[index] = optimistic
+        respondingBotUX.insert(id)
+        defer { respondingBotUX.remove(id) }
+        do {
+            let (settled, notice) = try await aidenBotWithin(requestLimit) { try await send() }
+            guard !released else { return false }
+            if let current = entries.firstIndex(where: { $0.id == id }), entries[current] == optimistic {
+                entries[current] = settled
+            }
+            if let notice { botUXNotice = notice }
+            storeTranscript()
+            return notice == nil
+        } catch {
+            guard !released else { return false }
+            if case AidenRemoteClientError.server(404, _) = error {
+                // The card is gone on the Mac.
+                entries.removeAll { $0.id == id }
+                storeTranscript()
+                return false
+            }
+            if let current = entries.firstIndex(where: { $0.id == id }), entries[current] == optimistic {
+                entries[current] = original
+            }
+            if error is CancellationError { return false }
+            if case let AidenRemoteClientError.server(409, body) = error, !body.message.isEmpty {
+                errorMessage = body.message
+            } else {
+                errorMessage = AidenBotSessionCopy.proposalFailed
+            }
+            return false
+        }
+    }
+
+    func clearBotUXNotice() { botUXNotice = nil }
 
     // MARK: Connect cards
 

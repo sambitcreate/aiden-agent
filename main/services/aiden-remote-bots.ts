@@ -244,6 +244,8 @@ type BotApplicationPort = {
     botId: string;
     expectedRevision: string;
     access: BotAccessUpdate;
+    /** Full → Custom from a device never adds Web search Full did not grant. */
+    noWiderThanFull?: true;
   }): Promise<BotAccessView>;
   withBotMutation?<Result>(
     botId: string,
@@ -773,6 +775,7 @@ export class AidenRemoteBotService {
         botId: existing.id,
         expectedRevision,
         access: parsed as BotAccessUpdate,
+        noWiderThanFull: true,
       });
       this.options.notifyBotsChanged?.(existing.id);
       const canonical = await this.options.application.getCanonicalChat(existing.id);

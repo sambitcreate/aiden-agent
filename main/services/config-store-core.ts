@@ -98,6 +98,11 @@ import {
   type WebFetchSettingsV1,
 } from "../../renderer/shared/web-fetch-settings.js";
 import { parseAnalyticsState, type AnalyticsState } from "./analytics/analytics-consent.js";
+import {
+  approvalModeAfterUpgrade,
+  parseApprovalMode,
+  parseWorkspaceMacGrants,
+} from "../../renderer/shared/approval-mode.js";
 import type {
   AppSettings,
   McpServer,
@@ -216,13 +221,15 @@ function normalizePortableConfig(value: unknown): {
 
 function normalizeWorkspace(workspace: Workspace): Workspace {
   // Only a literal `true` marks a scratch or No workspace record; anything else is dropped.
-  const { scratch, noWorkspace, disabledSkills, disabledMcpServerIds, ...w } = workspace;
+  const { scratch, noWorkspace, disabledSkills, disabledMcpServerIds, approvalMode, macGrants, ...w } = workspace;
   return {
     ...w,
     ...(scratch === true ? { scratch } : {}),
     ...(noWorkspace === true ? { noWorkspace } : {}),
     name: w.name.trim() || "Workspace",
     permission: PERMISSIONS.has(w.permission) ? w.permission : "ask",
+    ...(parseApprovalMode(approvalMode) ? { approvalMode: parseApprovalMode(approvalMode) } : {}),
+    ...(parseWorkspaceMacGrants(macGrants) ? { macGrants: parseWorkspaceMacGrants(macGrants) } : {}),
     ...(typeof w.memoryEnabled === "boolean" ? { memoryEnabled: w.memoryEnabled } : {}),
     // No workspace chats always use the global skills and connectors.
     ...(noWorkspace === true ? {} : workspaceCapabilityFields({ disabledSkills, disabledMcpServerIds })),
@@ -460,6 +467,41 @@ export function createConfigStore(
   }
 
   /**
+   * The approval mode on the first start of a release with modes (§7,
+   * deviation a): an install already in use gets Ask, never Auto; a fresh
+   * one stays unset and follows a usable model to Auto. Local JSON only.
+   */
+  async function ensureApprovalModeSettings(): Promise<void> {
+    if (await settingsStore.loadedFromCorruptFile()) return;
+    const { settings } = await settingsStore.load();
+    if (settings.approvalModeOrigin === "fresh" || settings.approvalModeOrigin === "upgrade") return;
+    const local = await localStore.load();
+    // Read the outcome raw: an earlier release may have stored an older
+    // onboarding version that today's parser no longer accepts.
+    const onboardingOutcome =
+      settings.onboarding && typeof settings.onboarding === "object"
+        ? (settings.onboarding as { outcome?: unknown }).outcome
+        : undefined;
+    const workspaces = Array.isArray(local.workspaces) ? local.workspaces : [];
+    const inUse =
+      (typeof onboardingOutcome === "string" && onboardingOutcome !== "incomplete") ||
+      typeof settings.lastProviderId === "string" ||
+      workspaces.some((workspace) => workspace.id !== DEFAULT_WORKSPACE_ID || typeof workspace.folderPath === "string");
+    const mode = approvalModeAfterUpgrade({
+      stored: parseApprovalMode(settings.approvalMode) !== undefined,
+      // Every profile gets `aidenDirMigratedAt` when the split runs, so only the
+      // durable fresh-vs-upgrade marker says whether an older Aiden used it.
+      upgradedProfile: local.webSearchProfileKind === "upgrade" || (local.webSearchProfileKind === undefined && local.seeded !== false),
+      inUse,
+    });
+    await settingsStore.update((next) => {
+      if (next.settings.approvalModeOrigin !== undefined) return;
+      if (mode) next.settings.approvalMode = mode;
+      next.settings.approvalModeOrigin = mode ? "upgrade" : "fresh";
+    });
+  }
+
+  /**
    * Migrate onto the split layout, then backfill anything a newer release added.
    *
    * `migratePiProviderConfig` straddles the split: it rewrites providers and
@@ -657,6 +699,7 @@ export function createConfigStore(
           }
         });
         await ensureWebSearchSettings();
+        await ensureApprovalModeSettings();
         return true;
       })().catch((error: unknown) => {
         seedPromise = null;
@@ -1114,6 +1157,7 @@ export function createConfigStore(
       if (patch.usageLimitWaitHours !== undefined && !isUsageLimitWaitHours(patch.usageLimitWaitHours)) throw new Error("Invalid usage limit wait setting.");
       if (patch.botMessaging !== undefined && typeof patch.botMessaging !== "boolean") throw new Error("Invalid Bot messaging setting.");
       if (patch.botRoutinesGoAhead !== undefined && typeof patch.botRoutinesGoAhead !== "boolean") throw new Error("Invalid Bot routines setting.");
+      if (patch.approvalMode !== undefined && parseApprovalMode(patch.approvalMode) === undefined) throw new Error("Invalid approval mode.");
       if (patch.spendingLimits !== undefined) {
         const spendingLimits = parseSpendingLimitsSettings(patch.spendingLimits);
         if (spendingLimits === undefined) throw new Error("Invalid spending limits.");
@@ -1127,6 +1171,7 @@ export function createConfigStore(
       // append-only migration record that a settings change never rewrites. Do
       // not "fix" this by folding settings back into the portable file.
       const providerIdAliases = (await readPortable()).providerIdAliases;
+      let approvalModeChanged = false;
       const saved = await mutateSettings((config) => {
         // Web Search has its own versioned mutation seam. A generic settings
         // write may preserve an unsupported raw document, but it must not use
@@ -1150,6 +1195,7 @@ export function createConfigStore(
         if (Object.prototype.hasOwnProperty.call(patch, "webFetch")) {
           throw new Error("Web page settings change only through their own settings call.");
         }
+        approvalModeChanged = patch.approvalMode !== undefined && patch.approvalMode !== config.settings.approvalMode;
         const lastProviderId =
           typeof patch.lastProviderId === "string"
             ? (resolveProviderAlias(providerIdAliases, patch.lastProviderId) ??
@@ -1165,6 +1211,9 @@ export function createConfigStore(
         };
         return structuredClone(config.settings);
       }, isCurrent);
+      // Every workspace that follows the global mode now reads differently
+      // (its Remote access tier among them), so workspace observers refresh.
+      if (approvalModeChanged) notifyListeners(workspaceListeners);
       return runtimeSettingsFrom(saved);
     },
 
@@ -1426,6 +1475,8 @@ export function createConfigStore(
           // An emptied off-list is omitted from `next`; don't let the merge keep the old one.
           if (!next.disabledSkills) delete merged.disabledSkills;
           if (!next.disabledMcpServerIds) delete merged.disabledMcpServerIds;
+          if (!next.approvalMode) delete merged.approvalMode;
+          if (!next.macGrants) delete merged.macGrants;
           config.workspaces[idx] = merged;
         } else config.workspaces.push(next);
         return structuredClone(config.workspaces.find((w) => w.id === next.id)!);

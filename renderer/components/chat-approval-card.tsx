@@ -1,33 +1,23 @@
 import { ClassifierApproval } from "./classifier-approval";
 import { classifierApprovalState } from "../shared/classifier-approval";
 import * as React from "react";
-import { CalendarClock, ChevronDown, FilePen, FilePlus, Hand, Mic, ShieldQuestion, SquareTerminal, type LucideIcon } from "lucide-react";
-import {
-  Button,
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-  Text,
-} from "./ui";
+import { CalendarClock, FilePen, FilePlus, Hand, Mic, ShieldQuestion, SquareTerminal, type LucideIcon } from "lucide-react";
+import { Button, Text } from "./ui";
+import { ApprovalActions, ApprovalIconTile, type ApprovalRememberOption } from "./approval-card-parts";
 import { CopyButton } from "./copy-button";
 import { cn } from "../lib/ui-utils";
-import { approvalAriaKeyShortcut, approvalShortcutLabel, useApprovalShortcuts, type ApprovalShortcut } from "../lib/approval-shortcuts";
-import { detectedKeyboardPlatform } from "../shared/keybindings";
-import {
-  SubagentWorkspaceWriteApproval,
-  subagentWorkspaceWriteOperationLabel,
-} from "./subagent-workspace-write-approval";
+import { useApprovalShortcuts } from "../lib/approval-shortcuts";
+import { SubagentWorkspaceWriteApproval } from "./subagent-workspace-write-approval";
 import {
   SubagentMcpMutationApproval,
   subagentMcpMutationAllowLabel,
 } from "./subagent-mcp-mutation-approval";
 import { SubagentShellApproval } from "./subagent-shell-approval";
-import { HOOK_PROPOSAL_APPROVAL_FOOTER, HookProposalApproval, hookProposalHeadline } from "./hook-proposal-approval";
+import { HOOK_PROPOSAL_APPROVAL_FOOTER, HookProposalApproval } from "./hook-proposal-approval";
 import { HOOK_PROPOSAL_APPROVAL_KIND, isHookProposalApprovalDetails } from "../shared/hook-proposal-approval";
 import { SubagentRunGrantApproval } from "./subagent-run-grant-approval";
 import { FormFillApproval } from "./form-fill-approval";
-import { SCHEDULE_APPROVAL_FOOTER, ScheduledTaskApproval, scheduleApprovalHeadline } from "./scheduled-task-approval";
+import { SCHEDULE_APPROVAL_FOOTER, ScheduledTaskApproval } from "./scheduled-task-approval";
 import { ComputerUseAccessApproval } from "./computer-use-access-approval";
 import { isComputerUseAccessApprovalDetails } from "../shared/computer-use-access";
 import type { ApprovalPrompt } from "../lib/ipc";
@@ -46,107 +36,24 @@ import {
   type ToolApprovalScope,
 } from "../shared/tool-approval-scope";
 import type { ToolApprovalPreview } from "../shared/tool-approval-preview";
+import {
+  approvalCommand,
+  approvalDetailsHeadline,
+  approvalFilePath,
+  approvalHeadline,
+  toolLabel,
+} from "../shared/approval-card-model";
+
+export { approvalCommand, approvalHeadline, toolLabel } from "../shared/approval-card-model";
 import { LiveGuard } from "./live-guard";
-
-const TOOL_LABELS: Record<string, string> = {
-  edit_file: "Edit file",
-  run_command: "Run command",
-  write_file: "Write file",
-  read_file: "Read file",
-  delete_file: "Delete file",
-  move_file: "Move file",
-  web_fetch: "Fetch web page",
-  agent_tool: "Agent tool",
-  computer_use: "Computer Use",
-  form_fill: "Form fill",
-  workspace_artifact: "Artifact",
-};
-
-/** A tool's name as an approval heading: known labels, otherwise sentence case. */
-export function toolLabel(toolName: string): string {
-  const known = TOOL_LABELS[toolName];
-  if (known) return known;
-  const words = toolName.replace(/[_-]+/gu, " ").trim();
-  return words ? `${words.charAt(0).toLocaleUpperCase()}${words.slice(1)}` : "Tool";
-}
-
-const COMMAND_SUMMARY_PREFIX = "Run command: ";
 
 function fileName(path: string): string {
   return path.split(/[\\/]/u).filter(Boolean).pop() ?? path;
 }
 
-/**
- * The exact command a command approval would run: from the desktop preview, or
- * from Aiden's own "Run command: …" summary when the approval came from a
- * paired host that sends only the summary.
- */
-export function approvalCommand(pending: Pick<ApprovalPrompt, "toolName" | "summary" | "preview">): string | undefined {
-  if (pending.preview?.kind === "command") return pending.preview.command;
-  if (pending.toolName === "run_command" && pending.summary.startsWith(COMMAND_SUMMARY_PREFIX)) {
-    const command = pending.summary.slice(COMMAND_SUMMARY_PREFIX.length);
-    return command.trim() ? command : undefined;
-  }
-  return undefined;
-}
-
-/** Aiden's own file summaries, which name one path, by tool. */
-const FILE_SUMMARY_PREFIXES: Record<string, { prefix: string; verb: string }> = {
-  edit_file: { prefix: "Edit file: ", verb: "Edit" },
-  write_file: { prefix: "Create or replace file: ", verb: "Write" },
-};
-
-/** The one file a file approval names: from the desktop preview, or from Aiden's own summary. */
-function approvalFilePath(pending: Pick<ApprovalPrompt, "toolName" | "summary" | "preview">): string | undefined {
-  if (pending.preview?.kind === "file") return pending.preview.path;
-  const fileSummary = FILE_SUMMARY_PREFIXES[pending.toolName];
-  if (!fileSummary || !pending.summary.startsWith(fileSummary.prefix)) return undefined;
-  const path = pending.summary.slice(fileSummary.prefix.length).trim();
-  return path && !/[\r\n]/u.test(path) ? path : undefined;
-}
-
-/** The approval card's question, in plain words: "Run this command?", "Edit forecast.ts?". */
-export function approvalHeadline(pending: Pick<ApprovalPrompt, "toolName" | "summary" | "preview">): string {
-  const { preview } = pending;
-  if (preview?.kind === "file") {
-    return `${preview.operation === "edit" ? "Edit" : "Write"} ${fileName(preview.path)}?`;
-  }
-  const fileSummary = FILE_SUMMARY_PREFIXES[pending.toolName];
-  const path = approvalFilePath(pending);
-  if (fileSummary && path) return `${fileSummary.verb} ${fileName(path)}?`;
-  switch (pending.toolName) {
-    case "run_command":
-      return "Run this command?";
-    case "edit_file":
-      return "Edit files?";
-    case "write_file":
-      return "Write a file?";
-    case "delete_file":
-      return "Delete files?";
-    case "move_file":
-      return "Move files?";
-    case "read_file":
-      return "Read a file?";
-    case "web_fetch":
-      return "Open a web page?";
-    case "agent_tool":
-      return "Use a tool?";
-    case "schedule_task":
-      return "Save this scheduled task?";
-    case "edit_automation":
-      return "Change this automation?";
-    case "generate_image":
-      return "Generate an image?";
-    case "share_image":
-      return "Share this image in the chat?";
-    default:
-      return `Allow ${toolLabel(pending.toolName)}?`;
-  }
-}
-
-/** The quiet line under the headline: the file and its size of change, or that Aiden is waiting. */
-function approvalMeta(preview: ToolApprovalPreview | undefined): string {
-  if (preview?.kind !== "file") return "Aiden is paused until you choose.";
+/** The quiet line under the headline: the file and its size of change, or who is waiting. */
+function approvalMeta(preview: ToolApprovalPreview | undefined, requester: string): string {
+  if (preview?.kind !== "file") return `${requester} is paused until you choose.`;
   if (preview.operation === "write") {
     return `${preview.path} · ${preview.added} ${preview.added === 1 ? "line" : "lines"}`;
   }
@@ -169,11 +76,7 @@ export function ApprovalIcon({
         ? FilePen
         : FilePlus
       : ShieldQuestion);
-  return (
-    <span className="approval-icon-tile grid size-11 shrink-0 place-items-center bg-fill-accent text-fill-accent-foreground">
-      <Icon className="size-5" aria-hidden="true" />
-    </span>
-  );
+  return <ApprovalIconTile icon={Icon} />;
 }
 
 function ApprovalCommand({ command, descriptionId }: { command: string; descriptionId: string }) {
@@ -268,8 +171,18 @@ function rememberScopeHint(
         : pending.toolName === "write_file"
           ? `any write to ${file}`
           : "this exact action";
+  if (scope === "workspace") {
+    // A Mac card's grant covers that part of the Mac, not one exact action.
+    const reach =
+      pending.toolName === "computer_use"
+        ? "using your Mac with Computer Use"
+        : pending.toolName === "run_command" || pending.preview?.kind === "command"
+          ? "running commands"
+          : "changing files";
+    return `Won't ask again before ${reach} in this workspace. Remove it in Workspace settings.`;
+  }
   return scope === "always"
-    ? `Won't ask again for ${target} here. Undo in Settings → Bots & Approvals → Tool approvals.`
+    ? `Won't ask again for ${target} here. Undo in Settings → Approvals.`
     : `Won't ask again for ${target} until Aiden quits.`;
 }
 
@@ -290,6 +203,8 @@ function LiveVoiceApprovalHint({ mode }: { mode: "voice" | "tap" }) {
   );
 }
 
+export { ApprovalActions, ApprovalStatusLine, approvalStatusLabel, type ApprovalStatus } from "./approval-card-parts";
+
 export interface ChatApprovalDecisionOptions {
   formFillExcludedOrders?: number[];
   scope?: ToolApprovalScope;
@@ -305,9 +220,9 @@ function claimsKind(details: unknown, kind: string): boolean {
 }
 
 /**
- * The pending tool approval above the composer, shared by local and remote
- * chats. A details payload that claims a specialized kind but fails its guard
- * can never be allowed.
+ * The pending approval above the composer, shared by workspace chats, Bot
+ * chats and paired hosts' chats. A details payload that claims a specialized
+ * kind but fails its guard can never be allowed.
  */
 export function ChatApprovalCard({
   pending,
@@ -320,6 +235,12 @@ export function ChatApprovalCard({
   computerUseHost = "local",
   keyboardShortcuts = false,
   liveVoice = null,
+  requester = "Aiden",
+  alwaysOption,
+  notes = [],
+  suggestion,
+  allowElsewhere,
+  error,
 }: {
   pending: ApprovalPrompt;
   deciding: boolean;
@@ -345,6 +266,18 @@ export function ChatApprovalCard({
    * "tap" means this one needs a button.
    */
   liveVoice?: "voice" | "tap" | null;
+  /** Who asked: Aiden, or a Bot by name. */
+  requester?: string;
+  /** How the `always` scope reads here; a Bot's always is its own allow list, not the workspace's. */
+  alwaysOption?: { label: string; hint: string };
+  /** Quiet lines under the request, such as how often it was allowed before. */
+  notes?: readonly string[];
+  /** A quiet offer under the notes, such as switching to Auto after repeated allows. */
+  suggestion?: { text: string; action: string; onAction(): void; busy?: boolean };
+  /** This device may only deny: the device where the person can allow it instead. */
+  allowElsewhere?: string;
+  /** The last answer could not be sent. */
+  error?: string | null;
 }) {
   const details = pending.details as unknown;
   const schedule = isScheduledTaskApprovalDetails(details) || isAssistantAutomationApprovalDetails(details) ? details : undefined;
@@ -369,7 +302,7 @@ export function ChatApprovalCard({
   React.useEffect(() => {
     setFormFillExcludedOrders([]);
   }, [pending.approvalId]);
-  const pendingCanAllow = pending.canAllow !== false && !invalidPendingPrivilegedApproval;
+  const pendingCanAllow = pending.canAllow !== false && !invalidPendingPrivilegedApproval && allowElsewhere === undefined;
   // Only plain workspace writes and shell commands can be remembered; the main
   // process offers scopes solely for those, and specialized cards keep once.
   const pendingRememberScopes =
@@ -378,7 +311,6 @@ export function ChatApprovalCard({
       : [];
   const computerUseAccess = isComputerUseAccessApprovalDetails(details);
   const disabled = deciding || disabledReason !== undefined;
-  const keyboardPlatform = detectedKeyboardPlatform();
   useApprovalShortcuts({
     // Computer Use access sets up permissions first, so it keeps its own buttons.
     enabled: keyboardShortcuts && !computerUseAccess && !disabled,
@@ -388,13 +320,6 @@ export function ChatApprovalCard({
         ? onDecide("deny")
         : onDecide("allow", pendingFormFill ? { formFillExcludedOrders } : undefined),
   });
-  const shortcutHint = (shortcut: ApprovalShortcut) =>
-    keyboardShortcuts && !disabled ? (
-      // Shown only where both buttons have room for it; a narrow card keeps plain labels.
-      <span aria-hidden="true" data-approval-shortcut={shortcut} className="ml-1.5 hidden shrink-0 font-normal tabular-nums opacity-65 @md:inline">
-        {approvalShortcutLabel(shortcut, keyboardPlatform)}
-      </span>
-    ) : null;
   if (computerUseAccess) {
     return (
       <ComputerUseAccessApproval
@@ -410,13 +335,22 @@ export function ChatApprovalCard({
     );
   }
   const summaryId = `approval-summary-${pending.approvalId}`;
+  // A card that can't be allowed here still shows its request when the reason
+  // is only where it may be allowed.
+  const reviewable = pendingCanAllow || (allowElsewhere !== undefined && !invalidPendingPrivilegedApproval && pending.canAllow !== false);
   // Plain coding approvals show the exact command or file change; specialized
   // and invalid approvals keep their own review bodies.
   const plainApproval =
-    !invalidPendingPrivilegedApproval && pendingCanAllow && !schedule && !pendingClassifier.details &&
+    !invalidPendingPrivilegedApproval && reviewable && !schedule && !pendingClassifier.details &&
     !pendingWorkspaceWrite && !pendingMcpMutation && !pendingShell && !pendingRunGrant && !pendingFormFill && !pendingHook;
   const plainPreview = plainApproval ? pending.preview : undefined;
   const plainCommand = plainApproval ? approvalCommand(pending) : undefined;
+  const rememberOptions: ApprovalRememberOption[] = pendingRememberScopes.map((scope) => ({
+    key: scope,
+    label: scope === "always" && alwaysOption ? alwaysOption.label : toolApprovalScopeLabel(scope),
+    hint: scope === "always" && alwaysOption ? alwaysOption.hint : rememberScopeHint(scope, pending),
+    onSelect: () => onDecide("allow", { scope }),
+  }));
 
   return (
     // Approvals are the user's: Aiden Live can never press Allow, Always allow or their menu.
@@ -425,7 +359,7 @@ export function ChatApprovalCard({
       <p className="sr-only" role="status">
         {invalidPendingPrivilegedApproval
           ? "Invalid privileged approval blocked"
-          : `Approval needed for ${pendingWorkspaceWrite?.childLabel ?? pendingMcpMutation?.childLabel ?? pendingShell?.childLabel ?? toolLabel(pending.toolName)}${pendingCount > 1 ? `, 1 of ${pendingCount}` : ""}${liveVoice === "voice" && !disabledReason ? ". Live is listening: say allow or deny" : ""}`}
+          : `${requester === "Aiden" ? "Approval needed" : `${requester} needs approval`} for ${pendingWorkspaceWrite?.childLabel ?? pendingMcpMutation?.childLabel ?? pendingShell?.childLabel ?? toolLabel(pending.toolName)}${pendingCount > 1 ? `, 1 of ${pendingCount}` : ""}${liveVoice === "voice" && !disabledReason ? ". Live is listening: say allow or deny" : ""}`}
       </p>
       <section
         ref={cardRef}
@@ -447,25 +381,12 @@ export function ChatApprovalCard({
           <Text variant="strong" as="p" id={`approval-title-${pending.approvalId}`} className="mt-2.5 text-balance">
             {invalidPendingPrivilegedApproval
               ? "Invalid privileged approval blocked"
-              : pendingWorkspaceWrite
-                ? `${pendingWorkspaceWrite.childLabel} wants to ${subagentWorkspaceWriteOperationLabel(
-                    pendingWorkspaceWrite.operation,
-                  ).toLocaleLowerCase("en-US")}`
-                : pendingMcpMutation
-                  ? `${pendingMcpMutation.childLabel} wants to call ${pendingMcpMutation.serverId}:${pendingMcpMutation.toolName}`
-                  : pendingShell
-                    ? `${pendingShell.childLabel} wants to run a full-host command`
-                    : pendingRunGrant
-                      ? `Allow ${pendingRunGrant.lane === "write" ? "writes" : "shell"} for ${pendingRunGrant.childLabel}`
-                      : pendingHook && pendingCanAllow
-                        ? hookProposalHeadline(pendingHook)
-                        : schedule
-                        ? scheduleApprovalHeadline(schedule)
-                        : approvalHeadline(pending)}
+              : // A hook the person can't apply here reads as the plain card it falls back to.
+                (pendingHook && !pendingCanAllow ? undefined : approvalDetailsHeadline(details)) ?? approvalHeadline(pending)}
             {pendingCount > 1 ? <span className="ml-1.5 font-normal text-tertiary">1 of {pendingCount}</span> : null}
           </Text>
         </div>
-        {!pendingCanAllow ? (
+        {!reviewable ? (
           <Text variant="small" as="p" id={summaryId} className="approval-well mt-3 bg-well px-4 py-3">
             Aiden cannot safely authorize this action from this view. Deny it here or review the exact action on the
             device that owns this chat.
@@ -520,38 +441,47 @@ export function ChatApprovalCard({
                       ? HOOK_PROPOSAL_APPROVAL_FOOTER
                       : schedule
                       ? SCHEDULE_APPROVAL_FOOTER
-                      : approvalMeta(plainPreview)}
+                      : approvalMeta(plainPreview, requester)}
         </Text>
+        {notes.map((note) => (
+          <Text key={note} variant="small" color="tertiary" as="p" className="mt-1 shrink-0 text-center text-pretty">
+            {note}
+          </Text>
+        ))}
+        {suggestion ? (
+          <div className="mt-1 flex shrink-0 flex-wrap items-center justify-center gap-x-1.5" role="group" aria-label={suggestion.text}>
+            <Text variant="small" color="tertiary" as="span" className="text-pretty">
+              {suggestion.text}
+            </Text>
+            <Button variant="transparent" size="small" disabled={suggestion.busy === true || deciding} onClick={suggestion.onAction}>
+              {suggestion.action}
+            </Button>
+          </div>
+        ) : null}
+        {allowElsewhere !== undefined ? (
+          <Text variant="small" color="secondary" as="p" role="note" className="mt-1.5 shrink-0 text-center">
+            {`Allow it on ${allowElsewhere}.`}
+          </Text>
+        ) : null}
         {disabledReason ? (
           <Text variant="small" color="secondary" as="p" role="note" className="mt-1.5 shrink-0 text-center">
             {disabledReason}
           </Text>
         ) : null}
         {liveVoice && !disabledReason ? <LiveVoiceApprovalHint mode={liveVoice} /> : null}
-        <div className="@container mt-3.5 flex shrink-0 gap-2">
-          <Button
-            ref={denyRef}
-            variant="filled"
-            size="large"
-            className="flex-1"
-            disabled={disabled}
-            aria-keyshortcuts={keyboardShortcuts ? approvalAriaKeyShortcut("deny", keyboardPlatform) : undefined}
-            onClick={() => onDecide("deny")}
-          >
-            {pendingFormFill ? "Cancel" : "Deny"}
-            {shortcutHint("deny")}
-          </Button>
-          {pendingCanAllow ? (
-            <div className={cn("flex min-w-0 flex-1", pendingRememberScopes.length > 0 && "squircle-action-group squircle-control shadow-control")}>
-              <Button
-                variant="accent"
-                size="large"
-                className={cn("min-w-0 flex-1", pendingRememberScopes.length > 0 && "shadow-none hover:shadow-none active:shadow-none")}
-                disabled={disabled}
-                aria-keyshortcuts={keyboardShortcuts ? approvalAriaKeyShortcut("allow", keyboardPlatform) : undefined}
-                onClick={() => onDecide("allow", pendingFormFill ? { formFillExcludedOrders } : undefined)}
-              >
-                {deciding
+        {error ? (
+          <Text variant="small" as="p" role="alert" className="mt-1.5 shrink-0 text-center text-status-red">
+            {error}
+          </Text>
+        ) : null}
+        <ApprovalActions
+          denyRef={denyRef}
+          // A held change (a hook the agent proposed) is applied or dismissed, never "allowed".
+          denyLabel={pendingFormFill ? "Cancel" : pendingHook ? "Dismiss" : "Deny"}
+          onDeny={() => onDecide("deny")}
+          {...(pendingCanAllow
+            ? {
+                allowLabel: deciding
                   ? "Sending…"
                   : pendingFormFill
                     ? `Fill ${pendingFormFill.rows.length - formFillExcludedOrders.length} field${pendingFormFill.rows.length - formFillExcludedOrders.length === 1 ? "" : "s"}`
@@ -559,38 +489,16 @@ export function ChatApprovalCard({
                       ? subagentMcpMutationAllowLabel(pendingMcpMutation)
                       : pendingRunGrant
                         ? "Allow for run"
-                        : "Allow once"}
-                {deciding ? null : shortcutHint("allow")}
-              </Button>
-              {pendingRememberScopes.length > 0 ? (
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      variant="accent"
-                      size="large"
-                      iconOnly
-                      disabled={disabled}
-                      className="w-10 border-l border-fill-accent-foreground/25 shadow-none hover:shadow-none active:shadow-none"
-                      aria-label="More ways to allow"
-                    >
-                      <ChevronDown aria-hidden="true" className="size-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent side="top" align="end" className="w-80">
-                    {pendingRememberScopes.map((scope) => (
-                      <DropdownMenuItem key={scope} onSelect={() => onDecide("allow", { scope })} className="py-1.5">
-                        <span className="flex min-w-0 flex-col">
-                          <span>{scope === "always" ? "Always allow in this workspace" : toolApprovalScopeLabel(scope)}</span>
-                          <span className="text-small text-tertiary">{rememberScopeHint(scope, pending)}</span>
-                        </span>
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
+                        : pendingHook
+                          ? "Apply"
+                          : "Allow once",
+                onAllow: () => onDecide("allow", pendingFormFill ? { formFillExcludedOrders } : undefined),
+              }
+            : {})}
+          rememberOptions={rememberOptions}
+          disabled={disabled}
+          keyboardShortcuts={keyboardShortcuts}
+        />
       </section>
     </div>
     </LiveGuard>

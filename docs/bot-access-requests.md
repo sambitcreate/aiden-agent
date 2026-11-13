@@ -2,17 +2,17 @@
 
 A Bot with Custom access limited to selected folders can ask to read and change files outside those folders. Its card names the folder, shows its location and explains why it is needed. New Bots still start with Full access, so this does not add a first-run permission step.
 
-The choices are:
+The card asks like every approval card: **Allow once** and **Deny**, with **Always for this folder** under More ways to allow. The choices are:
 
 - **Allow once** lets the current task use that folder for at most an hour. A new task, quitting Aiden or changing the Bot's access ends the grant. A person's steer that joins the same task can use it; a queued follow-up starts a new task and cannot inherit it.
 - **Always for this folder** adds that exact folder to the Bot's saved Custom access. It also lets the current task continue. The Bot keeps its other saved choices. If it was saved just as the task ended, Aiden reports **Folder approval recorded** and does not grant temporary access to the ended task. This acknowledges the earlier approval; replaying it never restores access you later removed.
-- **Not now** leaves access unchanged. The Bot carries on without that folder and does not ask for it again in the same task.
+- **Deny** leaves access unchanged. The Bot carries on without that folder and does not ask for it again in the same task.
 
 Each task can have one extra temporary folder at a time. Approving another folder replaces the previous Allow once grant. Saved Always folders remain part of the Bot's Custom access. Requesting an already available saved folder does not replace a different Allow once grant. A folder saved from an unattended issue becomes available to later tasks; the original unattended task carries on without it.
 
 A temporary grant from an access card is unavailable while an unattended routine, Telegram or Bot input joins that run. A person's joined steer remains supported. A temporary validation-read failure stops that file call, but does not discard a still-live task approval. Retrying must pass the current owner, permissions and deadline checks again.
 
-A request for **your whole Mac** offers only Allow once and Not now. It is never saved as an Always grant. File access turned off is not a route to requesting more access; change that choice yourself in the Bot's Advanced settings.
+A request for **your whole Mac** offers only Allow once and Deny. It is never saved as an Always grant. File access turned off is not a route to requesting more access; change that choice yourself under **Tools** in the Bot's **Advanced** tab.
 
 Folder cards that offer Always can show how often you allowed that exact
 folder in the last two weeks. After three approvals without a recent denial,
@@ -21,7 +21,8 @@ folder**, at most once a week. Whole-Mac requests never count; folders without
 an Always choice never offer the reminder. Retries keep the original choice
 and count it once. If an earlier Always was saved before its acknowledgement
 arrived, a later retry records that earlier approval without restoring access
-you removed. See [Allowed without asking](bot-rules.md#allowed-without-asking).
+you removed. Saved folders appear under **Allowed on this Mac** on the rules
+page in Settings → Approvals; see [The rules page](bot-rules.md#the-rules-page).
 
 ## What an approval covers
 

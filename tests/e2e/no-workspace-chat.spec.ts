@@ -99,15 +99,16 @@ test("No workspace chats each run in their own hidden folder and share one Chats
   expect(await isDirectory(firstHome!.folderPath!)).toBe(true);
 
   // A new chat from the Chats group gets a folder of its own, and the access
-  // chosen before sending applies to it alone.
+  // chosen before sending applies to it alone. A No workspace chat has no
+  // Workspace settings, so its approvals chip always shows and offers Chat only.
   await chatsGroup.hover();
   await page.getByRole("button", { name: "New chat without a workspace" }).click();
-  await page.getByRole("button", { name: /^Workspace access: Ask first/u }).click();
+  await page.getByRole("button", { name: /^Approvals: /u }).click();
   await page
-    .getByRole("radiogroup", { name: "Workspace access" })
-    .getByRole("radio", { name: /^Workspace access: No access/u })
+    .getByRole("radiogroup", { name: "Approvals" })
+    .getByRole("radio", { name: "Approvals: Chat only", exact: true })
     .click();
-  await expect(page.getByRole("button", { name: /^Workspace access: No access/u })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Approvals: Chat only\./u })).toBeVisible();
   await sendAndWaitForReply(page, "Draft a soup recipe", userDataDir, 2);
   const second = (await regularChats(userDataDir)).find((chat) => chat.id !== first.id)!;
   const secondHome = (await workspaces(page)).find((workspace) => workspace.id === second.workspaceId);

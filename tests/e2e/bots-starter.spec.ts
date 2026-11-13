@@ -1,27 +1,29 @@
 import { connectOnboardingLmStudio } from "./fixtures";
-import { botFixture } from "../../renderer/main/bots/test-fixtures";
+import { botFixture, catalogFixture } from "../../renderer/main/bots/test-fixtures";
 import { E2E_PROFILE_NAME, expect, finishLmStudioOnboarding, test } from "./fixtures";
 
 // The e2e profile has no macOS Keychain authority, so the real Bot store cannot
 // open (bots:list fails with "Bot bootstrap marker could not be updated"). Only
 // the Bot IPC is substituted, as in guided-setup.spec.ts; the onboarding,
-// navigation, carousel, chat route and composer are the shipped renderer.
+// navigation, New bot dialog, chat route and composer are the shipped renderer.
 // The turn streams back as live events from main, then the Bot asks a
 // quick-reply question the way the durable runtime publishes a waiting
 // ask_user_question card, and then hands the person a step the way it
 // publishes a waiting hand_off card, and last asks the person to sign in the
 // way it publishes a waiting sign_in card.
-test("an empty Bots list opens a starter Bot chat, sends to it, and answers its quick-reply, hand-off and sign-in cards", async ({ aiden }) => {
+test("New bot makes a Bot from just a name and opens its chat, which sends and answers its quick-reply, hand-off and sign-in cards", async ({ aiden }) => {
   const { page } = aiden;
   const bot = botFixture({ id: "bot-chief", name: "Chief of Staff", description: "Keeps your week on track" });
   await finishLmStudioOnboarding(page);
-  await aiden.app.evaluate(({ ipcMain }, fixture) => {
-    const state = { created: false, sends: [] as unknown[], answers: [] as unknown[], handoffs: [] as unknown[], opened: [] as unknown[] };
+  await aiden.app.evaluate(({ ipcMain }, { fixture, catalog }) => {
+    const state = { created: false, creates: [] as unknown[], introduced: [] as unknown[], sends: [] as unknown[], answers: [] as unknown[], handoffs: [] as unknown[], opened: [] as unknown[] };
     (globalThis as unknown as { botStarterE2e: typeof state }).botStarterE2e = state;
     for (const channel of [
       "bots:list",
       "bots:get",
-      "bots:createFromPreset",
+      "bots:getCapabilityCatalog",
+      "bots:create",
+      "bots:introduce",
       "bots:live:subscribe",
       "bots:live:summary",
       "bots:getCanonicalPhoto",
@@ -34,9 +36,15 @@ test("an empty Bots list opens a starter Bot chat, sends to it, and answers its 
     const idle = { botId: fixture.id, preview: null, updatedAt: null, state: { kind: "idle" } };
     ipcMain.handle("bots:list", () => (state.created ? [fixture] : []));
     ipcMain.handle("bots:get", () => fixture);
-    ipcMain.handle("bots:createFromPreset", () => {
+    ipcMain.handle("bots:getCapabilityCatalog", () => catalog);
+    ipcMain.handle("bots:create", (_event, input: unknown) => {
       state.created = true;
-      return { bot: fixture, created: true };
+      state.creates.push(input);
+      return fixture;
+    });
+    ipcMain.handle("bots:introduce", (_event, botId: unknown) => {
+      state.introduced.push(botId);
+      return true;
     });
     ipcMain.handle("bots:live:subscribe", () => ({ ...idle, epoch: "e1", seq: 0, entries: [], partial: null, question: null, activity: null, queued: [] }));
     ipcMain.handle("bots:live:summary", () => idle);
@@ -73,16 +81,26 @@ test("an empty Bots list opens a starter Bot chat, sends to it, and answers its 
       state.opened.push(input);
       return { opened: "browser" };
     });
-  }, bot);
+  }, { fixture: bot, catalog: catalogFixture() });
 
   await page.getByRole("button", { name: "Bots", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Meet your first Bot" })).toBeVisible();
-  const starters = page.getByRole("list", { name: "Starter Bots" });
-  const chiefOfStaff = starters.getByRole("listitem").filter({ hasText: "Chief of Staff" });
-  await chiefOfStaff.getByRole("button", { name: "Start chat", exact: true }).click();
+  // One field: a name and Return make the Bot and open its chat.
+  await page.getByRole("button", { name: "New bot", exact: true }).click();
+  const create = page.getByRole("dialog", { name: "New bot" });
+  await expect(create.getByRole("textbox")).toHaveCount(1);
+  const name = create.getByRole("textbox", { name: "Name your Bot" });
+  await name.fill("Chief of Staff");
+  await name.press("Enter");
 
   const composer = page.getByPlaceholder("Ask Chief of Staff");
   await expect(composer).toBeVisible();
+  await expect(create).toBeHidden();
+  const made = await aiden.app.evaluate(() => {
+    const state = (globalThis as unknown as { botStarterE2e: { creates: unknown[]; introduced: unknown[] } }).botStarterE2e;
+    return { creates: state.creates, introduced: state.introduced };
+  });
+  expect(made.creates).toMatchObject([{ bot: { name: "Chief of Staff" }, access: { accessMode: "full" } }]);
+  expect(made.introduced).toEqual(["bot-chief"]);
   const question = "What should I focus on today?";
   await composer.fill(question);
   await page.getByRole("button", { name: "Send message", exact: true }).click();
@@ -132,8 +150,54 @@ test("an empty Bots list opens a starter Bot chat, sends to it, and answers its 
   }, bot.id);
   await expect(page.getByRole("heading", { name: "Which area matters most this week?" })).toBeVisible();
   await expect(composer).toBeHidden();
+
+  // The person starts answering: Family is picked but not yet submitted.
   await page.getByRole("button", { name: /Family/u }).click();
   await expect(page.getByRole("button", { name: /Family/u })).toHaveAttribute("aria-pressed", "true");
+
+  // While the question waits, the Bot also hands the person a step. Both pile
+  // up in the one Needs-you slot, but the question on show stays put: the
+  // arrival only raises the count, and the half-made answer is kept. The step
+  // ranks first, so Previous reaches it.
+  await aiden.app.evaluate(({ BrowserWindow }, botId) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.webContents.send("bots:live:event", {
+        botId,
+        epoch: "e1",
+        seq: 8,
+        type: "handoff",
+        handoff: {
+          botId,
+          waitId: "7a1d2c3b-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+          toolCallId: "call-2",
+          kind: "action",
+          action: "Approve the calendar invite from Sam",
+          why: "Only you can accept invites on your work account.",
+          source: "tool",
+        },
+      });
+    }
+  }, bot.id);
+  const card = page.getByRole("group", { name: "Chief of Staff needs you" });
+  const needsYou = page.getByRole("navigation", { name: "Needs you" });
+  await expect(needsYou).toContainText("2 of 2");
+  await expect(page.getByRole("heading", { name: "Which area matters most this week?" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Family/u })).toHaveAttribute("aria-pressed", "true");
+  await expect(card).toHaveCount(0);
+  await needsYou.getByRole("button", { name: "Previous" }).click();
+  await expect(needsYou).toContainText("1 of 2");
+  await expect(card.getByText("Needs you: Approve the calendar invite from Sam")).toBeVisible();
+  await expect(card.getByRole("button", { name: "Take control" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Which area matters most this week?" })).toHaveCount(0);
+  // Back to the question to finish it. Moving away from it let go of the pick
+  // (only an arrival keeps it), so Family is chosen again.
+  await needsYou.getByRole("button", { name: "Next" }).click();
+  await expect(needsYou).toContainText("2 of 2");
+  await expect(page.getByRole("heading", { name: "Which area matters most this week?" })).toBeVisible();
+  const family = page.getByRole("button", { name: /Family/u });
+  await expect(family).toHaveAttribute("aria-pressed", "false");
+  await family.click();
+  await expect(family).toHaveAttribute("aria-pressed", "true");
   await page.getByRole("button", { name: "Submit" }).click();
 
   await expect
@@ -157,31 +221,19 @@ test("an empty Bots list opens a starter Bot chat, sends to it, and answers its 
     },
   ]);
 
-  // The question settles, and the Bot hands the person a step: the card sits above the composer.
+  // The question settles; the step is all that is left, so the header goes and
+  // the card sits alone above the composer. Take control first, then I'm done.
   await aiden.app.evaluate(({ BrowserWindow }, botId) => {
     for (const window of BrowserWindow.getAllWindows()) {
-      window.webContents.send("bots:live:event", { botId, epoch: "e1", seq: 8, type: "question", question: null });
-      window.webContents.send("bots:live:event", {
-        botId,
-        epoch: "e1",
-        seq: 9,
-        type: "handoff",
-        handoff: {
-          botId,
-          waitId: "7a1d2c3b-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
-          toolCallId: "call-2",
-          kind: "action",
-          action: "Approve the calendar invite from Sam",
-          why: "Only you can accept invites on your work account.",
-          source: "tool",
-        },
-      });
+      window.webContents.send("bots:live:event", { botId, epoch: "e1", seq: 9, type: "question", question: null });
     }
   }, bot.id);
-  const card = page.getByRole("group", { name: "Chief of Staff needs you" });
-  await expect(card.getByText("Your turn: Approve the calendar invite from Sam")).toBeVisible();
+  await expect(card.getByText("Needs you: Approve the calendar invite from Sam")).toBeVisible();
+  await expect(needsYou).toHaveCount(0);
   await expect(page.getByPlaceholder("Add a note and send to mark it done")).toBeVisible();
-  await card.getByRole("button", { name: "Done", exact: true }).click();
+  await expect(card.getByRole("button", { name: "I’m done", exact: true })).toHaveCount(0);
+  await card.getByRole("button", { name: "Take control", exact: true }).click();
+  await card.getByRole("button", { name: "I’m done", exact: true }).click();
   await expect
     .poll(() =>
       aiden.app.evaluate(() => (globalThis as unknown as { botStarterE2e: { handoffs: unknown[] } }).botStarterE2e.handoffs),
@@ -218,9 +270,9 @@ test("an empty Bots list opens a starter Bot chat, sends to it, and answers its 
   await expect(signIn.getByText("Sign in to github.com for Chief of Staff")).toBeVisible();
   await expect(signIn.getByText("Chief of Staff never sees your password.", { exact: false })).toBeVisible();
   // The answer is on the card: the composer takes no note while a sign-in waits.
-  await expect(page.getByText("Sign in for Chief of Staff with Open sign-in above, then choose I’m signed in.")).toBeVisible();
+  await expect(page.getByText("Sign in for Chief of Staff with Take control above, then choose I’m done.")).toBeVisible();
   await expect(page.getByPlaceholder("Add a note and send to mark it done")).toHaveCount(0);
-  await signIn.getByRole("button", { name: "Open sign-in" }).click();
+  await signIn.getByRole("button", { name: "Take control to sign in" }).click();
   await expect
     .poll(() => aiden.app.evaluate(() => (globalThis as unknown as { botStarterE2e: { opened: unknown[] } }).botStarterE2e.opened))
     .toEqual([{ botId: "bot-chief", waitId: "9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d" }]);
@@ -233,7 +285,7 @@ test("an empty Bots list opens a starter Bot chat, sends to it, and answers its 
   await expect(botPanel).toHaveAttribute("data-surface-mode", "tools-floating");
   const panelSignIn = botPanel.getByRole("group", { name: "Chief of Staff needs you" });
   await expect(panelSignIn.getByText("Sign in to github.com for Chief of Staff")).toBeVisible();
-  await panelSignIn.getByRole("button", { name: "I’m signed in" }).click();
+  await panelSignIn.getByRole("button", { name: "I’m done" }).click();
   await expect
     .poll(() =>
       aiden.app.evaluate(() => (globalThis as unknown as { botStarterE2e: { handoffs: unknown[] } }).botStarterE2e.handoffs),
@@ -244,18 +296,20 @@ test("an empty Bots list opens a starter Bot chat, sends to it, and answers its 
     ]);
 });
 
-// Onboarding decides whether to offer "Meet your first Bot" when it loads, so
-// the Bot IPC is substituted first and the window reloaded.
-test("onboarding Start Chat creates the starter Bot and opens its chat when setup finishes", async ({ aiden }) => {
+// Onboarding decides whether to make the first Bot when it loads, so the Bot
+// IPC is substituted first and the window reloaded. The Bot's first message
+// is the snapshot its chat subscribes to once it exists.
+test("onboarding makes the first Bot by itself and its chat opens on its first message when setup finishes", async ({ aiden }) => {
   const { page } = aiden;
-  const bot = botFixture({ id: "bot-chief", name: "Chief of Staff", description: "Keeps your week on track" });
-  await aiden.app.evaluate(({ ipcMain }, fixture) => {
+  const bot = botFixture({ id: "bot-chief", name: "Chief", description: undefined });
+  const hello = "Hi, I’m Chief. What would you like help with?";
+  await aiden.app.evaluate(({ ipcMain }, { fixture, hello }) => {
     const state = { created: 0 };
     (globalThis as unknown as { botOnboardingE2e: typeof state }).botOnboardingE2e = state;
     for (const channel of [
       "bots:list",
       "bots:get",
-      "bots:createFromPreset",
+      "bots:createFirst",
       "bots:live:subscribe",
       "bots:live:summary",
       "bots:getCanonicalPhoto",
@@ -264,15 +318,24 @@ test("onboarding Start Chat creates the starter Bot and opens its chat when setu
     const idle = { botId: fixture.id, preview: null, updatedAt: null, state: { kind: "idle" } };
     ipcMain.handle("bots:list", () => (state.created > 0 ? [fixture] : []));
     ipcMain.handle("bots:get", () => fixture);
-    ipcMain.handle("bots:createFromPreset", () => {
+    ipcMain.handle("bots:createFirst", () => {
       state.created += 1;
-      return { bot: fixture, created: true };
+      return { bot: fixture, created: state.created === 1 };
     });
-    ipcMain.handle("bots:live:subscribe", () => ({ ...idle, epoch: "e1", seq: 0, entries: [], partial: null, question: null, activity: null, queued: [] }));
+    ipcMain.handle("bots:live:subscribe", () => ({
+      ...idle,
+      epoch: "e1",
+      seq: 1,
+      entries: state.created > 0 ? [{ id: "a1", type: "assistant", text: hello, toolCalls: [], stopReason: "stop" }] : [],
+      partial: null,
+      question: null,
+      activity: null,
+      queued: [],
+    }));
     ipcMain.handle("bots:live:summary", () => idle);
     ipcMain.handle("bots:getCanonicalPhoto", () => null);
     ipcMain.handle("bots:pendingApprovals", () => []);
-  }, bot);
+  }, { fixture: bot, hello });
   await page.reload();
 
   const onboarding = page.locator('section[aria-label="Set up Aiden"]');
@@ -282,22 +345,18 @@ test("onboarding Start Chat creates the starter Bot and opens its chat when setu
   await next.click();
   await connectOnboardingLmStudio(onboarding);
 
-  await onboarding.getByText("Choose your first Bot", { exact: true }).click();
-  await expect(onboarding.getByRole("heading", { name: "Meet your first Bot" })).toBeVisible();
-  const starters = onboarding.getByRole("list", { name: "Starter Bots" });
-  await starters
-    .getByRole("listitem")
-    .filter({ hasText: "Chief of Staff" })
-    .getByRole("button", { name: "Start chat", exact: true })
-    .click();
-  await expect(onboarding.getByRole("heading", { name: "Finish setup" })).toBeVisible();
+  // No choice to make: the last step already holds the first Bot.
+  const firstBot = onboarding.getByRole("region", { name: "Your first Bot" });
+  await expect(firstBot.getByRole("status")).toHaveText("Chief is ready");
   await onboarding.getByRole("button", { name: "Start using Aiden" }).click();
   await expect(onboarding).toBeHidden();
 
-  await expect(page.getByPlaceholder("Ask Chief of Staff")).toBeVisible();
-  // Ready to type in the Bot's chat straight away.
-  await expect(page.getByPlaceholder("Ask Chief of Staff")).toBeFocused();
-  await expect(page.getByRole("button", { name: "Chief of Staff profile" })).toBeVisible();
+  const composer = page.getByPlaceholder("Ask Chief");
+  await expect(composer).toBeVisible();
+  await expect(page.getByText(hello)).toBeVisible();
+  // Ready to type the answer in the Bot's chat straight away.
+  await expect(composer).toBeFocused();
+  await expect(page.getByRole("button", { name: "Chief settings" })).toBeVisible();
   expect(
     await aiden.app.evaluate(() => (globalThis as unknown as { botOnboardingE2e: { created: number } }).botOnboardingE2e.created),
   ).toBe(1);

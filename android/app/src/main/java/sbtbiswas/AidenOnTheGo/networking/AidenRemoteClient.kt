@@ -120,6 +120,8 @@ class AidenRemoteClient(
         /** Booting a simulator can take tens of seconds. */
         const val SIMULATOR_OPEN_TIMEOUT_SECONDS = 120L
         const val SIMULATOR_HELPER_PATH = "/simulators/hub/vendor/serve-sim/helper"
+        /** The Mac's route grammar for revision-61 change, proposal and lesson ids. */
+        private val BOT_UX_ITEM_ID = Regex("^[A-Za-z0-9._:-]{1,160}$")
 
         // Null optional pairing fields must be omitted. Older Macs reject the
         // additive keys (and even explicit nulls) as an unknown payload shape.
@@ -2333,17 +2335,145 @@ class AidenRemoteClient(
         decodeBotWire(AidenBotPresetList.serializer(), String(bytes, Charsets.UTF_8))
     }
 
-    /** Idempotent per preset on the host; `200` whether or not this call made the Bot. */
-    suspend fun createBotFromPreset(presetId: String, idempotencyKey: UUID): AidenBotPresetCreateResult = executeRequest(
+    /**
+     * Idempotent per preset on the host; `200` whether or not this call made the Bot. Revision 61
+     * (`bot:templates`): [version] is the template version the detail showed, and another one is
+     * `409 revision_conflict`.
+     */
+    suspend fun createBotFromPreset(presetId: String, idempotencyKey: UUID, version: Int? = null): AidenBotPresetCreateResult = executeRequest(
         "/bots/from-preset",
         method = "POST",
-        bodyJson = botJson.encodeToString(AidenBotPresetCreateRequest.serializer(), AidenBotPresetCreateRequest(presetId)),
+        bodyJson = botJson.encodeToString(AidenBotPresetCreateRequest.serializer(), AidenBotPresetCreateRequest(presetId, version)),
         idempotencyKey = idempotencyKey,
         retryConnectionFailure = false,
         acceptedStatus = setOf(200, 201),
         botScope = AidenBotPrivateResponseScope.Root("botPresetCreate")
     ) { bytes ->
         decodeBotWire(AidenBotPresetCreateResult.serializer(), String(bytes, Charsets.UTF_8))
+    }
+
+    // --- Revision 61: Bot UX simplification (`bot:settings-changes`, `bot:suggestions`, `approvals:settings`) ---
+
+    private fun botUxPath(botId: String, kind: String, itemId: String, action: String): String {
+        AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
+        require(BOT_UX_ITEM_ID.matches(itemId)) { "Invalid $kind id" }
+        return "/bots/$botId/$kind/$itemId/$action"
+    }
+
+    /** Apply or Dismiss a held settings change, or Undo an applied one. */
+    suspend fun respondToBotSettingsChange(
+        botId: String,
+        changeId: String,
+        decision: AidenBotSettingsChangeDecision
+    ): AidenBotSettingsChangeRespondResult = executeRequest(
+        botUxPath(botId, "settings-changes", changeId, "respond"),
+        method = "POST",
+        bodyJson = botJson.encodeToString(AidenBotSettingsChangeRespondRequest.serializer(), AidenBotSettingsChangeRespondRequest(decision)),
+        retryConnectionFailure = false,
+        botScope = AidenBotPrivateResponseScope.Root("botSettingsChange")
+    ) { bytes ->
+        decodeBotWire(AidenBotSettingsChangeRespondResult.serializer(), String(bytes, Charsets.UTF_8))
+            .also { if (it.changeId != changeId) throw AidenRemoteClientException.InvalidResponse() }
+    }
+
+    suspend fun respondToBotSkillProposal(
+        botId: String,
+        proposalId: String,
+        decision: AidenBotSkillProposalDecision
+    ): AidenBotSkillProposalRespondResult = executeRequest(
+        botUxPath(botId, "skill-proposals", proposalId, "respond"),
+        method = "POST",
+        bodyJson = botJson.encodeToString(AidenBotSkillProposalRespondRequest.serializer(), AidenBotSkillProposalRespondRequest(decision)),
+        retryConnectionFailure = false,
+        botScope = AidenBotPrivateResponseScope.Root("botSuggestion")
+    ) { bytes ->
+        decodeBotWire(AidenBotSkillProposalRespondResult.serializer(), String(bytes, Charsets.UTF_8))
+            .also { if (it.proposalId != proposalId) throw AidenRemoteClientException.InvalidResponse() }
+    }
+
+    suspend fun respondToBotLesson(
+        botId: String,
+        lessonId: String,
+        decision: AidenBotLessonDecision
+    ): AidenBotLessonRespondResult = executeRequest(
+        botUxPath(botId, "lessons", lessonId, "respond"),
+        method = "POST",
+        bodyJson = botJson.encodeToString(AidenBotLessonRespondRequest.serializer(), AidenBotLessonRespondRequest(decision)),
+        retryConnectionFailure = false,
+        botScope = AidenBotPrivateResponseScope.Root("botSuggestion")
+    ) { bytes ->
+        decodeBotWire(AidenBotLessonRespondResult.serializer(), String(bytes, Charsets.UTF_8))
+            .also { if (it.lessonId != lessonId) throw AidenRemoteClientException.InvalidResponse() }
+    }
+
+    /** Undo on a Learned line: retires the lesson. */
+    suspend fun removeBotLesson(botId: String, lessonId: String): AidenBotLessonRespondResult = executeRequest(
+        botUxPath(botId, "lessons", lessonId, "remove"),
+        method = "POST",
+        bodyJson = "{}",
+        retryConnectionFailure = false,
+        botScope = AidenBotPrivateResponseScope.Root("botSuggestion")
+    ) { bytes ->
+        decodeBotWire(AidenBotLessonRespondResult.serializer(), String(bytes, Charsets.UTF_8))
+            .also { if (it.lessonId != lessonId || it.status != AidenBotLessonStatus.RETIRED) throw AidenRemoteClientException.InvalidResponse() }
+    }
+
+    /** Undo on "Tidied memory". */
+    suspend fun undoBotLearning(botId: String, changeId: String): AidenBotLearningUndoResult = executeRequest(
+        botUxPath(botId, "learning", changeId, "undo"),
+        method = "POST",
+        bodyJson = "{}",
+        retryConnectionFailure = false,
+        botScope = AidenBotPrivateResponseScope.Root("botSuggestion")
+    ) { bytes ->
+        decodeBotWire(AidenBotLearningUndoResult.serializer(), String(bytes, Charsets.UTF_8))
+            .also { if (it.changeId != changeId || !it.undone) throw AidenRemoteClientException.InvalidResponse() }
+    }
+
+    suspend fun approvalMode(): AidenApprovalModeView = executeRequest("/approvals/mode") { bytes ->
+        botUxParse { AidenApprovalModeView.parse(json.parseToJsonElement(String(bytes, Charsets.UTF_8))) }
+    }
+
+    /** `PUT /approvals/mode` with exactly `{mode}`; returns the mode as it now is. */
+    suspend fun setApprovalMode(mode: AidenApprovalMode): AidenApprovalModeView = executeRequest(
+        "/approvals/mode",
+        method = "PUT",
+        bodyJson = AidenApprovalModeView.request(mode).toString(),
+        retryConnectionFailure = false
+    ) { bytes ->
+        botUxParse { AidenApprovalModeView.parse(json.parseToJsonElement(String(bytes, Charsets.UTF_8))) }
+    }
+
+    suspend fun approvalRules(): AidenApprovalRulesView = executeRequest("/approvals/rules") { bytes ->
+        botUxParse { AidenApprovalRulesView.parse(json.parseToJsonElement(String(bytes, Charsets.UTF_8))) }
+    }
+
+    suspend fun approvalRulePicker(): List<AidenApprovalRulePickerOption> = executeRequest("/approvals/rules/picker") { bytes ->
+        botUxParse { AidenApprovalRulePickerOption.parseList(json.parseToJsonElement(String(bytes, Charsets.UTF_8))) }
+    }
+
+    suspend fun addApprovalRule(target: JsonObject, decision: AidenApprovalRuleDecision): AidenApprovalRulesView =
+        approvalRulesWrite("/approvals/rules", AidenApprovalRulesView.addRequest(target, decision))
+
+    suspend fun changeApprovalRule(ref: JsonObject, decision: AidenApprovalRuleDecision): AidenApprovalRulesView =
+        approvalRulesWrite("/approvals/rules/change", AidenApprovalRulesView.changeRequest(ref, decision))
+
+    suspend fun removeApprovalRule(ref: JsonObject): AidenApprovalRulesView =
+        approvalRulesWrite("/approvals/rules/remove", AidenApprovalRulesView.removeRequest(ref))
+
+    private suspend fun approvalRulesWrite(path: String, body: JsonObject): AidenApprovalRulesView = executeRequest(
+        path,
+        method = "POST",
+        bodyJson = body.toString(),
+        retryConnectionFailure = false
+    ) { bytes ->
+        botUxParse { AidenApprovalRulesView.parse(json.parseToJsonElement(String(bytes, Charsets.UTF_8))) }
+    }
+
+    private inline fun <T> botUxParse(parse: () -> T): T = try {
+        parse()
+    } catch (_: AidenBotUxContractException) {
+        throw AidenRemoteClientException.InvalidResponse()
     }
 
     // --- Revision 27: memory (`bot-memory-v1`) ---

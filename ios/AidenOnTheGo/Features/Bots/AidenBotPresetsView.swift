@@ -7,6 +7,8 @@ struct AidenBotMeetFirstBotView: View {
     let isBusy: Bool
     let canCreate: Bool
     let onStartChat: (AidenBotPreset) -> Void
+    /// Revision 61: Open for a template that already made a Bot.
+    var onOpen: (String) -> Void = { _ in }
     let onCreateOwn: () -> Void
 
     @Environment(\.aidenPalette) private var palette
@@ -40,9 +42,13 @@ struct AidenBotMeetFirstBotView: View {
 
             VStack(spacing: 10) {
                 Button {
-                    if let current { onStartChat(current) }
+                    if let existing = current?.template?.existingBotId {
+                        onOpen(existing)
+                    } else if let current {
+                        onStartChat(current)
+                    }
                 } label: {
-                    Text("Start Chat")
+                    Text(current?.template?.existingBotId == nil ? "Start Chat" : "Open")
                         .frame(maxWidth: .infinity)
                         .frame(minHeight: 44)
                 }
@@ -93,10 +99,91 @@ struct AidenBotMeetFirstBotView: View {
                     .font(.footnote)
                     .foregroundStyle(palette.secondary)
             }
+            if let template = preset.template {
+                Text("Version \(template.version)")
+                    .font(.caption)
+                    .foregroundStyle(palette.secondary)
+            }
         }
         .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(palette.raised, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// Revision 61 (`bot:templates`): the Mac's templates as a list, each with its
+/// version and a sample of what it says. A template that already made a Bot
+/// opens that Bot instead of making another.
+struct AidenBotTemplatesView: View {
+    let presets: [AidenBotPreset]
+    let isBusy: Bool
+    let canCreate: Bool
+    let onUse: (AidenBotPreset) -> Void
+    let onOpen: (String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.aidenPalette) private var palette
+
+    var body: some View {
+        NavigationStack {
+            List(presets) { preset in
+                row(preset)
+                    .listRowBackground(palette.raised)
+            }
+            .scrollContentBackground(.hidden)
+            .background(palette.canvas)
+            .navigationTitle("Templates")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func row(_ preset: AidenBotPreset) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            AidenBotSemanticAvatarView(avatar: .recipe(preset.avatar), name: preset.name, size: 44)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(preset.name)
+                        .font(.headline)
+                        .foregroundStyle(palette.foreground)
+                    if let template = preset.template {
+                        Text("Version \(template.version)")
+                            .font(.caption)
+                            .foregroundStyle(palette.secondary)
+                    }
+                }
+                Text(preset.subtitle)
+                    .font(.subheadline)
+                    .foregroundStyle(palette.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let sample = preset.template?.sample.first {
+                    Text("“\(sample)”")
+                        .font(.footnote)
+                        .foregroundStyle(palette.secondary)
+                        .lineLimit(2)
+                }
+                if let existing = preset.template?.existingBotId {
+                    Button("Open") { onOpen(existing) }
+                        .buttonStyle(.bordered)
+                        .buttonBorderShape(.capsule)
+                        .padding(.top, 4)
+                } else {
+                    Button("Use Template") { onUse(preset) }
+                        .buttonStyle(.borderedProminent)
+                        .buttonBorderShape(.capsule)
+                        .aidenSolidFillTint()
+                        .disabled(isBusy || !canCreate)
+                        .padding(.top, 4)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 6)
+        .accessibilityElement(children: .contain)
     }
 }

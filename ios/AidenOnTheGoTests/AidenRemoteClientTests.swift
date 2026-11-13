@@ -5452,6 +5452,85 @@ final class AidenRemoteClientTests: XCTestCase {
         }
     }
 
+    /// Contract revision 61: each Bot UX opt-in is asked for alone and only
+    /// while the Mac lists it; one refused name leaves every other grant.
+    @MainActor
+    func testCoordinatorNegotiatesBotUXOptInsAloneAndOnlyWhatTheMacOffers() async throws {
+        for status in [200, 400, 404] {
+            let refused = status != 200
+            let keychain = AidenRemoteMemoryKeychain()
+            let store = AidenInstallationStore(keychain: keychain)
+            _ = try store.savePairing(
+                makeExchange(instanceId: "instance-ux", deviceId: "device-ux", credential: "credential-ux"),
+                trust: makeSystemTrust(),
+                name: "Bot UX Mac"
+            )
+            let session = makeSession()
+            var granted = ["server:read", "workspace:read"]
+            var accepts: [[String]] = []
+            // This Mac offers four of the five; `bot:templates` is not listed.
+            let offered = ["approval:cards", "approvals:settings", "bot:settings-changes", "bot:suggestions"]
+            AidenRemoteMockURLProtocol.handler = { request in
+                switch (request.httpMethod, request.url?.path) {
+                case ("GET", "/api/aiden/v1/server"):
+                    let serverObject: [String: Any] = [
+                        "protocolVersion": 1,
+                        "instanceId": "instance-ux",
+                        "name": "Bot UX Mac",
+                        "appVersion": "1.0.0",
+                        "capabilities": granted,
+                        "serverCapabilities": ["server:read", "workspace:read", "tasks:read"] + offered,
+                        "features": ["chat-tasks-v1"],
+                        "connectionMode": "lan",
+                        "serverTime": "2026-11-13T12:00:00.000Z",
+                    ]
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: serverObject))
+                case ("GET", "/api/aiden/v1/workspaces"):
+                    return Self.response(for: request, status: 200, json: "{\"workspaces\":[]}")
+                case ("PATCH", "/api/aiden/v1/device/identity"):
+                    let name = try XCTUnwrap(try Self.jsonBody(request)["name"] as? String)
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: ["name": name]))
+                case ("POST", "/api/aiden/v1/device/capabilities"):
+                    let asked = try XCTUnwrap(try Self.jsonBody(request)["accepts"] as? [String])
+                    accepts.append(asked)
+                    if refused, asked.contains("approvals:settings") {
+                        return Self.response(
+                            for: request,
+                            status: status,
+                            json: #"{"error":{"code":"invalid_request","message":"Unknown capability.","requestId":"request-ux","retryable":false}}"#
+                        )
+                    }
+                    granted += asked
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: ["capabilities": granted]))
+                default:
+                    XCTFail("Unexpected request: \(request.httpMethod ?? "nil") \(request.url?.path ?? "nil")")
+                    return Self.response(for: request, status: 500, json: "{}")
+                }
+            }
+            let coordinator = AidenRemoteCoordinator(
+                installationStore: store,
+                clientFactory: { installation, credential in
+                    AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
+                }
+            )
+            await coordinator.start()
+
+            XCTAssertEqual(coordinator.connectionState, .connected, "status \(status)")
+            XCTAssertEqual(accepts.first, ["tasks:read"])
+            XCTAssertTrue(accepts.dropFirst().allSatisfy { $0.count == 1 }, "Each opt-in is asked for in a call of its own")
+            XCTAssertEqual(Set(accepts.dropFirst().flatMap { $0 }), Set(offered))
+            XCTAssertFalse(accepts.joined().contains("bot:templates"), "A name the Mac doesn't list is never asked for")
+
+            let installation = try XCTUnwrap(AidenInstallationStore(keychain: keychain).activeInstallation)
+            XCTAssertTrue(installation.hasNegotiatedAccess(to: .tasksRead), "a refusal keeps the batch's grants")
+            for capability in [AidenRemoteCapability.approvalCards, .botSettingsChanges, .botSuggestions] {
+                XCTAssertTrue(installation.hasNegotiatedAccess(to: capability), "status \(status): \(capability.rawValue) survives the refusal")
+            }
+            XCTAssertEqual(installation.hasNegotiatedAccess(to: .approvalsSettings), !refused)
+            XCTAssertFalse(installation.hasNegotiatedAccess(to: .botTemplates))
+        }
+    }
+
     /// Contract revision 40: a Mac that offers `bot:handoff-notes` is asked
     /// for it with `bot:handoffs`; a Mac on revision 37 is never asked for it,
     /// and once that Mac updates, the device asks for the notes alone.

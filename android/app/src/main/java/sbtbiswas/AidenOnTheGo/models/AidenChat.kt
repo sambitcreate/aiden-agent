@@ -1600,8 +1600,18 @@ data class AidenStreamPendingApproval(
     val scopes: List<String>? = null,
     /** Contract revision 39 (`schedule:cards`): a scheduled-task card. An invalid one reads as null. */
     @Serializable(with = AidenApprovalScheduleLenientSerializer::class)
-    val schedule: AidenApprovalSchedule? = null
-)
+    val schedule: AidenApprovalSchedule? = null,
+    /**
+     * Contract revision 61 (`approval:cards`): the typed card the desktop shows. It must agree
+     * with [canAllow] and every offered scope, or the approval is refused.
+     */
+    @Serializable(with = AidenApprovalCardSerializer::class)
+    val card: AidenApprovalCard? = null
+) {
+    init {
+        card?.let { AidenApprovalCard.requireAgrees(it, canAllow, scopes) }
+    }
+}
 
 @Serializable
 data class AidenStreamApprovalSnapshot(
@@ -1814,7 +1824,13 @@ data class AidenPendingApproval(
      * only: it never changes [canAllow] or [scopes]. Approvals are never persisted, so a
      * relaunch reads it again from the host.
      */
-    val schedule: AidenApprovalSchedule? = null
+    val schedule: AidenApprovalSchedule? = null,
+    /**
+     * Revision 61 (`approval:cards`): the typed card. When present it replaces the summary
+     * card, and its buttons are the only answers offered: each sends exactly its decision and
+     * scope.
+     */
+    val card: AidenApprovalCard? = null
 )
 
 data class AidenApprovalCapabilities(
@@ -1943,7 +1959,15 @@ object AidenPendingApprovalResolution {
             } else {
                 listOf(AidenApprovalScope.ONCE)
             },
-            schedule = AidenApprovalSchedule.forTool(approval.toolName, approval.schedule)
+            schedule = AidenApprovalSchedule.forTool(approval.toolName, approval.schedule),
+            // Deny stays answerable; only the allows go, saying why.
+            card = approval.card?.let {
+                when {
+                    canAllow -> it
+                    capabilities.canRespond && !hasRequiredWriteCapability -> it.denyOnly(AidenApprovalCard.SCHEDULE_WRITE_REQUIRED)
+                    else -> it.denyOnly()
+                }
+            }
         )
     }
 }

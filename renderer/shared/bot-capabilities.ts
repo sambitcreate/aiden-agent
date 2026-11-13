@@ -44,6 +44,13 @@ export interface BotModelSelection {
   modelId: string;
 }
 
+/**
+ * The Web search capability's label. In Full access it is on only with
+ * `webSearchEnabled`, and the catalog has no kind, so Advanced → Tools tells
+ * it apart by this label; main names it with the same constant.
+ */
+export const BOT_WEB_SEARCH_CAPABILITY_LABEL = "Web search";
+
 export interface BotCapabilityOption {
   /** Opaque, main-minted grant id. It is not a provider/server/skill id. */
   id: string;

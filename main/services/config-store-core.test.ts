@@ -21,6 +21,7 @@ import {
 import { withoutWorkspaceDisabledMcpServers } from "./workspace-capabilities.js";
 import { freshWebSearchSettings } from "./web-search-provider-registry-core.js";
 import { defaultWebFetchSettings } from "../../renderer/shared/web-fetch-settings.js";
+import { effectiveApprovalMode } from "../../renderer/shared/approval-mode.js";
 import type { AssistantConfig, StoredProvider, Workspace } from "./types.js";
 
 function expectedWebSearchSettings(enabled: boolean) {
@@ -132,6 +133,12 @@ async function harness(t: test.TestContext, legacy?: unknown) {
     cacheFile: path.join(localRoot, PROVIDER_MODEL_CACHE_FILENAME),
   };
 }
+
+// A profile an older Aiden already used starts in Ask, never Auto (plan §7);
+// the seed records that once so a later start never re-decides it.
+const UPGRADED_APPROVAL_MODE = { approvalMode: "ask", approvalModeOrigin: "upgrade" } as const;
+// A new profile records only that it started fresh; its mode stays unset.
+const FRESH_APPROVAL_MODE = { approvalModeOrigin: "fresh" } as const;
 
 async function readJson<T>(file: string): Promise<T> {
   return JSON.parse(await fs.readFile(file, "utf-8")) as T;
@@ -514,6 +521,7 @@ test("MCP servers and skills are portable; workspaces and settings are not", asy
     true,
   );
   assert.deepEqual((await readJson<{ settings: unknown }>(h.settingsFile)).settings, {
+    ...FRESH_APPROVAL_MODE,
     exaEnabled: true,
     showLocalModelReasoning: false,
     webSearch: expectedWebSearchSettings(true),
@@ -680,6 +688,7 @@ test("reads and writes survive a restart of the whole store", async (t) => {
     isBuiltin: false,
   });
   assert.deepEqual(await next.getSettings(), {
+    ...FRESH_APPROVAL_MODE,
     compactionEngine: "llm",
     exaEnabled: true,
     assistant: assistantConfig,
@@ -1586,6 +1595,7 @@ test("seeding runs once even under concurrent first reads", async (t) => {
   assert.deepEqual(skills, []);
   assert.deepEqual(servers, []);
   assert.deepEqual(settings, {
+    ...UPGRADED_APPROVAL_MODE,
     compactionEngine: "llm",
     webSearch: expectedWebSearchSettings(false),
   });
@@ -2168,6 +2178,7 @@ test("valid-JSON malformed local roots are normalized before startup reads", asy
     assert.deepEqual(await h.store.listProviders(), []);
     assert.equal((await h.store.listWorkspaces()).length, 1);
     assert.deepEqual(await h.store.getSettings(), {
+      ...UPGRADED_APPROVAL_MODE,
       compactionEngine: "llm",
       webSearch: expectedWebSearchSettings(false),
     });
@@ -2290,6 +2301,7 @@ test("valid-JSON malformed settings roots are normalized before reads and writes
     await fs.writeFile(h.settingsFile, JSON.stringify(malformed), "utf-8");
 
     assert.deepEqual(await h.store.getSettings(), {
+      ...UPGRADED_APPROVAL_MODE,
       compactionEngine: "llm",
       webSearch: expectedWebSearchSettings(false),
     });
@@ -2323,10 +2335,12 @@ test("malformed legacy settings are normalized before same-process consumers run
   });
 
   assert.deepEqual(await h.store.getSettings(), {
+    ...UPGRADED_APPROVAL_MODE,
     compactionEngine: "llm",
     webSearch: expectedWebSearchSettings(false),
   });
   assert.deepEqual(await h.store.setGoogleThinkingLevel("gemini-test", "high"), {
+    ...UPGRADED_APPROVAL_MODE,
     compactionEngine: "llm",
     googleThinkingByModel: { "gemini-test": "high" },
     webSearch: expectedWebSearchSettings(false),
@@ -2760,6 +2774,7 @@ test("malformed known settings fields are dropped before type-assuming consumers
   );
 
   assert.deepEqual(await h.store.getSettings(), {
+    ...UPGRADED_APPROVAL_MODE,
     compactionEngine: "llm",
     futureSetting: { retained: true },
     webSearch: expectedWebSearchSettings(false),
@@ -3489,4 +3504,116 @@ test('botMessaging validates booleans and persists only off',async t=>{
  await assert.rejects(h.store.setSettings({botMessaging:'no' as never}),/messaging/);
  await h.store.setSettings({botMessaging:false});assert.equal((await h.store.getSettings()).botMessaging,false);
  await h.store.setSettings({botMessaging:true});assert.equal((await h.store.getSettings()).botMessaging,undefined);
+});
+
+// ── Approval mode migration (docs/plans/bot-ux-simplification.md §7) ───────
+
+function restartStore(h: Awaited<ReturnType<typeof harness>>) {
+  return createConfigStore(
+    createPortableConfigStores(
+      () => path.dirname(h.portableFile),
+      () => path.dirname(h.localFile),
+    ),
+    fakeSecrets().port,
+  );
+}
+
+test("approval mode: a fresh install stays unset (Auto once a model exists) across restarts", async (t) => {
+  const h = await harness(t);
+  const first = await h.store.getSettings();
+  assert.equal(first.approvalMode, undefined);
+  assert.equal(first.approvalModeOrigin, "fresh");
+  // Onboarding connects a model; the next start must not treat this install as an upgrade.
+  await h.store.setSettings({ lastProviderId: "openai", lastModel: "gpt-5" });
+  const restarted = await restartStore(h).getSettings();
+  assert.equal(restarted.approvalMode, undefined);
+  assert.equal(restarted.approvalModeOrigin, "fresh");
+});
+
+test("approval mode: an install already in use starts in Ask, never Auto, and keeps its Full workspace", async (t) => {
+  const h = await harness(t, {
+    providers: [],
+    settings: { lastProviderId: "anthropic", lastModel: "claude" },
+    workspaces: [
+      { id: "proj", name: "Project", folderPath: "/work/proj", permission: "full", createdAt: 1, updatedAt: 1 },
+      { id: "docs", name: "Docs", folderPath: "/work/docs", permission: "ask", createdAt: 1, updatedAt: 1 },
+    ],
+    seeded: true,
+  });
+  const settings = await h.store.getSettings();
+  assert.equal(settings.approvalMode, "ask");
+  assert.equal(settings.approvalModeOrigin, "upgrade");
+  // The Full workspace is untouched on disk, so the previous release still reads Full.
+  const proj = await h.store.getWorkspace("proj");
+  assert.equal(proj?.permission, "full");
+  assert.equal(proj?.approvalMode, undefined);
+  // A person's later choice is kept on the next start.
+  await h.store.setSettings({ approvalMode: "auto" });
+  assert.equal((await restartStore(h).getSettings()).approvalMode, "auto");
+});
+
+test("approval mode: onboarding finished on an earlier release counts as in use", async (t) => {
+  const h = await harness(t);
+  await fs.rm(h.settingsFile, { force: true });
+  await fs.writeFile(
+    h.settingsFile,
+    JSON.stringify({ settings: { onboarding: { version: 2, outcome: "completed", lastSatisfiedStep: "tour" } } }),
+    "utf-8",
+  );
+  const settings = await restartStore(h).getSettings();
+  assert.equal(settings.approvalModeOrigin, "upgrade");
+  assert.equal(settings.approvalMode, "ask");
+});
+
+test("approval mode: changing the global mode tells workspace observers, so phones see the new access tier", async (t) => {
+  const h = await harness(t);
+  let notified = 0;
+  h.store.onWorkspacesChanged(() => { notified += 1; });
+  await h.store.setSettings({ memoryEnabled: false });
+  assert.equal(notified, 0, "an unrelated setting changes no workspace");
+  await h.store.setSettings({ approvalMode: "never" });
+  assert.equal(notified, 1);
+  await h.store.setSettings({ approvalMode: "never" });
+  assert.equal(notified, 1, "saving the same mode again changes nothing");
+});
+
+test("approval mode: an install whose settings file is unreadable runs in Ask, never Auto", async (t) => {
+  const h = await harness(t, {
+    providers: [],
+    settings: { lastProviderId: "anthropic", lastModel: "claude" },
+    workspaces: [{ id: "proj", name: "Project", folderPath: "/work/proj", permission: "ask", createdAt: 1, updatedAt: 1 }],
+    seeded: true,
+  });
+  await fs.writeFile(h.settingsFile, "{ this is not json", "utf-8");
+  const settings = await restartStore(h).getSettings();
+  assert.equal(effectiveApprovalMode(settings, true), "ask");
+  // Only the fresh-install seed's own marker lets an unset mode follow a model to Auto.
+  const fresh = await (await harness(t)).store.getSettings();
+  assert.equal(effectiveApprovalMode(fresh, true), "auto");
+});
+
+test("a workspace keeps only a valid approval mode and Mac grants across saves and reloads", async (t) => {
+  const h = await harness(t);
+  const base = { permission: "ask" as const, createdAt: 1, updatedAt: 1 };
+  await h.store.saveWorkspace({ ...base, id: "custom", name: "Custom", approvalMode: "never", macGrants: { shell: true } });
+  await h.store.saveWorkspace({
+    ...base,
+    id: "odd",
+    name: "Odd",
+    approvalMode: "full" as unknown as "never",
+    macGrants: { shell: "yes", root: true } as unknown as { shell: true },
+  });
+  const reloaded = restartStore(h);
+  const custom = await reloaded.getWorkspace("custom");
+  assert.equal(custom?.approvalMode, "never");
+  assert.deepEqual(custom?.macGrants, { shell: true });
+  const odd = await reloaded.getWorkspace("odd");
+  assert.equal("approvalMode" in (odd ?? {}), false);
+  assert.equal("macGrants" in (odd ?? {}), false);
+  // Back to the global mode: the fields go, not just their values.
+  const { approvalMode: _mode, macGrants: _grants, ...plain } = custom!;
+  await reloaded.saveWorkspace(plain);
+  const cleared = await restartStore(h).getWorkspace("custom");
+  assert.equal("approvalMode" in (cleared ?? {}), false);
+  assert.equal("macGrants" in (cleared ?? {}), false);
 });

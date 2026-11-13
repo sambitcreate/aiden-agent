@@ -1,6 +1,7 @@
 // Profile-owned approval waits. Durable identity and provenance stay in main;
 // only the explicitly copied public card fields cross IPC.
 import { botApprovalRuleKey } from "../../../renderer/shared/tool-approval-scope.js";
+import { ApprovalAnalytics } from "../approval-gate/approval-analytics.js";
 import { ToolApprovalCoordinator, type ToolApprovalOutcome } from "../tool-approval.js";
 import type { BotApprovalDecision, BotApprovalOwner, BotApprovalRequest, BotAllowListRelease } from "./bot-extension.js";
 
@@ -12,15 +13,22 @@ export interface BotApprovalPrompt {
   authorizationFingerprint?: string;
   allowList?: BotApprovalRequest["allowList"];
   always?: { key: string; count: number };
+  /** In Ask, Auto would hand this call to the judge: the desktop card may offer Auto. */
+  autoWouldJudge?: true;
   botId: string;
   waitId: string;
   toolCallId: string;
   toolName: string;
   summary: string;
+  /** One-way hashes (see `BotApprovalRequest`): the desktop card groups only waits that match on both. */
+  argumentsHash?: string;
+  runHash?: string;
 }
-export function publicBotApprovalPrompt(prompt: BotApprovalPrompt): Pick<BotApprovalPrompt, "botId" | "waitId" | "toolCallId" | "toolName" | "summary" | "always"> {
+export function publicBotApprovalPrompt(prompt: BotApprovalPrompt): Pick<BotApprovalPrompt, "botId" | "waitId" | "toolCallId" | "toolName" | "summary" | "always" | "autoWouldJudge" | "argumentsHash" | "runHash"> {
   return { botId: prompt.botId, waitId: prompt.waitId, toolCallId: prompt.toolCallId, toolName: prompt.toolName, summary: prompt.summary,
-    ...(prompt.always ? { always: { key: prompt.always.key, count: prompt.always.count } } : {}) };
+    ...(prompt.always ? { always: { key: prompt.always.key, count: prompt.always.count } } : {}),
+    ...(prompt.autoWouldJudge ? { autoWouldJudge: true as const } : {}),
+    ...(prompt.argumentsHash ? { argumentsHash: prompt.argumentsHash } : {}), ...(prompt.runHash ? { runHash: prompt.runHash } : {}) };
 }
 export interface BotApprovals {
   request(request: BotApprovalRequest): Promise<BotApprovalDecision>;
@@ -61,7 +69,9 @@ export function createBotApprovals(options: BotApprovalsOptions): BotApprovals {
     const request = state.request;
     const published: BotApprovalPrompt = { botId: request.botId, waitId: request.waitId, toolCallId: request.toolCallId,
       toolName: request.toolName, summary: request.summary, authorizationFingerprint: request.authorizationFingerprint,
+      ...(request.argumentsHash ? { argumentsHash: request.argumentsHash } : {}), ...(request.runHash ? { runHash: request.runHash } : {}),
       ...(request.owner ? { owner: structuredClone(request.owner) } : {}), ...(request.always ? { always: { ...request.always } } : {}),
+      ...(request.autoWouldJudge ? { autoWouldJudge: true as const } : {}),
       ...(request.allowList ? { allowList: structuredClone(request.allowList) } : {}) };
     state.prompt = published; waiting.set(request.waitId, state);
     options.publish(published); changed(request.botId);
@@ -71,7 +81,7 @@ export function createBotApprovals(options: BotApprovalsOptions): BotApprovals {
       clearCallbacks(state);
       options.withdraw?.(state.prompt, outcome); changed(state.prompt.botId);
     }
-  });
+  }, undefined, new ApprovalAnalytics({ surface: "bot", mode: () => "bot" }));
   async function request(input: BotApprovalRequest): Promise<BotApprovalDecision> {
     const captured = { ...input, owner: structuredClone(input.owner), always: structuredClone(input.always), allowList: structuredClone(input.allowList) };
     assertActive(captured);
@@ -149,7 +159,7 @@ export function createBotApprovals(options: BotApprovalsOptions): BotApprovals {
       if (!state || (state.claimed && !(source === "expiry" && decision === "deny"))) return false;
       state.claimed = true; state.source = source;
       if (state.prompt) state.prompt.decisionSource = source;
-      return coordinator.decideAsHost(id, decision === "allow", scope ? { scope } : undefined);
+      return coordinator.decideAsHost(id, decision === "allow", scope ? { scope } : undefined, source === "person");
     },
     async releaseFromAllowList(id, input) {
       const state = waiting.get(id), grant = structuredClone(input);
@@ -167,7 +177,7 @@ export function createBotApprovals(options: BotApprovalsOptions): BotApprovals {
         if (waiting.get(id) !== state || state.controller.signal.aborted) return false;
         state.replacement = structuredClone(result); state.source = "allow_list";
         if (state.prompt) state.prompt.decisionSource = "allow_list";
-        return coordinator.decideAsHost(id, true);
+        return coordinator.decideAsHost(id, true, undefined, false);
       } catch { return false; }
       finally { if (waiting.get(id) === state) state.claimed = false; }
     },

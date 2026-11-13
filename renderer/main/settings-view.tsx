@@ -39,7 +39,6 @@ import { TtsSettings } from "../components/settings/tts-settings";
 import { ShortcutSettings } from "../components/settings/shortcut-settings";
 import { ComputerUseSettings } from "../components/settings/computer-use-settings";
 import { BotComputersSettings } from "../components/settings/bot-computers-settings";
-import { BotsSettings } from "../components/settings/bots-settings";
 import { ModelDataSettings } from "../components/settings/model-data-settings";
 import { AboutSettings } from "../components/settings/about-settings";
 import { ScheduledTasksSettings } from "../components/settings/scheduled-tasks-settings";
@@ -48,12 +47,25 @@ import { RemoteAccessSettings } from "../components/settings/remote-access-setti
 import { PeerHostsSettingsPage } from "../components/settings/peer-hosts-settings";
 import { AppControlSettings } from "../components/settings/app-control-settings";
 import { SimulatorSettingsPage } from "../components/settings/device-workspace-settings";
-import { ToolApprovalSettings } from "../components/settings/tool-approval-settings";
+import { ApprovalRulesSettings } from "../components/settings/approval-rules-settings";
+import { ApprovalModeSettings } from "../components/settings/approval-mode-settings";
+
+/** Settings → Approvals: the mode first, then the rules page, then Advanced (which holds Bot messaging). */
+function ApprovalsSettings() {
+  return (
+    <>
+      <ApprovalModeSettings>
+        <ApprovalRulesSettings />
+      </ApprovalModeSettings>
+    </>
+  );
+}
 import { LimitsSettings } from "../components/settings/limits-settings";
 import { HooksSettings } from "../components/settings/hooks-settings";
 import {
   availableSettingsPages,
   firstMatchingSettingsSection,
+  isSettingsAnchor,
   pageFor,
   resolveSettingsSection,
   SETTINGS_GROUPS,
@@ -82,7 +94,7 @@ const NAV_ICONS: Record<SettingsPageId, React.ReactNode> = {
   websearch: <Globe className="size-5" />,
   imageGeneration: <ImageIcon className="size-5" />,
   memory: <MemoryCardIcon className="size-5" />,
-  botsApprovals: <Bot className="size-5" />,
+  approvals: <Bot className="size-5" />,
   scheduledTasks: <Clock3 className="size-5" />,
   computers: <Monitor className="size-5" />,
   simulator: <TabletSmartphone className="size-5" />,
@@ -117,10 +129,10 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   hooks: HooksSettings,
   websearch: WebSearchSettings,
   imageGeneration: ImageGenerationSettings,
-  approvals: ToolApprovalSettings,
+  approvals: ApprovalsSettings,
   appControls: AppControlSettings,
   computerUse: ComputerUseSettings,
-  bots: BotsSettings,
+  bots: ApprovalsSettings,
   botComputers: BotComputersSettings,
   simulator: SimulatorSettingsPage,
   memory: MemorySettings,
@@ -194,10 +206,10 @@ const DESCRIPTIONS: Record<SettingsSection, string> = {
   peerHosts: "Pair the other computers you control from here, and manage them.",
   websearch: "Choose how Aiden searches and reads the web.",
   imageGeneration: "Connect image providers and choose the models Aiden uses to make images.",
-  approvals: "Review the exact actions Aiden may repeat without asking, and revoke them.",
+  approvals: "Choose when Aiden asks before acting, and review what it may repeat without asking.",
   appControls: "Ask Aiden how a feature works or to show its settings. Chat controls use the same settings and permissions as the app.",
   computerUse: "Manage Aiden’s access to native apps and your screen.",
-  bots: "Choose how every Bot handles steps that need your OK.",
+  bots: "Choose when Aiden asks before acting, and review what it may repeat without asking.",
   botComputers: "Give a Bot its own macOS computer to work in, apart from yours.",
   simulator: "Control iOS Simulator streaming, agent access, and the helper tools on this Mac.",
   memory: "Control what Aiden remembers across chats and Workspaces.",
@@ -327,7 +339,7 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
             description={DESCRIPTIONS[section]}
           >
             <SettingsPageTabs page={activePage} section={section} onSelect={open}>
-              <SettingsAnchorContext.Provider value={section === "links" ? { section, request: anchorRequest ?? 0 } : null}>
+              <SettingsAnchorContext.Provider value={isSettingsAnchor(section) ? { section, request: anchorRequest ?? 0 } : null}>
                 <SettingsLiveGuard section={section}>
                   <ActiveSection />
                 </SettingsLiveGuard>

@@ -173,6 +173,11 @@ export interface BotApplicationDependencies {
   ) => Promise<void>;
   /** Bot delete: erase the Bot's canonical photo (every revision). Idempotent. */
   deleteBotPhoto?: (botId: string) => Promise<void>;
+  /**
+   * The Bot's own rules on the rules page go with it. A failure (an unreadable
+   * rules file) never stops the deletion; the page then lists them to remove.
+   */
+  forgetBotApprovalRules?: (botId: string) => Promise<void>;
   /** Bot delete: close the Bot's browser tabs and clear its browser profile (cookies, storage, cache). Idempotent. */
   deleteBotBrowserProfile?(botId: string): Promise<void>;
   /**
@@ -197,6 +202,12 @@ interface UpdateBotAccessInput {
   expectedRevision: string;
   access: BotAccessUpdate;
   refuseDriftedGrants?: boolean | { message: string };
+  /**
+   * A paired device's change (Aiden Remote): moving a Full Bot to Custom never
+   * adds Web search that Full did not grant. The wire carries no capability
+   * kind, so the host drops the web grant itself rather than trust a label.
+   */
+  noWiderThanFull?: true;
 }
 export const BOT_FOLDER_GRANT_DRIFT_MESSAGE = "Some of this Bot's access changed since you last saved it. Review it in the Bot's settings first.";
 
@@ -205,8 +216,10 @@ export interface CreateBotApplicationInput {
   /** A pre-minted id (Start Chat saves it under its key first); omitted mints one. */
   botId?: string;
   bot: BotCreateInput;
-  /** The starter Bot this was made from, for usage data only. */
+  /** The template this was made from, for usage data only. */
   presetId?: string;
+  /** Where on the desktop it was made, for usage data only: New bot, a Template or onboarding's first Bot. */
+  source?: "new" | "template" | "onboarding";
   /** Omitted means the foreground Full Access default. */
   access?: BotAccessUpdate;
   /**
@@ -328,12 +341,13 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
   let recoveryFailure: unknown;
 
   // Counted in the background, so a slow store cannot hold the new Bot back.
-  const reportBotCreated = (presetId: string | undefined): void => {
+  const reportBotCreated = (presetId: string | undefined, source: CreateBotApplicationInput["source"]): void => {
     const report = captureAnalyticsReporter();
     void deps.botStore.list().then(
       (bots) => report("bot_created", {
         preset_id: analyticsBotPresetId(presetId),
         bot_count: countBucket(bots.length),
+        ...(source === undefined ? {} : { source }),
       }),
       () => undefined,
     );
@@ -704,6 +718,7 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     const { botId } = operation;
     deps.capabilityStore.invalidateBotAuthority(botId);
     await deps.deleteBotPhoto?.(botId);
+    await deps.forgetBotApprovalRules?.(botId).catch(() => undefined);
     await deps.deleteBotBrowserProfile?.(botId);
     await deps.managedWorkspace.deleteHome(botId);
     await deps.capabilityStore.deleteBotAuthority(botId);
@@ -1252,10 +1267,22 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
           // Audience-safe IDs are revalidated against this exact fresh snapshot.
           // A stale client revision can therefore be rebased without accepting a
           // removed or changed provider, model, connection, skill, or file scope.
-          const access: BotAccessUpdate = withCurrentCatalogRevision(
+          let access: BotAccessUpdate = withCurrentCatalogRevision(
             input.access,
             snapshot.catalog.revision,
           );
+          if (input.noWiderThanFull && access.accessMode === "custom") {
+            const current = await deps.capabilityStore.getBotPolicy(input.botId);
+            if (current.accessMode === "full" && !(await deps.capabilityStore.getBotWebSearchEnabled(input.botId))) {
+              const web = new Set(
+                snapshot.resources.otherCapabilities.filter(({ kind }) => kind === "web").map(({ option }) => option.id),
+              );
+              access = {
+                ...access,
+                custom: { ...access.custom, otherCapabilityIds: access.custom.otherCapabilityIds.filter((id) => !web.has(id)) },
+              };
+            }
+          }
           await guard?.validate();
           if (guard) assertCurrent();
           const savedBinding = await deps.capabilityStore.getBotBinding(input.botId);
@@ -1809,7 +1836,7 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
           const bot = await deps.botStore.createWithId(botId, input.bot);
           operation = await advance(operation, "identity_committed");
           await deps.lifecycleJournal.complete(operationId, "identity_committed");
-          reportBotCreated(input.presetId);
+          reportBotCreated(input.presetId, input.source);
           return bot;
         } catch (error) {
           const visible = await deps.botStore.get(botId);
@@ -1820,7 +1847,7 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
               await deps.managedWorkspace.resolve(botId);
               await requirePolicyForVisibleBot(botId);
             });
-            reportBotCreated(input.presetId);
+            reportBotCreated(input.presetId, input.source);
             return (await deps.botStore.get(botId))!;
           }
           try {
@@ -2074,12 +2101,14 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
       audienceId: string,
       acknowledgement: BotNoticeAcknowledgement,
       assertCurrent?: () => void,
+      options?: { keepReviewFirst?: boolean },
     ) {
       await ensureOperational();
       return deps.capabilityStore.acknowledgeNotice(
         audienceId,
         acknowledgement,
         assertCurrent,
+        options,
       );
     },
 

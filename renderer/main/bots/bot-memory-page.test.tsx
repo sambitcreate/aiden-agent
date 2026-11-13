@@ -1,7 +1,7 @@
 import { emitBotTestNotification, installBotTestIpc } from "./test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { Toaster } from "../../components/ui";
 import type {
   BotMemoryEdit,
@@ -91,13 +91,8 @@ function memoryIpc(
 }
 
 async function mountMemory(path = "/bots/bot-1?page=memory") {
-  return mountWithBotRouter(
-    <>
-      <BotsView />
-      <Toaster />
-    </>,
-    { initialPath: path },
-  );
+  // The toaster stays mounted beside the routed page, as in the app: these links open the Bot's chat.
+  return mountWithBotRouter(<BotsView />, { initialPath: path, sidebar: <Toaster /> });
 }
 
 async function chooseEntryAction(text: string, action: "Edit" | "Delete") {
@@ -108,27 +103,25 @@ async function chooseEntryAction(text: string, action: "Edit" | "Delete") {
 
 const memoryGets = (calls: { channel: string }[]) => calls.filter((call) => call.channel === "bots:memory:get").length;
 
-test("Profile shows how much the Bot remembers, and Memory lists both groups with their usage", async () => {
+test("the Bot's settings show how much it remembers, and Memory opens the panel's Memory tab with both groups and their usage", async () => {
   memoryIpc(memoryView([SHORT, KIDS], [MEALS]));
-  await mountMemory("/bots/bot-1");
+  await mountMemory("/bots/bot-1?page=advanced");
 
   const row = await screen.findByRole("button", { name: "Memory" });
   await waitFor(() => assert.match(row.textContent ?? "", /3 things/u));
   fireEvent.click(row);
 
-  assert.ok(await screen.findByRole("heading", { name: "Memory" }));
-  assert.ok(
-    screen.getByText("What Planner remembers about you and its work. It’s stored on this Mac, and Planner uses it in every chat."),
-  );
-  const aboutYou = screen.getByRole("list", { name: "About you" });
+  const panel = document.getElementById("bot-panel")!;
+  await waitFor(() => assert.equal(within(panel).getByRole("tab", { name: "Memory" }).getAttribute("aria-selected"), "true"));
+  const aboutYou = await within(panel).findByRole("list", { name: "About you" });
   assert.deepEqual(
     within(aboutYou).getAllByRole("listitem").map((item) => item.querySelector("p")?.textContent),
     [SHORT.text, KIDS.text],
   );
-  const notes = screen.getByRole("list", { name: "Planner’s notes" });
+  const notes = within(panel).getByRole("list", { name: "Planner’s notes" });
   assert.deepEqual(within(notes).getAllByRole("listitem").map((item) => item.querySelector("p")?.textContent), [MEALS.text]);
 
-  const meters = screen.getAllByRole("meter");
+  const meters = within(panel).getAllByRole("meter");
   assert.deepEqual(
     meters.map((meter) => [meter.getAttribute("aria-label"), meter.getAttribute("aria-valuetext")]),
     [
@@ -192,7 +185,7 @@ test("an edit to a memory that changed elsewhere says so and shows the fresh lis
 
 test("Delete hides a memory at once, Undo brings it back untouched, and a kept delete is sent on leaving", async () => {
   const ipc = memoryIpc(memoryView([SHORT, KIDS], [MEALS]));
-  await mountMemory();
+  const { router } = await mountMemory();
 
   await chooseEntryAction(KIDS.text, "Delete");
   await waitFor(() => assert.equal(screen.queryByText(KIDS.text) === null, true));
@@ -203,11 +196,11 @@ test("Delete hides a memory at once, Undo brings it back untouched, and a kept d
   await chooseEntryAction(KIDS.text, "Delete");
   await waitFor(() => assert.equal(screen.queryByText(KIDS.text) === null, true));
   assert.deepEqual(ipc.edits, []);
-  fireEvent.click(screen.getByRole("button", { name: "Back" }));
-  await screen.findByRole("button", { name: "Instructions" });
+  // Leaving the Bot's chat sends it.
+  await act(async () => {
+    await router.navigate({ to: "/settings" });
+  });
   await waitFor(() => assert.deepEqual(ipc.edits, [{ kind: "remove", target: "user", entryId: KIDS.id }]));
-  const memoryRow = await screen.findByRole("button", { name: "Memory" });
-  await waitFor(() => assert.match(memoryRow.textContent ?? "", /2 things/u));
 });
 
 test("Erase memory asks first, then clears both groups", async () => {
@@ -231,12 +224,13 @@ test("Erase memory asks first, then clears both groups", async () => {
 
 test("unreadable memory shows a callout whose only action is Erase", async () => {
   const ipc = memoryIpc(memoryView([], [], { readable: false }));
-  await mountMemory("/bots/bot-1");
+  await mountMemory("/bots/bot-1?page=advanced");
   const row = await screen.findByRole("button", { name: "Memory" });
   await waitFor(() => assert.match(row.textContent ?? "", /Couldn’t be read/u));
   fireEvent.click(row);
 
-  const alert = await screen.findByRole("alert");
+  const panel = document.getElementById("bot-panel")!;
+  const alert = await within(panel).findByRole("alert");
   assert.match(alert.textContent ?? "", /Memory couldn’t be read/u);
   assert.equal(screen.queryByRole("list", { name: "About you" }) === null, true);
   assert.equal(screen.queryAllByRole("meter").length, 0);

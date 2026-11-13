@@ -50,6 +50,10 @@ export const botApplicationService = createBotApplicationService({
   deleteChatWithEffects: (chatId, assertCurrent, onDeletionRollForward) =>
     chatApplicationService.remove(chatId, { assertCurrent, onDeletionRollForward }),
   deleteBotPhoto: (botId) => botAvatarStore.deleteBot(botId),
+  forgetBotApprovalRules: async (botId) => {
+    const { approvalRules } = await import("./approval-rules/store-main.js");
+    await approvalRules.forgetOwner({ kind: "bot", botId });
+  },
   // Its cookies and site data go with it; loaded lazily (Electron web contents).
   deleteBotBrowserProfile: async (botId) => {
     const managed = await botManagedWorkspace.resolve(botId).catch(() => undefined);

@@ -9,6 +9,8 @@ import { useNavigate } from "@tanstack/react-router";
 import { Ellipsis, Pause, Play, Square } from "lucide-react";
 import { AskUserQuestionComposer } from "../components/ask-user-question-composer";
 import { HandoffCard, handoffNoNoteComposerText } from "../components/bots/handoff-card";
+import { handoffTakenKey, useHandoffTaken } from "../components/bots/handoff-taken";
+import { NeedsYouAnnouncer, NeedsYouFocusScope, NeedsYouHeader, needsYouSlotState, type NeedsYouItem } from "../components/bots/needs-you-slot";
 import { Composer } from "../components/composer";
 import { MessageAttachmentPreviewProvider } from "../components/message-attachments";
 import {
@@ -30,13 +32,17 @@ import { useRemoteBotSession } from "../lib/hosts/use-remote-bot-session";
 import { browserApi, peerHostsApi } from "../lib/ipc";
 import type { Attachment } from "../lib/types";
 import type { AskUserQuestionResponseV1 } from "../shared/ask-user-question";
-import { DEFAULT_BOT_AVATAR, isBotAvatar, resolveBotChatActivity, type BotAvatar } from "../shared/bots";
+import { DEFAULT_BOT_AVATAR, botChatActivityOnDevice, isBotAvatar, showsBotToolActivity, type BotAvatar } from "../shared/bots";
+import { useAppearancePreference } from "../lib/use-appearance-preference";
+import { useBots } from "../lib/queries";
 import { BOT_HANDOFF_NOTE_MAX_CHARS, botHandoffTakesNote, type BotHandoffOutcome } from "../shared/bot-handoffs";
 import type { BotPendingQuestion } from "../shared/bot-live";
 import { mintPeerIdempotencyKey, type PeerHostFeedSnapshot, type PeerHostView, type PeerOperationOutcome } from "../shared/peer-host";
 import type { PeerOperation } from "../shared/peer-operation";
 import type { AidenRemoteBotApproval, AidenRemoteBotHandoff } from "../../main/services/aiden-remote-protocol";
 import { BotApprovalCard, BotInterruptedCard, TranscriptEntries, questionPrompt } from "./bots/bot-chat-pane";
+import { ApprovalStatusLine } from "../components/chat-approval-card";
+import { useApprovalStatusLine } from "../lib/use-approval-status-line";
 import { BOT_CHAT_COMPOSER_SURFACES } from "./bots/bot-chat-mode";
 import { botReplyQuote } from "./bots/bot-message-actions";
 import { BotPausedNotice, botPausedText } from "./bots/bot-paused-card";
@@ -120,6 +126,9 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
   const host = list.data?.find((view) => view.id === hostId);
   const hostName = host?.name ?? "the other Mac";
   const name = botName(feed.data, botId) ?? "Bot";
+  // Show tool activity is this device's switch (§4.5); until it is set, this Mac's own Bots decide.
+  const toolActivitySetting = useAppearancePreference("showToolActivity");
+  const localBots = useBots(false, toolActivitySetting === undefined);
   const avatar = botAvatar(feed.data, botId);
   // A host too old to share the conversation is told so below, without asking it.
   const shared = !host || hostSharesBotSessions(host);
@@ -132,6 +141,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
   // id: the host's frame (or a fresh snapshot) for it is a new prompt, and it shows.
   const [settledQuestion, setSettledQuestion] = React.useState<BotPendingQuestion | null>(null);
   const [settledApproval, setSettledApproval] = React.useState<AidenRemoteBotApproval | null>(null);
+  const approvalStatus = useApprovalStatusLine(`${hostId}:${botId}`);
   const [statusLayout, setStatusLayout] = React.useState("");
   // A send whose acknowledgement was lost keeps its key and staged photos, so
   // sending the same thing again is deduplicated by the host, not repeated.
@@ -143,6 +153,11 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
   // holds that same card. Resume asks a hand-off again under the same wait id:
   // the host's frame (or a fresh snapshot) for it is a new card, and it shows.
   const [settledHandoff, setSettledHandoff] = React.useState<AidenRemoteBotHandoff | null>(null);
+  // The Needs-you item the person moved to with Previous or Next, by key.
+  const [needsYouChoice, setNeedsYouChoice] = React.useState<string | null>(null);
+  const [handoffTaken, takeHandoff] = useHandoffTaken(
+    live.view?.handoff ? handoffTakenKey(`remote:${hostId}:${botId}`, live.view.handoff.waitId) : undefined,
+  );
   const shownHandoff = React.useRef<AidenRemoteBotHandoff | null>(null);
   shownHandoff.current = live.view?.handoff ?? null;
 
@@ -310,7 +325,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
     );
   }
 
-  const chatActivity = resolveBotChatActivity(undefined);
+  const chatActivity = botChatActivityOnDevice(showsBotToolActivity(toolActivitySetting, localBots.data ?? []), undefined);
   const activityPhase = snapshot.activity?.phase;
   const replyStreaming =
     running && (snapshot.partial?.trim().length ?? 0) > 0 && (activityPhase === "writing" || activityPhase === "thinking");
@@ -553,49 +568,86 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
     });
   };
 
+  // One Needs-you slot, as on this Mac's own Bots: take control, then the approval, then the question.
+  type SlotItem = NeedsYouItem & { render?(): React.ReactNode };
+  const slotItems: SlotItem[] = [];
+  if (handoff) {
+    slotItems.push({
+      key: `handoff:${handoff.waitId}`,
+      kind: "take_control",
+      render: () => (
+        <HandoffCard
+          key={handoff.waitId}
+          name={name}
+          avatar={avatar}
+          handoff={handoff}
+          busy={busy("handoff")}
+          finishOn={hostName}
+          taken={handoffTaken}
+          onTake={takeHandoff}
+          onOpen={() => void openHandoff(handoff)}
+          onFinish={() => void finishHandoff(handoff)}
+          onAnswer={(outcome) => void answerHandoff(handoff, outcome)}
+        />
+      ),
+    });
+  }
+  if (approval) {
+    slotItems.push({
+      key: `approval:${approval.waitId}`,
+      kind: "approval",
+      render: () => (
+        <BotApprovalCard
+          key={approval.waitId}
+          name={name}
+          prompt={{ botId, waitId: approval.waitId, toolCallId: approval.toolCallId, toolName: approval.toolName, summary: approval.summary }}
+          {...(approval.canAllow ? {} : { allowElsewhere: hostName })}
+          keyboardShortcuts
+          onAnswer={(decision) => {
+            setSettledApproval(approval);
+            approvalStatus.show({ decision });
+            void call(
+              { operation: "respondApproval", resourceId: approval.waitId, idempotencyKey: mintPeerIdempotencyKey(), body: { decision } },
+              "Aiden couldn’t send that answer.",
+            ).catch(() => {
+              approvalStatus.clear();
+              setSettledApproval((settled) => (settled === approval ? null : settled));
+            });
+          }}
+        />
+      ),
+    });
+  }
+  if (question) slotItems.push({ key: `question:${question.waitId}`, kind: "question" });
+  const slot = needsYouSlotState(slotItems, needsYouChoice, setNeedsYouChoice);
+  const askingQuestion = question !== null && slot.current?.kind === "question";
+  const questionElsewhere = question !== null && !askingQuestion;
+
   const footer = (
-    <div className="flex flex-col">
-      {approval || handoff ? (
-        <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-2">
-          {handoff ? (
-            <HandoffCard
-              key={handoff.waitId}
-              name={name}
-              avatar={avatar}
-              handoff={handoff}
-              busy={busy("handoff")}
-              finishOn={hostName}
-              onOpen={() => void openHandoff(handoff)}
-              onFinish={() => void finishHandoff(handoff)}
-              onAnswer={(outcome) => void answerHandoff(handoff, outcome)}
-            />
-          ) : null}
-          {approval ? (
-            <BotApprovalCard
-              key={approval.waitId}
-              name={name}
-              prompt={{ botId, waitId: approval.waitId, toolCallId: approval.toolCallId, toolName: approval.toolName, summary: approval.summary }}
-              {...(approval.canAllow ? {} : { allowElsewhere: hostName })}
-              keyboardShortcuts
-              onAnswer={(decision) => {
-                setSettledApproval(approval);
-                void call(
-                  { operation: "respondApproval", resourceId: approval.waitId, idempotencyKey: mintPeerIdempotencyKey(), body: { decision } },
-                  "Aiden couldn’t send that answer.",
-                ).catch(() => setSettledApproval((settled) => (settled === approval ? null : settled)));
-              }}
-            />
+    <NeedsYouFocusScope currentKey={slot.current?.key} className="flex flex-col">
+      <NeedsYouAnnouncer slot={slot} />
+      {slot.count > 0 || approvalStatus.status ? (
+        <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-2" data-needs-you-slot>
+          <NeedsYouHeader slot={slot} />
+          {slot.current?.render ? (
+            <div key={slot.current.key} className="contents" data-needs-you-card>
+              {slot.current.render()}
+            </div>
+          ) : !slot.current && approvalStatus.status ? (
+            <ApprovalStatusLine status={approvalStatus.status} />
           ) : null}
         </div>
       ) : null}
-      {question ? (
+      {question && askingQuestion ? (
         <>
-          <AskUserQuestionComposer
-            key={question.waitId}
-            prompt={questionPrompt(question)}
-            submitting={busy("answer")}
-            onRespond={(response) => answerQuestion(question, response)}
-          />
+          <div className="contents" data-needs-you-card>
+            <AskUserQuestionComposer
+              key={question.waitId}
+              prompt={questionPrompt(question)}
+              submitting={busy("answer")}
+              onRespond={(response) => answerQuestion(question, response)}
+            />
+          </div>
           <div className="aiden-dock-inset chat-content-column flex justify-end pb-4 pt-2">
             <Button variant="filled" size="small" onClick={stop}>
               <Square aria-hidden="true" />
@@ -606,9 +658,11 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
       ) : (
         <Composer
           key={`remote-bot:${hostId}:${botId}`}
-          ready={state?.kind !== "unavailable" && !isPaused && !signInElsewhere && !noteRefused}
+          ready={state?.kind !== "unavailable" && !isPaused && !signInElsewhere && !noteRefused && !questionElsewhere}
           readinessMessage={
-            isPaused
+            questionElsewhere
+              ? `Answer ${name}’s question first. It’s ${slot.count} of ${slot.count} above.`
+              : isPaused
               ? botPausedText(name)
               : signInElsewhere
                 ? `Finish signing in on ${hostName}, or skip it.`
@@ -637,7 +691,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
         />
       )}
       {/* The composer's send answers the card, so Stop lives here while it waits. */}
-      {handoff && !question && running ? (
+      {handoff && !askingQuestion && running ? (
         <div className="aiden-dock-inset chat-content-column flex justify-end pb-4 pt-2">
           <Button variant="filled" size="small" onClick={stop}>
             <Square aria-hidden="true" />
@@ -645,7 +699,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
           </Button>
         </div>
       ) : null}
-    </div>
+    </NeedsYouFocusScope>
   );
 
   // A Bot's transcript is data, never instructions: Aiden Live sees only how many rows it has.

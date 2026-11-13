@@ -246,8 +246,11 @@ private fun AidenBotSessionContent(
     val detailFlow = remember(botId) { coordinator.botCache.botDetails.map { it[botId] }.distinctUntilChanged() }
     val botDetail by detailFlow.collectAsStateWithLifecycle(coordinator.botCache.getBotDetail(botId))
     val chatActivity = aidenBotChatActivity(serverInfo, botDetail, coordinator.cachedBotActivitySupported)
-    LaunchedEffect(controller, chatActivity) {
-        controller.setWording(chatActivity?.wording ?: AidenBotChatActivityWording.FOLLOWS)
+    // Revision 61: on a Mac with the new Bot UX, this phone's Show tool activity switch decides it.
+    val offersBotUx = coordinator.installationStore.activeInstallation?.offersBotUx == true
+    val showToolActivity = AidenTheme.config.showToolActivity
+    LaunchedEffect(controller, chatActivity, offersBotUx, showToolActivity) {
+        controller.setWording(aidenBotStatusWording(chatActivity?.wording, offersBotUx, showToolActivity))
     }
     // One read of the Bot per visit; Advanced opens from it (or the cache) without another.
     LaunchedEffect(controller) {
@@ -398,11 +401,11 @@ private fun AidenBotSessionContent(
             saveHost = saveHost,
             onSaveSettled = { scope.launch { controller.refetch() } },
             onSaveFailed = coordinator::presentError,
-            chatActivityAvailable = aidenBotShowsChatActivity(serverInfo, hasBaseline = true, cachedSupport = coordinator.cachedBotActivitySupported),
+            chatActivityAvailable = aidenBotShowsChatActivity(serverInfo, hasBaseline = true, cachedSupport = coordinator.cachedBotActivitySupported, offersBotUx = offersBotUx),
             chatActivityHost = chatActivityHost,
             // The host has already cached the pick (pinned to its pairing); this only refreshes the chat.
             onChatActivitySaved = { saved ->
-                controller.setWording(saved.chatActivity?.wording ?: AidenBotChatActivityWording.FOLLOWS)
+                controller.setWording(aidenBotStatusWording(saved.chatActivity?.wording, offersBotUx, showToolActivity))
                 scope.launch { controller.refetch() }
             }
         )
@@ -497,6 +500,23 @@ private fun AidenBotSessionContent(
                             attachments = listOf(controller.sharedImageAttachment(entry)),
                             edge = AidenMessageMediaEdge.LEADING
                         ) { controller.sharedImageData(entry.id) }
+                        // Revision 61: settings changes, suggestions and learning receipts.
+                        is AidenBotSettingsChangeEntry, is AidenBotSkillProposalEntry,
+                        is AidenBotLessonEntry, is AidenBotMemoryTidyEntry -> AidenBotUxEntryRow(
+                            entry = entry,
+                            botName = identity.name,
+                            canAnswer = canWriteBots,
+                            sending = entry.id in ui.uxSending,
+                            error = ui.uxErrors[entry.id],
+                            tidyUndone = entry.id in ui.undoneTidyIds,
+                            actions = AidenBotUxEntryActions(
+                                onSettings = { decision -> scope.launch { controller.respondToSettingsChange(entry.id, decision) } },
+                                onSkill = { decision -> scope.launch { controller.respondToSkillProposal(entry.id, decision) } },
+                                onLesson = { decision -> scope.launch { controller.respondToLesson(entry.id, decision) } },
+                                onUndoLearned = { scope.launch { controller.undoLearnedLesson(entry.id) } },
+                                onUndoTidy = { scope.launch { controller.undoMemoryTidy(entry.id) } }
+                            )
+                        )
                     }
                 }
                 if (!partial.isNullOrEmpty()) {
@@ -599,7 +619,18 @@ private fun AidenBotSessionContent(
                         AidenBotApprovalCard(approval, enabled = canWriteBots && !ui.isRespondingToApproval,
                             onRespond = { decision -> scope.launch { controller.respondToApproval(decision) } },
                             botName = botName, allowedSupported = controller.allowedSupported,
-                            onAlways = { scope.launch { controller.respondToApproval(sbtbiswas.AidenOnTheGo.models.AidenApprovalDecision.ALLOW, sbtbiswas.AidenOnTheGo.models.AidenApprovalScope.ALWAYS) } })
+                            onAlways = { scope.launch { controller.respondToApproval(sbtbiswas.AidenOnTheGo.models.AidenApprovalDecision.ALLOW, sbtbiswas.AidenOnTheGo.models.AidenApprovalScope.ALWAYS) } },
+                            onCardRespond = { decision, chosen -> scope.launch { controller.respondToApproval(decision, chosen.takeUnless { it == sbtbiswas.AidenOnTheGo.models.AidenApprovalScope.ONCE }) } })
+                    }
+                }
+                // Revision 61: the typed card's answered line, in its place until the Mac moves on.
+                ui.answeredApproval?.takeIf { ui.session?.approval == null }?.let { answered ->
+                    item(key = "approval-answered-${answered.waitId}") {
+                        sbtbiswas.AidenOnTheGo.features.chat.AidenApprovalAnsweredRow(
+                            title = answered.title,
+                            answered = answered.answered,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp)
+                        )
                     }
                 }
                 ui.session?.plan?.takeIf { ui.plansSupported }?.let { plan ->
@@ -630,7 +661,8 @@ private fun AidenBotSessionContent(
                             // Done without a note; the composer's Send is Done with one (iOS parity).
                             onDone = { scope.launch { controller.answerHandoff(AidenBotHandoffOutcome.DONE) } },
                             onSkip = { scope.launch { controller.answerHandoff(AidenBotHandoffOutcome.SKIPPED) } },
-                            onFinishOnMac = { scope.launch { controller.finishHandoffOnMac() } }
+                            onFinishOnMac = { scope.launch { controller.finishHandoffOnMac() } },
+                            twoStep = offersBotUx
                         )
                     }
                 }

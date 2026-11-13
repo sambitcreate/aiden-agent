@@ -2721,3 +2721,37 @@ for (const command of ["/queue", "/continue", "/interrupt"]) {
     h.service.stop(); h.turnMock.completePendingTurn();
   });
 }
+
+// Bot UX Phase 6: approvals are answered in Aiden (the Mac or a paired phone),
+// never from Telegram. A reply that reads like an answer is just a message to
+// the Bot, and an approval-shaped button press does nothing.
+test("Telegram never answers an approval: 'Allow' is a message and an approval button does nothing", async () => {
+  const owner = person(42, "owner");
+  const admitted: import("./bot-reply-outbox.js").TelegramBotMessage[] = [];
+  const h = harness({
+    enabled: true,
+    allowedUserId: 42,
+    profile: "work",
+    resolveBotBinding: async () => durableBinding,
+    existingChats: [{ id: durableBinding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" }],
+    batches: [[
+      makeUpdate(7, makeMessage(10, owner, "Allow")),
+      { update_id: 8, callback_query: { id: "approval-press", from: owner, message: makeMessage(11, BOT, "Send the note?"), data: "approval:wait-61:allow" } },
+    ]],
+    autoStop: false,
+    botIngress: {
+      admit: async (message) => {
+        admitted.push(message);
+        return { requestId: `tg:bot-a:${message.messageId}:0:1`, deduped: false };
+      },
+    },
+  });
+  try {
+    await h.service.start();
+    await waitFor(() => h.api.answerCallbackQueryCalls() > 0 && admitted.length === 1);
+    assert.deepEqual(admitted.map((message) => message.text), ["Allow"], "the reply reaches the Bot as its own words, and the button press admits nothing");
+    assert.equal(h.turnMock.startCalls(), 0);
+  } finally {
+    h.service.stop();
+  }
+});

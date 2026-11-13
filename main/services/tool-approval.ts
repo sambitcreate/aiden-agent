@@ -1,4 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import type { ApprovalAnalytics } from "./approval-gate/approval-analytics.js";
 import type { ToolApprovalDetails } from "../../renderer/shared/assistant.js";
 import type { ToolApprovalPreview } from "../../renderer/shared/tool-approval-preview.js";
 import {
@@ -23,14 +24,88 @@ export interface ToolApprovalPrompt {
    * broader than once is honored only when it was offered here.
    */
   scopes?: readonly ToolApprovalScope[];
+  /**
+   * In Ask, Auto would hand this call to the judge rather than a card, so the
+   * desktop card may offer Switch to Auto. Desktop only, like `preview`.
+   */
+  autoWouldJudge?: true;
 }
 
 interface PendingApproval {
+  approvalId: string;
   streamId: string;
   toolCallId: string;
   ownerDocumentId?: string;
   scopes: readonly ToolApprovalScope[];
+  /** Identical calls waiting on this card, by tool call id. */
+  followers: string[];
   settle(outcome: ToolApprovalOutcome): void;
+}
+
+/** A card that identical parallel calls in the same run share. */
+interface SharedApproval {
+  entry: PendingApproval;
+  result: Promise<ToolApprovalOutcome>;
+}
+
+/**
+ * What a call would do, for a caller that can name it exactly: the tool and
+ * its canonical arguments (object keys sorted, undefined fields dropped), plus
+ * anything else that picks the target, such as a browser tab. Two calls with
+ * the same key do the same thing. A value that is not plain JSON has no key.
+ */
+/** JSON with object keys sorted, so equal values read the same; throws on a value JSON can't hold. */
+export function canonicalJson(value: unknown): string {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new Error("not JSON");
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) return `[${value.map((item) => (item === undefined ? "null" : canonicalJson(item))).join(",")}]`;
+  if (typeof value !== "object") throw new Error("not JSON");
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, child]) => child !== undefined)
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+    .map(([key, child]) => `${JSON.stringify(key)}:${canonicalJson(child)}`);
+  return `{${entries.join(",")}}`;
+}
+
+export function toolCallApprovalEffect(toolName: string, args: unknown, target?: unknown): string | undefined {
+  try {
+    return createHash("sha256")
+      .update(canonicalJson({ toolName, args: args ?? null, target: target ?? null }))
+      .digest("hex");
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The card two calls may share, and a denied one is remembered by, in a run.
+ * Only a caller-supplied effect (`toolCallApprovalEffect`) counts: a card's
+ * text often leaves the arguments out, so equal text is not the same action.
+ * The owning document and everything the card shows are part of it too.
+ */
+function approvalEffectKey(
+  descriptor: Omit<ToolApprovalPrompt, "approvalId">,
+  effect: string | undefined,
+  ownerDocumentId: string | undefined,
+): string | undefined {
+  if (effect === undefined) return undefined;
+  try {
+    return JSON.stringify([
+      ownerDocumentId ?? null,
+      effect,
+      descriptor.toolName,
+      descriptor.summary,
+      descriptor.details ?? null,
+      descriptor.preview ?? null,
+      descriptor.scopes ?? null,
+    ]);
+  } catch {
+    // An unserializable card is never shared or remembered.
+    return undefined;
+  }
 }
 
 /** Optional structured payload an approval card may return with a decision. */
@@ -88,6 +163,10 @@ export class ToolApprovalCoordinator {
   private readonly closedStreams = new Map<string, "cancelled" | "detached">();
   /** Payloads from settled approvals, consumed once by the tool caller. */
   private readonly decisionPayloads = new Map<string, ToolApprovalDecisionPayload>();
+  /** Pending cards by stream and effect, for identical parallel calls to share. */
+  private readonly shared = new Map<string, Map<string, SharedApproval>>();
+  /** Effects the person denied, by stream: the run never asks them again. */
+  private readonly denied = new Map<string, Set<string>>();
   private stopped = false;
 
   private payloadKey(streamId: string, toolCallId: string): string {
@@ -103,6 +182,8 @@ export class ToolApprovalCoordinator {
      * detached first: nobody saw it, and the model is told it is unavailable.
      */
     private readonly onShortCircuited?: (prompt: ToolApprovalPrompt) => void,
+    /** Counts the cards shown and the person's answers (enums only). */
+    private readonly analytics?: ApprovalAnalytics,
   ) {}
 
   private shortCircuited(prompt: ToolApprovalPrompt): void {
@@ -117,12 +198,19 @@ export class ToolApprovalCoordinator {
    * `approvalId` may be supplied by a caller whose approvals outlive this
    * process (Bots persist it as their `waitId`). A still-pending prompt with
    * the same id is withdrawn first, so the id always names the newest ask.
+   *
+   * Without one, the card belongs to this run. When the caller also names the
+   * call's `effect` (`toolCallApprovalEffect`), a card for the same action
+   * already pending in the stream is shared (one card answers every waiting
+   * call), and an action the person denied in the stream is not asked again.
+   * A call without an effect always gets its own card.
    */
   request(
-    descriptor: Omit<ToolApprovalPrompt, "approvalId"> & { approvalId?: string },
+    request: Omit<ToolApprovalPrompt, "approvalId"> & { approvalId?: string; effect?: string },
     signal?: AbortSignal,
     ownerDocumentId?: string,
   ): Promise<ToolApprovalOutcome> {
+    const { effect: callEffect, ...descriptor } = request;
     if (this.stopped || signal?.aborted) {
       return Promise.resolve("cancelled");
     }
@@ -132,8 +220,56 @@ export class ToolApprovalCoordinator {
       if (closedOutcome === "detached") this.shortCircuited({ ...descriptor, approvalId });
       return Promise.resolve(closedOutcome);
     }
+    const effect = descriptor.approvalId === undefined ? approvalEffectKey(descriptor, callEffect, ownerDocumentId) : undefined;
+    if (effect !== undefined) {
+      if (this.denied.get(descriptor.streamId)?.has(effect)) return Promise.resolve("denied");
+      const leader = this.shared.get(descriptor.streamId)?.get(effect);
+      if (leader) return this.follow(leader, request, signal, ownerDocumentId);
+    }
     this.pending.get(approvalId)?.settle("cancelled");
-    return new Promise<ToolApprovalOutcome>((resolve) => {
+    const result = this.ask(descriptor, approvalId, signal, ownerDocumentId, effect);
+    return result;
+  }
+
+  /** Wait on an identical card already pending in this run. */
+  private async follow(
+    leader: SharedApproval,
+    descriptor: Omit<ToolApprovalPrompt, "approvalId"> & { effect?: string },
+    signal: AbortSignal | undefined,
+    ownerDocumentId: string | undefined,
+  ): Promise<ToolApprovalOutcome> {
+    leader.entry.followers.push(descriptor.toolCallId);
+    let onAbort: (() => void) | undefined;
+    const aborted = new Promise<"aborted">((resolve) => {
+      onAbort = () => resolve("aborted");
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
+    try {
+      const outcome = await Promise.race([leader.result, aborted]);
+      if (outcome === "aborted") {
+        leader.entry.followers = leader.entry.followers.filter((id) => id !== descriptor.toolCallId);
+        this.decisionPayloads.delete(this.payloadKey(descriptor.streamId, descriptor.toolCallId));
+        return "cancelled";
+      }
+      // The shared card went away for its own call only: this call still waits.
+      if (outcome === "cancelled" && !signal?.aborted && !this.stopped && !this.closedStreams.has(descriptor.streamId)) {
+        return this.request(descriptor, signal, ownerDocumentId);
+      }
+      return outcome;
+    } finally {
+      if (onAbort) signal?.removeEventListener("abort", onAbort);
+    }
+  }
+
+  private ask(
+    descriptor: Omit<ToolApprovalPrompt, "approvalId"> & { approvalId?: string },
+    approvalId: string,
+    signal: AbortSignal | undefined,
+    ownerDocumentId: string | undefined,
+    effect: string | undefined,
+  ): Promise<ToolApprovalOutcome> {
+    let entry!: PendingApproval;
+    const result = new Promise<ToolApprovalOutcome>((resolve) => {
       let phase: ApprovalPromptPhase = "admitted";
       let settledWhilePublishing: ToolApprovalOutcome | undefined;
       const aborted = () => finish("cancelled");
@@ -150,18 +286,34 @@ export class ToolApprovalCoordinator {
         const priorPhase = phase;
         phase = "settled";
         this.pending.delete(approvalId);
+        this.analytics?.forget(approvalId);
+        if (effect !== undefined) {
+          const streamShared = this.shared.get(descriptor.streamId);
+          if (streamShared?.get(effect)?.entry === entry) {
+            streamShared.delete(effect);
+            if (streamShared.size === 0) this.shared.delete(descriptor.streamId);
+          }
+          if (outcome === "denied" && !this.closedStreams.has(descriptor.streamId) && !this.stopped) {
+            const streamDenied = this.denied.get(descriptor.streamId) ?? new Set<string>();
+            streamDenied.add(effect);
+            this.denied.set(descriptor.streamId, streamDenied);
+          }
+        }
         signal?.removeEventListener("abort", aborted);
         if (priorPhase === "published") withdrawPrompt(outcome);
         if (priorPhase === "publishing") settledWhilePublishing = outcome;
         resolve(outcome);
       };
-      this.pending.set(approvalId, {
+      entry = {
+        approvalId,
         streamId: descriptor.streamId,
         toolCallId: descriptor.toolCallId,
         ownerDocumentId,
         scopes: descriptor.scopes ?? ["once"],
+        followers: [],
         settle: finish,
-      });
+      };
+      this.pending.set(approvalId, entry);
       signal?.addEventListener("abort", aborted, { once: true });
       if (this.stopped || signal?.aborted) {
         finish("cancelled");
@@ -193,11 +345,20 @@ export class ToolApprovalCoordinator {
       // Reaching here means this prompt was shown, so it owns the id from now on.
       // A replacement that was never shown leaves the enclosing prompt to withdraw.
       if (enclosing) enclosing.replaced = true;
-      if (settledWhilePublishing === undefined) phase = "published";
+      if (settledWhilePublishing === undefined) {
+        phase = "published";
+        this.analytics?.shown({ ...descriptor, approvalId });
+      }
       // Withdrawal goes by id, so a same-id replacement asked during publication
       // owns the id from then on, even if it has already settled and withdrawn.
       else if (!publication.replaced) withdrawPrompt(settledWhilePublishing);
     });
+    if (effect !== undefined && this.pending.get(approvalId) === entry) {
+      const streamShared = this.shared.get(descriptor.streamId) ?? new Map<string, SharedApproval>();
+      streamShared.set(effect, { entry, result });
+      this.shared.set(descriptor.streamId, streamShared);
+    }
+    return result;
   }
 
   decide(
@@ -208,7 +369,7 @@ export class ToolApprovalCoordinator {
   ): boolean {
     const entry = this.pending.get(approvalId);
     if (!entry || entry.ownerDocumentId !== ownerDocumentId) return false;
-    return this.settleDecision(entry, allowed, payload);
+    return this.settleDecision(entry, allowed, payload, true);
   }
 
   /**
@@ -220,17 +381,21 @@ export class ToolApprovalCoordinator {
     approvalId: string,
     allowed: boolean,
     payload?: ToolApprovalDecisionPayload,
+    /** False when the host answered on its own (an expiry, an allow list). */
+    byPerson = true,
   ): boolean {
     const entry = this.pending.get(approvalId);
     if (!entry) return false;
-    return this.settleDecision(entry, allowed, payload);
+    return this.settleDecision(entry, allowed, payload, byPerson);
   }
 
   private settleDecision(
     entry: PendingApproval,
     allowed: boolean,
-    payload?: ToolApprovalDecisionPayload,
+    payload: ToolApprovalDecisionPayload | undefined,
+    byPerson: boolean,
   ): boolean {
+    let answeredScope: ToolApprovalScope | undefined;
     if (payload) {
       const { scope: requestedScope, ...rest } = payload;
       const scope = parseToolApprovalScope(requestedScope);
@@ -239,10 +404,15 @@ export class ToolApprovalCoordinator {
         allowed && scope && scope !== "once" && entry.scopes.includes(scope)
           ? { ...rest, scope }
           : rest;
+      answeredScope = effective.scope;
       if (Object.keys(effective).length > 0) {
-        this.decisionPayloads.set(this.payloadKey(entry.streamId, entry.toolCallId), effective);
+        // Calls sharing this card get the same answer, scope included.
+        for (const toolCallId of [entry.toolCallId, ...entry.followers]) {
+          this.decisionPayloads.set(this.payloadKey(entry.streamId, toolCallId), effective);
+        }
       }
     }
+    if (byPerson) this.analytics?.answered(entry.approvalId, allowed, answeredScope);
     entry.settle(allowed ? "allowed" : "denied");
     return true;
   }
@@ -280,12 +450,14 @@ export class ToolApprovalCoordinator {
   releaseStream(streamId: string): void {
     this.cancelStream(streamId);
     this.closedStreams.delete(streamId);
+    this.denied.delete(streamId);
   }
 
   shutdown(): void {
     this.stopped = true;
     for (const entry of [...this.pending.values()]) entry.settle("cancelled");
     this.closedStreams.clear();
+    this.denied.clear();
   }
 
   get pendingCount(): number {

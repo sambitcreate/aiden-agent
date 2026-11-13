@@ -97,6 +97,10 @@ import { persistedChatWorkspaceId } from "./chat-workspace-authority.js";
 import { chatActivityRegistry } from "./chat-activity.js";
 import { chatTitleService } from "./chat-title.js";
 import { configStore } from "./config-store.js";
+import { effectiveApprovalMode } from "../../renderer/shared/approval-mode.js";
+import { AidenRemoteApprovalSettingsService } from "./aiden-remote-approval-settings.js";
+import { applySettingsEffects } from "./settings-application-effects.js";
+import { reportApprovalModeChanged } from "./approval-gate/approval-analytics.js";
 import { createAidenRemoteNewWorktrees } from "./aiden-remote-new-worktree.js";
 import { firstMessageWorktrees } from "./first-message-worktree-main.js";
 import { llmClient } from "./llm-client.js";
@@ -423,6 +427,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     appControls: typeof remoteAppControls;
     providers: AidenRemoteProviderService;
     memorySettings: AidenRemoteMemorySettingsService;
+    approvalSettings: AidenRemoteApprovalSettingsService;
     spending: AidenRemoteSpendingService;
     backgroundJobs?: AidenRemoteBackgroundJobService;
     usage: typeof usageStore;
@@ -997,6 +1002,22 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 routines: botRoutineService,
                 questions: botQuestions,
                 approvals: botApprovals,
+                // Revision 61: held update_bot cards, suggestions and learning receipts,
+                // answered through the desktop's own services (same serialization and checks).
+                settingsChanges: {
+                  respond: async (botId, changeId, decision) =>
+                    (await import("./bot-settings-changes/service-main.js")).botSettingsChanges.respond(botId, changeId, decision),
+                },
+                suggestions: {
+                  respondSkill: async (botId, proposalId, decision) =>
+                    (await import("./bot-skills/skill-proposals-main.js")).botSkillProposals.answer({ botId, proposalId, decision }),
+                  respondLesson: async (botId, lessonId, decision) =>
+                    (await import("./bot-learning/learning-main.js")).respondToWaitingLesson(botId, lessonId, decision),
+                  removeLesson: async (botId, lessonId) =>
+                    (await (await import("./bot-learning/learning-main.js")).removeLesson(botId, lessonId)) ? { ok: true } : { ok: false, code: "not_found" },
+                  undoLearning: async (botId, changeId) =>
+                    (await import("./bot-learning/learning-main.js")).undoBotLearning(botId, changeId),
+                },
                 // Revision 37: phones answer hand-offs through the desktop's own bridge.
                 handoffs: botHandoffs,
                 accessRequests: botAccessRequests,
@@ -1033,14 +1054,18 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                   list: () => BOT_PRESETS,
                   // The one process-wide starter the desktop uses: a Mac tap and a
                   // phone tap converge on one Bot, and only the creator sends the self-intro.
-                  create: async (presetId, { audienceId }) => {
+                  create: async (presetId, { audienceId, version }) => {
                     const { botStarter } = await import("./bot-runtime/bot-starter-main.js");
                     const result = await botStarter().startFromPreset(presetId, {
+                      // Revision 61: a `bot:templates` phone names the version it was shown.
+                      ...(version === undefined ? {} : { version }),
                       // Created for the phone's audience; the key is remembered by the shared starter.
                       createBot: (bot, botId, presetId) => botApplicationService.createBot({ audienceId, botId, bot, presetId }),
                     });
                     return { botId: result.bot.id, created: result.created };
                   },
+                  presetBots: async () => (await import("./bot-runtime/bot-starter-main.js")).botStarter().presetBots(),
+                  introduce: async (botId) => (await import("./bot-runtime/bot-starter-main.js")).botStarter().introduce(botId),
                 },
                 connectCardStatus: async (botId, card) => {
                   const { connectCardStatus } = await import("./bot-runtime/bot-session-main.js");
@@ -1130,6 +1155,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             source: createAidenRemoteHostFeedSource({
               chats,
               listWorkspaces: () => workspaceApplicationService.list(),
+              approvalMode: async () => effectiveApprovalMode(await configStore.getSettings(), true),
               repositoryIdentity: gitCachedRepositoryIdentity,
               ...(bots ? { listBots: () => bots.list() } : {}),
               // Read runtime signals without opening conversation entries or context.
@@ -1177,6 +1203,30 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             changed: () => ipcMain.broadcast("app:config-externally-changed", {}),
           });
           const memorySettings = new AidenRemoteMemorySettingsService(configStore, publishAppControlsChanged);
+          // Revision 61 (`approvals:settings`): the desktop's own mode save path and rules page.
+          const approvalSettings = new AidenRemoteApprovalSettingsService({
+            readMode: async () => {
+              const usable = (await listConfiguredProviders()).some((provider) =>
+                provider.models.length > 0 && (provider.hasKey || !provider.needsKey));
+              return { mode: effectiveApprovalMode(await configStore.getSettings(), usable), autoAvailable: usable };
+            },
+            writeMode: async (mode) => {
+              const before = (await configStore.getSettings()).approvalMode;
+              const patch = { approvalMode: mode };
+              const saved = await configStore.setSettings(patch);
+              await applySettingsEffects(saved, patch);
+              reportApprovalModeChanged("global", before, saved.approvalMode);
+              publishAppControlsChanged();
+            },
+            rules: {
+              list: async () => (await import("./approval-rules/rules-page-main.js")).approvalRulesPage().list(),
+              picker: async () => (await import("./approval-rules/rules-page-main.js")).approvalRulesPage().picker(),
+              add: async (input) => (await import("./approval-rules/rules-page-main.js")).approvalRulesPage().add(input),
+              change: async (input) => (await import("./approval-rules/rules-page-main.js")).approvalRulesPage().change(input),
+              remove: async (ref) => (await import("./approval-rules/rules-page-main.js")).approvalRulesPage().remove(ref),
+            },
+            log: (message, error) => logger.warn("aiden-remote", message, error),
+          });
           const speech = new AidenRemoteSpeechService();
           activeReadAloud?.close();
           const readAloud = new AidenRemoteTtsService(ttsService);
@@ -1194,6 +1244,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             appControls: remoteAppControls,
             providers,
             memorySettings,
+            approvalSettings,
             spending: new AidenRemoteSpendingService({
               spending,
               requireBot: async (botId) => {
@@ -1236,6 +1287,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               idempotency,
               persistIdempotency: (snapshot) => operationStore.save(snapshot),
               notifyChanged: () => ipcMain.broadcast("workspaces:changed", {}),
+              approvalMode: async () => effectiveApprovalMode(await configStore.getSettings(), true),
             }),
           };
         },

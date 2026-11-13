@@ -695,7 +695,7 @@
     <string name="bot_activity_status_elapsed">%1$s · %2$s</string>
     <!-- Advanced → Chat activity (spec §7). The previews replay what each level shows on the Mac. -->
     <string name="bot_chat_activity_title">Chat activity</string>
-    <string name="bot_chat_activity_description">What you see in %1$s’s chat on your Mac while it works. Changes save as you pick them.</string>
+    <string name="bot_chat_activity_description">How %1$s’s status line reads while it works. Each computer’s Show tool activity switch decides whether its chats show the steps; Detailed turns them on for a computer that hasn’t chosen. Changes save as you pick them.</string>
     <string name="bot_chat_activity_level_title">How much to show</string>
     <string name="bot_chat_activity_wording_title">What the status line says</string>
     <string name="bot_chat_activity_phones_title">On iPhone and Android</string>

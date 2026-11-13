@@ -499,6 +499,13 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       const peers = await import("../bot-peers/host-main.js");
       const { botPeerCandidate } = await import("../bot-peers/tool.js");
       tools.push(botPeerCandidate(botId, {service:peers.botPeerHost,source:peers.botPeerToolSource,wake:peers.wakeBotPeers}));
+      const settings = await import("../bot-settings-changes/service-main.js");
+      const { updateBotCandidate, updateBotOwnerStarted } = await import("../bot-settings-changes/tool.js");
+      tools.push(updateBotCandidate(botId, {
+        service: settings.botSettingsChanges,
+        ownerStarted: async (call) =>
+          updateBotOwnerStarted(botExecutionScope(botId)?.requestIds, call.runRequestIds ? await call.runRequestIds() : undefined),
+      }));
       const openWork = await import("../bot-open-work/service-main.js");
       tools.push(botOpenWorkCandidate(botId, { service: openWork.botOpenWork, routineOrigin: openWork.resolveBotOpenWorkRoutineOrigin, peerOrigin: peers.botPeerOpenWorkOrigin }));
       // This turn's own authority: Custom access (and any chat reduction) that leaves the app out.

@@ -1,5 +1,5 @@
 // Bot hand-offs (plan §4): a step the Bot hands back to the person, such as
-// "Your turn: Enter the 2FA code for your bank.", answered with Done or Skip.
+// "Needs you: Enter the 2FA code for your bank.", answered with I’m done or Skip.
 //
 // Main owns the waits (`main/services/bot-runtime/bot-handoffs.ts`); this file
 // holds the shapes every surface reads, their bounds, and the parsers for what
@@ -42,7 +42,7 @@ export interface BotPendingHandoff {
   waitId: string;
   toolCallId: string;
   kind: BotHandoffKind;
-  /** The card's title after "Your turn: "; for a sign-in, "Sign in to <host>". */
+  /** The card's title after "Needs you: "; for a sign-in, "Sign in to <host>". */
   action: string;
   why?: string;
   /** An https page that helps; for a sign-in, always the site's origin. */
