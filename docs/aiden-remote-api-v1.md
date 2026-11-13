@@ -1325,13 +1325,13 @@ The marker is display-only. It grants nothing, is not accepted on any Remote wri
 
 ## Bot UX on phones, revision 61 (provisional)
 
-Revision 61 is provisional: it was written when `main` was at 60, and is claimed when the PR merges (take the next revision after `main` then, and move iOS, Android and the fixtures with it). The host keeps it in one constant (`AIDEN_REMOTE_BOT_UX_CONTRACT_REVISION`). It brings Phase 6 of the Bot UX simplification (`docs/plans/bot-ux-simplification.md`) to the wire. There is no new `/server` feature token. Five opt-ins, each advertised in `serverCapabilities` only where the host wires it, negotiated through `POST /device/capabilities` (`404 not_found` where not wired) and never issued at pairing. A client asks for each in a call of its own, so an older host that refuses one name leaves the rest in place. The serve-only CLI wires none of them: `approval:cards` is the only one an `aiden serve` host can offer (its approvals keep the Ask behaviour and the same card model), and the other four are desktop-only. Older clients keep every shape they had.
+Revision 61 is provisional: it was written when `main` was at 60, and is claimed when the PR merges (take the next revision after `main` then, and move iOS, Android and the fixtures with it). The host keeps it in one constant (`AIDEN_REMOTE_BOT_UX_CONTRACT_REVISION`). It brings Phase 6 of the Bot UX simplification (`docs/plans/bot-ux-simplification.md`) to the wire. There is no new `/server` feature token. Five opt-ins, each advertised in `serverCapabilities` only where the host wires it, negotiated through `POST /device/capabilities` (`404 not_found` where not wired) and never issued at pairing. A client asks for each in a call of its own, so an older host that refuses one name leaves the rest in place. An `aiden serve` host offers only `approval:cards` (its approvals keep the Ask behaviour and use the same card model); the other four are desktop-only. Older clients keep every shape they had.
 
 The shared fixture is `protocol/aiden-remote/v1/fixtures/bot-ux-revision-61.json`. `main/services/aiden-remote-bot-ux.test.ts` rebuilds it with the host's own serializers and fails when the file differs (`AIDEN_WRITE_FIXTURES=1` writes it).
 
 ### Approval cards (`approval:cards`)
 
-A holder receives `card` beside the existing fields on `GET /streams/{streamId}/approval`, on run `approval_required` payloads and gap snapshots (phones), and on the Bot session `approval`. The card is built by one model shared with the desktop card (`renderer/shared/approval-card-model.ts`):
+A holder receives `card` beside the existing fields on `GET /streams/{streamId}/approval`, on run `approval_required` payloads and in a gap snapshot's `approvals` (phones), and on the Bot session `approval`. On the stream and run approvals, `canAllow` is then exactly whether the card has an allow button, and `scopes` lists only the scopes its buttons offer; the fixture has a complete and a deny-only sample of each (`streamApprovals`, `phoneRunApprovalEvents`). The card is built by one model shared with the desktop card (`renderer/shared/approval-card-model.ts`):
 
 ```json
 {
@@ -1353,9 +1353,9 @@ A holder receives `card` beside the existing fields on `GET /streams/{streamId}/
 ```
 
 - `arguments` are in Rakazo order: shorter values first. At most 16; keys at most 40 characters, values at most 500. `title` at most 200, `body` and `previous` at most 16,000, `rows` at most 60 (`batch`), `notes` at most 6 of 400.
-- `buttons` start with the deny button, then the allow buttons the desktop offers: Allow once (Apply on a held change, Fill N fields on a batch, Allow for run on a sub-agent run grant), Allow in this chat (`scope: "chat"`), Allow in this workspace or, for a Bot holding `bot:allowed`, Always allow this tool (`scope: "always"`). `answered` is the status line to show after that answer. Remembered scopes appear only on plain cards, never on a specialized card.
+- `buttons` start with the deny button, then the allow buttons the desktop offers: Allow once (Apply on a held change, Fill N fields on a batch), Allow in this chat (`scope: "chat"`), Allow in this workspace or, for a Bot holding `bot:allowed`, Always allow this tool (`scope: "always"`). `answered` is the status line to show after that answer. Remembered scopes appear only on plain cards, never on a specialized card.
 - A card is complete or deny-only. When anything under review would not fit these bounds, when the host kept no details (`detailsOmitted`), when details are malformed or of a kind the model does not know, for a plain Computer Use call and for the disclosure tools (`classify`, `generate_image`), the card has only the deny button and `allowOnMac`. `allowOnMac` is present exactly when no allow button is. The Computer Use access grant is answerable; its note says macOS permissions are set up on the Mac.
-- Mac cards carry the full command (`body.format: "command"`). A hook the agent proposed is a `held_change` with Apply and Dismiss, its hook as `body` and the hook it replaces as `previous`.
+- Mac cards carry the full command (`body.format: "command"`). A sub-agent's file change carries its diff and a sub-agent's connector call its exact arguments as `body`; a diff the host already cut short (`diffTruncated`) leaves the card deny-only. A sub-agent's run-wide grant (Allow for run) is always deny-only on a device: it is given on the Mac. A hook the agent proposed is a `held_change` with Apply and Dismiss, its event, matcher and command as `body` and the hook it replaces as `previous`; a hook missing any of these, or one that had to be clipped, is deny-only.
 - Host-only, never on a card: macOS privacy prompts, pairing code match, Approve Home Folder, and the MCP connect launch review (a native dialog on the Mac; the kind is reserved for a later revision).
 - The respond routes are unchanged. For a holder, the host allows exactly what the card offers: `canAllow` equals "the card has an allow button", and an allow whose `scope` is not on a button is `403 capability_denied`. Non-holders keep the pre-61 rules.
 - Telegram never answers approvals. A reply there is a message to the Bot.
@@ -1385,18 +1385,18 @@ A holder's Bot session (snapshot, page and SSE `entry`) includes `settings_chang
 
 A holder's Bot session includes:
 
-- `{type: "skill_proposal", id, proposalId, name, description, reason?, update, preview, status: "pending"|"added"|"dismissed", createdAt?}`; `preview` is the new file or the diff, at most 16,000 characters.
+- `{type: "skill_proposal", id, proposalId, name, description, reason?, update, preview, previewTruncated?, status: "pending"|"added"|"dismissed", createdAt?}`; `preview` is the new file or the diff, at most 16,000 characters. A longer one is cut and carries `previewTruncated: true`: show what fits and that the rest is on the Mac, and offer Not now only.
 - `{type: "lesson", id, lessonId, kind: "proposal"|"learned", text, routineName?, runs?, status: "pending"|"active"|"dismissed"|"retired", createdAt?}`.
 - `{type: "memory_tidy", id, changeId?, createdAt?}`: a receipt with Undo when `changeId` is present.
 
 Routes, each needing `bot:read`, `bot:write` and `bot:suggestions`, with no query:
 
-- `POST /bots/{botId}/skill-proposals/{proposalId}/respond` `{"decision":"add"|"dismiss"}` → `{proposalId, status}`.
+- `POST /bots/{botId}/skill-proposals/{proposalId}/respond` `{"decision":"add"|"dismiss"}` → `{proposalId, status}`. Add on a skill whose preview was truncated is `409 revision_conflict` ("This skill is too long to review here. Add it on your Mac."); Add on one the device was not shown is `404 not_found`.
 - `POST /bots/{botId}/lessons/{lessonId}/respond` `{"decision":"keep"|"dismiss"}` → `{lessonId, status}`.
 - `POST /bots/{botId}/lessons/{lessonId}/remove` `{}` → `{lessonId, status: "retired"}` (Undo on a Learned line).
-- `POST /bots/{botId}/learning/{changeId}/undo` `{}` → `{changeId, undone: true}`; `409 revision_conflict` when the memory changed since.
+- `POST /bots/{botId}/learning/{changeId}/undo` `{}` → `{changeId, undone: true}`; `404 not_found` when there is no such change, `409 revision_conflict` when the memory changed since or it was already undone.
 
-A suggestion or lesson that is no longer waiting answers `404 not_found`.
+A suggestion that no longer exists answers `404 not_found`. A lesson answers `404 not_found` when it does not exist or is no longer in the state the route needs: respond needs a lesson still waiting (an already-answered one is 404), remove needs an active one.
 
 ### Templates and one-field create (`bot:templates`)
 
