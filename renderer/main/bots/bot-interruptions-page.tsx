@@ -1,31 +1,15 @@
-// Advanced → Interruptions (spec §6 P4): quiet hours and how many proactive
-// notifications a Bot may send a day. Choices save as they change.
+// A Bot's Advanced tab → Notifications → Quiet hours (spec §6 P4, plan §4.4):
+// quiet hours and how many proactive notifications a Bot may send a day.
+// Choices save as they change.
 
 import { Minus, Plus } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
-import { Button, Field, FieldSet, Switch, toast } from "../../components/ui";
-import { userFacingErrorMessage } from "../../lib/ipc-error";
-import {
-  BOT_INTERRUPTIONS_MAX_DAILY_LIMIT,
-  resolveBotInterruptions,
-  type BotDefinition,
-  type BotInterruptions,
-} from "../../shared/bots";
-import { updateBotIdentity } from "./bot-identity";
-import { BotPageShell } from "./bot-page-shell";
+import { Button, Field, FieldSet, Switch } from "../../components/ui";
+import { BOT_INTERRUPTIONS_MAX_DAILY_LIMIT, type BotInterruptions } from "../../shared/bots";
 
 /** "10:00 PM" for "22:00", in the person's own clock style. */
 export function clockLabel(time: string): string {
   const [hours, minutes] = time.split(":").map(Number);
   return new Date(2000, 0, 1, hours, minutes).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-}
-
-/** Advanced's trailing value: "Quiet 10:00 PM–7:00 AM · 5 a day". */
-export function botInterruptionsSummary(value: BotInterruptions | undefined): string {
-  const resolved = resolveBotInterruptions(value);
-  const limit = resolved.dailyLimit === 0 ? "None a day" : `${resolved.dailyLimit} a day`;
-  if (!resolved.quietHours.enabled) return limit;
-  return `Quiet ${clockLabel(resolved.quietHours.start)}–${clockLabel(resolved.quietHours.end)} · ${limit}`;
 }
 
 /** The editable part of the page, separate from saving so it can be tested alone. */
@@ -107,20 +91,5 @@ export function BotInterruptionsFields({
         </Field>
       </FieldSet>
     </>
-  );
-}
-
-export function BotInterruptionsPage({ bot, onClose }: { bot: BotDefinition; onClose(): void }) {
-  const qc = useQueryClient();
-  const value = resolveBotInterruptions(bot.interruptions);
-  const change = (next: BotInterruptions) => {
-    void updateBotIdentity(qc, bot.id, { interruptions: next }).catch((error: unknown) =>
-      toast.error(userFacingErrorMessage(error, `Aiden couldn’t save ${bot.name}’s interruptions.`)),
-    );
-  };
-  return (
-    <BotPageShell scrollId={`bot-interruptions:${bot.id}`} title="Interruptions" backLabel="Advanced" onBack={onClose}>
-      <BotInterruptionsFields value={value} onChange={change} />
-    </BotPageShell>
   );
 }

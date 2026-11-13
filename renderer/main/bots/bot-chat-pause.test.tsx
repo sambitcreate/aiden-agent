@@ -31,7 +31,7 @@ function snapshot(overrides: Partial<BotLiveSnapshot> = {}): BotLiveSnapshot {
 async function mountChat(handlers: Record<string, (...args: unknown[]) => unknown>) {
   const calls = installBotTestIpc({ "bots:get": () => botFixture(), ...handlers });
   await mountWithBotRouter(<BotChatRoute botId="bot-1" />, { initialPath: "/bots/bot-1/chat" });
-  await screen.findByRole("button", { name: "Planner profile" });
+  await screen.findByRole("button", { name: "Planner settings" });
   return calls;
 }
 

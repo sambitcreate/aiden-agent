@@ -1168,7 +1168,8 @@ export function BotChatPane({ botId }: { botId: string }) {
   const current = bot.data ?? null;
   // A Bot over its spending limit sends nothing until the person allows more.
   const spendingReached = spending.status?.state === "reached" ? spendingNotice(spending.status, current?.name)?.title : undefined;
-  const openAdvanced = () => void navigate({ to: "/bots/$botId", params: { botId }, search: { page: "advanced" } });
+  // A Bot's settings live in the side panel's Advanced tab (plan §4.4).
+  const openAdvanced = () => panel.show("advanced", { botId, section: "model" });
   // Memory, Files and Routines live in the side panel beside the chat (spec §8).
   const openMemory = () => panel.show("memory");
 
@@ -1184,7 +1185,7 @@ export function BotChatPane({ botId }: { botId: string }) {
           <BotChatNamePill
             bot={current}
             working={running}
-            onOpenProfile={() => void navigate({ to: "/bots/$botId", params: { botId: current.id } })}
+            onOpenProfile={() => panel.show("advanced", { botId: current.id })}
           />
         ) : bot.isLoading ? (
           <span className="block h-4 w-28 rounded-full bg-control motion-safe:animate-pulse" aria-hidden="true" />
@@ -1200,7 +1201,7 @@ export function BotChatPane({ botId }: { botId: string }) {
               bot={current}
               pinned={pinned}
               paused={state?.kind === "paused"}
-              onAction={(action, returnFocus) => menuAction(current, action, returnFocus)}
+              onAction={(action) => menuAction(current, action)}
             />
           </>
         ) : null

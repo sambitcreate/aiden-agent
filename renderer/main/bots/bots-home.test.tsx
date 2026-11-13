@@ -4,6 +4,7 @@ import { BotConnectionSetupHost } from "./bot-connection-setup-host";
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { useRouterState } from "@tanstack/react-router";
 import { BotsView } from "../bots-view";
 import { QueryClient } from "@tanstack/react-query";
 import { queryKeys } from "../../lib/queries";
@@ -228,11 +229,54 @@ test("a Bots list that fails to load offers Try again, then opens the Bot once i
   await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-1/chat"));
 });
 
-test("Profile's back returns to the Bot's chat", async () => {
+/** The Bot panel's selected tab, or null while it is closed. */
+function openPanelTab(): string | null {
+  const panel = document.getElementById("bot-panel");
+  if (!panel || panel.getAttribute("data-state") !== "open") return null;
+  // A dialog the link opened hides the rest of the page from the accessibility tree.
+  return within(panel).getAllByRole("tab", { hidden: true }).find((tab) => tab.getAttribute("aria-selected") === "true")?.textContent ?? null;
+}
+
+test("old Profile, Advanced and settings links open the Bot's chat with its settings beside it", async () => {
+  const cases: [query: string, tab: string, dialog?: string][] = [
+    ["", "Advanced"],
+    ["?page=profile", "Advanced"],
+    ["?page=advanced", "Advanced"],
+    ["?page=chat-activity", "Advanced"],
+    ["?page=instructions", "Advanced", "Instructions"],
+    ["?page=interruptions", "Advanced", "Quiet hours"],
+    ["?page=memory", "Memory"],
+  ];
+  for (const [query, tab, dialog] of cases) {
+    localStorage.clear();
+    twoBots({});
+    const { router } = await mountWithBotRouter(<BotsView />, { initialPath: `/bots/bot-2${query}` });
+    await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-2/chat", query));
+    await waitFor(() => assert.equal(openPanelTab(), tab, query));
+    if (dialog) assert.ok(await screen.findByRole("dialog", { name: dialog }), query);
+    cleanup();
+  }
+});
+
+/** The Bots page on Bots paths only: the harness mounts its children on every path, Settings too. */
+function BotsPagesOnly() {
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  return pathname.startsWith("/bots") ? <BotsView /> : null;
+}
+
+test("the old Allowed without asking link opens Settings → Approvals", async () => {
   twoBots({});
-  const { router } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot-2" });
-  fireEvent.click(await screen.findByRole("button", { name: "Chat" }));
+  const { router } = await mountWithBotRouter(<BotsPagesOnly />, { initialPath: "/bots/bot-2?page=allowed" });
+  await waitFor(() => assert.equal(router.state.location.pathname, "/settings"));
+  assert.equal((router.state.location.search as { section?: string }).section, "approvals");
+});
+
+test("Open work is still a page, and its back goes to the chat with the Bot's settings open", async () => {
+  twoBots({});
+  const { router } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot-2?page=open-work" });
+  fireEvent.click(await screen.findByRole("button", { name: "Inbox" }));
   await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-2/chat"));
+  await waitFor(() => assert.equal(openPanelTab(), "Advanced"));
 });
 
 test("a phone's Finish on your Mac opens the connection setup even with the Bots list closed", async () => {

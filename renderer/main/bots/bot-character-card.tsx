@@ -1,13 +1,11 @@
 import * as React from "react";
 import { Check } from "lucide-react";
 import { AvatarFace } from "../../components/bot-avatar";
-import { Button, Field, FieldSet } from "../../components/ui";
 import {
   BOT_AVATAR_COLOR_LABELS,
   BOT_AVATAR_COLORS,
   BOT_AVATAR_SHAPE_LABELS,
   BOT_AVATAR_SHAPES,
-  DEFAULT_BOT_AVATAR,
   resolveBotAvatar,
   type BotAvatar,
   type BotAvatarAppearance,
@@ -137,44 +135,3 @@ export function BotLookPicker({
   );
 }
 
-/**
- * Character: the colour and shape that make up a Bot's mark everywhere.
- * Selection is shown with a check or a soft fill, never a decorative border.
- */
-export function BotCharacterCard({
-  avatar,
-  onChange,
-  disabled = false,
-}: {
-  avatar: BotAvatar;
-  onChange(avatar: BotAvatarAppearance): void;
-  disabled?: boolean;
-}) {
-  const current = resolveBotAvatar(avatar);
-  const choose = (patch: Partial<Pick<BotAvatarAppearance, "shape" | "color">>) => {
-    const next = { ...current, ...patch };
-    if (!sameCharacter(next, current)) onChange(next);
-  };
-  const isDefault = sameCharacter(current, DEFAULT_BOT_AVATAR);
-
-  return (
-    <FieldSet title="Character">
-      <Field orientation="vertical" label="Colour">
-        <ColourRadios current={current} choose={(color) => choose({ color })} disabled={disabled} />
-      </Field>
-      <Field orientation="vertical" label="Shape">
-        <ShapeRadios current={current} choose={(shape) => choose({ shape })} disabled={disabled} />
-      </Field>
-      <Field label="Default look" description="How this Bot looks everywhere: its list row, chat, and phone.">
-        <Button
-          size="small"
-          variant="filled"
-          disabled={disabled || isDefault}
-          onClick={() => onChange({ ...DEFAULT_BOT_AVATAR })}
-        >
-          Reset to default
-        </Button>
-      </Field>
-    </FieldSet>
-  );
-}

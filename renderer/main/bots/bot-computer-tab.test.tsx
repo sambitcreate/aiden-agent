@@ -64,7 +64,7 @@ async function mountBotChat(
     ...handlers,
   });
   const mounted = await mountWithBotRouter(null, { initialPath: "/bots/bot-1/chat", capabilities });
-  await screen.findByRole("button", { name: "Planner profile" });
+  await screen.findByRole("button", { name: "Planner settings" });
   return { calls, ...mounted };
 }
 
@@ -101,7 +101,7 @@ test("Computer joins the panel while the Bot has a computer, and a saved Compute
   assert.equal(tabNames().includes("Computer"), false, "a Bot without a computer");
 
   act(() => emitBotTestNotification(BOT_COMPUTERS_CHANGED_CHANNEL, status([computer()])));
-  await waitFor(() => assert.deepEqual(tabNames(), ["Activity", "Files", "Memory", "Routines", "Computer"]));
+  await waitFor(() => assert.deepEqual(tabNames(), ["Activity", "Files", "Memory", "Routines", "Computer", "Advanced"]));
 
   act(() => emitBotTestNotification(BOT_COMPUTERS_CHANGED_CHANNEL, status([])));
   await waitFor(() => assert.equal(tabNames().includes("Computer"), false, "the computer was removed"));
@@ -223,10 +223,10 @@ test("with Browser and Computer both shown, the six tabs keep their order and Op
     },
   );
   const panel = botPanel();
-  await waitFor(() => assert.deepEqual(tabNames(), ["Activity", "Files", "Memory", "Routines", "Browser", "Computer"]));
+  await waitFor(() => assert.deepEqual(tabNames(), ["Activity", "Files", "Memory", "Routines", "Browser", "Computer", "Advanced"]));
   fireEvent.keyDown(within(panel).getByRole("button", { name: "Open tabs" }), { key: "Enter" });
   const items = await screen.findAllByRole("menuitem");
-  assert.deepEqual(items.map((item) => item.textContent), ["Activity", "Files", "Memory", "Routines", "Browser", "Computer"]);
+  assert.deepEqual(items.map((item) => item.textContent), ["Activity", "Files", "Memory", "Routines", "Browser", "Computer", "Advanced"]);
   fireEvent.click(screen.getByRole("menuitem", { name: "Computer" }));
   await waitFor(() => assert.equal(selectedTab(), "Computer"));
   await waitFor(() =>

@@ -63,7 +63,7 @@ interface RowProps {
   /** Show the key on the row, while ⌘ is held. */
   shortcutShown: boolean;
   onOpen(bot: BotDefinition): void;
-  onAction(bot: BotDefinition, action: BotMenuAction, returnFocus?: HTMLElement | null): void;
+  onAction(bot: BotDefinition, action: BotMenuAction): void;
 }
 
 /** A row re-renders only when what it shows changes, not on every sidebar render. */
@@ -126,19 +126,16 @@ const BotRow = React.memo(function BotRow({
 }: RowProps) {
   const line = botRowLine(row);
   const lineId = React.useId();
-  const rowRef = React.useRef<HTMLButtonElement>(null);
   return (
     <li data-roving-row className="group relative">
       <BotRowMenus
         bot={row.bot}
         pinned={pinned}
         paused={row.state?.kind === "paused"}
-        rowRef={rowRef}
         moreClassName={cn("right-1.5 top-1/2 -translate-y-1/2", shortcutShown && shortcut && "invisible")}
-        onAction={(action, returnFocus) => onAction(row.bot, action, returnFocus)}
+        onAction={(action) => onAction(row.bot, action)}
       >
         <button
-          ref={rowRef}
           type="button"
           data-bot-row={row.bot.id}
           data-roving-item
@@ -208,7 +205,6 @@ const PinnedBot = React.memo(function PinnedBot({
   onOpen,
   onAction,
 }: RowProps) {
-  const rowRef = React.useRef<HTMLButtonElement>(null);
   const lineId = React.useId();
   // The hero shows no preview; like the rows, it says when the Bot is working
   // or why it stopped, as its description. "Needs you" is its own badge.
@@ -220,12 +216,10 @@ const PinnedBot = React.memo(function PinnedBot({
         bot={row.bot}
         pinned
         paused={row.state?.kind === "paused"}
-        rowRef={rowRef}
         moreClassName={cn("right-1.5 top-1.5", shortcutShown && shortcut && "invisible")}
-        onAction={(action, returnFocus) => onAction(row.bot, action, returnFocus)}
+        onAction={(action) => onAction(row.bot, action)}
       >
         <button
-          ref={rowRef}
           type="button"
           data-bot-row={row.bot.id}
           data-roving-item

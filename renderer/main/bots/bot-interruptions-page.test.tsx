@@ -4,7 +4,7 @@ import { afterEach, test } from "node:test";
 import * as React from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { DEFAULT_BOT_INTERRUPTIONS, type BotInterruptions } from "../../shared/bots";
-import { BotInterruptionsFields, botInterruptionsSummary } from "./bot-interruptions-page";
+import { BotInterruptionsFields } from "./bot-interruptions-page";
 
 afterEach(cleanup);
 
@@ -27,7 +27,6 @@ test("shows quiet hours on, 10 PM to 7 AM, and 5 a day by default", () => {
   assert.equal((screen.getByLabelText("Quiet from") as HTMLInputElement).value, "22:00");
   assert.equal((screen.getByLabelText("Quiet until") as HTMLInputElement).value, "07:00");
   assert.equal(screen.getByRole("status", { name: "Notifications a day" }).textContent, "5");
-  assert.match(botInterruptionsSummary(undefined), /^Quiet .+–.+ · 5 a day$/u);
 });
 
 test("turning quiet hours off saves enabled false and hides the times", () => {
@@ -36,7 +35,6 @@ test("turning quiet hours off saves enabled false and hides the times", () => {
   fireEvent.click(screen.getByRole("switch", { name: "Quiet hours" }));
   assert.equal(saved[saved.length - 1]?.quietHours.enabled, false);
   assert.equal(screen.queryByLabelText("Quiet from"), null);
-  assert.equal(botInterruptionsSummary(saved[saved.length - 1]), "5 a day");
 });
 
 test("the limit stepper stays within 0 and 20", () => {

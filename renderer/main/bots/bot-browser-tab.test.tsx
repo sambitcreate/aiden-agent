@@ -64,7 +64,7 @@ async function mountBotChat(state: () => BrowserState, handlers: Record<string, 
     ...handlers,
   });
   const mounted = await mountWithBotRouter(null, { initialPath: "/bots/bot-1/chat" });
-  await screen.findByRole("button", { name: "Planner profile" });
+  await screen.findByRole("button", { name: "Planner settings" });
   return { calls, ...mounted };
 }
 
@@ -83,11 +83,11 @@ test("Browser joins the Bot panel once its browser has a tab; a saved Browser ta
   let tabs: BrowserTab[] = [];
   await mountBotChat(() => browserState(tabs));
   await waitFor(() => assert.equal(selectedTab(), "Activity"));
-  assert.deepEqual(tabNames(), ["Activity", "Files", "Memory", "Routines"]);
+  assert.deepEqual(tabNames(), ["Activity", "Files", "Memory", "Routines", "Advanced"]);
 
   tabs = [browserTab()];
   await act(async () => emitBotTestNotification("browser:event", { type: "state", state: browserState(tabs) }));
-  await waitFor(() => assert.deepEqual(tabNames(), ["Activity", "Files", "Memory", "Routines", "Browser"]));
+  await waitFor(() => assert.deepEqual(tabNames(), ["Activity", "Files", "Memory", "Routines", "Browser", "Advanced"]));
   assert.equal(selectedTab(), "Browser", "the saved choice comes back once there is something to show");
 
   // Closing the last tab keeps the Browser view where the person is.

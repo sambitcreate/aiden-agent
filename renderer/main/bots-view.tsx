@@ -7,18 +7,13 @@ import { settingsLocation } from "../lib/settings-section";
 import { lastViewedBotId } from "../lib/bot-sidebar-preferences";
 import { useBot } from "../lib/queries";
 import type { BotDefinition } from "../shared/bots";
-import { BotAdvanced } from "./bots/bot-advanced";
-import { BotInterruptionsPage } from "./bots/bot-interruptions-page";
 import { BotLearningPage } from "./bots/bot-learning-page";
 import { BotCreateMenu, useBotCreateDialogs } from "./bots/bot-create-menu";
-import { BotDeleteDialog } from "./bots/bot-delete-dialog";
-import { BotInstructionsDialog } from "./bots/bot-instructions-editor";
 import { useBotRows } from "./bots/bot-sidebar-rows";
-import { BotMemoryPage } from "./bots/bot-memory-page";
 import { BotOpenWorkPage } from "./bots/bot-open-work-page";
 import { BotPageShell, BotPageSkeleton } from "./bots/bot-page-shell";
-import { parseBotPageSearch, type BotSubpage } from "./bots/bot-page-search";
-import { BotProfile } from "./bots/bot-profile";
+import { botPageTarget, parseBotPageSearch, type BotPageTarget } from "./bots/bot-page-search";
+import { useBotPanelActions } from "./bots/bot-panel-context";
 import { useBotSidebarPreferences } from "./bots/use-bot-sidebar-preferences";
 
 /** How long /bots waits for chat-activity summaries before ordering Bots by their own updatedAt. */
@@ -121,30 +116,38 @@ function BotsIndex() {
 
 function BotPage({ botId }: { botId: string }) {
   const navigate = useNavigate();
+  const panel = useBotPanelActions();
   const bot = useBot(botId);
-  // `?page=advanced` opens a sub-page directly (the chat's "Choose a model");
-  // moving between Profile and its sub-pages after that is local.
-  const initialPage = parseBotPageSearch(useSearch({ strict: false }) as Record<string, unknown>).page ?? null;
-  const [page, setPage] = React.useState<BotSubpage | null>(initialPage);
-  const [deleting, setDeleting] = React.useState(false);
-  React.useEffect(() => setPage(initialPage), [botId, initialPage]);
-  // The old "Allowed without asking" page is now Settings → Approvals.
+  const target = botPageTarget(parseBotPageSearch(useSearch({ strict: false }) as Record<string, unknown>).page);
+  const targetKey = JSON.stringify(target);
+  // The Profile and Advanced pages are gone: their links open the Bot's chat
+  // with its settings in the side panel.
   React.useEffect(() => {
-    if (initialPage === "allowed") void navigate({ ...settingsLocation("approvals"), replace: true });
-  }, [initialPage, navigate]);
-  const openPage = setPage;
+    const next = JSON.parse(targetKey) as BotPageTarget;
+    if (next.kind === "settings") {
+      void navigate({ ...settingsLocation(next.section), replace: true });
+    } else if (next.kind === "panel") {
+      panel.show(next.tab, next.section ? { botId, section: next.section } : { botId });
+      void navigate({ ...botChatPath(botId), replace: true });
+    }
+  }, [botId, navigate, panel, targetKey]);
   const allBots = () => void navigate(botListLocation());
+  // Back from Open work or What I've learned: the chat, with the settings they were opened from.
+  const backToSettings = () => {
+    panel.show("advanced", { botId });
+    void navigate(botChatPath(botId));
+  };
 
-  if (bot.isLoading) {
+  if (target.kind !== "page" || bot.isLoading) {
     return (
-      <BotPageShell scrollId={`bot-profile:${botId}`} title="" backLabel="All Bots" onBack={allBots}>
+      <BotPageShell scrollId={`bot-page:${botId}`} title="" backLabel="All Bots" onBack={allBots}>
         <BotPageSkeleton label="Loading Bot" groups={[3, 2]} />
       </BotPageShell>
     );
   }
   if (!bot.data) {
     return (
-      <BotPageShell scrollId={`bot-profile:${botId}`} title="Bot" backLabel="All Bots" onBack={allBots}>
+      <BotPageShell scrollId={`bot-page:${botId}`} title="Bot" backLabel="All Bots" onBack={allBots}>
         <EmptyState
           title="Bot not found"
           description="This Bot may have been deleted."
@@ -158,45 +161,14 @@ function BotPage({ botId }: { botId: string }) {
     );
   }
   const current = bot.data;
-  const back = () => openPage(null);
-  return (
-    <>
-      <BotInstructionsDialog bot={current} open={page === "instructions"} onOpenChange={(open) => !open && back()} />
-      {page === "advanced" ? (
-        <BotAdvanced
-          key={`${current.id}:advanced`}
-          bot={current}
-          onClose={back}
-          onOpenInterruptions={() => openPage("interruptions")}
-        />
-      ) : page === "interruptions" ? (
-        <BotInterruptionsPage key={`${current.id}:interruptions`} bot={current} onClose={() => openPage("advanced")} />
-      ) : page === "open-work" ? (
-        <BotOpenWorkPage key={current.id + ":open-work"} bot={current} onClose={back} />
-      ) : page === "learning" ? (
-        <BotLearningPage key={`${current.id}:learning`} bot={current} onClose={back} />
-      ) : page === "memory" ? (
-        <BotMemoryPage key={`${current.id}:memory`} bot={current} onClose={back} />
-      ) : (
-        <BotProfile
-          bot={current}
-          onBack={() => void navigate(botChatPath(current.id))}
-          onOpenChat={() => void navigate(botChatPath(current.id))}
-          onOpenInstructions={() => openPage("instructions")}
-          onOpenAdvanced={() => openPage("advanced")}
-          onOpenMemory={() => openPage("memory")}
-          onOpenLearning={() => openPage("learning")}
-          onOpenWork={() => openPage("open-work")}
-          onOpenApprovals={() => void navigate(settingsLocation("approvals"))}
-          onDelete={() => setDeleting(true)}
-        />
-      )}
-      <BotDeleteDialog bot={current} open={deleting} onOpenChange={setDeleting} />
-    </>
+  return target.page === "open-work" ? (
+    <BotOpenWorkPage key={`${current.id}:open-work`} bot={current} onClose={backToSettings} />
+  ) : (
+    <BotLearningPage key={`${current.id}:learning`} bot={current} onClose={backToSettings} />
   );
 }
 
-/** Routes `/bots` to the most recent Bot's chat (or the starter Bots), `/bots/$botId` to a Bot's Profile and `/bots/$botId/chat` to its chat. */
+/** Routes `/bots` to the most recent Bot's chat (or New bot and Templates), and `/bots/$botId` to a Bot's Open work or What I've learned, or (old links) its chat with its settings beside it. */
 export function BotsView() {
   const params = useParams({ strict: false }) as { botId?: string };
   if (params.botId) return <BotPage botId={params.botId} />;

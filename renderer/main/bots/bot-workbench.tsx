@@ -1,5 +1,5 @@
 // The Bot side panel (spec §8) on the C1 workbench shell, beside a Bot's chat:
-// fixed Activity, Files, Memory and Routines tabs, Browser once the Bot's
+// fixed Activity, Files, Memory, Routines and Advanced (the Bot's settings, plan §4.4) tabs, Browser once the Bot's
 // own browser has a tab (a stored Browser tab shows Activity until then; a tab
 // the Bot or a hand-off opens to show reveals it), and Computer while the Bot
 // has a computer on a Mac with Bot computers (plan §8.5; a stored Computer tab
@@ -13,7 +13,7 @@
 
 import * as React from "react";
 import { LiveGuard } from "../../components/live-guard";
-import { CalendarClock, Files, Globe, ListChecks, Monitor } from "lucide-react";
+import { CalendarClock, Files, Globe, ListChecks, Monitor, SlidersHorizontal } from "lucide-react";
 import { MemoryCardIcon } from "../../components/memory-card-icon";
 import { WorkbenchPanel, useWorkbenchWidth, type WorkbenchTab, type WorkbenchView } from "../../components/workbench-panel";
 import { BOT_PANEL_WIDTH_BOUNDS, resolveEnvironmentPanelLayout } from "../../lib/environment-panel-layout";
@@ -22,7 +22,10 @@ import { cn } from "../../lib/ui-utils";
 import { useBotLive } from "../../lib/use-bot-live";
 import type { BotTranscriptEntry } from "../../shared/bot-live";
 import { BotBrowserTab, useBotBrowserPresence } from "./bot-browser-tab";
+import { BotAdvancedTab } from "./bot-advanced";
 import { BotComputerFloat } from "./bot-computer-float";
+import { BotConnectorWatches } from "./bot-connector-watches";
+import { BotEventRoutines } from "./bot-event-routines";
 import { BotComputerSignInReveal, BotComputerTab, useBotComputer, useBotComputerStart } from "./bot-computer-tab";
 import { BotMemoryContent } from "./bot-memory-page";
 import { BotPanelActivity } from "./bot-panel-activity";
@@ -39,6 +42,7 @@ const TAB_META: Record<BotPanelTab, { label: string; icon: React.ComponentType<{
   routines: { label: "Routines", icon: CalendarClock },
   browser: { label: "Browser", icon: Globe },
   computer: { label: "Computer", icon: Monitor },
+  advanced: { label: "Advanced", icon: SlidersHorizontal },
 };
 
 /**
@@ -77,7 +81,7 @@ function ActivityTab({ botId, botName }: { botId: string; botName: string }) {
  * subscription for as long as it is shown; the Activity tab shares it.
  */
 export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botId: string }>) {
-  const { open, tab: storedTab, fileRequest, focusRequest, close, consumeFocusRequest, setTab, reveal, show } = useBotPanel();
+  const { open, tab: storedTab, fileRequest, sectionRequest, focusRequest, close, consumeFocusRequest, setTab, reveal, show } = useBotPanel();
   const bot = useBot(botId).data ?? null;
   const revealBrowser = React.useCallback(() => reveal("browser"), [reveal]);
   const revealComputer = React.useCallback(() => reveal("computer"), [reveal]);
@@ -179,10 +183,20 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
           </LiveGuard>
         );
       case "routines":
-        // Routines run prompts in the background: the user's to change.
+        // Routines run prompts in the background: the user's to change. Scheduled
+        // routines and wake-ups list first, then event routines and app watches.
         return (
           <LiveGuard guard="you">
             <BotRoutines bot={bot} compact />
+            <BotEventRoutines bot={bot} />
+            <BotConnectorWatches bot={bot} />
+          </LiveGuard>
+        );
+      case "advanced":
+        // A Bot's settings are the person's to change, never Aiden Live's.
+        return (
+          <LiveGuard guard="you">
+            <BotAdvancedTab bot={bot} sectionRequest={sectionRequest} />
           </LiveGuard>
         );
       case "browser":
@@ -267,7 +281,7 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
         tabs={tabs}
         idPrefix={BOT_PANEL_ID}
         tabListLabel="Bot panel views"
-        // Five tabs always fit; with Browser and Computer both shown, the list reveals any that scroll away.
+        // Five tabs always fit; with Browser or Computer shown, the list reveals any that scroll away.
         tabMenu={shownTabs.length > 5}
         onSelectTab={(entry) => {
           const next = entry.viewId as BotPanelTab;

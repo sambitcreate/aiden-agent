@@ -80,7 +80,7 @@ async function mountChat(handlers: Record<string, (...args: unknown[]) => unknow
     ...handlers,
   });
   await mountWithBotRouter(<BotChatRoute botId="bot-1" />, { initialPath: "/bots/bot-1/chat" });
-  await screen.findByRole("button", { name: "Planner profile" });
+  await screen.findByRole("button", { name: "Planner settings" });
   return calls;
 }
 
@@ -1176,7 +1176,7 @@ test("Stop stays available while a question card replaces the composer", async (
   await waitFor(() => assert.deepEqual(calls.filter((call) => call.channel === "bots:stop").map((call) => call.args), [["bot-1"]]));
 });
 
-test("a model the Bot can't reach says why, and Choose a model opens Advanced for that Bot", async () => {
+test("a model the Bot can't reach says why, and Choose a model opens that Bot's Advanced tab", async () => {
   installBotTestIpc({
     "bots:get": () => botFixture(),
     "bots:pendingApprovals": () => [],
@@ -1186,20 +1186,27 @@ test("a model the Bot can't reach says why, and Choose a model opens Advanced fo
   const card = await screen.findByRole("alert", { name: "Planner can’t reach its AI model" });
   assert.ok(within(card).getByText("Sign in to Text Service again."));
   fireEvent.click(within(card).getByRole("button", { name: "Choose a model" }));
-  await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-1"));
-  assert.equal((router.state.location.search as { page?: string }).page, "advanced");
+  await waitFor(() => assert.equal(advancedTabShown(), true));
+  assert.equal(router.state.location.pathname, "/bots/bot-1/chat", "the chat stays, with its settings beside it");
 });
 
-test("an interrupted Bot whose access changed opens Advanced, not just the Profile", async () => {
+/** The Bot panel is open on its Advanced tab, the Bot's settings. */
+function advancedTabShown(): boolean {
+  const panel = document.getElementById("bot-panel");
+  if (!panel || panel.getAttribute("data-state") !== "open") return false;
+  return within(panel).getByRole("tab", { name: "Advanced" }).getAttribute("aria-selected") === "true";
+}
+
+test("an interrupted Bot whose access changed opens its Advanced tab", async () => {
   installBotTestIpc({
     "bots:get": () => botFixture(),
     "bots:pendingApprovals": () => [],
     "bots:live:subscribe": () => snapshot({ state: { kind: "interrupted", submissionId: "s1", blocked: "access_changed" } }),
   });
-  const { router } = await mountWithBotRouter(<BotChatRoute botId="bot-1" />, { initialPath: "/bots/bot-1/chat" });
+  await mountWithBotRouter(<BotChatRoute botId="bot-1" />, { initialPath: "/bots/bot-1/chat" });
   const card = await screen.findByRole("group", { name: "Planner was interrupted" });
   fireEvent.click(within(card).getByRole("button", { name: "Open Advanced" }));
-  await waitFor(() => assert.equal((router.state.location.search as { page?: string }).page, "advanced"));
+  await waitFor(() => assert.equal(advancedTabShown(), true));
 });
 
 /** Gives the chat's scrollport a real height so follow-the-reply can be observed. */
@@ -1471,7 +1478,7 @@ test("the chat header's face works only while the Bot works, and a photo gets a 
     "bots:live:subscribe": () =>
       snapshot({ state: { kind: "running", submissionId: "s1" }, activity: { phase: "thinking", startedAt: Date.now() } }),
   });
-  const pill = await screen.findByRole("button", { name: "Planner profile" });
+  const pill = await screen.findByRole("button", { name: "Planner settings" });
   const face = within(pill).getByTitle("Planner");
   await waitFor(() => {
     assert.equal(face.hasAttribute("data-working"), true);

@@ -179,11 +179,6 @@ export function BotPeerExchangeDialog({ botId, exchangeId, onClose, api = botsAp
   </Dialog>{confirmStop && exchange && <Dialog open confirmHidden title="Stop this exchange?" onOpenChange={(open) => { if (!open) setConfirmStop(false); }}><Text variant="small">Stop only the work linked to this exchange. If its inputs are mixed with other work, the host may refuse the Stop.</Text><Button disabled={controls.busy} onClick={() => { setConfirmStop(false); void stop({ botId, exchangeId, mutationId: crypto.randomUUID(), expectedRevision: exchange.revision }); }}>Confirm Stop</Button></Dialog>}</>;
 }
 
-export function BotPeersSection({ botId, botName }: { botId: string; botName: string }) {
-  const [open, setOpen] = React.useState(false);
-  return <><FieldSet title="Bot messaging"><Field label="Approved Bot pairs" description="Choose which Bots may exchange requests with each other."><Button size="small" variant="transparent" aria-label="Manage Bot messaging" onClick={() => setOpen(true)}>Manage</Button></Field></FieldSet>{open && <BotPeerManagerDialog key={botId} botId={botId} botName={botName} onClose={() => setOpen(false)} />}</>;
-}
-
 export function BotPeerExchangeButton({ botId, exchangeId }: { botId: string; exchangeId: string }) {
   const [open, setOpen] = React.useState(false);
   return <><Button size="small" variant="transparent" onClick={() => setOpen(true)}>View exchange</Button>{open && <BotPeerExchangeDialog key={`${botId}:${exchangeId}`} botId={botId} exchangeId={exchangeId} onClose={() => setOpen(false)} />}</>;

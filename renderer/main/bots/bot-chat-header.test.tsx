@@ -28,17 +28,17 @@ const openMenu = async () => {
   return (await screen.findAllByRole("menuitem")).map((item) => item.textContent);
 };
 
-test("the name pill opens the Bot's profile", async () => {
+test("the name pill opens the Bot's settings", async () => {
   const calls = await renderHeader();
-  fireEvent.click(screen.getByRole("button", { name: "SLMob profile" }));
+  fireEvent.click(screen.getByRole("button", { name: "SLMob settings" }));
   assert.deepEqual(calls, ["profile"]);
 });
 
-test("the ••• menu offers Profile, Files, Memory, Routines, Advanced, Pin to top, Pause Bot and Delete Bot, in that order", async () => {
+test("the ••• menu offers only Pin to top, Pause Bot and Delete Bot, in that order", async () => {
   const calls = await renderHeader();
-  assert.deepEqual(await openMenu(), ["Profile", "Files", "Memory", "Routines", "Advanced", "Pin to top", "Pause Bot", "Delete Bot"]);
-  fireEvent.click(screen.getByRole("menuitem", { name: "Routines" }));
-  assert.deepEqual(calls, ["routines"]);
+  assert.deepEqual(await openMenu(), ["Pin to top", "Pause Bot", "Delete Bot"]);
+  fireEvent.click(screen.getByRole("menuitem", { name: "Pause Bot" }));
+  assert.deepEqual(calls, ["pause"]);
 });
 
 test("a pinned Bot's menu offers Unpin instead", async () => {
@@ -68,7 +68,7 @@ test("the ••• menu opens from the keyboard, moves with arrows and runs the
   fireEvent.keyDown(items[0]!, { key: "ArrowDown" });
   await waitFor(() => assert.equal(document.activeElement === items[1], true));
   fireEvent.keyDown(items[1]!, { key: "Enter" });
-  assert.deepEqual(calls, ["files"]);
+  assert.deepEqual(calls, ["pause"]);
 });
 
 test("Delete Bot is the last item, set apart from the others by a separator", async () => {
@@ -81,17 +81,9 @@ test("Delete Bot is the last item, set apart from the others by a separator", as
   assert.equal(Boolean(separator.compareDocumentPosition(deleteItem) & Node.DOCUMENT_POSITION_FOLLOWING), true);
 });
 
-test("after Files hands focus to the panel, the next close by Pin to top or Escape gives focus back to •••", async () => {
+test("closing the menu by Pin to top or Escape gives focus back to •••", async () => {
   await renderHeader();
   const more = screen.getByRole("button", { name: "More for SLMob" });
-  more.focus();
-  fireEvent.keyDown(more, { key: "Enter" });
-  fireEvent.click(await screen.findByRole("menuitem", { name: "Files" }));
-  await waitFor(() => assert.equal(screen.queryByRole("menu") === null, true));
-  // Files left focus to the panel (absent here), so the menu did not take it back.
-  await new Promise((resolve) => setTimeout(resolve, 30));
-  assert.equal(document.activeElement === more, false);
-
   more.focus();
   fireEvent.keyDown(more, { key: "Enter" });
   fireEvent.click(await screen.findByRole("menuitem", { name: "Pin to top" }));
@@ -104,20 +96,20 @@ test("after Files hands focus to the panel, the next close by Pin to top or Esca
   await waitFor(() => assert.equal(document.activeElement === more, true));
 });
 
-test("a menu whose action fails to open the panel still gives focus back to •••", async () => {
+test("a menu whose action fails still gives focus back to •••", async () => {
   render(
     <BotChatActions
       bot={bot}
       pinned={false}
       onAction={() => {
-        throw new Error("The panel is not available.");
+        throw new Error("The Bot is not available.");
       }}
     />,
   );
   const more = screen.getByRole("button", { name: "More for SLMob" });
   more.focus();
   fireEvent.keyDown(more, { key: "Enter" });
-  const files = await screen.findByRole("menuitem", { name: "Files" });
+  const pin = await screen.findByRole("menuitem", { name: "Pin to top" });
   const reported: unknown[] = [];
   const onError = (event: ErrorEvent) => {
     reported.push(event.error);
@@ -125,7 +117,7 @@ test("a menu whose action fails to open the panel still gives focus back to •�
   };
   window.addEventListener("error", onError);
   try {
-    fireEvent.click(files);
+    fireEvent.click(pin);
   } catch (error) {
     reported.push(error);
   } finally {
