@@ -175,7 +175,10 @@ function boundedText(value: unknown, maximum: number, allowEmpty: boolean): stri
   if (!allowEmpty && !trimmed) return undefined;
   if (Array.from(trimmed).length > maximum) return undefined;
   // No control characters other than line breaks and tabs.
-  if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/u.test(trimmed)) return undefined;
+  for (const character of trimmed) {
+    const code = character.codePointAt(0)!;
+    if ((code < 0x20 && character !== "\n" && character !== "\r" && character !== "\t") || code === 0x7f) return undefined;
+  }
   return trimmed;
 }
 
