@@ -199,6 +199,7 @@ export class BotCapabilityStore {
     audienceId: string,
     acknowledgement: unknown,
     assertCurrent?: () => void,
+    options?: { keepReviewFirst?: boolean },
   ): Promise<BotNoticeStatus> {
     this.requireInitialized();
     return this.serialized(async () => {
@@ -206,7 +207,7 @@ export class BotCapabilityStore {
       const prior = projectBotNoticeStatus(before, audienceId);
       const next = await this.persistence.update((state) => {
         assertCurrent?.();
-        return this.editor(state).acknowledgeNotice(audienceId, acknowledgement);
+        return this.editor(state).acknowledgeNotice(audienceId, acknowledgement, options);
       });
       if (
         !prior.requiresAcknowledgement &&

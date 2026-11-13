@@ -107,15 +107,13 @@ export function OnboardingBotsStep({
  */
 export async function acceptFirstBotAccess(botId: string, access: FirstBotAccess): Promise<void> {
   if (access !== "full") return;
-  const { notice } = await botsApi.getCapabilityCatalog();
-  if (notice.requiresAcknowledgement || notice.acceptedDecision !== "continue_full") {
-    // A choice to review first made since this step showed still stands.
-    if (!notice.requiresAcknowledgement && notice.acceptedDecision === "customize_first") return;
-    await botsApi.acknowledgeAccessNotice({
-      version: BOT_FULL_ACCESS_NOTICE_VERSION,
-      decision: "continue_full",
-      confirmedForeground: true,
-    });
-  }
+  // Main checks for a review-first choice and accepts in one step, so one made
+  // since this step showed still stands.
+  const notice = await botsApi.acceptFirstBotAccess({
+    version: BOT_FULL_ACCESS_NOTICE_VERSION,
+    decision: "continue_full",
+    confirmedForeground: true,
+  });
+  if (notice.requiresAcknowledgement || notice.acceptedDecision !== "continue_full") return;
   await botsApi.introduce(botId);
 }

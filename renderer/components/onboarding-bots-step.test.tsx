@@ -58,8 +58,9 @@ function mountOnboarding({
   };
   const calls: BotTestIpcCall[] = installBotTestIpc({
     "bots:getCapabilityCatalog": catalog,
-    "bots:acknowledgeAccessNotice": (acknowledgement: unknown) => {
-      decision = (acknowledgement as { decision: "continue_full" | "customize_first" }).decision;
+    // Like main: one step that keeps a review-first choice.
+    "bots:acceptFirstBotAccess": () => {
+      if (decision !== "customize_first") decision = "continue_full";
       return catalog().notice;
     },
     "bots:introduce": () => true,
@@ -81,6 +82,7 @@ function mountOnboarding({
     },
     ...overrides,
   });
+  const chooseReviewFirstElsewhere = () => { decision = "customize_first"; };
   render(
     <QueryClientProvider client={createBotTestQueryClient()}>
       <AppCapabilitiesProvider
@@ -90,7 +92,7 @@ function mountOnboarding({
       </AppCapabilitiesProvider>
     </QueryClientProvider>,
   );
-  return calls;
+  return Object.assign(calls, { chooseReviewFirstElsewhere });
 }
 
 const tourHeading = "Finish setup";
@@ -116,15 +118,15 @@ test("finishing onboarding opens the first Bot's chat, where it asks what it sho
   assert.deepEqual(opened, [], "the chat waits until onboarding is done");
   await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
   const channels = () => calls.map((call) => call.channel);
-  assert.equal(channels().includes("bots:acknowledgeAccessNotice"), false, "showing the step accepts nothing");
+  assert.equal(channels().includes("bots:acceptFirstBotAccess"), false, "showing the step accepts nothing");
   assert.equal(channels().includes("bots:introduce"), false);
 
   fireEvent.click(screen.getByRole("button", { name: /Start using Aiden/u }));
   await waitFor(() => assert.deepEqual(opened, ["bot-chief"]));
   await waitFor(() => assert.ok(channels().includes("bots:introduce")));
-  const acknowledgement = calls.find((call) => call.channel === "bots:acknowledgeAccessNotice");
+  const acknowledgement = calls.find((call) => call.channel === "bots:acceptFirstBotAccess");
   assert.equal((acknowledgement?.args[0] as { decision?: string } | undefined)?.decision, "continue_full");
-  assert.ok(channels().indexOf("bots:acknowledgeAccessNotice") < channels().indexOf("bots:introduce"), "it greets only once Full access is accepted");
+  assert.ok(channels().indexOf("bots:acceptFirstBotAccess") < channels().indexOf("bots:introduce"), "it greets only once Full access is accepted");
 });
 
 test("a person who chose to review Bot access first keeps that choice through onboarding", async () => {
@@ -135,7 +137,20 @@ test("a person who chose to review Bot access first keeps that choice through on
   fireEvent.click(screen.getByRole("button", { name: /Start using Aiden/u }));
   await waitFor(() => assert.deepEqual(opened, ["bot-chief"]));
   await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
-  assert.equal(calls.some((call) => call.channel === "bots:acknowledgeAccessNotice"), false);
+  assert.equal(calls.some((call) => call.channel === "bots:acceptFirstBotAccess"), false);
+  assert.equal(calls.some((call) => call.channel === "bots:introduce"), false);
+});
+
+test("a review-first choice made elsewhere after the step showed stands, and the Bot doesn't greet", async () => {
+  const opened: string[] = [];
+  const calls = mountOnboarding({ bots: [], onOpenBotChat: (botId) => opened.push(botId) });
+  await screen.findByText("Chief is ready");
+  screen.getByText(/Chief gets Full access/u);
+  calls.chooseReviewFirstElsewhere();
+  fireEvent.click(screen.getByRole("button", { name: /Start using Aiden/u }));
+  await waitFor(() => assert.deepEqual(opened, ["bot-chief"]));
+  await waitFor(() => assert.ok(calls.some((call) => call.channel === "bots:acceptFirstBotAccess")));
+  await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
   assert.equal(calls.some((call) => call.channel === "bots:introduce"), false);
 });
 

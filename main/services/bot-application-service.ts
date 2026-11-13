@@ -2101,12 +2101,14 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
       audienceId: string,
       acknowledgement: BotNoticeAcknowledgement,
       assertCurrent?: () => void,
+      options?: { keepReviewFirst?: boolean },
     ) {
       await ensureOperational();
       return deps.capabilityStore.acknowledgeNotice(
         audienceId,
         acknowledgement,
         assertCurrent,
+        options,
       );
     },
 

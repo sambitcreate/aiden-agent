@@ -1877,6 +1877,9 @@ export const botsApi = {
   getAccessNotice: () => invoke<BotNoticeStatus>("bots:getAccessNotice"),
   acknowledgeAccessNotice: (acknowledgement: BotNoticeAcknowledgement) =>
     invoke<BotNoticeStatus>("bots:acknowledgeAccessNotice", acknowledgement),
+  /** Accepts Full access unless the person chose to review it first, in one step in main. */
+  acceptFirstBotAccess: (acknowledgement: BotNoticeAcknowledgement) =>
+    invoke<BotNoticeStatus>("bots:acceptFirstBotAccess", acknowledgement),
   getTelegramAccessNotice: (profile: string) =>
     invoke<BotNoticeStatus>("bots:getTelegramAccessNotice", profile),
   acknowledgeTelegramAccessNotice: (profile: string, acknowledgement: BotNoticeAcknowledgement) =>

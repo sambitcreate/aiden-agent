@@ -1606,11 +1606,19 @@ export class BotCapabilityStateEditor {
     return result;
   }
 
-  acknowledgeNotice(audienceId: string, value: unknown): BotNoticeStatus {
+  /**
+   * `keepReviewFirst`: an existing choice to review access first stands, and
+   * the status comes back unchanged. The check and the write are one step, so
+   * a review-first choice made just before can't be overwritten.
+   */
+  acknowledgeNotice(audienceId: string, value: unknown, options: { keepReviewFirst?: boolean } = {}): BotNoticeStatus {
     const safeAudienceId = assertNoticeAudience(audienceId);
     const acknowledgement: BotNoticeAcknowledgement = parseBotNoticeAcknowledgement(value);
     const existing = this.state.notices.find((entry) => entry.audienceId === safeAudienceId);
     if (existing) {
+      if (options.keepReviewFirst && existing.decision === "customize_first") {
+        return projectBotNoticeStatus(this.state, safeAudienceId);
+      }
       if (existing.decision !== acknowledgement.decision) {
         if (
           existing.decision !== "customize_first" ||
