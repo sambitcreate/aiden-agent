@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { getSupportedThinkingLevels, type Api, type Model } from "@earendil-works/pi-ai";
+import { clampThinkingLevel, getSupportedThinkingLevels, type Api, type Model } from "@earendil-works/pi-ai";
 import { BOT_ROUTINE_THINKING_LEVELS, parseBotRoutineModelId, parseBotRoutineModelSave, parseBotRoutineModelSettings, type BotRoutineModelCatalog, type BotRoutineModelChoice, type BotRoutineModelResult, type BotRoutineModelRun, type BotRoutineModelSave, type BotRoutineModelSettings, type BotRoutineThinkingLevel } from "../../renderer/shared/bot-routine-models.js";
 import { assertBoundBotProviderModelCurrent, bindBotProviderModel, parseBoundBotProviderModel, type BoundBotProviderModel } from "./bot-capability-bindings.js";
 import type { BotCapabilityCatalogSnapshot } from "./bot-capability-catalog-core.js";
@@ -154,6 +154,18 @@ export function createBotRoutineModelService(options: BotRoutineModelServiceOpti
     if (!executableLevels(model).includes(choice.thinkingLevel)) throw new BotRoutineModelSelectionError("This model does not support the selected thinking level.");
     return { binding, thinkingLevel: choice.thinkingLevel };
   }
+  /**
+   * The Bot's own model has no thinking setting of its own, so an inherited
+   * choice takes the nearest level that model supports rather than one it
+   * would refuse. Unreadable metadata leaves the choice for the run to refuse.
+   */
+  async function inheritedChoice(botId: string): Promise<BotExecutionModelChoice> {
+    const choice = await options.defaultChoice(botId);
+    let model: Model<Api>;
+    try { model = await options.metadata(choice.binding.sourceProviderId, choice.binding.sourceModelId); } catch { return choice; }
+    const thinkingLevel = clampThinkingLevel(model, choice.thinkingLevel);
+    return thinkingLevel === choice.thinkingLevel || !executableLevels(model).includes(thinkingLevel) ? choice : { ...choice, thinkingLevel };
+  }
   async function read(botId: string, routineId: string): Promise<BotRoutineModelSettings> { return serial("store", async () => publicConfig(currentConfig(await load(), botId, routineId, await anchors(botId, routineId)))); }
   async function catalog(botId: string, routineId: string): Promise<BotRoutineModelCatalog> {
     await anchors(botId, routineId); const state = await load(), config = currentConfig(state, botId, routineId, await anchors(botId, routineId));
@@ -203,7 +215,7 @@ export function createBotRoutineModelService(options: BotRoutineModelServiceOpti
   async function prepareRoutineClaim(botId: string, routineId: string): Promise<string> {
     return serial("store", async () => {
       const state = await load(), identity = await anchors(botId, routineId), config = currentConfig(state, botId, routineId, identity);
-      const primary = config.selection.mode === "selected" ? config.primary! : await options.defaultChoice(botId);
+      const primary = config.selection.mode === "selected" ? config.primary! : await inheritedChoice(botId);
       const vision = await options.companionChoice?.(botId), fallback = config.fallback;
       return preparedChoiceHash(identity, primary, vision, fallback);
     });
@@ -228,7 +240,7 @@ export function createBotRoutineModelService(options: BotRoutineModelServiceOpti
       const config = input.routineOrigin ? currentConfig(state, botId, input.routineOrigin.routineId, identity) : undefined;
       const original = input.retryOf ? state.claims.find((row) => row.botId === botId && row.requestId === input.retryOf && row.routineId === input.routineOrigin?.routineId && row.botIncarnation === identity.botIncarnation && row.routineIncarnation === identity.routineIncarnation) : undefined;
       if (input.retryOf && (!original || input.routineOrigin?.kind !== "retry")) throw new Error("The retry has no original accepted model binding.");
-      const primary = resumed ? resumed.actual === "fallback" ? resumed.fallback! : resumed.primary : original?.primary ?? (config?.selection.mode === "selected" ? config.primary! : await options.defaultChoice(botId));
+      const primary = resumed ? resumed.actual === "fallback" ? resumed.fallback! : resumed.primary : original?.primary ?? (config?.selection.mode === "selected" ? config.primary! : await inheritedChoice(botId));
       const vision = resumed ? resumed.vision : original ? original.vision : await options.companionChoice?.(botId);
       const fallback = resumed ? undefined : original ? original.fallback : config?.fallback;
       const deliveryQuiet = resumed ? resumed.deliveryQuiet : original ? original.deliveryQuiet : input.routineOrigin && await options.deliveryQuiet?.(botId,input.routineOrigin.routineId) ? true : undefined;
@@ -367,6 +379,22 @@ export function createBotRoutineModelService(options: BotRoutineModelServiceOpti
     async approveCost(raw: BotCostApprovalFacts): Promise<string> { return serial("store", async () => { const facts = parseCostApprovalFacts(raw), state = await load(), botIncarnation = await approvalOwners(state, facts), existing = state.costApprovals.find((row) => row.botIncarnation === botIncarnation && digest(row.facts) === digest(facts)); if (existing) return existing.id; if (state.costApprovals.length >= 4096) throw new Error("Protected cost approvals are full. No prior approval was discarded."); const id = randomUUID(); state.costApprovals.push({ id, issuedAt: now(), botIncarnation, facts }); await saveState(state, async () => { if (await approvalOwners(state, facts) !== botIncarnation) throw new Error("The cost approval owner changed."); }); return id; }); },
     async verifyCostApproval(id: string, raw: BotCostApprovalFacts): Promise<boolean> { const facts = parseCostApprovalFacts(raw), state = await load(), approval = state.costApprovals.find((row) => row.id === id && digest(row.facts) === digest(facts)); if (!approval) return false; return approval.botIncarnation === await approvalOwners(state, facts); },
     async recordSubmission(botId: string, id: string, submissionId: string) { await updateClaim(botId, id, (claim) => { if (claim.submissionId && claim.submissionId !== submissionId) throw new Error("Execution submission mismatch."); claim.submissionId = submissionId; }); },
+    /**
+     * A person's or Bot's message refused before it was submitted holds no work
+     * yet, so its claim is dropped and a retry of the same request binds the
+     * Bot's current model. It is found by request, so a claim whose save
+     * succeeded but whose reply was lost is dropped too. Routine, peer and
+     * started claims are never dropped.
+     */
+    async releaseUnsubmittedClaim(botId: string, requestId: string) {
+      await serial("store", async () => {
+        const state = await load(), identity = await anchors(botId);
+        const index = state.claims.findIndex((row) => row.botId === botId && row.requestId === requestId && row.botIncarnation === identity.botIncarnation), claim = state.claims[index];
+        if (!claim || claim.startedAt !== undefined || claim.submissionId !== undefined || claim.routineId !== undefined || claim.peer || claim.peerRoot || claim.root.botId !== botId || claim.root.requestId !== requestId) return;
+        if (state.costApprovals.some((row) => row.facts.ownerClaimId === claim.id || row.facts.sourceClaimId === claim.id) || state.responseEvidence.some((row) => row.facts.claimId === claim.id)) return;
+        state.claims.splice(index, 1); await saveState(state, async () => {});
+      });
+    },
     async started(botId: string, id: string) { await updateClaim(botId, id, (claim) => { claim.startedAt ??= now(); }); },
     async selectFallback(botId: string, id: string, reason: "model_unavailable" | "credentials_unavailable") { await updateClaim(botId, id, (claim) => { if (claim.startedAt || !claim.fallback) throw new Error("Fallback is not available for dispatched work."); claim.actual = "fallback"; claim.fallbackReason = reason; }); },
     async readRuns(botId: string, routineId: string): Promise<BotRoutineModelRun[]> {

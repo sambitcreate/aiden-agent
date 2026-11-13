@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { botFixture } from "../../../renderer/main/bots/test-fixtures.js";
+import { SpendingDispatchError } from "../spending-dispatch-ledger.js";
 import { projectBotMessageRoster } from "./roster.js";
 
 test("roster reports local model, budget and pause availability independently for each Bot", async () => {
@@ -28,4 +29,27 @@ test("roster reports local model, budget and pause availability independently fo
     ],
   );
   assert.deepEqual(reports, ["unreadable"]);
+});
+
+test("a Bot whose last request has an unknown cost stays reachable and is not reported as unreadable", async () => {
+  const reports: unknown[] = [];
+  const rows = await projectBotMessageRoster([botFixture({ id: "unsure", name: "Unsure" }), botFixture({ id: "broken", name: "Broken" })], {
+    paused: async () => false,
+    hasModel: async () => true,
+    spendingRefusal: async (id) => {
+      if (id === "unsure") throw new SpendingDispatchError("uncertain", "A previous request may have been billed.");
+      throw new Error("spending file damaged");
+    },
+    report: (id) => {
+      reports.push(id);
+    },
+  });
+  assert.deepEqual(
+    rows.map((row) => [row.id, row.unavailable]),
+    [
+      ["unsure", undefined],
+      ["broken", "unavailable"],
+    ],
+  );
+  assert.deepEqual(reports, ["broken"]);
 });

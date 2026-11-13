@@ -161,16 +161,17 @@ export interface MemoryReviewResult {
 
 /**
  * One add-only review: up to `maxRounds` requests, each answered tool call
- * applied through the memory service. Throws when the model fails or the run
- * times out or is aborted, and `BotMemoryAuthorityLostError` when its
- * authority is revoked or no longer revalidates.
+ * applied through the memory service. Once `timeoutMs` has passed it starts no
+ * further request and returns what it saved. Throws when the model fails or
+ * the run is aborted, and `BotMemoryAuthorityLostError` when its authority is
+ * revoked or no longer revalidates.
  */
 export async function runMemoryReview(run: MemoryReviewRun): Promise<MemoryReviewResult> {
-  const signal = AbortSignal.any([
-    AbortSignal.timeout(run.timeoutMs),
-    run.authority.signal,
-    ...(run.signal ? [run.signal] : []),
-  ]);
+  // The time limit never cuts off a request already sent: an abandoned request
+  // may still be billed, and its unknown cost blocks the Bot's next request
+  // until the person reviews it.
+  const deadline = AbortSignal.timeout(run.timeoutMs);
+  const signal = AbortSignal.any([run.authority.signal, ...(run.signal ? [run.signal] : [])]);
   let added = 0;
   const targets = new Set<BotMemoryTarget>();
   const lost = () => new BotMemoryAuthorityLostError(added, [...targets], run.authority.signal.reason);
@@ -208,7 +209,10 @@ export async function runMemoryReview(run: MemoryReviewRun): Promise<MemoryRevie
     },
   ];
   for (let round = 0; round < run.maxRounds; round += 1) {
+    if (deadline.aborted) break;
     await fence();
+    // The access check can itself take long enough to cross the limit.
+    if (deadline.aborted) break;
     let answer: AssistantMessage;
     try {
       answer = await run.model.models.completeSimple(
@@ -634,7 +638,7 @@ export function createBotMemoryReview(deps: BotMemoryReviewDeps): BotMemoryRevie
           }
           return { kind: "revoked", added: error.added, targets: error.targets };
         }
-        // A model error or the timeout still writes the marker, so the next try waits another interval.
+        // A model error still writes the marker, so the next try waits another interval.
         deps.onError?.(botId, error);
         if (!(await writeMarker(botId, controller, { source: "review", added: 0, targets: [], failed: true }))) {
           return { kind: "aborted" };
