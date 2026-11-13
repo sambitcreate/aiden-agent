@@ -2,15 +2,15 @@
 
 A Bot's rules say what it stops for: steps it asks about first, and steps it
 hands back to the person to do themselves. Every rule now lives on one page,
-**Settings → Bots & Approvals → Approvals**, under the mode (see
-[The rules page](#the-rules-page)); there is no Rules screen on a Bot's Profile
-any more. Main checks the rules at every tool call they cover. A Bot's
+**Settings → Approvals**, under the mode (see
+[The rules page](#the-rules-page)); there is no Rules screen in a Bot's
+settings any more. Main checks the rules at every tool call they cover. A Bot's
 built-in rules only make it stricter: the strictest of the Bot's own approval
 and every matching built-in or worded rule wins, so no worded rule can let
 through a step the Bot would otherwise ask about. You can approve a bounded
 plan for the current task, as described below.
-Settings → Bots & Approvals also has a routines-only go-ahead setting
-(see [Routines and the approval mode](#routines-and-the-approval-mode-settings--bots--approvals--approvals)).
+Settings → Approvals → Advanced keeps an older routines-only go-ahead setting
+for anyone who had it on (see [Routines and the approval mode](#routines-and-the-approval-mode-settings--approvals)).
 
 The design is in `docs/plans/bot-handoffs-rules-computers-plan.md` §6;
 implementation notes are in `.memory/bot-rules.md`.
@@ -45,7 +45,8 @@ implementation notes are in `.memory/bot-rules.md`.
   would hand off doesn't run, nor does a step a rule would ask about that has
   no approval of its own. The Bot is told why. A step with an approval of its
   own (a connection tool that changes something) waits under Needs you until
-  the person answers. Settings → Bots & Approvals can let routines go ahead instead.
+  the person answers. Never ask, or the older routines go-ahead under Settings →
+  Approvals → Advanced for someone who had it on, lets routines go ahead instead.
 
 ## Approve a plan once
 
@@ -106,10 +107,9 @@ rest of its calls. The CLI host does not offer plan tools or coverage, and a
 desktop viewing another desktop's Bot does not show plan cards. Such a viewer
 can still show Waiting for you; answer on the host desktop or a supported phone.
 
-## Routines and the approval mode (Settings → Bots & Approvals → Approvals)
+## Routines and the approval mode (Settings → Approvals)
 
-Every Bot follows the one approval mode in Settings → Bots & Approvals →
-Approvals: **Auto**, **Ask** or **Never ask** (see
+Every Bot follows the one approval mode in Settings → Approvals: **Auto**, **Ask** or **Never ask** (see
 [docs/plans/bot-ux-simplification.md](plans/bot-ux-simplification.md) §3.1).
 There is no per-Bot mode.
 
@@ -180,7 +180,7 @@ runs in Ask and keeps asking for every MCP call.
 
 ## The rules page
 
-Settings → Bots & Approvals → Approvals lists every rule under the mode, in
+Settings → Approvals lists every rule under the mode, in
 three groups: **Always allow**, **Always ask** and **Blocked**. Each row has an
 Allow / Ask / Block control and Remove; **Add rule** in a group opens a
 searchable picker of Aiden's tools, connected apps and their tools, a website,

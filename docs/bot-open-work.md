@@ -1,6 +1,6 @@
 # Open work
 
-Open a Bot’s **Profile → Open work** on desktop, iPhone or Android. The desktop Bot panel’s Activity tab also links to it and shows its active count.
+On the desktop, open **Open work** from the Bot's **Advanced** tab (click the Bot's name in its chat); the Activity tab also links to it and shows its active count. On iPhone or Android, open the Bot's **Profile → Open work**.
 
 When Tasks is enabled in the Bot’s access, it can record responsibilities it accepts from your current request or an accepted routine, including a manual Run now. The host binds each record to the actual input. Future ideas, hidden introductions and self-generated wake-ups cannot create owner-authorized work this way. Recording work uses a tool during the existing turn; there is no extra extraction model or background scan. Turning Tasks off also removes the work summary from the Bot’s context. You can still manage its records yourself.
 

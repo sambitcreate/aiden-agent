@@ -12,7 +12,7 @@ Each task can have one extra temporary folder at a time. Approving another folde
 
 A temporary grant from an access card is unavailable while an unattended routine, Telegram or Bot input joins that run. A person's joined steer remains supported. A temporary validation-read failure stops that file call, but does not discard a still-live task approval. Retrying must pass the current owner, permissions and deadline checks again.
 
-A request for **your whole Mac** offers only Allow once and Deny. It is never saved as an Always grant. File access turned off is not a route to requesting more access; change that choice yourself in the Bot's Advanced settings.
+A request for **your whole Mac** offers only Allow once and Deny. It is never saved as an Always grant. File access turned off is not a route to requesting more access; change that choice yourself under **Tools** in the Bot's **Advanced** tab.
 
 Folder cards that offer Always can show how often you allowed that exact
 folder in the last two weeks. After three approvals without a recent denial,

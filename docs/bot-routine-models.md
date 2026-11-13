@@ -1,6 +1,6 @@
 # Models for Bot routines
 
-Choose **Model** beside a scheduled routine, event routine or connected-app watch on the desktop. On iPhone and Android, open the Bot’s **Profile → Routine models** to choose from all its routines. The owning desktop supplies the models and supported thinking levels. Opening this chooser does not refresh a provider catalog, connect an app or sign in.
+Choose **Model** beside a scheduled routine, event routine or connected-app watch in the desktop Bot panel's **Routines** tab (the **Routine models** row under Advanced → Model opens it). On iPhone and Android, open the Bot’s **Profile → Routine models** to choose from all its routines. The owning desktop supplies the models and supported thinking levels. Opening this chooser does not refresh a provider catalog, connect an app or sign in.
 
 **Bot default** uses the Bot’s model and thinking level when a fire is accepted. **Choose a model** saves an exact model and thinking level for this routine. Saving grants that routine permission to use its chosen model; it does not change the Bot’s default or another routine. In Custom access, this is a separate routine-specific grant. Choose an optional fallback explicitly if you want one. Unsupported thinking levels cannot be saved.
 

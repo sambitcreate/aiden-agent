@@ -60,7 +60,7 @@ Bot conversation summaries and helpers run under the originating input’s Bot a
 | Limit | Where it is set | What it covers |
 | --- | --- | --- |
 | **Each chat** | Settings → Context & Limits | The whole workspace chat, with the helpers it starts. |
-| **Each Bot, per month** | Settings (the default) and the Bot's Profile → Spending → Monthly limit | Everything the Bot spends in its month, routines included. A Bot can use the default, its own amount, or no limit. |
+| **Each Bot, per month** | Settings (the default) and the Bot's Advanced tab → Spending → Monthly limit | Everything the Bot spends in its month, routines included. A Bot can use the default, its own amount, or no limit. |
 | **Each routine run** | Settings → Context & Limits | One run of a routine. It also counts toward its Bot's month. |
 
 The limits appear only once a provider that bills by the request is connected: a hosted provider with a stored API key, not a sign-in, a model on this Mac or an agent harness. Until then Settings → Context & Limits says "Nothing here costs money yet", and a Bot's Profile has no Spending group. A limit already set keeps its controls in reach, and so does a provider list that can't be read. A Bot's own amount is an override of the Mac's limit for each Bot.
@@ -100,4 +100,4 @@ Aiden On The Go for iPhone and Android shows the same 80% line and reached notic
 - `main/services/provider-failure.ts`: the existing provider-failure classifier the wait builds on.
 - `main/services/spending-core.ts`, `spending-service.ts`, `spending-main.ts`: the ledger, the meter wrapped around each request, and its Electron binding. `aiden-remote-spending.ts` is the phone projection.
 - `renderer/shared/usage-limits.ts` and `renderer/shared/spending.ts`: settings, parsing and the words the app shows.
-- `renderer/components/settings/limits-settings.tsx`: Settings → Context & Limits. `renderer/components/spending/` and `renderer/main/bots/bot-spending-section.tsx`: the notices and the Bot Profile row.
+- `renderer/components/settings/limits-settings.tsx`: Settings → Context & Limits. `renderer/components/spending/` and `renderer/main/bots/bot-spending-section.tsx`: the notices and the Bot's Advanced-tab row.
