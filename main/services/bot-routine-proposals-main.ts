@@ -6,6 +6,7 @@ import { app } from "../platform.js";
 import { createBotRoutineProposalService } from "./bot-routine-proposals.js";
 import { systemTimezone } from "./schedule-store.js";
 import { botRoutineService } from "./scheduled-bot-routines-main.js";
+import { botSuggestionBudget } from "./bot-runtime/bot-suggestion-budget-main.js";
 
 const profileDir = () => app.getPath("userData");
 const eventRoutineServices = () => import("./bot-routine-events/sources-main.js");
@@ -27,6 +28,7 @@ export const botRoutineProposals = createBotRoutineProposalService({
     },
   },
   defaultTimezone: systemTimezone,
+  suggestionBudget: botSuggestionBudget,
   // Appended without a submission: a write submission starts the Bot's
   // scheduler, which would run a turn left interrupted or paused.
   async appendEntry(botId, kind, data) {

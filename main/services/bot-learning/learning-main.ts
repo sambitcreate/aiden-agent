@@ -24,6 +24,7 @@ import { botBehaviorFingerprint } from "./fingerprint.js";
 import { createBotLearningHistory } from "./history.js";
 import { restoreSkillFile } from "./restore-skill.js";
 import { createRoutineReflection } from "./routine-reflection.js";
+import { botSuggestionBudget } from "../bot-runtime/bot-suggestion-budget-main.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
@@ -189,6 +190,7 @@ const reflection = createRoutineReflection({
   notes: async (botId, taskId) => (await import("../scheduled-bot-routines-main.js")).botRoutineNotes.render(botId, taskId),
   lessons: botLessons,
   budget: botLearningBudget,
+  suggestionBudget: botSuggestionBudget,
   admit: async (botId) => (await import("../bot-runtime/bot-session-main.js")).admitMemoryWork(botId),
   appendEntry,
   state: reflectionState,

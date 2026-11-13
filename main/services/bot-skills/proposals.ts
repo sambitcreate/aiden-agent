@@ -4,6 +4,7 @@
 // Records live in `<profile>/bots/<dir>/skill-proposals.json`, which Bot file
 // tools cannot write.
 
+import { BOT_SUGGESTION_LIMIT_MESSAGE as SUGGESTION_LIMIT, type BotSuggestionBudget } from "../bot-runtime/bot-suggestion-budget.js";
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -48,6 +49,8 @@ export interface BotSkillProposalDependencies {
   invalidate(): void;
   /** Records an added skill in the learning history (before/after file text). */
   recordAdded?(botId: string, change: { name: string; before: string | null; after: string }): Promise<void>;
+  /** The shared cap on a Bot's own suggestions (routines, skills, lessons). */
+  suggestionBudget?: BotSuggestionBudget;
   now?(): number;
   newId?(): string;
 }
@@ -92,7 +95,7 @@ export function createBotSkillProposalService(deps: BotSkillProposalDependencies
       botId: string,
       input: BotSkillDraft & { reason?: string },
       append: Append = (kind, data) => deps.appendEntry(botId, kind, data),
-    ): Promise<{ ok: true; proposalId: string } | { ok: false; code: "invalid" | "too_many_pending"; errors: string[] }> {
+    ): Promise<{ ok: true; proposalId: string } | { ok: false; code: "invalid" | "too_many_pending" | "suggestion_limit"; errors: string[] }> {
       return serial(botId, async () => {
         const records = await load(botId);
         if (records.filter((record) => record.status === "pending").length >= BOT_SKILL_PROPOSAL_LIMITS.pendingPerBot) {
@@ -120,7 +123,6 @@ export function createBotSkillProposalService(deps: BotSkillProposalDependencies
           status: "pending",
           createdAt: now(),
         };
-        await save(botId, [...records, record]);
         const card: BotSkillProposalEntryData = {
           proposalId: record.proposalId,
           name: record.name,
@@ -130,7 +132,15 @@ export function createBotSkillProposalService(deps: BotSkillProposalDependencies
           preview: checked.preview,
           update: checked.update,
         };
-        await append(BOT_SKILL_PROPOSAL_ENTRY_KIND, { ...card });
+        const show = async () => {
+          await save(botId, [...records, record]);
+          await append(BOT_SKILL_PROPOSAL_ENTRY_KIND, { ...card });
+          return true;
+        };
+        // A skill the Bot offers is one of its own suggestions; a skill found in its folder is not.
+        if (deps.suggestionBudget ? !(await deps.suggestionBudget.offer(botId, "skill", show)) : !(await show())) {
+          return { ok: false, code: "suggestion_limit", errors: [SUGGESTION_LIMIT] };
+        }
         return { ok: true, proposalId: record.proposalId };
       });
     },

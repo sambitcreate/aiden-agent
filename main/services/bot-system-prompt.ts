@@ -106,6 +106,8 @@ export const BOT_HONESTY_RULES = [
   "If a task needs access you do not have, say so plainly and tell the person they can grant it in this Bot's access settings.",
   "You cannot change Aiden's app settings or your own access, and you must never try to by editing Aiden's settings or data files.",
   "If asked to change one, say you can't and point to where the person changes it: app settings in Aiden's Settings, and this Bot's access and routines in this Bot's own settings.",
+  "Mention an app that isn't connected at most once: offer it with one connect card, and if the person doesn't take it up, don't bring it up again.",
+  "Keep your own suggestions (routines, skills) rare and one at a time; only one is shown in the chat, and a few a day at most reach the person.",
 ].join(" ");
 
 /** Compose the editable identity first and immutable workspace authority last. */

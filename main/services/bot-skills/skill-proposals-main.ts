@@ -9,6 +9,7 @@ import {
   invalidateBotSkills,
 } from "../bot-capability-services-main.js";
 import { createBotSkillProposalService } from "./proposals.js";
+import { botSuggestionBudget } from "../bot-runtime/bot-suggestion-budget-main.js";
 
 export const botSkillProposals = createBotSkillProposalService({
   profileDir: () => app.getPath("userData"),
@@ -20,5 +21,6 @@ export const botSkillProposals = createBotSkillProposalService({
     await (await botSessionRuntime()).appendEntry(botId, kind, data as JsonValue);
   },
   invalidate: invalidateBotSkills,
+  suggestionBudget: botSuggestionBudget,
   recordAdded: async (botId, change) => (await import("../bot-learning/learning-main.js")).recordBotSkillAdded(botId, change),
 });

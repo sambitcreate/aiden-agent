@@ -633,6 +633,7 @@
         "main/services/bot-skills/skills.test.ts",
         "main/services/bot-learning/learning.test.ts",
         "main/services/bot-runtime/bot-run-watchdog.test.ts",
+        "main/services/bot-runtime/bot-suggestion-budget.test.ts",
         "main/services/bot-runtime/bot-claim-check.test.ts",
         "main/services/bot-health/checks.test.ts",
         "main/services/bot-health/preflight.test.ts",
