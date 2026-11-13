@@ -2078,6 +2078,41 @@ test("only a creator that discloses Web Search grants it to a new Full Access Bo
   assert.deepEqual(web, [undefined, true, false]);
 });
 
+test("a paired device moving a Full Bot to Custom never adds Web search that Full did not grant", async () => {
+  for (const fullWeb of [false, true]) {
+    const app = fixture({ bots: [bot("bot:web")] });
+    await app.service.initialize();
+    // The catalog offers Web search (kind "web") beside another ordinary capability.
+    const other = (id: string, kind: "web" | "browser") => ({
+      option: { id, label: id === "other:web" ? "Web search" : "Browser", available: true },
+      kind,
+      capabilityFingerprint: "f".repeat(64),
+      exactFingerprint: "e".repeat(64),
+    });
+    const snapshot = app.deps.catalog.snapshot.bind(app.deps.catalog);
+    app.deps.catalog.snapshot = async (...args: Parameters<typeof snapshot>) => {
+      const value = await snapshot(...args);
+      value.resources.otherCapabilities = [other("other:browser", "browser"), other("other:web", "web")];
+      value.catalog.otherCapabilities = value.resources.otherCapabilities.map(({ option }) => option);
+      return value;
+    };
+    app.deps.capabilityStore.getBotWebSearchEnabled = async () => fullWeb;
+    const custom = { providerId: "provider:opaque", modelId: "model:opaque", fileScopeIds: ["scope:home"], shellEnabled: true, connectionIds: [], skillIds: [], otherCapabilityIds: ["other:browser", "other:web"] };
+    const update = (noWiderThanFull?: true) => app.service.updateBotAccess({
+      audienceId: "device:phone",
+      botId: "bot:web",
+      expectedRevision: app.policies.get("bot:web")!.revision,
+      access: { accessMode: "custom", catalogRevision: CATALOG_REVISION, custom },
+      ...(noWiderThanFull ? { noWiderThanFull } : {}),
+    });
+    const saved = await update(true);
+    assert.deepEqual(saved.custom?.otherCapabilityIds, fullWeb ? ["other:browser", "other:web"] : ["other:browser"], `Full with web ${fullWeb ? "on" : "off"}`);
+    // Already Custom: a device's later change is not a Full conversion, so its explicit choice stands.
+    const again = await update(true);
+    assert.deepEqual(again.custom?.otherCapabilityIds, ["other:browser", "other:web"]);
+  }
+});
+
 test("Bot creation retries its policy after a runtime inventory invalidation", async () => {
   // An MCP OAuth token refresh or provider credential write during the create
   // snapshot fences the first lease; the Bot must still be created once.

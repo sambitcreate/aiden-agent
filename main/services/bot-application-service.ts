@@ -202,6 +202,12 @@ interface UpdateBotAccessInput {
   expectedRevision: string;
   access: BotAccessUpdate;
   refuseDriftedGrants?: boolean | { message: string };
+  /**
+   * A paired device's change (Aiden Remote): moving a Full Bot to Custom never
+   * adds Web search that Full did not grant. The wire carries no capability
+   * kind, so the host drops the web grant itself rather than trust a label.
+   */
+  noWiderThanFull?: true;
 }
 export const BOT_FOLDER_GRANT_DRIFT_MESSAGE = "Some of this Bot's access changed since you last saved it. Review it in the Bot's settings first.";
 
@@ -1261,10 +1267,22 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
           // Audience-safe IDs are revalidated against this exact fresh snapshot.
           // A stale client revision can therefore be rebased without accepting a
           // removed or changed provider, model, connection, skill, or file scope.
-          const access: BotAccessUpdate = withCurrentCatalogRevision(
+          let access: BotAccessUpdate = withCurrentCatalogRevision(
             input.access,
             snapshot.catalog.revision,
           );
+          if (input.noWiderThanFull && access.accessMode === "custom") {
+            const current = await deps.capabilityStore.getBotPolicy(input.botId);
+            if (current.accessMode === "full" && !(await deps.capabilityStore.getBotWebSearchEnabled(input.botId))) {
+              const web = new Set(
+                snapshot.resources.otherCapabilities.filter(({ kind }) => kind === "web").map(({ option }) => option.id),
+              );
+              access = {
+                ...access,
+                custom: { ...access.custom, otherCapabilityIds: access.custom.otherCapabilityIds.filter((id) => !web.has(id)) },
+              };
+            }
+          }
           await guard?.validate();
           if (guard) assertCurrent();
           const savedBinding = await deps.capabilityStore.getBotBinding(input.botId);

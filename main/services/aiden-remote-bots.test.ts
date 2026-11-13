@@ -115,6 +115,7 @@ function fixture(
   let botSequence = bots.length;
   let chatSequence = 0;
   let createCalls = 0;
+  const accessUpdates: Array<{ botId: string; noWiderThanFull?: true }> = [];
   const resolvedSelections: unknown[] = [];
   const notifications: string[] = [];
 
@@ -229,7 +230,9 @@ function fixture(
       botId: string;
       expectedRevision: string;
       access: BotAccessUpdate;
+      noWiderThanFull?: true;
     }) {
+      accessUpdates.push({ botId: input.botId, noWiderThanFull: input.noWiderThanFull });
       if (options.updateBotAccessError !== undefined) {
         throw options.updateBotAccessError;
       }
@@ -280,6 +283,7 @@ function fixture(
 
   return {
     service,
+    accessUpdates,
     createCalls: () => createCalls,
     deletedBots: () => [...deletedBots],
     resolvedSelections,
@@ -694,6 +698,18 @@ test("stale identity and policy revisions return authoritative conflicts", async
       (error as { details?: { currentRevision?: string } }).details?.currentRevision ===
         "policy_revision_1",
   );
+});
+
+test("a paired device's access change asks the Mac never to widen a Full Bot's web access", async () => {
+  // The Mac drops a web grant Full did not give (bot-application-service.test.ts);
+  // every change through the Remote path must ask for that.
+  const app = fixture();
+  await app.service.updateAccess("device_1", "bot_1", "policy_revision_1", {
+    accessMode: "full",
+    catalogRevision: CATALOG_REVISION,
+    confirmedForeground: true,
+  });
+  assert.deepEqual(app.accessUpdates, [{ botId: "bot_1", noWiderThanFull: true }]);
 });
 
 test("stale capability validation maps to a retryable operation conflict", async () => {
