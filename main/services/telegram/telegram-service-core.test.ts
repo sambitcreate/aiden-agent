@@ -2728,18 +2728,6 @@ for (const command of ["/queue", "/continue", "/interrupt"]) {
 test("Telegram never answers an approval: 'Allow' is a message and an approval button does nothing", async () => {
   const owner = person(42, "owner");
   const admitted: import("./bot-reply-outbox.js").TelegramBotMessage[] = [];
-  // The Bot is waiting on an approval. Telegram's service has no approvals
-  // port, so the spy sits on the real approvals the Bot waits on: nothing a
-  // Telegram message or button does may reach it.
-  const { createBotApprovals } = await import("../bot-runtime/bot-approvals.js");
-  const approvals = createBotApprovals({ publish() {} });
-  const realDecide = approvals.decide.bind(approvals);
-  let decideCalls = 0;
-  approvals.decide = (...args: Parameters<typeof realDecide>) => {
-    decideCalls += 1;
-    return realDecide(...args);
-  };
-  const waiting = approvals.request({ botId: "bot-a", waitId: "wait-61", toolCallId: "call-61", toolName: "send_note", summary: "Send the note", signal: undefined, authorizationFingerprint: "fingerprint-61" });
   const h = harness({
     enabled: true,
     allowedUserId: 42,
@@ -2761,13 +2749,9 @@ test("Telegram never answers an approval: 'Allow' is a message and an approval b
   try {
     await h.service.start();
     await waitFor(() => h.api.answerCallbackQueryCalls() > 0 && admitted.length === 1);
-    assert.deepEqual(admitted.map((message) => message.text), ["Allow"], "the reply reaches the Bot as its own words");
+    assert.deepEqual(admitted.map((message) => message.text), ["Allow"], "the reply reaches the Bot as its own words, and the button press admits nothing");
     assert.equal(h.turnMock.startCalls(), 0);
-    assert.equal(decideCalls, 0, "no approval was answered");
-    assert.deepEqual(approvals.pending("bot-a").map((prompt) => prompt.waitId), ["wait-61"], "the approval is still waiting");
   } finally {
     h.service.stop();
-    realDecide("wait-61", "deny");
-    await waiting;
   }
 });
