@@ -37,6 +37,7 @@ import { settingsLocation, type SettingsSection } from "../../lib/settings-secti
 import { isUsable } from "../../lib/model-picker-data";
 import { useProviders, useSettings } from "../../lib/queries";
 import { effectiveApprovalMode, type ApprovalMode } from "../../shared/approval-mode";
+import { ApprovalsContentSettledContext } from "./approval-mode-settings";
 import {
   APPROVAL_RULE_DECISION_LABELS,
   approvalRuleDecisionsFor,
@@ -454,6 +455,13 @@ export function ApprovalRulesSettings() {
       stopControls();
     };
   }, [load]);
+
+  // The first read, rows or error, gave the list its height.
+  const reportSettled = React.useContext(ApprovalsContentSettledContext);
+  const firstReadSettled = rows !== null || error !== null;
+  React.useEffect(() => {
+    if (firstReadSettled) reportSettled?.();
+  }, [firstReadSettled, reportSettled]);
 
   React.useEffect(() => {
     if (adding === null || options !== null) return;

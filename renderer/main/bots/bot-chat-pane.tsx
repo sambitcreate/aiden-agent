@@ -1278,7 +1278,7 @@ export function BotChatPane({ botId }: { botId: string }) {
     return shell(<BotNeedsModel bot={current} onSetUp={openProviders} />);
   }
 
-  const question = snapshot.question;
+  const question = snapshot.question ?? null;
   const plan = snapshot.plan ?? null;
   const pendingPlan = plan?.status === "pending";
   const accessRequest = snapshot.accessRequest ?? null;

@@ -14,7 +14,8 @@ import { createBotTestQueryClient } from "../../main/bots/test-providers";
 import type { AppSettings, Provider, Workspace } from "../../lib/types";
 import { TooltipProvider } from "../ui";
 import { WorkspaceApprovalFields } from "../workspace-settings-dialog";
-import { ApprovalModeSettings } from "./approval-mode-settings";
+import * as React from "react";
+import { ApprovalModeSettings, ApprovalsContentSettledContext } from "./approval-mode-settings";
 import { SettingsAnchorContext } from "./settings-page";
 
 afterEach(cleanup);
@@ -29,7 +30,11 @@ const MODEL: Provider = {
   hasKey: true,
 } as Provider;
 
-function mount(settings: Partial<AppSettings>, providers: Provider[] = [MODEL], options: { failSave?: boolean; anchor?: "bots" } = {}) {
+function mount(
+  settings: Partial<AppSettings>,
+  providers: Provider[] = [MODEL],
+  options: { failSave?: boolean; anchor?: "bots"; children?: React.ReactNode } = {},
+) {
   let current: Partial<AppSettings> = { ...settings };
   const calls = installBotTestIpc({
     "settings:get": () => current,
@@ -44,7 +49,7 @@ function mount(settings: Partial<AppSettings>, providers: Provider[] = [MODEL], 
     <TooltipProvider>
       <QueryClientProvider client={createBotTestQueryClient()}>
         <SettingsAnchorContext.Provider value={options.anchor ? { section: options.anchor, request: 1 } : null}>
-          <ApprovalModeSettings />
+          <ApprovalModeSettings>{options.children}</ApprovalModeSettings>
         </SettingsAnchorContext.Provider>
       </QueryClientProvider>
     </TooltipProvider>,
@@ -155,6 +160,36 @@ test("opening Settings at Bot messaging scrolls its switch into view", async () 
     mount({ approvalMode: "ask" });
     await screen.findByRole("switch", { name: "Bot messaging" });
     assert.equal(scrolled.length, 0);
+  } finally {
+    HTMLElement.prototype.scrollIntoView = original;
+  }
+});
+
+test("a jump to Bot messaging waits for the rules list above it to load before scrolling", async () => {
+  const scrolled: Element[] = [];
+  const original = HTMLElement.prototype.scrollIntoView;
+  HTMLElement.prototype.scrollIntoView = function (this: HTMLElement) {
+    scrolled.push(this);
+  };
+  let finishLoading: () => void = () => undefined;
+  function SlowRules() {
+    const settled = React.useContext(ApprovalsContentSettledContext);
+    const [rows, setRows] = React.useState<string[] | null>(null);
+    finishLoading = () => setRows(["Always allow · web_fetch", "Blocked · send_email"]);
+    React.useEffect(() => {
+      if (rows) settled?.();
+    }, [rows, settled]);
+    return rows ? <ul>{rows.map((row) => <li key={row}>{row}</li>)}</ul> : <p>Loading rules</p>;
+  }
+  try {
+    mount({ approvalMode: "ask" }, [MODEL], { anchor: "bots", children: <SlowRules /> });
+    const toggle = await screen.findByRole("switch", { name: "Bot messaging" });
+    await waitFor(() => assert.equal(toggle.hasAttribute("disabled"), false));
+    assert.equal(scrolled.length, 0, "the row would move once the rules load");
+    React.act(() => finishLoading());
+    await screen.findByText("Blocked · send_email");
+    await waitFor(() => assert.equal(scrolled.length, 1));
+    assert.ok(scrolled[0]!.contains(toggle));
   } finally {
     HTMLElement.prototype.scrollIntoView = original;
   }

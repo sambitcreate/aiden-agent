@@ -34,6 +34,13 @@ import {
   type ApprovalMode,
 } from "../../shared/approval-mode";
 
+/**
+ * The rules page under the mode reports here once its first read settled, so a
+ * search that lands on Bot messaging scrolls after the rows above it have their
+ * height, not before (when they would push the row back out of view).
+ */
+export const ApprovalsContentSettledContext = React.createContext<(() => void) | null>(null);
+
 const CHAT_MODEL = "chat";
 const modelValue = (providerId: string, model: string) => `${providerId}::${model}`;
 
@@ -83,10 +90,15 @@ export function ApprovalModeSettings({ children }: { /** The rules page, under t
   const anchor = React.useContext(SettingsAnchorContext);
   const scrollRequest = anchor?.section === "bots" ? anchor.request : null;
   const messagingRow = React.useRef<HTMLDivElement>(null);
+  const [childrenSettled, setChildrenSettled] = React.useState(children === undefined);
+  const settleChildren = React.useCallback(() => setChildrenSettled(true), []);
+  // Everything above the row changes height as it loads: the What changed
+  // note (settings), Auto's row (providers) and the rules list.
+  const settled = childrenSettled && !settings.isLoading && !providers.isLoading;
   React.useEffect(() => {
-    if (scrollRequest === null) return;
+    if (scrollRequest === null || !settled) return;
     messagingRow.current?.scrollIntoView({ block: "center", behavior: prefersReducedMotion() ? "auto" : "smooth" });
-  }, [scrollRequest]);
+  }, [scrollRequest, settled]);
 
   const choose = (next: ApprovalMode) => {
     if (next === mode && settings.data?.approvalMode !== undefined) return;
@@ -153,7 +165,7 @@ export function ApprovalModeSettings({ children }: { /** The rules page, under t
           </Text>
         ) : null}
       </FieldSet>
-      {children}
+      <ApprovalsContentSettledContext.Provider value={settleChildren}>{children}</ApprovalsContentSettledContext.Provider>
       <FieldSet title="Advanced">
         <Field
           label="Approval model"

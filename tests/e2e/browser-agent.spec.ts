@@ -118,7 +118,9 @@ test("Ask holds a mutating browser tool until the user allows that action", asyn
       page.getByRole("button", { name: /^Approvals: Ask\./u }),
     ).toHaveAttribute("aria-expanded", "false");
 
-    const prompt = "Browser approval scenario: apply the change after I review it.";
+    // The person names the fixture's site, so opening it is not a new
+    // destination; the click is the one action under review.
+    const prompt = `Browser approval scenario: open ${url} and apply the change after I review it.`;
     const calls = [
       { name: "browser", arguments: {} },
       { name: "browser_open", arguments: { open: true } },
