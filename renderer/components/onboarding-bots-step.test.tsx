@@ -5,7 +5,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { QueryClientProvider } from "@tanstack/react-query";
 import { AppCapabilitiesProvider, DISABLED_APP_CAPABILITIES } from "../lib/app-capabilities";
 import { emitBotTestNotification, installBotTestIpc, type BotTestIpcCall } from "../main/bots/test-dom";
-import { botFixture } from "../main/bots/test-fixtures";
+import { botFixture, catalogFixture } from "../main/bots/test-fixtures";
 import { createBotTestQueryClient } from "../main/bots/test-providers";
 import { OnboardingFlow } from "./onboarding-flow";
 import type { OnboardingSnapshot } from "../shared/onboarding";
@@ -46,7 +46,14 @@ function mountOnboarding({
   onOpenBotChat?(botId: string): void;
 }) {
   let created = false;
+  // Like main: until the Full-access notice is accepted, a Full-access Bot can't act.
+  let noticeAccepted = false;
   const calls: BotTestIpcCall[] = installBotTestIpc({
+    "bots:getCapabilityCatalog": () => catalogFixture({ accepted: noticeAccepted }),
+    "bots:acknowledgeAccessNotice": (acknowledgement: unknown) => {
+      noticeAccepted = (acknowledgement as { decision?: unknown }).decision === "continue_full";
+      return catalogFixture({ accepted: noticeAccepted }).notice;
+    },
     "app:getOnboardingState": () => resumeAfterProvider,
     "app:setOnboardingProgress": (step: unknown) => ({
       ...resumeAfterProvider,
@@ -59,6 +66,7 @@ function mountOnboarding({
     "bots:createFirst": async () => {
       // Making it takes a moment; main makes it once however often it is asked.
       await new Promise((resolve) => setTimeout(resolve, 20));
+      if (!noticeAccepted) throw new Error("Review the current Bot access notice before this Bot acts.");
       const first = !created;
       created = true;
       return { bot: botFixture({ id: "bot-chief", name: "Chief" }), created: first };

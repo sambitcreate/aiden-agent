@@ -4,6 +4,7 @@ import { botsApi } from "../lib/ipc";
 import { queryKeys } from "../lib/queries";
 import { addBotToCache } from "../main/bots/bot-identity";
 import type { BotDefinition } from "../shared/bots";
+import { BOT_FULL_ACCESS_NOTICE_VERSION } from "../shared/bot-capabilities";
 import { BotAvatar } from "./bot-avatar";
 import { Button, Text } from "./ui";
 
@@ -14,8 +15,9 @@ type FirstBotState = { kind: "making" } | { kind: "ready"; bot: BotDefinition } 
  * silently, "Chief" with a random look and no job yet, and hands over to its
  * chat: it opens when setup finishes and its first message asks what it should
  * help with. Making it is idempotent in main, so showing this twice, or
- * running onboarding again, never makes a second one. A failure offers only
- * Try again.
+ * running onboarding again, never makes a second one. Like New bot, making it
+ * with Full access accepts the access notice first, or the Bot could not act.
+ * A failure offers only Try again.
  */
 export function OnboardingBotsStep({ onReady, onBusyChange }: { onReady(bot: BotDefinition): void; onBusyChange?(busy: boolean): void }) {
   const qc = useQueryClient();
@@ -28,6 +30,14 @@ export function OnboardingBotsStep({ onReady, onBusyChange }: { onReady(bot: Bot
     setState({ kind: "making" });
     onBusyRef.current?.(true);
     try {
+      const { notice } = await botsApi.getCapabilityCatalog();
+      if (notice.requiresAcknowledgement || notice.acceptedDecision !== "continue_full") {
+        await botsApi.acknowledgeAccessNotice({
+          version: BOT_FULL_ACCESS_NOTICE_VERSION,
+          decision: "continue_full",
+          confirmedForeground: true,
+        });
+      }
       const { bot } = await botsApi.createFirst();
       addBotToCache(qc, bot);
       void qc.invalidateQueries({ queryKey: queryKeys.bots });
