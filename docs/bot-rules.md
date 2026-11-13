@@ -130,8 +130,9 @@ There is no per-Bot mode.
   No model (an ACP agent), an error, a slow or unsure reply, or a
   conversation that has already read outside content all show the card. For
   a Bot, outside content is a connection's data, a web page, its browser,
-  its own computer or shell, or an image it inspected. It is read from the
-  Bot's whole saved conversation, earlier turns and compacted history
+  its own computer or shell, or an image it inspected; a connection's result
+  still counts after the connection is removed. It is read from the Bot's
+  whole saved conversation, earlier turns and compacted history
   included, so asking "OK, take care of it" after a turn that read your
   inbox, or resuming after a restart, still shows the card. Rules you
   wrote, page rules, sharing an image, purchases, hand-offs and your Mac are
@@ -150,7 +151,9 @@ more careful about where things go next. Outside content is a web page or
 search result, anything from the browser (except resizing it or changing its
 appearance), a simulator screenshot, a subagent's report, a pull request's
 comments, codemode, or any connector's result, and it counts for the rest of
-the chat, earlier turns included. From then on **Ask** also asks before a fetch
+the chat, earlier turns included, even after the chat is compacted. A summary
+Aiden can't check (a forked chat's summary of where it came from, or one
+whose source isn't in the chat's history) counts as outside content too. From then on **Ask** also asks before a fetch
 to a site you didn't name in the chat and before the first use of each
 connector, even one that only reads; **Auto** has the approval model judge
 those; **Never ask** runs them. Expect a few more cards in Ask after a chat has

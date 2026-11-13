@@ -56,6 +56,45 @@ export interface RunTaintCall {
 export interface RunTaintHistoryEntry {
   role: string;
   toolName?: string;
+  /** Counts as outside content whatever its role: a summary of history that can't be checked. */
+  outside?: true;
+}
+
+/** One entry of a chat's journal branch, as far as taint reads it. */
+export interface RunTaintBranchEntry {
+  type: string;
+  message?: { role: string; toolName?: unknown };
+  retainedTail?: readonly { role: string; toolName?: unknown }[];
+}
+
+const SUMMARY_ROLES: ReadonlySet<string> = new Set(["compactionSummary", "branchSummary"]);
+
+/**
+ * A chat's whole journal branch, root to tip, as taint history: tool results
+ * a compaction folded away still count, since its summary may carry what
+ * they brought in. A summary whose source isn't on the branch (a compaction
+ * with nothing before it, another branch's summary, or a summary message)
+ * can't be checked, so it counts as outside content.
+ */
+export function runTaintHistoryOfBranch(branch: readonly RunTaintBranchEntry[]): RunTaintHistoryEntry[] {
+  const history: RunTaintHistoryEntry[] = [];
+  const add = (message: { role: string; toolName?: unknown }) => {
+    history.push({ role: message.role, ...(typeof message.toolName === "string" ? { toolName: message.toolName } : {}),
+      ...(SUMMARY_ROLES.has(message.role) ? { outside: true as const } : {}) });
+  };
+  let folded = false;
+  for (const entry of branch) {
+    if (entry.type === "message" && entry.message) {
+      add(entry.message);
+      folded = true;
+    } else if (entry.type === "compaction") {
+      if (!folded) history.push({ role: "compactionSummary", outside: true });
+      for (const message of entry.retainedTail ?? []) add(message);
+    } else if (entry.type === "branch_summary") {
+      history.push({ role: "branchSummary", outside: true });
+    }
+  }
+  return history;
 }
 
 export class RunTaint {
@@ -75,6 +114,7 @@ export class RunTaint {
   }) {
     for (const text of input.personText) for (const host of namedHosts(text)) this.hosts.add(host);
     for (const entry of input.history ?? []) {
+      if (entry.outside) this.outside = true;
       if (entry.role !== "toolResult" || entry.toolName === undefined) continue;
       if (bringsOutsideContent(entry.toolName) || input.isConnectorTool?.(entry.toolName)) this.outside = true;
     }

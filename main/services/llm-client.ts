@@ -22,7 +22,7 @@ import { spending } from "./spending-main.js";
 import { createSpendingMeter, spendCounts } from "./spending-service.js";
 import { effectiveApprovalMode, parseApprovalModel, workspaceApprovalPolicy, type MacGrantClass } from "../../renderer/shared/approval-mode.js";
 import { currentWorkspaceApproval, legacyAccessOf } from "./approval-gate/run-approval.js";
-import { RunTaint } from "./approval-gate/run-taint.js";
+import { RunTaint, runTaintHistoryOfBranch } from "./approval-gate/run-taint.js";
 import { declaredReadOnlyHint } from "./approval-gate/tool-classes.js";
 import { approvalJudgeAction, createApprovalJudge, type ApprovalJudge } from "./approval-judge/judge.js";
 import { approvalJudgeComplete } from "./approval-judge/model-complete.js";
@@ -3912,13 +3912,25 @@ export const llmClient = {
         runtimeTools = onDemandTools.initialTools(initialMessages);
         generationContextOptions.tools = runtimeTools;
       }
-      // Outside content already in the transcript taints the run from the start.
+      // Outside content already in the transcript taints the run from the
+      // start, including what a compaction folded away: the journal's whole
+      // branch is read, and a branch that can't be read counts as tainted.
+      const journalHistory = await promptJournal.getBranch().then(
+        (branch) => runTaintHistoryOfBranch(branch),
+        (error: unknown) => {
+          logger.warn("pi", "Could not read the chat's journal for taint; treating the run as tainted.", error);
+          return [{ role: "journal", outside: true as const }];
+        },
+      );
       runTaint = new RunTaint({
         personText: generationChat.messages.filter((message) => message.role === "user").map((message) => message.content),
-        history: initialMessages.map((message) => ({
-          role: message.role,
-          ...("toolName" in message && typeof message.toolName === "string" ? { toolName: message.toolName } : {}),
-        })),
+        history: [
+          ...initialMessages.map((message) => ({
+            role: message.role,
+            ...("toolName" in message && typeof message.toolName === "string" ? { toolName: message.toolName } : {}),
+          })),
+          ...journalHistory,
+        ],
         isConnectorTool: (name) => claimCheckOptions.isConnectorTool(name),
       });
       approvalRequestText = currentUser?.content ?? "";
