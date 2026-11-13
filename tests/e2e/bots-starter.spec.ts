@@ -132,6 +132,37 @@ test("an empty Bots list opens a starter Bot chat, sends to it, and answers its 
   }, bot.id);
   await expect(page.getByRole("heading", { name: "Which area matters most this week?" })).toBeVisible();
   await expect(composer).toBeHidden();
+
+  // While the question waits, the Bot also hands the person a step. Both pile
+  // up in the one Needs-you slot: Take control comes first, the question waits
+  // behind it, and the header moves between them.
+  await aiden.app.evaluate(({ BrowserWindow }, botId) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.webContents.send("bots:live:event", {
+        botId,
+        epoch: "e1",
+        seq: 8,
+        type: "handoff",
+        handoff: {
+          botId,
+          waitId: "7a1d2c3b-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+          toolCallId: "call-2",
+          kind: "action",
+          action: "Approve the calendar invite from Sam",
+          why: "Only you can accept invites on your work account.",
+          source: "tool",
+        },
+      });
+    }
+  }, bot.id);
+  const card = page.getByRole("group", { name: "Chief of Staff needs you" });
+  const needsYou = page.getByRole("navigation", { name: "Needs you" });
+  await expect(card.getByText("Needs you: Approve the calendar invite from Sam")).toBeVisible();
+  await expect(needsYou).toContainText("1 of 2");
+  await expect(page.getByRole("heading", { name: "Which area matters most this week?" })).toHaveCount(0);
+  await needsYou.getByRole("button", { name: "Next" }).click();
+  await expect(needsYou).toContainText("2 of 2");
+  await expect(page.getByRole("heading", { name: "Which area matters most this week?" })).toBeVisible();
   await page.getByRole("button", { name: /Family/u }).click();
   await expect(page.getByRole("button", { name: /Family/u })).toHaveAttribute("aria-pressed", "true");
   await page.getByRole("button", { name: "Submit" }).click();
@@ -157,30 +188,18 @@ test("an empty Bots list opens a starter Bot chat, sends to it, and answers its 
     },
   ]);
 
-  // The question settles, and the Bot hands the person a step: the card sits above the composer.
+  // The question settles; the step is all that is left, so the header goes and
+  // the card sits alone above the composer. Take control first, then I'm done.
   await aiden.app.evaluate(({ BrowserWindow }, botId) => {
     for (const window of BrowserWindow.getAllWindows()) {
-      window.webContents.send("bots:live:event", { botId, epoch: "e1", seq: 8, type: "question", question: null });
-      window.webContents.send("bots:live:event", {
-        botId,
-        epoch: "e1",
-        seq: 9,
-        type: "handoff",
-        handoff: {
-          botId,
-          waitId: "7a1d2c3b-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
-          toolCallId: "call-2",
-          kind: "action",
-          action: "Approve the calendar invite from Sam",
-          why: "Only you can accept invites on your work account.",
-          source: "tool",
-        },
-      });
+      window.webContents.send("bots:live:event", { botId, epoch: "e1", seq: 9, type: "question", question: null });
     }
   }, bot.id);
-  const card = page.getByRole("group", { name: "Chief of Staff needs you" });
   await expect(card.getByText("Needs you: Approve the calendar invite from Sam")).toBeVisible();
+  await expect(needsYou).toHaveCount(0);
   await expect(page.getByPlaceholder("Add a note and send to mark it done")).toBeVisible();
+  await expect(card.getByRole("button", { name: "I’m done", exact: true })).toHaveCount(0);
+  await card.getByRole("button", { name: "Take control", exact: true }).click();
   await card.getByRole("button", { name: "I’m done", exact: true }).click();
   await expect
     .poll(() =>
