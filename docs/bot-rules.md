@@ -38,9 +38,9 @@ implementation notes are in `.memory/bot-rules.md`.
   the same reply waiting at the same time share one card in the chat only
   when they are the same call (same tool, request and arguments), and then one
   answer covers them all; any other call gets its own card.
-- A rule that hands off shows a hand-off card ("Needs you: …") with Take
-  control, Skip and I'm done; the Bot waits for the answer and never does the
-  step itself.
+- A rule that hands off shows a hand-off card ("Needs you: …") in two steps:
+  **Take control** first, then **I'm done** and **Skip**. The Bot waits for the
+  answer and never does the step itself.
 - On a routine or Telegram turn nobody is there to answer, so a step a rule
   would hand off doesn't run, nor does a step a rule would ask about that has
   no approval of its own. The Bot is told why. A step with an approval of its
@@ -51,8 +51,8 @@ implementation notes are in `.memory/bot-rules.md`.
 
 A desktop-hosted Bot can propose a task with a reason, numbered steps and the
 access or actions it needs. Review the coverage lines and use **Show details**
-to see the exact connected-app actions. Choose **Approve plan** or **Not now**
-in the Bot's chat on the desktop or a supported paired iPhone or Android phone.
+to see the exact connected-app actions. The card reads "Approve this plan?";
+choose **Allow once** or **Deny** in the Bot's chat on the desktop or a supported paired iPhone or Android phone.
 Phone coverage identifies a folder by its host-owned location, including its
 name and read/change scope. If its exact location cannot fit safely in the
 phone review, approve on the host desktop instead; the phone cannot approve

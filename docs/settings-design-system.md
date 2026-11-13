@@ -183,8 +183,10 @@ not part of these modes: it stays the steady one-line Thinking row that only the
 reader opens, so the transcript does not jump while a model thinks. Manual
 opens/closes win over automatic timing. Completed work never keeps live shimmer or announcements.
 Answers, visuals, approvals and question recaps keep their normal placement.
-Bot activity availability still follows each Bot's Quiet/Summary/Detailed level;
-the global mode and timing adjust Detailed recaps without adding hidden steps.
+Bot chats on this device show tool activity only while **Show tool activity**
+is on (a switch in the same Chat group, stored with the device's appearance;
+until it is set, a Mac where any Bot was Detailed keeps it on). When shown, the
+global mode and timing adjust the recaps without adding hidden steps.
 
 The link row edits the browser-service preference, including Ask each time, Aiden browser and System browser. Local-file checks,
 loopback rules, modifier-click and restricted-content confirmation still apply.
