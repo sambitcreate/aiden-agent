@@ -1,6 +1,7 @@
 import "../../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
+import { act } from "react";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { NeedsYouAnnouncer, NeedsYouFocusScope, NeedsYouHeader, useNeedsYouSlot, type NeedsYouItem } from "./needs-you-slot";
 
@@ -10,7 +11,8 @@ type Item = NeedsYouItem & { text: string };
 
 /**
  * A chat footer in miniature: the announcer, the header, then the one item on
- * show as a named card with its answer button, and a control outside the slot.
+ * show as a named card with its answer button, the composer, and a control
+ * outside the slot.
  */
 function Slot({ items }: { items: readonly Item[] }) {
   const slot = useNeedsYouSlot(items);
@@ -19,15 +21,18 @@ function Slot({ items }: { items: readonly Item[] }) {
       <button type="button">Elsewhere in the chat</button>
       <NeedsYouFocusScope currentKey={slot.current?.key}>
         <NeedsYouAnnouncer slot={slot} />
-        <NeedsYouHeader slot={slot} />
         {slot.current ? (
-          <div key={slot.current.key} className="contents" data-needs-you-card>
-            <div role="group" aria-label={slot.current.text}>
-              <p data-testid="shown">{slot.current.text}</p>
-              <button type="button">{`Answer: ${slot.current.text}`}</button>
+          <div data-needs-you-slot>
+            <NeedsYouHeader slot={slot} />
+            <div key={slot.current.key} className="contents" data-needs-you-card>
+              <div role="group" aria-label={slot.current.text}>
+                <p data-testid="shown">{slot.current.text}</p>
+                <button type="button">{`Answer: ${slot.current.text}`}</button>
+              </div>
             </div>
           </div>
         ) : null}
+        <textarea aria-label="Message" />
       </NeedsYouFocusScope>
     </div>
   );
@@ -142,4 +147,32 @@ test("answering the card that held focus moves focus to the card that takes its 
   screen.getByRole("button", { name: "Elsewhere in the chat" }).focus();
   rerender(<Slot items={[plan]} />);
   assert.equal(document.activeElement, screen.getByRole("button", { name: "Elsewhere in the chat" }));
+});
+
+test("answering the last card from inside the slot hands focus to the composer", () => {
+  const take: Item = { key: "h", kind: "take_control", text: "Enter the code" };
+  const { rerender } = render(<Slot items={[take]} />);
+  screen.getByRole("button", { name: "Answer: Enter the code" }).focus();
+  rerender(<Slot items={[]} />);
+  assert.equal(document.activeElement, screen.getByRole("textbox", { name: "Message" }), "focus goes to the composer, not the page");
+});
+
+test("a card answered elsewhere while focus is outside the slot, or on nothing, moves no focus", async () => {
+  const take: Item = { key: "h", kind: "take_control", text: "Enter the code" };
+  const approval: Item = { key: "a", kind: "approval", text: "Send email" };
+  const plan: Item = { key: "p", kind: "plan", text: "Approve this plan?" };
+  const { rerender } = render(<Slot items={[take, approval, plan]} />);
+  // The person is typing in the composer when a phone answers the card on show.
+  const composer = screen.getByRole("textbox", { name: "Message" });
+  composer.focus();
+  rerender(<Slot items={[approval, plan]} />);
+  assert.equal(document.activeElement, composer, "the composer keeps focus");
+  // They were in the slot once, then let focus go to nothing (clicked the transcript).
+  screen.getByRole("button", { name: "Answer: Send email" }).focus();
+  await act(async () => {
+    (document.activeElement as HTMLElement).blur();
+  });
+  assert.equal(document.activeElement, document.body);
+  rerender(<Slot items={[plan]} />);
+  assert.equal(document.activeElement, document.body, "an answer from another device does not pull focus into the slot");
 });

@@ -114,11 +114,13 @@ export function NeedsYouAnnouncer<Item extends NeedsYouItem>({ slot }: { slot: N
 }
 
 /**
- * Keeps keyboard focus in the slot when a card is answered: if focus was on
- * something inside it that went away with the answer, focus moves to the card
- * that took its place (its named group, or a heading). Focus the person moved
- * elsewhere is left alone. Wrap the slot and the question in it, and mark each
- * card's wrapper with `data-needs-you-card`.
+ * Keeps keyboard focus in the slot when a card is answered here: if focus was
+ * inside the slot when the card on show went away, focus moves to the card
+ * that took its place (its named group, or a heading), or to the composer when
+ * nothing is left. A card answered elsewhere (a phone, another window) while
+ * focus was outside the slot, or on nothing at all, moves nothing. Wrap the
+ * slot, the question and the composer in it, and mark each card's wrapper with
+ * `data-needs-you-card` (the slot's own wrapper with `data-needs-you-slot`).
  */
 export function NeedsYouFocusScope({
   currentKey,
@@ -130,35 +132,59 @@ export function NeedsYouFocusScope({
   children: React.ReactNode;
 }) {
   const scope = React.useRef<HTMLDivElement>(null);
-  const lastFocused = React.useRef<Element | null>(null);
+  // Whether this window's focus is in the slot, as of the last focus change.
+  const inSlot = React.useRef(false);
   React.useEffect(() => {
     const element = scope.current;
     if (!element) return;
-    const remember = (event: FocusEvent) => {
-      lastFocused.current = event.target instanceof Element ? event.target : null;
+    const document = element.ownerDocument;
+    const enter = (event: FocusEvent) => {
+      inSlot.current = withinSlot(event.target);
     };
-    element.addEventListener("focusin", remember);
-    return () => element.removeEventListener("focusin", remember);
+    const leave = (event: FocusEvent) => {
+      // Focus moving to another element is settled by its focusin.
+      if (event.relatedTarget) return;
+      const left = event.target;
+      // Read once the change settles: a card removed with focus on it, or a
+      // button disabled while its answer is sent, still counts as in the
+      // slot; the person sending focus to nothing does not.
+      queueMicrotask(() => {
+        if (!(left instanceof Element) || !left.isConnected || left.matches(":disabled")) return;
+        if (document.activeElement === left) return; // the window lost focus; it comes back here
+        inSlot.current = withinSlot(document.activeElement);
+      });
+    };
+    document.addEventListener("focusin", enter);
+    document.addEventListener("focusout", leave);
+    return () => {
+      document.removeEventListener("focusin", enter);
+      document.removeEventListener("focusout", leave);
+    };
   }, []);
   React.useLayoutEffect(() => {
     const element = scope.current;
-    const was = lastFocused.current;
-    if (!element || !was || was.isConnected) return;
+    if (!element || !inSlot.current) return;
     const active = element.ownerDocument.activeElement;
-    // Focus went with the card it was on; anywhere the person chose stays.
-    if (active && active !== element.ownerDocument.body) return;
+    // Focus still on something that stayed (Previous, Next, a card that only changed) is left alone.
+    if (active && active !== element.ownerDocument.body && active.isConnected) return;
     const card = element.querySelector("[data-needs-you-card]");
-    const target = card?.querySelector<HTMLElement>('[role="group"][aria-label], [role="region"][aria-label], h1, h2, h3, h4');
+    const target =
+      card?.querySelector<HTMLElement>('[role="group"][aria-label], [role="region"][aria-label], h1, h2, h3, h4') ??
+      (card ? null : element.querySelector<HTMLElement>("textarea:not(:disabled)"));
     if (!target) return;
-    if (!target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");
+    if (card && !target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");
     target.focus();
-    lastFocused.current = target;
+    inSlot.current = withinSlot(target);
   }, [currentKey]);
   return (
     <div ref={scope} className={className}>
       {children}
     </div>
   );
+}
+
+function withinSlot(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest("[data-needs-you-card], [data-needs-you-slot]") !== null;
 }
 
 /** The slot's header when more than one item waits: "Needs you · 2 of 3" with Previous and Next. */
