@@ -18,6 +18,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
@@ -65,11 +69,24 @@ fun AidenBotHandoffCard(
     macOpened: Boolean?,
     onDone: () -> Unit,
     onSkip: () -> Unit,
-    onFinishOnMac: () -> Unit
+    onFinishOnMac: () -> Unit,
+    /**
+     * Revision 61 Macs: Take control first, then I'm done and Skip. The answers are the same
+     * `done` and `skipped`; only this phone's card changes.
+     */
+    twoStep: Boolean = false
 ) {
     val palette = AidenTheme.palette
     val uriHandler = LocalUriHandler.current
     val signIn = handoff.kind == AidenBotHandoffKind.SIGN_IN
+    var tookControl by remember(handoff.waitId) { mutableStateOf(AidenBotHandoffTaken.contains(handoff.waitId)) }
+    val openUrl = handoff.openUrl?.takeIf { AidenBotHandoffWire.isOpenUrl(it) }
+    // What Take control opens: the Bot's browser or computer on the Mac, or the page it names.
+    val open: () -> Unit = {
+        if (signIn || handoff.onMac) onFinishOnMac()
+        else if (openUrl != null) runCatching { uriHandler.openUri(openUrl) }
+    }
+    val canOpenAgain = signIn || handoff.onMac || openUrl != null
     Surface(
         color = palette.raised,
         shape = RoundedCornerShape(20.dp),
@@ -110,6 +127,37 @@ fun AidenBotHandoffCard(
                     color = palette.secondary
                 )
             }
+            if (twoStep) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.padding(top = 4.dp)
+                ) {
+                    if (!tookControl) {
+                        AidenPrimaryButton(
+                            text = stringResource(R.string.bot_handoff_take_control),
+                            enabled = canAnswer && !isFinishing,
+                            onClick = {
+                                AidenBotHandoffTaken.add(handoff.waitId)
+                                tookControl = true
+                                open()
+                            }
+                        )
+                    } else {
+                        if (signIn) {
+                            // A sign-in finishes on the Mac; Skip is its only answer here.
+                            AidenPrimaryButton(text = stringResource(R.string.bot_handoff_skip), enabled = canAnswer, onClick = onSkip)
+                        } else {
+                            AidenPrimaryButton(text = stringResource(R.string.bot_handoff_im_done), enabled = canAnswer, onClick = onDone)
+                            AidenTonalButton(text = stringResource(R.string.bot_handoff_skip), enabled = canAnswer, onClick = onSkip)
+                        }
+                        if (canOpenAgain) {
+                            AidenTonalButton(text = stringResource(R.string.bot_handoff_open_again), enabled = canAnswer && !isFinishing, onClick = open)
+                        }
+                    }
+                }
+                return@Column
+            }
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -145,6 +193,21 @@ fun AidenBotHandoffCard(
                 }
             }
         }
+    }
+}
+
+/**
+ * Revision 61: the hand-offs this phone took control of, kept for the app's life so a card
+ * drawn again (scrolled away, or the chat reopened) stays on its second step.
+ */
+object AidenBotHandoffTaken {
+    private val taken = LinkedHashSet<String>()
+
+    @Synchronized fun contains(waitId: String): Boolean = waitId in taken
+
+    @Synchronized fun add(waitId: String) {
+        if (taken.size >= 200) taken.remove(taken.first())
+        taken += waitId
     }
 }
 

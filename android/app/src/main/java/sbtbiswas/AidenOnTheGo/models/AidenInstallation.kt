@@ -401,6 +401,14 @@ data class AidenInstallation(
     val canWriteBots: Boolean
         get() = isBotsEligible && hasNegotiatedAccess(AidenRemoteCapability.BOT_WRITE)
 
+    /**
+     * Revision 61: the Mac offers the new Bot UX (it advertises `approval:cards`), so this phone
+     * uses the client-only pieces that go with it: two-step Take control, the single messaging
+     * switch, the per-device Show tool activity switch and Disable a tool.
+     */
+    val offersBotUx: Boolean
+        get() = serverCapabilities?.contains(AidenRemoteCapability.APPROVAL_CARDS) == true
+
     fun hasNegotiatedAccess(capability: AidenRemoteCapability): Boolean {
         return deviceCapabilities.contains(capability) &&
                 serverCapabilities?.contains(capability) == true

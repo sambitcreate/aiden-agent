@@ -246,8 +246,11 @@ private fun AidenBotSessionContent(
     val detailFlow = remember(botId) { coordinator.botCache.botDetails.map { it[botId] }.distinctUntilChanged() }
     val botDetail by detailFlow.collectAsStateWithLifecycle(coordinator.botCache.getBotDetail(botId))
     val chatActivity = aidenBotChatActivity(serverInfo, botDetail, coordinator.cachedBotActivitySupported)
-    LaunchedEffect(controller, chatActivity) {
-        controller.setWording(chatActivity?.wording ?: AidenBotChatActivityWording.FOLLOWS)
+    // Revision 61: on a Mac with the new Bot UX, this phone's Show tool activity switch decides it.
+    val offersBotUx = coordinator.installationStore.activeInstallation?.offersBotUx == true
+    val showToolActivity = AidenTheme.config.showToolActivity
+    LaunchedEffect(controller, chatActivity, offersBotUx, showToolActivity) {
+        controller.setWording(aidenBotStatusWording(chatActivity?.wording, offersBotUx, showToolActivity))
     }
     // One read of the Bot per visit; Advanced opens from it (or the cache) without another.
     LaunchedEffect(controller) {
@@ -398,11 +401,11 @@ private fun AidenBotSessionContent(
             saveHost = saveHost,
             onSaveSettled = { scope.launch { controller.refetch() } },
             onSaveFailed = coordinator::presentError,
-            chatActivityAvailable = aidenBotShowsChatActivity(serverInfo, hasBaseline = true, cachedSupport = coordinator.cachedBotActivitySupported),
+            chatActivityAvailable = aidenBotShowsChatActivity(serverInfo, hasBaseline = true, cachedSupport = coordinator.cachedBotActivitySupported, offersBotUx = offersBotUx),
             chatActivityHost = chatActivityHost,
             // The host has already cached the pick (pinned to its pairing); this only refreshes the chat.
             onChatActivitySaved = { saved ->
-                controller.setWording(saved.chatActivity?.wording ?: AidenBotChatActivityWording.FOLLOWS)
+                controller.setWording(aidenBotStatusWording(saved.chatActivity?.wording, offersBotUx, showToolActivity))
                 scope.launch { controller.refetch() }
             }
         )
@@ -658,7 +661,8 @@ private fun AidenBotSessionContent(
                             // Done without a note; the composer's Send is Done with one (iOS parity).
                             onDone = { scope.launch { controller.answerHandoff(AidenBotHandoffOutcome.DONE) } },
                             onSkip = { scope.launch { controller.answerHandoff(AidenBotHandoffOutcome.SKIPPED) } },
-                            onFinishOnMac = { scope.launch { controller.finishHandoffOnMac() } }
+                            onFinishOnMac = { scope.launch { controller.finishHandoffOnMac() } },
+                            twoStep = offersBotUx
                         )
                     }
                 }

@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.Animation
+import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -54,7 +55,9 @@ import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 @Composable
 fun AidenAppearanceSettingsScreen(
     appearanceStore: AidenAppearanceStore,
-    onNavigateBack: () -> Unit
+    onNavigateBack: () -> Unit,
+    /** Revision 61: the paired Mac offers the new Bot UX, so Show tool activity applies. */
+    showsToolActivity: Boolean = false
 ) {
     val config = AidenTheme.config
     AidenSettingsScaffold(
@@ -95,6 +98,24 @@ fun AidenAppearanceSettingsScreen(
                             headline = size.title,
                             selected = config.fontSize == size,
                             onClick = { appearanceStore.updateFontSize(size) }
+                        )
+                    }
+                }
+            }
+        }
+        if (showsToolActivity) {
+            item(key = "chat") {
+                AidenSettingsGroup(
+                    title = stringResource(R.string.appearance_group_chat),
+                    footer = stringResource(R.string.appearance_show_tool_activity_footer)
+                ) {
+                    row {
+                        AidenSettingsSwitchRow(
+                            headline = stringResource(R.string.appearance_show_tool_activity),
+                            // Unset, a Bot keeps its own wording, which follows its tools by default.
+                            checked = config.showToolActivity ?: true,
+                            leadingIcon = Icons.Outlined.Build,
+                            onCheckedChange = appearanceStore::updateShowToolActivity
                         )
                     }
                 }

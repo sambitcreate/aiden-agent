@@ -56,7 +56,7 @@ fun AidenSettingsDestination(
                 onNavigateBack = onNavigateBack
             )
         }
-        AidenSettingsPage.APPEARANCE -> AidenAppearanceSettingsScreen(appearanceStore, onNavigateBack)
+        AidenSettingsPage.APPEARANCE -> AidenAppearanceSettingsScreen(appearanceStore, onNavigateBack, showsToolActivity = active?.offersBotUx == true)
         AidenSettingsPage.VOICE -> AidenVoiceSettingsScreen(settingsStore, voiceInputStore, onNavigateBack)
         AidenSettingsPage.PROVIDERS -> AidenProviderSettingsScreen(
             store = settingsStore,

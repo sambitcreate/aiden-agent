@@ -43,4 +43,9 @@
     <string name="bot_presets_open">Open</string>
     <string name="bot_presets_version">Version %1$d</string>
     <string name="bot_editor_one_field_hint">It introduces itself in its first chat and asks what to help with. You can change anything later.</string>
+    <string name="bot_handoff_take_control">Take control</string>
+    <string name="bot_handoff_im_done">I’m done</string>
+    <string name="bot_handoff_open_again">Open again</string>
+    <string name="bot_messaging_single">Can message other Bots</string>
+    <string name="bot_disable_tool">Disable a tool</string>
 </resources>

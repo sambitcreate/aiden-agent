@@ -261,7 +261,12 @@ data class AidenAppearanceConfig(
     val fontSize: AidenFontSize = AidenFontSize.MEDIUM,
     val diffMarkers: AidenDiffMarkerOption = AidenDiffMarkerOption.SYMBOLS,
     val reduceMotion: Boolean = false,
-    val privacyMaskExcerpts: Boolean = false
+    val privacyMaskExcerpts: Boolean = false,
+    /**
+     * Revision 61: Show tool activity in Bot chats on this phone. Null until the person sets it,
+     * so a Bot keeps the wording it was given; it applies only on a Mac that offers the new cards.
+     */
+    val showToolActivity: Boolean? = null
 )
 
 class AidenAppearanceStore(private val storageDir: File) {
@@ -318,6 +323,11 @@ class AidenAppearanceStore(private val storageDir: File) {
 
     fun updateReduceMotion(reduce: Boolean) {
         _config.value = _config.value.copy(reduceMotion = reduce)
+        save()
+    }
+
+    fun updateShowToolActivity(show: Boolean) {
+        _config.value = _config.value.copy(showToolActivity = show)
         save()
     }
 

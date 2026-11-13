@@ -48,4 +48,8 @@
     <string name="approvals_picker_empty">Nothing to add a rule for yet.</string>
     <string name="approvals_add_choose">When %1$s comes up</string>
     <string name="approvals_unreadable">Your approval rules couldn’t be read. Fix them on your Mac first.</string>
+    <!-- Appearance → Chat (revision 61, per device). -->
+    <string name="appearance_group_chat">Chat</string>
+    <string name="appearance_show_tool_activity">Show tool activity</string>
+    <string name="appearance_show_tool_activity_footer">Shows what a Bot is doing while it works. Off, its status line reads “Thinking”. This applies to this phone only.</string>
 </resources>

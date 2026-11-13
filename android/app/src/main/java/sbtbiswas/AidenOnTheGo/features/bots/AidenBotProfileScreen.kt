@@ -643,7 +643,12 @@ fun AidenBotProfileScreen(
             // The Mac's Bot is already kept by the save; a rollback is only shown.
             onSaveSettled = { accept(it, confirmed = false) },
             onSaveFailed = coordinator::presentError,
-            chatActivityAvailable = aidenBotShowsChatActivity(serverInfo, hasBaseline = true, cachedSupport = coordinator.cachedBotActivitySupported),
+            chatActivityAvailable = aidenBotShowsChatActivity(
+                serverInfo,
+                hasBaseline = true,
+                cachedSupport = coordinator.cachedBotActivitySupported,
+                offersBotUx = coordinator.installationStore.activeInstallation?.offersBotUx == true
+            ),
             chatActivityHost = remember(client) { coordinator.botChatActivityHost() },
             // The baseline only: unsaved name or subtitle edits stay, and the host has cached the pick.
             onChatActivitySaved = { bot = it }

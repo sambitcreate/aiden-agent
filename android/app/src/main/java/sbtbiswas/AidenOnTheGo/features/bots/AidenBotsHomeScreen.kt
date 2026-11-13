@@ -517,7 +517,12 @@ private fun AidenBotsHomeContent(
             saveHost = remember(advancedClient) { coordinator.botSaveHost() },
             onSaveSettled = { viewModel.loadBots(force = true) },
             onSaveFailed = coordinator::presentError,
-            chatActivityAvailable = aidenBotShowsChatActivity(serverInfo, hasBaseline = true, cachedSupport = coordinator.cachedBotActivitySupported),
+            chatActivityAvailable = aidenBotShowsChatActivity(
+                serverInfo,
+                hasBaseline = true,
+                cachedSupport = coordinator.cachedBotActivitySupported,
+                offersBotUx = coordinator.installationStore.activeInstallation?.offersBotUx == true
+            ),
             chatActivityHost = remember(advancedClient) { coordinator.botChatActivityHost() }
         )
     }
