@@ -16,7 +16,7 @@ import { cn } from "../lib/ui-utils";
 import { LiveGuard } from "./live-guard";
 import { approvalAriaKeyShortcut, approvalShortcutLabel, type ApprovalShortcut } from "../lib/approval-shortcuts";
 import { detectedKeyboardPlatform } from "../shared/keybindings";
-import type { ToolApprovalScope } from "../shared/tool-approval-scope";
+import { approvalStatusLabel, type ApprovalStatus } from "../shared/approval-card-model";
 
 /** The accent squircle tile at the top of a card. */
 export function ApprovalIconTile({ icon: Icon }: { icon: LucideIcon }) {
@@ -136,26 +136,7 @@ export function ApprovalActions({
   );
 }
 
-/** How an answered card reads once it collapses, or that it went away unanswered. */
-export type ApprovalStatus =
-  | { decision: "deny" }
-  | {
-      decision: "allow";
-      /** How far the allow reached. `always` is the workspace's list, a Bot's list, or every chat for Computer Use. */
-      scope?: ToolApprovalScope;
-      always?: "workspace" | "everywhere";
-    }
-  | { decision: "stale" };
-
-/** "Allowed once", "Allowed in this chat", "Allowed in this workspace", "Always allowed", "Denied", "No longer active". */
-export function approvalStatusLabel(status: ApprovalStatus): string {
-  if (status.decision === "deny") return "Denied";
-  if (status.decision === "stale") return "No longer active";
-  if (status.scope === "chat") return "Allowed in this chat";
-  if (status.scope === "workspace") return "Allowed in this workspace";
-  if (status.scope === "always") return status.always === "workspace" ? "Allowed in this workspace" : "Always allowed";
-  return "Allowed once";
-}
+export { approvalStatusLabel, type ApprovalStatus } from "../shared/approval-card-model";
 
 /** An answered card, collapsed to one quiet line where the card was. */
 export function ApprovalStatusLine({ status }: { status: ApprovalStatus }) {

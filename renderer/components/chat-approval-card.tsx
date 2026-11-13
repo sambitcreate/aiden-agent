@@ -7,20 +7,17 @@ import { ApprovalActions, ApprovalIconTile, type ApprovalRememberOption } from "
 import { CopyButton } from "./copy-button";
 import { cn } from "../lib/ui-utils";
 import { useApprovalShortcuts } from "../lib/approval-shortcuts";
-import {
-  SubagentWorkspaceWriteApproval,
-  subagentWorkspaceWriteOperationLabel,
-} from "./subagent-workspace-write-approval";
+import { SubagentWorkspaceWriteApproval } from "./subagent-workspace-write-approval";
 import {
   SubagentMcpMutationApproval,
   subagentMcpMutationAllowLabel,
 } from "./subagent-mcp-mutation-approval";
 import { SubagentShellApproval } from "./subagent-shell-approval";
-import { HOOK_PROPOSAL_APPROVAL_FOOTER, HookProposalApproval, hookProposalHeadline } from "./hook-proposal-approval";
+import { HOOK_PROPOSAL_APPROVAL_FOOTER, HookProposalApproval } from "./hook-proposal-approval";
 import { HOOK_PROPOSAL_APPROVAL_KIND, isHookProposalApprovalDetails } from "../shared/hook-proposal-approval";
 import { SubagentRunGrantApproval } from "./subagent-run-grant-approval";
 import { FormFillApproval } from "./form-fill-approval";
-import { SCHEDULE_APPROVAL_FOOTER, ScheduledTaskApproval, scheduleApprovalHeadline } from "./scheduled-task-approval";
+import { SCHEDULE_APPROVAL_FOOTER, ScheduledTaskApproval } from "./scheduled-task-approval";
 import { ComputerUseAccessApproval } from "./computer-use-access-approval";
 import { isComputerUseAccessApprovalDetails } from "../shared/computer-use-access";
 import type { ApprovalPrompt } from "../lib/ipc";
@@ -39,99 +36,19 @@ import {
   type ToolApprovalScope,
 } from "../shared/tool-approval-scope";
 import type { ToolApprovalPreview } from "../shared/tool-approval-preview";
+import {
+  approvalCommand,
+  approvalDetailsHeadline,
+  approvalFilePath,
+  approvalHeadline,
+  toolLabel,
+} from "../shared/approval-card-model";
+
+export { approvalCommand, approvalHeadline, toolLabel } from "../shared/approval-card-model";
 import { LiveGuard } from "./live-guard";
-
-const TOOL_LABELS: Record<string, string> = {
-  edit_file: "Edit file",
-  run_command: "Run command",
-  write_file: "Write file",
-  read_file: "Read file",
-  delete_file: "Delete file",
-  move_file: "Move file",
-  web_fetch: "Fetch web page",
-  agent_tool: "Agent tool",
-  computer_use: "Computer Use",
-  form_fill: "Form fill",
-  workspace_artifact: "Artifact",
-};
-
-/** A tool's name as an approval heading: known labels, otherwise sentence case. */
-export function toolLabel(toolName: string): string {
-  const known = TOOL_LABELS[toolName];
-  if (known) return known;
-  const words = toolName.replace(/[_-]+/gu, " ").trim();
-  return words ? `${words.charAt(0).toLocaleUpperCase()}${words.slice(1)}` : "Tool";
-}
-
-const COMMAND_SUMMARY_PREFIX = "Run command: ";
 
 function fileName(path: string): string {
   return path.split(/[\\/]/u).filter(Boolean).pop() ?? path;
-}
-
-/**
- * The exact command a command approval would run: from the desktop preview, or
- * from Aiden's own "Run command: …" summary when the approval came from a
- * paired host that sends only the summary.
- */
-export function approvalCommand(pending: Pick<ApprovalPrompt, "toolName" | "summary" | "preview">): string | undefined {
-  if (pending.preview?.kind === "command") return pending.preview.command;
-  if (pending.toolName === "run_command" && pending.summary.startsWith(COMMAND_SUMMARY_PREFIX)) {
-    const command = pending.summary.slice(COMMAND_SUMMARY_PREFIX.length);
-    return command.trim() ? command : undefined;
-  }
-  return undefined;
-}
-
-/** Aiden's own file summaries, which name one path, by tool. */
-const FILE_SUMMARY_PREFIXES: Record<string, { prefix: string; verb: string }> = {
-  edit_file: { prefix: "Edit file: ", verb: "Edit" },
-  write_file: { prefix: "Create or replace file: ", verb: "Write" },
-};
-
-/** The one file a file approval names: from the desktop preview, or from Aiden's own summary. */
-function approvalFilePath(pending: Pick<ApprovalPrompt, "toolName" | "summary" | "preview">): string | undefined {
-  if (pending.preview?.kind === "file") return pending.preview.path;
-  const fileSummary = FILE_SUMMARY_PREFIXES[pending.toolName];
-  if (!fileSummary || !pending.summary.startsWith(fileSummary.prefix)) return undefined;
-  const path = pending.summary.slice(fileSummary.prefix.length).trim();
-  return path && !/[\r\n]/u.test(path) ? path : undefined;
-}
-
-const MAC_COMMAND_TOOLS: ReadonlySet<string> = new Set(["run_command", "background_job"]);
-const MAC_FILE_TOOLS: ReadonlySet<string> = new Set(["edit_file", "write_file", "delete_file", "move_file"]);
-
-/** The site a generic card's call reaches, when its summary names one. */
-function approvalTarget(summary: string): string | undefined {
-  const match = /\bhttps?:\/\/[^\s<>"'()[\]{}]+/iu.exec(summary);
-  if (!match) return undefined;
-  try {
-    // Prose punctuation after the link ("…example.com, Tue") is not part of it.
-    return new URL(match[0].replace(/[.,;:!?…]+$/u, "")).hostname || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * The approval card's question. Calls on the person's Mac name the Mac: "Run on
- * your Mac?", "Change files on your Mac?", "Use your Mac with Computer Use?".
- * Everything else reads "Review before {tool → target}".
- */
-export function approvalHeadline(pending: Pick<ApprovalPrompt, "toolName" | "summary" | "preview">): string {
-  const { preview, toolName } = pending;
-  if (preview?.kind === "command" || MAC_COMMAND_TOOLS.has(toolName)) return "Run on your Mac?";
-  if (preview?.kind === "file" || MAC_FILE_TOOLS.has(toolName)) return "Change files on your Mac?";
-  switch (toolName) {
-    case "computer_use":
-      return "Use your Mac with Computer Use?";
-    case "schedule_task":
-      return "Save this scheduled task?";
-    case "edit_automation":
-      return "Change this automation?";
-  }
-  const target = approvalTarget(pending.summary);
-  return `Review before ${toolLabel(toolName)}${target ? ` → ${target}` : ""}`;
 }
 
 /** The quiet line under the headline: the file and its size of change, or who is waiting. */
@@ -464,21 +381,8 @@ export function ChatApprovalCard({
           <Text variant="strong" as="p" id={`approval-title-${pending.approvalId}`} className="mt-2.5 text-balance">
             {invalidPendingPrivilegedApproval
               ? "Invalid privileged approval blocked"
-              : pendingWorkspaceWrite
-                ? `${pendingWorkspaceWrite.childLabel} wants to ${subagentWorkspaceWriteOperationLabel(
-                    pendingWorkspaceWrite.operation,
-                  ).toLocaleLowerCase("en-US")}`
-                : pendingMcpMutation
-                  ? `${pendingMcpMutation.childLabel} wants to call ${pendingMcpMutation.serverId}:${pendingMcpMutation.toolName}`
-                  : pendingShell
-                    ? `${pendingShell.childLabel} wants to run a full-host command`
-                    : pendingRunGrant
-                      ? `Allow ${pendingRunGrant.lane === "write" ? "writes" : "shell"} for ${pendingRunGrant.childLabel}`
-                      : pendingHook && pendingCanAllow
-                        ? hookProposalHeadline(pendingHook)
-                        : schedule
-                        ? scheduleApprovalHeadline(schedule)
-                        : approvalHeadline(pending)}
+              : // A hook the person can't apply here reads as the plain card it falls back to.
+                (pendingHook && !pendingCanAllow ? undefined : approvalDetailsHeadline(details)) ?? approvalHeadline(pending)}
             {pendingCount > 1 ? <span className="ml-1.5 font-normal text-tertiary">1 of {pendingCount}</span> : null}
           </Text>
         </div>

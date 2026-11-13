@@ -1436,6 +1436,7 @@
         "renderer/components/chat-approval-card.test.tsx",
         "renderer/lib/switch-to-auto.test.tsx",
         "renderer/shared/tool-approval-preview.test.ts",
+        "renderer/shared/approval-card-model.test.ts",
         "main/services/transcript-image-fetch.test.ts",
         "main/handlers/transcript-images.test.ts",
         "renderer/components/transcript-image.test.tsx",
