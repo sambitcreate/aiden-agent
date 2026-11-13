@@ -150,13 +150,18 @@ In a workspace chat, once outside content has entered the chat, Aiden is
 more careful about where things go next. Outside content is a web page or
 search result, anything from the browser (except resizing it or changing its
 appearance), a simulator screenshot, a subagent's report, a pull request's
-comments, codemode, or any connector's result, and it counts for the rest of
-the chat, earlier turns included, even after the chat is compacted. A summary
+comments, codemode, or any connector's result (a connector's result still
+counts after that connector is removed or renamed), and it counts for the rest
+of the chat, earlier turns included, even after the chat is compacted. Files
+in the workspace, and in a Bot's home or selected folders, are not outside
+content. A summary
 Aiden can't check (a forked chat's summary of where it came from, or one
 whose source isn't in the chat's history) counts as outside content too. From then on **Ask** also asks before a fetch
 to a site you didn't name in the chat and before the first use of each
 connector, even one that only reads; **Auto** has the approval model judge
-those; **Never ask** runs them. Expect a few more cards in Ask after a chat has
+those; **Never ask** runs them. A consequential step in a chat that has
+read outside content is still judged in **Auto**, against what you wrote in
+the chat; a Bot shows its card instead. Expect a few more cards in Ask after a chat has
 used the browser or a subagent: that is by design, since text you didn't write
 could be steering the model.
 
