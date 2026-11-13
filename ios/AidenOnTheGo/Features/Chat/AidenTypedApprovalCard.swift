@@ -18,7 +18,7 @@ struct AidenTypedApprovalCard: View {
     /// with any other scope is not shown, since it could not be sent.
     var sendableScopes: Set<AidenApprovalScope> = [.once]
     /// What to show instead of the buttons when `canRespond` is false.
-    var readOnlyNote: String = "Answer this on your machine."
+    var readOnlyNote: String = "Answer this on your computer."
     /// False when this phone may deny but not allow (a scheduled task without
     /// schedule write access): only Deny shows, with `limitNote` beneath it.
     var allowsHere: Bool = true

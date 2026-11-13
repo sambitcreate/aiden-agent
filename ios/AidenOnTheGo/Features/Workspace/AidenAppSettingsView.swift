@@ -120,7 +120,7 @@ struct AidenAppSettingsView: View {
                     } label: {
                         Label("Approvals", systemImage: "checkmark.shield")
                     }
-                } footer: { Text("When Aiden asks before acting, and the rules it follows on your paired machine.") }
+                } footer: { Text("When Aiden asks before acting, and the rules it follows on your paired computer.") }
             }
 
             if offersBotUX {

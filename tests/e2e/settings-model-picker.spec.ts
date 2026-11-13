@@ -217,7 +217,7 @@ test("every Settings destination renders and a one-model local inventory stays u
     await settingsNavigation.getByRole("button", { name: "Voice & Speech", exact: true }).click();
     await expect(page.getByText("Accessibility access", { exact: true })).toHaveCount(0);
     await page.getByRole("combobox").first().click();
-    await page.getByRole("option", { name: "On this device · Private", exact: true }).click();
+    await page.getByRole("option", { name: "On this computer · Private", exact: true }).click();
     await expect(
       page.getByText(
         "Completed transcripts are copied to the clipboard so you can paste them into any app.",

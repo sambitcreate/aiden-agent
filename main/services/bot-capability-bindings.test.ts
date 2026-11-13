@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import {
+  botFullComputerLabel,
   validateSelectionAgainstCatalog,
   type BotCustomSelection,
 } from "../../renderer/shared/bot-capabilities.js";
@@ -701,7 +702,7 @@ test("main catalog service uses injected inventories, stable persisted key, and 
   assert.deepEqual(
     first.catalog.fileScopes.slice(0, 2).map(({ kind, label }) => ({ kind, label })),
     [
-      { kind: "full_mac", label: "Full Mac" },
+      { kind: "full_mac", label: botFullComputerLabel(process.platform) },
       { kind: "bot_home", label: "Bot folder" },
     ],
   );
