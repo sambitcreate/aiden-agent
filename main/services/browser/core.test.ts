@@ -204,6 +204,40 @@ test("queued actions serialize and human intervention revokes active and already
   await assert.rejects(second, /interrupted/);
   assert.equal(await queue.run(async () => 3), 3);
 });
+test("physical input preserves the person's navigation but cancels agent work", async () => {
+  const queue = new BrowserActionQueue();
+  for (const source of ["user", "agent"] as const) {
+    let release!: () => void;
+    let started!: () => void;
+    const ready = new Promise<void>((resolve) => { started = resolve; });
+    const pending = queue.run(async (check) => {
+      started();
+      await new Promise<void>((resolve) => { release = resolve; });
+      check();
+      return "loaded";
+    }, undefined, source);
+    await ready;
+    queue.interruptForHumanInput();
+    assert.equal(queue.signal?.aborted, source === "agent");
+    release();
+    if (source === "user") assert.equal(await pending, "loaded");
+    else await assert.rejects(pending, /interrupted/);
+  }
+});
+test("closing a tab still cancels a user-sourced navigation", async () => {
+  const queue = new BrowserActionQueue();
+  let release!: () => void;
+  let started!: () => void;
+  const ready = new Promise<void>((resolve) => { started = resolve; });
+  const pending = queue.run(async () => {
+    started();
+    await new Promise<void>((resolve) => { release = resolve; });
+  }, undefined, "user");
+  await ready;
+  queue.interrupt();
+  release();
+  await assert.rejects(pending, /interrupted/);
+});
 test("action deadlines cancel pending operations and preserve rejection cleanup", async () => {
   const controller = new AbortController();
   const pending = browserDeadline(new Promise(() => {}), 10000, controller.signal);

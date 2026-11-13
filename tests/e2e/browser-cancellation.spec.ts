@@ -121,7 +121,7 @@ test("semantic clicks cannot hit an overlay introduced by hover or just before d
 });
 
 for (const kind of ["mouse", "key"] as const) for (const takeover of ["input", "access"] as const) {
-  test(`browser ${takeover === "input" ? "user takeover" : "access revocation"} releases ${kind} input when cancellation races the down response`, async ({
+  test(`browser ${takeover === "input" ? "physical input preserves the person's action and" : "access revocation"} releases ${kind} input when the down response is pending`, async ({
     aiden,
   }) => {
     const { page, app } = aiden;
@@ -181,10 +181,10 @@ for (const kind of ["mouse", "key"] as const) for (const takeover of ["input", "
         .toBe(true);
       if (takeover === "input") {
         await app.evaluate(({ webContents }, id) => {
-          // This event is unrelated to the protocol-generated down event and represents
-          // a person taking control while Chromium's dispatch response is still pending.
+          // The person's unrelated input must preserve the action they started.
           webContents.fromId(id)!.sendInputEvent({ type: "keyUp", keyCode: "Escape" });
         }, guestId);
+        await app.evaluate(() => (globalThis as BrowserTestGlobal).__browserHeldInput!.release());
       } else if (kind === "mouse") {
         await command(page, { action: "agent_access", access: "off" });
       } else {
@@ -192,7 +192,8 @@ for (const kind of ["mouse", "key"] as const) for (const takeover of ["input", "
           (window as unknown as BrowserTestWindow).aidenAPI.ipc.invoke<BrowserState>("browser:get-state", workspaceId), E2E_WORKSPACE_ID);
         await command(page, { action: "defaults", defaults: { ...state.defaults, agentAccess: "off" } });
       }
-      await expect(pending).resolves.toMatchObject({
+      if (takeover === "input") await expect(pending).resolves.toEqual({ error: "" });
+      else await expect(pending).resolves.toMatchObject({
         error: expect.stringMatching(/interrupted/i),
       });
       expect(
@@ -211,7 +212,7 @@ for (const kind of ["mouse", "key"] as const) for (const takeover of ["input", "
 }
 
 for (const kind of ["mouse", "key"] as const) {
-  test(`matching human ${kind} input arriving before the CDP echo still interrupts the action`, async ({ aiden }) => {
+  test(`matching physical ${kind} input arriving before the CDP echo preserves the person's action`, async ({ aiden }) => {
     const { page, app } = aiden;
     await finishLmStudioOnboarding(page);
     const tabId = (await command(page, { action: "create" })).tabId!;
@@ -248,9 +249,9 @@ for (const kind of ["mouse", "key"] as const) {
       await expect.poll(() => app.evaluate(() => Boolean((globalThis as BrowserTestGlobal).__browserHeldInput?.downDelivered))).toBe(true);
       await app.evaluate(async ({ webContents }, { guestId, kind }) => {
         const guest = webContents.fromId(guestId)!;
-        // Physical keys are rejected immediately by their native source marker.
-        // Mouse events lack that marker: a matching first event can consume the
-        // expectation, but its subsequent CDP echo must interrupt continuation.
+        // Physical keys are distinguished by their native source marker.
+        // Mouse events lack that marker, so a matching first event can consume
+        // the expectation. Neither event cancels a user-sourced action.
         await new Promise<void>((resolve) => {
           if (kind === "mouse") {
             guest.once("before-mouse-event", () => resolve());
@@ -264,7 +265,7 @@ for (const kind of ["mouse", "key"] as const) {
       }, { guestId, kind });
       const outcome = await pending;
       const events = await app.evaluate(() => (globalThis as BrowserTestGlobal).__browserHeldInput?.events);
-      expect(outcome.error, JSON.stringify(events)).toMatch(/interrupted/i);
+      expect(outcome, JSON.stringify(events)).toEqual({ error: "" });
       if (kind === "key") {
         // Pin Electron's native contract: physical inputs are unmarked, while
         // the mandatory cleanup keyUp carries Blink's debugger source flag.
