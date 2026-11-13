@@ -13302,10 +13302,7 @@
         "x-aiden-provider-model-must-be-currently-available": true,
         "required": [
           "name",
-          "purpose",
-          "instructions",
-          "avatar",
-          "access"
+          "avatar"
         ],
         "properties": {
           "name": {
@@ -13315,7 +13312,8 @@
           },
           "purpose": {
             "type": "string",
-            "maxLength": 280
+            "maxLength": 280,
+            "description": "Optional from contract revision 61; absent means empty."
           },
           "openingGreeting": {
             "type": "string",
@@ -13326,13 +13324,15 @@
           "instructions": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 32000
+            "maxLength": 32000,
+            "description": "Optional from contract revision 61; absent means the starter instructions. An empty string is still refused."
           },
           "avatar": {
             "$ref": "#/components/schemas/BotSemanticAvatar"
           },
           "access": {
-            "$ref": "#/components/schemas/BotAccessUpdateRequest"
+            "$ref": "#/components/schemas/BotAccessUpdateRequest",
+            "description": "Optional."
           }
         },
         "additionalProperties": false
