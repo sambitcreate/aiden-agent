@@ -91,6 +91,7 @@ class AidenSettingsNavigationUiTest {
                         is AidenScreen.Settings -> AidenSettingsDestination(
                             page = screen.page,
                             settingsStore = settingsStore,
+                            approvalSettings = AidenApprovalSettingsController(scope),
                             appearanceStore = appearanceStore,
                             voiceInputStore = voiceInputStore,
                             installationStore = installationStore,

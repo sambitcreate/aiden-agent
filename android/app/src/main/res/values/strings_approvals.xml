@@ -42,7 +42,7 @@
     <string name="approvals_removing">Removing…</string>
     <string name="approvals_adding">Adding…</string>
     <string name="approvals_add_rule">Add rule</string>
-    <string name="approvals_add_rule_description">Pick a tool, a connected app or a site, or describe what a Bot wants to do.</string>
+    <string name="approvals_add_rule_description">Pick a tool or a connected app.</string>
     <string name="approvals_add_rule_words">Rules in your own words are written on your Mac.</string>
     <string name="approvals_picker_unavailable">Couldn’t load the list from your Mac.</string>
     <string name="approvals_picker_empty">Nothing to add a rule for yet.</string>
