@@ -238,10 +238,33 @@ test("turning daily check-ins on or raising notifications a day waits for the pe
   await h.service.call(BOT, { notifications: { perDay: 9 } }, { owner: true });
   assert.deepEqual([lastChange(h.entries).mode, lastChange(h.entries).heldReason], ["held", "widens"]);
   assert.deepEqual(h.writes, []);
-  // Doing less on its own applies at once.
+  // Quiet hours (22:00–07:00 by default) that stop covering a minute they did: off, shorter or moved.
+  for (const quietHours of [{ enabled: false }, { start: "23:00" }, { end: "06:00" }, { start: "20:00", end: "05:00" }]) {
+    await h.service.call(BOT, { notifications: { quietHours } }, { owner: true });
+    assert.deepEqual([lastChange(h.entries).mode, lastChange(h.entries).heldReason], ["held", "widens"], JSON.stringify(quietHours));
+    // Answer each card, so the waiting ones stay under the limit.
+    await h.service.respond(BOT, lastChange(h.entries).changeId, "dismiss");
+  }
+  assert.deepEqual(h.writes, []);
+  // Doing less on its own applies at once: fewer a day, or longer quiet hours.
   await h.service.call(BOT, { notifications: { perDay: 2 } }, { owner: true });
   assert.equal(lastChange(h.entries).mode, "applied");
   assert.equal(h.values().notifications.dailyLimit, 2);
+  await h.service.call(BOT, { notifications: { quietHours: { start: "21:00", end: "08:00" } } }, { owner: true });
+  assert.equal(lastChange(h.entries).mode, "applied");
+  assert.deepEqual(h.values().notifications.quietHours, { enabled: true, start: "21:00", end: "08:00" });
+});
+
+test("Apply writes only the fields the card listed, even when the Bot's arguments named more", async () => {
+  const h = harness();
+  // The name is already Chief, so the card lists only the instructions.
+  await h.service.call(BOT, { name: "Chief", instructions: "Plan trips." }, { owner: false });
+  const held = lastChange(h.entries);
+  assert.deepEqual(held.fields, ["instructions"]);
+  h.set({ name: "Planner" });
+  assert.deepEqual(await h.service.respond(BOT, held.changeId, "apply"), { ok: true, status: "applied" });
+  assert.equal(h.values().instructions, "Plan trips.");
+  assert.equal(h.values().name, "Planner", "a rename the card never showed is not undone by Apply");
 });
 
 test("Apply merges only what the Bot asked for onto the settings as they are then", async () => {

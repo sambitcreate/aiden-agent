@@ -118,14 +118,31 @@ export interface BotSettingsChangeEntryData {
   undoable?: false;
 }
 
+/** The minutes of the day quiet hours cover (a window past midnight wraps). */
+function quietMinutes(quiet: BotInterruptions["quietHours"]): Set<number> {
+  const minutes = new Set<number>();
+  if (!quiet.enabled) return minutes;
+  const at = (clock: string) => Number(clock.slice(0, 2)) * 60 + Number(clock.slice(3, 5));
+  const start = at(quiet.start);
+  const end = at(quiet.end);
+  if (start === end) return minutes;
+  for (let minute = start; minute !== end; minute = (minute + 1) % 1440) minutes.add(minute);
+  return minutes;
+}
+
 /**
  * Whether a patch has the Bot reach out more on its own: daily check-ins
- * turned on, or a higher daily notification limit. Those always wait for the
- * person, whoever started the run.
+ * turned on, a higher daily notification limit, or quiet hours that no
+ * longer cover every minute they did (turned off, shortened or moved).
+ * Those always wait for the person, whoever started the run.
  */
 export function botSettingsPatchWidens(current: BotSettingsValues, patch: BotSettingsPatch): boolean {
   if (patch.dailyCheckIns === true && !current.dailyCheckIns) return true;
-  return patch.notifications !== undefined && patch.notifications.dailyLimit > current.notifications.dailyLimit;
+  if (patch.notifications === undefined) return false;
+  if (patch.notifications.dailyLimit > current.notifications.dailyLimit) return true;
+  const after = quietMinutes(patch.notifications.quietHours);
+  for (const minute of quietMinutes(current.notifications.quietHours)) if (!after.has(minute)) return true;
+  return false;
 }
 
 export type BotInstructionsDiffLine = { kind: "same" | "added" | "removed"; text: string };

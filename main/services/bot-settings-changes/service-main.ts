@@ -7,7 +7,26 @@ import type { BotSettingsPatch, BotSettingsValues } from "../../../renderer/shar
 import { app, ipcMain } from "../../platform.js";
 import { botApplicationService } from "../bot-application-service-main.js";
 import { BOT_DESKTOP_AUDIENCE_ID } from "../bot-runtime-authority-main.js";
+import { BotCapabilityRevisionConflictError } from "../bot-capability-store-core.js";
 import { BotIdentityRevisionConflictError } from "../bot-store-core.js";
+
+/**
+ * The revision a change is decided on: the Bot's identity revision and its
+ * access revision (the model lives there), so a desktop edit to either since
+ * the read refuses the write.
+ */
+function joinRevision(bot: string, access: string): string {
+  return JSON.stringify([bot, access]);
+}
+function splitRevision(revision: string): { bot: string; access: string } {
+  try {
+    const [bot, access] = JSON.parse(revision) as unknown[];
+    if (typeof bot === "string" && typeof access === "string") return { bot, access };
+  } catch {
+    // Not one of ours: nothing matches it.
+  }
+  return { bot: "", access: "" };
+}
 import { BotSettingsConflictError, createBotSettingsChangeService, type BotSettingsModelOption } from "./service.js";
 
 async function botOf(botId: string): Promise<BotDefinition> {
@@ -25,9 +44,11 @@ async function models(botId: string): Promise<BotSettingsModelOption[]> {
       .map((model) => ({ providerId: provider.id, modelId: model.id, label: `${model.label} (${provider.label})` })));
 }
 
-async function writeModel(botId: string, model: NonNullable<BotSettingsPatch["model"]>): Promise<void> {
+async function writeModel(botId: string, model: NonNullable<BotSettingsPatch["model"]>, expectedAccessRevision: string): Promise<void> {
   const catalog = await botApplicationService.capabilityCatalog(BOT_DESKTOP_AUDIENCE_ID, botId);
   const view = await botApplicationService.getBotAccess(botId);
+  // Access changed since the read (a model or tools edit on the desktop): that edit wins.
+  if (view.revision !== expectedAccessRevision) throw new BotSettingsConflictError();
   const access: BotAccessUpdate = view.accessMode === "full"
     ? {
         accessMode: "full",
@@ -42,10 +63,12 @@ async function writeModel(botId: string, model: NonNullable<BotSettingsPatch["mo
   await botApplicationService.updateBotAccess({
     audienceId: BOT_DESKTOP_AUDIENCE_ID,
     botId,
-    expectedRevision: view.revision,
+    expectedRevision: expectedAccessRevision,
     access,
     // A model switch never re-grants folders or apps that drifted since.
     refuseDriftedGrants: true,
+  }).catch((error: unknown) => {
+    throw error instanceof BotCapabilityRevisionConflictError ? new BotSettingsConflictError() : error;
   });
 }
 
@@ -54,6 +77,8 @@ export const botSettingsChanges = createBotSettingsChangeService({
   async read(botId): Promise<{ values: BotSettingsValues; revision: string }> {
     const bot = await botOf(botId);
     const selection = await botApplicationService.modelSelection(BOT_DESKTOP_AUDIENCE_ID, botId).catch(() => undefined);
+    // Unreadable access leaves an empty revision, which no model write matches.
+    const access = await botApplicationService.getBotAccess(botId).then((view) => view.revision, () => "");
     const values: BotSettingsValues = {
       name: bot.name,
       description: bot.description ?? "",
@@ -63,7 +88,7 @@ export const botSettingsChanges = createBotSettingsChangeService({
       notifications: resolveBotInterruptions(bot.interruptions),
       model: selection ? { providerId: selection.providerId, modelId: selection.modelId } : null,
     };
-    return { values, revision: bot.revision };
+    return { values, revision: joinRevision(bot.revision, access) };
   },
   models,
   async write(botId, patch, expectedRevision) {
@@ -71,14 +96,17 @@ export const botSettingsChanges = createBotSettingsChangeService({
     if (patch.model === null) throw new Error("update_bot can't take a Bot's model away.");
     const identity = patch.name !== undefined || patch.description !== undefined || patch.look !== undefined
       || patch.instructions !== undefined || patch.dailyCheckIns !== undefined || patch.notifications !== undefined;
+    const expected = splitRevision(expectedRevision);
     const bot = await botOf(botId);
     // The revision the change (or its Undo) was decided on: an edit since wins.
-    if (bot.revision !== expectedRevision) throw new BotSettingsConflictError();
+    if (bot.revision !== expected.bot) throw new BotSettingsConflictError();
+    // Checked before anything is written, so a stale model never leaves half a change behind.
+    if (patch.model && (await botApplicationService.getBotAccess(botId)).revision !== expected.access) throw new BotSettingsConflictError();
     if (identity) {
       const description = patch.description ?? bot.description ?? "";
       await botApplicationService.updateBot({
         id: botId,
-        expectedRevision,
+        expectedRevision: expected.bot,
         name: patch.name ?? bot.name,
         ...(description ? { description } : {}),
         instructions: patch.instructions ?? bot.instructions,
@@ -93,7 +121,7 @@ export const botSettingsChanges = createBotSettingsChangeService({
         await botWakeUps.cancelAll(botId);
       }
     }
-    if (patch.model) await writeModel(botId, patch.model);
+    if (patch.model) await writeModel(botId, patch.model, expected.access);
     ipcMain.broadcast("bots:changed", { botId });
   },
   async appendEntry(botId, kind, data) {

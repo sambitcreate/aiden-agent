@@ -57,7 +57,10 @@ export class BotSettingsConflictError extends Error {
 
 export interface BotSettingsPorts {
   profileDir(): string;
-  /** The Bot's current settings, and the Bot revision they were read at. */
+  /**
+   * The Bot's current settings, and an opaque revision they were read at
+   * (production joins the Bot's and its access's revisions).
+   */
   read(botId: string): Promise<{ values: BotSettingsValues; revision: string }>;
   /** Models from providers already connected on this device. */
   models(botId: string): Promise<BotSettingsModelOption[]>;
@@ -279,7 +282,12 @@ export function createBotSettingsChangeService(ports: BotSettingsPorts) {
           // Only what the Bot asked for, merged onto the settings as they are now.
           const parsed = parseBotSettingsArgs(record.requested, current);
           if (!parsed.ok) return { ok: false, message: "This change can't be applied any more." };
-          patch = parsed.patch;
+          // Only the fields the card listed: an argument that changed nothing
+          // when proposed never overwrites what the person set since.
+          patch = {};
+          for (const field of record.fields) {
+            if (parsed.patch[field] !== undefined) (patch as Record<string, unknown>)[field] = parsed.patch[field];
+          }
         }
         const refusal = await modelAllowed(botId, patch.model);
         if (refusal) return { ok: false, message: "That model isn't connected any more." };
