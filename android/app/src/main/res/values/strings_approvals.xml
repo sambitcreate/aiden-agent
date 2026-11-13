@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Settings → Approvals (revision 61, approvals:settings). Copy follows the desktop. -->
+    <string name="approvals_title">Approvals</string>
+    <string name="approvals_group">Approvals</string>
+    <string name="approvals_mode_group">When Aiden asks</string>
+    <string name="approvals_mode_footer">Every Bot and workspace follows this, unless a workspace has its own in Workspace settings. Purchases, passwords and money always come to you.</string>
+    <string name="approvals_mode_ask">Ask</string>
+    <string name="approvals_mode_ask_helper">Asks before sending, spending or changing anything.</string>
+    <string name="approvals_mode_auto">Auto</string>
+    <string name="approvals_mode_auto_helper">A model approves routine actions and asks you about the rest.</string>
+    <string name="approvals_mode_auto_unavailable">Auto appears once a model is connected in Providers.</string>
+    <string name="approvals_mode_never">Never ask</string>
+    <string name="approvals_mode_never_helper">Asks only before purchases, sharing your data and the first use of your Mac. Only Block rules apply.</string>
+    <string name="approvals_mode_unavailable">Couldn’t load approvals from your Mac.</string>
+    <string name="approvals_unsupported">Update Aiden on your Mac to change approvals from this phone.</string>
+    <string name="approvals_rules">Rules</string>
+    <string name="approvals_rules_supporting">Always allow, Always ask and Blocked</string>
+    <plurals name="approvals_rules_count">
+        <item quantity="one">%d rule</item>
+        <item quantity="other">%d rules</item>
+    </plurals>
+    <string name="approvals_rules_title">Rules</string>
+    <string name="approvals_rules_unavailable">Couldn’t load your rules.</string>
+    <string name="approvals_group_allow">Always allow</string>
+    <string name="approvals_group_ask">Always ask</string>
+    <string name="approvals_group_block">Blocked</string>
+    <string name="approvals_group_mac">Allowed on this Mac</string>
+    <string name="approvals_empty_allow">Nothing yet. Choose Always on a card, or add a rule, to stop a question you keep answering.</string>
+    <string name="approvals_empty_ask">Add a rule to be asked before something that would otherwise run.</string>
+    <string name="approvals_empty_block">Add a rule to stop something in every mode.</string>
+    <string name="approvals_scope_mac">Every Bot and workspace</string>
+    <string name="approvals_scope_workspace">Only in %1$s</string>
+    <string name="approvals_scope_bot">Only for %1$s</string>
+    <string name="approvals_scope_chat">%1$s · one chat</string>
+    <string name="approvals_hand_off">You do it yourself</string>
+    <string name="approvals_decision_allow">Allow</string>
+    <string name="approvals_decision_ask">Ask</string>
+    <string name="approvals_decision_block">Block</string>
+    <string name="approvals_rule_decision">Decision for %1$s</string>
+    <string name="approvals_remove">Remove</string>
+    <string name="approvals_removing">Removing…</string>
+    <string name="approvals_adding">Adding…</string>
+    <string name="approvals_add_rule">Add rule</string>
+    <string name="approvals_add_rule_description">Pick a tool, a connected app or a site, or describe what a Bot wants to do.</string>
+    <string name="approvals_add_rule_words">Rules in your own words are written on your Mac.</string>
+    <string name="approvals_picker_unavailable">Couldn’t load the list from your Mac.</string>
+    <string name="approvals_picker_empty">Nothing to add a rule for yet.</string>
+    <string name="approvals_add_choose">When %1$s comes up</string>
+    <string name="approvals_unreadable">Your approval rules couldn’t be read. Fix them on your Mac first.</string>
+</resources>

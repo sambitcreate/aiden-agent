@@ -21,6 +21,7 @@ import sbtbiswas.AidenOnTheGo.config.AidenVoiceInputStore
 import sbtbiswas.AidenOnTheGo.models.READ_ALOUD_SETUP_GUIDANCE
 import sbtbiswas.AidenOnTheGo.navigation.AidenSettingsPage
 import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 
 /** Routes a Settings destination to its page. Every page is a full screen with its own back. */
@@ -28,6 +29,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 fun AidenSettingsDestination(
     page: AidenSettingsPage,
     settingsStore: AidenSettingsStore,
+    approvalSettings: AidenApprovalSettingsController,
     appearanceStore: AidenAppearanceStore,
     voiceInputStore: AidenVoiceInputStore,
     installationStore: AidenInstallationStore,
@@ -35,14 +37,20 @@ fun AidenSettingsDestination(
     onOpenInstallations: () -> Unit,
     onNavigateBack: () -> Unit
 ) {
+    val installations by installationStore.installations.collectAsStateWithLifecycle()
+    val activeId by installationStore.activeInstallationId.collectAsStateWithLifecycle()
+    val active = installations.firstOrNull { it.id == activeId }
+    // The pages need both: approvals:settings opens them, approval:respond lets this phone answer.
+    val approvalsAvailable = active?.let {
+        it.hasNegotiatedAccess(AidenRemoteCapability.APPROVALS_SETTINGS) && it.hasNegotiatedAccess(AidenRemoteCapability.APPROVAL_RESPOND)
+    } == true
     when (page) {
         AidenSettingsPage.ROOT -> {
-            val installations by installationStore.installations.collectAsStateWithLifecycle()
-            val activeId by installationStore.activeInstallationId.collectAsStateWithLifecycle()
             AidenSettingsScreen(
                 store = settingsStore,
                 voiceInputStore = voiceInputStore,
-                connectedDesktopName = installations.firstOrNull { it.id == activeId }?.name,
+                connectedDesktopName = active?.name,
+                approvalSettings = approvalSettings.takeIf { approvalsAvailable },
                 onNavigate = onNavigate,
                 onOpenInstallations = onOpenInstallations,
                 onNavigateBack = onNavigateBack
@@ -57,6 +65,13 @@ fun AidenSettingsDestination(
         )
         AidenSettingsPage.ADD_PROVIDER -> AidenAddProviderScreen(settingsStore, onNavigateBack)
         AidenSettingsPage.ABOUT -> AidenAboutSettingsScreen(onNavigateBack)
+        AidenSettingsPage.APPROVALS -> AidenApprovalSettingsScreen(
+            controller = approvalSettings,
+            available = approvalsAvailable,
+            onOpenRules = { onNavigate(AidenSettingsPage.APPROVAL_RULES) },
+            onNavigateBack = onNavigateBack
+        )
+        AidenSettingsPage.APPROVAL_RULES -> AidenApprovalRulesScreen(approvalSettings, approvalsAvailable, onNavigateBack)
     }
 }
 
@@ -71,6 +86,7 @@ fun AidenSettingsScreen(
     voiceInputStore: AidenVoiceInputStore,
     connectedDesktopName: String?,
     onNavigate: (AidenSettingsPage) -> Unit,
+    approvalSettings: AidenApprovalSettingsController? = null,
     onOpenInstallations: () -> Unit,
     onNavigateBack: () -> Unit
 ) {
@@ -120,6 +136,9 @@ fun AidenSettingsScreen(
                     )
                 }
             }
+        }
+        if (approvalSettings != null) {
+            item(key = "approvals") { AidenApprovalsRootGroup(approvalSettings, onNavigate) }
         }
         item(key = "memory") {
             AidenSettingsMemoryGroup(state = state, onToggle = store::setMemoryEnabled)

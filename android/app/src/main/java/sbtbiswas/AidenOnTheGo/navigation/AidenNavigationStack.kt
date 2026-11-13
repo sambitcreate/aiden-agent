@@ -10,7 +10,9 @@ enum class AidenSettingsPage(val token: String) {
     VOICE("voice"),
     PROVIDERS("providers"),
     ADD_PROVIDER("add-provider"),
-    ABOUT("about");
+    ABOUT("about"),
+    APPROVALS("approvals"),
+    APPROVAL_RULES("approval-rules");
 
     companion object {
         fun fromToken(token: String): AidenSettingsPage? = entries.firstOrNull { it.token == token }
