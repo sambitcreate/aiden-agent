@@ -387,7 +387,10 @@ data class AidenGitResult(
     val worktrees: AidenGitWorktrees? = null,
     val mutation: AidenGitMutation? = null,
     val result: AidenGitMutation? = null
-)
+) {
+    val canCommitReviewedChanges: Boolean
+        get() = capability?.allowed == true && review?.files?.isNotEmpty() == true && snapshotId != null
+}
 
 /**
  * Reads a Git reply as the Mac sends it: every projection arrives under `result`, tagged by

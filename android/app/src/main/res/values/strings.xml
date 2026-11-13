@@ -1373,4 +1373,5 @@
     <string name="bot_access_always">Always for this folder</string>
     <string name="bot_issue_allow_folder">Allow this folder</string>
     <string name="bot_access_not_now">Not now</string>
+    <string name="git_commit_unavailable">Commit is unavailable for this review.</string>
 </resources>
