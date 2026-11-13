@@ -520,7 +520,8 @@ data class AidenBotApproval(
                 alwaysCount = aidenBotApprovalCount(obj, "alwaysCount"),
                 card = obj["card"]?.let {
                     try {
-                        AidenApprovalCard.parse(it)
+                        // Only buttons the Bot route can send are kept (see forBotRoute).
+                        AidenApprovalCard.parse(it).forBotRoute()
                     } catch (_: AidenBotUxContractException) {
                         throw AidenBotContractException.InvalidField("approval.card")
                     }

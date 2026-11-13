@@ -1781,10 +1781,15 @@ class AidenBotSessionController(
         var claimed = false
         // A typed card (revision 61) offers exactly its buttons: only those answers go out.
         val card = approval.card
-        val button = card?.let { it.button(decision, scope ?: AidenApprovalScope.ONCE) ?: return false }
+        val button = card?.button(decision, scope ?: AidenApprovalScope.ONCE)
+        // A card shows only answers this route can send; anything else is said, never dropped quietly.
+        if (card != null && (button == null ||
+                (scope != null && scope != AidenApprovalScope.ONCE && scope != AidenApprovalScope.ALWAYS))) {
+            _state.update { it.copy(actionError = ANSWER_ON_MAC) }
+            return false
+        }
         if (released || (scope != null && scope != AidenApprovalScope.ONCE && button == null &&
             !(scope == AidenApprovalScope.ALWAYS && decision == AidenApprovalDecision.ALLOW && allowedSupported && approval.alwaysCount != null))) return false
-        if (button != null && scope != null && scope != AidenApprovalScope.ONCE && scope != AidenApprovalScope.ALWAYS) return false
         val chosenScope = scope?.takeIf { it == AidenApprovalScope.ALWAYS }
         val generation = approvalGeneration
         val writes = approvalWrites
@@ -2373,6 +2378,8 @@ class AidenBotSessionController(
         /** Tries a message gets on a connection that keeps failing before it says "Couldn't send". */
         const val MAX_CONNECTION_ATTEMPTS = 3
         const val SEND_FAILED = "Aiden couldn’t send that. Try again."
+        /** A typed card answer this phone can't send to a Bot's approval route. */
+        const val ANSWER_ON_MAC = "Answer this on your Mac."
         const val UNREACHABLE = "Aiden couldn’t reach your Mac. Try again."
         const val ANSWER_FAILED = "Aiden couldn’t send that answer. Try again."
         /** Revision 37 copy, shared with iOS and desktop. */

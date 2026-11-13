@@ -137,7 +137,8 @@ class AidenChatViewModel(
     val pendingApproval: StateFlow<AidenPendingApproval?> = _pendingApproval.asStateFlow()
     /**
      * Revision 61: the typed card's answered line ("Allowed once"), shown in the card's place at
-     * once after a tap. A refusal brings the card back and drops the line.
+     * once after a tap. A refusal brings the card back and drops the line; the next approval, the
+     * end of the run and the start of another one drop it too.
      */
     private val _answeredApproval = MutableStateFlow<AidenApprovalAnsweredLine?>(null)
     val answeredApproval: StateFlow<AidenApprovalAnsweredLine?> = _answeredApproval.asStateFlow()
@@ -770,6 +771,15 @@ class AidenChatViewModel(
             coordinator.client.collect { client ->
                 if (client != null && client !== transcriptClient && activeClient() === client) loadChat()
             }
+        }
+        // The answered line belongs to one approval in one run.
+        viewModelScope.launch {
+            _pendingApproval.collect { next ->
+                if (next != null) _answeredApproval.update { line -> line?.takeIf { it.approvalId == next.id } }
+            }
+        }
+        viewModelScope.launch {
+            _streamState.collect { state -> if (state?.isTerminal == true) _answeredApproval.value = null }
         }
         resumeActiveStreamIfNeeded()
         viewModelScope.launch {
@@ -2024,6 +2034,7 @@ class AidenChatViewModel(
 
     private fun startStreaming(originalStream: AidenChatCache.ActiveStream) {
         val client = activeClient() ?: return
+        if (activeStreamId != originalStream.streamId) _answeredApproval.value = null
         activeStreamId = originalStream.streamId
         streamStartMessageIds = _chat.value?.messages.orEmpty().mapTo(HashSet()) { it.id }
         endedReply = null
@@ -3023,6 +3034,7 @@ class AidenChatViewModel(
                 foreignReconcileJob?.cancel()
                 foreignReconcileJob = null
                 foreignRunId = projection.runId
+                _answeredApproval.value = null
                 foreignRunsPresented += 1
                 foreignProjection = projection
                 transcript.publishCurrent()
@@ -3096,6 +3108,7 @@ class AidenChatViewModel(
         discardForeignTranscript()
         foreignRunId = null
         foreignProjection = null
+        _answeredApproval.value = null
         foreignRunAccountedRunId = projection.runId
         val client = activeClient()
         foreignRunEndedWriteToken = chatCache.reserveChatWrite()
@@ -3152,6 +3165,7 @@ class AidenChatViewModel(
         discardForeignTranscript()
         foreignRunId = null
         foreignProjection = null
+        _answeredApproval.value = null
         if (!wasPresented || activeStreamId != null) return
         liveReveal.reset()
         _reasoning.value = ""

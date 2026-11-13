@@ -206,6 +206,31 @@ class AidenBotUxSessionControllerTest {
     }
 
     @Test
+    fun aBotCardNeverShowsAnAllowItsRouteCantSendAndAnUnsendableTapIsSaid() = runTest {
+        // A Mac card with Allow once and Allow in this chat: a Bot's route takes once or Always only.
+        val macCard = fixture.getValue("streamApprovals").jsonObject.getValue("complete").jsonObject.getValue("card").jsonObject
+        val mixed = approval("botAlways").with("card" to macCard)
+        val shown = session(approval = mixed).approval!!.card!!
+        assertEquals(listOf(null), shown.allowButtons.map { it.scope })
+        assertNull(shown.allowOnMac)
+
+        // Only the chat allow: the card is Deny alone and says where to allow it.
+        val chatOnly = JsonObject(macCard + ("buttons" to JsonArray(macCard.getValue("buttons").jsonArray.filter {
+            it.jsonObject["scope"]?.jsonPrimitive?.content == "chat" || it.jsonObject.getValue("decision").jsonPrimitive.content == "deny"
+        })))
+        val transport = Transport(session(approval = approval("botAlways").with("card" to chatOnly)))
+        val card = transport.current.approval!!.card!!
+        assertEquals(listOf("Deny"), card.buttons.map { it.label })
+        assertEquals(AidenApprovalCard.ALLOW_ON_MAC, card.allowOnMac)
+        val controller = AidenBotSessionController(transport.current.botId, transport, backgroundScope)
+        controller.refetch()
+        assertFalse(controller.respondToApproval(AidenApprovalDecision.ALLOW, AidenApprovalScope.CHAT))
+        assertEquals(AidenBotSessionController.ANSWER_ON_MAC, controller.state.value.actionError)
+        assertTrue(transport.calls.isEmpty())
+        assertEquals("wait-61", controller.state.value.session!!.approval?.waitId)
+    }
+
+    @Test
     fun aCardWithoutAnAllowButtonSendsNoAllow() = runTest {
         val denyOnly = approval("botAlways").let { raw ->
             raw.with("card" to AidenApprovalCard.parse(raw.getValue("card")).denyOnly().toJson())

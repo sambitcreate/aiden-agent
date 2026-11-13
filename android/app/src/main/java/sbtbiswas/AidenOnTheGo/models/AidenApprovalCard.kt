@@ -87,6 +87,20 @@ data class AidenApprovalCard(
     fun denyOnly(): AidenApprovalCard =
         if (!hasAllow) this else copy(buttons = listOf(denyButton), allowOnMac = allowOnMac ?: ALLOW_ON_MAC)
 
+    /**
+     * The card as a Bot approval's route can answer it. `POST /approvals/{waitId}/respond` for a
+     * Bot takes a one-time allow or Always, so an allow in any other scope is never shown; with no
+     * allow left the card is Deny alone, saying where to allow it.
+     */
+    fun forBotRoute(): AidenApprovalCard {
+        val kept = buttons.filter {
+            it.decision == AidenApprovalDecision.DENY || it.effectiveScope == AidenApprovalScope.ONCE || it.effectiveScope == AidenApprovalScope.ALWAYS
+        }
+        if (kept.size == buttons.size) return this
+        return if (kept.any { it.decision == AidenApprovalDecision.ALLOW }) copy(buttons = kept)
+        else copy(buttons = kept, allowOnMac = allowOnMac ?: ALLOW_ON_MAC)
+    }
+
     /** The card without its Always button, for a Bot approval this device can't make standing. */
     fun withoutAlways(): AidenApprovalCard =
         copy(buttons = buttons.filter { it.scope != AidenApprovalScope.ALWAYS })
