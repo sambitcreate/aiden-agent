@@ -3906,22 +3906,18 @@ export const llmClient = {
             contentOverrides.get(currentUser.id),
           )
         : undefined;
-      let initialMessages = (await promptJournal.buildContext()).messages;
+      // One read of the journal's whole branch gives both the model context
+      // and the run's starting taint. Outside content already in the
+      // transcript taints the run from the start, including what a compaction
+      // folded away.
+      const journalBranch = await promptJournal.getBranch();
+      let initialMessages = (await promptJournal.buildContext(journalBranch)).messages;
       if (onDemandTools) {
         // Tools this chat already loaded or called stay declared from the start.
         runtimeTools = onDemandTools.initialTools(initialMessages);
         generationContextOptions.tools = runtimeTools;
       }
-      // Outside content already in the transcript taints the run from the
-      // start, including what a compaction folded away: the journal's whole
-      // branch is read, and a branch that can't be read counts as tainted.
-      const journalHistory = await promptJournal.getBranch().then(
-        (branch) => runTaintHistoryOfBranch(branch),
-        (error: unknown) => {
-          logger.warn("pi", "Could not read the chat's journal for taint; treating the run as tainted.", error);
-          return [{ role: "journal", outside: true as const }];
-        },
-      );
+      const journalHistory = runTaintHistoryOfBranch(journalBranch);
       runTaint = new RunTaint({
         personText: generationChat.messages.filter((message) => message.role === "user").map((message) => message.content),
         history: [

@@ -500,8 +500,8 @@ export async function projectVisibleHistoryWithoutSkills<M extends PiSessionMeta
       getBranch,
       // Recall must not bypass the projection by traversing historical branches.
       getEntries: getBranch,
-      buildContext: async () => {
-        const branch = await getBranch();
+      buildContext: async (given) => {
+        const branch = given ?? await getBranch();
         const lastCompaction = branch.findIndex((entry, index) =>
           entry.type === "compaction" && !branch.slice(index + 1).some((later) => later.type === "compaction"));
         const entries = lastCompaction < 0 ? branch : branch.slice(lastCompaction);
