@@ -403,7 +403,8 @@ extension AidenChatViewModel {
                 ? AidenApprovalScope.offered(approval.scopes?.map(\.rawValue))
                 : [.once],
             toolName: approval.toolName,
-            schedule: AidenApprovalSchedule.card(approval.schedule, toolName: approval.toolName)
+            schedule: AidenApprovalSchedule.card(approval.schedule, toolName: approval.toolName),
+            card: approval.card
         )
     }
 
@@ -588,7 +589,8 @@ extension AidenChatViewModel {
     func respondToForeignApproval(
         _ decision: AidenApprovalDecision,
         approval: AidenPendingApproval,
-        scope: AidenApprovalScope
+        scope: AidenApprovalScope,
+        onSend: (() -> Void)? = nil
     ) async {
         guard let runId = foreignRun?.runId,
               let context = liveOwner else { return }
@@ -615,6 +617,7 @@ extension AidenChatViewModel {
         defer { isRespondingToApproval = false }
         foreignRun?.markAnsweredLocally(approval.id)
         publishForeignRun(context: context)
+        onSend?()
         do {
             let result = try await coordinator.remoteClient(for: context).respondToRunApproval(
                 runId: runId,

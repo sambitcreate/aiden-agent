@@ -356,7 +356,12 @@ final class AidenChatViewModel {
     private var approvalSnapshotGeneration: UInt64 = 0
     private var approvalSnapshotInFlight: (streamID: String, context: AidenRemoteRequestContext, approval: AidenPendingApproval?, state: AidenStreamState?)?
     private(set) var isRenaming = false
-    var pendingApproval: AidenPendingApproval?
+    var pendingApproval: AidenPendingApproval? {
+        // A card back on screen (a refusal, or the next request) replaces the answered line.
+        didSet { if pendingApproval != nil { approvalAnsweredLine = nil } }
+    }
+    /// Revision 61: the tapped button's `answered` line, shown at once in the card's place.
+    private(set) var approvalAnsweredLine: String?
     private var questionSnapshotGeneration: UInt64 = 0
     var pendingQuestion: AidenPendingQuestion?
     var isRespondingToQuestion = false
@@ -2714,10 +2719,22 @@ final class AidenChatViewModel {
         }
     }
 
+    /// Revision 61: answers with one of the typed card's buttons, sending only
+    /// the decision and scope it offers. Its `answered` line shows at once.
+    func respondToApproval(button: AidenApprovalCardButton, approvalID: String) async {
+        guard let approval = pendingApproval, approval.id == approvalID,
+              let card = approval.card, card.buttons.contains(button) else { return }
+        let line = button.answered
+        await respondToApproval(button.decision, approvalID: approvalID, scope: button.offeredScope) {
+            self.approvalAnsweredLine = line
+        }
+    }
+
     func respondToApproval(
         _ decision: AidenApprovalDecision,
         approvalID: String,
-        scope: AidenApprovalScope = .once
+        scope: AidenApprovalScope = .once,
+        onSend: (() -> Void)? = nil
     ) async {
         guard !isReadOnlyPresentation, isConnected, !isRespondingToApproval, !isStopping,
               let approval = pendingApproval, approval.id == approvalID else { return }
@@ -2726,7 +2743,7 @@ final class AidenChatViewModel {
             return
         }
         if activeStreamID == nil, foreignRun != nil {
-            await respondToForeignApproval(decision, approval: approval, scope: scope)
+            await respondToForeignApproval(decision, approval: approval, scope: scope, onSend: onSend)
             return
         }
         guard let streamID = activeStreamID,
@@ -2757,6 +2774,7 @@ final class AidenChatViewModel {
         let requestedScope: AidenApprovalScope? = decision == .allow && scope != .once
             && approval.scopes.contains(scope) ? scope : nil
         pendingApproval = nil
+        onSend?()
         streamState = .running
         do {
             let response = try await coordinator.remoteClient(for: context).respondToApproval(

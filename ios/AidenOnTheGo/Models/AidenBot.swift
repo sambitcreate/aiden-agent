@@ -646,7 +646,9 @@ struct AidenBotChatActivity: Codable, Equatable, Sendable {
 struct AidenBotCreateRequest: Codable, Equatable, Sendable {
     let name: String
     let purpose: String
-    let instructions: String
+    /// Nil only for revision 61's one-field create (`bot:templates`): the Mac
+    /// then uses its starter instructions and the Bot asks what to help with.
+    let instructions: String?
     let avatar: AidenBotSemanticAvatar
     /// Optional since revision 25: omitted means Full Access by default, and a
     /// Bot created without an AI model reports `sessionState: needs_model`.
@@ -655,13 +657,15 @@ struct AidenBotCreateRequest: Codable, Equatable, Sendable {
     init(
         name: String,
         purpose: String,
-        instructions: String,
+        instructions: String?,
         avatar: AidenBotSemanticAvatar,
         access: AidenBotAccessUpdate? = nil
     ) throws {
         try AidenBotWire.validateString(name, field: "name", maxLength: AidenBotWire.maxNameLength, allowEmpty: false)
         try AidenBotWire.validateString(purpose, field: "purpose", maxLength: AidenBotWire.maxPurposeLength, allowEmpty: true)
-        try AidenBotWire.validateString(instructions, field: "instructions", maxLength: AidenBotWire.maxInstructionsLength, allowEmpty: false)
+        if let instructions {
+            try AidenBotWire.validateString(instructions, field: "instructions", maxLength: AidenBotWire.maxInstructionsLength, allowEmpty: false)
+        }
         self.name = name
         self.purpose = purpose
         self.instructions = instructions
@@ -682,7 +686,7 @@ struct AidenBotCreateRequest: Codable, Equatable, Sendable {
             maxLength: AidenBotWire.maxPurposeLength,
             allowEmpty: true
         )
-        instructions = try AidenBotWire.requiredString(
+        instructions = try AidenBotWire.optionalString(
             values,
             forKey: .instructions,
             maxLength: AidenBotWire.maxInstructionsLength
@@ -691,6 +695,11 @@ struct AidenBotCreateRequest: Codable, Equatable, Sendable {
             from: values.superDecoder(forKey: .avatar)
         )
         access = try values.decodeIfPresent(AidenBotAccessUpdate.self, forKey: .access)
+    }
+
+    /// The same request as a one-field create: no instructions, so the Mac's starter ones apply.
+    func withoutInstructions() throws -> Self {
+        try Self(name: name, purpose: purpose, instructions: nil, avatar: avatar, access: access)
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {

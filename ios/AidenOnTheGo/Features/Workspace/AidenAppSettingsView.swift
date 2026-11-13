@@ -28,6 +28,18 @@ struct AidenAppSettingsView: View {
     @State private var isSavingMemory = false
     @AppStorage(AidenWorkspaceDefaultApplication.permissionKey) private var defaultWorkspacePermissionRaw = AidenWorkspacePermission.ask.rawValue
     @AppStorage(AidenVoiceInputMode.defaultsKey) private var voiceInputModeRaw = AidenVoiceInputMode.onDevice.rawValue
+    @AppStorage(AidenToolActivityPreference.defaultsKey) private var showToolActivity = false
+
+    /// Revision 61 (`approvals:settings`): the Mac's approval mode and rules.
+    private var offersApprovalSettings: Bool {
+        coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .approvalsSettings) == true
+            && coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .approvalRespond) == true
+    }
+
+    /// Revision 61: the Mac offers the new cards, so Show tool activity applies.
+    private var offersBotUX: Bool {
+        coordinator.installationStore.activeInstallation?.offersBotUX == true
+    }
 
     private func loadMemorySettings() async {
         do {
@@ -100,6 +112,26 @@ struct AidenAppSettingsView: View {
                     Label("Providers", systemImage: "server.rack")
                 }
             } footer: { Text("Manage model connections on your paired machine.") }
+
+            if offersApprovalSettings, let client = try? coordinator.remoteClient() {
+                Section {
+                    NavigationLink {
+                        AidenApprovalSettingsView(model: AidenApprovalSettingsModel(transport: client))
+                    } label: {
+                        Label("Approvals", systemImage: "checkmark.shield")
+                    }
+                } footer: { Text("When Aiden asks before acting, and the rules it follows on your paired machine.") }
+            }
+
+            if offersBotUX {
+                Section {
+                    Toggle("Show tool activity", isOn: $showToolActivity)
+                } header: {
+                    Text("Chat")
+                } footer: {
+                    Text("Shows what a Bot is doing while it works. Off, its status line reads “Thinking”. This applies to this iPhone only.")
+                }
+            }
 
             Section {
                 Toggle(

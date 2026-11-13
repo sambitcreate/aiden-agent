@@ -210,6 +210,8 @@ func aidenBotHomeRows(
 
 private enum AidenBotsHomeSheet: Identifiable {
     case create
+    /// Revision 61 (`bot:templates`): the Mac's templates, with their versions.
+    case templates
     case profile(AidenBotSummary)
     /// Profile, opened straight to Memory or Advanced from a row's menu.
     case memory(AidenBotSummary)
@@ -218,6 +220,7 @@ private enum AidenBotsHomeSheet: Identifiable {
     var id: String {
         switch self {
         case .create: "create"
+        case .templates: "templates"
         case let .profile(bot): "profile-\(bot.id)"
         case let .memory(bot): "memory-\(bot.id)"
         case let .advanced(bot): "advanced-\(bot.id)"
@@ -393,6 +396,20 @@ struct AidenBotsHomeView: View {
                     // Reopened by Try Again: it goes only to the Mac it was for.
                     startCreate(input, retrying: createPrefill, on: target)
                 }
+            case .templates:
+                AidenBotTemplatesView(
+                    presets: presets,
+                    isBusy: isStartingPreset,
+                    canCreate: canCreateBot,
+                    onUse: { preset in
+                        presentedSheet = nil
+                        Task { await startChat(with: preset) }
+                    },
+                    onOpen: { botID in
+                        presentedSheet = nil
+                        openExisting(botID: botID)
+                    }
+                )
             case let .profile(bot):
                 AidenBotProfileView(
                     coordinator: coordinator,
@@ -494,13 +511,32 @@ struct AidenBotsHomeView: View {
                 DefaultToolbarItem(kind: .search, placement: .primaryAction)
                 ToolbarSpacer(.fixed, placement: .primaryAction)
                 ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        createPrefill = nil
-                        presentedSheet = .create
-                    } label: {
-                        Label("New Bot", systemImage: "plus")
+                    if offersTemplates {
+                        Menu {
+                            Button {
+                                createPrefill = nil
+                                presentedSheet = .create
+                            } label: {
+                                Label("New Bot", systemImage: "plus")
+                            }
+                            .disabled(!canTapNewBot)
+                            Button {
+                                presentedSheet = .templates
+                            } label: {
+                                Label("Templates", systemImage: "square.grid.2x2")
+                            }
+                        } label: {
+                            Label("New Bot", systemImage: "plus")
+                        }
+                    } else {
+                        Button {
+                            createPrefill = nil
+                            presentedSheet = .create
+                        } label: {
+                            Label("New Bot", systemImage: "plus")
+                        }
+                        .disabled(!canTapNewBot)
                     }
-                    .disabled(!canTapNewBot)
                 }
             }
     }
@@ -573,6 +609,7 @@ struct AidenBotsHomeView: View {
                 isBusy: isStartingPreset,
                 canCreate: canCreateBot && canOpenNewBot,
                 onStartChat: { preset in Task { await startChat(with: preset) } },
+                onOpen: { botID in openExisting(botID: botID) },
                 onCreateOwn: {
                     createPrefill = nil
                     presentedSheet = .create
@@ -842,7 +879,13 @@ struct AidenBotsHomeView: View {
     /// preset reuses its Idempotency-Key.
     @MainActor
     private func startChat(with preset: AidenBotPreset) async {
-        guard !isStartingPreset, let request = try? AidenBotPresetCreateRequest(presetId: preset.id) else { return }
+        // Revision 61: a template already made opens its Bot instead.
+        if let existing = preset.template?.existingBotId {
+            openExisting(botID: existing)
+            return
+        }
+        guard !isStartingPreset,
+              let request = try? AidenBotPresetCreateRequest(presetId: preset.id, version: preset.template?.version) else { return }
         let key = presetAttempt?.presetID == preset.id ? presetAttempt!.key : UUID()
         presetAttempt = (preset.id, key)
         isStartingPreset = true
@@ -859,8 +902,33 @@ struct AidenBotsHomeView: View {
             return
         } catch {
             if !aidenBotSessionFailureIsAmbiguous(error) { presetAttempt = nil }
+            if case let AidenRemoteClientError.server(409, body) = error, body.code.rawValue == "revision_conflict" {
+                // Revision 61: the template changed on the Mac; show the new version.
+                loadError = body.message.isEmpty ? "This template changed. Close it and open it again." : body.message
+                if let context = try? coordinator.requestContext(),
+                   let client = try? coordinator.remoteClient(for: context) {
+                    await loadPresets(client: client)
+                }
+                return
+            }
             loadError = "\(preset.name) couldn’t be created. Please try again."
         }
+    }
+
+    /// Revision 61: Open on a template that already has a Bot.
+    @MainActor
+    private func openExisting(botID: String) {
+        if let bot = allBots.first(where: { $0.id == botID }) {
+            openChat(for: bot)
+        } else {
+            loadError = "That Bot isn’t on this list yet. Pull to refresh and try again."
+        }
+    }
+
+    /// The Mac sends template versions to this phone (`bot:templates`).
+    private var offersTemplates: Bool {
+        coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .botTemplates) == true
+            && !presets.isEmpty
     }
 
     @MainActor

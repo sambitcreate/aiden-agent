@@ -236,7 +236,21 @@ struct AidenLiveResponseView: View {
                     .transition(.opacity)
             }
 
-            if let approval = model.pendingApproval {
+            if let approval = model.pendingApproval, let card = approval.card {
+                // Revision 61: the Mac's own card, answered with exactly its buttons.
+                AidenTypedApprovalCard(
+                    card: card,
+                    canRespond: approval.canRespond && approval.hasRequiredWriteCapability,
+                    onAnswer: { button in
+                        Task { await model.respondToApproval(button: button, approvalID: approval.id) }
+                    }
+                )
+                .disabled(!model.isConnected || model.isReadOnlyPresentation || model.isRespondingToApproval || model.isStopping)
+                .id(approval.id)
+            } else if model.pendingApproval == nil, let answered = model.approvalAnsweredLine {
+                AidenApprovalAnsweredLine(text: answered)
+                    .transition(.opacity)
+            } else if let approval = model.pendingApproval {
                 AidenApprovalCard(
                     summary: approval.summary,
                     toolName: approval.toolName,

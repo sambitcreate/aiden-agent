@@ -16,6 +16,9 @@ struct AidenBotSessionChatView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var model: AidenBotSessionModel?
     @State private var summary: AidenBotSummary?
+    /// The Bot's own stored wording; revision 61 phones read Show tool activity instead.
+    @State private var storedWording: AidenBotChatActivityWording?
+    @AppStorage(AidenToolActivityPreference.defaultsKey) private var showToolActivity = false
     /// Lives here, not in the composer: the composer leaves while the Bot needs a model.
     @State private var composerSession: AidenComposerSession
     @State private var peerExchangeID: String?
@@ -88,6 +91,16 @@ struct AidenBotSessionChatView: View {
     @State private var onScreen = AidenBotChatOnScreen()
 
     /// The machine this chat belongs to.
+    /// The status line's wording: the Bot's own, or this phone's Show tool
+    /// activity switch on a Mac with the revision 61 cards.
+    private func applyWording() {
+        model?.wording = AidenToolActivityPreference.wording(
+            botWording: storedWording,
+            hostOffersBotUX: ownerConnection?.installation.offersBotUX == true,
+            showToolActivity: showToolActivity
+        )
+    }
+
     private var ownerConnection: AidenHostConnection? {
         coordinator.hosts.connection(for: model?.owner.instanceId ?? machineID)
     }
@@ -259,7 +272,8 @@ struct AidenBotSessionChatView: View {
             tools.advanced(
                 onSaved: { updated in
                     summary = AidenBotSummary(detail: updated)
-                    model?.wording = updated.chatActivity?.wording ?? .follows
+                    storedWording = updated.chatActivity?.wording
+                    applyWording()
                     Task { await model?.load() }
                 },
                 onSaveFailed: { advancedSaveError = $0 }
@@ -318,6 +332,7 @@ struct AidenBotSessionChatView: View {
         // open from the saved features while the phone connects, before this
         // connection negotiated a grant (`bot:handoffs` after the Mac updates);
         // once it is negotiated, a feed that opened without it opens again.
+        .onChange(of: showToolActivity) { _, _ in applyWording() }
         .onChange(of: aidenBotSessionFeedGrants(ownerConnection?.installation)) { _, grants in
             guard let model, grants != feedOpenedWith else { return }
             feedOpenedWith = grants
@@ -499,6 +514,8 @@ struct AidenBotSessionChatView: View {
                         }
                         if let approval = model.approval {
                             approvalCard(approval, model: model)
+                        } else if let answered = model.approvalAnsweredLine {
+                            AidenApprovalAnsweredLine(text: answered)
                         }
                         AidenBotStatusLineView(model: model)
                     }
@@ -663,6 +680,35 @@ struct AidenBotSessionChatView: View {
                 onRespond: { decision in
                     Task { await model.respondToProposal(card.proposalId, decision: decision) }
                 }
+            )
+        case let .settingsChange(change):
+            AidenBotSettingsChangeCardView(
+                change: change,
+                botName: bot?.name ?? "This Bot",
+                canRespond: canWrite,
+                isBusy: model.respondingBotUX.contains(change.id),
+                onRespond: { decision in Task { await model.respondToSettingsChange(change, decision: decision) } }
+            )
+        case let .skillProposal(proposal):
+            AidenBotSkillProposalCardView(
+                proposal: proposal,
+                canRespond: canWrite,
+                isBusy: model.respondingBotUX.contains(proposal.id),
+                onRespond: { decision in Task { await model.respondToSkillProposal(proposal, decision: decision) } }
+            )
+        case let .lesson(lesson):
+            AidenBotLessonCardView(
+                lesson: lesson,
+                canRespond: canWrite,
+                isBusy: model.respondingBotUX.contains(lesson.id),
+                onRespond: { decision in Task { await model.respondToLesson(lesson, decision: decision) } },
+                onUndo: { Task { await model.removeLesson(lesson) } }
+            )
+        case let .memoryTidy(tidy):
+            AidenBotMemoryTidyLine(
+                tidy: tidy,
+                canUndo: canWrite && !model.respondingBotUX.contains(tidy.id),
+                onUndo: { Task { await model.undoMemoryTidy(tidy) } }
             )
         case let .peer(peer):
             if ownerConnection?.server?.supportsBotPeerExchanges == true {
@@ -874,6 +920,19 @@ struct AidenBotSessionChatView: View {
     /// composer in view.
     @ViewBuilder
     private func approvalCard(_ approval: AidenRemoteBotApproval, model: AidenBotSessionModel) -> some View {
+        if let card = approval.card {
+            // Revision 61: the Mac's card, with Always among its own buttons.
+            AidenTypedApprovalCard(card: card, canRespond: canRespondToApprovals) { button in
+                Task { await model.answerApproval(button: button) }
+            }
+            .disabled(!canRespondToApprovals || !model.canAnswerApproval)
+            .id(approval.waitId)
+        } else {
+            legacyApprovalCard(approval, model: model)
+        }
+    }
+
+    private func legacyApprovalCard(_ approval: AidenRemoteBotApproval, model: AidenBotSessionModel) -> some View {
         VStack(spacing: 10) {
             if let count = approval.alwaysCount, model.allowedSupported {
                 Text("You’ve allowed this \(count) times in the last 2 weeks.").font(.footnote).foregroundStyle(palette.secondary)
@@ -915,6 +974,11 @@ struct AidenBotSessionChatView: View {
             questionCard(model, stop: nil)
         }
         if let notice = model.approvalSuccessNotice { Text(notice).font(.footnote).foregroundStyle(palette.secondary) }
+        if let notice = model.botUXNotice {
+            // Revision 61: why an Undo didn't happen.
+            Text(notice).font(.footnote).foregroundStyle(palette.secondary)
+                .onTapGesture { model.clearBotUXNotice() }
+        }
         if let plan = model.plan, model.plansSupported {
             AidenBotPlanCard(plan: plan, botName: bot?.name ?? "Bot",
                 canAnswer: canWrite && model.canRespondToPlan(plan), error: model.planError,
@@ -950,7 +1014,8 @@ struct AidenBotSessionChatView: View {
                 macPrompt: model.handoffMacPrompt.flatMap { $0.waitId == handoff.waitId ? $0.text : nil },
                 onDone: { Task { await model.answerHandoff(.done) } },
                 onSkip: { Task { await model.answerHandoff(.skipped) } },
-                onFinishOnMac: { Task { await model.finishHandoffOnMac() } }
+                onFinishOnMac: { Task { await model.finishHandoffOnMac() } },
+                twoStep: ownerConnection?.installation.offersBotUX == true
             )
             .id(handoff.waitId)
         }
@@ -1270,6 +1335,11 @@ struct AidenBotSessionChatView: View {
             store: .shared, scope: .init(instanceID: context.instanceId, deviceID: context.deviceId, botID: botID))
         model.activitySupported = activitySupported
         model.attachmentsSupported = isAdvertised(AidenBotHostFeature.attachments)
+        model.wording = AidenToolActivityPreference.wording(
+            botWording: storedWording,
+            hostOffersBotUX: ownerConnection?.installation.offersBotUX == true,
+            showToolActivity: showToolActivity
+        )
         feedOpenedWith = aidenBotSessionFeedGrants(ownerConnection?.installation)
         // G24: a hand-off that arrives while the person is away from this
         // chat (the app went to the background) alerts once, on this phone.
@@ -1315,7 +1385,8 @@ struct AidenBotSessionChatView: View {
         if let detail = try? await coordinator.remoteClient(for: context).bot(id: botID),
            coordinator.holds(context) {
             summary = AidenBotSummary(detail: detail)
-            model?.wording = detail.chatActivity?.wording ?? .follows
+            storedWording = detail.chatActivity?.wording
+            applyWording()
         }
     }
 }

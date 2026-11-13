@@ -681,6 +681,8 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// Contract revision 59 adds `bot:routine-models`, asked for alone.
     /// Contract revision 59 adds `bot:peers`, asked for alone.
 
+    /// Contract revision 61 adds `approval:cards`, `approvals:settings`,
+    /// `bot:settings-changes`, `bot:suggestions` and `bot:templates`, each alone.
     /// Contract revision 54 adds `bot:messaging`, also asked for alone.
     static let phoneNegotiable: [Self] = v1Known + [
         Self(rawValue: "runs:observe"), Self(rawValue: "runs:control"),
@@ -697,7 +699,7 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
         Self(rawValue: "bot:open-work"),
         Self(rawValue: "bot:routine-models"),
         Self(rawValue: "bot:peers"),
-    ]
+    ] + botUX
 
     /// Revision 27: the device renders `memory_update` and `routine_proposal`
     /// Bot session entries. It grants no authority.
@@ -2878,7 +2880,8 @@ private enum AidenBotPrivateResponseValidator {
                     || isPrivateChildProjectionKey(normalizedKey)
                     || (root == "chatSummaries" && chatSummaryForbiddenKeys.contains(normalizedKey))),
                    !isAllowedKnownIdentityKey(key, root: root, parentPath: path),
-                   !isAllowedRoutineProposalPrompt(key, root: root, object: object) {
+                   !isAllowedRoutineProposalPrompt(key, root: root, object: object),
+                   !isAllowedBotUXKey(key, root: root, object: object, parentPath: path) {
                     throw AidenRemoteContractError.unsafePayloadField(key)
                 }
                 try validate(child, root: root, path: path + [key])
@@ -2956,6 +2959,28 @@ private enum AidenBotPrivateResponseValidator {
             && ["botSession", "botSessionEvents", "botSessionCards"].contains(root)
             && object["type"] as? String == "routine_proposal"
             && object["proposalId"] is String
+    }
+
+    /// Revision 61: a held settings change's proposed `instructions`, a typed
+    /// approval card's `arguments` (labelled display rows the card shows), and
+    /// a template's `instructions` beside its version.
+    private static func isAllowedBotUXKey(
+        _ key: String,
+        root: String,
+        object: [String: Any],
+        parentPath: [String]
+    ) -> Bool {
+        let sessionRoots = ["botSession", "botSessionEvents", "botSessionCards"]
+        if key == "instructions", sessionRoots.contains(root) {
+            return object["type"] as? String == "settings_change" && object["changeId"] is String
+        }
+        if key == "arguments", sessionRoots.contains(root) {
+            return parentPath.last == "card" && object["kind"] is String && object["buttons"] is [Any]
+        }
+        if key == "instructions", root == "botPresets" {
+            return parentPath == ["presets", "[]"] && object["version"] is NSNumber
+        }
+        return false
     }
 
     private static func isAllowedKnownIdentityKey(
@@ -3832,6 +3857,9 @@ struct AidenRemoteRunApproval: Decodable, Equatable, Sendable {
     let scopes: [AidenApprovalScope]?
     /// Contract revision 39 (`schedule:cards`): display-only, nil when absent or invalid.
     let schedule: AidenApprovalSchedule?
+    /// Contract revision 61 (`approval:cards`): the typed card. When present,
+    /// `canAllow` and `scopes` agree with its buttons, or the payload is refused.
+    var card: AidenApprovalCardModel? = nil
 
     init(
         approvalId: String,
@@ -3885,10 +3913,13 @@ struct AidenRemoteRunApproval: Decodable, Equatable, Sendable {
         }
         // A card that fails validation is dropped; the approval still decodes.
         schedule = try? values.decodeIfPresent(AidenApprovalSchedule.self, forKey: .schedule)
+        // Revision 61: strict, like the host's `parseAidenRemotePhoneRunApproval`.
+        card = try values.decodeIfPresent(AidenApprovalCardModel.self, forKey: .card)
+        try card?.validateSummary(canAllow: canAllow, scopes: scopes?.map(\.rawValue))
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case approvalId, summary, toolCallId, toolName, canAllow, scopes, schedule
+        case approvalId, summary, toolCallId, toolName, canAllow, scopes, schedule, card
     }
 }
 
