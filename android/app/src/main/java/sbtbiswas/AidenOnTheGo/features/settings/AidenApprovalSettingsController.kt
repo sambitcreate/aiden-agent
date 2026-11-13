@@ -76,6 +76,8 @@ class AidenApprovalSettingsController(private val scope: CoroutineScope) {
     private var generation = 0L
     private var modeWrites = 0L
     private var rulesWrites = 0L
+    /** Rule writes of this generation still waiting on the Mac. */
+    private var rulesInFlight = 0
     private var nextToken = 0L
     private var loadJob: Job? = null
 
@@ -84,8 +86,29 @@ class AidenApprovalSettingsController(private val scope: CoroutineScope) {
         if (remote === this.remote) return
         this.remote = remote
         generation += 1
+        rulesInFlight = 0
         loadJob?.cancel()
         _state.value = AidenApprovalSettingsState()
+    }
+
+    /**
+     * After a rules write fails, or lands behind a newer one, only the Mac knows the page: a
+     * rollback may restore another write's refused change. The reread lands once no write is
+     * waiting and none started since; a newer write's own answer settles the page otherwise.
+     */
+    private fun rereadRules(current: Long) {
+        val remote = remote ?: return
+        val at = rulesWrites
+        scope.launch {
+            try {
+                val page = remote.rules()
+                if (current == generation && at == rulesWrites && rulesInFlight == 0) _state.update { it.copy(rules = page, rulesFailed = false) }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                // The rollback stays; the next refresh reads the Mac again.
+            }
+        }
     }
 
     fun refresh() {
@@ -178,24 +201,30 @@ class AidenApprovalSettingsController(private val scope: CoroutineScope) {
         val current = generation
         val pending = AidenApprovalPendingRule(option.label, decision.group, nextToken++)
         rulesWrites += 1
+        rulesInFlight += 1
         val writes = rulesWrites
         _state.update { it.copy(pendingRules = it.pendingRules + pending, rulesError = null) }
         return try {
             val page = remote.add(option.target, decision)
             if (current == generation) {
+                rulesInFlight -= 1
                 _state.update { state ->
                     state.copy(
                         rules = if (writes == rulesWrites) page else state.rules,
                         pendingRules = state.pendingRules - pending
                     )
                 }
+                if (writes != rulesWrites) rereadRules(current)
             }
             true
         } catch (error: CancellationException) {
+            if (current == generation) rulesInFlight -= 1
             throw error
         } catch (error: Exception) {
             if (current == generation) {
+                rulesInFlight -= 1
                 _state.update { it.copy(pendingRules = it.pendingRules - pending, rulesError = refusal(error, ADD_FAILED)) }
+                rereadRules(current)
             }
             false
         }
@@ -215,18 +244,26 @@ class AidenApprovalSettingsController(private val scope: CoroutineScope) {
         }
         val current = generation
         rulesWrites += 1
+        rulesInFlight += 1
         val writes = rulesWrites
         _state.update {
             it.copy(rules = before.copy(rows = optimistic(before.rows)), savingRefs = it.savingRefs + ref, rulesError = null)
         }
+        var failed = false
         return try {
             val page = send(remote)
-            if (current == generation && writes == rulesWrites) _state.update { it.copy(rules = page) }
+            if (current == generation) {
+                rulesInFlight -= 1
+                if (writes == rulesWrites) _state.update { it.copy(rules = page) } else rereadRules(current)
+            }
             true
         } catch (error: CancellationException) {
+            if (current == generation) rulesInFlight -= 1
             throw error
         } catch (error: Exception) {
+            failed = true
             if (current == generation) {
+                rulesInFlight -= 1
                 val server = error as? AidenRemoteClientException.Server
                 _state.update { state ->
                     val rollback = writes == rulesWrites
@@ -242,7 +279,10 @@ class AidenApprovalSettingsController(private val scope: CoroutineScope) {
             }
             false
         } finally {
-            if (current == generation) _state.update { it.copy(savingRefs = it.savingRefs - ref) }
+            if (current == generation) {
+                _state.update { it.copy(savingRefs = it.savingRefs - ref) }
+                if (failed) rereadRules(current)
+            }
         }
     }
 

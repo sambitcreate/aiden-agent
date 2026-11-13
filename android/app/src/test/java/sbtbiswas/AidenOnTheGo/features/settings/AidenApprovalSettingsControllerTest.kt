@@ -44,9 +44,12 @@ class AidenApprovalSettingsControllerTest {
         var gate: CompletableDeferred<Unit>? = null
         var failure: Exception? = null
         val writes = mutableListOf<String>()
+        /** Per-write gates: a write named here waits for its own answer, a failure or null. */
+        val held = mutableMapOf<String, CompletableDeferred<Exception?>>()
 
         private suspend fun answer(label: String) {
             writes += label
+            held[label]?.let { gate -> gate.await()?.let { throw it }; return }
             gate?.await()
             failure?.let { throw it }
         }
@@ -156,9 +159,59 @@ class AidenApprovalSettingsControllerTest {
         }
         val controller = loaded(remote)
         val rule = controller.state.value.rows(AidenApprovalRuleGroup.ASK).first()
+        remote.rules = remote.rules.copy(rows = remote.rules.rows.drop(1))
         assertFalse(controller.changeRule(rule, AidenApprovalRuleDecision.ALLOW))
+        advanceUntilIdle()
         assertEquals(listOf("Rule b"), controller.state.value.rules!!.rows.map { it.title })
         assertEquals(AidenApprovalSettingsController.GONE, controller.state.value.rulesError)
+    }
+
+    @Test fun twoFailedWritesInARowLeaveTheMacsRealPage() = runTest {
+        val remote = FakeRemote().apply {
+            rules = AidenApprovalRulesView(listOf(row("a", AidenApprovalRuleGroup.ALLOW), row("b", AidenApprovalRuleGroup.ASK)), unreadable = false)
+        }
+        val controller = loaded(remote)
+        val a = controller.state.value.rows(AidenApprovalRuleGroup.ALLOW).single()
+        val b = controller.state.value.rows(AidenApprovalRuleGroup.ASK).single()
+        val first = CompletableDeferred<Exception?>().also { remote.held["change:\"a\":block"] = it }
+        val second = CompletableDeferred<Exception?>().also { remote.held["remove:\"b\""] = it }
+        val changing = async { controller.changeRule(a, AidenApprovalRuleDecision.BLOCK) }
+        runCurrent()
+        val removing = async { controller.removeRule(b) }
+        runCurrent()
+        // Meanwhile another device blocked a third rule; neither write reached the Mac.
+        remote.rules = remote.rules.copy(rows = remote.rules.rows + row("c", AidenApprovalRuleGroup.BLOCK))
+        first.complete(server(409, "That rule changed on your Mac.", AidenRemoteErrorCode.REVISION_CONFLICT))
+        assertFalse(changing.await())
+        second.complete(server(409, "That rule changed on your Mac.", AidenRemoteErrorCode.REVISION_CONFLICT))
+        assertFalse(removing.await())
+        advanceUntilIdle()
+        val shown = controller.state.value
+        assertEquals(remote.rules, shown.rules)
+        assertEquals(listOf("Rule a"), shown.rows(AidenApprovalRuleGroup.ALLOW).map { it.title })
+        assertEquals(listOf("Rule b"), shown.rows(AidenApprovalRuleGroup.ASK).map { it.title })
+        assertEquals(listOf("Rule c"), shown.rows(AidenApprovalRuleGroup.BLOCK).map { it.title })
+    }
+
+    @Test fun anAddOvertakenByAFailedChangeStillShowsTheAddedRule() = runTest {
+        val remote = FakeRemote().apply {
+            rules = AidenApprovalRulesView(listOf(row("a", AidenApprovalRuleGroup.ALLOW)), unreadable = false)
+        }
+        val controller = loaded(remote)
+        val a = controller.state.value.rows(AidenApprovalRuleGroup.ALLOW).single()
+        val adding = CompletableDeferred<Exception?>().also { remote.held["add:block"] = it }
+        val changing = CompletableDeferred<Exception?>().also { remote.held["change:\"a\":ask"] = it }
+        val add = async { controller.addRule(remote.picker().single(), AidenApprovalRuleDecision.BLOCK) }
+        runCurrent()
+        val change = async { controller.changeRule(a, AidenApprovalRuleDecision.ASK) }
+        runCurrent()
+        adding.complete(null)
+        assertTrue(add.await())
+        changing.complete(IOException("offline"))
+        assertFalse(change.await())
+        advanceUntilIdle()
+        assertEquals(listOf("Run commands"), controller.state.value.rows(AidenApprovalRuleGroup.BLOCK).map { it.title })
+        assertEquals(listOf("Rule a"), controller.state.value.rows(AidenApprovalRuleGroup.ALLOW).map { it.title })
     }
 
     @Test fun onlyTheDecisionsARowOffersAreSent() = runTest {
