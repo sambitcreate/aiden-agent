@@ -1960,7 +1960,14 @@ object AidenPendingApprovalResolution {
                 listOf(AidenApprovalScope.ONCE)
             },
             schedule = AidenApprovalSchedule.forTool(approval.toolName, approval.schedule),
-            card = approval.card?.let { if (canAllow) it else it.denyOnly() }
+            // Deny stays answerable; only the allows go, saying why.
+            card = approval.card?.let {
+                when {
+                    canAllow -> it
+                    capabilities.canRespond && !hasRequiredWriteCapability -> it.denyOnly(AidenApprovalCard.SCHEDULE_WRITE_REQUIRED)
+                    else -> it.denyOnly()
+                }
+            }
         )
     }
 }

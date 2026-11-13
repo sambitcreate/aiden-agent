@@ -84,8 +84,8 @@ data class AidenApprovalCard(
      * The card as a device that may not allow it reads it: Deny alone, saying where to allow it.
      * Used when this phone lacks the grant the allow needs, though the Mac would take it.
      */
-    fun denyOnly(): AidenApprovalCard =
-        if (!hasAllow) this else copy(buttons = listOf(denyButton), allowOnMac = allowOnMac ?: ALLOW_ON_MAC)
+    fun denyOnly(reason: String = ALLOW_ON_MAC): AidenApprovalCard =
+        if (!hasAllow) this else copy(buttons = listOf(denyButton), allowOnMac = allowOnMac ?: reason)
 
     /**
      * The card as a Bot approval's route can answer it. `POST /approvals/{waitId}/respond` for a
@@ -147,6 +147,8 @@ data class AidenApprovalCard(
         const val MAX_ALLOW_ON_MAC = 120
         /** The desktop's own line for a card a phone can only deny. */
         const val ALLOW_ON_MAC = "Allow it on your Mac."
+        /** Why a task card is Deny-only on a phone without `schedule:write` (the summary card's own note). */
+        const val SCHEDULE_WRITE_REQUIRED = "Schedule write access is required to approve this task."
 
         private val CARD_KEYS = setOf("kind", "mac", "title", "arguments", "body", "previous", "rows", "notes", "buttons", "allowOnMac")
 

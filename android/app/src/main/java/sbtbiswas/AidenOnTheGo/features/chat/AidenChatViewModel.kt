@@ -3081,7 +3081,14 @@ class AidenChatViewModel(
                 canAllow = canControl && approval.canAllow && hasWrite,
                 scopes = approval.scopes ?: listOf(AidenApprovalScope.ONCE),
                 schedule = AidenApprovalSchedule.forTool(approval.toolName, approval.schedule),
-                card = approval.card?.let { if (canControl && approval.canAllow && hasWrite) it else it.denyOnly() }
+                card = approval.card?.let {
+                    when {
+                        canControl && approval.canAllow && hasWrite -> it
+                        // Deny stays answerable; only the allows go, saying why.
+                        canControl && !hasWrite -> it.denyOnly(AidenApprovalCard.SCHEDULE_WRITE_REQUIRED)
+                        else -> it.denyOnly()
+                    }
+                }
             )
         }
         _pendingQuestion.value = projection.pendingQuestion?.let { question ->
@@ -3369,9 +3376,10 @@ class AidenChatViewModel(
                     if (_pendingApproval.value == null) restorePendingApproval(streamId, isFallback = true)
                 }
             } catch (e: Exception) {
+                // Unconfirmed: the answered line never outlives the answer, whatever else changed.
+                if (e !is CancellationException) _answeredApproval.update { line -> line?.takeUnless { it.approvalId == approval.id } }
                 if (e !is CancellationException && activeClient() === client && activeStreamId == streamId &&
                     _streamState.value?.isTerminal != true) {
-                    _answeredApproval.update { line -> line?.takeUnless { it.approvalId == approval.id } }
                     _presentedError.value = "The approval response was not confirmed. Refreshing the current request from your Mac."
                     // An ambiguous write may have succeeded; only the Mac can restore a card.
                     if (_pendingApproval.value == null) restorePendingApproval(streamId, isFallback = true)

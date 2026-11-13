@@ -992,7 +992,13 @@ class AidenBotSessionController(
         accessRequestWrites += 1
         approvalWrites += 1
         approvalKeys.keys.removeAll { session.approval == null || !it.startsWith("$RESPOND_APPROVAL:${session.approval.waitId}:") }
-        _state.update { it.copy(approvalSuccessNotice = null) }
+        // Another approval is waiting: an earlier one's answered line gives way, as on a feed frame.
+        _state.update { current ->
+            current.copy(
+                approvalSuccessNotice = null,
+                answeredApproval = current.answeredApproval?.takeUnless { session.approval != null && it.waitId != session.approval.waitId }
+            )
+        }
         handoffWritten(previous?.handoff, session.handoff)
         if (session.activity != previous?.activity) activityArrived(session.activity)
         afterStateWrite(previous)
@@ -1818,7 +1824,11 @@ class AidenBotSessionController(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            if (generation != approvalGeneration || released) return false
+            if (generation != approvalGeneration || released) {
+                // Superseded, but the answer still wasn't confirmed: its line goes.
+                _state.update { current -> current.copy(answeredApproval = current.answeredApproval?.takeUnless { it.waitId == approval.waitId }) }
+                return false
+            }
             if (aidenBotMacAnswered(error)) approvalKeys.remove(action)
             when ((error as? AidenRemoteClientException.Server)?.body?.code) {
                 AidenRemoteErrorCode.APPROVAL_EXPIRED -> _state.update { it.copy(actionError = "That request expired.", answeredApproval = null) }

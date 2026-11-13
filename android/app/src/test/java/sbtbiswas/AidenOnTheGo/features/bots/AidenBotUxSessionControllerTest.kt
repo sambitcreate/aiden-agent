@@ -231,6 +231,34 @@ class AidenBotUxSessionControllerTest {
     }
 
     @Test
+    fun anExpiredSettledOrSupersededAnswerLeavesNoAnsweredLine() = runTest {
+        for (code in listOf(AidenRemoteErrorCode.APPROVAL_EXPIRED, AidenRemoteErrorCode.APPROVAL_ALREADY_RESOLVED)) {
+            val transport = Transport(session(approval = approval("botAlways"))).apply { gate = CompletableDeferred(); failure = server(409, "Gone", code) }
+            val controller = AidenBotSessionController(transport.current.botId, transport, backgroundScope)
+            controller.refetch()
+            val pending = async { controller.respondToApproval(AidenApprovalDecision.ALLOW) }
+            runCurrent()
+            assertEquals("Allowed once", controller.state.value.answeredApproval?.answered)
+            transport.gate!!.complete(Unit)
+            assertFalse(pending.await())
+            // The card does not come back, and neither does a line saying it was answered.
+            assertNull(controller.state.value.session!!.approval)
+            assertNull(code.toString(), controller.state.value.answeredApproval)
+        }
+
+        // The feed reopened while the answer was on its way, then the answer failed.
+        val transport = Transport(session(approval = approval("botAlways"))).apply { gate = CompletableDeferred(); failure = IOException("offline") }
+        val controller = AidenBotSessionController(transport.current.botId, transport, backgroundScope)
+        controller.refetch()
+        val pending = async { controller.respondToApproval(AidenApprovalDecision.ALLOW) }
+        runCurrent()
+        controller.reopenFeed()
+        transport.gate!!.complete(Unit)
+        assertFalse(pending.await())
+        assertNull(controller.state.value.answeredApproval)
+    }
+
+    @Test
     fun aCardWithoutAnAllowButtonSendsNoAllow() = runTest {
         val denyOnly = approval("botAlways").let { raw ->
             raw.with("card" to AidenApprovalCard.parse(raw.getValue("card")).denyOnly().toJson())

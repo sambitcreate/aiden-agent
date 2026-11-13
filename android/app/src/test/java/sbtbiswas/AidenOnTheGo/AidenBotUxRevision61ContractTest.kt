@@ -16,6 +16,7 @@ import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -182,6 +183,20 @@ class AidenBotUxRevision61ContractTest {
         )
         assertFalse(reviewer.card!!.hasAllow)
         assertEquals(AidenApprovalCard.ALLOW_ON_MAC, reviewer.card!!.allowOnMac)
+
+        // A task card on a phone that may answer but not write schedules: Deny stays, the allows go, and it says why.
+        val task = clientStreamApproval(samples.getValue("complete").jsonObject.with("toolName" to JsonPrimitive("schedule_task")))
+        val noScheduleWrite = requireNotNull(
+            AidenPendingApprovalResolution.resolve(
+                task, task.streamId, task.chatId,
+                capabilities = AidenApprovalCapabilities(canRespond = true, canWriteSchedules = false),
+                now = Instant.parse("2026-11-13T08:00:00Z")
+            )
+        )
+        assertTrue(noScheduleWrite.canRespond)
+        assertEquals(listOf("Deny"), noScheduleWrite.card!!.buttons.map { it.label })
+        assertNotNull(noScheduleWrite.card!!.button(AidenApprovalDecision.DENY))
+        assertEquals(AidenApprovalCard.SCHEDULE_WRITE_REQUIRED, noScheduleWrite.card!!.allowOnMac)
 
         val disagreeing = listOf(
             samples.getValue("denyOnly").jsonObject.with("canAllow" to JsonPrimitive(true)),

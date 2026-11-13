@@ -57,7 +57,12 @@ class AidenChatAnsweredApprovalTest {
     private fun approval(id: String) = """{"approvalId":"$id","streamId":"stream-ans","chatId":"chat-ans","summary":"Run command: npm test","toolCallId":"tool-$id","toolName":"run_command","expiresAt":"2099-01-01T00:00:00Z","canAllow":true,"scopes":["once"],"card":{"kind":"mac","mac":"shell","title":"Run on your Mac?","arguments":[{"key":"tool","value":"Run command"}],"body":{"format":"command","text":"npm test"},"buttons":[{"label":"Deny","decision":"deny","answered":"Denied"},{"label":"Allow once","decision":"allow","answered":"Allowed once"}]}}"""
 
     @Test
-    fun theAnsweredLineShowsAtOnceRollsBackOnRefusalAndClearsForTheNextApprovalAndTheRunsEnd() {
+    fun theAnsweredLineShowsAtOnceRollsBackOnRefusalAndClearsForTheNextApprovalAndTheRunsEnd() = exercise(unpairDuringAnswer = false)
+
+    @Test
+    fun anUnconfirmedAnswerLeavesNoLineEvenWhenThePairingWentAwayMeanwhile() = exercise(unpairDuringAnswer = true)
+
+    private fun exercise(unpairDuringAnswer: Boolean) {
         val directory = kotlin.io.path.createTempDirectory("aiden-answered-").toFile()
         val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
         val server = MockWebServer()
@@ -106,7 +111,7 @@ class AidenChatAnsweredApprovalTest {
         try {
             runBlocking(dispatcher) {
                 val installations = AidenInstallationStore(directory, InMemoryAidenSecureStore())
-                installations.addInstallation(AidenPairingExchange(
+                val installation = installations.addInstallation(AidenPairingExchange(
                     instanceId = "instance-ans", deviceId = "device-ans", endpoint = server.url("/api/aiden/v1").toString(),
                     serverSpkiSha256 = "sha256/test", credential = "synthetic-credential", capabilities = grants), null)
                 val cache = AidenChatCache(directory)
@@ -125,6 +130,15 @@ class AidenChatAnsweredApprovalTest {
                 assertEquals("Allowed once", model.answeredApproval.value?.answered)
                 assertEquals("Run on your Mac?", model.answeredApproval.value?.title)
                 assertNull(model.pendingApproval.value)
+
+                if (unpairDuringAnswer) {
+                    // The pairing goes while the answer is on its way, and the Mac never confirms it.
+                    coordinator.removeInstallation(installation.id)
+                    release.get().countDown()
+                    withTimeout(5_000) { model.isRespondingToApproval.first { !it } }
+                    assertNull(model.answeredApproval.value)
+                    return@runBlocking
+                }
 
                 // The Mac refuses: the line goes and the card comes back from the Mac.
                 release.get().countDown()
