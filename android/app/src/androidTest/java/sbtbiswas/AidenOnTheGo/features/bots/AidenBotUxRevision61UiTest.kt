@@ -11,9 +11,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -212,12 +215,17 @@ class AidenBotUxRevision61UiTest {
     @Test
     fun showToolActivityIsAPerDeviceSwitchInAppearance() {
         val store = AidenAppearanceStore(File(instrumentation.targetContext.cacheDir, "phase6c-appearance").apply { deleteRecursively() })
-        compose.setContent { AidenTheme { AidenAppearanceSettingsScreen(store, onNavigateBack = {}, showsToolActivity = true) } }
+        // As in the app, the theme reads this phone's stored appearance.
+        compose.setContent {
+            val config by store.config.collectAsState()
+            AidenTheme(config) { AidenAppearanceSettingsScreen(store, onNavigateBack = {}, showsToolActivity = true) }
+        }
         compose.onNode(hasScrollAction()).performScrollToNode(hasText("Show tool activity"))
         // Off until the person turns it on.
         compose.onNodeWithText("Show tool activity").assertIsOff()
+        capture("appearance-tool-activity")
         compose.onNodeWithText("Show tool activity").performClick()
         compose.runOnIdle { assertEquals(true, store.config.value.showToolActivity) }
-        capture("appearance-tool-activity")
+        compose.onNodeWithText("Show tool activity").assertIsOn()
     }
 }
