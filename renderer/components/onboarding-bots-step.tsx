@@ -47,9 +47,14 @@ export function OnboardingBotsStep({
     setState({ kind: "making" });
     onBusyRef.current?.(true);
     try {
-      const [{ bot }, { notice }] = await Promise.all([botsApi.createFirst(), botsApi.getCapabilityCatalog()]);
+      // The notice only picks the card's words: main keeps a review-first
+      // choice when Start accepts, so an unreadable notice never fails the step.
+      const [{ bot }, notice] = await Promise.all([
+        botsApi.createFirst(),
+        botsApi.getAccessNotice().catch(() => null),
+      ]);
       const access: FirstBotAccess =
-        !notice.requiresAcknowledgement && notice.acceptedDecision === "customize_first" ? "review_first" : "full";
+        notice && !notice.requiresAcknowledgement && notice.acceptedDecision === "customize_first" ? "review_first" : "full";
       addBotToCache(qc, bot);
       void qc.invalidateQueries({ queryKey: queryKeys.bots });
       setState({ kind: "ready", bot, access });

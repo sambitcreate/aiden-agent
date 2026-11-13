@@ -58,6 +58,7 @@ function mountOnboarding({
   };
   const calls: BotTestIpcCall[] = installBotTestIpc({
     "bots:getCapabilityCatalog": catalog,
+    "bots:getAccessNotice": () => catalog().notice,
     // Like main: one step that keeps a review-first choice.
     "bots:acceptFirstBotAccess": () => {
       if (decision !== "customize_first") decision = "continue_full";
@@ -152,6 +153,20 @@ test("a review-first choice made elsewhere after the step showed stands, and the
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "bots:acceptFirstBotAccess")));
   await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
   assert.equal(calls.some((call) => call.channel === "bots:introduce"), false);
+});
+
+test("an access notice that can't be read still lets the first Bot be ready and greet after Start", async () => {
+  const opened: string[] = [];
+  const calls = mountOnboarding({
+    bots: [],
+    onOpenBotChat: (botId) => opened.push(botId),
+    overrides: { "bots:getAccessNotice": () => Promise.reject(new Error("Bot access is unavailable.")) },
+  });
+  await screen.findByText("Chief is ready");
+  screen.getByText(/Chief gets Full access/u);
+  fireEvent.click(screen.getByRole("button", { name: /Start using Aiden/u }));
+  await waitFor(() => assert.deepEqual(opened, ["bot-chief"]));
+  await waitFor(() => assert.ok(calls.some((call) => call.channel === "bots:introduce")));
 });
 
 test("the first Bot is never made when Bots already exist", async () => {
