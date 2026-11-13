@@ -1788,7 +1788,9 @@ export function BotChatPane({ botId }: { botId: string }) {
           ready={!pendingPlan && !noteRefused && !questionElsewhere && !spendingReached && (!state || (state.kind !== "unavailable" && state.kind !== "paused"))}
           readinessMessage={
             pendingPlan
-              ? "Answer the plan above, then send a message."
+              ? slot.current?.kind === "plan"
+                ? "Answer the plan above, then send a message."
+                : "Answer the plan under Needs you, then send a message."
               : questionElsewhere
                 ? `Answer ${current.name}’s question first. It’s ${slot.count} of ${slot.count} above.`
               : state?.kind === "unavailable"

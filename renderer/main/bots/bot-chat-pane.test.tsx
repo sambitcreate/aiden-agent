@@ -2281,6 +2281,7 @@ test("a pile-up waits in one Needs-you slot: take control first, then each ask c
   const composer = document.querySelector("textarea")!;
   assert.ok(slot().compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING, "the slot sits above the composer");
   assert.equal((screen.getByRole("button", { name: "Send message" }) as HTMLButtonElement).disabled, true, "a pending plan still gates Send");
+  assert.ok(screen.getByText("Answer the plan under Needs you, then send a message."), "the hint doesn't point at a card that isn't on show");
 
   // Next walks the ask cards in order: the approval, the folder request, the plan.
   const header = screen.getByRole("navigation", { name: "Needs you" });
@@ -2293,6 +2294,7 @@ test("a pile-up waits in one Needs-you slot: take control first, then each ask c
   fireEvent.click(within(header).getByRole("button", { name: "Next" }));
   const plan = within(slot()).getByRole("group", { name: "Jester asked Planner to do this" });
   assert.equal(slotPosition(), "4 of 5");
+  assert.ok(screen.getByText("Answer the plan above, then send a message."));
   fireEvent.change(composer, { target: { value: "Do something else" } });
   fireEvent.keyDown(composer, { key: "Enter" });
   assert.equal(calls.some((call) => call.channel === "bots:send" || call.channel === "bots:answerHandoff"), false);
