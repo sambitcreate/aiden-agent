@@ -93,7 +93,7 @@ test("Bot creation acts as the desktop audience and refuses a renderer-named aud
   assert.deepEqual(calls, [
     {
       method: "createBot",
-      args: [{ audienceId: DESKTOP, bot: BOT_FIELDS, access: FULL_ACCESS }],
+      args: [{ audienceId: DESKTOP, bot: BOT_FIELDS, access: FULL_ACCESS, source: "new" }],
     },
   ]);
 

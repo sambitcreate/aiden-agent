@@ -210,8 +210,10 @@ export interface CreateBotApplicationInput {
   /** A pre-minted id (Start Chat saves it under its key first); omitted mints one. */
   botId?: string;
   bot: BotCreateInput;
-  /** The starter Bot this was made from, for usage data only. */
+  /** The template this was made from, for usage data only. */
   presetId?: string;
+  /** Where on the desktop it was made, for usage data only: New bot, a Template or onboarding's first Bot. */
+  source?: "new" | "template" | "onboarding";
   /** Omitted means the foreground Full Access default. */
   access?: BotAccessUpdate;
   /**
@@ -333,12 +335,13 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
   let recoveryFailure: unknown;
 
   // Counted in the background, so a slow store cannot hold the new Bot back.
-  const reportBotCreated = (presetId: string | undefined): void => {
+  const reportBotCreated = (presetId: string | undefined, source: CreateBotApplicationInput["source"]): void => {
     const report = captureAnalyticsReporter();
     void deps.botStore.list().then(
       (bots) => report("bot_created", {
         preset_id: analyticsBotPresetId(presetId),
         bot_count: countBucket(bots.length),
+        ...(source === undefined ? {} : { source }),
       }),
       () => undefined,
     );
@@ -1815,7 +1818,7 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
           const bot = await deps.botStore.createWithId(botId, input.bot);
           operation = await advance(operation, "identity_committed");
           await deps.lifecycleJournal.complete(operationId, "identity_committed");
-          reportBotCreated(input.presetId);
+          reportBotCreated(input.presetId, input.source);
           return bot;
         } catch (error) {
           const visible = await deps.botStore.get(botId);
@@ -1826,7 +1829,7 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
               await deps.managedWorkspace.resolve(botId);
               await requirePolicyForVisibleBot(botId);
             });
-            reportBotCreated(input.presetId);
+            reportBotCreated(input.presetId, input.source);
             return (await deps.botStore.get(botId))!;
           }
           try {

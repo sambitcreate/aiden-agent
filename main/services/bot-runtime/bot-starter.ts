@@ -1,7 +1,8 @@
-// Start Chat on a starter Bot (spec §4.2) and the one-time self-intro of a
-// newly created Bot (§4.3).
+// Create bot on a Template (plan §4.3), the silent first Bot onboarding makes
+// (§4.1), and the one-time self-intro of a newly created Bot.
 //
-// `startFromPreset` is idempotent per preset (`preset:<id>`): repeat and
+// `startFromPreset` is idempotent per template (`preset:<id>`) and
+// `startFirst` per install (`first-bot`): repeat and
 // concurrent taps return the same Bot, and only the call that created it sends
 // the self-intro. Desktop IPC and the Remote `POST /bots/from-preset` route
 // share this one instance (`botStarter()` in `bot-starter-main.ts`; Remote
@@ -15,9 +16,15 @@
 
 import type { BotAccessUpdate } from "../../../renderer/shared/bot-capabilities.js";
 import {
+  BOT_FIRST_BOT_KEY,
+  BOT_PRESETS,
+  botFirstCreateInput,
   botPresetIdempotencyKey,
   createBotPresetCreator,
+  createKeyedBotCreator,
+  getBotPreset,
   type BotPresetCreateResult,
+  type BotPresetRoutine,
 } from "../../../renderer/shared/bot-presets.js";
 import type { BotCreateInput, BotDefinition } from "../../../renderer/shared/bots.js";
 import { sendBotIntro } from "./bot-intro.js";
@@ -30,10 +37,20 @@ export interface BotStarterDeps {
   mintBotId(): string;
   /** Durably save `creationKey` → `botId`. Called before the Bot is created. */
   reserveCreation(creationKey: string, botId: string): Promise<void>;
-  /** Create the Bot with exactly `botId` (the desktop default). */
-  createBot(input: BotCreateInput, access: BotAccessUpdate | undefined, botId: string, presetId: string): Promise<BotDefinition>;
+  /**
+   * Create the Bot with exactly `botId` (the desktop default). `presetId` is
+   * the template it came from; none for the first Bot.
+   */
+  createBot(input: BotCreateInput, access: BotAccessUpdate | undefined, botId: string, presetId: string | undefined): Promise<BotDefinition>;
+  /**
+   * Adds a template's routine to the Bot it just made, paused until the person
+   * turns it on. Optional: a host without routines adds none.
+   */
+  addPausedRoutine?(botId: string, routine: BotPresetRoutine): Promise<void>;
   session: Pick<BotSessionRuntime, "send" | "state" | "conversation">;
   onIntroError?(botId: string, error: unknown): void;
+  /** The Bot exists; only its paused template routine could not be added. */
+  onRoutineError?(botId: string, error: unknown): void;
 }
 
 export interface BotStartResult extends BotPresetCreateResult {
@@ -44,6 +61,8 @@ export interface BotStartResult extends BotPresetCreateResult {
 export interface BotStartOptions {
   /** The access the person confirmed (desktop). */
   access?: BotAccessUpdate;
+  /** The template version the person was shown; another version refuses. */
+  version?: number;
   /**
    * False leaves the one-time self-intro to the caller (`introduce`), so the
    * answer comes back as soon as the Bot exists and its chat can open while the
@@ -56,6 +75,10 @@ export interface BotStartOptions {
 
 export interface BotStarter {
   startFromPreset(presetId: string, options?: BotStartOptions): Promise<BotStartResult>;
+  /** The silent first Bot (§4.1): "Chief", made once; a repeat returns it. */
+  startFirst(options?: Pick<BotStartOptions, "introduce">): Promise<BotStartResult>;
+  /** Template id → the live Bot it made, for "Open" instead of "Create bot". */
+  presetBots(): Promise<Record<string, string>>;
   /** The self-intro for a Bot created some other way (the create flow). */
   introduce(botId: string): Promise<boolean>;
 }
@@ -63,18 +86,26 @@ export interface BotStarter {
 export function createBotStarter(deps: BotStarterDeps): BotStarter {
   /** The options of the call that owns each in-flight creation. */
   const optionsByKey = new Map<string, BotStartOptions>();
-  const create = createBotPresetCreator({
+  const store = {
     findBotByCreationKey: deps.findBotByCreationKey,
-    async createBot(input, key) {
+    async createBot(input: BotCreateInput, key: string) {
       const options = optionsByKey.get(key) ?? {};
       const botId = deps.mintBotId();
       await deps.reserveCreation(key, botId);
-      const presetId = key.slice("preset:".length);
-      return options.createBot
-        ? options.createBot(input, botId, presetId)
-        : deps.createBot(input, options.access, botId, presetId);
+      const presetId = key.startsWith("preset:") ? key.slice("preset:".length) : undefined;
+      const bot = options.createBot && presetId !== undefined
+        ? await options.createBot(input, botId, presetId)
+        : await deps.createBot(input, options.access, botId, presetId);
+      // A template's routine arrives paused; nothing runs until the person turns it on.
+      const routine = presetId === undefined ? undefined : getBotPreset(presetId)?.suggestedRoutine;
+      if (routine && deps.addPausedRoutine) {
+        await deps.addPausedRoutine(bot.id, routine).catch((error: unknown) => deps.onRoutineError?.(bot.id, error));
+      }
+      return bot;
     },
-  });
+  };
+  const create = createBotPresetCreator(store);
+  const createKeyed = createKeyedBotCreator(store);
 
   const introduce = async (botId: string): Promise<boolean> => {
     try {
@@ -86,18 +117,36 @@ export function createBotStarter(deps: BotStarterDeps): BotStarter {
     }
   };
 
+  const started = async (
+    key: string,
+    options: BotStartOptions,
+    make: () => Promise<BotPresetCreateResult>,
+  ): Promise<BotStartResult> => {
+    const owner = !optionsByKey.has(key);
+    if (owner) optionsByKey.set(key, options);
+    try {
+      const result = await make();
+      const introduced = result.created && options.introduce !== false ? await introduce(result.bot.id) : false;
+      return { ...result, introduced };
+    } finally {
+      if (owner) optionsByKey.delete(key);
+    }
+  };
+
   return {
-    async startFromPreset(presetId, options = {}) {
-      const key = botPresetIdempotencyKey(presetId);
-      const owner = !optionsByKey.has(key);
-      if (owner) optionsByKey.set(key, options);
-      try {
-        const result = await create(presetId);
-        const introduced = result.created && options.introduce !== false ? await introduce(result.bot.id) : false;
-        return { ...result, introduced };
-      } finally {
-        if (owner) optionsByKey.delete(key);
+    startFromPreset(presetId, options = {}) {
+      return started(botPresetIdempotencyKey(presetId), options, () => create(presetId, options.version));
+    },
+    startFirst(options = {}) {
+      return started(BOT_FIRST_BOT_KEY, options, () => createKeyed(BOT_FIRST_BOT_KEY, () => botFirstCreateInput()));
+    },
+    async presetBots() {
+      const found: Record<string, string> = {};
+      for (const preset of BOT_PRESETS) {
+        const bot = await deps.findBotByCreationKey(botPresetIdempotencyKey(preset.id));
+        if (bot) found[preset.id] = bot.id;
       }
+      return found;
     },
     introduce,
   };

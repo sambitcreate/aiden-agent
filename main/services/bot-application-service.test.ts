@@ -2789,10 +2789,12 @@ test("a created Bot counts once with its preset and how many there are, and a fa
   await shipped.service.createBot({
     audienceId: "device:a",
     presetId: preset.id,
+    source: "template",
     bot: { name: "Planner", instructions: "Plan.", avatar: { version: 1, shape: "wisp", color: "lilac" } },
   });
   await analyticsSettled();
   assert.equal(sent[0]?.props?.preset_id, preset.id);
+  assert.equal(sent[0]?.props?.source, "template", "how the Bot was made travels with it");
 
   sent.length = 0;
   const failing = fixture({ failIdentityCreate: true });

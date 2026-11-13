@@ -1983,8 +1983,13 @@ export const botsApi = {
   onLiveEvent: (handler: (event: import("../shared/bot-live").BotLiveEvent) => void) =>
     onNotification<import("../shared/bot-live").BotLiveEvent>("bots:live:event", handler),
   /** Start Chat on a starter Bot: the same Bot every time; only the first call reports `created`. */
-  createFromPreset: (input: { presetId: string; access?: BotAccessUpdate }) =>
+  /** A Template's Create bot; `version` is the template version on screen, and another version is refused. */
+  createFromPreset: (input: { presetId: string; version?: number; access?: BotAccessUpdate }) =>
     invoke<{ bot: BotDefinition; created: boolean }>("bots:createFromPreset", input),
+  /** Onboarding's silent first Bot: made once; a repeat returns the same Bot. */
+  createFirst: () => invoke<{ bot: BotDefinition; created: boolean }>("bots:createFirst"),
+  /** Template id → the Bot it already made, so Templates offers Open. */
+  presetBots: () => invoke<Record<string, string>>("bots:presetBots"),
   /** The one-time self-intro of a Bot made with the create flow. */
   introduce: (botId: string) => invoke<boolean>("bots:introduce", botId),
   /** Read-only Files: the Bot's own folder. */

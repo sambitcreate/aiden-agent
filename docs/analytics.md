@@ -30,7 +30,7 @@ Feature events fire once, at the moment the action succeeded, from the service t
 | `chat_created` | A new chat from the sidebar, a phone, the first message of a draft, or the Assistant. Bots, schedules and forks are not counted. | `workspace_kind`: folder, scratch, worktree or none |
 | `provider_connected` | A sign-in or key was saved for a built-in provider, or a custom provider was added | `provider_id`, `auth`: key, oauth or local (a custom provider on this machine or one with no key) |
 | `workspace_added` | A folder, named or scratch workspace was added. A hidden No workspace folder is not. | `kind`: folder, scratch or path (a typed path or a clone) |
-| `bot_created` | A Bot was created | `preset_id`, `bot_count` bucket |
+| `bot_created` | A Bot was created | `preset_id`, `bot_count` bucket, and on the Mac `source`: new (New bot), template (a Template's Create bot) or onboarding (the first Bot) |
 | `bot_routine_ran` | A Bot routine finished with a result | `trigger`, `result`: success or failed |
 | `scheduled_task_ran` | A scheduled task finished with a result. A cancelled or skipped run is not counted; one blocked by a permission is `failed`. | `trigger`, `result`: success, silent or failed |
 | `subagent_launched` | A subagent started | `role` |

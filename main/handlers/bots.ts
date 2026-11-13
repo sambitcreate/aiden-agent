@@ -171,13 +171,27 @@ export function registerBotHandlers(): void {
     return stopWithIntents(botTurnIntents, botId, async () => (await botSessionRuntime()).stop(botId));
   });
   ipcMain.handle("bots:createFromPreset", async (_event, input: unknown) => {
-    const { presetId, access } = parseBotCreateFromPreset(input);
+    const { presetId, version, access } = parseBotCreateFromPreset(input);
     // The chat opens as soon as the Bot exists; its self-intro arrives in that chat.
     const starter = botStarter();
-    const { bot, created } = await starter.startFromPreset(presetId, { ...(access === undefined ? {} : { access }), introduce: false });
+    const { bot, created } = await starter.startFromPreset(presetId, {
+      ...(access === undefined ? {} : { access }),
+      ...(version === undefined ? {} : { version }),
+      introduce: false,
+    });
     if (created) void starter.introduce(bot.id);
     return { bot, created };
   });
+  // Onboarding's silent first Bot (plan §4.1): made once, a repeat returns it.
+  ipcMain.handle("bots:createFirst", async (_event, input: unknown) => {
+    if (input !== undefined) throw new Error("Invalid first Bot request.");
+    const starter = botStarter();
+    const { bot, created } = await starter.startFirst({ introduce: false });
+    if (created) void starter.introduce(bot.id);
+    return { bot, created };
+  });
+  // Templates: which ones already made a Bot, so their detail offers Open.
+  ipcMain.handle("bots:presetBots", async () => botStarter().presetBots());
   ipcMain.handle("bots:introduce", async (_event, id: unknown) => {
     // The create flow's one-time self-intro; deduped per Bot by the runtime.
     return botStarter().introduce(parseBotId(id));

@@ -101,6 +101,8 @@ export function registerBotAccessHandlers<Event>(deps: BotAccessHandlerDependenc
         audienceId: desktopAudienceId,
         bot: parsed.bot,
         access: parsed.access,
+        // The desktop's one-field New bot.
+        source: "new",
       });
     } catch (error) {
       deps.warn("Bot creation failed.", error);

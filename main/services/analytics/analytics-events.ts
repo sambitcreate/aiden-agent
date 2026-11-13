@@ -59,7 +59,7 @@ export const ANALYTICS_EVENTS = {
   workspace_added: { kind: enumProp("folder", "scratch", "path") },
 
   // Big features
-  bot_created: { preset_id: id, bot_count: enumProp(...COUNT_BUCKETS) },
+  bot_created: { preset_id: id, bot_count: enumProp(...COUNT_BUCKETS), source: optional(enumProp("new", "template", "onboarding")) },
   bot_routine_ran: { trigger: RUN_TRIGGERS, result: enumProp("success", "failed") },
   scheduled_task_ran: { trigger: RUN_TRIGGERS, result: enumProp("success", "silent", "failed") },
   subagent_launched: { role: enumProp("scout", "planner", "reviewer", "implementer", "other") },

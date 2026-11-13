@@ -82,11 +82,14 @@ export function parseBotCreateWithAccess(value: unknown): {
   };
 }
 
-const FROM_PRESET_KEYS = new Set(["access", "presetId"]);
+const FROM_PRESET_KEYS = new Set(["access", "presetId", "version"]);
 const PRESET_ID = /^[a-z0-9][a-z0-9-]{0,63}$/u;
 
-/** `bots:createFromPreset`: a starter Bot id and, optionally, the access the person confirmed. */
-export function parseBotCreateFromPreset(value: unknown): { presetId: string; access?: BotAccessUpdate } {
+/**
+ * `bots:createFromPreset`: a template id, optionally the template version the
+ * person was shown, and optionally the access they confirmed.
+ */
+export function parseBotCreateFromPreset(value: unknown): { presetId: string; version?: number; access?: BotAccessUpdate } {
   const record = value as Record<string, unknown> | null;
   if (!record || typeof record !== "object" || Array.isArray(record) || !Object.keys(record).every((key) => FROM_PRESET_KEYS.has(key))) {
     throw new Error("Invalid starter Bot fields.");
@@ -94,8 +97,12 @@ export function parseBotCreateFromPreset(value: unknown): { presetId: string; ac
   if (typeof record.presetId !== "string" || !PRESET_ID.test(record.presetId)) {
     throw new Error("Invalid starter Bot id.");
   }
+  if (record.version !== undefined && (typeof record.version !== "number" || !Number.isSafeInteger(record.version) || record.version < 1)) {
+    throw new Error("Invalid template version.");
+  }
   return {
     presetId: record.presetId,
+    ...(record.version === undefined ? {} : { version: record.version }),
     ...(record.access === undefined ? {} : { access: parseBotAccessUpdate(record.access) }),
   };
 }

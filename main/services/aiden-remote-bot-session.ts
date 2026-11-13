@@ -56,7 +56,7 @@ import {
   type ConnectCardEntry,
   type ConnectCardStatus,
 } from "../../renderer/shared/bot-connections.js";
-import type { BotPreset } from "../../renderer/shared/bot-presets.js";
+import { botPresetRoutineSchedule, type BotPreset } from "../../renderer/shared/bot-presets.js";
 import { botHandoffResultLine } from "../../renderer/shared/bot-handoffs.js";
 import { BOT_ISSUE_ID_PATTERN } from "../../renderer/shared/bot-issues.js";
 import { formatBotRoutineLabel } from "../../renderer/shared/bot-routine-label.js";
@@ -2912,7 +2912,7 @@ export class AidenRemoteBotSessionService {
             ? {
                 suggestedRoutine: {
                   name: routine.name,
-                  label: formatBotRoutineLabel(presetRoutineSchedule(routine.schedule), { currentYear }),
+                  label: formatBotRoutineLabel(botPresetRoutineSchedule(routine.schedule), { currentYear }),
                 },
               }
             : {}),
@@ -2941,14 +2941,4 @@ export class AidenRemoteBotSessionService {
   }
 }
 
-/** The preset's friendly schedule in the routines backend's shape. */
-function presetRoutineSchedule(
-  schedule: NonNullable<BotPreset["suggestedRoutine"]>["schedule"],
-): Parameters<typeof formatBotRoutineLabel>[0] {
-  const [hour, minute] = schedule.time.split(":");
-  const time = `${hour!.padStart(2, "0")}:${minute!.padStart(2, "0")}`;
-  return schedule.frequency === "weekly"
-    ? { kind: "weekly", days: [...schedule.days], time }
-    : { kind: schedule.frequency, time };
-}
 import { isBotInputEntryKind } from "./bot-runtime/bot-input-entry.js";
