@@ -153,6 +153,11 @@ enum AidenDemoBotUX {
         responder.reply(instanceId: id, method: "POST", path: "/approvals/\(waitId)/respond", status: 200, json: data([
             "approvalId": waitId, "decision": "allow", "resolvedAt": timestamp(Date()),
         ]))
+        // The late chat approval's Deny, so its answered line can be seen.
+        let run = "run_demo_late_approval"
+        responder.reply(instanceId: id, method: "POST", path: "/runs/\(run)/approvals/approval_demo_late/respond", status: 200, json: data([
+            "runId": run, "approvalId": "approval_demo_late", "decision": "deny", "resolvedAt": timestamp(Date()),
+        ]))
         let catalog = data(catalog())
         responder.reply(instanceId: id, path: "/bot-capabilities", status: 200, json: catalog)
         responder.reply(instanceId: id, path: "/bot-capabilities", query: "botId=\(botId)", status: 200, json: catalog)

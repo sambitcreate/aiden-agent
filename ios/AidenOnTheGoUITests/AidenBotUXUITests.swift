@@ -29,12 +29,17 @@ final class AidenBotUXUITests: XCTestCase {
         bot.tap()
         let card = app.staticTexts["Review before Fetch web page → example.com"].firstMatch
         XCTAssertTrue(card.waitForExistence(timeout: 15), "The typed approval card did not show")
+        // The transcript opens at its end: the typed card under the learning lines.
         shoot("bot-approval-card")
-        app.swipeDown()
-        app.swipeDown()
+        // A slow drag that holds at its end, so the list moves by one card's height.
+        let top = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+        top.press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)),
+                  withVelocity: .slow, thenHoldForDuration: 0.3)
         shoot("bot-cards-learning")
         app.swipeDown()
+        app.swipeDown()
         shoot("bot-cards-settings-change")
+        app.swipeUp()
         app.swipeUp()
         app.swipeUp()
         app.swipeUp()
@@ -75,7 +80,11 @@ final class AidenBotUXUITests: XCTestCase {
             shoot("bot-advanced-messaging")
             let disable = app.buttons["Disable a Tool"].firstMatch
             if disable.waitForExistence(timeout: 3) {
-                disable.tap()
+                // Shoot only once the menu's tools are on screen.
+                // The row spans the width but only its label opens the menu.
+                app.staticTexts["Disable a Tool"].firstMatch.tap()
+                XCTAssertTrue(app.descendants(matching: .any)["Mail"].firstMatch.waitForExistence(timeout: 5),
+                              "Disable a Tool did not open its menu")
                 shoot("bot-advanced-disable-tool")
                 AidenStateMatrix.tapOutsidePopover(in: app)
             }
@@ -120,6 +129,12 @@ final class AidenBotUXUITests: XCTestCase {
             chat.tap()
             if app.staticTexts["Run on your Mac?"].firstMatch.waitForExistence(timeout: 20) {
                 shoot("chat-approval-card")
+                let deny = app.buttons["Deny"].firstMatch
+                if deny.waitForExistence(timeout: 5) {
+                    deny.tap()
+                    XCTAssertTrue(app.staticTexts["Denied"].firstMatch.waitForExistence(timeout: 10), "No denied line")
+                    shoot("chat-approval-denied")
+                }
             } else {
                 XCTFail("The chat's typed approval card did not show")
             }
