@@ -89,7 +89,7 @@ export function createBotSkillProposalService(deps: BotSkillProposalDependencies
 
   type Append = (kind: string, data: Record<string, unknown>) => Promise<void>;
 
-  return {
+  const service = {
     /** The Bot's `propose_skill`: validate, then show the card through the calling tool's own write. */
     propose(
       botId: string,
@@ -177,13 +177,20 @@ export function createBotSkillProposalService(deps: BotSkillProposalDependencies
     },
 
     /** The person's answer. Add writes (for a proposal) and approves the exact content. */
-    respond(input: { botId: string; proposalId: string; decision: "add" | "dismiss" }): Promise<{ status: "added" | "dismissed" }> {
+    async respond(input: { botId: string; proposalId: string; decision: "add" | "dismiss" }): Promise<{ status: "added" | "dismissed" }> {
+      const result = await service.answer(input);
+      if (!result.ok) throw new Error("This skill suggestion is no longer available.");
+      return { status: result.status };
+    },
+
+    /** `respond` as a result: a suggestion gone by the time the answer is applied is `not_found`, never a throw. */
+    answer(input: { botId: string; proposalId: string; decision: "add" | "dismiss" }): Promise<{ ok: true; status: "added" | "dismissed" } | { ok: false; code: "not_found" }> {
       return serial(input.botId, async () => {
         const records = await load(input.botId);
         const index = records.findIndex((record) => record.proposalId === input.proposalId);
         const record = records[index];
-        if (!record) throw new Error("This skill suggestion is no longer available.");
-        if (record.status !== "pending") return { status: record.status };
+        if (!record) return { ok: false as const, code: "not_found" as const };
+        if (record.status !== "pending") return { ok: true as const, status: record.status };
         if (input.decision === "add") {
           if (record.origin === "bot") {
             const home = await deps.homePath(input.botId);
@@ -203,12 +210,13 @@ export function createBotSkillProposalService(deps: BotSkillProposalDependencies
         await deps.appendEntry(input.botId, BOT_SKILL_PROPOSAL_STATUS_ENTRY_KIND, { proposalId: record.proposalId, status });
         records[index] = { ...record, status, decidedAt: now() };
         await save(input.botId, records);
-        return { status };
+        return { ok: true as const, status };
       });
     },
 
     list: load,
   };
+  return service;
 }
 
 export type BotSkillProposalService = ReturnType<typeof createBotSkillProposalService>;

@@ -122,6 +122,21 @@ test("Add writes the file, approves that content, and a second pending proposal 
   assert.equal(h.entries[h.entries.length - 1]?.kind, "aiden.skill-proposal-status");
 });
 
+test("answering a suggestion that is gone is a not_found result, not a throw; an answered one keeps its answer", async () => {
+  const h = service(tempRoot(), tempRoot());
+  assert.deepEqual(await h.proposals.answer({ botId: "bot-a", proposalId: "no-such-suggestion", decision: "add" }), { ok: false, code: "not_found" });
+  await assert.rejects(h.proposals.respond({ botId: "bot-a", proposalId: "no-such-suggestion", decision: "add" }), /no longer available/u, "the desktop path still says so");
+  const proposed = await h.proposals.propose("bot-a", { name: "meal-plan", description: "Use when planning meals.", instructions: "List seven dinners." });
+  assert.ok(proposed.ok);
+  // Two devices answer at once: one wins, the other reads the settled answer.
+  const [first, second] = await Promise.all([
+    h.proposals.answer({ botId: "bot-a", proposalId: proposed.proposalId, decision: "dismiss" }),
+    h.proposals.answer({ botId: "bot-a", proposalId: proposed.proposalId, decision: "add" }),
+  ]);
+  assert.deepEqual([first, second], [{ ok: true, status: "dismissed" }, { ok: true, status: "dismissed" }]);
+  assert.equal(h.invalidated(), 0, "the losing Add wrote and approved nothing");
+});
+
 test("an update to a huge current skill shows every proposed line on its card", async () => {
   const home = tempRoot();
   const h = service(tempRoot(), home);
