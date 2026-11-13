@@ -224,6 +224,8 @@ export interface PeerDiscoveredDevice {
 export interface PeerDiscoveryState {
   scanning: boolean;
   devices: PeerDiscoveredDevice[];
+  /** A status read failed during this scan; absent when Tailscale is missing or readable. */
+  tailscale?: { status: "unavailable"; reason: "invalid-response" | "timed-out" | "command-failed" };
 }
 
 /** Why a pairing attempt ended without a paired host. */

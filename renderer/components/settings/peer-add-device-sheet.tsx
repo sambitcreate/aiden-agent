@@ -101,6 +101,16 @@ function DiscoveredList({
             Open Aiden on the other computer. It must be on the same network or the same Tailscale
             tailnet. You can also pair with a setup code.
           </Text>
+          {!discovery.scanning && discovery.tailscale?.status === "unavailable" ? (
+            <Text as="p" variant="small" color="secondary" role="status" className="mt-3 flex items-center justify-center gap-1.5">
+              <TriangleAlert className="size-3.5 shrink-0 text-status-warning" aria-hidden="true" />
+              {discovery.tailscale.reason === "timed-out"
+                ? "Tailscale didn't respond in time. Check it and search again."
+                : discovery.tailscale.reason === "invalid-response"
+                  ? "Tailscale returned an unreadable device list. Check it and search again."
+                  : "Aiden couldn't read Tailscale's device list. Check it and search again."}
+            </Text>
+          ) : null}
         </div>
       ) : (
         <ul className="overflow-hidden rounded-card bg-well" aria-label="Discovered computers">
