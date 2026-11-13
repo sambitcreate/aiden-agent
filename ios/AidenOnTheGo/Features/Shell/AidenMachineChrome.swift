@@ -368,3 +368,59 @@ extension EnvironmentValues {
     /// The name a conversation's toolbar shows under its title. Nil says nothing.
     @Entry var aidenConversationMachine: String?
 }
+
+/// Tiles in rows: as many columns at least `minimumWidth` wide as fit, sharing the
+/// width, as `GridItem(.adaptive(minimum:))` lays them out. It measures every tile
+/// up front instead of lazily. On iOS 26.5 an adaptive `LazyVGrid` in a Form row on
+/// an iPad sized itself again on each pass when the text size changed, until UIKit
+/// stopped the app.
+struct AidenTileGrid: Layout {
+    var minimumWidth: CGFloat
+    var spacing: CGFloat
+
+    /// How many columns fit in `width`.
+    static func columnCount(width: CGFloat, minimumWidth: CGFloat, spacing: CGFloat) -> Int {
+        guard width.isFinite, width > 0, minimumWidth > 0 else { return 1 }
+        return max(1, Int(((width + spacing) / (minimumWidth + spacing)).rounded(.down)))
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let grid = columns(in: proposal.width, count: subviews.count)
+        let heights = rowHeights(of: subviews, grid: grid)
+        let naturalWidth = CGFloat(grid.count) * grid.width + CGFloat(grid.count - 1) * spacing
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? naturalWidth
+        return CGSize(width: width, height: heights.reduce(0, +) + CGFloat(max(heights.count - 1, 0)) * spacing)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let grid = columns(in: bounds.width, count: subviews.count)
+        var y = bounds.minY
+        for (row, height) in rowHeights(of: subviews, grid: grid).enumerated() {
+            for column in 0..<grid.count {
+                let index = row * grid.count + column
+                guard index < subviews.count else { break }
+                subviews[index].place(
+                    at: CGPoint(x: bounds.minX + CGFloat(column) * (grid.width + spacing), y: y),
+                    anchor: .topLeading,
+                    proposal: ProposedViewSize(width: grid.width, height: height)
+                )
+            }
+            y += height + spacing
+        }
+    }
+
+    /// One row of every tile at its smallest when no width is offered.
+    private func columns(in width: CGFloat?, count: Int) -> (count: Int, width: CGFloat) {
+        guard let width, width.isFinite, width > 0 else { return (max(count, 1), minimumWidth) }
+        let columns = Self.columnCount(width: width, minimumWidth: minimumWidth, spacing: spacing)
+        return (columns, max((width - CGFloat(columns - 1) * spacing) / CGFloat(columns), 0))
+    }
+
+    private func rowHeights(of subviews: Subviews, grid: (count: Int, width: CGFloat)) -> [CGFloat] {
+        stride(from: 0, to: subviews.count, by: grid.count).map { start in
+            subviews[start..<min(start + grid.count, subviews.count)]
+                .map { $0.sizeThatFits(ProposedViewSize(width: grid.width, height: nil)).height }
+                .max() ?? 0
+        }
+    }
+}

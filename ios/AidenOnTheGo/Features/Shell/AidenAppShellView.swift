@@ -234,8 +234,12 @@ struct AidenAppShellView: View {
                 }
             }
         }
+        // The system's own placement: an iPad opens on the tab strip, and the
+        // sidebar is a tap away. Asking for the sidebar by default
+        // (`defaultAdaptableTabBarPlacement(.sidebar)`) made SwiftUI write its
+        // sidebar state while drawing the first frame, which it reports as
+        // "Modifying state during view update".
         .tabViewStyle(.sidebarAdaptable)
-        .defaultAdaptableTabBarPlacement(.sidebar)
         .tabBarMinimizeBehavior(horizontalSizeClass == .compact ? .onScrollDown : .automatic)
         .tabViewSearchActivation(.searchTabSelection)
         .aidenNewWorkPresentation(newWork, coordinator: coordinator)

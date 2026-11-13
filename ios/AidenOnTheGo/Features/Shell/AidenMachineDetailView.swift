@@ -248,10 +248,7 @@ struct AidenMachineDetailView: View {
             }
 
             Section("Symbol") {
-                LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: tileSize + AidenSpacing.s), spacing: AidenSpacing.s)],
-                    spacing: AidenSpacing.s
-                ) {
+                AidenTileGrid(minimumWidth: tileSize + AidenSpacing.s, spacing: AidenSpacing.s) {
                     ForEach(AidenMachineSymbol.allCases, id: \.self) { symbol in
                         symbolTile(symbol, row: row)
                     }
@@ -260,10 +257,7 @@ struct AidenMachineDetailView: View {
             }
 
             Section("Colour") {
-                LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: tileSize + AidenSpacing.s), spacing: AidenSpacing.s)],
-                    spacing: AidenSpacing.s
-                ) {
+                AidenTileGrid(minimumWidth: tileSize + AidenSpacing.s, spacing: AidenSpacing.s) {
                     ForEach(AidenMachineColor.allCases, id: \.self) { color in
                         colourTile(color, row: row)
                     }
