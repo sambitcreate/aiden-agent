@@ -32,6 +32,8 @@ function stores(accessMode: "full" | "custom" = "full") {
   let duringAccessWrite: (() => void) | undefined;
   /** Runs once, inside the next identity write, before its revision check. */
   let duringIdentityWrite: (() => void) | undefined;
+  /** Runs once, right after the next identity write lands, before it returns. */
+  let afterIdentityWrite: (() => void) | undefined;
   let botRevision = 1;
   const view = (): BotAccessView => {
     const base = { botId: BOT, revision: `access-${accessRevision}`, policyEpoch: "1", summary: "" };
@@ -72,6 +74,11 @@ function stores(accessMode: "full" | "custom" = "full") {
       if (input.expectedRevision !== bot.revision) throw new BotIdentityRevisionConflictError(bot.revision);
       botRevision += 1;
       bot = { ...bot, name: input.name, description: input.description, instructions: input.instructions, avatar: input.avatar, revision: `bot-${botRevision}` };
+      const written = structuredClone(bot);
+      const after = afterIdentityWrite;
+      afterIdentityWrite = undefined;
+      after?.();
+      return written;
     },
     cancelWakeUps: async () => {},
     broadcastChanged: () => {},
@@ -84,6 +91,7 @@ function stores(accessMode: "full" | "custom" = "full") {
     setAccessReadable(readable: boolean) { accessReadable = readable; },
     raceAccessWrite(edit: () => void) { duringAccessWrite = edit; },
     raceIdentityWrite(edit: () => void) { duringIdentityWrite = edit; },
+    followIdentityWrite(edit: () => void) { afterIdentityWrite = edit; },
     /** A desktop identity edit: moves only the Bot's revision. */
     renameOnDesktop(name: string) {
       botRevision += 1;
@@ -172,6 +180,23 @@ test("a name and model change whose name write loses a race to a desktop edit ch
 
     const after = await fake.current();
     assert.equal(after.name, "Desk name", mode);
+    assert.deepEqual(after.model, { providerId: "provider:a", modelId: "model:slow" }, mode);
+  }
+});
+
+test("a desktop rename landing between the name write and a refused model write stands", async () => {
+  for (const mode of ["full", "custom"] as const) {
+    const fake = stores(mode);
+    const { revision } = await fake.ports.read(BOT);
+    // The desktop renames the Bot right after this change's name write, then
+    // saves access so the model half is refused and the name is put back.
+    fake.followIdentityWrite(() => fake.renameOnDesktop("Desk name"));
+    fake.raceAccessWrite(() => fake.bumpAccess());
+
+    await assert.rejects(fake.ports.write(BOT, { name: "Planner", model: FAST }, revision), BotSettingsConflictError);
+
+    const after = await fake.current();
+    assert.equal(after.name, "Desk name", `${mode}: the undo must not overwrite the later desktop edit`);
     assert.deepEqual(after.model, { providerId: "provider:a", modelId: "model:slow" }, mode);
   }
 });

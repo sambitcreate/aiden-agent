@@ -21,8 +21,11 @@ export interface BotSettingsPortDeps {
   botWebSearchEnabled(botId: string): Promise<boolean>;
   /** Compare-and-swap on `expectedRevision`; throws `BotCapabilityRevisionConflictError` when it moved. */
   updateBotAccess(input: { botId: string; expectedRevision: string; access: BotAccessUpdate; refuseDriftedGrants: true }): Promise<unknown>;
-  /** Compare-and-swap on `expectedRevision`; throws `BotIdentityRevisionConflictError` when it moved. */
-  updateBot(input: BotUpdateInput): Promise<unknown>;
+  /**
+   * Compare-and-swap on `expectedRevision`; throws `BotIdentityRevisionConflictError` when it moved.
+   * Resolves to the Bot as this write left it.
+   */
+  updateBot(input: BotUpdateInput): Promise<Pick<BotDefinition, "revision">>;
   cancelWakeUps(botId: string): Promise<void>;
   broadcastChanged(botId: string): void;
   appendEntry: BotSettingsPorts["appendEntry"];
@@ -132,7 +135,7 @@ export function createBotSettingsPorts(deps: BotSettingsPortDeps): BotSettingsPo
         let writtenRevision: string | undefined;
         if (identity) {
           const description = patch.description ?? bot.description ?? "";
-          await deps.updateBot({
+          const written = await deps.updateBot({
             id: botId,
             expectedRevision: expected.bot,
             name: patch.name ?? bot.name,
@@ -145,7 +148,10 @@ export function createBotSettingsPorts(deps: BotSettingsPortDeps): BotSettingsPo
             throw error instanceof BotIdentityRevisionConflictError ? new BotSettingsConflictError() : error;
           });
           wrote = true;
-          if (patch.model) writtenRevision = (await botOf(botId)).revision;
+          // The revision this write made, not a fresh read: a desktop edit
+          // landing after it moves the revision, so the undo below is refused
+          // and that edit stands.
+          writtenRevision = written.revision;
         }
         if (patch.model && view) {
           try {
