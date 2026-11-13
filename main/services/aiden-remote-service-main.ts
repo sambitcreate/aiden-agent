@@ -1009,12 +1009,15 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                     (await import("./bot-settings-changes/service-main.js")).botSettingsChanges.respond(botId, changeId, decision),
                 },
                 suggestions: {
-                  respondSkill: async (botId, proposalId, decision) =>
-                    (await import("./bot-skills/skill-proposals-main.js")).botSkillProposals.respond({ botId, proposalId, decision }),
+                  respondSkill: async (botId, proposalId, decision) => {
+                    const { botSkillProposals } = await import("./bot-skills/skill-proposals-main.js");
+                    if (!(await botSkillProposals.list(botId)).some((record) => record.proposalId === proposalId)) return { ok: false, code: "not_found" };
+                    return { ok: true, ...(await botSkillProposals.respond({ botId, proposalId, decision })) };
+                  },
                   respondLesson: async (botId, lessonId, decision) =>
-                    (await import("./bot-learning/learning-main.js")).respondToLesson(botId, lessonId, decision),
+                    (await import("./bot-learning/learning-main.js")).respondToWaitingLesson(botId, lessonId, decision),
                   removeLesson: async (botId, lessonId) =>
-                    (await import("./bot-learning/learning-main.js")).removeLesson(botId, lessonId),
+                    (await (await import("./bot-learning/learning-main.js")).removeLesson(botId, lessonId)) ? { ok: true } : { ok: false, code: "not_found" },
                   undoLearning: async (botId, changeId) =>
                     (await import("./bot-learning/learning-main.js")).undoBotLearning(botId, changeId),
                 },

@@ -203,11 +203,15 @@ function projectPayload(
   // whether it may allow from the phone, and allow scopes only when it may.
   const card = projection.endsWith("-cards") ? runApprovalCard(payload) : undefined;
   const canAllow = card ? approvalCardAllows(card) : phoneMayAllow(payload);
+  // A card holder is offered exactly the scopes its card's buttons offer.
+  const cardScopes = card && Array.isArray(scopes)
+    ? scopes.filter((scope) => typeof scope === "string" && approvalCardAllows(card, scope as ToolApprovalScope))
+    : scopes;
   const schedule = projection.startsWith("phone-schedule") ? approvalScheduleCard(payload.details) : undefined;
   return {
     ...summary,
     canAllow,
-    ...(canAllow && scopes !== undefined ? { scopes } : {}),
+    ...(canAllow && cardScopes !== undefined && (!Array.isArray(cardScopes) || cardScopes.length > 0) ? { scopes: cardScopes } : {}),
     ...(schedule ? { schedule } : {}),
     ...(card ? { card } : {}),
   };

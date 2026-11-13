@@ -217,6 +217,180 @@
       ]
     }
   },
+  "streamApprovals": {
+    "complete": {
+      "approvalId": "approval_fixture_61a",
+      "streamId": "stream_fixture_61",
+      "chatId": "chat_fixture_61",
+      "summary": "Run command: npm test",
+      "toolCallId": "call_approval_fixture_61a",
+      "toolName": "run_command",
+      "expiresAt": "2026-11-13T09:00:00.000Z",
+      "canAllow": true,
+      "scopes": [
+        "once",
+        "chat"
+      ],
+      "card": {
+        "kind": "mac",
+        "mac": "shell",
+        "title": "Run on your Mac?",
+        "arguments": [
+          {
+            "key": "tool",
+            "value": "Run command"
+          }
+        ],
+        "body": {
+          "format": "command",
+          "text": "npm test"
+        },
+        "buttons": [
+          {
+            "label": "Deny",
+            "decision": "deny",
+            "answered": "Denied"
+          },
+          {
+            "label": "Allow once",
+            "decision": "allow",
+            "answered": "Allowed once"
+          },
+          {
+            "label": "Allow in this chat",
+            "decision": "allow",
+            "scope": "chat",
+            "answered": "Allowed in this chat"
+          }
+        ]
+      }
+    },
+    "denyOnly": {
+      "approvalId": "approval_fixture_61b",
+      "streamId": "stream_fixture_61",
+      "chatId": "chat_fixture_61",
+      "summary": "Click Send in Mail",
+      "toolCallId": "call_approval_fixture_61b",
+      "toolName": "computer_use",
+      "expiresAt": "2026-11-13T09:00:00.000Z",
+      "canAllow": false,
+      "card": {
+        "kind": "mac",
+        "mac": "computer_use",
+        "title": "Use your Mac with Computer Use?",
+        "arguments": [
+          {
+            "key": "tool",
+            "value": "Computer Use"
+          }
+        ],
+        "body": {
+          "format": "text",
+          "text": "Click Send in Mail"
+        },
+        "buttons": [
+          {
+            "label": "Deny",
+            "decision": "deny",
+            "answered": "Denied"
+          }
+        ],
+        "allowOnMac": "Allow it on your Mac."
+      }
+    }
+  },
+  "phoneRunApprovalEvents": {
+    "complete": {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_61",
+      "sequence": 2,
+      "timestamp": "2026-11-13T09:00:00.000Z",
+      "type": "approval_required",
+      "terminal": false,
+      "payload": {
+        "approvalId": "approval_fixture_61c",
+        "summary": "Run command: git status",
+        "toolCallId": "call_approval_fixture_61c",
+        "toolName": "run_command",
+        "canAllow": true,
+        "scopes": [
+          "once",
+          "chat"
+        ],
+        "card": {
+          "kind": "mac",
+          "mac": "shell",
+          "title": "Run on your Mac?",
+          "arguments": [
+            {
+              "key": "tool",
+              "value": "Run command"
+            }
+          ],
+          "body": {
+            "format": "command",
+            "text": "git status"
+          },
+          "buttons": [
+            {
+              "label": "Deny",
+              "decision": "deny",
+              "answered": "Denied"
+            },
+            {
+              "label": "Allow once",
+              "decision": "allow",
+              "answered": "Allowed once"
+            },
+            {
+              "label": "Allow in this chat",
+              "decision": "allow",
+              "scope": "chat",
+              "answered": "Allowed in this chat"
+            }
+          ]
+        }
+      }
+    },
+    "denyOnly": {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_61",
+      "sequence": 3,
+      "timestamp": "2026-11-13T09:00:00.000Z",
+      "type": "approval_required",
+      "terminal": false,
+      "payload": {
+        "approvalId": "approval_fixture_61d",
+        "summary": "Click Send in Mail",
+        "toolCallId": "call_approval_fixture_61d",
+        "toolName": "computer_use",
+        "canAllow": false,
+        "card": {
+          "kind": "mac",
+          "mac": "computer_use",
+          "title": "Use your Mac with Computer Use?",
+          "arguments": [
+            {
+              "key": "tool",
+              "value": "Computer Use"
+            }
+          ],
+          "body": {
+            "format": "text",
+            "text": "Click Send in Mail"
+          },
+          "buttons": [
+            {
+              "label": "Deny",
+              "decision": "deny",
+              "answered": "Denied"
+            }
+          ],
+          "allowOnMac": "Allow it on your Mac."
+        }
+      }
+    }
+  },
   "botSessionEntries": [
     {
       "type": "settings_change",
@@ -303,6 +477,18 @@
       "type": "memory_tidy",
       "id": "entry_fixture_65",
       "changeId": "learning_fixture_01",
+      "createdAt": "2026-11-13T09:00:00.000Z"
+    },
+    {
+      "type": "skill_proposal",
+      "id": "entry_fixture_66",
+      "proposalId": "6a1f3e2d-9c4b-4e8a-b1d2-7f0e5c3a9b61",
+      "name": "House rules",
+      "description": "Everything the house agreed on.",
+      "update": false,
+      "preview": "# House rules\n\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dishes.\nTake turns with the dish…",
+      "previewTruncated": true,
+      "status": "pending",
       "createdAt": "2026-11-13T09:00:00.000Z"
     }
   ],

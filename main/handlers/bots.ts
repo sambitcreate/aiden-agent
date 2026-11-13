@@ -331,9 +331,13 @@ export function registerBotHandlers(): void {
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     overview: async (botId) => (await learning()).botLearningOverview(botId),
     undo: async (botId, changeId) => (await learning()).undoBotLearning(botId, changeId),
-    undoLesson: async (botId, lessonId) => (await learning()).removeLesson(botId, lessonId),
+    undoLesson: async (botId, lessonId) => {
+      await (await learning()).removeLesson(botId, lessonId);
+    },
     respondLesson: async (botId, lessonId, decision) => (await learning()).respondToLesson(botId, lessonId, decision),
-    removeLesson: async (botId, lessonId) => (await learning()).removeLesson(botId, lessonId),
+    removeLesson: async (botId, lessonId) => {
+      await (await learning()).removeLesson(botId, lessonId);
+    },
   });
   // Profile → Health: the newest check, and Check now.
   registerBotHealthHandlers<Electron.IpcMainInvokeEvent>({

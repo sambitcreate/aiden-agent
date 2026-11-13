@@ -16,6 +16,7 @@ import {
   type AidenRemoteApprovalSettingsPorts,
 } from "./aiden-remote-approval-settings.ts";
 import {
+  AIDEN_REMOTE_BOT_SKILL_PREVIEW_MAX,
   botApprovalCardForAudience,
   botTemplateFields,
   parseAidenRemoteApprovalCard,
@@ -35,7 +36,11 @@ import {
   AIDEN_REMOTE_BOT_TEMPLATE_CAPABILITIES,
   AIDEN_REMOTE_BOT_UX_CONTRACT_REVISION,
   parseAidenRemoteBotSessionEntry,
+  parseAidenRemotePhoneRunApproval,
+  parseAidenRemotePhoneStreamApproval,
 } from "./aiden-remote-protocol.ts";
+import { hostRunWireEvent } from "./aiden-remote-host-runs.ts";
+import { projectPhoneStreamApproval } from "./aiden-remote-streams.ts";
 import { ApprovalRulesUnreadableError } from "./approval-rules/store.ts";
 import type { ApprovalRulesView } from "../../renderer/shared/approval-rules.ts";
 
@@ -82,10 +87,17 @@ function build() {
     proposal: { proposalId: "8d0c5c8e-2f0b-4c4e-9a59-3b6f1f0e9a61", name: "Weekly shop", description: "Build the Saturday shopping list.", reason: "You asked for this three weeks running.", origin: "bot", preview: "# Weekly shop\n\nList what the week's meals need.", update: false },
     status: "pending",
   };
+  // A skill too long to show in full: the phone reads previewTruncated and adds it on the Mac.
+  const longSkill: BotTranscriptEntry = {
+    id: "e7",
+    type: "skill_proposal",
+    proposal: { proposalId: "6a1f3e2d-9c4b-4e8a-b1d2-7f0e5c3a9b61", name: "House rules", description: "Everything the house agreed on.", origin: "folder", preview: `# House rules\n\n${"Take turns with the dishes.\n".repeat(700)}`, update: false },
+    status: "pending",
+  };
   const lessonProposal: BotTranscriptEntry = { id: "e4", type: "lesson_proposal", lesson: { lessonId: "lesson_fixture_01", lesson: "Skip recipes with mushrooms.", routineName: "Weekly meal plan", runs: 3 }, status: "pending" };
   const lessonLearned: BotTranscriptEntry = { id: "e5", type: "lesson_learned", lesson: { lessonId: "lesson_fixture_02", lesson: "Prices in euros." }, status: "active" };
   const tidy: BotTranscriptEntry = { id: "e6", type: "memory_tidy", changeId: "learning_fixture_01" };
-  const entries = [settingsHeld, settingsApplied, skill, lessonProposal, lessonLearned, tidy]
+  const entries = [settingsHeld, settingsApplied, skill, lessonProposal, lessonLearned, tidy, longSkill]
     .map((entry, index) => projectBotUxEntry(entry, `entry_fixture_6${index}`, AT));
 
   const botApproval = buildApprovalCard({
@@ -96,6 +108,26 @@ function build() {
     alwaysLabel: "Always allow this tool",
     notes: ["You’ve allowed this 4 times in the last 2 weeks."],
   });
+  // The same approvals as a phone's own stream and a run it watches read them.
+  const streamApproval = (approvalId: string, toolName: string, summary: string, scopes?: ("once" | "chat" | "always")[]) => projectPhoneStreamApproval({
+    approvalId,
+    streamId: "stream_fixture_61",
+    chatId: "chat_fixture_61",
+    summary,
+    toolCallId: `call_${approvalId}`,
+    toolName,
+    expiresAt: AT,
+    canAllow: true,
+    ...(scopes ? { scopes } : {}),
+  }, { card: true });
+  const runApproval = (approvalId: string, sequence: number, toolName: string, summary: string, scopes?: string[]) => hostRunWireEvent({
+    runId: "run_fixture_61",
+    sequence,
+    timestamp: AT,
+    type: "approval_required",
+    terminal: false,
+    payload: { approvalId, summary, toolCallId: `call_${approvalId}`, toolName, canAllow: true, ...(scopes ? { scopes } : {}) },
+  }, "chat_fixture_61", "phone-cards");
   return {
     contractRevision: AIDEN_REMOTE_BOT_UX_CONTRACT_REVISION,
     capabilities: [
@@ -122,6 +154,14 @@ function build() {
       allowOnMac: buildApprovalCard({ toolName: "computer_use", summary: "Click Send in Mail", canAllow: true }),
       botAlways: botApproval,
       botWithoutAllowed: botApprovalCardForAudience(botApproval, false),
+    },
+    streamApprovals: {
+      complete: streamApproval("approval_fixture_61a", "run_command", "Run command: npm test", ["once", "chat"]),
+      denyOnly: streamApproval("approval_fixture_61b", "computer_use", "Click Send in Mail"),
+    },
+    phoneRunApprovalEvents: {
+      complete: runApproval("approval_fixture_61c", 2, "run_command", "Run command: git status", ["once", "chat"]),
+      denyOnly: runApproval("approval_fixture_61d", 3, "computer_use", "Click Send in Mail"),
     },
     botSessionEntries: entries,
     templates: parseAidenRemoteBotTemplateList({
@@ -171,6 +211,19 @@ test("the shared revision-61 fixture is exactly what the host's serializers prod
 test("every fixture shape round-trips through the strict parsers clients mirror", () => {
   const fixture = JSON.parse(readFileSync(FIXTURE, "utf8"));
   for (const card of Object.values(fixture.approvalCards)) assert.deepEqual(parseAidenRemoteApprovalCard(card), card);
+  for (const approval of Object.values(fixture.streamApprovals)) assert.deepEqual(parseAidenRemotePhoneStreamApproval(approval), approval);
+  for (const event of Object.values(fixture.phoneRunApprovalEvents) as Array<{ type: string; payload: unknown }>) {
+    assert.equal(event.type, "approval_required");
+    assert.deepEqual(parseAidenRemotePhoneRunApproval(event.payload), event.payload);
+  }
+  // canAllow is the card's answer: a Deny-only card leaves canAllow false and offers no scopes.
+  for (const pair of [fixture.streamApprovals, { complete: fixture.phoneRunApprovalEvents.complete.payload, denyOnly: fixture.phoneRunApprovalEvents.denyOnly.payload }]) {
+    assert.equal(pair.complete.canAllow, true);
+    assert.deepEqual(pair.complete.scopes, ["once", "chat"]);
+    assert.equal(pair.denyOnly.canAllow, false);
+    assert.equal(pair.denyOnly.scopes, undefined);
+    assert.equal(pair.denyOnly.card.allowOnMac, "Allow it on your Mac.");
+  }
   for (const entry of fixture.botSessionEntries) {
     assert.deepEqual(parseAidenRemoteBotUxEntry(entry), entry);
     assert.deepEqual(parseAidenRemoteBotSessionEntry(entry), entry, "the session parser accepts the new entries");
@@ -185,11 +238,18 @@ test("every fixture shape round-trips through the strict parsers clients mirror"
   assert.equal(held.instructions.endsWith("Shop on Saturdays."), true, "the card carries the full proposed text");
   assert.equal(held.previousInstructions, "Plan my meals.\nKeep it vegetarian.");
   assert.ok(held.instructionsDiff.some((line: { kind: string }) => line.kind !== "same"), "and a diff against the current text");
+  const skills = fixture.botSessionEntries.filter((entry: { type: string }) => entry.type === "skill_proposal");
+  assert.deepEqual(skills.map((entry: { previewTruncated?: boolean }) => entry.previewTruncated === true), [false, true]);
+  assert.equal([...skills[1].preview].length, AIDEN_REMOTE_BOT_SKILL_PREVIEW_MAX);
   assert.deepEqual(fixture.approvalCards.botWithoutAllowed.buttons.map((button: { label: string }) => button.label), ["Deny", "Allow once"]);
 });
 
 test("the parsers refuse what a client must not trust", () => {
   const fixture = JSON.parse(readFileSync(FIXTURE, "utf8"));
+  const denyOnly = fixture.streamApprovals.denyOnly;
+  assert.throws(() => parseAidenRemotePhoneStreamApproval({ ...denyOnly, canAllow: true }), "canAllow must match the card");
+  assert.throws(() => parseAidenRemotePhoneStreamApproval({ ...fixture.streamApprovals.complete, scopes: ["once", "always"] }), "a scope the card does not offer");
+  assert.throws(() => parseAidenRemotePhoneRunApproval({ ...fixture.phoneRunApprovalEvents.complete.payload, card: { ...denyOnly.card, extra: true } }));
   const card = fixture.approvalCards.macCommand;
   assert.throws(() => parseAidenRemoteApprovalCard({ ...card, extra: true }));
   assert.throws(() => parseAidenRemoteApprovalCard({ ...card, buttons: [...card.buttons].reverse() }), "Deny comes first");

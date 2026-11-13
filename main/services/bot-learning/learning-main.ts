@@ -221,11 +221,28 @@ export async function respondToLesson(botId: string, lessonId: string, decision:
   return status;
 }
 
-/** Remove an active lesson from the learning page. */
-export async function removeLesson(botId: string, lessonId: string): Promise<void> {
-  const lesson = await botLessons.setStatus(botId, lessonId, "retired");
-  if (lesson) await botLearningHistory.record({ botId, kind: "lesson_removed", summary: `Removed: ${lesson.lesson}`, target: { kind: "lesson", lessonId }, before: lesson.lesson, after: null });
+/**
+ * A paired device's Keep or Not now: only a lesson still waiting is answered,
+ * so a stale card is told it is gone rather than shown a past answer.
+ */
+export async function respondToWaitingLesson(
+  botId: string,
+  lessonId: string,
+  decision: "keep" | "dismiss",
+): Promise<{ ok: true; status: "active" | "dismissed" } | { ok: false; code: "not_found" | "answered" }> {
+  const lesson = (await botLessons.list(botId)).find((entry) => entry.id === lessonId);
+  if (!lesson) return { ok: false, code: "not_found" };
+  if (lesson.status !== "proposed") return { ok: false, code: "answered" };
+  return { ok: true, status: await respondToLesson(botId, lessonId, decision) };
+}
+
+/** Remove an active lesson from the learning page. Returns whether there was one to remove. */
+export async function removeLesson(botId: string, lessonId: string): Promise<boolean> {
+  const lesson = await botLessons.setStatus(botId, lessonId, "retired", { from: "active" });
+  if (!lesson) return false;
+  await botLearningHistory.record({ botId, kind: "lesson_removed", summary: `Removed: ${lesson.lesson}`, target: { kind: "lesson", lessonId }, before: lesson.lesson, after: null });
   await appendEntry(botId, BOT_LESSON_STATUS_ENTRY_KIND, { lessonId, status: "retired" }).catch(() => undefined);
+  return true;
 }
 
 const lastTidy = new Map<string, number>();
@@ -310,7 +327,7 @@ export async function botLearningOverview(botId: string): Promise<BotLearningOve
   };
 }
 
-export async function undoBotLearning(botId: string, changeId: string): Promise<{ ok: true } | { ok: false; code: string }> {
+export async function undoBotLearning(botId: string, changeId: string): Promise<{ ok: true } | { ok: false; code: "conflict" | "not_found" | "already_undone" }> {
   const result = await botLearningHistory.undo(botId, changeId);
   return result.ok ? { ok: true } : { ok: false, code: result.code };
 }

@@ -185,6 +185,8 @@ export interface AidenRemoteBotSkillProposalEntry {
   update: boolean;
   /** The new file, or a unified diff against the current one. */
   preview: string;
+  /** Set when `preview` was cut to fit: such a skill is added on the Mac only. */
+  previewTruncated?: true;
   status: "pending" | "added" | "dismissed";
   createdAt?: string;
 }
@@ -219,6 +221,11 @@ export type AidenRemoteBotUxEntry =
 /** Session entry types only `bot:settings-changes` devices receive. */
 export const AIDEN_REMOTE_BOT_SETTINGS_CHANGE_ENTRY_TYPES = ["settings_change"] as const;
 /** Session entry types only `bot:suggestions` devices receive. */
+/** A skill suggestion's preview on the wire, in code points; a longer one is cut and added on the Mac only. */
+export const AIDEN_REMOTE_BOT_SKILL_PREVIEW_MAX = 16_000;
+/** Refusal for Add on a skill whose preview the phone could not show in full. */
+export const BOT_SKILL_ADD_ON_MAC_MESSAGE = "This skill is too long to review here. Add it on your Mac.";
+
 export const AIDEN_REMOTE_BOT_SUGGESTION_ENTRY_TYPES = ["skill_proposal", "lesson", "memory_tidy"] as const;
 
 /** The wire entry for one of the desktop's settings, suggestion or learning rows, or undefined. */
@@ -261,7 +268,8 @@ export function projectBotUxEntry(entry: BotTranscriptEntry, id: string, created
         description: clip(proposal.description, 400),
         ...(proposal.reason?.trim() ? { reason: clip(proposal.reason.trim(), 400) } : {}),
         update: proposal.update,
-        preview: clip(proposal.preview, 16_000),
+        preview: clip(proposal.preview, AIDEN_REMOTE_BOT_SKILL_PREVIEW_MAX),
+        ...([...proposal.preview].length > AIDEN_REMOTE_BOT_SKILL_PREVIEW_MAX ? { previewTruncated: true as const } : {}),
         status: entry.status,
         ...at,
       };
@@ -323,7 +331,8 @@ export function parseAidenRemoteBotUxEntry(value: unknown): AidenRemoteBotUxEntr
       };
     }
     case "skill_proposal":
-      exactKeys(value, ["type", "id", "proposalId", "name", "description", "reason", "update", "preview", "status", "createdAt"], "Skill proposal entry");
+      exactKeys(value, ["type", "id", "proposalId", "name", "description", "reason", "update", "preview", "previewTruncated", "status", "createdAt"], "Skill proposal entry");
+      if (has(value, "previewTruncated") && value.previewTruncated !== true) throw new Error("Skill proposal previewTruncated must be true when present.");
       return {
         type: "skill_proposal",
         id,
@@ -332,7 +341,8 @@ export function parseAidenRemoteBotUxEntry(value: unknown): AidenRemoteBotUxEntr
         description: text(value.description, "Skill proposal description", 400, { blank: true }),
         ...(has(value, "reason") ? { reason: text(value.reason, "Skill proposal reason", 400) } : {}),
         update: bool(value.update, "Skill proposal update"),
-        preview: text(value.preview, "Skill proposal preview", 16_000, { blank: true }),
+        preview: text(value.preview, "Skill proposal preview", AIDEN_REMOTE_BOT_SKILL_PREVIEW_MAX, { blank: true }),
+        ...(value.previewTruncated === true ? { previewTruncated: true as const } : {}),
         status: member(value.status, ["pending", "added", "dismissed"] as const, "Skill proposal status"),
         ...createdAt,
       };

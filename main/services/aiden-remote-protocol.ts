@@ -6,7 +6,8 @@ import {
   parseAidenRemoteBotUxEntry,
   type AidenRemoteBotUxEntry,
 } from "./aiden-remote-bot-ux.js";
-import type { ApprovalCard } from "../../renderer/shared/approval-card-model.js";
+import { approvalCardAllows, type ApprovalCard } from "../../renderer/shared/approval-card-model.js";
+import type { ToolApprovalScope } from "../../renderer/shared/tool-approval-scope.js";
 import { botPendingAccessRequestOf, parseBotAccessChoice, type BotAccessChoice } from "../../renderer/shared/bot-access-requests.js";
 import { parseAppControlPanels } from "../../renderer/shared/app-controls.js";
 import { parseBotPeerId } from "../../renderer/shared/bot-peers.js";
@@ -7261,12 +7262,7 @@ function parseScheduleCardsFixture(value: unknown): AidenRemoteScheduleCardsFixt
     throw new Error("Schedule cards streamApproval must carry an approval.");
   }
   const approval = value.streamApproval.approval;
-  assertExactKeys(
-    approval,
-    ["approvalId", "streamId", "chatId", "summary", "toolCallId", "toolName", "expiresAt", "canAllow", "scopes", "schedule"],
-    "Schedule cards stream approval",
-  );
-  if (typeof approval.canAllow !== "boolean") throw new Error("Schedule cards stream approval canAllow must be boolean.");
+  parseAidenRemotePhoneStreamApproval(approval);
   const schedule = parseAidenRemoteApprovalSchedule(approval.schedule);
   parseRunEventSequence(value.phoneRunEvents, "Schedule cards phone run events", "phone");
   const runApprovals = (value.phoneRunEvents as Array<Record<string, any>>)
@@ -9430,6 +9426,60 @@ function parsePairingRequestsFixture(value: unknown): AidenRemotePairingRequests
  * what a phone holding the phone-scoped run subset receives: approvals carry a
  * summary, `canAllow` and offered scopes but never tool details.
  */
+/**
+ * Revision 61: a typed card on a phone's approval must agree with the summary
+ * fields: `canAllow` is exactly whether the card has an allow button, and every
+ * offered scope is one the card's buttons offer.
+ */
+function parsePhoneApprovalCard(payload: Record<string, unknown>, label: string): void {
+  if (!hasOwn(payload, "card")) return;
+  const card = parseAidenRemoteApprovalCard(payload.card);
+  if (payload.canAllow !== approvalCardAllows(card)) throw new Error(`${label} canAllow must match its card.`);
+  if (Array.isArray(payload.scopes) && payload.scopes.some((scope) => !approvalCardAllows(card, scope as ToolApprovalScope))) {
+    throw new Error(`${label} scopes must be ones its card offers.`);
+  }
+}
+
+function parsePhoneApprovalCommon(payload: Record<string, unknown>, label: string): void {
+  // Revision 39: a display-only card for `schedule:cards` holders; it never changes canAllow.
+  if (payload.schedule !== undefined) parseAidenRemoteApprovalSchedule(payload.schedule);
+  assertBoundedString(payload, "approvalId", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
+  assertBoundedString(payload, "summary", 2_000);
+  assertBoundedString(payload, "toolCallId", 128, true);
+  assertBoundedString(payload, "toolName", 120);
+  if (typeof payload.canAllow !== "boolean") throw new Error(`${label} canAllow must be boolean.`);
+  if (payload.scopes !== undefined) {
+    if (!payload.canAllow) throw new Error(`A deny-only ${label.toLocaleLowerCase("en-US")} offers no scopes.`);
+    if (
+      !Array.isArray(payload.scopes) ||
+      payload.scopes.some((scope) => !["once", "chat", "always"].includes(scope as string))
+    ) {
+      throw new Error(`${label} scopes are invalid.`);
+    }
+  }
+  parsePhoneApprovalCard(payload, label);
+}
+
+/** A phone's `approval_required` run payload (and a gap snapshot's approvals). */
+export function parseAidenRemotePhoneRunApproval(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) throw new Error("Phone run approval must be an object.");
+  assertExactKeys(value, ["approvalId", "summary", "toolCallId", "toolName", "canAllow", "scopes", "schedule", "card"], "Phone run approval");
+  parsePhoneApprovalCommon(value, "Phone run approval");
+  return value;
+}
+
+/** A phone's own stream approval (`GET /streams/{id}/approval`). */
+export function parseAidenRemotePhoneStreamApproval(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) throw new Error("Stream approval must be an object.");
+  assertExactKeys(
+    value,
+    ["approvalId", "streamId", "chatId", "summary", "toolCallId", "toolName", "expiresAt", "canAllow", "scopes", "schedule", "card"],
+    "Stream approval",
+  );
+  parsePhoneApprovalCommon(value, "Stream approval");
+  return value;
+}
+
 function parseRunEventSequence(value: unknown, label: string, projection: "host" | "phone"): void {
   if (!Array.isArray(value) || value.length === 0) {
     throw new Error(`${label} must be a non-empty array.`);
@@ -9463,24 +9513,10 @@ function parseRunEventSequence(value: unknown, label: string, projection: "host"
       assertExactKeys(event.payload, ["promptId", "outcome"], "Question resolved");
       boundedText(event.payload.promptId, "Question resolved promptId", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
     } else if (projection === "phone" && event.type === "approval_required") {
-      const payload = event.payload;
-      assertExactKeys(payload, ["approvalId", "summary", "toolCallId", "toolName", "canAllow", "scopes", "schedule"], "Phone run approval");
-      // Revision 39: a display-only card for `schedule:cards` holders; it never changes canAllow.
-      if (payload.schedule !== undefined) parseAidenRemoteApprovalSchedule(payload.schedule);
-      assertBoundedString(payload, "approvalId", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
-      assertBoundedString(payload, "summary", 2_000);
-      assertBoundedString(payload, "toolCallId", 128, true);
-      assertBoundedString(payload, "toolName", 120);
-      if (typeof payload.canAllow !== "boolean") throw new Error("Phone run approval canAllow must be boolean.");
-      if (payload.scopes !== undefined) {
-        if (!payload.canAllow) throw new Error("A deny-only phone run approval offers no scopes.");
-        if (
-          !Array.isArray(payload.scopes) ||
-          payload.scopes.some((scope) => !["once", "chat", "always"].includes(scope as string))
-        ) {
-          throw new Error("Phone run approval scopes are invalid.");
-        }
-      }
+      parseAidenRemotePhoneRunApproval(event.payload);
+    } else if (projection === "phone" && event.type === "snapshot" && Array.isArray(event.payload.approvals)) {
+      // A gap snapshot repeats each waiting approval as the phone would have read it.
+      event.payload.approvals.forEach((approval) => parseAidenRemotePhoneRunApproval(approval));
     } else if (projection === "phone" && event.type === "question_required") {
       const payload = event.payload;
       assertExactKeys(payload, ["promptId", "questions", "toolCallId", "expiresAt"], "Phone run question");

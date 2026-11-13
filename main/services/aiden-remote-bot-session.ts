@@ -15,6 +15,7 @@ import {
   parseBotUxDecision,
   parseEmptyBody,
   projectBotUxEntry,
+  BOT_SKILL_ADD_ON_MAC_MESSAGE,
 } from "./aiden-remote-bot-ux.js";
 import type { BotPlans } from "./bot-plans/plans.js";
 import { homedir } from "node:os";
@@ -288,10 +289,12 @@ export interface AidenRemoteBotSessionServiceOptions {
   };
   /** Revision 61 (`bot:suggestions`): the desktop's skill, lesson and learning services. */
   suggestions?: {
-    respondSkill(botId: string, proposalId: string, decision: "add" | "dismiss"): Promise<{ status: "added" | "dismissed" }>;
-    respondLesson(botId: string, lessonId: string, decision: "keep" | "dismiss"): Promise<"active" | "dismissed">;
-    removeLesson(botId: string, lessonId: string): Promise<void>;
-    undoLearning(botId: string, changeId: string): Promise<{ ok: true } | { ok: false; code: string }>;
+    respondSkill(botId: string, proposalId: string, decision: "add" | "dismiss"): Promise<{ ok: true; status: "added" | "dismissed" } | { ok: false; code: "not_found" }>;
+    /** Only a lesson still waiting for an answer is answered; any other is `answered`. */
+    respondLesson(botId: string, lessonId: string, decision: "keep" | "dismiss"): Promise<{ ok: true; status: "active" | "dismissed" } | { ok: false; code: "not_found" | "answered" }>;
+    /** Only an active lesson is removed. */
+    removeLesson(botId: string, lessonId: string): Promise<{ ok: true } | { ok: false; code: "not_found" }>;
+    undoLearning(botId: string, changeId: string): Promise<{ ok: true } | { ok: false; code: "conflict" | "not_found" | "already_undone" }>;
   };
   /**
    * Revision 37: the Bot's waiting hand-off cards (the same bridge the desktop
@@ -2207,8 +2210,15 @@ export class AidenRemoteBotSessionService {
     const port = this.suggestionsOrNotFound();
     const decision = parseOrInvalid((value) => parseBotUxDecision(value, BOT_SKILL_PROPOSAL_REMOTE_DECISIONS, "Skill response"), input, "The skill response is invalid.");
     await this.options.bots.bot(botId);
-    const { status } = await gone(() => port.respondSkill(botId, proposalId, decision));
-    return { proposalId, status };
+    if (decision === "add") {
+      // Add approves the exact content: a phone adds only a skill it was shown in full.
+      const shown = (await this.projector(botId)).entries.find((entry) => entry.type === "skill_proposal" && entry.proposalId === proposalId);
+      if (!shown) throw new AidenRemoteServiceError("not_found", SKILL_GONE, 404);
+      if (shown.type === "skill_proposal" && shown.previewTruncated) throw new AidenRemoteServiceError("revision_conflict", BOT_SKILL_ADD_ON_MAC_MESSAGE, 409);
+    }
+    const result = await port.respondSkill(botId, proposalId, decision);
+    if (!result.ok) throw new AidenRemoteServiceError("not_found", SKILL_GONE, 404);
+    return { proposalId, status: result.status };
   }
 
   /** Revision 61: Keep or Not now on a lesson card. */
@@ -2216,7 +2226,9 @@ export class AidenRemoteBotSessionService {
     const port = this.suggestionsOrNotFound();
     const decision = parseOrInvalid((value) => parseBotUxDecision(value, BOT_LESSON_REMOTE_DECISIONS, "Lesson response"), input, "The lesson response is invalid.");
     await this.options.bots.bot(botId);
-    return { lessonId, status: await gone(() => port.respondLesson(botId, lessonId, decision)) };
+    const result = await port.respondLesson(botId, lessonId, decision);
+    if (!result.ok) throw new AidenRemoteServiceError("not_found", LESSON_GONE, 404);
+    return { lessonId, status: result.status };
   }
 
   /** Revision 61: Undo on a Learned line: the lesson is retired. */
@@ -2224,7 +2236,7 @@ export class AidenRemoteBotSessionService {
     const port = this.suggestionsOrNotFound();
     parseOrInvalid((value) => parseEmptyBody(value, "Lesson undo"), input, "The lesson undo is invalid.");
     await this.options.bots.bot(botId);
-    await gone(() => port.removeLesson(botId, lessonId));
+    if (!(await port.removeLesson(botId, lessonId)).ok) throw new AidenRemoteServiceError("not_found", LESSON_GONE, 404);
     return { lessonId, status: "retired" };
   }
 
@@ -2235,6 +2247,8 @@ export class AidenRemoteBotSessionService {
     await this.options.bots.bot(botId);
     const result = await port.undoLearning(botId, changeId);
     if (!result.ok) {
+      if (result.code === "not_found") throw new AidenRemoteServiceError("not_found", "This change is no longer available.", 404);
+      if (result.code === "already_undone") throw new AidenRemoteServiceError("revision_conflict", "This change was already undone.", 409);
       throw new AidenRemoteServiceError("revision_conflict", "This change can’t be undone any more. Its memory changed since.", 409);
     }
     return { changeId, undone: true };
@@ -3131,14 +3145,5 @@ export class AidenRemoteBotSessionService {
 
 import { isBotInputEntryKind } from "./bot-runtime/bot-input-entry.js";
 
-/** A suggestion the desktop service no longer has (it says so by throwing) is `not_found`. */
-async function gone<T>(action: () => Promise<T>): Promise<T> {
-  try {
-    return await action();
-  } catch (error) {
-    if (error instanceof AidenRemoteServiceError) throw error;
-    const message = error instanceof Error && /no longer|not found|isn.t available/iu.test(error.message) ? error.message : undefined;
-    if (message) throw new AidenRemoteServiceError("not_found", message, 404);
-    throw error;
-  }
-}
+const SKILL_GONE = "This skill suggestion is no longer available.";
+const LESSON_GONE = "This lesson is no longer waiting for an answer.";

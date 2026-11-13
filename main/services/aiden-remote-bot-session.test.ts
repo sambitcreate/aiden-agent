@@ -4673,10 +4673,13 @@ test("D Always refuses unoffered and Computer Use scopes without consuming the w
 test("revision 61: settings changes and suggestions reach only devices that opted in, and answers go through the Bot's services", async () => {
   const { BOT_SETTINGS_CHANGE_ENTRY_KIND } = await import("../../renderer/shared/bot-settings-changes.js");
   const { BOT_LESSON_LEARNED_ENTRY_KIND } = await import("../../renderer/shared/bot-lessons.js");
+  const { BOT_SKILL_PROPOSAL_ENTRY_KIND } = await import("../../renderer/shared/bot-skill-proposals.js");
   const driven = drivenConversation([
     user(1, "Rename yourself Planner."),
     { id: 2, kind: BOT_SETTINGS_CHANGE_ENTRY_KIND, data: { changeId: "change_61", mode: "held", fields: ["name"], lines: ["Name: Chief → Planner"] } },
     { id: 3, kind: BOT_LESSON_LEARNED_ENTRY_KIND, data: { lessonId: "lesson_61", lesson: "Prices in euros." } },
+    { id: 4, kind: BOT_SKILL_PROPOSAL_ENTRY_KIND, data: { proposalId: "skill_short", name: "Invoices", description: "Read invoices", origin: "bot", preview: "# Invoices\nRead the total first.", update: false } },
+    { id: 5, kind: BOT_SKILL_PROPOSAL_ENTRY_KIND, data: { proposalId: "skill_long", name: "Reports", description: "Write reports", origin: "bot", preview: `# Reports\n${"Use plain words. ".repeat(4_000)}`, update: false } },
   ]);
   const fake = fakeRuntime({ kind: "idle" });
   const answers: unknown[][] = [];
@@ -4691,10 +4694,13 @@ test("revision 61: settings changes and suggestions reach only devices that opte
       },
     },
     suggestions: {
-      respondSkill: async () => ({ status: "added" }),
-      respondLesson: async () => { throw new Error("This lesson is no longer there."); },
-      removeLesson: async (...args) => { answers.push(["remove", ...args]); },
-      undoLearning: async () => ({ ok: false, code: "changed" }),
+      respondSkill: async (...args) => { answers.push(["skill", ...args]); return { ok: true, status: args[2] === "add" ? "added" : "dismissed" }; },
+      respondLesson: async (_botId, lessonId) => (lessonId === "lesson_answered" ? { ok: false, code: "answered" } : { ok: false, code: "not_found" }),
+      removeLesson: async (...args) => {
+        answers.push(["remove", ...args]);
+        return args[1] === "lesson_61" ? { ok: true } : { ok: false, code: "not_found" };
+      },
+      undoLearning: async (_botId, changeId) => ({ ok: false, code: changeId === "learning_gone" ? "not_found" : "conflict" }),
     },
     notifyBotsChanged: () => {},
     projectorIdleMs: 60_000,
@@ -4703,18 +4709,35 @@ test("revision 61: settings changes and suggestions reach only devices that opte
     const types = async (options: Parameters<typeof service.session>[1]) => (await service.session(BOT_ID, options)).entries.map((entry) => entry.type);
     assert.deepEqual(await types({}), ["message"], "an older phone sees neither card");
     assert.deepEqual(await types({ settingsChanges: true }), ["message", "settings_change"]);
-    assert.deepEqual(await types({ suggestions: true }), ["message", "lesson"]);
+    assert.deepEqual(await types({ suggestions: true }), ["message", "lesson", "skill_proposal", "skill_proposal"]);
     const session = await service.session(BOT_ID, { settingsChanges: true, suggestions: true });
     assert.deepEqual(parseAidenRemoteBotSession(session), session);
+    const skills = session.entries.filter((entry) => entry.type === "skill_proposal");
+    assert.deepEqual(skills.map((entry) => entry.type === "skill_proposal" && entry.previewTruncated === true), [false, true], "a preview cut to fit says so");
 
     assert.deepEqual(await service.respondSettingsChange(BOT_ID, "change_61", { decision: "apply" }), { changeId: "change_61", status: "applied" });
     await assert.rejects(service.respondSettingsChange(BOT_ID, "change_61", { decision: "undo" }), isError("revision_conflict", 409));
     await assert.rejects(service.respondSettingsChange(BOT_ID, "change_61", { decision: "edit" }), isError("invalid_request", 400), "Edit happens on the desktop");
-    await assert.rejects(service.respondLesson(BOT_ID, "lesson_61", { decision: "keep" }), isError("not_found", 404));
+    await assert.rejects(service.respondLesson(BOT_ID, "lesson_bogus", { decision: "keep" }), isError("not_found", 404));
+    await assert.rejects(service.respondLesson(BOT_ID, "lesson_answered", { decision: "keep" }), isError("not_found", 404), "an already-answered lesson is gone");
     await assert.rejects(service.undoLearning(BOT_ID, "learning_61", {}), isError("revision_conflict", 409));
+    await assert.rejects(service.undoLearning(BOT_ID, "learning_gone", {}), isError("not_found", 404));
     await assert.rejects(service.removeLesson(BOT_ID, "lesson_61", { extra: true }), isError("invalid_request", 400));
+    await assert.rejects(service.removeLesson(BOT_ID, "lesson_bogus", {}), isError("not_found", 404));
     assert.deepEqual(await service.removeLesson(BOT_ID, "lesson_61", {}), { lessonId: "lesson_61", status: "retired" });
-    assert.deepEqual(answers, [["settings", BOT_ID, "change_61", "apply"], ["settings", BOT_ID, "change_61", "undo"], ["remove", BOT_ID, "lesson_61"]]);
+
+    await assert.rejects(service.respondSkillProposal(BOT_ID, "skill_long", { decision: "add" }), isError("revision_conflict", 409), "a skill the phone saw only in part is added on the Mac");
+    await assert.rejects(service.respondSkillProposal(BOT_ID, "skill_unseen", { decision: "add" }), isError("not_found", 404));
+    assert.deepEqual(await service.respondSkillProposal(BOT_ID, "skill_long", { decision: "dismiss" }), { proposalId: "skill_long", status: "dismissed" });
+    assert.deepEqual(await service.respondSkillProposal(BOT_ID, "skill_short", { decision: "add" }), { proposalId: "skill_short", status: "added" });
+    assert.deepEqual(answers, [
+      ["settings", BOT_ID, "change_61", "apply"],
+      ["settings", BOT_ID, "change_61", "undo"],
+      ["remove", BOT_ID, "lesson_bogus"],
+      ["remove", BOT_ID, "lesson_61"],
+      ["skill", BOT_ID, "skill_long", "dismiss"],
+      ["skill", BOT_ID, "skill_short", "add"],
+    ], "a refused Add never reaches the Bot's skill service");
   } finally {
     await service.close();
   }

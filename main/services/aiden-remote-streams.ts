@@ -251,6 +251,29 @@ function approvalIsHostOnly(details: ToolApprovalDetails | undefined): boolean {
   return details !== undefined && details.kind !== "scheduled-task";
 }
 
+/**
+ * A phone's view of its own stream approval: host-only details dropped, and
+ * for an `approval:cards` holder (revision 61) the typed card, whose allow
+ * buttons decide `canAllow` and the scopes offered.
+ */
+export function projectPhoneStreamApproval(
+  approval: AidenRemotePendingApproval,
+  options: { scheduleCard?: boolean; card?: boolean } = {},
+): AidenRemotePendingApproval {
+  const { details: _hostOnly, scopes, ...mobile } = approval;
+  const card = options.card === true ? streamApprovalCard(approval) : undefined;
+  const canAllow = card ? approvalCardAllows(card) : approvalIsHostOnly(approval.details) ? false : approval.canAllow;
+  const offered = card && scopes ? scopes.filter((scope) => approvalCardAllows(card, scope)) : scopes;
+  const schedule = options.scheduleCard === true ? approvalScheduleCard(approval.details) : undefined;
+  return {
+    ...mobile,
+    canAllow,
+    ...(canAllow && offered && offered.length > 0 ? { scopes: offered } : {}),
+    ...(schedule ? { schedule } : {}),
+    ...(card ? { card } : {}),
+  };
+}
+
 /** The typed card for a phone's own stream approval (revision 61), from the one card model. */
 function streamApprovalCard(approval: Pick<ApprovalRecord, "toolName" | "summary" | "canAllow" | "scopes" | "details">): ApprovalCard {
   return buildApprovalCard({
@@ -1498,18 +1521,7 @@ export class AidenRemoteStreamService {
   ): AidenRemotePendingApproval | null {
     const stream = this.requireStream(deviceId, streamId);
     const approval = this.pendingApprovalForStream(stream.streamId);
-    if (!approval) return null;
-    const { details: _hostOnly, scopes, ...mobile } = approval;
-    const card = options.card === true ? streamApprovalCard(approval) : undefined;
-    const canAllow = card ? approvalCardAllows(card) : approvalIsHostOnly(approval.details) ? false : approval.canAllow;
-    const schedule = options.scheduleCard === true ? approvalScheduleCard(approval.details) : undefined;
-    return {
-      ...mobile,
-      canAllow,
-      ...(canAllow && scopes ? { scopes } : {}),
-      ...(schedule ? { schedule } : {}),
-      ...(card ? { card } : {}),
-    };
+    return approval ? projectPhoneStreamApproval(approval, options) : null;
   }
 
   approvalChatId(deviceId: string, approvalId: string): string {
