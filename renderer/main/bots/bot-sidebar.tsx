@@ -5,7 +5,7 @@
 
 import * as React from "react";
 import { useNavigate, useRouter, useRouterState } from "@tanstack/react-router";
-import { ChevronLeft, Plug, Plus, RotateCcw, Search, Star, UserRound, X } from "lucide-react";
+import { ChevronLeft, Plug, RotateCcw, Search, Star, UserRound, X } from "lucide-react";
 import { BotAvatar } from "../../components/bot-avatar";
 import { HistoryNavButtons } from "../../components/history-nav";
 import {
@@ -26,7 +26,7 @@ import { cn } from "../../lib/ui-utils";
 import type { BotDefinition } from "../../shared/bots";
 import { RemoteBotsSection, remoteBotGroupsMatching } from "../../components/remote-bots-section";
 import { useRemoteBots } from "../remote-bots";
-import { BotCreateFlow } from "./bot-create-flow";
+import { BotCreateMenu, useBotCreateDialogs } from "./bot-create-menu";
 import { BotDeleteDialog } from "./bot-delete-dialog";
 import { BotRowMenus, useBotMenuActions, type BotMenuAction } from "./bot-menu";
 import { botRowLine, matchesBotSearch, useBotRows, type BotSidebarRow } from "./bot-sidebar-rows";
@@ -317,7 +317,6 @@ export function BotSidebar() {
   const navRef = React.useRef<HTMLElement>(null);
   // The Bot list takes one Tab stop; arrow keys move between its rows.
   useRovingRows(navRef);
-  const [creating, setCreating] = React.useState(false);
   const [deleting, setDeleting] = React.useState<{ bot: BotDefinition; neighbours: string[] } | null>(null);
   // The rows in the order they are on screen: the pinned Bot first, then the list.
   const visibleIdsRef = React.useRef<string[]>([]);
@@ -354,6 +353,7 @@ export function BotSidebar() {
     },
     [navigate, router],
   );
+  const create = useBotCreateDialogs(openChat);
   // ⌘1–9 and ⇧⌘[ / ⇧⌘] follow the rows on screen, as in the chat sidebar;
   // Bots on a paired Mac have no number, like chats there.
   const orderedBots = [...(pinnedRow ? [pinnedRow] : []), ...visible].map((row) => row.bot);
@@ -528,17 +528,7 @@ export function BotSidebar() {
           >
             <Search />
           </Button>
-          <Button
-            ref={newBotRef}
-            iconOnly
-            variant="bar"
-            size="small"
-            aria-label="New Bot"
-            title="New Bot"
-            onClick={() => setCreating(true)}
-          >
-            <Plus />
-          </Button>
+          <BotCreateMenu ref={newBotRef} onNewBot={create.newBot} onTemplates={create.openTemplates} />
         </div>
         {searchOpen ? (
           <div className="relative mx-2.5 mb-2">
@@ -589,7 +579,7 @@ export function BotSidebar() {
           />
         </nav>
       </Sidebar>
-      <BotCreateFlow open={creating} onOpenChange={setCreating} onCreated={(bot) => openChat(bot)} />
+      {create.dialogs}
       {deleting ? (
         <BotDeleteDialog
           bot={deleting.bot}

@@ -50,6 +50,93 @@ function useRovingRadio<Value extends string>(
   return { onKeyDown, register, tabIndex: (value: Value) => (value === selected ? 0 : -1) };
 }
 
+/** The colour radios: one tab stop, arrows move and select. */
+function ColourRadios({ current, choose, disabled }: { current: BotAvatarAppearance; choose(color: BotAvatarColor): void; disabled: boolean }) {
+  const colors = useRovingRadio<BotAvatarColor>(BOT_AVATAR_COLORS, current.color, choose);
+  return (
+    <div role="radiogroup" aria-label="Colour" className="flex flex-wrap gap-2">
+      {BOT_AVATAR_COLORS.map((color) => {
+        const checked = current.color === color;
+        return (
+          <button
+            key={color}
+            ref={colors.register(color)}
+            type="button"
+            role="radio"
+            aria-checked={checked}
+            aria-label={BOT_AVATAR_COLOR_LABELS[color]}
+            tabIndex={colors.tabIndex(color)}
+            disabled={disabled}
+            onClick={() => choose(color)}
+            onKeyDown={(event) => colors.onKeyDown(event, color)}
+            className="grid size-8 place-items-center rounded-full outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring disabled:opacity-45"
+            style={{ backgroundColor: `var(--bot-avatar-${color})` }}
+          >
+            {checked ? <Check aria-hidden="true" className="size-4 text-[var(--bot-avatar-face)]" /> : null}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** The shape radios, each drawn in the current colour. */
+function ShapeRadios({ current, choose, disabled }: { current: BotAvatarAppearance; choose(shape: BotAvatarShape): void; disabled: boolean }) {
+  const shapes = useRovingRadio<BotAvatarShape>(BOT_AVATAR_SHAPES, current.shape, choose);
+  return (
+    <div role="radiogroup" aria-label="Shape" className="flex flex-wrap gap-1">
+      {BOT_AVATAR_SHAPES.map((shape) => {
+        const checked = current.shape === shape;
+        return (
+          <button
+            key={shape}
+            ref={shapes.register(shape)}
+            type="button"
+            role="radio"
+            aria-checked={checked}
+            aria-label={BOT_AVATAR_SHAPE_LABELS[shape]}
+            tabIndex={shapes.tabIndex(shape)}
+            disabled={disabled}
+            onClick={() => choose(shape)}
+            onKeyDown={(event) => shapes.onKeyDown(event, shape)}
+            className={`grid size-10 place-items-center rounded-control p-1.5 outline-none transition-colors duration-150 hover:bg-list-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring disabled:opacity-45 motion-reduce:transition-none ${
+              checked ? "bg-list-selection" : ""
+            }`}
+          >
+            <AvatarFace avatar={{ ...current, shape }} />
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * The colour and shape rows alone, for the New bot dialog and the side
+ * panel's avatar popover. Selection is a check or a soft fill, never a border.
+ */
+export function BotLookPicker({
+  avatar,
+  onChange,
+  disabled = false,
+}: {
+  avatar: BotAvatar;
+  onChange(avatar: BotAvatarAppearance): void;
+  disabled?: boolean;
+}) {
+  const current = resolveBotAvatar(avatar);
+  const choose = (patch: Partial<Pick<BotAvatarAppearance, "shape" | "color">>) => {
+    const next = { ...current, ...patch };
+    if (!sameCharacter(next, current)) onChange(next);
+  };
+  return (
+    <div className="flex flex-col gap-3">
+      <ColourRadios current={current} choose={(color) => choose({ color })} disabled={disabled} />
+      <ShapeRadios current={current} choose={(shape) => choose({ shape })} disabled={disabled} />
+    </div>
+  );
+}
+
 /**
  * Character: the colour and shape that make up a Bot's mark everywhere.
  * Selection is shown with a check or a soft fill, never a decorative border.
@@ -68,68 +155,15 @@ export function BotCharacterCard({
     const next = { ...current, ...patch };
     if (!sameCharacter(next, current)) onChange(next);
   };
-  const colors = useRovingRadio<BotAvatarColor>(BOT_AVATAR_COLORS, current.color, (color) =>
-    choose({ color }),
-  );
-  const shapes = useRovingRadio<BotAvatarShape>(BOT_AVATAR_SHAPES, current.shape, (shape) =>
-    choose({ shape }),
-  );
   const isDefault = sameCharacter(current, DEFAULT_BOT_AVATAR);
 
   return (
     <FieldSet title="Character">
       <Field orientation="vertical" label="Colour">
-        <div role="radiogroup" aria-label="Colour" className="flex flex-wrap gap-2">
-          {BOT_AVATAR_COLORS.map((color) => {
-            const checked = current.color === color;
-            return (
-              <button
-                key={color}
-                ref={colors.register(color)}
-                type="button"
-                role="radio"
-                aria-checked={checked}
-                aria-label={BOT_AVATAR_COLOR_LABELS[color]}
-                tabIndex={colors.tabIndex(color)}
-                disabled={disabled}
-                onClick={() => choose({ color })}
-                onKeyDown={(event) => colors.onKeyDown(event, color)}
-                className="grid size-8 place-items-center rounded-full outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring disabled:opacity-45"
-                style={{ backgroundColor: `var(--bot-avatar-${color})` }}
-              >
-                {checked ? (
-                  <Check aria-hidden="true" className="size-4 text-[var(--bot-avatar-face)]" />
-                ) : null}
-              </button>
-            );
-          })}
-        </div>
+        <ColourRadios current={current} choose={(color) => choose({ color })} disabled={disabled} />
       </Field>
       <Field orientation="vertical" label="Shape">
-        <div role="radiogroup" aria-label="Shape" className="flex flex-wrap gap-1">
-          {BOT_AVATAR_SHAPES.map((shape) => {
-            const checked = current.shape === shape;
-            return (
-              <button
-                key={shape}
-                ref={shapes.register(shape)}
-                type="button"
-                role="radio"
-                aria-checked={checked}
-                aria-label={BOT_AVATAR_SHAPE_LABELS[shape]}
-                tabIndex={shapes.tabIndex(shape)}
-                disabled={disabled}
-                onClick={() => choose({ shape })}
-                onKeyDown={(event) => shapes.onKeyDown(event, shape)}
-                className={`grid size-10 place-items-center rounded-control p-1.5 outline-none transition-colors duration-150 hover:bg-list-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring disabled:opacity-45 motion-reduce:transition-none ${
-                  checked ? "bg-list-selection" : ""
-                }`}
-              >
-                <AvatarFace avatar={{ ...current, shape }} />
-              </button>
-            );
-          })}
-        </div>
+        <ShapeRadios current={current} choose={(shape) => choose({ shape })} disabled={disabled} />
       </Field>
       <Field label="Default look" description="How this Bot looks everywhere: its list row, chat, and phone.">
         <Button

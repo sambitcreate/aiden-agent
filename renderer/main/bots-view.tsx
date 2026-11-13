@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
-import { Plus, RotateCcw } from "lucide-react";
+import { LayoutTemplate, Plus, RotateCcw } from "lucide-react";
 import { Button, Callout, EmptyState, ScrollArea, Text } from "../components/ui";
 import { botChatPath, botListLocation } from "../lib/bot-routes";
 import { settingsLocation } from "../lib/settings-section";
@@ -10,7 +10,7 @@ import type { BotDefinition } from "../shared/bots";
 import { BotAdvanced } from "./bots/bot-advanced";
 import { BotInterruptionsPage } from "./bots/bot-interruptions-page";
 import { BotLearningPage } from "./bots/bot-learning-page";
-import { BotCreateFlow } from "./bots/bot-create-flow";
+import { BotCreateMenu, useBotCreateDialogs } from "./bots/bot-create-menu";
 import { BotDeleteDialog } from "./bots/bot-delete-dialog";
 import { BotInstructionsDialog } from "./bots/bot-instructions-editor";
 import { useBotRows } from "./bots/bot-sidebar-rows";
@@ -19,7 +19,6 @@ import { BotOpenWorkPage } from "./bots/bot-open-work-page";
 import { BotPageShell, BotPageSkeleton } from "./bots/bot-page-shell";
 import { parseBotPageSearch, type BotSubpage } from "./bots/bot-page-search";
 import { BotProfile } from "./bots/bot-profile";
-import { BotStarterCarousel } from "./bots/bot-starter-carousel";
 import { useBotSidebarPreferences } from "./bots/use-bot-sidebar-preferences";
 
 /** How long /bots waits for chat-activity summaries before ordering Bots by their own updatedAt. */
@@ -30,15 +29,16 @@ const CACHED_LIST_TRUST_MS = 5 * 60 * 1000;
 /**
  * `/bots` with no Bot selected (spec §9): the Bot list lives in the sidebar, so
  * this opens the chat of the Bot last viewed on this Mac, else the one with the
- * newest activity. With no Bots it is "Meet your first Bot".
+ * newest activity. With no Bots it points at New bot and Templates.
  */
 function BotsIndex() {
   const navigate = useNavigate();
   const { bots, rows, summariesSettled } = useBotRows();
   const { preferences } = useBotSidebarPreferences();
-  const [creating, setCreating] = React.useState(false);
   const [summariesGraceOver, setSummariesGraceOver] = React.useState(false);
   const openChat = (bot: BotDefinition) => void navigate(botChatPath(bot.id));
+  const create = useBotCreateDialogs(openChat);
+  const creating = create.creating || create.templates;
   // A settled, successful load names a Bot to open. A list read recently enough
   // (this launch's own read, refreshing in the background) may name the Bot the
   // person last looked at without waiting: that Bot's chat shows at once from
@@ -78,11 +78,7 @@ function BotsIndex() {
     <ScrollArea
       scrollRestorationId="bots-home"
       title="Bots"
-      actions={
-        <Button variant="toolbar" size="medium" onClick={() => setCreating(true)}>
-          <Plus /> New Bot
-        </Button>
-      }
+      actions={<BotCreateMenu variant="toolbar" onNewBot={create.newBot} onTemplates={create.openTemplates} />}
     >
       <main className="mx-auto w-full max-w-3xl px-5 pb-10 pt-4">
         {bots.isError ? (
@@ -102,10 +98,23 @@ function BotsIndex() {
         ) : bots.isLoading ? (
           <BotPageSkeleton label="Loading Bots" groups={[3]} />
         ) : (
-          <BotStarterCarousel onCreateOwn={() => setCreating(true)} onOpenChat={openChat} />
+          <EmptyState
+            title="No Bots yet"
+            description="A Bot is a helper with its own chat, memory and routines. Name one and tell it what you need, or start from a template."
+            action={
+              <div className="flex flex-wrap justify-center gap-2">
+                <Button variant="accent" onClick={create.newBot}>
+                  <Plus /> New bot
+                </Button>
+                <Button variant="filled" onClick={create.openTemplates}>
+                  <LayoutTemplate /> Templates
+                </Button>
+              </div>
+            }
+          />
         )}
       </main>
-      <BotCreateFlow open={creating} onOpenChange={setCreating} onCreated={(bot) => openChat(bot)} />
+      {create.dialogs}
     </ScrollArea>
   );
 }

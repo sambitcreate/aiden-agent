@@ -536,7 +536,7 @@ test("Shift+F10 on a focused row opens its menu from the keyboard", async () => 
   await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-2"));
 });
 
-test("deleting a row's Bot leaves focus on the next row, and deleting the last Bot leaves it on New Bot", async () => {
+test("deleting a row's Bot leaves focus on the next row, and deleting the last Bot leaves it on Create", async () => {
   let bots = [PLANNER, INBOX, SCOUT];
   sidebarIpc([], {
     "bot-1": summary("bot-1", { updatedAt: 300 }),
@@ -565,7 +565,7 @@ test("deleting a row's Bot leaves focus on the next row, and deleting the last B
   // None below: the row above.
   await waitFor(() => assert.equal(document.activeElement === rowButton("Planner"), true));
   await remove("Planner");
-  await waitFor(() => assert.equal(document.activeElement === screen.getByRole("button", { name: "New Bot" }), true));
+  await waitFor(() => assert.equal(document.activeElement === screen.getByRole("button", { name: "Create" }), true));
 });
 
 test("deleting a Bot from its own chat leaves nothing behind for it, not even a last-viewed time", async () => {
