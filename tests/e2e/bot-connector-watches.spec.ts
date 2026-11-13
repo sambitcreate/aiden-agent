@@ -35,7 +35,9 @@ test("connector watches require explicit source discovery and keep the editor us
     }
   }, { bot, templates: BOT_CONNECTOR_WATCH_TEMPLATES, rules: defaultBotRulesView(bot.id) });
   await page.getByRole("button", { name: "Bots", exact: true }).click();
-  await page.getByRole("button", { name: "Inbox Helper profile" }).click();
+  // Watches live in the side panel's Routines tab; the Bot's name opens the panel.
+  await page.getByRole("button", { name: "Inbox Helper settings" }).click();
+  await page.getByRole("tab", { name: "Routines", exact: true }).click();
   const group = page.getByRole("heading", { name: "Connected-app watches", exact: true }).locator("xpath=ancestor::section[1]");
   await expect(group.getByText("No connected-app watches", { exact: true })).toBeVisible();
   expect(await aiden.app.evaluate(() => (globalThis as { watchDiscoveries?: number }).watchDiscoveries ?? 0)).toBe(0);
@@ -157,7 +159,9 @@ test("an eligible Calendar watch supports preview, editing, pause, same-request 
   }, { bot, rules: defaultBotRulesView(bot.id), templates: BOT_CONNECTOR_WATCH_TEMPLATES.map((item) => item.kind === "calendar" ? { ...item, available: true, unavailableReason: undefined } : item) });
   const snapshot = () => aiden.app.evaluate(() => (globalThis as { calendarJourney?: CalendarJourneyState }).calendarJourney!);
   await page.getByRole("button", { name: "Bots", exact: true }).click();
-  await page.getByRole("button", { name: "Calendar Helper profile" }).click();
+  // Watches live in the side panel's Routines tab; the Bot's name opens the panel.
+  await page.getByRole("button", { name: "Calendar Helper settings" }).click();
+  await page.getByRole("tab", { name: "Routines", exact: true }).click();
   const group = page.getByRole("heading", { name: "Connected-app watches", exact: true }).locator("xpath=ancestor::section[1]");
   await expect(group.getByText("No connected-app watches", { exact: true })).toBeVisible();
   expect((await snapshot()).discoveries).toBe(0);

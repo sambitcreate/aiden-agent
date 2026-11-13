@@ -155,23 +155,13 @@ test("plan approval waits for the host, then becomes a stoppable checklist", asy
 });
 
 
-test("onboarding explains plan approvals and draws the checklist in its Bots tile", async ({ aiden }, testInfo) => {
+test("onboarding's Bots tile draws the first Bot's chat and explains plan approvals", async ({ aiden }, testInfo) => {
   const { page } = aiden;
-  await aiden.app.evaluate(({ ipcMain }) => {
-    ipcMain.removeHandler("bots:list");
-    ipcMain.handle("bots:list", () => []);
-  });
   const onboarding = page.locator('section[aria-label="Set up Aiden"]');
   await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
   const next = onboarding.getByRole("button", { name: /^Next/u });
   await next.click();
   await connectOnboardingLmStudio(onboarding);
-  await onboarding.getByText("Choose your first Bot", { exact: true }).click();
-  await expect(onboarding.getByRole("heading", { name: "Meet your first Bot" })).toBeVisible();
-  await expect(onboarding.getByText(/approve a whole plan/u)).toBeVisible();
-  await expect(onboarding.getByText(/track accepted tasks in Open work/u)).toBeVisible();
-  await onboarding.getByRole("button", { name: "Skip", exact: true }).click();
-  await expect(onboarding.getByRole("heading", { name: "Finish setup" })).toBeVisible();
   await onboarding.getByText("Explore Aiden’s features", { exact: true }).click();
   const botsTile = onboarding.locator('article[data-onboarding-feature="bots"]');
   for (const [mode, width] of [["light", 1280], ["dark", 600]] as const) {
@@ -183,7 +173,7 @@ test("onboarding explains plan approvals and draws the checklist in its Bots til
     await expect(page.locator("html")).toHaveAttribute("data-appearance-scheme", mode);
     await page.mouse.move(0, 0);
     await botsTile.scrollIntoViewIfNeeded();
-    await expect(botsTile.getByText("Stop plan", { exact: true })).toBeVisible();
+    await expect(botsTile.getByText("What should I help with?", { exact: true })).toBeVisible();
     await botsTile.screenshot({ path: testInfo.outputPath(`bots-plan-tour-${mode}.png`) });
     await botsTile.focus();
     await expect(botsTile).toBeFocused();

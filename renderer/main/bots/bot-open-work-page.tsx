@@ -229,7 +229,7 @@ export function BotOpenWorkPage({ bot, onClose }: { bot: BotDefinition; onClose(
   return <BotPageShell scrollId={"bot-open-work:" + bot.id} title="Open work" backLabel={bot.name} onBack={guard.requestLeave}><BotOpenWorkContent key={bot.id} bot={bot} onDirtyChange={setDirty} />{guard.dialog}</BotPageShell>;
 }
 
-/** Compact entry for Profile and the Bot's existing Activity panel. */
+/** Compact entry for the Advanced tab and the Bot’s Activity tab. */
 export function BotOpenWorkRow({ botId, onOpen, compact = false }: { botId: string; onOpen(): void; compact?: boolean }) {
   const view = useBotOpenWork(botId);
   const count = view.data?.items.filter((item) => item.state === "open" || item.state === "waiting").length;
