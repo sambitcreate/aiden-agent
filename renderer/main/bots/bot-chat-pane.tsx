@@ -741,7 +741,7 @@ export function TranscriptEntries({
   onRemoveQueued?(submissionId: string, button: HTMLButtonElement): void;
   onConnect(pluginId: string): void;
   onDismissConnection?(pluginId: string): void;
-  /** "Add to this Bot" for an app connected in Aiden but left out of the Bot's access. */
+  /** Connect on an app connected in Aiden but left out of the Bot's access. */
   onAddConnection?(pluginId: string): void;
   onOpenFile?(path: string): void;
   onReply(text: string): void;
@@ -1583,7 +1583,7 @@ export function BotChatPane({ botId }: { botId: string }) {
     }
   };
 
-  /** "Add to this Bot": only this tap adds the app to the Bot's access. */
+  /** Connect on an app connected in Aiden that this Bot leaves out: only this tap adds the app to the Bot's access. */
   const addConnection = async (pluginId: string) => {
     setAddingConnection(true);
     try {
