@@ -7,7 +7,8 @@ import type { BotSettingsPatch, BotSettingsValues } from "../../../renderer/shar
 import { app, ipcMain } from "../../platform.js";
 import { botApplicationService } from "../bot-application-service-main.js";
 import { BOT_DESKTOP_AUDIENCE_ID } from "../bot-runtime-authority-main.js";
-import { createBotSettingsChangeService, type BotSettingsModelOption } from "./service.js";
+import { BotIdentityRevisionConflictError } from "../bot-store-core.js";
+import { BotSettingsConflictError, createBotSettingsChangeService, type BotSettingsModelOption } from "./service.js";
 
 async function botOf(botId: string): Promise<BotDefinition> {
   const bot = await botApplicationService.get(botId);
@@ -50,10 +51,10 @@ async function writeModel(botId: string, model: NonNullable<BotSettingsPatch["mo
 
 export const botSettingsChanges = createBotSettingsChangeService({
   profileDir: () => app.getPath("userData"),
-  async read(botId): Promise<BotSettingsValues> {
+  async read(botId): Promise<{ values: BotSettingsValues; revision: string }> {
     const bot = await botOf(botId);
     const selection = await botApplicationService.modelSelection(BOT_DESKTOP_AUDIENCE_ID, botId).catch(() => undefined);
-    return {
+    const values: BotSettingsValues = {
       name: bot.name,
       description: bot.description ?? "",
       look: { color: bot.avatar.color, shape: bot.avatar.shape },
@@ -62,23 +63,30 @@ export const botSettingsChanges = createBotSettingsChangeService({
       notifications: resolveBotInterruptions(bot.interruptions),
       model: selection ? { providerId: selection.providerId, modelId: selection.modelId } : null,
     };
+    return { values, revision: bot.revision };
   },
   models,
-  async write(botId, patch) {
+  async write(botId, patch, expectedRevision) {
+    // A Bot's model is never taken away from chat, and Undo never claims it was.
+    if (patch.model === null) throw new Error("update_bot can't take a Bot's model away.");
     const identity = patch.name !== undefined || patch.description !== undefined || patch.look !== undefined
       || patch.instructions !== undefined || patch.dailyCheckIns !== undefined || patch.notifications !== undefined;
+    const bot = await botOf(botId);
+    // The revision the change (or its Undo) was decided on: an edit since wins.
+    if (bot.revision !== expectedRevision) throw new BotSettingsConflictError();
     if (identity) {
-      const bot = await botOf(botId);
       const description = patch.description ?? bot.description ?? "";
       await botApplicationService.updateBot({
         id: botId,
-        expectedRevision: bot.revision,
+        expectedRevision,
         name: patch.name ?? bot.name,
         ...(description ? { description } : {}),
         instructions: patch.instructions ?? bot.instructions,
         avatar: patch.look ? { version: 1, color: patch.look.color, shape: patch.look.shape } : bot.avatar,
         ...(patch.notifications ? { interruptions: patch.notifications } : {}),
         ...(patch.dailyCheckIns !== undefined ? { selfWakeUps: patch.dailyCheckIns } : {}),
+      }).catch((error: unknown) => {
+        throw error instanceof BotIdentityRevisionConflictError ? new BotSettingsConflictError() : error;
       });
       if (patch.dailyCheckIns === false) {
         const { botWakeUps } = await import("../bot-wake-ups/wake-ups-main.js");

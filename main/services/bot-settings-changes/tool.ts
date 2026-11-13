@@ -12,6 +12,7 @@ import type { BotToolCandidate } from "../bot-runtime/bot-tool-assembly.js";
 import type { BotToolCall } from "../bot-runtime/tool-adapter.js";
 import type { BotSettingsChangeService } from "./service.js";
 import { botRunStartedByOwner } from "../bot-runtime/bot-owner-request.js";
+import { botHistoryToolTaints } from "../bot-runtime/bot-tool-assembly.js";
 
 /**
  * Whether the person alone started the calling run: both the run's execution
@@ -25,12 +26,31 @@ export function updateBotOwnerStarted(
   return botRunStartedByOwner(scopeRequestIds) && (runRequestIds === undefined || botRunStartedByOwner(runRequestIds));
 }
 
+/**
+ * Whether the calling conversation's committed tool results already brought
+ * content from outside the chat (a page, a search, an app's data), earlier
+ * turns included, since the model may still hold it. A conversation that
+ * can't be read counts as having read it.
+ */
+export async function updateBotReadOutside(call: Pick<BotToolCall, "entries">): Promise<boolean> {
+  try {
+    for (const entry of await call.entries()) {
+      for (const message of entry.model ?? []) {
+        if (message.role === "toolResult" && typeof message.toolName === "string" && botHistoryToolTaints(message.toolName)) return true;
+      }
+    }
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 const DESCRIPTION = [
   "Read or change your own settings. Call with no fields to read them, with the models you can switch to.",
   "Change a setting only when the person asked for it in this chat, or when you have no job yet and the person just told you what to do (then write yourself a short description and first instructions).",
   "You can change: name, description, look (color, shape), instructions, dailyCheckIns, notifications (perDay, quietHours) and model (only one of the connected models this tool lists).",
   "You can't change access, tools, connections, other Bots, Bot messaging, the computer, approvals, hooks or spending: the person changes those in your settings.",
-  "When the person didn't start this run, the change waits on a card for them to apply.",
+  "The change waits on a card for the person to apply when they didn't start this run, when this chat has read content from outside it (a page, a search, an app's data), or when it turns daily check-ins on or raises notifications a day.",
 ].join(" ");
 
 export function updateBotCandidate(
@@ -39,6 +59,8 @@ export function updateBotCandidate(
     service: Pick<BotSettingsChangeService, "call">;
     /** Whether the person alone started the calling run. */
     ownerStarted(call: BotToolCall): Promise<boolean>;
+    /** Whether the calling conversation already read outside content; defaults to `updateBotReadOutside`. */
+    readOutside?(call: BotToolCall): Promise<boolean>;
   },
 ): BotToolCandidate {
   const build = (call?: BotToolCall): AgentTool => ({
@@ -70,9 +92,11 @@ export function updateBotCandidate(
     async execute(_id, input) {
       if (!call) throw new Error("update_bot needs its calling Bot conversation.");
       const owner = await ports.ownerStarted(call);
+      const readOutside = owner ? await (ports.readOutside ?? updateBotReadOutside)(call) : false;
       call.signal.throwIfAborted();
       const text = await ports.service.call(botId, input, {
         owner,
+        readOutside,
         append: (kind, data) => call.appendEntry(kind, data as JsonValue),
       });
       return { content: [{ type: "text", text }], details: null };

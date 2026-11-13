@@ -92,6 +92,15 @@ export const BOT_SETTINGS_PERSON_ONLY = new Set([
 
 export type BotSettingsChangeMode = "applied" | "held";
 
+/**
+ * Why a change waits for the person instead of applying: the run wasn't
+ * theirs, the conversation already read content from outside the chat (a
+ * page, a search, an app's data), or the change has the Bot reach out more
+ * on its own (daily check-ins on, or more notifications a day).
+ */
+export type BotSettingsHeldReason = "not_owner" | "outside_content" | "widens";
+const HELD_REASONS: readonly BotSettingsHeldReason[] = ["not_owner", "outside_content", "widens"];
+
 /** The chat entry a change writes. */
 export interface BotSettingsChangeEntryData {
   changeId: string;
@@ -101,6 +110,64 @@ export interface BotSettingsChangeEntryData {
   lines: string[];
   /** The proposed instructions, for a held change that has them (Edit starts from these). */
   instructions?: string;
+  /** The instructions when the held change was proposed, so the card can mark what changes. */
+  previousInstructions?: string;
+  /** Why a held change waits; absent on older entries, which were all `not_owner`. */
+  heldReason?: BotSettingsHeldReason;
+  /** False when Undo can't put this change back (the Bot had no model of its own before). */
+  undoable?: false;
+}
+
+/**
+ * Whether a patch has the Bot reach out more on its own: daily check-ins
+ * turned on, or a higher daily notification limit. Those always wait for the
+ * person, whoever started the run.
+ */
+export function botSettingsPatchWidens(current: BotSettingsValues, patch: BotSettingsPatch): boolean {
+  if (patch.dailyCheckIns === true && !current.dailyCheckIns) return true;
+  return patch.notifications !== undefined && patch.notifications.dailyLimit > current.notifications.dailyLimit;
+}
+
+export type BotInstructionsDiffLine = { kind: "same" | "added" | "removed"; text: string };
+
+/** Lines compared at most; longer instructions show as all removed then all added. */
+const DIFF_LINES_COMPARED = 400;
+
+/**
+ * A line-by-line comparison of two instructions (longest common
+ * subsequence), in reading order with removed lines before the added ones
+ * that replace them.
+ */
+export function botInstructionsDiff(before: string, after: string): BotInstructionsDiffLine[] {
+  const a = before.split(/\r?\n/u);
+  const b = after.split(/\r?\n/u);
+  if (a.length > DIFF_LINES_COMPARED || b.length > DIFF_LINES_COMPARED) {
+    return [...a.map((text) => ({ kind: "removed" as const, text })), ...b.map((text) => ({ kind: "added" as const, text }))];
+  }
+  // lengths[i][j]: the longest common run of a[i..] and b[j..].
+  const lengths = Array.from({ length: a.length + 1 }, () => new Array<number>(b.length + 1).fill(0));
+  for (let i = a.length - 1; i >= 0; i -= 1) {
+    for (let j = b.length - 1; j >= 0; j -= 1) {
+      lengths[i]![j] = a[i] === b[j] ? lengths[i + 1]![j + 1]! + 1 : Math.max(lengths[i + 1]![j]!, lengths[i]![j + 1]!);
+    }
+  }
+  const out: BotInstructionsDiffLine[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < a.length || j < b.length) {
+    if (i < a.length && j < b.length && a[i] === b[j]) {
+      out.push({ kind: "same", text: a[i]! });
+      i += 1;
+      j += 1;
+    } else if (j >= b.length || (i < a.length && lengths[i + 1]![j]! >= lengths[i]![j + 1]!)) {
+      out.push({ kind: "removed", text: a[i]! });
+      i += 1;
+    } else {
+      out.push({ kind: "added", text: b[j]! });
+      j += 1;
+    }
+  }
+  return out;
 }
 
 /**
@@ -289,12 +356,18 @@ export function botSettingsChangeOf(data: unknown): BotSettingsChangeEntryData |
   if (!Array.isArray(data.fields) || !data.fields.every((field) => (BOT_SETTINGS_FIELDS as readonly unknown[]).includes(field))) return undefined;
   if (!Array.isArray(data.lines) || !data.lines.every((line) => typeof line === "string")) return undefined;
   if (data.instructions !== undefined && typeof data.instructions !== "string") return undefined;
+  if (data.previousInstructions !== undefined && typeof data.previousInstructions !== "string") return undefined;
+  if (data.heldReason !== undefined && !HELD_REASONS.includes(data.heldReason as BotSettingsHeldReason)) return undefined;
+  if (data.undoable !== undefined && data.undoable !== false) return undefined;
   return {
     changeId: data.changeId,
     mode: data.mode,
     fields: data.fields as BotSettingsField[],
     lines: data.lines as string[],
     ...(typeof data.instructions === "string" ? { instructions: data.instructions } : {}),
+    ...(typeof data.previousInstructions === "string" ? { previousInstructions: data.previousInstructions } : {}),
+    ...(data.heldReason !== undefined ? { heldReason: data.heldReason as BotSettingsHeldReason } : {}),
+    ...(data.undoable === false ? { undoable: false as const } : {}),
   };
 }
 
