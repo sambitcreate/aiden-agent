@@ -3,7 +3,6 @@ import {
   CalendarClock,
   Check,
   ChevronRight,
-  Circle,
   Cpu,
   Ellipsis,
   Folder,
@@ -160,7 +159,12 @@ export function AidenLiveArt() {
   );
 }
 
-/** A Bot chat's approved plan, with bounded coverage, hand-off attention and a routine/reply. */
+/**
+ * The first Bot's chat (plan §4.1): Chief asks what it should help with and
+ * offers replies, the person answers, and Chief sets itself up, which reads as
+ * an "Instructions updated · Undo" receipt. Chips keep routines and Bots that
+ * talk to each other in view.
+ */
 export function BotsArt() {
   return (
     <>
@@ -170,48 +174,35 @@ export function BotsArt() {
             <span className="oa-bots-avatar">
               <AvatarFace avatar={{ version: 1, shape: "drop", color: "peach" }} />
             </span>
-            Meal Planner
+            Chief
           </span>
           <span className="oa-grow" />
           <ArtIcon icon={PanelRightOpen} />
           <ArtIcon icon={Ellipsis} />
         </div>
-        <div className="oa-bots-body">
-          <div role="group" aria-label="Meal Planner's approved plan" className="oa-stack rounded-card bg-popover p-2 shadow-control">
-            <span>Approved · ends in 45 min</span>
-            <Bar width="70%" tone="ink" />
-            <ul aria-label="Plan steps" className="oa-stack m-0 list-none p-0">
-              <li className="oa-row">
-                <span role="img" aria-label="Done" className="rounded-full bg-status-green-surface text-status-green">
-                  <ArtIcon icon={Check} />
-                </span>
-                <Bar width="72%" tone="soft" />
-              </li>
-              <li className="oa-row">
-                <span role="img" aria-label="Pending"><ArtIcon icon={Circle} /></span>
-                <Bar width="60%" tone="soft" className="oa-anim-type" />
-              </li>
+        <div role="group" aria-label="Chief's first chat" className="oa-bots-body oa-stack">
+          <div aria-label="Chief asks what it should help with" role="group" className="oa-stack">
+            <span>What should I help with?</span>
+            <Bar width="82%" tone="soft" />
+            <ul aria-label="Replies to tap" className="oa-bots-replies m-0 list-none p-0">
+              <li className="oa-chip"><Bar width={34} tone="soft" /></li>
+              <li className="oa-chip"><Bar width={26} tone="soft" /></li>
             </ul>
-            <ul aria-label="Plan coverage" className="m-0 list-none p-0">
-              <li>
-                <span className="block">Calendar · create events (up to 5)</span>
-                <span className="block text-tertiary">1 of 5 used</span>
-              </li>
-            </ul>
-            <div className="oa-row">
-              <ArtButton variant="ghost">Stop plan</ArtButton>
-              <ArtButton variant="ghost">Show details</ArtButton>
-            </div>
           </div>
+          <div aria-label="Your answer" role="group" className="oa-bots-bubble oa-anim-pop" style={{ animationDelay: "0.6s" }}>
+            <Bar width="90%" tone="ink" />
+            <Bar width="62%" tone="ink" />
+          </div>
+          <div role="group" aria-label="Chief set itself up" className="oa-bots-receipt oa-anim-pop" style={{ animationDelay: "1.2s" }}>
+            <span>Instructions updated · Undo</span>
+          </div>
+          <Bar width="74%" tone="soft" className="oa-anim-type" />
         </div>
       </ArtWindow>
-      <ArtChip icon={ShieldQuestion} className="oa-bots-routine" style={{ left: 20, top: 158 }}>
-        Needs you
-      </ArtChip>
-      <ArtChip icon={CalendarClock} className="oa-bots-routine" style={{ left: 20, top: 182 }}>
+      <ArtChip icon={CalendarClock} className="oa-bots-routine" style={{ left: 20, top: 206 }}>
         Every Sunday at 9:00 AM
       </ArtChip>
-      <ArtChip icon={MessageSquare} className="oa-bots-routine" style={{ left: 20, top: 206 }}>
+      <ArtChip icon={MessageSquare} className="oa-bots-routine" style={{ left: 20, top: 230 }}>
         COS replied
       </ArtChip>
     </>
