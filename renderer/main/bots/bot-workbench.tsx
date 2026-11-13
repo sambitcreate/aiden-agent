@@ -55,7 +55,7 @@ const NO_ENTRIES: readonly BotTranscriptEntry[] = [];
  */
 function ActivityTab({ botId, botName }: { botId: string; botName: string }) {
   const live = useBotLive(botId);
-  // Always the full log: the Bot's Chat activity level shapes only the in-chat
+  // Always the full log: Show tool activity (Appearance) shapes only the in-chat
   // recap, and opening this tab is the person asking to see every step.
   return (
     <>

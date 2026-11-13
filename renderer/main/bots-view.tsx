@@ -8,7 +8,6 @@ import { lastViewedBotId } from "../lib/bot-sidebar-preferences";
 import { useBot } from "../lib/queries";
 import type { BotDefinition } from "../shared/bots";
 import { BotAdvanced } from "./bots/bot-advanced";
-import { BotChatActivityPage } from "./bots/bot-chat-activity-page";
 import { BotInterruptionsPage } from "./bots/bot-interruptions-page";
 import { BotLearningPage } from "./bots/bot-learning-page";
 import { BotCreateFlow } from "./bots/bot-create-flow";
@@ -160,13 +159,10 @@ function BotPage({ botId }: { botId: string }) {
           key={`${current.id}:advanced`}
           bot={current}
           onClose={back}
-          onOpenChatActivity={() => openPage("chat-activity")}
           onOpenInterruptions={() => openPage("interruptions")}
         />
       ) : page === "interruptions" ? (
         <BotInterruptionsPage key={`${current.id}:interruptions`} bot={current} onClose={() => openPage("advanced")} />
-      ) : page === "chat-activity" ? (
-        <BotChatActivityPage key={`${current.id}:chat-activity`} bot={current} onClose={() => openPage("advanced")} />
       ) : page === "open-work" ? (
         <BotOpenWorkPage key={current.id + ":open-work"} bot={current} onClose={back} />
       ) : page === "learning" ? (

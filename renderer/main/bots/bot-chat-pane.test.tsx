@@ -13,6 +13,8 @@ import type { BotLiveSnapshot, BotTranscriptEntry } from "../../shared/bot-live"
 import { pendingBotResumes, recordBotResume } from "./bot-resume-journal";
 import type { BotPlanView } from "../../shared/bot-plans";
 import { BOT_SIDEBAR_PREFERENCES_KEY, parseBotSidebarPreferences } from "../../lib/bot-sidebar-preferences";
+import { APPEARANCE_CHANGE_EVENT, cacheAppearance } from "../../lib/appearance-runtime";
+import { createDefaultAppearanceConfig } from "../../shared/appearance";
 
 afterEach(cleanup);
 beforeEach(() => {
@@ -1036,22 +1038,45 @@ test("each round's narration is its own bubble before the answer", async () => {
   assert.ok(screen.getByText("TAP on Friday is cheapest."));
 });
 
-test("a Summary Bot shows one recap above its answer that opens to the steps", async () => {
+const FINISHED_SEARCH: BotTranscriptEntry[] = [
+  { ...userEntry("u1", "Find flights"), at: 1_000 } as BotTranscriptEntry,
+  toolStep("a1", ""),
+  { id: "r1", type: "tool_result", toolCallId: "a1-call", toolName: "web_search", isError: false, status: "ok", at: 5_000 },
+  { ...assistantEntry("a2", "TAP on Friday is cheapest."), at: 19_000 } as BotTranscriptEntry,
+];
+
+function showToolActivity(value: boolean) {
+  cacheAppearance({ ...createDefaultAppearanceConfig(), showToolActivity: value });
+  act(() => window.dispatchEvent(new CustomEvent(APPEARANCE_CHANGE_EVENT)));
+}
+
+test("tool activity is hidden by default; Show tool activity shows it, folded to one line once the run ended", async () => {
+  try {
+    await mountChat({
+      // A Bot still stored as Summary: the device switch decides now, not the Bot.
+      "bots:get": () => botFixture({ chatActivity: { level: "summary", wording: "follows" } }),
+      "bots:live:subscribe": () => snapshot({ entries: FINISHED_SEARCH }),
+    });
+    await screen.findByText("TAP on Friday is cheapest.");
+    assert.equal(screen.queryByRole("button", { name: /^Worked for/u }), null, "hidden by default");
+    showToolActivity(true);
+    const recap = await screen.findByRole("button", { name: "Worked for 18s · searched the web" });
+    assert.equal(screen.queryByText("Searched the web"), null, "the finished run is one line");
+    fireEvent.click(recap);
+    assert.ok(await screen.findByText("Searched the web"));
+    showToolActivity(false);
+    await waitFor(() => assert.equal(screen.queryByRole("button", { name: /^Worked for/u }), null));
+  } finally {
+    localStorage.clear();
+  }
+});
+
+test("until the switch is set, a Bot that was Detailed keeps showing its tool activity", async () => {
   await mountChat({
-    "bots:get": () => botFixture({ chatActivity: { level: "summary", wording: "follows" } }),
-    "bots:live:subscribe": () =>
-      snapshot({
-        entries: [
-          { ...userEntry("u1", "Find flights"), at: 1_000 } as BotTranscriptEntry,
-          toolStep("a1", ""),
-          { id: "r1", type: "tool_result", toolCallId: "a1-call", toolName: "web_search", isError: false, status: "ok", at: 5_000 },
-          { ...assistantEntry("a2", "TAP on Friday is cheapest."), at: 19_000 } as BotTranscriptEntry,
-        ],
-      }),
+    "bots:get": () => botFixture({ chatActivity: { level: "detailed", wording: "follows" } }),
+    "bots:live:subscribe": () => snapshot({ entries: FINISHED_SEARCH }),
   });
-  const recap = await screen.findByRole("button", { name: "Worked for 18s · searched the web" });
-  fireEvent.click(recap);
-  assert.ok(await screen.findByText("Searched the web"));
+  assert.ok(await screen.findByRole("button", { name: "Worked for 18s · searched the web" }));
 });
 
 test("a reply the person stopped says so in a quiet centred line", async () => {

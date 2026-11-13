@@ -36,8 +36,8 @@ import { botAlwaysAllowLabel } from "../../shared/tool-approval-scope";
 import { botsApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import type { Attachment } from "../../lib/types";
-import { resolveBotChatActivity, type BotChatActivityLevel } from "../../shared/bots";
-import { queryKeys, useBot } from "../../lib/queries";
+import { botChatActivityOnDevice, showsBotToolActivity, type BotChatActivityLevel } from "../../shared/bots";
+import { queryKeys, useBot, useBots } from "../../lib/queries";
 import { useBotLive } from "../../lib/use-bot-live";
 import { prefersReducedMotion } from "../../lib/appearance-runtime";
 import {
@@ -997,6 +997,9 @@ export function BotChatPane({ botId }: { botId: string }) {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const bot = useBot(botId);
+  // Show tool activity is per device (§4.5); until it is set, the Bots' old levels decide.
+  const toolActivitySetting = useAppearancePreference("showToolActivity");
+  const otherBots = useBots(false, toolActivitySetting === undefined);
   const live = useBotLive(botId);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   const panel = useBotPanelActions();
@@ -1261,7 +1264,11 @@ export function BotChatPane({ botId }: { botId: string }) {
   const signInWaits = handoff?.kind === "sign_in";
   // A sign-in or a password-or-code card is answered on the card alone: whatever is typed here would reach the Bot.
   const noteRefused = signInWaits || (handoff !== null && !botHandoffTakesNote(handoff));
-  const chatActivity = resolveBotChatActivity(current.chatActivity);
+  // Tool activity follows this device's Show tool activity switch, not the Bot (§4.5).
+  const chatActivity = botChatActivityOnDevice(
+    showsBotToolActivity(toolActivitySetting, [current, ...(otherBots.data ?? [])]),
+    current.chatActivity,
+  );
   // While the reply's visible words stream, the words are the signal (§5.2). The
   // partial text can outlast narration into a tool call, so a running step keeps the line.
   const activityPhase = snapshot.activity?.phase;

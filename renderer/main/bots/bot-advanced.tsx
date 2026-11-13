@@ -61,7 +61,6 @@ import {
   recommendedBotModelChoice,
   sameBotModelChoice,
 } from "./bot-model-choice";
-import { botChatActivitySummary } from "./bot-chat-activity-page";
 import { updateBotIdentity } from "./bot-identity";
 import { botRoutinesKey } from "./bot-routines";
 import { botInterruptionsSummary } from "./bot-interruptions-page";
@@ -470,12 +469,10 @@ function SelfWakeUpsField({ bot }: { bot: BotDefinition }) {
 export function BotAdvanced({
   bot,
   onClose,
-  onOpenChatActivity,
   onOpenInterruptions,
 }: {
   bot: BotDefinition;
   onClose(): void;
-  onOpenChatActivity(): void;
   onOpenInterruptions(): void;
 }) {
   const qc = useQueryClient();
@@ -498,11 +495,6 @@ export function BotAdvanced({
   const dirty = accessChanged;
   const discardDescription = `Your changes to ${bot.name}’s Advanced settings won’t be saved.`;
   const guard = useDiscardChangesGuard({ dirty, onLeave: onClose, description: discardDescription });
-  const chatActivityGuard = useDiscardChangesGuard({
-    dirty,
-    onLeave: onOpenChatActivity,
-    description: discardDescription,
-  });
   const interruptionsGuard = useDiscardChangesGuard({
     dirty,
     onLeave: onOpenInterruptions,
@@ -616,21 +608,6 @@ export function BotAdvanced({
       <FieldSet title="Chat">
         <button
           type="button"
-          aria-label="Chat activity"
-          className="settings-field relative flex w-full min-w-0 items-center gap-3 p-4 text-left outline-none transition-colors duration-150 hover:bg-list-hover focus-visible:bg-list-hover focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring motion-reduce:transition-none"
-          onClick={() => {
-            if (!saving) chatActivityGuard.requestLeave();
-          }}
-        >
-          <span className="min-w-0 flex-1">
-            <span className="block text-strong text-primary">Chat activity</span>
-            <span className="mt-0.5 block text-small text-secondary">What you see while {bot.name} works.</span>
-          </span>
-          <span className="shrink-0 text-small text-secondary">{botChatActivitySummary(bot.chatActivity)}</span>
-          <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-tertiary" />
-        </button>
-        <button
-          type="button"
           aria-label="Interruptions"
           className="settings-field relative flex w-full min-w-0 items-center gap-3 p-4 text-left outline-none transition-colors duration-150 hover:bg-list-hover focus-visible:bg-list-hover focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring motion-reduce:transition-none"
           onClick={() => {
@@ -649,7 +626,6 @@ export function BotAdvanced({
       <BotMessagingFields bot={bot} />
       <TelegramSection bot={bot} />
       {guard.dialog}
-      {chatActivityGuard.dialog}
       {interruptionsGuard.dialog}
     </BotPageShell>
   );

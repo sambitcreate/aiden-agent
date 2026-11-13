@@ -16,6 +16,8 @@ import {
 import { isInlineVisualsMode, type InlineVisualsMode } from "../../shared/appearance";
 import type { LinuxTitleBarPreference, WindowChrome } from "../../shared/window-chrome";
 import { settingsApi } from "../../lib/ipc";
+import { useBots } from "../../lib/queries";
+import { showsBotToolActivity } from "../../shared/bots";
 import { useAppCapabilities } from "../../lib/app-capabilities";
 import { useWindowChrome } from "../../lib/window-chrome";
 import {
@@ -281,6 +283,9 @@ export function AppearanceSettings() {
   const capabilities = useAppCapabilities();
   const windowChrome = useWindowChrome();
   const [config, setConfig] = React.useState<AppearanceConfig>(() => readCachedAppearance() ?? createDefaultAppearanceConfig());
+  // Until it is set, the switch reads as the Bot chats do: on if a Bot was Detailed.
+  const bots = useBots(false, config.showToolActivity === undefined);
+  const showToolActivity = showsBotToolActivity(config.showToolActivity, bots.data ?? []);
   const [hydrated, setHydrated] = React.useState(false);
   const [saveError, setSaveError] = React.useState<string | null>(null);
   const [modePending, setModePending] = React.useState(false);
@@ -557,6 +562,16 @@ export function AppearanceSettings() {
           value={config.workDetailsCollapseTiming} labels={COLLAPSE_TIMING_LABELS}
           onChange={(workDetailsCollapseTiming) => update((current) => ({ ...current, workDetailsCollapseTiming }))}
         />
+        <Field
+          label="Show tool activity"
+          description="In Bot chats on this Mac, show the steps a Bot takes while it works. They fold to one line when it finishes."
+        >
+          <Switch
+            checked={showToolActivity}
+            onCheckedChange={(checked) => update((current) => ({ ...current, showToolActivity: checked }))}
+            aria-label="Show tool activity"
+          />
+        </Field>
         <LinksSettings embedded />
         <ChatPreferenceField
           label="Send behavior while busy"

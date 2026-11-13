@@ -32,7 +32,9 @@ import { useRemoteBotSession } from "../lib/hosts/use-remote-bot-session";
 import { browserApi, peerHostsApi } from "../lib/ipc";
 import type { Attachment } from "../lib/types";
 import type { AskUserQuestionResponseV1 } from "../shared/ask-user-question";
-import { DEFAULT_BOT_AVATAR, isBotAvatar, resolveBotChatActivity, type BotAvatar } from "../shared/bots";
+import { DEFAULT_BOT_AVATAR, botChatActivityOnDevice, isBotAvatar, showsBotToolActivity, type BotAvatar } from "../shared/bots";
+import { useAppearancePreference } from "../lib/use-appearance-preference";
+import { useBots } from "../lib/queries";
 import { BOT_HANDOFF_NOTE_MAX_CHARS, botHandoffTakesNote, type BotHandoffOutcome } from "../shared/bot-handoffs";
 import type { BotPendingQuestion } from "../shared/bot-live";
 import { mintPeerIdempotencyKey, type PeerHostFeedSnapshot, type PeerHostView, type PeerOperationOutcome } from "../shared/peer-host";
@@ -124,6 +126,9 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
   const host = list.data?.find((view) => view.id === hostId);
   const hostName = host?.name ?? "the other Mac";
   const name = botName(feed.data, botId) ?? "Bot";
+  // Show tool activity is this device's switch (§4.5); until it is set, this Mac's own Bots decide.
+  const toolActivitySetting = useAppearancePreference("showToolActivity");
+  const localBots = useBots(false, toolActivitySetting === undefined);
   const avatar = botAvatar(feed.data, botId);
   // A host too old to share the conversation is told so below, without asking it.
   const shared = !host || hostSharesBotSessions(host);
@@ -320,7 +325,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
     );
   }
 
-  const chatActivity = resolveBotChatActivity(undefined);
+  const chatActivity = botChatActivityOnDevice(showsBotToolActivity(toolActivitySetting, localBots.data ?? []), undefined);
   const activityPhase = snapshot.activity?.phase;
   const replyStreaming =
     running && (snapshot.partial?.trim().length ?? 0) > 0 && (activityPhase === "writing" || activityPhase === "thinking");

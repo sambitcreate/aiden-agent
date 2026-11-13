@@ -77,6 +77,12 @@ export interface AppearanceConfig {
   inlineVisuals: InlineVisualsMode;
   workDetails: WorkDetailsMode;
   workDetailsCollapseTiming: WorkDetailsCollapseTiming;
+  /**
+   * Bot chats on this device: show the Bot's tool activity while it works
+   * (folded to one line when the run ends), or hide it. Unset until the
+   * person chooses; see `showsBotToolActivity`.
+   */
+  showToolActivity?: boolean;
   busySendBehavior: BusySendPreference;
   /** Linux only: Aiden's own title bar, the desktop's, or Aiden's unless a tiling window manager runs. Applies on the next launch. */
   linuxTitleBar: LinuxTitleBarPreference;
@@ -570,6 +576,11 @@ export function normalizeAppearanceConfig(value: unknown): AppearanceConfig {
     inlineVisuals: isInlineVisualsMode(value.inlineVisuals) ? value.inlineVisuals : fallback.inlineVisuals,
     workDetails: isWorkDetailsMode(value.workDetails) ? value.workDetails : fallback.workDetails,
     workDetailsCollapseTiming: isWorkDetailsCollapseTiming(value.workDetailsCollapseTiming) ? value.workDetailsCollapseTiming : fallback.workDetailsCollapseTiming,
+    ...(typeof value.showToolActivity === "boolean"
+      ? { showToolActivity: value.showToolActivity }
+      : typeof fallback.showToolActivity === "boolean"
+        ? { showToolActivity: fallback.showToolActivity }
+        : {}),
     busySendBehavior: isBusySendPreference(value.busySendBehavior) ? value.busySendBehavior : fallback.busySendBehavior,
     linuxTitleBar: isLinuxTitleBarPreference(value.linuxTitleBar) ? value.linuxTitleBar : fallback.linuxTitleBar,
   };
@@ -604,6 +615,9 @@ export function parseAppearanceConfig(value: unknown): AppearanceConfig {
   }
   if (value.busySendBehavior !== undefined && !isBusySendPreference(value.busySendBehavior)) {
     throw new Error("Busy send behavior is unsupported.");
+  }
+  if (value.showToolActivity !== undefined && typeof value.showToolActivity !== "boolean") {
+    throw new Error("Show tool activity must be a boolean value.");
   }
   // Optional for older v1 exports; reject malformed explicitly supplied preferences.
   if (value.showWorkspacePaths !== undefined && typeof value.showWorkspacePaths !== "boolean") {
