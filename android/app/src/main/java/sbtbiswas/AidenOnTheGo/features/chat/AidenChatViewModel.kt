@@ -135,6 +135,12 @@ class AidenChatViewModel(
 
     private val _pendingApproval = MutableStateFlow<AidenPendingApproval?>(null)
     val pendingApproval: StateFlow<AidenPendingApproval?> = _pendingApproval.asStateFlow()
+    /**
+     * Revision 61: the typed card's answered line ("Allowed once"), shown in the card's place at
+     * once after a tap. A refusal brings the card back and drops the line.
+     */
+    private val _answeredApproval = MutableStateFlow<AidenApprovalAnsweredLine?>(null)
+    val answeredApproval: StateFlow<AidenApprovalAnsweredLine?> = _answeredApproval.asStateFlow()
     private val _isStopping = MutableStateFlow(false)
     val isStopping: StateFlow<Boolean> = _isStopping.asStateFlow()
 
@@ -3062,7 +3068,8 @@ class AidenChatViewModel(
                 hostCanAllow = approval.canAllow,
                 canAllow = canControl && approval.canAllow && hasWrite,
                 scopes = approval.scopes ?: listOf(AidenApprovalScope.ONCE),
-                schedule = AidenApprovalSchedule.forTool(approval.toolName, approval.schedule)
+                schedule = AidenApprovalSchedule.forTool(approval.toolName, approval.schedule),
+                card = approval.card?.let { if (canControl && approval.canAllow && hasWrite) it else it.denyOnly() }
             )
         }
         _pendingQuestion.value = projection.pendingQuestion?.let { question ->
@@ -3219,8 +3226,11 @@ class AidenChatViewModel(
             }
             return
         }
+        // A typed card (revision 61) offers exactly its buttons: only those answers go out.
+        val button = approval.card?.let { it.button(decision, scope) ?: return }
         val client = activeClient() ?: return
         _isRespondingToApproval.value = true
+        _answeredApproval.value = button?.let { AidenApprovalAnsweredLine(approval.id, approval.card?.title.orEmpty(), it.answered) }
         foreignTranscript?.flush()
         liveReveal.flush()
         projection.markAnsweredLocally(approvalId)
@@ -3230,11 +3240,12 @@ class AidenChatViewModel(
                 // Only a scope the Mac offered for this exact approval is sent.
                 val requestedScope = scope.takeIf {
                     decision == AidenApprovalDecision.ALLOW && it != AidenApprovalScope.ONCE &&
-                        approval.scopes.contains(it)
+                        (button != null || approval.scopes.contains(it))
                 }
                 client.respondToRunApproval(runId, approvalId, decision, requestedScope)
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
+                _answeredApproval.update { line -> line?.takeUnless { it.approvalId == approvalId } }
                 projection.answerUnconfirmed(approvalId)
                 handleForeignControlFailure(
                     error,
@@ -3319,9 +3330,12 @@ class AidenChatViewModel(
             refreshApprovalAccess()
             return
         }
+        // A typed card (revision 61) offers exactly its buttons: only those answers go out.
+        val button = approval.card?.let { it.button(decision, scope) ?: return }
         val client = activeClient() ?: return
         val streamId = activeStreamId ?: return
         _isRespondingToApproval.value = true
+        _answeredApproval.value = button?.let { AidenApprovalAnsweredLine(approval.id, approval.card?.title.orEmpty(), it.answered) }
         _pendingApproval.value = null
         _streamState.value = AidenStreamState.RUNNING
 
@@ -3330,18 +3344,20 @@ class AidenChatViewModel(
                 // Only a scope the Mac offered for this exact approval is sent.
                 val requestedScope = scope.takeIf {
                     decision == AidenApprovalDecision.ALLOW && it != AidenApprovalScope.ONCE &&
-                        approval.scopes.contains(it)
+                        (button != null || approval.scopes.contains(it))
                 }
                 val response = client.respondToApproval(approval.id, decision, scope = requestedScope)
                 if (activeClient() !== client || activeStreamId != streamId ||
                     _streamState.value?.isTerminal == true) return@launch
                 if (response.approvalId != approval.id || response.decision != decision) {
+                    _answeredApproval.update { line -> line?.takeUnless { it.approvalId == approval.id } }
                     _presentedError.value = "The approval response was not confirmed. Refreshing the current request from your Mac."
                     if (_pendingApproval.value == null) restorePendingApproval(streamId, isFallback = true)
                 }
             } catch (e: Exception) {
                 if (e !is CancellationException && activeClient() === client && activeStreamId == streamId &&
                     _streamState.value?.isTerminal != true) {
+                    _answeredApproval.update { line -> line?.takeUnless { it.approvalId == approval.id } }
                     _presentedError.value = "The approval response was not confirmed. Refreshing the current request from your Mac."
                     // An ambiguous write may have succeeded; only the Mac can restore a card.
                     if (_pendingApproval.value == null) restorePendingApproval(streamId, isFallback = true)

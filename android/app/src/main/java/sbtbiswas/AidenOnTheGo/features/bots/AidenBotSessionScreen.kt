@@ -497,6 +497,23 @@ private fun AidenBotSessionContent(
                             attachments = listOf(controller.sharedImageAttachment(entry)),
                             edge = AidenMessageMediaEdge.LEADING
                         ) { controller.sharedImageData(entry.id) }
+                        // Revision 61: settings changes, suggestions and learning receipts.
+                        is AidenBotSettingsChangeEntry, is AidenBotSkillProposalEntry,
+                        is AidenBotLessonEntry, is AidenBotMemoryTidyEntry -> AidenBotUxEntryRow(
+                            entry = entry,
+                            botName = identity.name,
+                            canAnswer = canWriteBots,
+                            sending = entry.id in ui.uxSending,
+                            error = ui.uxErrors[entry.id],
+                            tidyUndone = entry.id in ui.undoneTidyIds,
+                            actions = AidenBotUxEntryActions(
+                                onSettings = { decision -> scope.launch { controller.respondToSettingsChange(entry.id, decision) } },
+                                onSkill = { decision -> scope.launch { controller.respondToSkillProposal(entry.id, decision) } },
+                                onLesson = { decision -> scope.launch { controller.respondToLesson(entry.id, decision) } },
+                                onUndoLearned = { scope.launch { controller.undoLearnedLesson(entry.id) } },
+                                onUndoTidy = { scope.launch { controller.undoMemoryTidy(entry.id) } }
+                            )
+                        )
                     }
                 }
                 if (!partial.isNullOrEmpty()) {
@@ -599,7 +616,18 @@ private fun AidenBotSessionContent(
                         AidenBotApprovalCard(approval, enabled = canWriteBots && !ui.isRespondingToApproval,
                             onRespond = { decision -> scope.launch { controller.respondToApproval(decision) } },
                             botName = botName, allowedSupported = controller.allowedSupported,
-                            onAlways = { scope.launch { controller.respondToApproval(sbtbiswas.AidenOnTheGo.models.AidenApprovalDecision.ALLOW, sbtbiswas.AidenOnTheGo.models.AidenApprovalScope.ALWAYS) } })
+                            onAlways = { scope.launch { controller.respondToApproval(sbtbiswas.AidenOnTheGo.models.AidenApprovalDecision.ALLOW, sbtbiswas.AidenOnTheGo.models.AidenApprovalScope.ALWAYS) } },
+                            onCardRespond = { decision, chosen -> scope.launch { controller.respondToApproval(decision, chosen.takeUnless { it == sbtbiswas.AidenOnTheGo.models.AidenApprovalScope.ONCE }) } })
+                    }
+                }
+                // Revision 61: the typed card's answered line, in its place until the Mac moves on.
+                ui.answeredApproval?.takeIf { ui.session?.approval == null }?.let { answered ->
+                    item(key = "approval-answered-${answered.waitId}") {
+                        sbtbiswas.AidenOnTheGo.features.chat.AidenApprovalAnsweredRow(
+                            title = answered.title,
+                            answered = answered.answered,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp)
+                        )
                     }
                 }
                 ui.session?.plan?.takeIf { ui.plansSupported }?.let { plan ->

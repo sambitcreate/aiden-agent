@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Aiden Remote revision 61: the Bot UX simplification on Android. Copy matches the desktop. -->
+<resources>
+    <!-- Typed approval card (`approval:cards`) -->
+    <string name="approval_card_previous">Before</string>
+
+    <!-- Settings changes (`bot:settings-changes`) -->
+    <string name="bot_ux_settings_updated">Settings updated</string>
+    <string name="bot_ux_instructions_updated">Instructions updated</string>
+    <string name="bot_ux_restored">Restored</string>
+    <string name="bot_ux_undo_refused">Changed again since, so not undone</string>
+    <string name="bot_ux_dismissed">Dismissed</string>
+    <string name="bot_ux_undo">Undo</string>
+    <string name="bot_ux_undoing">Undoing…</string>
+    <string name="bot_ux_apply">Apply</string>
+    <string name="bot_ux_applying">Applying…</string>
+    <string name="bot_ux_dismiss">Dismiss</string>
+    <string name="bot_ux_held_not_owner">%1$s asked to change its settings in a run you didn’t start.</string>
+    <string name="bot_ux_held_outside_content">%1$s asked to change its settings after this chat read content from outside it, like a web page or an app’s data.</string>
+    <string name="bot_ux_held_widens">%1$s asked to reach out to you more on its own.</string>
+    <string name="bot_ux_held_replaces">Apply replaces %1$s’s instructions with this text.</string>
+    <string name="bot_ux_line_added">Added:</string>
+    <string name="bot_ux_line_removed">Removed:</string>
+
+    <!-- Suggestions and learning (`bot:suggestions`) -->
+    <string name="bot_ux_add">Add</string>
+    <string name="bot_ux_adding">Adding…</string>
+    <string name="bot_ux_skill_add_title">Add a skill?</string>
+    <string name="bot_ux_skill_update_title">Update a skill?</string>
+    <string name="bot_ux_skill_added">Added skill: %1$s</string>
+    <string name="bot_ux_not_added">Not added: %1$s</string>
+    <string name="bot_ux_skill_add_on_mac">This skill is too long to review here. Add it on your Mac.</string>
+    <string name="bot_ux_lesson_title">I learned something</string>
+    <string name="bot_ux_lesson_title_routine">I learned something about %1$s</string>
+    <plurals name="bot_ux_lesson_runs">
+        <item quantity="one">Based on %1$d recent run</item>
+        <item quantity="other">Based on %1$d recent runs</item>
+    </plurals>
+    <string name="bot_ux_lesson_added">Added lesson: %1$s</string>
+    <string name="bot_ux_learned">Learned: %1$s</string>
+    <string name="bot_ux_tidied_memory">Tidied memory</string>
+    <string name="bot_ux_undone">%1$s (undone)</string>
+</resources>

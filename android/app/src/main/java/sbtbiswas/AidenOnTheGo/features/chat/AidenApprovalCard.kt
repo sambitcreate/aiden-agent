@@ -114,6 +114,19 @@ internal fun AidenApprovalCardContent(
     scheduleBodyMaxHeight: Dp = Dp.Unspecified,
     now: Instant? = null
 ) {
+    // Revision 61: a typed card replaces the summary card, and its buttons are the answers.
+    approval.card?.let { card ->
+        AidenTypedApprovalCardContent(
+            card = card,
+            resetKey = approval.id,
+            enabled = enabled,
+            canRespond = approval.canRespond,
+            onRespond = { button -> onRespond(button.decision, button.effectiveScope) },
+            modifier = modifier,
+            readOnlyNote = stringResource(R.string.chat_approval_review_only)
+        )
+        return
+    }
     val palette = AidenTheme.palette
     val isAutomation = AidenApprovalPresentation.isAutomation(approval.toolName)
     val schedule = AidenApprovalSchedule.forTool(approval.toolName, approval.schedule)
