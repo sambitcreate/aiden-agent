@@ -20,6 +20,7 @@ import { SkillProposalCard } from "../../components/bots/skill-proposal-card";
 import { LearnedLine, LessonProposalCard } from "../../components/bots/lesson-cards";
 import { BotIssueCard } from "../../components/bots/bot-issue-card";
 import { HandoffCard, handoffNoNoteComposerText, handoffSignInComposerText } from "../../components/bots/handoff-card";
+import { NeedsYouHeader, needsYouSlotState, type NeedsYouItem } from "../../components/bots/needs-you-slot";
 import { PlanCard } from "../../components/bots/plan-card";
 import { MemoryCardIcon } from "../../components/memory-card-icon";
 import { ApprovalStatusLine, ChatApprovalCard } from "../../components/chat-approval-card";
@@ -1101,6 +1102,8 @@ export function BotChatPane({ botId }: { botId: string }) {
   const approvalGroups = groupBotApprovalPrompts(approvals.prompts);
   const [answering, setAnswering] = React.useState(false);
   const findBar = useChatFind(botId);
+  // The Needs-you item the person moved to with Previous or Next, by key.
+  const [needsYouChoice, setNeedsYouChoice] = React.useState<string | null>(null);
   const accessRequestActions = useBotAccessRequestActions(botId, live.snapshot?.accessRequest?.waitId);
   const handoffActions = useBotHandoffActions(botId, live.snapshot?.handoff?.waitId);
 
@@ -1179,6 +1182,7 @@ export function BotChatPane({ botId }: { botId: string }) {
         snapshot?.partial,
         state?.kind,
         approvals.prompts.length,
+        needsYouChoice,
         snapshot?.question?.waitId,
         snapshot?.handoff?.waitId,
         snapshot?.accessRequest?.waitId,
@@ -1617,83 +1621,140 @@ export function BotChatPane({ botId }: { botId: string }) {
     }
   };
 
+  /** One answer for a group of identical waiting calls; only the waits it decided leave. */
+  const answerApprovalGroup = async (group: readonly BotApprovalPrompt[], decision: "allow" | "deny", scope?: "always") => {
+    for (const prompt of group) answeringApprovals.current.add(prompt.waitId);
+    const results = await Promise.allSettled(
+      group.map((prompt, index) => botsApi.approve(prompt.waitId, decision, index === 0 ? scope : undefined)),
+    ).finally(() => {
+      for (const prompt of group) answeringApprovals.current.delete(prompt.waitId);
+    });
+    const decided = (index: number) => {
+      const result = results[index];
+      return result?.status === "fulfilled" && result.value.decided;
+    };
+    if (!group.some((_prompt, index) => decided(index))) {
+      const failed = results.find((result) => result.status === "rejected");
+      if (failed) throw failed.reason;
+      throw new Error("That approval was already answered or closed.");
+    }
+    // Only the waits this answer reached leave; any other stays to be answered.
+    group.forEach((prompt, index) => {
+      if (decided(index)) approvals.remove(prompt.waitId);
+    });
+    // Always rides on the first wait only, so it counts only when that one was decided.
+    const always = scope === "always" && decided(0) ? scope : undefined;
+    approvalStatus.show(decision === "deny" ? { decision: "deny" } : { decision: "allow", ...(always ? { scope: always } : {}) });
+    if (always) {
+      toast.success("Always allow requested.", {
+        action: { label: "Manage", onClick: () => void navigate(settingsLocation("approvals")) },
+      });
+    }
+  };
+
+  // Everything waiting on the person, one at a time in the Needs-you slot:
+  // take control, then the ask cards, then the question (§4.7).
+  type SlotItem = NeedsYouItem & { render?(): React.ReactNode };
+  const slotItems: SlotItem[] = [];
+  if (handoff) {
+    slotItems.push({
+      key: `handoff:${handoff.waitId}`,
+      kind: "take_control",
+      render: () => (
+        <HandoffCard
+          key={handoff.waitId}
+          botId={current.id}
+          name={current.name}
+          avatar={current.avatar}
+          handoff={handoff}
+          busy={handoffActions.busy}
+          taken={handoffActions.taken}
+          onTake={handoffActions.take}
+          onOpen={() => void handoffActions.open(handoff)}
+          onAnswer={(outcome) => void handoffActions.answer(handoff, outcome)}
+        />
+      ),
+    });
+  }
+  // Identical waiting calls share one card, and it answers all of them.
+  for (const group of approvalGroups) {
+    const first = group[0]!;
+    slotItems.push({
+      key: `approval:${first.waitId}`,
+      kind: "approval",
+      render: () => (
+        <BotApprovalCard
+          key={`${first.botId}:${first.waitId}`}
+          name={current.name}
+          prompt={first}
+          keyboardShortcuts
+          onAnswer={(decision, scope) => answerApprovalGroup(group, decision, scope)}
+        />
+      ),
+    });
+  }
+  if (accessRequest) {
+    slotItems.push({
+      key: `access:${accessRequest.waitId}`,
+      kind: "access",
+      render: () => (
+        <AccessRequestCard key={accessRequest.waitId} request={accessRequest} botName={current.name} avatar={current.avatar}
+          busy={accessRequestActions.busy} onAnswer={(choice) => void accessRequestActions.answer(accessRequest, choice)} />
+      ),
+    });
+  }
+  if (plan && pendingPlan) {
+    slotItems.push({
+      key: `plan:${plan.planId}:${plan.revision}`,
+      kind: "plan",
+      render: () => (
+        <PlanCard
+          plan={plan}
+          botName={current.name}
+          avatar={current.avatar}
+          onRespond={async (decision) => {
+            const { result } = await botsApi.respondPlan({ botId: current.id, planId: plan.planId, decision });
+            if (result === "not_waiting") throw new Error("That plan was already answered or closed.");
+          }}
+        />
+      ),
+    });
+  }
+  if (question) {
+    slotItems.push({ key: `question:${question.waitId}`, kind: "question" });
+  }
+  const slot = needsYouSlotState(slotItems, needsYouChoice, setNeedsYouChoice);
+  const askingQuestion = question !== null && slot.current?.kind === "question";
+  // A question waits, but another item is on show: the composer points at it.
+  const questionElsewhere = question !== null && !askingQuestion;
+
   const footer = (
     <div className="flex flex-col">
-      {plan || approvals.prompts.length > 0 || approvalStatus.status || handoff || accessRequest ? (
+      {plan && !pendingPlan ? (
         <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-2">
-          {plan ? (
-            <PlanCard
-              plan={plan}
-              botName={current.name}
-              avatar={current.avatar}
-              onRespond={async (decision) => {
-                const { result } = await botsApi.respondPlan({ botId: current.id, planId: plan.planId, decision });
-                if (result === "not_waiting") throw new Error("That plan was already answered or closed.");
-              }}
-            />
-          ) : null}
-          {accessRequest ? (
-            <AccessRequestCard key={accessRequest.waitId} request={accessRequest} botName={current.name} avatar={current.avatar}
-              busy={accessRequestActions.busy} onAnswer={(choice) => void accessRequestActions.answer(accessRequest, choice)} />
-          ) : null}
-          {handoff ? (
-            <HandoffCard
-              key={handoff.waitId}
-              botId={current.id}
-              name={current.name}
-              avatar={current.avatar}
-              handoff={handoff}
-              busy={handoffActions.busy}
-              onOpen={() => void handoffActions.open(handoff)}
-              onAnswer={(outcome) => void handoffActions.answer(handoff, outcome)}
-            />
-          ) : null}
-          {/* One card at a time; identical waiting calls share it, and it answers all of them. */}
-          {approvalGroups[0] ? (
-            <BotApprovalCard
-              key={`${approvalGroups[0][0]!.botId}:${approvalGroups[0][0]!.waitId}`}
-              name={current.name}
-              prompt={approvalGroups[0][0]!}
-              pendingCount={approvalGroups.length}
-              keyboardShortcuts
-              onAnswer={async (decision, scope) => {
-                const group = approvalGroups[0]!;
-                for (const prompt of group) answeringApprovals.current.add(prompt.waitId);
-                const results = await Promise.allSettled(
-                  group.map((prompt, index) => botsApi.approve(prompt.waitId, decision, index === 0 ? scope : undefined)),
-                ).finally(() => {
-                  for (const prompt of group) answeringApprovals.current.delete(prompt.waitId);
-                });
-                const decided = (index: number) => {
-                  const result = results[index];
-                  return result?.status === "fulfilled" && result.value.decided;
-                };
-                if (!group.some((_prompt, index) => decided(index))) {
-                  const failed = results.find((result) => result.status === "rejected");
-                  if (failed) throw failed.reason;
-                  throw new Error("That approval was already answered or closed.");
-                }
-                // Only the waits this answer reached leave; any other stays to be answered.
-                group.forEach((prompt, index) => {
-                  if (decided(index)) approvals.remove(prompt.waitId);
-                });
-                // Always rides on the first wait only, so it counts only when that one was decided.
-                const always = scope === "always" && decided(0) ? scope : undefined;
-                approvalStatus.show(decision === "deny" ? { decision: "deny" } : { decision: "allow", ...(always ? { scope: always } : {}) });
-                if (always) {
-                  toast.success("Always allow requested.", {
-                    action: { label: "Manage", onClick: () => void navigate(settingsLocation("approvals")) },
-                  });
-                }
-              }}
-            />
-          ) : approvalStatus.status ? (
+          <PlanCard
+            plan={plan}
+            botName={current.name}
+            avatar={current.avatar}
+            onRespond={async (decision) => {
+              const { result } = await botsApi.respondPlan({ botId: current.id, planId: plan.planId, decision });
+              if (result === "not_waiting") throw new Error("That plan was already answered or closed.");
+            }}
+          />
+        </div>
+      ) : null}
+      {slot.count > 0 || approvalStatus.status ? (
+        <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-2" data-needs-you-slot>
+          <NeedsYouHeader slot={slot} />
+          {slot.current?.render ? (
+            slot.current.render()
+          ) : !slot.current && approvalStatus.status ? (
             <ApprovalStatusLine status={approvalStatus.status} />
           ) : null}
         </div>
       ) : null}
-      {/* A waiting A–E question takes the composer's place, as in workspace chats. */}
-      {question ? (
+      {/* The question takes the composer's place, as in workspace chats, while the slot shows it. */}
+      {question && askingQuestion ? (
         <>
           <AskUserQuestionComposer
             key={question.waitId}
@@ -1713,10 +1774,12 @@ export function BotChatPane({ botId }: { botId: string }) {
         <Composer
           key={`bot:${current.id}`}
           // A sign-in or a password-or-code card is answered on the card: a password typed here would reach the Bot.
-          ready={!pendingPlan && !noteRefused && !spendingReached && (!state || (state.kind !== "unavailable" && state.kind !== "paused"))}
+          ready={!pendingPlan && !noteRefused && !questionElsewhere && !spendingReached && (!state || (state.kind !== "unavailable" && state.kind !== "paused"))}
           readinessMessage={
             pendingPlan
               ? "Answer the plan above, then send a message."
+              : questionElsewhere
+                ? `Answer ${current.name}’s question first. It’s ${slot.count} of ${slot.count} above.`
               : state?.kind === "unavailable"
               ? BOT_UNAVAILABLE_LABEL
               : state?.kind === "paused"
@@ -1748,7 +1811,7 @@ export function BotChatPane({ botId }: { botId: string }) {
         />
       )}
       {/* The composer's send answers the card, so Stop lives here while it waits. */}
-      {handoff && !question && running ? (
+      {handoff && !askingQuestion && running ? (
         <div className="aiden-dock-inset chat-content-column flex justify-end pb-4 pt-2">
           <Button variant="filled" size="small" onClick={stop}>
             <Square aria-hidden="true" />

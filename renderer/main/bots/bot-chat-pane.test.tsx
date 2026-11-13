@@ -5,6 +5,7 @@ import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-libra
 import { BotChatRoute } from "../bot-chat-route";
 import { settleBotPendingSends } from "./bot-chat-pane";
 import { BotPanelHandoff } from "./bot-panel-handoff";
+import { clearHandoffTaken } from "../../components/bots/handoff-taken";
 import { mountWithBotRouter } from "./test-providers";
 import { toast } from "../../components/ui";
 import { botFixture } from "./test-fixtures";
@@ -14,7 +15,10 @@ import type { BotPlanView } from "../../shared/bot-plans";
 import { BOT_SIDEBAR_PREFERENCES_KEY, parseBotSidebarPreferences } from "../../lib/bot-sidebar-preferences";
 
 afterEach(cleanup);
-beforeEach(() => localStorage.clear());
+beforeEach(() => {
+  localStorage.clear();
+  clearHandoffTaken();
+});
 
 const COST_RECEIPT = "cost_" + "a".repeat(64);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
@@ -52,6 +56,12 @@ function statusRegion(): Element | undefined {
 /** What a screen reader is told by the status line ("" while no line shows), or null without a region. */
 function announced(): string | null {
   return statusRegion()?.textContent ?? null;
+}
+
+/** The Needs-you slot's "1 of N", or null while it shows one item or none. */
+function slotPosition(): string | null {
+  const header = screen.queryByRole("navigation", { name: "Needs you" });
+  return header ? within(header).getByText(/^\d+ of \d+$/u).textContent : null;
 }
 
 function userEntry(id: string, text: string): BotTranscriptEntry {
@@ -660,14 +670,15 @@ test("identical waiting calls share one card, which answers every one of them", 
     emitBotTestNotification("bots:approval", { ...same, runHash: "run-2", waitId: "wait-4", toolCallId: "call-4" });
     emitBotTestNotification("bots:approval", { botId: "bot-1", toolName: "send_email", summary: "send_email", waitId: "wait-5", toolCallId: "call-5" });
   });
-  const card = await screen.findByRole("region", { name: "Review before Send email 1 of 4" });
+  const card = await screen.findByRole("region", { name: "Review before Send email" });
+  assert.equal(slotPosition(), "1 of 4", "the Needs-you slot counts the cards");
   fireEvent.click(within(card).getByRole("button", { name: "Deny" }));
   await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:approve").length, 2));
   assert.deepEqual(calls.filter((call) => call.channel === "bots:approve").map((call) => call.args), [
     [{ waitId: "wait-1", decision: "deny" }],
     [{ waitId: "wait-2", decision: "deny" }],
   ], "different arguments, another reply, or no hashes each wait for their own answer");
-  assert.ok(await screen.findByRole("region", { name: "Review before Send email 1 of 3" }));
+  await waitFor(() => assert.equal(slotPosition(), "1 of 3"));
 });
 
 test("a shared card's answer removes only the waits it reached", async () => {
@@ -1476,9 +1487,10 @@ test("a hand-off card waits above the composer, Open asks for its page, and Done
   assert.ok(within(card).getByText("Only you get the code on your phone."));
   const note = screen.getByPlaceholderText("Add a note and send to mark it done");
   assert.ok(
-    within(card).getByRole("button", { name: "I’m done" }).compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING,
+    within(card).getByRole("button", { name: "Take control at bank.example" }).compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING,
     "the composer stays, for a note, and Tab reaches it after the card's buttons",
   );
+  assert.equal(within(card).queryByRole("button", { name: "I’m done" }), null, "I'm done comes once the person took control");
 
   fireEvent.click(within(card).getByRole("button", { name: "Take control at bank.example" }));
   await waitFor(() =>
@@ -1516,6 +1528,8 @@ test("Skip answers the card as skipped, and a card answered elsewhere says so", 
     });
     const card = await screen.findByRole("group", { name: "Planner needs you" });
     assert.equal(within(card).queryByRole("button", { name: /^Open/u }), null, "no page, no Open");
+    fireEvent.click(within(card).getByRole("button", { name: "Take control" }));
+    assert.equal(calls.some((call) => call.channel === "bots:openHandoff"), false, "nothing to open");
     fireEvent.click(within(card).getByRole("button", { name: "Skip" }));
     await waitFor(() => assert.deepEqual(errors.shown, ["That card was already answered or closed."]));
     assert.deepEqual(handoffAnswers(calls), [{ botId: "bot-1", waitId: "wait-h", outcome: "skipped" }]);
@@ -1678,6 +1692,7 @@ test("a password-or-code card takes no note: the composer points to the card, an
   assert.equal(handoffAnswers(calls).length, 0, "the code typed in the chat is never sent");
   assert.equal(calls.some((call) => call.channel === "bots:send"), false);
 
+  fireEvent.click(within(card).getByRole("button", { name: "Take control" }));
   fireEvent.click(within(card).getByRole("button", { name: "I’m done" }));
   await waitFor(() => assert.deepEqual(handoffAnswers(calls), [{ botId: "bot-1", waitId: "wait-c", outcome: "done" }]));
 });
@@ -1726,7 +1741,7 @@ const GITHUB_SIGN_IN = {
   source: "tool" as const,
 };
 
-test("a sign-in card opens the site in the Bot's browser, brings its panel forward, and I'm signed in answers it", async () => {
+test("a sign-in card opens the site in the Bot's browser, brings its panel forward, and I'm done answers it", async () => {
   const calls = await mountChat({
     "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: GITHUB_SIGN_IN }),
     "bots:openHandoff": () => ({ opened: "browser" }),
@@ -1749,7 +1764,7 @@ test("a sign-in card opens the site in the Bot's browser, brings its panel forwa
 });
 
 // This DOM lays nothing out, so the chat measures no room beside the panel and the panel floats over it.
-test("a panel floating over the chat carries the sign-in's buttons, so I'm signed in stays in reach", async () => {
+test("a panel floating over the chat carries the sign-in's buttons, so I'm done stays in reach", async () => {
   const calls = await mountChat({
     "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: GITHUB_SIGN_IN }),
     "bots:openHandoff": () => ({ opened: "browser" }),
@@ -1785,7 +1800,7 @@ test("a panel docked beside the chat leaves the hand-off to its card, with no se
     assert.equal(panel.getAttribute("data-state"), "open");
     assert.equal(panel.getAttribute("data-surface-mode"), "tools-pinned");
     assert.equal(within(panel).queryByRole("group", { name: "Planner needs you" }), null);
-    assert.equal(screen.getAllByRole("button", { name: "I’m done" }).length, 1);
+    assert.equal(screen.getAllByRole("button", { name: "Take control to sign in" }).length, 1);
   } finally {
     HTMLElement.prototype.getBoundingClientRect = measure;
   }
@@ -2159,38 +2174,84 @@ function emitPlan(plan: BotPlanView | null, seq: number) {
   act(() => emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq, type: "plan", plan }));
 }
 
-test("a pending plan renders above the other cards and composer, gates Send and Approve calls respondPlan once", async () => {
+test("a pile-up waits in one Needs-you slot: take control first, then each ask card, then the question, one at a time", async () => {
   let release!: (result: { result: "done" }) => void;
   const calls = await mountChat({
-    "bots:live:subscribe": () => snapshot({ plan: CHAT_PLAN, handoff: BANK_HANDOFF, accessRequest: {
-      botId: "bot-1", waitId: "access-1", toolCallId: "tool-access", target: "folder", label: "Team",
-      place: "~/Documents/Team", why: "Read the brief.", choices: ["not_now", "once"],
-    } }),
+    "bots:live:subscribe": () => snapshot({
+      state: RUNNING,
+      plan: CHAT_PLAN,
+      handoff: BANK_HANDOFF,
+      accessRequest: {
+        botId: "bot-1", waitId: "access-1", toolCallId: "tool-access", target: "folder", label: "Team",
+        place: "~/Documents/Team", why: "Read the brief.", choices: ["not_now", "once"],
+      },
+      question: { botId: "bot-1", waitId: "wait-q", toolCallId: "tool-q", questions: [COLOUR_QUESTION] },
+    }),
     "bots:pendingApprovals": () => [{ botId: "bot-1", waitId: "approval-1", toolCallId: "tool-approval", toolName: "shell", summary: "Run a command" }],
     "bots:plans:respond": () => new Promise((resolve) => { release = resolve; }),
   });
-  const plan = await screen.findByRole("group", { name: "Jester asked Planner to do this" });
+  const slot = () => document.querySelector("[data-needs-you-slot]") as HTMLElement;
+  // Take control comes first, and it is the only card above the composer.
+  await screen.findByRole("group", { name: "Planner needs you" });
+  await waitFor(() => assert.equal(slotPosition(), "1 of 5"));
+  const shown = () => [
+    ...within(slot()).queryAllByRole("group"),
+    ...within(slot()).queryAllByRole("region"),
+  ].map((card) => card.getAttribute("aria-label") ?? card.getAttribute("aria-labelledby"));
+  assert.deepEqual(shown(), ["Planner needs you"], "one card at a time");
+  assert.equal(screen.queryByRole("heading", { name: COLOUR_QUESTION.question }), null, "the question waits its turn");
   const composer = document.querySelector("textarea")!;
-  for (const later of [
-    await screen.findByRole("group", { name: "Planner needs you" }),
-    screen.getByRole("group", { name: "Planner wants to use Team" }),
-    await screen.findByRole("region", { name: "Review before Shell" }),
-    composer,
-  ]) assert.ok(plan.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING);
-  assert.equal((screen.getByRole("button", { name: "Send message" }) as HTMLButtonElement).disabled, true);
+  assert.ok(slot().compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING, "the slot sits above the composer");
+  assert.equal((screen.getByRole("button", { name: "Send message" }) as HTMLButtonElement).disabled, true, "a pending plan still gates Send");
+
+  // Next walks the ask cards in order: the approval, the folder request, the plan.
+  const header = screen.getByRole("navigation", { name: "Needs you" });
+  fireEvent.click(within(header).getByRole("button", { name: "Next" }));
+  assert.ok(await within(slot()).findByRole("region", { name: "Review before Shell" }));
+  assert.equal(slotPosition(), "2 of 5");
+  assert.equal(within(slot()).queryByRole("group", { name: "Planner needs you" }), null);
+  fireEvent.click(within(header).getByRole("button", { name: "Next" }));
+  assert.ok(within(slot()).getByRole("group", { name: "Planner wants to use Team" }));
+  fireEvent.click(within(header).getByRole("button", { name: "Next" }));
+  const plan = within(slot()).getByRole("group", { name: "Jester asked Planner to do this" });
+  assert.equal(slotPosition(), "4 of 5");
   fireEvent.change(composer, { target: { value: "Do something else" } });
   fireEvent.keyDown(composer, { key: "Enter" });
   assert.equal(calls.some((call) => call.channel === "bots:send" || call.channel === "bots:answerHandoff"), false);
   const approve = within(plan).getByRole("button", { name: "Approve plan" });
   fireEvent.click(approve);
   fireEvent.click(approve);
-  fireEvent.click(within(plan).getByRole("button", { name: "Not now" }));
   await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:plans:respond").length, 1));
   assert.deepEqual(calls.find((call) => call.channel === "bots:plans:respond")!.args, [{ botId: "bot-1", planId: "plan-1", decision: "approve" }]);
-  assert.equal((approve as HTMLButtonElement).disabled, true);
   await act(async () => release({ result: "done" }));
-  assert.ok(screen.getByRole("group", { name: "Jester asked Planner to do this" }));
-  assert.equal((screen.getByRole("button", { name: "Send message" }) as HTMLButtonElement).disabled, true, "a response receipt does not invent plan settlement");
+  assert.ok(screen.getByRole("group", { name: "Jester asked Planner to do this" }), "a response receipt does not invent plan settlement");
+
+  // Last comes the question, in the composer's place; Previous wraps back round.
+  fireEvent.click(within(header).getByRole("button", { name: "Next" }));
+  assert.ok(await screen.findByRole("heading", { name: COLOUR_QUESTION.question }));
+  assert.equal(slotPosition(), "5 of 5");
+  assert.equal(screen.queryByPlaceholderText("Add a note and send to mark it done"), null, "the question takes the composer's place");
+  fireEvent.click(within(header).getByRole("button", { name: "Next" }));
+  assert.equal(slotPosition(), "1 of 5");
+  assert.ok(within(slot()).getByRole("group", { name: "Planner needs you" }));
+});
+
+test("when the card on show is answered, the slot goes back to the first item still waiting", async () => {
+  await mountChat({
+    "bots:live:subscribe": () => snapshot({ state: RUNNING, handoff: BANK_HANDOFF }),
+    "bots:pendingApprovals": () => [{ botId: "bot-1", waitId: "approval-1", toolCallId: "tool-approval", toolName: "shell", summary: "Run a command" }],
+  });
+  await waitFor(() => assert.equal(slotPosition(), "1 of 2"));
+  fireEvent.click(within(screen.getByRole("navigation", { name: "Needs you" })).getByRole("button", { name: "Next" }));
+  await screen.findByRole("region", { name: "Review before Shell" });
+  assert.equal(
+    screen.getAllByRole("status").find((node) => node.hasAttribute("data-needs-you-announcement"))?.textContent,
+    "Needs you, 2 of 2",
+    "a screen reader hears where the slot moved",
+  );
+  act(() => emitBotTestNotification("bots:approval-settled", { botId: "bot-1", waitId: "approval-1", outcome: "allowed" }));
+  assert.ok(await screen.findByRole("group", { name: "Planner needs you" }));
+  assert.equal(slotPosition(), null, "one item left: no counter");
 });
 
 test("only a pending plan gates the composer; active, ended and cleared host events release it", async () => {

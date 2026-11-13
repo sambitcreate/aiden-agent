@@ -9,6 +9,8 @@ import { useNavigate } from "@tanstack/react-router";
 import { Ellipsis, Pause, Play, Square } from "lucide-react";
 import { AskUserQuestionComposer } from "../components/ask-user-question-composer";
 import { HandoffCard, handoffNoNoteComposerText } from "../components/bots/handoff-card";
+import { handoffTakenKey, useHandoffTaken } from "../components/bots/handoff-taken";
+import { NeedsYouHeader, needsYouSlotState, type NeedsYouItem } from "../components/bots/needs-you-slot";
 import { Composer } from "../components/composer";
 import { MessageAttachmentPreviewProvider } from "../components/message-attachments";
 import {
@@ -146,6 +148,11 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
   // holds that same card. Resume asks a hand-off again under the same wait id:
   // the host's frame (or a fresh snapshot) for it is a new card, and it shows.
   const [settledHandoff, setSettledHandoff] = React.useState<AidenRemoteBotHandoff | null>(null);
+  // The Needs-you item the person moved to with Previous or Next, by key.
+  const [needsYouChoice, setNeedsYouChoice] = React.useState<string | null>(null);
+  const [handoffTaken, takeHandoff] = useHandoffTaken(
+    live.view?.handoff ? handoffTakenKey(`remote:${hostId}:${botId}`, live.view.handoff.waitId) : undefined,
+  );
   const shownHandoff = React.useRef<AidenRemoteBotHandoff | null>(null);
   shownHandoff.current = live.view?.handoff ?? null;
 
@@ -556,48 +563,74 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
     });
   };
 
+  // One Needs-you slot, as on this Mac's own Bots: take control, then the approval, then the question.
+  type SlotItem = NeedsYouItem & { render?(): React.ReactNode };
+  const slotItems: SlotItem[] = [];
+  if (handoff) {
+    slotItems.push({
+      key: `handoff:${handoff.waitId}`,
+      kind: "take_control",
+      render: () => (
+        <HandoffCard
+          key={handoff.waitId}
+          name={name}
+          avatar={avatar}
+          handoff={handoff}
+          busy={busy("handoff")}
+          finishOn={hostName}
+          taken={handoffTaken}
+          onTake={takeHandoff}
+          onOpen={() => void openHandoff(handoff)}
+          onFinish={() => void finishHandoff(handoff)}
+          onAnswer={(outcome) => void answerHandoff(handoff, outcome)}
+        />
+      ),
+    });
+  }
+  if (approval) {
+    slotItems.push({
+      key: `approval:${approval.waitId}`,
+      kind: "approval",
+      render: () => (
+        <BotApprovalCard
+          key={approval.waitId}
+          name={name}
+          prompt={{ botId, waitId: approval.waitId, toolCallId: approval.toolCallId, toolName: approval.toolName, summary: approval.summary }}
+          {...(approval.canAllow ? {} : { allowElsewhere: hostName })}
+          keyboardShortcuts
+          onAnswer={(decision) => {
+            setSettledApproval(approval);
+            approvalStatus.show({ decision });
+            void call(
+              { operation: "respondApproval", resourceId: approval.waitId, idempotencyKey: mintPeerIdempotencyKey(), body: { decision } },
+              "Aiden couldn’t send that answer.",
+            ).catch(() => {
+              approvalStatus.clear();
+              setSettledApproval((settled) => (settled === approval ? null : settled));
+            });
+          }}
+        />
+      ),
+    });
+  }
+  if (question) slotItems.push({ key: `question:${question.waitId}`, kind: "question" });
+  const slot = needsYouSlotState(slotItems, needsYouChoice, setNeedsYouChoice);
+  const askingQuestion = question !== null && slot.current?.kind === "question";
+  const questionElsewhere = question !== null && !askingQuestion;
+
   const footer = (
     <div className="flex flex-col">
-      {approval || approvalStatus.status || handoff ? (
-        <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-2">
-          {handoff ? (
-            <HandoffCard
-              key={handoff.waitId}
-              name={name}
-              avatar={avatar}
-              handoff={handoff}
-              busy={busy("handoff")}
-              finishOn={hostName}
-              onOpen={() => void openHandoff(handoff)}
-              onFinish={() => void finishHandoff(handoff)}
-              onAnswer={(outcome) => void answerHandoff(handoff, outcome)}
-            />
-          ) : null}
-          {approval ? (
-            <BotApprovalCard
-              key={approval.waitId}
-              name={name}
-              prompt={{ botId, waitId: approval.waitId, toolCallId: approval.toolCallId, toolName: approval.toolName, summary: approval.summary }}
-              {...(approval.canAllow ? {} : { allowElsewhere: hostName })}
-              keyboardShortcuts
-              onAnswer={(decision) => {
-                setSettledApproval(approval);
-                approvalStatus.show({ decision });
-                void call(
-                  { operation: "respondApproval", resourceId: approval.waitId, idempotencyKey: mintPeerIdempotencyKey(), body: { decision } },
-                  "Aiden couldn’t send that answer.",
-                ).catch(() => {
-                  approvalStatus.clear();
-                  setSettledApproval((settled) => (settled === approval ? null : settled));
-                });
-              }}
-            />
-          ) : approvalStatus.status ? (
+      {slot.count > 0 || approvalStatus.status ? (
+        <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-2" data-needs-you-slot>
+          <NeedsYouHeader slot={slot} />
+          {slot.current?.render ? (
+            slot.current.render()
+          ) : !slot.current && approvalStatus.status ? (
             <ApprovalStatusLine status={approvalStatus.status} />
           ) : null}
         </div>
       ) : null}
-      {question ? (
+      {question && askingQuestion ? (
         <>
           <AskUserQuestionComposer
             key={question.waitId}
@@ -615,9 +648,11 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
       ) : (
         <Composer
           key={`remote-bot:${hostId}:${botId}`}
-          ready={state?.kind !== "unavailable" && !isPaused && !signInElsewhere && !noteRefused}
+          ready={state?.kind !== "unavailable" && !isPaused && !signInElsewhere && !noteRefused && !questionElsewhere}
           readinessMessage={
-            isPaused
+            questionElsewhere
+              ? `Answer ${name}’s question first. It’s ${slot.count} of ${slot.count} above.`
+              : isPaused
               ? botPausedText(name)
               : signInElsewhere
                 ? `Finish signing in on ${hostName}, or skip it.`
@@ -646,7 +681,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
         />
       )}
       {/* The composer's send answers the card, so Stop lives here while it waits. */}
-      {handoff && !question && running ? (
+      {handoff && !askingQuestion && running ? (
         <div className="aiden-dock-inset chat-content-column flex justify-end pb-4 pt-2">
           <Button variant="filled" size="small" onClick={stop}>
             <Square aria-hidden="true" />

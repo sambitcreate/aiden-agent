@@ -31,10 +31,12 @@ import { botSidebarPreferenceActions } from "./use-bot-sidebar-preferences";
 import { shouldRestoreEnvironmentFocus } from "../../lib/environment-panel-state";
 import { botFixture } from "./test-fixtures";
 import { mountWithBotRouter } from "./test-providers";
+import { clearHandoffTaken } from "../../components/bots/handoff-taken";
 
 beforeEach(() => {
   installBotTestIpc();
   localStorage.clear();
+  clearHandoffTaken();
 });
 afterEach(cleanup);
 
