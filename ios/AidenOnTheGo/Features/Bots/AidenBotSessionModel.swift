@@ -1966,6 +1966,8 @@ final class AidenBotSessionModel {
         let wasBlocked = stateView?.blocked == .accessChanged
         stateView = view
         stateWrites += 1
+        // A finished or interrupted turn retires the last approval's answered line.
+        if let view, view.state != .running { approvalAnsweredLine = nil }
         if view?.state != .running {
             stopIntent = .none
             resumeIntent = .none
@@ -2394,7 +2396,7 @@ final class AidenBotSessionModel {
             // Revision 61: only what a button offers, with its scope.
             guard let button = card.buttons.first(where: {
                 $0.decision == decision && ($0.decision == .deny || $0.offeredScope == (scope ?? .once))
-            }) else { return }
+            }), button.decision == .deny || sendableScopes(for: current).contains(button.offeredScope) else { return }
             await sendApprovalAnswer(current, decision: decision, scope: button.requestScope, answered: button.answered)
             return
         }
@@ -2404,9 +2406,16 @@ final class AidenBotSessionModel {
         await sendApprovalAnswer(current, decision: decision, scope: chosenScope, answered: nil)
     }
 
+    /// The scopes `POST /approvals/{waitId}/respond` takes for a Bot approval:
+    /// once, and Always only with `bot:allowed` and the Mac's approval count.
+    func sendableScopes(for approval: AidenRemoteBotApproval) -> Set<AidenApprovalScope> {
+        allowedSupported && approval.alwaysCount != nil ? [.once, .always] : [.once]
+    }
+
     /// Revision 61: answers with one of the card's buttons, exactly as offered.
     func answerApproval(button: AidenApprovalCardButton) async {
-        guard let card = approval?.card, card.buttons.contains(button) else { return }
+        guard let current = approval, let card = current.card, card.buttons.contains(button),
+              button.decision == .deny || sendableScopes(for: current).contains(button.offeredScope) else { return }
         await answerApproval(button.decision, scope: button.decision == .allow ? button.offeredScope : nil)
     }
 
@@ -2780,6 +2789,8 @@ final class AidenBotSessionModel {
               enqueue(text, mode: offersBusyModes ? mode ?? .queue : nil, retryOf: nil, attachments: attachments) else { return false }
         pendingAttachments = []
         for attachment in attachments { attachmentImages[attachment.id] = nil }
+        // A new turn retires the last approval's answered line.
+        approvalAnsweredLine = nil
         await runFlush()
         return true
     }

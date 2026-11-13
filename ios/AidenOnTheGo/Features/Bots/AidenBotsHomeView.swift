@@ -1037,7 +1037,10 @@ struct AidenBotsHomeView: View {
                 try await client.botConversations()
             }
             let (listResult, conversationResult) = await (listRequest, conversationRequest)
-            if case let .success(list) = listResult, list?.bots.isEmpty == true {
+            // The carousel shows on an empty list; with `bot:templates` (revision
+            // 61) Templates is always in the New Bot menu, so it loads either way.
+            let holdsTemplates = coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .botTemplates) == true
+            if case let .success(list) = listResult, list?.bots.isEmpty == true || holdsTemplates {
                 await loadPresets(client: client)
             }
             guard coordinator.isCurrent(context), loadGeneration == generation,

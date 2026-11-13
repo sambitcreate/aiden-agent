@@ -60,6 +60,9 @@ final class AidenBotUXTests: XCTestCase {
         XCTAssertFalse(installation.hasNegotiatedAccess(to: .approvalsSettings))
         // On a revision 61 Mac the per-device switch decides, whatever the Bot stored.
         XCTAssertEqual(AidenToolActivityPreference.wording(botWording: .follows, hostOffersBotUX: true, showToolActivity: false), .thinking)
+        // An untouched switch reads off.
+        let untouched = try XCTUnwrap(UserDefaults(suiteName: "aiden.tests.tool-activity.\(UUID().uuidString)"))
+        XCTAssertFalse(AidenToolActivityPreference.isOn(untouched))
         XCTAssertEqual(AidenToolActivityPreference.wording(botWording: .thinking, hostOffersBotUX: true, showToolActivity: true), .follows)
     }
 
@@ -351,10 +354,20 @@ extension AidenBotUXTests {
     }
 
     func testBotApprovalButtonSendsItsScopeShowsTheAnsweredLineAndRollsBack() async throws {
-        let approval = botApprovalObject(card: try card("botAlways"))
+        let approval = botApprovalObject(card: try card("botAlways"), alwaysCount: 4)
         let (model, transport) = try await loadedModel(approval: approval)
         let current = try XCTUnwrap(model.approval?.card)
         let always = try XCTUnwrap(current.buttons.last)
+
+        // Without bot:allowed the route refuses Always, so the button isn't
+        // offered and tapping it sends nothing.
+        let waiting = try XCTUnwrap(model.approval)
+        XCTAssertFalse(current.allowButtons(sendable: model.sendableScopes(for: waiting)).contains(always))
+        await model.answerApproval(button: always)
+        XCTAssertTrue(transport.approvals.isEmpty)
+        XCTAssertNotNil(model.approval)
+        model.allowedSupported = true
+        XCTAssertTrue(current.allowButtons(sendable: model.sendableScopes(for: waiting)).contains(always))
 
         let gate = UXGate()
         transport.gate = gate
@@ -374,6 +387,16 @@ extension AidenBotUXTests {
         XCTAssertEqual(transport.approvals.last?.decision, .allow)
         XCTAssertEqual(transport.approvals.last?.scope, Optional<AidenApprovalScope>.none)
         XCTAssertEqual(model.approvalAnsweredLine, "Allowed once")
+
+        // The line stays while the turn runs on and goes when it ends.
+        func state(_ seq: Int, _ value: AidenBotSessionStateKind) throws -> AidenBotSessionEvent {
+            AidenBotSessionEvent(botId: "bot_fixture_01", epoch: "epoch_61", seq: seq,
+                                 kind: .state(try AidenBotSessionStateView(state: value)))
+        }
+        _ = await model.apply(try state(1, .running))
+        XCTAssertEqual(model.approvalAnsweredLine, "Allowed once")
+        _ = await model.apply(try state(2, .idle))
+        XCTAssertNil(model.approvalAnsweredLine, "A finished turn retires the answered line")
     }
 
     func testBotApprovalWithoutAnAllowButtonNeverSendsAllow() async throws {
@@ -439,6 +462,33 @@ extension AidenBotUXTests {
         XCTAssertTrue(model.rows(in: .mac).isEmpty)
     }
 
+    func testOverlappingRuleWritesSettleOnWhatTheMacHolds() async throws {
+        let rules = try decode(AidenApprovalRulesView.self, section("approvalRules"))
+        let transport = ApprovalSettingsTransport(mode: AidenApprovalModeView(mode: .ask, autoAvailable: true), rules: rules)
+        let model = AidenApprovalSettingsModel(transport: transport)
+        await model.load()
+        let readsAfterLoad = transport.rulesReads
+
+        // github.com → Block is held and then refused; Send email → Ask lands
+        // in the meantime.
+        let github = rules.rows[0], email = rules.rows[1]
+        let gate = UXGate()
+        transport.changeGates[github.ref] = gate
+        transport.changeFailures[github.ref] = URLError(.networkConnectionLost)
+        let refused = Task { await model.change(github, to: .block) }
+        await gate.entered()
+        let landed = await model.change(email, to: .ask)
+        XCTAssertTrue(landed)
+        await gate.release()
+        let refusedResult = await refused.value
+        XCTAssertFalse(refusedResult)
+
+        XCTAssertEqual(model.rows(in: .allow).map(\.title).first, "github.com", "The refused change is not on screen")
+        XCTAssertTrue(model.rows(in: .ask).map(\.title).contains("Send email"), "The change that landed stays")
+        XCTAssertFalse(model.rows(in: .block).map(\.title).contains("Send email"))
+        XCTAssertEqual(transport.rulesReads, readsAfterLoad + 1, "A refused write reads the rules again once")
+    }
+
     func testDisableAToolTurnsEverythingIntoEverythingButThatTool() throws {
         let catalog = try decode(AidenBotCapabilityCatalog.self, catalogObject())
         var draft = try XCTUnwrap(try? aidenBotEditorResolvedDraft(mode: .create(defaultAccess: .recommended), catalog: catalog, bot: nil))
@@ -450,18 +500,46 @@ extension AidenBotUXTests {
         XCTAssertTrue(next.customAccess.shellEnabled)
         XCTAssertEqual(next.customAccess.skillIDs, ["skill_notes"])
 
+        XCTAssertEqual(next.customAccess.otherCapabilityIDs, ["capability_browser"])
+
         let noShell = next.disabling(.shell, catalog: catalog)
         XCTAssertFalse(noShell.customAccess.shellEnabled)
         XCTAssertEqual(noShell.customAccess.connectionIDs, ["connection_calendar"], "A Custom Bot keeps what it had")
+    }
+
+    func testDisableAToolNeverWidensWhatFullAccessGrants() throws {
+        let catalog = try decode(AidenBotCapabilityCatalog.self, catalogObject())
+        var full = try XCTUnwrap(try? aidenBotEditorResolvedDraft(mode: .create(defaultAccess: .recommended), catalog: catalog, bot: nil))
+        full.usesFullAccess = true
+        // What Full access grants for certain on this catalog: available
+        // connections, skills, the shell, the whole Mac, and other
+        // capabilities except Web search, which needs a flag the phone can't see.
+        let grantedOthers: Set<String> = ["capability_browser"]
+        let grantedConnections: Set<String> = ["connection_mail", "connection_calendar"]
+
+        let offered = AidenBotTool.available(in: catalog).map(\.label)
+        XCTAssertFalse(offered.contains("Web search"), "Full access may not have Web search to disable")
+        XCTAssertFalse(offered.contains("Tasks"))
+
+        for (tool, label) in AidenBotTool.available(in: catalog) {
+            let custom = full.disabling(tool, catalog: catalog).customAccess
+            XCTAssertTrue(custom.otherCapabilityIDs.isSubset(of: grantedOthers), "\(label) widened other capabilities")
+            XCTAssertFalse(custom.otherCapabilityIDs.contains("capability_web"), "\(label) added Web search")
+            XCTAssertTrue(custom.connectionIDs.isSubset(of: grantedConnections), "\(label) added a connection")
+            XCTAssertTrue(custom.fileScopeIDs.isSubset(of: ["scope_full"]), "\(label) changed file access")
+            XCTAssertTrue(custom.skillIDs.isSubset(of: ["skill_notes"]))
+        }
     }
 }
 
 // MARK: Helpers
 
 extension AidenBotUXTests {
-    func botApprovalObject(card: [String: Any], canAllow: Bool = true) -> [String: Any] {
-        ["waitId": "8d1e2f3a-4b5c-4d6e-9f70-a1b2c3d4e5f6", "toolCallId": "call_61", "toolName": "web_fetch",
-         "summary": "Fetch https://example.com/menu", "canAllow": canAllow, "card": card]
+    func botApprovalObject(card: [String: Any], canAllow: Bool = true, alwaysCount: Int? = nil) -> [String: Any] {
+        var object: [String: Any] = ["waitId": "8d1e2f3a-4b5c-4d6e-9f70-a1b2c3d4e5f6", "toolCallId": "call_61", "toolName": "web_fetch",
+                                     "summary": "Fetch https://example.com/menu", "canAllow": canAllow, "card": card]
+        if let alwaysCount { object["alwaysCount"] = alwaysCount }
+        return object
     }
 
     func sessionObject(entries: [[String: Any]], approval: Any = NSNull()) -> [String: Any] {
@@ -514,7 +592,10 @@ extension AidenBotUXTests {
             "connections": [option("connection_mail", "Mail"), option("connection_calendar", "Calendar"), option("connection_off", "Off", false)],
             "skills": [option("skill_notes", "Notes")],
             "skillsEnabled": true,
-            "otherCapabilities": [],
+            "otherCapabilities": [
+                option("capability_web", "Web search"), option("capability_browser", "Browser"),
+                option("capability_tasks", "Tasks", false),
+            ],
         ]
     }
 }
@@ -610,6 +691,10 @@ private final class ApprovalSettingsTransport: AidenApprovalSettingsTransport, @
     var failure: Error?
     var modeWrites: [AidenApprovalMode] = []
     var changes: [AidenApprovalRuleChangeRequest] = []
+    var rulesReads = 0
+    /// Per-row holds and refusals, for writes that overlap.
+    var changeGates: [AidenOpaqueJSON: UXGate] = [:]
+    var changeFailures: [AidenOpaqueJSON: Error] = [:]
 
     init(mode: AidenApprovalModeView, rules: AidenApprovalRulesView) {
         self.mode = mode
@@ -628,12 +713,25 @@ private final class ApprovalSettingsTransport: AidenApprovalSettingsTransport, @
         mode = AidenApprovalModeView(mode: next, autoAvailable: mode.autoAvailable)
         return mode
     }
-    func approvalRules() async throws -> AidenApprovalRulesView { rules }
+    func approvalRules() async throws -> AidenApprovalRulesView {
+        rulesReads += 1
+        return rules
+    }
     func approvalRulePicker() async throws -> AidenApprovalRulePicker { throw URLError(.unsupportedURL) }
     func addApprovalRule(_ request: AidenApprovalRuleAddRequest) async throws -> AidenApprovalRulesView { throw URLError(.unsupportedURL) }
     func changeApprovalRule(_ request: AidenApprovalRuleChangeRequest) async throws -> AidenApprovalRulesView {
         changes.append(request)
+        if let gate = changeGates.removeValue(forKey: request.ref) { await gate.wait() }
         try await pass()
+        if let failure = changeFailures.removeValue(forKey: request.ref) { throw failure }
+        // The Mac applies the change and answers with the whole page.
+        if let index = rules.rows.firstIndex(where: { $0.ref == request.ref }) {
+            switch request.decision {
+            case .allow: rules.rows[index].group = .allow
+            case .ask: rules.rows[index].group = .ask
+            case .block: rules.rows[index].group = .block
+            }
+        }
         return rules
     }
     func removeApprovalRule(_ request: AidenApprovalRuleRemoveRequest) async throws -> AidenApprovalRulesView {

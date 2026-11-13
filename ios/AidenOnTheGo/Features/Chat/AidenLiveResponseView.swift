@@ -241,6 +241,7 @@ struct AidenLiveResponseView: View {
                 AidenTypedApprovalCard(
                     card: card,
                     canRespond: approval.canRespond && approval.hasRequiredWriteCapability,
+                    sendableScopes: Set(approval.scopes),
                     onAnswer: { button in
                         Task { await model.respondToApproval(button: button, approvalID: approval.id) }
                     }

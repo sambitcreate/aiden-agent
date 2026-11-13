@@ -294,6 +294,8 @@ final class AidenChatViewModel {
             let wasActive = oldValue.map { !$0.isTerminal } ?? false
             let isActive = streamState.map { !$0.isTerminal } ?? false
             guard wasActive != isActive else { return }
+            // A run starting or ending retires the last approval's answered line.
+            approvalAnsweredLine = nil
             if !isActive { runInputMode = .queue }
             if reportsChanges { onChatActivityChanged(chat.id, isActive ? .active : .idle) }
         }
@@ -2723,7 +2725,8 @@ final class AidenChatViewModel {
     /// the decision and scope it offers. Its `answered` line shows at once.
     func respondToApproval(button: AidenApprovalCardButton, approvalID: String) async {
         guard let approval = pendingApproval, approval.id == approvalID,
-              let card = approval.card, card.buttons.contains(button) else { return }
+              let card = approval.card, card.buttons.contains(button),
+              button.decision == .deny || button.offeredScope == .once || approval.scopes.contains(button.offeredScope) else { return }
         let line = button.answered
         await respondToApproval(button.decision, approvalID: approvalID, scope: button.offeredScope) {
             self.approvalAnsweredLine = line

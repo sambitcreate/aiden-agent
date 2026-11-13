@@ -210,6 +210,12 @@ struct AidenApprovalCardModel: Codable, Equatable, Sendable {
 
     var denyButton: AidenApprovalCardButton { buttons[0] }
     var allowButtons: [AidenApprovalCardButton] { buttons.filter { $0.decision == .allow } }
+    /// The allow buttons the answer route can send: a one-time allow always,
+    /// a wider scope only when the route takes it for this approval.
+    func allowButtons(sendable scopes: Set<AidenApprovalScope>) -> [AidenApprovalCardButton] {
+        allowButtons.filter { $0.offeredScope == .once || scopes.contains($0.offeredScope) }
+    }
+
     /// The card has an allow button: the same as the summary's `canAllow`.
     var canAllow: Bool { !allowButtons.isEmpty }
 
@@ -533,7 +539,8 @@ struct AidenBotTemplateFields: Codable, Equatable, Sendable {
 // MARK: - Approval mode and rules (`approvals:settings`)
 
 enum AidenApprovalMode: String, Codable, Sendable, CaseIterable, Identifiable {
-    case ask, auto, never
+    /// In the desktop's order (`APPROVAL_MODES`): Auto, Ask, Never ask.
+    case auto, ask, never
     var id: String { rawValue }
 }
 

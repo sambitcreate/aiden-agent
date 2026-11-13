@@ -90,6 +90,12 @@ final class AidenApprovalSettingsModel {
     var errorMessage: String?
 
     @ObservationIgnored private let transport: any AidenApprovalSettingsTransport
+    /// Bumped by every rules write: a reply or re-read applies only when no
+    /// later write has started, so overlapping writes never leave a refused
+    /// change (or an older page) on screen.
+    @ObservationIgnored private var rulesGeneration = 0
+    @ObservationIgnored private var rulesWritesInFlight = 0
+    @ObservationIgnored private var rulesNeedRefresh = false
 
     init(transport: any AidenApprovalSettingsTransport) {
         self.transport = transport
@@ -105,11 +111,12 @@ final class AidenApprovalSettingsModel {
     func load() async {
         isLoading = true
         defer { isLoading = false }
+        let generation = rulesGeneration
         async let loadedMode = try? transport.approvalMode()
         async let loadedRules = try? transport.approvalRules()
         let (nextMode, nextRules) = await (loadedMode, loadedRules)
         if let nextMode { mode = nextMode }
-        if let nextRules { rules = nextRules }
+        if let nextRules, generation == rulesGeneration { rules = nextRules }
         if nextMode == nil || nextRules == nil { errorMessage = "Aiden couldn’t read your approvals. Please try again." }
     }
 
@@ -167,13 +174,34 @@ final class AidenApprovalSettingsModel {
         guard !isAdding, rules?.unreadable != true else { return false }
         isAdding = true
         defer { isAdding = false }
+        let generation = beginRulesWrite()
         do {
-            rules = try await transport.addApprovalRule(AidenApprovalRuleAddRequest(target: option.target, decision: decision))
+            let page = try await transport.addApprovalRule(AidenApprovalRuleAddRequest(target: option.target, decision: decision))
+            if generation == rulesGeneration { rules = page }
+            await endRulesWrite(failed: false)
             return true
         } catch {
             if !(error is CancellationError) { errorMessage = message(for: error, fallback: "Couldn’t add that rule.") }
+            await endRulesWrite(failed: !(error is CancellationError))
             return false
         }
+    }
+
+    private func beginRulesWrite() -> Int {
+        rulesGeneration += 1
+        rulesWritesInFlight += 1
+        return rulesGeneration
+    }
+
+    /// After a refused write, once no other write is on its way, the page is
+    /// read again from the Mac, so what shows is what the Mac holds.
+    private func endRulesWrite(failed: Bool) async {
+        rulesWritesInFlight -= 1
+        if failed { rulesNeedRefresh = true }
+        guard rulesWritesInFlight == 0, rulesNeedRefresh else { return }
+        rulesNeedRefresh = false
+        let generation = rulesGeneration
+        if let fresh = try? await transport.approvalRules(), generation == rulesGeneration { rules = fresh }
     }
 
     private func write(
@@ -187,24 +215,32 @@ final class AidenApprovalSettingsModel {
         rules = optimistic
         busyRefs.insert(ref)
         defer { busyRefs.remove(ref) }
+        let generation = beginRulesWrite()
         do {
-            rules = try await send()
+            let page = try await send()
+            if generation == rulesGeneration { rules = page }
+            await endRulesWrite(failed: false)
             return true
         } catch {
+            let isLatest = generation == rulesGeneration
             if case AidenRemoteClientError.server(404, _) = error {
                 // The rule is gone on the Mac: it stays gone here.
-                if goneIsDone { return true }
-                rules = original
-                rules?.rows.removeAll { $0.ref == ref }
+                if goneIsDone {
+                    await endRulesWrite(failed: false)
+                    return true
+                }
+                if isLatest {
+                    rules = original
+                    rules?.rows.removeAll { $0.ref == ref }
+                }
+                await endRulesWrite(failed: true)
                 return false
             }
-            rules = original
-            if error is CancellationError { return false }
-            errorMessage = message(for: error, fallback: failure)
-            if case AidenRemoteClientError.server(409, _) = error {
-                // The Mac's rules changed or became unreadable: show them as they are.
-                if let fresh = try? await transport.approvalRules() { rules = fresh }
-            }
+            // Only the latest write can put the page back as it was; an older
+            // one leaves a newer change alone, and the re-read settles both.
+            if isLatest { rules = original }
+            if !(error is CancellationError) { errorMessage = message(for: error, fallback: failure) }
+            await endRulesWrite(failed: !(error is CancellationError))
             return false
         }
     }

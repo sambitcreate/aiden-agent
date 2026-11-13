@@ -14,6 +14,9 @@ struct AidenTypedApprovalCard: View {
     let card: AidenApprovalCardModel
     /// False when this phone can't answer (no write access, or another device owns it).
     let canRespond: Bool
+    /// The scopes the answer route takes for this approval. An allow button
+    /// with any other scope is not shown, since it could not be sent.
+    var sendableScopes: Set<AidenApprovalScope> = [.once]
     /// What to show instead of the buttons when `canRespond` is false.
     var readOnlyNote: String = "Answer this on your machine."
     let onAnswer: (AidenApprovalCardButton) -> Void
@@ -150,7 +153,7 @@ struct AidenTypedApprovalCard: View {
     }
 
     private var buttons: some View {
-        let allows = card.allowButtons
+        let allows = card.allowButtons(sendable: sendableScopes)
         return HStack(spacing: 10) {
             Button { onAnswer(card.denyButton) } label: {
                 Text(card.denyButton.label)
