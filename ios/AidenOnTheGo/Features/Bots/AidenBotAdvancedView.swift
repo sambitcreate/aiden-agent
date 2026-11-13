@@ -358,7 +358,7 @@ struct AidenBotAdvancedView: View {
                 .buttonStyle(.plain)
                 .disabled(isDirty)
             } footer: {
-                Text(isDirty ? "Save or cancel your changes first." : "How its status line reads while it works. Each computer chooses whether to show the steps, in its Appearance settings.")
+                Text(isDirty ? "Save or cancel your changes first." : "How its status line reads while it works. Each computer’s Show tool activity switch decides whether to show the steps.")
             }
         }
     }
@@ -928,7 +928,7 @@ enum AidenBotChatActivityCopy {
     }
 
     static func description(botName: String) -> String {
-        "How \(botName)’s status line reads while it works. Each computer chooses whether its chats show the steps, with Show tool activity in its Appearance settings; the level here only sets where one that hasn’t chosen starts. Changes save as you pick them."
+        "How \(botName)’s status line reads while it works. Each computer’s Show tool activity switch decides whether its chats show the steps; Detailed turns them on for a computer that hasn’t chosen. Changes save as you pick them."
     }
 }
 
