@@ -163,10 +163,28 @@ test("an access notice that can't be read still lets the first Bot be ready and 
     overrides: { "bots:getAccessNotice": () => Promise.reject(new Error("Bot access is unavailable.")) },
   });
   await screen.findByText("Chief is ready");
-  screen.getByText(/Chief gets Full access/u);
+  screen.getByText(/Unless you chose to review a Bot’s access first, Chief gets Full access/u);
   fireEvent.click(screen.getByRole("button", { name: /Start using Aiden/u }));
   await waitFor(() => assert.deepEqual(opened, ["bot-chief"]));
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "bots:introduce")));
+});
+
+test("an unreadable notice over a stored review-first choice claims no Full access, and Start keeps the choice", async () => {
+  const opened: string[] = [];
+  const calls = mountOnboarding({
+    bots: [],
+    notice: "customize_first",
+    onOpenBotChat: (botId) => opened.push(botId),
+    overrides: { "bots:getAccessNotice": () => Promise.reject(new Error("Bot access is unavailable.")) },
+  });
+  await screen.findByText("Chief is ready");
+  assert.equal(screen.queryByText(/^Chief gets Full access/u), null, "the card doesn't say the choice was Full access");
+  screen.getByText(/Unless you chose to review a Bot’s access first/u);
+  fireEvent.click(screen.getByRole("button", { name: /Start using Aiden/u }));
+  await waitFor(() => assert.deepEqual(opened, ["bot-chief"]));
+  await waitFor(() => assert.ok(calls.some((call) => call.channel === "bots:acceptFirstBotAccess")));
+  await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+  assert.equal(calls.some((call) => call.channel === "bots:introduce"), false, "main kept review-first, so no greeting");
 });
 
 test("the first Bot is never made when Bots already exist", async () => {

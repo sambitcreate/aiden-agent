@@ -10,10 +10,11 @@ import { BOT_FULL_ACCESS_NOTICE_VERSION } from "../shared/bot-capabilities";
 
 /**
  * How the first Bot may act once setup finishes: Full access, accepted when
- * the person presses Start using Aiden (or already accepted); or the person
- * chose earlier to review access first, which stands.
+ * the person presses Start using Aiden (or already accepted); the person
+ * chose earlier to review access first, which stands; or the notice couldn't
+ * be read, so the card says both and main decides when Start is pressed.
  */
-export type FirstBotAccess = "full" | "review_first";
+export type FirstBotAccess = "full" | "review_first" | "unknown";
 
 type FirstBotState =
   | { kind: "making" }
@@ -53,8 +54,9 @@ export function OnboardingBotsStep({
         botsApi.createFirst(),
         botsApi.getAccessNotice().catch(() => null),
       ]);
-      const access: FirstBotAccess =
-        notice && !notice.requiresAcknowledgement && notice.acceptedDecision === "customize_first" ? "review_first" : "full";
+      const access: FirstBotAccess = !notice
+        ? "unknown"
+        : !notice.requiresAcknowledgement && notice.acceptedDecision === "customize_first" ? "review_first" : "full";
       addBotToCache(qc, bot);
       void qc.invalidateQueries({ queryKey: queryKeys.bots });
       setState({ kind: "ready", bot, access });
@@ -92,7 +94,9 @@ export function OnboardingBotsStep({
           <Text as="p" variant="small" color="secondary" className="mt-1.5 text-pretty">
             {state.access === "full"
               ? `${state.bot.name} gets Full access: it can use your files, apps and the web as you can, and still asks before anything risky. Starting accepts this; you can narrow it any time in ${state.bot.name}’s Advanced tab.`
-              : `You chose to review a Bot’s access first, so ${state.bot.name} waits until you set it in its Advanced tab.`}
+              : state.access === "unknown"
+                ? `Unless you chose to review a Bot’s access first, ${state.bot.name} gets Full access: it can use your files, apps and the web as you can, and still asks before anything risky. Starting accepts this; you can narrow it any time in ${state.bot.name}’s Advanced tab.`
+                : `You chose to review a Bot’s access first, so ${state.bot.name} waits until you set it in its Advanced tab.`}
           </Text>
         ) : null}
         {state.kind === "failed" ? (
@@ -111,7 +115,7 @@ export function OnboardingBotsStep({
  * as it is, and that Bot doesn't introduce itself until its access is set.
  */
 export async function acceptFirstBotAccess(botId: string, access: FirstBotAccess): Promise<void> {
-  if (access !== "full") return;
+  if (access === "review_first") return;
   // Main checks for a review-first choice and accepts in one step, so one made
   // since this step showed still stands.
   const notice = await botsApi.acceptFirstBotAccess({
