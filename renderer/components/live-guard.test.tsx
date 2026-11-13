@@ -163,7 +163,7 @@ test("the user's input on the ribbon's Confirm or Cancel answers the question; a
   assert.equal(isLiveConfirmAnswerTarget(window), false, "a window-level event has no control");
 });
 
-test("a Bot's access card is the user's to answer, including Always for this folder and Not now", () => {
+test("a Bot's access card is the user's to answer, including Deny and the menu that holds Always for this folder", () => {
   render(
     <AccessRequestCard
       request={{
@@ -181,9 +181,12 @@ test("a Bot's access card is the user's to answer, including Always for this fol
       onAnswer={() => undefined}
     />,
   );
-  for (const name of ["Not now", "Always for this folder", "Allow once"]) {
+  for (const name of ["Deny", "Allow once"]) {
     assert.equal(facts(byText(name), "button", name)?.guard, "you", name);
   }
+  const more = document.querySelector<HTMLElement>('button[aria-label="More ways to allow"]');
+  assert.ok(more, "the menu with Always for this folder is offered");
+  assert.equal(facts(more, "button", "More ways to allow")?.guard, "you");
 });
 
 test("erasing a simulator is the user's, in the panel and in the confirmation it opens", () => {

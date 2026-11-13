@@ -485,6 +485,17 @@ test("a customized workspace shows its mode, and Use Settings hands it back to t
   assert.deepEqual(patches, [{ approvalMode: "ask" }, { approvalMode: null }]);
 });
 
+test("choosing an approvals option from the keyboard keeps the menu open for the next choice", async () => {
+  const patches = mountApprovals({ approvalMode: "never" }, { settings: { approvalMode: "ask" } });
+  await settled();
+  const chip = await screen.findByRole("button", { name: "Approvals: Never ask. Show options." });
+  fireEvent.click(chip);
+  // Keyboard activation carries no click count (detail 0); a pointer click closes the menu instead.
+  fireEvent.click(screen.getByRole("radio", { name: "Approvals: Ask" }), { detail: 0 });
+  assert.equal(chip.getAttribute("aria-expanded"), "true");
+  assert.deepEqual(patches, [{ approvalMode: "ask" }]);
+});
+
 test("a workspace stored as Full access reads as Never ask, and Auto needs a usable model", async () => {
   mountApprovals({ permission: "full" }, { providers: [] });
   await settled();
