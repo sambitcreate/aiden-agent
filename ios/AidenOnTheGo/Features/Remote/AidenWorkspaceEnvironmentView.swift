@@ -364,7 +364,7 @@ final class AidenWorkspaceFilesModel {
             guard stillHolds(context, coordinator) else { return false }
             if case AidenRemoteClientError.server(_, let body) = error,
                body.code.rawValue == "revision_conflict" {
-                errorMessage = "This file changed on the paired desktop. Reload it before saving again."
+                errorMessage = "This file changed on the paired computer. Reload it before saving again."
                 coordinator.haptics.play(.warning, scope: hapticScope)
             } else {
                 errorMessage = error.localizedDescription
@@ -521,8 +521,8 @@ private struct AidenWorkspaceFileEditorView: View {
                     if let message = model.errorMessage {
                         VStack(spacing: 8) {
                             Text(message).font(.footnote).foregroundStyle(.secondary)
-                            if message.contains("changed on the paired desktop") {
-                                Button("Reload from desktop") {
+                            if message.contains("changed on the paired computer") {
+                                Button("Reload from computer") {
                                     Task { await model.reloadDocument(coordinator: coordinator) }
                                 }
                             }

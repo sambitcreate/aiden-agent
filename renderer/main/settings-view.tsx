@@ -74,6 +74,7 @@ import {
   settingsLocation,
 } from "../lib/settings-section";
 import { useAppCapabilities } from "../lib/app-capabilities";
+import { localComputerNoun, type LocalComputerNoun } from "../shared/computer-noun";
 import { MemoryCardIcon } from "../components/memory-card-icon";
 import {
   SettingsAnchorContext,
@@ -194,7 +195,8 @@ function SettingsLiveGuard({ section, children }: { section: SettingsSection; ch
   return <>{children}</>;
 }
 
-const DESCRIPTIONS: Record<SettingsSection, string> = {
+/** Each section's description; `computer` names this one ("Mac" on macOS). */
+const settingsDescriptions = (computer: LocalComputerNoun): Record<SettingsSection, string> => ({
   providers: "Connect models to Aiden and manage the providers you use.",
   modelData: "Arrange your models by capability and pace. Your map stays on this device.",
   limits: "Choose how long chats stay manageable, how replies wait out usage limits, and how much chats and Bots may spend.",
@@ -202,7 +204,7 @@ const DESCRIPTIONS: Record<SettingsSection, string> = {
   mcp: "Connect tools and services to extend what Aiden can do.",
   hooks: "Run your own shell commands at points in a chat, such as before a tool runs. Each one runs only after you approve it.",
   telegram: "Connect your Telegram bots and choose how they respond.",
-  remoteAccess: "Use Aiden on this computer from your phone or another computer.",
+  remoteAccess: `Use Aiden on this ${computer} from your phone or another computer.`,
   peerHosts: "Pair the other computers you control from here, and manage them.",
   websearch: "Choose how Aiden searches and reads the web.",
   imageGeneration: "Connect image providers and choose the models Aiden uses to make images.",
@@ -220,14 +222,15 @@ const DESCRIPTIONS: Record<SettingsSection, string> = {
   links: "Choose where links you click open.",
   shortcut: "Customize the keyboard controls for Aiden and the app.",
   appearance: "Pick a theme, choose when Aiden uses its light or dark look, and set how wide conversations read.",
-  storage: "See how much disk Aiden uses on this computer, and clear out what you no longer need.",
+  storage: `See how much disk Aiden uses on this ${computer}, and clear out what you no longer need.`,
   about: "App information, updates, and diagnostics.",
-};
+});
 
 export function SettingsView({ initialSection }: { initialSection?: SettingsSection }) {
   const router = useRouter();
   const navigate = useNavigate();
   const capabilities = useAppCapabilities();
+  const descriptions = React.useMemo(() => settingsDescriptions(localComputerNoun(capabilities.platform)), [capabilities.platform]);
   const [search, setSearch] = React.useState("");
 
   const anchorRequest = useLocation({ select: (location) => location.state.aidenSettingsAnchor });
@@ -236,7 +239,7 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
   const pages = availableSettingsPages(capabilities);
   const activePage = pages.find((page) => page.id === pageFor(section).id)!;
   const rows = pages.flatMap((page) => {
-    const target = firstMatchingSettingsSection(page, query, (item) => DESCRIPTIONS[item]);
+    const target = firstMatchingSettingsSection(page, query, (item) => descriptions[item]);
     return target ? [{ page, target }] : [];
   });
   const open = (next: SettingsSection) =>
@@ -336,7 +339,7 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
           <SettingsPage
             heading={!OWN_HEADING.has(activePage.id)}
             title={activePage.title}
-            description={DESCRIPTIONS[section]}
+            description={descriptions[section]}
           >
             <SettingsPageTabs page={activePage} section={section} onSelect={open}>
               <SettingsAnchorContext.Provider value={isSettingsAnchor(section) ? { section, request: anchorRequest ?? 0 } : null}>

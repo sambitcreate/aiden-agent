@@ -18,10 +18,15 @@ import { Badge, Text } from "./ui";
 import { cn } from "../lib/ui-utils";
 import { formatScheduledTaskCadence, scheduledTaskEnabledAfterApproval } from "../shared/scheduled-task-presentation";
 import type { ScheduleApprovalDetails } from "../shared/approval-card-model";
+import { localComputerNoun } from "../shared/computer-noun";
+import { useAppCapabilities } from "../lib/app-capabilities";
 
 export { scheduleApprovalHeadline, type ScheduleApprovalDetails } from "../shared/approval-card-model";
 
-export const SCHEDULE_APPROVAL_FOOTER = "Scheduled work runs on your desktop while Aiden is open and the computer is awake.";
+/** The card's footer for a schedule approval, naming this computer by its platform. */
+export function scheduleApprovalFooter(platform: string | null | undefined): string {
+  return `Scheduled work runs on this ${localComputerNoun(platform)} while Aiden is open and it's awake.`;
+}
 
 /** "today at 9:00 AM", "tomorrow at 9:00 AM", or "Thu, Oct 23 at 9:00 AM", in this computer's time. */
 export function formatScheduleNextRun(timestamp: number, now = Date.now()): string {
@@ -104,6 +109,7 @@ export function ScheduledTaskApproval({
   descriptionId: string;
   now?: number;
 }) {
+  const { platform } = useAppCapabilities();
   const cadence = formatScheduledTaskCadence(details.cron, details.timezone, new Date(now));
   const script = details.kind === "scheduled-task" && details.mode === "script" ? details.script : null;
   const body = script ?? details.prompt;
@@ -169,7 +175,7 @@ export function ScheduledTaskApproval({
                     ))}
                   </ul>
                 ) : full ? (
-                  "Anywhere on your computer"
+                  `Anywhere on your ${localComputerNoun(platform)}`
                 ) : (
                   "No project"
                 )}

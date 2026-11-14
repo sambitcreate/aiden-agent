@@ -17,7 +17,8 @@ import { HOOK_PROPOSAL_APPROVAL_FOOTER, HookProposalApproval } from "./hook-prop
 import { HOOK_PROPOSAL_APPROVAL_KIND, isHookProposalApprovalDetails } from "../shared/hook-proposal-approval";
 import { SubagentRunGrantApproval } from "./subagent-run-grant-approval";
 import { FormFillApproval } from "./form-fill-approval";
-import { SCHEDULE_APPROVAL_FOOTER, ScheduledTaskApproval } from "./scheduled-task-approval";
+import { useAppCapabilities } from "../lib/app-capabilities";
+import { scheduleApprovalFooter, ScheduledTaskApproval } from "./scheduled-task-approval";
 import { ComputerUseAccessApproval } from "./computer-use-access-approval";
 import { isComputerUseAccessApprovalDetails } from "../shared/computer-use-access";
 import type { ApprovalPrompt } from "../lib/ipc";
@@ -279,6 +280,7 @@ export function ChatApprovalCard({
   /** The last answer could not be sent. */
   error?: string | null;
 }) {
+  const { platform } = useAppCapabilities();
   const details = pending.details as unknown;
   const schedule = isScheduledTaskApprovalDetails(details) || isAssistantAutomationApprovalDetails(details) ? details : undefined;
   const pendingWorkspaceWrite = isSubagentWorkspaceWriteApprovalDetails(pending.details) ? pending.details : undefined;
@@ -440,7 +442,7 @@ export function ChatApprovalCard({
                     : pendingHook && pendingCanAllow
                       ? HOOK_PROPOSAL_APPROVAL_FOOTER
                       : schedule
-                      ? SCHEDULE_APPROVAL_FOOTER
+                      ? scheduleApprovalFooter(platform)
                       : approvalMeta(plainPreview, requester)}
         </Text>
         {notes.map((note) => (

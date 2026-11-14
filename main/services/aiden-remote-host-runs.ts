@@ -160,7 +160,7 @@ type ControlOutcome<T> =
     };
 
 function runGone(): AidenRemoteServiceError {
-  return new AidenRemoteServiceError("run_gone", "This run is no longer available on this Aiden host.", 404);
+  return new AidenRemoteServiceError("run_gone", "This run is no longer available on this computer.", 404);
 }
 
 function staleRun(): AidenRemoteServiceError {
@@ -360,7 +360,7 @@ function requireInformedAllow(payload: Record<string, unknown>, scope: ToolAppro
   if (payload.detailsOmitted === true) {
     throw new AidenRemoteServiceError(
       "capability_denied",
-      "Review this approval on the Aiden host; its details are too large to send.",
+      "Review this approval in Aiden Agent on your computer; its details are too large to send.",
       403,
     );
   }
@@ -596,7 +596,7 @@ export class AidenRemoteHostRunService {
             if (card ? !approvalCardAllows(card, scope) : options.phoneScoped === true && !phoneMayAllow(prompt.payload)) {
               throw new AidenRemoteServiceError(
                 "capability_denied",
-                "This approval can only be allowed from the Aiden desktop app.",
+                "Allow this in Aiden Agent on your computer.",
                 403,
               );
             }

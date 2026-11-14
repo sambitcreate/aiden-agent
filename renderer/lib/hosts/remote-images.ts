@@ -23,7 +23,7 @@ export function peerAttachmentContent(value: unknown): PeerAttachmentContent {
   const record = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
   const { mimeType, bytes } = record;
   if ((mimeType !== "image/png" && mimeType !== "image/jpeg") || !(bytes instanceof Uint8Array))
-    throw new Error("The other Mac sent an image this Mac cannot read.");
+    throw new Error("The other computer sent an image Aiden cannot read.");
   return { mimeType, bytes };
 }
 
@@ -142,11 +142,11 @@ function useRemoteImageReads(
             result = await read(image.id);
           } catch (error) {
             // Bytes main could not hand over as an image are not worth reading again.
-            throw new RemoteImageGone(error instanceof Error ? error.message : "The other Mac sent an unreadable image.");
+            throw new RemoteImageGone(error instanceof Error ? error.message : "The other computer sent an unreadable image.");
           }
           if (!result.ok) throw imageGone(result.error) ? new RemoteImageGone(result.error.message) : new Error(result.error.message);
           const data = acceptRemoteImage(image, result.value);
-          if (data === null) throw new RemoteImageGone("The other Mac sent a different image.");
+          if (data === null) throw new RemoteImageGone("The other computer sent a different image.");
           return data;
         }),
       enabled,
@@ -199,7 +199,7 @@ export function useRemoteChatImages(
     (id) =>
       adapter?.attachmentContent
         ? adapter.attachmentContent(chatId, id)
-        : Promise.resolve({ ok: false, error: { code: "unsupported", message: "This Mac cannot read that image." } }),
+        : Promise.resolve({ ok: false, error: { code: "unsupported", message: "Aiden cannot read that image here." } }),
     [adapter, chatId],
   );
   const hostId = adapter?.hostId ?? "";
@@ -234,7 +234,7 @@ export function withRemoteBotImages(
       return {
         id: entry.id,
         type: "assistant",
-        text: `I shared an image: ${entry.name}. Open this chat on its Mac to see it.`,
+        text: `I shared an image: ${entry.name}. Open this chat on its computer to see it.`,
         toolCalls: [],
         stopReason: "stop",
       };

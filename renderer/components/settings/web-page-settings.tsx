@@ -17,6 +17,8 @@ import {
 } from "../../shared/web-fetch-settings";
 import { WebSearchKeyPoolEditor } from "./web-search-key-pool";
 
+import { useAppCapabilities } from "../../lib/app-capabilities";
+import { localComputerNoun } from "../../shared/computer-noun";
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
 }
@@ -50,6 +52,7 @@ export function WebPageSettingsView({
   onSaveAccountId: (accountId: string | null) => Promise<boolean>;
   onKeysChanged: () => void;
 }) {
+  const { platform } = useAppCapabilities();
   const model = WEB_EXTRACT_MODELS[snapshot.settings.extract.model];
   const savedAccountId = snapshot.settings.extract.accountId ?? "";
   const [accountDraft, setAccountDraft] = React.useState(savedAccountId);
@@ -82,7 +85,7 @@ export function WebPageSettingsView({
         label="Read web pages"
         description={
           snapshot.webSearchEnabled
-            ? "Lets the agent open a public page and read its text in your chats. Pages on this computer or your local network are never opened."
+            ? `Lets the agent open a public page and read its text in your chats. Pages on this ${localComputerNoun(platform)} or your local network are never opened.`
             : "Turn on Web Search above to let the agent read pages."
         }
       >

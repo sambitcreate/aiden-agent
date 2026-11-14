@@ -175,7 +175,7 @@ final class AidenChatViewModel {
         }
         return pendingSend.canRetry()
             ? "Couldn’t confirm delivery. Retry uses the same saved request within its safe retry window."
-            : "Couldn’t confirm delivery. The retry window has ended. Check the conversation on your desktop before sending another message."
+            : "Couldn’t confirm delivery. The retry window has ended. Check the conversation on your computer before sending another message."
     }
     func discardPendingSend() async {
         guard !isStarting, !isSubmittingRunInput, let session = draftSession else { return }
@@ -1040,7 +1040,7 @@ final class AidenChatViewModel {
             draftSession = session
             isPendingSendRefusedBecauseBusy = false
             do { pendingSend = try await draftStore.loadPendingSend(session: session, deviceId: context.deviceId) }
-            catch { sendRecoveryError = "The saved send could not be read. Check the conversation on your desktop before dismissing it and sending again." }
+            catch { sendRecoveryError = "The saved send could not be read. Check the conversation on your computer before dismissing it and sending again." }
             if draft.isEmpty, pendingAttachments.isEmpty, !isPreparingAttachments, !isUploadingAttachment, !isStarting,
                let savedDraft = await draftStore.load(session: session) {
                 guard !isRemoved, coordinator.isLive(context), draftSession == session else { return }
@@ -1203,7 +1203,7 @@ final class AidenChatViewModel {
             if await coordinator.handleCredentialRevocation(error, context: context) { return false }
             guard !isRemoved, coordinator.isLive(context) else { return false }
             if isProgressAccessDenied(error) {
-                presentedError = String(localized: "This device can no longer stop agents on your machine.")
+                presentedError = String(localized: "This device can no longer stop agents on your computer.")
             } else {
                 presentedError = String(localized: "Stop was not confirmed. Check the agent before trying again.")
             }
@@ -2772,7 +2772,7 @@ final class AidenChatViewModel {
             case .scheduleWriteRequired:
                 String(localized: "Schedule write access was removed from this paired device. The task was not approved.")
             case .hostApprovalRequired:
-                String(localized: "This request can only be approved on your paired desktop.")
+                String(localized: "This request can only be approved on your paired computer.")
             }
             pendingApproval = nil
             streamState = .reconciling
@@ -2794,7 +2794,7 @@ final class AidenChatViewModel {
             guard !isRemoved, coordinator.isLive(context), activeStreamID == streamID,
                   streamState?.isTerminal != true else { return }
             guard response.approvalId == approval.id, response.decision == decision else {
-                presentedError = String(localized: "The approval response was not confirmed. Refreshing the current request from your machine.")
+                presentedError = String(localized: "The approval response was not confirmed. Refreshing the current request from your computer.")
                 retractApprovalAnsweredLine()
                 if pendingApproval == nil {
                     await restorePendingApproval(streamID: streamID, context: context, isFallback: true)
@@ -2815,7 +2815,7 @@ final class AidenChatViewModel {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard !isRemoved, coordinator.isLive(context), activeStreamID == streamID,
                   streamState?.isTerminal != true else { return }
-            presentedError = String(localized: "The approval response was not confirmed. Refreshing the current request from your machine.")
+            presentedError = String(localized: "The approval response was not confirmed. Refreshing the current request from your computer.")
             retractApprovalAnsweredLine()
             if pendingApproval == nil {
                 await restorePendingApproval(streamID: streamID, context: context, isFallback: true)
@@ -2860,7 +2860,7 @@ final class AidenChatViewModel {
             guard coordinator.isLive(context), activeStreamID == streamID,
                   streamState?.isTerminal != true else { return }
             guard response.promptId == question.id else {
-                presentedError = String(localized: "The question response was not confirmed. Refreshing the current prompt from your machine.")
+                presentedError = String(localized: "The question response was not confirmed. Refreshing the current prompt from your computer.")
                 if pendingQuestion == nil {
                     await restorePendingQuestion(streamID: streamID, context: context)
                 }
@@ -2871,7 +2871,7 @@ final class AidenChatViewModel {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard coordinator.isLive(context), activeStreamID == streamID,
                   streamState?.isTerminal != true else { return }
-            presentedError = String(localized: "The question response was not confirmed. Refreshing the current prompt from your machine.")
+            presentedError = String(localized: "The question response was not confirmed. Refreshing the current prompt from your computer.")
             // Never resurrect the captured card or retry a possibly accepted answer.
             if pendingQuestion == nil {
                 await restorePendingQuestion(streamID: streamID, context: context)

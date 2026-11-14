@@ -177,7 +177,7 @@ test("onboarding's Bots tile draws the first Bot's chat and explains plan approv
     await botsTile.screenshot({ path: testInfo.outputPath(`bots-plan-tour-${mode}.png`) });
     await botsTile.focus();
     await expect(botsTile).toBeFocused();
-    await expect(botsTile).toHaveAttribute("aria-label", /Approve a whole plan on desktop or phone/u);
+    await expect(botsTile).toHaveAttribute("aria-label", /Approve a whole plan in Aiden Agent or on your phone/u);
     expect(await botsTile.evaluate(tile => tile.scrollWidth <= tile.clientWidth)).toBe(true);
     await botsTile.screenshot({ path: testInfo.outputPath(`bots-plan-tour-description-${mode}.png`) });
     await botsTile.press("Tab");

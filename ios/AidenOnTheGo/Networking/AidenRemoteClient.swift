@@ -654,7 +654,7 @@ enum AidenNoWorkspace {
     /// Shown when a new chat landed in a hidden folder the phone couldn't list yet (the workspace
     /// re-read failed), so the chat exists on the Mac but can't open until the list refreshes.
     static var startedButUnlistedMessage: String {
-        String(localized: "Your new chat was started on your machine but couldn't open yet. It will appear under Chats once Aiden On The Go reconnects.")
+        String(localized: "Your new chat was started on your computer but couldn't open yet. It will appear under Chats once Aiden On The Go reconnects.")
     }
 
     /// Workspaces a person picks, opens or manages: everything but the hidden records, except
@@ -1138,7 +1138,7 @@ enum AidenRemoteClientError: Error, LocalizedError {
         case .missingTrustConfiguration:
             return "This Aiden installation must be paired again to establish secure server trust."
         case .installationChanged:
-            return "The active Aiden Agent changed. Try again on the selected desktop."
+            return "The active Aiden Agent changed. Try again on the selected computer."
         }
     }
 }
@@ -4510,7 +4510,7 @@ struct AidenReadAloudStatus: Codable, Sendable {
     let settingsRevision: String
     let source: AidenReadAloudSource?
     let job: AidenReadAloudJob?
-    static let setupGuidance = "Enable Read Aloud in the desktop app: Settings → Voice & Speech → Text to Speech. Voice and credentials are managed on your machine. Selected response text is sent from your machine to Google and may incur charges."
+    static let setupGuidance = "Turn on Read Aloud in Aiden Agent on your computer: Settings → Voice & Speech → Text to Speech. Voice and keys stay on your computer, which sends the selected reply text to Google when you press Play. Charges may apply."
 }
 struct AidenReadAloudAudio: Codable, Sendable {
     let bytesBase64: String

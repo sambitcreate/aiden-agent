@@ -17,7 +17,8 @@ import {
 } from "./sidebar-inbox";
 import { LOCAL_SIDEBAR_HOST_ID, projectOrderKey, type SidebarMachineFilter } from "./sidebar-organization";
 import {
-  LOCAL_MACHINE_LABEL,
+  localMachineLabel,
+  UNNAMED_PAIRED_HOST_LABEL,
   type RemoteSidebarRows,
   type RemoteSidebarChat,
   type SidebarHost,
@@ -34,8 +35,8 @@ import { peerFeedBotAttention } from "../shared/peer-feed-inbox";
  * Placement itself lives in `sidebar-inbox.ts`.
  */
 
-/** Shown when a paired host has no name. Never a bare "Mac". */
-export const INBOX_UNNAMED_HOST_LABEL = "Paired Mac";
+/** Shown when a paired host has no name. Never a bare "Mac" or "computer". */
+export const INBOX_UNNAMED_HOST_LABEL = UNNAMED_PAIRED_HOST_LABEL;
 export const INBOX_ASSISTANT_PROJECT_LABEL = "Assistant";
 export const INBOX_SCHEDULED_PROJECT_LABEL = "Scheduled";
 /** Line 1 of a Bot's row, in place of a project. */
@@ -84,6 +85,8 @@ export interface LocalInboxInput {
   pending: ReadonlyMap<string, ChatPendingAttention>;
   /** The chat's Pin, Done and Snooze, from this Mac's triage store and this device's own writes. */
   triage?: (chatId: string) => ChatTriageEntry | undefined;
+  /** This computer's platform, which names it in each row ("This Mac" on macOS). */
+  platform: string | null | undefined;
 }
 
 /**
@@ -112,7 +115,7 @@ export function localInboxEntries(input: LocalInboxInput): InboxEntry[] {
         title: chat.title,
         project,
         hostId: LOCAL_SIDEBAR_HOST_ID,
-        hostLabel: LOCAL_MACHINE_LABEL,
+        hostLabel: localMachineLabel(input.platform),
         ...(pending ? { pending } : {}),
         source: { kind: "local", chat },
         signals: {
@@ -150,6 +153,8 @@ export interface BotInboxInput {
   openBotId: string | null;
   /** Unread from the Bot sidebar preferences (`isBotUnread`), not chat read markers. */
   unread: (botId: string, lastReplyAt: number | null) => boolean;
+  /** This computer's platform, which names it in each row ("This Mac" on macOS). */
+  platform: string | null | undefined;
 }
 
 /** A Bot's row key. Bot ids never collide with chat ids under it. */
@@ -190,7 +195,7 @@ export function botInboxRows(input: BotInboxInput): BotInboxRows {
       title: row.bot.name,
       project: INBOX_BOT_PROJECT_LABEL,
       hostId: LOCAL_SIDEBAR_HOST_ID,
-      hostLabel: LOCAL_MACHINE_LABEL,
+      hostLabel: localMachineLabel(input.platform),
       source: {
         kind: "bot",
         bot: row.bot,

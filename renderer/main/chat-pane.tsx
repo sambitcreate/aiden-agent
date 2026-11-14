@@ -36,6 +36,7 @@ import {
   type WorktreeFirstSend,
 } from "../lib/draft-worktree-send";
 import { isValidBranchName, type FirstMessageWorktreeRequest } from "../shared/worktree-on-send";
+import { localComputerNoun } from "../shared/computer-noun";
 import { DraftWorktreeSendView } from "../components/draft-worktree-send-view";
 import type { GitBranchPickerDraft } from "../components/git-branch-picker";
 import { QueuedMessages } from "../components/queued-messages";
@@ -4310,7 +4311,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           saveComposerDraftText(key, cloneDraftRef.current.text);
           seedComposerAttachments(key, cloneDraftRef.current.attachments);
         } else if (cloneDraftRef.current.text || cloneDraftRef.current.attachments.length) {
-          toast.info("The paired computer already has a draft. Your current prompt remains saved on this computer.");
+          toast.info(`The paired computer already has a draft. Your current prompt remains saved on this ${localComputerNoun(capabilities.platform)}.`);
         }
         qc.setQueryData<import("../shared/peer-host").PeerHostFeedSnapshot | null>(hostQueryKeys.feed(hostId), current => current ? { ...current, workspaces: [...current.workspaces.filter(row => row.id !== workspace.id), workspace] } : current);
         void navigate({ to: "/host/$hostId/new", params: { hostId }, search: { workspaceId: workspace.id } });

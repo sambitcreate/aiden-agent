@@ -6,6 +6,7 @@ import {
   botAccessChoicesFor,
   botAccessResultLine,
   botPendingAccessRequestOf,
+  botWholeComputerLabel,
   parseBotAccessChoice,
 } from "./bot-access-requests.js";
 import { botIssueActionOf, botIssueKindOf } from "./bot-issues.js";
@@ -33,6 +34,14 @@ test("whole Mac is only ever Allow once", () => {
     }),
     null,
   );
+});
+test("a whole-computer card names the host's platform and both spellings parse", () => {
+  assert.equal(botWholeComputerLabel("darwin"), "your whole Mac");
+  assert.equal(botWholeComputerLabel("linux"), "your whole computer");
+  const whole = { ...card, target: "whole_mac", place: undefined, choices: ["not_now", "once"] };
+  for (const label of ["your whole Mac", "your whole computer"])
+    assert.equal(botPendingAccessRequestOf({ ...whole, label })?.label, label);
+  assert.equal(botPendingAccessRequestOf({ ...whole, label: "your whole disk" }), null);
 });
 test("a folder offers Always only when allowed", () => {
   assert.deepEqual(botAccessChoicesFor({ target: "folder", alwaysOffered: true }), [
@@ -72,8 +81,12 @@ test("titles, choices and result lines match the card", () => {
     "Ada wants to use Taxes",
   );
   assert.equal(
+    botAccessCardTitle("Ada", { target: "whole_mac", label: "your whole computer" }),
+    "Ada wants to use your whole computer",
+  );
+  assert.equal(
     botAccessCardTitle("Ada", { target: "whole_mac", label: "ignored" }),
-    "Ada wants to use your whole Mac",
+    `Ada wants to use ${botWholeComputerLabel()}`,
   );
   for (const choice of ["once", "always", "not_now"])
     assert.equal(parseBotAccessChoice(choice), choice);

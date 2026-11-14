@@ -15,6 +15,8 @@
 // This file holds the shapes every surface reads, the fixed rule tables and
 // their labels, and the IPC channel names.
 
+import { localComputerNoun, runtimeComputerPlatform } from "./computer-noun.js";
+
 export const BOT_ACTION_CLASSES = ["credentials", "money", "purchase", "communicate", "delete", "publish", "install"] as const;
 export type BotActionClass = (typeof BOT_ACTION_CLASSES)[number];
 
@@ -45,15 +47,15 @@ export const BOT_CUSTOM_RULES_MAX = 20;
 export const BOT_CUSTOM_RULE_ID_PATTERN = /^custom\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
 /** The rule labels, as the editor and the approval and hand-off cards show them (plan §6.1). */
-const ACTION_CLASS_LABELS: Readonly<Record<BotActionClass, string>> = Object.freeze({
+const ACTION_CLASS_LABELS: Readonly<Record<Exclude<BotActionClass, "install">, string>> = Object.freeze({
   credentials: "Enter a password or 2FA code, or change account security",
   money: "Move money or enter card details",
   purchase: "Make a purchase or booking",
   communicate: "Send a message or email to someone",
   publish: "Post or publish something publicly",
   delete: "Permanently delete something",
-  // The person's Mac: inside a Bot's own computer, installing is not ruled (plan §8.7).
-  install: "Install software on your Mac",
+  // `install` is named for the person's platform in `botRuleLabel`. It means
+  // the person's computer: inside a Bot's own computer, installing is not ruled (plan §8.7).
 });
 
 function rule(actionClass: BotActionClass, behavior: BotRuleBehavior, locked: boolean): BotRule {
@@ -95,7 +97,11 @@ export function normalizeBotRuleText(text: string): string {
  * custom rule's own words with a capital first letter ("Book a flight").
  * The editor renders custom rules as "When <Bot> wants to <text>".
  */
-export function botRuleLabel(entry: Pick<BotRule, "actionClass" | "text">): string {
+export function botRuleLabel(
+  entry: Pick<BotRule, "actionClass" | "text">,
+  platform: string | null | undefined = runtimeComputerPlatform(),
+): string {
+  if (entry.actionClass === "install") return `Install software on your ${localComputerNoun(platform)}`;
   if (entry.actionClass !== undefined) return ACTION_CLASS_LABELS[entry.actionClass];
   const text = normalizeBotRuleText(entry.text ?? "");
   return text.length === 0 ? "Your rule" : text.charAt(0).toLocaleUpperCase() + text.slice(1);

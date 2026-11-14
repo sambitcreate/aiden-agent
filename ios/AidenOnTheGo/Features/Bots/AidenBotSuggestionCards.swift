@@ -103,7 +103,7 @@ struct AidenBotSettingsChangeCardView: View {
                         .aidenSolidFillTint()
                 }
                 .disabled(isBusy)
-                Text("To edit it first, open this Bot on your Mac.")
+                Text("To edit it first, open this Bot on your computer.")
                     .font(.footnote)
                     .foregroundStyle(palette.secondary)
             } else {
@@ -114,7 +114,7 @@ struct AidenBotSettingsChangeCardView: View {
         case .applied:
             Label("Applied", systemImage: "checkmark").font(.subheadline.weight(.semibold)).foregroundStyle(palette.success)
         case .edited:
-            Label("Edited and applied on your Mac", systemImage: "checkmark").font(.subheadline).foregroundStyle(palette.success)
+            Label("Edited and applied on your computer", systemImage: "checkmark").font(.subheadline).foregroundStyle(palette.success)
         case .dismissed:
             Text("Dismissed").font(.subheadline).foregroundStyle(palette.secondary)
         case .restored:
@@ -208,7 +208,7 @@ struct AidenBotSkillProposalCardView: View {
                 .padding(10)
                 .background(palette.canvas, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             if proposal.previewTruncated {
-                Label("This skill is too long to review here. Add it on your Mac.", systemImage: "desktopcomputer")
+                Label("This skill is too long to review here. Add it on your computer.", systemImage: "desktopcomputer")
                     .font(.footnote)
                     .foregroundStyle(palette.secondary)
                     .fixedSize(horizontal: false, vertical: true)

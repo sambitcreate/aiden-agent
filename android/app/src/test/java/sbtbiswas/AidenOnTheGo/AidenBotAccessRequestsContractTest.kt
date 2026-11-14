@@ -38,6 +38,8 @@ class AidenBotAccessRequestsContractTest {
         assertEquals(listOf(AidenBotAccessRequestChoice.NOT_NOW, AidenBotAccessRequestChoice.ONCE), mac.choices)
         assertNull(mac.place)
         assertEquals("your whole Mac", mac.label)
+        val linuxWhole = JsonObject(fixture.getValue("wholeMac").jsonObject + ("label" to JsonPrimitive("your whole computer")))
+        assertEquals("your whole computer", AidenBotAccessRequest.parse(linuxWhole).label)
         var session = snapshot(fixture.getValue("session"))
         assertEquals(folder, session.accessRequest)
         for (event in fixture.getValue("events").jsonArray.map(::frame)) {

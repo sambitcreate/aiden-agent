@@ -625,7 +625,7 @@ struct AidenBotsHomeView: View {
                 Text(
                     coordinator.connectionState == .connected
                         ? "A Bot is a helper you can chat with anytime."
-                        : "Connect to your machine to see your Bots."
+                        : "Connect to your computer to see your Bots."
                 )
             } actions: {
                 if canOpenNewBot {

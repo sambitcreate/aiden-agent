@@ -1,10 +1,10 @@
 import {
-  BOT_ACCESS_SUMMARIES,
   BOT_CAPABILITY_LIMITS,
   BOT_CAPABILITY_STORE_VERSION,
   BOT_FULL_ACCESS_NOTICE_VERSION,
   assertBotIdentity,
   assertBotRevision,
+  botAccessSummaries,
   botCustomSelectionIsSubset,
   botCustomSelectionNarrows,
   botCustomSelectionsEqual,
@@ -688,7 +688,7 @@ export function projectBotAccessView(
     botId,
     revision: policy.revision,
     policyEpoch: `epoch:${policy.policyEpoch}`,
-    summary: policy.accessMode === "full" ? BOT_ACCESS_SUMMARIES.full : BOT_ACCESS_SUMMARIES.custom,
+    summary: policy.accessMode === "full" ? botAccessSummaries(process.platform).full : botAccessSummaries(process.platform).custom,
   };
   return policy.accessMode === "custom"
     ? { ...base, accessMode: "custom", custom: cloneBotCustomSelection(policy.custom) }
@@ -722,8 +722,8 @@ export function projectBotChatAccessView(
     botPolicyRevision: policy.revision,
     summary:
       chat.mode === "inherit" && policy.accessMode === "full"
-        ? BOT_ACCESS_SUMMARIES.full
-        : BOT_ACCESS_SUMMARIES.custom,
+        ? botAccessSummaries(process.platform).full
+        : botAccessSummaries(process.platform).custom,
   };
   return chat.mode === "custom"
     ? { ...base, mode: "custom", custom: cloneBotCustomSelection(chat.custom) }

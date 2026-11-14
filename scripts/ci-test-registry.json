@@ -1315,6 +1315,7 @@
         "renderer/shared/bot-capabilities.test.ts",
         "renderer/shared/bot-activity.test.ts",
         "renderer/shared/bot-routine-label.test.ts",
+        "renderer/shared/computer-noun.test.ts",
         "renderer/shared/btw.test.ts",
         "renderer/shared/chat-message-contract.test.ts",
         "renderer/shared/chat-input-source.test.ts",

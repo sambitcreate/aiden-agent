@@ -1,7 +1,7 @@
 import { calendarWatchCallAllowed } from "../bot-routine-events/connector-calendar-policy.js";
 import { BOT_MESSAGE_TOOL_NAME, botMessageChainOf, botMessageTurnOf, isBotMessageRequestId } from "../../../renderer/shared/bot-messages.js";
 import { BOT_PLAN_STEP_TOOL_NAME, BOT_PROPOSE_PLAN_TOOL_NAME } from "../../../renderer/shared/bot-plans.js";
-import { BOT_REQUEST_ACCESS_TOOL_NAME } from "../../../renderer/shared/bot-access-requests.js";
+import { BOT_REQUEST_ACCESS_TOOL_NAME, botWholeComputerLabel } from "../../../renderer/shared/bot-access-requests.js";
 // Which tools a Bot may use, and which need the person's approval.
 //
 // This is the legacy Bot classification from `llm-client.ts`
@@ -185,7 +185,7 @@ export async function botToolVerdict(
   if ((turn.peer || botPeerIngress()) && (UNATTENDED_WITHHELD.has(name) || [BOT_MESSAGE_TOOL_NAME, BOT_REQUEST_ACCESS_TOOL_NAME, BOT_PROPOSE_PLAN_TOOL_NAME, BOT_PLAN_STEP_TOOL_NAME, WAKE_UP_TOOL, ROUTINE_NOTES_TOOL, "bot_memory", SUGGEST_CONNECTION_TOOL_NAME].includes(name))) return { allowed: false, reason: "Peer work cannot request person approval, change routines or person memory, sign in, create wake-ups or spawn subagents." };
   if (name === BOT_PROPOSE_PLAN_TOOL_NAME || name === BOT_PLAN_STEP_TOOL_NAME) return verdict(turn.telegram !== true && turn.routine !== true, "Plans are off for this Bot turn.");
   if (name === BOT_REQUEST_ACCESS_TOOL_NAME) {
-    if (authority.accessMode !== "custom" || authority.files.mode === "full_mac") return { allowed: false, reason: "This Bot can already use your whole Mac." };
+    if (authority.accessMode !== "custom" || authority.files.mode === "full_mac") return { allowed: false, reason: `This Bot can already use ${botWholeComputerLabel(process.platform)}.` };
     return verdict(authority.files.mode === "scoped", "File access is off for this Bot.");
   }
   if (name === BOT_MESSAGE_TOOL_NAME) return verdict(!turn.telegram && !turn.routine, "Messaging other Bots is off for this turn.");

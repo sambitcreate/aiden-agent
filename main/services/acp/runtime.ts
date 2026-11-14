@@ -346,7 +346,7 @@ export class AcpHarnessRuntime {
     if (!host) {
       throw new AcpHarnessError(
         "unavailable",
-        `${this.definition.label} works only in ordinary desktop chats, not here. Choose another model for this conversation.`,
+        `${this.definition.label} works only in ordinary chats in Aiden Agent, not here. Choose another model for this conversation.`,
       );
     }
     const signal = options.signal;

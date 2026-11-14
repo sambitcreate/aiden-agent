@@ -3,6 +3,8 @@ import { playLiveConnectionCue } from "../../lib/dictation-sounds";
 import { readLiveAudioDevices, saveLiveAudioDevices, type LiveAudioDevices } from "../../lib/live-audio-devices";
 import { Button, Field, FieldSet, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Text } from "../ui";
 
+import { useAppCapabilities } from "../../lib/app-capabilities";
+import { localComputerNoun } from "../../shared/computer-noun";
 // Extend the existing quiet settings rows; routing is local to Live and session-scoped.
 export function LiveAudioDeviceFields({ value, devices, onChange, outputSupported = true }: {
   value: LiveAudioDevices;
@@ -32,6 +34,7 @@ export function LiveAudioDeviceFields({ value, devices, onChange, outputSupporte
 }
 
 export function LiveAudioSettings(): React.ReactElement {
+  const { platform } = useAppCapabilities();
   const [value, setValue] = React.useState(readLiveAudioDevices);
   const [devices, setDevices] = React.useState<MediaDeviceInfo[]>([]);
   const [error, setError] = React.useState<string | null>(null);
@@ -83,7 +86,7 @@ export function LiveAudioSettings(): React.ReactElement {
   };
   return <FieldSet title="Audio devices">
     <LiveAudioDeviceFields value={value} devices={devices} onChange={change} outputSupported={outputSupported} />
-    <Field label="Check audio" description="Saved on this Mac. Changes apply the next time you start Live. Allow microphone access to see available device names.">
+    <Field label="Check audio" description={`Saved on this ${localComputerNoun(platform)}. Changes apply the next time you start Live. Allow microphone access to see available device names.`}>
       <div className="flex flex-wrap gap-2">
         <Button size="small" variant="filled" onClick={() => void refresh()}>Refresh devices</Button>
         <Button size="small" variant="filled" disabled={testing} onClick={() => void testOutput()}>{testing ? "Playing…" : "Test speaker"}</Button>

@@ -25,8 +25,13 @@ import {
   type BotRoutineProposalStatus,
 } from "../../shared/bot-routine-proposals";
 
-export const ROUTINE_LINK_DESCRIPTION =
-  "Works on your network or Tailscale while this Mac is awake. It is shown only now; New link makes another and stops this one. The Mac's certificate is self-signed, so callers may need to allow that (curl -k).";
+import { useAppCapabilities } from "../../lib/app-capabilities";
+import { localComputerNoun } from "../../shared/computer-noun";
+/** What a link routine's link is, naming this computer by its platform. */
+export function routineLinkDescription(platform: string | null | undefined): string {
+  const computer = localComputerNoun(platform);
+  return `Works on your network or Tailscale while this ${computer} is awake. It is shown only now; New link makes another and stops this one. The ${computer}'s certificate is self-signed, so callers may need to allow that (curl -k).`;
+}
 export const ROUTINE_LINK_OFF_DESCRIPTION = "Turn on remote access in Settings → Connections to use this routine's link.";
 
 function ProposalIcon({ proposal }: { proposal: Pick<BotRoutineProposalEntryData, "trigger"> }) {
@@ -58,6 +63,7 @@ export function RoutineProposalCard({
   /** A new link for an added link routine; the old one stops working. */
   onNewLink?(routineId: string): Promise<string | null>;
 }) {
+  const { platform } = useAppCapabilities();
   // After Not now here, "Why not?" offers the reasons once; choosing one records it.
   const [whyNot, setWhyNot] = React.useState<"offered" | "asking" | "given" | null>(null);
   // The answer shows at once; the live transcript confirms it moments later.
@@ -166,7 +172,7 @@ export function RoutineProposalCard({
       >
         <p>{`Added ✓ · ${when}`}</p>
         {link ? (
-          <p className="mt-0.5">{link.value ? ROUTINE_LINK_DESCRIPTION : ROUTINE_LINK_OFF_DESCRIPTION}</p>
+          <p className="mt-0.5">{link.value ? routineLinkDescription(platform) : ROUTINE_LINK_OFF_DESCRIPTION}</p>
         ) : actions ? (
           <p className="mt-0.5">Its link is shown once. New link makes one here and stops any earlier one.</p>
         ) : null}

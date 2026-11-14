@@ -256,6 +256,6 @@ test("scheduled tasks never pin, or silently fall back to, an agent-backed provi
   // The agent-backed default is configured and works in chats; the warning says why it can't run a schedule.
   assert.equal(
     scheduledTaskProviderGuardrail("llm", undefined, "antigravity", [{ ...antigravity, label: "Google Antigravity" }]),
-    "No provider pinned, and the app default (Google Antigravity) runs only in chats you have open on this computer. Pin a provider so this task can run.",
+    "No provider pinned, and the app default (Google Antigravity) runs only in chats you have open. Pin a provider so this task can run.",
   );
 });

@@ -52,6 +52,7 @@ import {
 } from "./ui";
 import { LiveGuard } from "./live-guard";
 
+import { useAppCapabilities } from "../lib/app-capabilities";
 /** Ask an already mounted picker to open (a new `nonce` each time). */
 export interface WorkspaceMenuRequest {
   nonce: number;
@@ -503,6 +504,7 @@ const CloneView = React.forwardRef<
     onCloned: (workspace: Workspace) => Promise<void>;
   }
 >(function CloneView({ onBack, onCloningChange, onCloned }, ref) {
+  const { platform } = useAppCapabilities();
   const queryClient = useQueryClient();
   const urlId = React.useId();
   const destinationId = React.useId();
@@ -615,7 +617,7 @@ const CloneView = React.forwardRef<
       if (!result.ok) {
         setCloneId(null);
         setProgress(null);
-        setError(cloneFailureMessage(result));
+        setError(cloneFailureMessage(result, platform));
         return;
       }
       setFinishing(true);

@@ -6,6 +6,7 @@ import { aidenRemoteApi } from "../lib/ipc";
 import { queryKeys } from "../lib/queries";
 import { useAppCapabilities } from "../lib/app-capabilities";
 import type { AidenRemotePairingRequestPrompt } from "../shared/aiden-remote";
+import { localComputerNoun } from "../shared/computer-noun";
 import { LiveGuard } from "./live-guard";
 
 /** Six digits shown as two groups of three, which are easier to compare aloud. */
@@ -105,13 +106,13 @@ export function PairingRequestSheetBody({
 }
 
 /**
- * App-wide approval sheet for desktop connection requests. Deny is the safe
+ * App-wide approval sheet for connection requests from other computers. Deny is the safe
  * default: it takes focus whenever a request is shown, and dismissing the sheet
  * denies the request.
  */
 export function PairingRequestSheet() {
   const capabilities = useAppCapabilities();
-  const hostLabel = capabilities.platform === "darwin" ? "Mac" : "computer";
+  const hostLabel = localComputerNoun(capabilities.platform);
   const queryClient = useQueryClient();
   const requests = useQuery({
     queryKey: queryKeys.aidenRemotePairingRequests,

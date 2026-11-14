@@ -1413,7 +1413,7 @@ export function BotChatPane({ botId }: { botId: string }) {
       const attempt = recordBotResume(input, retry);
       setHiddenInterruptedSubmission(attempt.submissionId);
       const after = await botsApi.resume(attempt.botId, attempt.requestId, attempt.acknowledgement);
-      if (!after || !["idle", "running", "interrupted", "needs_model", "model_error", "unavailable", "paused"].includes(after.kind) || (after.kind === "running" || after.kind === "interrupted") && !after.submissionId) throw new Error("The host did not confirm the Resume request.");
+      if (!after || !["idle", "running", "interrupted", "needs_model", "model_error", "unavailable", "paused"].includes(after.kind) || (after.kind === "running" || after.kind === "interrupted") && !after.submissionId) throw new Error("The computer did not confirm the Resume request.");
       settleBotResume(attempt);
       if (lifetime.active && (after.kind === "interrupted" || latestSnapshot.current !== before && latestSnapshot.current?.state.kind === "interrupted")) setHiddenInterruptedSubmission(null);
     } catch (error) {

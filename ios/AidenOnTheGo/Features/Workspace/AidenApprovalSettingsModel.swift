@@ -28,18 +28,18 @@ enum AidenApprovalSettingsCopy {
         switch mode {
         case .auto: "A model approves routine actions and asks you about the rest."
         case .ask: "Asks before sending, spending or changing anything."
-        case .never: "Asks only before purchases, sharing your data and the first use of your Mac. Only Block rules apply."
+        case .never: "Asks only before purchases, sharing your data and the first use of your computer. Only Block rules apply."
         }
     }
 
-    static let autoUnavailable = "Auto needs an approval model. Choose one on your Mac."
+    static let autoUnavailable = "Auto needs an approval model. Choose one on your computer."
 
     static func groupTitle(_ group: AidenApprovalRuleGroup) -> String {
         switch group {
         case .allow: "Always allow"
         case .ask: "Always ask"
         case .block: "Blocked"
-        case .mac: "Allowed on this Mac"
+        case .mac: "Allowed on your computer"
         }
     }
 
@@ -69,8 +69,8 @@ enum AidenApprovalSettingsCopy {
         }
     }
 
-    static let unreadable = "Aiden couldn’t read your rules. Fix them on your Mac, then try again."
-    static let failed = "That didn’t reach your machine. Please try again."
+    static let unreadable = "Aiden couldn’t read your rules. Fix them on your computer, then try again."
+    static let failed = "That didn’t reach your computer. Please try again."
 }
 
 /// The Approvals page: the Mac's approval mode and its rules. Every change

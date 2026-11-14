@@ -8,6 +8,8 @@ import { userFacingErrorMessage } from "../../lib/ipc-error";
 import { formatRelativeTime } from "../../lib/relative-time";
 import { BOT_CONNECTOR_WATCH_LIMITS as limits, type BotConnectorWatchConfig, type BotConnectorWatchCreateInput, type BotConnectorWatchEnableInput, type BotConnectorWatchIdentityInput, type BotConnectorWatchInterval, type BotConnectorWatchList, type BotConnectorWatchReply, type BotConnectorWatchSourceList, type BotConnectorWatchTestResult, type BotConnectorWatchUpdateInput, type BotConnectorWatchView } from "../../shared/bot-connector-watches";
 
+import { useAppCapabilities } from "../../lib/app-capabilities";
+import { localComputerNoun } from "../../shared/computer-noun";
 export type BotConnectorWatchesApi = typeof botsApi.connectorWatches;
 type Draft = BotConnectorWatchConfig & { id?: string; expectedRevision?: string; sourceChoiceId?: string };
 type Pending =
@@ -71,6 +73,7 @@ export function BotConnectorWatches({ bot, api = botsApi.connectorWatches }: {
 }
 
 function WatchManager({ bot, api }: { bot: { id: string; name: string }; api: BotConnectorWatchesApi }) {
+  const { platform } = useAppCapabilities();
   const [pending, setPending] = React.useState<Pending | null>(() => readPending(bot.id));
   const [draft, setDraft] = React.useState<Draft | null>(() => draftFromPending(readPending(bot.id)));
   const [list, setList] = React.useState<BotConnectorWatchList | null>(null);
@@ -193,7 +196,7 @@ function WatchManager({ bot, api }: { bot: { id: string; name: string }; api: Bo
   const template = list?.templates.find((item) => item.kind === draft?.condition.kind);
 
   return <FieldSet title="Connected-app watches">
-    <Field label="Watch while Aiden is running" description="Checks continue away from the Bots screen while this computer is awake. Connect and grant the app in this Bot’s Access settings first." />
+    <Field label="Watch while Aiden is running" description={`Checks continue away from the Bots screen while this ${localComputerNoun(platform)} is awake. Connect and grant the app in this Bot’s Access settings first.`} />
     {error && <Field orientation="vertical" label="Watch needs attention"><Text color="red" role="alert">{error}</Text><Button size="small" variant="transparent" onClick={() => void reload()}>Refresh watches</Button></Field>}
     {notice && <Field orientation="vertical" label={<span role="status">{notice}</span>} />}
     {pending && <Field orientation="vertical" label="Change waiting for confirmation" description="The original request is saved on this device. Retry it to confirm the outcome before making another change.">
@@ -233,7 +236,7 @@ function WatchManager({ bot, api }: { bot: { id: string; name: string }; api: Bo
         {sources && <>
           <Label htmlFor={`${fieldId}-source`}>Connected source</Label><Select value={draft.sourceChoiceId ?? ""} disabled={disabled} onValueChange={(sourceChoiceId) => setDraft({ ...draft, sourceChoiceId })}><SelectTrigger id={`${fieldId}-source`}><SelectValue placeholder="Choose a source" /></SelectTrigger><SelectContent>{sources.choices.filter((item) => item.templateId === template?.id).map((item) => <SelectItem key={item.id} value={item.id} disabled={!item.available}>{item.providerLabel} · {item.accountLabel} · {item.resourceLabel}</SelectItem>)}</SelectContent></Select>
           {sources.unavailableReasons.map((reason, index) => <Text key={index} variant="small" color="tertiary">{reason}</Text>)}
-          {!sources.choices.length && <Text variant="small" color="tertiary">No eligible sources. Open the connector on this computer and check this Bot’s Access settings, then try again.</Text>}
+          {!sources.choices.length && <Text variant="small" color="tertiary">No eligible sources. Open the connector on this {localComputerNoun(platform)} and check this Bot’s Access settings, then try again.</Text>}
         </>}
         {draft.condition.kind === "email" ? <>
           <Input aria-label="Sender filter" placeholder="Sender contains (optional)" maxLength={limits.filterChars} value={draft.condition.sender ?? ""} disabled={disabled} onChange={(e) => setDraft({ ...draft, condition: { ...draft.condition as Extract<Draft["condition"], { kind: "email" }>, sender: e.target.value || undefined } })} />

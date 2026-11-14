@@ -110,11 +110,11 @@ test("the sign-in hint tells the user what the runtime still needs, and only tha
 test("Assistant and Bot chats explain up front that an agent-backed model cannot answer there", () => {
   assert.equal(
     acpHarnessChatReason("antigravity", "Google Antigravity", "assistant"),
-    "Google Antigravity runs only in ordinary desktop chats, not in Assistant chats. Choose another model.",
+    "Google Antigravity runs only in ordinary chats in Aiden Agent, not in Assistant chats. Choose another model.",
   );
   assert.equal(
     acpHarnessChatReason("antigravity", "Google Antigravity", "bot"),
-    "Google Antigravity runs only in ordinary desktop chats, not in Bot chats. Choose another model.",
+    "Google Antigravity runs only in ordinary chats in Aiden Agent, not in Bot chats. Choose another model.",
   );
   // Ordinary chats, and every other provider, are unaffected.
   assert.equal(acpHarnessChatReason("antigravity", "Google Antigravity", undefined), undefined);
@@ -127,7 +127,7 @@ test("a signed-out agent model explains the surface first, then asks for a sign-
   // Signing in would not help in an Assistant chat, so that reason wins.
   assert.equal(
     acpHarnessReadinessMessage(signedOut, "assistant"),
-    "Google Antigravity runs only in ordinary desktop chats, not in Assistant chats. Choose another model.",
+    "Google Antigravity runs only in ordinary chats in Aiden Agent, not in Assistant chats. Choose another model.",
   );
   assert.equal(
     acpHarnessReadinessMessage(signedOut, undefined),

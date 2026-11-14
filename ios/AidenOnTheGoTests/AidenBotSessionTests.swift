@@ -1079,7 +1079,7 @@ final class AidenBotSessionTests: XCTestCase {
         await model.requestConnection(pluginId: "unknown-app")
 
         XCTAssertEqual(model.errorMessage, "Aiden can't connect that app.")
-        XCTAssertFalse(model.sentConnectionRequests.contains("unknown-app"), "Finish on your machine is offered again.")
+        XCTAssertFalse(model.sentConnectionRequests.contains("unknown-app"), "Finish on your computer is offered again.")
         await model.requestConnection(pluginId: "unknown-app")
         XCTAssertEqual(transport.connectionKeys.count, 2)
         XCTAssertNotEqual(transport.connectionKeys[0], transport.connectionKeys[1], "A definitive 404 does not pin the key.")
@@ -2457,11 +2457,11 @@ final class AidenBotSessionActivityTests: XCTestCase {
 
         try await waitUntil({ model.isStreamDown }, what: "the drop")
         XCTAssertEqual(
-            model.statusLine(nowMs: started + 1_000)?.display.word, "Reconnecting to your Mac",
+            model.statusLine(nowMs: started + 1_000)?.display.word, "Reconnecting to your computer",
             "a dropped stream says so even over streamed text"
         )
         model.wording = .thinking
-        XCTAssertEqual(model.statusLine(nowMs: started + 1_000)?.display.word, "Reconnecting to your Mac")
+        XCTAssertEqual(model.statusLine(nowMs: started + 1_000)?.display.word, "Reconnecting to your computer")
         model.wording = .follows
         try await waitUntil({ !model.isStreamDown && model.epoch == "epoch_b" }, what: "the next connection")
         XCTAssertEqual(model.statusLine(nowMs: started + 1_000)?.display.word, "Searching the web")
@@ -4240,7 +4240,7 @@ final class AidenBotConnectionHintTests: XCTestCase {
             try await waitUntil({ model.isStreamDown }, what: "the drop")
             XCTAssertEqual(aidenBotConnectionHint(for: model, nowMs: started), expected, "\(state)")
             if state == .running {
-                XCTAssertEqual(model.statusLine(nowMs: started)?.display.word, "Reconnecting to your Mac")
+                XCTAssertEqual(model.statusLine(nowMs: started)?.display.word, "Reconnecting to your computer")
             }
             listener.cancel()
             await listener.value
@@ -4421,7 +4421,7 @@ final class AidenBotChatActivityTests: XCTestCase {
         await model.pick(AidenBotChatActivity(level: .detailed, wording: .follows))
         XCTAssertEqual(model.value, macsChoice, "the radio shows what the Mac has now")
         XCTAssertEqual(model.saveFailure, .conflict)
-        XCTAssertEqual(model.errorMessage, "This changed on your machine. Showing what it has now.")
+        XCTAssertEqual(model.errorMessage, "This changed on your computer. Showing what it has now.")
         XCTAssertEqual(adopted.map(\.revision), ["rev_5"], "the screens behind hear about the Mac's version")
         XCTAssertFalse(model.isSaving)
 
@@ -4540,7 +4540,7 @@ final class AidenBotChatActivityTests: XCTestCase {
         XCTAssertEqual(calls, 0)
         XCTAssertEqual(model.value, .standard)
         XCTAssertEqual(model.saveFailure, .offline)
-        XCTAssertEqual(model.errorMessage, "Aiden couldn’t reach your machine to save that choice.", "offline says so, not a generic failure")
+        XCTAssertEqual(model.errorMessage, "Aiden couldn’t reach your computer to save that choice.", "offline says so, not a generic failure")
     }
 
     func testARequestOnADeadLinkIsBoundedAndTheNextPickStillUsesTheSameRevision() async throws {
@@ -4681,7 +4681,7 @@ final class AidenBotChatActivityTests: XCTestCase {
         await model.pick(AidenBotChatActivity(level: .summary, wording: .follows))
         XCTAssertEqual(model.value.level, .quiet)
         XCTAssertEqual(model.saveFailure, .offline)
-        XCTAssertEqual(model.errorMessage, "Aiden couldn’t reach your machine to save that choice.")
+        XCTAssertEqual(model.errorMessage, "Aiden couldn’t reach your computer to save that choice.")
 
         // A refusal from the Mac is not "offline": it keeps the generic copy.
         let refused = try self.model(save: { _, _ in throw SaveFailure() })
@@ -5287,11 +5287,11 @@ final class AidenBotSessionHandoffTests: XCTestCase {
         transport.opened = false
         await model.finishHandoffOnMac()
         XCTAssertEqual(transport.opens.map(\.waitId), [waitID])
-        XCTAssertEqual(model.handoffMacPrompt?.text, "Open Aiden on your machine to finish signing in.")
+        XCTAssertEqual(model.handoffMacPrompt?.text, "Open Aiden Agent on your computer to finish signing in.")
         XCTAssertEqual(model.handoff?.waitId, waitID, "the card stays until it is answered on the Mac")
         transport.opened = true
         await model.finishHandoffOnMac()
-        XCTAssertEqual(model.handoffMacPrompt?.text, "Finish signing in on your machine.")
+        XCTAssertEqual(model.handoffMacPrompt?.text, "Finish signing in on your computer.")
         XCTAssertNotEqual(transport.opens[0].key, transport.opens[1].key, "an answered request does not replay its key")
 
         let skipped = await model.answerHandoff(.skipped)
@@ -5312,10 +5312,10 @@ final class AidenBotSessionHandoffTests: XCTestCase {
         transport.opened = false
         await model.finishHandoffOnMac()
         XCTAssertEqual(transport.opens.map(\.waitId), [waitID])
-        XCTAssertEqual(model.handoffMacPrompt?.text, "Open Aiden on your machine to finish this step.")
+        XCTAssertEqual(model.handoffMacPrompt?.text, "Open Aiden Agent on your computer to finish this step.")
         transport.opened = true
         await model.finishHandoffOnMac()
-        XCTAssertEqual(model.handoffMacPrompt?.text, "Finish this step on your machine.")
+        XCTAssertEqual(model.handoffMacPrompt?.text, "Finish this step on your computer.")
         XCTAssertEqual(model.handoff?.waitId, waitID, "the card stays until it is answered")
 
         let done = await model.answerHandoff(.done)
@@ -5921,6 +5921,12 @@ final class AidenBotAccessRequestsTests: XCTestCase {
         XCTAssertEqual(mac.choices, [.notNow, .once])
         XCTAssertNil(mac.place)
         XCTAssertEqual(mac.label, "your whole Mac")
+        // A Linux or CLI host names the same target "your whole computer".
+        var computer = try XCTUnwrap(section["wholeMac"] as? [String: Any])
+        computer["label"] = "your whole computer"
+        XCTAssertEqual(try decode(AidenRemoteBotAccessRequest.self, computer).label, "your whole computer")
+        computer["label"] = "your whole desktop"
+        XCTAssertThrowsError(try decode(AidenRemoteBotAccessRequest.self, computer))
         let issue = try decode(AidenRemoteBotIssue.self, section["issue"]!)
         XCTAssertEqual(issue.kind, .accessNeeded)
         XCTAssertFalse(issue.isAvailable())

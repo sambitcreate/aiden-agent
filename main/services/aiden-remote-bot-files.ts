@@ -352,7 +352,7 @@ export class AidenRemoteBotFileService {
         if (error instanceof BotRuntimeAuthorityError) mapAuthorityError(error);
         throw new AidenRemoteServiceError(
           "workspace_unavailable",
-          "This Bot's files are not currently available on the Mac.",
+          "This Bot's files are not currently available on your computer.",
           409,
         );
       }
@@ -450,13 +450,13 @@ export class AidenRemoteBotFileService {
         if (error instanceof WorkspaceFileError && error.code === "changed_on_disk") {
           throw new AidenRemoteServiceError(
             "revision_conflict",
-            "This file changed on the Mac. Reload it before saving.",
+            "This file changed on your computer. Reload it before saving.",
             409,
           );
         }
         throw new AidenRemoteServiceError(
           "workspace_unavailable",
-          "Aiden could not safely save this file on the Mac.",
+          "Aiden could not safely save this file on your computer.",
           409,
         );
       }

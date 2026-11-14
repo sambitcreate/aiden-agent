@@ -124,7 +124,7 @@ export function MachineFilterChip({ label, onClear }: { label: string; onClear: 
         size="small"
         iconOnly
         className="size-6 text-tertiary"
-        aria-label={`Show all machines instead of ${label} only`}
+        aria-label={`Show all computers instead of ${label} only`}
         onClick={onClear}
       >
         <X className="size-3.5" aria-hidden="true" />
@@ -218,7 +218,7 @@ export function RemoteHostStatusList({ hosts, filter, onReconnect, onManage }: R
   );
   if (unavailable.length === 0) return null;
   return (
-    <div role="group" aria-label="Unavailable machines" className="flex flex-col gap-1 px-2.5 pb-2">
+    <div role="group" aria-label="Unavailable computers" className="flex flex-col gap-1 px-2.5 pb-2">
       {unavailable.map((host) => (
         <RemoteHostStatusRow key={host.id} host={host} onReconnect={onReconnect} onManage={onManage} />
       ))}

@@ -102,7 +102,7 @@ struct AidenInboxTabView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: { _ in
-            Text("This permanently removes the chat from its machine.")
+            Text("This permanently removes the chat from its computer.")
         }
     }
 
@@ -349,7 +349,7 @@ struct AidenInboxTabView: View {
             )
         case .offline(let machines):
             unavailable(
-                machines == 1 ? "Can’t reach your machine" : "Can’t reach your machines",
+                machines == 1 ? "Can’t reach your computer" : "Can’t reach your computers",
                 systemImage: "wifi.slash",
                 description: "Saved chats appear here after this phone has connected once."
             )
@@ -357,9 +357,9 @@ struct AidenInboxTabView: View {
             unavailable("Chats unavailable", systemImage: "tray", description: message)
         case .allHidden:
             ContentUnavailableView(
-                "Every machine is hidden",
+                "Every computer is hidden",
                 systemImage: "eye.slash",
-                description: Text("Turn off Hide from Inbox on a machine to see its chats here.")
+                description: Text("Turn off Hide from Inbox on a computer to see its chats here.")
             )
         }
     }

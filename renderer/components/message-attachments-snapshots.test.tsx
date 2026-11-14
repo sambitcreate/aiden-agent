@@ -29,7 +29,7 @@ test("the desktop never shows a visual's snapshot as a second image", () => {
   assert.equal(images[0]!.getAttribute("alt")?.includes("Board") ?? false, false);
 });
 
-test("a paired Mac's visual shows as its snapshot image on this desktop", () => {
+test("a paired computer's visual shows as its snapshot image here", () => {
   const snapshot = image(`${VISUAL_SNAPSHOT_ID_PREFIX}${"b".repeat(64)}`, "Board.png");
   const shown = render(<MessageAttachments attachments={attachmentsShownWithVisuals({ attachments: [snapshot] })} role="assistant" />);
   const images = [...shown.container.querySelectorAll("img")];

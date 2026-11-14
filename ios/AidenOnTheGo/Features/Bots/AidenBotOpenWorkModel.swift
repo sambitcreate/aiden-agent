@@ -74,7 +74,7 @@ final class AidenBotOpenWorkModel {
                 }
             } catch {
                 storageBlocked = true
-                message = "This phone couldn’t read its saved Open work request. Inspect the host before making changes."
+                message = "This phone couldn’t read its saved Open work request. Inspect the computer before making changes."
             }
         }
         isRestoring = false
@@ -104,7 +104,7 @@ final class AidenBotOpenWorkModel {
             loadError = nil
         } catch {
             guard generation == loadGeneration, isCurrent() else { return }
-            loadError = "Open work couldn’t be loaded. Connect to your paired host and try again."
+            loadError = "Open work couldn’t be loaded. Connect to your paired computer and try again."
         }
     }
     private func apply(_ loaded: AidenOpenWorkSnapshot) {
@@ -180,7 +180,7 @@ final class AidenBotOpenWorkModel {
         guard canWrite, !isBusy, let attempt else { return }
         let age = now.timeIntervalSince(attempt.createdAt)
         guard attempt.mutation.action.isStop || (0..<(23 * 3600)).contains(age) else {
-            message = "This request’s outcome is still unknown. Inspect Open work on your host before making another change."
+            message = "This request’s outcome is still unknown. Inspect Open work on your computer before making another change."
             return
         }
         await send(attempt)
@@ -231,7 +231,7 @@ final class AidenBotOpenWorkModel {
             guard isCurrent(), attempt?.mutation.mutationId == command.mutation.mutationId else { return }
             if hadUnknownOutcome || aidenBotSessionFailureIsAmbiguous(error) {
                 uncertain = true
-                message = "The host may have accepted this request. Check its state or retry the exact same request. Your draft is kept."
+                message = "The computer may have accepted this request. Check its state or retry the exact same request. Your draft is kept."
             } else {
                 settle(command, consumeDraft: false)
                 message = "This change wasn’t confirmed. Refresh and review Open work before trying again. Your draft is kept."
@@ -252,7 +252,7 @@ final class AidenBotOpenWorkModel {
         if attempt.mutation.action.isReversible,
            let option = loaded.undo.first(where: { $0.mutationId == attempt.mutation.mutationId }),
            attempt.itemID == nil || option.itemId == attempt.itemID {
-            settle(attempt); message = "Change saved on your host."
+            settle(attempt); message = "Change saved on your computer."
         } else if attempt.mutation.action.isStop,
                   let item = loaded.items.first(where: { $0.id == attempt.itemID }),
                   let stop = item.lastStop, stop.mutationId == attempt.mutation.mutationId, stop.state.isTerminal {
@@ -266,7 +266,7 @@ final class AidenBotOpenWorkModel {
             try store.save(.init(draft: draft, baseline: baseline, draftRevision: draftRevision, attempt: attempt), scope: scope, settling: mutationID)
         } catch {
             storageBlocked = true
-            message = "This phone couldn’t retain the Open work draft safely. Inspect the host before making changes."
+            message = "This phone couldn’t retain the Open work draft safely. Inspect the computer before making changes."
         }
     }
     func loadEvidence(item: AidenOpenWorkItem, kind: AidenOpenWorkEvidenceKind) async {
@@ -287,7 +287,7 @@ final class AidenBotOpenWorkModel {
             evidence = value
         } catch {
             guard isCurrent(), generation == evidenceGeneration else { return }
-            evidenceError = "This retained source or result isn’t available from your host."
+            evidenceError = "This retained source or result isn’t available from your computer."
         }
     }
     func closeEvidence() {

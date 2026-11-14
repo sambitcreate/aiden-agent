@@ -83,7 +83,7 @@ const LOCAL_STATUS: HostChatStatus = { availability: "online", generation: 0 };
 
 const NOT_A_HOST_READ = {
   code: "unsupported",
-  message: "Local chats are read from this Mac's chat store.",
+  message: "Local chats are read from the local chat store.",
 } as const;
 
 /**

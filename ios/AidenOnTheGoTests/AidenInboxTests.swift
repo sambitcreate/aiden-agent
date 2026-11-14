@@ -1412,6 +1412,10 @@ extension AidenInboxTests {
         store.start()
         defer { store.stop() }
         await fixture.waitUntil("the row") { store.needsYouCount == 1 }
+        // The count can show while that first poll is still reading workspaces
+        // and Bots, and a refresh joins a poll that's still out. Let it finish,
+        // so the refresh below reads the new page instead of joining it.
+        await store.refreshAll()
         let heard = Heard()
         withObservationTracking { _ = store.needsYouCount } onChange: { heard.changed = true }
 

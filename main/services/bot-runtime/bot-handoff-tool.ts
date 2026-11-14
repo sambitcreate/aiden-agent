@@ -15,6 +15,7 @@
 //   admission while it waits (`interactive` on the candidate).
 
 import { randomUUID } from "node:crypto";
+import { localComputerNoun } from "../../../renderer/shared/computer-noun.js";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
 import {
@@ -59,8 +60,8 @@ export function botHandoffDescription(targets: BotHandoffTargets = { browser: fa
   if (where.length === 0) return DESCRIPTION;
   return (
     `${DESCRIPTION} When the step is in your own ${targets.browser && targets.computer ? "browser or computer" : targets.browser ? "browser" : "computer"}, ` +
-    `pass ${where.join(", or ")} (with \`open.url\` for the page): the person does it there, on the Mac or by ` +
-    "finishing on the Mac from their phone, never in their own browser."
+    `pass ${where.join(", or ")} (with \`open.url\` for the page): the person does it there, on the ${localComputerNoun(process.platform)} or by ` +
+    `finishing on the ${localComputerNoun(process.platform)} from their phone, never in their own browser.`
   );
 }
 

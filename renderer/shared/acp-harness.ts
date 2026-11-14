@@ -197,7 +197,7 @@ export function acpHarnessChatReason(
 ): string | undefined {
   if (!surface || !providerId || !isAcpHarnessProvider(providerId)) return undefined;
   const where = surface === "assistant" ? "Assistant chats" : "Bot chats";
-  return `${providerLabel} runs only in ordinary desktop chats, not in ${where}. Choose another model.`;
+  return `${providerLabel} runs only in ordinary chats in Aiden Agent, not in ${where}. Choose another model.`;
 }
 
 /**

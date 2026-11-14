@@ -1,4 +1,5 @@
 import { botMessagingEnabled } from "../../../renderer/shared/bot-messages.js";
+import { botFullComputerLabel } from "../../../renderer/shared/bot-capabilities.js";
 import { publicBotApprovalPrompt } from "../../../main/services/bot-runtime/bot-approvals.js";
 import type { AppSettings } from "../../../main/services/types.js";
 import { parseBotSend } from "../../../main/handlers/bot-params.js";
@@ -195,7 +196,7 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
   async function tools(admission: BotRuntimeAuthorityAdmission, context?: CliDurableBotToolContext) {
     const { authority } = admission, locations: BotFileToolLocation[] = [];
     if (authority.files.botHome) locations.push({ id: "builtin.bot_home.v1", label: "Bot folder", root: authority.workingDirectory, expectedIdentity: authority.managedHome.incarnation });
-    if (authority.files.fullMac) locations.push({ id: authority.files.fullMac.sourceId, label: "Host files", root: "/" });
+    if (authority.files.fullMac) locations.push({ id: authority.files.fullMac.sourceId, label: botFullComputerLabel(process.platform), root: "/" });
     for (const grant of authority.files.approvedLocations) {
       const candidate = approvedRoots().find((item) => item.id === grant.sourceId);
       if (!candidate) throw new Error("The approved Bot folder is unavailable.");

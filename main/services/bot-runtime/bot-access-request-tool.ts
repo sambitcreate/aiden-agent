@@ -3,11 +3,13 @@ import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { isBoundedBotText } from "../../../renderer/shared/bot-capabilities.js";
 import { withoutBotHandoffControls } from "../../../renderer/shared/bot-handoffs.js";
+import { localComputerNoun } from "../../../renderer/shared/computer-noun.js";
 import {
   BOT_ACCESS_PATH_MAX_BYTES,
   BOT_ACCESS_WHY_MAX_CHARS,
   BOT_REQUEST_ACCESS_TOOL_NAME,
   botAccessChoicesFor,
+  botWholeComputerLabel,
   type BotAccessAuthorization,
   type BotAccessResultDetails,
 } from "../../../renderer/shared/bot-access-requests.js";
@@ -81,7 +83,7 @@ function paramsOf(value: unknown): { path: string; why: string } {
   return { path: record.path, why };
 }
 const REFUSED = {
-  filesystem_root: 'Ask for "whole_mac" to use the whole Mac.',
+  filesystem_root: `Ask for "whole_mac" to use the whole ${localComputerNoun(process.platform)}.`,
   private: "That folder belongs to Aiden and can't be shared with a Bot.",
   not_found: "That folder doesn't exist.",
   not_absolute: "Give the folder's full path, like ~/Documents/Taxes.",
@@ -138,7 +140,7 @@ export function botAccessRequestCandidate(
         const issueKey = `access:${key}`;
         const dedupeKey = Array.from(issueKey).length <= 400 ? issueKey : `access:${createHash("sha256").update(key).digest("hex")}`;
         const root = target.kind === "whole_mac" ? "/" : target.root;
-        const label = target.kind === "whole_mac" ? "your whole Mac" : target.label;
+        const label = target.kind === "whole_mac" ? botWholeComputerLabel(process.platform) : target.label;
         const result = (
           outcome: BotAccessResultDetails["outcome"],
           text: string,

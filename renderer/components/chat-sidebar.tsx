@@ -67,6 +67,7 @@ import { useHeldModifierReveal } from "../lib/use-held-modifier-reveal";
 import { queryKeys, useAllRegularChats, useFoundationModelsConnection, useSidebarChatPullRequests } from "../lib/queries";
 import { MAX_SIDEBAR_PULL_REQUEST_CHATS } from "../shared/chat-pull-requests";
 import type { ChatTriageEntry } from "../shared/chat-triage";
+import { localComputerNoun } from "../shared/computer-noun";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useEnvironmentPanel } from "./environment-panel";
 import type { ChatMeta, Workspace } from "../lib/types";
@@ -688,9 +689,10 @@ function WorkspaceChatSidebar({
             bots: botRows.rows,
             openBotId,
             unread: (botId, lastReplyAt) => isBotUnread(botPreferences, botId, lastReplyAt),
+            platform: capabilities.platform,
           })
         : { listed: [], unlisted: [] },
-    [botPreferences, botRows.rows, inboxBotsShown, openBotId],
+    [botPreferences, botRows.rows, capabilities.platform, inboxBotsShown, openBotId],
   );
   // Paired hosts' Bots join while their host says they need the person or failed (revision 50).
   const openRemoteBotKey = hostBotChatRouteKey(pathname);
@@ -718,6 +720,7 @@ function WorkspaceChatSidebar({
         pending,
         triage: (chatId) =>
           triage.entryFor({ key: projectOrderKey(LOCAL_SIDEBAR_HOST_ID, chatId), hostId: LOCAL_SIDEBAR_HOST_ID, chatId }),
+        platform: capabilities.platform,
       }),
       ...remoteInboxEntries(
         remoteRows,
@@ -733,6 +736,7 @@ function WorkspaceChatSidebar({
     activeRemoteChat,
     botInbox.listed,
     remoteBotInbox.listed,
+    capabilities.platform,
     chatActivity,
     chats.data,
     environmentPanel.agentBusy,
@@ -948,7 +952,7 @@ function WorkspaceChatSidebar({
   const sendRemoteChatRead = React.useCallback(
     async (chat: RemoteSidebarChat) => {
       const view = peerHosts.views.get(chat.hostId);
-      if (!view) throw new Error("That Mac is no longer paired with this one.");
+      if (!view) throw new Error("That computer is no longer paired with this one.");
       const adapter = new RemoteHostAdapter(view);
       try {
         await adapter.ready();
@@ -977,7 +981,7 @@ function WorkspaceChatSidebar({
     const view = peerHosts.views.get(target.hostId);
     if (!view) {
       setRemoteRenaming(null);
-      toast.error(`${target.hostLabel} is no longer paired with this Mac.`);
+      toast.error(`${target.hostLabel} is no longer paired with this ${localComputerNoun(capabilities.platform)}.`);
       return;
     }
     const currentRevision = () =>
@@ -1016,12 +1020,12 @@ function WorkspaceChatSidebar({
       adapter.dispose();
       setRemoteRenameBusy(false);
     }
-  }, [peerHosts.views, remoteRenaming, renameValue]);
+  }, [capabilities.platform, peerHosts.views, remoteRenaming, renameValue]);
   const reconnectHost = React.useCallback(async (hostId: string) => {
     try {
       await peerHostsApi.reconnect(hostId);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Aiden could not reconnect to that Mac.");
+      toast.error(error instanceof Error ? error.message : "Aiden could not reconnect to that computer.");
     }
   }, []);
 
@@ -1892,7 +1896,7 @@ function WorkspaceChatSidebar({
                   ) : null}
                   <span className="truncate">{primary.hostLabel}</span>
                 </span>
-                <MachineBadges labels={projectEntryMachineLabels(group.project)} />
+                <MachineBadges labels={projectEntryMachineLabels(group.project, capabilities.platform)} />
               </span>
         }
         actions={
@@ -1944,7 +1948,7 @@ function WorkspaceChatSidebar({
   const machineFilterChip =
     hasHosts && shownMachines !== "all" ? (
       <MachineFilterChip
-        label={machineFilterLabel(shownMachines, peerHosts.hosts)}
+        label={machineFilterLabel(shownMachines, peerHosts.hosts, capabilities.platform)}
         onClear={() => setMachineFilter("all")}
       />
     ) : null;
@@ -2177,14 +2181,14 @@ function WorkspaceChatSidebar({
                     search.trim()
                       ? "No matches"
                       : shownMachines !== "all"
-                        ? `No workspaces on ${machineFilterLabel(shownMachines, peerHosts.hosts)}`
+                        ? `No workspaces on ${machineFilterLabel(shownMachines, peerHosts.hosts, capabilities.platform)}`
                         : "No workspaces yet"
                   }
                   description={
                     search.trim()
                       ? "Try a different search."
                       : shownMachines !== "all"
-                        ? "Choose All machines in Organize to see every workspace."
+                        ? "Choose All computers in Organize to see every workspace."
                         : "Add a folder or create an empty workspace to begin."
                   }
                 />
@@ -2311,7 +2315,7 @@ function WorkspaceChatSidebar({
                                   <WorkspacePathLabel path={workspace.folderPath} format={pathPreferences.workspacePathFormat} />
                                 </span>
                               ) : secondaryLabel ? <span className="truncate text-small text-tertiary">{secondaryLabel}</span> : null}
-                              <MachineBadges labels={projectEntryMachineLabels(group.project)} />
+                              <MachineBadges labels={projectEntryMachineLabels(group.project, capabilities.platform)} />
                             </span>
                       }
                       actions={

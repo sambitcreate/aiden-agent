@@ -130,7 +130,7 @@ test("hosts list only enabled hosts and suffix names shared with another host or
       // The disabled host with the same name does not force a suffix.
       { id: "host-cccc3333", label: "Laptop", availability: "blocked", blockedReason: "auth" },
       { id: "host-eeee5555", label: "This Mac (5555)", availability: "connecting", blockedReason: undefined },
-      { id: "host-ffff6666", label: "Paired Mac", availability: "connecting", blockedReason: undefined },
+      { id: "host-ffff6666", label: "Paired computer", availability: "connecting", blockedReason: undefined },
     ],
   );
 });
@@ -208,8 +208,8 @@ test("the machine filter narrows rows and an unknown host falls back to all mach
   assert.deepEqual(machines("host:unpaired"), machines("all"));
   assert.equal(effectiveMachineFilter("host:unpaired", hosts), "all");
   assert.equal(effectiveMachineFilter("local", []), "all");
-  assert.equal(machineFilterLabel("host:laptop", hosts), "Laptop");
-  assert.equal(machineFilterLabel("local", hosts), "This Mac");
+  assert.equal(machineFilterLabel("host:laptop", hosts, "darwin"), "Laptop");
+  assert.equal(machineFilterLabel("local", hosts, "darwin"), "This Mac");
 });
 
 test("grouping merges by repository, optionally by path, one workspace per machine", () => {
@@ -249,7 +249,7 @@ test("grouping merges by repository, optionally by path, one workspace per machi
   assert.equal(merged.key, local.projects[0].key);
   assert.equal(merged.name, "aiden");
   // Studio's root workspace joins first; its docs workspace is a second Studio match and stays apart.
-  assert.deepEqual(projectEntryMachineLabels(merged), ["This Mac", "Studio", "Laptop"]);
+  assert.deepEqual(projectEntryMachineLabels(merged, "darwin"), ["This Mac", "Studio", "Laptop"]);
   assert.equal(byRepository.projects.length, 5);
   assert.ok(byRepository.projects.some((entry) => entry.primary.name === "aiden docs" && entry.members.length === 1));
   // Projects with no repository identity never merge, even with equal names.
@@ -265,7 +265,7 @@ test("grouping merges by repository, optionally by path, one workspace per machi
   const byPath = grouped("repository_path");
   const pathMerged = byPath.projects.filter((entry) => entry.members.length > 1);
   assert.equal(pathMerged.length, 1);
-  assert.deepEqual(projectEntryMachineLabels(pathMerged[0]), ["This Mac", "Studio", "Laptop"]);
+  assert.deepEqual(projectEntryMachineLabels(pathMerged[0], "darwin"), ["This Mac", "Studio", "Laptop"]);
   assert.ok(byPath.projects.some((entry) => entry.name === "aiden docs" && entry.members.length === 1));
 });
 

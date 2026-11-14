@@ -85,7 +85,7 @@ async function sendHostWrites(
     }
     return outcomes;
   }
-  if (!view) return writes.map(() => ({ ok: false, conflict: false, message: "That Mac is no longer paired with this one." }));
+  if (!view) return writes.map(() => ({ ok: false, conflict: false, message: "That computer is no longer paired with this one." }));
   const adapter = new RemoteHostAdapter(view);
   try {
     await adapter.ready();

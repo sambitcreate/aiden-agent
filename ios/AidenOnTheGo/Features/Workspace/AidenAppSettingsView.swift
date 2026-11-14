@@ -20,7 +20,7 @@ struct AidenAppSettingsView: View {
             readAloudStatus = value; readAloudError = nil
         } catch {
             guard coordinator.isCurrent(context) else { return }
-            readAloudStatus = nil; readAloudError = "Read Aloud is unavailable. Connect to an updated desktop app."
+            readAloudStatus = nil; readAloudError = "Read Aloud is unavailable. Update Aiden Agent on your computer."
         }
     }
     @State private var memorySettings: AidenMemorySettings?
@@ -83,7 +83,7 @@ struct AidenAppSettingsView: View {
                     LabeledContent {
                         Text(machinesSummary)
                     } label: {
-                        Label("Machines", systemImage: "desktopcomputer")
+                        Label("Computers", systemImage: "desktopcomputer")
                     }
                 }
                 AidenDefaultMachineRow(coordinator: coordinator)
@@ -111,7 +111,7 @@ struct AidenAppSettingsView: View {
                 NavigationLink { AidenProvidersView(coordinator: coordinator) } label: {
                     Label("Providers", systemImage: "server.rack")
                 }
-            } footer: { Text("Manage model connections on your paired machine.") }
+            } footer: { Text("Manage model connections on your paired computer.") }
 
             if offersApprovalSettings, let client = try? coordinator.remoteClient() {
                 Section {
@@ -120,7 +120,7 @@ struct AidenAppSettingsView: View {
                     } label: {
                         Label("Approvals", systemImage: "checkmark.shield")
                     }
-                } footer: { Text("When Aiden asks before acting, and the rules it follows on your paired machine.") }
+                } footer: { Text("When Aiden asks before acting, and the rules it follows on your paired computer.") }
             }
 
             if offersBotUX {
@@ -148,11 +148,11 @@ struct AidenAppSettingsView: View {
             } header: {
                 Text("Memory")
             } footer: {
-                Text("This controls memory on your paired machine. Turning it off stops recall, saving, and indexing without deleting existing approved facts. Workspace overrides are in each workspace’s ••• menu.")
+                Text("This controls memory on your paired computer. Turning it off stops recall, saving, and indexing without deleting existing approved facts. Workspace overrides are in each workspace’s ••• menu.")
             }
 
             Section {
-                Text(readAloudStatus?.ready == true ? "Ready on your machine" : "Set up on your machine")
+                Text(readAloudStatus?.ready == true ? "Ready on your computer" : "Set up on your computer")
                 if let readAloudError { Text(readAloudError).foregroundStyle(.secondary) }
                 Button("Refresh status") { Task { await loadReadAloudStatus() } }
             } header: { Text("Read Aloud") } footer: {
@@ -170,7 +170,7 @@ struct AidenAppSettingsView: View {
                     NavigationLink {
                         AidenMacTranscriptionSettingsView(coordinator: coordinator)
                     } label: {
-                        Label("Desktop speech model", systemImage: "desktopcomputer")
+                        Label("Computer speech model", systemImage: "desktopcomputer")
                     }
                 }
             } header: {
@@ -178,7 +178,7 @@ struct AidenAppSettingsView: View {
             } footer: {
                 Text(
                     voiceInputModeRaw == AidenVoiceInputMode.pairedMac.rawValue
-                        ? "Microphone audio is sent over Aiden's encrypted pinned connection, processed on-device by your paired machine, and not retained. Text appears after you stop recording."
+                        ? "Microphone audio is sent over Aiden's encrypted pinned connection, processed on-device by your paired computer, and not retained. Text appears after you stop recording."
                         : "Uses Apple's on-device Speech framework. Microphone audio stays on this device."
                 )
             }

@@ -138,7 +138,7 @@ enum AidenPairingMethod: String, CaseIterable, Identifiable, Hashable {
     var title: String {
         switch self {
         case .scanQRCode: return String(localized: "Scan QR Code")
-        case .nearbyMac: return String(localized: "Nearby Desktop + Setup Code")
+        case .nearbyMac: return String(localized: "Nearby Computer + Setup Code")
         case .privateAddress: return String(localized: "Private Address + Setup Code")
         case .pastePayload: return String(localized: "Paste Pairing Payload")
         }
@@ -147,11 +147,11 @@ enum AidenPairingMethod: String, CaseIterable, Identifiable, Hashable {
     var detail: String {
         switch self {
         case .scanQRCode:
-            return String(localized: "Scan the one-time QR shown by Aiden Agent.")
+            return String(localized: "Scan the one-time QR shown on your computer.")
         case .nearbyMac:
-            return String(localized: "Find your desktop on local Wi-Fi, then enter its setup code.")
+            return String(localized: "Find your computer on local Wi-Fi, then enter its setup code.")
         case .privateAddress:
-            return String(localized: "Enter the private Tailscale address and setup code shown on your desktop.")
+            return String(localized: "Enter the private Tailscale address and setup code shown on your computer.")
         case .pastePayload:
             return String(localized: "Use the complete one-time payload when the camera is unavailable.")
         }
@@ -202,7 +202,7 @@ enum AidenMobileOnboardingPhase: String, CaseIterable, Identifiable, Hashable {
     var detail: String {
         switch self {
         case .build:
-            return String(localized: "Use Workspaces for project-focused work with files, commands, review, and Git. Expand folders as needed and preview source before editing. When Bots are available on your paired desktop, use them as reusable helpers from the Bots tab.")
+            return String(localized: "Use Workspaces for project-focused work with files, commands, review, and Git. Expand folders as needed and preview source before editing. When Bots are available on your paired computer, use them as reusable helpers from the Bots tab.")
         case .extend:
             return String(localized: "Choose models and thinking levels, attach images, use web search, and extend Aiden with skills and connectors.")
         case .control:
@@ -558,22 +558,25 @@ struct AidenPairingView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Prepare your desktop").font(.largeTitle.bold())
-                    Text("Your desktop does the work. Your AI account keys stay on your desktop.")
+                    Text("Prepare your computer").font(.largeTitle.bold())
+                    Text("Your computer does the work. Your AI account keys stay there.")
                         .foregroundStyle(palette.secondary)
                 }
 
-                pairingStep(number: 1, title: "Open Aiden Agent", detail: "On your desktop, go to Settings → Connections.")
+                pairingStep(number: 1, title: "Open Aiden Agent", detail: "On your computer, go to Settings → Connections.")
                 pairingStep(number: 2, title: "Connect your phone", detail: "Choose where you’ll use Aiden, then select Connect a device. Review what Aiden will enable.")
                 pairingStep(number: 3, title: "Scan to finish", detail: "Keep the QR or setup code visible. Both expire after five minutes and can be used once.")
-                Text("Read Aloud uses your desktop’s settings. Enable it on the desktop; selected response text is sent to Google only when you press Play. Charges may apply.")
+                Text("On a server, `aiden serve` shows the code in its terminal, or run `aiden remote pair lan`.")
+                    .font(.footnote)
+                    .foregroundStyle(palette.secondary)
+                Text("Read Aloud uses Aiden Agent’s settings on your computer. Turn it on there; selected response text is sent to Google only when you press Play. Charges may apply.")
                     .font(.footnote)
                     .foregroundStyle(palette.secondary)
 
                 VStack(alignment: .leading, spacing: 10) {
                     Label("Only devices you connect can access Aiden", systemImage: "key.fill")
-                    Label("Encrypted connection to your desktop", systemImage: "lock.shield.fill")
-                    Label("Remove access from your desktop at any time", systemImage: "checkmark.shield")
+                    Label("Encrypted connection to your computer", systemImage: "lock.shield.fill")
+                    Label("Remove access from your computer at any time", systemImage: "checkmark.shield")
                 }
                 .font(.subheadline)
                 .foregroundStyle(palette.secondary)
@@ -612,7 +615,7 @@ struct AidenPairingView: View {
     private var pairingPage: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Scan the code in Settings → Connections on your desktop.")
+                Text("Scan the code from Settings → Connections in Aiden Agent, or from `aiden serve` on a server.")
                     .font(.subheadline)
                     .foregroundStyle(palette.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -658,11 +661,11 @@ struct AidenPairingView: View {
                 Label("Open Aiden Agent’s Add Device window and keep the one-time QR visible.", systemImage: "desktopcomputer")
                 Label("The QR already contains the selected Local Network or Tailscale address.", systemImage: "network")
             } header: {
-                Text("On your desktop")
+                Text("On your computer")
             }
 
             Section("Private pairing") {
-                Text("The QR expires after five minutes and can be used once. Aiden pins the desktop’s HTTPS identity during pairing.")
+                Text("The QR expires after five minutes and can be used once. Aiden pins the computer’s HTTPS identity during pairing.")
                     .foregroundStyle(palette.secondary)
             }
         }
@@ -690,14 +693,14 @@ struct AidenPairingView: View {
                     }
                 }
             } header: {
-                Text("Nearby desktops")
+                Text("Nearby computers")
             } footer: {
-                Text("Your iPhone or iPad and desktop must be on the same local network. Select the desktop shown in Aiden Agent’s Add Device window.")
+                Text("Your iPhone or iPad and computer must be on the same local network. Select the computer shown in Aiden Agent’s Add Device window.")
             }
 
             Section {
                 manualEndpointField(
-                    placeholder: "https://desktop-name.local:49220/api/aiden/v1",
+                    placeholder: "https://computer-name.local:49220/api/aiden/v1",
                     accessibilityLabel: "Nearby Aiden Agent address"
                 )
                 manualSetupCodeField
@@ -705,7 +708,7 @@ struct AidenPairingView: View {
             } header: {
                 Text("Setup code")
             } footer: {
-                Text("If discovery is unavailable, enter the exact nearby desktop address shown in Aiden Agent. The setup code is encrypted and can be used once.")
+                Text("If discovery is unavailable, enter the exact nearby computer address shown in Aiden Agent. The setup code is encrypted and can be used once.")
             }
         }
         .scrollContentBackground(.hidden)
@@ -716,7 +719,7 @@ struct AidenPairingView: View {
         Form {
             Section {
                 manualEndpointField(
-                    placeholder: "https://desktop-name.tailnet.ts.net/api/aiden/v1",
+                    placeholder: "https://computer-name.tailnet.ts.net/api/aiden/v1",
                     accessibilityLabel: "Private Tailscale address"
                 )
                 manualSetupCodeField
@@ -729,7 +732,7 @@ struct AidenPairingView: View {
 
             Section("Before pairing") {
                 Label("Sign in to the same Tailscale network on both devices", systemImage: "network")
-                Label("Keep Aiden Agent open on your desktop", systemImage: "desktopcomputer")
+                Label("Keep Aiden Agent open on your computer", systemImage: "desktopcomputer")
             }
         }
         .scrollContentBackground(.hidden)
@@ -758,7 +761,7 @@ struct AidenPairingView: View {
             } header: {
                 Text("One-time pairing payload")
             } footer: {
-                Text("Use only the complete payload copied from your own desktop. It contains a one-time secret and expires after five minutes.")
+                Text("Use only the complete payload copied from your own computer. It contains a one-time secret and expires after five minutes.")
             }
         }
         .scrollContentBackground(.hidden)
@@ -796,8 +799,8 @@ struct AidenPairingView: View {
         .accessibilityValue(selectedAgentID == agent.id ? "Selected" : "Not selected")
         .accessibilityAddTraits(selectedAgentID == agent.id ? .isSelected : [])
         .accessibilityHint(agent.endpoint == nil
-            ? "This desktop is still resolving its network address."
-            : "Use this desktop for setup-code pairing.")
+            ? "This computer is still resolving its network address."
+            : "Use this computer for setup-code pairing.")
     }
 
     private func manualEndpointField(

@@ -53,7 +53,7 @@ struct AidenSearchTabView: View {
                 ContentUnavailableView(
                     "Search",
                     systemImage: "magnifyingglass",
-                    description: Text("Find a chat, or a Bot conversation on any of your machines.")
+                    description: Text("Find a chat, or a Bot conversation on any of your computers.")
                 )
             }
         } else {
@@ -152,7 +152,7 @@ struct AidenSearchTabView: View {
                     ContentUnavailableView(
                         "No results",
                         systemImage: "magnifyingglass",
-                        description: Text("Search covers the chats Aiden has loaded and Bot conversations on connected machines. A chat that hasn’t loaded yet won’t appear here.")
+                        description: Text("Search covers the chats Aiden has loaded and Bot conversations on connected computers. A chat that hasn’t loaded yet won’t appear here.")
                     )
                 }
                 if let note {
@@ -195,7 +195,7 @@ private struct AidenSearchChatRowView: View {
         return summary.title
     }
 
-    private var machine: String { machineName ?? String(localized: "Unknown machine") }
+    private var machine: String { machineName ?? String(localized: "Unknown computer") }
 
     private var subtitle: String {
         [workspaceName, machine, row.isOnline ? nil : String(localized: "offline")]

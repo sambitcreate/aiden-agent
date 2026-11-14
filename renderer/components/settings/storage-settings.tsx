@@ -25,6 +25,7 @@ import {
 import { AlertDialog, Badge, Button, EmptyState, Field, FieldSet, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Text, toast } from "../ui";
 import { InfoHint } from "../ui-info-hint";
 
+import { localComputerNoun } from "../../shared/computer-noun";
 /** How many of the largest worktrees and chats the page lists. */
 const LARGEST_ITEM_COUNT = 8;
 
@@ -173,6 +174,7 @@ export function StorageSettings({
   canOpenSection?: (section: SettingsSection) => boolean;
   onOpenSection?: (section: SettingsSection) => void;
 }) {
+  const { platform } = useAppCapabilities();
   const [report, setReport] = React.useState<StorageReport | null>(null);
   const [loadFailed, setLoadFailed] = React.useState(false);
   const [busy, setBusy] = React.useState<StorageCleanupAction | "refresh" | "preview" | null>(null);
@@ -364,7 +366,7 @@ export function StorageSettings({
   return (
     <>
       <FieldSet
-        title="On this computer"
+        title={`On this ${localComputerNoun(platform)}`}
         action={
           <Button
             ref={refreshRef}

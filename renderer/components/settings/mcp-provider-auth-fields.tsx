@@ -51,7 +51,7 @@ export function McpProviderAuthFields(props: {
       )}
     </Field>
     {props.providerId ? <Field label="Key sharing" orientation="vertical"
-      description="Only attended desktop workspace chats can use this connection. Imported settings can’t approve it; each device needs your approval.">
+      description="Only attended workspace chats in Aiden Agent can use this connection. Imported settings can’t approve it; each device needs your approval.">
       <p className="break-all text-small text-secondary">Allow this server to receive the selected provider’s API key on every request: <strong>{props.endpoint || "Add an HTTPS server URL"}</strong></p>
       <Button size="small" variant="filled" disabled={props.disabled || props.busy} onClick={() => props.onConsent(!props.approved)}>
         {props.busy ? "Updating…" : props.approved ? "Stop sharing the key" : "Allow the key"}

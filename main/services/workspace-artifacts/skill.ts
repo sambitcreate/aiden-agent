@@ -10,7 +10,7 @@ export const AIDEN_ARTIFACTS_SKILL = Object.freeze({
   description:
     "Build and update interactive pages in the workspace's Artifacts tab: live status boards such as open pull requests, release checklists or TODO lists.",
   instructions: [
-    `Use ${WORKSPACE_ARTIFACT_TOOL_NAME} when the person wants a page they will come back to in this workspace, such as open pull requests, CI status, a release checklist or a TODO board. For a one-off answer, chart or form, use render_ui in the chat instead. If ${WORKSPACE_ARTIFACT_TOOL_NAME} is not among your tools, artifacts are not available here (they live in the Aiden desktop app), so use render_ui.`,
+    `Use ${WORKSPACE_ARTIFACT_TOOL_NAME} when the person wants a page they will come back to in this workspace, such as open pull requests, CI status, a release checklist or a TODO board. For a one-off answer, chart or form, use render_ui in the chat instead. If ${WORKSPACE_ARTIFACT_TOOL_NAME} is not among your tools, artifacts are not available here (they live in Aiden Agent), so use render_ui.`,
     "",
     "Build and check, in this order:",
     `1. Call ${WORKSPACE_ARTIFACT_TOOL_NAME} with operation "list". If a page already covers the request, update it by id instead of creating a near-duplicate. A workspace holds at most ${WORKSPACE_ARTIFACT_LIMITS.perWorkspace} pages.`,

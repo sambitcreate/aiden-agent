@@ -15,10 +15,10 @@ const errorText = (error: unknown) => userFacingErrorMessage(error, "The request
 const stateLabel: Record<BotPeerExchangeState, string> = { waiting: "Waiting", queued: "Queued", running: "Working", interrupted: "Interrupted", stopping: "Stop awaiting acknowledgement", completed: "Completed", failed: "Failed", cancelled: "Cancelled", expired: "Expired", uncertain: "Outcome unconfirmed" };
 const returnLabel = { reserved: "Return will follow", waiting: "Return waiting", queued: "Return queued", delivered: "Return delivered", not_applicable: "No reply expected" };
 function stopOutcome(receipt: BotPeerStopReceipt): string {
-  if (receipt.state === "stopped") return "The host confirmed the linked work stopped.";
-  if (receipt.state === "not_running") return "The host confirmed this exchange has no running work.";
-  if (receipt.state === "blocked") return receipt.reason === "mixed_inputs" ? "The host refused Stop because this run includes other inputs." : "The host could not stop the linked work.";
-  return "Stop is awaiting the host’s acknowledgement.";
+  if (receipt.state === "stopped") return "The computer confirmed the linked work stopped.";
+  if (receipt.state === "not_running") return "The computer confirmed this exchange has no running work.";
+  if (receipt.state === "blocked") return receipt.reason === "mixed_inputs" ? "The computer refused Stop because this run includes other inputs." : "The computer could not stop the linked work.";
+  return "Stop is awaiting the computer’s acknowledgement.";
 }
 function readPending(botId: string) {
   try { return { rows: pendingBotPeerChanges(botId), error: null as string | null }; }
@@ -63,7 +63,7 @@ export function BotPeerManagerDialog({ botId, botName, onClose, api = botsApi.pe
       const confirmed = pendingBotPeerChanges(botId).find((row) => row.kind === "settings" && row.request.mutationId === settings.lastMutationId);
       if (settleBotPeerSettings(settings)) {
         acceptSettings(settings, confirmed?.kind === "settings" && confirmed.request.action === "describe");
-        setMessage("The host confirmed the saved change.");
+        setMessage("The computer confirmed the saved change.");
       }
     }
     catch { controls.refresh(); }
@@ -102,11 +102,11 @@ export function BotPeerManagerDialog({ botId, botName, onClose, api = botsApi.pe
     <Text variant="small" color="secondary">Approve named Bot pairs to let them exchange requests in both directions. Each Bot keeps its own model, access, rules and spending limits.</Text>
     {(error || controls.pending.error) && <Text role="alert" variant="small" color="red">{error ?? controls.pending.error}</Text>}
     {message && <Text role="status" variant="small">{message}</Text>}
-    {saved.map((row) => <Field key={row.request.mutationId} orientation="vertical" label="Saved change awaiting confirmation" description="Keep the original request until the host confirms its outcome."><Button size="small" disabled={controls.busy} onClick={() => void perform(row.request as BotPeerMutation, true)}>Retry saved change</Button></Field>)}
+    {saved.map((row) => <Field key={row.request.mutationId} orientation="vertical" label="Saved change awaiting confirmation" description="Keep the original request until the computer confirms its outcome."><Button size="small" disabled={controls.busy} onClick={() => void perform(row.request as BotPeerMutation, true)}>Retry saved change</Button></Field>)}
     {view.isError && !settings ? <Field label="Bot messaging unavailable"><Button size="small" onClick={() => void view.refetch()}>Try again</Button></Field> : !settings || draft === null ? <Text role="status">Loading Bot messaging…</Text> : <>
       <FieldSet title="Routing description">
         <Field orientation="vertical" label="When other Bots should ask me" description="A short description of this Bot’s role. This helps route requests; it grants no access."><Textarea aria-label="When other Bots should ask me" value={draft} maxLength={1000} disabled={disabled} onChange={(event) => setDraft(event.target.value)} /></Field>
-        {conflict && <Field orientation="vertical" label="Changed on another device" description={conflict.routingDescription || "The host has a newer version of these settings."}><Button size="small" disabled={disabled} onClick={() => { setBaseline(conflict); setConflict(null); setError(null); }}>Use latest revision for my description</Button></Field>}
+        {conflict && <Field orientation="vertical" label="Changed on another device" description={conflict.routingDescription || "The computer has a newer version of these settings."}><Button size="small" disabled={disabled} onClick={() => { setBaseline(conflict); setConflict(null); setError(null); }}>Use latest revision for my description</Button></Field>}
         <Field><Button size="small" disabled={disabled || !dirty || Boolean(conflict)} onClick={() => { if (baseline) void perform({ action: "describe", botId, mutationId: crypto.randomUUID(), expectedRevision: baseline.revision, routingDescription: draft }); }}>Save description</Button></Field>
       </FieldSet>
       <FieldSet title="Approved pairs">
@@ -132,7 +132,7 @@ export function BotPeerExchangeDialog({ botId, exchangeId, onClose, api = botsAp
   const saved = controls.pending.rows.filter((row) => row.kind === "stop" && row.request.exchangeId === exchangeId);
   React.useEffect(() => {
     if (!view.data) return;
-    try { if (settleBotPeerStop(botId, view.data)) setMessage("The host confirmed the saved Stop outcome."); }
+    try { if (settleBotPeerStop(botId, view.data)) setMessage("The computer confirmed the saved Stop outcome."); }
     catch { controls.refresh(); }
   }, [view.data, botId, controls.refresh]);
   const stop = async (request: BotPeerStopMutation, retry = false) => {
@@ -142,7 +142,7 @@ export function BotPeerExchangeDialog({ botId, exchangeId, onClose, api = botsAp
       // Only this fresh read can authorize an old, still-protected Stop retry.
       const freshExchange = retry ? await api.exchange(botId, exchangeId) : undefined;
       if (!controls.alive.current) return;
-      if (freshExchange && settleBotPeerStop(botId, freshExchange)) { setMessage("The host confirmed the saved Stop outcome."); void view.refetch(); return; }
+      if (freshExchange && settleBotPeerStop(botId, freshExchange)) { setMessage("The computer confirmed the saved Stop outcome."); void view.refetch(); return; }
       const attempt = recordBotPeerAttempt({ kind: "stop", request }, { retry, freshExchange: freshExchange ?? undefined });
       const result = await api.stop(attempt.request as BotPeerStopMutation);
       if (!result.ok) {
@@ -150,7 +150,7 @@ export function BotPeerExchangeDialog({ botId, exchangeId, onClose, api = botsAp
         if (controls.alive.current) setError(result.error + (retry || result.code === "unavailable" ? " The saved Stop remains unconfirmed." : ""));
       } else {
         const settled = settleBotPeerStop(botId, result.exchange);
-        if (controls.alive.current) setMessage(settled ? stopOutcome(result.exchange.lastStop!) : "Stop requested. Waiting for the host’s acknowledgement; the original request is saved.");
+        if (controls.alive.current) setMessage(settled ? stopOutcome(result.exchange.lastStop!) : "Stop requested. Waiting for the computer’s acknowledgement; the original request is saved.");
       }
       if (controls.alive.current) { await qc.invalidateQueries({ queryKey: detailKey(botId, exchangeId) }); void qc.invalidateQueries({ queryKey: ["bot-peers", botId, "exchanges"] }); }
     } catch (error) { if (controls.alive.current) setError(errorText(error)); }
@@ -169,14 +169,14 @@ export function BotPeerExchangeDialog({ botId, exchangeId, onClose, api = botsAp
     {saved.map((row) => <Field key={row.request.mutationId} orientation="vertical" label="Saved Stop awaiting confirmation" description="A sent Stop does not confirm cancellation. The original request is retained."><Button size="small" disabled={controls.busy} onClick={() => void stop(row.request as BotPeerStopMutation, true)}>Retry saved Stop</Button></Field>)}
     {view.isPending ? <Text role="status">Loading exchange…</Text> : view.isError ? <Field label="Exchange unavailable"><Button size="small" onClick={() => void view.refetch()}>Try again</Button></Field> : !exchange ? <Text>This exchange is no longer available.</Text> : <>
       <FieldSet title={exchange.title}><Field orientation="vertical" label={`${exchange.sender.name} → ${exchange.recipient.name}`} description={`${exchange.kind === "fyi" ? "FYI" : exchange.kind === "status" ? "Status update" : exchange.kind === "question" ? "Question" : "Request"} · ${stateLabel[exchange.state]} · ${returnLabel[exchange.returnState]}`}><Text as="p" variant="small" className="whitespace-pre-wrap break-words">{exchange.request.text}</Text></Field>
-        {exchange.result && <Field orientation="vertical" label={`Result · ${exchange.result.outcome}`}><Text as="p" variant="small" className="whitespace-pre-wrap break-words">{exchange.result.text}</Text>{exchange.result.truncated && <Text variant="small" color="tertiary">Result shortened by the host.</Text>}</Field>}
+        {exchange.result && <Field orientation="vertical" label={`Result · ${exchange.result.outcome}`}><Text as="p" variant="small" className="whitespace-pre-wrap break-words">{exchange.result.text}</Text>{exchange.result.truncated && <Text variant="small" color="tertiary">Result shortened by the computer.</Text>}</Field>}
         {exchange.blockedReason && <Field orientation="vertical" label="Needs attention" description={exchange.blockedReason.replace(/_/gu, " ")} />}
-        {hostStopPending && saved.length === 0 && <Field orientation="vertical" label="Stop awaiting acknowledgement" description="The host already has a pending Stop. Refresh to read its outcome; this device cannot replace the original request."><Button size="small" variant="transparent" onClick={() => void view.refetch()}>Refresh exchange</Button></Field>}
+        {hostStopPending && saved.length === 0 && <Field orientation="vertical" label="Stop awaiting acknowledgement" description="The computer already has a pending Stop. Refresh to read its outcome; this device cannot replace the original request."><Button size="small" variant="transparent" onClick={() => void view.refetch()}>Refresh exchange</Button></Field>}
         <Field orientation="vertical"><div className="flex flex-wrap gap-2"><Button size="small" variant="transparent" disabled={reading} onClick={() => void readEvidence("source")}>View source</Button><Button size="small" variant="transparent" disabled={reading} onClick={() => void readEvidence("result")}>View result evidence</Button>{exchange.canStop && !hostStopPending && <Button size="small" disabled={controls.busy || saved.length > 0 || Boolean(controls.pending.error)} onClick={() => setConfirmStop(true)}>Stop exchange</Button>}</div></Field>
       </FieldSet>
     </>}
-    {evidence && <FieldSet title={evidence.title}><Field orientation="vertical"><Text as="p" variant="small" className="whitespace-pre-wrap break-words">{evidence.text}</Text>{evidence.truncated && <Text variant="small" color="tertiary">Evidence shortened by the host.</Text>}</Field></FieldSet>}
-  </Dialog>{confirmStop && exchange && <Dialog open confirmHidden title="Stop this exchange?" onOpenChange={(open) => { if (!open) setConfirmStop(false); }}><Text variant="small">Stop only the work linked to this exchange. If its inputs are mixed with other work, the host may refuse the Stop.</Text><Button disabled={controls.busy} onClick={() => { setConfirmStop(false); void stop({ botId, exchangeId, mutationId: crypto.randomUUID(), expectedRevision: exchange.revision }); }}>Confirm Stop</Button></Dialog>}</>;
+    {evidence && <FieldSet title={evidence.title}><Field orientation="vertical"><Text as="p" variant="small" className="whitespace-pre-wrap break-words">{evidence.text}</Text>{evidence.truncated && <Text variant="small" color="tertiary">Evidence shortened by the computer.</Text>}</Field></FieldSet>}
+  </Dialog>{confirmStop && exchange && <Dialog open confirmHidden title="Stop this exchange?" onOpenChange={(open) => { if (!open) setConfirmStop(false); }}><Text variant="small">Stop only the work linked to this exchange. If its inputs are mixed with other work, the computer may refuse the Stop.</Text><Button disabled={controls.busy} onClick={() => { setConfirmStop(false); void stop({ botId, exchangeId, mutationId: crypto.randomUUID(), expectedRevision: exchange.revision }); }}>Confirm Stop</Button></Dialog>}</>;
 }
 
 export function BotPeerExchangeButton({ botId, exchangeId }: { botId: string; exchangeId: string }) {

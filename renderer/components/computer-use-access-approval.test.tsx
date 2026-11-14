@@ -175,7 +175,7 @@ test("a failed readiness check stops checking until Check again forces a fresh p
 
 test("a remote viewer leaves setup to the host Mac and never checks this Mac", async () => {
   const { calls, decisions } = mountCard({ host: "remote", initial: missingScreenRecording });
-  screen.getByText("Finish any Computer Use setup on the host Mac.");
+  screen.getByText("Finish any Computer Use setup on that Mac.");
   assert.equal((button("Allow in this chat") as HTMLButtonElement).disabled, false);
   await chooseAlwaysAllow();
   assert.deepEqual(decisions, [{ decision: "allow", options: { scope: "always" } }]);

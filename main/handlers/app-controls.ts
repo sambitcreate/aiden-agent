@@ -1,4 +1,5 @@
 import { aidenAppNavigation } from "../services/aiden-app-navigation.js";
+import { thisComputerLabel } from "../../renderer/shared/computer-noun.js";
 import { ipcMain } from "../platform.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { chatStore } from "../services/chat-store.js";
@@ -29,7 +30,7 @@ async function ownedPanel(event: Electron.IpcMainInvokeEvent, chatId: unknown, p
   const context: AppControlContext = {
     actor: "desktop",
     workspaceId: chat.workspaceId,
-    target: "This desktop",
+    target: thisComputerLabel(process.platform),
     humanGesture: true,
     isCurrent: () => !owner.isDestroyed(),
     authorize: async () => {

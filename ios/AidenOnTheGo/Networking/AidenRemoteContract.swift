@@ -77,7 +77,7 @@ enum AidenManualPairingError: Error, Equatable, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidCode:
-            return String(localized: "Enter the 20-character setup code shown on your desktop.")
+            return String(localized: "Enter the 20-character setup code shown on your computer.")
         case .invalidBootstrap:
             return String(localized: "Aiden Agent returned an invalid manual pairing response.")
         case .decryptionFailed:

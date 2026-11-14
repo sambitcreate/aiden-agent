@@ -346,7 +346,7 @@ export class RemoteNewChatControl {
           // The key stays with this target, so sending again cannot create a second chat.
           throw new HostChatControlError({
             code: "create_unconfirmed",
-            message: "That Mac didn't confirm the new chat. Send again to continue; it won't create a second one.",
+            message: "That computer didn't confirm the new chat. Send again to continue; it won't create a second one.",
             retryable: true,
           });
         }
@@ -405,7 +405,7 @@ export class RemoteNewChatControl {
     this.guard("send");
     const ref = this.ref(turn.chatId);
     const { intent } = recorded;
-    if (!this.ledger.retryAllowed(intent)) throw new HostChatControlError({ code: "retry_expired", message: "The safe retry window has ended. Open the conversation on the host to review delivery before dismissing this request." });
+    if (!this.ledger.retryAllowed(intent)) throw new HostChatControlError({ code: "retry_expired", message: "The safe retry window has ended. Open the conversation on that computer to review delivery before dismissing this request." });
     this.ledger.retrying(ref, turn.key, true);
     try {
       await this.ledger.validateRetry(ref, intent);

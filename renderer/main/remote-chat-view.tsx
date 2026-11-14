@@ -155,7 +155,7 @@ export function remoteComposerActions(
       if (!control) throw new Error(`Connecting to ${hostLabel}…`);
       // A running turn on the host takes text only; nothing is dropped silently.
       if (attachments.length > 0 || skill) throw new Error("Send attachments and skills as a new message after this run.");
-      if (!runId) throw new Error("Wait for the run to start on that Mac.");
+      if (!runId) throw new Error(`Wait for the run to start on ${hostLabel}.`);
       try {
         const result = await control.submitInput(runId, mode, text);
         if (result.admitted) return;
@@ -774,7 +774,7 @@ export function RemoteChatPane({
                   deciding={state?.decidingApprovalId === openApproval.approvalId}
                   onDecide={(decision, options) => decide(openApproval, decision, options)}
                   disabledReason={
-                    refusal("respondApproval") ?? (runId ? undefined : "Waiting for the run on that Mac.")
+                    refusal("respondApproval") ?? (runId ? undefined : "Waiting for the run on that computer.")
                   }
                   pendingCount={approvals.length}
                   keyboardShortcuts
@@ -823,8 +823,8 @@ export function RemoteChatPane({
                 </ControlNotice>
               ) : null}
               {state?.unresolvedFork ? (
-                <ControlNotice tone="warning" role="alert" actions={<Button size="small" onClick={() => { void control?.dismissFork().catch(() => toast.error("Couldn’t dismiss this saved fork.")); }}>I checked the host</Button>}>
-                  <Text as="p" variant="small">Couldn't confirm the earlier fork. Check this computer's chat list before creating another. Repeating the same fork can recover it within the safe retry window.</Text>
+                <ControlNotice tone="warning" role="alert" actions={<Button size="small" onClick={() => { void control?.dismissFork().catch(() => toast.error("Couldn’t dismiss this saved fork.")); }}>{`I checked ${host.label}`}</Button>}>
+                  <Text as="p" variant="small">{`Couldn't confirm the earlier fork. Check the chat list on ${host.label} before creating another. Repeating the same fork can recover it within the safe retry window.`}</Text>
                 </ControlNotice>
               ) : null}
               {state?.recoveryError ? (
@@ -1337,7 +1337,7 @@ export function RemoteChatRoute({ hostId, chatId, onManage, onRemoved, onOpenCha
     try {
       await peerHostsApi.reconnect(id);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Aiden could not reconnect to that Mac.");
+      toast.error(error instanceof Error ? error.message : "Aiden could not reconnect to that computer.");
     }
   }, []);
   const loadOlder = React.useCallback(() => {
@@ -1358,7 +1358,7 @@ export function RemoteChatRoute({ hostId, chatId, onManage, onRemoved, onOpenCha
     return (
       <div className="flex h-full min-h-0 items-center justify-center">
         <EmptyState
-          title="Paired Macs could not be read"
+          title="Paired computers could not be read"
           description={list.error instanceof Error ? list.error.message : "Try again in a moment."}
         />
       </div>
@@ -1370,7 +1370,7 @@ export function RemoteChatRoute({ hostId, chatId, onManage, onRemoved, onOpenCha
     return (
       <div className="flex h-full min-h-0 items-center justify-center">
         <EmptyState
-          title="This Mac is not connected"
+          title="That computer isn't connected"
           description="Pair it again or turn it back on in Settings → Connections → Control other devices to open its chats."
         />
       </div>

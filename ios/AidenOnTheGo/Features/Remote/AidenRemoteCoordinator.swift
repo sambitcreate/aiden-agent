@@ -10,7 +10,7 @@ struct AidenConnectionIssue: Equatable {
     static func classify(_ error: Error) -> Self {
         let url = error as? URLError
         if error is AidenServerTrustError || [.serverCertificateHasBadDate, .serverCertificateUntrusted, .serverCertificateHasUnknownRoot, .serverCertificateNotYetValid, .secureConnectionFailed].contains(url?.code) {
-            return Self(title: "Verify this computer", message: "The saved computer's secure identity could not be verified. Check it on the desktop and pair again if its identity changed.", canRetry: false)
+            return Self(title: "Verify this computer", message: "The saved computer's secure identity could not be verified. Check it in Aiden Agent on that computer and pair again if its identity changed.", canRetry: false)
         }
         if url?.code == .notConnectedToInternet || url?.code == .dataNotAllowed {
             return Self(title: "Waiting for network", message: "Connect this device to Wi-Fi or cellular data, then retry. Saved conversations remain available.", canRetry: true)
@@ -871,7 +871,7 @@ final class AidenRemoteCoordinator {
 
     /// A machine's name for a sentence about it.
     private func machineName(of instanceId: String) -> String {
-        hosts.connection(for: instanceId)?.installation.name ?? String(localized: "its machine")
+        hosts.connection(for: instanceId)?.installation.name ?? String(localized: "its computer")
     }
 
     /// What went wrong on a machine other than the selected one, which the

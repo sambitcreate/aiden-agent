@@ -691,7 +691,7 @@
     <string name="bot_activity_tidying">Tidying up its notes</string>
     <string name="bot_activity_stopping">Stopping</string>
     <string name="bot_activity_resuming">Picking up where it left off</string>
-    <string name="bot_activity_reconnecting">Reconnecting to your Mac</string>
+    <string name="bot_activity_reconnecting">Reconnecting to your computer</string>
     <string name="bot_activity_status_elapsed">%1$s · %2$s</string>
     <!-- Advanced → Chat activity (spec §7). The previews replay what each level shows on the Mac. -->
     <string name="bot_chat_activity_title">Chat activity</string>

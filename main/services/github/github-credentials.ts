@@ -3,6 +3,7 @@
 // fingerprint (`host:sha256-prefix`) for cache keys and rate-limit scopes.
 
 import { execFile } from "node:child_process";
+import { localComputerNoun } from "../../../renderer/shared/computer-noun.js";
 import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { access, readFile } from "node:fs/promises";
@@ -265,7 +266,7 @@ export class GitHubCredentialSource {
         missing: {
           host,
           reason: "unauthenticated",
-          message: `Run \`gh auth login --hostname ${host}\` on this Mac, or set GH_HOST and GH_ENTERPRISE_TOKEN, then refresh.`,
+          message: `Run \`gh auth login --hostname ${host}\` on this ${localComputerNoun(process.platform)}, or set GH_HOST and GH_ENTERPRISE_TOKEN, then refresh.`,
         },
       };
     }
@@ -279,7 +280,7 @@ export class GitHubCredentialSource {
         missing: {
           host,
           reason: "unauthenticated",
-          message: `Run \`gh auth login --hostname ${host}\` on this Mac, or set GH_TOKEN, then refresh.`,
+          message: `Run \`gh auth login --hostname ${host}\` on this ${localComputerNoun(process.platform)}, or set GH_TOKEN, then refresh.`,
         },
       };
     } catch (error) {
@@ -292,7 +293,7 @@ export class GitHubCredentialSource {
           message:
             reason === "missing-tool"
               ? "Install GitHub CLI and run `gh auth login`, or set GH_TOKEN, so Aiden can read pull requests."
-              : `Run \`gh auth login --hostname ${host}\` on this Mac, or set GH_TOKEN, then refresh.`,
+              : `Run \`gh auth login --hostname ${host}\` on this ${localComputerNoun(process.platform)}, or set GH_TOKEN, then refresh.`,
         },
       };
     }

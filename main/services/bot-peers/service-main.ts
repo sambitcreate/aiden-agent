@@ -13,7 +13,7 @@ export interface BotPeerOwnerService {
 let host: BotPeerOwnerService | undefined;
 /** Installed by the owning host after its protected stores and runtime ports are ready. */
 export function installBotPeerHost(service: BotPeerOwnerService): void { if (host && host !== service) throw new Error("The peer host is already installed."); host = service; }
-function current(): BotPeerOwnerService { if (!host) throw new Error("Bot messaging is not ready on this host."); return host; }
+function current(): BotPeerOwnerService { if (!host) throw new Error("Bot messaging is not ready on this computer."); return host; }
 /** Public owner ports stay closed until the complete host is installed. */
 export const botPeers: BotPeerOwnerService = {
   isReady: () => host !== undefined,

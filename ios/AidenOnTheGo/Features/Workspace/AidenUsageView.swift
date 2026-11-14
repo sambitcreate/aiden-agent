@@ -8,8 +8,8 @@ struct AidenUsagePendingView: View {
     let isOffline: Bool
     let failed: Bool
     let retry: () -> Void
-    var unavailableMessage: LocalizedStringKey = "Usage appears once your machine is reachable."
-    var failedMessage: LocalizedStringKey = "Your machine didn't return usage this time."
+    var unavailableMessage: LocalizedStringKey = "Usage appears once your computer is reachable."
+    var failedMessage: LocalizedStringKey = "Your computer didn't return usage this time."
     var machinePicker: AidenNewWorkMachinePicker?
 
     var body: some View {
@@ -152,9 +152,9 @@ struct AidenMachineUsageView: View {
                     failed: model.loadFailed,
                     retry: { Task { await model.load() } },
                     unavailableMessage: model.sharesUsage
-                        ? "Usage appears once this machine is reachable."
-                        : "This machine doesn’t share usage with this phone.",
-                    failedMessage: "This machine didn't return usage this time.",
+                        ? "Usage appears once this computer is reachable."
+                        : "This computer doesn’t share usage with this phone.",
+                    failedMessage: "This computer didn't return usage this time.",
                     machinePicker: AidenNewWorkMachinePicker(picker: model.picker)
                 )
             }
@@ -442,7 +442,7 @@ struct AidenUsageView: View {
                 .foregroundStyle(palette.accent)
                 .frame(width: 28)
 
-            Text("Privacy-safe aggregates are recorded by Aiden Agent on your machine. Prompts, responses, chat IDs, workspace IDs, and file paths are not included.")
+            Text("Privacy-safe aggregates are recorded by Aiden Agent on your computer. Prompts, responses, chat IDs, workspace IDs, and file paths are not included.")
                 .font(.footnote)
                 .foregroundStyle(palette.secondary)
                 .fixedSize(horizontal: false, vertical: true)

@@ -1,4 +1,5 @@
 import { isBoundedBotText } from "./bot-capabilities.js";
+import { localComputerNoun, runtimeComputerPlatform } from "./computer-noun.js";
 import { withoutBotHandoffControls } from "./bot-handoffs.js";
 
 export const BOT_REQUEST_ACCESS_TOOL_NAME = "request_access";
@@ -172,7 +173,7 @@ export function botPendingAccessRequestOf(value: unknown): BotPendingAccessReque
     why = textOf(v.why, BOT_ACCESS_WHY_MAX_CHARS);
   if (!label || !why) return null;
   const place = v.place === undefined ? undefined : textOf(v.place, BOT_ACCESS_PLACE_MAX_CHARS);
-  if (v.target === "whole_mac" && (v.place !== undefined || label !== "your whole Mac"))
+  if (v.target === "whole_mac" && (v.place !== undefined || !isBotWholeComputerLabel(label)))
     return null;
   if (
     v.place !== undefined &&
@@ -204,11 +205,27 @@ export function botPendingAccessRequestOf(value: unknown): BotPendingAccessReque
     ...(v.approvalCount === undefined ? {} : { approvalCount: v.approvalCount as number }),
   };
 }
+/**
+ * A whole-computer request's label, named for the computer the Bot runs on.
+ * The `whole_mac` target keeps its name on every platform.
+ */
+export function botWholeComputerLabel(platform: string | null | undefined = runtimeComputerPlatform()): string {
+  return `your whole ${localComputerNoun(platform)}`;
+}
+
+/** Clients accept both spellings, so a Linux host's request is still shown. */
+export function isBotWholeComputerLabel(label: string): boolean {
+  return label === "your whole Mac" || label === "your whole computer";
+}
+
 export function botAccessCardTitle(
   botName: string,
   request: Pick<BotPendingAccessRequest, "target" | "label">,
 ): string {
-  return `${botName} wants to use ${request.target === "whole_mac" ? "your whole Mac" : request.label}`;
+  const label = request.target !== "whole_mac"
+    ? request.label
+    : isBotWholeComputerLabel(request.label) ? request.label : botWholeComputerLabel();
+  return `${botName} wants to use ${label}`;
 }
 export function botAccessResultLine(details: BotAccessResultDetails): string {
   switch (details.outcome) {

@@ -7,14 +7,14 @@ import type { AppControlSnapshot } from "../shared/app-controls";
 const snapshot: AppControlSnapshot = {
   version: 1,
   title: "Memory",
-  target: "This desktop",
+  target: "This Mac",
   policy: "safe",
   rows: [
     {
       id: "memory.enabled",
       label: "Memory",
       description: "Turning off does not delete facts.",
-      scope: "This desktop",
+      scope: "This Mac",
       value: false,
       revision: "revision",
     },
@@ -39,7 +39,7 @@ test("host catalog renders accessible real switches and preserves scope and disa
       }}
     />,
   );
-  assert.match(html, /aria-label="Memory — This desktop"/u);
+  assert.match(html, /aria-label="Memory — This Mac"/u);
   assert.match(html, /aria-checked="false"/u);
   assert.match(html, /aria-label="Workspace memory — Workspace — Demo"/u);
   assert.match(html, /disabled=""/u);

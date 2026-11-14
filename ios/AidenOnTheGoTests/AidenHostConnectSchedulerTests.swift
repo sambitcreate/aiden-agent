@@ -216,12 +216,15 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         let scheduler = scheduler(for: coordinator)
         await scheduler.foregrounded()
         scheduler.backgrounded()
-        let before = responder.requests(instanceId: "build").count
+        // Every connect starts with `GET /server`, so count only that. The
+        // offline build box's failed probe cancels its `/workspaces` request,
+        // which the responder can still log after `foregrounded()` returns.
+        let before = serverRequests("build")
 
         scheduler.connect(instanceId: "build")
         try await settle()
 
-        XCTAssertEqual(responder.requests(instanceId: "build").count, before)
+        XCTAssertEqual(serverRequests("build"), before)
     }
 
     func testTheSelectedMachineConnectsFirst() async throws {

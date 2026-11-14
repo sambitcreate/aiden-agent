@@ -165,8 +165,8 @@ const GROUPS: Record<
         "Color theme",
         "Theme colors for light and dark. Custom colors are edited in Settings → Appearance.",
       ],
-      ["appearance.chatWidth", "Chat width", "Width of conversations on the serving desktop."],
-      ["appearance.reduceMotion", "Reduce motion", "Prefer less motion on the serving desktop."],
+      ["appearance.chatWidth", "Chat width", "Width of conversations in Aiden Agent on your computer."],
+      ["appearance.reduceMotion", "Reduce motion", "Prefer less motion in Aiden Agent on your computer."],
     ],
   },
   memory: {
@@ -296,7 +296,7 @@ export class AppControlsService {
       )
         throw new Error("This terminal theme is unavailable.");
       if (context.remote && state.settings.remoteAppControlsEnabled !== true)
-        throw new Error("Paired-host app controls are disabled in Settings.");
+        throw new Error("Chat controls from paired devices are disabled in Settings.");
       if (
         policy === "disabled" ||
         (context.allowedControls && !context.allowedControls.has(operation.control))

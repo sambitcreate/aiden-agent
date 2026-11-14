@@ -206,7 +206,7 @@ test("a turn without a registered host is refused instead of running an unsuperv
   const h = harness();
   const result = await turn(h, [userMessage("echo:hi")]);
   assert.equal(result.stopReason, "error");
-  assert.match(result.errorMessage ?? "", /only in ordinary desktop chats/u);
+  assert.match(result.errorMessage ?? "", /only in ordinary chats in Aiden Agent/u);
   assert.equal(h.launcher.launches.length, 0);
   await h.runtime.close();
 });

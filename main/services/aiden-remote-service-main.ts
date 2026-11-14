@@ -1,6 +1,7 @@
 import { analyticsWorkspaceKind } from "./analytics/analytics-ids.js";
 import { createAidenRemoteBotAllowList, type AidenRemoteBotAllowList } from "./aiden-remote-bot-allowed.js";
 import { botMessagingEnabled } from "../../renderer/shared/bot-messages.js";
+import { localComputerNoun } from "../../renderer/shared/computer-noun.js";
 import { workspaceIntakeService } from "./workspace-intake-main.js";
 import { mcpLiveStatus } from "./mcp-status-events.js";
 import { remoteAppControls } from "./aiden-remote-app-controls.js";
@@ -32,7 +33,6 @@ import { recordRemoteRequestHealth } from "./diagnostic-health.js";
 import { AidenRemoteApprovedRootService } from "./aiden-remote-approved-roots.js";
 import { DataStore } from "./data-store.js";
 import {
-  aidenPairingRequestHostNoun,
   createAidenPairingRequestNotifier,
   createAidenPairingRequestSettingsStore,
 } from "./aiden-remote-pairing-request-host.js";
@@ -462,7 +462,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
       window.show();
       window.focus();
     },
-    hostNoun: aidenPairingRequestHostNoun(process.platform),
+    hostNoun: localComputerNoun(process.platform),
     onError: (stage) => {
       // Native errors can carry the device name; keep only the phase.
       logger.warn("aiden-remote", `Connection request notification ${stage} failed.`);

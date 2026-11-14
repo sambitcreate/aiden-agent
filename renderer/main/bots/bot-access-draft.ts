@@ -1,7 +1,7 @@
 import type { BotAccessState } from "../../lib/ipc";
 import type { BotEditorAccessDraft } from "../../shared/bot-editor-save";
 import {
-  BOT_FILE_SCOPE_SELECTION_GUIDANCE,
+  botFileScopeSelectionGuidance,
   BOT_WEB_SEARCH_CAPABILITY_LABEL,
   botFileScopeSelectionIsCoherent,
   type BotAccessUpdate,
@@ -133,7 +133,7 @@ export function buildBotAccessUpdate(
     throw new Error("Run commands is not currently available on this device.");
   }
   if (!botFileScopeSelectionIsCoherent(draft.fileScopeIds, catalog.fileScopes)) {
-    throw new Error(BOT_FILE_SCOPE_SELECTION_GUIDANCE);
+    throw new Error(botFileScopeSelectionGuidance());
   }
   return {
     accessMode: "custom",

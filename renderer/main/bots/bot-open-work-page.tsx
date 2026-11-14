@@ -94,7 +94,7 @@ function WorkRow({ item, botId, botName, disabled, undo, onEdit, onAction, onEvi
       {[...new Set([...(item.source.kind === "peer" ? [item.source.exchangeId] : []), ...item.links.flatMap((link) => link.kind === "peer" ? [link.exchangeId] : [])])].map((exchangeId) => <BotPeerExchangeButton key={exchangeId} botId={botId} exchangeId={exchangeId} />)}
     </div>
     {item.execution.blockedReason === "mixed_inputs" && <Text variant="small" color="tertiary">This run includes another input, so its work cannot be stopped separately here.</Text>}
-    {item.lastStop && PENDING_STOP.has(item.lastStop.state) && <Text variant="small" color="tertiary">Stop is awaiting acknowledgement. Work stays unfinished until the host confirms what stopped.</Text>}
+    {item.lastStop && PENDING_STOP.has(item.lastStop.state) && <Text variant="small" color="tertiary">Stop is awaiting acknowledgement. Work stays unfinished until the computer confirms what stopped.</Text>}
   </Field>;
 }
 
@@ -134,7 +134,7 @@ function OpenWorkBody({ bot, api, onDirtyChange }: { bot: Pick<BotDefinition, "i
     try {
       const resolved = settleOpenWorkPending(view.data);
       if (resolved.length) {
-        setError(null); setMessage("The host confirmed the saved change.");
+        setError(null); setMessage("The computer confirmed the saved change.");
         if (draftRequest.current && resolved.includes(draftRequest.current)) {
           draftRequest.current = undefined; setDraft(null); setConflict(null);
         }
@@ -152,7 +152,7 @@ function OpenWorkBody({ bot, api, onDirtyChange }: { bot: Pick<BotDefinition, "i
     const targetId = "id" in candidate ? candidate.id : candidate.action === "undo" ? view.data?.undo.find((option) => option.mutationId === candidate.undoOf)?.itemId : undefined;
     const target = view.data?.items.find((item) => item.id === targetId);
     if (!retry && target && (target.execution.state === "stopping" || target.lastStop && PENDING_STOP.has(target.lastStop.state))) {
-      setError("This item is waiting for Stop acknowledgement. Review its state after the host confirms it."); return;
+      setError("This item is waiting for Stop acknowledgement. Review its state after the computer confirms it."); return;
     }
     let request: PendingOpenWork;
     try { request = recordOpenWorkAttempt(bot.id, candidate, retry); }
@@ -162,7 +162,7 @@ function OpenWorkBody({ bot, api, onDirtyChange }: { bot: Pick<BotDefinition, "i
     if (draft && (candidate.action === "add" || candidate.action === "edit")) draftRequest.current = candidate.mutationId;
     try {
       const result = await api.mutate(bot.id, request.mutation);
-      if (result.ok && (result.mutationId !== request.mutation.mutationId || result.snapshot.botId !== bot.id)) throw new Error("The host returned a different change identity.");
+      if (result.ok && (result.mutationId !== request.mutation.mutationId || result.snapshot.botId !== bot.id)) throw new Error("The computer returned a different change identity.");
       if (result.snapshot) view.adopt(result.snapshot, before);
       if (!result.ok) {
         if (result.code !== "unavailable") clearOpenWorkPending(request, false);
@@ -175,7 +175,7 @@ function OpenWorkBody({ bot, api, onDirtyChange }: { bot: Pick<BotDefinition, "i
       const awaitingStop = isStop && result.stop && PENDING_STOP.has(result.stop.state);
       if (!awaitingStop) clearOpenWorkPending(request, true);
       setMessage(awaitingStop ? "Stop is awaiting acknowledgement. Check the same request to confirm it." : result.stop
-        ? result.stop.state === "blocked" ? "The linked run could not be stopped separately." : "The host confirmed the linked run’s state."
+        ? result.stop.state === "blocked" ? "The linked run could not be stopped separately." : "The computer confirmed the linked run’s state."
         : "Change saved.");
       if (!awaitingStop) { draftRequest.current = undefined; setDraft(null); setConflict(null); }
       void view.refetch();
@@ -199,7 +199,7 @@ function OpenWorkBody({ bot, api, onDirtyChange }: { bot: Pick<BotDefinition, "i
   };
 
   if (view.isPending) return <BotPageSkeleton label="Loading Open work" groups={[2]} />;
-  if (view.isError && !view.data) return <FieldSet title="Open work unavailable"><Field label="Aiden couldn’t load this Bot’s work" description="Check the owning host, then try again."><Button size="small" variant="filled" onClick={() => void view.refetch()}>Try again</Button></Field></FieldSet>;
+  if (view.isError && !view.data) return <FieldSet title="Open work unavailable"><Field label="Aiden couldn’t load this Bot’s work" description="Check the computer that runs this Bot, then try again."><Button size="small" variant="filled" onClick={() => void view.refetch()}>Try again</Button></Field></FieldSet>;
   const snapshot = view.data!;
   const active = snapshot.items.filter((item) => item.state === "open" || item.state === "waiting");
   const closed = snapshot.items.filter((item) => item.state === "done" || item.state === "dismissed");

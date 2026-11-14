@@ -457,7 +457,7 @@ struct AidenChatProgressSheet: View {
         case .storageNotEnabled:
             "Task tracking is turned off for this workspace."
         case .invalidSnapshot:
-            "The machine could not read a valid task snapshot."
+            "The computer could not read a valid task snapshot."
         case .unsupported:
             "Task tracking is unavailable on this Aiden Agent."
         }
@@ -485,8 +485,8 @@ struct AidenChatProgressSheet: View {
             let roster = model.agentRoster(for: selectedTurnId)
             VStack(spacing: 0) {
                 Text(model.canInterruptAgents
-                    ? "Live status from the machine. You can stop a running agent; private child transcripts stay on the machine."
-                    : "Read-only status from the machine. Private child transcripts stay on the machine.")
+                    ? "Live status from the computer. You can stop a running agent; private child transcripts stay on the computer."
+                    : "Read-only status from the computer. Private child transcripts stay on the computer.")
                     .font(.caption)
                     .foregroundStyle(palette.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -721,9 +721,9 @@ private struct AidenAgentDetailView: View {
                         }
                     }
                     .disabled(!model.canInterrupt(agent))
-                    .accessibilityHint(Text("Asks the machine to stop this delegated agent. The rest of the run continues."))
+                    .accessibilityHint(Text("Asks the computer to stop this delegated agent. The rest of the run continues."))
                 } footer: {
-                    Text("The machine stops only this agent. The main run and other agents keep going.")
+                    Text("The computer stops only this agent. The main run and other agents keep going.")
                 }
             }
             Section("Assignment") {
@@ -776,7 +776,7 @@ private struct AidenAgentDetailView: View {
             }
             Button("Keep running", role: .cancel) {}
         } message: {
-            Text("The machine stops this delegated agent. You cannot resume it from here.")
+            Text("The computer stops this delegated agent. You cannot resume it from here.")
         }
     }
 

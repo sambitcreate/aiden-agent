@@ -24,6 +24,7 @@ import {
   Text,
   toast,
 } from "../components/ui";
+import { useAppCapabilities } from "../lib/app-capabilities";
 import { botListLocation } from "../lib/bot-routes";
 import { insertTextIntoTextarea } from "../lib/composer-type-focus";
 import { hostQueryKeys } from "../lib/hosts/host-query-keys";
@@ -37,6 +38,7 @@ import { useAppearancePreference } from "../lib/use-appearance-preference";
 import { useBots } from "../lib/queries";
 import { BOT_HANDOFF_NOTE_MAX_CHARS, botHandoffTakesNote, type BotHandoffOutcome } from "../shared/bot-handoffs";
 import type { BotPendingQuestion } from "../shared/bot-live";
+import { localComputerNoun } from "../shared/computer-noun";
 import { mintPeerIdempotencyKey, type PeerHostFeedSnapshot, type PeerHostView, type PeerOperationOutcome } from "../shared/peer-host";
 import type { PeerOperation } from "../shared/peer-operation";
 import type { AidenRemoteBotApproval, AidenRemoteBotHandoff } from "../../main/services/aiden-remote-protocol";
@@ -124,7 +126,8 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
   const list = useQuery<PeerHostView[]>({ queryKey: hostQueryKeys.list(), queryFn: skipToken });
   const feed = useQuery<PeerHostFeedSnapshot | null>({ queryKey: hostQueryKeys.feed(hostId), queryFn: skipToken });
   const host = list.data?.find((view) => view.id === hostId);
-  const hostName = host?.name ?? "the other Mac";
+  const hostName = host?.name ?? "the other computer";
+  const { platform } = useAppCapabilities();
   const name = botName(feed.data, botId) ?? "Bot";
   // Show tool activity is this device's switch (§4.5); until it is set, this Mac's own Bots decide.
   const toolActivitySetting = useAppearancePreference("showToolActivity");
@@ -283,7 +286,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
       centered(
         <EmptyState
           title="Bot not found"
-          description={`This Bot may have been deleted on ${hostName}, or this Mac may no longer use it.`}
+          description={`This Bot may have been deleted on ${hostName}, or this ${localComputerNoun(platform)} may no longer use it.`}
           action={
             <Button variant="filled" onClick={() => void navigate(botListLocation())}>
               All Bots

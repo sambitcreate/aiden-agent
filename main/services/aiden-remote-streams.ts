@@ -1945,7 +1945,7 @@ export class AidenRemoteStreamService {
           if (decision === "allow" && !card && (approvalIsHostOnly(approval.details) || !approval.canAllow)) {
             throw new AidenRemoteServiceError(
               "capability_denied",
-              "This approval can only be allowed from the Aiden desktop app.",
+              "Allow this in Aiden Agent on your computer.",
               403,
             );
           }

@@ -1051,7 +1051,7 @@ struct AidenRemoteBotAccessRequest: Codable, Equatable, Sendable {
                 throw AidenBotContractError.invalidField("accessRequest.place")
             }
         }
-        guard target != .wholeMac || (label == "your whole Mac" && place == nil),
+        guard target != .wholeMac || ((label == "your whole Mac" || label == "your whole computer") && place == nil),
               choices == [.notNow, .once] || (target == .folder && choices == [.notNow, .always, .once]) else {
             throw AidenBotContractError.invalidField("accessRequest")
         }
