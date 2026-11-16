@@ -108,10 +108,6 @@ function flushHeld(): Promise<void> {
 
 /** Send what quiet hours held back once it is due; re-arms for the next held row. */
 async function flushHeldOnce(): Promise<void> {
-  // Asks still open after hours get their one reminder on the same tick.
-  await import("../bot-issues/service-main.js")
-    .then(({ remindWaitingBotIssues }) => remindWaitingBotIssues())
-    .catch((error: unknown) => logger.warn("bots", "Bot reminders could not be sent.", error));
   const next = await botDeliveryFunnel().flush(Date.now()).catch((error: unknown) => {
     logger.warn("bots", "Held Bot messages could not be sent.", error);
     return undefined;
