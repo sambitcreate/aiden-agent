@@ -22,7 +22,7 @@ afterEach(cleanup);
  * round-trip like main: an update without a description clears it, and an
  * access save answers with the saved access view alone.
  */
-function settingsIpc(initial: BotDefinition = botFixture(), options: { messaging?: boolean; failUpdates?: boolean; thinkingLevels?: Record<string, BotRoutineThinkingLevel[]> } = {}) {
+function settingsIpc(initial: BotDefinition = botFixture(), options: { messaging?: boolean; failUpdates?: boolean; failAccessUpdates?: boolean; thinkingLevels?: Record<string, BotRoutineThinkingLevel[]> } = {}) {
   let bot = initial;
   const updates: BotUpdateInput[] = [];
   const accessUpdates: { access: Record<string, unknown> }[] = [];
@@ -61,6 +61,7 @@ function settingsIpc(initial: BotDefinition = botFixture(), options: { messaging
       visionModelSelection: { providerId: "prov-vision", modelId: "model-vision" },
     }),
     "bots:updateBotAccess": (input) => {
+      if (options.failAccessUpdates) throw new Error("Error invoking remote method 'bots:updateBotAccess': Error: Bots are starting.");
       const sent = input as { access: Record<string, unknown> };
       accessUpdates.push(sent);
       access = { ...access, revision: `${String(access.revision)}+`, accessMode: sent.access.accessMode };
@@ -227,6 +228,28 @@ test("Thinking offers the chosen model's levels, shows the level it will really 
   assert.equal(store.updates[0]!.thinkingLevel, "max", "the Bot keeps what was asked; the run uses the nearest level the model has");
   assert.equal(store.accessUpdates[0]!.access.modelId, "model-vision");
   await waitFor(() => assert.equal(saveBar(), null));
+});
+
+test("a Save whose model write fails keeps the model and thinking level together to try again", async () => {
+  const options = { failAccessUpdates: true, thinkingLevels: { "model-text": ["low", "high", "max"], "model-vision": ["off", "low", "medium"] } as Record<string, BotRoutineThinkingLevel[]> };
+  const store = settingsIpc(botFixture(), options);
+  await openSettings();
+  fireEvent.click(await screen.findByRole("button", { name: "AI model" }));
+  fireEvent.click(await screen.findByRole("option", { name: /^Seer/u }));
+  fireEvent.click(await screen.findByRole("combobox", { name: "Thinking" }));
+  fireEvent.click(screen.getByRole("option", { name: "Medium" }));
+  fireEvent.click(within(saveBar()!).getByRole("button", { name: "Save" }));
+  await waitFor(() => assert.equal((within(saveBar()!).getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled, false));
+  assert.equal(store.updates.length, 0, "the level never lands without its model");
+  assert.match(screen.getByRole("button", { name: "AI model" }).textContent ?? "", /Seer/u);
+  assert.match(screen.getByRole("combobox", { name: "Thinking" }).textContent ?? "", /Medium/u);
+
+  options.failAccessUpdates = false;
+  fireEvent.click(within(saveBar()!).getByRole("button", { name: "Save" }));
+  // A boolean, so each failed retry doesn't print the whole save bar.
+  await waitFor(() => assert.equal(saveBar() === null, true));
+  assert.equal(store.accessUpdates.at(-1)!.access.modelId, "model-vision");
+  assert.equal(store.current().thinkingLevel, "medium");
 });
 
 test("Revert puts the thinking level back with the rest", async () => {

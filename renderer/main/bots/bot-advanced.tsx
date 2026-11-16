@@ -1000,6 +1000,15 @@ export function BotAdvancedTab({ bot, sectionRequest = null }: { bot: BotDefinit
     setNameError(null);
     setSaving(true);
     try {
+      // The model saves before the thinking level, and each edit clears only
+      // once its own write lands, so a failed Save leaves the rest to retry.
+      // Between the two writes a run sees the new model with the old level,
+      // which the claim clamps to a level that model runs.
+      if (accessChanged && draft && baseline) {
+        const saved = await saveAccessDraft(qc, bot.id, draft, baseline);
+        setDraft(saved);
+        setBaseline(saved);
+      }
       const patch: { name?: string; description?: string; thinkingLevel?: BotRoutineThinkingLevel } = {};
       if (nameDirty) patch.name = nameEdit!.trim();
       if (descriptionDirty) patch.description = descriptionEdit!.trim();
@@ -1008,11 +1017,6 @@ export function BotAdvancedTab({ bot, sectionRequest = null }: { bot: BotDefinit
       setNameEdit(null);
       setDescriptionEdit(null);
       setThinkingEdit(null);
-      if (accessChanged && draft && baseline) {
-        const saved = await saveAccessDraft(qc, bot.id, draft, baseline);
-        setDraft(saved);
-        setBaseline(saved);
-      }
       setRestored(false);
       toast.success("Saved");
     } catch (error) {
