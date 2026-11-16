@@ -109,6 +109,7 @@ import { botRunStarts, botTurnIntents } from "./bot-turn-intents-main.js";
 import type { BotExtensionDeps } from "./bot-extension.js";
 import { renderBotOpenWork } from "../bot-open-work/prompt.js";
 import { createBotRuntimeModels, type BotModelRuntime } from "./bot-models.js";
+import type { BotReplySilenceOptions } from "./bot-reply-silence.js";
 import type { Models } from "@earendil-works/pi-ai";
 import {
   BOT_NOTICE_ENTRY_KIND,
@@ -146,12 +147,18 @@ const profileDir = () => app.getPath("userData");
 setBotFileToolProtectedRoots(() => desktopBotProtectedRoots(profileDir(), aidenConfigDir(), botServiceRoot()));
 // Temporary Home/whole-Mac access must not expose any app-private store.
 setBotFileToolTemporaryPrivateRoots(() => botAccessPrivateRoots(profileDir(), aidenConfigDir()));
+/** A reply quiet after its words ends as finished; this only logs it. */
+function botReplySilence(): BotReplySilenceOptions {
+  return { onSilenced: (message) => logger.warn("bots", `A Bot reply from ${message.provider} went quiet after its text; it was ended as finished.`) };
+}
+
 // A Bot's replies and routines wait out provider usage limits like a chat's.
 const runtimeModels = createBotRuntimeModels({
   usageLimits: (botId, runtime) =>
     runtime.provider && isAcpHarnessProvider(runtime.provider.id)
       ? undefined
       : usageLimits.streamOptions({ kind: "bot", id: botId }, runtime.provider?.label ?? runtime.model.provider),
+  replySilence: botReplySilence,
 });
 const dismissals = createBotConnectionDismissalStore({ root: profileDir });
 // The pause store is shared with the legacy chat path (`bot-pause-main.ts`).
@@ -500,7 +507,7 @@ const executionIssues = createBotExecutionIssues(botIssues, spending, {
   onError: (botId, error) => logger.warn("bots", `Bot ${botId} quiet retry failed.`, error),
 });
 async function buildBotExecutionRuntime(botId: string, claim: BotExecutionClaim, runtime: ResolvedModelRuntime, signal: AbortSignal, revalidate: () => Promise<void>, release: () => void, thinkingLevel?: BotRoutineThinkingLevel): Promise<BotExecutionRuntime> {
-  const invocation = createBotRuntimeModels({ usageLimits: () => usageLimits.streamOptions({ kind: "bot", id: claim.root.botId }, runtime.provider.label) });
+  const invocation = createBotRuntimeModels({ usageLimits: () => usageLimits.streamOptions({ kind: "bot", id: claim.root.botId }, runtime.provider.label), replySilence: botReplySilence });
   invocation.register(botId, runtime as unknown as BotModelRuntime);
   const models = invocation.modelsFor(botId), counts = await spendCounts({ local: isLocalModelProvider(runtime.provider), provider: runtime.provider, models: runtime.models });
   const owner = botExecutionSpendingOwner(claim);
@@ -657,7 +664,7 @@ export function bindBotExecutionHelperRuntime(botId: string, kind: string, runti
   if (!binding || binding.owner !== owner || !owner?.bindHelperRuntime || runtime.model.provider !== binding.execution.model.provider || runtime.model.id !== binding.execution.model.id) throw new Error("This helper runtime does not belong to the active task.");
   // Resolved runtimes own the stream transport. Their Models collection may
   // still own other providers, so dispatch through streams after isolation.
-  const transport = createBotRuntimeModels({ usageLimits: () => usageLimits.streamOptions({ kind: "bot", id: owner.claim.root.botId }, runtime.provider.label) });
+  const transport = createBotRuntimeModels({ usageLimits: () => usageLimits.streamOptions({ kind: "bot", id: owner.claim.root.botId }, runtime.provider.label), replySilence: botReplySilence });
   transport.register(botId, runtime as unknown as BotModelRuntime);
   const models = owner.bindHelperRuntime(kind, { ...binding.execution, models: transport.modelsFor(botId) });
   return { ...runtime, models, streams: { streamSimple: models.streamSimple.bind(models) } };
