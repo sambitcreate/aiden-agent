@@ -66,17 +66,20 @@ export function createBotExecutionIssues(
     state.timer = options.setTimer(() => {
       if (retries.get(claim.id) !== state) return;
       delete state.timer;
+      // A resume that blocks again re-enters `blocked()` on its own and so
+      // counts as the next try there; it must not be counted twice here.
+      const untouched = () => retries.get(claim.id) === state && state.attempts === attempt + 1 && state.timer === undefined;
       void options.retry!(botId, claim, attempt + 1)
         .then((result) => {
           if (retries.get(claim.id) !== state) return;
           if (result === "moot") forget(claim.id);
           // Refused outright: the block still stands, so it counts as the next try.
-          else if (result === "failed") return blocked(botId, claim, message, kind);
+          else if (result === "failed" && untouched()) return blocked(botId, claim, message, kind);
           return undefined;
         })
         .catch((error: unknown) => {
           options.onError?.(botId, error);
-          if (retries.get(claim.id) === state) return blocked(botId, claim, message, kind);
+          if (untouched()) return blocked(botId, claim, message, kind);
           return undefined;
         })
         .catch((error: unknown) => options.onError?.(botId, error));

@@ -992,7 +992,8 @@ export function TranscriptEntries({
 /**
  * When the live chat last moved: any new event (an entry, a step, a state) or
  * streamed text. The status line uses it to say a turn is taking longer than
- * usual, which is all the person hears about a quiet run.
+ * usual, which is all the person hears about a quiet run. The host sends no
+ * progress time, so a chat opened mid-run counts from when it opened.
  */
 function useLastProgressAt(seq: number, partial: string | null): number {
   const [at, setAt] = React.useState(() => Date.now());

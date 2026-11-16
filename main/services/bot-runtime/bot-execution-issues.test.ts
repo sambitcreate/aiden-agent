@@ -75,6 +75,23 @@ test("a run that blocks again after a resume uses up the next try, not a fresh s
   assert.equal(h.raised.length, 1);
 });
 
+test("a resume that blocks again on its way back counts as one try, not two", async () => {
+  const h = setup();
+  // The host reports the re-block while the resume is still answering; the resume then says "failed".
+  await h.issues.blocked("bot-1", claim, "Model not ready", "unavailable");
+  for (let attempt = 0; attempt < BOT_EXECUTION_RETRY_DELAYS_MS.length; attempt += 1) {
+    const live = h.live();
+    const timer = live[live.length - 1]!;
+    timer.cancelled = true;
+    timer.fn();
+    await h.issues.blocked("bot-1", claim, "Model not ready", "unavailable");
+    await flush();
+    if (attempt < BOT_EXECUTION_RETRY_DELAYS_MS.length - 1) assert.deepEqual(h.raised, [], `no card after try ${attempt + 1}`);
+  }
+  assert.deepEqual(h.tries, [1, 2, 3], "each scheduled try ran once");
+  assert.equal(h.raised.length, 1, "the card comes only after the third try");
+});
+
 test("the person answering first ends the tries without a card", async () => {
   const moot = setup(["moot"]);
   await moot.issues.blocked("bot-1", claim, "Model not ready", "unavailable");
