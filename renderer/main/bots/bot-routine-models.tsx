@@ -3,14 +3,13 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button, Dialog, Field, FieldSet, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Switch, Text } from "../../components/ui";
 import { botsApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
-import type { BotRoutineModelCatalog, BotRoutineModelChoice, BotRoutineModelSelection, BotRoutineModelSettings, BotRoutineThinkingLevel } from "../../shared/bot-routine-models";
+import { BOT_THINKING_LEVEL_LABELS as thinkingLabel, type BotRoutineModelCatalog, type BotRoutineModelChoice, type BotRoutineModelSelection, type BotRoutineModelSettings, type BotRoutineThinkingLevel } from "../../shared/bot-routine-models";
 import { BotModelPicker } from "./bot-model-picker";
 import { useDiscardChangesGuard } from "./bot-page-shell";
 import { clearRoutineModelAttempt, pendingRoutineModelChanges, recordRoutineModelAttempt, ROUTINE_MODEL_JOURNAL_EVENT, type PendingRoutineModelChange } from "./routine-model-journal";
 
 export type BotRoutineModelApi = typeof botsApi.routineModels;
 type Draft = { mode: "inherit" | "selected"; primary?: BotRoutineModelChoice; fallbackEnabled: boolean; fallback?: BotRoutineModelChoice };
-const thinkingLabel: Record<BotRoutineThinkingLevel, string> = { off: "Off", minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Maximum" };
 const settingsKey = (botId: string, routineId: string) => ["bot-routine-models", botId, routineId] as const;
 const toDraft = (selection: BotRoutineModelSelection): Draft => selection.mode === "inherit" ? { mode: "inherit", fallbackEnabled: false } : { mode: "selected", primary: selection.primary, fallbackEnabled: Boolean(selection.fallback), fallback: selection.fallback };
 function selected(draft: Draft): BotRoutineModelSelection | undefined {

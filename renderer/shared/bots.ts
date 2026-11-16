@@ -1,3 +1,5 @@
+import type { BotRoutineThinkingLevel } from "./bot-routine-models";
+
 export const BOT_AVATAR_SHAPES = [
   "wisp",
   "orb",
@@ -214,6 +216,12 @@ export interface BotDefinition {
   selfWakeUps?: boolean;
   acceptsBotMessages?: boolean;
   messagesOtherBots?: boolean;
+  /**
+   * How much the Bot's model thinks when nothing else chooses (Advanced → Model).
+   * Absent: off (main never stores "off"). A model that cannot run this level
+   * uses its nearest supported one.
+   */
+  thinkingLevel?: BotRoutineThinkingLevel;
   createdAt: number;
   updatedAt: number;
 }
@@ -242,6 +250,8 @@ export interface BotUpdateInput extends BotCreateInput {
   selfWakeUps?: boolean;
   acceptsBotMessages?: boolean;
   messagesOtherBots?: boolean;
+  /** Absent keeps the stored level; "off" clears it. */
+  thinkingLevel?: BotRoutineThinkingLevel;
 }
 
 export interface TelegramBotBindingView {

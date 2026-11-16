@@ -2541,6 +2541,28 @@ test("capability catalog retains a private binding but returns only the safe pub
   assert.equal(app.catalogTargets[app.catalogTargets.length - 1], "bot:one");
 });
 
+test("model thinking levels resolve only the named picker model, by its source ids, and answer null when it is unknown or unreadable", async () => {
+  const app = fixture({ bots: [bot("bot:one")] });
+  await app.service.initialize();
+  const asked: string[] = [];
+  Object.assign(app.deps, {
+    modelThinkingLevels: async (providerId: string, modelId: string) => {
+      asked.push(`${providerId}/${modelId}`);
+      return ["low", "high", "max"];
+    },
+  });
+  const catalog = await app.service.capabilityCatalog("device:a", "bot:one");
+  const providerId = catalog.providers[0]!.id, modelId = catalog.providers[0]!.models[0]!.id;
+  assert.deepEqual(await app.service.modelThinkingLevels("device:a", "bot:one", providerId, modelId), ["low", "high", "max"]);
+  assert.deepEqual(asked, ["provider:exact/model:exact"], "the picker's opaque ids map to the provider's own ids");
+  assert.equal(await app.service.modelThinkingLevels("device:a", "bot:one", providerId, "provider:exact"), null, "a source id is not a picker id");
+  assert.equal(await app.service.modelThinkingLevels("device:a", "bot:one", "missing", modelId), null);
+  assert.equal(asked.length, 1, "an unknown model resolves nothing");
+  Object.assign(app.deps, { modelThinkingLevels: async () => { throw new Error("Saved model metadata is unavailable."); } });
+  assert.equal(await app.service.modelThinkingLevels("device:a", "bot:one", providerId, modelId), null);
+  await assert.rejects(app.service.modelThinkingLevels("device:a", "bot:gone", providerId, modelId), /no longer available/u);
+});
+
 test("Bot and chat access catalogs are scoped to their owning Bot while create is targetless", async () => {
   const owner = bot("bot:scope");
   const app = fixture({ bots: [owner] });

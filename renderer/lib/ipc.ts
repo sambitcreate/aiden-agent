@@ -2,7 +2,7 @@ import { parseBotRoutineModelDirectory } from "../shared/bot-routine-model-direc
 import type { ChatInputSourceV1 } from "../shared/chat-input-source";
 import { createBotPeerApi } from "./bot-peers-api";
 import { parseBotExecutionResumeStatus } from "../shared/bot-execution-resume";
-import { parseBotRoutineModelSettings, parseBotRoutineModelCatalog, parseBotRoutineModelResult, parseBotRoutineModelRuns, type BotRoutineModelSave } from "../shared/bot-routine-models";
+import { parseBotRoutineModelSettings, parseBotRoutineModelCatalog, parseBotRoutineModelResult, parseBotRoutineModelRuns, type BotRoutineModelSave, type BotRoutineThinkingLevel } from "../shared/bot-routine-models";
 import type { PeerProjectSource } from "../shared/peer-project-clone";
 import { BOT_CONNECTOR_WATCH_CHANNELS as watchChannels } from "../shared/bot-connector-watches";
 import type * as ConnectorWatch from "../shared/bot-connector-watches";
@@ -1896,6 +1896,9 @@ export const botsApi = {
   update: (input: BotUpdateInput) => invoke<BotDefinition>("bots:update", input),
   getCapabilityCatalog: (botId?: string) =>
     invoke<BotCapabilityCatalog>("bots:getCapabilityCatalog", botId),
+  /** The thinking levels one catalog model supports; null when unknown. */
+  getModelThinkingLevels: (input: { botId?: string; providerId: string; modelId: string }) =>
+    invoke<BotRoutineThinkingLevel[] | null>("bots:getModelThinkingLevels", input),
   getBotAccess: (id: string) => invoke<BotAccessState | null>("bots:getBotAccess", id),
   updateBotAccess: (input: { botId: string; expectedRevision: string; access: BotAccessUpdate }) =>
     invoke<BotAccessView>("bots:updateBotAccess", input),

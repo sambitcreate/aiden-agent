@@ -577,7 +577,7 @@ const execution: BotExecutionPort = {
       await sourceCurrent();
       const selected = claim.actual === "fallback" ? claim.fallback! : claim.primary;
       const runtime = await resolveBotModelRuntime(proof.binding.sourceProviderId, proof.binding.sourceModelId, boundSignal, botId);
-      if (!botRoutineModelThinkingLevels(runtime.model).includes(selected.thinkingLevel)) throw new Error("This routine's model no longer supports its selected thinking level.");
+      if (!botRoutineModelThinkingLevels(runtime.model).includes(selected.thinkingLevel)) throw new Error("This run's model can't use its thinking level. Choose another level in the Bot's or routine's Model settings.");
       return await buildBotExecutionRuntime(botId, claim, runtime, boundSignal,
         async () => { boundSignal.throwIfAborted(); await peerLease?.revalidate(); await proof.assertCurrent(); await sourceCurrent(); await admission.revalidateBeforeEffect(); boundSignal.throwIfAborted(); },
         () => {admission.release();peerLease?.release();}, selected.thinkingLevel);

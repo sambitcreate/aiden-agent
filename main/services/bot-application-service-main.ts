@@ -34,6 +34,11 @@ export const botApplicationService = createBotApplicationService({
   chatStore,
   capabilityStore: botCapabilityStore,
   catalog: botCapabilityCatalog,
+  // Loaded on use: the model runtime is heavy and Bot startup doesn't need it.
+  modelThinkingLevels: async (providerId, modelId) => {
+    const [{ resolveRuntimeModelMetadata }, { botRoutineModelThinkingLevels }] = await Promise.all([import("./model-runtime.js"), import("./bot-routine-models.js")]);
+    return botRoutineModelThinkingLevels(await resolveRuntimeModelMetadata(providerId, modelId));
+  },
   managedWorkspace: botManagedWorkspace,
   lifecycleJournal: botLifecycleJournal,
   migrationSeal: botCapabilityMigrationSeal,
