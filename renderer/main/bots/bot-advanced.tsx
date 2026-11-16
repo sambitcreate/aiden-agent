@@ -4,8 +4,8 @@
 // Notifications, Open work, Memory, Model, Computer, Permissions, Replies,
 // Instructions, How other Bots see it, Tools, Spending, then Clear.
 //
-// Switches and actions save at once. The name, the subtitle and the model and
-// tool choices batch behind a Save that sticks to the bottom of the tab and
+// Switches and actions save at once. The name, the subtitle, the model and its
+// thinking level and the tool choices batch behind a Save that sticks to the bottom of the tab and
 // shows only while something changed. Nothing asks "Discard changes?": an
 // unsaved edit is kept for this window, per Bot, and comes back when the tab
 // opens again, saying so.
@@ -49,12 +49,14 @@ import {
   queryKeys,
   useBotAccess,
   useBotCapabilityCatalog,
+  useBotModelThinkingLevels,
   useBotTelegramBinding,
   useBotTelegramTargets,
   useSettings,
 } from "../../lib/queries";
 import { settingsLocation } from "../../lib/settings-section";
 import { rebaseBotEditorAccessDraft } from "../../shared/bot-editor-save";
+import { BOT_THINKING_LEVEL_LABELS, effectiveBotThinkingLevel, type BotRoutineThinkingLevel } from "../../shared/bot-routine-models";
 import {
   BOT_FULL_ACCESS_NOTICE_VERSION,
   nextBotFileScopeIds,
@@ -109,15 +111,61 @@ import { botRoutinesKey } from "./bot-routines";
 import { BotSpendingSection } from "./bot-spending-section";
 import { botMemoryCount, botMemoryCountLabel, useBotMemory } from "./use-bot-memory";
 
+/**
+ * How much the Bot's model thinks. The choices are the levels the model picked
+ * above supports, and the select shows the level that will really run. It
+ * waits for Save with the model, so the two are always saved together.
+ */
+function ThinkingField({
+  supported,
+  requested,
+  disabled,
+  onChange,
+}: {
+  supported: readonly BotRoutineThinkingLevel[];
+  requested: BotRoutineThinkingLevel;
+  disabled: boolean;
+  onChange(next: BotRoutineThinkingLevel): void;
+}) {
+  const effective = effectiveBotThinkingLevel(supported, requested);
+  if (!effective) return null;
+  const description = supported.length === 1
+    ? effective === "off"
+      ? "This model answers without thinking first."
+      : `This model always thinks at ${BOT_THINKING_LEVEL_LABELS[effective]}.`
+    : effective === requested
+      ? "More thinking can help with harder work, but replies take longer and cost more."
+      : `This model can’t use ${BOT_THINKING_LEVEL_LABELS[requested]}, so it uses ${BOT_THINKING_LEVEL_LABELS[effective]}.`;
+  return (
+    <Field label="Thinking" description={description}>
+      <Select value={effective} disabled={disabled || supported.length < 2} onValueChange={(next) => onChange(next as BotRoutineThinkingLevel)}>
+        <SelectTrigger size="small" className="w-36 max-w-full" aria-label="Thinking">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {supported.map((level) => (
+            <SelectItem key={level} value={level}>
+              {BOT_THINKING_LEVEL_LABELS[level]}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </Field>
+  );
+}
+
 function ModelSection({
   catalog,
   draft,
+  thinking,
   disabled,
   onChange,
   onSetUpModel,
 }: {
   catalog: BotCapabilityCatalog;
   draft: BotAccessDraft;
+  /** The chosen model's levels (absent while loading or unknown) and the Bot's requested level. */
+  thinking: { supported: readonly BotRoutineThinkingLevel[] | null | undefined; requested: BotRoutineThinkingLevel; onChange(next: BotRoutineThinkingLevel): void };
   disabled: boolean;
   onChange(next: BotAccessDraft): void;
   onSetUpModel(): void;
@@ -154,6 +202,9 @@ function ModelSection({
           onSelect={(providerId, modelId) => onChange({ ...draft, ...chooseBotModel(catalog, draft, providerId, modelId) })}
         />
       </Field>
+      {thinking.supported?.length ? (
+        <ThinkingField supported={thinking.supported} requested={thinking.requested} disabled={disabled} onChange={thinking.onChange} />
+      ) : null}
       {primary && !primary.model.supportsImages ? (
         visionAvailable ? (
           <Field
@@ -482,6 +533,7 @@ function readFileAsBase64(file: Blob): Promise<string> {
 interface SettingsDraft {
   name: string | null;
   description: string | null;
+  thinking: BotRoutineThinkingLevel | null;
   access: BotAccessDraft | null;
   accessBaseline: BotAccessDraft | null;
 }
@@ -875,6 +927,7 @@ export function BotAdvancedTab({ bot, sectionRequest = null }: { bot: BotDefinit
   const [restored, setRestored] = React.useState(kept.current !== undefined);
   const [nameEdit, setNameEdit] = React.useState<string | null>(kept.current?.name ?? null);
   const [descriptionEdit, setDescriptionEdit] = React.useState<string | null>(kept.current?.description ?? null);
+  const [thinkingEdit, setThinkingEdit] = React.useState<BotRoutineThinkingLevel | null>(kept.current?.thinking ?? null);
   const [draft, setDraft] = React.useState<BotAccessDraft | null>(kept.current?.access ?? null);
   const [baseline, setBaseline] = React.useState<BotAccessDraft | null>(kept.current?.accessBaseline ?? null);
   const [saving, setSaving] = React.useState(false);
@@ -895,7 +948,10 @@ export function BotAdvancedTab({ bot, sectionRequest = null }: { bot: BotDefinit
   const nameDirty = nameEdit !== null && nameEdit.trim() !== bot.name;
   const descriptionDirty = descriptionEdit !== null && descriptionEdit.trim() !== (bot.description ?? "").trim();
   const accessChanged = draft !== null && baseline !== null && JSON.stringify(draft) !== JSON.stringify(baseline);
-  const dirty = nameDirty || descriptionDirty || accessChanged;
+  const storedThinking = bot.thinkingLevel ?? "off";
+  const thinkingDirty = thinkingEdit !== null && thinkingEdit !== storedThinking;
+  const dirty = nameDirty || descriptionDirty || thinkingDirty || accessChanged;
+  const thinkingQuery = useBotModelThinkingLevels(bot.id, draft?.providerId, draft?.modelId);
 
   // Every change is kept for this window until Save or Revert.
   React.useEffect(() => {
@@ -903,13 +959,14 @@ export function BotAdvancedTab({ bot, sectionRequest = null }: { bot: BotDefinit
       unsavedDrafts.set(bot.id, {
         name: nameDirty ? nameEdit : null,
         description: descriptionDirty ? descriptionEdit : null,
+        thinking: thinkingDirty ? thinkingEdit : null,
         access: accessChanged ? draft : null,
         accessBaseline: accessChanged ? baseline : null,
       });
     } else {
       unsavedDrafts.delete(bot.id);
     }
-  }, [accessChanged, baseline, bot.id, descriptionDirty, descriptionEdit, dirty, draft, nameDirty, nameEdit]);
+  }, [accessChanged, baseline, bot.id, descriptionDirty, descriptionEdit, dirty, draft, nameDirty, nameEdit, thinkingDirty, thinkingEdit]);
 
   React.useEffect(() => {
     if (!sectionRequest || sectionRequest.botId !== bot.id || handledRequest.current === sectionRequest.key) return;
@@ -928,6 +985,7 @@ export function BotAdvancedTab({ bot, sectionRequest = null }: { bot: BotDefinit
   const revert = () => {
     setNameEdit(null);
     setDescriptionEdit(null);
+    setThinkingEdit(null);
     setNameError(null);
     if (baseline) setDraft(baseline);
     setRestored(false);
@@ -942,17 +1000,23 @@ export function BotAdvancedTab({ bot, sectionRequest = null }: { bot: BotDefinit
     setNameError(null);
     setSaving(true);
     try {
-      const patch: { name?: string; description?: string } = {};
-      if (nameDirty) patch.name = nameEdit!.trim();
-      if (descriptionDirty) patch.description = descriptionEdit!.trim();
-      if (patch.name !== undefined || patch.description !== undefined) await updateBotIdentity(qc, bot.id, patch);
-      setNameEdit(null);
-      setDescriptionEdit(null);
+      // The model saves before the thinking level, and each edit clears only
+      // once its own write lands, so a failed Save leaves the rest to retry.
+      // Between the two writes a run sees the new model with the old level,
+      // which the claim clamps to a level that model runs.
       if (accessChanged && draft && baseline) {
         const saved = await saveAccessDraft(qc, bot.id, draft, baseline);
         setDraft(saved);
         setBaseline(saved);
       }
+      const patch: { name?: string; description?: string; thinkingLevel?: BotRoutineThinkingLevel } = {};
+      if (nameDirty) patch.name = nameEdit!.trim();
+      if (descriptionDirty) patch.description = descriptionEdit!.trim();
+      if (thinkingDirty) patch.thinkingLevel = thinkingEdit!;
+      if (Object.keys(patch).length > 0) await updateBotIdentity(qc, bot.id, patch);
+      setNameEdit(null);
+      setDescriptionEdit(null);
+      setThinkingEdit(null);
       setRestored(false);
       toast.success("Saved");
     } catch (error) {
@@ -1036,6 +1100,7 @@ export function BotAdvancedTab({ bot, sectionRequest = null }: { bot: BotDefinit
           <ModelSection
             catalog={catalog}
             draft={draft}
+            thinking={{ supported: thinkingQuery.data, requested: thinkingEdit ?? storedThinking, onChange: setThinkingEdit }}
             disabled={saving}
             onChange={setDraft}
             onSetUpModel={() => void navigate({ to: "/settings", search: { section: "providers" } })}

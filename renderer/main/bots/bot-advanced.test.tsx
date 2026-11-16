@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import type { BotDefinition, BotUpdateInput } from "../../shared/bots";
+import type { BotRoutineThinkingLevel } from "../../shared/bot-routine-models";
 import { DEFAULT_BOT_AVATAR } from "../../shared/bots";
 import { useRouterState } from "@tanstack/react-router";
 import { BotsView } from "../bots-view";
@@ -21,7 +22,7 @@ afterEach(cleanup);
  * round-trip like main: an update without a description clears it, and an
  * access save answers with the saved access view alone.
  */
-function settingsIpc(initial: BotDefinition = botFixture(), options: { messaging?: boolean; failUpdates?: boolean } = {}) {
+function settingsIpc(initial: BotDefinition = botFixture(), options: { messaging?: boolean; failUpdates?: boolean; failAccessUpdates?: boolean; thinkingLevels?: Record<string, BotRoutineThinkingLevel[]> } = {}) {
   let bot = initial;
   const updates: BotUpdateInput[] = [];
   const accessUpdates: { access: Record<string, unknown> }[] = [];
@@ -53,12 +54,14 @@ function settingsIpc(initial: BotDefinition = botFixture(), options: { messaging
       return bot;
     },
     "bots:getCapabilityCatalog": () => catalogFixture(),
+    "bots:getModelThinkingLevels": (input) => options.thinkingLevels?.[(input as { modelId: string }).modelId] ?? null,
     "bots:getBotAccess": () => ({
       access,
       modelSelection: { providerId: "prov-text", modelId: "model-text" },
       visionModelSelection: { providerId: "prov-vision", modelId: "model-vision" },
     }),
     "bots:updateBotAccess": (input) => {
+      if (options.failAccessUpdates) throw new Error("Error invoking remote method 'bots:updateBotAccess': Error: Bots are starting.");
       const sent = input as { access: Record<string, unknown> };
       accessUpdates.push(sent);
       access = { ...access, revision: `${String(access.revision)}+`, accessMode: sent.access.accessMode };
@@ -197,6 +200,74 @@ test("a new model waits for Save, and a model that reads images drops the photo 
   assert.equal(store.accessUpdates[0]!.access.modelId, "model-vision");
   assert.equal(store.accessUpdates[0]!.access.visionModel, null);
   await waitFor(() => assert.equal(saveBar(), null));
+});
+
+test("Thinking offers the chosen model's levels, shows the level it will really use, and waits for Save with the model", async () => {
+  const store = settingsIpc(botFixture(), {
+    thinkingLevels: { "model-text": ["low", "high", "max"], "model-vision": ["off", "low", "medium"] },
+  });
+  await openSettings();
+  const thinking = await screen.findByRole("combobox", { name: "Thinking" });
+  assert.match(thinking.textContent ?? "", /Low/u, "Writer can't think Off, so it runs Low");
+  assert.ok(screen.getByText("This model can’t use Off, so it uses Low."));
+  fireEvent.click(thinking);
+  assert.deepEqual(screen.getAllByRole("option").map((option) => option.textContent), ["Low", "High", "Maximum"]);
+  fireEvent.click(screen.getByRole("option", { name: "Maximum" }));
+  await waitFor(() => assert.match(screen.getByRole("combobox", { name: "Thinking" }).textContent ?? "", /Maximum/u));
+  assert.equal(store.updates.length, 0, "nothing saves before Save");
+
+  // The unsaved model's levels apply at once; Seer tops out at Medium.
+  fireEvent.click(screen.getByRole("button", { name: "AI model" }));
+  fireEvent.click(await screen.findByRole("option", { name: /^Seer/u }));
+  await waitFor(() => assert.match(screen.getByRole("combobox", { name: "Thinking" }).textContent ?? "", /Medium/u));
+  assert.ok(screen.getByText("This model can’t use Maximum, so it uses Medium."));
+
+  fireEvent.click(within(saveBar()!).getByRole("button", { name: "Save" }));
+  await waitFor(() => assert.equal(store.accessUpdates.length, 1));
+  assert.equal(store.updates.length, 1);
+  assert.equal(store.updates[0]!.thinkingLevel, "max", "the Bot keeps what was asked; the run uses the nearest level the model has");
+  assert.equal(store.accessUpdates[0]!.access.modelId, "model-vision");
+  await waitFor(() => assert.equal(saveBar(), null));
+});
+
+test("a Save whose model write fails keeps the model and thinking level together to try again", async () => {
+  const options = { failAccessUpdates: true, thinkingLevels: { "model-text": ["low", "high", "max"], "model-vision": ["off", "low", "medium"] } as Record<string, BotRoutineThinkingLevel[]> };
+  const store = settingsIpc(botFixture(), options);
+  await openSettings();
+  fireEvent.click(await screen.findByRole("button", { name: "AI model" }));
+  fireEvent.click(await screen.findByRole("option", { name: /^Seer/u }));
+  fireEvent.click(await screen.findByRole("combobox", { name: "Thinking" }));
+  fireEvent.click(screen.getByRole("option", { name: "Medium" }));
+  fireEvent.click(within(saveBar()!).getByRole("button", { name: "Save" }));
+  await waitFor(() => assert.equal((within(saveBar()!).getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled, false));
+  assert.equal(store.updates.length, 0, "the level never lands without its model");
+  assert.match(screen.getByRole("button", { name: "AI model" }).textContent ?? "", /Seer/u);
+  assert.match(screen.getByRole("combobox", { name: "Thinking" }).textContent ?? "", /Medium/u);
+
+  options.failAccessUpdates = false;
+  fireEvent.click(within(saveBar()!).getByRole("button", { name: "Save" }));
+  // A boolean, so each failed retry doesn't print the whole save bar.
+  await waitFor(() => assert.equal(saveBar() === null, true));
+  assert.equal(store.accessUpdates[store.accessUpdates.length - 1]!.access.modelId, "model-vision");
+  assert.equal(store.current().thinkingLevel, "medium");
+});
+
+test("Revert puts the thinking level back with the rest", async () => {
+  const store = settingsIpc(botFixture({ thinkingLevel: "high" }), { thinkingLevels: { "model-text": ["low", "high", "max"] } });
+  await openSettings();
+  fireEvent.click(await screen.findByRole("combobox", { name: "Thinking" }));
+  fireEvent.click(screen.getByRole("option", { name: "Low" }));
+  fireEvent.click(within(await waitFor(() => saveBar()!)).getByRole("button", { name: "Revert" }));
+  await waitFor(() => assert.match(screen.getByRole("combobox", { name: "Thinking" }).textContent ?? "", /High/u));
+  assert.equal(saveBar(), null);
+  assert.equal(store.updates.length, 0);
+});
+
+test("no Thinking row shows while a model's levels are unknown", async () => {
+  settingsIpc();
+  await openSettings();
+  await screen.findByRole("button", { name: "AI model" });
+  assert.equal(screen.queryByRole("combobox", { name: "Thinking" }), null);
 });
 
 test("Disable a tool narrows the Bot to Custom access on Save", async () => {

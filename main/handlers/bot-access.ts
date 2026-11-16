@@ -8,7 +8,7 @@ import { parseBotNoticeAcknowledgement } from "../../renderer/shared/bot-capabil
 import type { BotApplicationService } from "../services/bot-application-service.js";
 import { normalizeTelegramProfileName, telegramBotNoticeAudienceId } from "../services/telegram/telegram-profile-config.js";
 import { botAccessUpdateRendererError, botCreateRendererError } from "./bot-renderer-errors.js";
-import { parseBotAccessUpdateInput, parseBotCreateWithAccess, parseBotId } from "./bot-params.js";
+import { parseBotAccessUpdateInput, parseBotCreateWithAccess, parseBotId, parseBotModelThinkingLevelsInput } from "./bot-params.js";
 
 export interface BotAccessTelegramProfile {
   name: string;
@@ -23,6 +23,7 @@ export interface BotAccessHandlerDependencies<Event> {
     | "acknowledgeNotice"
     | "createBot"
     | "capabilityCatalog"
+    | "modelThinkingLevels"
     | "getBotAccess"
     | "botWebSearchEnabled"
     | "modelSelection"
@@ -121,6 +122,10 @@ export function registerBotAccessHandlers<Event>(deps: BotAccessHandlerDependenc
   deps.handle("bots:getCapabilityCatalog", async (_event, id: unknown) =>
     service.capabilityCatalog(desktopAudienceId, id === undefined ? undefined : parseBotId(id)),
   );
+  deps.handle("bots:getModelThinkingLevels", async (_event, input: unknown) => {
+    const { botId, providerId, modelId } = parseBotModelThinkingLevelsInput(input);
+    return service.modelThinkingLevels(desktopAudienceId, botId, providerId, modelId);
+  });
   deps.handle("bots:getBotAccess", async (_event, id: unknown) => {
     const botId = parseBotId(id);
     const [access, modelSelection, visionModelSelection, webSearchEnabled] = await Promise.all([
