@@ -248,7 +248,7 @@ test("a Save whose model write fails keeps the model and thinking level together
   fireEvent.click(within(saveBar()!).getByRole("button", { name: "Save" }));
   // A boolean, so each failed retry doesn't print the whole save bar.
   await waitFor(() => assert.equal(saveBar() === null, true));
-  assert.equal(store.accessUpdates.at(-1)!.access.modelId, "model-vision");
+  assert.equal(store.accessUpdates[store.accessUpdates.length - 1]!.access.modelId, "model-vision");
   assert.equal(store.current().thinkingLevel, "medium");
 });
 
