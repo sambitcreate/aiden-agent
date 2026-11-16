@@ -19,7 +19,7 @@ struct AidenBotPeersView: View {
                 }
             } else {
                 ContentUnavailableView("Bot peers unavailable", systemImage: "bubble.left.and.bubble.right",
-                    description: Text("Connect to a host that supports Bot peers and grants access to this Bot."))
+                    description: Text("Connect to a computer that supports Bot peers and grants access to this Bot."))
             }
         }
         .navigationTitle("Bot peers")
@@ -66,13 +66,13 @@ struct AidenBotPeersForm<ExchangeDestination: View>: View {
             if let message = model.message { Section { Text(message).foregroundStyle(palette.secondary) } }
             if model.pending != nil {
                 Section("Waiting for confirmation") {
-                    Text("The host may have saved this change. Its exact request is kept; other changes wait until the outcome is known.")
+                    Text("The computer may have saved this change. Its exact request is kept; other changes wait until the outcome is known.")
                     Button("Refresh peer settings") { Task { await model.load() } }.disabled(model.loading || !model.canWrite)
                     Button("Retry same request") { Task { await model.retry() } }.disabled(!model.canWrite || model.busy)
                 }
             }
             if model.needsReview {
-                Section("Changed on your host") {
+                Section("Changed on your computer") {
                     if let settings = model.settings { Text(settings.routingDescription.isEmpty ? "No saved routing description" : settings.routingDescription) }
                     Text("Refresh and review the current pairs and description before saving your retained draft.")
                     Button("Keep draft with current revision") { model.keepDraft() }.disabled(!model.canEdit)
@@ -112,7 +112,7 @@ struct AidenBotPeersForm<ExchangeDestination: View>: View {
                             }
                         }.disabled(!model.canApprove(bot)).accessibilityHint("Review and approve a pair in both directions")
                     }
-                    if model.catalog?.bots.isEmpty == true { Text("No other Bots are available on this host.").foregroundStyle(palette.secondary) }
+                    if model.catalog?.bots.isEmpty == true { Text("No other Bots are available on this computer.").foregroundStyle(palette.secondary) }
                 }
             }
             Section("Exchanges") {
@@ -162,7 +162,7 @@ struct AidenBotPeerExchangeView: View {
         Group {
             if let model, model.botID == botID, model.exchangeID == exchangeID, context.map(coordinator.holds) == true, coordinator.botServer(on: machine)?.supportsBotPeerExchanges == true {
                 AidenBotPeerExchangeForm(model: model)
-            } else { ContentUnavailableView("Exchange unavailable", systemImage: "bubble.left.and.bubble.right", description: Text("Connect to the owning host with Bot, chat and peer access.")) }
+            } else { ContentUnavailableView("Exchange unavailable", systemImage: "bubble.left.and.bubble.right", description: Text("Connect to the computer that owns it with Bot, chat and peer access.")) }
         }
         .navigationTitle("Peer exchange").navigationBarTitleDisplayMode(.inline)
         .onAppear { visible = true; updateActive() }
@@ -207,7 +207,7 @@ struct AidenBotPeerExchangeForm: View {
                 if let result = detail.result {
                     Section("Result · \(peerTitle(result.outcome.rawValue))") {
                         Text(result.text).textSelection(.enabled)
-                        if result.truncated { Text("This result was truncated by the host.").font(.footnote).foregroundStyle(palette.secondary) }
+                        if result.truncated { Text("This result was truncated by the computer.").font(.footnote).foregroundStyle(palette.secondary) }
                     }
                 }
                 Section("Evidence") {
@@ -224,7 +224,7 @@ struct AidenBotPeerExchangeForm: View {
                         Text("Stop may already be accepted. The original request is retained until the linked work acknowledges its outcome.")
                         Button("Check same Stop") { Task { await model.retry() } }.disabled(!model.canWrite || model.busy)
                     } else if model.hasHostPendingStop {
-                        Text("A Stop is already pending on the host. Refresh to check its acknowledgement.")
+                        Text("A Stop is already pending on the computer. Refresh to check its acknowledgement.")
                             .foregroundStyle(palette.secondary)
                     } else {
                         Button("Stop linked exchange", role: .destructive) { Task { await model.stop() } }.disabled(!model.canStop)
@@ -240,7 +240,7 @@ struct AidenBotPeerExchangeForm: View {
                 if let evidence = model.evidence {
                     ScrollView { VStack(alignment: .leading, spacing: 16) {
                         Text(evidence.text).textSelection(.enabled)
-                        if evidence.truncated { Text("This evidence was truncated by the host.").font(.footnote).foregroundStyle(palette.secondary) }
+                        if evidence.truncated { Text("This evidence was truncated by the computer.").font(.footnote).foregroundStyle(palette.secondary) }
                     }.padding().frame(maxWidth: .infinity, alignment: .leading) }
                     .navigationTitle(evidence.title).navigationBarTitleDisplayMode(.inline)
                     .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { model.clearEvidence() } } }

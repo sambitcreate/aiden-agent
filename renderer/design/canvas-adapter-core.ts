@@ -233,3 +233,37 @@ export function duplicateFrames(
   }
   return syncConnectors({ ...doc, frames: [...doc.frames, ...added] });
 }
+
+export type CanvasFocusResolution =
+  | { action: "wait" }
+  | { action: "drop" }
+  | { action: "fit"; ids: string[] };
+
+/**
+ * Decides whether a pending `canvas_focus` request should wait for frames to
+ * arrive and be measured by React Flow, drop if none arrived before the wait
+ * budget, or fit the target frames (empty `ids` fits the whole page).
+ */
+export function resolveCanvasFocus(input: {
+  requestedIds: readonly string[];
+  nodeIds: readonly string[];
+  hiddenIds?: readonly string[];
+  isMeasured: (id: string) => boolean;
+  waitedMs: number;
+  maxWaitMs: number;
+}): CanvasFocusResolution {
+  const hidden = new Set(input.hiddenIds);
+  const visibleNodeIds = input.nodeIds.filter((id) => !hidden.has(id));
+  const requestedVisible = input.requestedIds.filter((id) => !hidden.has(id));
+  if (input.requestedIds.length > 0 && requestedVisible.length === 0) return { action: "drop" };
+  if (input.requestedIds.length === 0 && input.nodeIds.length > 0 && visibleNodeIds.length === 0) {
+    return { action: "drop" };
+  }
+  const present = requestedVisible.filter((id) => visibleNodeIds.includes(id));
+  const measuredIds = present.length > 0 ? present : visibleNodeIds;
+  const measured = measuredIds.length > 0 && measuredIds.every((id) => input.isMeasured(id));
+  const arriving = present.length < requestedVisible.length || (visibleNodeIds.length > 0 && !measured);
+  if (arriving && input.waitedMs < input.maxWaitMs) return { action: "wait" };
+  if (input.requestedIds.length > 0 && present.length === 0) return { action: "drop" };
+  return { action: "fit", ids: present };
+}

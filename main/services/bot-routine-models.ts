@@ -155,16 +155,18 @@ export function createBotRoutineModelService(options: BotRoutineModelServiceOpti
     return { binding, thinkingLevel: choice.thinkingLevel };
   }
   /**
-   * The Bot's own model has no thinking setting of its own, so an inherited
-   * choice takes the nearest level that model supports rather than one it
-   * would refuse. Unreadable metadata leaves the choice for the run to refuse.
+   * The Bot's own thinking level (off unless the person chose one) is a
+   * preference, not an exact grant: when its model can't run that level, use
+   * the level Pi's clamp picks rather than admit a choice the run will refuse.
+   * If the model record can't be read, keep the level as asked; the run's own
+   * check still decides, as it did before this clamp existed.
    */
   async function inheritedChoice(botId: string): Promise<BotExecutionModelChoice> {
     const choice = await options.defaultChoice(botId);
     let model: Model<Api>;
     try { model = await options.metadata(choice.binding.sourceProviderId, choice.binding.sourceModelId); } catch { return choice; }
-    const thinkingLevel = clampThinkingLevel(model, choice.thinkingLevel);
-    return thinkingLevel === choice.thinkingLevel || !executableLevels(model).includes(thinkingLevel) ? choice : { ...choice, thinkingLevel };
+    if (executableLevels(model).includes(choice.thinkingLevel)) return choice;
+    return { ...choice, thinkingLevel: clampThinkingLevel(model, choice.thinkingLevel) };
   }
   async function read(botId: string, routineId: string): Promise<BotRoutineModelSettings> { return serial("store", async () => publicConfig(currentConfig(await load(), botId, routineId, await anchors(botId, routineId)))); }
   async function catalog(botId: string, routineId: string): Promise<BotRoutineModelCatalog> {

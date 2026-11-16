@@ -404,11 +404,17 @@ struct AidenBotPreset: Codable, Equatable, Identifiable, Sendable {
     let avatar: AidenBotAvatarRecipe
     let suggestedConnections: [AidenBotConnectionChip]
     let suggestedRoutine: AidenBotPresetRoutine?
+    /// Revision 61 (`bot:templates`): the version, instructions, sample and the
+    /// Bot it already made. Nil from an older Mac or without the opt-in.
+    let template: AidenBotTemplateFields?
 
     init(from decoder: Decoder) throws {
         try AidenBotWire.requireOnlyKeys(
             decoder,
-            allowed: ["id", "name", "subtitle", "avatar", "suggestedConnections", "suggestedRoutine"]
+            allowed: [
+                "id", "name", "subtitle", "avatar", "suggestedConnections", "suggestedRoutine",
+                "version", "instructions", "sample", "existingBotId",
+            ]
         )
         let values = try decoder.container(keyedBy: CodingKeys.self)
         id = try values.decode(String.self, forKey: .id)
@@ -418,13 +424,33 @@ struct AidenBotPreset: Codable, Equatable, Identifiable, Sendable {
         avatar = try AidenBotAvatarRecipe.decodeRequest(from: values.superDecoder(forKey: .avatar))
         suggestedConnections = try values.decode([AidenBotConnectionChip].self, forKey: .suggestedConnections)
         suggestedRoutine = try AidenBotWire.optional(AidenBotPresetRoutine.self, from: values, forKey: .suggestedRoutine)
+        template = try AidenBotTemplateFields.decodeIfPresent(
+            values, version: .version, instructions: .instructions, sample: .sample, existingBotId: .existingBotId
+        )
         guard suggestedConnections.count <= AidenBotRoutineWire.maxSuggestedConnections else {
             throw AidenBotContractError.invalidField("suggestedConnections")
         }
     }
 
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(name, forKey: .name)
+        try values.encode(subtitle, forKey: .subtitle)
+        try values.encode(avatar, forKey: .avatar)
+        try values.encode(suggestedConnections, forKey: .suggestedConnections)
+        try values.encodeIfPresent(suggestedRoutine, forKey: .suggestedRoutine)
+        if let template {
+            try values.encode(template.version, forKey: .version)
+            try values.encode(template.instructions, forKey: .instructions)
+            try values.encode(template.sample, forKey: .sample)
+            try values.encodeIfPresent(template.existingBotId, forKey: .existingBotId)
+        }
+    }
+
     private enum CodingKeys: String, CodingKey {
         case id, name, subtitle, avatar, suggestedConnections, suggestedRoutine
+        case version, instructions, sample, existingBotId
     }
 }
 
@@ -446,19 +472,27 @@ struct AidenBotPresetList: Codable, Equatable, Sendable {
 
 struct AidenBotPresetCreateRequest: Codable, Equatable, Sendable {
     let presetId: String
+    /// Revision 61 (`bot:templates`): the version the person saw. Another one
+    /// is refused with `409 revision_conflict`; nil sends the older body.
+    let version: Int?
 
-    init(presetId: String) throws {
+    init(presetId: String, version: Int? = nil) throws {
         try AidenBotSessionWire.validatePluginID(presetId, field: "presetId")
+        guard version.map({ $0 >= 1 }) ?? true else { throw AidenBotContractError.invalidField("version") }
         self.presetId = presetId
+        self.version = version
     }
 
     init(from decoder: Decoder) throws {
-        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["presetId"])
+        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["presetId", "version"])
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        try self.init(presetId: try values.decode(String.self, forKey: .presetId))
+        try self.init(
+            presetId: try values.decode(String.self, forKey: .presetId),
+            version: try AidenBotWire.optional(Int.self, from: values, forKey: .version)
+        )
     }
 
-    private enum CodingKeys: String, CodingKey { case presetId }
+    private enum CodingKeys: String, CodingKey { case presetId, version }
 }
 
 struct AidenBotPresetCreateResult: Codable, Equatable, Sendable {

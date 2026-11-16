@@ -67,7 +67,7 @@ const PHASES: Record<BotActivityPhase, { word: string; mark: ActivityMark }> = {
   tidying: { word: "Tidying up its notes", mark: "bounce" },
   stopping: { word: "Stopping", mark: "bounce" },
   resuming: { word: "Picking up where it left off", mark: "bounce" },
-  reconnecting: { word: "Reconnecting to your Mac", mark: "bounce" },
+  reconnecting: { word: "Reconnecting to your computer", mark: "bounce" },
 };
 
 /** The Bot tool set's fixed tools (`bot-tool-policy.ts`, `bot-file-tool-router.ts`). */

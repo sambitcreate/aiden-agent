@@ -12,8 +12,9 @@ export const BOT_PANEL_ID = "bot-panel";
 /**
  * `browser` shows only while the Bot's own browser has a tab, and `computer`
  * only while the Bot has a computer on a Mac with Bot computers (`bot-workbench.tsx`).
+ * `advanced` holds the Bot's settings (plan §4.4).
  */
-export const BOT_PANEL_TABS = ["activity", "files", "memory", "routines", "browser", "computer"] as const;
+export const BOT_PANEL_TABS = ["activity", "files", "memory", "routines", "browser", "computer", "advanced"] as const;
 export type BotPanelTab = (typeof BOT_PANEL_TABS)[number];
 export const BOT_PANEL_OPEN_KEY = "aiden-agent.bot-panel.open";
 export const BOT_PANEL_TAB_KEY = "aiden-agent.bot-panel.tab";
@@ -27,10 +28,22 @@ export interface BotPanelFileRequest {
   key: number;
 }
 
-/** A file to select needs the Bot it belongs to, so a request never lands on another Bot. */
+/** A spot in the Advanced tab a link can open: a dialog there, or the model section. */
+export type BotAdvancedSection = "instructions" | "quiet-hours" | "model";
+
+export interface BotPanelSectionRequest {
+  /** The Bot the request is for. Consumers must match both `botId` and `key` before applying it. */
+  botId: string;
+  section: BotAdvancedSection;
+  /** New on every request. */
+  key: number;
+}
+
+/** A file to select, or an Advanced spot to open, needs the Bot it belongs to, so a request never lands on another Bot. */
 export type BotPanelShowOptions = (
-  | { path?: undefined; botId?: string }
-  | { path: string; botId: string }
+  | { path?: undefined; section?: undefined; botId?: string }
+  | { path: string; section?: undefined; botId: string }
+  | { path?: undefined; section: BotAdvancedSection; botId: string }
 ) & {
   /** Where closing the panel returns focus when it was opened from something that unmounts, such as a menu item. */
   returnFocus?: HTMLElement | null;
@@ -53,6 +66,8 @@ interface BotPanelState {
   tab: BotPanelTab;
   /** Cleared when the chat moves to a different Bot. Apply it only when `botId` is the Bot on screen. */
   fileRequest: BotPanelFileRequest | null;
+  /** Like `fileRequest`, for a spot in the Advanced tab. */
+  sectionRequest: BotPanelSectionRequest | null;
   /** Bumped whenever the person opens the panel or picks a tab from outside it. */
   focusRequest: number;
 }
@@ -92,6 +107,7 @@ interface PanelState {
   open: boolean;
   tab: BotPanelTab;
   fileRequest: BotPanelFileRequest | null;
+  sectionRequest: BotPanelSectionRequest | null;
 }
 
 /**
@@ -107,6 +123,7 @@ export function BotPanelProvider({
     open: readStored(BOT_PANEL_OPEN_KEY) === "true",
     tab: parseBotPanelTab(readStored(BOT_PANEL_TAB_KEY)),
     fileRequest: null,
+    sectionRequest: null,
   }));
   const [focusRequest, setFocusRequest] = React.useState(0);
   const openRef = React.useRef(state.open);
@@ -120,9 +137,16 @@ export function BotPanelProvider({
   // (the Bots home, a Profile) may be where a request for the next chat was made.
   React.useEffect(() => {
     if (routedBotId === null) return;
-    setState((current) =>
-      current.fileRequest && current.fileRequest.botId !== routedBotId ? { ...current, fileRequest: null } : current,
-    );
+    setState((current) => {
+      const dropFile = current.fileRequest !== null && current.fileRequest.botId !== routedBotId;
+      const dropSection = current.sectionRequest !== null && current.sectionRequest.botId !== routedBotId;
+      if (!dropFile && !dropSection) return current;
+      return {
+        ...current,
+        fileRequest: dropFile ? null : current.fileRequest,
+        sectionRequest: dropSection ? null : current.sectionRequest,
+      };
+    });
   }, [routedBotId]);
 
   const requestFocus = React.useCallback((returnTo?: HTMLElement | null) => {
@@ -158,7 +182,16 @@ export function BotPanelProvider({
         options?.path && options.botId
           ? { botId: options.botId, path: options.path, key: (lastFileRequestKey += 1) }
           : null;
-      setState((current) => ({ open: true, tab, fileRequest: request ?? current.fileRequest }));
+      const sectionRequest =
+        options?.section && options.botId
+          ? { botId: options.botId, section: options.section, key: (lastFileRequestKey += 1) }
+          : null;
+      setState((current) => ({
+        open: true,
+        tab,
+        fileRequest: request ?? current.fileRequest,
+        sectionRequest: sectionRequest ?? current.sectionRequest,
+      }));
     },
     [requestFocus],
   );

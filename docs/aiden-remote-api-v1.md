@@ -48,6 +48,11 @@ Initial capability IDs:
 | `bot:write` | Mutate Bot-classified chats and operate their turns, attachments, streams, and approvals. Requires `bot:read` as well as the existing route capability. |
 | `bot:activity` | Opt-in, no authority (contract revision 30). Delivers the Bot session `activity` and `queued` frames and snapshot keys, the person's `submissionId` on their own user entries, and Bot detail `chatActivity`. Negotiable post-pairing by any device type through `POST /device/capabilities` while `/server.features` lists `bot-activity-v1` (`404 not_found` otherwise), advertised in `serverCapabilities` only then, never issued by pairing. See "Bot chat activity, revision 30". |
 | `bot:allowed` | Opt-in, provisional revision 57. Reads and removes the Bot’s combined remembered-rule/folder list with the existing Bot grants, and permits an offered Always response. Only wired desktop hosts advertise it. Negotiated separately after pairing; no feature token or CLI port. Approval counts reach holders only. |
+| `approval:cards` | Opt-in, provisional revision 61. Adds the typed `card` to every pending approval the device is sent (stream approvals, a phone's run `approval_required` events and snapshots, Bot session approvals) and lets the device allow exactly what the card's buttons offer. Answers still need `approval:respond` (and the Bot grants for a Bot card). Any device type; offered while stream, run or Bot approvals are served. See "Bot UX on phones, revision 61". |
+| `approvals:settings` | Opt-in, provisional revision 61. Opens `GET`/`PUT /approvals/mode` and the rules page routes (`/approvals/rules…`), which also need `approval:respond`. Desktop hosts only (no CLI port). |
+| `bot:settings-changes` | Opt-in, provisional revision 61. Delivers `settings_change` Bot session entries (held `update_bot` cards and applied-change receipts) and opens their answer route with `bot:read` and `bot:write`. Desktop hosts only. |
+| `bot:suggestions` | Opt-in, provisional revision 61. Delivers `skill_proposal`, `lesson` and `memory_tidy` Bot session entries and opens their answer and Undo routes with `bot:read` and `bot:write`. Desktop hosts only. |
+| `bot:templates` | Opt-in, provisional revision 61. Adds each template's `version`, `instructions`, `sample` and `existingBotId` to `GET /bot-presets`, the version check on `POST /bots/from-preset`, and one-field `POST /bots`. Desktop hosts only. |
 | `bot:plans` | Opt-in, contract revision 56. Delivers the public plan snapshot and frame, and opens the plan response route with `bot:read` and `bot:write`. Offered only by a wired desktop host. Phones negotiate it separately when advertised in `serverCapabilities`; no pairing grant, global feature token, CLI hosting or paired-Mac plan card. |
 | `bot:access-requests` | Opt-in, contract revision 55. Delivers public access cards and opens their answer route with `bot:read` and `bot:write`. Alongside `bot:issues`, delivers access issues, counts and alerts. Offered only by a wired desktop host; no feature token or CLI hosting. Phones negotiate in a separate capability update; paired desktops use legacy notice lines. |
 | `bot:messaging` | Opt-in, no authority by itself, contract revision 54. Delivers per-Bot `botMessaging`, list `messaging`, and `kind: "message"` notification items. Opens `PUT /bots/messaging`, which also needs `bot:write`. Negotiable through `POST /device/capabilities` only when listed in `serverCapabilities`; no feature token and never issued by pairing. |
@@ -122,7 +127,7 @@ Forbidden: local usernames, config/user-data paths, environment values, provider
 
 ### Workspace
 
-Allowed: `id`, `name`, `permission`, `hasFolder`, `isManagedWorktree`, the optional `noWorkspace: true` marker (contract revision 51), optional branch/repository display names, small Git summary, `createdAt`, `updatedAt`, `revision`.
+Allowed: `id`, `name`, `permission` (the access tier that never reads narrower than what runs on the host: `none` for Chat only, `ask` for the Ask mode with nothing allowed in the workspace, otherwise `full`, which covers Auto, Never ask and any "Allow in this workspace" grant), `hasFolder`, `isManagedWorktree`, the optional `noWorkspace: true` marker (contract revision 51), optional branch/repository display names, small Git summary, `createdAt`, `updatedAt`, `revision`.
 
 Forbidden: `folderPath`, repository/worktree/Git-admin paths, ownership token, device/inode identity, remote URL, created-from HEAD, config-store record.
 
@@ -216,7 +221,7 @@ Device enumeration/revocation remains desktop-local in v1 unless a later explici
 
 - `GET /workspaces`, `GET /workspaces/{workspaceId}`
 - `POST /workspaces`: `folderless`, `scratch`, `selected-folder`, or desktop-only `clone` with an idempotency key.
-- `PATCH /workspaces/{workspaceId}`: revision-checked name/permission patch. Permission elevation requires explicit foreground confirmation evidence.
+- `PATCH /workspaces/{workspaceId}`: revision-checked name/permission patch. Permission elevation requires explicit foreground confirmation evidence. On a host with approval modes, `full` clears the workspace's own mode and grants (Never ask with commands and file changes allowed), `ask` sets the workspace's own mode to Ask and removes its grants, and `none` is Chat only.
 - `DELETE /workspaces/{workspaceId}`: revision-checked unregister only; never deletes the folder.
 - `GET /workspace-browser/roots`
 - `GET /workspace-browser/children?location=...&cursor=...`
@@ -272,9 +277,9 @@ The clone stages privately before publication and registers only after selected 
   chosen scope. `chat` and `always` remember only the same tool with the exact
   trimmed command or exact normalized workspace-relative path, in the same
   workspace; `chat` lasts for that chat until the Mac app quits and `always`
-  persists on the Mac until revoked in Settings → Bots & Approvals → Tool approvals. Omitting
+  persists on the Mac until revoked in Settings → Approvals. Omitting
   `scope` means `once`, so revision 16 clients are unchanged.
-- `GET /streams/{streamId}/approval`: current bounded approval snapshot, or `null` after resolution. Since revision 17 an allowable snapshot may carry `scopes` (starting with `once`, at least two entries); it is omitted when only a one-time allow is possible or `canAllow` is false. Scopes are offered only for plain parent workspace `write_file`, `edit_file`, and `run_command` calls in an Ask workspace, never for Bot turns, privileged or structured approvals, or schedule/automation tools. Since revision 39, a scheduled-task approval also carries the display-only `schedule` card for devices holding `schedule:cards` and `schedule:read` (see "Scheduled-task approval cards, revision 39").
+- `GET /streams/{streamId}/approval`: current bounded approval snapshot, or `null` after resolution. Since revision 17 an allowable snapshot may carry `scopes` (starting with `once`, at least two entries); it is omitted when only a one-time allow is possible or `canAllow` is false. Scopes are offered only for plain parent workspace `write_file`, `edit_file`, and `run_command` calls in a workspace that predates approval modes (no mode of its own, with Ask access, under the legacy reading), never for Bot turns, privileged or structured approvals, or schedule/automation tools. Under an approval mode a Mac card's only remember option is the desktop's "Allow in this workspace" (scope `workspace`), which no Remote projection carries and no Remote answer may name (`invalid_request`), so a device sees such a card with no `scopes` and answers it with a one-time allow or deny. Since revision 39, a scheduled-task approval also carries the display-only `schedule` card for devices holding `schedule:cards` and `schedule:read` (see "Scheduled-task approval cards, revision 39").
 - `GET /streams/{streamId}/question`: current bounded question-prompt snapshot, or `null` after resolution. Requires `chat:read` and is advertised only when `/server.features` contains `chat-question-prompts-v1`; any authenticated device may read its own stream's snapshot, while a response still requires the `questions:respond` grant. The snapshot carries `promptId`, `streamId`, `chatId`, `toolCallId`, the bounded `questions` array (1–4 questions, each with `question`, `header`, `multiSelect`, and 2–4 `options` of `label`/`description`), and `expiresAt`. `expiresAt` is the agent's own answer deadline, never more than five minutes after the prompt reached the stream; when it passes, the host tells the agent to proceed with its best judgement and the prompt resolves as expired. Clients should present an answer given after that point as an ordinary follow-up message. Question text is assistant-authored and already bounded by the host grammar; no host-only data is projected.
 - `POST /questions/{promptId}/respond`: resolve one pending prompt owned by the authenticated device. Requires `questions:respond` and an `Idempotency-Key`. The exact body is `{ "cancelled": boolean, "answers": [...] }` where `cancelled: true` dismisses the entire prompt and each answer addresses one question index as `{ "questionIndex": n, "kind": "option" | "custom" | "multi", ... }`—`option` carries one selected `answer` label, `custom` carries free `answer` text (bounded to the shared custom-answer limit), and `multi` carries a unique `selected` label array for `multiSelect` questions. The host semantically validates answers against the stored prompt before settlement: wrong indices, unselectable options, single answers on multi-select questions, or malformed kinds return `invalid_request`. Success returns `{ "promptId", "resolvedAt" }`. A second response for a settled prompt returns `question_already_resolved`; an expired, cancelled, or terminated prompt returns `question_expired`. The idempotency ledger replays the original outcome for a repeated request UUID and rejects conflicting payload reuse. The stream leaves its waiting state and resumes generation once the host consumes the answer.
 
@@ -317,7 +322,7 @@ Mobile-triggered setup may download only the fixed, hash-pinned URL compiled int
 These routes were frozen as contract in Phase 1 and implemented in Phase 4 through main-owned application and authority services: authenticated Bot identity, access, chat creation, favorite order, notice acknowledgement, bounded inbox projection, managed-home files, and canonical avatars. Each Bot operation carries `x-aiden-capabilities`; every listed capability is required conjunctively. `x-aiden-capability` remains the primary legacy annotation, not an alternative grant. A Bot mutation therefore always requires both `bot:read` and `bot:write`, plus the ordinary `chat:*` or `files:*` grant when it reuses those resource classes.
 
 - `GET /bots`: at most 256 bounded summaries, matching the authoritative Bot-store ceiling, plus the fixed maximum and authoritative revisioned favorite order. `includeArchived=true` is explicit. Summaries never contain instructions, every summary has `updatedAt >= createdAt`, and favorite IDs never refer to archived Bots even when archived summaries are included.
-- `POST /bots`: exact `BotCreateRequest`, including one required Full/Custom `access` update tied to the current catalog revision, device-scoped `Idempotency-Key`, and authoritative `BotDetail` response. Identity and initial access are created atomically. Any provider/model pair selected by the request or resolved by the Mac for creation must be currently available; unavailable selections fail closed without fallback.
+- `POST /bots`: exact `BotCreateRequest` (`purpose` and `instructions` optional from revision 61 for a `bot:templates` holder; see one-field create), including one required Full/Custom `access` update tied to the current catalog revision, device-scoped `Idempotency-Key`, and authoritative `BotDetail` response. Identity and initial access are created atomically. Any provider/model pair selected by the request or resolved by the Mac for creation must be currently available; unavailable selections fail closed without fallback.
 - `GET /bots/{botId}`: authenticated detail with editable guidance, a safe access view, the Bot's optional current audience-safe provider/model selection, and its optional `visionModelSelection`. The latter is a separately bound image-inspection companion; private runtime identities never cross this boundary.
 - `PATCH /bots/{botId}`: exact non-empty `BotIdentityPatch` plus `If-Match`.
 - `DELETE /bots/{botId}`: `If-Match` soft archive returning the new authoritative detail; it never hard-deletes or mutates identity, history, home, semantic avatar, or avatar assets. Archive atomically removes the Bot from favorites.
@@ -327,7 +332,7 @@ These routes were frozen as contract in Phase 1 and implemented in Phase 4 throu
 - `POST /bots/{botId}/chats`: open-or-create the Bot's one persistent chat. The frozen v1 response remains `201` and the operation identifier remains `createBotChat` for compatibility with shipped clients, even when the existing chat is returned. When it already exists, the Mac returns it unchanged and ignores creation-only provider/model input. When absent, an empty body inherits the Bot provider/model; otherwise one exact providerId/modelId pair is required, plus `Idempotency-Key`. Partial pairs never fall back. The creation pair must be currently available; an unavailable selection fails closed without fallback. The Mac injects the authoritative `botId` and hidden managed-home workspace; neither identifier is accepted in the body, and every successful response includes that authoritative `botId`. Concurrent calls and retries converge on the same chat. Legacy duplicate chats remain readable for recovery, but only the deterministic canonical chat is writable or projected in the Bot inbox. From 0.60.0, while a host serves `bot-durable-session-v1`, `POST /chats/{chatId}/turns` on a Bot's chat answers `400 invalid_request` ("Update Aiden on this device to chat with this Bot…") and appends nothing: the Bot's conversation is its durable session, and a workspace-chat turn would run outside it. Paired desktops open a host's Bot through `GET /bots/{botId}/session`, its `/session/events` stream and the session routes, as phones do, and negotiate `bot:activity` when the host announces `bot-activity-v1` (they do not take `bot:cards`). A desktop that misses that answer (the host was briefly unreachable) asks again on its next reconnect; a refusal is final. Desktops offer Queue and Steer only while they hold `bot:activity`, because without it the host sends them no `queued` list. A desktop reads a newer host's session as far as it understands it, as phones do: an unknown session state reads as `unavailable`, an entry it cannot parse is left out, and a stream event it cannot parse makes it read `GET /bots/{botId}/session` again instead of dropping the stream. After a clean `closed` event it reopens the stream at once (up to twice in a row, then with backoff). `BotSession` and `BotMessageReceipt` compose the state fields from `BotSessionStateFields` and close with `unevaluatedProperties: false`; `BotSessionState` alone stays closed for Resume, Dismiss and Stop. A host error's own `message`, when short and printable, is what a paired desktop shows for a refused request.
 - `GET /bot-capabilities?botId=…`: safe revisioned provider/model, image-input capability, file-scope, shell, connection/MCP, skill, and other-capability catalog plus the full notice status. The optional, exact `botId` selects an authenticated existing Bot so its saved unavailable choices can remain visible; omitting it returns the generic creation catalog. Unknown, duplicate, malformed, empty, and overlong query values fail closed. `supportsImages` is explicit and unknown capability fails closed. The response never returns display copy that the client could mistake for authority.
 - The catalog’s additive `skillsEnabled` boolean defaults to `true` when omitted. When `false`, skill inventory discovery and incarnation reconciliation pause; target-Bot catalogs may retain that Bot’s authenticated saved skill IDs as unavailable choices. Clients may preserve or remove those saved choices during unrelated edits, but must not offer unavailable unselected skills as new choices. The Mac enforces exact saved ownership and per-chat narrowing, withholds skills from all runtime contexts, and restores unchanged selections when the global gate reopens. Invalid provided values fail decoding.
-- `PATCH /bots/{botId}/capabilities`: `If-Match` Full/Custom update with the exact current `catalogRevision`. Full requires `confirmedForeground: true` and may carry one exact provider/model pair; omitting both preserves the saved choice for compatibility with older clients, while supplying only one is invalid. Custom contains exactly one currently available provider/model pair plus only exact positive opaque selections from that catalog. Optional `visionModel` uses three-state semantics: omitted preserves the companion, `null` clears it, and an exact provider/model object sets it only when the catalog marks that model image-capable. A supplied pair becomes revisioned durable authority, changing either primary or companion fences active turns, and the canonical persistent chat mirrors only the primary model. An unavailable model remains visibly blocked and is never replaced by fallback.
+- `PATCH /bots/{botId}/capabilities`: `If-Match` Full/Custom update with the exact current `catalogRevision`. Full requires `confirmedForeground: true` and may carry one exact provider/model pair; omitting both preserves the saved choice for compatibility with older clients, while supplying only one is invalid. Custom contains exactly one currently available provider/model pair plus only exact positive opaque selections from that catalog. Optional `visionModel` uses three-state semantics: omitted preserves the companion, `null` clears it, and an exact provider/model object sets it only when the catalog marks that model image-capable. A supplied pair becomes revisioned durable authority, changing either primary or companion fences active turns, and the canonical persistent chat mirrors only the primary model. An unavailable model remains visibly blocked and is never replaced by fallback. Moving a Full Bot to Custom from a device never widens it: when Full had Web search off, the Mac drops the Web search grant from the new selection whatever the device sent, since the catalog carries no capability kind for a device to tell it apart.
 - `GET /chats/{chatId}/capabilities` and `PATCH /chats/{chatId}/capabilities`: authenticated authoritative inherit/Custom view, then an `If-Match` update carrying both the exact `catalogRevision` and `expectedBotPolicyRevision`. The server rejects policy drift or any selection outside the current Bot ceiling and returns the authoritative chat subset view.
 - `GET /bot-access-notice`: Mac-owned acknowledgement status for this paired device. This v1 client recognizes only `bot-full-access-v1`; an unknown future version fails closed until matching copy ships. `POST /bot-access-notice/acknowledgement` accepts only that exact version, `continue_full` or `customize_first`, `confirmedForeground: true`, and an `Idempotency-Key`. Local dismissal never acknowledges it.
 - `GET /bot-conversations/{chatId}/files` and `GET|PUT /bot-conversations/{chatId}/files/{fileId}`: reuse `FileIndex`/`FileDocument` and expected-version writes, but authorize every operation against the device grant, authoritative Bot/chat binding, current Bot policy, chat reduction, policy epoch, and managed-home identity. Ordinary Workspace file routes reject hidden Bot homes even if their opaque workspace ID is learned.
@@ -780,7 +785,7 @@ Malformed or absent hints leave manual/QR pairing available.
 
 `chat-ui-panels-v1` advertised inert assistant `appPanels` (up to four per message). Since contract revision 52 hosts no longer announce it: no shipped client read it, and messages carry `appPanels` without it. `chat-ui-panels-enabled-v1` below is unchanged. Native clients render the closed Appearance, Memory, Web Search and Skills vocabulary. A panel carries its original opaque workspace ID and readable fallback, never a view script or authority. Malformed additive panels are omitted while ordinary text remains readable. Old clients without `app-controls:read` receive text fallbacks instead of interactive descriptors.
 
-The desktop owner must explicitly allow **Paired-device chat controls** in Settings → Bots & Approvals → Controls in chat. Only then does `/server` advertise `chat-ui-panels-enabled-v1`; capable clients may negotiate `app-controls:read` and `app-controls:respond` through the existing additive capability endpoint. Chat write access alone grants neither. Disabling owner consent blocks future reads/changes even when old grants remain on the device record.
+The desktop owner must explicitly allow **Paired-device chat controls** in Settings → Approvals → Controls in chat. Only then does `/server` advertise `chat-ui-panels-enabled-v1`; capable clients may negotiate `app-controls:read` and `app-controls:respond` through the existing additive capability endpoint. Chat write access alone grants neither. Disabling owner consent blocks future reads/changes even when old grants remain on the device record.
 
 Desktop-only controls (Color theme and Model for new chats, added 2026-10-27) are not part of this vocabulary. Card snapshots for paired devices omit those rows, and a `models` card in a desktop chat is projected to devices as its plain text fallback, so v1 clients never receive an unknown control or topic.
 
@@ -962,7 +967,7 @@ A Bot's host code raises a **Bot issue** when the person is needed and no tool c
 | `createdAt` | RFC 3339 UTC date-time |
 | `resolved` | `true` on a settled card; a settled card carries no actions |
 
-`open_settings` is the desktop's own surface (the Bot's Advanced page or the app's Providers settings) and never crosses the wire. A card that offered only that arrives with `actions: []`, and clients read it as "Open on your Mac". A card that offers no action a phone may take keeps its title and body.
+`open_settings` is the desktop's own surface (the Bot's Advanced tab or the app's Providers settings) and never crosses the wire. A card that offered only that arrives with `actions: []`, and clients read it as "Open on your Mac". A card that offers no action a phone may take keeps its title and body.
 
 **Stream.** The host folds the issue list into the projector like queued messages: a `session` frame (`payload` `{ session }`) carries it on a fresh read, and an `issues` frame with payload `{ issues }` replaces the list when a card is raised, settled or superseded. Both travel only to a device holding `bot:issues`; every other device gets a `state` frame at that seq instead, so its sequence still advances. Because the host fixes a stream's audience when the stream opens, a device that negotiates `bot:issues` after opening a Bot chat reopens the stream once its grants change, as it does for the other Bot opt-ins.
 
@@ -1317,3 +1322,106 @@ A user message may carry an optional `inputSource: "voice"`. The host sets it on
 The marker is display-only. It grants nothing, is not accepted on any Remote write route, and a phone's own sends never carry it. On the desktop it rides the existing `chat:append` meta, first-message and `chat:admitRunInput` IPC as an optional `inputSource`, which accepts only `"voice"`.
 
 **Fixtures.** `protocol/aiden-remote/v1/fixtures/contract.json` adds `voiceInput`: a chat whose user message is marked, whose assistant message carries a stray marker that clients drop, and whose second user message carries an unknown value that reads as typed. `voiceMessageIds` lists the one message a client should label.
+
+## Bot UX on phones, revision 61 (provisional)
+
+Revision 61 is provisional: it was written when `main` was at 60, and is claimed when the PR merges (take the next revision after `main` then, and move iOS, Android and the fixtures with it). The host keeps it in one constant (`AIDEN_REMOTE_BOT_UX_CONTRACT_REVISION`). It brings Phase 6 of the Bot UX simplification (`docs/plans/bot-ux-simplification.md`) to the wire. There is no new `/server` feature token. Five opt-ins, each advertised in `serverCapabilities` only where the host wires it, negotiated through `POST /device/capabilities` (`404 not_found` where not wired) and never issued at pairing. A client asks for each in a call of its own, so an older host that refuses one name leaves the rest in place. An `aiden serve` host offers only `approval:cards` (its approvals keep the Ask behaviour and use the same card model); the other four are desktop-only. Older clients keep every shape they had.
+
+The shared fixture is `protocol/aiden-remote/v1/fixtures/bot-ux-revision-61.json`. `main/services/aiden-remote-bot-ux.test.ts` rebuilds it with the host's own serializers and fails when the file differs (`AIDEN_WRITE_FIXTURES=1` writes it).
+
+### Approval cards (`approval:cards`)
+
+A holder receives `card` beside the existing fields on `GET /streams/{streamId}/approval`, on run `approval_required` payloads and in a gap snapshot's `approvals` (phones), and on the Bot session `approval`. On the stream and run approvals, `canAllow` is then exactly whether the card has an allow button, and `scopes` lists only the scopes its buttons offer; the fixture has a complete and a deny-only sample of each (`streamApprovals`, `phoneRunApprovalEvents`). The card is built by one model shared with the desktop card (`renderer/shared/approval-card-model.ts`):
+
+```json
+{
+  "kind": "generic | explicit | mac | batch | held_change | schedule",
+  "mac": "shell | files | computer_use",
+  "title": "Run on your Mac?",
+  "arguments": [{ "key": "tool", "value": "Run command" }],
+  "body": { "format": "command | text", "text": "npm test" },
+  "previous": { "format": "command", "text": "…" },
+  "rows": [{ "label": "Name", "value": "Ada Lovelace" }],
+  "notes": ["You’ve allowed this 4 times in the last 2 weeks."],
+  "buttons": [
+    { "label": "Deny", "decision": "deny", "answered": "Denied" },
+    { "label": "Allow once", "decision": "allow", "answered": "Allowed once" },
+    { "label": "Allow in this chat", "decision": "allow", "scope": "chat", "answered": "Allowed in this chat" }
+  ],
+  "allowOnMac": "Allow it on your Mac."
+}
+```
+
+- `arguments` are in Rakazo order: shorter values first. At most 16; keys at most 40 characters, values at most 500. `title` at most 200, `body` and `previous` at most 16,000, `rows` at most 60 (`batch`), `notes` at most 6 of 400.
+- `buttons` start with the deny button, then the allow buttons the desktop offers: Allow once (Apply on a held change, Fill N fields on a batch), Allow in this chat (`scope: "chat"`), Allow in this workspace or, for a Bot holding `bot:allowed`, Always allow this tool (`scope: "always"`). `answered` is the status line to show after that answer. Remembered scopes appear only on plain cards, never on a specialized card.
+- A card is complete or deny-only. When anything under review would not fit these bounds, when the host kept no details (`detailsOmitted`), when details are malformed or of a kind the model does not know, for a plain Computer Use call and for the disclosure tools (`classify`, `generate_image`), the card has only the deny button and `allowOnMac`. `allowOnMac` is present exactly when no allow button is. The Computer Use access grant is answerable; its note says macOS permissions are set up on the Mac.
+- Mac cards carry the full command (`body.format: "command"`). A sub-agent's file change carries its diff and a sub-agent's connector call its exact arguments as `body`; a diff the host already cut short (`diffTruncated`) leaves the card deny-only. A sub-agent's run-wide grant (Allow for run) is always deny-only on a device: it is given on the Mac. A hook the agent proposed is a `held_change` with Apply and Dismiss, its event, matcher and command as `body` and the hook it replaces as `previous`; a hook missing any of these, or one that had to be clipped, is deny-only.
+- Host-only, never on a card: macOS privacy prompts, pairing code match, Approve Home Folder, and the MCP connect launch review (a native dialog on the Mac; the kind is reserved for a later revision).
+- The respond routes are unchanged. For a holder, the host allows exactly what the card offers: `canAllow` equals "the card has an allow button", and an allow whose `scope` is not on a button is `403 capability_denied`. Non-holders keep the pre-61 rules.
+- Telegram never answers approvals. A reply there is a message to the Bot.
+
+### Settings changes (`bot:settings-changes`)
+
+A holder's Bot session (snapshot, page and SSE `entry`) includes `settings_change` entries; other devices never see them:
+
+```json
+{
+  "type": "settings_change", "id": "…", "changeId": "…",
+  "mode": "held | applied",
+  "status": "pending | restored | undo_refused | applied | edited | dismissed",
+  "title": "Update instructions?", "fields": ["instructions"], "lines": ["Instructions: 2 lines changed"],
+  "heldReason": "not_owner | outside_content | widens",
+  "instructions": "…", "previousInstructions": "…",
+  "instructionsDiff": [{ "kind": "same | added | removed", "text": "…" }],
+  "undoable": true, "createdAt": "…"
+}
+```
+
+`held` is the card a run the person did not start produced (Apply, Edit on the Mac, Dismiss); it carries the full proposed and previous instructions (at most 32,000 characters each) and a line diff when it fits (2,000 lines). `applied` is a receipt with Undo when `undoable`. `lines` holds at most 10 lines of 400.
+
+`POST /bots/{botId}/settings-changes/{changeId}/respond` with exactly `{"decision":"apply"|"dismiss"|"undo"}` (no query, no Idempotency-Key; the desktop service serializes and compare-and-swaps). It needs `bot:read`, `bot:write` and `bot:settings-changes`. `200 {changeId, status, message?}`; an Undo the Mac cannot make answers `200` with `status: "undo_refused"`. `409 revision_conflict` with the Mac's message when the Bot's settings moved or the change is no longer waiting; `400 invalid_request` for any other body (`edit` included: Edit happens on the Mac).
+
+### Suggestions and learning (`bot:suggestions`)
+
+A holder's Bot session includes:
+
+- `{type: "skill_proposal", id, proposalId, name, description, reason?, update, preview, previewTruncated?, status: "pending"|"added"|"dismissed", createdAt?}`; `preview` is the new file or the diff, at most 16,000 characters. A longer one is cut and carries `previewTruncated: true`: show what fits and that the rest is on the Mac, and offer Not now only.
+- `{type: "lesson", id, lessonId, kind: "proposal"|"learned", text, routineName?, runs?, status: "pending"|"active"|"dismissed"|"retired", createdAt?}`.
+- `{type: "memory_tidy", id, changeId?, createdAt?}`: a receipt with Undo when `changeId` is present.
+
+Routes, each needing `bot:read`, `bot:write` and `bot:suggestions`, with no query:
+
+- `POST /bots/{botId}/skill-proposals/{proposalId}/respond` `{"decision":"add"|"dismiss"}` → `{proposalId, status}`. Add on a skill whose preview was truncated is `409 revision_conflict` ("This skill is too long to review here. Add it on your Mac."); Add on one the device was not shown is `404 not_found`.
+- `POST /bots/{botId}/lessons/{lessonId}/respond` `{"decision":"keep"|"dismiss"}` → `{lessonId, status}`.
+- `POST /bots/{botId}/lessons/{lessonId}/remove` `{}` → `{lessonId, status: "retired"}` (Undo on a Learned line).
+- `POST /bots/{botId}/learning/{changeId}/undo` `{}` → `{changeId, undone: true}`; `404 not_found` when there is no such change, `409 revision_conflict` when the memory changed since or it was already undone.
+
+A suggestion that no longer exists answers `404 not_found`. A lesson answers `404 not_found` when it does not exist or is no longer in the state the route needs: respond needs a lesson still waiting (an already-answered one is 404), remove needs an active one.
+
+### Templates and one-field create (`bot:templates`)
+
+For a holder, each `GET /bot-presets` row adds `version` (positive integer), `instructions`, `sample` (at most 8 lines of 280) and, when that template already made a live Bot, `existingBotId`: show Open instead of Create bot. `POST /bots/from-preset` from a holder may send `{presetId, version}`; another version is `409 revision_conflict` with "This template changed. Close it and open it again." A template's routine is created paused. Older bodies (`{presetId}`) keep working.
+
+One-field create: from revision 61, a device holding `bot:templates` may leave `purpose` and `instructions` out of `POST /bots`, so `{name, avatar}` (plus the optional fields as before) is a whole request. A missing `purpose` is empty and missing `instructions` are the Mac's starter instructions, and the new Bot then introduces itself once, asking what to help with. Every other device still sends both, and a request leaving either out is a 400. The fixture's `requests.oneFieldCreate` decodes through the same parser the host uses.
+
+### Approval mode and rules (`approvals:settings`)
+
+Person-only: no Bot or agent reaches these routes. Each needs `approval:respond` and `approvals:settings`, takes no query, and is offered only by a desktop host.
+
+- `GET /approvals/mode` → `{mode: "auto"|"ask"|"never", autoAvailable}`. Auto without a usable model reads `ask`.
+- `PUT /approvals/mode` with exactly `{mode}` → the mode as it now is. `auto` while `autoAvailable` is false is `400 invalid_request`.
+- `GET /approvals/rules` → `{rows, unreadable?}`, the desktop rules page. A row is `{ref, group: "allow"|"ask"|"block"|"mac", title, kind, scope: {kind: "mac"|"workspace"|"bot"|"chat", label?}, legacy?, decisions, handOff?: {on}, createdAt?}`. `decisions` lists the segments the row offers; empty means read and remove only. `ref` is opaque to clients: send it back as is.
+- `GET /approvals/rules/picker` → `{options: [{target, label, group, description?}]}`: Aiden's built-in tools, then each connected app.
+- `POST /approvals/rules` with `{target, decision, owner?, handOff?, label?}` adds a rule (or changes the existing one for that target). A rule in the person's own words (`target.kind: "text"`) can only ask or block.
+- `POST /approvals/rules/change` with `{ref, decision?, handOff?}` (at least one).
+- `POST /approvals/rules/remove` with exactly `{ref}`.
+
+Every write returns the rules page as it now is. They fail closed: while `unreadable` is set every write is `409 revision_conflict` ("Your approval rules couldn’t be read. Fix them on your Mac first."); a row that is gone is `404 not_found`; anything else the Mac refuses is `409 revision_conflict` with a generic message. Disable a tool is the Bot's access (`PATCH /bots/{botId}/capabilities`, unchanged).
+
+### What stays on the client
+
+No wire change, the clients decide:
+
+- Two-step Take control answers the existing hand-off route with `done` or `skipped`.
+- "Can message other Bots" is one switch, on only when both directions (revision 54 `botMessaging`) are on, and it writes both.
+- Per-Bot chat activity levels: phones use their own per-device Show tool activity switch. `chatActivity` stays on the wire (revision 30) so older clients keep working.

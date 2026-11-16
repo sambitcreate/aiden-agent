@@ -440,7 +440,7 @@ final class AidenAppShellTests: XCTestCase {
             AidenBotRouteModel.chatOwner(for: id, coordinator: coordinator),
             "A revoked machine's chat has no owner, not the default machine's"
         )
-        XCTAssertEqual(AidenBotRouteModel.machineGoneMessage, "This machine is no longer paired. Pair it again to open this Bot.")
+        XCTAssertEqual(AidenBotRouteModel.machineGoneMessage, "This computer is no longer paired. Pair it again to open this Bot.")
     }
 
     func testABotChatOnAChatRouteAsksForItsBotRoute() async throws {

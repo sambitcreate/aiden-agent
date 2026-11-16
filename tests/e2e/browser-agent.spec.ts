@@ -94,7 +94,7 @@ test("a real agent generation opens the closed Environment browser and edits the
   }
 });
 
-test("Ask first holds a mutating browser tool until the user allows that action", async ({
+test("Ask holds a mutating browser tool until the user allows that action", async ({
   aiden,
 }) => {
   const server = createServer((_request, response) => {
@@ -108,16 +108,19 @@ test("Ask first holds a mutating browser tool until the user allows that action"
   try {
     const { page, app, lmStudio } = aiden;
     await finishLmStudioOnboarding(page);
-    await page.getByRole("button", { name: /^Workspace access: Full access/u }).click();
+    // The seeded workspace was Full access, which reads as a customized Never ask.
+    await page.getByRole("button", { name: /^Approvals: Never ask/u }).click();
     await page
-      .getByRole("radiogroup", { name: "Workspace access" })
-      .getByRole("radio", { name: /^Workspace access: Ask first/u })
+      .getByRole("radiogroup", { name: "Approvals" })
+      .getByRole("radio", { name: "Approvals: Ask", exact: true })
       .click();
     await expect(
-      page.getByRole("button", { name: /^Workspace access: Ask first/u }),
+      page.getByRole("button", { name: /^Approvals: Ask\./u }),
     ).toHaveAttribute("aria-expanded", "false");
 
-    const prompt = "Browser approval scenario: apply the change after I review it.";
+    // The person names the fixture's site, so opening it is not a new
+    // destination; the click is the one action under review.
+    const prompt = `Browser approval scenario: open ${url} and apply the change after I review it.`;
     const calls = [
       { name: "browser", arguments: {} },
       { name: "browser_open", arguments: { open: true } },
@@ -238,8 +241,8 @@ test("browser approval expires when the same tab reloads before Allow once", asy
   try {
     const { page, app, lmStudio } = aiden;
     await finishLmStudioOnboarding(page);
-    await page.getByRole("button", { name: /^Workspace access: Full access/u }).click();
-    await page.getByRole("radio", { name: /^Workspace access: Ask first/u }).click();
+    await page.getByRole("button", { name: /^Approvals: Never ask/u }).click();
+    await page.getByRole("radio", { name: "Approvals: Ask", exact: true }).click();
     const prompt = "Test stale approval on a reloaded browser page.";
     const scenario = lmStudio.enqueueToolScenario!({ prompt, calls: [
       { name: "browser", arguments: {} },

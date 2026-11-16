@@ -93,7 +93,7 @@ export class ChatIntentLedger {
           if (row.hostId !== ref.hostId || row.chatId !== ref.chatId) continue;
           const request = row.request;
           if (request.kind === "fork") {
-            if (this.entry(ref).fork && this.entry(ref).fork!.idempotencyKey !== row.idempotencyKey) throw new Error("Several saved forks need recovery on the host.");
+            if (this.entry(ref).fork && this.entry(ref).fork!.idempotencyKey !== row.idempotencyKey) throw new Error("Several saved forks need recovery on that computer.");
             this.entry(ref).fork = { uncertain: true, signature: request.signature, idempotencyKey: row.idempotencyKey, createdAt: row.createdAt, request };
           } else {
             const intent: ChatIntent = { kind: request.kind, idempotencyKey: row.idempotencyKey, createdAt: row.createdAt, request,
@@ -122,10 +122,10 @@ export class ChatIntentLedger {
       const rows = await this.persistence.list(ref.hostId, ref.chatId);
       if (!rows.some(row => row.idempotencyKey === intent.idempotencyKey && row.createdAt === intent.createdAt
         && JSON.stringify(row.request) === JSON.stringify(intent.request))) {
-        throw new Error("The saved request no longer belongs to this pairing. Check the host before dismissing it.");
+        throw new Error("The saved request no longer belongs to this pairing. Check that computer before dismissing it.");
       }
     }
-    if (!this.retryAllowed(intent)) throw new Error("The safe retry window has ended. Check the host before dismissing this request.");
+    if (!this.retryAllowed(intent)) throw new Error("The safe retry window has ended. Check that computer before dismissing this request.");
   }
   retryAllowed(intent: ChatIntent | ChatForkIntent): boolean {
     return chatIntentRetryAllowed(intent.createdAt ?? 0, this.now());

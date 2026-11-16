@@ -19,6 +19,7 @@
 //   effect.
 
 import { Type } from "@earendil-works/pi-ai";
+import { localComputerNoun } from "../../../renderer/shared/computer-noun.js";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type {
   BrowserCommand,
@@ -115,7 +116,7 @@ export function botVisibleBrowserState(state: BrowserState): BrowserState {
 }
 
 export function botBrowserOwnerMissing(botName: string): string {
-  return `Open Aiden on your Mac to let ${botName} use its browser.`;
+  return `Open Aiden on your ${localComputerNoun(process.platform)} to let ${botName} use its browser.`;
 }
 
 const ASKING_ACTIONS: ReadonlySet<string> = new Set(["click", "type", "press"]);

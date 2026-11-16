@@ -1950,7 +1950,7 @@ test("a phone turn in a workspace whose folder moved is refused before it is sto
         error instanceof AidenRemoteServiceError &&
         error.code === "workspace_unavailable" &&
         error.status === 409 &&
-        /folder is missing on your Mac/u.test(error.message) &&
+        /folder is missing on your computer/u.test(error.message) &&
         // Remote errors never carry a path.
         !error.message.includes(root),
     );

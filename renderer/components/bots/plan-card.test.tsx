@@ -74,7 +74,7 @@ test("Show details reveals exact item details and controls the disclosure region
 });
 
 for (const [label, decision, status] of [
-  ["Approve plan", "approve", "pending"], ["Not now", "not_now", "pending"], ["Stop plan", "stop", "active"],
+  ["Allow once", "approve", "pending"], ["Deny", "not_now", "pending"], ["Stop plan", "stop", "active"],
 ] as const) {
   test(`${label} forwards exactly one decision and shares the busy guard with every answer`, async () => {
     const pending = deferred();
@@ -85,7 +85,7 @@ for (const [label, decision, status] of [
     act(() => {
       button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      if (status === "pending") screen.getByRole("button", { name: label === "Approve plan" ? "Not now" : "Approve plan" }).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      if (status === "pending") screen.getByRole("button", { name: label === "Allow once" ? "Deny" : "Allow once" }).dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     assert.deepEqual(decisions, [decision]);
     for (const answer of screen.getAllByRole("button").filter((node) => node.textContent !== "Show details")) {
@@ -101,9 +101,9 @@ for (const [label, decision, status] of [
 test("a failed answer exposes an inline error and permits a retry", async () => {
   let calls = 0;
   render(card(PLAN, async () => { if (++calls === 1) throw new Error("The plan changed. Try again."); }));
-  fireEvent.click(screen.getByRole("button", { name: "Approve plan" }));
+  fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
   assert.equal((await screen.findByRole("alert")).textContent, "The plan changed. Try again.");
-  const approve = screen.getByRole("button", { name: "Approve plan" }) as HTMLButtonElement;
+  const approve = screen.getByRole("button", { name: "Allow once" }) as HTMLButtonElement;
   assert.equal(approve.disabled, false);
   await act(async () => fireEvent.click(approve));
   assert.equal(calls, 2);
@@ -116,13 +116,13 @@ test("replacing a plan isolates its busy state, details and late failure", async
   const decisions: string[] = [];
   const view = render(card(PLAN, async () => { await old.promise; }));
   fireEvent.click(screen.getByRole("button", { name: "Show details" }));
-  fireEvent.click(screen.getByRole("button", { name: "Approve plan" }));
+  fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
   view.rerender(card({ ...PLAN, planId: "plan-2", title: "A new plan" }, async (answer) => { decisions.push(answer); await current.promise; }));
   assert.equal(screen.getByRole("button", { name: "Show details" }).getAttribute("aria-expanded"), "false");
-  fireEvent.click(screen.getByRole("button", { name: "Not now" }));
+  fireEvent.click(screen.getByRole("button", { name: "Deny" }));
   await act(async () => old.reject(new Error("Old failure")));
   assert.equal(screen.queryByRole("alert"), null);
-  assert.equal((screen.getByRole("button", { name: "Approve plan" }) as HTMLButtonElement).disabled, true);
+  assert.equal((screen.getByRole("button", { name: "Allow once" }) as HTMLButtonElement).disabled, true);
   assert.deepEqual(decisions, ["not_now"]);
   await act(async () => current.resolve());
 });
@@ -170,18 +170,19 @@ for (const status of ["finished", "stopped", "expired"] as const) {
   });
 }
 
-test("keyboard: Approve plan is the first answer control and retains native Enter activation", () => {
+test("keyboard: the batch card asks \"Approve this plan?\" and reads review, details, then Deny and Allow once, all native buttons", () => {
   render(card());
+  screen.getByText("Approve this plan?");
   const buttons = screen.getAllByRole("button") as HTMLButtonElement[];
-  assert.equal(buttons[0]!.textContent, "Approve plan");
+  assert.deepEqual(buttons.map((button) => button.textContent), ["Show details", "Deny", "Allow once"]);
   assert.deepEqual(buttons.map((button) => button.tabIndex), [0, 0, 0]);
-  assert.equal(buttons[0]!.tagName, "BUTTON");
-  assert.equal(buttons[0]!.type, "button");
-  buttons[0]!.focus();
-  assert.equal(document.activeElement, buttons[0]);
-  assert.equal(fireEvent.keyDown(buttons[0]!, { key: "Enter" }), true, "native Enter is not intercepted");
+  const allow = buttons[2]!;
+  assert.equal(allow.tagName, "BUTTON");
+  assert.equal(allow.type, "button");
+  allow.focus();
+  assert.equal(document.activeElement, allow);
+  assert.equal(fireEvent.keyDown(allow, { key: "Enter" }), true, "native Enter is not intercepted");
 });
-
 
 test("the complete review can receive keyboard focus independently of the answer controls", () => {
   render(card());
@@ -191,7 +192,7 @@ test("the complete review can receive keyboard focus independently of the answer
   within(review).getByText("Keep the team ready for next week.");
   within(review).getByRole("list", { name: "Plan steps" });
   within(review).getByRole("list", { name: "Plan coverage" });
-  assert.equal(within(review).queryByRole("button", { name: "Approve plan" }), null);
+  assert.equal(within(review).queryByRole("button", { name: "Allow once" }), null);
   fireEvent.click(screen.getByRole("button", { name: "Show details" }));
   within(review).getByText("Create a calendar event");
 });
