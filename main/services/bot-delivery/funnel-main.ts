@@ -15,6 +15,7 @@ import { countedToday, createBotDeliveryGate } from "./gate.js";
 import { botStore } from "../bot-store.js";
 import { resolveBotInterruptions } from "../../../renderer/shared/bots.js";
 import { createBotDeliveryLog } from "./log.js";
+import { botChatInFront } from "./in-front.js";
 
 /** Every Bot's delivery rows, beside that Bot's session (`bots/<dir>/deliveries.json`). */
 export const botDeliveryLog = createBotDeliveryLog({ profileDir: () => app.getPath("userData") });
@@ -43,6 +44,7 @@ export function botDeliveryFunnel(): BotDeliveryFunnel {
       timeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone,
     }),
     botName: async (botId) => (await botStore.get(botId))?.name,
+    inFront: botChatInFront,
     mac: async (input) => {
       // An issue, a digest, or a held routine result sent from the log is the
       // funnel's own banner, following the hand-off notifier: only while no
@@ -106,6 +108,10 @@ function flushHeld(): Promise<void> {
 
 /** Send what quiet hours held back once it is due; re-arms for the next held row. */
 async function flushHeldOnce(): Promise<void> {
+  // Asks still open after hours get their one reminder on the same tick.
+  await import("../bot-issues/service-main.js")
+    .then(({ remindWaitingBotIssues }) => remindWaitingBotIssues())
+    .catch((error: unknown) => logger.warn("bots", "Bot reminders could not be sent.", error));
   const next = await botDeliveryFunnel().flush(Date.now()).catch((error: unknown) => {
     logger.warn("bots", "Held Bot messages could not be sent.", error);
     return undefined;

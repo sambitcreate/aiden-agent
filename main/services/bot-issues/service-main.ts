@@ -85,3 +85,15 @@ export const botIssues = createBotIssueService({
 export function settleBotIssuesForRoutine(botId: string, routineId: string): Promise<number> {
   return resolveDeletedRoutineIssues(botIssues, botId, routineId);
 }
+
+/**
+ * The one reminder for every Bot's asks still waiting on the person after
+ * hours. Runs on the delivery flush's tick; a Bot that fails is skipped and
+ * tried again next time.
+ */
+export async function remindWaitingBotIssues(): Promise<void> {
+  const { botStore } = await import("../bot-store.js");
+  for (const bot of await botStore.list()) {
+    await botIssues.remind(bot.id).catch((error: unknown) => logger.warn("bots", `Bot ${bot.id} reminder could not be sent.`, error));
+  }
+}

@@ -12,6 +12,7 @@ import {
 } from "../../../renderer/shared/bot-issues.js";
 import type { BotDeliveryInput } from "../bot-delivery/funnel.js";
 import {
+  BOT_ISSUE_REMIND_AFTER_MS,
   createBotIssueService,
   resolveDeletedRoutineIssues,
   type BotIssueResumeResult,
@@ -330,6 +331,55 @@ test("raise delivers once through the funnel with class issue", async () => {
       status: "info",
     },
   ]);
+});
+
+test("a heads-up is logged quiet: it alerts nobody, never leaves the chat's list and is never reminded", async () => {
+  const harness = setup();
+  const issue = await harness.issues.raise({ ...ISSUE, dedupeKey: "execution:claim-1", quiet: true });
+
+  assert.equal(harness.deliveries.length, 1);
+  assert.equal(harness.deliveries[0]!.quiet, true, "the funnel keeps it for the record without a banner or phone alert");
+  assert.deepEqual((await harness.issues.list(BOT_ID, { open: true })).map((open) => open.id), [issue.id], "it still waits in Needs you");
+  assert.equal("quiet" in (await harness.issues.list(BOT_ID))[0]!, false, "the flag is host bookkeeping, not part of the card");
+
+  harness.tick(BOT_ISSUE_REMIND_AFTER_MS + 1);
+  assert.equal(await harness.issues.remind(BOT_ID), 0);
+  assert.equal(harness.deliveries.length, 1);
+});
+
+test("an ask still open after four hours is reminded once; a newer or settled one is not", async () => {
+  const harness = setup();
+  const waiting = await harness.issues.raise(ISSUE);
+  const settled = await harness.issues.raise({ ...ISSUE, dedupeKey: "routine:r2:failed", routineId: "r2", actions: [] });
+  await harness.issues.resolve(BOT_ID, settled.dedupeKey, "fixed");
+
+  harness.tick(BOT_ISSUE_REMIND_AFTER_MS - 1);
+  const fresh = await harness.issues.raise({ ...ISSUE, dedupeKey: "routine:r3:failed", routineId: "r3", actions: [] });
+  assert.equal(await harness.issues.remind(BOT_ID), 0, "nothing has waited four hours yet");
+
+  harness.tick(1);
+  assert.equal(await harness.issues.remind(BOT_ID), 1);
+  const reminder = harness.deliveries[harness.deliveries.length - 1]!;
+  assert.equal(reminder.class, "issue");
+  assert.equal(reminder.title, `Reminder: ${ISSUE.title}`);
+  assert.equal(reminder.body, ISSUE.body);
+  assert.notEqual(reminder.dedupeKey, `issue:${waiting.id}`, "a reminder is its own delivery, not a repeat of the first");
+  assert.equal(reminder.quiet, undefined);
+
+  // Later sweeps send nothing more, not even for an ask that is still open.
+  harness.tick(BOT_ISSUE_REMIND_AFTER_MS);
+  assert.equal(await harness.issues.remind(BOT_ID), 1, "only the newer ask, now due");
+  assert.equal(harness.deliveries[harness.deliveries.length - 1]!.title, `Reminder: ${fresh.title}`);
+  assert.equal(await harness.issues.remind(BOT_ID), 0);
+  assert.equal((await harness.issues.list(BOT_ID, { open: true })).length, 2, "a reminder never settles the ask");
+});
+
+test("an access ask's reminder keeps the access audience gate", async () => {
+  const harness = setup();
+  await harness.issues.raise(ACCESS_ISSUE);
+  harness.tick(BOT_ISSUE_REMIND_AFTER_MS);
+  assert.equal(await harness.issues.remind(BOT_ID), 1);
+  assert.equal(harness.deliveries[harness.deliveries.length - 1]!.requiredCapability, "bot:access-requests");
 });
 
 test("a removed Bot leaves no issues behind", async () => {
