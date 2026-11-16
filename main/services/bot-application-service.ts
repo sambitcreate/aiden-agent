@@ -4,6 +4,7 @@ import path from "node:path";
 import type { BotAllowedEntry } from "../../renderer/shared/tool-approval-scope.js";
 import { withoutBotHandoffControls } from "../../renderer/shared/bot-handoffs.js";
 import { nextBotFileScopeIds } from "../../renderer/shared/bot-capabilities.js";
+import type { BotRoutineThinkingLevel } from "../../renderer/shared/bot-routine-models.js";
 import { botAccessRootInventoryRevision, resolveBotAccessTarget, type BotAccessTargetDeps } from "./bot-runtime/bot-access-target.js";
 import type { AidenRemoteApprovedRoot } from "./aiden-remote-state.js";
 import type { BotFolderApprovalReceipt, BotFolderGrantInput, BotFolderGrantJournal, BotFolderGrantRecord } from "./bot-folder-grant-journal.js";
@@ -152,6 +153,8 @@ export interface BotApplicationDependencies {
   chatStore: ChatStorePort;
   capabilityStore: CapabilityStorePort;
   catalog: CatalogPort;
+  /** The thinking levels a provider model can run; throws when its metadata is unavailable. */
+  modelThinkingLevels?(sourceProviderId: string, sourceModelId: string): Promise<BotRoutineThinkingLevel[]>;
   managedWorkspace: ManagedWorkspacePort;
   lifecycleJournal: LifecycleJournalPort;
   migrationSeal: {
@@ -1128,6 +1131,32 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     return chat;
   };
 
+  /** The catalog snapshot the model and tool pickers read, retaining the Bot's saved choices. */
+  const capabilityCatalogSnapshot = async (audienceId: string, botId?: string) => {
+    const binding = botId === undefined
+      ? undefined
+      : await (async () => {
+          if (!(await deps.botStore.get(botId))) {
+            throw new Error("This Bot is no longer available.");
+          }
+          return deps.capabilityStore.getBotBinding(botId);
+        })();
+    const chat = botId === undefined ? undefined : await canonicalChatForBot(botId);
+    return deps.catalog.snapshot({
+      audienceId,
+      botId,
+      ...(binding ? { retainedBindings: [binding] } : {}),
+      ...(botId === undefined
+        ? {}
+        : {
+            retainedProviders: [
+              ...(chat ? retainedBotProviderForChat(chat) : []),
+              ...(await retainedVisionProvider(botId)),
+            ],
+          }),
+    });
+  };
+
   const createChatUnderMutation = async (
     input: CreateBotChatApplicationInput,
   ): Promise<Chat> => {
@@ -1978,28 +2007,7 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
 
     async capabilityCatalog(audienceId: string, botId?: string) {
       await ensureOperational();
-      const binding = botId === undefined
-        ? undefined
-        : await (async () => {
-            if (!(await deps.botStore.get(botId))) {
-              throw new Error("This Bot is no longer available.");
-            }
-            return deps.capabilityStore.getBotBinding(botId);
-          })();
-      const chat = botId === undefined ? undefined : await canonicalChatForBot(botId);
-      const snapshot = await deps.catalog.snapshot({
-        audienceId,
-        botId,
-        ...(binding ? { retainedBindings: [binding] } : {}),
-        ...(botId === undefined
-          ? {}
-          : {
-              retainedProviders: [
-                ...(chat ? retainedBotProviderForChat(chat) : []),
-                ...(await retainedVisionProvider(botId)),
-              ],
-            }),
-      });
+      const snapshot = await capabilityCatalogSnapshot(audienceId, botId);
       if (botId !== undefined && snapshot.catalog.skillsEnabled === false) {
         // Full Bots have no exact Custom binding, but their existing chat
         // reductions still own saved skill IDs. Retain safe presentation-only
@@ -2020,6 +2028,26 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
         });
       }
       return snapshot.catalog;
+    },
+
+    /**
+     * The thinking levels one catalog model supports, named by the opaque ids
+     * the model picker shows. Null when the catalog has no such model or its
+     * record can't be read. Only that one model is resolved.
+     */
+    async modelThinkingLevels(audienceId: string, botId: string | undefined, providerId: string, modelId: string): Promise<BotRoutineThinkingLevel[] | null> {
+      await ensureOperational();
+      const levelsFor = deps.modelThinkingLevels;
+      if (!levelsFor) return null;
+      const snapshot = await capabilityCatalogSnapshot(audienceId, botId);
+      const provider = snapshot.resources.providers.find((row) => row.option.id === providerId);
+      const model = provider?.models.find((row) => row.option.id === modelId);
+      if (!provider || !model) return null;
+      try {
+        return await levelsFor(provider.sourceId, model.sourceId);
+      } catch {
+        return null;
+      }
     },
 
     async modelSelection(audienceId: string, botId: string) {

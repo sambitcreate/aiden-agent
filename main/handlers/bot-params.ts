@@ -15,6 +15,7 @@ import {
   type BotAccessUpdate,
 } from "../../renderer/shared/bot-capabilities.js";
 import type { BotMemoryEditInput, BotMemoryTarget } from "../../renderer/shared/bot-memory.js";
+import { BOT_ROUTINE_THINKING_LEVELS, type BotRoutineThinkingLevel } from "../../renderer/shared/bot-routine-models.js";
 import { BOT_HANDOFF_NOTE_MAX_CHARS, type BotHandoffOutcome } from "../../renderer/shared/bot-handoffs.js";
 import { isBotRuleBehavior, type BotRuleBehavior, type BotRuleChange, type BotRulesUpdateInput } from "../../renderer/shared/bot-rules.js";
 import {
@@ -34,7 +35,7 @@ const CREATE_KEYS = new Set([
   "name",
 ]);
 const CREATE_WITH_ACCESS_KEYS = new Set(["access", "bot"]);
-const UPDATE_KEYS = new Set([...CREATE_KEYS, "chatActivity", "interruptions", "selfWakeUps", "acceptsBotMessages", "messagesOtherBots", "expectedRevision", "id"]);
+const UPDATE_KEYS = new Set([...CREATE_KEYS, "chatActivity", "interruptions", "selfWakeUps", "acceptsBotMessages", "messagesOtherBots", "thinkingLevel", "expectedRevision", "id"]);
 const CHAT_KEYS = new Set(["botId", "model", "providerId", "workspaceId"]);
 const ACCESS_UPDATE_KEYS = new Set(["access", "botId", "expectedRevision"]);
 function exact(value: unknown, keys: ReadonlySet<string>, label: string) {
@@ -126,7 +127,23 @@ export function parseBotUpdate(value: unknown): BotUpdateInput {
     ...(record.acceptsBotMessages !== undefined ? {acceptsBotMessages: parseMessagingSwitch(record.acceptsBotMessages)} : {}),
     ...(record.messagesOtherBots !== undefined ? {messagesOtherBots: parseMessagingSwitch(record.messagesOtherBots)} : {}),
     ...(record.selfWakeUps !== undefined ? { selfWakeUps: parseSelfWakeUps(record.selfWakeUps) } : {}),
+    ...(record.thinkingLevel !== undefined ? { thinkingLevel: parseBotThinkingLevel(record.thinkingLevel) } : {}),
   };
+}
+
+/** One catalog model to read thinking levels for: the picker's opaque ids, never provider ids. */
+export function parseBotModelThinkingLevelsInput(value: unknown): { botId?: string; providerId: string; modelId: string } {
+  const record = exact(value, new Set(["botId", "providerId", "modelId"]), "model thinking level fields");
+  const id = (raw: unknown) => {
+    if (typeof raw !== "string" || raw.length === 0 || raw.length > 256) throw new Error("Invalid model id.");
+    return raw;
+  };
+  return { ...(record.botId === undefined ? {} : { botId: parseBotId(record.botId) }), providerId: id(record.providerId), modelId: id(record.modelId) };
+}
+
+function parseBotThinkingLevel(value: unknown): BotRoutineThinkingLevel {
+  if (!BOT_ROUTINE_THINKING_LEVELS.includes(value as BotRoutineThinkingLevel)) throw new Error("Invalid Bot thinking level.");
+  return value as BotRoutineThinkingLevel;
 }
 
 function parseMessagingSwitch(value: unknown): boolean {

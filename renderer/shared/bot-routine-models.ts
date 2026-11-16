@@ -1,6 +1,18 @@
 /** Owner-reviewed routine-only model choices. IDs belong to the Bot capability catalog. */
 export const BOT_ROUTINE_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type BotRoutineThinkingLevel = typeof BOT_ROUTINE_THINKING_LEVELS[number];
+export const BOT_THINKING_LEVEL_LABELS: Record<BotRoutineThinkingLevel, string> = { off: "Off", minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Maximum" };
+/**
+ * The level a model runs for a requested one: the request when supported,
+ * otherwise the next supported level above it, then the nearest below.
+ * Matches the host's clamp, so the Bot's settings show what will run.
+ */
+export function effectiveBotThinkingLevel(supported: readonly BotRoutineThinkingLevel[], requested: BotRoutineThinkingLevel): BotRoutineThinkingLevel | undefined {
+  if (supported.includes(requested)) return requested;
+  const index = BOT_ROUTINE_THINKING_LEVELS.indexOf(requested);
+  return BOT_ROUTINE_THINKING_LEVELS.slice(index + 1).find((level) => supported.includes(level))
+    ?? BOT_ROUTINE_THINKING_LEVELS.slice(0, index).reverse().find((level) => supported.includes(level));
+}
 export interface BotRoutineModelChoice { providerId: string; modelId: string; thinkingLevel: BotRoutineThinkingLevel }
 export type BotRoutineModelSelection = { mode: "inherit" } | { mode: "selected"; primary: BotRoutineModelChoice; fallback?: BotRoutineModelChoice };
 export interface BotRoutineModelSettings { botId: string; routineId: string; revision: string; selection: BotRoutineModelSelection; updatedAt: number; lastMutationId?: string }
