@@ -401,7 +401,19 @@ test("an ask settled before its reminder goes out is never reminded; a failed re
   failing.tick(BOT_ISSUE_REMIND_AFTER_MS);
   failing.failNextDelivery();
   await assert.rejects(failing.issues.remind(BOT_ID));
-  assert.equal(await failing.issues.remind(BOT_ID), 1, "the claim was released, so the next sweep sends it");
+  assert.equal(await failing.issues.remind(BOT_ID), 1, "nothing was marked, so the next sweep sends it");
+});
+
+test("a reminder whose bookkeeping never landed is offered again under the same key", async () => {
+  const harness = setup();
+  const issue = await harness.issues.raise(ISSUE);
+  harness.tick(BOT_ISSUE_REMIND_AFTER_MS);
+  assert.equal(await harness.issues.remind(BOT_ID), 1);
+  // As if the process exited after the delivery log took it, before `reminded` was written.
+  await harness.store.change(BOT_ID, (issues) => ({ issues: issues.map((row) => ({ ...row, reminded: false })), result: undefined }));
+  assert.equal(await harness.issues.remind(BOT_ID), 1);
+  const reminders = harness.deliveries.filter((delivery) => delivery.dedupeKey.startsWith("issue-reminder:"));
+  assert.deepEqual(new Set(reminders.map((delivery) => delivery.dedupeKey)), new Set([`issue-reminder:${issue.id}`]), "one key, which the funnel dedupes");
 });
 
 test("an access ask's reminder keeps the access audience gate", async () => {

@@ -507,31 +507,26 @@ export function createBotIssueService(dependencies: BotIssueServiceDependencies)
       let sent = 0;
       for (const candidate of await dependencies.store.read(botId)) {
         if (!remindable(candidate, due)) continue;
-        // Claim the reminder in the same serialized write a settlement uses, so
-        // an ask answered first is never reminded. A crash before the delivery
-        // lands loses this one reminder rather than ever sending a stale one.
+        // Re-check in the same serialized lane a settlement writes through, as
+        // late as possible, so an ask answered first is not reminded.
         const issue = await dependencies.store.change(botId, (issues) => {
           const row = issues.find((stored) => stored.id === candidate.id);
-          if (!row || !remindable(row, due)) return { issues, result: undefined };
-          return { issues: issues.map((stored) => (stored.id === row.id ? { ...stored, reminded: true } : stored)), result: row };
+          return { issues, result: row && remindable(row, due) ? row : undefined };
         });
         if (!issue) continue;
-        try {
-          // Quiet hours and an open chat apply as to any issue.
-          await dependencies.funnel.deliver({
-            botId,
-            class: "issue",
-            ...(issue.kind === "access_needed" ? { requiredCapability: "bot:access-requests" as const } : {}),
-            dedupeKey: `issue-reminder:${issue.id}`,
-            title: botIssueReminderTitle(issue.title),
-            body: issue.body,
-            status: "info",
-          });
-        } catch (error) {
-          // Not delivered: the next sweep may try again (the funnel dedupes on the key).
-          await remember(botId, issue.id, { reminded: false });
-          throw error;
-        }
+        // `reminded` is written only after the delivery log took the reminder.
+        // A crash in between sends it again on the next sweep, and the funnel
+        // dedupes on the key, so it reaches the person once.
+        await dependencies.funnel.deliver({
+          botId,
+          class: "issue",
+          ...(issue.kind === "access_needed" ? { requiredCapability: "bot:access-requests" as const } : {}),
+          dedupeKey: `issue-reminder:${issue.id}`,
+          title: botIssueReminderTitle(issue.title),
+          body: issue.body,
+          status: "info",
+        });
+        await remember(botId, issue.id, { reminded: true });
         sent += 1;
       }
       return sent;
