@@ -226,7 +226,8 @@ export type BotTranscriptEntry =
     }
   /**
    * A "Needs you" issue the host raised for this Bot (plan F2). `status` is
-   * `open` until a status entry settles it; a settled card keeps one quiet line.
+   * `open` until a status entry settles it. An open one waits in the chat's
+   * Needs-you slot; a settled one is not shown at all.
    */
   | {
       id: string;

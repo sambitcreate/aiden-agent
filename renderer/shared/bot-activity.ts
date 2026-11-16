@@ -236,6 +236,8 @@ export function botStepInfinitive(kind: BotToolPhase, app?: string): string {
 
 const BOT_ELAPSED_AFTER_MS = 20_000;
 export const BOT_STILL_GOING_AFTER_MS = 120_000;
+/** No progress at all for this long: the status line says the turn is taking longer than usual. */
+export const BOT_TAKING_LONGER_AFTER_MS = 10 * 60_000;
 
 /** "18s", "1m 12s", "2m", "1h 2m". Never less than one second. */
 export function botDurationLabel(ms: number): string {

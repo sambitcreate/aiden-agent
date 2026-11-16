@@ -1,13 +1,13 @@
 // A "Needs you" issue the host raised for this Bot (plan F2): what happened,
-// why it matters in one line, and up to two actions. Settled issues keep one
-// quiet line, like a routine suggestion, so the transcript never grows a card
-// the person can no longer answer.
+// why it matters in one line, and up to two actions. It waits in the chat's
+// Needs-you slot above the composer while open, and leaves once settled, so
+// the conversation never collects cards nobody can answer (as on the phones).
 
 import * as React from "react";
 import { CircleAlert, Clock, Pause } from "lucide-react";
 import { Button } from "../ui";
 import { BotNoticeCard, type BotNoticeTone } from "./bot-notice-card";
-import type { BotIssue, BotIssueAction, BotIssueKind, BotIssueResolution } from "../../shared/bot-issues";
+import type { BotIssue, BotIssueAction, BotIssueKind } from "../../shared/bot-issues";
 
 const KIND_LOOK: Record<BotIssueKind, { icon: React.ReactNode; tone: BotNoticeTone }> = {
   preflight_failed: { icon: <CircleAlert />, tone: "warning" },
@@ -15,12 +15,6 @@ const KIND_LOOK: Record<BotIssueKind, { icon: React.ReactNode; tone: BotNoticeTo
   routine_paused: { icon: <Pause />, tone: "neutral" },
   run_stalled: { icon: <Clock />, tone: "warning" },
   access_needed: { icon: <CircleAlert />, tone: "warning" },
-};
-
-const RESOLVED_LINE: Record<BotIssueResolution, string> = {
-  fixed: "Fixed",
-  dismissed: "Dismissed",
-  superseded: "Superseded",
 };
 
 type SettingsSection = Extract<BotIssueAction, { kind: "open_settings" }>["section"];
@@ -65,30 +59,15 @@ function actionKey(action: BotIssueAction): string {
 
 export function BotIssueCard({
   issue,
-  status,
   onAct,
 }: {
   issue: Pick<BotIssue, "kind" | "title" | "body" | "actions">;
-  status: "open" | BotIssueResolution;
   /** Carries out one offered action; rejects so the buttons come back. */
   onAct(action: BotIssueAction): Promise<void> | void;
 }) {
   // The answer shows at once; the live transcript confirms it moments later.
   const [busy, setBusy] = React.useState<string | null>(null);
   const look = KIND_LOOK[issue.kind];
-
-  if (status !== "open") {
-    return (
-      <BotNoticeCard
-        label={`${issue.title} · ${RESOLVED_LINE[status]}`}
-        icon={look.icon}
-        iconTone="neutral"
-        title={issue.title}
-      >
-        <p>{RESOLVED_LINE[status]}</p>
-      </BotNoticeCard>
-    );
-  }
 
   const act = async (action: BotIssueAction) => {
     if (busy !== null) return;

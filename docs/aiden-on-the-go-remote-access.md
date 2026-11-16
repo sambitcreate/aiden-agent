@@ -120,7 +120,7 @@ When a desktop host grants `bot:allowed` (contract revision 57), iPhone and Andr
 
 ## Needs you: Bot issues on the phone
 
-When the paired Mac offers it (contract revision 42, `bot:issues`), a Bot's **Needs you** cards appear in its chat on Aiden On The Go for iPhone and Android. A card says what happened in plain words ("Paused “Morning brief” after 3 failed tries", "Gmail needs reconnecting", "A reply has been quiet for 10 minutes") and offers up to two actions: **Resume routine**, **Stop**, **Keep waiting**, or **Open chat**. A card whose only action opens the Mac's own settings shows "Open on your Mac" instead of a button. The Bots list shows how many open cards a Bot has, and a phone notification says the Bot needs you when the app is not in the foreground. With an older Mac the cards stay on the Mac, and the phone shows nothing for them.
+When the paired Mac offers it (contract revision 42, `bot:issues`), a Bot's **Needs you** cards appear in its chat on Aiden On The Go for iPhone and Android. A card says what happened in plain words ("Paused “Morning brief” after 3 failed tries", "Gmail needs reconnecting") and offers up to two actions: **Resume routine**, **Stop**, **Keep waiting**, or **Open chat**. Current Macs no longer raise the "quiet for 10 minutes" card that offered Stop and Keep waiting; a phone still answers one an older Mac left open. A card whose only action opens the Mac's own settings shows "Open on your Mac" instead of a button. The Bots list shows how many open cards a Bot has, and a phone notification says the Bot needs you when the app is not in the foreground. With an older Mac the cards stay on the Mac, and the phone shows nothing for them.
 
 ## Bot messaging on the phone
 
