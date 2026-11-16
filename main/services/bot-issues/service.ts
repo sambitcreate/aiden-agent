@@ -180,6 +180,20 @@ function statusEntry(issue: BotIssue): BotIssueStatusEntryData & { effectId: str
   };
 }
 
+/**
+ * A heads-up, not an ask. Rows saved before `quiet` existed are judged by
+ * what raised them: a stall card, or a chat reply's "Review this run".
+ */
+function isHeadsUp(issue: StoredBotIssue): boolean {
+  if (issue.quiet === true || issue.kind === "run_stalled") return true;
+  return issue.kind === "preflight_failed" && issue.routineId === undefined && issue.dedupeKey.startsWith("execution:");
+}
+
+/** An ask that went out once, is still open, waited long enough and was never reminded. */
+function remindable(issue: StoredBotIssue, due: number): boolean {
+  return isOpen(issue) && !isHeadsUp(issue) && issue.reminded !== true && issue.delivered === true && issue.createdAt <= due;
+}
+
 export function createBotIssueService(dependencies: BotIssueServiceDependencies): BotIssueService {
   const listeners = new Set<(botId: string) => void>();
 
@@ -491,21 +505,33 @@ export function createBotIssueService(dependencies: BotIssueServiceDependencies)
     async remind(botId) {
       const due = dependencies.now() - BOT_ISSUE_REMIND_AFTER_MS;
       let sent = 0;
-      for (const issue of await dependencies.store.read(botId)) {
-        // Only an ask that already went out once, is still open and was never reminded.
-        if (!isOpen(issue) || issue.quiet === true || issue.reminded === true || issue.delivered !== true || issue.createdAt > due) continue;
-        // The funnel dedupes on the key, so a reminder whose flag never landed
-        // is not sent twice; quiet hours and an open chat apply as to any issue.
-        await dependencies.funnel.deliver({
-          botId,
-          class: "issue",
-          ...(issue.kind === "access_needed" ? { requiredCapability: "bot:access-requests" as const } : {}),
-          dedupeKey: `issue-reminder:${issue.id}`,
-          title: botIssueReminderTitle(issue.title),
-          body: issue.body,
-          status: "info",
+      for (const candidate of await dependencies.store.read(botId)) {
+        if (!remindable(candidate, due)) continue;
+        // Claim the reminder in the same serialized write a settlement uses, so
+        // an ask answered first is never reminded. A crash before the delivery
+        // lands loses this one reminder rather than ever sending a stale one.
+        const issue = await dependencies.store.change(botId, (issues) => {
+          const row = issues.find((stored) => stored.id === candidate.id);
+          if (!row || !remindable(row, due)) return { issues, result: undefined };
+          return { issues: issues.map((stored) => (stored.id === row.id ? { ...stored, reminded: true } : stored)), result: row };
         });
-        await remember(botId, issue.id, { reminded: true });
+        if (!issue) continue;
+        try {
+          // Quiet hours and an open chat apply as to any issue.
+          await dependencies.funnel.deliver({
+            botId,
+            class: "issue",
+            ...(issue.kind === "access_needed" ? { requiredCapability: "bot:access-requests" as const } : {}),
+            dedupeKey: `issue-reminder:${issue.id}`,
+            title: botIssueReminderTitle(issue.title),
+            body: issue.body,
+            status: "info",
+          });
+        } catch (error) {
+          // Not delivered: the next sweep may try again (the funnel dedupes on the key).
+          await remember(botId, issue.id, { reminded: false });
+          throw error;
+        }
         sent += 1;
       }
       return sent;

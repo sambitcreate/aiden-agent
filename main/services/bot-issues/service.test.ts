@@ -141,6 +141,9 @@ function setup(
       clock += by;
       return clock;
     },
+    failNextDelivery() {
+      deliveryFailures += 1;
+    },
   };
 }
 
@@ -372,6 +375,33 @@ test("an ask still open after four hours is reminded once; a newer or settled on
   assert.equal(harness.deliveries[harness.deliveries.length - 1]!.title, `Reminder: ${fresh.title}`);
   assert.equal(await harness.issues.remind(BOT_ID), 0);
   assert.equal((await harness.issues.list(BOT_ID, { open: true })).length, 2, "a reminder never settles the ask");
+});
+
+test("a heads-up saved before quiet existed is not reminded, while an older routine block still is", async () => {
+  const harness = setup();
+  // Rows an earlier version wrote: no quiet flag on either.
+  await harness.issues.raise({ ...ISSUE, kind: "preflight_failed", dedupeKey: "execution:claim-1", routineId: undefined, title: "Review this run before resuming", actions: [{ kind: "open_chat" }] });
+  await harness.issues.raise({ ...ISSUE, kind: "run_stalled", dedupeKey: "stall:run-1", routineId: undefined, title: "Still working?", actions: [{ kind: "keep_waiting" }, { kind: "stop_run" }] });
+  await harness.issues.raise({ ...ISSUE, kind: "preflight_failed", dedupeKey: "execution:claim-2", title: "Review this run before resuming", actions: [{ kind: "open_chat" }] });
+  harness.tick(BOT_ISSUE_REMIND_AFTER_MS);
+  assert.equal(await harness.issues.remind(BOT_ID), 1);
+  assert.equal(harness.deliveries[harness.deliveries.length - 1]!.title, "Reminder: Review this run before resuming");
+  assert.equal(harness.deliveries.filter((delivery) => delivery.dedupeKey.startsWith("issue-reminder:")).length, 1);
+});
+
+test("an ask settled before its reminder goes out is never reminded; a failed reminder is tried again", async () => {
+  const harness = setup();
+  const answered = await harness.issues.raise(ISSUE);
+  harness.tick(BOT_ISSUE_REMIND_AFTER_MS);
+  await harness.issues.resolve(BOT_ID, answered.dedupeKey, "fixed");
+  assert.equal(await harness.issues.remind(BOT_ID), 0);
+
+  const failing = setup();
+  await failing.issues.raise(ISSUE);
+  failing.tick(BOT_ISSUE_REMIND_AFTER_MS);
+  failing.failNextDelivery();
+  await assert.rejects(failing.issues.remind(BOT_ID));
+  assert.equal(await failing.issues.remind(BOT_ID), 1, "the claim was released, so the next sweep sends it");
 });
 
 test("an access ask's reminder keeps the access audience gate", async () => {
