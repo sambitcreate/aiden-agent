@@ -477,7 +477,28 @@ const botSpending: NonNullable<BotExtensionDeps["spending"]> = {
 };
 
 const dispatchCoordinator = createBotDispatchCoordinator();
-const executionIssues = createBotExecutionIssues(botIssues, spending);
+const executionIssues = createBotExecutionIssues(botIssues, spending, {
+  // A quiet try is the person's Resume, made for them while the block may be
+  // passing. Anything but the same interrupted run (resumed, dismissed,
+  // paused by the person) ends the tries without a card.
+  retry: async (botId, claim, attempt) => {
+    const service = await botSessionRuntime();
+    const before = await service.state(botId);
+    if (before.kind !== "interrupted" || before.blocked) return "moot";
+    try {
+      const after = await service.resume(botId, `auto-retry:${claim.id}:${attempt}`);
+      return after.kind === "running" ? "resumed" : after.kind === "interrupted" ? "failed" : "moot";
+    } catch {
+      return "failed";
+    }
+  },
+  setTimer: (fn, ms) => {
+    const timer = setTimeout(fn, ms);
+    timer.unref?.();
+    return { cancel: () => clearTimeout(timer) };
+  },
+  onError: (botId, error) => logger.warn("bots", `Bot ${botId} quiet retry failed.`, error),
+});
 async function buildBotExecutionRuntime(botId: string, claim: BotExecutionClaim, runtime: ResolvedModelRuntime, signal: AbortSignal, revalidate: () => Promise<void>, release: () => void, thinkingLevel?: BotRoutineThinkingLevel): Promise<BotExecutionRuntime> {
   const invocation = createBotRuntimeModels({ usageLimits: () => usageLimits.streamOptions({ kind: "bot", id: claim.root.botId }, runtime.provider.label) });
   invocation.register(botId, runtime as unknown as BotModelRuntime);
@@ -987,7 +1008,16 @@ interface WatchedRun {
 const watchedRuns = new Map<string, WatchedRun>();
 const RUN_STALL_ISSUE_KEY = "run_stalled";
 
+/** Bots whose "Still working?" card from an earlier version was settled this launch. */
+const legacyStallsSettled = new Set<string>();
+
 function watchRun(botId: string, state: BotSessionState): void {
+  // Aiden no longer asks "Still working?". A card an earlier version left open
+  // can't be answered usefully, so it settles the first time this Bot is seen.
+  if (!legacyStallsSettled.has(botId)) {
+    legacyStallsSettled.add(botId);
+    void botIssues.resolve(botId, RUN_STALL_ISSUE_KEY, "dismissed").catch(() => undefined);
+  }
   const current = watchedRuns.get(botId);
   if (state.kind !== "running") {
     if (!current) return;
@@ -1031,7 +1061,7 @@ const runWatchdog = createBotRunWatchdog({
   // Unknown until the request id is read; an unknown run is never stopped.
   runKind: (botId) => {
     const run = watchedRuns.get(botId);
-    // A routine with the person's messages waiting is asked about, never stopped.
+    // A routine with the person's messages waiting is left running, never stopped.
     if (run?.quiet === true) return run.queued > 0 ? "attended" : "routine";
     return run?.quiet === false ? "attended" : null;
   },
@@ -1050,16 +1080,6 @@ const runWatchdog = createBotRunWatchdog({
       botRunStalls.consume(botId);
       throw error;
     }
-  },
-  raiseStall: async (botId) => {
-    await botIssues.raise({
-      botId,
-      kind: "run_stalled",
-      dedupeKey: RUN_STALL_ISSUE_KEY,
-      title: "Still working?",
-      body: "This reply hasn't moved in 10 minutes.",
-      actions: [{ kind: "stop_run" }, { kind: "keep_waiting" }],
-    });
   },
   now: Date.now,
   setInterval: (fn, ms) => {

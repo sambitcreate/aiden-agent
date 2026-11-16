@@ -1000,6 +1000,19 @@ export function TranscriptEntries({
   );
 }
 
+/**
+ * When the live chat last moved: any new event (an entry, a step, a state) or
+ * streamed text. The status line uses it to say a turn is taking longer than
+ * usual, which is all the person hears about a quiet run.
+ */
+function useLastProgressAt(seq: number, partial: string | null): number {
+  const [at, setAt] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    setAt(Date.now());
+  }, [seq, partial]);
+  return at;
+}
+
 /** Bubble-shaped placeholders while a chat opens. */
 function BotChatSkeleton() {
   return (
@@ -1063,6 +1076,7 @@ export function BotChatPane({ botId }: { botId: string }) {
   const [statusLayout, setStatusLayout] = React.useState("");
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
   const snapshot = live.snapshot;
+  const quietSince = useLastProgressAt(snapshot?.seq ?? 0, snapshot?.partial ?? null);
   const latestSnapshot = React.useRef(snapshot);
   React.useLayoutEffect(() => { latestSnapshot.current = snapshot; }, [snapshot]);
   const interruptedControlLifetime = React.useRef<{ botId: string; active: boolean } | null>(null);
@@ -1985,7 +1999,7 @@ export function BotChatPane({ botId }: { botId: string }) {
       </MessageAttachmentPreviewProvider>
       <BotStatusAnnouncer text={statusActivity ? botStatusSpeech(statusActivity, chatActivity.wording) : ""} />
       {statusActivity ? (
-        <BotStatusLine activity={statusActivity} wording={chatActivity.wording} onLayoutChange={setStatusLayout} />
+        <BotStatusLine activity={statusActivity} wording={chatActivity.wording} quietSince={quietSince} onLayoutChange={setStatusLayout} />
       ) : null}
       {/* The one status slot (§4.7): only the most important status card shows. */}
       {status === "usage_limit" && usageLimitWait ? (
