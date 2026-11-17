@@ -334,6 +334,71 @@ test("explicit tool cancellation remains cancelled at generation settlement", ()
   assert.equal(toolSteps(final)[0]?.status, "cancelled");
 });
 
+test("Stop marks exactly the steps it cancels, and the mark survives a reload", () => {
+  const projector = new GenerationTimelineProjector("generation-stop", () => {});
+  projector.toolStarted("done", "read_file", { path: "README.md" });
+  projector.toolFinished("done", "completed");
+  // Cancelled earlier for another reason: no mark, even after a later Stop.
+  projector.toolStarted("earlier", "edit_file", { path: "a.ts" });
+  projector.toolFinished("earlier", "cancelled");
+  // The tool that ended after the person pressed Stop.
+  projector.toolStarted("ended", "run_command", { command: "private" });
+  projector.toolRunning("ended");
+  projector.toolFinished("ended", "cancelled", undefined, { stoppedByUser: true });
+  // Still running when the generation settles: swept by the Stop.
+  projector.toolStarted("swept", "grep", { pattern: "x" });
+  projector.toolRunning("swept");
+  // A completed call is never marked, whatever the caller says.
+  projector.toolStarted("late", "list_dir", { path: "." });
+  projector.toolFinished("late", "completed", undefined, { stoppedByUser: true });
+
+  const final = projector.finish("cancelled", "user_stop");
+  const marks = toolSteps(final).map((step) => [step.toolName, step.status, step.stoppedByUser]);
+  assert.deepEqual(marks, [
+    ["read_file", "completed", undefined],
+    ["edit_file", "cancelled", undefined],
+    ["run_command", "cancelled", true],
+    ["grep", "cancelled", true],
+    ["list_dir", "completed", undefined],
+  ]);
+  const reloaded = parseGenerationTimeline(JSON.parse(JSON.stringify(final)));
+  assert.deepEqual(reloaded, final);
+});
+
+test("cancellations from any other origin, or none, never carry the Stop mark", () => {
+  for (const origin of [undefined, "application_shutdown", "chat_deletion", "scheduled_task_cancel"] as const) {
+    const projector = new GenerationTimelineProjector("generation-other", () => {});
+    projector.toolStarted("swept", "grep", { pattern: "x" });
+    projector.toolRunning("swept");
+    const final = projector.finish("cancelled", origin);
+    assert.equal(toolSteps(final)[0]?.status, "cancelled", String(origin));
+    assert.equal(toolSteps(final)[0]?.stoppedByUser, undefined, String(origin));
+  }
+  const failed = new GenerationTimelineProjector("generation-failed", () => {});
+  failed.toolStarted("swept", "grep", { pattern: "x" });
+  assert.equal(toolSteps(failed.finish("failed"))[0]?.stoppedByUser, undefined);
+});
+
+test("a stored Stop mark is accepted only on a cancelled current-version step", () => {
+  const projector = new GenerationTimelineProjector("generation-stored", () => {});
+  projector.toolStarted("swept", "grep", { pattern: "x" });
+  const final = JSON.parse(JSON.stringify(projector.finish("cancelled", "user_stop")));
+  const parsed = parseGenerationTimeline(final);
+  assert.ok(parsed);
+  assert.equal(toolSteps(parsed)[0]?.stoppedByUser, true);
+  const withStep = (patch: Record<string, unknown>, version = final.version) => ({
+    ...final,
+    version,
+    steps: [{ ...final.steps[0], ...patch }],
+  });
+  assert.equal(parseGenerationTimeline(withStep({ status: "failed" })), undefined);
+  assert.equal(parseGenerationTimeline(withStep({ stoppedByUser: false })), undefined);
+  assert.equal(parseGenerationTimeline(withStep({ stoppedByUser: "yes" })), undefined);
+  assert.equal(parseGenerationTimeline(withStep({}, 2)), undefined);
+  const unmarked = parseGenerationTimeline(withStep({ stoppedByUser: undefined }));
+  assert.equal(unmarked && toolSteps(unmarked)[0]?.stoppedByUser, undefined);
+});
+
 test("terminal steps and timelines ignore replayed lifecycle events", () => {
   const projector = new GenerationTimelineProjector("generation-1", () => {});
   projector.toolStarted("provider-call-id", "read_file", { path: "README.md" });

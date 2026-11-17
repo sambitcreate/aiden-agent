@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **2026-11-11 — Stopped calls read as stopped (Remote revision 62).** A tool call the person ended with Stop on the Mac reads "<Step> stopped" with a neutral mark and is not counted as an issue. The host marks exactly those calls with `stoppedByUser: true`; a call cancelled for any other reason, even earlier in a run the person later stopped, keeps the cancelled issue treatment. Older hosts send no mark, so their cancelled calls stay issues.
+
 - **2026-11-13 — Bot UX on a revision 61 Mac.** A Mac offering provisional contract revision 61 is asked for `approval:cards`, `approvals:settings`, `bot:settings-changes`, `bot:suggestions` and `bot:templates`, each in a call of its own; without them every screen stays as it was.
   - Chat, run and Bot approvals show the Mac's own card: the title, arguments, the command or change, what it replaces, rows and notes, then the buttons with Deny first. Each button sends only its own decision and scope. A card only the Mac may allow offers Deny and says to allow it on the Mac, and a scheduled task on a device without schedule write access still offers Deny. A tap shows the answered line at once ("Allowed once", or "Denied" with a cross) and takes it back, restoring the card when the Mac still waits, if the answer doesn't land.
   - A Bot's chat shows a held settings change with the full new instructions, what changed, and Apply / Dismiss; an applied change reads as a receipt with Undo. Skill, lesson and memory tidy-up cards answer through their own routes. A skill too long to review on a phone offers only Not now and says to add it on the Mac. A card the Mac no longer has disappears.
