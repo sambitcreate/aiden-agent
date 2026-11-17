@@ -863,12 +863,19 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         let release = responder.hold(instanceId: "laptop", path: "/server")
         defer { release() }
         let studio = try connection("studio", in: coordinator)
+        // A real 0.1 s deadline can pass before a busy machine has read the
+        // revocation, and then the attempt only times out. This one passes once
+        // the revocation has started the next machine's connect.
+        var deadlinePassed = false
+        studio.waitForDeadline = { _ in
+            while !deadlinePassed, !Task.isCancelled { try? await Task.sleep(nanoseconds: 1_000_000) }
+        }
 
         let attempt = Task { await studio.connect(over: .probe, timeout: 0.1) }
         try await waitUntil("the next machine's connect") { serverRequests("laptop") == 1 }
-        try await Task.sleep(nanoseconds: 300_000_000)
-        release()
+        deadlinePassed = true
         await attempt.value
+        release()
 
         XCTAssertEqual(coordinator.defaultInstanceId, "laptop")
         try await waitUntil("the next machine to connect") { coordinator.connectionState == .connected }
