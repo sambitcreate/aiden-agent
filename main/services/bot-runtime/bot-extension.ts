@@ -1,6 +1,7 @@
 import { botMessageTurnOf, isBotMessageRequestId } from "../../../renderer/shared/bot-messages.js";
 import { BOT_MESSAGE_INPUT_KIND, type BotMessageInputMetadata } from "./bot-input-entry.js";
 import { BOT_ROUTINE_INPUT_KIND } from "./bot-input-entry.js";
+import { ownerRequestOf, type BotRunInputForJudge } from "./bot-owner-request.js";
 import { botExecutionScope } from "./bot-execution.js";
 // The `aiden-bot` Pi Durable extension: everything a Bot turn needs from
 // Aiden, installed in a Bot harness's registry before anything can run.
@@ -208,6 +209,48 @@ export interface BotApprovalSettlement {
   hint?: string;
   publication?: BotAllowListRelease;
 }
+/** A page of a conversation's entries, oldest first, from `minEntryId` (inclusive) on. */
+export type ContextEntryScan = (minEntryId: number | undefined, cursor: unknown) => Promise<{
+  items: readonly { id: unknown; model?: readonly { role: string; toolName?: unknown }[] }[];
+  next?: unknown;
+}>;
+
+/**
+ * Every tool result name a conversation holds, continuing from `known` (the
+ * last entry an earlier scan read, and the names up to it) when that entry is
+ * still there. A mark whose own entry is gone (the conversation was cleared,
+ * reset or replaced under the same id) is dropped and the scan starts over.
+ */
+export async function scanContextToolNames(
+  scan: ContextEntryScan, known?: { through: number; names: readonly string[] },
+): Promise<{ through: number | undefined; names: string[] }> {
+  const from = async (mark: typeof known) => {
+    const names = new Set(mark?.names);
+    let through = mark?.through;
+    let cursor: unknown;
+    let first = true;
+    do {
+      const page = await scan(mark?.through, cursor);
+      // The mark's own entry comes back first, or the mark is stale.
+      if (first && mark !== undefined && Number(page.items[0]?.id) !== mark.through) return undefined;
+      first = false;
+      for (const entry of page.items) {
+        if (mark !== undefined && Number(entry.id) <= mark.through) continue;
+        for (const message of entry.model ?? []) {
+          if (message.role === "toolResult" && typeof message.toolName === "string") names.add(message.toolName);
+        }
+        through = Number(entry.id);
+      }
+      cursor = page.next;
+    } while (cursor !== undefined);
+    return { through, names: [...names] };
+  };
+  return (known === undefined ? undefined : await from(known)) ?? (await from(undefined))!;
+}
+
+/** Conversations whose scanned tool names `contextToolNames` keeps. */
+const CONTEXT_TOOL_NAMES_KEPT = 64;
+
 export interface BotApprovalRequirement {
   evidence?: BotApprovalEvidence;
   allowFromList?(grant: BotAllowListRelease): Promise<void>;
@@ -223,8 +266,10 @@ export interface BotApprovalRequirement {
   onAllow?(): void | Promise<void>;
   /** The rule that made (or also covers) this ask. */
   rule?: BotHandoffRule;
+  /** In Ask, Auto would hand this call to the judge rather than a card. */
+  autoWouldJudge?: true;
   /**
-   * The person's Settings → Bots & Approvals lets this routine run go ahead: no card,
+   * The person's Settings → Approvals → Advanced lets this routine run go ahead: no card,
    * `onAllow` still runs before the tool.
    */
   preapproved?: true;
@@ -240,7 +285,7 @@ export interface BotRuleHandoff {
   rule: BotHandoffRule;
   /** What the call was about to do, for the block text ("The person did this themselves: …"). */
   summary: string;
-  /** The card's title after "Your turn: ". */
+  /** The card’s title after "Needs you: ". */
   action: string;
   why: string;
   /** The page where the person can do it (the Bot browser's tab): the card's Open. */
@@ -306,6 +351,18 @@ export interface BotToolCallCheck {
   /** Request ids of the inputs the calling run serves (one per input; `undefined` when it has none). */
   requestIds?: readonly (string | undefined)[];
   hasRoutineInputs?(): Promise<boolean>;
+  /**
+   * What the owner asked for in the inputs the calling run serves, for the
+   * Auto judge: `undefined` when any input carries words the owner didn't
+   * write (`ownerRequestOf`).
+   */
+  ownerRequest?(): Promise<string | undefined>;
+  /**
+   * Every tool whose result this Bot's conversation has committed, earlier
+   * turns and compacted history included, since the model's context (or a
+   * compaction summary of it) may still hold what those tools brought in.
+   */
+  contextToolNames?(): Promise<string[]>;
 }
 
 export type BotReadmission = { ok: true } | { ok: false; reason: "access_changed" | "bot_missing" };
@@ -318,6 +375,8 @@ export interface BotApprovalOwner {
 export interface BotApprovalRequest {
   authorizationFingerprint: string;
   always?: { key: string; count: number };
+  /** In Ask, Auto would hand this call to the judge: the desktop card may offer Auto. */
+  autoWouldJudge?: true;
   allowList?: Pick<BotApprovalRequirements, "target" | "requirementsFingerprint" | "consentRevision">;
   assertCurrent?(): Promise<void>;
   prepareAllowListRelease?(grant: BotAllowListRelease): Promise<BotApprovalDecision | undefined>;
@@ -328,6 +387,13 @@ export interface BotApprovalRequest {
   toolCallId: string;
   toolName: string;
   summary: string;
+  /**
+   * One-way hashes of the call's exact arguments and of the reply it belongs
+   * to. Waits that match on both (and on the card) are the same action in the
+   * same run, so one card may answer them; nothing else is grouped.
+   */
+  argumentsHash?: string;
+  runHash?: string;
   /** Aborted when the turn is stopped; the approval prompt should be withdrawn. */
   signal: AbortSignal | undefined;
 }
@@ -696,6 +762,75 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
       ? [] : inputs.filter((input): input is NonNullable<typeof input> => input !== undefined)};
   }
 
+  /** What the Auto judge reads about the calling run: the owner's words, and the tools it already ran. */
+  function judgeReads(
+    api: Pick<DocumentReader, "snapshot"> & { readonly conversationId: ConversationId }, context: Context,
+  ): Pick<BotToolCallCheck, "ownerRequest" | "contextToolNames"> {
+    return {
+      ownerRequest: async () => {
+        const inputs = await readRunInputEntries(api, context);
+        return inputs === undefined ? undefined : ownerRequestOf(inputs.map(({ input }) => input));
+      },
+      contextToolNames: async () => {
+        if (!harness) throw new Error("The conversation could not be read.");
+        const conversation = await harness.conversation(api.conversationId, context);
+        if (!conversation) throw new Error("The conversation could not be read.");
+        // Entries are only appended, so each conversation is scanned once
+        // from its start and then only past the last entry already seen. The
+        // marks belong to this harness (a new store starts over), and a mark
+        // whose own entry is gone (the conversation was cleared, reset or
+        // replaced under the same id) is dropped and the scan starts over.
+        const marks = contextToolNamesSeen.get(harness) ?? new Map<string, { through: number; names: string[] }>();
+        contextToolNamesSeen.set(harness, marks);
+        const key = String(api.conversationId);
+        const known = marks.get(key);
+        marks.delete(key);
+        const seen = await conversation.commit((tx) => scanContextToolNames(
+          (minEntryId, cursor) => tx.scanEntries({
+            conversationId: api.conversationId, order: "ascending",
+            ...(minEntryId === undefined ? {} : { minEntryId: minEntryId as never }),
+          }, 500, cursor as never),
+          known,
+        ), context);
+        if (seen.through !== undefined) marks.set(key, { through: seen.through, names: seen.names });
+        while (marks.size > CONTEXT_TOOL_NAMES_KEPT) marks.delete(marks.keys().next().value!);
+        return seen.names;
+      },
+    };
+  }
+
+  /**
+   * The committed entries of the inputs the calling run serves, with their
+   * request ids and user text, or `undefined` when any can't be read.
+   */
+  async function readRunInputEntries(
+    api: Pick<DocumentReader, "snapshot"> & { readonly conversationId: ConversationId }, context: Context,
+  ): Promise<{ entryId: number; input: BotRunInputForJudge }[] | undefined> {
+    if (!harness) return undefined;
+    const live = await api.snapshot(LiveDoc, api.conversationId, context);
+    const { submissions } = await harness.inspect(context);
+    const conversation = await harness.conversation(api.conversationId, context);
+    if (!conversation) return undefined;
+    const out: { entryId: number; input: BotRunInputForJudge }[] = [];
+    for (const id of live?.run?.inputs ?? []) {
+      const submission = submissions.find((candidate) => candidate.id === id);
+      if (submission?.type !== "input" || submission.entry === undefined) return undefined;
+      const entry = await conversation.commit((tx) => tx.entry(submission.entry!), context);
+      if (!entry) return undefined;
+      const texts: string[] = [];
+      for (const message of entry.model ?? []) {
+        if (message.role !== "user") continue;
+        if (typeof message.content === "string") texts.push(message.content);
+        else for (const part of message.content) if (part.type === "text") texts.push(part.text);
+      }
+      out.push({ entryId: Number(entry.id), input: {
+        ...(submission.requestId !== undefined ? { requestId: submission.requestId } : {}),
+        kind: entry.kind, ...(entry.data !== undefined ? { data: entry.data } : {}), text: texts.join("\n\n"),
+      } });
+    }
+    return out;
+  }
+
   function botInputMetadata(requestId: string | undefined, data: JsonValue | undefined): BotMessageInputMetadata | undefined {
     const turn = botMessageTurnOf(requestId);
     if (!data || typeof data !== "object" || Array.isArray(data)) return undefined;
@@ -771,6 +906,18 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
   const executionApprovals = new Map<string, { approval: BotApprovalRequirement; invalid?: boolean; argsFingerprint?: string }>();
   const ordinaryExecutions = new Set<string>();
   const executedApprovals = new Map<string, { id: string; authorizationFingerprint: string; cacheKey: string }>();
+  /** Actions the person declined, by run: in-memory only, for the runs still going. */
+  const declinedInRuns = new Map<string, Set<string>>();
+  /** Per harness and conversation: the last entry `contextToolNames` read, and every tool result name up to it. */
+  const contextToolNamesSeen = new WeakMap<object, Map<string, { through: number; names: string[] }>>();
+  const rememberDecline = (runId: string, key: string) => {
+    const declined = declinedInRuns.get(runId) ?? new Set<string>();
+    declined.add(key);
+    declinedInRuns.delete(runId);
+    declinedInRuns.set(runId, declined);
+    // Keep only the most recent runs.
+    while (declinedInRuns.size > 64) declinedInRuns.delete(declinedInRuns.keys().next().value!);
+  };
 
   /**
    * A hook's ask gets a card of its own, ahead of the rule's flow: a remembered
@@ -844,6 +991,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
           return requestIds.length > 0;
         }, context);
       },
+      ...judgeReads(api, context),
     };
     let decision = await deps.checkPolicy(botId, call.name, check);
     if (!planAdmissionAvailable && decision.allowed && decision.approval?.evidence && !decision.approval.preapproved) {
@@ -959,6 +1107,12 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
         authorizationFingerprint: evidence.authorizationFingerprint,
       }, context);
     };
+    // The person already declined this exact action in this run: never ask
+    // again (the approval gate's "declined in run" rule, plan §3.3).
+    // A run is the reply to one set of inputs, across all of its model steps.
+    const declineRun = `${api.conversationId}\u0000${owner.inputs.map(input => input.submissionId).join(",")}`;
+    const declineKey = `${call.name}\u0000${approval.summary}\u0000${JSON.stringify(call.arguments ?? null)}`;
+    if (declinedInRuns.get(declineRun)?.has(declineKey)) return { block: "The person declined this action." };
     let memo = await attemptMemo(approval);
     let fingerprint = evidenceOf(approval).authorizationFingerprint;
     let releaseProof: BotAllowListRelease | undefined;
@@ -967,8 +1121,10 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     const capturedRemember = approval.remember ? structuredClone(approval.remember) : undefined;
     const request: BotApprovalRequest = {
       botId, waitId: memo.waitId, toolCallId: memo.toolCallId, toolName: call.name, summary: approval.summary,
+      argumentsHash: approvalHash({ toolName: call.name, args: call.arguments ?? null }), runHash: approvalHash(declineRun),
       authorizationFingerprint: fingerprint, owner, signal: context.abortSignal, assertCurrent: () => assertLive(api, context, owner),
       ...(capturedRemember?.offer && !approval.rule ? { always: { key: botApprovalRuleKey(capturedRemember.target), count: capturedRemember.offer.count } } : {}),
+      ...(approval.autoWouldJudge ? { autoWouldJudge: true as const } : {}),
       ...(capturedRequirements && capturedRemember && !approval.rule ? {
         allowList: { target: capturedRequirements.target, requirementsFingerprint: capturedRequirements.requirementsFingerprint,
           consentRevision: capturedRequirements.consentRevision },
@@ -1037,8 +1193,11 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
       }
       settlement = cache.result as BotApprovalSettlement;
     }
-    if (answer.answer === "deny") return { block: answer.source === "expiry" ? "The approval window expired. Nobody approved this action."
-      : answer.source === "person" ? "The person declined this action." : "This action was not approved." };
+    if (answer.answer === "deny") {
+      if (answer.source === "person") rememberDecline(declineRun, declineKey);
+      return { block: answer.source === "expiry" ? "The approval window expired. Nobody approved this action."
+        : answer.source === "person" ? "The person declined this action." : "This action was not approved." };
+    }
     const current = await fresh();
     const publication = releaseProof ?? settlement.publication;
     const same = current && evidenceOf(current).authorizationFingerprint === fingerprint;
@@ -1103,6 +1262,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     const decision = await deps.checkPolicy(botId, toolName, { executionId, callId: (api as ToolExecutionApi).callId,
       args, owner, requestIds, authorizationIds: await runInputIds(api, context),
       signal: context.abortSignal, assertCurrent: () => assertLive(api, context, owner),
+      ...judgeReads(api, context),
       skipPlanCoverage: true, skipAllowList: true, approvalProbe: true });
     if (!decision.allowed || !decision.approval || decision.approval.preapproved) return undefined;
     return ordinaryEvidence(decision.approval, executionId, toolName, args, owner, requestIds);

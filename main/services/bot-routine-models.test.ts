@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import test from "node:test";
-import { createModels, fauxProvider, fauxAssistantMessage, createAssistantMessageEventStream, type Models } from "@earendil-works/pi-ai";
+import { clampThinkingLevel, createModels, fauxProvider, fauxAssistantMessage, createAssistantMessageEventStream, getSupportedThinkingLevels, type Models } from "@earendil-works/pi-ai";
 import { createBotRoutineModelService, inspectBotRoutineModelGrant, type BotProviderResponseFacts, type BotCostApprovalFacts, type BotRoutineModelLifetime } from "./bot-routine-models.js";
 import { buildBotCapabilityCatalogSnapshot } from "./bot-capability-catalog-core.js";
 import { bindBotCustomSelection, bindBotProviderModel, createBotCapabilityOpaqueIdMint } from "./bot-capability-bindings.js";
@@ -19,16 +19,16 @@ import { issueBotRoutineInputOrigin } from "./bot-runtime/bot-input-entry.js";
 import { issueBotPeerInputOrigin } from "./bot-peers/authority.js";
 import { SpendingService } from "./spending-service.js";
 import { emptySpendingDocument } from "./spending-core.js";
-import { parseBotRoutineModelCatalog, parseBotRoutineModelResult, parseBotRoutineModelRuns } from "../../renderer/shared/bot-routine-models.js";
+import { BOT_ROUTINE_THINKING_LEVELS, effectiveBotThinkingLevel, parseBotRoutineModelCatalog, parseBotRoutineModelResult, parseBotRoutineModelRuns } from "../../renderer/shared/bot-routine-models.js";
 const fp = (text: string) => createHash("sha256").update(text).digest("hex");
 const lifetime = (): BotRoutineModelLifetime => ({ signal: new AbortController().signal, assertCurrent() {} });
-async function fixture(t: test.TestContext) {
+async function fixture(t: test.TestContext, options: { defaultAlwaysReasons?: boolean; defaultMetadataFails?: boolean } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-routine-models-")); t.after(() => rm(root, { recursive: true, force: true }));
   let anchor: string | null = null, marker: BotCapabilityBootstrapMarkerState | null = null;
   const open = async () => {
     const store = createBotCapabilityStore({ root: () => root, checkpoint: createBotCapabilityStateCheckpoint({ root: () => root, keyStore: createBotCapabilityOpaqueKeyStore({ root: () => root }), anchor: { load: async () => anchor, store: async (value, expected) => { assert.equal(anchor, expected); anchor = value; } }, bootstrapMarker: { load: async () => marker, store: async (value, expected) => { assert.deepEqual(marker, expected); marker = value; } }, inspectInitialBootstrap: async () => "clean" as const }) }); await store.initialize(); return store;
   };
-  const store = await open(); let quiet = false, routinePresent = true, connection = "one", defaultAvailable = true, botIncarnation = "bot-one", routineIncarnation = "routine-one", defaultCalls = 0, now = 1_000, failAfterPublish = false;
+  const store = await open(); let quiet = false, routinePresent = true, connection = "one", defaultAvailable = true, botIncarnation = "bot-one", routineIncarnation = "routine-one", defaultCalls = 0, now = 1_000, failAfterPublish = false, metadataFails = false;
   let heldPersistence: { stage: "read" | "write"; entered(): void; released: Promise<void> } | undefined;
   const pausePersistence = async (stage: "read" | "write") => { const held = heldPersistence; if (held?.stage !== stage) return; heldPersistence = undefined; held.entered(); await held.released; };
   const holdNextPersistence = (stage: "read" | "write") => {
@@ -42,9 +42,9 @@ async function fixture(t: test.TestContext) {
   const custom = { providerId: provider.id, modelId: d.id, fileScopeIds: [], connectionIds: [], skillIds: [], otherCapabilityIds: [], shellEnabled: false };
   await store.acknowledgeNotice("desktop", { version: "bot-full-access-v1", decision: "customize_first", confirmedForeground: true });
   await store.createBotPolicy({ botId: "bot:one", catalog: initial.catalog, access: { accessMode: "custom", catalogRevision: initial.catalog.revision, custom }, binding: bindBotCustomSelection({ selection: custom, catalogRevision: initial.catalog.revision, snapshot: initial }) });
-  const service = createBotRoutineModelService({ persistence: { read: async () => { await pausePersistence("read"); return store.getRoutineModelsState(); }, write: async (...args) => { await pausePersistence("write"); await store.saveRoutineModelsState(...args); if (failAfterPublish) { failAfterPublish = false; throw new Error("lost response after protected publication"); } } }, identity: async (botId, routineId) => { if (!["bot:one", "bot:two", "bot:three"].includes(botId) || routineId && (!routinePresent || routineId !== "routine:one")) throw new Error("Unknown owner"); return { botIncarnation: botId === "bot:one" ? botIncarnation : botId === "bot:two" ? "bot-two" : "bot-three", ...(routineId ? { routineIncarnation } : {}) }; }, snapshot: async () => snapshot(), metadata: async (_provider, id) => models.getModel("proof", id)!, deliveryQuiet: async () => quiet, defaultChoice: async () => { defaultCalls++; if (!defaultAvailable) throw new Error("default unavailable"); return { binding: bindBotProviderModel({ providerId: provider.id, modelId: d.id, catalogRevision: snapshot().catalog.revision, snapshot: snapshot() }), thinkingLevel: "off" }; }, now: () => now });
+  const service = createBotRoutineModelService({ persistence: { read: async () => { await pausePersistence("read"); return store.getRoutineModelsState(); }, write: async (...args) => { await pausePersistence("write"); await store.saveRoutineModelsState(...args); if (failAfterPublish) { failAfterPublish = false; throw new Error("lost response after protected publication"); } } }, identity: async (botId, routineId) => { if (!["bot:one", "bot:two", "bot:three"].includes(botId) || routineId && (!routinePresent || routineId !== "routine:one")) throw new Error("Unknown owner"); return { botIncarnation: botId === "bot:one" ? botIncarnation : botId === "bot:two" ? "bot-two" : "bot-three", ...(routineId ? { routineIncarnation } : {}) }; }, snapshot: async () => snapshot(), metadata: async (_provider, id) => { if ((options.defaultMetadataFails || metadataFails) && id === "D") throw new Error("Saved model metadata is unavailable."); const model = models.getModel("proof", id)!; return options.defaultAlwaysReasons && id === "D" ? { ...model, reasoning: true, thinkingLevelMap: { off: null, minimal: null } } : model; }, deliveryQuiet: async () => quiet, defaultChoice: async () => { defaultCalls++; if (!defaultAvailable) throw new Error("default unavailable"); return { binding: bindBotProviderModel({ providerId: provider.id, modelId: d.id, catalogRevision: snapshot().catalog.revision, snapshot: snapshot() }), thinkingLevel: "off" }; }, now: () => now });
   const saveA = async () => service.save({ botId: "bot:one", routineId: "routine:one", mutationId: randomUUID(), expectedRevision: (await service.read("bot:one", "routine:one")).revision, catalogRevision: (await service.catalog("bot:one", "routine:one")).revision, selection: { mode: "selected", primary: { providerId: provider.id, modelId: a.id, thinkingLevel: "high" } } }, lifetime());
-  return { root, store, open, service, snapshot, saveA, provider, a, d, models, faux, holdNextPersistence, get defaultCalls() { return defaultCalls; }, setQuiet(value:boolean) {quiet=value;}, unavailableDefault() { defaultAvailable = false; }, rotate() { connection = "two"; }, recreate() { routineIncarnation = "routine-two"; }, removeRoutine() { routinePresent = false; }, recreateBot() { botIncarnation = "bot-two"; }, tick() { now++; }, loseResponse() { failAfterPublish = true; } };
+  return { root, store, open, service, snapshot, saveA, provider, a, d, models, faux, holdNextPersistence, get defaultCalls() { return defaultCalls; }, setQuiet(value:boolean) {quiet=value;}, unavailableDefault() { defaultAvailable = false; }, failMetadata(value: boolean) { metadataFails = value; }, rotate() { connection = "two"; }, recreate() { routineIncarnation = "routine-two"; }, removeRoutine() { routinePresent = false; }, recreateBot() { botIncarnation = "bot-two"; }, tick() { now++; }, loseResponse() { failAfterPublish = true; } };
 }
 test("a prepared choice refuses model, thinking and fallback drift while credential repair and existing ownership retain their routes", async t => {
   const f = await fixture(t);
@@ -70,6 +70,69 @@ test("a prepared choice refuses model, thinking and fallback drift while credent
   }
 });
 
+test("an inherited Bot default on a model that cannot turn thinking off runs at its lowest supported level", async (t) => {
+  const f = await fixture(t, { defaultAlwaysReasons: true });
+  const chat = await f.service.claim("bot:one", { requestId: "plain-chat" });
+  assert.equal(chat.primary.binding.sourceModelId, "D");
+  assert.equal(chat.primary.thinkingLevel, "low");
+  const origin = { version: 1 as const, botId: "bot:one", routineId: "routine:one", runId: "inherited-run", kind: "event" as const };
+  const prepared = await f.service.prepareRoutineClaim("bot:one", "routine:one");
+  const routine = await f.service.claim("bot:one", { requestId: "inherited-run", routineOrigin: origin, expectedChoiceHash: prepared });
+  assert.equal(routine.primary.thinkingLevel, "low");
+  // A default model that can turn thinking off keeps "off".
+  const plain = await fixture(t);
+  assert.equal((await plain.service.claim("bot:one", { requestId: "plain-chat" })).primary.thinkingLevel, "off");
+  // An unreadable model record doesn't refuse the turn here; the run's own check decides.
+  const unreadable = await fixture(t, { defaultMetadataFails: true });
+  assert.equal((await unreadable.service.claim("bot:one", { requestId: "plain-chat" })).primary.thinkingLevel, "off");
+});
+test("the Bot settings show the same thinking level the host runs for every supported set and request", () => {
+  const model = fauxProvider({ provider: "proof", models: [{ id: "M", reasoning: true }] }).getModel();
+  for (let mask = 1; mask < 1 << BOT_ROUTINE_THINKING_LEVELS.length; mask++) {
+    const wanted = BOT_ROUTINE_THINKING_LEVELS.filter((_level, index) => mask & (1 << index));
+    const thinkingLevelMap = Object.fromEntries(BOT_ROUTINE_THINKING_LEVELS.map((level) => [level, wanted.includes(level) ? level : null]));
+    const candidate = { ...model, thinkingLevelMap };
+    const supported = getSupportedThinkingLevels(candidate);
+    assert.deepEqual(supported, wanted);
+    for (const requested of BOT_ROUTINE_THINKING_LEVELS) assert.equal(effectiveBotThinkingLevel(supported, requested), clampThinkingLevel(candidate, requested), `${wanted.join(",")} asked ${requested}`);
+  }
+  assert.equal(effectiveBotThinkingLevel([], "high"), undefined);
+});
+test("a message refused before submission drops its claim, so the same request binds the repaired default; routine and submitted claims stay", async t => {
+  const f = await fixture(t, { defaultAlwaysReasons: true });
+  f.failMetadata(true);
+  let loseClaimReply = false;
+  const execution: BotExecutionPort = {
+    claim: async (botId, input) => { const saved = await f.service.claim(botId, input); if (loseClaimReply) throw new Error("The claim was saved but its reply was lost."); return saved; }, getClaim: (...args) => f.service.getClaim(...args), recordSubmission: (...args) => f.service.recordSubmission(...args), selectFallback: (...args) => f.service.selectFallback(...args), releaseUnsubmittedClaim: (...args) => f.service.releaseUnsubmittedClaim(...args),
+    async resolve(_botId, claim) {
+      const model = f.models.getModel("proof", claim.primary.binding.sourceModelId)!;
+      if (claim.primary.thinkingLevel === "off") throw new Error("This model cannot turn thinking off.");
+      return { model, models: f.models, imageInput: false, reserveResponse: async () => {}, sealResponse: async () => {}, revalidate: async () => {}, release() {} };
+    },
+  };
+  const runtime = await createBotSessionService({ profileDir: f.root, models: f.models, execution, extension: recordingDeps(), knownBotIds: async () => new Set(["bot:one"]), resolveModel: async () => ({ provider: "proof", modelId: "D" }), settings: { compaction: { enabled: false }, retry: { enabled: false } } }); t.after(() => runtime.shutdown());
+  await assert.rejects(runtime.send("bot:one", { requestId: "phone-send", text: "hello" }), { name: "BotSessionError", reason: "model_error" });
+  assert.equal(await f.service.claimByRequest("bot:one", "phone-send"), undefined);
+  f.failMetadata(false); f.faux.setResponses([fauxAssistantMessage("hello back")]);
+  const sent = await runtime.send("bot:one", { requestId: "phone-send", text: "hello" });
+  assert.equal(sent.deduped, false);
+  assert.equal((await f.service.claimByRequest("bot:one", "phone-send"))?.primary.thinkingLevel, "low");
+
+  loseClaimReply = true;
+  await assert.rejects(runtime.send("bot:one", { requestId: "lost-reply", text: "again" }), { name: "BotSessionError", reason: "model_error" });
+  assert.equal(await f.service.claimByRequest("bot:one", "lost-reply"), undefined, "a claim saved before its reply was lost is released too");
+  loseClaimReply = false; f.faux.setResponses([fauxAssistantMessage("again back")]);
+  assert.equal((await runtime.send("bot:one", { requestId: "lost-reply", text: "again" })).deduped, false);
+
+  const origin = { version: 1 as const, botId: "bot:one", routineId: "routine:one", runId: "event-run", kind: "event" as const };
+  const routine = await f.service.claim("bot:one", { requestId: "event-run", routineOrigin: origin });
+  await f.service.releaseUnsubmittedClaim("bot:one", routine.requestId);
+  assert.deepEqual(await f.service.claimByRequest("bot:one", "event-run"), routine);
+  const submitted = await f.service.claim("bot:one", { requestId: "submitted-turn" });
+  await f.service.recordSubmission("bot:one", submitted.id, "7");
+  await f.service.releaseUnsubmittedClaim("bot:one", submitted.requestId);
+  assert.equal((await f.service.claimByRequest("bot:one", "submitted-turn"))?.submissionId, "7");
+});
 test("explicit routine grant admits its model while Custom default stays unavailable and unchanged; forged/cross-owner/recreated grants fail", async (t) => {
   const f = await fixture(t); assert.equal((await f.saveA()).ok, true); f.unavailableDefault();
   const claim = await f.service.claim("bot:one", { requestId: "routine:one:fire", routineOrigin: { version: 1, botId: "bot:one", routineId: "routine:one", runId: "routine:one:fire", kind: "manual" } });

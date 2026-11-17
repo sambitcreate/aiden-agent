@@ -199,6 +199,7 @@ export interface AidenRemoteServiceOptions {
         botOpenWork?: AidenRemoteRouterDependencies["botOpenWork"];
         botRoutineModels?: AidenRemoteRouterDependencies["botRoutineModels"];
         botPeers?: AidenRemoteRouterDependencies["botPeers"];
+        approvalSettings?: AidenRemoteRouterDependencies["approvalSettings"];
         bots?: Pick<
           AidenRemoteBotService,
           | "list"
@@ -243,6 +244,7 @@ export interface AidenRemoteServiceOptions {
         botOpenWork?: AidenRemoteRouterDependencies["botOpenWork"];
         botRoutineModels?: AidenRemoteRouterDependencies["botRoutineModels"];
         botPeers?: AidenRemoteRouterDependencies["botPeers"];
+        approvalSettings?: AidenRemoteRouterDependencies["approvalSettings"];
         bots?: Pick<
           AidenRemoteBotService,
           | "list"
@@ -1443,7 +1445,7 @@ export class AidenRemoteService {
   /** Persist "Accept connection requests"; turning it off cancels open requests. */
   async setAcceptPairingRequests(accept: boolean): Promise<void> {
     const settings = this.options.pairingRequestSettings;
-    if (!settings) throw new Error("Connection requests are unavailable on this host.");
+    if (!settings) throw new Error("Connection requests are not available on this computer.");
     await this.serialized(async () => {
       await settings.save(accept);
       this.acceptPairingRequests = accept;

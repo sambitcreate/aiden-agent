@@ -116,7 +116,7 @@ export function createBotAllowList(deps: BotAllowListDeps): BotAllowList {
       const savedDecision = !always ? await deps.tallies.decision(botId, decision.id, decision.authorizationFingerprint) : undefined;
       const hintDisplay = async () => ({ label: await label(target, remember.title),
         choice: clean(botAlwaysAllowLabel(clean(await deps.botName(botId) ?? "this Bot", "this Bot")), "Always allow"),
-        place: "Allowed without asking on your profile" });
+        place: "add a rule in Settings → Approvals" });
       const hint = !savedDecision && remember.offer && decision.source === "person" && decision.answer === "allow" ? await hintDisplay() : undefined;
       const result = await deps.tallies.record(botId, target, { ...decision, offered: prior?.offered ?? !!remember.offer,
         ...(publicationContext ? { publicationContext } : {}) }, { origin: "live", replayOffer: "stored", hintEligible: input.hintEligible ?? true, ...(hint ? { hint } : {}) });

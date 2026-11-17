@@ -233,7 +233,7 @@ test("adding another computer by setup code reports an unreachable address and r
   await expect(sheet).toBeVisible();
   await sheet.getByRole("button", { name: "Enter setup code", exact: true }).click();
   const form = page.getByRole("dialog", { name: "Enter setup code" });
-  const address = form.getByRole("textbox", { name: "Desktop address" });
+  const address = form.getByRole("textbox", { name: "Computer address" });
   await expect(address).toBeFocused();
   const pair = form.getByRole("button", { name: "Pair", exact: true });
   await expect(pair).toBeDisabled();

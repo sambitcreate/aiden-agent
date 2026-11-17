@@ -9,6 +9,7 @@ import {
   PopoverTrigger,
   Text,
 } from "./ui";
+import { useAppCapabilities } from "../lib/app-capabilities";
 import { aidenRemoteApi } from "../lib/ipc";
 import { queryKeys, useAidenRemoteSettings } from "../lib/queries";
 import {
@@ -17,6 +18,7 @@ import {
   type RemoteDeviceGroups,
 } from "../lib/remote-connection-status";
 import type { AidenRemoteDeviceView } from "../shared/aiden-remote";
+import { localComputerNoun } from "../shared/computer-noun";
 
 function relativeSeen(timestamp: number, now = Date.now()): string {
   const elapsed = Math.max(0, now - timestamp);
@@ -98,6 +100,7 @@ export function RemoteConnectionPopover({
   const queryClient = useQueryClient();
   const [open, setOpen] = React.useState(false);
   const settings = useAidenRemoteSettings(open);
+  const { platform } = useAppCapabilities();
 
   React.useEffect(() => aidenRemoteApi.onChanged(() => {
     void queryClient.invalidateQueries({ queryKey: queryKeys.aidenRemote });
@@ -174,7 +177,7 @@ export function RemoteConnectionPopover({
           ) : !snapshot ? (
             <p className="px-3 py-3 text-small text-secondary">Connection status is unavailable.</p>
           ) : snapshot.devices.length === 0 ? (
-            <p className="px-3 py-3 text-small text-secondary">No devices have been paired with this desktop.</p>
+            <p className="px-3 py-3 text-small text-secondary">No devices have been paired with this {localComputerNoun(platform)}.</p>
           ) : (
             <>
               <DeviceGroup label="Recently active" devices={groups.active} state="active" />

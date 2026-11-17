@@ -18,7 +18,7 @@ Composer: the dock wrapper uses Composer's `pb-4 pt-3 sm:pb-5`. Key handling:
 Aiden Remote contract revision 29 (main took 28 for inline visuals) adds `questionnaire` to `GenerationToolStep` in `openapi.json`. An Ajv test checks that the schema and the runtime parser agree. The shared fixture's timeline event carries a recap, and desktop, iOS (`AidenRemotePhase0Tests`) and Android (`AidenChatTest`) each decode it.
 
 Native clients:
-- iOS: `AidenQuestionnaireRecap` in `Models/AidenChat.swift` and `AidenQuestionnaireRecapView` in `AidenChatFeature.swift`.
+- iOS: `AidenQuestionnaireRecap` in `Models/AidenChat.swift` and `AidenQuestionnaireRecapView` in `Features/Chat/AidenChronologicalTranscript.swift`.
 - Android: `models/AidenQuestionnaireRecap.kt` and `features/chat/AidenQuestionnaireRecapView.kt`.
 - Both drop an invalid recap and keep the step, while the desktop rejects the whole timeline.
 - Both get a `questionnaire` chronological row kind and leave questionnaire steps out of the activity tally.

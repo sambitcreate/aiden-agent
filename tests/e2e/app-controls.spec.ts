@@ -38,7 +38,7 @@ test("owned help and inert settings cards work with no workspace file access; cl
   await page.getByRole("button", { name: "Send message" }).click();
   const memory = page.getByRole("region", { name: "memory controls" });
   await expect(memory).toBeVisible();
-  const memorySwitch = memory.getByRole("switch", { name: "Memory — This desktop", exact: true });
+  const memorySwitch = memory.getByRole("switch", { name: /^Memory — This (Mac|computer)$/u });
   await expect(memorySwitch).toBeChecked();
   expect(scenario.error).toBeUndefined();
   expect(scenario.issuedToolNames).toEqual(calls.map(({ name }) => name));
@@ -62,7 +62,7 @@ test("owned help and inert settings cards work with no workspace file access; cl
   await expect(memorySwitch).toBeChecked();
   expect(lmStudio.requests.length).toBe(modelRequests);
   const appearance = page.getByRole("region", { name: "appearance controls" });
-  await appearance.getByRole("combobox", { name: "Color mode — This desktop", exact: true }).click();
+  await appearance.getByRole("combobox", { name: /^Color mode — This (Mac|computer)$/u }).click();
   await page.getByRole("option", { name: "Dark", exact: true }).click();
   await expect(appearance.getByRole("status")).toContainText("Saved");
   // The open window repaints without visiting Settings → Appearance.
@@ -81,7 +81,7 @@ test("owned help and inert settings cards work with no workspace file access; cl
   await expect(
     aiden.page
       .getByRole("region", { name: "memory controls" })
-      .getByRole("switch", { name: "Memory — This desktop", exact: true }),
+      .getByRole("switch", { name: /^Memory — This (Mac|computer)$/u }),
   ).not.toBeChecked();
   expect(persisted.appearance?.mode).toBe("dark");
   await expect(aiden.page.locator("html")).toHaveAttribute("data-appearance-scheme", "dark");

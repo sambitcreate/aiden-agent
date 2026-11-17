@@ -5,7 +5,7 @@ import { BOT_DESKTOP_AUDIENCE_ID, botRuntimeAuthority } from "./bot-runtime-auth
 import { botCapabilityCatalog, botCapabilityStore } from "./bot-capability-services-main.js";
 import { botStore } from "./bot-store.js";
 import { scheduleStore } from "./schedule-store.js";
-import { resolveCompactionModelMetadata } from "./model-runtime.js";
+import { resolveRuntimeModelMetadata } from "./model-runtime.js";
 import { createBotRoutineModelService, type BotExecutionModelChoice } from "./bot-routine-models.js";
 
 /** Owner routes authorize their principal; this singleton mints only private exact grants. */
@@ -26,7 +26,8 @@ const service = createBotRoutineModelService({
     if (!event) throw new Error("This routine no longer exists."); return { botIncarnation, routineIncarnation: `event:${event.createdAt}` };
   },
   snapshot: (retainedProviders) => botCapabilityCatalog.snapshotModelsForRuntime({ retainedProviders }),
-  metadata: resolveCompactionModelMetadata,
+  // The same model record a run builds, so saved and inherited levels pass its check.
+  metadata: resolveRuntimeModelMetadata,
   deliveryQuiet: async (botId,routineId) => {const task=await scheduleStore.get(routineId);return task?.botId===botId&&task.notify===false;},
   companionChoice: async (botId) => (await botCapabilityStore.getBotVisionModelAuthority(botId))?.binding,
   defaultChoice: async (botId): Promise<BotExecutionModelChoice> => {
@@ -37,8 +38,8 @@ const service = createBotRoutineModelService({
     try {
       await admission.revalidateBeforeEffect(); const authority = await botCapabilityStore.getBotModelAuthority(botId);
       if (!authority) throw new Error("This Bot needs an AI model.");
-      // Bot defaults currently have no independent thinking setting.
-      return { binding: authority.binding, thinkingLevel: "off" };
+      // Advanced → Model's Thinking; the service moves it to a level the model supports.
+      return { binding: authority.binding, thinkingLevel: (await botStore.get(botId))?.thinkingLevel ?? "off" };
     } finally { admission.release(); }
   },
   changed: (botId) => ipcMain.broadcast("bots:changed", { botId }),

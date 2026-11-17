@@ -285,7 +285,7 @@ test("a host that does not send this Mac hand-offs shows the Mac-only line, and 
   const opened = remoteBotSessionView(parseAidenRemoteBotSession(legacy.session));
   assert.equal(opened.handoff, null);
   const notice = opened.snapshot.entries.find((entry) => entry.id.startsWith("handoff-notice:"));
-  assert.equal(notice?.type === "assistant" && notice.text, "Scout needs you on your Mac: Enter the 2FA code your bank sent you");
+  assert.equal(notice?.type === "assistant" && notice.text, "Scout needs you on your computer: Enter the 2FA code your bank sent you");
   const steps = applyAll(opened, legacy.events);
   const notices = (view: RemoteBotSessionView) => view.snapshot.entries.filter((entry) => entry.id.startsWith("handoff-notice:"));
   assert.equal(notices(steps[1]!).length, 0, "the line goes once the hand-off settles");

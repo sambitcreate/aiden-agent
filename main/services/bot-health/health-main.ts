@@ -108,6 +108,7 @@ let onResume: (() => void) | undefined;
 export function startBotHealth(): void {
   if (preflight) return;
   void import("../bot-delivery/funnel-main.js").then(({ startBotDeliveryFlush }) => startBotDeliveryFlush());
+  void import("../bot-issues/service-main.js").then(({ startBotIssueReminders }) => startBotIssueReminders());
   void import("../bot-routine-events/sources-main.js").then(({ startBotEventRoutines }) => startBotEventRoutines());
   preflight = createBotRoutinePreflight({
     routines: () => scheduleStore.list(),
@@ -156,6 +157,7 @@ export async function stopBotHealth(): Promise<void> {
   // Awaited, so shutdown closes the stores only after nothing can still flush or rearm.
   const stopped = Promise.allSettled([
     import("../bot-delivery/funnel-main.js").then(({ stopBotDeliveryFlush }) => stopBotDeliveryFlush()),
+    import("../bot-issues/service-main.js").then(({ stopBotIssueReminders }) => stopBotIssueReminders()),
     import("../bot-routine-events/sources-main.js").then(({ stopBotEventRoutines }) => stopBotEventRoutines()),
   ]);
   let deadline: ReturnType<typeof setTimeout> | undefined;

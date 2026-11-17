@@ -85,3 +85,41 @@ export const botIssues = createBotIssueService({
 export function settleBotIssuesForRoutine(botId: string, routineId: string): Promise<number> {
   return resolveDeletedRoutineIssues(botIssues, botId, routineId);
 }
+
+/** How often Aiden looks for asks that are due their one reminder. */
+const REMINDER_SWEEP_MS = 5 * 60_000;
+let reminderInterval: ReturnType<typeof setInterval> | undefined;
+let sweeping: Promise<void> | undefined;
+
+/**
+ * The one reminder for every Bot's asks still waiting on the person after
+ * hours. A Bot that fails is skipped and tried again on the next sweep.
+ */
+export async function remindWaitingBotIssues(): Promise<void> {
+  const { botStore } = await import("../bot-store.js");
+  for (const bot of await botStore.list()) {
+    await botIssues.remind(bot.id).catch((error: unknown) => logger.warn("bots", `Bot ${bot.id} reminder could not be sent.`, error));
+  }
+}
+
+function sweep(): void {
+  if (sweeping) return;
+  sweeping = remindWaitingBotIssues()
+    .catch((error: unknown) => logger.warn("bots", "Bot reminders could not be sent.", error))
+    .finally(() => { sweeping = undefined; });
+}
+
+/** Started with the other Bot background services; reads only local issue files. */
+export function startBotIssueReminders(): void {
+  if (reminderInterval) return;
+  reminderInterval = setInterval(sweep, REMINDER_SWEEP_MS);
+  reminderInterval.unref?.();
+  sweep();
+}
+
+/** Stops the sweep; resolves once a sweep already sending has finished. */
+export async function stopBotIssueReminders(): Promise<void> {
+  if (reminderInterval) clearInterval(reminderInterval);
+  reminderInterval = undefined;
+  await sweeping;
+}

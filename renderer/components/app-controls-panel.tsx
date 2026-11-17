@@ -22,6 +22,8 @@ import type {
   AppControlOperation,
 } from "../shared/app-controls";
 
+import { useAppCapabilities } from "../lib/app-capabilities";
+import { localComputerNoun } from "../shared/computer-noun";
 const catalog = defineCatalog(schema, {
   components: {
     SettingsGroup: { props: z.object({}), slots: ["default"], description: "Owned settings rows." },
@@ -123,6 +125,7 @@ export function appControlsSpec(snapshot: AppControlSnapshot): Spec {
   };
 }
 export function AppControlsPanel({ panel, chatId }: { panel: AppControlPanel; chatId: string }) {
+  const { platform } = useAppCapabilities();
   const ref = React.useRef<HTMLElement>(null);
   const [visible, setVisible] = React.useState(false);
   const [snapshot, setSnapshot] = React.useState<AppControlSnapshot>();
@@ -140,7 +143,7 @@ export function AppControlsPanel({ panel, chatId }: { panel: AppControlPanel; ch
     } catch {
       if (epoch === owner.current) {
         setSnapshot(undefined);
-        setMessage("Current settings are unavailable. Refresh when the host is connected.");
+        setMessage("Current settings are unavailable. Refresh when the computer is connected.");
       }
     }
   }, [chatId, panel.id]);
@@ -258,7 +261,7 @@ export function AppControlsPanel({ panel, chatId }: { panel: AppControlPanel; ch
           if (!open) setConfirmation(undefined);
         }}
         title={`Change ${snapshot?.rows.find((row) => row.id === confirmation?.control)?.label ?? "preference"}?`}
-        description={`This changes ${snapshot?.rows.find((row) => row.id === confirmation?.control)?.scope ?? "this host"}. Existing permissions and setup still apply.`}
+        description={`This changes ${snapshot?.rows.find((row) => row.id === confirmation?.control)?.scope ?? `this ${localComputerNoun(platform)}`}. Existing permissions and setup still apply.`}
         confirmLabel="Apply change"
         onConfirm={() => {
           const operation = confirmation;
