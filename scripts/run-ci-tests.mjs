@@ -12,6 +12,7 @@ import {
   readRegistry,
   validateRegistry,
 } from "./ci-test-registry.mjs";
+import { readTestSelection } from "./ci-e2e-shards.mjs";
 
 const require = createRequire(import.meta.url);
 const tsxCli = require.resolve("tsx/cli");
@@ -170,6 +171,12 @@ function unitCommands(lane, options, laneCount) {
   }];
 }
 
+export function applyUnitSelection(files, selection) {
+  if (!selection || selection.unit?.mode !== "related") return files;
+  const allowed = new Set(selection.unit.files ?? []);
+  return files.filter((file) => allowed.has(file));
+}
+
 export function buildPlan(registry, options) {
   const lanesByName = new Map((registry.lanes ?? []).map((lane) => [lane.name, lane]));
   const preservedById = new Map((registry.preserved ?? []).map((entry) => [entry.id, entry]));
@@ -182,7 +189,11 @@ export function buildPlan(registry, options) {
     if (!lanesByName.has(name)) throw new Error(`Unknown CI unit lane: ${name}`);
   }
 
-  const selectedLanes = laneNames.map((name) => lanesByName.get(name));
+  const selection = options.selection ?? readTestSelection();
+  const selectedLanes = laneNames.map((name) => {
+    const lane = lanesByName.get(name);
+    return { ...lane, files: applyUnitSelection(lane.files ?? [], selection) };
+  });
   const lanePreservedIds = selectedLanes.flatMap((lane) => lane.preserved ?? []);
   const preservedIds = options.allPreserved || options.defaultAll
     ? [...preservedById.keys()]
@@ -205,7 +216,10 @@ export function buildPlan(registry, options) {
     lanes: selectedLanes,
     preserved: selectedPreserved,
     prerequisites,
-    unitCommands: selectedLanes.map((lane) => unitCommands(lane, options, selectedLanes.length)).flat(),
+    unitCommands: selectedLanes
+      .filter((lane) => lane.files.length > 0)
+      .map((lane) => unitCommands(lane, options, selectedLanes.length))
+      .flat(),
   };
 }
 
@@ -246,6 +260,7 @@ function printPlan(plan, options, validation) {
   }
   for (const lane of summary.lanes) {
     console.log(`[lane:${lane.name}] ${lane.files} files (${lane.ts} ts/tsx, ${lane.node} node tests)`);
+    if (lane.files === 0) console.log(`[lane:${lane.name}] no files selected; skipping node --test`);
     if (options.list) {
       const selected = plan.lanes.find((candidate) => candidate.name === lane.name);
       for (const file of selected.files) console.log(`  ${file}`);

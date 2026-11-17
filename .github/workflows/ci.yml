@@ -41,8 +41,21 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          FORCE_FULL: ${{ github.event_name == 'push' && 'true' || 'false' }}
+          FORCE_FULL: ${{ (github.event_name == 'push' || github.event_name == 'merge_group') && 'true' || 'false' }}
         run: node scripts/ci-changes.mjs
+      - name: Select reachable tests
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          FORCE_FULL: ${{ (github.event_name == 'push' || github.event_name == 'merge_group') && 'true' || 'false' }}
+        run: node scripts/ci-select-tests.mjs
+      - name: Upload test selection
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ci-test-selection-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ci-test-selection.json
+          if-no-files-found: error
+          retention-days: 1
 
   policy:
     name: CI policy and test inventory
@@ -127,7 +140,24 @@ jobs:
           path: ${{ runner.temp }}/desktop-build
       - name: Restore production build
         run: tar -xf "$RUNNER_TEMP/desktop-build/desktop-build.tar"
+      - name: Restore recorded E2E spec timings
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: test-results/e2e-spec-timings.json
+          key: e2e-spec-timings-v1-${{ github.sha }}
+          restore-keys: |
+            e2e-spec-timings-v1-
+      - name: Download test selection
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+        with:
+          name: ci-test-selection-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-test-selection
       - name: Run deterministic Electron E2E shard
+        env:
+          AIDEN_E2E_TIMINGS: test-results/e2e-spec-timings.json
+          AIDEN_E2E_TIMINGS_PLATFORM: darwin
+          AIDEN_CI_TEST_SELECTION: ${{ runner.temp }}/ci-test-selection/ci-test-selection.json
         run: node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/4
       - name: Build sanitized E2E failure receipt
         if: ${{ failure() }}
@@ -139,6 +169,14 @@ jobs:
           name: playwright-e2e-ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
           path: test-results/e2e-safe-receipt.json
           if-no-files-found: error
+          retention-days: 7
+      - name: Upload E2E spec timings
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: e2e-spec-timings-macOS-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
+          path: test-results/e2e-shard-timings.json
+          if-no-files-found: ignore
           retention-days: 7
 
   static:
@@ -255,9 +293,15 @@ jobs:
       - name: Install Playwright Chromium for containment
         if: ${{ matrix.chromium == true }}
         run: npx playwright install --with-deps chromium
+      - name: Download test selection
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+        with:
+          name: ci-test-selection-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-test-selection
       - name: Run assigned regression tests and prerequisites
         env:
           AIDEN_SKIP_VIRTUALIZED_LAUNCH_CONSTRAINT_TESTS: "1"
+          AIDEN_CI_TEST_SELECTION: ${{ runner.temp }}/ci-test-selection/ci-test-selection.json
         run: node scripts/run-ci-tests.mjs --lane ${{ matrix.lane }} --summary
 
   apple:
@@ -858,7 +902,25 @@ jobs:
       - name: Build the app
         run: npm run build
 
+      - name: Restore recorded E2E spec timings
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: test-results/e2e-spec-timings.json
+          key: e2e-spec-timings-v1-${{ github.sha }}
+          restore-keys: |
+            e2e-spec-timings-v1-
+      - name: Download test selection
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+        with:
+          name: ci-test-selection-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-test-selection
+
       - name: Run deterministic Electron E2E gate
+        env:
+          AIDEN_E2E_TIMINGS: test-results/e2e-spec-timings.json
+          AIDEN_E2E_TIMINGS_PLATFORM: linux
+          AIDEN_CI_TEST_SELECTION: ${{ runner.temp }}/ci-test-selection/ci-test-selection.json
         run: |
           set -euo pipefail
           # Ubuntu 24.04 blocks unprivileged user namespaces through AppArmor,
@@ -889,6 +951,50 @@ jobs:
           path: test-results/e2e-safe-receipt.json
           if-no-files-found: error
           retention-days: 7
+      - name: Upload E2E spec timings
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: e2e-spec-timings-Linux-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
+          path: test-results/e2e-shard-timings.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+  e2e-spec-timings:
+    name: Merge E2E spec timings
+    needs: [changes, e2e, linux-e2e]
+    if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.desktop == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - name: Use Node.js 22
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22.23.4
+      - name: Restore previous E2E spec timings
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: test-results/e2e-spec-timings.json
+          key: e2e-spec-timings-v1-${{ github.sha }}
+          restore-keys: |
+            e2e-spec-timings-v1-
+      - name: Download shard timing artifacts
+        continue-on-error: true
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+        with:
+          pattern: e2e-spec-timings-*
+          path: ${{ runner.temp }}/e2e-spec-timings
+          merge-multiple: false
+      - name: Merge recorded spec timings
+        run: node scripts/ci-e2e-timings.mjs merge-dir test-results/e2e-spec-timings.json "$RUNNER_TEMP/e2e-spec-timings" --out test-results/e2e-spec-timings.json
+      - name: Save merged E2E spec timings
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: test-results/e2e-spec-timings.json
+          key: e2e-spec-timings-v1-${{ github.sha }}
 
   linux-rpm:
     name: Linux x64 · Fedora RPM

@@ -29,9 +29,16 @@ the macOS CI gate). On Linux, follow CI's Linux E2E step: its apt packages,
 Hosted CI splits deterministic spec files across four isolated macOS runners (`e2e`)
 and three Ubuntu runners (`linux-e2e`), each with one Playwright worker. macOS shards reuse the
 `build` job's output; each Ubuntu shard builds the app itself and runs under `xvfb-run`.
-`scripts/ci-e2e-shards.mjs` balances files using recorded macOS durations and automatically
-assigns newly added specs. After `npm run build`, reproduce one shard with
+`scripts/ci-e2e-shards.mjs` balances files using recorded hosted durations when
+the Actions cache is present, otherwise the conservative `FILE_SECONDS` table,
+and automatically assigns newly added specs (default 30s). After `npm run build`,
+reproduce one shard with
 `node scripts/ci-e2e-shards.mjs 1/4` for macOS or `1/3` for Linux; append `--list` to inspect its files.
+Pull-request CI also reads `scripts/ci-e2e-spec-map.json` to run only specs whose
+listed source prefixes match the diff. Add every new deterministic spec to that
+map with the `renderer/` / `main/` paths it covers; fixtures and Playwright config
+stay in the map's `full` list so they keep the whole suite. Main, the merge queue
+and releases always run every spec.
 Never run these shards concurrently against the same checkout or desktop session.
 
 The production-profile diagnostics spec runs separately after the desktop build job's

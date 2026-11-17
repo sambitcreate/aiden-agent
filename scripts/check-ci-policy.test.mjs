@@ -48,7 +48,7 @@ test("CI assigns platform work conservatively and exposes one complete required 
   }
   const filter = jobs.changes.steps.find((step) => step.id === "filter");
   assert.equal(filter.run, "node scripts/ci-changes.mjs");
-  assert.equal(filter.env.FORCE_FULL, "${{ github.event_name == 'push' && 'true' || 'false' }}");
+  assert.equal(filter.env.FORCE_FULL, "${{ (github.event_name == 'push' || github.event_name == 'merge_group') && 'true' || 'false' }}");
   assert.equal(jobs.changes.steps[0].with["fetch-depth"], 0);
   assert.deepEqual(Object.keys(jobs.changes.outputs).toSorted(), [...AREA_NAMES].toSorted());
   // Linux packaging still follows its own area, but the branch ruleset
@@ -217,6 +217,11 @@ test("desktop E2E and unit work are sharded with independent Apple and iOS check
   assert.deepEqual(jobs.unit.strategy.matrix.include.filter((entry) => entry.chromium).map((entry) => entry.lane).toSorted(), browserLanes.toSorted());
   const runner = jobs.unit.steps.find((step) => step.run?.includes("scripts/run-ci-tests.mjs"));
   assert.equal(runner.run, "node scripts/run-ci-tests.mjs --lane ${{ matrix.lane }} --summary");
+  assert.equal(runner.env.AIDEN_CI_TEST_SELECTION, "${{ runner.temp }}/ci-test-selection/ci-test-selection.json");
+  assert.ok(jobs.changes.steps.some((step) => step.run === "node scripts/ci-select-tests.mjs"));
+  assert.ok(jobs.e2e.steps.some((step) => step.uses?.startsWith("actions/cache/restore@")));
+  assert.equal(jobs["e2e-spec-timings"]["runs-on"], "ubuntu-24.04");
+  assert.ok(!jobs.required.needs.includes("e2e-spec-timings"));
   for (const lane of jobs.unit.strategy.matrix.lane) {
     const result = spawnSync(process.execPath, ["scripts/run-ci-tests.mjs", "--lane", lane, "--dry-run"], {
       cwd: fileURLToPath(new URL("../", import.meta.url)), encoding: "utf8", maxBuffer: 2 * 1024 * 1024,

@@ -1,8 +1,17 @@
-import { appendFileSync, readdirSync } from "node:fs";
+import { appendFileSync, readFileSync, readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import {
+  DEFAULT_SPEC_SECONDS,
+  extractSpecSeconds,
+  readTimingsStore,
+  specWeight,
+  timingPlatform,
+  timingWeights,
+  writeJson,
+} from "./ci-e2e-timings.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -88,14 +97,16 @@ export function discoverSpecs(directory = path.join(root, "tests/e2e")) {
     .sort();
 }
 
-export function planShards(specs, count = E2E_SHARD_COUNT) {
+export function planShards(specs, count = E2E_SHARD_COUNT, options = {}) {
   if (!Number.isInteger(count) || count < 1 || count > 16) throw new Error("Invalid E2E shard count");
   if (!Array.isArray(specs) || new Set(specs).size !== specs.length || specs.some((file) =>
     typeof file !== "string" || !/^[\w/-]+(?:\.[\w-]+)*\.spec\.ts$/u.test(file) || file.includes(".."))) {
     throw new Error("Invalid or duplicate E2E spec paths");
   }
   const files = specs.filter((file) => !file.endsWith(".live.spec.ts") && file !== "diagnostics-production.spec.ts");
-  const weight = (file) => FILE_SECONDS[file] ?? 30;
+  const recorded = options.recorded ?? {};
+  const fallback = options.fallback ?? FILE_SECONDS;
+  const weight = (file) => specWeight(file, recorded, fallback, options.defaultSeconds ?? DEFAULT_SPEC_SECONDS);
   files.sort((a, b) => weight(b) - weight(a) || a.localeCompare(b, "en"));
   const shards = Array.from({ length: count }, (_, index) => ({ index: index + 1, seconds: 0, files: [] }));
   for (const file of files) {
@@ -106,31 +117,83 @@ export function planShards(specs, count = E2E_SHARD_COUNT) {
   return shards;
 }
 
-export function shardArguments(specs, selection) {
+export function loadRecordedWeights(filePath = process.env.AIDEN_E2E_TIMINGS, platform) {
+  return timingWeights(readTimingsStore(filePath), platform ?? timingPlatform());
+}
+
+export function shardArguments(specs, selection, options = {}) {
   const match = /^([1-9][0-9]*)\/([1-9][0-9]*)$/u.exec(selection ?? "");
   if (!match || Number(match[1]) > Number(match[2])) throw new Error("Use an E2E shard such as 1/3");
-  const shard = planShards(specs, Number(match[2]))[Number(match[1]) - 1];
-  if (!shard.files.length) throw new Error("E2E shard must contain tests");
+  const shard = planShards(specs, Number(match[2]), options)[Number(match[1]) - 1];
+  if (!shard.files.length) {
+    if (options.allowEmpty) {
+      return { shard, args: ["test", "--config=playwright.config.ts", "--workers=1", "--fail-on-flaky-tests"], empty: true };
+    }
+    throw new Error("E2E shard must contain tests");
+  }
   const patterns = shard.files.map((file) => `(?:^|/)tests/e2e/${file.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}$`);
   return { shard, args: ["test", "--config=playwright.config.ts", "--workers=1", "--fail-on-flaky-tests", ...patterns] };
 }
 
+export function selectedSpecs(discovered, selection) {
+  if (!selection || selection.e2e?.mode !== "related") return discovered;
+  const wanted = selection.e2e.specs;
+  if (!Array.isArray(wanted) || wanted.length === 0) return discovered;
+  const allowed = new Set(wanted);
+  const files = discovered.filter((file) => allowed.has(file));
+  return files.length > 0 ? files : discovered;
+}
+
+export function readTestSelection(filePath = process.env.AIDEN_CI_TEST_SELECTION) {
+  if (!filePath) return null;
+  try {
+    return JSON.parse(readFileSync(filePath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function writeShardTimings(reportPath, outputPath) {
+  try {
+    const extracted = extractSpecSeconds(JSON.parse(readFileSync(reportPath, "utf8")));
+    writeJson(outputPath, extracted);
+  } catch {
+    // A missing or truncated Playwright report must not fail the shard after tests.
+  }
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const { shard, args } = shardArguments(discoverSpecs(), process.argv[2]);
+  const selection = readTestSelection();
+  const specs = selectedSpecs(discoverSpecs(), selection);
+  const { shard, args, empty } = shardArguments(specs, process.argv[2], {
+    recorded: loadRecordedWeights(),
+    allowEmpty: selection?.e2e?.mode === "related",
+  });
   if (process.argv[3] === "--list") {
     process.stdout.write(`${JSON.stringify(shard, null, 2)}\n`);
   } else {
     if (process.argv.length !== 3) throw new Error("Unexpected E2E shard arguments");
-    const start = Date.now();
-    const result = spawnSync(process.execPath, [path.join(root, "node_modules/@playwright/test/cli.js"), ...args], {
-      cwd: root, env: process.env, stdio: "inherit",
-    });
-    const seconds = Math.round((Date.now() - start) / 1000);
-    const success = !result.error && result.status === 0;
-    if (process.env.GITHUB_STEP_SUMMARY) {
-      appendFileSync(process.env.GITHUB_STEP_SUMMARY,
-        `Electron shard ${shard.index}: ${shard.files.length} spec files, ${seconds}s, ${success ? "passed" : "failed"}.\n`);
+    if (empty) {
+      process.stdout.write(`Electron shard ${shard.index}: 0 spec files selected; skipping.\n`);
+      if (process.env.GITHUB_STEP_SUMMARY) {
+        appendFileSync(process.env.GITHUB_STEP_SUMMARY, `Electron shard ${shard.index}: 0 spec files selected; skipped.\n`);
+      }
+    } else {
+      const start = Date.now();
+      const result = spawnSync(process.execPath, [path.join(root, "node_modules/@playwright/test/cli.js"), ...args], {
+        cwd: root, env: process.env, stdio: "inherit",
+      });
+      const seconds = Math.round((Date.now() - start) / 1000);
+      const success = !result.error && result.status === 0;
+      writeShardTimings(
+        path.join(root, "test-results/e2e-playwright.json"),
+        path.join(root, "test-results/e2e-shard-timings.json"),
+      );
+      if (process.env.GITHUB_STEP_SUMMARY) {
+        appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+          `Electron shard ${shard.index}: ${shard.files.length} spec files, ${seconds}s, ${success ? "passed" : "failed"}.\n`);
+      }
+      process.exitCode = success ? 0 : 1;
     }
-    process.exitCode = success ? 0 : 1;
   }
 }

@@ -251,6 +251,13 @@ test("pull requests use the actual triple-dot range and pushes use a two-dot ran
     "-z",
     "base...head",
   ]);
+  assert.deepEqual(buildDiffArgs({ eventName: "merge_group", baseSha: "base", headSha: "head" }), [
+    "diff",
+    "--name-only",
+    "--no-renames",
+    "-z",
+    "base...head",
+  ]);
   assert.deepEqual(buildDiffArgs({ eventName: "push", baseSha: "base", headSha: "head" }), [
     "diff",
     "--name-only",
@@ -449,6 +456,7 @@ test("unknown changed paths force all checks even when a known area is also chan
 
 test("FORCE_FULL applies to main pushes while pull requests keep path selection", () => {
   assert.deepEqual(decideChangedAreas(["docs/guide.md"], { forceFull: true }), allTrue);
+  assert.deepEqual(decideChangedAreas(["docs/guide.md"], { eventName: "merge_group", forceFull: true }), allTrue);
   assert.deepEqual(decideChangedAreas(["docs/guide.md"], { eventName: "pull_request", forceFull: true }), allFalse);
   assert.equal(analyzeChangedPaths(["docs/guide.md"], { forceFull: true }).reason, "forced-full");
 

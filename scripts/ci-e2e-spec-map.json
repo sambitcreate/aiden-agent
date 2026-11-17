@@ -1,0 +1,400 @@
+{
+  "version": 1,
+  "full": [
+    "playwright.config.ts",
+    "vite.config.ts",
+    "electron-builder.yml",
+    "electron-builder.yaml",
+    "package.json",
+    "package-lock.json",
+    "renderer/main/",
+    "renderer/index.html",
+    "renderer/styles.css",
+    "main/index.ts",
+    "main/windows/",
+    "preload/",
+    "tests/e2e/fixtures.ts",
+    "tests/e2e/global-setup.ts",
+    "tests/e2e/fake-openrouter.ts",
+    "tests/e2e/lume-fake.mjs",
+    "tests/e2e/mcp-stdio-fake.mjs",
+    "tests/e2e/device-hub-fake.mjs",
+    "tests/e2e/agent-device-fake.mjs",
+    "tests/e2e/bot-sign-in-native.ts",
+    "tests/e2e/bot-browser-native.ts",
+    "tests/e2e/browser-initial-crash-native.ts",
+    "tests/e2e/browser-throttling-native.ts",
+    "tests/e2e/design-mode-helpers.ts"
+  ],
+  "specs": {
+    "app-controls.spec.ts": [
+      "renderer/components/app-controls",
+      "main/services/app-controls",
+      "main/services/aiden-app-navigation",
+      "renderer/shared/app-controls.ts"
+    ],
+    "assistant-scheduled-profile.spec.ts": [
+      "renderer/components/scheduled-task",
+      "renderer/components/assistant",
+      "main/services/scheduled",
+      "renderer/shared/assistant.ts"
+    ],
+    "bot-access-requests.spec.ts": [
+      "renderer/components/bot",
+      "main/services/bot-access",
+      "renderer/shared/bot-access-requests.ts"
+    ],
+    "bot-browser.spec.ts": [
+      "renderer/components/bot",
+      "renderer/components/browser",
+      "main/services/bot-browser",
+      "main/services/browser"
+    ],
+    "bot-computer-tab.spec.ts": [
+      "renderer/components/bot",
+      "renderer/components/settings/bot-computer",
+      "main/services/bot-computers",
+      "main/services/bot-computer"
+    ],
+    "bot-connect-card.spec.ts": [
+      "renderer/components/bot",
+      "renderer/components/remote",
+      "main/services/bot-connection",
+      "renderer/shared/bot-connections.ts"
+    ],
+    "bot-connector-watches.spec.ts": [
+      "renderer/components/bot",
+      "main/services/bot-connector",
+      "renderer/shared/bot-connector-watches.ts"
+    ],
+    "bot-handoff-own-screen.spec.ts": [
+      "renderer/components/bot",
+      "main/services/bot-handoff",
+      "renderer/shared/bot-handoffs.ts"
+    ],
+    "bot-messaging.spec.ts": [
+      "renderer/components/bot",
+      "main/services/bot-message",
+      "renderer/shared/bot-messages.ts"
+    ],
+    "bot-open-work.spec.ts": [
+      "renderer/components/bot",
+      "main/services/bot-open-work",
+      "renderer/shared/bot-open-work.ts"
+    ],
+    "bot-peers.spec.ts": [
+      "renderer/components/bot",
+      "main/services/bot-peer",
+      "renderer/shared/bot-peers.ts"
+    ],
+    "bot-plans.spec.ts": [
+      "renderer/components/bot",
+      "main/services/bot-plan",
+      "renderer/shared/bot-plans.ts"
+    ],
+    "bot-routine-models.spec.ts": [
+      "renderer/components/bot",
+      "renderer/components/scheduled-task",
+      "main/services/bot-routine",
+      "renderer/shared/bot-routine-models.ts",
+      "renderer/shared/bot-routine-model-directory.ts"
+    ],
+    "bot-sign-in.spec.ts": [
+      "renderer/components/bot",
+      "main/services/bot-connection",
+      "main/services/bot-sign"
+    ],
+    "bots-persistence.spec.ts": [
+      "renderer/components/bot",
+      "main/services/bot-store",
+      "renderer/shared/bots.ts"
+    ],
+    "bots-sidebar-panel.spec.ts": [
+      "renderer/components/bot",
+      "renderer/components/chat-sidebar",
+      "renderer/shared/bots.ts"
+    ],
+    "bots-starter.spec.ts": [
+      "renderer/components/bot",
+      "renderer/components/onboarding-bots",
+      "renderer/shared/bot-presets.ts"
+    ],
+    "browser-agent.spec.ts": [
+      "renderer/components/browser",
+      "main/services/browser"
+    ],
+    "browser-cancellation.spec.ts": [
+      "renderer/components/browser",
+      "main/services/browser"
+    ],
+    "browser-initial-crash.spec.ts": [
+      "renderer/components/browser",
+      "main/services/browser"
+    ],
+    "browser-lifecycle.spec.ts": [
+      "renderer/components/browser",
+      "main/services/browser"
+    ],
+    "browser-throttling.spec.ts": [
+      "renderer/components/browser",
+      "main/services/browser"
+    ],
+    "browser.spec.ts": [
+      "renderer/components/browser",
+      "main/services/browser"
+    ],
+    "chat-follow-bottom.spec.ts": [
+      "renderer/components/message-list",
+      "renderer/components/scroll-area-follow",
+      "renderer/lib/sticky-section.ts"
+    ],
+    "chat-fork.spec.ts": [
+      "renderer/components/chat",
+      "main/services/chat-fork"
+    ],
+    "chat-message-queue.spec.ts": [
+      "renderer/components/queued-messages",
+      "renderer/lib/chat-message-queue.ts",
+      "main/services/chat-run-input"
+    ],
+    "chat-shell-interactions.spec.ts": [
+      "renderer/components/composer",
+      "renderer/components/message",
+      "renderer/components/chat",
+      "main/services/chat-"
+    ],
+    "chat-top-bar.spec.ts": [
+      "renderer/components/chat-top-bar",
+      "renderer/components/model-picker"
+    ],
+    "crash-reporting.spec.ts": [
+      "renderer/components/settings/diagnostics",
+      "main/services/analytics",
+      "main/services/diagnostics"
+    ],
+    "create-images.spec.ts": [
+      "renderer/components/image",
+      "main/services/create-images/",
+      "main/services/image-generation/",
+      "renderer/shared/image-generation/"
+    ],
+    "custom-model-options.spec.ts": [
+      "renderer/components/settings/custom-model-options",
+      "renderer/shared/custom-model-options.ts",
+      "main/services/custom-model"
+    ],
+    "cut-off-reply.spec.ts": [
+      "renderer/components/message",
+      "main/services/chat-generation",
+      "main/services/generation"
+    ],
+    "design-canvas.spec.ts": [
+      "renderer/components/design",
+      "main/services/design-canvas/",
+      "main/handlers/design-canvas"
+    ],
+    "design-containment.spec.ts": [
+      "renderer/components/design",
+      "main/services/design-canvas/"
+    ],
+    "design-mode.spec.ts": [
+      "renderer/components/design-mode-banner",
+      "renderer/components/design",
+      "main/services/design-canvas/"
+    ],
+    "draft-agent-chats.spec.ts": [
+      "renderer/components/chat",
+      "main/services/chat-store",
+      "main/services/draft"
+    ],
+    "environment-devices-agent.spec.ts": [
+      "renderer/components/device",
+      "main/services/devices",
+      "renderer/shared/devices.ts"
+    ],
+    "environment-devices-android.spec.ts": [
+      "renderer/components/device",
+      "main/services/devices",
+      "renderer/shared/devices.ts"
+    ],
+    "environment-devices-features.spec.ts": [
+      "renderer/components/device",
+      "main/services/devices",
+      "renderer/shared/devices.ts"
+    ],
+    "environment-devices-stream.spec.ts": [
+      "renderer/components/device",
+      "main/services/devices",
+      "renderer/shared/devices.ts"
+    ],
+    "environment-devices-tab.spec.ts": [
+      "renderer/components/device",
+      "main/services/devices",
+      "renderer/shared/devices.ts"
+    ],
+    "environment-focus.spec.ts": [
+      "renderer/components/device",
+      "renderer/components/environment",
+      "main/services/devices"
+    ],
+    "follow-through-lifecycle.spec.ts": [
+      "renderer/components/follow",
+      "main/services/follow-through",
+      "main/services/durable-jobs/"
+    ],
+    "guided-setup.spec.ts": [
+      "renderer/components/onboarding",
+      "renderer/components/guided-provider-chooser"
+    ],
+    "inbox-sidebar.spec.ts": [
+      "renderer/components/inbox",
+      "renderer/lib/inbox",
+      "main/services/inbox",
+      "renderer/shared/inbox-state.ts"
+    ],
+    "inline-visuals.spec.ts": [
+      "renderer/components/html-artifact-frame",
+      "renderer/components/image-generation-placeholder",
+      "renderer/shared/visual",
+      "renderer/shared/chat-artifacts.ts"
+    ],
+    "interrupted-question-resume.spec.ts": [
+      "renderer/components/ask-user",
+      "main/services/ask-user-question",
+      "renderer/shared/ask-user-question.ts"
+    ],
+    "interrupted-reply-resume.spec.ts": [
+      "renderer/components/message",
+      "main/services/chat-generation",
+      "main/services/bot-execution-resume"
+    ],
+    "linux-window-controls.spec.ts": [
+      "renderer/components/titlebar",
+      "renderer/components/window",
+      "main/windows/",
+      "main/linux"
+    ],
+    "live-app-control.spec.ts": [
+      "renderer/components/app-controls",
+      "renderer/components/settings/app-control",
+      "main/services/app-controls",
+      "renderer/shared/app-controls.ts"
+    ],
+    "lmstudio-chat-attachments.spec.ts": [
+      "renderer/components/message-attachments",
+      "renderer/components/composer",
+      "main/services/attachments",
+      "main/services/chat-attachment"
+    ],
+    "memory-list.spec.ts": [
+      "renderer/components/memory",
+      "main/services/bot-memory",
+      "renderer/shared/bot-memory.ts"
+    ],
+    "model-call-retry.spec.ts": [
+      "renderer/components/provider-failure",
+      "main/services/model-call",
+      "main/services/provider-failure",
+      "renderer/shared/provider-failure.ts"
+    ],
+    "model-pad-responsive.spec.ts": [
+      "renderer/components/model-pad",
+      "renderer/components/model-picker"
+    ],
+    "no-workspace-chat.spec.ts": [
+      "renderer/components/workspace",
+      "main/services/workspace"
+    ],
+    "onboarding-lmstudio.spec.ts": [
+      "renderer/components/onboarding",
+      "renderer/components/local-provider-dialog",
+      "renderer/components/guided-provider-chooser"
+    ],
+    "peer-project-clone.spec.ts": [
+      "renderer/components/bot",
+      "main/services/bot-peer",
+      "main/services/peer"
+    ],
+    "provider-artwork.spec.ts": [
+      "renderer/components/provider-icon",
+      "renderer/components/image-model-logo"
+    ],
+    "provider-failure-actions.spec.ts": [
+      "renderer/components/provider-failure",
+      "main/services/provider-failure",
+      "renderer/shared/provider-failure.ts"
+    ],
+    "providers-settings.spec.ts": [
+      "renderer/components/settings/",
+      "renderer/components/provider",
+      "renderer/components/local-provider-dialog",
+      "renderer/components/builtin-provider"
+    ],
+    "quick-view-cards.spec.ts": [
+      "renderer/components/quick-view"
+    ],
+    "remote-access-lifecycle.spec.ts": [
+      "renderer/components/remote",
+      "main/services/aiden-remote",
+      "main/handlers/aiden-remote",
+      "renderer/shared/aiden-remote.ts"
+    ],
+    "settings-connectors.spec.ts": [
+      "renderer/components/settings/connections",
+      "renderer/components/settings/"
+    ],
+    "settings-model-picker.spec.ts": [
+      "renderer/components/settings/",
+      "renderer/components/model-picker"
+    ],
+    "settings-simulator-ssh-hosts.spec.ts": [
+      "renderer/components/settings/",
+      "renderer/components/settings/computer-use",
+      "main/services/simulator"
+    ],
+    "settings-unification.spec.ts": [
+      "renderer/components/settings/"
+    ],
+    "studio-foundation.spec.ts": [
+      "renderer/components/studio",
+      "main/services/studio"
+    ],
+    "terminal.spec.ts": [
+      "renderer/components/terminal-drawer",
+      "main/services/terminal"
+    ],
+    "transcript-image-consent.spec.ts": [
+      "renderer/components/message-attachments",
+      "main/services/chat-image",
+      "main/services/create-images/consent"
+    ],
+    "usage-data.spec.ts": [
+      "renderer/components/settings/about-settings",
+      "main/services/analytics"
+    ],
+    "usage-limit-wait.spec.ts": [
+      "renderer/components/usage",
+      "main/services/spending",
+      "renderer/shared/spending.ts"
+    ],
+    "workspace-folder-missing.spec.ts": [
+      "renderer/components/workspace-folder-missing-notice",
+      "main/services/workspace"
+    ],
+    "workspace-panel.spec.ts": [
+      "renderer/components/workspace",
+      "renderer/components/git-",
+      "main/services/workspace"
+    ],
+    "workspace-settings.spec.ts": [
+      "renderer/components/workspace-settings-dialog",
+      "renderer/components/settings/device-workspace",
+      "main/services/workspace"
+    ],
+    "worktree-folder-deleted.spec.ts": [
+      "renderer/components/workspace",
+      "main/services/workspace-worktree",
+      "main/services/worktree"
+    ]
+  }
+}

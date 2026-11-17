@@ -24,7 +24,12 @@ const config: PlaywrightTestConfig = {
   retries: process.env.CI ? 1 : 0,
   forbidOnly: Boolean(process.env.CI),
   reporter: process.env.CI
-    ? [["./scripts/safe-test-reporter.mjs"], ["line"], ["html", { outputFolder: "playwright-report/e2e", open: "never" }]]
+    ? [
+        ["./scripts/safe-test-reporter.mjs"],
+        ["line"],
+        ["html", { outputFolder: "playwright-report/e2e", open: "never" }],
+        ["json", { outputFile: "test-results/e2e-playwright.json" }],
+      ]
     : "line",
   use: {
     screenshot: "only-on-failure",
