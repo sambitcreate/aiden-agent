@@ -343,10 +343,10 @@ final class AidenBotConversationFilesModel {
         guard coordinator.holds(grant.context) else { return }
         if case AidenRemoteClientError.server(_, let body) = error,
            body.code.rawValue == "revision_conflict" {
-            errorMessage = "This file changed on your machine. Reload it before saving again."
+            errorMessage = "This file changed on your computer. Reload it before saving again."
             offersReload = true
         } else if error is AidenRemoteClientError {
-            errorMessage = "Something changed on your machine. Go back to the chat and open Files again."
+            errorMessage = "Something changed on your computer. Go back to the chat and open Files again."
         } else {
             errorMessage = error.localizedDescription
         }
@@ -539,7 +539,7 @@ private struct AidenBotConversationFileEditorView: View {
                         VStack(spacing: 8) {
                             Text(message).font(.footnote).foregroundStyle(.secondary)
                             if model.offersReload {
-                                Button("Reload from your machine") {
+                                Button("Reload from your computer") {
                                     Task { await model.reloadDocument(coordinator: coordinator) }
                                 }
                             }

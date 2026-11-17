@@ -804,7 +804,7 @@ final class AidenChatTests: XCTestCase {
         var reads: [String] = []
         let read: (AidenAppControlPanel) async throws -> AidenAppControlSnapshot = { panel in
             reads.append(panel.id)
-            return AidenAppControlSnapshot(version: 1, title: "Memory", target: "Paired host", policy: denied ? "disabled" : "safe", rows: [AidenAppControlRow(id: "memory.enabled", label: "Memory", description: "Saved facts remain", scope: "Paired host", value: .boolean(enabled), revision: enabled ? "on" : "off", options: nil, disabledReason: denied ? "Access disabled" : nil)])
+            return AidenAppControlSnapshot(version: 1, title: "Memory", target: "Paired computer", policy: denied ? "disabled" : "safe", rows: [AidenAppControlRow(id: "memory.enabled", label: "Memory", description: "Saved facts remain", scope: "Paired computer", value: .boolean(enabled), revision: enabled ? "on" : "off", options: nil, disabledReason: denied ? "Access disabled" : nil)])
         }
         _ = try await cache.load(first, read: read)
         _ = try await cache.load(second, read: read)
@@ -889,7 +889,7 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(try fixture.readAloudAudio.validatedBytes(offset: 0, expectedTotal: nil), Data([1, 2]))
         XCTAssertThrowsError(try fixture.readAloudAudio.validatedBytes(offset: 1, expectedTotal: nil))
         XCTAssertThrowsError(try fixture.readAloudAudio.validatedBytes(offset: 0, expectedTotal: 99))
-        XCTAssertTrue(AidenReadAloudStatus.setupGuidance.contains("desktop"))
+        XCTAssertTrue(AidenReadAloudStatus.setupGuidance.contains("Aiden Agent on your computer"))
     }
     func testReadAloudRejectsInvalidAudioAndUnknownJobPhases() throws {
         let invalid = AidenReadAloudAudio(bytesBase64: "AQI=", mimeType: "audio/wav", sampleRate: 24000, channels: 1,
@@ -1421,7 +1421,7 @@ final class AidenChatTests: XCTestCase {
     func testBrowserRecordingFailuresTellAGoneRecordingFromOtherFailures() throws {
         let envelope = try AidenRemoteJSONDecoder.decode(
             AidenRemoteErrorEnvelope.self,
-            from: Data(#"{"error":{"code":"not_found","message":"This recording is no longer on the Mac.","requestId":"request-1","retryable":false}}"#.utf8)
+            from: Data(#"{"error":{"code":"not_found","message":"This recording is no longer on the computer.","requestId":"request-1","retryable":false}}"#.utf8)
         )
         XCTAssertEqual(AidenBrowserRecordingLoad.failure(after: AidenRemoteClientError.server(statusCode: 404, body: envelope.error)), .missing)
         XCTAssertEqual(AidenBrowserRecordingLoad.failure(after: AidenRemoteClientError.unexpectedStatus(404)), .missing)
@@ -2206,6 +2206,123 @@ final class AidenChatTests: XCTestCase {
         try await exerciseControlResponse(stop: false, nextApproval: "approval-next", mode: .cancelledControls)
     }
 
+    /// Revision 61: a typed card's host, recording each answer the phone sends
+    /// and whether the Mac still holds the approval.
+    private final class TypedApprovalHost: @unchecked Sendable {
+        private let lock = NSLock()
+        private var decisions: [String] = []
+        private var resolved = false
+        let toolName: String
+        let card: String
+        let answer: (String) -> (Int, Data)
+
+        init(toolName: String, card: String, answer: @escaping (String) -> (Int, Data)) {
+            self.toolName = toolName
+            self.card = card
+            self.answer = answer
+        }
+
+        var sent: [String] { lock.withLock { decisions } }
+
+        func respond(_ request: URLRequest) -> (Int, String, Data)? {
+            let path = request.url?.path ?? ""
+            if path == "/api/aiden/v1/streams/stream-control/approval" {
+                if lock.withLock({ resolved }) {
+                    return (200, "application/json", Data(#"{"approval":null}"#.utf8))
+                }
+                return (200, "application/json", Data("""
+                    {"approval":{"approvalId":"approval-current","streamId":"stream-control","chatId":"chat-progress-lifecycle","summary":"Review","toolCallId":"tool-control","toolName":"\(toolName)","expiresAt":"2099-01-01T00:00:00Z","canAllow":true,"card":\(card)}}
+                    """.utf8))
+            }
+            guard path == "/api/aiden/v1/approvals/approval-current/respond" else { return nil }
+            var body = request.httpBody ?? Data()
+            if body.isEmpty, let stream = request.httpBodyStream {
+                stream.open()
+                var buffer = [UInt8](repeating: 0, count: 1024)
+                while stream.hasBytesAvailable {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    guard count > 0 else { break }
+                    body.append(buffer, count: count)
+                }
+                stream.close()
+            }
+            let decision = ((try? JSONSerialization.jsonObject(with: body)) as? [String: Any])?["decision"] as? String ?? "?"
+            lock.withLock {
+                decisions.append(decision)
+                // The Mac settles the approval either way; a later read finds none.
+                resolved = true
+            }
+            let (status, data) = answer(decision)
+            return (status, "application/json", data)
+        }
+    }
+
+    @MainActor
+    private func typedApprovalModel(_ host: TypedApprovalHost, root: URL) async throws -> AidenChatViewModel {
+        let cache = AidenChatCache(root: root)
+        let model = try await makeProgressLifecycleModel(mode: .controls, cache: cache, responseOverride: host.respond)
+        try await cache.saveActiveStream(.init(deviceId: "device-progress-lifecycle", streamId: "stream-control", turnId: "turn-control", lastSequence: 0), instanceId: "instance-progress-lifecycle", chatId: model.chat.id, chatWriteToken: cache.reserveChatWrite())
+        await model.load(observeProgress: false)
+        return model
+    }
+
+    @MainActor
+    func testTypedScheduleCardStillDeniesWithoutScheduleWrite() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-typed-schedule-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let card = #"{"kind":"schedule","title":"Schedule this task?","arguments":[{"key":"tool","value":"Schedule task"}],"rows":[{"label":"When","value":"Weekdays at 9:00"}],"buttons":[{"label":"Cancel","decision":"deny","answered":"Denied"},{"label":"Approve task","decision":"allow","answered":"Approved"}]}"#
+        let host = TypedApprovalHost(toolName: "schedule_task", card: card) { decision in
+            (200, Data(#"{"approvalId":"approval-current","decision":"\#(decision)","resolvedAt":"2026-09-22T12:00:00Z"}"#.utf8))
+        }
+        let model = try await typedApprovalModel(host, root: root)
+        // This device was granted approval:respond but not schedule:write.
+        let approval = try XCTUnwrap(model.pendingApproval)
+        let typed = try XCTUnwrap(approval.card)
+        XCTAssertTrue(approval.canRespond, "The card still answers here")
+        XCTAssertFalse(approval.hasRequiredWriteCapability)
+        XCTAssertEqual(
+            AidenApprovalPresentation.limit(kind: approval.kind, canRespond: approval.canRespond,
+                                            hasRequiredWriteCapability: approval.hasRequiredWriteCapability,
+                                            canAllow: typed.canAllow)?.text,
+            "Schedule write access is required to approve this task."
+        )
+
+        // Approve is refused before anything is sent.
+        await model.respondToApproval(button: typed.allowButtons[0], approvalID: "approval-current")
+        XCTAssertEqual(host.sent, [])
+
+        // Cancel (Deny) still reaches the Mac and leaves its own answered line.
+        let reloaded = try XCTUnwrap(model.pendingApproval?.card)
+        await model.respondToApproval(button: reloaded.denyButton, approvalID: "approval-current")
+        XCTAssertEqual(host.sent, ["deny"])
+        XCTAssertNil(model.pendingApproval)
+        XCTAssertEqual(model.approvalAnsweredButton?.answered, "Denied")
+        XCTAssertEqual(model.approvalAnsweredButton?.decision, .deny)
+    }
+
+    @MainActor
+    func testTypedAnswerTheMacNeverConfirmedTakesItsAnsweredLineBack() async throws {
+        let card = #"{"kind":"mac","mac":"shell","title":"Run on your Mac?","arguments":[{"key":"tool","value":"Run command"}],"body":{"format":"command","text":"npm test"},"buttons":[{"label":"Deny","decision":"deny","answered":"Denied"},{"label":"Allow once","decision":"allow","answered":"Allowed once"}]}"#
+        let failures: [(String, (String) -> (Int, Data))] = [
+            ("unconfirmed", { _ in (503, Data(#"{"error":{"code":"internal_error","message":"Unconfirmed","requestId":"request-control","retryable":true}}"#.utf8)) }),
+            ("mismatched", { _ in (200, Data(#"{"approvalId":"approval-other","decision":"allow","resolvedAt":"2026-09-22T12:00:00Z"}"#.utf8)) }),
+        ]
+        for (name, answer) in failures {
+            let root = FileManager.default.temporaryDirectory.appending(path: "aiden-typed-unconfirmed-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+            let host = TypedApprovalHost(toolName: "run_command", card: card, answer: answer)
+            let model = try await typedApprovalModel(host, root: root)
+            let typed = try XCTUnwrap(model.pendingApproval?.card, name)
+            await model.respondToApproval(button: typed.allowButtons[0], approvalID: "approval-current")
+            XCTAssertEqual(host.sent, ["allow"], name)
+            // The refresh finds nothing waiting, so no card returns to replace
+            // the line; the line must not claim an answer that never landed.
+            XCTAssertNil(model.pendingApproval, name)
+            XCTAssertNil(model.approvalAnsweredButton, name)
+            XCTAssertNotNil(model.presentedError, name)
+        }
+    }
+
     @MainActor
     func testCancelledStopPreservesCurrentRunAndApproval() async throws {
         try await exerciseControlResponse(stop: true, nextApproval: "approval-current", mode: .cancelledControls)
@@ -2557,7 +2674,7 @@ final class AidenChatTests: XCTestCase {
         let presentID = Self.fixtureRecordingID
         let goneID = "recording-11111111-2222-4333-8444-555555555555"
         let video = Data([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70] + Array(repeating: UInt8(7), count: 32))
-        let notFound = Data(#"{"error":{"code":"not_found","message":"This recording is no longer on the Mac.","requestId":"request-1","retryable":false}}"#.utf8)
+        let notFound = Data(#"{"error":{"code":"not_found","message":"This recording is no longer on the computer.","requestId":"request-1","retryable":false}}"#.utf8)
         let serverJSON = #"{"protocolVersion":1,"instanceId":"instance-progress-lifecycle","name":"Progress Lifecycle Mac","appVersion":"1.0","capabilities":["server:read","workspace:read","chat:read","chat:write"],"serverCapabilities":["server:read","workspace:read","chat:read","chat:write"],"features":["chat-browser-recordings-v1"],"connectionMode":"lan","serverTime":"2026-09-14T12:00:00Z"}"#
         let model = try await makeProgressLifecycleModel(
             mode: .denied,
@@ -7321,7 +7438,7 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(AidenAgentActivityPresentation.tone(for: failed), .danger)
     }
 
-    /// Contract revision 61: the shared fixture's stopped and issue steps read
+    /// Contract revision 62: the shared fixture's stopped and issue steps read
     /// the same here as on the Mac.
     func testStoppedStepsFixtureMatchesTheMac() throws {
         let fixtureURL = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
@@ -7660,11 +7777,11 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(resolved.providerId, "google")
         XCTAssertEqual(
             AidenChatModelAuthority.macOnlyAgentNotice(chat: chat, catalog: catalog, replyModelLabel: "Gemini Flash"),
-            "This chat used Google Antigravity, which runs only on your machine. Replies from here use Gemini Flash."
+            "This chat used Google Antigravity, which runs only on your computer. Replies from here use Gemini Flash."
         )
         XCTAssertEqual(
             AidenChatModelAuthority.macOnlyAgentNotice(chat: chat, catalog: catalog, replyModelLabel: nil),
-            "This chat used Google Antigravity, which runs only on your machine. Choose a model for replies from here."
+            "This chat used Google Antigravity, which runs only on your computer. Choose a model for replies from here."
         )
 
         // A chat on a model this phone can use, or a Bot chat, says nothing.
@@ -9935,8 +10052,8 @@ final class AidenChatTests: XCTestCase {
             AidenApprovalPresentation.limit(kind: kind, canRespond: respond, hasRequiredWriteCapability: write, canAllow: allow)
         }
         XCTAssertNil(limit(.action), "An approval this phone can answer shows the paused note instead.")
-        XCTAssertEqual(limit(.action, allow: false), AidenApprovalLimit(text: "Allow this on your machine. You can deny it here.", symbol: "desktopcomputer"))
-        XCTAssertEqual(limit(.scheduledTask, allow: false), AidenApprovalLimit(text: "This task must be approved on your paired desktop.", symbol: "desktopcomputer"))
+        XCTAssertEqual(limit(.action, allow: false), AidenApprovalLimit(text: "Allow this on your computer. You can deny it here.", symbol: "desktopcomputer"))
+        XCTAssertEqual(limit(.scheduledTask, allow: false), AidenApprovalLimit(text: "This task must be approved on your paired computer.", symbol: "desktopcomputer"))
         XCTAssertEqual(limit(.scheduledTask, write: false), AidenApprovalLimit(text: "Schedule write access is required to approve this task.", symbol: "lock.fill"))
         XCTAssertEqual(
             limit(.scheduledTask, respond: false, write: false, allow: false),
@@ -10583,7 +10700,7 @@ final class AidenChatTests: XCTestCase {
             )),
             .init(
                 title: "Generation failed",
-                detail: "The model provider rejected its credentials. Check Provider Settings on your desktop.",
+                detail: "The model provider rejected its credentials. Check Provider Settings in Aiden Agent on your computer.",
                 symbol: "exclamationmark.triangle",
                 isFailure: true
             )
@@ -12901,7 +13018,7 @@ final class AidenAppearanceTests: XCTestCase {
             Bundle.main.object(forInfoDictionaryKey: "NSPhotoLibraryUsageDescription") as? String
         )
         XCTAssertTrue(pickerValue.contains("when you open the attachment picker"))
-        XCTAssertTrue(pickerValue.contains("paired machine"))
+        XCTAssertTrue(pickerValue.contains("paired computer"))
     }
 
     func testAttachmentPickerSelectionPreservesTapOrderAndHonorsCapacity() {
@@ -15602,7 +15719,7 @@ private final class AidenAnnouncedRunFixture: @unchecked Sendable {
     }
 
     private static let runGone = (404, "application/json", Data(
-        #"{"error":{"code":"run_gone","message":"This run is no longer available on this Aiden host.","requestId":"r","retryable":false}}"#.utf8
+        #"{"error":{"code":"run_gone","message":"This run is no longer available on this computer.","requestId":"r","retryable":false}}"#.utf8
     ))
 
     private func event(

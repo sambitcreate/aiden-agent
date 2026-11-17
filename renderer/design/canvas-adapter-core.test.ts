@@ -11,6 +11,7 @@ import {
   nodesFromCanvas,
   placeFrame,
   presentedFrameIds,
+  resolveCanvasFocus,
 } from "./canvas-adapter-core";
 
 function frame(id: string, overrides: Partial<DesignFrame> = {}): DesignFrame {
@@ -393,4 +394,114 @@ test("presenting a frame shows it with what is in it and its own arrows, never a
   assert.deepEqual([...presentedFrameIds(doc, "board")].sort(), ["board", "deep", "inner", "inside-arrow", "title"]);
   assert.deepEqual([...presentedFrameIds(doc, "beside")], ["beside"]);
   assert.equal(presentedFrameIds(doc, "gone").size, 0);
+});
+
+test("canvas focus waits until every target frame is present and measured before fitting", () => {
+  const measured = new Set(["f1"]);
+  assert.deepEqual(
+    resolveCanvasFocus({
+      requestedIds: ["f1", "f2"],
+      nodeIds: ["f1", "f2"],
+      isMeasured: (id) => measured.has(id),
+      waitedMs: 200,
+      maxWaitMs: 3_000,
+    }),
+    { action: "wait" },
+    "having only the first frame measured is not enough when fitting two",
+  );
+  assert.deepEqual(
+    resolveCanvasFocus({
+      requestedIds: [],
+      nodeIds: ["f1", "f2"],
+      isMeasured: (id) => measured.has(id),
+      waitedMs: 200,
+      maxWaitMs: 3_000,
+    }),
+    { action: "wait" },
+    "whole-page focus waits for every page frame to be measured too",
+  );
+
+  measured.add("f2");
+  assert.deepEqual(
+    resolveCanvasFocus({
+      requestedIds: ["f1", "f2"],
+      nodeIds: ["f1", "f2", "other"],
+      isMeasured: (id) => measured.has(id),
+      waitedMs: 200,
+      maxWaitMs: 3_000,
+    }),
+    { action: "fit", ids: ["f1", "f2"] },
+  );
+  assert.deepEqual(
+    resolveCanvasFocus({
+      requestedIds: [],
+      nodeIds: ["f1", "f2"],
+      isMeasured: (id) => measured.has(id),
+      waitedMs: 200,
+      maxWaitMs: 3_000,
+    }),
+    { action: "fit", ids: [] },
+  );
+  assert.deepEqual(
+    resolveCanvasFocus({
+      requestedIds: ["gone"],
+      nodeIds: ["f1"],
+      isMeasured: () => true,
+      waitedMs: 3_000,
+      maxWaitMs: 3_000,
+    }),
+    { action: "drop" },
+  );
+});
+
+test("hidden frames never stall canvas focus or enter fitView targets", () => {
+  const measured = new Set(["f1"]);
+  assert.deepEqual(
+    resolveCanvasFocus({
+      requestedIds: [],
+      nodeIds: ["f1", "hidden-1"],
+      hiddenIds: ["hidden-1"],
+      isMeasured: (id) => measured.has(id),
+      waitedMs: 0,
+      maxWaitMs: 3_000,
+    }),
+    { action: "fit", ids: [] },
+    "whole-page focus fits immediately once visible frames are measured, ignoring unmeasured hidden frames",
+  );
+  assert.deepEqual(
+    resolveCanvasFocus({
+      requestedIds: ["f1", "hidden-1"],
+      nodeIds: ["f1", "hidden-1"],
+      hiddenIds: ["hidden-1"],
+      isMeasured: (id) => measured.has(id),
+      waitedMs: 0,
+      maxWaitMs: 3_000,
+    }),
+    { action: "fit", ids: ["f1"] },
+    "targeted focus fits only visible requested frames without waiting on hidden ones",
+  );
+  assert.deepEqual(
+    resolveCanvasFocus({
+      requestedIds: ["hidden-1"],
+      nodeIds: ["f1", "hidden-1"],
+      hiddenIds: ["hidden-1"],
+      isMeasured: (id) => measured.has(id),
+      waitedMs: 0,
+      maxWaitMs: 3_000,
+    }),
+    { action: "drop" },
+    "focusing only hidden frames drops immediately instead of stalling 3 s",
+  );
+  assert.deepEqual(
+    resolveCanvasFocus({
+      requestedIds: [],
+      nodeIds: ["hidden-1"],
+      hiddenIds: ["hidden-1"],
+      isMeasured: () => false,
+      waitedMs: 0,
+      maxWaitMs: 3_000,
+    }),
+    { action: "drop" },
+    "whole-page focus drops immediately when every frame on the page is hidden",
+  );
 });

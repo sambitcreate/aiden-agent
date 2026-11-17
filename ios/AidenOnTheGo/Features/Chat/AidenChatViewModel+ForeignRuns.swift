@@ -403,7 +403,8 @@ extension AidenChatViewModel {
                 ? AidenApprovalScope.offered(approval.scopes?.map(\.rawValue))
                 : [.once],
             toolName: approval.toolName,
-            schedule: AidenApprovalSchedule.card(approval.schedule, toolName: approval.toolName)
+            schedule: AidenApprovalSchedule.card(approval.schedule, toolName: approval.toolName),
+            card: approval.card
         )
     }
 
@@ -588,7 +589,8 @@ extension AidenChatViewModel {
     func respondToForeignApproval(
         _ decision: AidenApprovalDecision,
         approval: AidenPendingApproval,
-        scope: AidenApprovalScope
+        scope: AidenApprovalScope,
+        onSend: (() -> Void)? = nil
     ) async {
         guard let runId = foreignRun?.runId,
               let context = liveOwner else { return }
@@ -601,11 +603,11 @@ extension AidenChatViewModel {
             case .allowed:
                 nil
             case .approvalResponseRequired:
-                String(localized: "This paired device can't answer requests from runs it didn't start. Answer it on your machine.")
+                String(localized: "This paired device can't answer requests from runs it didn't start. Answer it on your computer.")
             case .scheduleWriteRequired:
                 String(localized: "Schedule write access was removed from this paired device. The task was not approved.")
             case .hostApprovalRequired:
-                String(localized: "This request can only be approved on your paired desktop.")
+                String(localized: "This request can only be approved on your paired computer.")
             }
             return
         }
@@ -615,6 +617,7 @@ extension AidenChatViewModel {
         defer { isRespondingToApproval = false }
         foreignRun?.markAnsweredLocally(approval.id)
         publishForeignRun(context: context)
+        onSend?()
         do {
             let result = try await coordinator.remoteClient(for: context).respondToRunApproval(
                 runId: runId,
@@ -625,18 +628,22 @@ extension AidenChatViewModel {
             guard coordinator.isLive(context) else { return }
             if result.decision == decision {
                 coordinator.haptics.play(.selection, scope: hapticScope, dedupeKey: "approval-response:\(approval.id):\(decision.rawValue)")
+            } else {
+                retractApprovalAnsweredLine()
             }
         } catch let error where aidenIsCancellation(error) {
+            retractApprovalAnsweredLine()
             return
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard coordinator.isLive(context) else { return }
+            retractApprovalAnsweredLine()
             foreignRun?.answerUnconfirmed(approval.id)
             if let loser = AidenForeignRunResolution.loser(from: error) {
                 showForeignRunNotice(loser.notice)
                 return
             }
-            presentedError = String(localized: "The approval response was not confirmed. Check the request on your machine.")
+            presentedError = String(localized: "The approval response was not confirmed. Check the request on your computer.")
             coordinator.haptics.play(.error, scope: hapticScope)
         }
     }
@@ -672,12 +679,12 @@ extension AidenChatViewModel {
                 showForeignRunNotice(loser.notice)
                 return
             }
-            presentedError = String(localized: "The question response was not confirmed. Check the prompt on your machine.")
+            presentedError = String(localized: "The question response was not confirmed. Check the prompt on your computer.")
             coordinator.haptics.play(.error, scope: hapticScope)
         }
     }
 
-    /// "Answered on your machine": the transient composer caption a losing phone shows.
+    /// "Answered on your computer": the transient composer caption a losing phone shows.
     private func showForeignRunNotice(_ text: String) {
         showRunInputReceipt(text)
     }

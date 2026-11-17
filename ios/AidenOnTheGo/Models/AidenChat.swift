@@ -849,8 +849,8 @@ enum AidenBrowserRecordingLoad: Equatable, Sendable {
     /// Anything else: offline, refused, or an answer the phone rejected.
     case failed
 
-    static let watchOnMacMessage = "Watch this recording on your machine."
-    static let missingMessage = "This recording is no longer on the machine."
+    static let watchOnMacMessage = "Watch this recording on your computer."
+    static let missingMessage = "This recording is no longer on the computer."
     static let failedMessage = "This recording can\u{2019}t be played right now."
 
     /// A 404 means the recording is gone; every other failure may pass.
@@ -935,7 +935,7 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
     let extraction: AidenWebExtractRecap?
     /// Present only on a completed `browser_recording_stop` step (revision 46).
     let recording: AidenBrowserRecordingRecap?
-    /// Contract revision 61: `true` only on a cancelled tool step Aiden
+    /// Contract revision 62: `true` only on a cancelled tool step Aiden
     /// cancelled because the person pressed Stop. Any other value, or the key
     /// on a step that did not end cancelled, decodes as `nil`.
     let stoppedByUser: Bool?
@@ -1439,7 +1439,7 @@ struct AidenGenerationTimeline: Codable, Equatable, Sendable {
 
     /// Display-only: a tool call the person ended with Stop. The Mac marks
     /// exactly the calls it cancelled because of Stop with `stoppedByUser`
-    /// (revision 61), so the call stopping is what they asked for, not a
+    /// (revision 62), so the call stopping is what they asked for, not a
     /// problem to review. A call cancelled for any other reason (an earlier
     /// agent detach, app shutdown, chat deletion, a scheduled task's cancel)
     /// carries no mark and keeps the cancelled treatment, even in a run the
@@ -1521,7 +1521,7 @@ struct AidenGenerationTimeline: Codable, Equatable, Sendable {
                           && (0...100_000_000).contains(changes.additions)
                           && (0...100_000_000).contains(changes.deletions)
                   }) ?? true,
-                  // Revision 61 marks stopped calls only in version 3
+                  // Revision 62 marks stopped calls only in version 3
                   // timelines; an older timeline carrying the mark is
                   // invalid, as on desktop.
                   step.stoppedByUser == nil || version == 3 else {
@@ -3203,9 +3203,12 @@ struct AidenStreamPendingApproval: Codable, Equatable, Sendable {
     /// Contract revision 39 (`schedule:cards`): the display-only card on a
     /// scheduled-task approval. Nil when absent or when it fails validation.
     var schedule: AidenApprovalSchedule? = nil
+    /// Contract revision 61 (`approval:cards`): the typed card. When present,
+    /// `canAllow` and `scopes` agree with its buttons, or the snapshot is refused.
+    var card: AidenApprovalCardModel? = nil
 
     private enum CodingKeys: String, CodingKey {
-        case approvalId, streamId, chatId, summary, toolCallId, toolName, expiresAt, canAllow, scopes, schedule
+        case approvalId, streamId, chatId, summary, toolCallId, toolName, expiresAt, canAllow, scopes, schedule, card
     }
 }
 
@@ -3223,6 +3226,9 @@ extension AidenStreamPendingApproval {
         scopes = try values.decodeIfPresent([String].self, forKey: .scopes)
         // A card that fails validation is dropped; the approval still decodes.
         schedule = try? values.decodeIfPresent(AidenApprovalSchedule.self, forKey: .schedule)
+        // Revision 61: strict, like the host's `parseAidenRemotePhoneStreamApproval`.
+        card = try values.decodeIfPresent(AidenApprovalCardModel.self, forKey: .card)
+        try card?.validateSummary(canAllow: canAllow, scopes: scopes)
     }
 }
 
@@ -3430,6 +3436,9 @@ struct AidenPendingApproval: Identifiable, Equatable, Sendable {
     /// Contract revision 39: the structured card for a `schedule_task` approval.
     /// Display-only; it never changes `canAllow` or `scopes`.
     var schedule: AidenApprovalSchedule? = nil
+    /// Contract revision 61 (`approval:cards`): the typed card. With it, the
+    /// buttons are the card's and only what they offer is ever sent.
+    var card: AidenApprovalCardModel? = nil
 }
 
 enum AidenApprovalKind: Equatable, Sendable {
@@ -3512,8 +3521,8 @@ enum AidenApprovalPresentation {
         }
         if !canAllow {
             return kind == .scheduledTask
-                ? AidenApprovalLimit(text: String(localized: "This task must be approved on your paired desktop."), symbol: "desktopcomputer")
-                : AidenApprovalLimit(text: String(localized: "Allow this on your machine. You can deny it here."), symbol: "desktopcomputer")
+                ? AidenApprovalLimit(text: String(localized: "This task must be approved on your paired computer."), symbol: "desktopcomputer")
+                : AidenApprovalLimit(text: String(localized: "Allow this on your computer. You can deny it here."), symbol: "desktopcomputer")
         }
         return nil
     }
@@ -3670,7 +3679,7 @@ struct AidenScheduleCardPresentation: Equatable {
         var isWarning: Bool { self == .schedulerOff }
     }
 
-    static let footnote = String(localized: "Scheduled work runs on your desktop while Aiden is open and the computer is awake.")
+    static let footnote = String(localized: "Scheduled work runs on your computer while Aiden is open and the computer is awake.")
     static let truncatedNote = String(localized: "Shortened to fit. The full text is on your computer.")
 
     let title: String
@@ -3822,7 +3831,8 @@ enum AidenPendingApprovalResolution {
             canAllow: canAllow,
             scopes: canAllow && kind == .action ? AidenApprovalScope.offered(approval.scopes) : [.once],
             toolName: approval.toolName,
-            schedule: AidenApprovalSchedule.card(approval.schedule, toolName: approval.toolName)
+            schedule: AidenApprovalSchedule.card(approval.schedule, toolName: approval.toolName),
+            card: approval.card
         )
     }
 }
@@ -4013,13 +4023,13 @@ struct AidenForeignRunResolution: Equatable, Sendable {
     var notice: String {
         switch prompt {
         case .approval(.allow?):
-            String(localized: "Answered on your machine: allowed")
+            String(localized: "Answered on your computer: allowed")
         case .approval(.deny?):
-            String(localized: "Answered on your machine: denied")
+            String(localized: "Answered on your computer: denied")
         case .question("expired"):
-            String(localized: "Question expired on your machine")
+            String(localized: "Question expired on your computer")
         case .approval(nil), .question:
-            String(localized: "Answered on your machine")
+            String(localized: "Answered on your computer")
         }
     }
 

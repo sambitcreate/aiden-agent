@@ -31,11 +31,11 @@ the issue treatment.
 The shared parser (`renderer/shared/generation-timeline.ts`) accepts the key only as `true` on a
 cancelled step of timeline version 3, so it survives chat reload and the Remote projection. The
 OpenAPI v1/v2 timeline conditional forbids it, and iOS/Android `isRendererSafe` reject a v1/v2
-timeline that carries it (see the revision 61 section of `docs/aiden-remote-api-v1.md`).
+timeline that carries it (see the revision 62 section of `docs/aiden-remote-api-v1.md`).
 
 ## Protocol
-Remote revision 61 (`AIDEN_REMOTE_STOPPED_BY_USER_CONTRACT_REVISION`, provisional, claimed when main
-was at 60; re-claim at merge if main moves). OpenAPI `GenerationToolStep.stoppedByUser` (const true,
+Remote revision 62 (`AIDEN_REMOTE_STOPPED_BY_USER_CONTRACT_REVISION`; written as 61, re-claimed
+as 62 at merge on 2026-11-17 after Bot UX took 61). OpenAPI `GenerationToolStep.stoppedByUser` (const true,
 cancelled only); fixture section `stoppedSteps` checked by `parseAidenRemoteContractFixture`.
 iOS decodes the key only as `true` on a cancelled tool step; Android uses `AidenTolerantTrueSerializer`.
 

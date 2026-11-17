@@ -143,7 +143,7 @@ class AidenStoppedActivityTest {
         assertTrue(timeline.isRendererSafe())
     }
 
-    /** Contract revision 61: the shared fixture reads the same here as on the Mac. */
+    /** Contract revision 62: the shared fixture reads the same here as on the Mac. */
     @Test
     fun stoppedStepsFixtureMatchesTheMac() {
         val root = Json.parseToJsonElement(javaClass.classLoader!!.getResource("contract.json")!!.readText()).jsonObject

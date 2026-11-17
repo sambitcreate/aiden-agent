@@ -35,7 +35,7 @@ final class AidenBotRoutineModelsModel {
         self.storageGeneration = scope.flatMap { store?.generation(for: $0) }
         if let store, let scope {
             do { if let saved = try store.load(scope) { baseline = saved.baseline; draft = saved.draft; pending = saved.attempt } }
-            catch { storageBlocked = true; message = "This phone couldn’t read its saved model change. Inspect the host before making changes." }
+            catch { storageBlocked = true; message = "This phone couldn’t read its saved model change. Inspect the computer before making changes." }
         }
         restoring = false
     }
@@ -103,7 +103,7 @@ final class AidenBotRoutineModelsModel {
     func retry(now: Date = Date()) async {
         guard canWrite, !busy, let pending else { return }
         let age = now.timeIntervalSince(pending.createdAt)
-        guard age >= 0, age < 23 * 3600 else { message = "This request is too old to replay safely. Its outcome remains unknown; inspect the host. A new request has not been created."; return }
+        guard age >= 0, age < 23 * 3600 else { message = "This request is too old to replay safely. Its outcome remains unknown; inspect the computer. A new request has not been created."; return }
         await send(pending, previouslyUnknown: true)
     }
     private func send(_ frozen: AidenRoutineModelAttempt, previouslyUnknown: Bool) async {
@@ -123,8 +123,8 @@ final class AidenBotRoutineModelsModel {
                 if code != .unavailable, !previouslyUnknown { pending = nil; persist(settling: frozen.request.mutationId) }
                 if code == .conflict { needsReview = true }
                 message = code == .unavailable || previouslyUnknown
-                    ? "Your host may have saved this change. Refresh or retry the same request before making another change."
-                    : "This change wasn’t saved. Your draft is kept. Refresh and review the host’s saved version before trying again."
+                    ? "Your computer may have saved this change. Refresh or retry the same request before making another change."
+                    : "This change wasn’t saved. Your draft is kept. Refresh and review the computer’s saved version before trying again."
             }
         } catch {
             guard scopeIsCurrent, pending?.request.mutationId == frozen.request.mutationId else { return }

@@ -129,7 +129,7 @@ test("a starter Bot reaches its creator with the preset it came from", async () 
       ...directory.deps,
       session,
       createBot: (input, _access, botId, presetId) => {
-        presets.push(presetId);
+        presets.push(presetId ?? "none");
         return directory.make(input, botId);
       },
     });
@@ -311,4 +311,114 @@ test("a caller that defers the self-intro gets the Bot at once, and one later in
   } finally {
     await session.shutdown();
   }
+});
+
+test("a Template shown at an older version refuses to create anything", async () => {
+  const profile = tempDir();
+  const directory = botDirectory(profile);
+  const session = await sessionFor(profile, createFauxModels([fauxAssistantMessage("never")]));
+  try {
+    const starter = createBotStarter({ ...directory.deps, session });
+    await assert.rejects(starter.startFromPreset("meal-planner", { version: 999 }), /This template changed/u);
+    assert.equal(directory.created.length, 0);
+    assert.deepEqual(await starter.presetBots(), {});
+  } finally {
+    await session.shutdown();
+  }
+});
+
+test("creating a Template twice opens the Bot it made, and its routine arrives paused once", async () => {
+  const profile = tempDir();
+  const directory = botDirectory(profile);
+  const routines: { botId: string; name: string }[] = [];
+  const session = await sessionFor(profile, createFauxModels([fauxAssistantMessage("Hi."), fauxAssistantMessage("never")]));
+  try {
+    const starter = createBotStarter({
+      ...directory.deps,
+      session,
+      addPausedRoutine: async (botId, routine) => {
+        routines.push({ botId, name: routine.name });
+      },
+    });
+    const first = await starter.startFromPreset("meal-planner", { version: 1, introduce: false });
+    const again = await starter.startFromPreset("meal-planner", { version: 1, introduce: false });
+
+    assert.equal(again.bot.id, first.bot.id);
+    assert.equal(again.created, false);
+    assert.equal(directory.created.length, 1);
+    assert.deepEqual(routines.map((routine) => routine.botId), [first.bot.id]);
+    assert.deepEqual(await starter.presetBots(), { "meal-planner": first.bot.id });
+  } finally {
+    await session.shutdown();
+  }
+});
+
+test("a routine that cannot be added still leaves the Template's Bot", async () => {
+  const profile = tempDir();
+  const directory = botDirectory(profile);
+  const failures: string[] = [];
+  const session = await sessionFor(profile, createFauxModels([fauxAssistantMessage("Hi.")]));
+  try {
+    const starter = createBotStarter({
+      ...directory.deps,
+      session,
+      addPausedRoutine: async () => {
+        throw new Error("routines are offline");
+      },
+      onRoutineError: (botId) => failures.push(botId),
+    });
+    const result = await starter.startFromPreset("chief-of-staff", { introduce: false });
+    assert.equal(result.created, true);
+    assert.deepEqual(failures, [result.bot.id]);
+  } finally {
+    await session.shutdown();
+  }
+});
+
+test("the silent first Bot is made once, however often onboarding asks", async () => {
+  const profile = tempDir();
+  const directory = botDirectory(profile);
+  const presets: (string | undefined)[] = [];
+  const fauxModels = createFauxModels([fauxAssistantMessage("Hi, I'm Chief. What should I help with?"), fauxAssistantMessage("never")]);
+  const session = await sessionFor(profile, fauxModels);
+  try {
+    const starter = createBotStarter({
+      ...directory.deps,
+      session,
+      createBot: (input, _access, botId, presetId) => {
+        presets.push(presetId);
+        return directory.make(input, botId);
+      },
+    });
+    const [first, second] = await Promise.all([starter.startFirst(), starter.startFirst()]);
+    const third = await starter.startFirst();
+
+    assert.equal(directory.created.length, 1);
+    assert.equal(new Set([first.bot.id, second.bot.id, third.bot.id]).size, 1);
+    assert.deepEqual([first.introduced, second.introduced, third.introduced], [true, false, false]);
+    assert.equal(directory.created[0]!.name, "Chief");
+    assert.deepEqual(presets, [undefined], "the first Bot is not a Template");
+    assert.deepEqual(await starter.presetBots(), {}, "it never counts as a Template's Bot");
+
+    const state = await session.state(first.bot.id);
+    if (state.kind === "running") await session.awaitReply(first.bot.id, state.submissionId, new AbortController().signal);
+    assert.equal(fauxModels.calls(), 1);
+  } finally {
+    await session.shutdown();
+  }
+});
+
+test("a restart after the first Bot was made finds it instead of making another", async () => {
+  const profile = tempDir();
+  const bots = new Map<string, BotDefinition>();
+  const session = {
+    send: async () => ({ submissionId: "s", deduped: false }),
+    state: async () => ({ kind: "idle" as const }),
+    conversation: async () => ({ context: async () => ({ entries: [] }) }) as never,
+  };
+  const first = await createBotStarter({ ...botDirectory(profile, bots).deps, session }).startFirst({ introduce: false });
+  const again = await createBotStarter({ ...botDirectory(profile, bots).deps, session }).startFirst({ introduce: false });
+  assert.equal(bots.size, 1);
+  assert.equal(again.bot.id, first.bot.id);
+  assert.equal(again.created, false);
 });

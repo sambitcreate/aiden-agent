@@ -23,6 +23,14 @@ fun aidenBotMessagingAvailable(capabilities: List<AidenRemoteCapability>, settin
 fun aidenBotMessagingControlsEnabled(settings: AidenBotMessagingSettings?, canWrite: Boolean, saving: Boolean) =
     settings?.enabled == true && canWrite && !saving
 
+/**
+ * Revision 61: the single Can message other Bots switch reads on only when both stored
+ * directions are on; flipping it writes both.
+ */
+fun aidenBotMessagingSingleSwitch(value: AidenBotMessaging): Boolean = value.receive && value.send
+
+fun aidenBotMessagingSingleSwitchPatch(on: Boolean): AidenBotMessagingPatch = AidenBotMessagingPatch(receive = on, send = on)
+
 data class AidenBotMessagingState(
     val settings: AidenBotMessagingSettings? = null,
     val saving: Boolean = false,
@@ -128,11 +136,18 @@ fun AidenBotMessagingSection(coordinator: AidenRemoteCoordinator, bot: AidenBotD
     val enabled = aidenBotMessagingControlsEnabled(global.settings, !locked && client != null && AidenRemoteCapability.BOT_WRITE in granted, global.saving || edit.isSaving)
     Column {
         Text(stringResource(R.string.bot_messaging_other_bots), style = MaterialTheme.typography.titleSmall, color = AidenTheme.palette.secondary)
-        AidenBotMessagingSwitch(stringResource(R.string.bot_messaging_receive, bot.name), value.receive, enabled) {
-            coordinator.launchDetached { editor.edit(AidenBotIdentityPatch(botMessaging = AidenBotMessagingPatch(receive = it))) }
-        }
-        AidenBotMessagingSwitch(stringResource(R.string.bot_messaging_send, bot.name), value.send, enabled) {
-            coordinator.launchDetached { editor.edit(AidenBotIdentityPatch(botMessaging = AidenBotMessagingPatch(send = it))) }
+        if (coordinator.installationStore.activeInstallation?.offersBotUx == true) {
+            // Revision 61: one switch, as on the Mac. The wire keeps both directions.
+            AidenBotMessagingSwitch(stringResource(R.string.bot_messaging_single), aidenBotMessagingSingleSwitch(value), enabled) {
+                coordinator.launchDetached { editor.edit(AidenBotIdentityPatch(botMessaging = aidenBotMessagingSingleSwitchPatch(it))) }
+            }
+        } else {
+            AidenBotMessagingSwitch(stringResource(R.string.bot_messaging_receive, bot.name), value.receive, enabled) {
+                coordinator.launchDetached { editor.edit(AidenBotIdentityPatch(botMessaging = AidenBotMessagingPatch(receive = it))) }
+            }
+            AidenBotMessagingSwitch(stringResource(R.string.bot_messaging_send, bot.name), value.send, enabled) {
+                coordinator.launchDetached { editor.edit(AidenBotIdentityPatch(botMessaging = AidenBotMessagingPatch(send = it))) }
+            }
         }
         if (global.settings?.enabled == false) Text(stringResource(R.string.bot_messaging_globally_off), color = AidenTheme.palette.secondary)
         else if (global.settings == null) Text(stringResource(R.string.bot_messaging_check_connection), color = AidenTheme.palette.secondary)

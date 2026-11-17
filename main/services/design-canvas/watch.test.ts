@@ -235,8 +235,10 @@ test("after a page stops being watched, a later revert to the canvas's own words
 function fakeWatcher(
   t: TestContext,
   options: {
+    allowed?: (chatId: string, root: string) => boolean;
     now?: () => number;
     noting?: () => Promise<void>;
+    wallNow?: () => number;
     debounceMs?: number;
     ownWriteWindowMs?: number;
     /** Undefined for the watcher's own default. */
@@ -251,8 +253,10 @@ function fakeWatcher(
   const instance = new DesignFileWatcher({
     onChange: (update) => updates.push(update),
     debounceMs: options.debounceMs ?? 5,
+    ...(options.allowed ? { allowed: options.allowed } : {}),
     ...(options.now ? { now: options.now } : {}),
     ...(options.noting ? { noting: options.noting } : {}),
+    ...(options.wallNow ? { wallNow: options.wallNow } : {}),
     ...(options.ownWriteWindowMs !== undefined ? { ownWriteWindowMs: options.ownWriteWindowMs } : {}),
     ...(lookback !== undefined ? { neighbourLookbackMs: lookback } : {}),
     watch: (_folder, _options, listener) => {
@@ -380,6 +384,44 @@ test("a stylesheet changed while the canvas notes the files beside its page stil
   assert.deepEqual(updates.map((update) => update.paths), [["design/hero.html"]], "the stylesheet changed after the write began");
 });
 
+test("a stylesheet changed as the canvas notes its page reloads the page when the volume's clock is behind this Mac's", async (t) => {
+  const root = await workspace(t, {
+    "design/hero.html": "<link rel=stylesheet href=hero.css><h1>Ship faster</h1>",
+    "design/hero.css": "h1{}",
+  });
+  let changes = 0;
+  const { instance, updates, emit } = fakeWatcher(t, {
+    // This Mac's clock runs a minute ahead of the one that stamps the
+    // workspace's files, as on a network volume.
+    wallNow: () => Date.now() + 60_000,
+    noting: async () => {
+      if ((changes += 1) === 1) await fsp.writeFile(path.join(root, "design/hero.css"), "h1{color:red}");
+    },
+  });
+  await instance.set("chat-1", root, ["design/hero.html"]);
+  const written = "<link rel=stylesheet href=hero.css><h1>Ship sooner</h1>";
+  const settle = instance.ownWrite("chat-1", "design/hero.html", written);
+  await fsp.writeFile(path.join(root, "design/hero.html"), written);
+  settle(true);
+  emit(null);
+  await eventually(() => updates.length > 0);
+  assert.deepEqual(updates.map((update) => update.paths), [["design/hero.html"]], "the stylesheet changed after the write began, by the volume's clock");
+});
+
+test("a write's note of the files beside its page is let go once its window has passed, with no event to report", async (t) => {
+  const root = await workspace(t, { "design/hero.html": "<h1>Ship faster</h1>", "design/hero.css": "h1{}" });
+  const { instance } = fakeWatcher(t, { ownWriteWindowMs: 30 });
+  await instance.set("chat-1", root, ["design/hero.html"]);
+  const written = "<h1>Ship sooner</h1>";
+  const settle = instance.ownWrite("chat-1", "design/hero.html", written);
+  await fsp.writeFile(path.join(root, "design/hero.html"), written);
+  settle(true);
+  await instance.noted("chat-1", "design/hero.html");
+  assert.equal(instance.heldNotes("chat-1"), 1, "the note is kept for an event inside the window");
+  await eventually(() => instance.heldNotes("chat-1") === 0);
+  assert.equal(instance.heldNotes("chat-1"), 0, "nothing can use the note past the window");
+});
+
 test("an own-write event that arrived inside the window is still put down to the write when the report waits past it", async (t) => {
   const root = await workspace(t, { "design/hero.html": "<h1>Ship faster</h1>", "design/hero.css": "h1{}" });
   let clock = 0;
@@ -434,6 +476,28 @@ test("a stylesheet beside a page that links elsewhere in the workspace reloads t
   emit(null);
   await eventually(() => updates.length > 0);
   assert.deepEqual(updates.map((update) => update.paths), [["design/hero.html"]]);
+});
+
+test("a folder beside a page that links elsewhere in the workspace counts as changed, since a file inside it changes unseen", async (t) => {
+  const root = await workspace(t, {
+    "design/hero.html": "<img src=assets/logo.svg><h1>Ship faster</h1>",
+    "shared/assets/logo.svg": "<svg></svg>",
+  });
+  await fsp.symlink("../shared/assets", path.join(root, "design/assets"));
+  // Older than the times the watcher counts as touched around a write.
+  await sleep(50);
+  const { instance, updates, emit } = fakeWatcher(t);
+  await instance.set("chat-1", root, ["design/hero.html"]);
+  const written = "<img src=assets/logo.svg><h1>Ship sooner</h1>";
+  const settle = instance.ownWrite("chat-1", "design/hero.html", written);
+  await fsp.writeFile(path.join(root, "design/hero.html"), written);
+  settle(true);
+  await instance.noted("chat-1", "design/hero.html");
+  // The logo inside the linked folder changes; neither the link nor the folder it points at does.
+  await fsp.writeFile(path.join(root, "shared/assets/logo.svg"), "<svg><circle r=1></circle></svg>");
+  emit(null);
+  await eventually(() => updates.length > 0);
+  assert.deepEqual(updates.map((update) => update.paths), [["design/hero.html"]], "the page's logo may have changed");
 });
 
 test("a link beside a page whose target is missing counts as changed", async (t) => {
@@ -542,6 +606,37 @@ test("replacing the watched set closes the old watchers", async (t) => {
   assert.equal(open(), 0);
 });
 
+test("a change queued just before the watched set grows is still reported for the pages that stay watched", async (t) => {
+  // A page Aiden writes lands as a frame, which replaces the watched set,
+  // while Aiden's edit to another page is still waiting out the quiet period.
+  const root = await workspace(t, {
+    "design/home.html": "<p>1</p>",
+    "design/library.html": "<p>1</p>",
+    "other/gone.html": "<p>1</p>",
+  });
+  const emitters: Array<(event: string, filename: string | null) => void> = [];
+  const updates: DesignFilesChanged[] = [];
+  const instance = new DesignFileWatcher({
+    onChange: (update) => updates.push(update),
+    watch: (_folder, _options, listener) => {
+      emitters.push(listener as (event: string, filename: string | null) => void);
+      return Object.assign(new EventEmitter(), { close: () => undefined }) as unknown as fs.FSWatcher;
+    },
+  });
+  t.after(() => instance.clearAll());
+  await instance.set("chat-1", root, ["design/home.html", "other/gone.html"]);
+  assert.equal(emitters.length, 2, "each page's folder is watched");
+  const [designFolder, otherFolder] = emitters as [
+    (event: string, filename: string | null) => void,
+    (event: string, filename: string | null) => void,
+  ];
+  designFolder("change", "home.html");
+  otherFolder("change", "gone.html");
+  await instance.set("chat-1", root, ["design/home.html", "design/library.html"]);
+  await sleep(DESIGN_WATCH_DEBOUNCE_MS + 100);
+  assert.deepEqual(updates, [{ chatId: "chat-1", paths: ["design/home.html"] }], "a page no longer watched is not reported");
+});
+
 test("at most 50 paths are watched", async (t) => {
   const files = Object.fromEntries(Array.from({ length: 60 }, (_, index) => [`design/f${index}.html`, "x"]));
   const root = await workspace(t, files);
@@ -579,4 +674,16 @@ test("a chat that may no longer frame its workspace stops being watched", async 
   await sleep(400);
   assert.equal(updates.length, 0);
   assert.equal(open(), 0);
+
+  // Also when permission is lost while an async own-write check is still waiting.
+  allowed = true;
+  const inflight = fakeWatcher(t, { allowed: () => allowed });
+  await inflight.instance.set("chat-1", root, ["design/page.html"]);
+  const finishWrite = inflight.instance.ownWrite("chat-1", "design/page.html", "own");
+  inflight.emit("page.html");
+  await sleep(DESIGN_WATCH_DEBOUNCE_MS + 30);
+  allowed = false;
+  finishWrite(false);
+  await sleep(40);
+  assert.equal(inflight.updates.length, 0, "revoked permission during async flush suppresses the report");
 });

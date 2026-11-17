@@ -725,6 +725,17 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/bots/{botId}/allowed/{entryId}/remove",
     "/bots/{botId}/plans/{planId}/respond",
     "/bots/{botId}/access-requests/{waitId}/answer",
+    // Revision 61: approval settings, settings changes and suggestions.
+    "/approvals/mode",
+    "/approvals/rules",
+    "/approvals/rules/picker",
+    "/approvals/rules/change",
+    "/approvals/rules/remove",
+    "/bots/{botId}/settings-changes/{changeId}/respond",
+    "/bots/{botId}/skill-proposals/{proposalId}/respond",
+    "/bots/{botId}/lessons/{lessonId}/respond",
+    "/bots/{botId}/lessons/{lessonId}/remove",
+    "/bots/{botId}/learning/{changeId}/undo",
   ];
   assert.deepEqual(Object.keys(paths), requiredPaths);
   assert.deepEqual(document.security, [{ deviceBearer: [], protocolVersion: [] }]);
@@ -1217,7 +1228,7 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
   assert.deepEqual(botModelSelection.required, ["providerId", "modelId"]);
   const createRequest = record(schemas.BotCreateRequest, "BotCreateRequest");
   assert.equal(createRequest["x-aiden-provider-model-must-be-currently-available"], true);
-  assert.deepEqual(createRequest.required, ["name", "purpose", "instructions", "avatar", "access"]);
+  assert.deepEqual(createRequest.required, ["name", "avatar"]);
   assert.deepEqual(Object.keys(record(createRequest.properties, "BotCreateRequest properties")), ["name", "purpose", "openingGreeting", "instructions", "avatar", "access"]);
   assert.equal(
     record(record(createRequest.properties, "BotCreateRequest properties").access, "create access").$ref,
@@ -3607,7 +3618,7 @@ test("revision 56 plans decode strictly, preserve absent versus null, and exclud
   const section = protocol.parseAidenRemoteContractFixture(raw).botPlans!;
   assert.deepEqual(section, raw.botPlans);
   assert.equal(protocol.AIDEN_REMOTE_BOT_PLANS_CONTRACT_REVISION, 56);
-  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 61);
+  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 62);
   assert.equal(section.pending.status, "pending");
   assert.equal(section.active.steps[0].status, "done");
   const parse = protocol.parseAidenRemoteBotPlan;
@@ -3694,7 +3705,7 @@ test("revision 57 allowed fixture is strict and exposes only bounded public list
   const raw = await json("fixtures/contract.json") as Record<string, any>;
   const section = protocol.parseAidenRemoteContractFixture(raw).botAllowed!;
   assert.deepEqual(section, raw.botAllowed);
-  assert.equal(protocol.AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION, 57); assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 61);
+  assert.equal(protocol.AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION, 57); assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 62);
   const all = [...section.paginated.firstPage.entries, ...section.paginated.nextPage.entries];
   assert.equal(all.length, 53); assert.equal(all.filter(e => e.kind === "rule").length, 50); assert.equal(all.filter(e => e.kind === "folder").length, 3);
   assert.equal(new Set(all.map(e => e.id)).size, 53);
@@ -3760,11 +3771,11 @@ test("revision 60 marks only user messages Aiden Live sent by voice, and clients
   assert.equal(message({ ...voiceUser, inputSource: "dictation" }), false, "hosts send only the voice marker");
 });
 
-test("revision 61 reads only the steps Stop cancelled as stopped, and every other cancelled step stays an issue", async () => {
+test("revision 62 reads only the steps Stop cancelled as stopped, and every other cancelled step stays an issue", async () => {
   const protocol = await import("./aiden-remote-protocol.js");
   const raw = await json("fixtures/contract.json") as Record<string, any>;
-  assert.equal(protocol.AIDEN_REMOTE_STOPPED_BY_USER_CONTRACT_REVISION, 61);
-  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 61);
+  assert.equal(protocol.AIDEN_REMOTE_STOPPED_BY_USER_CONTRACT_REVISION, 62);
+  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 62);
   const fixture = protocol.parseAidenRemoteContractFixture(raw).stoppedSteps;
   assert.ok(fixture);
   assert.deepEqual(fixture.stoppedStepIds, ["tool-3"]);
@@ -3782,9 +3793,9 @@ test("revision 61 reads only the steps Stop cancelled as stopped, and every othe
   marked.stoppedSteps.timeline.steps[3].stoppedByUser = true;
   assert.throws(() => protocol.parseAidenRemoteContractFixture(marked), /valid timeline/u);
   const older = structuredClone(raw);
-  older.contractRevision = 60;
-  older.hostHealth.contractRevision = 60;
-  assert.throws(() => protocol.parseAidenRemoteContractFixture(older), /revision 61/u);
+  older.contractRevision = 61;
+  older.hostHealth.contractRevision = 61;
+  assert.throws(() => protocol.parseAidenRemoteContractFixture(older), /revision 62/u);
   delete older.stoppedSteps;
   assert.equal(protocol.parseAidenRemoteContractFixture(older).stoppedSteps, undefined);
 

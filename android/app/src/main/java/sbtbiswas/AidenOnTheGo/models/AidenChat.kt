@@ -295,7 +295,7 @@ data class AidenAgentStep(
     @Serializable(with = AidenBrowserRecordingRecapSerializer::class)
     val recording: AidenBrowserRecordingRecap? = null,
     /**
-     * Contract revision 61: `true` only on a cancelled tool step the Mac
+     * Contract revision 62: `true` only on a cancelled tool step the Mac
      * cancelled because the person pressed Stop. Any other value reads as
      * null without rejecting the step.
      */
@@ -537,7 +537,7 @@ data class AidenGenerationTimeline(
     /**
      * Display-only: a tool call the person ended with Stop. The Mac marks
      * exactly the calls it cancelled because of Stop with `stoppedByUser`
-     * (revision 61), so the call stopping is what they asked for, not a
+     * (revision 62), so the call stopping is what they asked for, not a
      * problem to review. A call cancelled for any other reason (an earlier
      * agent detach, app shutdown, chat deletion, a scheduled task's cancel)
      * carries no mark and keeps the cancelled treatment, even in a run the
@@ -591,7 +591,7 @@ data class AidenGenerationTimeline(
                     step.lineChanges.additions !in 0..100_000_000 ||
                     step.lineChanges.deletions !in 0..100_000_000
                 )) ||
-                // Revision 61 marks stopped calls only in version 3 timelines;
+                // Revision 62 marks stopped calls only in version 3 timelines;
                 // an older timeline carrying the mark is invalid, as on desktop.
                 (step.stoppedByUser != null && version != 3)
             ) return false
@@ -1647,8 +1647,18 @@ data class AidenStreamPendingApproval(
     val scopes: List<String>? = null,
     /** Contract revision 39 (`schedule:cards`): a scheduled-task card. An invalid one reads as null. */
     @Serializable(with = AidenApprovalScheduleLenientSerializer::class)
-    val schedule: AidenApprovalSchedule? = null
-)
+    val schedule: AidenApprovalSchedule? = null,
+    /**
+     * Contract revision 61 (`approval:cards`): the typed card the desktop shows. It must agree
+     * with [canAllow] and every offered scope, or the approval is refused.
+     */
+    @Serializable(with = AidenApprovalCardSerializer::class)
+    val card: AidenApprovalCard? = null
+) {
+    init {
+        card?.let { AidenApprovalCard.requireAgrees(it, canAllow, scopes) }
+    }
+}
 
 @Serializable
 data class AidenStreamApprovalSnapshot(
@@ -1861,7 +1871,13 @@ data class AidenPendingApproval(
      * only: it never changes [canAllow] or [scopes]. Approvals are never persisted, so a
      * relaunch reads it again from the host.
      */
-    val schedule: AidenApprovalSchedule? = null
+    val schedule: AidenApprovalSchedule? = null,
+    /**
+     * Revision 61 (`approval:cards`): the typed card. When present it replaces the summary
+     * card, and its buttons are the only answers offered: each sends exactly its decision and
+     * scope.
+     */
+    val card: AidenApprovalCard? = null
 )
 
 data class AidenApprovalCapabilities(
@@ -1990,7 +2006,15 @@ object AidenPendingApprovalResolution {
             } else {
                 listOf(AidenApprovalScope.ONCE)
             },
-            schedule = AidenApprovalSchedule.forTool(approval.toolName, approval.schedule)
+            schedule = AidenApprovalSchedule.forTool(approval.toolName, approval.schedule),
+            // Deny stays answerable; only the allows go, saying why.
+            card = approval.card?.let {
+                when {
+                    canAllow -> it
+                    capabilities.canRespond && !hasRequiredWriteCapability -> it.denyOnly(AidenApprovalCard.SCHEDULE_WRITE_REQUIRED)
+                    else -> it.denyOnly()
+                }
+            }
         )
     }
 }

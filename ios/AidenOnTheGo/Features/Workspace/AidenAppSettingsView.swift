@@ -20,7 +20,7 @@ struct AidenAppSettingsView: View {
             readAloudStatus = value; readAloudError = nil
         } catch {
             guard coordinator.isCurrent(context) else { return }
-            readAloudStatus = nil; readAloudError = "Read Aloud is unavailable. Connect to an updated desktop app."
+            readAloudStatus = nil; readAloudError = "Read Aloud is unavailable. Update Aiden Agent on your computer."
         }
     }
     @State private var memorySettings: AidenMemorySettings?
@@ -28,6 +28,18 @@ struct AidenAppSettingsView: View {
     @State private var isSavingMemory = false
     @AppStorage(AidenWorkspaceDefaultApplication.permissionKey) private var defaultWorkspacePermissionRaw = AidenWorkspacePermission.ask.rawValue
     @AppStorage(AidenVoiceInputMode.defaultsKey) private var voiceInputModeRaw = AidenVoiceInputMode.onDevice.rawValue
+    @AppStorage(AidenToolActivityPreference.defaultsKey) private var showToolActivity = false
+
+    /// Revision 61 (`approvals:settings`): the Mac's approval mode and rules.
+    private var offersApprovalSettings: Bool {
+        coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .approvalsSettings) == true
+            && coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .approvalRespond) == true
+    }
+
+    /// Revision 61: the Mac offers the new cards, so Show tool activity applies.
+    private var offersBotUX: Bool {
+        coordinator.installationStore.activeInstallation?.offersBotUX == true
+    }
 
     private func loadMemorySettings() async {
         do {
@@ -71,7 +83,7 @@ struct AidenAppSettingsView: View {
                     LabeledContent {
                         Text(machinesSummary)
                     } label: {
-                        Label("Machines", systemImage: "desktopcomputer")
+                        Label("Computers", systemImage: "desktopcomputer")
                     }
                 }
                 AidenDefaultMachineRow(coordinator: coordinator)
@@ -99,7 +111,27 @@ struct AidenAppSettingsView: View {
                 NavigationLink { AidenProvidersView(coordinator: coordinator) } label: {
                     Label("Providers", systemImage: "server.rack")
                 }
-            } footer: { Text("Manage model connections on your paired machine.") }
+            } footer: { Text("Manage model connections on your paired computer.") }
+
+            if offersApprovalSettings, let client = try? coordinator.remoteClient() {
+                Section {
+                    NavigationLink {
+                        AidenApprovalSettingsView(model: AidenApprovalSettingsModel(transport: client))
+                    } label: {
+                        Label("Approvals", systemImage: "checkmark.shield")
+                    }
+                } footer: { Text("When Aiden asks before acting, and the rules it follows on your paired computer.") }
+            }
+
+            if offersBotUX {
+                Section {
+                    Toggle("Show tool activity", isOn: $showToolActivity)
+                } header: {
+                    Text("Chat")
+                } footer: {
+                    Text("Shows what a Bot is doing while it works. Off, its status line reads “Thinking”. This applies to this iPhone only.")
+                }
+            }
 
             Section {
                 Toggle(
@@ -116,11 +148,11 @@ struct AidenAppSettingsView: View {
             } header: {
                 Text("Memory")
             } footer: {
-                Text("This controls memory on your paired machine. Turning it off stops recall, saving, and indexing without deleting existing approved facts. Workspace overrides are in each workspace’s ••• menu.")
+                Text("This controls memory on your paired computer. Turning it off stops recall, saving, and indexing without deleting existing approved facts. Workspace overrides are in each workspace’s ••• menu.")
             }
 
             Section {
-                Text(readAloudStatus?.ready == true ? "Ready on your machine" : "Set up on your machine")
+                Text(readAloudStatus?.ready == true ? "Ready on your computer" : "Set up on your computer")
                 if let readAloudError { Text(readAloudError).foregroundStyle(.secondary) }
                 Button("Refresh status") { Task { await loadReadAloudStatus() } }
             } header: { Text("Read Aloud") } footer: {
@@ -138,7 +170,7 @@ struct AidenAppSettingsView: View {
                     NavigationLink {
                         AidenMacTranscriptionSettingsView(coordinator: coordinator)
                     } label: {
-                        Label("Desktop speech model", systemImage: "desktopcomputer")
+                        Label("Computer speech model", systemImage: "desktopcomputer")
                     }
                 }
             } header: {
@@ -146,7 +178,7 @@ struct AidenAppSettingsView: View {
             } footer: {
                 Text(
                     voiceInputModeRaw == AidenVoiceInputMode.pairedMac.rawValue
-                        ? "Microphone audio is sent over Aiden's encrypted pinned connection, processed on-device by your paired machine, and not retained. Text appears after you stop recording."
+                        ? "Microphone audio is sent over Aiden's encrypted pinned connection, processed on-device by your paired computer, and not retained. Text appears after you stop recording."
                         : "Uses Apple's on-device Speech framework. Microphone audio stays on this device."
                 )
             }

@@ -1,5 +1,7 @@
 package sbtbiswas.AidenOnTheGo.features.bots
 
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.features.shared.AidenRevalidation
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -215,6 +217,9 @@ class AidenBotsViewModel(
     /** Starter Bots for the empty home ("Meet Your First Bot"), when the Mac serves them. */
     val presets: StateFlow<List<AidenBotPreset>> = _presets.asStateFlow()
     private var presetsClient: AidenRemoteClient? = null
+    private val _presetNotice = MutableStateFlow<String?>(null)
+    /** A template that changed under the person: the carousel says so above its buttons. */
+    val presetNotice: StateFlow<String?> = _presetNotice.asStateFlow()
     private val presetKeys = AidenBotActionKeys()
 
     fun loadPresets() {
@@ -234,13 +239,18 @@ class AidenBotsViewModel(
 
     /**
      * Creates (or finds) the preset's Bot and adds it to the list. Returns its id, or null
-     * when the Mac couldn't be reached; a retry reuses the same idempotency key.
+     * when the Mac couldn't be reached; a retry reuses the same idempotency key. A template that
+     * already made a live Bot (`existingBotId`, revision 61) opens that Bot instead. A versioned
+     * template sends its version, and a template that changed since the list loaded reloads the
+     * list and says so.
      */
-    suspend fun startPreset(presetId: String): String? {
+    suspend fun startPreset(preset: AidenBotPreset): String? {
+        _presetNotice.value = null
+        preset.existingBotId?.let { return it }
         val client = coordinator.client.value ?: return null
-        val action = "preset:$presetId"
+        val action = "preset:${preset.id}:${preset.version ?: 0}"
         return try {
-            val result = client.createBotFromPreset(presetId, presetKeys.key(action))
+            val result = client.createBotFromPreset(preset.id, presetKeys.key(action), version = preset.version)
             presetKeys.complete(action)
             acceptBot(result.bot)
             result.bot.id
@@ -248,7 +258,14 @@ class AidenBotsViewModel(
             throw error
         } catch (error: Exception) {
             presetKeys.failed(action, error)
-            _errorMessage.value = "Aiden couldn’t start this Bot. Try again."
+            val server = error as? AidenRemoteClientException.Server
+            if (server?.statusCode == 409 && server.body.code == AidenRemoteErrorCode.REVISION_CONFLICT) {
+                _presetNotice.value = server.body.message.ifBlank { TEMPLATE_STALE }
+                presetsClient = null
+                loadPresets()
+            } else {
+                _errorMessage.value = "Aiden couldn’t start this Bot. Try again."
+            }
             null
         }
     }
@@ -271,6 +288,8 @@ class AidenBotsViewModel(
     }
 
     companion object {
+        const val TEMPLATE_STALE = "This template changed. Close it and open it again."
+
         fun factory(
             coordinator: AidenRemoteCoordinator,
             botCache: AidenBotCache? = coordinator.botCache
