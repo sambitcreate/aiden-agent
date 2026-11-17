@@ -159,6 +159,23 @@ final class AidenSearchModelTests: XCTestCase {
         XCTFail("Never settled: \(what)", file: file, line: line)
     }
 
+    /// Waits for a request to reach the demo responder. URLSession starts it on
+    /// its own thread, so main-actor yields can't tell how long that takes.
+    private func waitForRequest(
+        _ request: String,
+        to instanceId: String,
+        on responder: AidenDemoResponder,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws {
+        let deadline = Date().addingTimeInterval(30)
+        while Date() < deadline {
+            if responder.requests(instanceId: instanceId).contains(request) { return }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTFail("\(instanceId) was never sent \(request)", file: file, line: line)
+    }
+
     /// Starts a run and waits until it is sleeping through the debounce.
     private func startRun(_ model: AidenSearchModel, sleeping count: Int = 1) async -> Task<Void, Never> {
         let task = Task { await model.run() }
@@ -643,9 +660,7 @@ final class AidenSearchModelTests: XCTestCase {
         model.query = "scout"
         let run = await startRun(model)
         pastDebounce()
-        await settle("laptop asked") {
-            responder.requests(instanceId: "laptop").contains("GET /bot-conversations")
-        }
+        try await waitForRequest("GET /bot-conversations", to: "laptop", on: responder)
 
         await revoke("laptop", in: coordinator)
         release()

@@ -498,6 +498,7 @@ class MainActivity : ComponentActivity() {
                                 AidenSettingsDestination(
                                     page = screen.page,
                                     settingsStore = settingsStore,
+                                    approvalSettings = container.approvalSettings,
                                     appearanceStore = appearanceStore,
                                     voiceInputStore = voiceInputStore,
                                     installationStore = installationStore,

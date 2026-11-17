@@ -288,6 +288,30 @@ Replacing those two waits with an expectation the stub fulfils, once it has
 served the run's events and the model has shown them, would make the ceiling
 bound only a failure there too.
 
+On 2026-11-12 the design-canvas watcher and frame-picture gaps left out of
+#793 were closed:
+
+- A folder beside an edited page that is reached through a link now counts as
+  changed. The walk never enters a linked folder, so a stylesheet or image
+  inside it could change while neither the link nor its target folder did, and
+  its one unnamed event inside the three seconds was put down to the canvas.
+- The "touched since shortly before the write began" check now reads the
+  write's start on the clock that stamps the workspace's files. That offset
+  is taken from the page's own times just after the canvas writes it. A
+  network volume whose clock runs behind the Mac's could otherwise stamp a
+  stylesheet changed during the walk as older than the write.
+- A write's note of the files beside its page is let go when its three
+  seconds end, not at the next report.
+- Of two pictures of one frame captured at once, the one whose capture
+  started last is kept, whichever comes back first.
+- The "page edited in place" canvas test had polled between `act` calls
+  because RTL's `waitFor` hung there, never returning or timing out. The hang
+  was the check itself: a failed `assert.equal(iframe, null)` makes Node's
+  strict assertion diff happy-dom's whole inspected `<iframe>` against `null`.
+  That synchronous diff had not finished after 40 seconds in any local run,
+  so neither `waitFor`'s interval nor its timeout could run. The check now compares a
+  boolean, as the rest of the file does, and uses `waitFor`.
+
 Release workflows, signing/notarization, publication and repository protection
 settings remain unchanged. The previous draft's release-admission rewrite has
 been removed to keep release hardening separate from this CI rollout.

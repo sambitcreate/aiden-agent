@@ -2,7 +2,7 @@
 // above the composer, so the panel shows the card's title and buttons at its
 // top: a sign-in the person opened in the panel's Browser or Computer tab is
 // answered beside that tab, with no need to close the panel to reach I'm
-// signed in.
+// done. Take control pressed in either place moves both to I'm done and Skip.
 
 import { BotAvatar } from "../../components/bot-avatar";
 import { BotNoticeCard } from "../../components/bots/bot-notice-card";
@@ -27,6 +27,8 @@ export function BotPanelHandoff({ botId, name, avatar }: { botId: string; name: 
             handoff={handoff}
             name={name}
             busy={actions.busy}
+            taken={actions.taken}
+            onTake={actions.take}
             onOpen={() => void actions.open(handoff)}
             onAnswer={(outcome) => void actions.answer(handoff, outcome)}
           />

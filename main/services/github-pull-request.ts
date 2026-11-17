@@ -1,10 +1,11 @@
 // GitHub pull request/check status for workspace repositories. Reads go
 // straight to GitHub's GraphQL API through the shared rate-limit gate, using
-// the token `gh` (or GH_TOKEN) already holds on this Mac; the repository and
+// the token `gh` (or GH_TOKEN) already holds on this computer; the repository and
 // head are worked out from local git configuration. Only `gh pr create` still
 // shells out. Renderer-facing fields are bounded.
 
 import { spawn, type ExecFileException } from "child_process";
+import { localComputerNoun } from "../../renderer/shared/computer-noun.js";
 import * as os from "os";
 import { createProcessGroupTerminator, waitForChildExit } from "../shared/process-group.js";
 import { redactUrlCredentials } from "../shared/redaction.js";
@@ -225,7 +226,7 @@ function failureFrom(result: Exclude<PullRequestEntryResult, { kind: "ok" }>, ho
     case "unauthorized":
       return {
         availability: "unauthenticated",
-        message: `GitHub rejected the saved credential. Run \`gh auth login --hostname ${host}\` on this Mac, or update GH_TOKEN, then refresh.`,
+        message: `GitHub rejected the saved credential. Run \`gh auth login --hostname ${host}\` on this ${localComputerNoun(process.platform)}, or update GH_TOKEN, then refresh.`,
       };
     case "unavailable":
       return { availability: result.reason, message: result.message };
@@ -532,7 +533,7 @@ export class GitHubPullRequestService {
         return { kind: "failed", availability: kind, message: "Install GitHub CLI, then run `gh auth login`." };
       }
       if (kind === "unauthenticated") {
-        return { kind: "failed", availability: kind, message: "Run `gh auth login` on this Mac, then try again." };
+        return { kind: "failed", availability: kind, message: `Run \`gh auth login\` on this ${localComputerNoun(process.platform)}, then try again.` };
       }
       const timedOut = (error as { killed?: unknown } | undefined)?.killed === true;
       return {

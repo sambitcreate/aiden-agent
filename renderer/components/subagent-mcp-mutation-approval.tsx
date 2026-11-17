@@ -28,11 +28,7 @@ const PROFILE_LABELS = {
   },
 } as const;
 
-export function subagentMcpMutationAllowLabel(
-  details: SubagentMcpMutationApprovalDetails,
-): "Allow once" | "Allow once after unknown outcome" {
-  return details.priorUnknownEffect ? "Allow once after unknown outcome" : "Allow once";
-}
+export { subagentMcpMutationAllowLabel } from "../shared/approval-card-model";
 
 export function SubagentMcpMutationApproval({
   details,

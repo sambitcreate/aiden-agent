@@ -1,10 +1,12 @@
 import {
   BOT_CAPABILITY_LIMITS,
   BOT_FULL_ACCESS_NOTICE_VERSION,
+  botFullComputerLabel,
   isPathSafeBotCapabilityId,
   type BotCustomSelection,
   type BotNoticeStatus,
 } from "../../renderer/shared/bot-capabilities.js";
+import { localComputerNoun } from "../../renderer/shared/computer-noun.js";
 import {
   buildBotCapabilityCatalogSnapshot,
   finalizeBotCapabilityCatalog,
@@ -116,7 +118,7 @@ export class BotCapabilityCatalogMainService {
     signal.throwIfAborted();
     return buildBotCapabilityCatalogSnapshot({
       inventory: { providers: [...providers], fileScopes: [
-        { sourceId: "builtin.full_mac.v1", label: "Full Mac", available: false, kind: "full_mac", scopeFingerprint: "0".repeat(64) },
+        { sourceId: "builtin.full_mac.v1", label: botFullComputerLabel(process.platform), available: false, kind: "full_mac", scopeFingerprint: "0".repeat(64) },
         { sourceId: "builtin.bot_home.v1", label: "Bot folder", available: false, kind: "bot_home", scopeFingerprint: "0".repeat(64) },
       ], shell: { available: false, shellFingerprint: "0".repeat(64) }, connections: [], skills: [], otherCapabilities: [] },
       notice: { version: BOT_FULL_ACCESS_NOTICE_VERSION, requiresAcknowledgement: true },
@@ -190,8 +192,8 @@ export class BotCapabilityCatalogMainService {
           fileScopes: [
             {
               sourceId: "builtin.full_mac.v1",
-              label: "Full Mac",
-              description: "Files in locations your Mac lets Aiden access.",
+              label: botFullComputerLabel(process.platform),
+              description: `Files in locations your ${localComputerNoun(process.platform)} lets Aiden access.`,
               available: macFiles.fullMac.available,
               kind: "full_mac",
               scopeFingerprint: macFiles.fullMac.scopeFingerprint,

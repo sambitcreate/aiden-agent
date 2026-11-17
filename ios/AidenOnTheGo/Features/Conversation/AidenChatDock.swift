@@ -51,9 +51,9 @@ struct AidenDockInput: Equatable {
 }
 
 enum AidenDockCopy {
-    static let offline = String(localized: "This machine is offline. You can read this chat until it’s back.")
-    static let machineRevoked = String(localized: "This phone is no longer paired with this machine. Pair it again to send messages.")
-    static let noRunInput = String(localized: "This machine can’t take messages during a run. Stop it, or wait for it to finish.")
+    static let offline = String(localized: "This computer is offline. You can read this chat until it’s back.")
+    static let machineRevoked = String(localized: "This phone is no longer paired with this computer. Pair it again to send messages.")
+    static let noRunInput = String(localized: "This computer can’t take messages during a run. Stop it, or wait for it to finish.")
     static let cannotMessageBot = String(localized: "This phone can read this Bot’s messages but can’t reply.")
     static let scheduledTask = String(localized: "Review the scheduled task above before Aiden saves it.")
 }

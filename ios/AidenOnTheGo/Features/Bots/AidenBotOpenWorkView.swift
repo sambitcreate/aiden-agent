@@ -15,7 +15,7 @@ struct AidenBotOpenWorkView: View {
                 AidenOpenWorkListView(coordinator: coordinator, machine: machine, model: model)
             } else {
                 ContentUnavailableView("Open work unavailable", systemImage: "checklist",
-                    description: Text("Connect to a paired host that supports Open work and grants Bot and chat access."))
+                    description: Text("Connect to a paired computer that supports Open work and grants Bot and chat access."))
             }
         }
         .navigationTitle("Open work")
@@ -104,7 +104,7 @@ struct AidenOpenWorkListView: View {
                     }
                 }
                 Section {
-                    Text("\(model.countSummary). Your host keeps up to 64 active items and 128 items in history.")
+                    Text("\(model.countSummary). Your computer keeps up to 64 active items and 128 items in history.")
                         .font(.footnote).foregroundStyle(palette.secondary)
                 }
             } else if model.isLoading {
@@ -145,8 +145,8 @@ struct AidenOpenWorkPendingSection: View {
         Section(model.isCheckingStop ? "Waiting for Stop acknowledgement" : "Waiting for confirmation") {
             Text(model.isCheckingStop
                  ? "This Stop request hasn’t been confirmed. The item stays unfinished; Stop and dismiss waits for acknowledgement."
-                 : "A previous request may have reached your host. Other changes wait until its outcome is known. Your draft is kept.")
-            Button("Refresh host state") { Task { await model.load() } }
+                 : "A previous request may have reached your computer. Other changes wait until its outcome is known. Your draft is kept.")
+            Button("Refresh from computer") { Task { await model.load() } }
             Button(model.isCheckingStop ? "Check same Stop request" : "Retry same request") {
                 Task { await model.retryPending() }
             }
@@ -237,7 +237,7 @@ struct AidenOpenWorkDetailView: View {
                     }
                 } else {
                     ContentUnavailableView("Item unavailable", systemImage: "checklist",
-                        description: Text("It may have been removed on your host. Any saved draft is kept."))
+                        description: Text("It may have been removed on your computer. Any saved draft is kept."))
                 }
             }
             .scrollContentBackground(.hidden).background(palette.canvas)
@@ -272,8 +272,8 @@ struct AidenOpenWorkDetailView: View {
     }
     private var confirmationMessage: String {
         switch confirming {
-        case .stop: "The host stops only the run linked to this item. The item stays unfinished."
-        case .stopAndDismiss: "The item is dismissed only after the host confirms the linked run stopped or had already finished."
+        case .stop: "The computer stops only the run linked to this item. The item stays unfinished."
+        case .stopAndDismiss: "The item is dismissed only after the computer confirms the linked run stopped or had already finished."
         default: "Dismiss keeps history and doesn’t stop a run. Undo won’t reverse external effects."
         }
     }

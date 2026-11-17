@@ -75,7 +75,7 @@ export class AidenRemoteSpeechServiceCore {
     return {
       engine: {
         ready: engine.ready,
-        error: engine.ready ? null : "The desktop speech engine is unavailable. Restart Aiden Agent and try again.",
+        error: engine.ready ? null : "Your computer's speech engine is unavailable. Restart Aiden Agent and try again.",
       },
       // The model desktop dictation uses now, so Automatic still shows one.
       selectedModelId: effectiveLocalModelId(settings.localVoiceModel || undefined, installed) ?? null,
@@ -151,7 +151,7 @@ export class AidenRemoteSpeechServiceCore {
     }
     const id = modelId(value.modelId);
     const installed = this.dependencies.listModels().some((candidate) => candidate.id === id && candidate.installed);
-    if (!installed) throw new AidenRemoteServiceError("operation_stale", "The selected speech model is not installed on the desktop.", 409, true);
+    if (!installed) throw new AidenRemoteServiceError("operation_stale", "The selected speech model is not installed on your computer.", 409, true);
     return this.transcriptionLane.run(async () => {
       // A queued request may wait while model management runs. Revalidate at
       // execution time so deletion cannot leave an admitted request pointing at
@@ -161,7 +161,7 @@ export class AidenRemoteSpeechServiceCore {
       if (!stillInstalled) {
         throw new AidenRemoteServiceError(
           "operation_stale",
-          "The selected speech model is no longer installed on the desktop.",
+          "The selected speech model is no longer installed on your computer.",
           409,
           true,
         );

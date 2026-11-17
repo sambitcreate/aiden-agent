@@ -85,7 +85,7 @@ test("a Bot's sign-in opens in a held tab of its own browser that it can't read 
     target: "browser",
   });
 
-  // Open sign-in opens the origin in the Bot's own browser, nowhere else.
+  // Take control opens the origin in the Bot's own browser, nowhere else.
   expect(result.opened).toBe("browser");
   expect(result.elsewhere).toEqual([]);
   expect(result.held.reason).toBe("sign_in");

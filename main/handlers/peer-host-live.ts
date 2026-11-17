@@ -96,7 +96,7 @@ export function registerPeerHostLiveHandlers<Event>(
           if (!dependencies.intents || !operation || typeof operation !== "object" || !("idempotencyKey" in operation)) throw new Error("Missing saved request.");
           credentialIdentity = await dependencies.intents().admissionIdentity(hostIdentifier(hostId), operation as PeerOperation);
         } catch {
-          return { ok: false, error: { code: "outcome_unknown", message: "The saved request or its pairing changed. Check delivery on the host before dismissing it." } };
+          return { ok: false, error: { code: "outcome_unknown", message: "The saved request or its pairing changed. Check delivery on that computer before dismissing it." } };
         }
       }
       if (owner.isDestroyed()) throw new Error(INACTIVE);

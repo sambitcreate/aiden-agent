@@ -224,7 +224,7 @@ final class AidenNewWorkChatFlow {
         }
         if state() == .connected { return true }
         let resumedStatus = status
-        status = String(localized: "Waiting for your machine…")
+        status = String(localized: "Waiting for your computer…")
         defer { status = resumedStatus }
         let deadline = ContinuousClock.now + readinessWait
         while ContinuousClock.now < deadline, !Task.isCancelled {

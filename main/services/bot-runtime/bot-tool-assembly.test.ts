@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { BOT_MESSAGE_REQUEST_PREFIX } from "../../../renderer/shared/bot-messages.js";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -18,6 +19,8 @@ import { declarePiRuntimeReplay } from "../pi-runtime-tool.js";
 import { buildSkillTools, SKILL_TOOL_NAME } from "../skill-tools.js";
 import { LOAD_TOOLS_TOOL_NAME } from "../on-demand-tools.js";
 import { botRuleLabel, defaultBotRules, type BotRule } from "../../../renderer/shared/bot-rules.js";
+import type { ApprovalMode } from "../../../renderer/shared/approval-mode.js";
+import type { ApprovalRule } from "../../../renderer/shared/approval-rules.js";
 import { BOT_HANDOFF_RESULT_ENTRY_KIND } from "../../../renderer/shared/bot-handoffs.js";
 import type { BotClassifiableAction } from "../bot-rules/classify.js";
 import { BOT_COMPUTER_TOOL_NAME } from "../bot-computers/types.js";
@@ -833,6 +836,43 @@ test("two identical rule-made calls each get their own card", async () => {
     assert.equal(turn.deps.approvals.length, 2);
     assert.equal(new Set(turn.deps.approvals.map((request) => request.waitId)).size, 2);
     assert.deepEqual(turn.deps.approvals.map((request) => request.toolCallId), ["call-1", "call-2"]);
+    // Main still asks for each wait; the same call in the same reply is what the desktop may show as one card.
+    const [first, second] = turn.deps.approvals;
+    assert.ok(first?.argumentsHash && first.runHash);
+    assert.equal(second?.argumentsHash, first.argumentsHash);
+    assert.equal(second?.runHash, first.runHash);
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
+test("an action the person declined is not asked again in the same run", async () => {
+  const state = assemblyState(full(botHome()));
+  const send = countingTool(SEND_EMAIL_TOOL);
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall(SEND_EMAIL_TOOL, { text: "hello" }, { id: "send-1" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall(SEND_EMAIL_TOOL, { text: "hello" }, { id: "send-2" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall(SEND_EMAIL_TOOL, { text: "a different note" }, { id: "send-3" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("done"),
+  ]);
+  const deps = assemblyDeps(state, {
+    candidates: () => [{ tool: send, mcp: true }],
+    rules: () => defaultBotRules(),
+    approve: async () => "deny",
+  });
+  const { harness, root } = await memoryHarness(deps, fauxModels);
+  try {
+    await (await root.submit({ type: "input", content: "send it" }, ctx)).wait(ctx);
+    assert.deepEqual(deps.approvals.map((request) => request.toolCallId), ["send-1", "send-3"],
+      "the retried identical call gets no second card; a different one still asks");
+    const [hello, different] = deps.approvals;
+    assert.notEqual(hello?.argumentsHash, different?.argumentsHash, "different arguments are never one card");
+    assert.equal(hello?.runHash, different?.runHash);
+    assert.doesNotMatch(JSON.stringify([hello?.argumentsHash, hello?.runHash]), /hello|send it/u, "the hashes carry no argument text");
+    const results = await toolResults(root);
+    assert.equal(results.length, 3);
+    for (const result of results) assert.match(String(result.content[0]?.text), /Tool call blocked: The person declined this action\./);
+    assert.equal(send.executions.length, 0);
   } finally {
     await harness.close(ctx);
   }
@@ -1059,7 +1099,7 @@ test("on a routine or Telegram turn a rule never waits: it blocks with what the 
   }
 });
 
-/** One ruled turn from `requestId`, with Settings → Bots & Approvals' routines setting. */
+/** One ruled turn from `requestId`, with the legacy routines setting in Settings → Approvals → Advanced. */
 async function goAheadTurn(options: Parameters<typeof ruledTurn>[0], requestId?: string) {
   let handoffAsked = false;
   const turn = ruledTurn({
@@ -1116,9 +1156,12 @@ test("routines going ahead never lowers a hand-off, Computer Use on the person's
   assert.equal(money.turn.computer.executions.length, 0);
   assert.ok(resultText(money.results[0]).includes(ruleUnattendedBlock(botRuleLabel({ actionClass: "money" }))));
 
-  // Computer Use acts on the person's own Mac: it still asks.
+  // Computer Use acts on the person's own Mac: it still needs the person, so
+  // the routine refuses and reports it instead of waiting (Phase 2).
   const mac = await goAheadTurn({ rules: () => rulesWith("ask"), routinesGoAhead: () => true }, "routine:daily:fire-1");
-  assert.equal(mac.turn.deps.approvals.length, 1);
+  assert.equal(mac.turn.deps.approvals.length, 0);
+  assert.equal(mac.turn.computer.executions.length, 0);
+  assert.ok(resultText(mac.results[0]).includes("nobody is here to give it during a routine"));
 
   // A person chatting is asked as before.
   const chat = await goAheadTurn({ rules: () => rulesWith("ask"), baseline: false, toolName: BOT_COMPUTER_TOOL_NAME, routinesGoAhead: () => true });
@@ -1142,7 +1185,9 @@ test("routines going ahead never lowers a hand-off, Computer Use on the person's
 });
 
 test("with routines going ahead, a routine sends through a connection without waiting for an OK", async () => {
-  for (const [goAhead, scheduled] of [[true, true], [true, false], [false, true]] as const) {
+  // Phase 2: a routine never waits for an OK. Without the legacy override (or
+  // without a real scheduled fire) it refuses the send and reports it.
+  for (const [goAhead, scheduled, sends] of [[true, true, 1], [true, false, 0], [false, true, 0]] as const) {
     const state = assemblyState(full(botHome()));
     const send = countingTool(SEND_EMAIL_TOOL);
     const fauxModels = createFauxModels([
@@ -1161,9 +1206,8 @@ test("with routines going ahead, a routine sends through a connection without wa
       await (await root.submit({ type: "input", content: "send it", requestId: recordedId,
         ...(scheduled ? { entry: { kind: "aiden.routine-input" } } : {}),
       }, ctx)).wait(ctx);
-      // Off, the send still waits for the person's OK (this test's approver allows it).
-      assert.equal(deps.approvals.length, goAhead && scheduled ? 0 : 1, `goAhead ${goAhead}, scheduled ${scheduled}`);
-      assert.equal(send.executions.length, 1);
+      assert.equal(deps.approvals.length, 0, `goAhead ${goAhead}, scheduled ${scheduled}`);
+      assert.equal(send.executions.length, sends, `goAhead ${goAhead}, scheduled ${scheduled}`);
     } finally {
       await harness.close(ctx);
     }
@@ -2337,4 +2381,366 @@ test("shipping messages and approved-peer exchanges offer distinct schemas and c
   assert.deepEqual(await namesFor("bot:sender:2:00112233-4455-4677-8899-aabbccddeeff"), []);
   assert.deepEqual(Object.keys((peer.tool.parameters as unknown as { properties: Record<string, unknown> }).properties), ["action", "peerId", "kind", "title", "text", "exchangeId"]);
   assert.deepEqual(Object.keys((message.parameters as unknown as { properties: Record<string, unknown> }).properties), ["bot", "message"]);
+});
+
+// --- Settings → Approvals' rules (plan §3.5) ---------------------------------
+
+function pageRule(id: string, target: ApprovalRule["target"], decision: ApprovalRule["decision"], owner: ApprovalRule["owner"] = { kind: "mac" }, handOff?: true): ApprovalRule {
+  return { id, target, decision, owner, ...(handOff ? { handOff } : {}), createdAt: "2026-11-12T00:00:00.000Z" };
+}
+
+async function mailTurnUnderPage(pageRules: () => readonly ApprovalRule[], botRules: () => readonly BotRule[] = () => defaultBotRules()) {
+  const state = assemblyState(full(botHome()));
+  const send = countingTool(SEND_EMAIL_TOOL);
+  const read = countingTool(READ_INBOX_TOOL);
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall(READ_INBOX_TOOL, { text: "r" }), fauxToolCall(SEND_EMAIL_TOOL, { text: "s" })], {
+      stopReason: "toolUse",
+    }),
+    fauxAssistantMessage("done"),
+  ]);
+  const deps = assemblyDeps(state, {
+    candidates: () => [{ tool: send, mcp: true }, { tool: read, mcp: true }],
+    rules: botRules,
+    pageRules,
+  });
+  const { harness, root } = await memoryHarness(deps, fauxModels);
+  try {
+    await (await root.submit({ type: "input", content: "go" }, ctx)).wait(ctx);
+    return { approvals: deps.approvals, sent: send.executions.length, read: read.executions.length, results: (await toolResults(root)).map(resultText) };
+  } finally {
+    await harness.close(ctx);
+  }
+}
+
+test("rules page: Block on a connected app refuses its reads and sends in every mode, with no card", async () => {
+  const outcome = await mailTurnUnderPage(() => [pageRule("r1", { kind: "connector", serverId: MAIL_SERVER.id }, "block")]);
+  assert.deepEqual(outcome.approvals, []);
+  assert.equal(outcome.sent, 0);
+  assert.equal(outcome.read, 0);
+  for (const text of outcome.results) assert.match(text, /Block rule in Settings → Approvals/u);
+});
+
+test("rules page: Always allow runs a send without a card, Always ask makes a card for a read that needed none", async () => {
+  const rules = () => [
+    pageRule("r1", { kind: "connector-tool", serverId: MAIL_SERVER.id, tool: "send_email" }, "allow"),
+    pageRule("r2", { kind: "connector-tool", serverId: MAIL_SERVER.id, tool: "read_inbox" }, "ask"),
+  ];
+  // With the "Send a message" rule switched off, Always allow is the only say.
+  const outcome = await mailTurnUnderPage(rules, () => defaultBotRules().filter((rule) => rule.actionClass !== "communicate"));
+  assert.deepEqual(outcome.approvals.map((request) => request.toolName), [READ_INBOX_TOOL]);
+  assert.match(outcome.approvals[0]!.summary, /^Rule · /u);
+  assert.equal(outcome.sent, 1);
+  assert.equal(outcome.read, 1);
+  // A Bot's own Ask rule still asks: Always allow never lowers it.
+  const withOwnRule = await mailTurnUnderPage(rules);
+  assert.deepEqual(withOwnRule.approvals.map((request) => request.toolName), [READ_INBOX_TOOL, SEND_EMAIL_TOOL]);
+});
+
+test("rules page: a rule owned by another Bot never answers for this one", async () => {
+  const outcome = await mailTurnUnderPage(() => [
+    pageRule("r1", { kind: "connector", serverId: MAIL_SERVER.id }, "block", { kind: "bot", botId: "bot-2" }),
+  ]);
+  assert.equal(outcome.read, 1);
+  assert.equal(outcome.sent, 1);
+  assert.deepEqual(outcome.approvals.map((request) => request.toolName), [SEND_EMAIL_TOOL]);
+});
+
+test("rules page: a 'When a Bot wants to' Block refuses the matching call only, and its Ask words make the card", async () => {
+  const blocked = await mailTurnUnderPage(() => [pageRule("r1", { kind: "text", text: "send an email" }, "block")]);
+  assert.equal(blocked.sent, 0);
+  assert.equal(blocked.read, 1);
+  const asked = await mailTurnUnderPage(() => [pageRule("r2", { kind: "text", text: "send an email" }, "ask")]);
+  assert.equal(asked.sent, 1);
+  assert.deepEqual(asked.approvals.map((request) => request.summary), [`Rule · Send a message or email to someone — ${SEND_EMAIL_TOOL}`]);
+});
+
+test("rules page: sharing an image asks in Never ask and under an Always-allow rule; only Block skips the card", async () => {
+  async function share(options: { mode?: ApprovalMode; page?: () => readonly ApprovalRule[]; content?: string } = {}) {
+    const state = assemblyState(full(botHome()));
+    const fauxModels = createFauxModels([
+      fauxAssistantMessage([fauxToolCall("share_image", { path: "photo.png" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage("done"),
+    ]);
+    const deps = assemblyDeps(state, {
+      candidates: (authority) => [shareImageCandidate(authority)],
+      ...(options.mode ? { approvalMode: () => options.mode! } : {}),
+      ...(options.page ? { pageRules: options.page } : {}),
+    });
+    const { harness, root } = await memoryHarness(deps, fauxModels);
+    try {
+      await (await root.submit({ type: "input", content: "send me the photo" }, ctx)).wait(ctx);
+      return { cards: deps.approvals.length, shared: (await sharedImages(root)).length };
+    } finally {
+      await harness.close(ctx);
+    }
+  }
+  const allowShare = () => [pageRule("r1", { kind: "tool", tool: "share_image" }, "allow")];
+  assert.deepEqual(await share({ mode: "never" }), { cards: 1, shared: 1 }, "Never ask still shows the card");
+  assert.deepEqual(await share({ page: allowShare }), { cards: 1, shared: 1 }, "an Always-allow rule doesn't skip it");
+  assert.deepEqual(await share({ mode: "auto", page: allowShare }), { cards: 1, shared: 1 }, "nor does Auto");
+  const blocked = await share({ mode: "never", page: () => [pageRule("r1", { kind: "tool", tool: "share_image" }, "block")] });
+  assert.deepEqual(blocked, { cards: 0, shared: 0 }, "a Block rule still wins");
+});
+
+test("rules page: an unreadable rule book refuses the call instead of running it", async () => {
+  const outcome = await mailTurnUnderPage(() => { throw new Error("disk"); });
+  assert.equal(outcome.read, 0);
+  assert.equal(outcome.sent, 0);
+  assert.deepEqual(outcome.approvals, []);
+});
+
+// --- The Auto judge for Bots (plan §3.2) -------------------------------------
+
+type JudgeCall = { run: string; request: string; action: string; effect: string };
+
+/** A judge port that answers `reply` (or throws) and records what it was shown. */
+function recordingJudge(reply: "pass" | "defer" | "throw") {
+  const calls: JudgeCall[] = [];
+  const judge = async (_botId: string, input: JudgeCall) => {
+    calls.push({ run: input.run, request: input.request, action: input.action, effect: input.effect });
+    if (reply === "throw") throw new Error("model offline");
+    return reply;
+  };
+  return { judge, calls };
+}
+
+/** One Bot turn whose model makes `steps` (one assistant message each) under `mode`. */
+async function judgedTurn(options: {
+  mode: ApprovalMode;
+  steps: string[][];
+  judge?: ReturnType<typeof recordingJudge>["judge"];
+  content?: string;
+  botRules?: () => readonly BotRule[];
+  pageRules?: () => readonly ApprovalRule[];
+}) {
+  const state = assemblyState(full(botHome()));
+  const send = countingTool(SEND_EMAIL_TOOL);
+  const read = countingTool(READ_INBOX_TOOL);
+  const fauxModels = createFauxModels([
+    ...options.steps.map((names) => fauxAssistantMessage(names.map((name) => fauxToolCall(name, { text: "x", to: "sam@example.com" })), { stopReason: "toolUse" })),
+    fauxAssistantMessage("done"),
+  ]);
+  const deps = assemblyDeps(state, {
+    candidates: () => [{ tool: send, mcp: true }, { tool: read, mcp: true }],
+    rules: options.botRules ?? (() => defaultBotRules()),
+    approvalMode: () => options.mode,
+    ...(options.judge ? { judge: options.judge } : {}),
+    ...(options.pageRules ? { pageRules: options.pageRules } : {}),
+  });
+  const { harness, root } = await memoryHarness(deps, fauxModels);
+  try {
+    await (await root.submit({ type: "input", content: options.content ?? "Email Sam today's notes" }, ctx)).wait(ctx);
+    return { cards: deps.approvals.map((request) => request.toolName), sent: send.executions.length, read: read.executions.length };
+  } finally {
+    await harness.close(ctx);
+  }
+}
+
+test("Auto: the judge passes a send the owner asked for, which runs with no card; it reads the request and the action", async () => {
+  const { judge, calls } = recordingJudge("pass");
+  const outcome = await judgedTurn({ mode: "auto", steps: [[SEND_EMAIL_TOOL]], judge });
+  assert.deepEqual(outcome, { cards: [], sent: 1, read: 0 });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]!.request, "Email Sam today's notes");
+  assert.match(calls[0]!.action, new RegExp(`Tool: ${SEND_EMAIL_TOOL}`, "u"));
+  assert.match(calls[0]!.action, /sam@example\.com/u);
+});
+
+test("Auto fails closed for Bots: a deferral, a failed judge or no judge shows the card", async () => {
+  for (const reply of ["defer", "throw"] as const) {
+    const { judge, calls } = recordingJudge(reply);
+    assert.deepEqual(await judgedTurn({ mode: "auto", steps: [[SEND_EMAIL_TOOL]], judge }), { cards: [SEND_EMAIL_TOOL], sent: 1, read: 0 }, reply);
+    assert.equal(calls.length, 1, reply);
+  }
+  assert.deepEqual(await judgedTurn({ mode: "auto", steps: [[SEND_EMAIL_TOOL]] }), { cards: [SEND_EMAIL_TOOL], sent: 1, read: 0 }, "no judge");
+});
+
+test("only Auto asks the judge: Ask shows the card and Never ask runs, with no judge call", async () => {
+  const ask = recordingJudge("pass");
+  assert.deepEqual(await judgedTurn({ mode: "ask", steps: [[SEND_EMAIL_TOOL]], judge: ask.judge }), { cards: [SEND_EMAIL_TOOL], sent: 1, read: 0 });
+  const never = recordingJudge("pass");
+  assert.deepEqual(await judgedTurn({ mode: "never", steps: [[SEND_EMAIL_TOOL]], judge: never.judge }), { cards: [], sent: 1, read: 0 });
+  assert.equal(ask.calls.length + never.calls.length, 0);
+});
+
+test("Auto: once a run has read a connection's data, a later send shows its card unjudged", async () => {
+  const { judge, calls } = recordingJudge("pass");
+  const outcome = await judgedTurn({ mode: "auto", steps: [[READ_INBOX_TOOL], [SEND_EMAIL_TOOL]], judge });
+  assert.deepEqual(outcome, { cards: [SEND_EMAIL_TOOL], sent: 1, read: 1 });
+  assert.equal(calls.length, 0, "outside content could have steered it");
+});
+
+test("Auto never judges a rule the person wrote, here or on the rules page", async () => {
+  const words: BotRule = { id: "custom.0b8a3f5e-2c11-4d5f-9b7a-0123456789ac", text: "send an email", behavior: "ask", locked: false };
+  const own = recordingJudge("pass");
+  assert.deepEqual(
+    await judgedTurn({ mode: "auto", steps: [[SEND_EMAIL_TOOL]], judge: own.judge, botRules: () => [...defaultBotRules(), words] }),
+    { cards: [SEND_EMAIL_TOOL], sent: 1, read: 0 },
+  );
+  const page = recordingJudge("pass");
+  assert.deepEqual(
+    await judgedTurn({ mode: "auto", steps: [[SEND_EMAIL_TOOL]], judge: page.judge,
+      pageRules: () => [pageRule("r1", { kind: "connector", serverId: MAIL_SERVER.id }, "ask")] }),
+    { cards: [SEND_EMAIL_TOOL], sent: 1, read: 0 },
+  );
+  assert.equal(own.calls.length + page.calls.length, 0);
+});
+
+/** One policy check, as a turn of `kind` would make it, for steps the harness can't stage. */
+async function judgedCheck(options: {
+  toolName: string;
+  action: BotClassifiableAction;
+  judge?: ReturnType<typeof recordingJudge>["judge"];
+  routine?: true;
+  botMessage?: true;
+  ownerRequest?: string | undefined;
+  contextToolNames?: () => Promise<string[]>;
+  mode?: "ask" | "auto";
+}): Promise<string> {
+  const state = { ...assemblyState(testAuthority({ mode: "full", home: botHome(), ...FULL_GRANTS, other: [...FULL_GRANTS.other, "computer"] })), hasComputer: true };
+  const deps = assemblyDeps(state, {
+    candidates: () => [{ tool: countingTool(options.toolName), ...(options.toolName === SEND_EMAIL_TOOL ? { mcp: true } : {}) }],
+    rules: () => defaultBotRules(),
+    approvalMode: () => options.mode ?? "auto",
+    ...(options.judge ? { judge: options.judge } : {}),
+    approvalFor: async () => ({ approval: { summary: "Do the thing" }, action: options.action }),
+  });
+  const decision = await deps.checkPolicy("bot-1", options.toolName, {
+    callId: "call-1",
+    args: { action: "click" },
+    signal: undefined,
+    requestIds: [options.routine ? "routine:daily:fire-1" : options.botMessage ? BOT_MESSAGE_REQUEST : "req-1"],
+    ...(options.routine ? { hasRoutineInputs: async () => true } : {}),
+    ownerRequest: async () => ("ownerRequest" in options ? options.ownerRequest : "Email Sam"),
+    contextToolNames: options.contextToolNames ?? (async () => []),
+  });
+  if (!decision.allowed) return "refused";
+  if (decision.handoff) return "hand off";
+  if (!decision.approval) return "run";
+  if (decision.approval.preapproved) return "run";
+  return decision.approval.autoWouldJudge ? "card, Auto would judge" : "card";
+}
+
+test("Auto never judges a purchase, Computer Use on the Mac or sharing an image", async () => {
+  const purchase: BotClassifiableAction = { surface: "computer_use", action: "click", app: "Safari", windowTitle: "Checkout", element: { role: "AXButton", label: "Place your order" } };
+  const plainClick: BotClassifiableAction = { surface: "computer_use", action: "click", app: "Notes", element: { role: "AXButton", label: "Bold" } };
+  const { judge, calls } = recordingJudge("pass");
+  assert.equal(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: purchase, judge }), "card", "a purchase");
+  assert.equal(await judgedCheck({ toolName: "computer_use", action: plainClick, judge }), "card", "the Mac");
+  assert.equal(await judgedCheck({ toolName: "share_image", action: plainClick, judge }), "card", "a disclosure");
+  assert.equal(calls.length, 0);
+  // A consequential call no rule names is judged.
+  assert.equal(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: plainClick, judge }), "run");
+  assert.equal(calls.length, 1);
+});
+
+test("Auto in a routine: a pass runs the step, and a deferral still refuses it", async () => {
+  const plainClick: BotClassifiableAction = { surface: "computer_use", action: "click", app: "Notes", element: { role: "AXButton", label: "Bold" } };
+  assert.equal(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: plainClick, judge: recordingJudge("pass").judge, routine: true }), "run");
+  assert.equal(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: plainClick, judge: recordingJudge("defer").judge, routine: true }), "refused");
+});
+
+const BOT_MESSAGE_REQUEST = `${BOT_MESSAGE_REQUEST_PREFIX}0b8a3f5e-2c11-4d5f-9b7a-0123456789ac`;
+const DELETE_ON_COMPUTER: BotClassifiableAction = { surface: "computer", action: "click", intent: "Delete the old backups" };
+
+test("in Ask, a card says Auto would judge it only where Auto really would, and asking never calls the judge", async () => {
+  const plainClick: BotClassifiableAction = { surface: "computer_use", action: "click", app: "Notes", element: { role: "AXButton", label: "Bold" } };
+  const purchase: BotClassifiableAction = { surface: "computer_use", action: "click", app: "Safari", windowTitle: "Checkout", element: { role: "AXButton", label: "Place your order" } };
+  const { judge, calls } = recordingJudge("pass");
+  const ask = { mode: "ask" as const, judge };
+  assert.equal(await judgedCheck({ ...ask, toolName: SEND_EMAIL_TOOL, action: plainClick }), "card, Auto would judge");
+  // Auto would still show these cards, so switching would change nothing.
+  assert.equal(await judgedCheck({ ...ask, toolName: SEND_EMAIL_TOOL, action: purchase }), "card", "a purchase");
+  assert.equal(await judgedCheck({ ...ask, toolName: "share_image", action: plainClick }), "card", "sharing an image");
+  assert.equal(await judgedCheck({ ...ask, toolName: "computer_use", action: plainClick }), "card", "the Mac");
+  assert.equal(await judgedCheck({ ...ask, toolName: "computer_shell", action: DELETE_ON_COMPUTER }), "card", "a rule on the Bot's shell");
+  assert.equal(await judgedCheck({ ...ask, toolName: SEND_EMAIL_TOOL, action: plainClick, botMessage: true }), "card", "another Bot's message");
+  assert.equal(await judgedCheck({ ...ask, toolName: SEND_EMAIL_TOOL, action: plainClick, ownerRequest: undefined }), "card", "inputs not only the owner's");
+  assert.equal(await judgedCheck({ ...ask, toolName: SEND_EMAIL_TOOL, action: plainClick, contextToolNames: async () => ["inspect_image"] }), "card", "a tainted run");
+  assert.equal(await judgedCheck({ mode: "ask", toolName: SEND_EMAIL_TOOL, action: plainClick }), "card", "no judge on this host");
+  assert.equal(calls.length, 0, "Ask never asks the judge");
+  // In Auto itself there is nothing to offer.
+  assert.equal(await judgedCheck({ judge: recordingJudge("defer").judge, toolName: SEND_EMAIL_TOOL, action: plainClick }), "card");
+});
+
+test("Auto keeps a built-in Ask rule on the Bot's own computer: a delete in its shell shows the card, judged or not", async () => {
+  const { judge, calls } = recordingJudge("pass");
+  assert.equal(await judgedCheck({ toolName: "computer_shell", action: DELETE_ON_COMPUTER, judge }), "card", "a judge that would pass");
+  assert.equal(await judgedCheck({ toolName: "computer_shell", action: DELETE_ON_COMPUTER }), "card", "no judge on this host");
+  assert.equal(await judgedCheck({ toolName: "computer", action: DELETE_ON_COMPUTER, judge }), "card", "its screen");
+  assert.equal(calls.length, 0, "exempt tools never reach the judge");
+});
+
+test("Auto in a routine: a delete in the Bot's shell still refuses, judged or not", async () => {
+  const { judge } = recordingJudge("pass");
+  assert.equal(await judgedCheck({ toolName: "computer_shell", action: DELETE_ON_COMPUTER, judge, routine: true }), "refused");
+  assert.equal(await judgedCheck({ toolName: "computer_shell", action: DELETE_ON_COMPUTER, routine: true }), "refused");
+});
+
+test("Auto with no judge keeps a built-in rule's card for a connection send it would otherwise judge", async () => {
+  const sendDelete: BotClassifiableAction = { surface: "computer", action: "click", intent: "Delete the old thread" };
+  assert.equal(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: sendDelete }), "card");
+  const { judge, calls } = recordingJudge("pass");
+  assert.equal(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: sendDelete, judge }), "run", "with a judge, the rule's class is judged");
+  assert.equal(calls.length, 1);
+});
+
+test("Auto never judges a run whose inputs carry words the owner didn't write, or a Bot-message turn", async () => {
+  const plainClick: BotClassifiableAction = { surface: "computer_use", action: "click", app: "Notes", element: { role: "AXButton", label: "Bold" } };
+  const injected = recordingJudge("pass");
+  assert.equal(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: plainClick, judge: injected.judge, routine: true, ownerRequest: undefined }), "refused",
+    "an event routine's email body is not the owner's request");
+  assert.equal(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: plainClick, judge: injected.judge, ownerRequest: undefined }), "card");
+  const peer = recordingJudge("pass");
+  assert.notEqual(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: plainClick, judge: peer.judge, botMessage: true, ownerRequest: "Email Sam" }), "run");
+  assert.equal(injected.calls.length + peer.calls.length, 0);
+});
+
+test("Auto: outside content the conversation read, in an earlier turn or before a restart, still stops judging", async () => {
+  const plainClick: BotClassifiableAction = { surface: "computer_use", action: "click", app: "Notes", element: { role: "AXButton", label: "Bold" } };
+  for (const earlier of ["computer_shell", "computer", "browser", "inspect_image", READ_INBOX_TOOL]) {
+    const { judge, calls } = recordingJudge("pass");
+    assert.equal(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: plainClick, judge, ownerRequest: "Email Sam", contextToolNames: async () => ["bot_memory", earlier] }), "card", earlier);
+    assert.equal(calls.length, 0, earlier);
+  }
+  const unreadable = recordingJudge("pass");
+  assert.equal(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: plainClick, judge: unreadable.judge, ownerRequest: "Email Sam",
+    contextToolNames: async () => { throw new Error("unreadable"); } }), "card", "a run that can't be read counts as tainted");
+  const clean = recordingJudge("pass");
+  assert.equal(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: plainClick, judge: clean.judge, ownerRequest: "Email Sam", contextToolNames: async () => ["bot_memory"] }), "run");
+});
+
+test("Auto: a connection's earlier result still taints after its grant is gone, and an unknown tool counts too", async () => {
+  const plainClick: BotClassifiableAction = { surface: "computer_use", action: "click", app: "Notes", element: { role: "AXButton", label: "Bold" } };
+  // A Slack read in turn 1; Slack was disconnected (or renamed) before turn 2, so it is no longer among the Bot's tools.
+  for (const earlier of ["slack__read_channel", "old_server__list_messages_3fa2", "a_tool_this_release_does_not_know"]) {
+    const { judge, calls } = recordingJudge("pass");
+    assert.equal(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: plainClick, judge, contextToolNames: async () => ["bot_memory", earlier] }), "card", earlier);
+    assert.equal(calls.length, 0, earlier);
+  }
+  // The Bot's own memory, notes, questions and home files never taint.
+  const clean = recordingJudge("pass");
+  assert.equal(await judgedCheck({ toolName: SEND_EMAIL_TOOL, action: plainClick, judge: clean.judge,
+    contextToolNames: async () => ["bot_memory", "bot_recall", "routine_notes", "ask_user_question", "read_file", "write_file"] }), "run");
+});
+
+test("Auto fails closed when the host can't say what the run read or what the owner asked", async () => {
+  const plainClick: BotClassifiableAction = { surface: "computer_use", action: "click", app: "Notes", element: { role: "AXButton", label: "Bold" } };
+  const state = assemblyState(full(botHome()));
+  const { judge, calls } = recordingJudge("pass");
+  const deps = assemblyDeps(state, {
+    candidates: () => [{ tool: countingTool(SEND_EMAIL_TOOL), mcp: true }],
+    rules: () => defaultBotRules(), approvalMode: () => "auto", judge,
+    approvalFor: async () => ({ approval: { summary: "Do the thing" }, action: plainClick }),
+  });
+  const base = { callId: "call-1", args: { action: "click" }, signal: undefined, requestIds: ["req-1"] };
+  for (const [name, extra] of [
+    ["no record of the run's tools", { ownerRequest: async () => "Email Sam" }],
+    ["no owner request", { contextToolNames: async () => [] }],
+  ] as const) {
+    const decision = await deps.checkPolicy("bot-1", SEND_EMAIL_TOOL, { ...base, ...extra });
+    assert.ok(decision.allowed && decision.approval && !decision.approval.preapproved, name);
+  }
+  assert.equal(calls.length, 0);
 });

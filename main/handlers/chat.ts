@@ -162,7 +162,7 @@ export function registerChatGenerationHandlers(): void {
     },
   );
 
-  // Remembered "always allow" tool approval rules (Settings → Bots & Approvals → Tool approvals).
+  // Remembered "always allow" tool approval rules (Settings → Approvals).
   ipcMain.handle("chat:listApprovalRules", async () => toolApprovalRules.list());
 
   ipcMain.handle("chat:revokeApprovalRule", async (_event, ruleId: unknown) => {

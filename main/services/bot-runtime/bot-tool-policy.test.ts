@@ -21,9 +21,10 @@ test("plan tools allow only genuine-person or strict message-request ingress for
 
 test("request_access is offered only to scoped Custom Bots and remains callable to raise unattended issues", async () => {
   const base = bareFacts();
+  const whole = `This Bot can already use your whole ${process.platform === "darwin" ? "Mac" : "computer"}.`;
   for (const [accessMode, mode, allowed, reason] of [
-    ["custom", "scoped", true, undefined], ["full", "full_mac", false, "This Bot can already use your whole Mac."],
-    ["custom", "full_mac", false, "This Bot can already use your whole Mac."], ["custom", "off", false, "File access is off for this Bot."],
+    ["custom", "scoped", true, undefined], ["full", "full_mac", false, whole],
+    ["custom", "full_mac", false, whole], ["custom", "off", false, "File access is off for this Bot."],
   ] as const) {
     const facts = { ...base, authority: { ...base.authority, accessMode, files: { mode } } as BotRuntimeEffectiveAuthority };
     const verdict = await botToolVerdict("request_access", facts);

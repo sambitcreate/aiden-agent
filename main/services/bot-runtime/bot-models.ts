@@ -8,6 +8,8 @@
 
 import type { Api, Model, Models } from "@earendil-works/pi-ai";
 import { streamSimpleWaitingOutUsageLimits, type UsageLimitStreamOptions } from "../usage-limit-stream.js";
+import { withBotReplySilenceLimit, type BotReplySilenceOptions } from "./bot-reply-silence.js";
+import { isAcpHarnessProvider } from "../../../renderer/shared/acp-harness.js";
 
 export interface BotModelRuntime {
   model: Model<Api>;
@@ -19,6 +21,12 @@ export interface BotModelRuntime {
 export interface BotRuntimeModelsOptions {
   /** How a Bot's replies and routines wait out provider usage limits; undefined sends straight through. */
   usageLimits?: (botId: string, runtime: BotModelRuntime) => UsageLimitStreamOptions | undefined;
+  /**
+   * How long a reply may stay silent after its words, and the timer and log it
+   * uses; `false` turns the limit off for that runtime. An agent harness never
+   * has one. Undefined uses the defaults.
+   */
+  replySilence?: (runtime: BotModelRuntime) => BotReplySilenceOptions | false;
 }
 
 export interface BotRuntimeModels {
@@ -37,6 +45,7 @@ const key = (provider: string, modelId: string) => `${provider}\u0000${modelId}`
 function botModels(
   runtimes: Map<string, BotModelRuntime>,
   limitsFor?: (runtime: BotModelRuntime) => UsageLimitStreamOptions | undefined,
+  silenceFor?: (runtime: BotModelRuntime) => BotReplySilenceOptions | false,
 ): Models {
   const runtimeFor = (model: Pick<Model<Api>, "provider" | "id">): BotModelRuntime => {
     const runtime = runtimes.get(key(model.provider, model.id));
@@ -47,8 +56,16 @@ function botModels(
   const stream = (model: Model<Api>, context: Parameters<Models["streamSimple"]>[1], options?: Parameters<Models["streamSimple"]>[2]) => {
     const runtime = runtimeFor(model);
     const limits = limitsFor?.(runtime);
-    if (!limits) return runtime.streams.streamSimple(model, context, options);
-    return streamSimpleWaitingOutUsageLimits(model, options, (sent) => runtime.streams.streamSimple(model, context, sent), limits);
+    const send = (sent: typeof options) =>
+      limits
+        ? streamSimpleWaitingOutUsageLimits(model, sent, (next) => runtime.streams.streamSimple(model, context, next), limits)
+        : runtime.streams.streamSimple(model, context, sent);
+    // An agent harness runs its own tools inside one stream, so its quiet stretches are work.
+    const harness = runtime.provider !== undefined && isAcpHarnessProvider(runtime.provider.id);
+    const silence = harness ? false : silenceFor ? silenceFor(runtime) : {};
+    if (silence === false) return send(options);
+    // A reply that goes silent after its words ends as finished (bot-reply-silence.ts).
+    return withBotReplySilenceLimit(options?.signal, (signal) => send({ ...options, signal }), silence);
   };
 
   const overrides: Partial<Models> = {
@@ -78,8 +95,8 @@ export function createBotRuntimeModels(options: BotRuntimeModelsOptions = {}): B
       const limitsFor = options.usageLimits;
       found = {
         runtimes,
-        models: botModels(runtimes, limitsFor ? (runtime) => limitsFor(botId, runtime) : undefined),
-        background: botModels(runtimes),
+        models: botModels(runtimes, limitsFor ? (runtime) => limitsFor(botId, runtime) : undefined, options.replySilence),
+        background: botModels(runtimes, undefined, options.replySilence),
       };
       perBot.set(botId, found);
     }

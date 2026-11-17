@@ -19,7 +19,7 @@ export class AidenRemoteSpeechLane {
     if (this.admitted >= this.maximumAdmitted) {
       throw new AidenRemoteServiceError(
         "rate_limited",
-        "The desktop speech engine is busy. Try again in a moment.",
+        "Your computer's speech engine is busy. Try again in a moment.",
         429,
         true,
         { retryAfterSeconds: 2 },

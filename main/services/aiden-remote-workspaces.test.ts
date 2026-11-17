@@ -5,6 +5,10 @@ import {
   AidenRemoteWorkspaceService,
   projectAidenRemoteWorkspace,
 } from "./aiden-remote-workspaces.js";
+import { createWorkspaceApplicationService, type WorkspaceApplicationDependencies } from "./workspace-application-service.js";
+import { WorkspaceMutationGate } from "./workspace-mutation-gate.js";
+import { WorkspaceOperationRegistry } from "./workspace-operation-registry.js";
+import { workspaceApprovalPolicy } from "../../renderer/shared/approval-mode.js";
 import {
   AidenIdempotencyLedger,
   type AidenIdempotencySnapshot,
@@ -287,4 +291,59 @@ test("managed worktrees cannot be unregistered through generic workspace CRUD", 
     app.service.remove("workspace-1", current.revision),
     (error: unknown) => (error as { code?: string }).code === "workspace_unavailable",
   );
+});
+
+test("a phone sees the access tier that never reads narrower than what runs", () => {
+  const tier = (fields: Partial<Workspace>, mode: "ask" | "auto" | "never") =>
+    projectAidenRemoteWorkspace(workspace(fields), mode).permission;
+  assert.equal(tier({}, "ask"), "ask");
+  assert.equal(tier({}, "auto"), "full", "Auto can run consequential calls without a card");
+  assert.equal(tier({}, "never"), "full");
+  assert.equal(tier({ approvalMode: "never" }, "ask"), "full");
+  assert.equal(tier({ approvalMode: "ask" }, "never"), "ask");
+  assert.equal(tier({ approvalMode: "ask", macGrants: { shell: true } }, "ask"), "full", "commands run without a card");
+  assert.equal(tier({ permission: "full" }, "ask"), "full");
+  assert.equal(tier({ permission: "none" }, "never"), "none");
+  // The revision is the stored workspace's, whatever the mode.
+  assert.equal(projectAidenRemoteWorkspace(workspace(), "auto").revision, projectAidenRemoteWorkspace(workspace(), "ask").revision);
+});
+
+test("a phone choosing Ask on a customized workspace makes it Ask with nothing allowed", async () => {
+  let stored: Workspace = workspace({ folderPath: "/work/p", approvalMode: "never", macGrants: { shell: true, files: true } });
+  const application = createWorkspaceApplicationService({
+    configStore: {
+      listWorkspaces: async () => [stored],
+      getWorkspace: async () => stored,
+      saveWorkspace: async (value: Workspace, guard?: (current: Workspace | undefined) => void | Promise<void>) => {
+        await guard?.(stored);
+        stored = { ...value, updatedAt: stored.updatedAt + 1 };
+        return stored;
+      },
+      removeWorkspace: async () => undefined,
+    },
+    llmClient: { cancelWorkspaceAndSettle: async () => undefined },
+    scheduleService: { cancelWorkspace: async () => undefined, resumeWorkspace: async () => undefined },
+    terminalService: { closeForWorkspace: () => undefined },
+    workspaceMutationGate: new WorkspaceMutationGate(),
+    workspaceOperationRegistry: new WorkspaceOperationRegistry(),
+    createScratchWorkspaceDirectory: async () => ({ name: "Scratch", folderPath: "/tmp/scratch" }),
+    realpath: async (value: string) => value,
+    stat: async () => ({ isDirectory: () => true }),
+    removeEmptyDirectory: async () => undefined,
+    createId: () => "w-new",
+    now: () => 1,
+    logError: () => undefined,
+  } as unknown as WorkspaceApplicationDependencies);
+  const service = new AidenRemoteWorkspaceService({
+    application,
+    browser: { consumeSelection: async () => { throw new Error("unused"); }, revalidateConsumedSelection: async () => { throw new Error("unused"); } },
+    approvalMode: () => "auto",
+  });
+  const before = await service.get("workspace-1");
+  assert.equal(before.permission, "full");
+  const after = await service.update("workspace-1", before.revision, { confirmedForeground: true, permission: "ask" });
+  assert.equal(after.permission, "ask");
+  const policy = workspaceApprovalPolicy(stored, "auto");
+  assert.equal(policy.mode, "ask");
+  assert.equal(policy.macGrants.size, 0);
 });

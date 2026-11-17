@@ -87,7 +87,7 @@ export class AidenRemoteTtsService {
     if (existing) return existing;
     const key = JSON.stringify([authority.deviceId, authority.chatId]);
     if (this.sessions.size >= 256) this.reclaimIdle(true);
-    if (this.sessions.size >= 256) throw new AidenRemoteServiceError("rate_limited", "The Read Aloud session limit was reached on the desktop.", 429);
+    if (this.sessions.size >= 256) throw new AidenRemoteServiceError("rate_limited", "The Read Aloud session limit was reached on your computer.", 429);
     let invalidated = false;
     const listeners = new Set<() => void>();
     const session: Session = {
@@ -153,7 +153,7 @@ export class AidenRemoteTtsService {
     }
     if ((!this.sourceIntents.has(sourceIntent) && this.sourceIntents.size >= 16_384) ||
       (!this.requestIntents.has(requestIntent) && this.requestIntents.size >= 16_384)) {
-      throw new AidenRemoteServiceError("rate_limited", "The Read Aloud intent limit was reached on the desktop.", 429);
+      throw new AidenRemoteServiceError("rate_limited", "The Read Aloud intent limit was reached on your computer.", 429);
     }
     const settleSource = this.reserveIntent(this.sourceIntents, session.sourceIntents, sourceIntent);
     const settleRequest = this.reserveIntent(this.requestIntents, session.requestIntents, requestIntent);
@@ -183,7 +183,7 @@ export class AidenRemoteTtsService {
       status.latestSource.source?.messageId !== session.source?.messageId) {
       throw new AidenRemoteServiceError("not_found", "The response changed before its audio could be read.", 404);
     }
-    if (!status.settings.enabled) throw new AidenRemoteServiceError("capability_denied", "Enable Read Aloud on the desktop.", 403);
+    if (!status.settings.enabled) throw new AidenRemoteServiceError("capability_denied", "Turn on Read Aloud in Aiden Agent on your computer.", 403);
     const audio = this.service.readAudio(session.owner, jobId, segment, offset, TTS_LIMITS.audioReadMaxBytes);
     if (!audio) throw new AidenRemoteServiceError("not_found", "This soundbite is no longer retained. It will not be generated again automatically.", 404);
     return { ...audio, bytes: undefined, bytesBase64: Buffer.from(audio.bytes).toString("base64") };
