@@ -30,6 +30,12 @@ export const UPTIME_BUCKETS = ["<1m", "1-10m", "10-60m", "1h+"] as const;
 
 const RUN_TRIGGERS = enumProp("automatic", "manual", "catch_up", "retry", "file_change", "webhook", "watch");
 
+const APPROVAL_CARD = {
+  kind: enumProp("command", "file", "computer_use", "form_fill", "schedule", "subagent", "hook", "classifier", "tool"),
+  mode: enumProp("ask", "auto", "never", "full", "read_only", "none", "bot"),
+  chat: enumProp("workspace", "subagent", "bot"),
+} as const;
+
 export const ANALYTICS_EVENTS = {
   // Who's using it
   app_opened: { launch_kind: enumProp("cold", "after_update", "after_crash") },
@@ -53,7 +59,7 @@ export const ANALYTICS_EVENTS = {
   workspace_added: { kind: enumProp("folder", "scratch", "path") },
 
   // Big features
-  bot_created: { preset_id: id, bot_count: enumProp(...COUNT_BUCKETS) },
+  bot_created: { preset_id: id, bot_count: enumProp(...COUNT_BUCKETS), source: optional(enumProp("new", "template", "onboarding")) },
   bot_routine_ran: { trigger: RUN_TRIGGERS, result: enumProp("success", "failed") },
   scheduled_task_ran: { trigger: RUN_TRIGGERS, result: enumProp("success", "silent", "failed") },
   subagent_launched: { role: enumProp("scout", "planner", "reviewer", "implementer", "other") },
@@ -72,6 +78,17 @@ export const ANALYTICS_EVENTS = {
   design_mode_exited: {},
   design_mode_declined: {},
   design_comments_sent: { count_bucket: enumProp(...COUNT_BUCKETS) },
+
+  // Approval cards. `chat` says which chat asked; it is not named `surface`,
+  // which every event already carries (desktop or server).
+  approval_shown: APPROVAL_CARD,
+  approval_answered: { ...APPROVAL_CARD, scope: enumProp("once", "chat", "workspace", "bot", "deny") },
+  // The person chose an approval mode: for this Mac, or for one workspace
+  // ("global" there means it went back to following this Mac's mode).
+  approval_mode_changed: {
+    mode: enumProp("ask", "auto", "never", "global"),
+    scope: enumProp("global", "workspace"),
+  },
 
   // Crashes without a JavaScript stack (process gone, unclean exit)
   app_crashed: {

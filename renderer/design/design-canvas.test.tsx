@@ -3,7 +3,7 @@ import { emitBotTestNotification, installBotTestIpc, type BotTestIpcCall } from 
 import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 import { afterEach, test } from "node:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as React from "react";
 import { Toaster } from "../components/ui";
@@ -11,6 +11,7 @@ import { isMacPlatform } from "../lib/ghostty-terminal/host-platform";
 import { useComposerTypeFocus } from "../lib/use-composer-type-focus";
 import { emptyDesignCanvas, type DesignCanvas, type DesignFrame } from "../shared/design-canvas/schema";
 import { DesignCanvasRegion } from "./design-canvas-region";
+import { designFrameSnapshots } from "./frame-snapshots";
 import { designCommentTray } from "./comment-tray-store";
 
 // The canvas imports React Flow's CSS, which Node cannot load; tests get an empty module.
@@ -267,6 +268,124 @@ test("the canvas watches its pages and reloads one when its file changes", async
     `aiden-design://${GRANT}/assets/logo.png`,
     "an unchanged image keeps its address",
   );
+});
+
+test("a text edit written to a file shown twice reloads only the other frame", async () => {
+  // Two frames of one file, as ⌘D or Duplicate page leaves them.
+  measureCanvasAt1000x800();
+  const hero: DesignFrame = { id: "f1", kind: "file", title: "Hero", x: 0, y: 0, w: 300, h: 300, path: "design/hero.html", designWidth: 1280, pageId: "page-1", createdBy: "aiden" };
+  const copy: DesignFrame = { ...hero, id: "f2", title: "Hero copy", x: 400 };
+  const { calls } = setup(canvasWith(hero, copy), { "designCanvas:editText": () => ({ ok: true }) });
+  await mount();
+  fireEvent.doubleClick(screen.getByRole("group", { name: "Hero" }));
+  const frame = (id: string) => document.querySelector<HTMLIFrameElement>(`iframe[data-frame-id="${id}"]`);
+  await waitFor(() => {
+    assert.equal(frame("f1")?.getAttribute("src"), `aiden-design://${GRANT}/design/hero.html`);
+    assert.equal(frame("f2")?.getAttribute("src"), `aiden-design://${GRANT}/design/hero.html`);
+  });
+
+  // happy-dom loads no pages, so the edited frame gets a stand-in window to post from.
+  const edited = frame("f1")!;
+  const guest = { postMessage: () => undefined } as unknown as Window;
+  Object.defineProperty(edited, "contentWindow", { configurable: true, get: () => guest });
+  act(() => {
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        source: guest,
+        data: {
+          type: "aiden-design:edit-end",
+          cancelled: false,
+          plain: true,
+          changes: [{ before: "Ship faster", after: "Ship sooner" }],
+          beforeHtml: "<h1>Ship faster</h1>",
+          afterHtml: "<h1>Ship sooner</h1>",
+          element: null,
+        },
+      }),
+    );
+  });
+  await waitFor(() => assert.equal(frame("f2")?.getAttribute("src"), `aiden-design://${GRANT}/design/hero.html?v=1`), SAVE_WAIT);
+  assert.deepEqual(calls.find((call) => call.channel === "designCanvas:editText")?.args.slice(0, 2), ["chat-1", "f1"]);
+  assert.equal(frame("f1"), edited, "the frame being edited is not replaced");
+  assert.equal(edited.getAttribute("src"), `aiden-design://${GRANT}/design/hero.html`, "and keeps the page it shows");
+
+  // A later change of the file reloads both frames.
+  act(() => emitBotTestNotification("designCanvas:filesChanged", { chatId: "chat-1", paths: ["design/hero.html"] }));
+  await waitFor(() => {
+    assert.equal(frame("f1")?.getAttribute("src"), `aiden-design://${GRANT}/design/hero.html?v=2`);
+    assert.equal(frame("f2")?.getAttribute("src"), `aiden-design://${GRANT}/design/hero.html?v=2`);
+  });
+});
+
+test("a page edited in place does not show its picture from before the edit once it stops being live", async () => {
+  measureCanvasAt1000x800();
+  // A small page and six larger ones: only six frames run a real page, so the
+  // small one shows its snapshot unless it is entered.
+  const edited: DesignFrame = { id: "kept-1", kind: "file", title: "Hero", x: 0, y: 600, w: 100, h: 100, path: "design/hero.html", designWidth: 1280, pageId: "page-1", createdBy: "aiden" };
+  const others = Array.from({ length: 6 }, (_, index): DesignFrame => ({
+    ...edited,
+    id: `other-${index}`,
+    title: `Other ${index}`,
+    path: `design/other-${index}.html`,
+    x: (index % 3) * 320,
+    y: Math.floor(index / 3) * 260,
+    w: 300,
+    h: 240,
+  }));
+  const before = "data:image/png;base64,QkVGT1JF";
+  // Taken when the page last left the live set, before the edit.
+  designFrameSnapshots.set("kept-1", 0, before);
+  const { calls } = setup(canvasWith(edited, ...others), { "designCanvas:editText": () => ({ ok: true }) });
+  const region = await mount();
+  const picture = () => screen.getByRole("group", { name: "Hero" }).querySelector("img")?.getAttribute("src") ?? null;
+  await waitFor(() => assert.equal(picture(), before));
+
+  fireEvent.doubleClick(screen.getByRole("group", { name: "Hero" }));
+  const frame = await waitFor(() => {
+    const element = document.querySelector<HTMLIFrameElement>('iframe[data-frame-id="kept-1"]');
+    assert.ok(element);
+    return element;
+  });
+  const guest = { postMessage: () => undefined } as unknown as Window;
+  Object.defineProperty(frame, "contentWindow", { configurable: true, get: () => guest });
+  act(() => {
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        source: guest,
+        data: {
+          type: "aiden-design:edit-end",
+          cancelled: false,
+          plain: true,
+          changes: [{ before: "Ship faster", after: "Ship sooner" }],
+          beforeHtml: "<h1>Ship faster</h1>",
+          afterHtml: "<h1>Ship sooner</h1>",
+          element: null,
+        },
+      }),
+    );
+  });
+  await waitFor(() => assert.equal(calls.some((call) => call.channel === "designCanvas:editText"), true), SAVE_WAIT);
+  // The rest of the write is promise callbacks, all run before the next task.
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  // Leaving the page and clearing the selection drops it from the live set.
+  region.focus();
+  fireEvent.keyDown(region, { key: "Escape", code: "Escape" });
+  fireEvent.keyDown(region, { key: "Escape", code: "Escape" });
+  // Compared as a boolean: a failed strict assert on the element itself diffs
+  // happy-dom's whole inspected iframe against null, which takes long enough
+  // that waitFor's interval and timeout never get to run.
+  await waitFor(() => assert.equal(document.querySelector('iframe[data-frame-id="kept-1"]') === null, true, "the page left the live set"), SAVE_WAIT);
+  // Its capture as it left came back empty, so it has no picture of the edited page yet.
+  const hero = screen.getByRole("group", { name: "Hero" });
+  assert.equal(picture(), null, "the picture from before the edit is gone");
+  assert.ok(within(hero).getByRole("img", { name: "Hero" }), "the frame shows its skeleton instead");
+
+  // Live again, it runs the page, which shows the edit.
+  fireEvent.doubleClick(hero);
+  await waitFor(() => assert.equal(document.querySelector('iframe[data-frame-id="kept-1"]') === null, false));
 });
 
 test("a visual Aiden draws again under the same title replaces the one in its frame", async () => {

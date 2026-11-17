@@ -31,7 +31,7 @@ function feed(hostId: string, patch: Partial<PeerHostFeedSnapshot>): PeerHostFee
 }
 
 test("an online host that granted chat writes can start a new chat", () => {
-  const [studio] = newChatMachines([view("host-b", "Studio")], [connected("host-b")]);
+  const [studio] = newChatMachines([view("host-b", "Studio")], [connected("host-b")], "darwin");
   assert.equal(studio?.label, "Studio");
   assert.equal(studio?.availability, "online");
   assert.equal(studio?.disabledReason, undefined);
@@ -41,6 +41,7 @@ test("a host that cannot take a new chat stays listed with a reason naming it", 
   const machines = newChatMachines(
     [view("host-b", "Studio"), view("host-c", "Laptop", ["chat:read"]), view("host-d", "Spare"), view("host-e", "Off", CHAT_GRANTS, false)],
     [backoff("host-b"), connected("host-c")],
+    "darwin",
   );
   assert.deepEqual(
     machines.map((machine) => machine.id),
@@ -51,6 +52,28 @@ test("a host that cannot take a new chat stays listed with a reason naming it", 
   assert.match(studio?.disabledReason ?? "", /^Studio is offline/u);
   assert.equal(laptop?.disabledReason, "Laptop hasn't allowed this Mac to start chats.");
   assert.match(spare?.disabledReason ?? "", /^Still connecting to Spare/u, "a host with no status yet is still connecting");
+});
+
+test("a reason names the paired computer throughout and this computer by its platform", () => {
+  const blocked = (hostId: string, reason: "protocol" | "auth"): PeerHostStatus => ({
+    hostId,
+    generation: 1,
+    state: { kind: "blocked", reason },
+    feed: "off",
+    stale: true,
+  } as PeerHostStatus);
+  const [studio, mini, laptop] = newChatMachines(
+    [view("host-b", "Studio"), view("host-c", "Lab $& box"), view("host-d", "Laptop", ["chat:read"])],
+    [blocked("host-b", "protocol"), blocked("host-c", "auth"), connected("host-d")],
+    "linux",
+  );
+  assert.equal(
+    studio?.disabledReason,
+    "Studio runs an incompatible version of Aiden. Update Aiden on both computers to control it.",
+  );
+  // The name is used as written, even with characters a pattern replacement would expand.
+  assert.equal(mini?.disabledReason, "Lab $& box needs to be paired again before it can be controlled.");
+  assert.equal(laptop?.disabledReason, "Laptop hasn't allowed this computer to start chats.");
 });
 
 test("a host's projects are offered most recently used first, with a name even when the host sent none", () => {
@@ -148,6 +171,7 @@ test("Bots are grouped by host, without hosts that have none", () => {
       ["host-c", feed("host-c", { bots: [] })],
       ["host-d", feed("host-d", { bots: [{ id: "bot-5", name: "Scribe" }] })],
     ]),
+    "darwin",
   );
   assert.deepEqual(
     groups.map((group) => [group.host.id, group.bots]),

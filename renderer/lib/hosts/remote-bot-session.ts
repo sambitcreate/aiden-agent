@@ -92,9 +92,14 @@ export function remoteBotTranscriptEntry(entry: AidenRemoteBotSessionEntry): Bot
     // (`useRemoteBotImages`); empty `data` marks an image not read yet.
     case "shared_image":
       return { id: entry.id, type: "shared_image", name: entry.name, mimeType: entry.mimeType, size: entry.size, data: "" };
-    // Cards this Mac does not opt into (`bot:cards`); the host never sends them here.
+    // Cards this Mac does not opt into (`bot:cards`, and the revision-61
+    // `bot:settings-changes` and `bot:suggestions`); the host never sends them here.
     case "memory_update":
     case "routine_proposal":
+    case "settings_change":
+    case "skill_proposal":
+    case "lesson":
+    case "memory_tidy":
       return null;
   }
 }

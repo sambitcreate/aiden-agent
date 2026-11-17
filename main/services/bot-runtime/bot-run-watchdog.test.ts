@@ -8,7 +8,6 @@ function setup(kind: "routine" | "attended", options: { waiting?: boolean } = {}
   let waiting = options.waiting ?? false;
   let limited = false;
   const stopped: string[] = [];
-  const raised: string[] = [];
   const watchdog = createBotRunWatchdog({
     running: () => ["bot-1"],
     lastProgressAt: () => progress,
@@ -16,12 +15,11 @@ function setup(kind: "routine" | "attended", options: { waiting?: boolean } = {}
     isWaitingOnPerson: () => waiting,
     isWaitingOnUsageLimit: () => limited,
     stopForStall: async (botId) => { stopped.push(botId); },
-    raiseStall: async (botId) => { raised.push(botId); },
     now: () => now,
     setInterval: () => ({ cancel: () => undefined }),
   });
   return {
-    watchdog, stopped, raised,
+    watchdog, stopped,
     wakeFromSleep: () => watchdog.resume(),
     at: (value: number) => { now = value; },
     /** Lets the clock run to `value` with the interval checking every minute on the way. */
@@ -46,61 +44,49 @@ test("stops a routine run after 10 minutes without progress", async () => {
   h.at(BOT_RUN_STALL_MS);
   await h.watchdog.check();
   assert.deepEqual(h.stopped, ["bot-1"]);
-  assert.deepEqual(h.raised, []);
 });
 
-test("never stops or flags a run that waits on the person", async () => {
+test("never stops a run that waits on the person", async () => {
   const h = setup("routine", { waiting: true });
   h.at(5 * BOT_RUN_STALL_MS);
   await h.watchdog.check();
-  const attended = setup("attended", { waiting: true });
-  attended.at(5 * BOT_RUN_STALL_MS);
-  await attended.watchdog.check();
-  assert.deepEqual([...h.stopped, ...h.raised, ...attended.stopped, ...attended.raised], []);
+  assert.deepEqual(h.stopped, []);
 });
 
-test("a run waiting out a usage limit is neither stopped nor flagged, and gets a full window once it clears", async () => {
+test("a run waiting out a usage limit is not stopped, and gets a full window once it clears", async () => {
   const h = setup("routine");
-  const attended = setup("attended");
-  for (const run of [h, attended]) {
-    run.setLimited(true);
-    // A 30-minute reset, checked every minute.
-    for (let minute = 1; minute <= 30; minute += 1) {
-      run.at(minute * 60_000);
-      await run.watchdog.check();
-    }
-    run.setLimited(false);
-    await run.advance(30 * 60_000 + BOT_RUN_STALL_MS - 1);
-    await run.watchdog.check();
+  h.setLimited(true);
+  // A 30-minute reset, checked every minute.
+  for (let minute = 1; minute <= 30; minute += 1) {
+    h.at(minute * 60_000);
+    await h.watchdog.check();
   }
-  assert.deepEqual([...h.stopped, ...h.raised, ...attended.stopped, ...attended.raised], []);
+  h.setLimited(false);
+  await h.advance(30 * 60_000 + BOT_RUN_STALL_MS - 1);
+  await h.watchdog.check();
+  assert.deepEqual(h.stopped, []);
   h.at(30 * 60_000 + BOT_RUN_STALL_MS);
   await h.watchdog.check();
   assert.deepEqual(h.stopped, ["bot-1"], "a run that stays quiet after the limit clears is still stuck");
 });
 
-test("an attended run raises one issue and is not stopped", async () => {
+test("a run the person started is never stopped, however long it is quiet", async () => {
   const h = setup("attended");
-  h.at(BOT_RUN_STALL_MS);
+  await h.advance(10 * BOT_RUN_STALL_MS);
   await h.watchdog.check();
-  h.at(BOT_RUN_STALL_MS + 60_000);
-  await h.watchdog.check();
-  assert.deepEqual(h.raised, ["bot-1"], "asked once per stall");
   assert.deepEqual(h.stopped, []);
 });
 
-test("keep waiting snoozes for another 10 minutes", async () => {
-  const h = setup("attended");
-  h.at(BOT_RUN_STALL_MS);
-  await h.watchdog.check();
-  h.at(BOT_RUN_STALL_MS + 1_000);
+test("a snooze gives the run another full window", async () => {
+  const h = setup("routine");
+  h.at(BOT_RUN_STALL_MS - 1_000);
   h.watchdog.snooze("bot-1");
-  await h.advance(2 * BOT_RUN_STALL_MS);
+  h.at(2 * BOT_RUN_STALL_MS - 1_001);
   await h.watchdog.check();
-  assert.equal(h.raised.length, 1);
-  h.at(2 * BOT_RUN_STALL_MS + 1_000);
+  assert.deepEqual(h.stopped, []);
+  h.at(2 * BOT_RUN_STALL_MS - 1_000);
   await h.watchdog.check();
-  assert.equal(h.raised.length, 2, "asked again after the snoozed window");
+  assert.deepEqual(h.stopped, ["bot-1"]);
 });
 
 test("progress resets the timer", async () => {
@@ -120,45 +106,31 @@ test("a stall mark is consumed once", () => {
 
 test("time asleep is not a stall: a run gets a fresh window when the computer wakes", async () => {
   const routine = setup("routine");
-  const attended = setup("attended");
-  for (const run of [routine, attended]) {
-    // Last progress at 0, then the lid closes for 15 minutes.
-    run.at(15 * 60_000);
-    run.wakeFromSleep();
-    await run.watchdog.check();
-  }
-  assert.deepEqual([...routine.stopped, ...attended.raised], [], "the first check after wake does not fire");
+  // Last progress at 0, then the lid closes for 15 minutes.
+  routine.at(15 * 60_000);
+  routine.wakeFromSleep();
+  await routine.watchdog.check();
+  assert.deepEqual(routine.stopped, [], "the first check after wake does not fire");
 
   // Still no progress a full window after waking: now it is a real stall.
-  for (const run of [routine, attended]) {
-    await run.advance(15 * 60_000 + BOT_RUN_STALL_MS);
-    await run.watchdog.check();
-  }
+  await routine.advance(15 * 60_000 + BOT_RUN_STALL_MS);
+  await routine.watchdog.check();
   assert.deepEqual(routine.stopped, ["bot-1"]);
-  assert.deepEqual(attended.raised, ["bot-1"]);
 });
 
 test("a long gap between checks counts as sleep even when the system reports no wake", async () => {
   const routine = setup("routine");
-  const attended = setup("attended");
-  for (const run of [routine, attended]) {
-    // Checked every minute, then the timer goes quiet for 15 minutes.
-    await run.advance(3 * 60_000);
-    await run.watchdog.check();
-    run.at(18 * 60_000);
-    await run.watchdog.check();
-  }
-  assert.deepEqual([...routine.stopped, ...attended.raised], [], "the first check after the gap does not fire");
+  // Checked every minute, then the timer goes quiet for 15 minutes.
+  await routine.advance(3 * 60_000);
+  await routine.watchdog.check();
+  routine.at(18 * 60_000);
+  await routine.watchdog.check();
+  assert.deepEqual(routine.stopped, [], "the first check after the gap does not fire");
 
-  for (const run of [routine, attended]) {
-    await run.advance(18 * 60_000 + BOT_RUN_STALL_MS - 1);
-    await run.watchdog.check();
-  }
-  assert.deepEqual([...routine.stopped, ...attended.raised], [], "the window restarts at the wake");
-  for (const run of [routine, attended]) {
-    run.at(18 * 60_000 + BOT_RUN_STALL_MS);
-    await run.watchdog.check();
-  }
+  await routine.advance(18 * 60_000 + BOT_RUN_STALL_MS - 1);
+  await routine.watchdog.check();
+  assert.deepEqual(routine.stopped, [], "the window restarts at the wake");
+  routine.at(18 * 60_000 + BOT_RUN_STALL_MS);
+  await routine.watchdog.check();
   assert.deepEqual(routine.stopped, ["bot-1"]);
-  assert.deepEqual(attended.raised, ["bot-1"]);
 });

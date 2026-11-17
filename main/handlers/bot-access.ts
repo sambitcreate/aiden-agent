@@ -8,7 +8,7 @@ import { parseBotNoticeAcknowledgement } from "../../renderer/shared/bot-capabil
 import type { BotApplicationService } from "../services/bot-application-service.js";
 import { normalizeTelegramProfileName, telegramBotNoticeAudienceId } from "../services/telegram/telegram-profile-config.js";
 import { botAccessUpdateRendererError, botCreateRendererError } from "./bot-renderer-errors.js";
-import { parseBotAccessUpdateInput, parseBotCreateWithAccess, parseBotId } from "./bot-params.js";
+import { parseBotAccessUpdateInput, parseBotCreateWithAccess, parseBotId, parseBotModelThinkingLevelsInput } from "./bot-params.js";
 
 export interface BotAccessTelegramProfile {
   name: string;
@@ -23,6 +23,7 @@ export interface BotAccessHandlerDependencies<Event> {
     | "acknowledgeNotice"
     | "createBot"
     | "capabilityCatalog"
+    | "modelThinkingLevels"
     | "getBotAccess"
     | "botWebSearchEnabled"
     | "modelSelection"
@@ -71,6 +72,15 @@ export function registerBotAccessHandlers<Event>(deps: BotAccessHandlerDependenc
       assertCurrent,
     );
   });
+  // Onboarding's Start using Aiden: accepts Full access for the first Bot
+  // unless the person chose to review access first, checked in the same step
+  // as the write so a review-first choice is never overwritten.
+  deps.handle("bots:acceptFirstBotAccess", async (event, input: unknown) => {
+    const assertCurrent = ownerCheck(event);
+    const acknowledgement = parseBotNoticeAcknowledgement(input);
+    if (acknowledgement.decision !== "continue_full") throw new Error("Invalid first Bot access acceptance.");
+    return service.acknowledgeNotice(desktopAudienceId, acknowledgement, assertCurrent, { keepReviewFirst: true });
+  });
   deps.handle("bots:getTelegramAccessNotice", async (_event, profile: unknown) => {
     const principal = await pairedTelegramAudience(profile);
     return service.noticeStatus(principal.audienceId);
@@ -101,6 +111,8 @@ export function registerBotAccessHandlers<Event>(deps: BotAccessHandlerDependenc
         audienceId: desktopAudienceId,
         bot: parsed.bot,
         access: parsed.access,
+        // The desktop's one-field New bot.
+        source: "new",
       });
     } catch (error) {
       deps.warn("Bot creation failed.", error);
@@ -110,6 +122,10 @@ export function registerBotAccessHandlers<Event>(deps: BotAccessHandlerDependenc
   deps.handle("bots:getCapabilityCatalog", async (_event, id: unknown) =>
     service.capabilityCatalog(desktopAudienceId, id === undefined ? undefined : parseBotId(id)),
   );
+  deps.handle("bots:getModelThinkingLevels", async (_event, input: unknown) => {
+    const { botId, providerId, modelId } = parseBotModelThinkingLevelsInput(input);
+    return service.modelThinkingLevels(desktopAudienceId, botId, providerId, modelId);
+  });
   deps.handle("bots:getBotAccess", async (_event, id: unknown) => {
     const botId = parseBotId(id);
     const [access, modelSelection, visionModelSelection, webSearchEnabled] = await Promise.all([

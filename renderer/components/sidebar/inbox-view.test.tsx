@@ -345,6 +345,7 @@ test("a row that leaves Needs you lingers 400ms before it moves", () => {
 /** A local Bot's rows, built by the sidebar's own rule; `seenAt` is the newest reply marked read. */
 function botRows(state: { needsYou?: boolean; lastReplyAt?: number | null; seenAt?: number }) {
   return botInboxRows({
+    platform: "darwin",
     bots: [{
       bot: botFixture({ id: "b1", name: "Trip Planner" }),
       activityAt: NOW - 5 * MINUTE,

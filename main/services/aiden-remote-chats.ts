@@ -1355,7 +1355,7 @@ function requireRevision(expected: string, chat: Chat): void {
 
 /** What an older Mac sees when it sends to a Bot through the workspace chat routes. */
 export const AIDEN_REMOTE_LEGACY_BOT_TURN_MESSAGE =
-  "Update Aiden on this device to chat with this Bot. Bots now keep one conversation on the Mac that runs them.";
+  "Update Aiden on this device to chat with this Bot. Bots now keep one conversation on the computer that runs them.";
 
 export class AidenRemoteChatService {
   private readonly idempotency: AidenIdempotencyLedger;
@@ -1718,7 +1718,7 @@ export class AidenRemoteChatService {
     const { throughMessageId } = parseMarkRead(input);
     const readMarkers = this.options.readMarkers;
     if (!readMarkers) {
-      throw new AidenRemoteServiceError("not_found", "Chat read state is unavailable on this host.", 404);
+      throw new AidenRemoteServiceError("not_found", "Chat read state is not available on this computer.", 404);
     }
     await readMarkers.markRead(chatId, throughMessageId);
   }
@@ -1795,7 +1795,7 @@ export class AidenRemoteChatService {
     if (result.imageArtifactRecoveryUnavailable) {
       throw new AidenRemoteServiceError(
         "operation_in_progress",
-        "This chat is waiting for image-artifact storage repair on the desktop.",
+        "This chat is waiting for image-artifact storage repair on your computer.",
         409,
         true,
       );
@@ -2302,7 +2302,7 @@ export class AidenRemoteChatService {
             if (error instanceof AidenRemoteServiceError) throw error;
             throw new AidenRemoteServiceError(
               "git_capability_denied",
-              "Aiden couldn't make the worktree on your Mac. Try again, or send without New worktree.",
+              "Aiden couldn't make the worktree on your computer. Try again, or send without New worktree.",
               409,
             );
           }
@@ -2404,7 +2404,7 @@ export class AidenRemoteChatService {
       throw new AidenRemoteServiceError("invalid_request", "The recording identifier is invalid.", 400);
     }
     const chat = await this.chat(chatId);
-    const unavailable = () => new AidenRemoteServiceError("not_found", "This recording is no longer on the Mac.", 404);
+    const unavailable = () => new AidenRemoteServiceError("not_found", "This recording is no longer on your computer.", 404);
     const named = chat.messages.some((message) =>
       parseGenerationTimeline(message.timeline, message.content.length)?.steps.some(
         (step) => isToolStep(step) && step.recording?.id === recordingId,
@@ -2449,7 +2449,7 @@ export class AidenRemoteChatService {
         });
       } catch (error) {
         if (error instanceof AidenRemoteServiceError && error.code === "invalid_request") {
-          throw new AidenRemoteServiceError("invalid_request", "That provider and model are not available on this Mac.", 400);
+          throw new AidenRemoteServiceError("invalid_request", "That provider and model are not available on this computer.", 400);
         }
         throw error;
       }
@@ -2499,7 +2499,7 @@ export class AidenRemoteChatService {
     }
     const parsed = parseFork(input);
     if (parsed.summary && !this.supportsForkSummaries) {
-      throw new AidenRemoteServiceError("not_found", "Fork with summary is unavailable on this host.", 404);
+      throw new AidenRemoteServiceError("not_found", "Fork with summary is not available on this computer.", 404);
     }
     try {
       return await this.executeIdempotent(
@@ -2578,7 +2578,7 @@ export class AidenRemoteChatService {
     const tooLarge = () =>
       new AidenRemoteServiceError(
         "payload_too_large",
-        "This chat is too large to fork from a paired device. Fork it on the Mac.",
+        "This chat is too large to fork from a paired device. Fork it on your computer.",
         413,
       );
     if (Buffer.byteLength(JSON.stringify(result), "utf8") > AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES) {

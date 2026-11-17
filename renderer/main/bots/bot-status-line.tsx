@@ -1,6 +1,8 @@
 // The one calm line a working Bot shows (spec §5, §6, §14): an activity mark
 // and a word, a hover/focus peek at the current step on the Mac, elapsed time
-// after 20 seconds, and a still-going note after 2 minutes. Stop lives only in
+// after 20 seconds, and a still-going note after 2 minutes. When nothing has
+// moved for 10 minutes the note says so instead, with no card or banner: the
+// person decides whether to stop, and nothing asks them to. Stop lives only in
 // the composer, beside Queue, as it does on phones. Screen
 // readers hear it through `BotStatusAnnouncer`, a live region the chat keeps
 // mounted while the line comes and goes, at most once every 2 seconds.
@@ -11,6 +13,7 @@ import { AidenActivityMark } from "../../components/aiden-activity-mark";
 import { Text } from "../../components/ui";
 import {
   BOT_STILL_GOING_AFTER_MS,
+  BOT_TAKING_LONGER_AFTER_MS,
   botActivityDisplay,
   botElapsedLabel,
   nextBotAnnouncement,
@@ -19,6 +22,9 @@ import {
 import type { BotLiveActivity } from "../../shared/bot-live";
 import type { BotChatActivityWording } from "../../shared/bots";
 import { pauseWhenUnseen } from "../../lib/offscreen-pause";
+
+export const BOT_STILL_GOING_TEXT = "Still going. I'll message you when it's done.";
+export const BOT_TAKING_LONGER_TEXT = "This is taking longer than usual. You can stop it from the message box.";
 
 const SILENT: BotAnnouncement = { text: "", at: Number.NEGATIVE_INFINITY };
 
@@ -81,10 +87,13 @@ export function BotStatusLine({
   activity,
   wording,
   now: fixedNow,
+  quietSince,
   onLayoutChange,
 }: {
   activity: BotLiveActivity;
   wording: BotChatActivityWording;
+  /** When the turn last showed any progress (an entry, streamed text, a step). Defaults to its start. */
+  quietSince?: number;
   /** A fixed clock (tests and previews); otherwise the line ticks each second. */
   now?: number;
   /** Reports which optional parts are showing, so a pinned scroll view can follow the height change. */
@@ -95,9 +104,10 @@ export function BotStatusLine({
   const now = fixedNow ?? clockNow;
   const elapsed = botElapsedLabel(activity.startedAt, now);
   // Waiting on the person, or already stopping: "I'll message you when it's done" would mislead.
-  const stillGoing =
-    now - activity.startedAt >= BOT_STILL_GOING_AFTER_MS && display.phase !== "waiting" && display.phase !== "stopping";
-  const layoutKey = `${elapsed ? "e" : ""}${stillGoing ? "s" : ""}`;
+  const working = display.phase !== "waiting" && display.phase !== "stopping";
+  const stillGoing = working && now - activity.startedAt >= BOT_STILL_GOING_AFTER_MS;
+  const takingLonger = stillGoing && now - Math.max(quietSince ?? activity.startedAt, activity.startedAt) >= BOT_TAKING_LONGER_AFTER_MS;
+  const layoutKey = `${elapsed ? "e" : ""}${stillGoing ? "s" : ""}${takingLonger ? "l" : ""}`;
   React.useEffect(() => {
     onLayoutChange?.(layoutKey);
     return () => onLayoutChange?.("");
@@ -125,7 +135,7 @@ export function BotStatusLine({
       </div>
       {stillGoing ? (
         <Text as="p" variant="small" color="tertiary" role="note" className="py-1 text-center">
-          Still going. I'll message you when it's done.
+          {takingLonger ? BOT_TAKING_LONGER_TEXT : BOT_STILL_GOING_TEXT}
         </Text>
       ) : null}
     </div>

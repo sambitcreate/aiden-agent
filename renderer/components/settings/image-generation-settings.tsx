@@ -49,6 +49,8 @@ import {
   type ImageModelRef,
 } from "../../shared/image-generation/types";
 
+import { useAppCapabilities } from "../../lib/app-capabilities";
+import { localComputerNoun } from "../../shared/computer-noun";
 /** Rows rendered before "Show more"; fetched catalogs can hold hundreds. */
 const MODEL_ROW_PAGE = 200;
 const AUTOMATIC = "__automatic__";
@@ -83,6 +85,7 @@ function keyStatus(provider: ImageGenerationProviderView): {
 }
 
 export function ImageGenerationSettings() {
+  const { platform } = useAppCapabilities();
   const [state, setState] = React.useState<ImageGenerationState | null>(null);
   const [loadError, setLoadError] = React.useState(false);
   // Keys of the actions in flight, e.g. `fetch:fal`, `key:replicate`, `model:fal::id`.
@@ -327,7 +330,7 @@ export function ImageGenerationSettings() {
           if (!open) setConfirmRemove(null);
         }}
         title={`Remove the ${removing} image key?`}
-        description={`Aiden deletes the encrypted key from this Mac. Image generation through ${removing} stops until you add a key again. Your chat providers aren’t affected.`}
+        description={`Aiden deletes the encrypted key from this ${localComputerNoun(platform)}. Image generation through ${removing} stops until you add a key again. Your chat providers aren’t affected.`}
         confirmLabel="Remove key"
         confirmVariant="destructive"
         busy={confirmRemove !== null && pending.has(`key:${confirmRemove}`)}
@@ -397,6 +400,7 @@ function ProviderSetupDialog({
   onFetch: () => void;
   returnFocus: () => HTMLElement | null;
 }) {
+  const { platform } = useAppCapabilities();
   const [replacing, setReplacing] = React.useState(false);
   const [draft, setDraft] = React.useState("");
   const keyHeadingId = React.useId();
@@ -433,7 +437,7 @@ function ProviderSetupDialog({
           <span className="truncate">{provider.name}</span>
         </span>
       }
-      description="Image keys are encrypted on this Mac and used only for image generation, never for chat."
+      description={`Image keys are encrypted on this ${localComputerNoun(platform)} and used only for image generation, never for chat.`}
       confirmHidden
     >
       <div className="grid gap-5">

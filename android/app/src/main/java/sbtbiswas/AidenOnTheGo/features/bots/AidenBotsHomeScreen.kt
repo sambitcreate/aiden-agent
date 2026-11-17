@@ -351,6 +351,7 @@ private fun AidenBotsHomeContent(
     )
 
     val presets by viewModel.presets.collectAsStateWithLifecycle()
+    val presetNotice by viewModel.presetNotice.collectAsStateWithLifecycle()
     var startingPresetId by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(client, connectionState, serverInfo) {
         if (client != null && connectionState == AidenConnectionState.CONNECTED) viewModel.loadPresets()
@@ -448,11 +449,12 @@ private fun AidenBotsHomeContent(
                     AidenMeetYourFirstBot(
                         presets = presets,
                         startingPresetId = startingPresetId,
+                        notice = presetNotice,
                         onStartChat = { preset ->
                             if (startingPresetId != null) return@AidenMeetYourFirstBot
                             startingPresetId = preset.id
                             scope.launch {
-                                val botId = viewModel.startPreset(preset.id)
+                                val botId = viewModel.startPreset(preset)
                                 startingPresetId = null
                                 if (botId != null) onNavigateToBotChat(botId)
                             }
@@ -515,7 +517,12 @@ private fun AidenBotsHomeContent(
             saveHost = remember(advancedClient) { coordinator.botSaveHost() },
             onSaveSettled = { viewModel.loadBots(force = true) },
             onSaveFailed = coordinator::presentError,
-            chatActivityAvailable = aidenBotShowsChatActivity(serverInfo, hasBaseline = true, cachedSupport = coordinator.cachedBotActivitySupported),
+            chatActivityAvailable = aidenBotShowsChatActivity(
+                serverInfo,
+                hasBaseline = true,
+                cachedSupport = coordinator.cachedBotActivitySupported,
+                offersBotUx = coordinator.installationStore.activeInstallation?.offersBotUx == true
+            ),
             chatActivityHost = remember(advancedClient) { coordinator.botChatActivityHost() }
         )
     }

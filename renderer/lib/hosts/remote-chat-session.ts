@@ -174,7 +174,7 @@ export class RemoteChatSession {
     this.queue = this.queue
       .then(() => (this.disposed ? undefined : task()))
       .catch((error: unknown) => {
-        if (!this.disposed) this.update({ error: error instanceof Error ? error.message : "The host request failed." });
+        if (!this.disposed) this.update({ error: error instanceof Error ? error.message : "The request to that computer failed." });
       });
     return this.queue;
   }
@@ -211,7 +211,7 @@ export class RemoteChatSession {
 
   private async refreshNewest(): Promise<void> {
     if (!this.adapter.capabilities().has("messagesWindow")) {
-      this.update({ error: "This host does not share chat transcripts with this Mac." });
+      this.update({ error: "That computer does not share chat transcripts with this one." });
       return;
     }
     const atRequest = this.snapshot.run;

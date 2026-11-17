@@ -388,7 +388,7 @@ export class PeerDiscovery {
         : "";
     session.found.set(id, {
       id,
-      name: name || "Aiden desktop",
+      name: name || "Aiden computer",
       ...(health.platform === "mac" || health.platform === "linux"
         ? { platform: health.platform }
         : {}),

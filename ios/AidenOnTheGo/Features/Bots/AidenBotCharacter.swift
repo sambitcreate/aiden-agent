@@ -141,12 +141,13 @@ enum AidenBotDeletion {
         canWriteBots && isConnected && hostFeatures?.contains(hostFeature) == true
     }
 
+    /// `machine` is the Bot's own machine; nil asks the selected one.
     @MainActor
-    static func isAvailable(coordinator: AidenRemoteCoordinator) -> Bool {
+    static func isAvailable(coordinator: AidenRemoteCoordinator, machine: String?) -> Bool {
         isAvailable(
-            hostFeatures: coordinator.server?.features,
-            canWriteBots: coordinator.installationStore.activeInstallation?.canWriteBots == true,
-            isConnected: coordinator.connectionState == .connected
+            hostFeatures: coordinator.botServer(on: machine)?.features,
+            canWriteBots: coordinator.botInstallation(on: machine)?.canWriteBots == true,
+            isConnected: coordinator.botConnectionState(on: machine) == .connected
         )
     }
 
@@ -156,9 +157,10 @@ enum AidenBotDeletion {
     static func delete(
         botID: String,
         revision: String,
-        coordinator: AidenRemoteCoordinator
+        coordinator: AidenRemoteCoordinator,
+        machine: String?
     ) async throws {
-        let context = try coordinator.requestContext()
+        let context = try coordinator.botContext(on: machine)
         do {
             try await coordinator.remoteClient(for: context).deleteBot(id: botID, revision: revision)
         } catch {
@@ -172,11 +174,15 @@ enum AidenBotDeletion {
     /// it. A Bot that is already gone (deleted on another device) answers 404,
     /// which counts as deleted: it is forgotten here and its row drops.
     @MainActor
-    static func deleteListed(botID: String, coordinator: AidenRemoteCoordinator) async throws {
-        let context = try coordinator.requestContext()
+    static func deleteListed(
+        botID: String,
+        coordinator: AidenRemoteCoordinator,
+        machine: String?
+    ) async throws {
+        let context = try coordinator.botContext(on: machine)
         do {
             let detail = try await coordinator.remoteClient(for: context).bot(id: botID)
-            try await delete(botID: detail.id, revision: detail.revision, coordinator: coordinator)
+            try await delete(botID: detail.id, revision: detail.revision, coordinator: coordinator, machine: machine)
         } catch where isAlreadyGone(error) {
             await forget(botID: botID, context: context, coordinator: coordinator)
         } catch {
@@ -197,7 +203,7 @@ enum AidenBotDeletion {
         context: AidenRemoteRequestContext,
         coordinator: AidenRemoteCoordinator
     ) async {
-        guard coordinator.isCurrent(context) else { return }
+        guard coordinator.holds(context) else { return }
         AidenBotRoutineControlStore.shared.purge(instanceID: context.instanceId, deviceID: context.deviceId, botID: botID)
         AidenBotPeerControlStore.shared.purge(instanceID: context.instanceId, deviceID: context.deviceId, botID: botID)
         _ = await coordinator.withRetainedInstallationData(for: context) {
@@ -210,6 +216,10 @@ enum AidenBotDeletion {
                 instanceId: context.instanceId,
                 deviceId: context.deviceId,
                 botId: botID
+            )
+            await AidenChatDraftStore.shared.remove(
+                instanceId: context.instanceId,
+                chatId: AidenBotChatRoute.pathValue(botID: botID)
             )
         }
     }

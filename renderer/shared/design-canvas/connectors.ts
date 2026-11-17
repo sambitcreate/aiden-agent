@@ -125,11 +125,15 @@ export function syncConnectors(doc: DesignCanvas): DesignCanvas {
   return changed ? { ...doc, frames: next } : doc;
 }
 
+const MAX_CONNECTOR_COORD = 1_000_000;
+const clampEndCoord = (value: number) =>
+  Math.min(MAX_CONNECTOR_COORD, Math.max(-MAX_CONNECTOR_COORD, Math.round(value)));
+
 /** A connector dragged by `dx`, `dy`: its free ends move, and ends on frames stay on them. */
 export function translateConnector(frame: DesignFrame, dx: number, dy: number): DesignFrame {
   if (!frame.ends || (dx === 0 && dy === 0)) return frame;
   const ends = frame.ends.map((end) =>
-    end.frameId !== undefined ? end : { x: Math.round(end.x + dx), y: Math.round(end.y + dy) },
+    end.frameId !== undefined ? end : { x: clampEndCoord(end.x + dx), y: clampEndCoord(end.y + dy) },
   ) as [DesignConnectorEnd, DesignConnectorEnd];
   return { ...frame, ends };
 }
