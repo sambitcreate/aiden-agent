@@ -45,3 +45,5 @@ Workspace changes suspend polling and interrupt check attempts before draining j
 A check whose process cleanup cannot be confirmed returns to waiting with its prior attempt count and posts an informational notice without waking the agent. Workspace cleanup still fails until the group exits.
 
 A failed check-ledger admission keeps the shell gated and leaves the check waiting without a wake or a spent attempt. After verified exit, a failed ledger release is logged and the command keeps its actual result. The stale durable entry is rechecked during recovery.
+
+2026-11-11 (W9 phase A, `claude/pr-follow-event-nudges`): pull request follows take debounced nudges (push, `gh` command, opening the list, focus, wake, online), probe with ETags so an unchanged look skips the full read, and back off quiet pull requests to 30 minutes. Details and the phase B webhook spike notes: `pr-follow-event-nudges.md`.

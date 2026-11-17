@@ -10,6 +10,8 @@ import {
   waitForToastsToClear,
 } from "./fixtures";
 
+import { observeNextBrowserMenu } from "./browser-native-menu";
+
 test.use({ workspaceSeed: true });
 
 test("workspace launcher opens tools on demand and returns after closing the last tab", async ({
@@ -303,6 +305,43 @@ test("terminal docking retains the same live surface, screen state and shell", a
   await expect(drawer.locator("canvas")).toHaveCount(2);
 });
 
+test("terminal screen reaches every edge of its area in both placements", async ({
+  aiden,
+}) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+  await page
+    .getByRole("button", { name: "Show terminal", exact: true })
+    .click();
+  const drawer = page.locator(".terminal-drawer");
+  await expect(drawer.getByRole("log", { name: "Terminal output" })).toHaveText(/\S/u);
+  // A short canvas leaves an empty band below it, and a tall one hides its last
+  // rows past the drawer edge: either way the shell's grid is not what's visible.
+  const edgeGaps = () =>
+    drawer.evaluate((surface) => {
+      const area = surface.getBoundingClientRect();
+      const header = surface.querySelector("header")!.getBoundingClientRect();
+      const screen = surface.querySelector("canvas")!.getBoundingClientRect();
+      return {
+        top: Math.round(screen.top - header.bottom),
+        right: Math.round(area.right - screen.right),
+        bottom: Math.round(area.bottom - screen.bottom),
+        left: Math.round(screen.left - area.left),
+      };
+    });
+  const flush = { top: 0, right: 0, bottom: 0, left: 0 };
+  await expect.poll(edgeGaps).toEqual(flush);
+  // With no saved height, the first open uses the default, not the minimum.
+  await expect
+    .poll(() => drawer.evaluate((surface) => surface.getBoundingClientRect().height))
+    .toBe(232);
+  await drawer
+    .getByRole("button", { name: "Move terminal to side panel" })
+    .click();
+  await expect(drawer).toHaveAttribute("data-placement", "side");
+  await expect.poll(edgeGaps).toEqual(flush);
+});
+
 test("context is available with the composer meter hidden and preference survives restart", async ({
   aiden,
 }) => {
@@ -456,8 +495,11 @@ test("browser creation and background selection preserve address focus while str
   await expect(tabs.first()).toBeFocused();
   await page.keyboard.press("End");
   await expect(tabs.last()).toBeFocused();
+  const tabMenu = await observeNextBrowserMenu(aiden.app);
+  const firstTitle = (await tabs.first().innerText()).trim();
   await panel.getByRole("button", { name: "Open tabs", exact: true }).click();
-  await page.getByRole("menuitem").first().click();
+  await tabMenu.waitForOpen();
+  await tabMenu.close(firstTitle);
   await expect(tabs.first()).toBeFocused();
   await address.focus();
   await page.evaluate(async (workspaceId) => {
