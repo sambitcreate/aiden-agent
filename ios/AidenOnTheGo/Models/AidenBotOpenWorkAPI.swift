@@ -76,16 +76,16 @@ enum AidenOpenWorkErrorCode: String, Codable, Sendable {
     var explanation: String {
         switch self {
         case .invalid: "Review the title, note and state before saving."
-        case .notFound, .deleted: "This item or Bot was removed on your host. Your draft is kept."
-        case .stale: "This item changed on your host. Your draft is kept; review the saved version before trying again."
+        case .notFound, .deleted: "This item or Bot was removed on your computer. Your draft is kept."
+        case .stale: "This item changed on your computer. Your draft is kept; review the saved version before trying again."
         case .activeFull: "This Bot already has 64 active items. Finish or dismiss an item before adding another."
-        case .historyFull: "This Bot’s retained history is full. Review Open work on your host."
-        case .receiptsFull: "The host is retaining earlier changes for safe retry and Undo. Try again later."
-        case .mutationConflict: "This request identity is already bound to another change. Inspect Open work on your host."
+        case .historyFull: "This Bot’s retained history is full. Review Open work on your computer."
+        case .receiptsFull: "The computer is retaining earlier changes for safe retry and Undo. Try again later."
+        case .mutationConflict: "This request identity is already bound to another change. Inspect Open work on your computer."
         case .undoConflict: "This item changed after that action. Undo won’t overwrite the newer change."
         case .undoExpired: "This Undo has expired. The saved item has not changed."
-        case .mixedInputs: "This run includes other inputs. Stop it on your host to avoid interrupting unrelated work."
-        case .unavailable: "The host may have saved this request. Check its state or retry the same request."
+        case .mixedInputs: "This run includes other inputs. Stop it on your computer to avoid interrupting unrelated work."
+        case .unavailable: "The computer may have saved this request. Check its state or retry the same request."
         }
     }
 }

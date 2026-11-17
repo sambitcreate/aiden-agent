@@ -219,7 +219,7 @@ export async function createCliRemote(agentDir: string, chats: ReturnType<typeof
         // A phone-owned approval settles through the stream service so its device records stay consistent.
         approve: ({ chatId, approvalId, decision, scope }) => {
           // This host keeps no remembered approvals, so only a one-time decision applies.
-          if (scope !== undefined && scope !== "once") throw new AidenRemoteServiceError("invalid_request", "This host only applies one-time approval decisions.", 400);
+          if (scope !== undefined && scope !== "once") throw new AidenRemoteServiceError("invalid_request", "This computer only applies one-time approval decisions.", 400);
           return api.streams.respondApprovalFromHost(chatId, approvalId, decision) || chats.llmClient.approveAsHost(approvalId, decision);
         },
         // CLI runs ask no questions and take no input while running.

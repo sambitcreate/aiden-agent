@@ -22,6 +22,8 @@ import type { RegisteredSkill, SkillRegistrySnapshot } from "../../skill-registr
 import { skillToolKey } from "../../skill-registry-core.js";
 import type { BotHandoffAnswer } from "../../../../renderer/shared/bot-handoffs.js";
 import type { BotRule } from "../../../../renderer/shared/bot-rules.js";
+import type { ApprovalRule } from "../../../../renderer/shared/approval-rules.js";
+import type { ApprovalMode } from "../../../../renderer/shared/approval-mode.js";
 import type {
   BotApprovalRequest,
   BotExtensionDeps,
@@ -34,6 +36,7 @@ import {
   type BotAdmission,
   type BotAllowListPort,
   type BotToolAssembly,
+  type BotToolAssemblyPorts,
   type BotLiveApproval,
   type BotToolCandidate,
 } from "../bot-tool-assembly.js";
@@ -268,8 +271,14 @@ export interface AssemblyDepsOptions {
   /** Answers rule hand-off cards. Absent: no one to ask (rule hand-offs block). */
   requestHandoff?: (request: BotRuleHandoffRequest) => Promise<BotHandoffAnswer>;
   botName?: string;
-  /** Settings → Bots & Approvals: routine runs go ahead without asking, read on every call. Absent: no port. */
+  /** Settings → Approvals → Advanced: routine runs go ahead without asking, read on every call. Absent: no port. */
   routinesGoAhead?: () => boolean;
+  /** Settings → Approvals' rules, read on every call; a throw is an unreadable rule book. Absent: no port. */
+  pageRules?: () => readonly ApprovalRule[];
+  /** Settings → Approvals' mode, read on every call. Absent: no port (Ask). */
+  approvalMode?: () => ApprovalMode;
+  /** The Auto judge. Absent: no port (Auto shows the card). */
+  judge?: NonNullable<BotToolAssemblyPorts["judge"]>;
 }
 
 export interface AssemblyDeps extends BotExtensionDeps {
@@ -311,6 +320,9 @@ export function assemblyDeps(state: AssemblyState, options: AssemblyDepsOptions)
     ...(options.rules === undefined ? {} : { rules: async () => options.rules!() }),
     ...(options.botName === undefined ? {} : { botName: async () => options.botName }),
     ...(options.routinesGoAhead === undefined ? {} : { routinesGoAhead: async () => options.routinesGoAhead!() }),
+    ...(options.pageRules === undefined ? {} : { pageRules: async () => options.pageRules!() }),
+    ...(options.approvalMode === undefined ? {} : { approvalMode: async () => options.approvalMode!() }),
+    ...(options.judge === undefined ? {} : { judge: options.judge }),
   });
   const deps: AssemblyDeps = {
     approvals: [],

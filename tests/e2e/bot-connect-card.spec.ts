@@ -63,19 +63,18 @@ test("a connect card for an app this Bot's access leaves out adds it only on the
   }, bot);
 
   await page.getByRole("button", { name: "Bots", exact: true }).click();
-  const card = page.getByRole("group", { name: "Add Notion to this Bot" });
+  // One Connect card, even for an app connected in Aiden that this Bot's access leaves out.
+  const card = page.getByRole("group", { name: "Connect Notion" });
   await expect(card).toBeVisible();
   await expect(card).toContainText("So I can file your meeting notes in Notion.");
-  await expect(card).toContainText("Notion is connected in Aiden, but this Bot’s access doesn’t include it yet.");
-  await expect(card.getByRole("button", { name: "Connect Notion" })).toHaveCount(0);
   // Showing the card grants nothing.
   expect(await aiden.app.evaluate(() => (globalThis as unknown as { connectCardE2e: { grants: unknown[] } }).connectCardE2e.grants)).toEqual([]);
 
-  await card.getByRole("button", { name: "Add Notion to this Bot" }).click();
+  await card.getByRole("button", { name: "Connect Notion" }).click();
   await expect
     .poll(() => aiden.app.evaluate(() => (globalThis as unknown as { connectCardE2e: { grants: unknown[] } }).connectCardE2e.grants))
     .toEqual([["bot-notes", "notion"]]);
   const settled = page.getByRole("group", { name: "Notion", exact: true });
   await expect(settled).toContainText("Connected");
-  await expect(page.getByRole("button", { name: "Add Notion to this Bot" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Connect Notion" })).toHaveCount(0);
 });

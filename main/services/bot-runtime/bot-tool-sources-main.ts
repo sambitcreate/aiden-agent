@@ -2,6 +2,7 @@ import { botMessageChainOf, botMessagingEnabled } from "../../../renderer/shared
 import { botMessages, botMessageRoster } from "../bot-messages/messages-main.js";
 import { messageBotCandidate } from "../bot-messages/candidate.js";
 import { isBotMessageRequestId } from "../../../renderer/shared/bot-messages.js";
+import { botFullComputerLabel } from "../../../renderer/shared/bot-capabilities.js";
 // Production candidate tools for durable Bot turns, built by the same legacy
 // factories and gates `llm-client.ts` used for Bot generations:
 //
@@ -134,7 +135,7 @@ export async function botFileLocations(admission: BotAdmission): Promise<BotFile
     });
   }
   if (authority.files.fullMac) {
-    locations.push({ id: authority.files.fullMac.sourceId, label: "Full Mac", root: "/" });
+    locations.push({ id: authority.files.fullMac.sourceId, label: botFullComputerLabel(process.platform), root: "/" });
   }
   for (const { device, inode, ...location } of await resolveBotRuntimeApprovedRoots(authority)) {
     locations.push({ ...location, expectedIdentity: { device, inode } });
@@ -499,6 +500,13 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       const peers = await import("../bot-peers/host-main.js");
       const { botPeerCandidate } = await import("../bot-peers/tool.js");
       tools.push(botPeerCandidate(botId, {service:peers.botPeerHost,source:peers.botPeerToolSource,wake:peers.wakeBotPeers}));
+      const settings = await import("../bot-settings-changes/service-main.js");
+      const { updateBotCandidate, updateBotOwnerStarted } = await import("../bot-settings-changes/tool.js");
+      tools.push(updateBotCandidate(botId, {
+        service: settings.botSettingsChanges,
+        ownerStarted: async (call) =>
+          updateBotOwnerStarted(botExecutionScope(botId)?.requestIds, call.runRequestIds ? await call.runRequestIds() : undefined),
+      }));
       const openWork = await import("../bot-open-work/service-main.js");
       tools.push(botOpenWorkCandidate(botId, { service: openWork.botOpenWork, routineOrigin: openWork.resolveBotOpenWorkRoutineOrigin, peerOrigin: peers.botPeerOpenWorkOrigin }));
       // This turn's own authority: Custom access (and any chat reduction) that leaves the app out.

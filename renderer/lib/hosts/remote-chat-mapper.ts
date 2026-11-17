@@ -143,7 +143,7 @@ export function mapRemoteMessagesWindow(value: unknown): RemoteMessagesWindow {
   const chatId = text(input?.chatId);
   const revision = text(input?.revision);
   if (!input || !chatId || !revision || !Array.isArray(input.messages) || typeof input.hasOlder !== "boolean")
-    throw new Error("The host returned an unreadable transcript page.");
+    throw new Error("That computer returned an unreadable transcript page.");
   const providerId = text(input.providerId);
   const modelId = text(input.modelId);
   return {

@@ -70,6 +70,7 @@ export const NATIVE_INVOKE_CHANNELS = {
 
 export const NOTIFICATION_CHANNEL_VALUES = [
   "settings:controls-changed",
+  "chat:approvalRules:changed",
   "app:config-externally-changed",
   "app:command",
   "app:navigate",

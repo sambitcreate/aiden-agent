@@ -298,7 +298,7 @@ export function ComputerUseArt() {
             <ArtIcon icon={MousePointer2} />
           </span>
           <span className="oa-stack" style={{ gap: 3, flex: 1, paddingTop: 1 }}>
-            <span className="oa-strong">Aiden wants to use your computer</span>
+            <span className="oa-strong">Use your Mac with Computer Use?</span>
             <Bar width="86%" tone="soft" />
             <Bar width="58%" tone="soft" />
           </span>
@@ -306,7 +306,7 @@ export function ComputerUseArt() {
         <div className="oa-row" style={{ justifyContent: "flex-end", gap: 5 }}>
           <ArtButton variant="ghost">Deny</ArtButton>
           <ArtButton variant="primary" className="oa-anim-press" style={{ animationDelay: "0.6s" }}>
-            Allow for this chat
+            Allow in this chat
           </ArtButton>
         </div>
       </ArtWindow>

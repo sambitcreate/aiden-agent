@@ -97,9 +97,12 @@ struct AidenBotCacheSegments: Sendable {
 
 /// Device-local Bot cache isolated by public installation identity.
 ///
-/// Every async refresh captures an Activation. Selecting A, then B, then A
-/// creates three different generations, so completion from the first A cannot
-/// publish into the later A activation merely because the instance ID matches.
+/// Every async refresh captures an Activation, and the cache keeps one per
+/// machine, so activating B leaves A's activation current. Activating the same
+/// machine again replaces its activation: selecting A, then B, then A leaves
+/// the first A stale, so its completion cannot publish into the later A
+/// activation merely because the instance ID matches. An activation carries its
+/// own instance and device, so a write can't land under another machine's rows.
 actor AidenBotCache {
     struct Activation: Equatable, Hashable, Sendable {
         fileprivate let instanceId: String
@@ -120,8 +123,13 @@ actor AidenBotCache {
     private let fileManager: FileManager
     private let maximumEnvelopeBytes = 4 * 1_024 * 1_024
     private let maximumAvatarBytes = 4 * 1_048_576
-    private var selectedInstanceId: String?
-    private var selectedDeviceId: String?
+    private struct Retained {
+        let deviceId: String
+        let generation: UInt64
+    }
+
+    /// The live activation of each machine, by instance ID.
+    private var activations: [String: Retained] = [:]
     private var generation: UInt64 = 0
 
     init(root: URL? = nil, fileManager: FileManager = .default) {
@@ -142,21 +150,18 @@ actor AidenBotCache {
     @discardableResult
     func activate(instanceId: String, deviceId: String) -> Activation {
         generation &+= 1
-        selectedInstanceId = instanceId
-        selectedDeviceId = deviceId
+        activations[instanceId] = Retained(deviceId: deviceId, generation: generation)
         return Activation(instanceId: instanceId, deviceId: deviceId, generation: generation)
     }
 
-    func deactivate() {
-        generation &+= 1
-        selectedInstanceId = nil
-        selectedDeviceId = nil
+    /// Ends one machine's activation. Other machines keep theirs.
+    func deactivate(instanceId: String) {
+        activations[instanceId] = nil
     }
 
     func isCurrent(_ activation: Activation) -> Bool {
-        selectedInstanceId == activation.instanceId
-            && selectedDeviceId == activation.deviceId
-            && generation == activation.generation
+        guard let retained = activations[activation.instanceId] else { return false }
+        return retained.deviceId == activation.deviceId && retained.generation == activation.generation
     }
 
     func load(instanceId: String, deviceId: String) -> AidenBotCacheSnapshot? {
@@ -252,7 +257,7 @@ actor AidenBotCache {
     }
 
     /// Merges authoritative segments for an exact retained pairing without
-    /// changing the foreground surface activation. Callers must hold
+    /// changing any machine's activation. Callers must hold
     /// `AidenRemoteCoordinator.withRetainedInstallationData` while using this
     /// entry point so removal or re-pair cannot race the write.
     func mergeAndStore(
@@ -264,13 +269,12 @@ actor AidenBotCache {
         let existing = load(instanceId: instanceId, deviceId: deviceId)
         let merged = segments.applying(to: existing, savedAt: savedAt)
         guard Self.isValid(merged) else { return nil }
-        let activation = Activation(
-            instanceId: instanceId,
-            deviceId: deviceId,
-            generation: generation
-        )
-        let selectedMatches = selectedInstanceId == instanceId && selectedDeviceId == deviceId
-        if selectedMatches {
+        if let retained = activations[instanceId], retained.deviceId == deviceId {
+            let activation = Activation(
+                instanceId: instanceId,
+                deviceId: deviceId,
+                generation: retained.generation
+            )
             guard try write(merged, activation: activation) else { return nil }
             return merged
         }
@@ -399,11 +403,7 @@ actor AidenBotCache {
     }
 
     func purge(instanceId: String) {
-        if selectedInstanceId == instanceId {
-            generation &+= 1
-            selectedInstanceId = nil
-            selectedDeviceId = nil
-        }
+        activations[instanceId] = nil
         try? fileManager.removeItem(at: instanceDirectory(instanceId: instanceId))
     }
 

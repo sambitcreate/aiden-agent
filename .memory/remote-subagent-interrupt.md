@@ -18,7 +18,7 @@ read-only public agent roster.
     200.
   - 404 means the agent is not in the current turn.
   - 409 `operation_stale` means a legacy or unbound run.
-- iOS (`AidenChatFeature.interruptAgent`, `AidenAgentDetailView`) and Android
+- iOS (`AidenChatViewModel.interruptAgent` in `Features/Chat/AidenChatViewModel.swift`, `AidenAgentDetailView`) and Android
   (`AidenChatViewModel.interruptAgent`, `AidenAgentDetailSheet` with
   `AidenAgentStopControl`) show a destructive Stop with confirmation. It appears
   only for non-terminal agents in the current roster, and only when the Mac

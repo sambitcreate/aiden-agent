@@ -236,7 +236,16 @@ test("desktop E2E and unit work are sharded with independent Apple and iOS check
   assert.equal(simulatorTest["continue-on-error"], undefined);
   assert.equal(simulatorResults.if, "failure()");
   assert.equal(simulatorResults.uses, "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02");
-  assert.equal(simulatorResults.with.path, "${{ runner.temp }}/AidenOnTheGoSimulator.xcresult");
+  assert.ok(simulatorTest.run.includes("-skip-testing:AidenOnTheGoUITests"), "the unit run must not launch the UI target");
+  const shellSmoke = jobs.ios.steps.find((step) => step.run?.includes("-only-testing:AidenOnTheGoUITests/AidenShellUITests/testShellLaunchesForEveryScenario"));
+  assert.ok(shellSmoke, "the shell UI smoke step is missing");
+  assert.ok(jobs.ios.steps.indexOf(shellSmoke) > jobs.ios.steps.indexOf(simulatorTest));
+  assert.ok(shellSmoke.run.includes("-resultBundlePath '${{ runner.temp }}/AidenOnTheGoShellUI.xcresult'"));
+  assert.equal(shellSmoke["continue-on-error"], undefined);
+  assert.equal(
+    simulatorResults.with.path.trim(),
+    "${{ runner.temp }}/AidenOnTheGoSimulator.xcresult\n${{ runner.temp }}/AidenOnTheGoShellUI.xcresult",
+  );
   assert.equal(simulatorResults.with["retention-days"], 7);
   // One macOS job builds the production bundles; E2E shards and verify reuse
   // them. Linux shards build their own so they never wait for a macOS slot.
@@ -400,6 +409,25 @@ test("iOS-only PRs retain shipping and TestFlight policy checks when desktop lan
   assert.equal(steps[install].run, "npm ci");
   const registry = readRegistry();
   assert.ok(registry.lanes.some((lane) => lane.preserved.includes("ios-release-policy")));
+});
+
+test("the Xcode 27 iOS check never gates a PR or release builds", async () => {
+  const { jobs } = parse(await readFile(workflowUrl, "utf8"));
+  assert.equal(jobs.ios["runs-on"], "macos-26");
+  assert.equal(jobs.ios.env.DEVELOPER_DIR, "/Applications/Xcode_26.6.app/Contents/Developer");
+  assert.equal(jobs.ios["continue-on-error"], undefined, "the Xcode 26.6 job must stay blocking");
+  const preview = jobs["ios-27"];
+  assert.equal(preview["runs-on"], "xcode-27");
+  assert.equal(preview.env.DEVELOPER_DIR, "/Applications/Xcode_27.1.app/Contents/Developer");
+  assert.equal(preview["continue-on-error"], true, "the preview image must not block");
+  assert.equal(preview.if, jobs.ios.if, "both iOS jobs run for the same changes");
+  assert.ok(!jobs.required.needs.includes("ios-27"), "the required gate must not wait on the preview job");
+  assert.ok(!("ios-27" in REQUIRED_JOB_RULES));
+  const commands = (job) => job.steps.filter((step) => step.run?.includes("xcodebuild")).map((step) => step.run);
+  assert.deepEqual(commands(preview), commands(jobs.ios), "the preview runs the same xcodebuild steps");
+  const upload = (job) => job.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
+  assert.equal(upload(preview).uses, upload(jobs.ios).uses);
+  assert.notEqual(upload(preview).with.name, upload(jobs.ios).with.name, "result artifacts must not collide");
 });
 
 test("foreground Electron smoke is a required package command in desktop verification", async () => {

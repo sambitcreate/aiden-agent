@@ -4,7 +4,8 @@
 //
 // 1. Flush: when `bot_memory` would be offered, an add-only review of the
 //    person's own turns among the entries being compacted (newest 16,000
-//    characters, 20 s, 2 rounds) saves facts that would otherwise only live in
+//    characters, 2 rounds; no new round starts after 20 s, but a request
+//    already sent is never cut off) saves facts that would otherwise only live in
 //    the summary. Routine and self-intro inputs, and what the Bot produced for
 //    them, are left out by each entry's own provenance (`personTurns`), not by
 //    whoever is running now. Any add is recorded as an
@@ -15,7 +16,7 @@
 //    A replay after a crash re-runs it harmlessly: duplicate adds are no-ops.
 // 2. Steered summary: Pi Durable's own summarization prompt plus a focus on
 //    what the person shared and what the Bot promised, through the Bot's own
-//    model. Any failure or timeout returns `undefined`, so Pi summarizes as it
+//    model. Any failure returns `undefined`, so Pi summarizes as it
 //    would have anyway.
 // 3. Refresh: the memory snapshot is marked stale, so the first request after
 //    compaction carries the current memory.
@@ -46,7 +47,6 @@ export const BOT_COMPACTION_FOCUS =
 
 export const BOT_COMPACTION_FLUSH_TIMEOUT_MS = 20_000;
 export const BOT_COMPACTION_FLUSH_MAX_ROUNDS = 2;
-export const BOT_COMPACTION_SUMMARY_TIMEOUT_MS = 60_000;
 /** Pi Durable's default `reserveTokens`. */
 const DEFAULT_RESERVE_TOKENS = 16_384;
 const TOOL_RESULT_MAX_CHARS = 2_000;
@@ -151,7 +151,6 @@ export interface BotCompactionSteeringDeps {
   reserveTokens?: number;
   onError?(botId: string, error: unknown): void;
   flushTimeoutMs?: number;
-  summaryTimeoutMs?: number;
 }
 
 /** What the run being compacted offers, and the conversation its entries come from. */
@@ -224,8 +223,9 @@ export function createBotCompactionSteering(deps: BotCompactionSteeringDeps): Bo
           Math.floor(0.8 * reserve),
           model.model.maxTokens > 0 ? model.model.maxTokens : Number.POSITIVE_INFINITY,
         );
+        // No timer: a summary request cut off after it was sent may still be
+        // billed, and its unknown cost would also refuse Pi's own summary.
         const signal = AbortSignal.any([
-          AbortSignal.timeout(deps.summaryTimeoutMs ?? BOT_COMPACTION_SUMMARY_TIMEOUT_MS),
           lease.signal,
           ...(context.abortSignal === undefined ? [] : [context.abortSignal]),
         ]);

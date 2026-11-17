@@ -5,6 +5,9 @@
  * this Mac, count as $0. Device-local; nothing here leaves the Mac.
  */
 
+import { isAcpHarnessProvider } from "./acp-harness.js";
+import { resolveProviderDeployment, type ProviderDeployment } from "./provider-deployment.js";
+
 /** The amounts the owner can pick, in US dollars. */
 export const SPENDING_LIMIT_PRESETS_USD = [1, 2, 5, 10, 25, 50, 100, 250, 500] as const;
 /** The largest limit a stored setting may hold. */
@@ -61,6 +64,35 @@ export function parseSpendingLimitsSettings(value: unknown): SpendingLimitsSetti
     parsed.monthStartDay = input.monthStartDay;
   }
   return parsed;
+}
+
+/** What a provider row says about how its requests are paid for. */
+export interface SpendingProviderFields {
+  id: string;
+  baseUrl?: string;
+  deployment?: ProviderDeployment;
+  hasKey?: boolean;
+  credentialType?: "api_key" | "oauth";
+}
+
+/**
+ * Whether any connected provider bills by the request: one with a stored key
+ * that is not a sign-in, a model on this Mac, or an agent harness. Spending
+ * limits show only then, since nothing else ever costs money.
+ */
+export function meteredProviderConnected(providers: readonly SpendingProviderFields[]): boolean {
+  return providers.some(
+    (provider) =>
+      provider.hasKey === true &&
+      provider.credentialType !== "oauth" &&
+      !isAcpHarnessProvider(provider.id) &&
+      resolveProviderDeployment(provider) === "hosted",
+  );
+}
+
+/** Whether the owner already set any spending limit, so the controls stay in reach to change it. */
+export function anySpendingLimitSet(limits: SpendingLimitsSettings): boolean {
+  return limits.chatUsd !== undefined || limits.botMonthUsd !== undefined || limits.routineRunUsd !== undefined;
 }
 
 /** "$5.00", "$0.42", "$1,250.00". An amount under a cent reads "less than $0.01". */

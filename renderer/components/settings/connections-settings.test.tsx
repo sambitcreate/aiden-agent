@@ -104,8 +104,8 @@ test("before the code exists, waiting is announced without a code", () => {
 });
 
 test("a setup code for a discovered device needs no address; a typed one does", () => {
-  assert.doesNotMatch(body({ kind: "setup", device: { id: "install_closed", name: "Lab Linux" } }), /Desktop address/u);
-  assert.match(body({ kind: "setup" }), /Desktop address/u);
+  assert.doesNotMatch(body({ kind: "setup", device: { id: "install_closed", name: "Lab Linux" } }), /Computer address/u);
+  assert.match(body({ kind: "setup" }), /Computer address/u);
   // Pair stays off until the fields are filled.
   assert.ok(!buttons(body({ kind: "setup" })).includes("Pair"));
 });
