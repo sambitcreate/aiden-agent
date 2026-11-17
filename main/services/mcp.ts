@@ -215,6 +215,7 @@ export async function withIsolatedSubagentMcpClient<T>(
           configuredOperation,
           isCurrent,
         ),
+      reportOutputSchemaDiagnostic: reportMcpOutputSchemaDiagnostic,
     },
   });
 }
@@ -238,6 +239,11 @@ export const productionSubagentMcpReadHost: SubagentMcpReadHost = Object.freeze(
 /** A listed tool left out because its input schema root is unusable. */
 function reportSkippedMcpTool(toolName: string, reason: string): void {
   logger.warn("mcp", `Skipped MCP tool "${toolName.slice(0, 128)}": ${reason}.`);
+}
+
+/** An agent-facing tool result that broke its output schema and was used as received. */
+function reportMcpOutputSchemaDiagnostic(diagnostic: string): void {
+  logger.warn("mcp", diagnostic);
 }
 
 function botMcpRequestOptions(signal: AbortSignal) {
@@ -714,9 +720,10 @@ class McpManager {
     const callLive = (live: McpClient, params: Parameters<typeof callMcpTool>[1], options?: McpToolCallOptions) => {
       const signal = AbortSignal.any([lease.signal, ...(options?.signal ? [options.signal] : [])]);
       const needsFreshList = live.serverCapabilities?.tools?.listChanged !== true;
+      // The model reads this result; a schema mismatch is logged, not thrown after the side effect.
       return callMcpToolOnLiveClient(
         callGuard, live, (client) => this.cachedInventory(server, generation, client, signal, needsFreshList),
-        params, { ...options, signal },
+        params, { ...options, signal, outputSchema: "advisory", onOutputSchemaDiagnostic: reportMcpOutputSchemaDiagnostic },
       );
     };
     const client: Parameters<typeof createMcpResourceTool>[1] & {

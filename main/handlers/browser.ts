@@ -6,10 +6,19 @@ import { botIdForBrowserWorkspace } from "../services/browser/bot-workspaces.js"
 import { configStore } from "../services/config-store.js";
 import { externalUrl } from "../services/browser/core.js";
 import { resolveExternalWorkspaceDocument } from "../services/browser/external-document.js";
-import type { BrowserCommand } from "../../renderer/shared/browser.js";
+import { dismissBrowserMenu, popupBrowserMenu } from "../services/browser/popup-menu.js";
+import type { BrowserCommand, BrowserMenuItem } from "../../renderer/shared/browser.js";
 import { findBrowserRecording, readBrowserRecording } from "../services/browser/recordings.js";
 
 export function registerBrowserHandlers(): void {
+  ipcMain.handle("browser:popup-menu", (event, id: string, point: { x: number; y: number }, items: BrowserMenuItem[]) => {
+    const owner = rendererDocumentOwner(event, () => new Error("Browser menus require the active application document."));
+    return popupBrowserMenu(event.sender, owner, id, point, items);
+  });
+  ipcMain.handle("browser:dismiss-menu", (event, id: string) => {
+    rendererDocumentOwner(event, () => new Error("Browser menus require the active application document."));
+    dismissBrowserMenu(event.sender, id);
+  });
   ipcMain.handle("browser:get-state", async (event, workspaceId: unknown) => {
     const owner = rendererDocumentOwner(
       event,

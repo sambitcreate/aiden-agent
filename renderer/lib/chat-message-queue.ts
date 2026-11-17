@@ -332,9 +332,7 @@ export async function admitRunInputOnceStarted(input: {
   const retryMs = input.retryMs ?? RUN_INPUT_START_RETRY_MS;
   for (let attempt = 0; ; attempt += 1) {
     const receipt = await input.admit();
-    const notStartedYet =
-      !receipt.admitted && !receipt.committed && receipt.reason === "run_not_active";
-    if (!notStartedYet || attempt >= retryMs.length || !input.live()) return receipt;
+    if (!unsavedRunNotActive(receipt) || attempt >= retryMs.length || !input.live()) return receipt;
     await delay(retryMs[attempt]!);
     if (!input.live()) return receipt;
   }
@@ -390,12 +388,15 @@ export type SteerQueuedMessageOutcome =
  * admission. A committed receipt always removes the row, because main already
  * holds the message as history. An uncommitted rejection keeps it queued for
  * the normal follow-up path. An unknown outcome keeps it but pauses the queue,
- * so it is never auto-sent as a possible duplicate turn.
+ * so it is never auto-sent as a possible duplicate turn. When `stopping` says
+ * the person pressed Stop while admission waited, an uncommitted rejection is
+ * reported as `cancelled`, as for a composer draft.
  */
 export async function steerQueuedMessage(input: {
   queue: ChatMessageQueue;
   id: string;
   admit: (text: string) => Promise<ChatRunInputAdmissionResult>;
+  stopping?: () => boolean;
 }): Promise<SteerQueuedMessageOutcome> {
   const candidate = input.queue.getSnapshot().messages.find((item) => item.id === input.id);
   if (!candidate || !canSteerQueuedMessage(candidate)) return { kind: "unavailable" };
@@ -413,7 +414,77 @@ export async function steerQueuedMessage(input: {
     return receipt.admitted ? { kind: "admitted" } : { kind: "committed", reason: receipt.reason };
   }
   input.queue.settle(message.id, "deferred");
-  return { kind: "rejected", reason: receipt.reason };
+  return { kind: "rejected", reason: input.stopping?.() ? "cancelled" : receipt.reason };
+}
+
+/** An uncommitted `run_not_active`: the run is not taking input (not started yet, or past its end) and nothing was saved. */
+function unsavedRunNotActive(receipt: ChatRunInputAdmissionResult): boolean {
+  return !receipt.admitted && !receipt.committed && receipt.reason === "run_not_active";
+}
+
+export type SteerDraftOutcome =
+  /** Pi accepted the guidance; the transcript already shows it. */
+  | { kind: "admitted" }
+  /** Saved as conversation history, but the run ended before Pi accepted it. */
+  | { kind: "committed"; reason?: ChatRunInputRejectionReason }
+  /**
+   * The run ended before it could take the guidance and nothing was saved,
+   * so the message joined the queue and sends as the next turn (unless the
+   * queue is paused).
+   */
+  | { kind: "queued"; paused: boolean }
+  /** Nothing was written or queued; the draft stays in the composer. */
+  | { kind: "rejected"; reason?: ChatRunInputRejectionReason }
+  /** The outcome is unknown; the draft stays so the person can check first. */
+  | { kind: "unknown"; error: unknown };
+
+/**
+ * Steer a composer draft into the current run, falling back to the queue when
+ * the run has already ended. After `agent_end` a run can stay open briefly
+ * (Stop hooks, checkpoint recovery, saving) while Steer is still offered; a
+ * steer there is refused as `run_not_active` without being saved, so it is
+ * queued and sent as a new turn once the run settles. A run the person is
+ * stopping never auto-sends: the draft is kept. A committed receipt is never
+ * queued, because main already holds the message as history.
+ */
+export async function steerDraftOrQueue(input: {
+  queue: ChatMessageQueue;
+  /** A text-only message; its id becomes the queued row's id. */
+  message: QueuedChatMessage;
+  /** The run to steer, or undefined when it has already ended. */
+  streamId: string | undefined;
+  /** The person pressed Stop on this run (checked before and after admission). */
+  stopping: () => boolean;
+  admit: (streamId: string, text: string) => Promise<ChatRunInputAdmissionResult>;
+}): Promise<SteerDraftOutcome> {
+  if (input.stopping()) return { kind: "rejected", reason: "cancelled" };
+  const queueLate = (): SteerDraftOutcome => {
+    input.queue.add(input.message);
+    return { kind: "queued", paused: input.queue.getSnapshot().paused };
+  };
+  if (!input.streamId) return queueLate();
+  let receipt: ChatRunInputAdmissionResult;
+  try {
+    receipt = await input.admit(input.streamId, input.message.text);
+  } catch (error) {
+    return { kind: "unknown", error };
+  }
+  if (receipt.committed) {
+    return receipt.admitted ? { kind: "admitted" } : { kind: "committed", reason: receipt.reason };
+  }
+  if (unsavedRunNotActive(receipt) && !input.stopping()) return queueLate();
+  return { kind: "rejected", reason: input.stopping() ? "cancelled" : receipt.reason };
+}
+
+/**
+ * Copy for a queued row whose Steer missed the run. An unsaved
+ * `run_not_active` leaves the row queued and the queue running, so it sends
+ * as the next turn once the run settles; a paused queue waits for Resume.
+ */
+export function lateSteerQueuedNotice(paused: boolean): string {
+  return paused
+    ? "The response ended before it could take the guidance. The message stays queued; resume the queue to send it."
+    : "The response ended before it could take the guidance. It will send as your next message.";
 }
 
 /**

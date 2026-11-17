@@ -300,7 +300,14 @@ data class AidenGitReview(
     val branch: String,
     val uncommitted: Int,
     val files: List<AidenGitFile>
-)
+) {
+    /**
+     * How many changes the computer counted but sent no file for. They exist, but this phone
+     * can't see them, so the review is neither clean nor committable.
+     */
+    val hiddenChangeCount: Int?
+        get() = if (files.isEmpty() && uncommitted > 0) uncommitted else null
+}
 
 @Serializable
 data class AidenGitDiff(
@@ -387,7 +394,10 @@ data class AidenGitResult(
     val worktrees: AidenGitWorktrees? = null,
     val mutation: AidenGitMutation? = null,
     val result: AidenGitMutation? = null
-)
+) {
+    val canCommitReviewedChanges: Boolean
+        get() = capability?.allowed == true && review?.files?.isNotEmpty() == true && snapshotId != null
+}
 
 /**
  * Reads a Git reply as the Mac sends it: every projection arrives under `result`, tagged by
