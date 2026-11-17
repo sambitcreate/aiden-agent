@@ -21,8 +21,12 @@ export default [
   js.configs.recommended,
   {
     files: [
-      "scripts/**/*.mjs",
+      "scripts/aiden-remote-*.mjs",
       "packages/cli/**/*.mjs",
+      "scripts/ios-asc-monitor*.mjs",
+      "scripts/ios-live-activity-process-proof*.mjs",
+      "scripts/vendor-generative-ui-libs.mjs",
+      "scripts/**/*.test.mjs",
     ],
     languageOptions: {
       globals: { ...globals.node },
