@@ -18,6 +18,10 @@ import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
 import { checkWorktreeAllocation } from "./managed-worktree-capacity.js";
+import {
+  managedWorktreeRemovalPhaseAllowed,
+  type ManagedWorktreeRemovalPhase,
+} from "./managed-worktree-removal-core.js";
 import type { GitBranches, GitInfo, GitWorktree } from "./types.js";
 import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import { resolveGitExecutableMemoized } from "./git-executable.js";
@@ -233,14 +237,7 @@ interface GitWorktreeAdminIdentity {
 
 interface GitWorktreeRemovalJournal {
   version: 3 | 4;
-  phase:
-    | "prepared"
-    | "quarantined"
-    | "checkout_cleanup_started"
-    | "checkout_complete"
-    | "admin_cleanup_started"
-    | "needs_review"
-    | "filesystem_complete";
+  phase: ManagedWorktreeRemovalPhase;
   adminDevice: number;
   adminGitdirContents: string;
   adminInode: number;
@@ -4599,6 +4596,12 @@ export class GitService {
     > = {},
   ): Promise<GitWorktreeRemovalJournal> {
     await this.readWorktreeRemovalJournal(journalPath, expected);
+    if (!managedWorktreeRemovalPhaseAllowed(expected.phase, phase)) {
+      throw new GitServiceError(
+        "command_failed",
+        "The managed worktree deletion journal cannot move to that phase.",
+      );
+    }
     const next = { ...expected, ...updates, phase };
     const temporaryPath = `${journalPath}.tmp-${randomUUID()}`;
     let handle: fs.FileHandle | undefined;
@@ -6482,6 +6485,56 @@ export class GitService {
   }
 
   /**
+   * Commits on the branch that no remote holds, for Settings → Storage's
+   * "safe to remove" check. A branch with no upstream counts every commit it
+   * has that no remote-tracking ref contains; a branch with an upstream counts
+   * only what it is ahead by.
+   */
+  async managedWorktreeUnpushedCommits(
+    cwd: string,
+    branch: string,
+    signal?: AbortSignal,
+  ): Promise<number> {
+    await this.requireRepository(await this.repository(cwd));
+    const branchRef = `refs/heads/${branch}`;
+    const upstream = await this.run(
+      cwd,
+      ["rev-parse", "--abbrev-ref", "--symbolic-full-name", `${branchRef}@{upstream}`],
+      { allowExitCodes: [128], signal },
+    ).catch(() => undefined);
+    if (upstream && upstream.exitCode === 0) {
+      const tracking = upstream.stdout.trim();
+      if (tracking) {
+        const counts = await this.run(
+          cwd,
+          ["rev-list", "--count", `${tracking}..${branchRef}`],
+          { signal },
+        );
+        const ahead = Number(counts.stdout.trim());
+        return Number.isSafeInteger(ahead) && ahead > 0 ? ahead : 0;
+      }
+    }
+    // No upstream: any commit not reachable from a remote-tracking ref is local only.
+    const remotes = await this.run(cwd, ["for-each-ref", "--format=%(refname)", "refs/remotes"], {
+      signal,
+    });
+    const remoteRefs = remotes.stdout
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0 && !line.endsWith("/HEAD"));
+    // A failed count rejects: "nothing unpushed" is what lets a worktree be removed.
+    const count = await this.run(
+      cwd,
+      remoteRefs.length > 0
+        ? ["rev-list", "--count", branchRef, "--not", ...remoteRefs]
+        : ["rev-list", "--count", branchRef],
+      { signal },
+    );
+    const ahead = Number(count.stdout.trim());
+    return Number.isSafeInteger(ahead) && ahead > 0 ? ahead : 0;
+  }
+
+  /**
    * Expand `--ignored=matching` status records to file granularity for the
    * service layer's advisory deletion-policy check. Returns undefined when the
    * expansion exceeds the status path cap.
@@ -7283,6 +7336,11 @@ export const gitManagedWorktreeDeletionPending = (
 ) => gitService.managedWorktreeDeletionPending(worktreePath, worktreeGitDir, ownershipToken);
 export const gitManagedWorktreeDirtyState = (folderPath: string, worktreePath: string) =>
   gitService.managedWorktreeDirtyState(folderPath, worktreePath);
+export const gitManagedWorktreeUnpushedCommits = (
+  folderPath: string,
+  branch: string,
+  signal?: AbortSignal,
+) => gitService.managedWorktreeUnpushedCommits(folderPath, branch, signal);
 export const gitCaptureManagedWorktreeSnapshot = (
   folderPath: string,
   worktreePath: string,

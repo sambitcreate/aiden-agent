@@ -1,7 +1,7 @@
 import { calendarWatchCallAllowed } from "../bot-routine-events/connector-calendar-policy.js";
 import { BOT_MESSAGE_TOOL_NAME, botMessageChainOf, botMessageTurnOf, isBotMessageRequestId } from "../../../renderer/shared/bot-messages.js";
 import { BOT_PLAN_STEP_TOOL_NAME, BOT_PROPOSE_PLAN_TOOL_NAME } from "../../../renderer/shared/bot-plans.js";
-import { BOT_REQUEST_ACCESS_TOOL_NAME } from "../../../renderer/shared/bot-access-requests.js";
+import { BOT_REQUEST_ACCESS_TOOL_NAME, botWholeComputerLabel } from "../../../renderer/shared/bot-access-requests.js";
 // Which tools a Bot may use, and which need the person's approval.
 //
 // This is the legacy Bot classification from `llm-client.ts`
@@ -18,6 +18,7 @@ import { botExecutionScope } from "./bot-execution.js";
 import { BOT_PEER_TOOL } from "../bot-peers/tool.js";
 import { botPeerIngress } from "../bot-peers/ingress.js";
 import { BOT_OPEN_WORK_TOOL } from "../bot-open-work/tool.js";
+import { UPDATE_BOT_TOOL_NAME } from "../../../renderer/shared/bot-settings-changes.js";
 import { BOT_ROUTINES_TOOL_NAME } from "../../../renderer/shared/bot-routine-proposals.js";
 import { composioServiceCallRequiresForeground, isComposioServiceToolDescriptor } from "../composio-service-tool.js";
 import { BOT_FILE_TOOL_NAMES } from "../bot-file-tool-router.js";
@@ -101,6 +102,15 @@ export function botRunUnattended(requestIds: readonly (string | undefined)[]): b
   return requestIds.some((id) => { const turn = botTurnOf(id); return turn.routine || turn.telegram || turn.botMessage || turn.peer; });
 }
 
+/**
+ * Whether the person can answer an approval for a run serving these inputs:
+ * not a routine, Telegram, Bot-message, peer or self-intro turn. A run with no
+ * inputs is not.
+ */
+export function botTurnAttended(requestIds: readonly (string | undefined)[]): boolean {
+  return requestIds.length > 0 && !botRunUnattended(requestIds) && requestIds.every((requestId) => !botTurnOf(requestId).intro);
+}
+
 const UNATTENDED_WITHHELD = new Set<string>([
   ASK_USER_QUESTION_TOOL_NAME,
   ROUTINE_TOOL,
@@ -175,7 +185,7 @@ export async function botToolVerdict(
   if ((turn.peer || botPeerIngress()) && (UNATTENDED_WITHHELD.has(name) || [BOT_MESSAGE_TOOL_NAME, BOT_REQUEST_ACCESS_TOOL_NAME, BOT_PROPOSE_PLAN_TOOL_NAME, BOT_PLAN_STEP_TOOL_NAME, WAKE_UP_TOOL, ROUTINE_NOTES_TOOL, "bot_memory", SUGGEST_CONNECTION_TOOL_NAME].includes(name))) return { allowed: false, reason: "Peer work cannot request person approval, change routines or person memory, sign in, create wake-ups or spawn subagents." };
   if (name === BOT_PROPOSE_PLAN_TOOL_NAME || name === BOT_PLAN_STEP_TOOL_NAME) return verdict(turn.telegram !== true && turn.routine !== true, "Plans are off for this Bot turn.");
   if (name === BOT_REQUEST_ACCESS_TOOL_NAME) {
-    if (authority.accessMode !== "custom" || authority.files.mode === "full_mac") return { allowed: false, reason: "This Bot can already use your whole Mac." };
+    if (authority.accessMode !== "custom" || authority.files.mode === "full_mac") return { allowed: false, reason: `This Bot can already use ${botWholeComputerLabel(process.platform)}.` };
     return verdict(authority.files.mode === "scoped", "File access is off for this Bot.");
   }
   if (name === BOT_MESSAGE_TOOL_NAME) return verdict(!turn.telegram && !turn.routine, "Messaging other Bots is off for this turn.");
@@ -184,6 +194,9 @@ export async function botToolVerdict(
     return verdict(!facts.supportsImages && authority.visionProvider !== undefined, "Image understanding is off for this Bot.");
   }
   if (name === BOT_OPEN_WORK_TOOL) return verdict(hasCapability(facts, "tasks"), "Task tracking is off for this Bot.");
+  // Its own name, look, instructions, check-ins, notifications and model only;
+  // outside a run the owner started, every change waits on a card (§4.6).
+  if (name === UPDATE_BOT_TOOL_NAME) return { allowed: true };
   if (name === WEB_SEARCH_TOOL) return verdict(hasCapability(facts, "web"), "Web search is off for this Bot.");
   if (isComputerUseCapabilityTool(name)) {
     return verdict(hasCapability(facts, "computer_use"), "Computer Use is off for this Bot.");
@@ -278,7 +291,8 @@ export async function botToolApprovalSummary(
   facts: BotToolFacts,
 ): Promise<string | undefined> {
   if (name === SHARE_IMAGE_TOOL_NAME) return summarizeToolCall(name, args);
-  if (FILE_TOOLS.has(name) || name === "run_command" || name === WEB_SEARCH_TOOL || name === BOT_OPEN_WORK_TOOL) return undefined;
+  // `update_bot` asks through its own receipt (Undo) or held card (Apply).
+  if (FILE_TOOLS.has(name) || name === "run_command" || name === WEB_SEARCH_TOOL || name === BOT_OPEN_WORK_TOOL || name === UPDATE_BOT_TOOL_NAME) return undefined;
   // The browser asks through its live tab and page (`bot-browser-approval.ts`).
   if (name === BOT_BROWSER_GATEWAY_TOOL || isBrowserToolName(name)) return undefined;
   // Inside the Bot's own computer the baseline is allowed; rules read the intent (§8.7).

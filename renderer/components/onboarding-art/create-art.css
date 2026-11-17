@@ -244,3 +244,80 @@
 .oa-visual-chart { display: flex; align-items: flex-end; gap: 6px; height: 74px; padding-top: 4px; }
 .oa-visual-chart i { flex: 1; border-radius: 3px 3px 0 0; background: var(--oa-bar-soft); }
 .oa-visual-chart i[data-accent] { background: var(--oa-tint); }
+
+/* Design mode */
+.oa-design-canvas {
+  background:
+    radial-gradient(circle, var(--oa-bar-soft) 0.6px, transparent 0.8px) 0 0 / 10px 10px,
+    var(--oa-surface);
+}
+.oa-design-toolbar {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-popover);
+  box-shadow: var(--elevation-control);
+  transform: translateX(-50%);
+}
+.oa-design-tool { display: grid; place-items: center; width: 15px; height: 15px; border-radius: var(--radius-pill); color: var(--text-secondary); }
+.oa-design-tool .oa-icon { width: 8px; height: 8px; }
+.oa-design-frame {
+  position: absolute;
+  overflow: visible;
+  border-radius: 6px;
+  background: var(--surface-popover);
+  box-shadow: var(--elevation-control);
+}
+.oa-design-frame-title {
+  position: absolute;
+  top: -10px;
+  left: 2px;
+  font-size: 7px;
+  line-height: 9px;
+  color: var(--text-secondary);
+}
+.oa-design-page { display: grid; gap: 4px; align-content: start; padding: 7px 9px; }
+.oa-design-heading { height: 7px; border-radius: 4px; }
+.oa-design-cta { display: block; width: 34px; height: 9px; margin-top: 1px; border-radius: 4px; background: var(--fill-accent); }
+.oa-design-pin {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  width: 13px;
+  height: 13px;
+  border-radius: 50% 50% 50% 2px;
+  background: var(--fill-accent);
+  color: var(--fill-accent-foreground);
+  font-size: 7px;
+  font-weight: 700;
+  box-shadow: var(--elevation-control);
+}
+.oa-design-note {
+  position: absolute;
+  display: grid;
+  gap: 4px;
+  padding: 7px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--oa-tint) 42%, var(--surface-popover));
+  box-shadow: var(--elevation-control);
+}
+.oa-design-tray {
+  position: absolute;
+  right: 12px;
+  left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 3px 0 8px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-popover);
+  box-shadow: var(--elevation-control);
+  font-size: 8px;
+}
+.oa-design-tray .oa-icon { width: 9px; height: 9px; }
+.oa-design-tray .oa-button { height: 14px; padding: 0 7px; font-size: 7.5px; }

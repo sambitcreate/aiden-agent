@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   createLifecycleCheck,
+  createUpdateInstallIntent,
+  settleUpdateInstallQuit,
+  whenLifecycleCheckFree,
   shouldQuitAfterAllWindowsClose,
   shouldReleaseAuxiliaryWindows,
 } from "./application-lifecycle-core.js";
@@ -80,4 +83,96 @@ test("only one lifecycle action holds the check, and queued work runs once", () 
   assert.equal(errors.length, 1);
   assert.equal(check.inFlight, false);
   assert.equal(check.tryBegin(), true);
+});
+
+test("an accepted update install that never reaches the quit is withdrawn", async () => {
+  const outcomes: Array<[string, () => Promise<boolean>, number]> = [
+    ["the quit began", async () => true, 0],
+    ["another lifecycle action held the check", async () => false, 1],
+    ["the quit failed", async () => { throw new Error("window gone"); }, 1],
+  ];
+  for (const [name, quit, expected] of outcomes) {
+    let withdrawn = 0;
+    const errors: unknown[] = [];
+    await settleUpdateInstallQuit(quit, () => { withdrawn += 1; }, (error) => errors.push(error));
+    assert.equal(withdrawn, expected, name);
+    assert.equal(errors.length, name === "the quit failed" ? 1 : 0, name);
+  }
+});
+
+test("deferred quit work waits for the action holding the check, whoever that is", () => {
+  const check = createLifecycleCheck(() => assert.fail("no action should throw"));
+  const ran: string[] = [];
+  assert.equal(check.tryBegin(), true);
+  whenLifecycleCheckFree(check, () => { ran.push("install quit"); });
+  assert.equal(ran.length, 0, "a quit already deciding owns the outcome until it releases");
+
+  // The first queued action takes the check, so the next must keep waiting.
+  whenLifecycleCheckFree(check, () => { ran.push("second"); });
+  check.release();
+  assert.deepEqual(ran, ["install quit", "second"]);
+
+  whenLifecycleCheckFree(check, () => { ran.push("free"); });
+  assert.deepEqual(ran, ["install quit", "second", "free"], "a free check runs at once");
+});
+
+test("work queued behind a check retaken during release runs after that release", () => {
+  const check = createLifecycleCheck(() => assert.fail("no action should throw"));
+  const ran: string[] = [];
+  assert.equal(check.tryBegin(), true);
+  whenLifecycleCheckFree(check, () => {
+    ran.push("takes the check");
+    assert.equal(check.tryBegin(), true);
+  });
+  whenLifecycleCheckFree(check, () => { ran.push("waits for it"); });
+  check.release();
+  assert.deepEqual(ran, ["takes the check"]);
+  check.release();
+  assert.deepEqual(ran, ["takes the check", "waits for it"]);
+});
+
+function installIntent() {
+  const state = { shutdownStarted: false, announced: 0 };
+  const intent = createUpdateInstallIntent({
+    shutdownStarted: () => state.shutdownStarted,
+    onWithdrawn: () => { state.announced += 1; },
+  });
+  return { state, intent };
+}
+
+test("a renderer veto keeps the install for its retry, however many callers withdraw", () => {
+  const { state, intent } = installIntent();
+  intent.arm();
+  intent.retryScheduled();
+  // The vetoed quit's own cleanup and the wrapper around it both withdraw.
+  intent.withdraw();
+  intent.withdraw();
+  assert.equal(intent.armed, true);
+  assert.equal(state.announced, 0);
+  intent.retryBegan();
+  assert.equal(intent.take(), true, "the retried quit installs the update");
+  assert.equal(intent.armed, false);
+});
+
+test("a retry the person then declines withdraws the install once", () => {
+  const { state, intent } = installIntent();
+  intent.arm();
+  intent.retryScheduled();
+  intent.retryBegan();
+  intent.withdraw();
+  intent.withdraw();
+  assert.equal(intent.armed, false);
+  assert.equal(state.announced, 1);
+  assert.equal(intent.take(), false, "a later ordinary quit installs nothing");
+});
+
+test("a shutdown under way keeps the install, and failing it lets the withdrawal through", () => {
+  const { state, intent } = installIntent();
+  intent.arm();
+  state.shutdownStarted = true;
+  intent.withdraw();
+  assert.equal(intent.armed, true);
+  state.shutdownStarted = false;
+  intent.withdraw();
+  assert.equal(intent.armed, false);
 });

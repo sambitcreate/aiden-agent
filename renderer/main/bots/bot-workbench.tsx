@@ -1,5 +1,5 @@
 // The Bot side panel (spec §8) on the C1 workbench shell, beside a Bot's chat:
-// fixed Activity, Files, Memory and Routines tabs, Browser once the Bot's
+// fixed Activity, Files, Memory, Routines and Advanced (the Bot's settings, plan §4.4) tabs, Browser once the Bot's
 // own browser has a tab (a stored Browser tab shows Activity until then; a tab
 // the Bot or a hand-off opens to show reveals it), and Computer while the Bot
 // has a computer on a Mac with Bot computers (plan §8.5; a stored Computer tab
@@ -12,7 +12,8 @@
 // Floating over a narrow chat, it repeats a waiting hand-off card's buttons.
 
 import * as React from "react";
-import { CalendarClock, Files, Globe, ListChecks, Monitor } from "lucide-react";
+import { LiveGuard } from "../../components/live-guard";
+import { CalendarClock, Files, Globe, ListChecks, Monitor, SlidersHorizontal } from "lucide-react";
 import { MemoryCardIcon } from "../../components/memory-card-icon";
 import { WorkbenchPanel, useWorkbenchWidth, type WorkbenchTab, type WorkbenchView } from "../../components/workbench-panel";
 import { BOT_PANEL_WIDTH_BOUNDS, resolveEnvironmentPanelLayout } from "../../lib/environment-panel-layout";
@@ -21,7 +22,10 @@ import { cn } from "../../lib/ui-utils";
 import { useBotLive } from "../../lib/use-bot-live";
 import type { BotTranscriptEntry } from "../../shared/bot-live";
 import { BotBrowserTab, useBotBrowserPresence } from "./bot-browser-tab";
+import { BotAdvancedTab } from "./bot-advanced";
 import { BotComputerFloat } from "./bot-computer-float";
+import { BotConnectorWatches } from "./bot-connector-watches";
+import { BotEventRoutines } from "./bot-event-routines";
 import { BotComputerSignInReveal, BotComputerTab, useBotComputer, useBotComputerStart } from "./bot-computer-tab";
 import { BotMemoryContent } from "./bot-memory-page";
 import { BotPanelActivity } from "./bot-panel-activity";
@@ -38,6 +42,7 @@ const TAB_META: Record<BotPanelTab, { label: string; icon: React.ComponentType<{
   routines: { label: "Routines", icon: CalendarClock },
   browser: { label: "Browser", icon: Globe },
   computer: { label: "Computer", icon: Monitor },
+  advanced: { label: "Advanced", icon: SlidersHorizontal },
 };
 
 /**
@@ -54,7 +59,7 @@ const NO_ENTRIES: readonly BotTranscriptEntry[] = [];
  */
 function ActivityTab({ botId, botName }: { botId: string; botName: string }) {
   const live = useBotLive(botId);
-  // Always the full log: the Bot's Chat activity level shapes only the in-chat
+  // Always the full log: Show tool activity (Appearance) shapes only the in-chat
   // recap, and opening this tab is the person asking to see every step.
   return (
     <>
@@ -76,7 +81,7 @@ function ActivityTab({ botId, botName }: { botId: string; botName: string }) {
  * subscription for as long as it is shown; the Activity tab shares it.
  */
 export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botId: string }>) {
-  const { open, tab: storedTab, fileRequest, focusRequest, close, consumeFocusRequest, setTab, reveal, show } = useBotPanel();
+  const { open, tab: storedTab, fileRequest, sectionRequest, focusRequest, close, consumeFocusRequest, setTab, reveal, show } = useBotPanel();
   const bot = useBot(botId).data ?? null;
   const revealBrowser = React.useCallback(() => reveal("browser"), [reveal]);
   const revealComputer = React.useCallback(() => reveal("computer"), [reveal]);
@@ -160,6 +165,8 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
     icon: TAB_META[id].icon,
     selected: tab === id,
     closable: false,
+    // Opening Computer starts the Bot's VM: only the person does that, never Aiden Live.
+    ...(id === "computer" ? { dataAttributes: { "data-live-guard": "you" } } : {}),
   }));
   const body = (id: BotPanelTab, active: boolean): React.ReactNode => {
     if (!bot) return null;
@@ -169,15 +176,37 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
       case "files":
         return <BotPanelFiles botId={bot.id} botName={bot.name} active={active} request={fileRequest} />;
       case "memory":
-        return <BotMemoryContent bot={bot} compact />;
+        // Editing or deleting what the Bot remembers is the person's to do.
+        return (
+          <LiveGuard guard="you">
+            <BotMemoryContent bot={bot} compact />
+          </LiveGuard>
+        );
       case "routines":
-        return <BotRoutines bot={bot} compact />;
+        // Routines run prompts in the background: the user's to change. Scheduled
+        // routines and wake-ups list first, then event routines and app watches.
+        return (
+          <LiveGuard guard="you">
+            <BotRoutines bot={bot} compact />
+            <BotEventRoutines bot={bot} />
+            <BotConnectorWatches bot={bot} />
+          </LiveGuard>
+        );
+      case "advanced":
+        // A Bot's settings are the person's to change, never Aiden Live's.
+        return (
+          <LiveGuard guard="you">
+            <BotAdvancedTab bot={bot} sectionRequest={sectionRequest} />
+          </LiveGuard>
+        );
       case "browser":
         return browser.workspaceId === null ? null : (
           <BotBrowserTab workspaceId={browser.workspaceId} botName={bot.name} active={active} />
         );
       case "computer":
+        // The VM's screen, sign-in and hand-back are the person's own.
         return computer.computer ? (
+          <LiveGuard guard="you">
           <BotComputerTab
             bot={bot}
             computer={computer.computer}
@@ -187,6 +216,7 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
             onDock={() => setComputerFloating(false)}
             start={computerStart}
           />
+          </LiveGuard>
         ) : null;
     }
   };
@@ -251,8 +281,8 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
         tabs={tabs}
         idPrefix={BOT_PANEL_ID}
         tabListLabel="Bot panel views"
-        // Five tabs always fit; with Browser and Computer both shown, the list reveals any that scroll away.
-        tabMenu={shownTabs.length > 5}
+        // Four tabs fit the narrowest panel; past that, the list reveals any that scroll away.
+        tabMenu={shownTabs.length > 4}
         onSelectTab={(entry) => {
           const next = entry.viewId as BotPanelTab;
           // The person switching to Computer starts a stopped computer; a tab restored at launch never does.
@@ -265,6 +295,7 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
         onClose={close}
       />
       {bot && computer.computer && computerFloating ? (
+        <LiveGuard guard="you">
         <BotComputerFloat
           bot={bot}
           computer={computer.computer}
@@ -275,6 +306,7 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
           }}
           onClose={() => setComputerFloating(false)}
         />
+        </LiveGuard>
       ) : null}
     </div>
   );

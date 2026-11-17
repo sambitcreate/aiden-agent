@@ -1,7 +1,8 @@
 import { parseBotRoutineModelDirectory } from "../shared/bot-routine-model-directory";
+import type { ChatInputSourceV1 } from "../shared/chat-input-source";
 import { createBotPeerApi } from "./bot-peers-api";
 import { parseBotExecutionResumeStatus } from "../shared/bot-execution-resume";
-import { parseBotRoutineModelSettings, parseBotRoutineModelCatalog, parseBotRoutineModelResult, parseBotRoutineModelRuns, type BotRoutineModelSave } from "../shared/bot-routine-models";
+import { parseBotRoutineModelSettings, parseBotRoutineModelCatalog, parseBotRoutineModelResult, parseBotRoutineModelRuns, type BotRoutineModelSave, type BotRoutineThinkingLevel } from "../shared/bot-routine-models";
 import type { PeerProjectSource } from "../shared/peer-project-clone";
 import { BOT_CONNECTOR_WATCH_CHANNELS as watchChannels } from "../shared/bot-connector-watches";
 import type * as ConnectorWatch from "../shared/bot-connector-watches";
@@ -29,6 +30,16 @@ import {
   type SpendingStatusView,
 } from "../shared/spending";
 import type { AnalyticsNoticeChoice, AnalyticsRegistryView, AnalyticsStatusView } from "../shared/analytics";
+import {
+  HOOKS_CHANGED_CHANNEL,
+  isHooksOverview,
+  type HookListing,
+  type HookRunRecord,
+  type HookSaveRequest,
+  type HooksChangedEvent,
+  type HooksOverview,
+  type HookTestResult,
+} from "../shared/hooks-settings";
 import type {
   WorkspaceClonePreview,
   WorkspaceCloneProgress,
@@ -163,6 +174,12 @@ import type {
   RendererDiagnosticPolicy,
   RendererDiagnosticReport,
 } from "../shared/diagnostics";
+import type {
+  StorageCleanupPreview,
+  StorageCleanupRequest,
+  StorageCleanupResult,
+  StorageReport,
+} from "../shared/storage";
 import type { BotSessionState } from "../../main/services/bot-runtime/bot-session-service";
 import type {
   BotCreateInput,
@@ -308,11 +325,23 @@ import type { PeerBotSessionMessage, PeerBotSessionSubscription } from "../share
 import type { LocalRunCursor, LocalRunFrameMessage } from "../shared/local-run-frames";
 import type {
   WorkspaceArtifactsChangedEvent,
+  WorkspaceArtifactImportPreview,
   WorkspaceArtifactV1,
+  WorkspaceArtifactRevisionSummary,
   WorkspaceArtifactSourceResultV1,
   WorkspaceArtifactView,
 } from "../shared/workspace-artifacts";
+import type { DesignCanvas } from "../shared/design-canvas/schema";
 import { invoke, onNotification } from "./ipc-bridge";
+import {
+  APPROVAL_RULE_CHANNELS,
+  type ApprovalRule,
+  type ApprovalRuleAddInput,
+  type ApprovalRuleChangeInput,
+  type ApprovalRulePickerOption,
+  type ApprovalRuleRowRef,
+  type ApprovalRulesView,
+} from "../shared/approval-rules";
 
 export { invoke, onNotification } from "./ipc-bridge";
 export { dictationApi, settingsApi, voiceApi } from "./ipc-voice";
@@ -415,6 +444,10 @@ export const appApi = {
   setOnboardingProgress: (step: "profile" | "provider" | "bots", selectedProviderId?: string) =>
     invoke<OnboardingSnapshot>("app:setOnboardingProgress", step, selectedProviderId),
   rendererReady: () => invoke<boolean>("app:renderer-ready"),
+  /** Widen this window for design mode; `widened` is false when the display is too narrow. */
+  widenForDesign: () => invoke<{ widened: boolean }>("app:widenForDesign"),
+  /** Whether widening could work: not full screen or maximized, on a display at least 1280 px wide. */
+  designWindowCanWiden: () => invoke<{ canWiden: boolean }>("app:designWindowCanWiden"),
   /** The commands that can run now, so the menu bar greys out the rest. */
   setMenuCommands: (commandIds: readonly string[]) =>
     invoke<boolean>("app:setMenuCommands", [...commandIds]),
@@ -558,6 +591,13 @@ export const assistantLiveApi = {
     invoke<boolean>("assistant-live:display-release", { bindingId }),
   sendFrame: (sessionId: string, frame: Uint8Array) =>
     invoke<boolean>("assistant-live:frame", { sessionId, frame }),
+  toolResult: (sessionId: string, requestId: string, response: Record<string, unknown>) =>
+    invoke<boolean>("assistant-live:tool-result", { sessionId, requestId, response }),
+  note: (sessionId: string, text: string, options?: { awaitDelivery?: boolean }) =>
+    invoke<boolean>(
+      "assistant-live:note",
+      options?.awaitDelivery ? { sessionId, text, awaitDelivery: true } : { sessionId, text },
+    ),
   onEvent: (handler: (event: AssistantLiveRendererEvent) => void) =>
     onNotification<AssistantLiveRendererEvent>("assistant-live:event", handler),
 };
@@ -640,8 +680,8 @@ export const spendingApi = {
   status: async (ownerKind: SpendingStatusView["ownerKind"], ownerId: string) =>
     parseSpendingStatusView(await invoke<unknown>("spending:status", ownerKind, ownerId)),
   /** Raise the chat's limit, or the Bot's month, by the limit once more. */
-  allowMore: async (ownerKind: SpendingStatusView["ownerKind"], ownerId: string) =>
-    parseSpendingStatusView(await invoke<unknown>("spending:allowMore", ownerKind, ownerId)),
+  allowMore: async (notice: SpendingStatusView) =>
+    parseSpendingStatusView(await invoke<unknown>("spending:allowMore", notice.ownerKind, notice.ownerId, notice)),
   botLimit: async (botId: string) => parseBotSpendingLimitChoice(await invoke<unknown>("spending:botLimit", botId)),
   /** "default" follows Settings, null is no limit, a number is the Bot's own. */
   setBotLimit: async (botId: string, choice: "default" | null | number) =>
@@ -651,6 +691,55 @@ export const spendingApi = {
     onNotification<SpendingChangedEvent>(SPENDING_CHANGED_CHANNEL, (event) => {
       if ((event?.ownerKind === "chat" || event?.ownerKind === "bot") && typeof event.ownerId === "string") handler(event);
     }),
+};
+
+type HookIpcResult<T> = { ok: true; value: T } | { ok: false; reason: string };
+
+function unwrapHookResult<T>(result: HookIpcResult<T>): T {
+  if (!result.ok) throw new Error(result.reason);
+  return result.value;
+}
+
+export const hooksApi = {
+  list: async (): Promise<HooksOverview> => {
+    const overview = await invoke<unknown>("hooks:list");
+    if (!isHooksOverview(overview)) throw new Error("Aiden could not read your hooks.");
+    return overview;
+  },
+  approveProposal: async (proposalId: string) =>
+    unwrapHookResult(await invoke<HookIpcResult<HookListing | undefined>>("hooks:approveProposal", proposalId)),
+  rejectProposal: (proposalId: string) => invoke<boolean>("hooks:rejectProposal", proposalId),
+  save: async (request: HookSaveRequest) =>
+    unwrapHookResult(await invoke<HookIpcResult<HookListing | undefined>>("hooks:save", request)),
+  /** Approve exactly the digest the owner saw; a hook that changed since is refused. */
+  approveDigest: async (hookId: string, digest: string) =>
+    unwrapHookResult(await invoke<HookIpcResult<HookListing>>("hooks:approveDigest", hookId, digest)),
+  setEnabled: (hookId: string, enabled: boolean) => invoke<boolean>("hooks:setEnabled", hookId, enabled),
+  delete: async (hookId: string) => unwrapHookResult(await invoke<HookIpcResult<void>>("hooks:delete", hookId)),
+  setPaused: (paused: boolean) => invoke<boolean>("hooks:setPaused", paused),
+  /**
+   * Runs the hook's command against a sample payload. Only from an explicit Test press,
+   * and only the version with `digest` (the one on screen); a hook that changed since is refused.
+   */
+  test: async (hookId: string, digest: string) =>
+    unwrapHookResult(await invoke<HookIpcResult<HookTestResult>>("hooks:test", hookId, digest)),
+  runLog: (hookId: string) => invoke<HookRunRecord[]>("hooks:runLog", hookId),
+  onChanged: (handler: (event: HooksChangedEvent) => void) =>
+    onNotification<HooksChangedEvent>(HOOKS_CHANGED_CHANNEL, (event) => {
+      if (event && typeof event.reason === "string") handler(event);
+    }),
+};
+
+/** Settings → Approvals, the rules page. */
+export const approvalRulesApi = {
+  list: () => invoke<ApprovalRulesView>(APPROVAL_RULE_CHANNELS.list),
+  picker: () => invoke<ApprovalRulePickerOption[]>(APPROVAL_RULE_CHANNELS.picker),
+  add: (input: ApprovalRuleAddInput) => invoke<ApprovalRule>(APPROVAL_RULE_CHANNELS.add, input),
+  change: (input: ApprovalRuleChangeInput) => invoke<{ changed: boolean }>(APPROVAL_RULE_CHANNELS.change, input),
+  remove: (ref: ApprovalRuleRowRef) => invoke<{ removed: boolean }>(APPROVAL_RULE_CHANNELS.remove, { ref }),
+  refresh: () => invoke<ApprovalRulesView>(APPROVAL_RULE_CHANNELS.refresh),
+  setAside: () => invoke<ApprovalRulesView>(APPROVAL_RULE_CHANNELS.setAside),
+  onChanged: (handler: () => void) => onNotification(APPROVAL_RULE_CHANNELS.changed, () => handler()),
 };
 
 export const computerUseApi = {
@@ -785,6 +874,20 @@ export const diagnosticsApi = {
     invoke<{ enabled: boolean; expiresAt: null; disablesOnRestart: true }>(
       "diagnostics:mode-enable",
     ),
+};
+
+// ── Settings → Storage (disk usage and cleanup) ───────────────────────
+export const storageApi = {
+  /** The cached inventory; a stale one refreshes in the background. */
+  report: () => invoke<StorageReport>("storage:report"),
+  /** Wait for a fresh scan (the page's Refresh button). */
+  refresh: () => invoke<StorageReport>("storage:refresh"),
+  preview: (request: StorageCleanupRequest) =>
+    invoke<StorageCleanupPreview>("storage:preview", request),
+  cleanup: (request: StorageCleanupRequest) =>
+    invoke<StorageCleanupResult>("storage:cleanup", request),
+  onChange: (handler: (event: { kind: "scan-started" | "scan-finished" }) => void) =>
+    onNotification<{ kind: "scan-started" | "scan-finished" }>("storage:changed", handler),
 };
 
 // ── Exa web search ────────────────────────────────────────────────────
@@ -1101,6 +1204,10 @@ export const workspacesApi = {
       memoryEnabled?: boolean;
       disabledSkills?: string[];
       disabledMcpServerIds?: string[];
+      /** A mode of its own, or `null` to follow Settings → Approvals. */
+      approvalMode?: import("../shared/approval-mode").ApprovalMode | null;
+      /** Remove one "Allowed in this workspace" Mac grant. */
+      revokeMacGrant?: import("../shared/approval-mode").MacGrantClass;
     },
   ) => invoke<Workspace>("workspaces:update", id, patch),
   remove: (id: string) => invoke<void>("workspaces:remove", id),
@@ -1449,8 +1556,9 @@ export const workspaceArtifactsApi = {
     invoke<WorkspaceArtifactV1>("workspaces:artifacts:rename", workspaceId, artifactId, title),
   delete: (workspaceId: string, artifactId: string) =>
     invoke<{ removed: boolean }>("workspaces:artifacts:delete", workspaceId, artifactId),
-  saveState: (workspaceId: string, artifactId: string, state: Record<string, unknown>) =>
-    invoke<void>("workspaces:artifacts:saveState", workspaceId, artifactId, state),
+  /** `revision` is the one the person was looking at; state from a page since replaced is dropped. */
+  saveState: (workspaceId: string, artifactId: string, revision: number, state: Record<string, unknown>) =>
+    invoke<void>("workspaces:artifacts:saveState", workspaceId, artifactId, revision, state),
   approve: (workspaceId: string, artifactId: string, digest: string) =>
     invoke<WorkspaceArtifactV1>("workspaces:artifacts:approve", workspaceId, artifactId, digest),
   /** Re-reads the page's sources in the workspace folder; every window gets a "refreshed" change. */
@@ -1459,6 +1567,23 @@ export const workspaceArtifactsApi = {
   /** Runs one of the page's buttons; main fills in the saved command. */
   run: (workspaceId: string, artifactId: string, action: string, args: unknown[], digest: string) =>
     invoke<{ ok: boolean; output: string }>("workspaces:artifacts:run", workspaceId, artifactId, action, args, digest),
+  /** The page's kept earlier versions, newest first. */
+  history: (workspaceId: string, artifactId: string) =>
+    invoke<WorkspaceArtifactRevisionSummary[]>("workspaces:artifacts:history", workspaceId, artifactId),
+  /** Brings back an earlier version; commands that differ from the approved ones need allowing again. */
+  restore: (workspaceId: string, artifactId: string, revision: number) =>
+    invoke<WorkspaceArtifactV1>("workspaces:artifacts:restore", workspaceId, artifactId, revision),
+  /** Saves the page as a file the person picks; main reads the page and leaves out approval, ids and data. */
+  exportPage: (workspaceId: string, artifactId: string) =>
+    invoke<{ status: "saved" | "cancelled" }>("workspaces:artifacts:export", workspaceId, artifactId),
+  /** Reads a page file the person picks and holds it in main until confirmed or discarded. */
+  importPreview: (workspaceId: string) =>
+    invoke<WorkspaceArtifactImportPreview>("workspaces:artifacts:importPreview", workspaceId),
+  /** Adds the previewed page, never approved, under a free name. */
+  importConfirm: (workspaceId: string, token: string) =>
+    invoke<WorkspaceArtifactV1>("workspaces:artifacts:importConfirm", workspaceId, token),
+  importDiscard: (workspaceId: string, token: string) =>
+    invoke<{ discarded: boolean }>("workspaces:artifacts:importDiscard", workspaceId, token),
   onChanged: (handler: (event: WorkspaceArtifactsChangedEvent) => void) =>
     onNotification<WorkspaceArtifactsChangedEvent>("workspaces:artifacts-changed", handler),
 };
@@ -1605,6 +1730,8 @@ export const chatsApi = {
     turnId: string;
     message: { role: "user"; content: string; attachments?: Attachment[] };
     skillInvocation?: SkillInvocationV1;
+    /** Aiden Live sent this first message for the person ("By voice"). */
+    inputSource?: ChatInputSourceV1;
   }) => invokeChatMutation<Chat>("chats:createWithFirstMessage", input),
   /**
    * First send with New worktree. Main creates (or, for the same draft,
@@ -1622,6 +1749,7 @@ export const chatsApi = {
     turnId: string;
     message: { role: "user"; content: string; attachments?: Attachment[] };
     skillInvocation?: SkillInvocationV1;
+    inputSource?: ChatInputSourceV1;
     worktree: FirstMessageWorktreeRequest;
   }) => invokeChatMutation<FirstMessageWorktreeResult<Chat>>("chats:createWithFirstMessage", input),
   /** Progress of the caller's own first-send worktree (fetching → creating → ready). */
@@ -1635,6 +1763,9 @@ export const chatsApi = {
   /** Change the model this chat answers with; other chats and new chats keep theirs. */
   setModel: (id: string, providerId: string, model: string) =>
     invoke<Chat | null>("chats:setModel", id, providerId, model),
+  /** Turn design mode on or off for this chat; every window hears `chats:design-mode-changed`. */
+  setDesignMode: (id: string, enabled: boolean, source?: "toggle" | "shortcut" | "slash" | "card") =>
+    invoke<Chat | null>("chats:setDesignMode", id, enabled, source),
   /**
    * Clone the whole visible chat, or fork it at `forkAt`. A fork with
    * `summary` also summarizes what the source did after the fork point.
@@ -1719,6 +1850,8 @@ export const chatsApi = {
       autoTitle?: boolean;
       turnId: string;
       skillInvocation?: SkillInvocationV1;
+      /** Aiden Live sent this message for the person ("By voice"). */
+      inputSource?: ChatInputSourceV1;
     },
   ) => invokeChatMutation<Chat>("chats:appendMessage", id, message, meta),
   approve: (
@@ -1744,6 +1877,9 @@ export const botsApi = {
   getAccessNotice: () => invoke<BotNoticeStatus>("bots:getAccessNotice"),
   acknowledgeAccessNotice: (acknowledgement: BotNoticeAcknowledgement) =>
     invoke<BotNoticeStatus>("bots:acknowledgeAccessNotice", acknowledgement),
+  /** Accepts Full access unless the person chose to review it first, in one step in main. */
+  acceptFirstBotAccess: (acknowledgement: BotNoticeAcknowledgement) =>
+    invoke<BotNoticeStatus>("bots:acceptFirstBotAccess", acknowledgement),
   getTelegramAccessNotice: (profile: string) =>
     invoke<BotNoticeStatus>("bots:getTelegramAccessNotice", profile),
   acknowledgeTelegramAccessNotice: (profile: string, acknowledgement: BotNoticeAcknowledgement) =>
@@ -1760,6 +1896,9 @@ export const botsApi = {
   update: (input: BotUpdateInput) => invoke<BotDefinition>("bots:update", input),
   getCapabilityCatalog: (botId?: string) =>
     invoke<BotCapabilityCatalog>("bots:getCapabilityCatalog", botId),
+  /** The thinking levels one catalog model supports; null when unknown. */
+  getModelThinkingLevels: (input: { botId?: string; providerId: string; modelId: string }) =>
+    invoke<BotRoutineThinkingLevel[] | null>("bots:getModelThinkingLevels", input),
   getBotAccess: (id: string) => invoke<BotAccessState | null>("bots:getBotAccess", id),
   updateBotAccess: (input: { botId: string; expectedRevision: string; access: BotAccessUpdate }) =>
     invoke<BotAccessView>("bots:updateBotAccess", input),
@@ -1850,8 +1989,13 @@ export const botsApi = {
   onLiveEvent: (handler: (event: import("../shared/bot-live").BotLiveEvent) => void) =>
     onNotification<import("../shared/bot-live").BotLiveEvent>("bots:live:event", handler),
   /** Start Chat on a starter Bot: the same Bot every time; only the first call reports `created`. */
-  createFromPreset: (input: { presetId: string; access?: BotAccessUpdate }) =>
+  /** A Template's Create bot; `version` is the template version on screen, and another version is refused. */
+  createFromPreset: (input: { presetId: string; version?: number; access?: BotAccessUpdate }) =>
     invoke<{ bot: BotDefinition; created: boolean }>("bots:createFromPreset", input),
+  /** Onboarding's silent first Bot: made once; a repeat returns the same Bot. */
+  createFirst: () => invoke<{ bot: BotDefinition; created: boolean }>("bots:createFirst"),
+  /** Template id → the Bot it already made, so Templates offers Open. */
+  presetBots: () => invoke<Record<string, string>>("bots:presetBots"),
   /** The one-time self-intro of a Bot made with the create flow. */
   introduce: (botId: string) => invoke<boolean>("bots:introduce", botId),
   /** Read-only Files: the Bot's own folder. */
@@ -1860,7 +2004,7 @@ export const botsApi = {
     read: (botId: string, path: string) =>
       invoke<import("./types").WorkspaceFileDocument>("bots:files:read", botId, path),
   },
-  /** "Add to this Bot" on a connect card: an app already connected in Aiden joins this Bot's Custom access. */
+  /** Connect on a connect card for an app already connected in Aiden: the app joins this Bot's Custom access. */
   grantConnection: (botId: string, pluginId: string) =>
     invoke<void>("bots:connections:grant", botId, pluginId),
   /** Not now on a connect card: this Bot won't suggest that connection again. */
@@ -1991,6 +2135,14 @@ export const botsApi = {
     respond: (input: { botId: string; proposalId: string; decision: "add" | "dismiss" }) =>
       invoke<{ status: "added" | "dismissed" }>("bots:skillProposals:respond", input),
   },
+  /** Changes a Bot made to its own settings from chat, and the person's answer. */
+  settingsChanges: {
+    respond: (input: { botId: string; changeId: string; decision: import("../shared/bot-settings-changes").BotSettingsChangeDecision }) =>
+      invoke<{ ok: true; status: import("../shared/bot-settings-changes").BotSettingsChangeStatus; message?: string } | { ok: false; message: string }>(
+        "bots:settingsChanges:respond",
+        input,
+      ),
+  },
   /** A Bot's health checks: the newest report, and Check now. */
   health: {
     report: (botId: string) =>
@@ -2069,6 +2221,8 @@ export interface ApprovalPrompt {
   canAllow?: boolean;
   /** Allow scopes offered for this call; absent means allow once only. */
   scopes?: ToolApprovalScope[];
+  /** In Ask, Auto would hand this call to the judge; only then may the card offer Auto. */
+  autoWouldJudge?: true;
   source?: "remote";
 }
 
@@ -2104,7 +2258,7 @@ export function stopDetachedGeneration(streamId: string): Promise<boolean> {
  */
 export function admitChatRunInput(
   streamId: string,
-  input: { mode: ChatRunInputMode; text: string },
+  input: { mode: ChatRunInputMode; text: string; inputSource?: ChatInputSourceV1 },
 ): Promise<ChatRunInputAdmissionResult> {
   return invoke<ChatRunInputAdmissionResult>("chat:admitRunInput", streamId, input);
 }
@@ -2140,6 +2294,8 @@ export interface StreamCallbacks {
   onRetrying?: (retry: ModelCallRetryView) => void;
   /** The AGENTS.md files cut short or skipped for this response (empty: all fit). */
   onAgentsInstructionNotices?: (notices: AgentsInstructionNotice[]) => void;
+  /** Hook `systemMessage` text, hook notices and a hook's stop reason; never model context. */
+  onHookMessages?: (messages: string[]) => void;
   onContextPressure?: (pressure: ChatContextPressureV1 | null) => void;
 }
 
@@ -2305,4 +2461,74 @@ export const ttsApi = {
   clearCache: () => invoke<{ ok: true }>("tts:cache:clear"),
   onEvent: (handler: (event: TtsServiceEvent) => void) =>
     onNotification<TtsServiceEvent>("tts:event", handler),
+};
+
+/** Result of `designCanvas:save`; mirrors main's `DesignCanvasSaveResult`. */
+export type DesignCanvasSaveResult =
+  | { ok: true; revision: number }
+  | { ok: false; reason: "conflict"; doc: DesignCanvas }
+  | { ok: false; reason: "invalid"; issues: string[] };
+
+/** The per-chat design canvas. Available only while design mode's flag is on. */
+export const designCanvasApi = {
+  getDesignCanvas: (chatId: string) => invoke<DesignCanvas>("designCanvas:get", chatId),
+  /** A page's file or an artifact's HTML, for the side panel's Code and Tweaks tabs. */
+  designFrameSource: (chatId: string, frameId: string) =>
+    invoke<{ text: string; truncated: boolean } | { error: "unavailable" | "missing" }>("designCanvas:source", chatId, frameId),
+  /** Writes a plain text change into a page's file, where its old words are found once. */
+  editDesignText: (chatId: string, frameId: string, changes: { before: string; after: string }[], stamp?: string) =>
+    invoke<
+      | { ok: true }
+      | { ok: false; reason: "unavailable" | "missing" | "not-found" | "ambiguous" | "unchanged" | "too-long" | "changed" }
+    >("designCanvas:editText", chatId, frameId, changes, stamp),
+  /** Saves one frame as a PNG, a PDF or its original file, through the save dialog. `theme` draws a dark artifact. */
+  exportDesignFrame: (chatId: string, frameId: string, format: "png" | "pdf" | "source", theme?: unknown) =>
+    invoke<{ saved: true } | { canceled: true } | { error: "unavailable" | "missing" | "failed" }>(
+      "designCanvas:export",
+      chatId,
+      frameId,
+      format,
+      theme,
+    ),
+  /** Compare-and-swap: lands only if `baseRevision` is still the stored revision. */
+  saveDesignCanvas: (chatId: string, doc: DesignCanvas, baseRevision: number) =>
+    invoke<DesignCanvasSaveResult>("designCanvas:save", chatId, doc, baseRevision),
+  onDesignCanvasUpdated: (handler: (update: { chatId: string; revision: number }) => void) =>
+    onNotification<{ chatId: string; revision: number }>("designCanvas:updated", handler),
+  /** The chat's `aiden-design://<grant>/` host for framing its workspace files. */
+  getDesignCanvasGrant: (chatId: string) =>
+    invoke<{ grant: string } | { error: "unavailable" }>("designCanvas:grant", chatId),
+  /** A PNG of this window's own page inside `rect` (CSS pixels), at most 1024 px on a side. */
+  captureDesignFrame: (rect: { x: number; y: number; width: number; height: number }) =>
+    invoke<{ dataUrl: string } | { error: "unavailable" }>("designCanvas:capture", rect),
+  /** Replaces the workspace files whose changes reload this chat's frames (at most 50). */
+  watchDesignFiles: (chatId: string, paths: string[]) =>
+    invoke<void>("designCanvas:watch", chatId, paths),
+  onDesignFilesChanged: (handler: (update: { chatId: string; paths: string[] }) => void) =>
+    onNotification<{ chatId: string; paths: string[] }>("designCanvas:filesChanged", handler),
+  /** Opens the file dialog in the chat's workspace folder. */
+  pickDesignFile: (chatId: string, kind: "file" | "image") =>
+    invoke<
+      | { path: string }
+      | { cancelled: true }
+      | { error: "outside-workspace" | "unsupported" | "unavailable" }
+    >("designCanvas:pickFile", chatId, kind),
+  /** Aiden asked to enter design mode; this window shows the card. */
+  onDesignModeConsent: (handler: (request: { requestId: string; chatId: string; reason: string }) => void) =>
+    onNotification<{ requestId: string; chatId: string; reason: string }>("designCanvas:consent", handler),
+  /** A card stopped waiting: answered, the reply stopped, or it timed out. */
+  onDesignModeConsentClosed: (handler: (closed: { requestId: string }) => void) =>
+    onNotification<{ requestId: string }>("designCanvas:consentClosed", handler),
+  /** The person's answer. Enter turns design mode on in main before Aiden hears it. False when the card expired. */
+  answerDesignModeConsent: (requestId: string, answer: "enter" | "decline") =>
+    invoke<boolean>("designCanvas:consentAnswer", requestId, answer),
+  /** Aiden asks the canvas to fit these frames (all when empty). */
+  onDesignCanvasFocus: (handler: (request: { chatId: string; frameIds: string[] }) => void) =>
+    onNotification<{ chatId: string; frameIds: string[] }>("designCanvas:focus", handler),
+  /** Aiden asks for a picture of the canvas; answer with `answerDesignCanvasSnapshot`. */
+  onDesignCanvasSnapshot: (handler: (request: { requestId: string; chatId: string }) => void) =>
+    onNotification<{ requestId: string; chatId: string }>("designCanvas:snapshot", handler),
+  /** A PNG data URL of the canvas region, or null when it is not on screen. */
+  answerDesignCanvasSnapshot: (requestId: string, dataUrl: string | null) =>
+    invoke<boolean>("designCanvas:snapshotAnswer", requestId, dataUrl),
 };

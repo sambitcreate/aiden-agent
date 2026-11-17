@@ -251,6 +251,39 @@ test("a send that fails mid-way is retried once with the duplicate label", async
   assert.deepEqual((await ingress.rows()).map((row) => row.state), ["sent"]);
 });
 
+test("recovery working from an old row list cannot deliver a reply that was already sent", async () => {
+  const file = path.join(tempDir(), "outbox.json");
+  const message = { botId: "bot:a", chatId: 7, ownerUserId: 7, messageId: 900, text: "Hi" };
+  const requestId = telegramBotRequestId(message);
+  // Each spent redelivery costs recovery one write, which is time for the wait below to finish.
+  const spent = Array.from({ length: 12 }, () => ({ state: "sending" as const, text: "Spent", redelivered: true }));
+  seed(file, [...spent, { requestId, state: "awaiting", submissionId: "77" }]);
+  let release!: () => void;
+  const answered = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const delivered: string[] = [];
+  const ingress = createTelegramBotIngress({
+    file,
+    session: {
+      async send() {
+        throw new Error("must not resubmit");
+      },
+      async awaitReply(): Promise<BotReplyOutcome> {
+        await answered;
+        return { kind: "completed", text: "Done." };
+      },
+    },
+    deliver: async (reply) => void delivered.push(reply.text),
+  });
+  await ingress.admit(message);
+  const recovering = ingress.recover();
+  release();
+  await recovering;
+  await ingress.idle();
+  assert.deepEqual(delivered, ["Done."]);
+});
+
 test("a turn interrupted by a quit is delivered once after an explicit Resume, across restarts", async () => {
   const dir = tempDir();
   const file = path.join(dir, "outbox.json");

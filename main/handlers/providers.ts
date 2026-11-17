@@ -1,3 +1,4 @@
+import { parseAidenLiveSettingsPatch } from "../../renderer/shared/aiden-live-settings.js";
 import { customModelThinkingLevels } from "../../renderer/shared/custom-model-options.js";
 import { isCompactionEngine, parseCompactionModelOverrides } from "../../renderer/shared/compaction.js";
 import { parseModelPadPreferencesPatch } from "../../renderer/shared/model-pad-preferences.js";
@@ -63,6 +64,8 @@ import { parseDictationPreferencePatch } from "../../renderer/shared/dictation-p
 import { parseVoicePreferencePatch, parseVoiceProviderPatch } from "../../renderer/shared/voice-preferences.js";
 import { isUsageLimitWaitHours } from "../../renderer/shared/usage-limits.js";
 import { parseSpendingLimitsSettings } from "../../renderer/shared/spending.js";
+import { parseApprovalSettingsPatch } from "../../renderer/shared/approval-mode.js";
+import { reportApprovalModeChanged } from "../services/approval-gate/approval-analytics.js";
 import { spending } from "../services/spending-main.js";
 import { usageLimits } from "../services/usage-limit-main.js";
 
@@ -434,9 +437,13 @@ export function registerProviderHandlers(): void {
       next.usageLimitWaitHours = p.usageLimitWaitHours;
     }
     if (p.botRoutinesGoAhead !== undefined) {
-      if (typeof p.botRoutinesGoAhead !== "boolean") throw new Error("Invalid Bot routines setting.");
-      next.botRoutinesGoAhead = p.botRoutinesGoAhead;
+      // The legacy switch is no longer offered; it can only be turned off.
+      if (p.botRoutinesGoAhead !== false) throw new Error("Invalid Bot routines setting.");
+      next.botRoutinesGoAhead = false;
     }
+    const approval = parseApprovalSettingsPatch(p);
+    Object.assign(next, approval);
+    const approvalModeBefore = approval.approvalMode !== undefined ? (await configStore.getSettings()).approvalMode : undefined;
     if (p.botMessaging !== undefined) {
       if (typeof p.botMessaging !== "boolean") throw new Error("Invalid Bot messaging setting.");
       next.botMessaging = p.botMessaging;
@@ -456,6 +463,7 @@ export function registerProviderHandlers(): void {
       if (typeof p[key] !== "boolean") throw new Error("Invalid Aiden Live setting.");
       next[key] = p[key];
     }
+    Object.assign(next, parseAidenLiveSettingsPatch(p as Record<string, unknown>));
     if (p.skillsEnabled !== undefined) {
       if (typeof p.skillsEnabled !== "boolean") throw new Error("Invalid skills enabled setting.");
       next.skillsEnabled = p.skillsEnabled;
@@ -475,6 +483,7 @@ export function registerProviderHandlers(): void {
       ? await linuxHoldSettings.apply(next.dictationHoldToTalk, (isCurrent) => configStore.setSettings(next, isCurrent))
       : await configStore.setSettings(next);
     await applySettingsEffects(saved, next);
+    if (approval.approvalMode !== undefined) reportApprovalModeChanged("global", approvalModeBefore, saved.approvalMode);
     if (next.spendingLimits !== undefined) spending.settingsChanged();
     if (next.usageLimitWaitHours !== undefined) void usageLimits.waitSettingChanged();
     return saved;

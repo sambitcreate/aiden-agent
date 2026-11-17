@@ -1,6 +1,6 @@
-import { spawn } from "node:child_process";
-import type { Readable } from "node:stream";
-import { createProcessGroupTerminator, decodeCappedUtf8, processGroupExists, waitForChildExit } from "../shared/process-group.js";
+import { spawn, type ChildProcessByStdio } from "node:child_process";
+import type { Readable, Writable } from "node:stream";
+import { createProcessGroupTerminator, decodeCappedUtf8, processGroupExists, waitForChildExit, type ProcessGroupProbe } from "../shared/process-group.js";
 
 export interface BoundedShellCommandOptions {
   command: string;
@@ -10,6 +10,8 @@ export interface BoundedShellCommandOptions {
   /** Combined stdout and stderr bytes kept; more stops the command. */
   maxOutputBytes: number;
   signal?: AbortSignal;
+  /** Written to the command's stdin, which is then closed. Without it stdin is ignored. */
+  input?: string;
   /**
    * When the shell has exited but processes it started still hold its output
    * open (`npm run dev &`), return this long after the exit with
@@ -21,6 +23,7 @@ export interface BoundedShellCommandOptions {
   /** Hold a check behind stdin until its group is durably recorded. On completion
    * terminate leftovers and release the record after group cleanup. */
   recordGroup?: (pid: number) => Promise<() => Promise<void>>;
+  groupProbe?: ProcessGroupProbe;
 }
 
 export interface BoundedShellCommandResult {
@@ -63,7 +66,7 @@ const PIPE_DRAIN_MS = 1_000;
  * output pipe, the command settles after a short drain and the group is
  * stopped, instead of waiting for the job or the timeout, unless
  * `releaseLeftoversAfterMs` hands the job to the caller. Used by
- * `run_command` and by workspace artifact sources and buttons.
+ * `run_command`, hooks, and workspace artifact sources and buttons.
  */
 export async function runBoundedShellCommand(options: BoundedShellCommandOptions): Promise<BoundedShellCommandResult> {
   const { signal } = options;
@@ -79,11 +82,17 @@ export async function runBoundedShellCommand(options: BoundedShellCommandOptions
   };
   // On a host crash the pipe closes. An unrecorded shell then exits without
   // evaluating the person's command. Pass the command as an argument verbatim.
-  const child = recordGroup
+  const child = (recordGroup
     ? spawn("/bin/sh", ["-c", 'IFS= read -r ready && exec /bin/sh -c "$1" </dev/null', "aiden-check", options.command],
         { ...spawnOptions, stdio: ["pipe", "pipe", "pipe"] })
-    : spawn(options.command, { ...spawnOptions, shell: true, stdio: ["ignore", "pipe", "pipe"] });
-  const terminator = createProcessGroupTerminator(child, { killGraceMs: KILL_GRACE_MS });
+    // stdout and stderr are always pipes; stdin is a pipe only when there is input.
+    : spawn(options.command, { ...spawnOptions, shell: true, stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"] })) as ChildProcessByStdio<Writable | null, Readable, Readable>;
+  if (options.input !== undefined && !recordGroup && child.stdin) {
+    // A command may exit without reading its input; a broken pipe is not an error.
+    child.stdin.on("error", () => undefined);
+    child.stdin.end(options.input);
+  }
+  const terminator = createProcessGroupTerminator(child, { killGraceMs: KILL_GRACE_MS, probe: options.groupProbe });
   const stdout: Buffer[] = [];
   const stderr: Buffer[] = [];
   let bytes = 0;
@@ -115,6 +124,10 @@ export async function runBoundedShellCommand(options: BoundedShellCommandOptions
     terminator.terminate();
   }, options.timeoutMs);
   timeout.unref?.();
+  const stopWatching = () => {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", abort);
+  };
 
   const result = (exitCode: number | null, extra: Partial<BoundedShellCommandResult>): BoundedShellCommandResult => ({
     stdout: decodeCappedUtf8(Buffer.concat(stdout), outputLimitExceeded),
@@ -160,7 +173,10 @@ export async function runBoundedShellCommand(options: BoundedShellCommandOptions
       terminator.terminate();
       child.stdout.destroy();
       child.stderr.destroy();
-      return result(released.code, { backgroundStopped: !timedOut && !outputLimitExceeded && !aborted });
+      // The run is over. Waiting for cleanup must not rewrite how it ended.
+      stopWatching();
+      const stopConfirmed = await terminator.finished() !== "cleanup_unconfirmed";
+      return result(released.code, { backgroundStopped: stopConfirmed && !timedOut && !outputLimitExceeded && !aborted });
     }
     const { code, pipesHeld } = await waitForChildExit(child, {
       drainMs: PIPE_DRAIN_MS,
@@ -171,15 +187,16 @@ export async function runBoundedShellCommand(options: BoundedShellCommandOptions
       if (admissionError) throw admissionError;
       if (processGroupExists(child.pid)) terminator.terminate();
     }
+    stopWatching();
+    const stopConfirmed = await terminator.finished() !== "cleanup_unconfirmed";
     return result(code, {
       ...(pipesHeld ? {} : leftovers(child.pid, terminator.requested)),
       // Only a group stopped because of the drain counts; a timeout, the cap or
       // an abort already explains itself.
-      backgroundStopped: pipesHeld && !timedOut && !outputLimitExceeded && !aborted,
+      backgroundStopped: pipesHeld && stopConfirmed && !timedOut && !outputLimitExceeded && !aborted,
     });
   } finally {
-    clearTimeout(timeout);
-    signal?.removeEventListener("abort", abort);
+    stopWatching();
     // The shell can close before its descendants leave the process group.
     await terminator.finished();
     await admission;

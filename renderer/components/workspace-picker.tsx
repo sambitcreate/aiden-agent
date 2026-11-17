@@ -50,7 +50,9 @@ import {
   PopoverTrigger,
   toast,
 } from "./ui";
+import { LiveGuard } from "./live-guard";
 
+import { useAppCapabilities } from "../lib/app-capabilities";
 /** Ask an already mounted picker to open (a new `nonce` each time). */
 export interface WorkspaceMenuRequest {
   nonce: number;
@@ -185,23 +187,26 @@ export function WorkspacePicker({
           }}
         >
           {view === "clone" ? (
-            <CloneView
-              ref={cloneRef}
-              onBack={() => setView("list")}
-              onCloningChange={setCloning}
-              onCloned={async (workspace) => {
-                try {
-                  await onSelectWorkspace(workspace.id);
-                } catch (error) {
-                  toast.info(
-                    error instanceof Error
-                      ? `The repository was cloned, but this chat could not move to it: ${error.message}`
-                      : "The repository was cloned, but this chat could not move to it.",
-                  );
-                }
-                close();
-              }}
-            />
+            // Cloning fetches from a URL onto this computer: the person's to start, never Aiden Live's.
+            <LiveGuard guard="you">
+              <CloneView
+                ref={cloneRef}
+                onBack={() => setView("list")}
+                onCloningChange={setCloning}
+                onCloned={async (workspace) => {
+                  try {
+                    await onSelectWorkspace(workspace.id);
+                  } catch (error) {
+                    toast.info(
+                      error instanceof Error
+                        ? `The repository was cloned, but this chat could not move to it: ${error.message}`
+                        : "The repository was cloned, but this chat could not move to it.",
+                    );
+                  }
+                  close();
+                }}
+              />
+            </LiveGuard>
           ) : (
             <WorkspaceListView
               workspaces={workspaces}
@@ -499,6 +504,7 @@ const CloneView = React.forwardRef<
     onCloned: (workspace: Workspace) => Promise<void>;
   }
 >(function CloneView({ onBack, onCloningChange, onCloned }, ref) {
+  const { platform } = useAppCapabilities();
   const queryClient = useQueryClient();
   const urlId = React.useId();
   const destinationId = React.useId();
@@ -611,7 +617,7 @@ const CloneView = React.forwardRef<
       if (!result.ok) {
         setCloneId(null);
         setProgress(null);
-        setError(cloneFailureMessage(result));
+        setError(cloneFailureMessage(result, platform));
         return;
       }
       setFinishing(true);

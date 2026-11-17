@@ -3,7 +3,7 @@
 import * as fs from "fs/promises";
 import { ipcMain } from "../platform.js";
 import { configStore } from "../services/config-store.js";
-import { terminalService } from "../services/terminal.js";
+import { TerminalInputOrder, terminalService } from "../services/terminal.js";
 import {
   commitWithWorkspaceMutationAdmission,
   workspaceMutationGate,
@@ -77,6 +77,8 @@ function withSessionAccess<T>(
   owner: RendererDocumentOwner,
   sessionId: string,
   operation: () => T,
+  /** Settles when the operation may run, after its access check. */
+  turn: Promise<void> = Promise.resolve(),
 ): Promise<T> {
   const workspaceId = terminalService.workspaceId(sessionId, owner);
   return commitWithWorkspaceMutationAdmission(
@@ -84,10 +86,13 @@ function withSessionAccess<T>(
     workspaceId,
     async (mutationSignal) => {
       await ensureSessionAccess(owner, sessionId, workspaceId, mutationSignal);
+      await turn;
       return operation;
     },
   );
 }
+
+const terminalInput = new TerminalInputOrder();
 
 export function registerTerminalHandlers(): void {
   ipcMain.handle("terminal:create", async (event, workspaceId: unknown) => {
@@ -139,7 +144,14 @@ export function registerTerminalHandlers(): void {
   ipcMain.handle("terminal:write", async (event, sessionId: unknown, data: unknown) => {
     const owner = terminalOwner(event);
     const id = asSessionId(sessionId);
-    await withSessionAccess(owner, id, () => terminalService.write(id, data, owner));
+    // Each keystroke is its own write; their checks run side by side, but they
+    // reach the shell in the order they were typed.
+    const place = terminalInput.enter(id);
+    try {
+      await withSessionAccess(owner, id, () => terminalService.write(id, data, owner), place.previous);
+    } finally {
+      place.done();
+    }
   });
   ipcMain.handle(
     "terminal:resize",

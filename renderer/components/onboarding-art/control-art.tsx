@@ -3,7 +3,6 @@ import {
   CalendarClock,
   Check,
   ChevronRight,
-  Circle,
   Cpu,
   Ellipsis,
   Folder,
@@ -12,10 +11,8 @@ import {
   Lock,
   MessageSquare,
   Mic,
-  Mic2,
   Monitor,
   Moon,
-  MousePointer2,
   MousePointerClick,
   OctagonAlert,
   PanelRightOpen,
@@ -26,7 +23,6 @@ import {
   Settings,
   ShieldCheck,
   ShieldQuestion,
-  Square,
   Sun,
   Wrench,
   X,
@@ -35,11 +31,14 @@ import {
 import { AidenActivityMark } from "../aiden-activity-mark";
 import { AvatarFace } from "../bot-avatar";
 import { ProviderIcon } from "../provider-icon";
+import { useAppCapabilities } from "../../lib/app-capabilities";
 import { THEME_PRESETS, type ThemePresetId } from "../../shared/appearance";
+import { thisComputerLabel } from "../../shared/computer-noun";
 import { COMMAND_BY_ID, prettyAcceleratorForPlatform, type CommandId } from "../../shared/keybindings";
 import {
   ArtButton,
   ArtChip,
+  ArtComposer,
   ArtIcon,
   ArtWindow,
   Bar,
@@ -51,11 +50,11 @@ import {
 
 /* Art for the "Automate and stay in control" tiles. */
 
-/** The composer's workspace access menu, in its real order and icon colours. */
+/** The composer's approvals menu, in its real order and icon colours. */
 const ACCESS_LEVELS = [
-  { label: "Full access", icon: OctagonAlert, color: "var(--support-warning)", detail: "60%" },
-  { label: "Ask first", icon: ShieldQuestion, color: "var(--text-secondary)", detail: "84%" },
-  { label: "No access", icon: Lock, color: "var(--text-tertiary)", detail: "70%" },
+  { label: "Auto", icon: ShieldCheck, color: "var(--text-secondary)", detail: "60%" },
+  { label: "Ask", icon: ShieldQuestion, color: "var(--text-secondary)", detail: "84%" },
+  { label: "Never ask", icon: OctagonAlert, color: "var(--support-warning)", detail: "70%" },
 ] as const;
 
 export function PermissionsArt() {
@@ -88,96 +87,86 @@ export function PermissionsArt() {
   );
 }
 
+// Five offset sine strands, like the ribbon Live draws while it speaks.
+const RIBBON_STRANDS = [0, 1, 2, 3, 4].map((strand) => {
+  const phase = strand * 0.9;
+  const amplitude = 5 + strand * 1.2;
+  let d = "";
+  for (let x = 0; x <= 96; x += 4) {
+    const edge = Math.sin((Math.PI * x) / 96);
+    const y = 12 + Math.sin(x / 9 + phase) * amplitude * edge;
+    d += `${x === 0 ? "M" : "L"}${x} ${y.toFixed(1)} `;
+  }
+  return d.trim();
+});
 
-/** Live's floating HUD over a shared window, waiting on a one-action voice approval. */
+/** Live's ribbon pill floating above a chat's composer, with its captions card, while Live speaks. */
 export function AidenLiveArt() {
   return (
     <>
-      <ArtWindow className="oa-live-screen" style={{ left: 14, top: 18, width: 186, height: 170 }}>
-        <div className="oa-live-screen-bar oa-separator-bottom">
+      <ArtWindow className="oa-live-chat" style={{ left: 14, top: 12, width: 364, height: 196 }}>
+        <div className="oa-live-chat-bar oa-separator-bottom">
           <TrafficLights />
-          <Bar width={46} tone="soft" />
+          <Bar width={58} tone="soft" />
         </div>
-        <div className="oa-live-screen-body">
-          <div className="oa-stack" style={{ gap: 5 }}>
+        <div className="oa-live-chat-body">
+          <span className="oa-live-bubble">
+            <Bar width={96} tone="soft" />
+          </span>
+          <div className="oa-stack" style={{ gap: 5, width: "72%" }}>
+            <Bar width="92%" />
             <Bar width="70%" tone="soft" />
-            <Bar width="52%" tone="soft" />
-            <Bar width="62%" tone="soft" />
-            <Bar width="44%" tone="soft" />
-            <Bar width="58%" tone="soft" />
-          </div>
-          <div className="oa-stack" style={{ gap: 5 }}>
-            <Bar width="86%" />
-            <Bar width="100%" tone="soft" />
-            <Bar width="74%" tone="soft" />
-            <Bar width="90%" tone="soft" />
-            <Bar width="62%" tone="soft" />
-            <span className="oa-live-target">
-              <Bar width={30} tone="ink" />
-            </span>
           </div>
         </div>
-        <span className="oa-live-cursor">
-          <ArtIcon icon={MousePointer2} />
+      </ArtWindow>
+      <ArtComposer style={{ left: 56, top: 148, width: 280 }} placeholder="Ask anything" />
+      <div className="oa-live-captions oa-anim-pop" style={{ left: 98, top: 48, width: 196 }}>
+        <div className="oa-row">
+          <b>You</b>
+          <Bar width="58%" tone="soft" />
+        </div>
+        <div className="oa-row">
+          <b>Aiden</b>
+          <Bar width="74%" tone="soft" />
+        </div>
+      </div>
+      {/* The floating ribbon pill, dark glass in every theme, as in the app. */}
+      <div className="oa-live-pill" style={{ left: 70, top: 98, width: 252 }}>
+        <span className="oa-live-ribbon">
+          {RIBBON_STRANDS.map((strand, index) => (
+            <span
+              key={strand}
+              className="oa-live-strand oa-anim-bars"
+              style={{ color: `var(--live-spectrum-${index + 1})`, transformOrigin: "center", animationDelay: `${index * 0.18}s`, opacity: 0.55 + index * 0.08 }}
+            >
+              <svg viewBox="0 0 96 24" preserveAspectRatio="none">
+                <path d={strand} />
+              </svg>
+            </span>
+          ))}
         </span>
-      </ArtWindow>
-      <ArtChip icon={Monitor} className="oa-live-sharing" style={{ left: 24, top: 160 }}>
-        Sharing screen
-      </ArtChip>
-      <ArtWindow raised className="oa-live-hud" style={{ left: 178, top: 26, width: 200 }}>
-        <div className="oa-live-head">
-          <span className="oa-live-mark">
-            <AidenActivityMark mark="glance" size={20} />
-          </span>
-          <span className="oa-stack" style={{ gap: 3, flex: 1 }}>
-            <span className="oa-row">
-              <span className="oa-strong">Live</span>
-              <span className="oa-live-badge">Approval needed</span>
-            </span>
-            <span style={{ color: "var(--text-tertiary)" }}>Google Gemini</span>
-          </span>
-          <span className="oa-live-stop">
-            <ArtIcon icon={Square} />
-          </span>
-        </div>
-        <div className="oa-live-captions">
-          <div className="oa-row">
-            <b>You</b>
-            <Bar width="46%" tone="soft" />
-            <span className="oa-live-level">
-              {[0, 0.25, 0.1, 0.4, 0.18].map((delay) => (
-                <i key={delay} className="oa-anim-bars" style={{ animationDelay: `${delay}s` }} />
-              ))}
-            </span>
-          </div>
-          <div className="oa-row">
-            <b>Aiden</b>
-            <Bar width="62%" tone="soft" />
-          </div>
-        </div>
-        <div className="oa-live-approval">
-          <div className="oa-row" style={{ gap: 5 }}>
-            <span className="oa-live-approval-icon">
-              <ArtIcon icon={Mic2} />
-            </span>
-            <span className="oa-strong">Voice approval required</span>
-          </div>
-          <div className="oa-stack" style={{ gap: 4, margin: "7px 0 8px" }}>
-            <Bar width="88%" />
-            <Bar width="70%" tone="soft" />
-            <Bar width="48%" tone="soft" />
-          </div>
-          {/* Live approvals are spoken, not clicked. */}
-          <div className="oa-live-say">
-            Say <span className="oa-live-word">“Allow once”</span> or <span className="oa-live-word">“Deny.”</span>
-          </div>
-        </div>
-      </ArtWindow>
+        <span className="oa-live-pill-title">Speaking</span>
+        <span className="oa-grow" />
+        <span className="oa-live-pill-control">
+          <ArtIcon icon={Mic} />
+        </span>
+        <span className="oa-live-pill-control">
+          <ArtIcon icon={Ellipsis} />
+        </span>
+        <span className="oa-live-pill-control oa-live-pill-end">
+          <ArtIcon icon={X} />
+        </span>
+      </div>
     </>
   );
 }
 
-/** A Bot chat's approved plan, with bounded coverage, hand-off attention and a routine/reply. */
+/**
+ * The first Bot's chat (plan §4.1): Chief asks what it should help with and
+ * offers replies, the person answers, and Chief sets itself up, which reads as
+ * an "Instructions updated · Undo" receipt. Chips keep routines and Bots that
+ * talk to each other in view.
+ */
 export function BotsArt() {
   return (
     <>
@@ -187,48 +176,35 @@ export function BotsArt() {
             <span className="oa-bots-avatar">
               <AvatarFace avatar={{ version: 1, shape: "drop", color: "peach" }} />
             </span>
-            Meal Planner
+            Chief
           </span>
           <span className="oa-grow" />
           <ArtIcon icon={PanelRightOpen} />
           <ArtIcon icon={Ellipsis} />
         </div>
-        <div className="oa-bots-body">
-          <div role="group" aria-label="Meal Planner's approved plan" className="oa-stack rounded-card bg-popover p-2 shadow-control">
-            <span>Approved · ends in 45 min</span>
-            <Bar width="70%" tone="ink" />
-            <ul aria-label="Plan steps" className="oa-stack m-0 list-none p-0">
-              <li className="oa-row">
-                <span role="img" aria-label="Done" className="rounded-full bg-status-green-surface text-status-green">
-                  <ArtIcon icon={Check} />
-                </span>
-                <Bar width="72%" tone="soft" />
-              </li>
-              <li className="oa-row">
-                <span role="img" aria-label="Pending"><ArtIcon icon={Circle} /></span>
-                <Bar width="60%" tone="soft" className="oa-anim-type" />
-              </li>
+        <div role="group" aria-label="Chief's first chat" className="oa-bots-body oa-stack">
+          <div aria-label="Chief asks what it should help with" role="group" className="oa-stack">
+            <span>What should I help with?</span>
+            <Bar width="82%" tone="soft" />
+            <ul aria-label="Replies to tap" className="oa-bots-replies m-0 list-none p-0">
+              <li className="oa-chip"><Bar width={34} tone="soft" /></li>
+              <li className="oa-chip"><Bar width={26} tone="soft" /></li>
             </ul>
-            <ul aria-label="Plan coverage" className="m-0 list-none p-0">
-              <li>
-                <span className="block">Calendar · create events (up to 5)</span>
-                <span className="block text-tertiary">1 of 5 used</span>
-              </li>
-            </ul>
-            <div className="oa-row">
-              <ArtButton variant="ghost">Stop plan</ArtButton>
-              <ArtButton variant="ghost">Show details</ArtButton>
-            </div>
           </div>
+          <div aria-label="Your answer" role="group" className="oa-bots-bubble oa-anim-pop" style={{ animationDelay: "0.6s" }}>
+            <Bar width="90%" tone="ink" />
+            <Bar width="62%" tone="ink" />
+          </div>
+          <div role="group" aria-label="Chief set itself up" className="oa-bots-receipt oa-anim-pop" style={{ animationDelay: "1.2s" }}>
+            <span>Instructions updated · Undo</span>
+          </div>
+          <Bar width="74%" tone="soft" className="oa-anim-type" />
         </div>
       </ArtWindow>
-      <ArtChip icon={ShieldQuestion} className="oa-bots-routine" style={{ left: 20, top: 158 }}>
-        Needs you
-      </ArtChip>
-      <ArtChip icon={CalendarClock} className="oa-bots-routine" style={{ left: 20, top: 182 }}>
+      <ArtChip icon={CalendarClock} className="oa-bots-routine" style={{ left: 20, top: 206 }}>
         Every Sunday at 9:00 AM
       </ArtChip>
-      <ArtChip icon={MessageSquare} className="oa-bots-routine" style={{ left: 20, top: 206 }}>
+      <ArtChip icon={MessageSquare} className="oa-bots-routine" style={{ left: 20, top: 230 }}>
         COS replied
       </ArtChip>
     </>
@@ -667,6 +643,7 @@ const CHAT_CONTROL_ROWS = [
 
 /** A reply that answers a settings request with a live settings card in the chat. */
 export function ChatControlsArt() {
+  const { platform } = useAppCapabilities();
   return (
     <>
       <div className="oa-ctl-ask" style={{ right: 12, top: 10, width: 96 }}>
@@ -681,7 +658,7 @@ export function ChatControlsArt() {
           <ArtIcon icon={Settings} />
           <span className="oa-strong">Settings</span>
           <span className="oa-grow" />
-          <ArtChip icon={Monitor}>This desktop</ArtChip>
+          <ArtChip icon={Monitor}>{thisComputerLabel(platform)}</ArtChip>
         </div>
         {CHAT_CONTROL_ROWS.map(({ label, on }, index) => (
           <div key={label} className="oa-ctl-row">
@@ -699,9 +676,10 @@ export function ChatControlsArt() {
 
 /** The paired-project clone dialog, cropped to its destination and explicit file choices. */
 export function PeerProjectsArt() {
+  const { platform } = useAppCapabilities();
   return <ArtWindow raised className="oa-otg-card" style={{ left: 14, top: 12, width: 172 }}>
     <span className="oa-row" style={{ gap: 6 }}><ArtIcon icon={Folder} /><span className="oa-mono">Add project</span></span>
-    <div className="oa-row" style={{ gap: 5, marginTop: 5 }}><ArtChip icon={Monitor}>This Mac</ArtChip><ArtIcon icon={ChevronRight} /><ArtChip icon={Monitor}>Studio</ArtChip></div>
+    <div className="oa-row" style={{ gap: 5, marginTop: 5 }}><ArtChip icon={Monitor}>{thisComputerLabel(platform)}</ArtChip><ArtIcon icon={ChevronRight} /><ArtChip icon={Monitor}>Studio</ArtChip></div>
     <div className="oa-row" style={{ gap: 5, marginTop: 6 }}><ArtIcon icon={Folder} /><Bar width="70%" tone="soft" /></div>
     <div className="oa-stack" style={{ gap: 5, marginTop: 6 }}><span className="oa-row" style={{ gap: 5 }}><Radio /><span className="oa-mono">.env</span><Bar width="40%" tone="soft" /></span><span className="oa-row" style={{ gap: 5 }}><Radio /><Bar width="55%" tone="soft" /></span></div>
     <ArtButton variant="primary" style={{ marginTop: 7, justifySelf: "end" }}>Clone project</ArtButton>

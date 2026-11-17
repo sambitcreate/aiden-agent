@@ -7,7 +7,7 @@ import path from "node:path";
 import test from "node:test";
 import Ajv from "ajv";
 import { createAidenRemoteRequestHandler, type AidenRemoteRouterDependencies } from "./aiden-remote-router.js";
-import { AIDEN_REMOTE_CONTRACT_REVISION, type AidenRemoteCapability } from "./aiden-remote-protocol.js";
+import { AIDEN_REMOTE_BOT_OPEN_WORK_CONTRACT_REVISION, type AidenRemoteCapability } from "./aiden-remote-protocol.js";
 import { createBotOpenWorkStore } from "./bot-open-work/store.js";
 import { createBotOpenWorkService } from "./bot-open-work/service.js";
 
@@ -28,7 +28,7 @@ function portable(t: test.TestContext) {
   return createBotOpenWorkService({ store: createBotOpenWorkStore({ profileDir: () => root, botExists: async () => true }), execution: { inspect: async () => ({ kind: "missing" }), stop: async () => "not_running" } });
 }
 test("Open work opt-in is advertised only with complete ports; task contents require chat visibility", async (t) => {
-  assert.equal(AIDEN_REMOTE_CONTRACT_REVISION, fixture.contractRevision);
+  assert.equal(AIDEN_REMOTE_BOT_OPEN_WORK_CONTRACT_REVISION, fixture.contractRevision);
   const service = portable(t);
   for (const [port, negotiated, expected] of [[service, true, true], [undefined, true, false], [service, false, false]] as const) {
     const server = await host(t, { port, negotiated }); const response = await server.request("/server"); const info = await response.json();

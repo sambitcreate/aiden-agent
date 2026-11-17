@@ -34,7 +34,7 @@ import { createBotMemoryStore } from "../../../main/services/bot-memory/store.js
 import { renderBotMemorySection } from "../../../main/services/bot-memory/prompt.js";
 import { botMemoryToolEntry, withBotMemoryIngress } from "../../../main/services/bot-memory/tool.js";
 import { botRecallToolEntry } from "../../../main/services/bot-memory/recall.js";
-import { botIngressAllowsTool } from "../../../main/services/bot-runtime/bot-tool-policy.js";
+import { botIngressAllowsTool, botTurnAttended } from "../../../main/services/bot-runtime/bot-tool-policy.js";
 import { composioServiceCallRequiresForeground, isComposioServiceToolDescriptor } from "../../../main/services/composio-service-tool.js";
 import { mcpAgentToolDescriptor } from "../../../main/services/mcp-agent-tool-descriptor.js";
 import type { BotRuntimeAuthorityAdmission } from "../../../main/services/bot-runtime-authority.js";
@@ -214,6 +214,10 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
       },
       codemodeSandbox: botCodemodeSandbox,
       turnAllows: withBotMemoryIngress(botIngressAllowsTool),
+      // The person's global and Bot hooks, run in the Bot's working directory.
+      hooks: { cwd: (botId) => admitted(botId, async (lease) => lease.authority.workingDirectory), attended: botTurnAttended,
+        // A Bot run has no transcript notice row, so hook messages go to the daemon log.
+        report: (botId, lines) => { for (const line of lines) process.stderr.write(`aiden: Bot ${botId} hook: ${line.replace(/[\r\n]+/gu, " ").slice(0, 500)}\n`); } },
       readmit: async (botId) => {
         if (!await ports.botStore.get(botId)) return { ok: false, reason: "bot_missing" };
         try { await admitted(botId, async () => {}); return { ok: true }; }

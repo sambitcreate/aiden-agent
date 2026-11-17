@@ -1,5 +1,5 @@
 import { AIDEN_UI_CATALOG, isAidenUiIcon, PRESERVE_WHITESPACE, type CatalogEntry, type PropKind } from "./catalog.js";
-import { parseExpression } from "./expression.js";
+import { AIDEN_UI_NAME, parseExpression } from "./expression.js";
 import { fallbackTextFor } from "./fallback-text.js";
 import { hasOwn, ownEntry } from "./own.js";
 import { parseAum, type AumAttr, type AumElement, type AumNode } from "./parse.js";
@@ -28,10 +28,10 @@ export interface CompiledAum {
 }
 
 /** Elements that may sit inside text-only components (`<Text>Press <Kbd>⌘</Kbd></Text>`). */
-const INLINE_ELEMENTS = new Set(["Kbd", "Badge", "Icon", "Math"]);
+export const INLINE_ELEMENTS: ReadonlySet<string> = new Set(["Kbd", "Badge", "Icon", "Math"]);
 const EVENT_OR_STYLE_PROP = /^(on[A-Z]|className$|style$|class$)/u;
-const RESERVED_DATA_NAMES = new Set(["__proto__", "constructor", "prototype"]);
-const MAX_TEXT_CHARS = 8000;
+export const RESERVED_DATA_NAMES: ReadonlySet<string> = new Set(["__proto__", "constructor", "prototype"]);
+export const MAX_TEXT_CHARS = 8000;
 
 interface Context {
   diagnostics: AidenUiDiagnostic[];
@@ -52,7 +52,9 @@ export interface CompileAumOptions {
   artifactActions?: boolean;
 }
 
-const MAX_RUN_ARGUMENTS = 8;
+export const MAX_RUN_ARGUMENTS = 8;
+/** A `run("name")` action name, as an artifact action may be called. */
+export const RUN_ACTION_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,39}$/u;
 
 function report(context: Context, diagnostic: AidenUiDiagnostic): void {
   if (context.diagnostics.length < 200) context.diagnostics.push(diagnostic);
@@ -104,7 +106,7 @@ function compileProp(
     if ((action.act === "compose" || action.act === "run") && !context.artifactActions) {
       return invalid(`${action.act === "run" ? "run" : "compose"}() works only in workspace artifacts; use sendPrompt("…") here`);
     }
-    if (action.act === "run" && (!/^[A-Za-z_][A-Za-z0-9_]{0,39}$/u.test(action.name) || action.a.length > MAX_RUN_ARGUMENTS)) {
+    if (action.act === "run" && (!RUN_ACTION_NAME.test(action.name) || action.a.length > MAX_RUN_ARGUMENTS)) {
       return invalid(`run("${action.name.slice(0, 40)}") needs an action name from the artifact's actions and at most ${MAX_RUN_ARGUMENTS} values`);
     }
     if (action.act === "set" && !context.stateKeys.has(action.key)) {
@@ -210,7 +212,7 @@ function textOf(nodes: readonly AumNode[]): string {
 function collectData(element: AumElement, context: Context): void {
   const nameAttr = element.attrs.find((attr) => attr.name === "name");
   const name = nameAttr?.value.kind === "string" ? nameAttr.value.text : undefined;
-  if (!name || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name) || RESERVED_DATA_NAMES.has(name)) {
+  if (!name || !AIDEN_UI_NAME.test(name) || RESERVED_DATA_NAMES.has(name)) {
     report(context, { code: "data_invalid", message: 'Data needs a name like <Data name="data">', at: "Data" });
     return;
   }

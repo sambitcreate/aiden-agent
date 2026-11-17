@@ -217,7 +217,7 @@ test("remote check prints both sections and fails when the Tailscale address doe
       const out = sink();
       const passed = await api.remoteCheckCommand(daemon.dir, { runner: tailscaleRunner(), host: linux, cloud: async () => false, probe: async (value) => { probed.push(value); return answers; }, out });
       assert.equal(passed, answers);
-      assert.match(out.text, /^Tailscale on this machine\n {2}✓ Tailscale is installed\n/);
+      assert.match(out.text, /^Tailscale on this computer\n {2}✓ Tailscale is installed\n/);
       assert.match(out.text, /\n\nAiden server\n {2}– Local network: off/);
       assert.match(out.text, answers ? /✓ https:\/\/box\.tail1234\.ts\.net\/api\/aiden\/v1 answers/ : /✗ https:\/\/box\.tail1234\.ts\.net\/api\/aiden\/v1 did not answer/);
     }

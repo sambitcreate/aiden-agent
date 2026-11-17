@@ -7,6 +7,7 @@ import {
   reportChatMessageSent,
   reportConnectorAdded,
   reportCustomProviderConnected,
+  reportDesignCommentsSent,
 } from "./analytics-feature-reports.js";
 import { analyticsModelId, analyticsProviderId, analyticsRunTrigger, analyticsWorkspaceKind } from "./analytics-ids.js";
 import { analyticsSettled, captureAnalyticsEvents } from "./test-support.js";
@@ -130,4 +131,23 @@ test("an action before any sender exists cannot be reported by a sender register
   finish(true);
   await analyticsSettled();
   assert.deepEqual(later, []);
+});
+
+test("a message carrying design comments reports only how many, from the person's latest message", (t) => {
+  const events = captureAnalyticsEvents(t);
+  const block = (count: number) =>
+    `<attached-design-comments>\nComments the person made.\n${JSON.stringify(
+      Array.from({ length: count }, (_, index) => ({ commentId: `c${index}`, note: "Make the button primary at /Users/person" })),
+    )}\n</attached-design-comments>`;
+  reportDesignCommentsSent([{ role: "user", content: `Fix these\n\n${block(3)}` }]);
+  reportDesignCommentsSent([
+    { role: "user", content: block(12) },
+    { role: "assistant", content: "Done." },
+    { role: "user", content: "Thanks, nothing attached this time" },
+  ]);
+  reportDesignCommentsSent([{ role: "user", content: block(1) }]);
+  assert.deepEqual(events, [
+    { event: "design_comments_sent", props: { count_bucket: "2-3" } },
+    { event: "design_comments_sent", props: { count_bucket: "1" } },
+  ]);
 });

@@ -1,4 +1,5 @@
 import type { SubagentShellApprovalDetails } from "../shared/assistant";
+import { ApprovalCodeWell } from "./approval-code-well";
 import { Text } from "./ui";
 
 export function SubagentShellApproval({
@@ -30,17 +31,7 @@ export function SubagentShellApproval({
           {details.effectDigestPrefix}
         </dd>
       </dl>
-      <div>
-        <Text as="p" variant="small-strong" color="tertiary">
-          Complete exact command
-        </Text>
-        <pre
-          className="mt-1 max-h-48 select-text overflow-auto whitespace-pre-wrap break-all rounded-control bg-well px-3 py-2 text-small text-primary"
-          aria-label="Complete exact full-host command"
-        >
-          {details.command}
-        </pre>
-      </div>
+      <ApprovalCodeWell label="Complete exact command">{details.command}</ApprovalCodeWell>
       <Text as="p" variant="small" color="secondary">
         This command is not OS-sandboxed. It has the current user&apos;s filesystem, process,
         system-tool, Keychain/API, and arbitrary network reach. The minimal environment only reduces

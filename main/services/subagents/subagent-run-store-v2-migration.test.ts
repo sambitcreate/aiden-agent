@@ -107,6 +107,35 @@ test("prepared migration resumes and committed migration is idempotent", async (
   assert.equal(v2.writes, writes);
 });
 
+test("a write that lands but reports failure resumes to the same committed store", async () => {
+  const clean: MemoryStorageState = { generation: "missing", writes: 0 };
+  await migrateSubagentRunStoreV2(memoryStorage(v1State()), memoryStorage(clean), () => 3_000);
+
+  for (const lostWrite of [1, 2]) {
+    const v1 = v1State();
+    const sourceBytes = Buffer.from(v1.contents!);
+    const v2: MemoryStorageState = { generation: "missing", writes: 0 };
+    const storage = memoryStorage(v2);
+    const losesResponse: SubagentRunStoreStorage = {
+      ...storage,
+      write: async (expected, contents) => {
+        const generation = await storage.write(expected, contents);
+        if (v2.writes === lostWrite) throw new Error("response lost");
+        return generation;
+      },
+    };
+
+    await assert.rejects(
+      migrateSubagentRunStoreV2(memoryStorage(v1), losesResponse, () => 3_000),
+      /response lost/u,
+    );
+    await migrateSubagentRunStoreV2(memoryStorage(v1), memoryStorage(v2), () => 4_000);
+
+    assert.deepEqual(v2.contents, clean.contents);
+    assert.deepEqual(v1.contents, sourceBytes);
+  }
+});
+
 test("committed migration survives filesystem generation changes when V1 bytes are identical", async () => {
   const v1 = v1State();
   const v2: MemoryStorageState = { generation: "missing", writes: 0 };

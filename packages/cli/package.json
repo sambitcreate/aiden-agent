@@ -17,7 +17,7 @@
   ],
   "scripts": {
     "build": "node scripts/patch-branding.mjs && node scripts/build.mjs",
-    "test": "node --test tests/bundle.test.mjs tests/runtime.test.mjs tests/extensions.test.mjs tests/parity.test.mjs tests/serve-startup.test.mjs tests/service.test.mjs tests/reachability.test.mjs tests/inbox-host.test.mjs",
+    "test": "node --test tests/bundle.test.mjs tests/runtime.test.mjs tests/extensions.test.mjs tests/parity.test.mjs tests/serve-startup.test.mjs tests/service.test.mjs tests/reachability.test.mjs tests/inbox-host.test.mjs tests/daemon-turns.test.mjs tests/serve-lifetime.test.mjs tests/schedule-consent.test.mjs tests/analytics.test.mjs",
     "type-check": "tsc --noEmit"
   },
   "dependencies": {
@@ -31,7 +31,8 @@
     "@earendil-works/pi-mcp": "1.4.0",
     "proper-lockfile": "4.1.2",
     "@earendil-works/pi-durable": "1.4.0",
-    "@earendil-works/chord": "1.4.0"
+    "@earendil-works/chord": "1.4.0",
+    "posthog-node": "5.56.1"
   },
   "devDependencies": {
     "@types/node": "22.19.19",
@@ -42,13 +43,19 @@
     "@types/proper-lockfile": "4.1.4"
   },
   "engines": {
-    "node": ">=22.19.0"
+    "node": ">=22.22.0"
   },
   "license": "MIT",
   "optionalDependencies": {
     "sherpa-onnx-node": "1.13.8"
   },
   "overrides": {
-    "undici": "8.12.3"
+    "undici": "8.12.3",
+    "posthog-node@5.56.1": {
+      "@posthog/core": {
+        ".": "1.59.0",
+        "@posthog/types": "1.416.0"
+      }
+    }
   }
 }

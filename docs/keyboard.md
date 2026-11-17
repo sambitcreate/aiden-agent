@@ -74,6 +74,38 @@ work while Aiden is in the background.
 | `⌘↩` | Allow once, while an approval is waiting and the message box is empty |
 | `⌘⌫` | Deny, under the same conditions |
 | `/` | Slash commands in the message box |
+| `⇧⌘L` | Design mode on / off for this chat (`/design` and `/design off` do the same; gone while `AIDEN_DESIGN_MODE=0` turns design mode off). `Esc` never leaves design mode |
+
+On the design canvas (with the canvas focused, not a note or an entered
+page): `⌘Z` / `⇧⌘Z` undo and redo, `⌘D` duplicates the selection, `⌫` or
+`Delete` removes it, `⇧1` fits everything, `⇧2` fits the selection, `⇧0`
+resets the zoom, `+` / `-` zoom, `V` / `H` pick the Select or Hand tool,
+`N` adds a note, `C` turns on the comment tool (a click on an element of a
+live page, a frame or the canvas opens a comment there; `⌥` picks the
+element's parent; in the comment box `↩` saves and `Esc` closes; `Esc` again
+leaves the tool), `F2` renames the selected frame (as does a double-click on
+its title; `↩` keeps the name, `Esc` cancels), `M` shows the minimap and
+`I` shows or hides the side panel (in its Layers list, `F2` renames a row and
+`⌥↑` / `⌥↓` bring the item forward or send it back).
+The drawing tools: `T` text, `F` an artboard, `R` a rectangle, `O` an oval,
+`L` a line, `⇧L` an arrow, `P` the pencil and `⇧P` the pen (hold `⇧` while
+dragging for a square box or a 45° line; `↩`, `Esc` or a double-click
+finishes a pen path). `↩` or a double-click on selected text or a shape edits
+its words; `Esc` or `⌘↩` finishes. `Esc` turns a drawing tool off.
+Inside a note or text item, `⌘B`, `⌘I` and `⌘U` make the selected words bold,
+italic or underlined (the editor takes `⌘B` before the sidebar does); links,
+lists, size and colours are on the formatting bar above it.
+While presenting (the **Present** button at the canvas's top right), `→`,
+`↓`, `Space`, `↩` or `PageDown` go to the next frame, `←`, `↑`, `⌫` or
+`PageUp` to the previous one, `Home` and `End` to the first and last, and
+`Esc` stops presenting (or closes a frame opened in a full window).
+The ⌘/ list shows these under **Design canvas** while design mode is
+available. `↩` or a double-click enters the selected page;
+`Esc` with the canvas focused, or a click on the canvas, leaves. Keys typed
+inside an entered page stay with that page. A double-click on words inside an
+entered page edits them: `↩` or **Done** finishes, `Esc` puts them back, and
+`⌘B`, `⌘I` and `⌘U` work while editing. Back on the canvas, `⌘Z` puts the
+page file's old words back and `⇧⌘Z` writes them again.
 
 `↑` works like **Edit in fork**: it forks the chat just before your last
 message and puts that message back in the box, so the original chat stays as
@@ -91,6 +123,10 @@ box or a button. They never act while the message box holds anything (even
 spaces or an attachment), while focus is in another text field, the terminal
 or the file editor, or while a menu or dialog is open. The buttons show them when the card is wide enough. When an
 approval appears, screen readers announce it.
+
+During an Aiden Live session the open chat's approval can also be answered by
+voice: say allow or deny (Settings → Voice & Speech → Aiden Live → Answer approvals by voice).
+Voice allow is allow once, the same as `⌘↩`.
 
 In the Browser panel, `⌘.` starts page markup instead of stopping the reply,
 but only while focus is inside the browser.
@@ -125,9 +161,8 @@ Besides the keyed commands above, the palette lists commands with no default
 key. You can give any of them one in Settings.
 
 - **Places:** Go to Bots, Open a Bot… (searches Bots by name), Go to Scheduled,
-  Go to Profile. Open Design Studio and Open Create Images appear in the
-  palette only while their experimental feature is turned on, and can't be
-  given a key.
+  Go to Profile. Open Create Images appears in the palette only while its
+  experimental feature is turned on, and can't be given a key.
 - **Workspace tools:** Open Changes, Files, Browser, Device, Context,
   Subagents and Artifacts.
 - **Chat actions:** Rename chat…, Duplicate chat, Delete chat…, Export chat,

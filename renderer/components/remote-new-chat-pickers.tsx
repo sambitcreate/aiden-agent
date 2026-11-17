@@ -2,7 +2,8 @@ import * as React from "react";
 import { Check, ChevronDown, Folder, FolderOpen, FolderX, Globe, Loader2, Monitor } from "lucide-react";
 import type { NewChatMachine, RemoteProjectChoice } from "../lib/hosts/new-chat-targets";
 import type { HostModelCatalog, HostModelChoice } from "../lib/hosts/host-resources";
-import { LOCAL_MACHINE_LABEL } from "../lib/sidebar-remote-groups";
+import { useAppCapabilities } from "../lib/app-capabilities";
+import { localMachineLabel } from "../lib/sidebar-remote-groups";
 import {
   Button,
   Command,
@@ -49,8 +50,10 @@ export function RemoteMachinePicker({
   onSelect(machine: NewChatMachineId): void;
   onAddProject?(): void;
 }) {
+  const { platform } = useAppCapabilities();
+  const localLabel = localMachineLabel(platform);
   const current = machines.find((machine) => machine.id === selected);
-  const label = current?.label ?? LOCAL_MACHINE_LABEL;
+  const label = current?.label ?? localLabel;
   const Icon = current ? Globe : Monitor;
   return (
     <DropdownMenu>
@@ -74,7 +77,7 @@ export function RemoteMachinePicker({
           <DropdownMenuRadioItem value="local">
             <span className="flex min-w-0 items-center gap-2">
               <Monitor className="size-4 shrink-0 text-secondary" aria-hidden="true" />
-              <span className="truncate">{LOCAL_MACHINE_LABEL}</span>
+              <span className="truncate">{localLabel}</span>
             </span>
           </DropdownMenuRadioItem>
           {machines.map((machine) => (
@@ -96,7 +99,7 @@ export function RemoteMachinePicker({
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>
-        {onAddProject ? <><DropdownMenuSeparator /><DropdownMenuItem onSelect={onAddProject}>Add this project to another machine…</DropdownMenuItem></> : null}
+        {onAddProject ? <><DropdownMenuSeparator /><DropdownMenuItem onSelect={onAddProject}>Add this project to another computer…</DropdownMenuItem></> : null}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -252,7 +255,7 @@ export function RemoteModelPicker({
   });
   const selectedProvider = selected ? providers.find((provider) => provider.id === selected.providerId) : undefined;
   const model = selected ? selectedProvider?.models.find((entry) => entry.id === selected.modelId) : undefined;
-  const label = model?.label ?? (loading ? "Loading models…" : "Host default");
+  const label = model?.label ?? (loading ? "Loading models…" : "Computer default");
   const byValue = new Map(
     providers.flatMap((provider) =>
       provider.models.map((entry) => [choiceValue({ providerId: provider.id, modelId: entry.id }), { providerId: provider.id, modelId: entry.id }] as const),

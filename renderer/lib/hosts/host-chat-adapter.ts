@@ -206,6 +206,8 @@ export interface HostChatInput {
   mode: ChatRunInputMode;
   text: string;
   idempotencyKey?: string;
+  /** Aiden Live sent this for the person ("By voice"); only this Mac's own chats keep it. */
+  inputSource?: import("../../shared/chat-input-source").ChatInputSourceV1;
 }
 
 export interface HostChatRenameInput {
@@ -344,5 +346,5 @@ export interface HostChatAdapter {
 
 export const FENCED_ERROR: HostChatError = {
   code: "fenced",
-  message: "The host connection changed before this response arrived.",
+  message: "The connection to that computer changed before this response arrived.",
 };

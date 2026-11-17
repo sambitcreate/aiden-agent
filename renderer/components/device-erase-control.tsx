@@ -10,6 +10,7 @@ import * as React from "react";
 import { Eraser } from "lucide-react";
 import { AlertDialog, Button, Dialog, Text, toast } from "./ui";
 import { ToolsSection } from "./device-tools-panel";
+import { LiveGuard } from "./live-guard";
 import { devicesApi } from "../lib/ipc";
 import type { DeviceFeatureTarget } from "../shared/device-features";
 
@@ -103,47 +104,50 @@ export function DeviceEraseSection(props: {
     }
   };
 
+  // Erasing wipes the device for good: the person's to do, never Aiden Live's.
   return (
-    <ToolsSection title="Device">
-      <div className="device-tools-actions">
-        <Button size="small" variant="muted" disabled={erasing} onClick={() => setConfirmOpen(true)}>
-          <Eraser aria-hidden />
-          Erase all content and settings…
-        </Button>
-      </div>
-      <Text variant="small" color="secondary">
-        Returns the {noun} to a fresh install. It shuts down first if it is running.
-      </Text>
-      <AlertDialog
-        open={confirmOpen}
-        onOpenChange={setConfirmOpen}
-        title={`Erase ${props.deviceName}?`}
-        description={
-          <>
-            All content and settings on {props.deviceName} are erased, including installed apps and their data.
-            The {noun} shuts down first if it is running. This cannot be undone.
-          </>
-        }
-        confirmLabel={erasing ? "Erasing…" : "Erase"}
-        confirmVariant="destructive"
-        busy={erasing}
-        keepOpenOnConfirm
-        onConfirm={erase}
-      />
-      <Dialog
-        open={bootOffer}
-        onOpenChange={(next) => {
-          if (next || booting) return;
-          setBootOffer(false);
-          props.onCloseSession();
-        }}
-        title={`${props.deviceName} was erased`}
-        description="It is shut down. Boot it again to keep using it here, or close it; you can open it later from the simulator list."
-        confirmLabel={booting ? "Booting…" : "Boot"}
-        cancelLabel="Close simulator"
-        busy={booting}
-        onConfirm={boot}
-      />
-    </ToolsSection>
+    <LiveGuard guard="you" wrap={false}>
+      <ToolsSection title="Device">
+        <div className="device-tools-actions" data-live-guard="you">
+          <Button size="small" variant="muted" disabled={erasing} onClick={() => setConfirmOpen(true)}>
+            <Eraser aria-hidden />
+            Erase all content and settings…
+          </Button>
+        </div>
+        <Text variant="small" color="secondary">
+          Returns the {noun} to a fresh install. It shuts down first if it is running.
+        </Text>
+        <AlertDialog
+          open={confirmOpen}
+          onOpenChange={setConfirmOpen}
+          title={`Erase ${props.deviceName}?`}
+          description={
+            <>
+              All content and settings on {props.deviceName} are erased, including installed apps and their data.
+              The {noun} shuts down first if it is running. This cannot be undone.
+            </>
+          }
+          confirmLabel={erasing ? "Erasing…" : "Erase"}
+          confirmVariant="destructive"
+          busy={erasing}
+          keepOpenOnConfirm
+          onConfirm={erase}
+        />
+        <Dialog
+          open={bootOffer}
+          onOpenChange={(next) => {
+            if (next || booting) return;
+            setBootOffer(false);
+            props.onCloseSession();
+          }}
+          title={`${props.deviceName} was erased`}
+          description="It is shut down. Boot it again to keep using it here, or close it; you can open it later from the simulator list."
+          confirmLabel={booting ? "Booting…" : "Boot"}
+          cancelLabel="Close simulator"
+          busy={booting}
+          onConfirm={boot}
+        />
+      </ToolsSection>
+    </LiveGuard>
   );
 }

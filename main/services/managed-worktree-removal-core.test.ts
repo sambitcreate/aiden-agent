@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   ManagedWorktreeRemovalError,
+  managedWorktreeRemovalPhaseAllowed,
   removeManagedWorkspace,
 } from "./managed-worktree-removal-core.js";
 
@@ -358,4 +359,23 @@ test("stale-looking metadata remains owned when the deletion transaction rejects
     /worktree already deregistered/u,
   );
   assert.equal(removed, false);
+});
+
+test("deletion phases advance one step at a time and never leave review", () => {
+  const forward = [
+    "prepared",
+    "quarantined",
+    "checkout_cleanup_started",
+    "checkout_complete",
+    "admin_cleanup_started",
+    "filesystem_complete",
+  ] as const;
+  for (const [index, from] of forward.entries()) {
+    assert.equal(managedWorktreeRemovalPhaseAllowed(from, "needs_review"), true, from);
+    assert.equal(managedWorktreeRemovalPhaseAllowed("needs_review", from), false, from);
+    for (const [target, to] of forward.entries()) {
+      const legal = target === index || target === index + 1;
+      assert.equal(managedWorktreeRemovalPhaseAllowed(from, to), legal, `${from} to ${to}`);
+    }
+  }
 });

@@ -180,7 +180,7 @@ function guestBridgeScript(nonce?: string): string {
       return [1, 2, 3, 4, 5, 6, 7, 8].map((i) => cssVar("--chart-" + i)).filter(Boolean);
     },
   });
-  // Configurable so a guest's own top-level aiden (Design Studio pages, older
+  // Configurable so a guest's own top-level aiden (standalone pages, older
   // artifacts) shadows it instead of failing the whole script. Locking it adds
   // no security: a guest can always post to the parent directly.
   Object.defineProperty(window, "aiden", { value: api, writable: false, configurable: true, enumerable: true });

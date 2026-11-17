@@ -19,6 +19,12 @@ export const AIDEN_UI_LIMITS = {
   fallbackChars: 4000,
 } as const;
 
+/** One drawing of a visual visits at most this many components and loop iterations in total. */
+export const AIDEN_UI_RENDER_BUDGET = {
+  nodes: AIDEN_UI_LIMITS.nodes * 2,
+  iterations: AIDEN_UI_LIMITS.eachIterations * 4,
+} as const;
+
 export type AidenUiBinaryOperator = "+" | "==" | "!=" | "<" | "<=" | ">" | ">=" | "&&" | "||";
 
 export type AidenUiFunctionName = "fmt" | "len" | "sum" | "max" | "min" | "round" | "filter" | "sort";

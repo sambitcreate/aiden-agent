@@ -308,7 +308,7 @@ test("Restart now uses Aiden's protected shutdown before launching the installer
   const handlerStart = main.indexOf('ipcMain.handle("app:restartToUpdate"');
   const handlerEnd = main.indexOf("\n});", handlerStart);
   const handler = main.slice(handlerStart, handlerEnd);
-  assert.match(handler, /setImmediate\(\(\) => void requestApplicationQuit\(window\)\)/u);
+  assert.match(handler, /setImmediate\(\(\) => continueApplicationQuit\(window,/u);
   assert.doesNotMatch(handler, /installDownloadedUpdateAndRestart/u);
 });
 

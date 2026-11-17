@@ -80,17 +80,17 @@ test("a step on the Bot's own browser opens in the Bot's browser, not the person
   }, bot.id);
 
   const card = page.getByRole("group", { name: "Grocer needs you" });
-  await expect(card.getByText("Your turn: Choose the delivery slot on the checkout page")).toBeVisible();
+  await expect(card.getByText("Needs you: Choose the delivery slot on the checkout page")).toBeVisible();
   await expect(card).toContainText("Opens in Grocer’s own browser at shop.example, not in yours.");
   await expect(card.getByRole("button", { name: "Open shop.example" })).toHaveCount(0);
-  await card.getByRole("button", { name: "Open in Grocer’s browser" }).click();
+  await card.getByRole("button", { name: "Take control of Grocer’s browser" }).click();
   await expect
     .poll(() => aiden.app.evaluate(() => (globalThis as unknown as { ownScreenE2e: { opened: unknown[] } }).ownScreenE2e.opened))
     .toEqual([{ botId: "bot-shop", waitId: "3c7e9a1b-5d2f-4e8a-9b6c-0a1d2e3f4a5b" }]);
   // The Bot's panel opens beside the chat, on its browser.
   await expect(page.locator("#bot-panel")).toHaveAttribute("data-state", "open");
 
-  await card.getByRole("button", { name: "Done", exact: true }).click();
+  await card.getByRole("button", { name: "I’m done", exact: true }).click();
   await expect
     .poll(() => aiden.app.evaluate(() => (globalThis as unknown as { ownScreenE2e: { answers: unknown[] } }).ownScreenE2e.answers))
     .toEqual([{ botId: "bot-shop", waitId: "3c7e9a1b-5d2f-4e8a-9b6c-0a1d2e3f4a5b", outcome: "done" }]);

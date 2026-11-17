@@ -3,8 +3,13 @@
 // requests. It matches the workspace approval card: a soft status icon, a short
 // title, quiet supporting text, and actions at the trailing edge. Status lives
 // in the icon's fill, never in a coloured border.
+//
+// Every one of these cards asks the person for a decision (allow, connect,
+// take over, accept a proposal), so Aiden Live never presses anything in
+// them, including menus they open.
 
 import * as React from "react";
+import { LiveGuard } from "../live-guard";
 import { Text } from "../ui";
 import { cn } from "../../lib/ui-utils";
 
@@ -46,7 +51,9 @@ export function BotNoticeCard({
   className?: string;
 }) {
   return (
+    <LiveGuard guard="you" wrap={false}>
     <section
+      data-live-guard="you"
       role={role}
       aria-label={label}
       className={cn(
@@ -74,5 +81,6 @@ export function BotNoticeCard({
       </div>
       {actions ? <div className="mt-2.5 flex flex-wrap items-center justify-end gap-2">{actions}</div> : null}
     </section>
+    </LiveGuard>
   );
 }

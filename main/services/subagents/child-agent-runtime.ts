@@ -207,7 +207,7 @@ export class SubagentRuntimeRegistry {
    */
   private childStreamOptions(sessionId: string, childRuntime: ResolvedModelRuntime, spec: SubagentChildSpec) {
     const options = buildAgentRuntimeOptions(sessionId, childRuntime);
-    if (!options.streamFn || isAcpHarnessProvider(spec.runtime.provider.id)) return options;
+    if (!options.streamFn || isAcpHarnessProvider(spec.runtime.provider.id)) return { agentOptions: options };
     const owner = { kind: "chat", id: spec.authority.chatId } as const;
     // A task-owned transform records this request under its frozen Bot/root
     // scopes; the ordinary foreground-chat meter would count it a second time.
@@ -222,17 +222,20 @@ export class SubagentRuntimeRegistry {
         models: spec.runtime.models,
       }),
     }) : undefined;
+    const beforeSendRefusal = spending && spendingMeter ? async () => {
+      await spendingMeter.settled();
+      return spending.refusal(owner);
+    } : undefined;
     let streamFn = options.streamFn;
     if (this.usageLimits) {
       const limits = this.usageLimits(owner, spec.runtime.provider.label, {
         observeFetch: childRuntime === spec.runtime,
       });
-      streamFn = withUsageLimitWait(streamFn, spending && spendingMeter ? {
+      streamFn = withUsageLimitWait(streamFn, beforeSendRefusal ? {
         ...limits,
         beforeSendRefusal: async () => {
           // The cap or shared chat spending can change while this request waits.
-          await spendingMeter.settled();
-          return (await limits.beforeSendRefusal?.()) ?? spending.refusal(owner);
+          return (await limits.beforeSendRefusal?.()) ?? beforeSendRefusal();
         },
       } : limits);
     }
@@ -240,7 +243,7 @@ export class SubagentRuntimeRegistry {
       // A helper's spending is its chat's, including requests after a provider wait.
       streamFn = spendingMeter.wrap(streamFn);
     }
-    return { ...options, streamFn };
+    return { agentOptions: { ...options, streamFn }, spendingMeter, beforeSendRefusal };
   }
 
   get activeCount(): number {
@@ -278,6 +281,7 @@ export class SubagentRuntimeRegistry {
       }) ?? spec.runtime;
     const childRuntime = spec.transformRuntime?.(isolatedRuntime, { childId, runId: spec.runId ?? childId }) ?? isolatedRuntime;
     if (childRuntime.provider.id !== spec.runtime.provider.id || childRuntime.model.provider !== spec.runtime.model.provider || childRuntime.model.id !== spec.runtime.model.id) throw new Error("A child runtime transform cannot switch its admitted model.");
+    const { agentOptions, spendingMeter, beforeSendRefusal } = this.childStreamOptions(sessionId, childRuntime, spec);
     const budget = resolveCompactionModelBudget(spec.compactionModelOverrides, childRuntime.model, spec.compactionEngine);
     const inputReserveTokens = configuredCompactionReserveTokens(spec.compactionModelOverrides, childRuntime.model, spec.compactionEngine);
     const contextOptions = {
@@ -294,9 +298,11 @@ export class SubagentRuntimeRegistry {
     const compactionOptions = {
       engine: spec.compactionEngine,
       settings: budget,
-      models: createPiCompactionModels(childRuntime, (message) =>
-        this.recordCompactionUsage?.(message, spec.runtime),
-      ),
+      models: createPiCompactionModels(childRuntime, async (message) => {
+        spendingMeter?.count(message);
+        await spendingMeter?.settled();
+        await this.recordCompactionUsage?.(message, spec.runtime);
+      }, beforeSendRefusal),
       model: childRuntime.model,
       thinkingLevel: spec.thinkingLevel,
       signal: cancellation.signal,
@@ -321,7 +327,7 @@ export class SubagentRuntimeRegistry {
           ]);
         }
       },
-      ...this.childStreamOptions(sessionId, childRuntime, spec),
+      ...agentOptions,
       convertToLlm,
       transformContext: createGenerationContextTransform(contextOptions),
       durability: {

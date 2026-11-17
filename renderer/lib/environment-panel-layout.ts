@@ -176,3 +176,76 @@ export function storedWorkbenchWidth(
   const parsed = Number(stored);
   return Number.isFinite(parsed) && parsed >= bounds.min && parsed <= bounds.max ? parsed : bounds.default;
 }
+
+/** Design mode's chat column: renderer-local and shared by every design-mode chat. */
+export const DESIGN_CHAT_WIDTH_BOUNDS: PanelWidthBounds = { min: 360, max: 560, default: 420 };
+/** The design canvas never sits beside the chat narrower than this. */
+export const DESIGN_CANVAS_MIN_WIDTH = 320;
+/**
+ * Content narrower than this cannot hold the chat and canvas minimums side by
+ * side, so design mode stacks them and shows one at a time.
+ */
+export const DESIGN_SPLIT_MIN_WIDTH = DESIGN_CHAT_WIDTH_BOUNDS.min + DESIGN_CANVAS_MIN_WIDTH;
+/** Widening for design mode aims for this window width, and is offered only when the display allows it. */
+export const DESIGN_WIDEN_TARGET = 1280;
+
+export type DesignLayoutMode = "split" | "stacked";
+
+export interface DesignCanvasLayout {
+  /** Split puts the chat and canvas side by side; stacked shows one of them at the full width. */
+  mode: DesignLayoutMode;
+  chatWidth: number;
+  canvasWidth: number;
+}
+
+/**
+ * Split the main content (after the sidebar) between the design chat column and
+ * the canvas. The chat keeps its preferred width within 360–560 and gives way to
+ * the canvas minimum first; once even 360 + 320 does not fit, the two stack and
+ * each takes the whole width while it is shown.
+ */
+export function resolveDesignCanvasLayout(
+  preferredChatWidth: number | undefined,
+  containerWidth: number,
+): DesignCanvasLayout {
+  const bounds = DESIGN_CHAT_WIDTH_BOUNDS;
+  const container = Math.max(0, Number.isFinite(containerWidth) ? containerWidth : 0);
+  const preferred =
+    typeof preferredChatWidth === "number" && Number.isFinite(preferredChatWidth)
+      ? preferredChatWidth
+      : bounds.default;
+  if (container < DESIGN_SPLIT_MIN_WIDTH) {
+    return { mode: "stacked", chatWidth: container, canvasWidth: container };
+  }
+  const clamped = Math.min(bounds.max, Math.max(bounds.min, preferred));
+  const chatWidth = Math.min(clamped, container - DESIGN_CANVAS_MIN_WIDTH);
+  return { mode: "split", chatWidth, canvasWidth: container - chatWidth };
+}
+
+/** The widest the design chat divider may go in a container this wide. */
+export function designChatMaxWidth(containerWidth: number): number {
+  const bounds = DESIGN_CHAT_WIDTH_BOUNDS;
+  return Math.max(bounds.min, Math.min(bounds.max, containerWidth - DESIGN_CANVAS_MIN_WIDTH));
+}
+
+export type DesignEntryAction = "none" | "collapseSidebar" | "widenWindow";
+
+/**
+ * What a person's own entry into design mode may do to make room for the split,
+ * measured on the content container. Collapsing an open sidebar is tried first
+ * when the content would then fit; otherwise the window is widened, but only
+ * when main says widening can work. Launch, reload and chat switches never get
+ * here, so nothing resizes on its own.
+ */
+export function resolveDesignEntryAction(input: {
+  containerWidth: number;
+  /** The sidebar's width while open, or 0 when it is already collapsed. */
+  sidebarWidth: number;
+  canWiden: boolean;
+}): DesignEntryAction {
+  if (input.containerWidth >= DESIGN_SPLIT_MIN_WIDTH) return "none";
+  if (input.sidebarWidth > 0 && input.containerWidth + input.sidebarWidth >= DESIGN_SPLIT_MIN_WIDTH) {
+    return "collapseSidebar";
+  }
+  return input.canWiden ? "widenWindow" : "none";
+}

@@ -200,8 +200,8 @@ MIT License. https://github.com/mrdoob/three.js/blob/dev/LICENSE
 
 ## React Flow (@xyflow/react)
 
-Renders the Design Studio and Create Images canvases. Loaded only when one of
-those experimental surfaces is opened.
+Renders the Create Images canvas. Loaded only when that experimental surface
+is opened.
 
 Copyright (c) 2019-2026 webkid GmbH
 
@@ -210,8 +210,7 @@ MIT License. https://github.com/xyflow/xyflow/blob/main/LICENSE
 ## React Flow runtime dependencies
 
 These packages are bundled with React Flow in the same lazily loaded canvas
-chunk, so they are loaded only when the Design Studio or Create Images surface
-is opened.
+chunk, so they are loaded only when the Create Images surface is opened.
 
 - `@xyflow/system@0.0.82`: Copyright (c) 2019-2025 webkid GmbH. MIT License.
   https://github.com/xyflow/xyflow/blob/main/LICENSE

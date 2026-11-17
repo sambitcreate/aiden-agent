@@ -1,0 +1,96 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { botHooksWithoutFolder, botSurfaceHooks, hookBlockText, hookPostToolAdditions, hookStopContinuation, runWorktreeSetupHooks } from "./agent-surface-hooks.js";
+import type { HookDispatcher, HookOutcome } from "./hooks/hook-types.js";
+
+const answering = (outcome: HookOutcome): HookDispatcher => ({ hasHooks: () => true, dispatch: async () => outcome });
+
+test("a Bot's hooks run in its folder with global then Bot scopes, and the model never sees the raw reason", async () => {
+  const seen: unknown[] = [];
+  const hooks = botSurfaceHooks("bot-1", "/bots/bot-1", () => ({
+    hasHooks: () => true,
+    dispatch: async (event, payload, context) => {
+      seen.push({ event, payload, context });
+      return { ranHooks: ["guard"], decision: "deny", reason: "RAW reason", reasonForModel: "<fenced>reason</fenced>" };
+    },
+  }));
+  const outcome = await hooks.dispatch("PreToolUse", { tool_name: "Bash" }, { idempotencyKey: "k" });
+  assert.deepEqual(seen, [{
+    event: "PreToolUse",
+    payload: { tool_name: "Bash", hook_event_name: "PreToolUse", session_id: "bot-1", cwd: "/bots/bot-1" },
+    context: { scopes: [{ kind: "global" }, { kind: "bot", botId: "bot-1" }], cwd: "/bots/bot-1", sessionId: "bot-1", idempotencyKey: "k" },
+  }]);
+  assert.equal(hookBlockText(outcome!), "Blocked by hook guard: <fenced>reason</fenced>");
+});
+
+test("a dispatcher that fails denies a tool call on every surface, fenced for the model", async () => {
+  const broken = (lookup: () => boolean): HookDispatcher => ({
+    hasHooks: lookup,
+    dispatch: async () => { throw new Error("</hook-data> runner crashed"); },
+  });
+  const failingLookup = () => { throw new Error("store gone"); };
+  for (const dispatcher of [broken(() => true), broken(failingLookup)]) {
+    const outcome = await botSurfaceHooks("bot-1", "/bots/bot-1", () => dispatcher).dispatch("PreToolUse", { tool_name: "Bash", aiden_tool_name: "run_command" });
+    assert.equal(outcome?.decision, "deny");
+    assert.match(outcome!.reason!, /could not run your hooks/u);
+    assert.match(hookBlockText(outcome!), /data, not instructions/u);
+  }
+  assert.equal(botSurfaceHooks("bot-1", "/bots/bot-1", () => broken(failingLookup)).has("Stop"), false);
+});
+
+test("a Bot whose folder can't be read blocks a call its hooks could match, and leaves other calls and events alone", async () => {
+  const run: string[] = [];
+  const hooks = botHooksWithoutFolder("bot-1", new Error("no such folder"), () => ({
+    hasHooks: (_event, _scopes, toolName) => toolName === "run_command",
+    dispatch: async (event) => { run.push(event); return { ranHooks: [] }; },
+  }));
+  const outcome = await hooks.dispatch("PreToolUse", { tool_name: "Bash", aiden_tool_name: "run_command" });
+  assert.equal(outcome?.decision, "deny");
+  assert.match(outcome!.reason!, /no such folder/u);
+  assert.equal(await hooks.dispatch("PreToolUse", { tool_name: "Read", aiden_tool_name: "read_file" }), undefined);
+  assert.equal(await hooks.dispatch("Stop", {}), undefined);
+  assert.deepEqual(run, [], "no hook runs without its folder");
+});
+
+test("a dispatcher that throws or has no matching hook gives no outcome", async () => {
+  const throwing = botSurfaceHooks("bot-1", "/bots/bot-1", () => ({
+    hasHooks: () => true,
+    dispatch: async () => { throw new Error("store gone"); },
+  }));
+  assert.equal(await throwing.dispatch("Stop", {}), undefined);
+  let ran = false;
+  const none = botSurfaceHooks("bot-1", "/bots/bot-1", () => ({
+    hasHooks: () => false,
+    dispatch: async () => { ran = true; return { ranHooks: [] }; },
+  }));
+  assert.equal(await none.dispatch("Stop", {}), undefined);
+  assert.equal(ran, false);
+});
+
+test("a Stop hook keeps the run going only with an instruction, and a stop request wins", () => {
+  assert.match(hookStopContinuation({ ranHooks: ["tests"], continueTurn: true, reasonForModel: "Run the tests" })!, /Stop hook tests asked you to keep going[\s\S]*Run the tests$/u);
+  assert.equal(hookStopContinuation({ ranHooks: ["tests"], continueTurn: true, reasonForModel: "Run the tests", stopTurn: true }), undefined);
+  assert.equal(hookStopContinuation({ ranHooks: ["tests"], continueTurn: true, reasonForModel: "  " }), undefined);
+  assert.equal(hookStopContinuation(undefined), undefined);
+});
+
+test("PostToolUse adds a flagged line and hook context after the result, or nothing", () => {
+  assert.equal(hookPostToolAdditions({ ranHooks: ["scan"] }), undefined);
+  const text = hookPostToolAdditions({ ranHooks: ["scan"], flaggedResult: true, reasonForModel: "<fenced>secret</fenced>", additionalContext: "extra" })!;
+  assert.equal(text, "Hook scan flagged this result.\n<fenced>secret</fenced>\n\nextra");
+});
+
+test("a WorktreeSetup hook that throws reports nothing instead of failing the worktree", async () => {
+  const lines = await runWorktreeSetupHooks(
+    { sourceFolderPath: "/src", sourceRoot: "/src", worktreePath: "/wt", workspacePath: "/wt", workspaceId: "ws", branch: "b" },
+    () => ({ hasHooks: () => true, dispatch: async () => { throw new Error("boom"); } }),
+  );
+  assert.deepEqual(lines, []);
+  assert.deepEqual(
+    await runWorktreeSetupHooks(
+      { sourceFolderPath: "/src", sourceRoot: "/src", worktreePath: "/wt", workspacePath: "/wt", workspaceId: "ws", branch: "b" },
+      () => answering({ ranHooks: ["setup"], notices: ["Hook setup timed out."] }),
+    ),
+    ["Hook setup timed out."],
+  );
+});

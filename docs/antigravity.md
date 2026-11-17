@@ -4,7 +4,7 @@ Google Antigravity runs Google's own coding agent on your computer, and bills yo
 
 ## Set up
 
-1. Open **Settings → Providers → More → Google Antigravity**.
+1. Open **Settings → Providers → Connect AI → Advanced connection → Other setup methods → Google Antigravity**. If you already have a connection, choose **Connect another AI**.
 2. Choose **Install Google Antigravity**. The dialog states the download size and source (`dl.google.com`) before anything is downloaded.
    - Aiden verifies the download against hashes pinned in this version of Aiden. It then starts the runtime once to confirm what it is.
    - Supported computers: Apple Silicon and Intel Macs, and Linux on x64 or arm64.
@@ -18,7 +18,7 @@ Antigravity follows the chat folder's permission setting.
 
 | Setting | What happens |
 | --- | --- |
-| **Ask** | File changes, commands and web fetches wait for Aiden's approval card. "Allow for this chat" covers the rest of the conversation. |
+| **Ask** | File changes, commands and web fetches wait for Aiden's approval card. "Allow in this chat" covers the rest of the conversation. |
 | **Full** | Antigravity edits files and runs commands without asking. Its commands run with your account's permissions. |
 | **Read-only** or **No access** | Changes and commands are refused. |
 

@@ -1,0 +1,908 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aiden · Design mode, today vs proposed</title>
+<style>
+:root {
+  color-scheme: light;
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+  --mono: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur: 360ms;
+  --text-primary: #3D3F41; --text-secondary: #535862; --text-tertiary: #585D69; --toolbar-icon: #77797a;
+  --bg: #f6f7f9; --sidebar: #eceef1; --popover: #ffffff; --chat-card: #ffffff;
+  --control: rgb(61 63 65 / 0.084); --control-hover: rgb(61 63 65 / 0.129);
+  --input: rgb(61 63 65 / 0.051); --well: rgb(61 63 65 / 0.029);
+  --list-hover: rgb(61 63 65 / 0.053); --list-sel: rgb(0 106 214 / 0.12);
+  --sep: rgb(61 63 65 / 0.087); --field: rgb(61 63 65 / 0.144);
+  --accent: #006ad6; --accent-text: #0060C3; --fill-accent: #006AD6; --fill-accent-fg: #fff;
+  --st-accent: #155BA2; --st-accent-surface: rgb(0 106 214 / 0.08);
+  --st-green: #266036; --st-green-surface: rgb(26 113 48 / 0.08);
+  --st-warn: #704F1A; --st-warn-surface: rgb(139 87 5 / 0.08);
+  --elev-pop: 0 0 0 0.5px rgb(0 0 0 / 0.12), 0 8px 24px -6px rgb(0 0 0 / 0.22);
+  --elev-composer: 0 2px 8px rgb(0 0 0 / 0.12);
+  --elev-modal: 0 0 0 0.5px rgb(0 0 0 / 0.16), 0 20px 44px -10px rgb(0 0 0 / 0.38);
+  --r-control: 12px; --r-button: 16px; --r-menu: 8px; --r-card: 12px; --r-composer: 28px;
+  --mint: #88e8b1; --sky: #83d8ff; --sun: #ffda7b; --lilac: #c6a9ff;
+}
+:root.dark {
+  color-scheme: dark;
+  --text-primary: #D1D4DA; --text-secondary: #B0B7C0; --text-tertiary: #A9B2BB; --toolbar-icon: #d5d7dd;
+  --bg: #181b21; --sidebar: #20242c; --popover: #292e37; --chat-card: #1d2027;
+  --control: rgb(209 212 218 / 0.094); --control-hover: rgb(209 212 218 / 0.139);
+  --input: rgb(209 212 218 / 0.056); --well: rgb(209 212 218 / 0.032);
+  --list-hover: rgb(209 212 218 / 0.059); --list-sel: rgb(62 151 246 / 0.18);
+  --sep: rgb(209 212 218 / 0.097); --field: rgb(209 212 218 / 0.162);
+  --accent: #3e97f6; --accent-text: #6AAFF8; --fill-accent: #3177C2;
+  --st-accent: #71ACEC; --st-accent-surface: rgb(62 151 246 / 0.08);
+  --st-green: #6AD29C; --st-green-surface: rgb(50 209 122 / 0.08);
+  --st-warn: #EFBD61; --st-warn-surface: rgb(255 176 32 / 0.08);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text-primary); font: 14px/20px var(--font); }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--text-primary); outline-offset: 2px; }
+
+/* ---------- Page chrome (outside the mock) ---------- */
+.page { padding: 20px 24px 40px; max-width: 1720px; margin: 0 auto; }
+.page h1 { font-size: 20px; line-height: 28px; margin: 0 0 4px; font-weight: 650; }
+.page .lede { color: var(--text-secondary); margin: 0 0 16px; max-width: 920px; }
+.controls { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; margin-bottom: 12px; }
+.seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--r-control); background: var(--control); }
+.seg button { border: 0; background: transparent; padding: 6px 14px; border-radius: 10px; cursor: pointer; color: var(--text-secondary); }
+.seg button[aria-pressed="true"] { background: var(--popover); color: var(--text-primary); box-shadow: 0 1px 2px rgb(0 0 0 / .12); font-weight: 600; }
+.ctl-group { display: inline-flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 13px; }
+.ctl-group input[type=range] { width: 160px; accent-color: var(--accent); }
+.btn { border: 0; background: var(--control); padding: 6px 12px; border-radius: var(--r-button); cursor: pointer; font-size: 13px; transition: background .2s, transform .1s; }
+.btn:hover { background: var(--control-hover); }
+.btn:active { transform: translateY(1px); }
+.btn.primary { background: var(--fill-accent); color: var(--fill-accent-fg); }
+.btn.primary:hover { filter: brightness(.95); }
+.btn.small { padding: 3px 10px; font-size: 12px; }
+.btn[disabled] { opacity: .45; cursor: default; }
+.notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; margin: 12px 0 16px; }
+.note { background: var(--well); border-radius: var(--r-card); padding: 10px 12px; font-size: 13px; line-height: 18px; color: var(--text-secondary); }
+.note b { color: var(--text-primary); display: block; margin-bottom: 2px; }
+.note.hl { background: var(--st-accent-surface); }
+.note.hl b { color: var(--st-accent); }
+
+/* ---------- Stage / scaling ---------- */
+.stage-wrap { position: relative; }
+.stage { transform-origin: top left; }
+.window { position: relative; height: 740px; border-radius: 14px; overflow: hidden; background: var(--bg); box-shadow: 0 0 0 0.5px rgb(0 0 0 / .2), 0 24px 60px -20px rgb(0 0 0 / .35); transition: width var(--dur) var(--ease); display: flex; }
+.width-tag { position: absolute; top: -22px; right: 0; font: 12px var(--mono); color: var(--text-tertiary); }
+
+/* ---------- Sidebar ---------- */
+.sidebar { flex: 0 0 auto; width: 260px; background: var(--sidebar); display: flex; flex-direction: column; overflow: hidden; transition: width var(--dur) var(--ease), opacity var(--dur) var(--ease); }
+.window.sb-collapsed .sidebar { width: 0; opacity: 0; }
+.traffic { display: flex; gap: 8px; padding: 14px 14px 8px; }
+.traffic i { width: 12px; height: 12px; border-radius: 50%; display: block; background: #ff5f57; }
+.traffic i:nth-child(2) { background: #febc2e; } .traffic i:nth-child(3) { background: #28c840; }
+.sb-inner { width: 260px; padding: 4px 8px 12px; overflow-y: auto; flex: 1; }
+.nav-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--r-menu); color: var(--text-primary); cursor: pointer; border: 0; background: transparent; width: 100%; text-align: left; font-size: 13px; }
+.nav-row:hover { background: var(--list-hover); }
+.nav-row.sel { background: var(--list-sel); }
+.nav-row .ico { width: 16px; height: 16px; flex: 0 0 auto; color: var(--toolbar-icon); }
+.nav-row .flag { margin-left: auto; font-size: 10px; padding: 0 6px; border-radius: 99px; background: var(--st-warn-surface); color: var(--st-warn); }
+.sb-label { font-size: 11px; font-weight: 600; color: var(--text-tertiary); padding: 14px 8px 4px; text-transform: none; letter-spacing: .01em; }
+.proj { margin-bottom: 2px; }
+.proj-head { display: flex; align-items: center; gap: 6px; padding: 5px 8px; font-size: 13px; font-weight: 600; color: var(--text-primary); border-radius: var(--r-menu); }
+.proj-head .ico { width: 15px; height: 15px; color: var(--toolbar-icon); }
+.chat-row { padding: 5px 8px 5px 29px; font-size: 13px; color: var(--text-secondary); border-radius: var(--r-menu); cursor: pointer; display: flex; align-items: center; gap: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-row:hover { background: var(--list-hover); }
+.chat-row.sel { background: var(--list-sel); color: var(--text-primary); }
+.chat-row .dm-badge { margin-left: auto; flex: 0 0 auto; font-size: 10px; line-height: 16px; padding: 0 6px; border-radius: 99px; background: var(--st-accent-surface); color: var(--st-accent); }
+.back-row { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-secondary); padding: 6px 8px; border-radius: var(--r-menu); cursor: pointer; border: 0; background: transparent; width: 100%; text-align: left; }
+.back-row:hover { background: var(--list-hover); color: var(--text-primary); }
+.scope-title { padding: 8px 8px 2px; font-size: 15px; font-weight: 650; display: flex; align-items: center; gap: 8px; }
+.scope-title .ico { width: 18px; height: 18px; color: var(--toolbar-icon); }
+.scope-sub { padding: 0 8px 6px; font-size: 12px; color: var(--text-tertiary); font-family: var(--mono); }
+.sb-fade { animation: sbIn var(--dur) var(--ease); }
+@keyframes sbIn { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: none; } }
+
+/* ---------- Main ---------- */
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.topbar { height: 46px; flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding: 0 10px; }
+.icon-btn { width: 30px; height: 30px; border-radius: 10px; border: 0; background: transparent; display: grid; place-items: center; cursor: pointer; color: var(--toolbar-icon); position: relative; }
+.icon-btn:hover { background: var(--control); }
+.icon-btn[aria-pressed="true"] { background: var(--st-accent-surface); color: var(--st-accent); }
+.icon-btn svg { width: 17px; height: 17px; }
+.chat-title { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-title small { color: var(--text-tertiary); font-weight: 400; margin-left: 6px; }
+.spacer { flex: 1; }
+.design-pill { display: none; align-items: center; gap: 6px; padding: 3px 10px 3px 8px; border-radius: 99px; background: var(--st-accent-surface); color: var(--st-accent); font-size: 12px; font-weight: 600; border: 0; cursor: pointer; }
+.window.design .design-pill { display: inline-flex; animation: sbIn .3s var(--ease); }
+.design-pill svg { width: 13px; height: 13px; }
+.design-pill .x { opacity: .7; margin-left: 2px; }
+.kbd { font: 11px var(--mono); padding: 1px 5px; border-radius: 5px; background: var(--control); color: var(--text-tertiary); }
+.tooltip { position: absolute; top: 34px; right: 0; white-space: nowrap; background: var(--popover); box-shadow: var(--elev-pop); border-radius: var(--r-menu); padding: 4px 8px; font-size: 12px; color: var(--text-primary); opacity: 0; pointer-events: none; transition: opacity .15s; z-index: 30; }
+.icon-btn:hover .tooltip { opacity: 1; }
+
+.body { flex: 1; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr); position: relative; transition: grid-template-columns var(--dur) var(--ease); padding: 0 10px 10px 0; }
+.window:not(.design) .body { grid-template-columns: minmax(0, 1fr) 10px var(--panelw, 560px); }
+.window.panel-closed:not(.design) .body { grid-template-columns: minmax(0, 1fr) 0px 0px; }
+.window.design .body { grid-template-columns: var(--chatw, 420px) 10px minmax(0, 1fr); }
+.window.overlay-panel:not(.design) .body { grid-template-columns: minmax(0, 1fr) 0 0; }
+
+/* chat column */
+.chat-col { min-width: 0; min-height: 0; display: flex; flex-direction: column; position: relative; padding-left: 10px; }
+.chat-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 0 12px; scroll-behavior: smooth; }
+.chat-inner { margin: 0 auto; max-width: 720px; padding: 0 var(--gutter, 48px); transition: padding var(--dur) var(--ease); }
+.window.design .chat-inner { max-width: none; --gutter: 14px; }
+.msg { margin: 0 0 14px; animation: msgIn .3s var(--ease); }
+@keyframes msgIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.msg.user { display: flex; justify-content: flex-end; }
+.msg.user .bubble { background: var(--control); padding: 8px 12px; border-radius: 18px; max-width: 85%; }
+.msg.ai p { margin: 0 0 8px; }
+.msg.ai .meta { font-size: 12px; color: var(--text-tertiary); margin-bottom: 6px; display: flex; gap: 6px; align-items: center; }
+.tool-line { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: var(--text-tertiary); padding: 2px 0; }
+.tool-line code { font-family: var(--mono); font-size: 11.5px; }
+.ref-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; padding: 1px 8px; border-radius: 99px; background: var(--st-accent-surface); color: var(--st-accent); font-family: var(--mono); }
+.ref-chip svg { width: 11px; height: 11px; }
+
+/* inline artifact card */
+.artifact { border-radius: var(--r-card); background: var(--chat-card); box-shadow: 0 0 0 0.5px var(--field); overflow: hidden; margin: 6px 0 8px; }
+.artifact .head { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; font-size: 12px; color: var(--text-secondary); }
+.artifact .head .name { font-weight: 600; color: var(--text-primary); white-space: nowrap; }
+.artifact .head .kind { white-space: nowrap; }
+.window.design .artifact .head .kind { display: none; }
+.artifact-btn { white-space: nowrap; }
+.artifact .head .spacer { flex: 1; }
+.artifact .canvas-ish { height: 150px; padding: 10px 12px; }
+.window.design .artifact .canvas-ish { height: 110px; }
+.artifact-btn { border: 0; background: transparent; cursor: pointer; border-radius: 8px; padding: 3px 8px; font-size: 12px; color: var(--text-secondary); display: inline-flex; gap: 4px; align-items: center; }
+.artifact-btn:hover { background: var(--control); color: var(--text-primary); }
+.artifact-btn.canvas { display: none; color: var(--st-accent); }
+.window.design .artifact-btn.canvas { display: inline-flex; }
+.artifact-btn svg { width: 13px; height: 13px; }
+
+/* consent card */
+.consent { border-radius: var(--r-card); background: var(--st-accent-surface); padding: 10px 12px; margin: 6px 0 10px; }
+.consent .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.consent .q { font-size: 13px; color: var(--text-primary); }
+.consent .q b { color: var(--st-accent); }
+.consent.resolved .row { display: none; }
+.consent .result { display: none; font-size: 12px; color: var(--text-tertiary); margin-top: 6px; font-family: var(--mono); }
+.consent.resolved .result { display: block; }
+
+/* composer */
+.composer-wrap { padding: 0 var(--gutter, 48px) 4px; max-width: 720px; margin: 0 auto; width: 100%; position: relative; transition: padding var(--dur) var(--ease); }
+.window.design .composer-wrap { max-width: none; --gutter: 10px; }
+.composer { background: var(--popover); border-radius: var(--r-composer); box-shadow: var(--elev-composer); padding: 8px 8px 8px 16px; display: flex; flex-direction: column; gap: 6px; }
+.composer .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.composer .chips:empty { display: none; }
+.composer .chips .ref-chip { padding-right: 4px; }
+.composer .chips .ref-chip button { border: 0; background: transparent; cursor: pointer; color: inherit; padding: 0 2px; line-height: 1; }
+.composer .line { display: flex; align-items: center; gap: 8px; }
+.composer input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; font: inherit; color: var(--text-primary); caret-color: var(--accent); padding: 6px 0; }
+.composer input::placeholder { color: var(--text-tertiary); }
+.send { width: 32px; height: 32px; border-radius: 50%; border: 0; background: var(--fill-accent); color: #fff; cursor: pointer; display: grid; place-items: center; flex: 0 0 auto; }
+.send svg { width: 16px; height: 16px; }
+.composer-hint { font-size: 11.5px; color: var(--text-tertiary); padding: 4px 6px 0; text-align: center; }
+.slash-menu { position: absolute; bottom: calc(100% + 6px); left: var(--gutter, 48px); right: var(--gutter, 48px); background: var(--popover); box-shadow: var(--elev-pop); border-radius: var(--r-card); padding: 4px; display: none; z-index: 20; }
+.slash-menu.open { display: block; animation: popIn .16s var(--ease); }
+@keyframes popIn { from { opacity: 0; transform: scale(.97) translateY(4px); } to { opacity: 1; transform: none; } }
+.slash-item { display: flex; gap: 10px; align-items: baseline; padding: 7px 10px; border-radius: var(--r-menu); cursor: pointer; }
+.slash-item.active { background: var(--list-sel); }
+.slash-item .n { font-family: var(--mono); font-size: 12.5px; color: var(--text-primary); min-width: 88px; }
+.slash-item .d { font-size: 12px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.slash-item .new { font-size: 10px; padding: 0 6px; border-radius: 99px; background: var(--st-green-surface); color: var(--st-green); margin-left: auto; flex: 0 0 auto; }
+
+/* divider */
+.divider { cursor: col-resize; position: relative; z-index: 5; }
+.divider::after { content: ""; position: absolute; top: 50%; left: 50%; width: 4px; height: 36px; border-radius: 4px; background: var(--field); transform: translate(-50%, -50%); opacity: 0; transition: opacity .2s; }
+.divider:hover::after, .divider.drag::after { opacity: 1; }
+.size-readout { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); white-space: nowrap; font: 11px var(--mono); background: var(--popover); box-shadow: var(--elev-pop); padding: 3px 8px; border-radius: 6px; display: none; z-index: 40; pointer-events: none; }
+.divider.drag .size-readout { display: block; }
+
+/* environment panel / canvas */
+.panel { min-width: 0; background: var(--chat-card); border-radius: var(--r-card); box-shadow: 0 0 0 0.5px var(--field); display: flex; flex-direction: column; overflow: hidden; position: relative; }
+.window.panel-closed:not(.design) .panel { visibility: hidden; }
+.window.overlay-panel:not(.design):not(.panel-closed) .panel { position: absolute; right: 10px; top: 0; bottom: 10px; width: 480px; box-shadow: var(--elev-modal); z-index: 15; }
+.tabs { display: flex; align-items: center; gap: 2px; padding: 6px 6px 0; overflow-x: auto; flex: 0 0 auto; }
+.tab { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 10px 10px 0 0; font-size: 12px; color: var(--text-secondary); cursor: pointer; border: 0; background: transparent; white-space: nowrap; }
+.tab:hover { background: var(--list-hover); }
+.tab[aria-selected="true"] { background: var(--well); color: var(--text-primary); font-weight: 600; }
+.tab svg { width: 13px; height: 13px; }
+.tab .dot { width: 8px; height: 8px; border-radius: 50%; }
+.tab.new-tab { animation: tabIn .45s var(--ease); }
+@keyframes tabIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.urlbar { display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: var(--well); flex: 0 0 auto; }
+.urlbar .url { flex: 1; min-width: 0; background: var(--input); border-radius: 9px; padding: 4px 10px; font: 12px var(--mono); color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.urlbar .icon-btn { width: 26px; height: 26px; }
+.annot-btn { border: 0; display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 10px; background: var(--control); cursor: pointer; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.annot-btn:hover { background: var(--control-hover); }
+.annot-btn[aria-pressed="true"] { background: var(--fill-accent); color: #fff; }
+.annot-btn svg { width: 13px; height: 13px; }
+.annot-btn .kbd { background: rgb(255 255 255 / .18); color: inherit; }
+.window:not(.design) .annot-btn .lbl { display: none; }
+.viewport { flex: 1; min-height: 0; position: relative; overflow: auto; background: var(--well); }
+.page-frame { position: relative; margin: 0 auto; min-height: 100%; transition: max-width var(--dur) var(--ease); }
+.annot-banner { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); background: var(--popover); box-shadow: var(--elev-pop); border-radius: 99px; padding: 4px 12px; font-size: 12px; z-index: 12; display: none; white-space: nowrap; }
+.annotating .annot-banner { display: block; }
+.hover-box { position: absolute; pointer-events: none; border-radius: 4px; box-shadow: 0 0 0 2px var(--accent), 0 0 0 9999px rgb(0 0 0 / 0.0); background: rgb(0 106 214 / .08); z-index: 10; display: none; transition: all .08s linear; }
+.hover-box .tag { position: absolute; top: -20px; left: -2px; background: var(--accent); color: #fff; font: 10.5px var(--mono); padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
+.annot-pop { position: absolute; z-index: 14; width: 260px; background: var(--popover); box-shadow: var(--elev-modal); border-radius: var(--r-card); padding: 10px; display: none; animation: popIn .18s var(--ease); }
+.annot-pop .t { font: 11px var(--mono); color: var(--text-tertiary); margin-bottom: 6px; }
+.annot-pop textarea { width: 100%; resize: none; height: 54px; border: 0; outline: none; border-radius: 9px; background: var(--input); font: inherit; font-size: 13px; color: var(--text-primary); padding: 6px 8px; caret-color: var(--accent); }
+.annot-pop .row { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
+.annot-pop .shot { height: 48px; border-radius: 8px; background: var(--well); margin-bottom: 8px; display: grid; place-items: center; font-size: 11px; color: var(--text-tertiary); overflow: hidden; }
+.pin { position: absolute; z-index: 11; width: 22px; height: 22px; border-radius: 50% 50% 50% 4px; background: var(--fill-accent); color: #fff; font-size: 11px; font-weight: 700; display: grid; place-items: center; box-shadow: var(--elev-pop); transform: translate(-4px, -18px); animation: popIn .2s var(--ease); }
+.edited-flash { animation: edited 1.6s var(--ease); }
+@keyframes edited { 0% { box-shadow: 0 0 0 0 rgb(40 200 64 / .0); } 20% { box-shadow: 0 0 0 4px rgb(40 200 64 / .6); } 100% { box-shadow: 0 0 0 0 rgb(40 200 64 / 0); } }
+
+/* Studio placeholder (today) */
+.studio { position: absolute; inset: 0; background: var(--bg); display: none; place-items: center; z-index: 25; }
+.studio.open { display: grid; animation: msgIn .25s var(--ease); }
+.studio .grid { position: absolute; inset: 0; background-image: radial-gradient(var(--field) 1px, transparent 1px); background-size: 18px 18px; opacity: .8; }
+.studio .empty { position: relative; text-align: center; color: var(--text-secondary); }
+.studio .empty b { display: block; color: var(--text-primary); font-size: 15px; margin-bottom: 4px; }
+
+/* expand modal (today) */
+.modal-scrim { position: absolute; inset: 0; background: rgb(0 0 0 / .35); display: none; place-items: center; z-index: 30; }
+.modal-scrim.open { display: grid; animation: fadeIn .2s; }
+@keyframes fadeIn { from { opacity: 0; } }
+.modal { width: 78%; height: 78%; background: var(--chat-card); border-radius: 16px; box-shadow: var(--elev-modal); display: flex; flex-direction: column; overflow: hidden; animation: popIn .22s var(--ease); }
+.modal .head { display: flex; align-items: center; padding: 8px 10px 8px 14px; font-size: 13px; font-weight: 600; gap: 8px; }
+.modal .content { flex: 1; padding: 20px; }
+
+/* narrow-window banner */
+.narrow-banner { display: none; position: absolute; left: 50%; top: 54px; transform: translateX(-50%); z-index: 22; background: var(--popover); box-shadow: var(--elev-pop); border-radius: var(--r-card); padding: 8px 12px; font-size: 12.5px; align-items: center; gap: 10px; white-space: nowrap; }
+.narrow-banner.show { display: flex; animation: popIn .2s var(--ease); }
+
+/* ---------- Mock site pages (inside canvas) ---------- */
+.site { font-family: var(--font); color: #1c1d1f; min-height: 100%; padding: 0 0 30px; }
+.site * { transition: all .4s var(--ease); }
+.site nav { display: flex; align-items: center; gap: 18px; padding: 16px 28px; font-size: 13px; }
+.site nav .logo { font-weight: 800; letter-spacing: -.02em; font-size: 16px; margin-right: auto; display: flex; align-items: center; gap: 8px; }
+.site nav .logo i { width: 18px; height: 18px; border-radius: 6px; display: inline-block; }
+.site .hero { padding: 44px 28px 28px; }
+.site h1 { margin: 0 0 12px; letter-spacing: -.03em; }
+.site .hero p { margin: 0 0 18px; max-width: 46ch; }
+.site .cta { display: inline-flex; padding: 10px 18px; border-radius: 12px; font-weight: 650; font-size: 14px; border: 0; cursor: pointer; }
+.site .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; padding: 12px 28px; }
+.site .feat { border-radius: 14px; padding: 14px; font-size: 13px; }
+.site .feat b { display: block; margin-bottom: 4px; font-size: 14px; }
+.site .price { margin: 18px 28px 0; border-radius: 16px; padding: 18px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.site .price .amt { font-size: 30px; font-weight: 800; letter-spacing: -.03em; }
+/* A · Calm */
+.site.calm { background: #f7f9fc; }
+.site.calm nav .logo i { background: linear-gradient(135deg, #83d8ff, #2f7eea); }
+.site.calm h1 { font-size: 38px; line-height: 1.08; font-weight: 700; color: #16243a; }
+.site.calm .hero p { color: #4b5a70; font-size: 15px; }
+.site.calm .cta { background: #2f7eea; color: #fff; }
+.site.calm .feat { background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / .06); color: #4b5a70; }
+.site.calm .feat b { color: #16243a; }
+.site.calm .price { background: #eaf2fe; color: #16243a; }
+/* B · Bold */
+.site.bold { background: #0f1012; color: #f2f3f5; }
+.site.bold nav .logo i { background: #c6ec7e; }
+.site.bold nav { color: #bfc3c9; }
+.site.bold h1 { font-size: 52px; line-height: .98; font-weight: 850; text-transform: none; }
+.site.bold h1 em { font-style: normal; color: #c6ec7e; }
+.site.bold .hero p { color: #a8adb5; font-size: 15px; }
+.site.bold .cta { background: #c6ec7e; color: #0f1012; border-radius: 99px; }
+.site.bold .feat { background: #1b1d21; color: #a8adb5; }
+.site.bold .feat b { color: #fff; }
+.site.bold .price { background: #c6ec7e; color: #0f1012; }
+/* C · Editorial */
+.site.edit { background: #f6f1e7; color: #2a2620; font-family: "Iowan Old Style", "Palatino", Georgia, serif; }
+.site.edit nav { font-family: var(--font); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; border-bottom: 1px solid #2a262033; }
+.site.edit nav .logo { font-family: "Iowan Old Style", Georgia, serif; text-transform: none; letter-spacing: 0; font-size: 20px; font-weight: 700; }
+.site.edit nav .logo i { display: none; }
+.site.edit h1 { font-size: 44px; line-height: 1.05; font-weight: 500; font-style: italic; }
+.site.edit .hero p { font-size: 17px; color: #4d463b; }
+.site.edit .cta { background: #2a2620; color: #f6f1e7; border-radius: 2px; font-family: var(--font); }
+.site.edit .feat { background: transparent; border-top: 2px solid #2a2620; border-radius: 0; color: #4d463b; }
+.site.edit .price { background: #ebe2cf; border-radius: 2px; }
+.site [data-annot] { cursor: inherit; }
+.annotating .site [data-annot] { cursor: crosshair; }
+
+/* chart artifact (inline + canvas) */
+.chart { display: flex; align-items: flex-end; gap: 10px; height: 100%; padding: 6px 4px 0; }
+.chart .bar { flex: 1; border-radius: 6px 6px 2px 2px; position: relative; animation: grow .6s var(--ease) both; }
+.chart .bar span { position: absolute; bottom: -18px; left: 0; right: 0; text-align: center; font-size: 10.5px; color: var(--text-tertiary); }
+@keyframes grow { from { transform: scaleY(0); transform-origin: bottom; } }
+.chart-full { padding: 30px 40px 50px; height: 100%; display: flex; flex-direction: column; }
+.chart-full h3 { margin: 0 0 6px; font-size: 18px; }
+.chart-full p { margin: 0 0 20px; color: var(--text-secondary); font-size: 13px; }
+
+.legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.footnote { color: var(--text-tertiary); font-size: 12px; margin-top: 14px; }
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>Design mode: how it works today and what I propose</h1>
+  <p class="lede">This is an interactive mockup, not the real app. Switch between <b>Today</b> and <b>Proposed</b>. In Proposed, try typing <span class="kbd">/design</span> in the composer, press <span class="kbd">⌘⇧D</span>, use the scenario buttons, drag the divider, turn on <b>Annotate</b> and click part of the page, or make the window narrower.</p>
+
+  <div class="controls">
+    <div class="seg" role="group" aria-label="Version">
+      <button id="v-before" aria-pressed="false">Today</button>
+      <button id="v-after" aria-pressed="true">Proposed</button>
+    </div>
+    <div class="ctl-group"><label for="w">Window width</label><input id="w" type="range" min="820" max="1680" step="10" value="1440"><span id="wv" class="kbd">1440</span></div>
+    <div class="ctl-group" id="scenarios">
+      <button class="btn" id="s-suggest">Aiden suggests design mode</button>
+      <button class="btn" id="s-dirs">Aiden writes 3 directions</button>
+      <button class="btn" id="s-reset">Reset</button>
+    </div>
+    <div class="ctl-group">
+      <button class="btn" id="theme">Dark</button>
+      <label><input type="checkbox" id="autowiden" checked> Widen window on entry</label>
+    </div>
+  </div>
+
+  <div class="notes" id="notes"></div>
+
+  <div class="stage-wrap" id="stageWrap">
+    <div class="stage" id="stage">
+      <div class="window" id="win">
+        <span class="width-tag" id="wtag"></span>
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar" aria-label="Sidebar">
+          <div class="traffic"><i></i><i></i><i></i></div>
+          <div class="sb-inner" id="sbInner"></div>
+        </aside>
+        <!-- Main -->
+        <div class="main">
+          <div class="topbar">
+            <button class="icon-btn" id="sbToggle" aria-label="Toggle sidebar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg></button>
+            <div class="chat-title" id="chatTitle">Pricing page refresh <small id="chatSub">aiden-site</small></div>
+            <button class="design-pill" id="designPill" title="Exit design mode (⌘⇧D)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><path d="M2 2l7.586 7.586"/><circle cx="11" cy="11" r="2"/></svg>Design mode <span class="x">✕</span></button>
+            <div class="spacer"></div>
+            <button class="icon-btn" id="designToggle" aria-pressed="false" aria-label="Design mode"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M10 4v16"/><path d="M13.5 9h4M13.5 12.5h4M13.5 16h2.5"/></svg><span class="tooltip" id="dtTip">Design mode <span class="kbd">⌘⇧D</span></span></button>
+            <button class="icon-btn" id="envToggle" aria-pressed="true" aria-label="Toggle environment"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M15 4v16"/></svg><span class="tooltip">Environment panel</span></button>
+          </div>
+
+          <div class="body" id="body">
+            <!-- Chat column -->
+            <section class="chat-col" aria-label="Chat">
+              <div class="chat-scroll" id="chatScroll"><div class="chat-inner" id="chatInner"></div></div>
+              <div class="composer-wrap" id="composerWrap">
+                <div class="slash-menu" id="slashMenu" role="listbox"></div>
+                <div class="composer">
+                  <div class="chips" id="chips"></div>
+                  <div class="line">
+                    <input id="composer" placeholder="Ask Aiden… (try /design)" autocomplete="off" aria-label="Message">
+                    <button class="send" id="send" aria-label="Send"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
+                  </div>
+                </div>
+                <div class="composer-hint" id="composerHint"></div>
+              </div>
+            </section>
+            <!-- Divider -->
+            <div class="divider" id="divider" role="separator" aria-orientation="vertical" tabindex="0" aria-label="Resize"><span class="size-readout" id="readout"></span></div>
+            <!-- Environment panel / canvas -->
+            <section class="panel" id="panel" aria-label="Environment">
+              <div class="tabs" id="tabs" role="tablist"></div>
+              <div class="urlbar">
+                <button class="icon-btn" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg></button>
+                <button class="icon-btn" aria-label="Reload"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg></button>
+                <div class="url" id="url"></div>
+                <button class="annot-btn" id="annotBtn" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4l7 17 2.5-7.5L21 11z"/></svg><span class="lbl">Annotate</span> <span class="kbd">⌘.</span></button>
+              </div>
+              <div class="viewport" id="viewport">
+                <div class="annot-banner">Click an element, or drag to select an area · <span class="kbd">Esc</span> to stop</div>
+                <div class="hover-box" id="hoverBox"><span class="tag" id="hoverTag"></span></div>
+                <div class="annot-pop" id="annotPop">
+                  <div class="t" id="annotTarget"></div>
+                  <div class="shot" id="annotShot">screenshot crop + React source captured</div>
+                  <textarea id="annotText" placeholder="What should change?"></textarea>
+                  <div class="row"><button class="btn small" id="annotCancel">Cancel</button><button class="btn small primary" id="annotAdd">Add to chat</button></div>
+                </div>
+                <div class="page-frame" id="pageFrame"></div>
+              </div>
+            </section>
+          </div>
+        </div>
+
+        <div class="narrow-banner" id="narrowBanner"><span>Design mode needs a window at least 840 px wide.</span><button class="btn small primary" id="widenBtn">Widen window</button></div>
+
+        <!-- Today: Studio route placeholder -->
+        <div class="studio" id="studio"><div class="grid"></div><div class="empty"><b>No design projects yet</b>The /design route today: an empty canvas. Nothing in the app uses DS-1a.<br><br><button class="btn" id="studioBack">Back to chat</button></div></div>
+        <!-- Today: expand modal -->
+        <div class="modal-scrim" id="modal"><div class="modal"><div class="head">Pricing comparison <span class="spacer" style="flex:1"></span><button class="btn small" id="modalClose">Close</button></div><div class="content" id="modalContent"></div></div></div>
+      </div>
+    </div>
+  </div>
+  <p class="footnote">The sizes match the plan: the chat column defaults to 420 px (between 360 and 560) and the canvas gets the rest, with a 480 px minimum. Today the panel defaults to 560 px (480 to 720) and the chat keeps at least 560 px. The browser keeps its tabs as you switch layouts because design mode reuses the same workbench instead of replacing it.</p>
+</div>
+
+<script>
+const $ = (s, r = document) => r.querySelector(s);
+const win = $("#win"), body = $("#body"), stage = $("#stage"), stageWrap = $("#stageWrap");
+const SIDEBAR_W = 260;
+
+const state = {
+  version: "after",      // before | after
+  design: false,
+  width: 1440,
+  sidebarCollapsed: false,
+  sidebarAuto: false,
+  panelOpen: true,
+  panelW: 560,
+  chatW: 420,
+  tabs: [],
+  activeTab: null,
+  annotating: false,
+  pins: 0,
+  chips: [],
+  slashIndex: 0,
+  dirsMade: false,
+  suggestShown: false,
+};
+
+/* ---------- content ---------- */
+const PAGES = {
+  calm: { cls: "calm", url: "localhost:5173/", h1: "Pricing that grows<br>with your team", p: "Start free, add seats when you need them. Every plan includes Bots, devices and remote access.", cta: "Start free", dot: "#2f7eea" },
+  bold: { cls: "bold", url: "localhost:5173/directions/bold", h1: "One agent.<br><em>Every</em> machine.", p: "Flat pricing. No per-token surprises. Run Aiden on your Mac, your phone and a Bot computer.", cta: "Get Aiden", dot: "#c6ec7e" },
+  edit: { cls: "edit", url: "localhost:5173/directions/editorial", h1: "A quieter way<br>to pay for help", p: "One subscription for a private assistant that lives on your own computer, and works where you are.", cta: "Read the plans", dot: "#2a2620" },
+};
+function siteHTML(key) {
+  const d = PAGES[key];
+  return `<div class="site ${d.cls}" data-page="${key}">
+    <nav data-annot="nav.site-nav"><span class="logo" data-annot="a.logo"><i></i>aiden</span><span>Features</span><span>Pricing</span><span>Docs</span></nav>
+    <section class="hero" data-annot="section.hero">
+      <h1 data-annot="h1.hero-title">${d.h1}</h1>
+      <p data-annot="p.hero-lede">${d.p}</p>
+      <button class="cta" data-annot="button.cta">${d.cta}</button>
+    </section>
+    <div class="features" data-annot="div.features">
+      <div class="feat" data-annot="div.feature-card"><b>Bots</b>Long-running helpers with their own computer.</div>
+      <div class="feat" data-annot="div.feature-card"><b>On the go</b>Pair your phone and keep chatting.</div>
+      <div class="feat" data-annot="div.feature-card"><b>Private</b>Your keys, your files, your machine.</div>
+    </div>
+    <div class="price" data-annot="div.price-card"><span class="amt">$0</span><span>Free for one person. Team plans from $12 per seat each month.</span></div>
+  </div>`;
+}
+const BARS = [["Free", 28, "var(--mint)"], ["Plus", 64, "var(--sky)"], ["Team", 92, "var(--lilac)"], ["Biz", 76, "var(--sun)"]];
+function chartHTML(full) {
+  const bars = BARS.map(([l, v, c], i) => `<div class="bar" style="height:${v}%;background:${c};animation-delay:${i * 60}ms"><span>${l}</span></div>`).join("");
+  if (!full) return `<div class="chart">${bars}</div>`;
+  return `<div class="chart-full"><h3>Seats per plan, last 30 days</h3><p>render_artifact visual, opened in the canvas as its own tab</p><div class="chart" style="flex:1">${bars}</div></div>`;
+}
+
+/* ---------- sidebar ---------- */
+const PROJECTS = [
+  { name: "aiden-site", path: "~/code/aiden-site", chats: ["Pricing page refresh", "Footer links audit", "OG image ideas"] },
+  { name: "pricing-api", path: "~/code/pricing-api", chats: ["Stripe webhook retries", "Seat proration"] },
+  { name: "mobile-app", path: "~/code/mobile-app", chats: ["Android paging bug"] },
+];
+const ICON = {
+  chat: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg>',
+  folder: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
+  bot: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="7" width="16" height="12" rx="4"/><path d="M12 3v4"/><circle cx="9" cy="13" r="1"/><circle cx="15" cy="13" r="1"/></svg>',
+  clock: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+  pen: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/></svg>',
+  image: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>',
+};
+function renderSidebar() {
+  const el = $("#sbInner");
+  const scoped = state.version === "after" && state.design;
+  if (scoped) {
+    const p = PROJECTS[0];
+    el.innerHTML = `<div class="sb-fade">
+      <button class="back-row" id="backAll"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>All projects</button>
+      <div class="scope-title">${ICON.folder}${p.name}</div>
+      <div class="scope-sub">${p.path}</div>
+      <div class="sb-label">Chats</div>
+      ${p.chats.map((c, i) => `<div class="chat-row ${i === 0 ? "sel" : ""}" style="padding-left:8px">${c}${i === 0 ? '<span class="dm-badge">Design</span>' : ""}</div>`).join("")}
+      <button class="nav-row" style="margin-top:6px;color:var(--text-secondary)">+ New chat in ${p.name}</button>
+    </div>`;
+    $("#backAll").onclick = () => setDesign(false, "sidebar");
+    return;
+  }
+  const studioRow = state.version === "before"
+    ? `<button class="nav-row" id="studioRow">${ICON.pen}Design<span class="flag">flag</span></button><button class="nav-row">${ICON.image}Images<span class="flag">flag</span></button>` : "";
+  el.innerHTML = `<div class="sb-fade">
+    <button class="nav-row">${ICON.chat}New chat</button>
+    <button class="nav-row">${ICON.bot}Bots</button>
+    <button class="nav-row">${ICON.clock}Scheduled</button>
+    ${studioRow}
+    <div class="sb-label">Projects</div>
+    ${PROJECTS.map((p, pi) => `<div class="proj"><div class="proj-head">${ICON.folder}${p.name}</div>${p.chats.map((c, i) => `<div class="chat-row ${pi === 0 && i === 0 ? "sel" : ""}">${c}${pi === 0 && i === 0 && state.design ? '<span class="dm-badge">Design</span>' : ""}</div>`).join("")}</div>`).join("")}
+    <div class="sb-label">Chats</div>
+    <div class="chat-row" style="padding-left:8px">Weekend trip packing list</div>
+    <div class="chat-row" style="padding-left:8px">Explain HTTP/3</div>
+  </div>`;
+  const sr = $("#studioRow");
+  if (sr) sr.onclick = () => $("#studio").classList.add("open");
+}
+
+/* ---------- chat ---------- */
+const chat = $("#chatInner");
+function addMsg(html, cls = "ai") {
+  const d = document.createElement("div");
+  d.className = "msg " + cls;
+  d.innerHTML = cls === "user" ? `<div class="bubble">${html}</div>` : html;
+  chat.appendChild(d);
+  requestAnimationFrame(() => { $("#chatScroll").scrollTop = 1e6; });
+  return d;
+}
+function seedChat() {
+  chat.innerHTML = "";
+  addMsg("Can you refresh the pricing page on the site? Something cleaner, and show me how seats are spread across plans.", "user");
+  const m = addMsg(`<div class="meta">Aiden</div>
+    <div class="tool-line">✓ Read <code>src/pages/pricing.tsx</code></div><br>
+    <div class="tool-line">✓ Started <code>npm run dev</code> on <code>:5173</code></div>
+    <p style="margin-top:8px">I started the dev server and opened the page in the browser. Here are seat counts by plan:</p>
+    <div class="artifact"><div class="head"><span class="name">Seats per plan</span><span class="kind">render_artifact</span><span class="spacer"></span>
+      <button class="artifact-btn canvas" data-act="canvas"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M10 4v16"/></svg>Show in canvas</button>
+      <button class="artifact-btn" data-act="expand"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>Expand</button></div>
+      <div class="canvas-ish">${chartHTML(false)}</div></div>
+    <p>Most people are on Team, so the page should lead with it. Should I mock up a few directions?</p>`);
+  m.querySelector('[data-act="expand"]').onclick = () => { $("#modalContent").innerHTML = chartHTML(true); $("#modal").classList.add("open"); };
+  m.querySelector('[data-act="canvas"]').onclick = () => openTab({ id: "chart", label: "Seats per plan", kind: "chart", url: "aiden-genui://artifact/seats-per-plan", dot: "var(--lilac)" });
+}
+
+/* ---------- tabs / canvas ---------- */
+function resetTabs() {
+  state.tabs = [{ id: "calm", label: "localhost:5173", kind: "site", page: "calm", url: PAGES.calm.url, dot: PAGES.calm.dot }];
+  state.activeTab = "calm";
+}
+function openTab(t, select = true) {
+  if (!state.tabs.find(x => x.id === t.id)) { t.fresh = true; state.tabs.push(t); }
+  if (select) state.activeTab = t.id;
+  renderTabs(); renderPage();
+}
+function renderTabs() {
+  const el = $("#tabs");
+  const lead = state.version === "before" || !state.design
+    ? `<button class="tab" disabled style="opacity:.6">Review</button><button class="tab" disabled style="opacity:.6">Files</button>` : "";
+  el.innerHTML = lead + state.tabs.map(t => `<button class="tab ${t.fresh ? "new-tab" : ""}" role="tab" aria-selected="${t.id === state.activeTab}" data-id="${t.id}"><span class="dot" style="background:${t.dot}"></span>${t.label}</button>`).join("");
+  state.tabs.forEach(t => t.fresh = false);
+  el.querySelectorAll(".tab[data-id]").forEach(b => b.onclick = () => { state.activeTab = b.dataset.id; renderTabs(); renderPage(); });
+}
+function renderPage() {
+  const t = state.tabs.find(x => x.id === state.activeTab) || state.tabs[0];
+  $("#url").textContent = t.url;
+  $("#pageFrame").innerHTML = t.kind === "chart" ? chartHTML(true) : siteHTML(t.page);
+  clearPins(); hideAnnotPop();
+  $("#annotBtn").disabled = t.kind !== "site";
+}
+
+/* ---------- layout ---------- */
+function bodyWidth() { return state.width - (state.sidebarCollapsed ? 0 : SIDEBAR_W); }
+function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+function layout() {
+  const isDesign = state.version === "after" && state.design;
+  win.classList.toggle("design", isDesign);
+  win.style.width = state.width + "px";
+  $("#wtag").textContent = `${state.width} × 740`;
+  // Auto-collapse: below 1100 in design mode the sidebar folds away; the app also folds it below 700 today
+  const wantCollapse = isDesign ? state.width < 1100 : state.width < 700;
+  if (wantCollapse && !state.sidebarCollapsed) { state.sidebarCollapsed = true; state.sidebarAuto = true; }
+  if (!wantCollapse && state.sidebarAuto) { state.sidebarCollapsed = false; state.sidebarAuto = false; }
+  win.classList.toggle("sb-collapsed", state.sidebarCollapsed);
+  const bw = bodyWidth() - 10;
+  if (isDesign) {
+    const max = Math.min(560, bw - 10 - 480);
+    state.chatW = clamp(state.chatW, 360, Math.max(360, max));
+    body.style.setProperty("--chatw", state.chatW + "px");
+    win.classList.remove("overlay-panel", "panel-closed");
+  } else {
+    const inline = bw - 480 >= 560;
+    win.classList.toggle("overlay-panel", !inline);
+    win.classList.toggle("panel-closed", !state.panelOpen);
+    const w = Math.min(state.panelW, Math.max(480, bw - 10 - 560));
+    body.style.setProperty("--panelw", (inline ? w : 480) + "px");
+  }
+  $("#designToggle").setAttribute("aria-pressed", String(isDesign));
+  $("#designToggle").classList.toggle("hidden", state.version === "before");
+  $("#envToggle").classList.toggle("hidden", isDesign);
+  $("#envToggle").setAttribute("aria-pressed", String(state.panelOpen));
+  $("#dtTip").innerHTML = isDesign ? 'Exit design mode <span class="kbd">⌘⇧D</span>' : 'Design mode <span class="kbd">⌘⇧D</span>';
+  $("#composerHint").textContent = isDesign ? "Full tools stay on. Annotations from the canvas arrive here as chips." : "";
+  $("#scenarios").style.display = state.version === "after" ? "" : "none";
+  $("#narrowBanner").classList.toggle("show", state.version === "after" && state.width < 840 && !isDesign && state.wantedDesign);
+  fit();
+  renderNotes();
+}
+function fit() {
+  const avail = stageWrap.clientWidth;
+  const s = Math.min(1, avail / state.width);
+  stage.style.transform = `scale(${s})`;
+  stageWrap.style.height = (740 * s + 4) + "px";
+  stage.dataset.scale = s;
+}
+window.addEventListener("resize", fit);
+
+/* ---------- design mode ---------- */
+function setDesign(on, source) {
+  if (state.version !== "after") return;
+  if (on && state.width < 840) {
+    if ($("#autowiden").checked) { setWidth(1280); }
+    else { state.wantedDesign = true; layout(); return; }
+  } else if (on && state.width < 1100 && $("#autowiden").checked) {
+    setWidth(Math.max(state.width, 1280));
+  }
+  state.wantedDesign = false;
+  state.design = on;
+  if (!on) setAnnotating(false);
+  renderSidebar(); renderTabs(); layout();
+  const why = { slash: "/design", toggle: "top bar toggle", key: "⌘⇧D", tool: "design_mode tool → entered", sidebar: "‹ All projects" }[source] || source;
+  flashNote(on ? `Entered design mode via ${why}. Chat moves left, the canvas fills the rest and the sidebar shows only aiden-site.` : `Left design mode via ${why}. The workbench is back to its normal width and the same tabs are still open.`);
+}
+let flashText = "";
+function flashNote(t) { flashText = t; renderNotes(); }
+function setWidth(w) { state.width = w; $("#w").value = w; $("#wv").textContent = w; layout(); }
+
+/* ---------- notes ---------- */
+function renderNotes() {
+  const isDesign = state.version === "after" && state.design;
+  let n;
+  if (state.version === "before") n = [
+    ["Studio is a separate route", "The flagged Design row opens /design, an empty canvas. The DS-1a backend (hidden chats, locked profile, revision store) has no UI."],
+    ["Visuals live inside the chat", "render_artifact cards stay inline. Expand opens a modal that blocks the chat, so you can't keep talking while you look."],
+    ["The browser is a side panel", "The panel is 480 to 720 px and the chat keeps at least 560 px, so a page always gets less than half the window. Try dragging the divider."],
+    ["Annotate already exists", "Press ⌘. in the browser to select elements, but the narrow panel makes the page small and cramped."],
+  ];
+  else if (!isDesign) n = [
+    ["Same chat, nothing new to learn", "Normal mode doesn't change. Design mode adds a top bar toggle (⌘⇧D) and a /design command."],
+    ["Aiden can offer it", "Click \"Aiden suggests design mode\". The design_mode tool shows a consent card, and nothing changes until you accept. Under Visuals → On request, only /design enters design mode."],
+    ["Bound to a folder", "Design mode needs a workspace. A chat without one now gets its own private folder (#667), so it works there too."],
+    ["Studio retires", "No separate /design route and no hidden chats. The design files are real workspace files, and git keeps their versions."],
+  ];
+  else n = [
+    ["Sidebar shows one project", "Only aiden-site's chats are listed. \"‹ All projects\" goes back to the full list and leaves design mode."],
+    ["Narrow chat, wide canvas", "The chat is 360 to 560 px, 420 by default, and the canvas gets the rest. Drag the divider. Below 1100 px the sidebar folds away; below 840 px the window widens if it can."],
+    ["The canvas is the Aiden browser", "Directions are separate files, each in its own tab. \"Show in canvas\" opens an inline visual as a tab. Annotate is the main action."],
+    ["Annotate → chat → edit", "Turn on Annotate, click the headline, write a note, then Add to chat and send it. Aiden edits that file and the page updates."],
+  ];
+  $("#notes").innerHTML = (flashText ? `<div class="note hl"><b>Just now</b>${flashText}</div>` : "") + n.map(([b, t]) => `<div class="note"><b>${b}</b>${t}</div>`).join("");
+}
+
+/* ---------- divider drag ---------- */
+(function () {
+  const d = $("#divider");
+  let startX, startVal;
+  d.addEventListener("pointerdown", e => {
+    d.setPointerCapture(e.pointerId); d.classList.add("drag");
+    startX = e.clientX; startVal = state.design && state.version === "after" ? state.chatW : state.panelW;
+    body.style.transition = "none";
+  });
+  d.addEventListener("pointermove", e => {
+    if (!d.classList.contains("drag")) return;
+    const s = +stage.dataset.scale || 1;
+    const dx = (e.clientX - startX) / s;
+    const bw = bodyWidth() - 10;
+    if (state.design && state.version === "after") {
+      state.chatW = clamp(startVal + dx, 360, Math.max(360, Math.min(560, bw - 10 - 480)));
+      body.style.setProperty("--chatw", state.chatW + "px");
+      $("#readout").textContent = `chat ${Math.round(state.chatW)} · canvas ${Math.round(bw - 10 - state.chatW)}`;
+    } else {
+      state.panelW = clamp(startVal - dx, 480, Math.max(480, Math.min(720, bw - 10 - 560)));
+      body.style.setProperty("--panelw", state.panelW + "px");
+      $("#readout").textContent = `chat ${Math.round(bw - 10 - state.panelW)} (min 560) · panel ${Math.round(state.panelW)} (max 720)`;
+    }
+  });
+  const end = () => { d.classList.remove("drag"); body.style.transition = ""; };
+  d.addEventListener("pointerup", end); d.addEventListener("pointercancel", end);
+  d.addEventListener("keydown", e => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    const dir = e.key === "ArrowRight" ? 1 : -1;
+    if (state.design && state.version === "after") state.chatW += dir * 20; else state.panelW -= dir * 20;
+    layout();
+  });
+})();
+
+/* ---------- annotate ---------- */
+const vp = $("#viewport"), hb = $("#hoverBox"), pop = $("#annotPop");
+let annotTarget = null;
+function setAnnotating(on) {
+  state.annotating = on;
+  $("#annotBtn").setAttribute("aria-pressed", String(on));
+  vp.classList.toggle("annotating", on);
+  if (!on) { hb.style.display = "none"; hideAnnotPop(); }
+}
+$("#annotBtn").onclick = () => setAnnotating(!state.annotating);
+function rel(el) {
+  const s = +stage.dataset.scale || 1;
+  const a = el.getBoundingClientRect(), b = vp.getBoundingClientRect();
+  return { x: (a.left - b.left) / s + vp.scrollLeft, y: (a.top - b.top) / s + vp.scrollTop, w: a.width / s, h: a.height / s };
+}
+vp.addEventListener("mousemove", e => {
+  if (!state.annotating || pop.style.display === "block") return;
+  const t = e.target.closest("[data-annot]");
+  if (!t) { hb.style.display = "none"; return; }
+  const r = rel(t);
+  Object.assign(hb.style, { display: "block", left: r.x + "px", top: r.y + "px", width: r.w + "px", height: r.h + "px" });
+  $("#hoverTag").textContent = `<${t.dataset.annot}>  ${Math.round(r.w)}×${Math.round(r.h)}`;
+});
+vp.addEventListener("click", e => {
+  if (!state.annotating) return;
+  if (e.target.closest("#annotPop")) return;
+  const t = e.target.closest("[data-annot]");
+  if (!t) return;
+  e.preventDefault();
+  annotTarget = t;
+  const r = rel(t);
+  const tab = state.tabs.find(x => x.id === state.activeTab);
+  const file = tab.page === "calm" ? "src/pages/pricing.tsx" : `directions/${tab.page === "bold" ? "bold" : "editorial"}.html`;
+  annotTarget.dataset.file = file;
+  $("#annotTarget").textContent = `${t.dataset.annot} · ${file}`;
+  const vw = vp.clientWidth;
+  Object.assign(pop.style, { display: "block", left: clamp(r.x, 8, vw - 270) + "px", top: (r.y + r.h + 8) + "px" });
+  $("#annotText").value = "";
+  setTimeout(() => $("#annotText").focus(), 30);
+});
+function hideAnnotPop() { pop.style.display = "none"; }
+$("#annotCancel").onclick = e => { e.stopPropagation(); hideAnnotPop(); };
+$("#annotAdd").onclick = e => {
+  e.stopPropagation();
+  if (!annotTarget) return;
+  state.pins++;
+  const r = rel(annotTarget);
+  const pin = document.createElement("div");
+  pin.className = "pin"; pin.textContent = state.pins;
+  pin.style.left = r.x + "px"; pin.style.top = r.y + "px";
+  vp.appendChild(pin);
+  const note = $("#annotText").value.trim() || "Make this stronger";
+  state.chips.push({ n: state.pins, sel: annotTarget.dataset.annot, file: annotTarget.dataset.file, note, el: annotTarget, page: state.activeTab });
+  renderChips();
+  hideAnnotPop(); hb.style.display = "none";
+  if (!$("#composer").value) $("#composer").value = note;
+  $("#composer").focus();
+};
+function clearPins() { vp.querySelectorAll(".pin").forEach(p => p.remove()); }
+const PIN_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M4 4l7 17 2.5-7.5L21 11z"/></svg>';
+function renderChips() {
+  const el = $("#chips");
+  el.innerHTML = state.chips.map((c, i) => `<span class="ref-chip">${PIN_SVG}${c.n} ${c.sel}<button aria-label="Remove" data-i="${i}">✕</button></span>`).join("");
+  el.querySelectorAll("button").forEach(b => b.onclick = () => { state.chips.splice(+b.dataset.i, 1); renderChips(); });
+}
+
+/* ---------- slash commands ---------- */
+const SLASH = () => [
+  state.design && state.version === "after"
+    ? { n: "/design", d: "Exit design mode and go back to the normal layout", run: () => setDesign(false, "slash"), isNew: true }
+    : { n: "/design", d: "Design mode: a narrow chat with the canvas beside it", run: () => setDesign(true, "slash"), isNew: true, hide: state.version === "before" },
+  { n: "/visualize", d: "Ask Aiden for an inline chart, diagram or explainer" },
+  { n: "/review", d: "Open the workspace Review destination" },
+  { n: "/sidebar", d: "Show or hide chat navigation", run: () => { state.sidebarCollapsed = !state.sidebarCollapsed; state.sidebarAuto = false; layout(); } },
+].filter(x => !x.hide);
+const input = $("#composer"), menu = $("#slashMenu");
+function slashMatches() {
+  const v = input.value;
+  if (!v.startsWith("/") || v.includes(" ")) return [];
+  return SLASH().filter(c => c.n.startsWith(v.toLowerCase()));
+}
+function renderSlash() {
+  const m = slashMatches();
+  if (!m.length) { menu.classList.remove("open"); return; }
+  state.slashIndex = clamp(state.slashIndex, 0, m.length - 1);
+  menu.innerHTML = m.map((c, i) => `<div class="slash-item ${i === state.slashIndex ? "active" : ""}" data-i="${i}"><span class="n">${c.n}</span><span class="d">${c.d}</span>${c.isNew ? '<span class="new">new</span>' : ""}</div>`).join("");
+  menu.classList.add("open");
+  menu.querySelectorAll(".slash-item").forEach(it => it.onmousedown = e => { e.preventDefault(); runSlash(m[+it.dataset.i]); });
+}
+function runSlash(c) {
+  input.value = ""; menu.classList.remove("open");
+  if (c.run) c.run(); else flashNote(`${c.n} is unchanged by this proposal.`);
+}
+input.addEventListener("input", () => { state.slashIndex = 0; renderSlash(); });
+input.addEventListener("keydown", e => {
+  const m = slashMatches();
+  if (m.length && menu.classList.contains("open")) {
+    if (e.key === "ArrowDown") { state.slashIndex++; renderSlash(); e.preventDefault(); return; }
+    if (e.key === "ArrowUp") { state.slashIndex--; renderSlash(); e.preventDefault(); return; }
+    if (e.key === "Enter" || e.key === "Tab") { runSlash(m[state.slashIndex]); e.preventDefault(); return; }
+    if (e.key === "Escape") { menu.classList.remove("open"); e.preventDefault(); return; }
+  }
+  if (e.key === "Enter") { send(); e.preventDefault(); }
+});
+input.addEventListener("blur", () => setTimeout(() => menu.classList.remove("open"), 100));
+$("#send").onclick = send;
+
+function send() {
+  const text = input.value.trim();
+  if (!text && !state.chips.length) return;
+  const chips = state.chips.splice(0);
+  renderChips();
+  input.value = "";
+  const chipHTML = chips.map(c => `<span class="ref-chip">${PIN_SVG}${c.n} ${c.sel}</span>`).join(" ");
+  addMsg(`${chipHTML ? chipHTML + "<br>" : ""}${text || ""}`, "user");
+  const thinking = addMsg(`<div class="meta">Aiden</div><div class="tool-line">Working…</div>`);
+  setTimeout(() => {
+    if (chips.length) {
+      const files = [...new Set(chips.map(c => c.file))];
+      thinking.innerHTML = `<div class="meta">Aiden</div>${files.map(f => `<div class="tool-line">✓ Edited <code>${f}</code></div><br>`).join("")}<p>Done. I followed ${chips.length === 1 ? "your note on" : "your notes on"} ${chips.map(c => `<code>${c.sel}</code>`).join(", ")}. The canvas has reloaded.</p>`;
+      chips.forEach(c => applyEdit(c, text));
+    } else if (/design|mock|direction|layout|landing|page|ui|screen/i.test(text) && !state.design && state.version === "after") {
+      thinking.remove(); suggest();
+    } else {
+      thinking.innerHTML = `<div class="meta">Aiden</div><p>(Mock reply.) In the real app this is a normal turn, and every tool is still available in design mode.</p>`;
+    }
+  }, 700);
+}
+function applyEdit(c, note) {
+  if (state.activeTab !== c.page) { state.activeTab = c.page; renderTabs(); renderPage(); }
+  const sel = `[data-annot="${c.sel}"]`;
+  const el = $("#pageFrame").querySelector(sel);
+  if (!el) return;
+  const H1 = { calm: "Simple pricing<br>for any team", bold: "Flat price.<br><em>Any</em> machine.", edit: "Help, priced<br>plainly" };
+  if (c.sel === "h1.hero-title") el.innerHTML = H1[c.page] || el.innerHTML;
+  if (c.sel === "p.hero-lede") el.textContent = el.textContent.split(".")[0] + ".";
+  if (c.sel === "button.cta") el.textContent = el.textContent === "Start free" ? "Start free, no card" : el.textContent + " →";
+  if (c.sel === "div.price-card") el.querySelector(".amt").textContent = "$12";
+  el.classList.add("edited-flash");
+  setTimeout(() => el.classList.remove("edited-flash"), 1700);
+}
+
+/* ---------- scenarios ---------- */
+function suggest() {
+  if (state.design) { flashNote("You're already in design mode."); return; }
+  const m = addMsg(`<div class="meta">Aiden</div><p>This is visual work. Should I switch to design mode? The chat moves to a narrow column and the page fills the rest of the window.</p>
+    <div class="consent" id="consent"><div class="q"><b>design_mode</b> · enter · <i>"comparing pricing page directions"</i></div>
+    <div class="row"><button class="btn small primary" data-a="yes">Enter design mode</button><button class="btn small" data-a="no">Not now</button></div>
+    <div class="result"></div></div>`);
+  const c = m.querySelector(".consent");
+  c.querySelector('[data-a="yes"]').onclick = () => { c.classList.add("resolved"); c.querySelector(".result").textContent = "→ { status: \"entered\" }"; setDesign(true, "tool"); };
+  c.querySelector('[data-a="no"]').onclick = () => { c.classList.add("resolved"); c.querySelector(".result").textContent = "→ { status: \"declined\" }. Aiden carries on in the normal layout."; flashNote("Declined. The tool returns \"declined\" and Aiden won't ask again in this chat."); };
+}
+$("#s-suggest").onclick = suggest;
+$("#s-dirs").onclick = () => {
+  if (!state.design) setDesign(true, "tool");
+  if (state.dirsMade) { flashNote("The directions are already open as tabs."); return; }
+  state.dirsMade = true;
+  addMsg("Mock up a few directions for the hero and pricing card.", "user");
+  const t = addMsg(`<div class="meta">Aiden</div><div class="tool-line">Working…</div>`);
+  setTimeout(() => {
+    t.innerHTML = `<div class="meta">Aiden</div>
+      <div class="tool-line">✓ Wrote <code>directions/bold.html</code></div><br>
+      <div class="tool-line">✓ Wrote <code>directions/editorial.html</code></div><br>
+      <div class="tool-line">✓ Opened 2 browser tabs</div>
+      <p style="margin-top:8px">Here are three directions: <b>A · Calm</b> (the current page, tidied up), <b>B · Bold</b> and <b>C · Editorial</b>. Each one has its own tab. Annotate any of them and I'll edit that file.</p>`;
+    const a = state.tabs.find(x => x.id === "calm"); a.label = "A · Calm";
+    openTab({ id: "bold", label: "B · Bold", kind: "site", page: "bold", url: PAGES.bold.url, dot: PAGES.bold.dot }, false);
+    setTimeout(() => openTab({ id: "edit", label: "C · Editorial", kind: "site", page: "edit", url: PAGES.edit.url, dot: PAGES.edit.dot }, false), 250);
+    setTimeout(() => { state.activeTab = "bold"; renderTabs(); renderPage(); }, 600);
+  }, 900);
+};
+$("#s-reset").onclick = () => reset();
+
+/* ---------- controls ---------- */
+$("#v-before").onclick = () => setVersion("before");
+$("#v-after").onclick = () => setVersion("after");
+function setVersion(v) {
+  state.version = v;
+  $("#v-before").setAttribute("aria-pressed", String(v === "before"));
+  $("#v-after").setAttribute("aria-pressed", String(v === "after"));
+  if (v === "before") { state.design = false; setAnnotating(false); }
+  $("#studio").classList.remove("open");
+  flashText = "";
+  input.placeholder = v === "before" ? "Ask Aiden…" : "Ask Aiden… (try /design)";
+  renderSidebar(); renderTabs(); layout();
+}
+$("#w").oninput = e => { state.width = +e.target.value; $("#wv").textContent = state.width; layout(); };
+$("#theme").onclick = () => { const d = document.documentElement.classList.toggle("dark"); $("#theme").textContent = d ? "Light" : "Dark"; };
+$("#designToggle").onclick = () => setDesign(!state.design, "toggle");
+$("#designPill").onclick = () => setDesign(false, "toggle");
+$("#envToggle").onclick = () => { state.panelOpen = !state.panelOpen; layout(); };
+$("#sbToggle").onclick = () => { state.sidebarCollapsed = !state.sidebarCollapsed; state.sidebarAuto = false; layout(); };
+$("#studioBack").onclick = () => $("#studio").classList.remove("open");
+$("#modalClose").onclick = () => $("#modal").classList.remove("open");
+$("#widenBtn").onclick = () => { setWidth(1280); setDesign(true, "toggle"); };
+document.addEventListener("keydown", e => {
+  if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "d") { e.preventDefault(); setDesign(!state.design, "key"); }
+  if ((e.metaKey || e.ctrlKey) && e.key === ".") { e.preventDefault(); setAnnotating(!state.annotating); }
+  if (e.key === "Escape") {
+    // Escape works from the inside out: popover, then Annotate. It never leaves design mode.
+    if (pop.style.display === "block") hideAnnotPop();
+    else if (state.annotating) setAnnotating(false);
+    else if ($("#modal").classList.contains("open")) $("#modal").classList.remove("open");
+  }
+});
+
+function reset() {
+  state.design = false; state.dirsMade = false; state.chips = []; state.pins = 0; state.chatW = 420; state.panelW = 560; state.panelOpen = true;
+  state.sidebarCollapsed = false; state.sidebarAuto = false; state.wantedDesign = false; flashText = "";
+  setAnnotating(false); resetTabs(); seedChat(); renderChips(); renderSidebar(); renderTabs(); renderPage(); setWidth(1440);
+}
+reset();
+</script>
+</body>
+</html>

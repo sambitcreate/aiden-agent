@@ -1,7 +1,11 @@
-// Starter Bots for "Meet Your First Bot". Shared by the desktop empty state and
-// onboarding step, and served over Remote so the phones show the same carousel.
+// Bot Templates (plan §4.3): the four starter Bots, versioned. The desktop
+// shows them in the Create menu's Templates dialog, and Remote serves them so
+// the phones show the same list. Also the silent first Bot (§4.1): "Chief",
+// with a random look and the starter instructions.
 
 import {
+  BOT_AVATAR_COLORS,
+  BOT_AVATAR_SHAPES,
   DEFAULT_BOT_AVATAR,
   type BotAvatarAppearance,
   type BotAvatarColor,
@@ -9,6 +13,7 @@ import {
   type BotCreateInput,
   type BotDefinition,
 } from "./bots.js";
+import type { BotRoutineSchedule } from "./bot-routine-schedule.js";
 
 /** A starter character: one recipe colour and one recipe shape. */
 export interface BotPresetCharacter {
@@ -32,6 +37,11 @@ export interface BotPresetRoutine {
 
 export interface BotPreset {
   id: string;
+  /**
+   * Bumped whenever what the template adds changes (name, instructions,
+   * routine). A preview of an older version refuses to create.
+   */
+  version: number;
   name: string;
   subtitle: string;
   avatar: BotPresetCharacter;
@@ -39,11 +49,14 @@ export interface BotPreset {
   /** Catalog plugin ids, resolvable with `connectionSuggestionFor`. */
   suggestedConnections: readonly string[];
   suggestedRoutine?: BotPresetRoutine;
+  /** A short made-up sample of what this Bot writes, shown faded on its card. */
+  sample: readonly string[];
 }
 
 export const BOT_PRESETS: readonly BotPreset[] = Object.freeze([
   {
     id: "chief-of-staff",
+    version: 1,
     name: "Chief of Staff",
     subtitle: "Keeps your week on track",
     avatar: { shape: "hex", color: "periwinkle" },
@@ -54,6 +67,11 @@ export const BOT_PRESETS: readonly BotPreset[] = Object.freeze([
       "When you need a decision from me, offer a few clear choices.",
     ].join("\n"),
     suggestedConnections: ["gmail", "google-calendar", "notion"],
+    sample: [
+      "Today: design review at 10, Priya’s draft is due at 3.",
+      "Two emails still need a reply: the venue and the invoice.",
+      "Want me to block an hour for the deck?",
+    ],
     suggestedRoutine: {
       name: "Morning brief",
       schedule: { frequency: "weekdays", time: "8:00" },
@@ -63,6 +81,7 @@ export const BOT_PRESETS: readonly BotPreset[] = Object.freeze([
   },
   {
     id: "meal-planner",
+    version: 1,
     name: "Meal Planner",
     subtitle: "Plans meals and shopping lists",
     avatar: { shape: "drop", color: "peach" },
@@ -73,6 +92,11 @@ export const BOT_PRESETS: readonly BotPreset[] = Object.freeze([
       "Reuse ingredients so little goes to waste.",
     ].join("\n"),
     suggestedConnections: ["notion"],
+    sample: [
+      "Mon: lemon chicken with rice. Tue: leftovers in wraps.",
+      "Shopping, produce: lemons, spinach, 2 onions.",
+      "Cook the rice once on Monday for both nights.",
+    ],
     suggestedRoutine: {
       name: "Weekly meal plan",
       schedule: { frequency: "weekly", days: [0], time: "9:00" },
@@ -81,6 +105,7 @@ export const BOT_PRESETS: readonly BotPreset[] = Object.freeze([
   },
   {
     id: "inbox-helper",
+    version: 1,
     name: "Inbox Helper",
     subtitle: "Sorts email and drafts replies",
     avatar: { shape: "cloud", color: "sky" },
@@ -90,6 +115,11 @@ export const BOT_PRESETS: readonly BotPreset[] = Object.freeze([
       "Draft short, friendly replies in my voice, and never send anything without asking me first.",
     ].join("\n"),
     suggestedConnections: ["gmail", "outlook-email"],
+    sample: [
+      "Needs a reply (3): the landlord, Sam, the dentist.",
+      "Draft to Sam: “Thursday works, see you at 6.”",
+      "Can wait: 12 newsletters and receipts.",
+    ],
     suggestedRoutine: {
       name: "Inbox wrap-up",
       schedule: { frequency: "weekdays", time: "17:00" },
@@ -98,6 +128,7 @@ export const BOT_PRESETS: readonly BotPreset[] = Object.freeze([
   },
   {
     id: "researcher",
+    version: 1,
     name: "Researcher",
     subtitle: "Digs into topics and sums them up",
     avatar: { shape: "orb", color: "mint" },
@@ -107,6 +138,11 @@ export const BOT_PRESETS: readonly BotPreset[] = Object.freeze([
       "Start with a short answer, then the details, then links to where you found them.",
     ].join("\n"),
     suggestedConnections: ["notion", "composio"],
+    sample: [
+      "Short answer: yes, heat pumps save money in mild winters.",
+      "Fairly sure. Three of four sources agree.",
+      "Details and links below.",
+    ],
   },
 ]);
 
@@ -116,6 +152,15 @@ const PRESETS_BY_ID: ReadonlyMap<string, BotPreset> = new Map(
 
 export function getBotPreset(id: string): BotPreset | null {
   return PRESETS_BY_ID.get(id) ?? null;
+}
+
+/** A template routine's friendly schedule in the routines backend's shape. */
+export function botPresetRoutineSchedule(schedule: BotPresetRoutineSchedule): BotRoutineSchedule {
+  const [hour, minute] = schedule.time.split(":");
+  const time = `${hour!.padStart(2, "0")}:${minute!.padStart(2, "0")}`;
+  return schedule.frequency === "weekly"
+    ? { kind: "weekly", days: [...schedule.days], time }
+    : { kind: schedule.frequency, time };
 }
 
 export function botPresetIdempotencyKey(presetId: string): `preset:${string}` {
@@ -136,7 +181,41 @@ export function botPresetCreateInput(preset: BotPreset): BotCreateInput {
   };
 }
 
-/** Persistence port for `bots:createFromPreset`. `createBot` must store the creation key. */
+/**
+ * What a Bot with no job yet is told (§4.1, §4.2). Stored instructions can't be
+ * empty (the Remote wire and the phones require text), so this fixed text
+ * stands for "none": while a Bot's instructions are exactly this, it asks for
+ * its job and then writes its own description and instructions with
+ * `update_bot`.
+ */
+export const BOT_STARTER_INSTRUCTIONS = [
+  "You don't have a job yet.",
+  "Ask me what I'd like you to help with.",
+  "Once I tell you, write yourself a short description and first instructions with update_bot, then get started.",
+].join("\n");
+
+/** Whether a Bot still has no job of its own: its instructions are the starter text. */
+export function botHasNoJobYet(instructions: string): boolean {
+  return instructions.trim() === BOT_STARTER_INSTRUCTIONS;
+}
+
+/** The first Bot's name (§4.1). */
+export const BOT_FIRST_BOT_NAME = "Chief";
+/** The creation key of the one first Bot onboarding makes. */
+export const BOT_FIRST_BOT_KEY = "first-bot";
+
+/** A random colour and shape. `random` returns [0, 1). */
+export function randomBotAvatar(random: () => number = Math.random): BotAvatarAppearance {
+  const pick = <Value,>(values: readonly Value[]) => values[Math.min(values.length - 1, Math.floor(random() * values.length))]!;
+  return { ...DEFAULT_BOT_AVATAR, color: pick(BOT_AVATAR_COLORS), shape: pick(BOT_AVATAR_SHAPES) };
+}
+
+/** The silent first Bot: "Chief", a random look, no job yet. */
+export function botFirstCreateInput(random: () => number = Math.random): BotCreateInput {
+  return { name: BOT_FIRST_BOT_NAME, instructions: BOT_STARTER_INSTRUCTIONS, avatar: randomBotAvatar(random) };
+}
+
+/** Persistence port for keyed creation. `createBot` must store the creation key. */
 export interface BotPresetStore {
   findBotByCreationKey(key: string): Promise<BotDefinition | null>;
   createBot(input: BotCreateInput, creationKey: string): Promise<BotDefinition>;
@@ -148,26 +227,26 @@ export interface BotPresetCreateResult {
   created: boolean;
 }
 
-export type CreateBotFromPreset = (presetId: string) => Promise<BotPresetCreateResult>;
+/** `version` is the template version the person was shown; another refuses. */
+export type CreateBotFromPreset = (presetId: string, version?: number) => Promise<BotPresetCreateResult>;
+
+/** The message a stale template preview gets. */
+export const BOT_TEMPLATE_STALE_MESSAGE = "This template changed. Close it and open it again.";
 
 /**
- * Main-process handler logic for Start Chat. Keyed `preset:<id>`: repeat and
- * concurrent calls for one preset return the same Bot, and only one reports `created`.
+ * Keyed, idempotent creation: repeat and concurrent calls for one key return
+ * the same Bot, and only one reports `created`.
  */
-export function createBotPresetCreator(store: BotPresetStore): CreateBotFromPreset {
+export function createKeyedBotCreator(store: BotPresetStore) {
   const inFlight = new Map<string, Promise<BotPresetCreateResult>>();
-  return async (presetId) => {
-    const preset = getBotPreset(presetId);
-    if (!preset) throw new Error("That starter Bot isn't available.");
-    const key = botPresetIdempotencyKey(preset.id);
+  return async (key: string, input: () => BotCreateInput): Promise<BotPresetCreateResult> => {
     const pending = inFlight.get(key);
     if (pending) return { bot: (await pending).bot, created: false };
-
     // Registered synchronously so a concurrent tap joins this lookup-and-create.
     const run = (async (): Promise<BotPresetCreateResult> => {
       const existing = await store.findBotByCreationKey(key);
       if (existing) return { bot: existing, created: false };
-      return { bot: await store.createBot(botPresetCreateInput(preset), key), created: true };
+      return { bot: await store.createBot(input(), key), created: true };
     })();
     inFlight.set(key, run);
     try {
@@ -175,5 +254,21 @@ export function createBotPresetCreator(store: BotPresetStore): CreateBotFromPres
     } finally {
       inFlight.delete(key);
     }
+  };
+}
+
+/**
+ * Main-process handler logic for a Template's Create bot. Keyed `preset:<id>`:
+ * repeat and concurrent calls for one template return the same Bot, and only
+ * one reports `created`. A `version` that isn't the template's current one is
+ * refused before anything is looked up or made.
+ */
+export function createBotPresetCreator(store: BotPresetStore): CreateBotFromPreset {
+  const create = createKeyedBotCreator(store);
+  return async (presetId, version) => {
+    const preset = getBotPreset(presetId);
+    if (!preset) throw new Error("That starter Bot isn't available.");
+    if (version !== undefined && version !== preset.version) throw new Error(BOT_TEMPLATE_STALE_MESSAGE);
+    return create(botPresetIdempotencyKey(preset.id), () => botPresetCreateInput(preset));
   };
 }

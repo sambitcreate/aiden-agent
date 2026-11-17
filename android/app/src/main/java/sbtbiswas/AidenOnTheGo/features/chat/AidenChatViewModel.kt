@@ -8,7 +8,9 @@ import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
@@ -133,6 +135,13 @@ class AidenChatViewModel(
 
     private val _pendingApproval = MutableStateFlow<AidenPendingApproval?>(null)
     val pendingApproval: StateFlow<AidenPendingApproval?> = _pendingApproval.asStateFlow()
+    /**
+     * Revision 61: the typed card's answered line ("Allowed once"), shown in the card's place at
+     * once after a tap. A refusal brings the card back and drops the line; the next approval, the
+     * end of the run and the start of another one drop it too.
+     */
+    private val _answeredApproval = MutableStateFlow<AidenApprovalAnsweredLine?>(null)
+    val answeredApproval: StateFlow<AidenApprovalAnsweredLine?> = _answeredApproval.asStateFlow()
     private val _isStopping = MutableStateFlow(false)
     val isStopping: StateFlow<Boolean> = _isStopping.asStateFlow()
 
@@ -763,6 +772,15 @@ class AidenChatViewModel(
                 if (client != null && client !== transcriptClient && activeClient() === client) loadChat()
             }
         }
+        // The answered line belongs to one approval in one run.
+        viewModelScope.launch {
+            _pendingApproval.collect { next ->
+                if (next != null) _answeredApproval.update { line -> line?.takeIf { it.approvalId == next.id } }
+            }
+        }
+        viewModelScope.launch {
+            _streamState.collect { state -> if (state?.isTerminal == true) _answeredApproval.value = null }
+        }
         resumeActiveStreamIfNeeded()
         viewModelScope.launch {
             _streamState.collect { state ->
@@ -1354,20 +1372,19 @@ class AidenChatViewModel(
         )
 
     /**
-     * Reads [recording] from the bound Mac into the cache for the player. Any
-     * recording saved for an earlier Play is dropped first, so at most one video
-     * waits on disk. A 404 means the Mac no longer has it.
+     * Reads [recording] from the bound Mac into a file owned by this Play.
+     * Other downloads and players keep their files until they close. A 404
+     * means the Mac no longer has it.
      */
     suspend fun browserRecording(recording: AidenBrowserRecordingRecap): AidenBrowserRecordingLoad {
         val client = activeClient() ?: return AidenBrowserRecordingLoad.Failed
-        withContext(ioDispatcher) { coordinator.purgeBrowserRecordings() }
         return try {
             val saved = client.browserRecording(chatId, recording.id, coordinator.browserRecordingDir)
             if (activeClient() === client) {
                 AidenBrowserRecordingLoad.Ready(saved)
             } else {
                 // The pairing changed while the video downloaded: it is not this chat's to show.
-                withContext(ioDispatcher) { saved.file.delete() }
+                withContext(NonCancellable + ioDispatcher) { saved.file.delete() }
                 AidenBrowserRecordingLoad.Failed
             }
         } catch (error: CancellationException) {
@@ -1380,8 +1397,11 @@ class AidenChatViewModel(
     }
 
     /** The player closed: its video leaves the cache. */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     fun releaseBrowserRecording(recording: AidenBrowserRecordingFile) {
-        viewModelScope.launch(ioDispatcher) { recording.file.delete() }
+        // onDispose can follow ViewModel clearing. This finite, non-suspending
+        // cleanup must start even when that scope has already been cancelled.
+        viewModelScope.launch(ioDispatcher, start = CoroutineStart.ATOMIC) { recording.file.delete() }
     }
 
     /**
@@ -2014,6 +2034,7 @@ class AidenChatViewModel(
 
     private fun startStreaming(originalStream: AidenChatCache.ActiveStream) {
         val client = activeClient() ?: return
+        if (activeStreamId != originalStream.streamId) _answeredApproval.value = null
         activeStreamId = originalStream.streamId
         streamStartMessageIds = _chat.value?.messages.orEmpty().mapTo(HashSet()) { it.id }
         endedReply = null
@@ -3013,6 +3034,7 @@ class AidenChatViewModel(
                 foreignReconcileJob?.cancel()
                 foreignReconcileJob = null
                 foreignRunId = projection.runId
+                _answeredApproval.value = null
                 foreignRunsPresented += 1
                 foreignProjection = projection
                 transcript.publishCurrent()
@@ -3058,7 +3080,15 @@ class AidenChatViewModel(
                 hostCanAllow = approval.canAllow,
                 canAllow = canControl && approval.canAllow && hasWrite,
                 scopes = approval.scopes ?: listOf(AidenApprovalScope.ONCE),
-                schedule = AidenApprovalSchedule.forTool(approval.toolName, approval.schedule)
+                schedule = AidenApprovalSchedule.forTool(approval.toolName, approval.schedule),
+                card = approval.card?.let {
+                    when {
+                        canControl && approval.canAllow && hasWrite -> it
+                        // Deny stays answerable; only the allows go, saying why.
+                        canControl && !hasWrite -> it.denyOnly(AidenApprovalCard.SCHEDULE_WRITE_REQUIRED)
+                        else -> it.denyOnly()
+                    }
+                }
             )
         }
         _pendingQuestion.value = projection.pendingQuestion?.let { question ->
@@ -3085,6 +3115,7 @@ class AidenChatViewModel(
         discardForeignTranscript()
         foreignRunId = null
         foreignProjection = null
+        _answeredApproval.value = null
         foreignRunAccountedRunId = projection.runId
         val client = activeClient()
         foreignRunEndedWriteToken = chatCache.reserveChatWrite()
@@ -3141,6 +3172,7 @@ class AidenChatViewModel(
         discardForeignTranscript()
         foreignRunId = null
         foreignProjection = null
+        _answeredApproval.value = null
         if (!wasPresented || activeStreamId != null) return
         liveReveal.reset()
         _reasoning.value = ""
@@ -3215,8 +3247,11 @@ class AidenChatViewModel(
             }
             return
         }
+        // A typed card (revision 61) offers exactly its buttons: only those answers go out.
+        val button = approval.card?.let { it.button(decision, scope) ?: return }
         val client = activeClient() ?: return
         _isRespondingToApproval.value = true
+        _answeredApproval.value = button?.let { AidenApprovalAnsweredLine(approval.id, approval.card?.title.orEmpty(), it.answered) }
         foreignTranscript?.flush()
         liveReveal.flush()
         projection.markAnsweredLocally(approvalId)
@@ -3226,11 +3261,12 @@ class AidenChatViewModel(
                 // Only a scope the Mac offered for this exact approval is sent.
                 val requestedScope = scope.takeIf {
                     decision == AidenApprovalDecision.ALLOW && it != AidenApprovalScope.ONCE &&
-                        approval.scopes.contains(it)
+                        (button != null || approval.scopes.contains(it))
                 }
                 client.respondToRunApproval(runId, approvalId, decision, requestedScope)
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
+                _answeredApproval.update { line -> line?.takeUnless { it.approvalId == approvalId } }
                 projection.answerUnconfirmed(approvalId)
                 handleForeignControlFailure(
                     error,
@@ -3315,9 +3351,12 @@ class AidenChatViewModel(
             refreshApprovalAccess()
             return
         }
+        // A typed card (revision 61) offers exactly its buttons: only those answers go out.
+        val button = approval.card?.let { it.button(decision, scope) ?: return }
         val client = activeClient() ?: return
         val streamId = activeStreamId ?: return
         _isRespondingToApproval.value = true
+        _answeredApproval.value = button?.let { AidenApprovalAnsweredLine(approval.id, approval.card?.title.orEmpty(), it.answered) }
         _pendingApproval.value = null
         _streamState.value = AidenStreamState.RUNNING
 
@@ -3326,16 +3365,19 @@ class AidenChatViewModel(
                 // Only a scope the Mac offered for this exact approval is sent.
                 val requestedScope = scope.takeIf {
                     decision == AidenApprovalDecision.ALLOW && it != AidenApprovalScope.ONCE &&
-                        approval.scopes.contains(it)
+                        (button != null || approval.scopes.contains(it))
                 }
                 val response = client.respondToApproval(approval.id, decision, scope = requestedScope)
                 if (activeClient() !== client || activeStreamId != streamId ||
                     _streamState.value?.isTerminal == true) return@launch
                 if (response.approvalId != approval.id || response.decision != decision) {
+                    _answeredApproval.update { line -> line?.takeUnless { it.approvalId == approval.id } }
                     _presentedError.value = "The approval response was not confirmed. Refreshing the current request from your Mac."
                     if (_pendingApproval.value == null) restorePendingApproval(streamId, isFallback = true)
                 }
             } catch (e: Exception) {
+                // Unconfirmed: the answered line never outlives the answer, whatever else changed.
+                if (e !is CancellationException) _answeredApproval.update { line -> line?.takeUnless { it.approvalId == approval.id } }
                 if (e !is CancellationException && activeClient() === client && activeStreamId == streamId &&
                     _streamState.value?.isTerminal != true) {
                     _presentedError.value = "The approval response was not confirmed. Refreshing the current request from your Mac."

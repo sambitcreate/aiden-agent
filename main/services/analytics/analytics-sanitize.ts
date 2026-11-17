@@ -137,6 +137,9 @@ const FILE_SYSTEM_ERRORS: Readonly<Record<string, string>> = {
 const SYSTEM_ERROR = Object.entries(FILE_SYSTEM_ERRORS).map(([code, text]) => `${code}: ${text}`).join("|");
 const SYSTEM_CALL = "access|chmod|chown|close|copyfile|cp|fstat|fsync|ftruncate|futime|lchown|link|lstat|mkdir|mkdtemp|open|opendir|read|readdir|readlink|realpath|rename|rm|rmdir|scandir|stat|symlink|unlink|utime|write";
 const NETWORK_ERROR = "EACCES|EADDRINUSE|EAI_AGAIN|ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENETUNREACH|ENOTFOUND|EPIPE|ETIMEDOUT";
+// The codes a server's crash report may send in place of a message. Each one is
+// a fixed name from the lists above, never text a thrown object made up.
+const SYSTEM_ERROR_CODES: ReadonlySet<string> = new Set([...Object.keys(FILE_SYSTEM_ERRORS), ...NETWORK_ERROR.split("|")]);
 const KNOWN_ENGINE_MESSAGES: readonly (readonly [RegExp, string?])[] = [
   [/^Cannot (?:read|set) propert(?:y|ies) of (?:undefined|null)$/u],
   [new RegExp(`^Cannot (read|set) propert(?:y|ies) of (undefined|null) \\((reading|setting) '${VARIABLE}'\\)$`, "u"), `Cannot $1 properties of $2 ($3 '${NAME}')`],
@@ -378,9 +381,16 @@ export function parseSanitizedFrame(raw: unknown): SanitizedFrame | undefined {
   };
 }
 
+export function isSystemErrorCode(value: unknown): value is string {
+  return typeof value === "string" && SYSTEM_ERROR_CODES.has(value);
+}
+
 // Accepts only what sanitizeOne could have produced; the message is
 // redacted again so a record that bypassed sanitizing still cannot leak.
-export function parseSanitizedError(raw: unknown): SanitizedError | undefined {
+// Only a server's report sets `allowSystemErrorCode`, because a server sends a
+// listed code where a desktop report sends a message. The desktop keeps a bare
+// code withheld.
+export function parseSanitizedError(raw: unknown, options: { allowSystemErrorCode?: boolean } = {}): SanitizedError | undefined {
   const error = record(raw);
   if (!error) return undefined;
   if (!isSafeErrorName(error.type)) return undefined;
@@ -392,7 +402,8 @@ export function parseSanitizedError(raw: unknown): SanitizedError | undefined {
     if (!frame) return undefined;
     frames.push(frame);
   }
-  return { type: error.type, value: redactExceptionMessage(error.value), frames };
+  const value = options.allowSystemErrorCode && isSystemErrorCode(error.value) ? error.value : redactExceptionMessage(error.value);
+  return { type: error.type, value, frames };
 }
 
 export function exceptionFingerprint(primary: SanitizedError): string {

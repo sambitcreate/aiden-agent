@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -178,8 +178,49 @@ test("TerminalHistoryStore flushAll retains output appended during an active wri
   assert.deepEqual(writes, ["alpha", "alpha beta"]);
 });
 
-test("TerminalHistoryStore persists sanitized output to disk", async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), "pty-history-sanitize-"));
+test("clearAll removes every file and no later flush recreates cleared scrollback", async () => {
+  // Settings → Storage reports the freed bytes, so a debounced write from state
+  // that was never invalidated must not bring the old history back.
+  const dir = await mkdtemp(path.join(tmpdir(), "pty-history-clear-all-"));
+  const writes: string[] = [];
+  let firePending: (() => void) | null = null;
+  const store = new TerminalHistoryStore({
+    logsDir: dir,
+    debounceMs: 60_000,
+    schedule: (fn) => {
+      firePending = fn;
+      return () => {
+        firePending = null;
+      };
+    },
+    writeFile: async (filePath, history) => {
+      writes.push(history);
+      await writeFile(filePath, history, "utf8");
+    },
+  });
+  try {
+    store.append("ws-1", "alpha");
+    await store.flush("ws-1");
+    store.append("ws-2", "beta");
+    await store.flush("ws-2");
+    // A fresh append leaves a write scheduled: this is the write that would
+    // otherwise restore cleared history after cleanup reports success.
+    store.append("ws-1", " pending");
+
+    await store.clearAll();
+    assert.deepEqual(await readdir(dir), [], "every scrollback file is gone");
+    assert.equal(firePending, null, "the pending debounced write was cancelled");
+
+    await store.flushAll();
+    assert.deepEqual(writes, ["alpha", "beta"], "no write ran after the clear");
+    assert.deepEqual(await readdir(dir), [], "flushAll recreated nothing");
+    assert.equal(await store.read("ws-1"), "", "the in-memory history was dropped too");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("TerminalHistoryStore persists sanitized output to disk", async () => {  const dir = await mkdtemp(path.join(tmpdir(), "pty-history-sanitize-"));
   const store = new TerminalHistoryStore({ logsDir: dir, debounceMs: 0 });
   try {
     store.append("ws-1", `visible ${CSI_CPR}text`);

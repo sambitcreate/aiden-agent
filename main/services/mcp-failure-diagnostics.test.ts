@@ -203,7 +203,8 @@ test("hosts outside the bundled connectors are recorded only as a category", () 
 });
 
 test("recorded events never contain URLs, paths, tokens, client secrets or stdio arguments", async () => {
-  const secrets = ["user-SECRET", "pw-SECRET", "SECRETPATH", "SECRET-QUERY", "SECRET-FRAGMENT", "8443", "SECRET-CLIENT", "SECRET-BODY", "SECRET-URI", "SECRET-ARG", "SECRET-ENV", "secret-bin", "SECRET-DATA", "example.com"];
+  // The port is matched with its colon: bare digits also occur by chance in the random serverRef hash.
+  const secrets = ["user-SECRET", "pw-SECRET", "SECRETPATH", "SECRET-QUERY", "SECRET-FRAGMENT", ":8443", "SECRET-CLIENT", "SECRET-BODY", "SECRET-URI", "SECRET-ARG", "SECRET-ENV", "secret-bin", "SECRET-DATA", "example.com"];
   const server: McpDiagnosticServer = {
     id: "custom-SECRETPATH",
     transport: "http",
