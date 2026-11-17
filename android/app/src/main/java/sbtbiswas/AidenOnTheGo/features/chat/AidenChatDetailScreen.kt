@@ -183,6 +183,7 @@ fun AidenChatDetailScreen(
     }
     val showsLiveCard = AidenChatScroll.showsLiveCard(streamState, hasLiveOutput)
     val pendingApproval by viewModel.pendingApproval.collectAsStateWithLifecycle()
+    val answeredApproval by viewModel.answeredApproval.collectAsStateWithLifecycle()
     val isStopping by viewModel.isStopping.collectAsStateWithLifecycle()
     val isSubmittingRunInput by viewModel.isSubmittingRunInput.collectAsStateWithLifecycle()
     val runInputMode by viewModel.runInputMode.collectAsStateWithLifecycle()
@@ -229,7 +230,7 @@ fun AidenChatDetailScreen(
     val forkSource by viewModel.forkSource.collectAsStateWithLifecycle()
     val isUpdatingForkSummary by viewModel.isUpdatingForkSummary.collectAsStateWithLifecycle()
     var forkWithSummaryMessageId by remember(chatId) { mutableStateOf<String?>(null) }
-    // Revision 63: a chat whose folder is gone may continue in a new chat in another workspace.
+    // Revision 64: a chat whose folder is gone may continue in a new chat in another workspace.
     val continueInNewChatOffer by viewModel.continueInNewChatOffer.collectAsStateWithLifecycle()
     var showsContinueInNewChatPicker by rememberSaveable(chatId) { mutableStateOf(false) }
     val currentOnNavigateToChat by rememberUpdatedState(onNavigateToChat)
@@ -650,6 +651,22 @@ fun AidenChatDetailScreen(
                                 modifier = Modifier.padding(16.dp)
                             )
                         }
+                    }
+                }
+
+                // Revision 61: a typed card's answered line, in the card's place while the run goes on.
+                val answeredLine = answeredApproval?.takeIf { pendingApproval == null && streamState?.isTerminal != true }
+                AnimatedVisibility(
+                    visible = answeredLine != null,
+                    enter = aidenBannerEnter(reduceMotion),
+                    exit = aidenBannerExit(reduceMotion)
+                ) {
+                    answeredLine?.let { line ->
+                        AidenApprovalAnsweredRow(
+                            title = line.title,
+                            answered = line.answered,
+                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp)
+                        )
                     }
                 }
 
@@ -1521,6 +1538,7 @@ private fun AssistantMessageRow(
                     rows = chronologicalRows,
                     active = false,
                     palette = palette,
+                    stoppedStepIds = message.timeline?.userStoppedStepIds.orEmpty(),
                     onCopy = onCopy,
                     onOpenUrl = onOpenUrl,
                     renderVisual = renderVisual,
@@ -1875,6 +1893,7 @@ internal fun ActiveStreamingCard(
                     rows = chronologicalRows,
                     active = isActive,
                     palette = palette,
+                    stoppedStepIds = activityTimeline?.userStoppedStepIds.orEmpty(),
                     live = true,
                     onCopy = onCopyMessage,
                     onOpenUrl = onOpenMessageUrl,
@@ -1927,7 +1946,12 @@ internal fun ActiveStreamingCard(
 
             // Tool activity: the timeline's calls once it has any, else the stream's live rows.
             if (fallbackToolSteps.isNotEmpty()) {
-                AidenToolStepsCard(steps = fallbackToolSteps, active = true, palette = palette)
+                AidenToolStepsCard(
+                    steps = fallbackToolSteps,
+                    active = true,
+                    palette = palette,
+                    stoppedStepIds = activityTimeline?.userStoppedStepIds.orEmpty()
+                )
                 Spacer(modifier = Modifier.height(8.dp))
             } else if (showsLiveToolRows) {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -2073,6 +2097,8 @@ private fun AidenChronologicalTranscript(
     rows: List<AidenChronologicalRow>,
     active: Boolean,
     palette: sbtbiswas.AidenOnTheGo.config.AidenPalette,
+    // Tool calls the person ended with Stop; see AidenGenerationTimeline.isStoppedByUser.
+    stoppedStepIds: Set<String> = emptySet(),
     // The live card renders its text in streaming chunks; a settled one is one message.
     live: Boolean = active,
     onCopy: (String) -> Unit,
@@ -2112,7 +2138,12 @@ private fun AidenChronologicalTranscript(
                         )
                     }
                     AidenChronologicalRow.Kind.TOOL -> {
-                        AidenToolStepsCard(steps = row.steps, active = active, palette = palette)
+                        AidenToolStepsCard(
+                            steps = row.steps,
+                            active = active,
+                            palette = palette,
+                            stoppedStepIds = stoppedStepIds
+                        )
                     }
                     AidenChronologicalRow.Kind.QUESTIONNAIRE -> {
                         row.questionnaire?.let { recap ->
@@ -2142,14 +2173,15 @@ private fun AidenChronologicalTranscript(
 private fun AidenToolStepsCard(
     steps: List<AidenAgentStep>,
     active: Boolean,
-    palette: sbtbiswas.AidenOnTheGo.config.AidenPalette
+    palette: sbtbiswas.AidenOnTheGo.config.AidenPalette,
+    stoppedStepIds: Set<String> = emptySet()
 ) {
     Surface(color = palette.raised, shape = MaterialTheme.shapes.medium) {
         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
             steps.forEach { step ->
                 key(step.id) {
                     AidenActivityShimmerLabel(
-                        label = AidenAgentActivityPresentation.line(step),
+                        label = AidenAgentActivityPresentation.line(step, stoppedByUser = step.id in stoppedStepIds),
                         active = active && step.isActive,
                         style = MaterialTheme.typography.bodySmall,
                         color = palette.secondary
@@ -2314,7 +2346,9 @@ private fun AidenTimelineCollapsibleCard(
     val compactOnly = AidenAgentActivityPresentation.isCompactContextOnly(timeline.steps)
     val allowsDisclosure = !compactOnly || timeline.issueCount > 0
     val headline = if (compactOnly && !allowsDisclosure) {
-        timeline.steps.lastOrNull()?.let { AidenAgentActivityPresentation.line(it) }
+        timeline.steps.lastOrNull()?.let {
+            AidenAgentActivityPresentation.line(it, stoppedByUser = timeline.isStoppedByUser(it))
+        }
             ?: AidenAgentActivityPresentation.summary(timeline)
     } else {
         AidenAgentActivityPresentation.summary(timeline)
@@ -2342,10 +2376,21 @@ private fun AidenTimelineCollapsibleCard(
                         else Modifier
                     )
             ) {
+                // A run the person stopped, with nothing else wrong, gets a neutral
+                // stop mark: they asked for it, so it is neither a warning nor a success.
+                val stoppedRun = timeline.issueCount == 0 && timeline.userStoppedStepIds.isNotEmpty()
                 Icon(
-                    imageVector = if (timeline.issueCount > 0) Icons.Default.Warning else Icons.Default.CheckCircle,
+                    imageVector = when {
+                        timeline.issueCount > 0 -> Icons.Default.Warning
+                        stoppedRun -> Icons.Default.StopCircle
+                        else -> Icons.Default.CheckCircle
+                    },
                     contentDescription = null,
-                    tint = if (timeline.issueCount > 0) palette.warning else palette.success,
+                    tint = when {
+                        timeline.issueCount > 0 -> palette.warning
+                        stoppedRun -> palette.secondary
+                        else -> palette.success
+                    },
                     modifier = Modifier.size(16.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
@@ -2373,16 +2418,26 @@ private fun AidenTimelineCollapsibleCard(
 
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     for (step in timeline.steps) {
+                        val stoppedByUser = timeline.isStoppedByUser(step)
+                        val mark = AidenAgentActivityPresentation.stepMark(step, stoppedByUser)
                         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                             Icon(
-                                imageVector = if (step.status?.isIssue == true) Icons.Default.ErrorOutline else Icons.Default.Check,
+                                imageVector = when (mark) {
+                                    AidenAgentActivityPresentation.StepMark.ISSUE -> Icons.Default.ErrorOutline
+                                    AidenAgentActivityPresentation.StepMark.STOPPED -> Icons.Default.StopCircle
+                                    AidenAgentActivityPresentation.StepMark.DONE -> Icons.Default.Check
+                                },
                                 contentDescription = null,
-                                tint = if (step.status?.isIssue == true) palette.danger else palette.success,
+                                tint = when (mark) {
+                                    AidenAgentActivityPresentation.StepMark.ISSUE -> palette.danger
+                                    AidenAgentActivityPresentation.StepMark.STOPPED -> palette.secondary
+                                    AidenAgentActivityPresentation.StepMark.DONE -> palette.success
+                                },
                                 modifier = Modifier.size(12.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = AidenAgentActivityPresentation.line(step),
+                                text = AidenAgentActivityPresentation.line(step, stoppedByUser),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = palette.foreground,
                                 modifier = Modifier.weight(1f)
@@ -2558,7 +2613,7 @@ private suspend fun readContentUriBounded(
 }
 
 /**
- * The error above the composer. [onContinueInNewChat] adds the revision 63 Continue action, for a
+ * The error above the composer. [onContinueInNewChat] adds the revision 64 Continue action, for a
  * refusal whose host offered to continue the chat in another workspace.
  */
 @Composable

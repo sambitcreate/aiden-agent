@@ -153,13 +153,16 @@ test("an old view's delayed hide cannot overtake its replacement's show", async 
   const calls: string[] = [];
   let release!: () => void;
   const blocked = new Promise<void>((resolve) => { release = resolve; });
-  const old = enqueueBrowserPresentation("owner:tab", async () => { calls.push("old-show"); await blocked; });
-  const hide = enqueueBrowserPresentation("owner:tab", async () => { calls.push("old-hide"); });
-  const next = enqueueBrowserPresentation("owner:tab", async () => { calls.push("new-show"); });
-  await Promise.resolve(); release(); await Promise.all([old, hide, next]);
+  const old = enqueueBrowserPresentation(async () => { await blocked; calls.push("old-show"); });
+  const hide = enqueueBrowserPresentation(async () => { calls.push("old-hide"); });
+  const next = enqueueBrowserPresentation(async () => { calls.push("new-show"); });
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(calls.length, 0, "the replacement waits for the in-flight presentation to settle");
+  release();
+  await Promise.all([old, hide, next]);
   assert.deepEqual(calls, ["old-show", "old-hide", "new-show"]);
-  await assert.rejects(enqueueBrowserPresentation("owner:tab", async () => { throw new Error("gone"); }));
-  await enqueueBrowserPresentation("owner:tab", async () => { calls.push("retry"); });
+  await assert.rejects(enqueueBrowserPresentation(async () => { throw new Error("gone"); }));
+  await enqueueBrowserPresentation(async () => { calls.push("retry"); });
   assert.equal(calls[calls.length - 1], "retry");
 });
 

@@ -33,7 +33,7 @@ const MAX_SNAPSHOTS = 4_096;
 const MAX_FILES = 4_000;
 const MAX_DIFF_CHARACTERS = 2_000_000;
 const IDEMPOTENCY_KEY_PATTERN = /^[\x21-\x7e]{16,128}$/u;
-const HIDDEN_CHANGES_REASON = "Some changed file names cannot be shown on this device. Commit them on the Mac.";
+const HIDDEN_CHANGES_REASON = "Some changed file names cannot be shown on this device. Commit them on your computer.";
 
 type GitFileStatus = "added" | "modified" | "deleted" | "renamed" | "untracked" | "conflicted";
 
@@ -94,7 +94,7 @@ interface GitDependencies {
   createBranch(folderPath: string, name: string, signal?: AbortSignal): Promise<void>;
   commit(folderPath: string, input: GitCommitInput, signal?: AbortSignal): Promise<{ commit: string; branch: string; subject: string; warning?: string }>;
   pushCapability(folderPath: string, signal?: AbortSignal): Promise<GitPushCapability>;
-  push(folderPath: string, input: GitPushInput, signal?: AbortSignal): Promise<{ branch: string; commit: string; remote: string; warning?: string }>;
+  push(folderPath: string, input: GitPushInput, signal?: AbortSignal): Promise<{ branch: string; commit: string; remote: string; warning?: string; pullRequestRepository?: string }>;
   compare(folderPath: string, targetRef: string, signal?: AbortSignal): Promise<GitComparison>;
   comparisonDiff(folderPath: string, input: GitComparisonDiffInput, signal?: AbortSignal): Promise<{ path: string; patch: string; truncated: boolean }>;
   worktrees(folderPath: string, signal?: AbortSignal): Promise<GitWorktree[]>;
@@ -180,8 +180,8 @@ function mapGitError(error: unknown): never {
   if (error instanceof InsufficientDiskSpaceError || error instanceof WorktreeCapacityUnavailableError) {
     throw new AidenRemoteServiceError("git_capability_denied",
       error instanceof InsufficientDiskSpaceError
-        ? "There is not enough free disk space on the Mac for this managed worktree. Free space and try again."
-        : "The Mac could not verify disk capacity for this managed worktree. Check its storage and try again.",
+        ? "There is not enough free disk space on your computer for this managed worktree. Free space and try again."
+        : "Your computer could not verify disk capacity for this managed worktree. Check its storage and try again.",
       409);
   }
   if (!(error instanceof GitServiceError)) {
@@ -220,6 +220,8 @@ export class AidenRemoteGitService {
       idempotency?: AidenIdempotencyLedger;
       persistIdempotency?: (snapshot: AidenIdempotencySnapshot) => Promise<void>;
       now?: () => number;
+      /** A push from a paired device landed; `pullRequestRepository` is its credential-free `host/owner/name`. */
+      onPushed?: (result: { pullRequestRepository?: string }) => void;
     },
   ) {
     this.idempotency = options.idempotency ?? new AidenIdempotencyLedger();
@@ -574,6 +576,11 @@ export class AidenRemoteGitService {
             setUpstream: !capability.upstream,
           };
           const result = await this.run(deviceId, workspaceId, (folderPath, signal) => this.options.git.push(folderPath, input, signal));
+          try {
+            this.options.onPushed?.(result);
+          } catch {
+            // Telling a follow about the push never fails the push.
+          }
           return {
             operationId: operationId(),
             status: "succeeded" as const,

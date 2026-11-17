@@ -67,6 +67,22 @@ test("the still-going note is only for work in progress, not while it waits on y
   assert.equal(screen.queryByRole("note") === null, true, "already stopping");
 });
 
+test("a turn quiet for 10 minutes says it is taking longer than usual, without asking anything", () => {
+  const minute = 60_000;
+  // Long but moving: the last progress was a minute ago.
+  render(<BotStatusLine activity={reading} wording="follows" now={1_000 + 30 * minute} quietSince={1_000 + 29 * minute} />);
+  assert.equal(screen.getByRole("note").textContent, "Still going. I'll message you when it's done.");
+  cleanup();
+  // Nothing has moved for 10 minutes.
+  render(<BotStatusLine activity={reading} wording="follows" now={1_000 + 30 * minute} quietSince={1_000 + 20 * minute} />);
+  assert.equal(screen.getByRole("note").textContent, "This is taking longer than usual. You can stop it from the message box.");
+  assert.equal(screen.queryByRole("button"), null, "the line offers no action of its own");
+  cleanup();
+  // Waiting on the person is never "taking longer".
+  render(<BotStatusLine activity={{ phase: "waiting", startedAt: 1_000 }} wording="follows" now={1_000 + 30 * minute} quietSince={1_000} />);
+  assert.equal(screen.queryByRole("note"), null);
+});
+
 test("the live region starts empty and fills after it mounts, so the first wording is announced", () => {
   const observer = new MutationObserver(() => {});
   const view = render(<div />);

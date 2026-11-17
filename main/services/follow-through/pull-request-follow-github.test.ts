@@ -88,6 +88,8 @@ function fakeApi(options: {
   graphql?: () => GitHubApiResult<unknown>;
   permissions?: Record<string, string>;
   log?: () => GitHubApiResult<unknown>;
+  /** GitHub's answer to a conditional probe of a pull request, check-runs or status path. */
+  probe?: (request: GitHubRestRequest) => GitHubApiResult<unknown>;
 } = {}) {
   const graphqlCalls: GitHubGraphQlRequest[] = [];
   const restCalls: GitHubRestRequest[] = [];
@@ -110,6 +112,7 @@ function fakeApi(options: {
         return { kind: "ok", status: 200, data: { permission: options.permissions?.[permission] ?? "read" } } as GitHubApiResult<T>;
       }
       if (request.path.endsWith("/logs")) return (options.log?.() ?? { kind: "not-found", message: "gone" }) as GitHubApiResult<T>;
+      if (options.probe) return options.probe(request) as GitHubApiResult<T>;
       return { kind: "not-found", message: "unexpected" };
     },
   };
@@ -223,4 +226,63 @@ test("job ids come only from Actions job links; logs lose colours and timestamps
     cleanJobLog("﻿2026-10-26T12:00:00.0000000Z \u001b[1;31mError\u001b[0m: boom\r\n2026-10-26T12:00:01Z done"),
     "Error: boom\ndone",
   );
+});
+
+const HEAD = "a".repeat(40);
+const probed = { ...follow, headSha: HEAD };
+const PATHS = [
+  "/repos/acme/app/pulls/42",
+  `/repos/acme/app/commits/${HEAD}/check-runs?per_page=100&filter=latest`,
+  `/repos/acme/app/commits/${HEAD}/status`,
+];
+const KNOWN = Object.fromEntries(PATHS.map((path, index) => [path, `W/"v${index}"`]));
+
+test("when every probe answers 304, an allowed skip makes no GraphQL read", async () => {
+  const github = fakeApi({ probe: (request) => ({ kind: "not-modified", ...(request.ifNoneMatch ? { etag: request.ifNoneMatch } : {}) }) });
+  const answer = await new PullRequestFollowReader(github.api).read(probed, undefined, { etags: KNOWN, skipIfUnchanged: true });
+  assert.deepEqual(answer, { kind: "unchanged" });
+  assert.equal(github.graphqlCalls.length, 0);
+  assert.deepEqual(github.restCalls.map((call) => [call.path, call.ifNoneMatch]), PATHS.map((path) => [path, KNOWN[path]]));
+});
+
+test("a changed probe does the full read and hands back the new tags", async () => {
+  const github = fakeApi({
+    probe: (request) =>
+      request.path.includes("/check-runs")
+        ? { kind: "ok", status: 200, data: {}, etag: 'W/"checks-2"' }
+        : { kind: "not-modified", ...(request.ifNoneMatch ? { etag: request.ifNoneMatch } : {}) },
+  });
+  const answer = await new PullRequestFollowReader(github.api).read(probed, undefined, { etags: KNOWN, skipIfUnchanged: true });
+  assert.equal(answer.kind, "ok");
+  assert.equal(github.graphqlCalls.length, 1);
+  assert.deepEqual(answer.kind === "ok" ? answer.etags : undefined, { ...KNOWN, [PATHS[1]!]: 'W/"checks-2"' });
+  assert.equal(answer.kind === "ok" ? answer.probedUnchanged : undefined, undefined);
+});
+
+test("a forced read after an unchanged probe still reads, and says the probe saw nothing", async () => {
+  const github = fakeApi({ probe: (request) => ({ kind: "not-modified", ...(request.ifNoneMatch ? { etag: request.ifNoneMatch } : {}) }) });
+  const answer = await new PullRequestFollowReader(github.api).read(probed, undefined, { etags: KNOWN, skipIfUnchanged: false });
+  assert.equal(answer.kind, "ok");
+  assert.equal(github.graphqlCalls.length, 1);
+  assert.equal(answer.kind === "ok" ? answer.probedUnchanged : undefined, true);
+});
+
+test("a rate-limited probe stops before the full read and asks to retry when GitHub said", async () => {
+  const github = fakeApi({ probe: () => ({ kind: "rate-limited", retryAt: T0 + 60_000, message: "slow down", sent: true }) });
+  const answer = await new PullRequestFollowReader(github.api).read(probed, undefined, { etags: KNOWN, skipIfUnchanged: true });
+  assert.deepEqual(answer, { kind: "retry", message: "GitHub's rate limit was reached; Aiden will try again later.", retryAt: T0 + 60_000 });
+  assert.equal(github.graphqlCalls.length, 0);
+  assert.equal(github.restCalls.length, 1, "no further probes once GitHub said to wait");
+});
+
+test("a follow without tags yet probes plainly, and one without a head commit probes only the pull request", async () => {
+  const github = fakeApi({ probe: (request) => ({ kind: "ok", status: 200, data: {}, etag: `W/"${request.path.length}"` }) });
+  const first = await new PullRequestFollowReader(github.api).read(probed, undefined, { skipIfUnchanged: false });
+  assert.equal(first.kind, "ok");
+  assert.ok(github.restCalls.every((call) => call.ifNoneMatch === undefined));
+  assert.deepEqual(Object.keys(first.kind === "ok" ? first.etags ?? {} : {}), PATHS);
+
+  const headless = fakeApi({ probe: () => ({ kind: "not-modified" }) });
+  await new PullRequestFollowReader(headless.api).read(follow, undefined, { skipIfUnchanged: true });
+  assert.deepEqual(headless.restCalls.map((call) => call.path), [PATHS[0]]);
 });

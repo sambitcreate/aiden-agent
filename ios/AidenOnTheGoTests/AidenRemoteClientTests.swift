@@ -1376,7 +1376,7 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenBackgroundJobs.self, from: twice))
     }
 
-    /// Revision 63: a missing-folder refusal says why and whether the chat can
+    /// Revision 64: a missing-folder refusal says why and whether the chat can
     /// continue elsewhere. Older Macs send no details, and a reason this build
     /// doesn't know reads as nil instead of failing the whole error.
     func testMissingFolderRefusalDetailsDecodeAndOnlyAnOfferedRefusalCanContinue() throws {
@@ -1390,7 +1390,7 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(refused.details?.reason, .folderMissing)
         XCTAssertEqual(refused.details?.canContinueInNewChat, true)
         XCTAssertEqual(offer?.reason, .folderMissing)
-        XCTAssertTrue(offer?.message.contains("folder is missing on your Mac") == true, "the Mac's own sentence")
+        XCTAssertTrue(offer?.message.contains("folder is missing on your computer") == true, "the host's own sentence")
 
         let (plain, plainOffer) = try decode(botFixtureData(at: ["continueInNewChat", "plainRefusal"]))
         XCTAssertNil(plain.details)
@@ -1412,7 +1412,7 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertNil(declinedOffer, "a chat the Mac cannot continue is not offered")
     }
 
-    /// Revision 63: the capability is an opt-in asked for alone, because older
+    /// Revision 64: the capability is an opt-in asked for alone, because older
     /// phones refuse detail keys they don't know.
     func testContinueInNewChatIsAnOptInNegotiatedAlone() async throws {
         let section = try XCTUnwrap(
@@ -1432,7 +1432,7 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertTrue(grants.contains(.chatContinueInNewChat))
     }
 
-    /// Revision 63: Continue in a new chat posts only the destination workspace
+    /// Revision 64: Continue in a new chat posts only the destination workspace
     /// to the fork route, with the chat's revision and a key, and accepts only a
     /// new chat in that workspace that records this chat as its source.
     func testContinueInNewChatPostsTheWorkspaceToTheForkRouteAndChecksTheNewChat() async throws {
@@ -2323,6 +2323,7 @@ final class AidenRemoteClientTests: XCTestCase {
         var revokeCredential = false
         var chatAccessReads = 0
         var writeCount = 0
+        var conflictOnWrite = false
 
         func mutatedBotDetail(_ change: (inout [String: Any]) -> Void) throws -> Data {
             var object = try XCTUnwrap(JSONSerialization.jsonObject(with: botDetail) as? [String: Any])
@@ -2365,6 +2366,12 @@ final class AidenRemoteClientTests: XCTestCase {
             case ("GET", "/api/aiden/v1/bot-conversations/\(chatID)/files/\(fileID)"):
                 return Self.response(for: request, status: 200, data: document)
             case ("PUT", "/api/aiden/v1/bot-conversations/\(chatID)/files/\(fileID)"):
+                if conflictOnWrite {
+                    return Self.response(for: request, status: 409, json: """
+                    {"error":{"code":"revision_conflict","message":"The file changed.",
+                    "requestId":"request-bot-tools-conflict","retryable":false}}
+                    """)
+                }
                 writeCount += 1
                 let body = try Self.jsonBody(request)
                 XCTAssertEqual(body["expectedVersion"] as? String, "file_revision_1")
@@ -2391,7 +2398,7 @@ final class AidenRemoteClientTests: XCTestCase {
         await coordinator.start()
         XCTAssertEqual(coordinator.connectionState, .connected)
 
-        let tools = AidenBotChatToolsModel(chatID: chatID, botID: botID, cache: botCache)
+        let tools = AidenBotChatToolsModel(chatID: chatID, botID: botID, machine: "instance-bot-tools", cache: botCache)
         await tools.load(coordinator: coordinator)
         XCTAssertTrue(tools.hasFiles)
         let cachedAfterRefresh = await botCache.load(
@@ -2419,6 +2426,18 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertTrue(savedFile)
         XCTAssertEqual(writeCount, 1)
         XCTAssertEqual(chatAccessReads, 0, "Bot chats no longer read per-chat access.")
+        XCTAssertFalse(files.offersReload)
+
+        // The file changed on the machine since it was opened: the editor offers Reload.
+        conflictOnWrite = true
+        files.draft = "third"
+        let savedOverConflict = await files.save(coordinator: coordinator)
+        XCTAssertFalse(savedOverConflict)
+        XCTAssertTrue(files.offersReload, "A revision conflict offers Reload")
+        await files.reloadDocument(coordinator: coordinator)
+        XCTAssertFalse(files.offersReload, "Reloading clears the conflict")
+        XCTAssertEqual(files.draft, "second")
+        conflictOnWrite = false
 
         // A Bot access change on the Mac invalidates the grant before any write.
         currentBotDetail = try mutatedBotDetail { object in
@@ -2508,14 +2527,14 @@ final class AidenRemoteClientTests: XCTestCase {
         )
         await coordinator.start()
         XCTAssertEqual(coordinator.connectionState, .connected)
-        XCTAssertFalse(AidenBotDeletion.isAvailable(coordinator: coordinator),
+        XCTAssertFalse(AidenBotDeletion.isAvailable(coordinator: coordinator, machine: nil),
                        "A host that does not advertise delete must not offer Delete.")
 
         features = "[\"bot-delete-v1\"]"
         await coordinator.start()
-        XCTAssertTrue(AidenBotDeletion.isAvailable(coordinator: coordinator))
+        XCTAssertTrue(AidenBotDeletion.isAvailable(coordinator: coordinator, machine: nil))
 
-        try await AidenBotDeletion.delete(botID: botID, revision: "bot_revision_8", coordinator: coordinator)
+        try await AidenBotDeletion.delete(botID: botID, revision: "bot_revision_8", coordinator: coordinator, machine: nil)
         XCTAssertEqual(deletes, ["bot_revision_8"])
     }
 
@@ -2570,13 +2589,13 @@ final class AidenRemoteClientTests: XCTestCase {
             }
         )
         await coordinator.start()
-        try await AidenBotDeletion.deleteListed(botID: botID, coordinator: coordinator)
+        try await AidenBotDeletion.deleteListed(botID: botID, coordinator: coordinator, machine: nil)
         XCTAssertEqual(deletes, 0, "A Bot the Mac no longer has needs no delete request.")
 
         // Any other failure still reports that the Bot wasn't deleted.
         detailStatus = 500
         do {
-            try await AidenBotDeletion.deleteListed(botID: botID, coordinator: coordinator)
+            try await AidenBotDeletion.deleteListed(botID: botID, coordinator: coordinator, machine: nil)
             XCTFail("A server failure must not count as deleted.")
         } catch {
             XCTAssertFalse(AidenBotDeletion.isAlreadyGone(error))
@@ -2744,7 +2763,7 @@ final class AidenRemoteClientTests: XCTestCase {
           {"id":"canary-180m-flash","name":"Canary 180M Flash","description":"Small and very fast. English, German, Spanish and French, with translation to English.","sizeLabel":"154 MB","quant":"int8","languagesLabel":"English, German, Spanish, French","accuracy":0.88,"speed":0.98,"recommended":false,"installed":false,"languages":["en","de","es","fr"],"capabilities":{"autoDetect":false,"languageHint":true,"translateToEnglish":true,"maxWindowSeconds":null},"license":{"name":"CC-BY-4.0 (NVIDIA)","url":"https://creativecommons.org/licenses/by/4.0/"}},
           {"id":"whisper-turbo","name":"Whisper Large v3 Turbo","description":"Broadest language coverage. Slower than the others.","sizeLabel":"564 MB","quant":"int8","languagesLabel":"99 languages","accuracy":0.88,"speed":0.35,"recommended":false,"installed":false,"languages":["en","zh","de"],"capabilities":{"autoDetect":true,"languageHint":true,"translateToEnglish":false,"maxWindowSeconds":30},"license":{"name":"MIT (OpenAI Whisper)","url":"https://github.com/openai/whisper/blob/main/LICENSE"},"download":{"id":"whisper-turbo","percentage":90,"phase":"verify","status":"downloading"}},
           {"id":"sense-voice","name":"SenseVoice Small","description":"Fast Chinese, Cantonese, English, Japanese and Korean.","sizeLabel":"163 MB","quant":"int8","languagesLabel":"Chinese, Cantonese, English, Japanese, Korean","accuracy":0.81,"speed":0.98,"recommended":false,"installed":false,"languages":["zh","yue","en","ja","ko"],"capabilities":{"autoDetect":true,"languageHint":true,"translateToEnglish":false,"maxWindowSeconds":30},"license":{"name":"FunASR Model License 1.1","url":"https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE","attribution":"SenseVoice Small, Alibaba FunAudioLLM"}},
-          {"id":"moonshine-base-en","name":"Moonshine Base","description":"Tiny English model for Macs with little free memory.","sizeLabel":"111 MB","quant":"int8","languagesLabel":"English","accuracy":0.8,"speed":0.99,"recommended":false,"installed":false,"languages":["en"],"capabilities":{"autoDetect":false,"languageHint":false,"translateToEnglish":false,"maxWindowSeconds":30},"license":{"name":"MIT (Moonshine English models)","url":"https://github.com/moonshine-ai/moonshine/blob/main/LICENSE"}}
+          {"id":"moonshine-base-en","name":"Moonshine Base","description":"Tiny English model for computers with little free memory.","sizeLabel":"111 MB","quant":"int8","languagesLabel":"English","accuracy":0.8,"speed":0.99,"recommended":false,"installed":false,"languages":["en"],"capabilities":{"autoDetect":false,"languageHint":false,"translateToEnglish":false,"maxWindowSeconds":30},"license":{"name":"MIT (Moonshine English models)","url":"https://github.com/moonshine-ai/moonshine/blob/main/LICENSE"}}
         ],
           "input":{"encoding":"pcm_s16le","sampleRate":16000,"channels":1,"maximumSeconds":60,"partialResults":false}
         }
@@ -3479,7 +3498,7 @@ final class AidenRemoteClientTests: XCTestCase {
             XCTFail("A loser must surface the first-responder conflict.")
         } catch {
             let loser = try XCTUnwrap(AidenForeignRunResolution.loser(from: error))
-            XCTAssertEqual(loser.notice, "Answered on Mac: allowed")
+            XCTAssertEqual(loser.notice, "Answered on your computer: allowed")
         }
     }
 
@@ -4535,7 +4554,7 @@ final class AidenRemoteClientTests: XCTestCase {
         let outcome = await coordinator.switchInstallationOutcome(to: "available")
 
         guard case .success = outcome else { return XCTFail("Switch should connect to the available computer") }
-        XCTAssertEqual(coordinator.activeInstanceId, "available")
+        XCTAssertEqual(coordinator.defaultInstanceId, "available")
         XCTAssertEqual(coordinator.connectionState, .connected)
         XCTAssertNil(coordinator.connectionIssue)
         XCTAssertEqual(unavailableAttempts, 1, "Switching must not first retry the unavailable computer")
@@ -5010,25 +5029,7 @@ final class AidenRemoteClientTests: XCTestCase {
             ),
             "Local Network"
         )
-        XCTAssertEqual(
-            AidenInstallationPresentation.reachability(
-                installationID: "instance-a",
-                activeInstallationID: "instance-b",
-                connectionState: .connected
-            ),
-            "Not checked"
-        )
-        XCTAssertEqual(AidenInstallationPresentation.identitySuffix("instance_studio_abcdef"), "abcdef")
-        XCTAssertEqual(
-            AidenInstallationPresentation.accessibilityValue(
-                installationID: "instance-a",
-                activeInstallationID: "instance-a",
-                connectionState: .connected,
-                endpoint: URL(string: "https://studio.local:49220/api/aiden/v1")!,
-                lastConnectedAt: nil
-            ),
-            "Selected, Connected, Local Network, Never connected"
-        )
+        XCTAssertEqual(AidenInstallationPresentation.lastConnection(nil), "Never connected")
     }
 
     @MainActor
@@ -5553,6 +5554,85 @@ final class AidenRemoteClientTests: XCTestCase {
             XCTAssertTrue(installation.hasNegotiatedAccess(to: .tasksRead), "a refusal keeps the batch's grants")
             XCTAssertEqual(installation.hasNegotiatedAccess(to: .botAllowed), !refused)
             XCTAssertEqual(coordinator.server?.capabilities.contains(.botAllowed), !refused)
+        }
+    }
+
+    /// Contract revision 61: each Bot UX opt-in is asked for alone and only
+    /// while the Mac lists it; one refused name leaves every other grant.
+    @MainActor
+    func testCoordinatorNegotiatesBotUXOptInsAloneAndOnlyWhatTheMacOffers() async throws {
+        for status in [200, 400, 404] {
+            let refused = status != 200
+            let keychain = AidenRemoteMemoryKeychain()
+            let store = AidenInstallationStore(keychain: keychain)
+            _ = try store.savePairing(
+                makeExchange(instanceId: "instance-ux", deviceId: "device-ux", credential: "credential-ux"),
+                trust: makeSystemTrust(),
+                name: "Bot UX Mac"
+            )
+            let session = makeSession()
+            var granted = ["server:read", "workspace:read"]
+            var accepts: [[String]] = []
+            // This Mac offers four of the five; `bot:templates` is not listed.
+            let offered = ["approval:cards", "approvals:settings", "bot:settings-changes", "bot:suggestions"]
+            AidenRemoteMockURLProtocol.handler = { request in
+                switch (request.httpMethod, request.url?.path) {
+                case ("GET", "/api/aiden/v1/server"):
+                    let serverObject: [String: Any] = [
+                        "protocolVersion": 1,
+                        "instanceId": "instance-ux",
+                        "name": "Bot UX Mac",
+                        "appVersion": "1.0.0",
+                        "capabilities": granted,
+                        "serverCapabilities": ["server:read", "workspace:read", "tasks:read"] + offered,
+                        "features": ["chat-tasks-v1"],
+                        "connectionMode": "lan",
+                        "serverTime": "2026-11-13T12:00:00.000Z",
+                    ]
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: serverObject))
+                case ("GET", "/api/aiden/v1/workspaces"):
+                    return Self.response(for: request, status: 200, json: "{\"workspaces\":[]}")
+                case ("PATCH", "/api/aiden/v1/device/identity"):
+                    let name = try XCTUnwrap(try Self.jsonBody(request)["name"] as? String)
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: ["name": name]))
+                case ("POST", "/api/aiden/v1/device/capabilities"):
+                    let asked = try XCTUnwrap(try Self.jsonBody(request)["accepts"] as? [String])
+                    accepts.append(asked)
+                    if refused, asked.contains("approvals:settings") {
+                        return Self.response(
+                            for: request,
+                            status: status,
+                            json: #"{"error":{"code":"invalid_request","message":"Unknown capability.","requestId":"request-ux","retryable":false}}"#
+                        )
+                    }
+                    granted += asked
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: ["capabilities": granted]))
+                default:
+                    XCTFail("Unexpected request: \(request.httpMethod ?? "nil") \(request.url?.path ?? "nil")")
+                    return Self.response(for: request, status: 500, json: "{}")
+                }
+            }
+            let coordinator = AidenRemoteCoordinator(
+                installationStore: store,
+                clientFactory: { installation, credential in
+                    AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
+                }
+            )
+            await coordinator.start()
+
+            XCTAssertEqual(coordinator.connectionState, .connected, "status \(status)")
+            XCTAssertEqual(accepts.first, ["tasks:read"])
+            XCTAssertTrue(accepts.dropFirst().allSatisfy { $0.count == 1 }, "Each opt-in is asked for in a call of its own")
+            XCTAssertEqual(Set(accepts.dropFirst().flatMap { $0 }), Set(offered))
+            XCTAssertFalse(accepts.joined().contains("bot:templates"), "A name the Mac doesn't list is never asked for")
+
+            let installation = try XCTUnwrap(AidenInstallationStore(keychain: keychain).activeInstallation)
+            XCTAssertTrue(installation.hasNegotiatedAccess(to: .tasksRead), "a refusal keeps the batch's grants")
+            for capability in [AidenRemoteCapability.approvalCards, .botSettingsChanges, .botSuggestions] {
+                XCTAssertTrue(installation.hasNegotiatedAccess(to: capability), "status \(status): \(capability.rawValue) survives the refusal")
+            }
+            XCTAssertEqual(installation.hasNegotiatedAccess(to: .approvalsSettings), !refused)
+            XCTAssertFalse(installation.hasNegotiatedAccess(to: .botTemplates))
         }
     }
 
@@ -6201,7 +6281,7 @@ final class AidenRemoteClientTests: XCTestCase {
         await coordinator.switchInstallation(to: "instance-2")
         await slowLoad.value
 
-        XCTAssertEqual(coordinator.activeInstanceId, "instance-2")
+        XCTAssertEqual(coordinator.defaultInstanceId, "instance-2")
         XCTAssertEqual(coordinator.server?.instanceId, "instance-2")
         XCTAssertEqual(coordinator.workspaces.map(\.id), ["workspace-instance-2"])
         XCTAssertEqual(coordinator.connectionState, .connected)
@@ -8416,7 +8496,7 @@ extension AidenRemoteClientTests {
                 markRead: { readMarks += 1; return readRefused ? 500 : 204 }
             )
             defer { try? FileManager.default.removeItem(at: inbox.root) }
-            XCTAssertEqual(inbox.coordinator.activeInstanceId, "instance-inbox")
+            XCTAssertEqual(inbox.coordinator.defaultInstanceId, "instance-inbox")
             AidenRemoteMockURLProtocol.hold = { request in
                 guard request.url?.path.hasSuffix("/triage") == true else { return nil }
                 arrived.fulfill()
@@ -8427,7 +8507,7 @@ extension AidenRemoteClientTests {
             let write = Task { await inbox.home.setTriage(.done(true), chatID: Self.inboxChatID, coordinator: inbox.coordinator) }
             await fulfillment(of: [arrived], timeout: 5)
             await inbox.coordinator.switchInstallation(to: Self.otherMacID)
-            XCTAssertEqual(inbox.coordinator.activeInstanceId, Self.otherMacID)
+            XCTAssertEqual(inbox.coordinator.defaultInstanceId, Self.otherMacID)
             let saved = await inbox.cache.loadChatSummaries(instanceId: "instance-inbox")?.summaries.first
             XCTAssertNotNil(saved?.inbox.doneAt, "The optimistic Done was saved for the first Mac.")
             release.signal()

@@ -76,6 +76,14 @@ test("while searching with nothing found yet, the sheet says so and cannot resta
   assert.ok(buttons(body({ kind: "choose" }, { scanning: false, devices: [] })).includes("Search again"));
 });
 
+test("an empty scan explains a failed Tailscale read but an empty tailnet does not", () => {
+  const failed = body({ kind: "choose" }, { scanning: false, devices: [], tailscale: { status: "unavailable", reason: "timed-out" } });
+  assert.match(failed, /No computers found/u);
+  assert.match(failed, /Tailscale didn&#x27;t respond in time/u);
+  assert.ok(buttons(failed).includes("Search again"));
+  assert.doesNotMatch(body({ kind: "choose" }, { scanning: false, devices: [] }), /respond in time|device list/u);
+});
+
 test("re-pairing lists the replaced host and lets it be connected again", () => {
   const names = buttons(body({ kind: "choose" }, DISCOVERED, "install_saved"));
   assert.ok(names.includes("Connect to Office Mac"));
@@ -104,8 +112,8 @@ test("before the code exists, waiting is announced without a code", () => {
 });
 
 test("a setup code for a discovered device needs no address; a typed one does", () => {
-  assert.doesNotMatch(body({ kind: "setup", device: { id: "install_closed", name: "Lab Linux" } }), /Desktop address/u);
-  assert.match(body({ kind: "setup" }), /Desktop address/u);
+  assert.doesNotMatch(body({ kind: "setup", device: { id: "install_closed", name: "Lab Linux" } }), /Computer address/u);
+  assert.match(body({ kind: "setup" }), /Computer address/u);
   // Pair stays off until the fields are filled.
   assert.ok(!buttons(body({ kind: "setup" })).includes("Pair"));
 });

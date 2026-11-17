@@ -30,10 +30,11 @@ import {
   createAidenRemoteUpgradeHandler,
   type AidenRemoteRouterDependencies,
 } from "./aiden-remote-router.js";
-import type {
-  AidenRemoteConnectionMode,
-  AidenRemoteStateDocument,
-  AidenRemoteStateRegistry,
+import {
+  isAidenRemotePairedDevice,
+  type AidenRemoteConnectionMode,
+  type AidenRemoteStateDocument,
+  type AidenRemoteStateRegistry,
 } from "./aiden-remote-state.js";
 import type { AidenRemoteTlsIdentity } from "./aiden-remote-tls-identity.js";
 import { fetchTlsServerSpkiSha256, classifyAidenRemoteTlsEndpointFailure } from "./aiden-remote-tls-identity.js";
@@ -198,6 +199,7 @@ export interface AidenRemoteServiceOptions {
         botOpenWork?: AidenRemoteRouterDependencies["botOpenWork"];
         botRoutineModels?: AidenRemoteRouterDependencies["botRoutineModels"];
         botPeers?: AidenRemoteRouterDependencies["botPeers"];
+        approvalSettings?: AidenRemoteRouterDependencies["approvalSettings"];
         bots?: Pick<
           AidenRemoteBotService,
           | "list"
@@ -242,6 +244,7 @@ export interface AidenRemoteServiceOptions {
         botOpenWork?: AidenRemoteRouterDependencies["botOpenWork"];
         botRoutineModels?: AidenRemoteRouterDependencies["botRoutineModels"];
         botPeers?: AidenRemoteRouterDependencies["botPeers"];
+        approvalSettings?: AidenRemoteRouterDependencies["approvalSettings"];
         bots?: Pick<
           AidenRemoteBotService,
           | "list"
@@ -701,7 +704,7 @@ export class AidenRemoteService {
       };
 
       const mayMoveFreshProfile = !state.lanPortCommitted
-        && state.devices.length === 0
+        && !state.devices.some(isAidenRemotePairedDevice)
         && state.tailscaleOwnership === undefined;
       const maySelectAlternatePort = mayMoveFreshProfile
         || options.allowEndpointRelocation === true;
@@ -1442,7 +1445,7 @@ export class AidenRemoteService {
   /** Persist "Accept connection requests"; turning it off cancels open requests. */
   async setAcceptPairingRequests(accept: boolean): Promise<void> {
     const settings = this.options.pairingRequestSettings;
-    if (!settings) throw new Error("Connection requests are unavailable on this host.");
+    if (!settings) throw new Error("Connection requests are not available on this computer.");
     await this.serialized(async () => {
       await settings.save(accept);
       this.acceptPairingRequests = accept;
@@ -1487,7 +1490,7 @@ export class AidenRemoteService {
         const mode = current.connectionMode === "both" ? "both" : transport;
         // Changing a saved transport can strand existing devices. Keep that an
         // explicit advanced operation, rather than silently choosing both.
-        if (mode !== current.connectionMode && (current.devices.length || current.tailscaleOwnership)) {
+        if (mode !== current.connectionMode && (current.devices.some(isAidenRemotePairedDevice) || current.tailscaleOwnership)) {
           throw new Error("This computer already has a saved connection. Use its current method, or review Connection settings before changing it.");
         }
         if (["finishing", "awaiting_scan"].includes(this.pairingStatus()?.state ?? "")) {
@@ -1667,7 +1670,7 @@ export class AidenRemoteService {
         : tailscaleErrorCode
           ? { tailscaleErrorCode }
           : {}),
-      pairedDeviceCount: state.devices.length,
+      pairedDeviceCount: state.devices.filter(isAidenRemotePairedDevice).length,
       approvedRootCount: state.approvedRoots.filter((root) => !root.botsOnly).length,
       ...(this.options.pairingRequestSettings
         ? { acceptPairingRequests: await this.loadPairingRequestSetting() }

@@ -2,7 +2,7 @@ import "./bots/test-dom";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test, { afterEach } from "node:test";
-import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { cleanup, waitFor } from "@testing-library/react";
 import { installBotTestIpc } from "./bots/test-dom";
 import { mountWithBotRouter } from "./bots/test-providers";
 import { botFixture } from "./bots/test-fixtures";
@@ -240,12 +240,8 @@ test("Bots is a stable sidebar destination and bot rosters do not open the termi
 });
 
 
-test("an allowed deep link renders the page and Back returns to Profile", async () => {
-  installBotTestIpc({ "bots:get": () => botFixture({ id: "bot:a" }), "bots:allowed:list": () => [] });
+test("an old allowed deep link opens Settings → Approvals instead", async () => {
+  installBotTestIpc({ "bots:get": () => botFixture({ id: "bot:a" }) });
   const { router } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot%3Aa?page=allowed" });
-  await screen.findByRole("heading", { name: "Allowed without asking", level: 1 });
-  screen.getByText("Planner asks before changes in your apps and on websites. Choose Always allow for Planner on a card to stop a question you keep answering.");
-  fireEvent.click(screen.getByRole("button", { name: "Back" }));
-  await screen.findByRole("button", { name: "Instructions" });
-  assert.equal(router.state.location.href, "/bots/bot%3Aa");
+  await waitFor(() => assert.equal(router.state.location.href, "/settings?section=approvals"));
 });

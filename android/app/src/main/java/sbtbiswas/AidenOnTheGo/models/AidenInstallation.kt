@@ -258,7 +258,7 @@ data class AidenServer(
             capabilities.contains(AidenRemoteCapability.CHAT_WRITE)
 
     /**
-     * Offered and held (revision 63), with `chat:write`: a chat whose folder is gone may be
+     * Offered and held (revision 64), with `chat:write`: a chat whose folder is gone may be
      * continued in a new chat in another workspace.
      */
     val supportsContinueInNewChat: Boolean
@@ -409,6 +409,17 @@ data class AidenInstallation(
 
     val canWriteBots: Boolean
         get() = isBotsEligible && hasNegotiatedAccess(AidenRemoteCapability.BOT_WRITE)
+
+    /**
+     * Revision 61: the host advertises `approval:cards`, so this phone uses the client-only pieces
+     * that go with the new Bot UX: two-step Take control, the single messaging switch, the
+     * per-device Show tool activity switch and Disable a tool. An `aiden serve` host advertises
+     * `approval:cards` too, so this is true there as well; that is safe, because each piece uses
+     * only routes and fields older hosts already have (the `done` / `skipped` hand-off answers,
+     * the two stored messaging directions, `PATCH /bots/{botId}/capabilities`).
+     */
+    val offersBotUx: Boolean
+        get() = serverCapabilities?.contains(AidenRemoteCapability.APPROVAL_CARDS) == true
 
     fun hasNegotiatedAccess(capability: AidenRemoteCapability): Boolean {
         return deviceCapabilities.contains(capability) &&

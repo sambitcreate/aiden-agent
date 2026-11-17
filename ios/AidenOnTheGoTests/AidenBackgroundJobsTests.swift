@@ -43,12 +43,37 @@ final class AidenBackgroundJobsTests: XCTestCase {
         )
         XCTAssertEqual(
             AidenBackgroundJobCopy.addresses(job("job_00000001", ports: [5173, 24678])),
-            "localhost:5173, localhost:24678 on your Mac"
+            "localhost:5173, localhost:24678 on your computer"
         )
         XCTAssertNil(AidenBackgroundJobCopy.addresses(job("job_00000001")))
         XCTAssertNil(AidenBackgroundJobCopy.chip(running: 0), "nothing shows while nothing runs")
         XCTAssertEqual(AidenBackgroundJobCopy.chip(running: 2), "2 in background")
         XCTAssertEqual(AidenBackgroundJobCopy.chipAccessibilityLabel(running: 1), "1 background job running")
+    }
+
+    /// Revision 63: a job the agent asked to stop once its chat went quiet
+    /// says so; one the person stopped, or a reason this version does not
+    /// know, reads as plain Stopped.
+    func testAJobStoppedAfterTheChatWentQuietSaysSo() throws {
+        let fixtureURL = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
+        let root = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL)) as? [String: Any])
+        XCTAssertEqual(root["contractRevision"] as? Int, 64)
+        let section = try XCTUnwrap(root["backgroundJobsChatSettled"] as? [String: Any])
+        let data = try JSONSerialization.data(withJSONObject: try XCTUnwrap(section["list"]))
+        let list = try AidenRemoteJSONDecoder.decode(AidenBackgroundJobs.self, from: data)
+        let now = start
+        let labels = Dictionary(uniqueKeysWithValues: list.jobs.map { ($0.id, AidenBackgroundJobCopy.status($0, now: now)) })
+        XCTAssertEqual(labels["job_2c3d4e5f"], "Stopped after the chat went quiet")
+        XCTAssertEqual(labels["job_6a7b8c9d"], "Stopped")
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let reencoded = try AidenRemoteJSONDecoder.decode(AidenBackgroundJobs.self, from: encoder.encode(list))
+        XCTAssertEqual(reencoded, list)
+
+        let later = String(decoding: data, as: UTF8.self).replacingOccurrences(of: "chat-settled", with: "a-later-reason")
+        let fromLaterHost = try AidenRemoteJSONDecoder.decode(AidenBackgroundJobs.self, from: Data(later.utf8))
+        XCTAssertEqual(fromLaterHost.jobs.map { AidenBackgroundJobCopy.status($0, now: now) }, ["Stopped", "Stopped"])
     }
 
     func testStopEndsTheJobAndAJobTheMacNoLongerHasRereadsTheList() async {

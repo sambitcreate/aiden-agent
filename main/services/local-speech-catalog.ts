@@ -158,7 +158,7 @@ export const SPEECH_MODELS: readonly SpeechModelSpec[] = Object.freeze<SpeechMod
   {
     id: "moonshine-base-en",
     name: "Moonshine Base",
-    description: "Tiny English model for Macs with little free memory.",
+    description: "Tiny English model for computers with little free memory.",
     family: "moonshine-v2",
     archive: { url: `${SPEECH_MODEL_RELEASE}/sherpa-onnx-moonshine-base-en-quantized-2026-02-27.tar.bz2`, bytes: 111_266_225, sha256: "43232c1d13013d37317163baec3135bd771a186a4356f28c889bab453bb0e891" },
     files: { encoder: "encoder_model.ort", mergedDecoder: "decoder_model_merged.ort", tokens: "tokens.txt" },

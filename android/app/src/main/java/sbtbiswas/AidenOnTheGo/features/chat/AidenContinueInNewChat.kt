@@ -34,12 +34,12 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
 import sbtbiswas.AidenOnTheGo.ui.theme.rememberAidenFullSheetState
 
 /**
- * Revision 63: the Mac refused a turn because this chat's workspace folder is gone, and said the
+ * Revision 64: the Mac refused a turn because this chat's workspace folder is gone, and said the
  * whole chat may be continued in a new chat in another workspace. [message] is the Mac's reason.
  */
 data class AidenContinueInNewChatOffer(val message: String)
 
-/** Continue in a new chat (`chat:continue-in-new-chat`, contract revision 63). */
+/** Continue in a new chat (`chat:continue-in-new-chat`, contract revision 64). */
 object AidenContinueInNewChat {
     const val ACTION_LABEL = "Continue in a new chat"
     const val PICKER_TITLE = "Continue in a new chat"
@@ -75,11 +75,15 @@ object AidenContinueInNewChat {
 
     /**
      * Whether the offer still stands after [error]: only a destination whose folder is missing too
-     * (409 `operation_in_progress`) or a request whose outcome is unknown leaves another try open.
+     * (409 `workspace_unavailable`), a busy source (409 `operation_in_progress`) or a request whose
+     * outcome is unknown leaves another try open.
      */
     fun offerSurvives(error: Throwable): Boolean {
         val server = error as? AidenRemoteClientException.Server ?: return true
-        return server.statusCode == 409 && server.body.code == AidenRemoteErrorCode.OPERATION_IN_PROGRESS ||
+        return server.statusCode == 409 && (
+            server.body.code == AidenRemoteErrorCode.WORKSPACE_UNAVAILABLE ||
+                server.body.code == AidenRemoteErrorCode.OPERATION_IN_PROGRESS
+            ) ||
             server.body.code == AidenRemoteErrorCode.IDEMPOTENCY_IN_FLIGHT
     }
 

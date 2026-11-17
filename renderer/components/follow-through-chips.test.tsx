@@ -56,6 +56,7 @@ function mount(state: ChatFollowThroughV1 | undefined, handlers: Record<string, 
     "chats:followThroughStopJob": () => undefined,
     "chats:followThroughStopFollow": () => undefined,
     "chats:followThroughClearCheck": () => undefined,
+    "chats:followThroughNudgePullRequests": () => undefined,
     "chats:followThroughJobOutput": () => ({ job: job(), output: "VITE ready on http://localhost:5173\n", truncated: false }),
     ...handlers,
   });
@@ -141,6 +142,22 @@ test("a server a command left running reads as ended, never as failed, once it s
   assert.equal(within(dialog).queryByText(/Failed/u), null);
 });
 
+test("a job Aiden stopped after the chat went quiet says so; one the person stopped reads as stopped", async () => {
+  mount({
+    ...emptyChatFollowThrough("chat-1"),
+    jobs: [
+      job(),
+      job({ id: "job_00000004", description: "Run the preview", state: "stopped", endReason: "chat-settled", endedAt: NOW }),
+      job({ id: "job_00000005", description: "Run the old server", state: "stopped", endReason: "person", endedAt: NOW }),
+    ],
+  });
+  fireEvent.click(screen.getByRole("button", { name: "1 background job running" }));
+  const dialog = await screen.findByRole("dialog", { name: "Background jobs" });
+  assert.ok(within(dialog).getByText("Stopped after the chat went quiet"));
+  assert.ok(within(dialog).getByText("Stopped"));
+  assert.equal(within(dialog).getAllByRole("button", { name: "Stop" }).length, 1, "a stopped job cannot be stopped again");
+});
+
 test("a job's running time is current when its list opens, not when the chip appeared", async (t) => {
   let clock = NOW;
   t.mock.method(Date, "now", () => clock);
@@ -154,8 +171,12 @@ test("a job's running time is current when its list opens, not when the chip app
 test("the follow chip names the pull request, opens it, and stops following", async () => {
   const state = { ...emptyChatFollowThrough("chat-1"), pullRequests: [follow(), follow({ number: 7, state: "ended", endedReason: "merged", title: "Old" })] };
   const { calls, opened, changed } = mount(state);
+  const nudges = () => calls.filter((call) => call.channel === "chats:followThroughNudgePullRequests").map((call) => call.args);
+  window.dispatchEvent(new Event("online"));
+  assert.deepEqual(nudges(), [[{}]], "coming back online asks every follow to look again");
   fireEvent.click(screen.getByRole("button", { name: "Following pull request 42" }));
   const dialog = await screen.findByRole("dialog", { name: "Followed pull requests" });
+  assert.deepEqual(nudges().slice(-1)[0], [{ chatId: "chat-1" }], "opening the list asks this chat's follows to look again");
   assert.ok(within(dialog).getByText("1 check failing · 1 of 10 updates sent"));
   assert.ok(within(dialog).getByText("Merged"));
   assert.ok(within(dialog).getByText(/Only comments from people who can write to the repository reach the agent/u));

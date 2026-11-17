@@ -6,6 +6,8 @@ import { BrowserPanel } from "../../components/browser-panel";
 import {
   BUILT_IN_BROWSER_PROFILES,
   DEFAULT_BROWSER_SETTINGS,
+  type BrowserMenuChoice,
+  type BrowserMenuItem,
   type BrowserState,
   type BrowserTab,
 } from "../../shared/browser";
@@ -64,7 +66,7 @@ async function mountBotChat(state: () => BrowserState, handlers: Record<string, 
     ...handlers,
   });
   const mounted = await mountWithBotRouter(null, { initialPath: "/bots/bot-1/chat" });
-  await screen.findByRole("button", { name: "Planner profile" });
+  await screen.findByRole("button", { name: "Planner settings" });
   return { calls, ...mounted };
 }
 
@@ -83,11 +85,11 @@ test("Browser joins the Bot panel once its browser has a tab; a saved Browser ta
   let tabs: BrowserTab[] = [];
   await mountBotChat(() => browserState(tabs));
   await waitFor(() => assert.equal(selectedTab(), "Activity"));
-  assert.deepEqual(tabNames(), ["Activity", "Files", "Memory", "Routines"]);
+  assert.deepEqual(tabNames(), ["Activity", "Files", "Memory", "Routines", "Advanced"]);
 
   tabs = [browserTab()];
   await act(async () => emitBotTestNotification("browser:event", { type: "state", state: browserState(tabs) }));
-  await waitFor(() => assert.deepEqual(tabNames(), ["Activity", "Files", "Memory", "Routines", "Browser"]));
+  await waitFor(() => assert.deepEqual(tabNames(), ["Activity", "Files", "Memory", "Routines", "Browser", "Advanced"]));
   assert.equal(selectedTab(), "Browser", "the saved choice comes back once there is something to show");
 
   // Closing the last tab keeps the Browser view where the person is.
@@ -119,12 +121,15 @@ test("a tab the Bot opens to show reveals its Browser tab without taking focus f
 
 test("a Bot's browser has no profile choice, annotations, DevTools, capture, recording or floating; a workspace browser keeps them", async () => {
   const state = browserState([browserTab()]);
-  installBotTestIpc(browserIpc(() => state));
+  let items: BrowserMenuItem[] = [];
+  installBotTestIpc({
+    ...browserIpc(() => state),
+    "browser:popup-menu": (_id, _point, choices) => { items = choices as BrowserMenuItem[]; return null; },
+  });
   const menuItems = async () => {
-    fireEvent.keyDown(screen.getByRole("button", { name: "Browser menu" }), { key: "Enter" });
-    const items = (await screen.findAllByRole("menuitem")).map((item) => item.textContent ?? "");
-    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
-    return items;
+    items = [];
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Browser menu" })));
+    return items.flatMap(item => item?.enabled ? [item.label] : []);
   };
 
   const workspace = render(<BrowserPanel workspaceId={WORKSPACE} active />);
@@ -148,11 +153,37 @@ test("a Bot's browser has no profile choice, annotations, DevTools, capture, rec
   }
 });
 
+test("switching tabs dismisses the open menu and discards a delayed selection", async () => {
+  let state = browserState([browserTab(), browserTab({ id: "tab-2", title: "Other page" })]);
+  let chooseReload!: () => void;
+  const calls = installBotTestIpc({
+    ...browserIpc(() => state),
+    "browser:dismiss-menu": () => undefined,
+    "browser:popup-menu": (_id, _point, choices) => new Promise<BrowserMenuChoice>(resolve => {
+      const index = (choices as BrowserMenuItem[]).findIndex(item => item?.label === "Hard reload");
+      assert.ok(index >= 0);
+      chooseReload = () => resolve({ index, shiftKey: false });
+    }),
+  });
+  render(<BrowserPanel workspaceId={WORKSPACE} active />);
+  await screen.findByRole("tab", { name: "Sign in to GitHub" });
+  const trigger = screen.getByRole("button", { name: "Browser menu" });
+  fireEvent.click(trigger);
+  assert.equal(trigger.getAttribute("aria-expanded"), "true");
+
+  state = { ...state, activeTabId: "tab-2", revision: state.revision + 1 };
+  await act(async () => emitBotTestNotification("browser:event", { type: "state", state }));
+  assert.equal(trigger.getAttribute("aria-expanded"), "false");
+  assert.ok(calls.some(call => call.channel === "browser:dismiss-menu"));
+  await act(async () => chooseReload());
+  assert.equal(calls.some(call => call.channel === "browser:command" && (call.args[1] as { action: string }).action === "reload"), false);
+});
+
 test("a tab the person holds says so and names the Bot, and an empty Bot browser never lists the person's history", async () => {
   let state = browserState([browserTab({ heldForPerson: { reason: "sign_in" } })]);
   installBotTestIpc(browserIpc(() => state));
   const view = render(<BrowserPanel workspaceId={WORKSPACE} active variant="bot" agentName="Planner" />);
-  const notice = await screen.findByText(/This tab is yours: sign in, then choose I’m signed in on Planner’s card/u);
+  const notice = await screen.findByText(/This tab is yours: sign in, then choose I’m done on Planner’s card/u);
   assert.equal(notice.getAttribute("role"), "status");
   view.unmount();
 
@@ -205,12 +236,12 @@ test("Open sign-in on the Mac moves the person into the Bot's Browser tab, where
   });
   assert.equal(botPanel().getAttribute("data-state"), "closed");
   const card = await screen.findByRole("group", { name: "Planner needs you" });
-  const open = within(card).getByRole("button", { name: "Open sign-in" });
+  const open = within(card).getByRole("button", { name: "Take control to sign in" });
   open.focus();
   await act(async () => fireEvent.click(open));
 
   await waitFor(() => assert.equal(selectedTab(), "Browser"));
-  assert.ok(await within(botPanel()).findByText(/This tab is yours: sign in, then choose I’m signed in on Planner’s card/u));
+  assert.ok(await within(botPanel()).findByText(/This tab is yours: sign in, then choose I’m done on Planner’s card/u));
   // The person asked for it, so focus follows them there; a tab the Bot opens leaves focus alone.
   await waitFor(() => assert.equal(document.activeElement?.textContent, "Browser"));
   assert.ok(botPanel().contains(document.activeElement));

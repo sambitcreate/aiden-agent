@@ -1,10 +1,10 @@
 import {
-  BOT_ACCESS_SUMMARIES,
   BOT_CAPABILITY_LIMITS,
   BOT_CAPABILITY_STORE_VERSION,
   BOT_FULL_ACCESS_NOTICE_VERSION,
   assertBotIdentity,
   assertBotRevision,
+  botAccessSummaries,
   botCustomSelectionIsSubset,
   botCustomSelectionNarrows,
   botCustomSelectionsEqual,
@@ -178,6 +178,32 @@ export class BotCapabilityUnavailableError extends Error {
   constructor(message = "Bot access is unavailable and must be repaired.") {
     super(message);
     this.name = "BotCapabilityUnavailableError";
+  }
+}
+
+/**
+ * Whether a revoke must also clear the device's Bot notices. A phone's revoke
+ * fails until they are cleared, so a retry still removes the acceptance. An
+ * outside app's token is already tombstoned, so Bot storage waiting for repair
+ * (no Secret Service on Linux, say) must not keep it listed as connected.
+ */
+export type BotNoticeRevokePolicy = "required" | "when-available";
+
+/**
+ * Runs `revoke` for a revoked device's Bot notice audience. Under
+ * `when-available` a BotCapabilityUnavailableError calls `onUnavailable` and
+ * resolves; every other failure, and any failure under `required`, rejects.
+ */
+export async function revokeBotNoticeAudience(
+  revoke: () => unknown,
+  policy: BotNoticeRevokePolicy,
+  onUnavailable: () => void,
+): Promise<void> {
+  try {
+    await revoke();
+  } catch (error) {
+    if (policy === "required" || !(error instanceof BotCapabilityUnavailableError)) throw error;
+    onUnavailable();
   }
 }
 
@@ -688,7 +714,7 @@ export function projectBotAccessView(
     botId,
     revision: policy.revision,
     policyEpoch: `epoch:${policy.policyEpoch}`,
-    summary: policy.accessMode === "full" ? BOT_ACCESS_SUMMARIES.full : BOT_ACCESS_SUMMARIES.custom,
+    summary: policy.accessMode === "full" ? botAccessSummaries(process.platform).full : botAccessSummaries(process.platform).custom,
   };
   return policy.accessMode === "custom"
     ? { ...base, accessMode: "custom", custom: cloneBotCustomSelection(policy.custom) }
@@ -722,8 +748,8 @@ export function projectBotChatAccessView(
     botPolicyRevision: policy.revision,
     summary:
       chat.mode === "inherit" && policy.accessMode === "full"
-        ? BOT_ACCESS_SUMMARIES.full
-        : BOT_ACCESS_SUMMARIES.custom,
+        ? botAccessSummaries(process.platform).full
+        : botAccessSummaries(process.platform).custom,
   };
   return chat.mode === "custom"
     ? { ...base, mode: "custom", custom: cloneBotCustomSelection(chat.custom) }
@@ -1606,11 +1632,19 @@ export class BotCapabilityStateEditor {
     return result;
   }
 
-  acknowledgeNotice(audienceId: string, value: unknown): BotNoticeStatus {
+  /**
+   * `keepReviewFirst`: an existing choice to review access first stands, and
+   * the status comes back unchanged. The check and the write are one step, so
+   * a review-first choice made just before can't be overwritten.
+   */
+  acknowledgeNotice(audienceId: string, value: unknown, options: { keepReviewFirst?: boolean } = {}): BotNoticeStatus {
     const safeAudienceId = assertNoticeAudience(audienceId);
     const acknowledgement: BotNoticeAcknowledgement = parseBotNoticeAcknowledgement(value);
     const existing = this.state.notices.find((entry) => entry.audienceId === safeAudienceId);
     if (existing) {
+      if (options.keepReviewFirst && existing.decision === "customize_first") {
+        return projectBotNoticeStatus(this.state, safeAudienceId);
+      }
       if (existing.decision !== acknowledgement.decision) {
         if (
           existing.decision !== "customize_first" ||

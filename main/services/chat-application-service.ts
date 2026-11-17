@@ -95,6 +95,11 @@ export interface ChatApplicationDependencies {
   designCanvasStore?: Pick<DesignCanvasStore, "delete">;
   /** aiden-design grants: a chat's ends when design mode turns off, it moves or it is deleted. */
   designGrants?: { revokeChat(chatId: string): void };
+  /**
+   * Runs once design mode turns on: puts the HTML pages this chat's earlier
+   * replies wrote on an empty canvas. Never awaited by the switch.
+   */
+  designPagesOnEntry?(chat: Chat, workspaceRoot: string): Promise<unknown>;
   /** Queued visual snapshots; a deleted chat's are dropped, not captured. */
   visualSnapshots?: { cancelChat(chatId: string): void };
   /** Stops a deleted chat's background jobs and drops its followed pull requests and check. */
@@ -239,7 +244,8 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
       return deps.llmClient.waitForChatIdle(chatId);
     },
 
-    async create(input: ParsedPublicChatCreate, owner: ChatApplicationOwner) {
+    /** `reportAnalytics: false` keeps `chat_created` unsent (an outside MCP app made the chat). */
+    async create(input: ParsedPublicChatCreate, owner: ChatApplicationOwner, options?: { reportAnalytics?: boolean }) {
       if (deps.llmClient.requiresAppendReconciliation(owner.documentId)) {
         throw new Error(appendReconciliationFailureMessage("blocked"));
       }
@@ -272,7 +278,9 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         };
         try {
           const chat = chatForRenderer(await deps.chatStore.create({ ...input, assertCurrent }));
-          reportAnalyticsEvent("chat_created", { workspace_kind: analyticsWorkspaceKind(workspace) });
+          if (options?.reportAnalytics !== false) {
+            reportAnalyticsEvent("chat_created", { workspace_kind: analyticsWorkspaceKind(workspace) });
+          }
           return chat;
         } catch (error) {
           if (isChatCreateReconciliationRequiredError(error)) {
@@ -324,6 +332,8 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
      * affected, because design mode only changes the layout.
      */
     async setDesignMode(chatId: string, enabled: boolean, options: ChatApplicationMutationOptions = {}) {
+      let turnedOn = false;
+      let workspaceRoot: string | undefined;
       const updated = await deps.chatStore.setDesignMode(chatId, enabled, async (chat) => {
         assertRenameAllowedFromChat(chat, options);
         await options.assertCurrent?.(chat);
@@ -332,8 +342,15 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         if (!workspace || (!workspace.folderPath && workspace.noWorkspace !== true)) {
           throw new ChatStoreError("design-mode-unavailable", DESIGN_MODE_UNAVAILABLE_MESSAGE);
         }
+        turnedOn = chat.designMode !== true;
+        workspaceRoot = workspace.folderPath;
       });
       if (!enabled) deps.designGrants?.revokeChat(chatId);
+      if (turnedOn && workspaceRoot && deps.designPagesOnEntry) {
+        void deps.designPagesOnEntry(updated, workspaceRoot).catch((error) => {
+          deps.logError("design", "Could not put earlier pages on the design canvas.", error);
+        });
+      }
       return chatForRenderer(updated);
     },
 

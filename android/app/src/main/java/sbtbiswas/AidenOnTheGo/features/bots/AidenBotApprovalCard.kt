@@ -9,6 +9,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import sbtbiswas.AidenOnTheGo.features.chat.AidenApprovalCardContent
+import sbtbiswas.AidenOnTheGo.features.chat.AidenTypedApprovalCardContent
 import sbtbiswas.AidenOnTheGo.models.AidenApprovalScope
 import sbtbiswas.AidenOnTheGo.models.AidenApprovalDecision
 import sbtbiswas.AidenOnTheGo.models.AidenBotApproval
@@ -32,7 +33,8 @@ fun aidenBotPendingApproval(approval: AidenBotApproval): AidenPendingApproval = 
     hasRequiredWriteCapability = true,
     hostCanAllow = approval.canAllow,
     canAllow = approval.canAllow,
-    scopes = listOf(AidenApprovalScope.ONCE)
+    scopes = listOf(AidenApprovalScope.ONCE),
+    card = approval.card
 )
 
 @Composable
@@ -42,13 +44,28 @@ fun AidenBotApprovalCard(
     onRespond: (AidenApprovalDecision) -> Unit,
     botName: String = "Bot",
     allowedSupported: Boolean = false,
-    onAlways: () -> Unit = {}
+    onAlways: () -> Unit = {},
+    /** Revision 61: a typed card's button, which carries its own scope (Always included). */
+    onCardRespond: (AidenApprovalDecision, AidenApprovalScope) -> Unit = { decision, _ -> onRespond(decision) }
 ) {
     Surface(
         color = AidenTheme.palette.raised,
         shape = RoundedCornerShape(24.dp),
         modifier = Modifier.fillMaxWidth().testTag(AIDEN_BOT_APPROVAL_CARD_TAG)
     ) {
+        approval.card?.let { card ->
+            // The typed card carries its own Always button and count note (only a
+            // `bot:allowed` holder is sent them), so it replaces the older Always row.
+            AidenTypedApprovalCardContent(
+                card = card,
+                resetKey = approval.waitId,
+                enabled = enabled,
+                canRespond = true,
+                onRespond = { button -> onCardRespond(button.decision, button.effectiveScope) },
+                modifier = Modifier.padding(16.dp)
+            )
+            return@Surface
+        }
         androidx.compose.foundation.layout.Column {
         if (allowedSupported && approval.alwaysCount != null) {
             androidx.compose.material3.Text("You’ve allowed this ${approval.alwaysCount} times in the last 2 weeks.",color = AidenTheme.palette.secondary,modifier = Modifier.padding(16.dp))

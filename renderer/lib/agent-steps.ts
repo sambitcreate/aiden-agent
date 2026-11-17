@@ -117,7 +117,32 @@ function stepObject(step: AgentToolStep): string | undefined {
   return step.detail ?? step.target;
 }
 
-export function activityLine(step: AgentStep): ActivityLine {
+/**
+ * Display-only: a tool call the person ended with Stop. The producer marks
+ * exactly the steps it cancelled because of Stop (`stoppedByUser`), so the
+ * call stopping is the outcome they asked for, not a problem to review. A
+ * step cancelled for any other reason (app shutdown, chat deletion, an agent
+ * permission cancelled on detach) carries no mark and keeps the cancelled
+ * treatment, even when a later Stop ends the same generation. So does a call
+ * a claim check names, because that warning asks the person to review it.
+ * Decoders and claim-check validation still treat every cancelled call as an issue.
+ */
+export function isStoppedByUser(
+  timeline: Pick<GenerationTimeline, "claimCheck">,
+  step: AgentStep,
+): boolean {
+  return (
+    isToolStep(step) &&
+    step.status === "cancelled" &&
+    step.stoppedByUser === true &&
+    !timeline.claimCheck?.stepIds.includes(step.id)
+  );
+}
+
+export function activityLine(
+  step: AgentStep,
+  { stoppedByUser = false }: { stoppedByUser?: boolean } = {},
+): ActivityLine {
   if (!isToolStep(step)) {
     return isActiveStep(step)
       ? { verb: "Thinking", tone: "normal" }
@@ -142,13 +167,18 @@ export function activityLine(step: AgentStep): ActivityLine {
     case "blocked":
       return { verb: `${step.label} denied`, object, tone: "warning" };
     case "cancelled":
-      return { verb: `${step.label} cancelled`, object, tone: "warning" };
+      return stoppedByUser
+        ? { verb: `${step.label} stopped`, object, tone: "normal" }
+        : { verb: `${step.label} cancelled`, object, tone: "warning" };
   }
 }
 
 /** The flattened row text, for accessible names and tests. */
-export function activityLineText(step: AgentStep): string {
-  const line = activityLine(step);
+export function activityLineText(
+  step: AgentStep,
+  options: { stoppedByUser?: boolean } = {},
+): string {
+  const line = activityLine(step, options);
   return line.object ? `${line.verb} ${line.object}` : line.verb;
 }
 
@@ -156,7 +186,8 @@ export function activityIssueCount(timeline: GenerationTimeline): number {
   return timeline.steps.filter(
     (step) =>
       isToolStep(step) &&
-      (step.status === "failed" || step.status === "blocked" || step.status === "cancelled"),
+      (step.status === "failed" || step.status === "blocked" || step.status === "cancelled") &&
+      !isStoppedByUser(timeline, step),
   ).length;
 }
 

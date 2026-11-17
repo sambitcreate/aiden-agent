@@ -5,8 +5,11 @@ import UserNotifications
 /// Lets Aiden's scheduled-run notifications alert while the app is
 /// foregrounded — without a center delegate iOS suppresses foreground
 /// presentation entirely, which is exactly when this polling feed delivers.
-/// Also routes a tapped run alert to its chat through the app's deep link.
+/// Also hands a tapped notification to `openTap`, which sends it to its machine.
 final class AidenNotificationPresentationDelegate: NSObject, UNUserNotificationCenterDelegate {
+    /// Set at launch, before a tap can arrive.
+    @MainActor static var openTap: (@MainActor (AidenNotificationTap) -> Void)?
+
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
@@ -22,7 +25,7 @@ final class AidenNotificationPresentationDelegate: NSObject, UNUserNotificationC
         identifier: String,
         appState: AidenRunAlertAppState
     ) -> UNNotificationPresentationOptions {
-        if identifier.hasPrefix("aiden.schedule.")
+        if identifier.hasPrefix(AidenScheduledRunNotifier.identifierPrefix)
             || identifier.hasPrefix(AidenBotRoutineNotifier.identifierPrefix) {
             return [.banner, .sound, .list]
         }
@@ -36,15 +39,114 @@ final class AidenNotificationPresentationDelegate: NSObject, UNUserNotificationC
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse
     ) async {
-        guard response.actionIdentifier == UNNotificationDefaultActionIdentifier,
-              let url = AidenRunAlertNotifier.deepLink(
-                from: response.notification.request.content.userInfo
-              ) else { return }
-        // The app's own scheme routes back through `onOpenURL`, which switches
-        // to the link's paired instance before opening the chat.
-        await MainActor.run { UIApplication.shared.open(url) }
+        guard response.actionIdentifier == UNNotificationDefaultActionIdentifier else { return }
+        let tap = AidenNotificationTap(userInfo: response.notification.request.content.userInfo)
+        await MainActor.run { Self.openTap?(tap) }
     }
 }
+
+/// What a tapped notification says about where it came from.
+struct AidenNotificationTap: Equatable, Sendable {
+    let link: URL?
+    let instanceID: String?
+
+    init(userInfo: [AnyHashable: Any]) {
+        link = AidenRunAlertNotifier.deepLink(from: userInfo)
+        instanceID = userInfo[AidenRunAlertNotifier.instanceUserInfoKey] as? String
+    }
+
+    /// Queues a route to the notification's own machine. A machine that's gone
+    /// takes the tap with it, without a word.
+    @MainActor
+    func open(coordinator: AidenRemoteCoordinator, intents: AidenForegroundIntentRouter? = nil) {
+        guard let route = route(on: coordinator), coordinator.canOpen(route) else { return }
+        (intents ?? .shared).submit(route: route)
+    }
+
+    /// A scheduled run has no chat to open, so its tap opens the machine's page.
+    @MainActor
+    private func route(on coordinator: AidenRemoteCoordinator) -> AidenAppRoute? {
+        if let request = link.flatMap(AidenDeepLink.request(from:)) {
+            return AidenAppRoute(
+                request: request,
+                installations: coordinator.installationStore.installations,
+                defaultInstanceId: coordinator.defaultInstanceId
+            )
+        }
+        return instanceID.map { .machine(instanceId: $0) }
+    }
+}
+
+/// The notification-center surface the identifier migration needs, so it is
+/// testable against a fake.
+protocol AidenNotificationInventory: AnyObject {
+    func postedRequests() async -> [UNNotificationRequest]
+    func removeNotifications(withIdentifiers identifiers: [String])
+}
+
+extension UNUserNotificationCenter: AidenNotificationInventory {
+    func postedRequests() async -> [UNNotificationRequest] {
+        let delivered = await deliveredNotifications().map(\.request)
+        return await pendingNotificationRequests() + delivered
+    }
+
+    func removeNotifications(withIdentifiers identifiers: [String]) {
+        removePendingNotificationRequests(withIdentifiers: identifiers)
+        removeDeliveredNotifications(withIdentifiers: identifiers)
+    }
+}
+
+/// `<prefix><instanceId>.<id>`, for notifications two machines could both post.
+/// The instance's `%` and `.` are escaped so the first dot always ends it: otherwise
+/// `a.b` + `c` and `a` + `b.c` would be one notification. Real instance IDs hold
+/// neither, so they read exactly as written.
+enum AidenMachineNotificationIdentifier {
+    static func make(prefix: String, instanceId: String, id: String) -> String {
+        let instance = instanceId
+            .replacingOccurrences(of: "%", with: "%25")
+            .replacingOccurrences(of: ".", with: "%2E")
+        return "\(prefix)\(instance).\(id)"
+    }
+}
+
+/// Scheduled-run and Bot routine identifiers used to name only the run, so two
+/// machines with one run ID replaced each other's notification. Whatever an older
+/// build left behind is cancelled on the first launch of this one. Old and new are
+/// told apart by the instance every new notification carries: an identifier alone
+/// can't say, because an old run ID may contain a dot.
+enum AidenNotificationIdentifierMigration {
+    static let completedKey = "aiden.notifications.machine-identifiers.v1"
+
+    static func runOnce(
+        center: any AidenNotificationInventory = UNUserNotificationCenter.current(),
+        defaults: UserDefaults = .standard
+    ) async {
+        guard !defaults.bool(forKey: completedKey) else { return }
+        center.removeNotifications(withIdentifiers: await oldIdentifiers(on: center))
+        // A removal reports nothing back, so only a second read says it worked.
+        // Anything left waits for the next launch; new notifications are never touched.
+        guard await oldIdentifiers(on: center).isEmpty else { return }
+        defaults.set(true, forKey: completedKey)
+    }
+
+    private static func oldIdentifiers(on center: any AidenNotificationInventory) async -> [String] {
+        await center.postedRequests().filter(isFromAnOlderBuild).map(\.identifier)
+    }
+
+    private static func isFromAnOlderBuild(_ request: UNNotificationRequest) -> Bool {
+        (request.identifier.hasPrefix(AidenScheduledRunNotifier.identifierPrefix)
+            || request.identifier.hasPrefix(AidenBotRoutineNotifier.identifierPrefix))
+            && request.content.userInfo[AidenRunAlertNotifier.instanceUserInfoKey] == nil
+    }
+}
+
+/// The feed the scheduled-run notifier polls. `AidenRemoteClient` provides it;
+/// tests substitute a fake.
+protocol AidenScheduledRunNotificationTransport: Sendable {
+    func scheduledRunNotifications(since: Date?) async throws -> AidenScheduledRunNotificationFeed
+}
+
+extension AidenRemoteClient: AidenScheduledRunNotificationTransport {}
 
 /// Turns the `/scheduled-tasks/notifications` feed into local notifications.
 /// Polling-only by design — Aiden Remote has no cloud push, so delivery
@@ -57,8 +159,18 @@ final class AidenScheduledRunNotifier {
     /// enough — UNUserNotificationCenter retains it weakly, hence the static.
     static let presentationDelegate = AidenNotificationPresentationDelegate()
 
+    nonisolated static let identifierPrefix = "aiden.schedule."
     private static let maximumDeliveredIds = 500
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
+    private let center: AidenRunAlertCenter
+
+    init(
+        defaults: UserDefaults = .standard,
+        center: AidenRunAlertCenter = UNUserNotificationCenter.current()
+    ) {
+        self.defaults = defaults
+        self.center = center
+    }
 
     /// Install once at app launch so foregrounded polls still alert.
     static func installPresentationDelegate() {
@@ -79,9 +191,8 @@ final class AidenScheduledRunNotifier {
         })
     }
 
-    func deliver(instanceId: String, client: AidenRemoteClient) async {
-        let center = UNUserNotificationCenter.current()
-        guard (try? await center.requestAuthorization(options: [.alert, .sound])) == true else { return }
+    func deliver(instanceId: String, client: any AidenScheduledRunNotificationTransport) async {
+        guard await center.requestAlertAuthorization() else { return }
         let cursor = defaults.object(forKey: cursorKey(instanceId)) as? Double
         do {
             let feed = try await client.scheduledRunNotifications(
@@ -122,8 +233,11 @@ final class AidenScheduledRunNotifier {
                 } else {
                     content.body = "Scheduled run completed."
                 }
+                content.userInfo = [AidenRunAlertNotifier.instanceUserInfoKey: instanceId]
                 let request = UNNotificationRequest(
-                    identifier: "aiden.schedule.\(item.id)",
+                    identifier: AidenMachineNotificationIdentifier.make(
+                        prefix: Self.identifierPrefix, instanceId: instanceId, id: item.id
+                    ),
                     content: content,
                     trigger: nil
                 )
@@ -194,16 +308,26 @@ final class AidenBotRoutineNotifier {
         "aiden.botRoutineNotifications.delivered.\(instanceId)"
     }
 
-    /// Polls the connected Mac when it serves `bot-proactive-v1`.
+    /// Polls every connected machine that serves `bot-proactive-v1`, not just
+    /// the default: each notification carries its own machine, so its tap opens
+    /// the Bot chat there.
     func deliverIfSupported(coordinator: AidenRemoteCoordinator) async {
-        guard isEnabled,
-              coordinator.connectionState == .connected,
-              AidenBotHostFeature.isAdvertised(AidenBotHostFeature.proactive, coordinator: coordinator),
-              let context = try? coordinator.requestContext(),
-              let client = try? coordinator.remoteClient(for: context) else { return }
-        await deliverFromHost(instanceId: context.instanceId, transport: client,
-            isCurrent: { coordinator.isCurrent(context) && coordinator.connectionState == .connected },
-            installation: { coordinator.installationStore.activeInstallation }, server: { coordinator.server })
+        guard isEnabled else { return }
+        for connection in coordinator.hosts.ordered
+        where !connection.isRevoked && connection.connectionState == .connected {
+            let instanceId = connection.instanceId
+            guard AidenBotHostFeature.isAdvertised(
+                      AidenBotHostFeature.proactive,
+                      by: coordinator.knownServerFeatures(of: instanceId)
+                  ),
+                  let context = try? coordinator.ownerContext(for: instanceId),
+                  let client = try? coordinator.remoteClient(for: context) else { continue }
+            // Each machine's own grants and /server fence its own feed.
+            await deliverFromHost(instanceId: instanceId, transport: client,
+                isCurrent: { coordinator.isLive(context) && coordinator.botConnectionState(on: instanceId) == .connected },
+                installation: { coordinator.botInstallation(on: instanceId) },
+                server: { coordinator.botServer(on: instanceId) })
+        }
     }
 
     func deliverFromHost(instanceId: String, transport: any AidenBotRoutineNotificationTransport,
@@ -323,11 +447,14 @@ final class AidenBotRoutineNotifier {
             ? "aiden.bot-issue.\(instanceId).\(item.botId)"
             : "aiden.bot-routine.\(instanceId).\(item.botId)"
         content.sound = .default
+        content.userInfo[AidenRunAlertNotifier.instanceUserInfoKey] = instanceId
         if let url = AidenDeepLink.botChatURL(instanceId: instanceId, botId: item.botId) {
-            content.userInfo = [AidenRunAlertNotifier.deepLinkUserInfoKey: url.absoluteString]
+            content.userInfo[AidenRunAlertNotifier.deepLinkUserInfoKey] = url.absoluteString
         }
         return UNNotificationRequest(
-            identifier: "\(identifierPrefix)\(item.id)",
+            identifier: AidenMachineNotificationIdentifier.make(
+                prefix: identifierPrefix, instanceId: instanceId, id: item.id
+            ),
             content: content,
             trigger: nil
         )
@@ -450,6 +577,9 @@ final class AidenRunAlertNotifier {
 
     nonisolated static let identifierPrefix = "aiden.run."
     nonisolated static let deepLinkUserInfoKey = "aidenURL"
+    /// On every scheduled-run and Bot routine notification. See
+    /// `AidenNotificationIdentifierMigration`.
+    nonisolated static let instanceUserInfoKey = "aidenInstance"
     static let permissionRequestedKey = "aiden.runAlerts.permissionRequested"
     static let alertedKeysKey = "aiden.runAlerts.alerted"
     private static let maximumAlertedKeys = 500

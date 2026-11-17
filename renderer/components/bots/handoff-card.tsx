@@ -1,28 +1,30 @@
-// A step the Bot handed back to the person (plan §4.1): "Your turn: Enter the
-// 2FA code for your bank." with the reason, an optional Open for the page that
-// helps, Skip and Done. The shared Bot notice card, elevated like an approval,
-// with the Bot's own face in the tile; no coloured borders. The composer stays
+// A step the Bot handed back to the person (plan §4.1; take control in
+// docs/plans/bot-ux-simplification.md §3.4): "Needs you: Enter the 2FA code
+// for your bank." with the reason and, first, **Take control** alone (the page
+// or screen that helps, when there is one). Once the person has taken
+// control the card offers **I'm done** and **Skip**. It sits in the chat's
+// Needs-you slot, the shared Bot notice card elevated like an approval, with
+// the Bot's own face in the tile; no coloured borders. The composer stays
 // below it: typing there answers Done with a note, which the Bot reads, so the
 // card says so. A card a password-or-code rule opened takes no note at all.
 //
 // A sign-in (plan §5.2) is the same card asking the person to sign in to one
-// site for the Bot: "Sign in to github.com for Ada", with Open sign-in (the
-// site in a new tab of the Bot's own browser), Skip and I'm signed in. A
-// sign-in on the Bot's own computer (`target: "computer"`, plan §8.6) offers
-// "Open Ada's computer" instead: the site opens there with the person in
+// site for the Bot: "Sign in to github.com for Ada". Take control opens the
+// site in a new tab of the Bot's own browser; a sign-in on the Bot's own
+// computer (`target: "computer"`, plan §8.6) opens it there with the person in
 // control, and the Bot's computer tools wait until the card is answered (a
 // program it left running in the guest is the limit; docs/bot-computers.md).
 //
-// A step on the Bot's own screen (an action with `target`) offers "Open in
-// Ada's browser" or "Open Ada's computer": the page opens there, never in the
-// person's own browser.
+// A step on the Bot's own screen (an action with `target`) opens in the Bot's
+// browser or on its computer, never in the person's own browser.
 //
 // A Bot that lives on another Mac (`finishOn`) shows the same card here. Its
-// sign-in happens in its own browser over there, so that card offers
-// "Finish on <Mac>" and Skip instead of Open sign-in and I'm signed in. A
-// step on its screen over there (`onMac`, Remote contract revision 43) offers
-// "Finish on <Mac>", Skip and Done.
+// sign-in happens in its own browser over there, so the first step is
+// "Finish on <Mac>" and the second Skip alone. A step on its screen over
+// there (`onMac`, Remote contract revision 43) offers "Finish on <Mac>", then
+// Skip and I'm done.
 
+import * as React from "react";
 import { ExternalLink, Globe, Laptop, LogIn, Monitor } from "lucide-react";
 import { BotAvatar } from "../bot-avatar";
 import { Button } from "../ui";
@@ -52,21 +54,20 @@ function onBotScreen(handoff: ShownHandoff): boolean {
   return handoff.kind === "action" && (handoff.target !== undefined || handoff.onMac === true);
 }
 
-/** An action's Open on the Bot's own screen: "Open in Ada's browser" or "Open Ada's computer". */
-export function handoffScreenOpenLabel(name: string | undefined, target: "browser" | "computer"): string {
-  if (target === "computer") return name ? `Open ${name}’s computer` : "Open the computer";
-  return name ? `Open in ${name}’s browser` : "Open in the Bot’s browser";
+/** Take control's accessible name on the Bot's own screen: "Take control of Ada's computer". */
+function screenControlLabel(name: string | undefined, target: "browser" | "computer"): string {
+  const owner = name ? `${name}’s` : "the Bot’s";
+  return `${TAKE_CONTROL} of ${owner} ${target}`;
 }
 
 function onComputer(handoff: Pick<ShownHandoff, "kind" | "target">): boolean {
   return handoff.kind === "sign_in" && handoff.target === "computer";
 }
 
-/** The sign-in's Open: in the Bot's browser, or on the Bot's own computer. */
-export function handoffSignInOpenLabel(name: string | undefined, handoff: Pick<ShownHandoff, "kind" | "target">): string {
-  if (!onComputer(handoff)) return "Open sign-in";
-  return name ? `Open ${name}’s computer` : "Open the computer";
-}
+/** Every hand-off's first button: the person takes the step over. */
+export const TAKE_CONTROL = "Take control";
+/** Every hand-off's answer once the person did the step. */
+export const IM_DONE = "I’m done";
 
 /** The site a sign-in names ("github.com"): its origin, else its page, else its title. */
 function signInHost(handoff: ShownHandoff): string {
@@ -81,9 +82,8 @@ function signInHost(handoff: ShownHandoff): string {
  * What the composer says while a sign-in waits: it is answered on the card,
  * never with a note, so a password typed in the chat can't reach the Bot.
  */
-export function handoffSignInComposerText(name: string, handoff?: Pick<ShownHandoff, "kind" | "target">): string {
-  const open = handoff ? handoffSignInOpenLabel(name, handoff) : "Open sign-in";
-  return `Sign in for ${name} with ${open} above, then choose I’m signed in.`;
+export function handoffSignInComposerText(name: string): string {
+  return `Sign in for ${name} with ${TAKE_CONTROL} above, then choose ${IM_DONE}.`;
 }
 
 /**
@@ -91,106 +91,135 @@ export function handoffSignInComposerText(name: string, handoff?: Pick<ShownHand
  * on the card, never with a note, so the code can't reach the Bot.
  */
 export function handoffNoNoteComposerText(name: string): string {
-  return `Enter it yourself, then choose Done above. This card takes no note, so a password or code never reaches ${name}.`;
+  return `Enter it yourself, then choose ${IM_DONE} above. This card takes no note, so a password or code never reaches ${name}.`;
 }
 
 /** The card's title: whose turn it is, or what to sign in to and for whom. */
 export function handoffCardTitle(name: string, handoff: ShownHandoff): string {
-  return handoff.kind === "sign_in" ? `Sign in to ${signInHost(handoff)} for ${name}` : `Your turn: ${handoff.action}`;
+  return handoff.kind === "sign_in" ? `Sign in to ${signInHost(handoff)} for ${name}` : `Needs you: ${handoff.action}`;
 }
 
 /**
- * The card's buttons: Open (or Open sign-in, or Open <name>'s computer), Skip
- * and Done (or I'm signed in), or "Finish on <Mac>" and Skip for a sign-in on
- * a Bot's other Mac. The Bot panel repeats them when it floats over the card.
+ * The card's buttons, in two steps (§3.4). First **Take control** alone: it
+ * opens the page, the sign-in, or the Bot's own browser or computer when
+ * there is one, or "Finish on <Mac>" for a Bot that lives on another Mac.
+ * Then **I'm done** and **Skip**, with the page one press away again. A
+ * sign-in finished on another Mac is answered there, so its second step is
+ * Skip alone. The answers on the wire are unchanged ("done", "skipped"). The
+ * Bot panel repeats the buttons when it floats over the card, and both copies
+ * share whether control was taken.
  */
 export function HandoffActions({
   handoff,
   name,
   busy = false,
   finishOn,
+  taken,
+  onTake,
   onOpen,
   onFinish,
   onAnswer,
 }: {
   handoff: ShownHandoff;
-  /** The Bot's name, for a sign-in on its computer ("Open Ada's computer"). */
+  /** The Bot's name, for Take control's accessible name ("Take control of Ada's computer"). */
   name?: string;
   busy?: boolean;
   finishOn?: string;
+  /** The person took control: the card offers I'm done and Skip. */
+  taken: boolean;
+  /** Take control was pressed; the card moves to its second step. */
+  onTake(): void;
   onOpen(): void;
   onFinish?(): void;
   onAnswer(outcome: BotHandoffOutcome): void;
 }) {
   const signIn = handoff.kind === "sign_in";
   const host = handoff.open && !signIn ? linkHost(handoff.open.url) : undefined;
+  const elsewhere = finishOn !== undefined && (signIn || onBotScreen(handoff));
+  // Take control replaces its own button, so the press that took control here
+  // moves focus on to the second step's answer: I'm done, or Skip where that
+  // is the only answer this device can give.
+  const answerAfterTake = React.useRef<HTMLButtonElement>(null);
+  const tookHere = React.useRef(false);
+  React.useEffect(() => {
+    if (!taken || !tookHere.current) return;
+    tookHere.current = false;
+    answerAfterTake.current?.focus();
+  }, [taken]);
+  const take = () => {
+    tookHere.current = true;
+    onTake();
+  };
+  const doneFirst = !(elsewhere && signIn);
   const done = (
-    <Button variant="accent" size="small" disabled={busy} onClick={() => onAnswer("done")}>
-      Done
+    <Button ref={doneFirst ? answerAfterTake : undefined} variant="accent" size="small" disabled={busy} onClick={() => onAnswer("done")}>
+      {IM_DONE}
     </Button>
   );
   const skip = (
-    <Button variant="transparent" size="small" disabled={busy} onClick={() => onAnswer("skipped")}>
+    <Button ref={doneFirst ? undefined : answerAfterTake} variant="transparent" size="small" disabled={busy} onClick={() => onAnswer("skipped")}>
       Skip
     </Button>
   );
-  if (signIn && finishOn !== undefined) {
+  if (elsewhere) {
+    const finish = (variant: "accent" | "transparent") => (
+      <Button
+        variant={variant}
+        size="small"
+        disabled={busy}
+        onClick={() => {
+          if (taken) onTake();
+          else take();
+          onFinish?.();
+        }}
+      >
+        <Laptop aria-hidden="true" />
+        {`Finish on ${finishOn}`}
+      </Button>
+    );
+    if (!taken) return finish("accent");
     return (
       <>
-        <Button variant="filled" size="small" disabled={busy} onClick={onFinish}>
-          <Laptop aria-hidden="true" />
-          {`Finish on ${finishOn}`}
-        </Button>
+        {finish("transparent")}
         {skip}
+        {signIn ? null : done}
       </>
     );
   }
-  if (signIn) {
+  // What Take control opens, if anything, and how it is named and drawn.
+  const opens = signIn ? handoff.open !== undefined : onBotScreen(handoff) ? handoff.target !== undefined : handoff.open !== undefined;
+  const takeLabel = signIn
+    ? onComputer(handoff) ? screenControlLabel(name, "computer") : `${TAKE_CONTROL} to sign in`
+    : onBotScreen(handoff) && handoff.target !== undefined
+      ? screenControlLabel(name, handoff.target)
+      : host ? `${TAKE_CONTROL} at ${host}` : TAKE_CONTROL;
+  const Icon = signIn
+    ? onComputer(handoff) ? Monitor : LogIn
+    : onBotScreen(handoff) && handoff.target !== undefined
+      ? handoff.target === "computer" ? Monitor : Globe
+      : handoff.open ? ExternalLink : null;
+  if (!taken) {
     return (
-      <>
-        {handoff.open ? (
-          <Button variant="filled" size="small" disabled={busy} onClick={onOpen}>
-            {onComputer(handoff) ? <Monitor aria-hidden="true" /> : <LogIn aria-hidden="true" />}
-            {handoffSignInOpenLabel(name, handoff)}
-          </Button>
-        ) : null}
-        {skip}
-        <Button variant="accent" size="small" disabled={busy} onClick={() => onAnswer("done")}>
-          I’m signed in
-        </Button>
-      </>
-    );
-  }
-  if (onBotScreen(handoff) && finishOn !== undefined) {
-    return (
-      <>
-        <Button variant="filled" size="small" disabled={busy} onClick={onFinish}>
-          <Laptop aria-hidden="true" />
-          {`Finish on ${finishOn}`}
-        </Button>
-        {skip}
-        {done}
-      </>
-    );
-  }
-  if (onBotScreen(handoff) && handoff.target !== undefined) {
-    return (
-      <>
-        <Button variant="filled" size="small" disabled={busy} onClick={onOpen}>
-          {handoff.target === "computer" ? <Monitor aria-hidden="true" /> : <Globe aria-hidden="true" />}
-          {handoffScreenOpenLabel(name, handoff.target)}
-        </Button>
-        {skip}
-        {done}
-      </>
+      <Button
+        variant="accent"
+        size="small"
+        disabled={busy}
+        aria-label={takeLabel}
+        onClick={() => {
+          take();
+          if (opens) onOpen();
+        }}
+      >
+        {Icon ? <Icon aria-hidden="true" /> : null}
+        {TAKE_CONTROL}
+      </Button>
     );
   }
   return (
     <>
-      {handoff.open ? (
-        <Button variant="filled" size="small" disabled={busy} aria-label={host ? `Open ${host}` : "Open"} onClick={onOpen}>
-          <ExternalLink aria-hidden="true" />
-          Open
+      {opens ? (
+        <Button variant="transparent" size="small" disabled={busy} aria-label={`Open again: ${takeLabel}`} onClick={onOpen}>
+          Open again
         </Button>
       ) : null}
       {skip}
@@ -206,6 +235,8 @@ export function HandoffCard({
   handoff,
   busy = false,
   finishOn,
+  taken,
+  onTake,
   onOpen,
   onFinish,
   onAnswer,
@@ -219,6 +250,9 @@ export function HandoffCard({
   busy?: boolean;
   /** The other Mac the Bot lives on, by name: a sign-in is finished there. */
   finishOn?: string;
+  /** The person took control: the card offers I'm done and Skip. */
+  taken: boolean;
+  onTake(): void;
   onOpen(): void;
   /** "Finish on <Mac>": bring the sign-in forward on the Bot's own Mac. */
   onFinish?(): void;
@@ -246,6 +280,8 @@ export function HandoffCard({
           name={name}
           busy={busy}
           finishOn={finishOn}
+          taken={taken}
+          onTake={onTake}
           onOpen={onOpen}
           onFinish={onFinish}
           onAnswer={onAnswer}

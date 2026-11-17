@@ -198,6 +198,43 @@ test("Open tabs lists every tab and selects the one chosen", async () => {
   assert.equal(selected("Pinned"), "true");
 });
 
+test("the strip scrolls a selected tab past either edge back into view, clear of the faded edges", () => {
+  // jsdom has no layout: the strip shows 200px of 340px of tabs, each tab 100px wide and 120px after the last.
+  const original = HTMLElement.prototype.getBoundingClientRect;
+  const widths = ["clientWidth", "scrollWidth"] as const;
+  const saved = widths.map((key) => Object.getOwnPropertyDescriptor(HTMLElement.prototype, key));
+  HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+    const list = this.closest('[role="tablist"]') as HTMLElement | null;
+    if (this.getAttribute("role") === "tablist") return DOMRect.fromRect({ x: 0, width: 200, height: 32 });
+    if (list && this.parentElement === list) {
+      const index = Array.from(list.children).indexOf(this);
+      return DOMRect.fromRect({ x: index * 120 - list.scrollLeft, width: 100, height: 32 });
+    }
+    return original.call(this);
+  };
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get() { return this.getAttribute("role") === "tablist" ? 200 : 0; } });
+  Object.defineProperty(HTMLElement.prototype, "scrollWidth", { configurable: true, get() { return this.getAttribute("role") === "tablist" ? 340 : 0; } });
+  try {
+    renderWithCommands(<StripHarness events={[]} />);
+    const list = screen.getByRole("tablist", { name: "Test views" });
+    assert.equal(list.scrollLeft, 0, "the first tab already shows");
+    assert.deepEqual([list.dataset.fadeStart, list.dataset.fadeEnd], [undefined, "true"], "only the edge with more tabs past it fades");
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Notes" }), { key: "End" });
+    // Pinned spans 240–340: it ends 16px inside the strip's right edge, clear of the fade.
+    assert.equal(list.scrollLeft, 156);
+    assert.equal(list.dataset.fadeStart, "true");
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Pinned" }), { key: "Home" });
+    assert.equal(list.scrollLeft, 0);
+    assert.equal(list.dataset.fadeStart, undefined);
+  } finally {
+    HTMLElement.prototype.getBoundingClientRect = original;
+    widths.forEach((key, index) => {
+      if (saved[index]) Object.defineProperty(HTMLElement.prototype, key, saved[index]!);
+      else delete (HTMLElement.prototype as unknown as Record<string, unknown>)[key];
+    });
+  }
+});
+
 test("Close panel names the panel toggle shortcut", async () => {
   renderWithCommands(<StripHarness events={[]} />);
   const close = screen.getByRole("button", { name: "Close test panel" });
@@ -214,22 +251,24 @@ function NotesWorkbench({
   containerWidth = 1600,
   initiallyOpen = false,
   covered = false,
+  firstViewId = "notes",
 }: {
   containerWidth?: number;
   initiallyOpen?: boolean;
   covered?: boolean;
+  firstViewId?: string;
 }) {
   const [open, setOpen] = React.useState(initiallyOpen);
-  const [selectedId, setSelectedId] = React.useState("notes");
+  const [selectedId, setSelectedId] = React.useState(firstViewId);
   const panelWidth = useWorkbenchWidth(WIDTH_KEY);
   const { width, inline } = resolveEnvironmentPanelLayout(panelWidth.preferredWidth, containerWidth);
   const tabs: WorkbenchTab[] = [
-    { id: "notes", viewId: "notes", label: "Notes", selected: selectedId === "notes", closable: false },
+    { id: "notes", viewId: firstViewId, label: "Notes", selected: selectedId === firstViewId, closable: false },
     { id: "log", viewId: "log", label: "Log", selected: selectedId === "log", closable: false },
   ];
   const views: WorkbenchView[] = [
     {
-      id: "notes",
+      id: firstViewId,
       render: ({ selected, presented }) => (
         <p>Notes body {selected ? "selected" : "idle"} {presented ? "presented" : "hidden"}</p>
       ),
@@ -315,6 +354,39 @@ test("a covered shell keeps its open state but leaves the tab order and the acce
   assert.equal(surface.hasAttribute("inert"), true);
   assert.equal(surface.getAttribute("aria-hidden"), "true");
   assert.match(document.getElementById("notes-notes-panel")?.textContent ?? "", /Notes body selected hidden/u);
+});
+
+test("closing the surface dismisses its native Open tabs menu and drops the pending choice", async () => {
+  const dismissed: unknown[] = [];
+  const popups: { id: unknown; choose(index: number): void }[] = [];
+  installBotTestIpc({
+    "shortcut:get": () => SHORTCUTS,
+    "browser:popup-menu": (id) => new Promise((resolve) => {
+      popups.push({ id, choose: (index) => resolve({ index, shiftKey: false }) });
+    }),
+    "browser:dismiss-menu": (id) => { dismissed.push(id); },
+  });
+  renderWithCommands(<NotesWorkbench initiallyOpen firstViewId="browser" />);
+  const openMenu = async () => {
+    const before = popups.length;
+    fireEvent.click(screen.getByRole("button", { name: "Open tabs" }));
+    await waitFor(() => assert.equal(popups.length, before + 1));
+    return popups[before]!;
+  };
+  const logSelected = () => screen.getByRole("tab", { name: "Log" }).getAttribute("aria-selected");
+
+  const stale = await openMenu();
+  fireEvent.click(screen.getByRole("button", { name: "Toggle notes panel" }));
+  await waitFor(() => assert.deepEqual(dismissed, [stale.id]));
+  fireEvent.click(screen.getByRole("button", { name: "Toggle notes panel" }));
+  assert.equal(notesSurface().getAttribute("data-state"), "open");
+  stale.choose(1);
+  await new Promise((resolve) => setTimeout(resolve));
+  assert.equal(logSelected(), "false", "a choice from before the close never applies after reopening");
+
+  // The reopened surface's own menu still works, so the check above isn't vacuous.
+  (await openMenu()).choose(1);
+  await waitFor(() => assert.equal(logSelected(), "true"));
 });
 
 test("keyboard resizing clamps to the bounds the container allows and keeps the clamped width", () => {

@@ -1041,3 +1041,103 @@ test("bot:activity survives a restart, dies with revocation, and an older stored
   await reloaded.registry.upgradeDeviceCapabilities(legacy.device.id, ["bot:activity"]);
   assert.equal((await reloaded.registry.authenticate(legacy.credential))?.capabilities.has("bot:activity"), true);
 });
+
+test("outside apps get only chat capabilities, never approvals, even from a tampered state file", async () => {
+  const state = fixture();
+  await state.registry.initialize();
+  const read = await state.registry.issueAgentApp({ name: "Codex", access: "read" });
+  const supervised = await state.registry.issueAgentApp({ name: "Claude Code", access: "supervised" });
+  assert.deepEqual(
+    [...(await state.registry.authenticate(read.credential))!.capabilities].sort(),
+    ["chat:read", "server:read"],
+  );
+  assert.deepEqual(
+    [...(await state.registry.authenticate(supervised.credential))!.capabilities].sort(),
+    ["chat:read", "chat:write", "server:read"],
+  );
+
+  // Someone edits the state file to widen each app's grant.
+  const tampered = state.stored();
+  for (const device of tampered.devices) {
+    device.capabilities = [
+      ...device.capabilities,
+      "approval:respond",
+      "files:read",
+      "files:write",
+      "bots:write",
+    ] as typeof device.capabilities;
+    device.acceptsBotCapabilities = true;
+  }
+  const restored = fixture(tampered);
+  await restored.registry.initialize();
+  const allowed = new Set(["server:read", "chat:read", "chat:write"]);
+  for (const credential of [read.credential, supervised.credential]) {
+    const app = await restored.registry.authenticate(credential);
+    assert.equal(app?.type, "agent");
+    assert.equal(app.capabilities.has("approval:respond"), false);
+    assert.ok([...app.capabilities].every((capability) => allowed.has(capability)));
+  }
+  assert.equal((await restored.registry.authenticate(read.credential))!.capabilities.has("chat:write"), false);
+  // Capability negotiation can never add anything to an app either.
+  assert.equal(await restored.registry.upgradeDeviceCapabilities(supervised.app.id, ["approval:respond"]), null);
+  assert.equal(await restored.registry.upgradeDeviceCapabilities(supervised.app.id, ["chat:progress"]), null);
+});
+
+test("outside apps are connected only through their own call, listed apart from paired devices, with their own quota", async () => {
+  const state = fixture();
+  await state.registry.initialize();
+  await assert.rejects(
+    state.registry.issueDevice({ name: "Sneaky", type: "agent" as never, clientVersion: "1" }),
+    /Invalid pairing device metadata/u,
+  );
+  await assert.rejects(
+    state.registry.issueAgentApp({ name: "Wide", access: "full" as never }),
+    /Invalid outside app metadata/u,
+  );
+  const phone = await state.registry.issueDevice({ name: "iPhone", type: "iphone", clientVersion: "1" });
+  const issued: Array<Awaited<ReturnType<typeof state.registry.issueAgentApp>>> = [];
+  for (let index = 0; index < 16; index += 1) {
+    issued.push(await state.registry.issueAgentApp({ name: `App ${index}`, access: "read" }));
+  }
+  await assert.rejects(
+    state.registry.issueAgentApp({ name: "One too many", access: "read" }),
+    /outside app capacity/u,
+  );
+  // A full set of apps never blocks pairing a phone.
+  await state.registry.issueDevice({ name: "iPad", type: "ipad", clientVersion: "1" });
+  assert.deepEqual((await state.registry.listDevices()).map((device) => device.type), ["iphone", "ipad"]);
+  const apps = await state.registry.listAgentApps();
+  assert.equal(apps.length, 16);
+  assert.deepEqual(apps[0], {
+    id: issued[0]!.app.id,
+    name: "App 0",
+    access: "read",
+    capabilities: ["server:read", "chat:read"],
+    createdAt: 1_000,
+    lastSeenAt: 0,
+  });
+  assert.equal(apps.some((app) => app.id === phone.device.id), false);
+
+  // Revoking one frees its slot; the revoked app stays listed as revoked.
+  await state.registry.revokeDevice(issued[3]!.app.id);
+  await state.registry.issueAgentApp({ name: "Replacement", access: "supervised" });
+  const after = await state.registry.listAgentApps();
+  assert.equal(after.find((app) => app.id === issued[3]!.app.id)?.revokedAt, 1_000);
+  assert.equal((await state.registry.authenticate(issued[3]!.credential))?.revoked, true);
+});
+
+test("the MCP server is off by default and keeps its switch and port across restarts", async () => {
+  const state = fixture();
+  await state.registry.initialize();
+  assert.deepEqual(await state.registry.mcpServerSettings(), { enabled: false });
+  await state.registry.setMcpServerEnabled(true);
+  await state.registry.commitMcpServerPort(49_401);
+  await assert.rejects(state.registry.commitMcpServerPort(80), /Invalid MCP server port/u);
+  const restored = fixture(state.stored());
+  await restored.registry.initialize();
+  assert.deepEqual(await restored.registry.mcpServerSettings(), { enabled: true, port: 49_401 });
+  await restored.registry.setMcpServerEnabled(false);
+  const again = fixture(restored.stored());
+  await again.registry.initialize();
+  assert.deepEqual(await again.registry.mcpServerSettings(), { enabled: false, port: 49_401 });
+});

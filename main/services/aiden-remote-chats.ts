@@ -1105,7 +1105,7 @@ type ParsedFork =
 function parseFork(input: unknown): ParsedFork {
   const record = ownRecord(input);
   if (record && Object.prototype.hasOwnProperty.call(record, "continueIn")) {
-    // Revision 63: the whole conversation, into another workspace.
+    // Revision 64: the whole conversation, into another workspace.
     const continueIn = ownRecord(record.continueIn);
     if (
       !exactKeys(record, ["continueIn"]) ||
@@ -1168,6 +1168,10 @@ function forkRemoteError(error: ChatForkError): AidenRemoteServiceError {
       return new AidenRemoteServiceError("payload_too_large", error.message, 413);
     case "unavailable":
       return new AidenRemoteServiceError("operation_in_progress", error.message, 409);
+    case "folder_missing":
+      // The same code as a turn in a chat whose folder is gone, without details:
+      // nothing is in progress, and another workspace may still work.
+      return new AidenRemoteServiceError("workspace_unavailable", error.message, 409);
   }
 }
 
@@ -1368,7 +1372,7 @@ function requireRevision(expected: string, chat: Chat): void {
 
 /** What an older Mac sees when it sends to a Bot through the workspace chat routes. */
 export const AIDEN_REMOTE_LEGACY_BOT_TURN_MESSAGE =
-  "Update Aiden on this device to chat with this Bot. Bots now keep one conversation on the Mac that runs them.";
+  "Update Aiden on this device to chat with this Bot. Bots now keep one conversation on the computer that runs them.";
 
 export class AidenRemoteChatService {
   private readonly idempotency: AidenIdempotencyLedger;
@@ -1482,7 +1486,7 @@ export class AidenRemoteChatService {
        */
       workspaceFolderRefusal?: (workspaceId: string) => Promise<WorkspaceFolderRemoteRefusal | undefined>;
       /**
-       * Revision 63: whether a device negotiated `chat:continue-in-new-chat`.
+       * Revision 64: whether a device negotiated `chat:continue-in-new-chat`.
        * Only such a device hears `details` on a missing-folder refusal (older
        * phones refuse unknown detail keys) and may send a `continueIn` fork.
        * Omission fails closed.
@@ -1502,6 +1506,11 @@ export class AidenRemoteChatService {
       isFolderWorkspace?: (workspaceId: string) => Promise<boolean>;
       /** For usage data: this device is another paired Mac or Linux host, not a phone. */
       deviceIsPeer?: (deviceId: string) => Promise<boolean>;
+      /**
+       * For usage data: false for a device whose chats and turns send no
+       * analytics (an outside MCP app). Absent or true: they are reported.
+       */
+      deviceReportsAnalytics?: (deviceId: string) => Promise<boolean>;
       /** The Mac's Settings → Appearance inline visuals choice for remote turns. */
       inlineVisuals?: () => Promise<InlineVisualsMode | undefined>;
       /**
@@ -1738,7 +1747,7 @@ export class AidenRemoteChatService {
     const { throughMessageId } = parseMarkRead(input);
     const readMarkers = this.options.readMarkers;
     if (!readMarkers) {
-      throw new AidenRemoteServiceError("not_found", "Chat read state is unavailable on this host.", 404);
+      throw new AidenRemoteServiceError("not_found", "Chat read state is not available on this computer.", 404);
     }
     await readMarkers.markRead(chatId, throughMessageId);
   }
@@ -1783,6 +1792,22 @@ export class AidenRemoteChatService {
     );
   }
 
+  /**
+   * True when this device already made this create or turn request under
+   * `key`, so repeating it replays the recorded answer and starts nothing new.
+   */
+  hasRecordedRequest(
+    deviceId: string,
+    target: { kind: "create" } | { kind: "turn"; chatId: string },
+    key: string,
+  ): boolean {
+    return this.idempotency.holds(
+      target.kind === "create"
+        ? { deviceId, route: "POST /chats", resourceId: "chat-registry", key }
+        : { deviceId, route: "POST /chats/{id}/turns", resourceId: safeId(target.chatId, "chat"), key },
+    );
+  }
+
   private async executeIdempotent<T>(
     scope: { deviceId: string; route: string; resourceId: string; key: string },
     input: unknown,
@@ -1815,7 +1840,7 @@ export class AidenRemoteChatService {
     if (result.imageArtifactRecoveryUnavailable) {
       throw new AidenRemoteServiceError(
         "operation_in_progress",
-        "This chat is waiting for image-artifact storage repair on the desktop.",
+        "This chat is waiting for image-artifact storage repair on your computer.",
         409,
         true,
       );
@@ -1961,6 +1986,17 @@ export class AidenRemoteChatService {
           .map((meta) => meta.id),
       ),
     };
+  }
+
+  /**
+   * True when `listSummaries` would show this chat: an ordinary chat with a
+   * safe id, workspace and timestamps. Never a Bot, assistant or
+   * feature-owned chat. Transcript-free: one read of the metadata index.
+   */
+  async isListedChat(chatId: string): Promise<boolean> {
+    const id = safeId(chatId, "chat");
+    const metadata = (await this.options.application.list()).find((entry) => entry.id === id);
+    return metadata !== undefined && safeSummaryMetadata(metadata) !== null;
   }
 
   /**
@@ -2175,6 +2211,7 @@ export class AidenRemoteChatService {
             const workspaceId = assignment?.workspaceId ?? (typeof target === "string" ? target : parsed.workspaceId);
             let uncertain = false;
             try {
+              const reportAnalytics = (await this.options.deviceReportsAnalytics?.(deviceId)) !== false;
               return await this.options.application.create(
                 {
                   workspaceId,
@@ -2183,6 +2220,7 @@ export class AidenRemoteChatService {
                     : {}),
                 },
                 owner,
+                ...(reportAnalytics ? [] : [{ reportAnalytics: false }] as const),
               );
             } catch (error) {
               uncertain = isChatCreateReconciliationRequiredError(error);
@@ -2322,7 +2360,7 @@ export class AidenRemoteChatService {
             if (error instanceof AidenRemoteServiceError) throw error;
             throw new AidenRemoteServiceError(
               "git_capability_denied",
-              "Aiden couldn't make the worktree on your Mac. Try again, or send without New worktree.",
+              "Aiden couldn't make the worktree on your computer. Try again, or send without New worktree.",
               409,
             );
           }
@@ -2424,7 +2462,7 @@ export class AidenRemoteChatService {
       throw new AidenRemoteServiceError("invalid_request", "The recording identifier is invalid.", 400);
     }
     const chat = await this.chat(chatId);
-    const unavailable = () => new AidenRemoteServiceError("not_found", "This recording is no longer on the Mac.", 404);
+    const unavailable = () => new AidenRemoteServiceError("not_found", "This recording is no longer on your computer.", 404);
     const named = chat.messages.some((message) =>
       parseGenerationTimeline(message.timeline, message.content.length)?.steps.some(
         (step) => isToolStep(step) && step.recording?.id === recordingId,
@@ -2469,7 +2507,7 @@ export class AidenRemoteChatService {
         });
       } catch (error) {
         if (error instanceof AidenRemoteServiceError && error.code === "invalid_request") {
-          throw new AidenRemoteServiceError("invalid_request", "That provider and model are not available on this Mac.", 400);
+          throw new AidenRemoteServiceError("invalid_request", "That provider and model are not available on this computer.", 400);
         }
         throw error;
       }
@@ -2493,7 +2531,7 @@ export class AidenRemoteChatService {
     return this.options.forks !== undefined;
   }
 
-  /** Whether this host can continue a chat whose folder is gone in a new chat (revision 63). */
+  /** Whether this host can continue a chat whose folder is gone in a new chat (revision 64). */
   get supportsContinueInNewChat(): boolean {
     return this.options.forks?.service.supportsContinue === true;
   }
@@ -2508,7 +2546,7 @@ export class AidenRemoteChatService {
    * Fork a regular chat at one message. `after` keeps the chosen settled
    * reply; `before` keeps everything before the chosen prompt and returns
    * that prompt as `prefill` so the device can edit and resend it. With
-   * `continueIn` (revision 63) the whole conversation, through its newest
+   * `continueIn` (revision 64) the whole conversation, through its newest
    * reply, goes to a new chat in another workspace because this chat's folder
    * is gone; the original stays as it is.
    */
@@ -2527,7 +2565,7 @@ export class AidenRemoteChatService {
     }
     const parsed = parseFork(input);
     if (parsed.summary && !this.supportsForkSummaries) {
-      throw new AidenRemoteServiceError("not_found", "Fork with summary is unavailable on this host.", 404);
+      throw new AidenRemoteServiceError("not_found", "Fork with summary is not available on this computer.", 404);
     }
     if (parsed.continueIn) {
       if (!this.supportsContinueInNewChat) {
@@ -2620,7 +2658,7 @@ export class AidenRemoteChatService {
     const tooLarge = () =>
       new AidenRemoteServiceError(
         "payload_too_large",
-        "This chat is too large to fork from a paired device. Fork it on the Mac.",
+        "This chat is too large to fork from a paired device. Fork it on your computer.",
         413,
       );
     if (Buffer.byteLength(JSON.stringify(result), "utf8") > AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES) {
@@ -2989,7 +3027,7 @@ export class AidenRemoteChatService {
               surface,
               owner.owner,
             );
-            if (started) {
+            if (started && (await this.options.deviceReportsAnalytics?.(deviceId)) !== false) {
               reportChatMessageSent({
                 providerId: selection.providerId,
                 model: selection.modelId,

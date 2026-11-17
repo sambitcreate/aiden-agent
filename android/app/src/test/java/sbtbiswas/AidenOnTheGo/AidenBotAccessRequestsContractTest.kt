@@ -30,7 +30,7 @@ class AidenBotAccessRequestsContractTest {
     private fun frame(element: JsonElement) = AidenBotSessionEventStream.decodeFrame(element.toString().toByteArray(), "bot_fixture_01")
 
     @Test fun canonicalCardsSessionFramesIssuesAndLegacySettlement() {
-        assertEquals(63, root.getValue("contractRevision").jsonPrimitive.int)
+        assertEquals(64, root.getValue("contractRevision").jsonPrimitive.int)
         assertEquals("bot:access-requests", fixture.getValue("capability").jsonPrimitive.content)
         val folder = AidenBotAccessRequest.parse(fixture.getValue("folder"))
         val mac = AidenBotAccessRequest.parse(fixture.getValue("wholeMac"))
@@ -38,6 +38,8 @@ class AidenBotAccessRequestsContractTest {
         assertEquals(listOf(AidenBotAccessRequestChoice.NOT_NOW, AidenBotAccessRequestChoice.ONCE), mac.choices)
         assertNull(mac.place)
         assertEquals("your whole Mac", mac.label)
+        val linuxWhole = JsonObject(fixture.getValue("wholeMac").jsonObject + ("label" to JsonPrimitive("your whole computer")))
+        assertEquals("your whole computer", AidenBotAccessRequest.parse(linuxWhole).label)
         var session = snapshot(fixture.getValue("session"))
         assertEquals(folder, session.accessRequest)
         for (event in fixture.getValue("events").jsonArray.map(::frame)) {

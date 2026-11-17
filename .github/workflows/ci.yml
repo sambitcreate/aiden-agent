@@ -364,6 +364,22 @@ jobs:
           -derivedDataPath '${{ runner.temp }}/AidenOnTheGoDerivedData'
           -clonedSourcePackagesDirPath '${{ runner.temp }}/AidenOnTheGoSourcePackages'
           -resultBundlePath '${{ runner.temp }}/AidenOnTheGoSimulator.xcresult'
+          -skip-testing:AidenOnTheGoUITests
+          CODE_SIGNING_ALLOWED=NO
+
+      # One smoke test: the real shell launches against every demo scenario. The
+      # screenshot matrix and accessibility audit stay a local tool.
+      - name: Run Aiden On The Go shell UI smoke test on the simulator
+        run: >-
+          xcodebuild test-without-building -quiet
+          -project ios/AidenOnTheGo.xcodeproj
+          -scheme AidenOnTheGo
+          -configuration Debug
+          -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}'
+          -derivedDataPath '${{ runner.temp }}/AidenOnTheGoDerivedData'
+          -clonedSourcePackagesDirPath '${{ runner.temp }}/AidenOnTheGoSourcePackages'
+          -resultBundlePath '${{ runner.temp }}/AidenOnTheGoShellUI.xcresult'
+          -only-testing:AidenOnTheGoUITests/AidenShellUITests/testShellLaunchesForEveryScenario
           CODE_SIGNING_ALLOWED=NO
 
       - name: Print failed iOS simulator test messages
@@ -371,20 +387,148 @@ jobs:
         shell: bash
         run: |
           # Parallel test runs print only test names; the failure messages
-          # live in the result bundle.
-          xcrun xcresulttool get test-results summary --compact \
-            --path '${{ runner.temp }}/AidenOnTheGoSimulator.xcresult' | python3 -c '
+          # live in the result bundles. A bundle is missing when its step never
+          # ran, so each one is optional.
+          for bundle in AidenOnTheGoSimulator AidenOnTheGoShellUI; do
+            path='${{ runner.temp }}'/"$bundle.xcresult"
+            [[ -d "$path" ]] || continue
+            xcrun xcresulttool get test-results summary --compact --path "$path" | python3 -c '
           import json, sys
           for failure in json.load(sys.stdin).get("testFailures", []):
               print("::error title=" + failure.get("testName", "test") + "::" + failure.get("failureText", "").replace("\n", " "))
           ' || true
+          done
 
       - name: Preserve failed iOS simulator test results
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: ios-simulator-results-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/AidenOnTheGoSimulator.xcresult
+          path: |
+            ${{ runner.temp }}/AidenOnTheGoSimulator.xcresult
+            ${{ runner.temp }}/AidenOnTheGoShellUI.xcresult
+          retention-days: 7
+          if-no-files-found: warn
+
+  # Same simulator steps on the Xcode 27 image, to see early whether the app
+  # still builds and tests with the toolchain people's phones run. Policy checks
+  # run once, in the ios job.
+  ios-27:
+    name: iOS build and simulator tests (Xcode 27, non-blocking)
+    needs: changes
+    if: ${{ needs.changes.outputs.ios == 'true' }}
+    runs-on: xcode-27
+    timeout-minutes: 50
+    # The xcode-27 image is a preview, so a failure here reports without
+    # blocking the PR. Release builds stay on Xcode 26.6 in the ios job.
+    continue-on-error: true
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      # Only the resolved Swift package checkouts are cached. Build products
+      # stay uncached because a fresh checkout invalidates them anyway.
+      - name: Restore Swift package checkouts
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ runner.temp }}/AidenOnTheGoSourcePackages
+          key: ios-spm-xcode-27.1-${{ hashFiles('ios/AidenOnTheGo.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+      - name: Compile Aiden On The Go tests for generic iOS hardware
+        run: >-
+          xcodebuild build-for-testing -quiet
+          -project ios/AidenOnTheGo.xcodeproj
+          -scheme AidenOnTheGo
+          -configuration Debug
+          -destination 'generic/platform=iOS'
+          -derivedDataPath '${{ runner.temp }}/AidenOnTheGoDerivedData'
+          -clonedSourcePackagesDirPath '${{ runner.temp }}/AidenOnTheGoSourcePackages'
+          CODE_SIGNING_ALLOWED=NO
+      - name: Select the newest available iPhone simulator
+        id: simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          udid="$(xcrun simctl list devices available --json | python3 -c '
+          import json, re, sys
+          runtimes = json.load(sys.stdin)["devices"]
+          def version(key):
+              return [int(part) for part in re.findall(r"\d+", key.rsplit(".", 1)[-1])]
+          for key in sorted((k for k in runtimes if ".SimRuntime.iOS-" in k), key=version, reverse=True):
+              phones = [d for d in runtimes[key] if d["name"].startswith("iPhone")]
+              if phones:
+                  print(phones[0]["udid"])
+                  break
+          ')"
+          if [[ -z "$udid" ]]; then
+            echo "No available iPhone simulator on this runner." >&2
+            xcrun simctl list devices available >&2
+            exit 1
+          fi
+          echo "udid=$udid" >> "$GITHUB_OUTPUT"
+      - name: Build Aiden On The Go tests for the simulator
+        run: >-
+          xcodebuild build-for-testing -quiet
+          -project ios/AidenOnTheGo.xcodeproj
+          -scheme AidenOnTheGo
+          -configuration Debug
+          -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}'
+          -derivedDataPath '${{ runner.temp }}/AidenOnTheGoDerivedData'
+          -clonedSourcePackagesDirPath '${{ runner.temp }}/AidenOnTheGoSourcePackages'
+          CODE_SIGNING_ALLOWED=NO
+      - name: Run Aiden On The Go XCTest on the simulator
+        run: >-
+          xcodebuild test-without-building -quiet
+          -project ios/AidenOnTheGo.xcodeproj
+          -scheme AidenOnTheGo
+          -configuration Debug
+          -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}'
+          -derivedDataPath '${{ runner.temp }}/AidenOnTheGoDerivedData'
+          -clonedSourcePackagesDirPath '${{ runner.temp }}/AidenOnTheGoSourcePackages'
+          -resultBundlePath '${{ runner.temp }}/AidenOnTheGoSimulator.xcresult'
+          -skip-testing:AidenOnTheGoUITests
+          CODE_SIGNING_ALLOWED=NO
+
+      # One smoke test: the real shell launches against every demo scenario. The
+      # screenshot matrix and accessibility audit stay a local tool.
+      - name: Run Aiden On The Go shell UI smoke test on the simulator
+        run: >-
+          xcodebuild test-without-building -quiet
+          -project ios/AidenOnTheGo.xcodeproj
+          -scheme AidenOnTheGo
+          -configuration Debug
+          -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}'
+          -derivedDataPath '${{ runner.temp }}/AidenOnTheGoDerivedData'
+          -clonedSourcePackagesDirPath '${{ runner.temp }}/AidenOnTheGoSourcePackages'
+          -resultBundlePath '${{ runner.temp }}/AidenOnTheGoShellUI.xcresult'
+          -only-testing:AidenOnTheGoUITests/AidenShellUITests/testShellLaunchesForEveryScenario
+          CODE_SIGNING_ALLOWED=NO
+
+      - name: Print failed iOS simulator test messages
+        if: failure()
+        shell: bash
+        run: |
+          # Parallel test runs print only test names; the failure messages
+          # live in the result bundles. A bundle is missing when its step never
+          # ran, so each one is optional.
+          for bundle in AidenOnTheGoSimulator AidenOnTheGoShellUI; do
+            path='${{ runner.temp }}'/"$bundle.xcresult"
+            [[ -d "$path" ]] || continue
+            xcrun xcresulttool get test-results summary --compact --path "$path" | python3 -c '
+          import json, sys
+          for failure in json.load(sys.stdin).get("testFailures", []):
+              print("::error title=" + failure.get("testName", "test") + "::" + failure.get("failureText", "").replace("\n", " "))
+          ' || true
+          done
+
+      - name: Preserve failed iOS simulator test results
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ios-27-simulator-results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/AidenOnTheGoSimulator.xcresult
+            ${{ runner.temp }}/AidenOnTheGoShellUI.xcresult
           retention-days: 7
           if-no-files-found: warn
 

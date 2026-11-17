@@ -1,4 +1,14 @@
 import { parseChatInputSource } from "../../renderer/shared/chat-input-source.js";
+import { BOT_STARTER_INSTRUCTIONS } from "../../renderer/shared/bot-presets.js";
+import {
+  AIDEN_REMOTE_BOT_SETTINGS_CHANGE_ENTRY_TYPES,
+  AIDEN_REMOTE_BOT_SUGGESTION_ENTRY_TYPES,
+  parseAidenRemoteApprovalCard,
+  parseAidenRemoteBotUxEntry,
+  type AidenRemoteBotUxEntry,
+} from "./aiden-remote-bot-ux.js";
+import { approvalCardAllows, type ApprovalCard } from "../../renderer/shared/approval-card-model.js";
+import type { ToolApprovalScope } from "../../renderer/shared/tool-approval-scope.js";
 import { botPendingAccessRequestOf, parseBotAccessChoice, type BotAccessChoice } from "../../renderer/shared/bot-access-requests.js";
 import { parseAppControlPanels } from "../../renderer/shared/app-controls.js";
 import { parseBotPeerId } from "../../renderer/shared/bot-peers.js";
@@ -6,7 +16,7 @@ import {
   parseAidenRemoteApprovalSchedule,
   type AidenRemoteApprovalSchedule,
 } from "./aiden-remote-approval-schedule.js";
-import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
+import { parseGenerationTimeline, type GenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import type {
   ChatRunInputMode,
   ChatRunInputRejectionReason,
@@ -307,18 +317,44 @@ export const AIDEN_REMOTE_BOT_PEERS_CONTRACT_REVISION = 59 as const;
  */
 export const AIDEN_REMOTE_VOICE_INPUT_CONTRACT_REVISION = 60 as const;
 /**
- * Contract revision 63 (provisional; re-claim the next revision after
- * `main`'s at merge by changing only this constant): Continue in a new chat
- * (`chat:continue-in-new-chat`, an opt-in capability rather than a feature
- * token, because phones already hear the most feature tokens shipped clients
- * accept). A device holding it hears `details.reason` and
+ * Contract revision 61 (provisional; re-claim the next revision after
+ * `main`'s at merge by changing only this constant): Phase 6 of the Bot UX
+ * simplification. Four opt-ins, each negotiated on its own and advertised only
+ * where wired: `approval:cards` (the typed approval card), `approvals:settings`
+ * (the global approval mode and the rules page), `bot:settings-changes` and
+ * `bot:suggestions` (held and applied settings changes, skill and lesson
+ * suggestions and their receipts) and `bot:templates` (versioned Templates and
+ * one-field create).
+ */
+export const AIDEN_REMOTE_BOT_UX_CONTRACT_REVISION = 61 as const;
+/**
+ * Contract revision 62 (provisional; re-claim the next revision after
+ * `main`'s at merge by changing only this constant): a cancelled tool step may
+ * carry `stoppedByUser: true` when Aiden cancelled it because the person
+ * pressed Stop. Display-only, no capability: clients read such a step as
+ * "stopped", not as an issue, and older ones ignore the key and keep showing
+ * it as cancelled. A step cancelled for any other reason never carries it.
+ */
+export const AIDEN_REMOTE_STOPPED_BY_USER_CONTRACT_REVISION = 62 as const;
+/**
+ * Contract revision 63 (re-claimed at merge on 2026-11-17; written as 62): a
+ * stopped background job may carry `endReason: "chat-settled"` when the agent asked for it to stop once the chat went quiet and it did.
+ * Display-only, no capability; clients show "Stopped after the chat went
+ * quiet", and older ones, which read the reason as text, show "Stopped".
+ */
+export const AIDEN_REMOTE_BACKGROUND_JOBS_CHAT_SETTLED_CONTRACT_REVISION = 63 as const;
+/**
+ * Contract revision 64 (re-claimed at merge on 2026-11-17; written as 63):
+ * Continue in a new chat (`chat:continue-in-new-chat`, an opt-in capability
+ * rather than a feature token, because phones already hear the most feature
+ * tokens shipped clients accept). A device holding it hears `details.reason` and
  * `details.canContinueInNewChat` on a turn's `409 workspace_unavailable` for a
  * missing folder, never a path, and may send
  * `POST /chats/{chatId}/fork` with `{ "continueIn": { "workspaceId" } }` to
  * fork the conversation into another workspace or No workspace. The original
  * chat stays as it is. Older phones see the plain message, as before.
  */
-export const AIDEN_REMOTE_CONTINUE_IN_NEW_CHAT_CONTRACT_REVISION = 63 as const;
+export const AIDEN_REMOTE_CONTINUE_IN_NEW_CHAT_CONTRACT_REVISION = 64 as const;
 export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_CONTINUE_IN_NEW_CHAT_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
@@ -556,6 +592,12 @@ export const AIDEN_REMOTE_BOT_ACCESS_REQUEST_CAPABILITIES = ["bot:access-request
 
 export const AIDEN_REMOTE_BOT_PLAN_CAPABILITIES = ["bot:plans"] as const;
 export const AIDEN_REMOTE_BOT_ALLOWED_CAPABILITIES = ["bot:allowed"] as const;
+/** Revision 61: held `update_bot` cards, applied-change receipts and their answer route. */
+export const AIDEN_REMOTE_BOT_SETTINGS_CHANGE_CAPABILITIES = ["bot:settings-changes"] as const;
+/** Revision 61: skill and lesson suggestion cards, learning receipts and their answer routes. */
+export const AIDEN_REMOTE_BOT_SUGGESTION_CAPABILITIES = ["bot:suggestions"] as const;
+/** Revision 61: template versions, samples and Open on the preset list, and one-field create. */
+export const AIDEN_REMOTE_BOT_TEMPLATE_CAPABILITIES = ["bot:templates"] as const;
 
 export const AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
@@ -571,7 +613,26 @@ export const AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ROUTINE_MODEL_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_PEER_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_SETTINGS_CHANGE_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_SUGGESTION_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_TEMPLATE_CAPABILITIES,
 ] as const;
+
+/**
+ * Contract revision 61: a device holding `approval:cards` receives the typed
+ * `card` on every pending approval it is sent (stream approvals, phone run
+ * approvals and Bot approvals) and may allow a specialized card the card shows
+ * in full. It widens no grant: answers still need `approval:respond` (and the
+ * Bot grants for a Bot card).
+ */
+export const AIDEN_REMOTE_APPROVAL_CARD_CAPABILITIES = ["approval:cards"] as const;
+
+/**
+ * Contract revision 61: a device holding `approvals:settings` may read and set
+ * the Mac's approval mode and read and change the rules page. Person-only
+ * routes: no Bot or agent path reaches them.
+ */
+export const AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES = ["approvals:settings"] as const;
 
 /**
  * Contract revision 39: a device holding `schedule:cards` (with
@@ -607,7 +668,7 @@ export const AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES = ["attachments:raw"] as const
 export const AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES = ["chat:new-worktree"] as const;
 
 /**
- * Contract revision 63: a device holding `chat:continue-in-new-chat` hears why
+ * Contract revision 64: a device holding `chat:continue-in-new-chat` hears why
  * a turn was refused for a missing folder (`details.reason`) and may continue
  * that chat in another workspace through the fork route, which still needs
  * `chat:write`. It is offered only while the host can continue chats, and
@@ -631,6 +692,8 @@ export const AIDEN_REMOTE_OPT_IN_CAPABILITIES = [
   ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
   ...AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES,
+  ...AIDEN_REMOTE_APPROVAL_CARD_CAPABILITIES,
+  ...AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES,
 ] as const;
 
@@ -657,6 +720,11 @@ export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
   ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
   ...AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_SETTINGS_CHANGE_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_SUGGESTION_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_TEMPLATE_CAPABILITIES,
+  ...AIDEN_REMOTE_APPROVAL_CARD_CAPABILITIES,
+  ...AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES,
 ] as const;
 
@@ -687,6 +755,11 @@ export const AIDEN_REMOTE_CAPABILITIES = [
   ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
   ...AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_SETTINGS_CHANGE_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_SUGGESTION_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_TEMPLATE_CAPABILITIES,
+  ...AIDEN_REMOTE_APPROVAL_CARD_CAPABILITIES,
+  ...AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES,
 ] as const;
 
@@ -995,11 +1068,11 @@ export interface AidenRemoteErrorEnvelope {
       /** When the winning resolution was committed, on either of the above. */
       resolvedAt?: string;
       /**
-       * Revision 63, only to a device holding `chat:continue-in-new-chat`: which
+       * Revision 64, only to a device holding `chat:continue-in-new-chat`: which
        * folder is gone on a turn's `workspace_unavailable`. Never a path.
        */
       reason?: AidenRemoteWorkspaceUnavailableReason;
-      /** Revision 63: whether `POST /chats/{chatId}/fork` with `continueIn` can continue this chat. */
+      /** Revision 64: whether `POST /chats/{chatId}/fork` with `continueIn` can continue this chat. */
       canContinueInNewChat?: boolean;
     };
   };
@@ -1362,7 +1435,9 @@ export interface AidenRemoteBotList {
 
 export interface AidenRemoteBotCreateRequest {
   name: string;
+  /** Optional on the wire (revision 61); absent reads as "". */
   purpose: string;
+  /** Optional on the wire (revision 61); absent reads as `BOT_STARTER_INSTRUCTIONS`. */
   instructions: string;
   avatar: AidenRemoteBotSemanticAvatar;
   /** Omitted means Full access (contract revision 25 dropped the notice wall). */
@@ -1596,7 +1671,13 @@ export type AidenRemoteBotSessionEntry =
       mimeType: AidenRemoteBotSharedImageMimeType;
       /** Bytes, at most `AIDEN_REMOTE_BOT_SHARED_IMAGE_MAX_BYTES`. */
       size: number;
-    };
+    }
+  /**
+   * Contract revision 61: `settings_change` only for `bot:settings-changes`
+   * devices; `skill_proposal`, `lesson` and `memory_tidy` only for
+   * `bot:suggestions` devices (`aiden-remote-bot-ux.ts`).
+   */
+  | AidenRemoteBotUxEntry;
 
 /** Revision 45: the image types a Bot can share (`share_image` accepts PNG and JPEG). */
 export const AIDEN_REMOTE_BOT_SHARED_IMAGE_MIME_TYPES = ["image/png", "image/jpeg"] as const;
@@ -1815,6 +1896,8 @@ export interface AidenRemoteBotApproval {
   canAllow: boolean;
   /** Only bot:allowed holders, on an offered card. Never the private class key. */
   alwaysCount?: number;
+  /** Contract revision 61, only for `approval:cards` holders: the typed card. Its Always button only for `bot:allowed` holders. */
+  card?: ApprovalCard;
 }
 
 /**
@@ -2310,7 +2393,11 @@ export interface AidenRemoteContractFixture {
   chatNewWorktree?: AidenRemoteChatNewWorktreeFixture;
   /** Revision 60: a user message Aiden Live sent ("By voice"), and values clients must ignore. */
   voiceInput?: AidenRemoteVoiceInputFixture;
-  /** Revision 63 (`chat:continue-in-new-chat`): a missing-folder refusal with and without details, and the continue fork. */
+  /** Revision 62: which cancelled steps read as stopped by the person, and which stay issues. */
+  stoppedSteps?: AidenRemoteStoppedStepsFixture;
+  /** Revision 63: a job stopped after its chat went quiet, beside one the person stopped. */
+  backgroundJobsChatSettled?: AidenRemoteBackgroundJobsChatSettledFixture;
+  /** Revision 64 (`chat:continue-in-new-chat`): a missing-folder refusal with and without details, and the continue fork. */
   continueInNewChat?: AidenRemoteContinueInNewChatFixture;
   taskProgress: AidenRemoteChatTaskProgress;
   agentRoster: AidenRemoteChatAgentRoster;
@@ -3360,8 +3447,11 @@ export function parseAidenRemoteBotCreateRequest(value: unknown): AidenRemoteBot
   ignoreRetiredBotGreeting(value, "Bot create");
   return {
     name: boundedText(value.name, "Bot create name", 80),
-    purpose: boundedText(value.purpose, "Bot create purpose", 280, true),
-    instructions: boundedText(value.instructions, "Bot create instructions", 32_000),
+    // Revision 61 one-field create: `{name, avatar}` is a whole request. No
+    // purpose is an empty one; no instructions are the starter text, with
+    // which the Bot asks what to help with.
+    purpose: hasOwn(value, "purpose") ? boundedText(value.purpose, "Bot create purpose", 280, true) : "",
+    instructions: hasOwn(value, "instructions") ? boundedText(value.instructions, "Bot create instructions", 32_000) : BOT_STARTER_INSTRUCTIONS,
     avatar: parseBotSemanticAvatar(value.avatar, true),
     ...(hasOwn(value, "access")
       ? { access: parseAidenRemoteBotAccessUpdateRequest(value.access) }
@@ -6015,6 +6105,12 @@ const BOT_SESSION_ENTRY_ID = /^[A-Za-z0-9._:-]{1,128}$/u;
 
 export function parseAidenRemoteBotSessionEntry(value: unknown): AidenRemoteBotSessionEntry {
   if (!isRecord(value)) throw new Error("Bot session entry must be an object.");
+  if (
+    (AIDEN_REMOTE_BOT_SETTINGS_CHANGE_ENTRY_TYPES as readonly unknown[]).includes(value.type) ||
+    (AIDEN_REMOTE_BOT_SUGGESTION_ENTRY_TYPES as readonly unknown[]).includes(value.type)
+  ) {
+    return parseAidenRemoteBotUxEntry(value);
+  }
   const id = boundedText(value.id, "Bot session entry id", 128);
   if (!BOT_SESSION_ENTRY_ID.test(id)) throw new Error("Bot session entry id is invalid.");
   switch (value.type) {
@@ -6629,7 +6725,7 @@ export function parseAidenRemoteBotAllowedList(value: unknown): AidenRemoteBotAl
 
 export function parseAidenRemoteBotApproval(value: unknown): AidenRemoteBotApproval {
   if (!isRecord(value)) throw new Error("Bot approval must be an object.");
-  assertExactKeys(value, ["waitId", "toolCallId", "toolName", "summary", "canAllow", "alwaysCount"], "Bot approval");
+  assertExactKeys(value, ["waitId", "toolCallId", "toolName", "summary", "canAllow", "alwaysCount", "card"], "Bot approval");
   if (hasOwn(value, "alwaysCount") && value.canAllow !== true) throw new Error("This Bot approval cannot offer Always.");
   return {
     waitId: parseBotQuestionWaitId(value.waitId, "Bot approval waitId"),
@@ -6638,6 +6734,7 @@ export function parseAidenRemoteBotApproval(value: unknown): AidenRemoteBotAppro
     summary: boundedText(value.summary, "Bot approval summary", 2_000),
     canAllow: requiredBooleanValue(value.canAllow, "Bot approval canAllow"),
     ...(hasOwn(value, "alwaysCount") ? { alwaysCount: parseBotApprovalCount(value.alwaysCount) } : {}),
+    ...(hasOwn(value, "card") ? { card: parseAidenRemoteApprovalCard(value.card) } : {}),
   };
 }
 
@@ -7230,12 +7327,7 @@ function parseScheduleCardsFixture(value: unknown): AidenRemoteScheduleCardsFixt
     throw new Error("Schedule cards streamApproval must carry an approval.");
   }
   const approval = value.streamApproval.approval;
-  assertExactKeys(
-    approval,
-    ["approvalId", "streamId", "chatId", "summary", "toolCallId", "toolName", "expiresAt", "canAllow", "scopes", "schedule"],
-    "Schedule cards stream approval",
-  );
-  if (typeof approval.canAllow !== "boolean") throw new Error("Schedule cards stream approval canAllow must be boolean.");
+  parseAidenRemotePhoneStreamApproval(approval);
   const schedule = parseAidenRemoteApprovalSchedule(approval.schedule);
   parseRunEventSequence(value.phoneRunEvents, "Schedule cards phone run events", "phone");
   const runApprovals = (value.phoneRunEvents as Array<Record<string, any>>)
@@ -8416,6 +8508,22 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     }
     voiceInput = parseVoiceInputFixture(value.voiceInput);
   }
+  let stoppedSteps: AidenRemoteStoppedStepsFixture | undefined;
+  if (value.stoppedSteps !== undefined) {
+    if (contractRevision < AIDEN_REMOTE_STOPPED_BY_USER_CONTRACT_REVISION) {
+      throw new Error(`Stopped step fixtures require contract revision ${AIDEN_REMOTE_STOPPED_BY_USER_CONTRACT_REVISION}.`);
+    }
+    stoppedSteps = parseStoppedStepsFixture(value.stoppedSteps);
+  }
+  let backgroundJobsChatSettled: AidenRemoteBackgroundJobsChatSettledFixture | undefined;
+  if (value.backgroundJobsChatSettled !== undefined) {
+    if (contractRevision < AIDEN_REMOTE_BACKGROUND_JOBS_CHAT_SETTLED_CONTRACT_REVISION) {
+      throw new Error(
+        `Chat-settled background job fixtures require contract revision ${AIDEN_REMOTE_BACKGROUND_JOBS_CHAT_SETTLED_CONTRACT_REVISION}.`,
+      );
+    }
+    backgroundJobsChatSettled = parseBackgroundJobsChatSettledFixture(value.backgroundJobsChatSettled);
+  }
   let botAllowed: AidenRemoteBotAllowedFixture | undefined;
   if (value.botAllowed !== undefined) {
     if (contractRevision < AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION) throw new Error("Bot allowed fixtures require revision 57.");
@@ -8541,8 +8649,51 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     ...(rawUploads ? { rawUploads } : {}),
     ...(chatNewWorktree ? { chatNewWorktree } : {}),
     ...(voiceInput ? { voiceInput } : {}),
+    ...(stoppedSteps ? { stoppedSteps } : {}),
+    ...(backgroundJobsChatSettled ? { backgroundJobsChatSettled } : {}),
     ...(continueInNewChat ? { continueInNewChat } : {}),
   };
+}
+
+/**
+ * Revision 62 fixture: a timeline the person stopped, with a step cancelled
+ * earlier for another reason. Every client must read `stoppedStepIds` as
+ * "stopped" and `issueStepIds` as issues.
+ */
+export interface AidenRemoteStoppedStepsFixture {
+  timeline: GenerationTimeline;
+  stoppedStepIds: string[];
+  issueStepIds: string[];
+}
+
+function parseStoppedStepsFixture(value: unknown): AidenRemoteStoppedStepsFixture {
+  if (!isRecord(value)) throw new Error("Stopped step fixture must be an object.");
+  assertExactKeys(value, ["timeline", "stoppedStepIds", "issueStepIds"], "Stopped step fixture");
+  const timeline = parseGenerationTimeline(value.timeline);
+  if (!timeline) throw new Error("Stopped step fixture timeline must be a valid timeline.");
+  const ids = (field: "stoppedStepIds" | "issueStepIds") => {
+    const list = value[field];
+    if (!Array.isArray(list) || !list.every((id) => typeof id === "string")) {
+      throw new Error(`Stopped step fixture ${field} must be strings.`);
+    }
+    return list as string[];
+  };
+  const stoppedStepIds = ids("stoppedStepIds");
+  const issueStepIds = ids("issueStepIds");
+  const named = new Set(timeline.claimCheck?.stepIds ?? []);
+  const stopped: string[] = [];
+  const issues: string[] = [];
+  for (const step of timeline.steps) {
+    if (step.kind !== "tool") continue;
+    if (step.status === "cancelled" && step.stoppedByUser === true && !named.has(step.id)) stopped.push(step.id);
+    else if (step.status === "failed" || step.status === "blocked" || step.status === "cancelled") issues.push(step.id);
+  }
+  const same = (left: string[], right: string[]) =>
+    left.length === right.length && left.every((id, index) => id === right[index]);
+  if (!same(stopped, stoppedStepIds) || !same(issues, issueStepIds)) {
+    throw new Error("Stopped step fixture marks different steps than the parser.");
+  }
+  return { timeline, stoppedStepIds, issueStepIds };
 }
 
 /** Revision 60 fixture: the chat as sent, and which of its messages read as "By voice". */
@@ -8747,8 +8898,8 @@ export interface AidenRemoteBackgroundJob {
   endedAt?: string;
   /** How a job that ended by itself exited; absent when it is unknown. */
   exitCode?: number;
-  /** Why a stopped job was stopped. */
-  endReason?: "agent" | "person" | "output-limit" | "chat-deleted" | "access-changed" | "app-quit";
+  /** Why a stopped job was stopped; `chat-settled` from revision 62. */
+  endReason?: "agent" | "person" | "output-limit" | "chat-deleted" | "access-changed" | "app-quit" | "chat-settled";
   /** A `run_command` call left it running; it has no exit code. */
   fromCommand?: true;
   /** TCP ports it listens on, on the Mac, while it runs. */
@@ -8768,6 +8919,7 @@ export const AIDEN_REMOTE_BACKGROUND_JOB_END_REASONS = [
   "chat-deleted",
   "access-changed",
   "app-quit",
+  "chat-settled",
 ] as const;
 export const AIDEN_REMOTE_MAX_BACKGROUND_JOBS = 40;
 export const AIDEN_REMOTE_MAX_BACKGROUND_JOB_LABEL = 200;
@@ -8835,6 +8987,21 @@ export interface AidenRemoteBackgroundJobsFixture {
   stop: { jobId: string; request: Record<string, never>; response: AidenRemoteBackgroundJobs };
   /** Stop or read of a job the chat does not have. */
   notFound: AidenRemoteErrorEnvelope;
+}
+
+/** Revision 62: a chat's job list with a job stopped after the chat went quiet. */
+export interface AidenRemoteBackgroundJobsChatSettledFixture {
+  list: AidenRemoteBackgroundJobs;
+}
+
+function parseBackgroundJobsChatSettledFixture(value: unknown): AidenRemoteBackgroundJobsChatSettledFixture {
+  if (!isRecord(value)) throw new Error("Chat-settled background jobs fixture must be an object.");
+  assertExactKeys(value, ["list"], "Chat-settled background jobs fixture");
+  const list = parseAidenRemoteBackgroundJobs(value.list);
+  if (!list.jobs.some((job) => job.endReason === "chat-settled")) {
+    throw new Error("Chat-settled background jobs fixture must include a job stopped after the chat went quiet.");
+  }
+  return { list };
 }
 
 function parseBackgroundJobsFixture(value: unknown): AidenRemoteBackgroundJobsFixture {
@@ -9486,6 +9653,60 @@ function parsePairingRequestsFixture(value: unknown): AidenRemotePairingRequests
  * what a phone holding the phone-scoped run subset receives: approvals carry a
  * summary, `canAllow` and offered scopes but never tool details.
  */
+/**
+ * Revision 61: a typed card on a phone's approval must agree with the summary
+ * fields: `canAllow` is exactly whether the card has an allow button, and every
+ * offered scope is one the card's buttons offer.
+ */
+function parsePhoneApprovalCard(payload: Record<string, unknown>, label: string): void {
+  if (!hasOwn(payload, "card")) return;
+  const card = parseAidenRemoteApprovalCard(payload.card);
+  if (payload.canAllow !== approvalCardAllows(card)) throw new Error(`${label} canAllow must match its card.`);
+  if (Array.isArray(payload.scopes) && payload.scopes.some((scope) => !approvalCardAllows(card, scope as ToolApprovalScope))) {
+    throw new Error(`${label} scopes must be ones its card offers.`);
+  }
+}
+
+function parsePhoneApprovalCommon(payload: Record<string, unknown>, label: string): void {
+  // Revision 39: a display-only card for `schedule:cards` holders; it never changes canAllow.
+  if (payload.schedule !== undefined) parseAidenRemoteApprovalSchedule(payload.schedule);
+  assertBoundedString(payload, "approvalId", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
+  assertBoundedString(payload, "summary", 2_000);
+  assertBoundedString(payload, "toolCallId", 128, true);
+  assertBoundedString(payload, "toolName", 120);
+  if (typeof payload.canAllow !== "boolean") throw new Error(`${label} canAllow must be boolean.`);
+  if (payload.scopes !== undefined) {
+    if (!payload.canAllow) throw new Error(`A deny-only ${label.toLocaleLowerCase("en-US")} offers no scopes.`);
+    if (
+      !Array.isArray(payload.scopes) ||
+      payload.scopes.some((scope) => !["once", "chat", "always"].includes(scope as string))
+    ) {
+      throw new Error(`${label} scopes are invalid.`);
+    }
+  }
+  parsePhoneApprovalCard(payload, label);
+}
+
+/** A phone's `approval_required` run payload (and a gap snapshot's approvals). */
+export function parseAidenRemotePhoneRunApproval(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) throw new Error("Phone run approval must be an object.");
+  assertExactKeys(value, ["approvalId", "summary", "toolCallId", "toolName", "canAllow", "scopes", "schedule", "card"], "Phone run approval");
+  parsePhoneApprovalCommon(value, "Phone run approval");
+  return value;
+}
+
+/** A phone's own stream approval (`GET /streams/{id}/approval`). */
+export function parseAidenRemotePhoneStreamApproval(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) throw new Error("Stream approval must be an object.");
+  assertExactKeys(
+    value,
+    ["approvalId", "streamId", "chatId", "summary", "toolCallId", "toolName", "expiresAt", "canAllow", "scopes", "schedule", "card"],
+    "Stream approval",
+  );
+  parsePhoneApprovalCommon(value, "Stream approval");
+  return value;
+}
+
 function parseRunEventSequence(value: unknown, label: string, projection: "host" | "phone"): void {
   if (!Array.isArray(value) || value.length === 0) {
     throw new Error(`${label} must be a non-empty array.`);
@@ -9519,24 +9740,10 @@ function parseRunEventSequence(value: unknown, label: string, projection: "host"
       assertExactKeys(event.payload, ["promptId", "outcome"], "Question resolved");
       boundedText(event.payload.promptId, "Question resolved promptId", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
     } else if (projection === "phone" && event.type === "approval_required") {
-      const payload = event.payload;
-      assertExactKeys(payload, ["approvalId", "summary", "toolCallId", "toolName", "canAllow", "scopes", "schedule"], "Phone run approval");
-      // Revision 39: a display-only card for `schedule:cards` holders; it never changes canAllow.
-      if (payload.schedule !== undefined) parseAidenRemoteApprovalSchedule(payload.schedule);
-      assertBoundedString(payload, "approvalId", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
-      assertBoundedString(payload, "summary", 2_000);
-      assertBoundedString(payload, "toolCallId", 128, true);
-      assertBoundedString(payload, "toolName", 120);
-      if (typeof payload.canAllow !== "boolean") throw new Error("Phone run approval canAllow must be boolean.");
-      if (payload.scopes !== undefined) {
-        if (!payload.canAllow) throw new Error("A deny-only phone run approval offers no scopes.");
-        if (
-          !Array.isArray(payload.scopes) ||
-          payload.scopes.some((scope) => !["once", "chat", "always"].includes(scope as string))
-        ) {
-          throw new Error("Phone run approval scopes are invalid.");
-        }
-      }
+      parseAidenRemotePhoneRunApproval(event.payload);
+    } else if (projection === "phone" && event.type === "snapshot" && Array.isArray(event.payload.approvals)) {
+      // A gap snapshot repeats each waiting approval as the phone would have read it.
+      event.payload.approvals.forEach((approval) => parseAidenRemotePhoneRunApproval(approval));
     } else if (projection === "phone" && event.type === "question_required") {
       const payload = event.payload;
       assertExactKeys(payload, ["promptId", "questions", "toolCallId", "expiresAt"], "Phone run question");

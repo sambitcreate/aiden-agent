@@ -882,6 +882,23 @@ test("Bot delete fences live leases and stays erased across restart", async (t) 
   assert.deepEqual((await restarted.store.auditBotInventory([])).orphanedBotIds, []);
 });
 
+test("accepting Full access while keeping a review-first choice never overwrites it", async (t) => {
+  const root = await temporaryRoot(t);
+  const { store } = storeAt(root);
+  await store.initialize();
+  // No decision yet: it accepts Full access.
+  const accepted = await store.acknowledgeNotice("device:new", acknowledgement(), undefined, { keepReviewFirst: true });
+  assert.equal(accepted.acceptedDecision, "continue_full");
+  // A review-first choice stands, however often Full access is asked for.
+  await store.acknowledgeNotice("device:careful", acknowledgement("customize_first"));
+  const kept = await store.acknowledgeNotice("device:careful", acknowledgement(), undefined, { keepReviewFirst: true });
+  assert.equal(kept.acceptedDecision, "customize_first");
+  assert.equal((await store.noticeStatus("device:careful")).acceptedDecision, "customize_first");
+  // Without the option, the person's own explicit acceptance still widens it.
+  const widened = await store.acknowledgeNotice("device:careful", acknowledgement());
+  assert.equal(widened.acceptedDecision, "continue_full");
+});
+
 test("device notice revocation is isolated and survives restart", async (t) => {
   const root = await temporaryRoot(t);
   const { store } = storeAt(root);

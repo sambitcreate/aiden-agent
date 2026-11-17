@@ -42,6 +42,10 @@ import { registerModelPaceHandlers } from "./model-pace.js";
 import { registerUsageLimitHandlers } from "./usage-limits.js";
 import { registerSpendingHandlers } from "./spending.js";
 import { registerHookHandlers } from "./hooks.js";
+import { registerApprovalRuleHandlers } from "./approval-rules.js";
+import { approvalRulesPage } from "../services/approval-rules/rules-page-main.js";
+import { approvalRules } from "../services/approval-rules/store-main.js";
+import { toolApprovalRules } from "../services/tool-approval-rules-main.js";
 import { getHookService } from "../services/hooks/hook-service-main.js";
 import { workspaceApplicationService } from "../services/workspace-application-service-main.js";
 import { HOOKS_CHANGED_CHANNEL } from "../../renderer/shared/hooks-settings.js";
@@ -161,6 +165,15 @@ export function registerHandlers(isMainWindow: (event: IpcMainInvokeEvent) => bo
       if (!isMainWindow(event as IpcMainInvokeEvent)) throw inactive();
       rendererDocumentOwner(event as IpcMainInvokeEvent, inactive);
     },
+  });
+  registerApprovalRuleHandlers({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    page: approvalRulesPage(),
+    onChange: (listener) => {
+      const stops = [approvalRules.onChange(listener), toolApprovalRules.onChange(listener), toolApprovalRules.onBotChange(() => listener())];
+      return () => { for (const stop of stops) stop(); };
+    },
+    broadcast: (channel, payload) => ipcMain.broadcast(channel, payload),
   });
   registerAnalyticsHandlers<IpcMainInvokeEvent>({
     owner: (event) => {

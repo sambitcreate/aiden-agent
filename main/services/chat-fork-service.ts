@@ -225,7 +225,7 @@ export function createChatForkService(deps: ChatForkServiceDependencies) {
               throw new ChatForkError("not_found", "That workspace is no longer available.");
             }
             if (await deps.workspaceFolderMissing!(destinationWorkspaceId)) {
-              throw new ChatForkError("unavailable", "That workspace's folder is missing too. Choose another workspace.");
+              throw new ChatForkError("folder_missing", "That workspace's folder is missing too. Choose another workspace.");
             }
           }
           assertCurrent();

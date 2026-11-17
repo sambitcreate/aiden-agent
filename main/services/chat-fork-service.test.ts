@@ -505,7 +505,7 @@ test("continuing is only for a chat whose folder is gone, into a usable workspac
   await rejectsWith(continueIn("removed-workspace"), "not_found");
   const elsewhere = records.get("elsewhere")!;
   records.set("elsewhere", { ...elsewhere, folderPath: path.join(path.dirname(originalFolder), "gone") });
-  await rejectsWith(continueIn("elsewhere"), "unavailable");
+  await rejectsWith(continueIn("elsewhere"), "folder_missing");
   records.set("elsewhere", elsewhere);
   await rejectsWith(
     forks.fork({ chatId: source.id, continueIn: { workspaceId: "elsewhere" }, forkAt: { messageId: ids.firstReply, position: "after" } }, caller),

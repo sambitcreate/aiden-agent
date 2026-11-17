@@ -60,7 +60,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
-/** Contract revision 63 (`chat:continue-in-new-chat`), read from the fixture every client shares. */
+/** Contract revision 64 (`chat:continue-in-new-chat`), read from the fixture every client shares. */
 class AidenContinueInNewChatTest {
     private val fixture: JsonObject by lazy {
         val text = requireNotNull(javaClass.classLoader?.getResourceAsStream("contract.json")) { "contract.json" }
@@ -331,8 +331,8 @@ class AidenContinueInNewChatTest {
     fun aRefusedSendOffersContinuingAndPickingAWorkspaceOpensTheNewChat() {
         val forks = CopyOnWriteArrayList<RecordedRequest>()
         val busyDestination = JsonObject(mapOf("error" to JsonObject(mapOf(
-            "code" to JsonPrimitive("operation_in_progress"),
-            "message" to JsonPrimitive("That workspace's folder is missing on your Mac too. Choose another workspace."),
+            "code" to JsonPrimitive("workspace_unavailable"),
+            "message" to JsonPrimitive("That workspace's folder is missing too. Choose another workspace."),
             "requestId" to JsonPrimitive("req_continue_busy"),
             "retryable" to JsonPrimitive(false)
         ))))
@@ -358,7 +358,7 @@ class AidenContinueInNewChatTest {
             model.continueInNewChat("workspace_fixture_03")
             withTimeout(5_000) { model.isForking.first { it } }
             withTimeout(5_000) { model.isForking.first { !it } }
-            assertEquals("That workspace's folder is missing on your Mac too. Choose another workspace.", model.presentedError.value)
+            assertEquals("That workspace's folder is missing too. Choose another workspace.", model.presentedError.value)
             assertNotNull(model.continueInNewChatOffer.value)
             assertNull(model.forkNavigation.value)
 

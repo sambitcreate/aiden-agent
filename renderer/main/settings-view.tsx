@@ -39,7 +39,6 @@ import { TtsSettings } from "../components/settings/tts-settings";
 import { ShortcutSettings } from "../components/settings/shortcut-settings";
 import { ComputerUseSettings } from "../components/settings/computer-use-settings";
 import { BotComputersSettings } from "../components/settings/bot-computers-settings";
-import { BotsSettings } from "../components/settings/bots-settings";
 import { ModelDataSettings } from "../components/settings/model-data-settings";
 import { AboutSettings } from "../components/settings/about-settings";
 import { ScheduledTasksSettings } from "../components/settings/scheduled-tasks-settings";
@@ -48,12 +47,25 @@ import { RemoteAccessSettings } from "../components/settings/remote-access-setti
 import { PeerHostsSettingsPage } from "../components/settings/peer-hosts-settings";
 import { AppControlSettings } from "../components/settings/app-control-settings";
 import { SimulatorSettingsPage } from "../components/settings/device-workspace-settings";
-import { ToolApprovalSettings } from "../components/settings/tool-approval-settings";
+import { ApprovalRulesSettings } from "../components/settings/approval-rules-settings";
+import { ApprovalModeSettings } from "../components/settings/approval-mode-settings";
+
+/** Settings → Approvals: the mode first, then the rules page, then Advanced (which holds Bot messaging). */
+function ApprovalsSettings() {
+  return (
+    <>
+      <ApprovalModeSettings>
+        <ApprovalRulesSettings />
+      </ApprovalModeSettings>
+    </>
+  );
+}
 import { LimitsSettings } from "../components/settings/limits-settings";
 import { HooksSettings } from "../components/settings/hooks-settings";
 import {
   availableSettingsPages,
   firstMatchingSettingsSection,
+  isSettingsAnchor,
   pageFor,
   resolveSettingsSection,
   SETTINGS_GROUPS,
@@ -62,6 +74,7 @@ import {
   settingsLocation,
 } from "../lib/settings-section";
 import { useAppCapabilities } from "../lib/app-capabilities";
+import { localComputerNoun, type LocalComputerNoun } from "../shared/computer-noun";
 import { MemoryCardIcon } from "../components/memory-card-icon";
 import {
   SettingsAnchorContext,
@@ -82,7 +95,7 @@ const NAV_ICONS: Record<SettingsPageId, React.ReactNode> = {
   websearch: <Globe className="size-5" />,
   imageGeneration: <ImageIcon className="size-5" />,
   memory: <MemoryCardIcon className="size-5" />,
-  botsApprovals: <Bot className="size-5" />,
+  approvals: <Bot className="size-5" />,
   scheduledTasks: <Clock3 className="size-5" />,
   computers: <Monitor className="size-5" />,
   simulator: <TabletSmartphone className="size-5" />,
@@ -117,10 +130,10 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   hooks: HooksSettings,
   websearch: WebSearchSettings,
   imageGeneration: ImageGenerationSettings,
-  approvals: ToolApprovalSettings,
+  approvals: ApprovalsSettings,
   appControls: AppControlSettings,
   computerUse: ComputerUseSettings,
-  bots: BotsSettings,
+  bots: ApprovalsSettings,
   botComputers: BotComputersSettings,
   simulator: SimulatorSettingsPage,
   memory: MemorySettings,
@@ -182,7 +195,8 @@ function SettingsLiveGuard({ section, children }: { section: SettingsSection; ch
   return <>{children}</>;
 }
 
-const DESCRIPTIONS: Record<SettingsSection, string> = {
+/** Each section's description; `computer` names this one ("Mac" on macOS). */
+const settingsDescriptions = (computer: LocalComputerNoun): Record<SettingsSection, string> => ({
   providers: "Connect models to Aiden and manage the providers you use.",
   modelData: "Arrange your models by capability and pace. Your map stays on this device.",
   limits: "Choose how long chats stay manageable, how replies wait out usage limits, and how much chats and Bots may spend.",
@@ -190,14 +204,14 @@ const DESCRIPTIONS: Record<SettingsSection, string> = {
   mcp: "Connect tools and services to extend what Aiden can do.",
   hooks: "Run your own shell commands at points in a chat, such as before a tool runs. Each one runs only after you approve it.",
   telegram: "Connect your Telegram bots and choose how they respond.",
-  remoteAccess: "Use Aiden on this computer from your phone or another computer.",
+  remoteAccess: `Use Aiden on this ${computer} from your phone or another computer.`,
   peerHosts: "Pair the other computers you control from here, and manage them.",
   websearch: "Choose how Aiden searches and reads the web.",
   imageGeneration: "Connect image providers and choose the models Aiden uses to make images.",
-  approvals: "Review the exact actions Aiden may repeat without asking, and revoke them.",
+  approvals: "Choose when Aiden asks before acting, and review what it may repeat without asking.",
   appControls: "Ask Aiden how a feature works or to show its settings. Chat controls use the same settings and permissions as the app.",
   computerUse: "Manage Aiden’s access to native apps and your screen.",
-  bots: "Choose how every Bot handles steps that need your OK.",
+  bots: "Choose when Aiden asks before acting, and review what it may repeat without asking.",
   botComputers: "Give a Bot its own macOS computer to work in, apart from yours.",
   simulator: "Control iOS Simulator streaming, agent access, and the helper tools on this Mac.",
   memory: "Control what Aiden remembers across chats and Workspaces.",
@@ -208,14 +222,15 @@ const DESCRIPTIONS: Record<SettingsSection, string> = {
   links: "Choose where links you click open.",
   shortcut: "Customize the keyboard controls for Aiden and the app.",
   appearance: "Pick a theme, choose when Aiden uses its light or dark look, and set how wide conversations read.",
-  storage: "See how much disk Aiden uses on this computer, and clear out what you no longer need.",
+  storage: `See how much disk Aiden uses on this ${computer}, and clear out what you no longer need.`,
   about: "App information, updates, and diagnostics.",
-};
+});
 
 export function SettingsView({ initialSection }: { initialSection?: SettingsSection }) {
   const router = useRouter();
   const navigate = useNavigate();
   const capabilities = useAppCapabilities();
+  const descriptions = React.useMemo(() => settingsDescriptions(localComputerNoun(capabilities.platform)), [capabilities.platform]);
   const [search, setSearch] = React.useState("");
 
   const anchorRequest = useLocation({ select: (location) => location.state.aidenSettingsAnchor });
@@ -224,7 +239,7 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
   const pages = availableSettingsPages(capabilities);
   const activePage = pages.find((page) => page.id === pageFor(section).id)!;
   const rows = pages.flatMap((page) => {
-    const target = firstMatchingSettingsSection(page, query, (item) => DESCRIPTIONS[item]);
+    const target = firstMatchingSettingsSection(page, query, (item) => descriptions[item]);
     return target ? [{ page, target }] : [];
   });
   const open = (next: SettingsSection) =>
@@ -324,10 +339,10 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
           <SettingsPage
             heading={!OWN_HEADING.has(activePage.id)}
             title={activePage.title}
-            description={DESCRIPTIONS[section]}
+            description={descriptions[section]}
           >
             <SettingsPageTabs page={activePage} section={section} onSelect={open}>
-              <SettingsAnchorContext.Provider value={section === "links" ? { section, request: anchorRequest ?? 0 } : null}>
+              <SettingsAnchorContext.Provider value={isSettingsAnchor(section) ? { section, request: anchorRequest ?? 0 } : null}>
                 <SettingsLiveGuard section={section}>
                   <ActiveSection />
                 </SettingsLiveGuard>

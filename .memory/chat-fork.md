@@ -153,4 +153,4 @@ Both halves ship together from `feat/chat-fork-mobile`, which also carries the A
 
 ## Continue in a new chat (2026-11-11)
 
-- `ChatForkService.fork` takes `continueIn: {workspaceId}` for a chat whose workspace folder is gone: it forks after `continueInNewChatForkPoint` (newest reply answering a prompt) into another workspace. Exclusive with `forkAt`/`summary`; needs the `workspaceFolderMissing` dep (else ineligible). Remote exposes it as the fork body `{continueIn}` behind `chat:continue-in-new-chat` (revision 63). Details in `workspace-folder-presence.md`.
+- `ChatForkService.fork` takes `continueIn: {workspaceId}` for a chat whose workspace folder is gone: it forks after `continueInNewChatForkPoint` (newest reply answering a prompt) into another workspace. Exclusive with `forkAt`/`summary`; needs the `workspaceFolderMissing` dep (else ineligible). Remote exposes it as the fork body `{continueIn}` behind `chat:continue-in-new-chat` (revision 64). Details in `workspace-folder-presence.md`.

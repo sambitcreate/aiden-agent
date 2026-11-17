@@ -2,7 +2,7 @@
 // as the desktop does: a phone's turn is refused before anything is kept or
 // any provider request is made, and runs once the folder is back; a turn that
 // gets past the Remote check, and a scheduled run, end with a clear error. A
-// phone that negotiated Continue in a new chat (revision 63) hears why, and
+// phone that negotiated Continue in a new chat (revision 64) hears why, and
 // can fork the whole chat into another workspace; the original stays as it is.
 import assert from "node:assert/strict";
 import test from "node:test";

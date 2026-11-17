@@ -115,7 +115,7 @@ export function createAidenAppTools(options: {
               name: "aiden_open",
               label: "Open Aiden settings",
               description:
-                "Open a supported Settings section in the requesting desktop. Report opened only after the renderer confirms navigation. This grants no feature or OS permission.",
+                "Open a supported Settings section in the Aiden Agent window that asked. Report opened only after the renderer confirms navigation. This grants no feature or OS permission.",
               parameters: Type.Object({
                 destination: Type.Union(AIDEN_APP_DESTINATIONS.map((value) => Type.Literal(value))),
               }),
@@ -148,7 +148,7 @@ export function createAidenAppTools(options: {
             await options.service.snapshot("memory", options.context);
             if (signal?.aborted || !options.context.isCurrent()) throw new Error("Change cancelled.");
             options.present({ version: 1, id: randomUUID(), topic: "memory", workspaceId: options.context.workspaceId,
-              fallback: "Use Workspace memory controls to confirm this change on the serving host." });
+              fallback: "Use Workspace memory controls to confirm this change on your computer." });
             return result({ status: "foreground_required", panelShown: true,
               reason: "Change Workspace memory through the foreground control so the active agent can settle before saving." });
           }

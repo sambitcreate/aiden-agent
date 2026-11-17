@@ -2,7 +2,7 @@ import { parseBotRoutineModelDirectory } from "../shared/bot-routine-model-direc
 import type { ChatInputSourceV1 } from "../shared/chat-input-source";
 import { createBotPeerApi } from "./bot-peers-api";
 import { parseBotExecutionResumeStatus } from "../shared/bot-execution-resume";
-import { parseBotRoutineModelSettings, parseBotRoutineModelCatalog, parseBotRoutineModelResult, parseBotRoutineModelRuns, type BotRoutineModelSave } from "../shared/bot-routine-models";
+import { parseBotRoutineModelSettings, parseBotRoutineModelCatalog, parseBotRoutineModelResult, parseBotRoutineModelRuns, type BotRoutineModelSave, type BotRoutineThinkingLevel } from "../shared/bot-routine-models";
 import type { PeerProjectSource } from "../shared/peer-project-clone";
 import { BOT_CONNECTOR_WATCH_CHANNELS as watchChannels } from "../shared/bot-connector-watches";
 import type * as ConnectorWatch from "../shared/bot-connector-watches";
@@ -333,6 +333,15 @@ import type {
 } from "../shared/workspace-artifacts";
 import type { DesignCanvas } from "../shared/design-canvas/schema";
 import { invoke, onNotification } from "./ipc-bridge";
+import {
+  APPROVAL_RULE_CHANNELS,
+  type ApprovalRule,
+  type ApprovalRuleAddInput,
+  type ApprovalRuleChangeInput,
+  type ApprovalRulePickerOption,
+  type ApprovalRuleRowRef,
+  type ApprovalRulesView,
+} from "../shared/approval-rules";
 
 export { invoke, onNotification } from "./ipc-bridge";
 export { dictationApi, settingsApi, voiceApi } from "./ipc-voice";
@@ -719,6 +728,18 @@ export const hooksApi = {
     onNotification<HooksChangedEvent>(HOOKS_CHANGED_CHANNEL, (event) => {
       if (event && typeof event.reason === "string") handler(event);
     }),
+};
+
+/** Settings → Approvals, the rules page. */
+export const approvalRulesApi = {
+  list: () => invoke<ApprovalRulesView>(APPROVAL_RULE_CHANNELS.list),
+  picker: () => invoke<ApprovalRulePickerOption[]>(APPROVAL_RULE_CHANNELS.picker),
+  add: (input: ApprovalRuleAddInput) => invoke<ApprovalRule>(APPROVAL_RULE_CHANNELS.add, input),
+  change: (input: ApprovalRuleChangeInput) => invoke<{ changed: boolean }>(APPROVAL_RULE_CHANNELS.change, input),
+  remove: (ref: ApprovalRuleRowRef) => invoke<{ removed: boolean }>(APPROVAL_RULE_CHANNELS.remove, { ref }),
+  refresh: () => invoke<ApprovalRulesView>(APPROVAL_RULE_CHANNELS.refresh),
+  setAside: () => invoke<ApprovalRulesView>(APPROVAL_RULE_CHANNELS.setAside),
+  onChanged: (handler: () => void) => onNotification(APPROVAL_RULE_CHANNELS.changed, () => handler()),
 };
 
 export const computerUseApi = {
@@ -1183,6 +1204,10 @@ export const workspacesApi = {
       memoryEnabled?: boolean;
       disabledSkills?: string[];
       disabledMcpServerIds?: string[];
+      /** A mode of its own, or `null` to follow Settings → Approvals. */
+      approvalMode?: import("../shared/approval-mode").ApprovalMode | null;
+      /** Remove one "Allowed in this workspace" Mac grant. */
+      revokeMacGrant?: import("../shared/approval-mode").MacGrantClass;
     },
   ) => invoke<Workspace>("workspaces:update", id, patch),
   remove: (id: string) => invoke<void>("workspaces:remove", id),
@@ -1231,6 +1256,9 @@ export interface TerminalSnapshot {
 }
 
 export const browserApi = {
+  popupMenu: (id: string, point: { x: number; y: number }, items: import("../shared/browser").BrowserMenuItem[]) =>
+    invoke<import("../shared/browser").BrowserMenuChoice | null>("browser:popup-menu", id, point, items),
+  dismissMenu: (id: string) => invoke<void>("browser:dismiss-menu", id),
   getState: (workspaceId: string) =>
     invoke<import("../shared/browser").BrowserState>("browser:get-state", workspaceId),
   command: (workspaceId: string, command: import("../shared/browser").BrowserCommand) =>
@@ -1685,6 +1713,9 @@ export const chatsApi = {
   followPullRequest: (chatId: string) => invoke<void>("chats:followThroughFollowPullRequest", { chatId }),
   stopFollowingPullRequest: (chatId: string, ref: { host: string; repository: string; number: number }) =>
     invoke<void>("chats:followThroughStopFollow", { chatId, ...ref }),
+  /** Read this chat's followed pull requests soon, or every chat's when `chatId` is omitted. */
+  nudgeFollowedPullRequests: (chatId?: string) =>
+    invoke<void>("chats:followThroughNudgePullRequests", chatId === undefined ? {} : { chatId }),
   setDoneWhenCheck: (chatId: string, command: string) =>
     invoke<void>("chats:followThroughSetCheck", { chatId, command }),
   clearDoneWhenCheck: (chatId: string) => invoke<void>("chats:followThroughClearCheck", { chatId }),
@@ -1858,6 +1889,9 @@ export const botsApi = {
   getAccessNotice: () => invoke<BotNoticeStatus>("bots:getAccessNotice"),
   acknowledgeAccessNotice: (acknowledgement: BotNoticeAcknowledgement) =>
     invoke<BotNoticeStatus>("bots:acknowledgeAccessNotice", acknowledgement),
+  /** Accepts Full access unless the person chose to review it first, in one step in main. */
+  acceptFirstBotAccess: (acknowledgement: BotNoticeAcknowledgement) =>
+    invoke<BotNoticeStatus>("bots:acceptFirstBotAccess", acknowledgement),
   getTelegramAccessNotice: (profile: string) =>
     invoke<BotNoticeStatus>("bots:getTelegramAccessNotice", profile),
   acknowledgeTelegramAccessNotice: (profile: string, acknowledgement: BotNoticeAcknowledgement) =>
@@ -1874,6 +1908,9 @@ export const botsApi = {
   update: (input: BotUpdateInput) => invoke<BotDefinition>("bots:update", input),
   getCapabilityCatalog: (botId?: string) =>
     invoke<BotCapabilityCatalog>("bots:getCapabilityCatalog", botId),
+  /** The thinking levels one catalog model supports; null when unknown. */
+  getModelThinkingLevels: (input: { botId?: string; providerId: string; modelId: string }) =>
+    invoke<BotRoutineThinkingLevel[] | null>("bots:getModelThinkingLevels", input),
   getBotAccess: (id: string) => invoke<BotAccessState | null>("bots:getBotAccess", id),
   updateBotAccess: (input: { botId: string; expectedRevision: string; access: BotAccessUpdate }) =>
     invoke<BotAccessView>("bots:updateBotAccess", input),
@@ -1964,8 +2001,13 @@ export const botsApi = {
   onLiveEvent: (handler: (event: import("../shared/bot-live").BotLiveEvent) => void) =>
     onNotification<import("../shared/bot-live").BotLiveEvent>("bots:live:event", handler),
   /** Start Chat on a starter Bot: the same Bot every time; only the first call reports `created`. */
-  createFromPreset: (input: { presetId: string; access?: BotAccessUpdate }) =>
+  /** A Template's Create bot; `version` is the template version on screen, and another version is refused. */
+  createFromPreset: (input: { presetId: string; version?: number; access?: BotAccessUpdate }) =>
     invoke<{ bot: BotDefinition; created: boolean }>("bots:createFromPreset", input),
+  /** Onboarding's silent first Bot: made once; a repeat returns the same Bot. */
+  createFirst: () => invoke<{ bot: BotDefinition; created: boolean }>("bots:createFirst"),
+  /** Template id → the Bot it already made, so Templates offers Open. */
+  presetBots: () => invoke<Record<string, string>>("bots:presetBots"),
   /** The one-time self-intro of a Bot made with the create flow. */
   introduce: (botId: string) => invoke<boolean>("bots:introduce", botId),
   /** Read-only Files: the Bot's own folder. */
@@ -1974,7 +2016,7 @@ export const botsApi = {
     read: (botId: string, path: string) =>
       invoke<import("./types").WorkspaceFileDocument>("bots:files:read", botId, path),
   },
-  /** "Add to this Bot" on a connect card: an app already connected in Aiden joins this Bot's Custom access. */
+  /** Connect on a connect card for an app already connected in Aiden: the app joins this Bot's Custom access. */
   grantConnection: (botId: string, pluginId: string) =>
     invoke<void>("bots:connections:grant", botId, pluginId),
   /** Not now on a connect card: this Bot won't suggest that connection again. */
@@ -2105,6 +2147,14 @@ export const botsApi = {
     respond: (input: { botId: string; proposalId: string; decision: "add" | "dismiss" }) =>
       invoke<{ status: "added" | "dismissed" }>("bots:skillProposals:respond", input),
   },
+  /** Changes a Bot made to its own settings from chat, and the person's answer. */
+  settingsChanges: {
+    respond: (input: { botId: string; changeId: string; decision: import("../shared/bot-settings-changes").BotSettingsChangeDecision }) =>
+      invoke<{ ok: true; status: import("../shared/bot-settings-changes").BotSettingsChangeStatus; message?: string } | { ok: false; message: string }>(
+        "bots:settingsChanges:respond",
+        input,
+      ),
+  },
   /** A Bot's health checks: the newest report, and Check now. */
   health: {
     report: (botId: string) =>
@@ -2183,6 +2233,8 @@ export interface ApprovalPrompt {
   canAllow?: boolean;
   /** Allow scopes offered for this call; absent means allow once only. */
   scopes?: ToolApprovalScope[];
+  /** In Ask, Auto would hand this call to the judge; only then may the card offer Auto. */
+  autoWouldJudge?: true;
   source?: "remote";
 }
 

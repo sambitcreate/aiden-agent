@@ -142,6 +142,27 @@ internal suspend fun aidenRequestBotPlans(
     client, stillCurrent
 )
 
+/**
+ * Revision 61 (provisional): `approval:cards`, `approvals:settings`, `bot:settings-changes`,
+ * `bot:suggestions` and `bot:templates`, each asked for alone when the Mac lists it in
+ * `serverCapabilities` and this pairing doesn't hold it, so a Mac that refuses one name keeps the
+ * rest. Without a grant the phone keeps the screens it had.
+ */
+internal fun aidenBotUxCapabilitiesToRequest(server: AidenServer, installation: AidenInstallation): List<AidenRemoteCapability> =
+    AidenRemoteCapability.BOT_UX.filter { aidenShouldRequestSoloCapability(it, server, installation) }
+
+internal suspend fun aidenRequestBotUxCapability(
+    capability: AidenRemoteCapability,
+    client: AidenRemoteClient, server: AidenServer, installation: AidenInstallation,
+    stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? {
+    require(capability in AidenRemoteCapability.BOT_UX)
+    return aidenRequestCapabilitiesAlone(
+        if (aidenShouldRequestSoloCapability(capability, server, installation)) listOf(capability) else emptyList(),
+        client, stillCurrent
+    )
+}
+
 internal fun aidenShouldRequestBotAccessRequests(server: AidenServer, installation: AidenInstallation): Boolean =
     aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_ACCESS_REQUESTS, server, installation)
 
@@ -178,7 +199,7 @@ internal fun aidenShouldRequestChatNewWorktree(server: AidenServer, installation
     aidenShouldRequestSoloCapability(AidenRemoteCapability.CHAT_NEW_WORKTREE, server, installation)
 
 /**
- * Revision 63: a Mac that offers `chat:continue-in-new-chat` in `serverCapabilities` is asked for
+ * Revision 64: a Mac that offers `chat:continue-in-new-chat` in `serverCapabilities` is asked for
  * it, in a call of its own after `chat:new-worktree`, unless [installation] already holds it.
  */
 internal fun aidenShouldRequestChatContinueInNewChat(server: AidenServer, installation: AidenInstallation): Boolean =
@@ -341,7 +362,7 @@ internal suspend fun aidenRequestChatNewWorktree(
     )
 
 /**
- * Revision 63: asks [server] for `chat:continue-in-new-chat` alone. A Mac that refuses it (400 or
+ * Revision 64: asks [server] for `chat:continue-in-new-chat` alone. A Mac that refuses it (400 or
  * 404) leaves the pairing as it was; a chat whose folder is gone then shows only the Mac's reason.
  */
 internal suspend fun aidenRequestChatContinueInNewChat(
@@ -766,7 +787,7 @@ class AidenRemoteCoordinator(
                     server = rawUploadsServer,
                     request = ::aidenRequestChatNewWorktree
                 )
-                // Revision 63: `chat:continue-in-new-chat` goes alone too.
+                // Revision 64: `chat:continue-in-new-chat` goes alone too.
                 val continueServer = negotiateSoloCapability(
                     generation = generation,
                     installation = installation,
@@ -792,7 +813,13 @@ class AidenRemoteCoordinator(
                     server = peersServer,
                     request = ::aidenRequestBotMessaging
                 )
-                val negotiatedServer = negotiateSoloCapability(generation, installation, newClient, messagingServer, ::aidenRequestBotAllowed)
+                var negotiatedServer = negotiateSoloCapability(generation, installation, newClient, messagingServer, ::aidenRequestBotAllowed)
+                // Revision 61: each Bot UX grant goes alone.
+                for (capability in AidenRemoteCapability.BOT_UX) {
+                    negotiatedServer = negotiateSoloCapability(generation, installation, newClient, negotiatedServer) { c, s, i, current ->
+                        aidenRequestBotUxCapability(capability, c, s, i, current)
+                    }
+                }
                 if (!isCurrent(generation, installation.id, newClient)) return@launch
                 installationStore.updateServerCapabilities(
                     instanceId = installation.instanceId,

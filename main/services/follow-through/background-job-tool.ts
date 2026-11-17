@@ -79,13 +79,21 @@ export function createBackgroundJobTool(options: BackgroundJobToolOptions): Agen
       'action "start" runs `command` with the workspace folder as the working directory and returns its job_id with any early output. ' +
       'action "read" returns the newest output of a job; "list" shows this chat\'s jobs; "stop" ends a job and everything it started. ' +
       "When a job ends on its own you get a message in this chat with how it ended and its last output, so do not poll in a loop. " +
-      "Jobs stop when the chat is deleted, folder access changes, or Aiden quits. Use run_command for short commands whose result you need right away.",
+      "Jobs stop when the chat is deleted, folder access changes, or Aiden quits. " +
+      "When you start a dev server, watcher or preview only to check the work you are doing now, set stop_when_chat_settles: Aiden then stops it 20 minutes after this chat goes quiet (no answer running and nothing waiting to be answered). Leave it unset for anything the person asked to keep running. " +
+      "Use run_command for short commands whose result you need right away.",
     parameters: Type.Object({
       action: Type.Union([Type.Literal("start"), Type.Literal("read"), Type.Literal("list"), Type.Literal("stop")]),
       command: Type.Optional(Type.String({ description: 'The shell command to run (action "start").' })),
       description: Type.Optional(
         Type.String({
           description: 'A short present-tense label for the job in 3-8 words, e.g. "Run the dev server" (action "start").',
+        }),
+      ),
+      stop_when_chat_settles: Type.Optional(
+        Type.Boolean({
+          description:
+            'Stop this job 20 minutes after the chat goes quiet (action "start"). Set it for dev servers, watchers and previews you start only to verify the current task; leave it unset for jobs the person wants kept running.',
         }),
       ),
       job_id: Type.Optional(Type.String({ description: 'The job to read or stop, e.g. "job_1a2b3c4d".' })),
@@ -103,6 +111,7 @@ export function createBackgroundJobTool(options: BackgroundJobToolOptions): Agen
         action: BackgroundJobAction;
         command?: string;
         description?: string;
+        stop_when_chat_settles?: boolean;
         job_id?: string;
         max_chars?: number;
       };
@@ -119,6 +128,7 @@ export function createBackgroundJobTool(options: BackgroundJobToolOptions): Agen
             command,
             ...(input.description ? { description: input.description } : {}),
             env: options.env(),
+            ...(input.stop_when_chat_settles === true ? { stopWhenChatSettles: true } : {}),
           });
           const settled = await options.jobs.settle(options.chatId, started.id, options.startWaitMs ?? BACKGROUND_JOB_START_WAIT_MS);
           const { output, truncated } = options.jobs.read(options.chatId, started.id, START_OUTPUT_CHARS);
@@ -127,6 +137,9 @@ export function createBackgroundJobTool(options: BackgroundJobToolOptions): Agen
               [
                 `Started ${statusLine(settled, now())}.`,
                 outputBlock(output, truncated),
+                ...(settled.stopWhenChatSettles
+                  ? ["Aiden stops it 20 minutes after this chat goes quiet; it is not reported to the chat when that happens."]
+                  : []),
                 `You will get a message in this chat when it ends on its own. Read its output with action "read" and job_id "${settled.id}", or end it with action "stop".`,
               ].join("\n\n"),
             );

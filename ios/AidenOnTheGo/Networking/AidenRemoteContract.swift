@@ -77,7 +77,7 @@ enum AidenManualPairingError: Error, Equatable, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidCode:
-            return String(localized: "Enter the 20-character setup code shown on your desktop.")
+            return String(localized: "Enter the 20-character setup code shown on your computer.")
         case .invalidBootstrap:
             return String(localized: "Aiden Agent returned an invalid manual pairing response.")
         case .decryptionFailed:
@@ -680,8 +680,10 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// Contract revision 59 adds `bot:open-work`, asked for alone.
     /// Contract revision 59 adds `bot:routine-models`, asked for alone.
     /// Contract revision 59 adds `bot:peers`, asked for alone.
-    /// Contract revision 63 adds `chat:continue-in-new-chat`, asked for alone.
+    /// Contract revision 64 adds `chat:continue-in-new-chat`, asked for alone.
 
+    /// Contract revision 61 adds `approval:cards`, `approvals:settings`,
+    /// `bot:settings-changes`, `bot:suggestions` and `bot:templates`, each alone.
     /// Contract revision 54 adds `bot:messaging`, also asked for alone.
     static let phoneNegotiable: [Self] = v1Known + [
         Self(rawValue: "runs:observe"), Self(rawValue: "runs:control"),
@@ -699,7 +701,7 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
         Self(rawValue: "bot:open-work"),
         Self(rawValue: "bot:routine-models"),
         Self(rawValue: "bot:peers"),
-    ]
+    ] + botUX
 
     /// Revision 27: the device renders `memory_update` and `routine_proposal`
     /// Bot session entries. It grants no authority.
@@ -766,7 +768,7 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// the name, so the device asks for it alone.
     static let chatNewWorktree = Self(rawValue: "chat:new-worktree")
 
-    /// Revision 63: a `workspace_unavailable` refusal carries why the chat's
+    /// Revision 64: a `workspace_unavailable` refusal carries why the chat's
     /// folder is gone and whether the whole chat can continue in a new chat,
     /// and `POST /chats/{chatId}/fork` accepts `{"continueIn":{"workspaceId"}}`.
     /// The Mac sends those details only to a device that holds this, because
@@ -919,7 +921,7 @@ struct AidenRemoteErrorCode: RawRepresentable, Codable, Hashable, Sendable {
     }
 }
 
-/// Why a chat's workspace folder is gone (revision 63).
+/// Why a chat's workspace folder is gone (revision 64).
 enum AidenWorkspaceUnavailableReason: String, Codable, Equatable, Sendable {
     case folderMissing = "folder_missing"
     case worktreeMissing = "worktree_missing"
@@ -938,10 +940,10 @@ struct AidenRemoteErrorEnvelope: Codable, Equatable, Sendable {
         /// The winning outcome a run-control loser receives with `question_already_resolved`.
         let outcome: String?
         let resolvedAt: Date?
-        /// Revision 63, with `workspace_unavailable`: why the chat's folder is
+        /// Revision 64, with `workspace_unavailable`: why the chat's folder is
         /// gone. A reason this build doesn't know reads as nil.
         let reason: AidenWorkspaceUnavailableReason?
-        /// Revision 63, with `workspace_unavailable`: whether the Mac can copy
+        /// Revision 64, with `workspace_unavailable`: whether the Mac can copy
         /// the whole chat into a new chat in another workspace.
         let canContinueInNewChat: Bool?
 
@@ -2902,7 +2904,8 @@ private enum AidenBotPrivateResponseValidator {
                     || isPrivateChildProjectionKey(normalizedKey)
                     || (root == "chatSummaries" && chatSummaryForbiddenKeys.contains(normalizedKey))),
                    !isAllowedKnownIdentityKey(key, root: root, parentPath: path),
-                   !isAllowedRoutineProposalPrompt(key, root: root, object: object) {
+                   !isAllowedRoutineProposalPrompt(key, root: root, object: object),
+                   !isAllowedBotUXKey(key, root: root, object: object, parentPath: path) {
                     throw AidenRemoteContractError.unsafePayloadField(key)
                 }
                 try validate(child, root: root, path: path + [key])
@@ -2980,6 +2983,28 @@ private enum AidenBotPrivateResponseValidator {
             && ["botSession", "botSessionEvents", "botSessionCards"].contains(root)
             && object["type"] as? String == "routine_proposal"
             && object["proposalId"] is String
+    }
+
+    /// Revision 61: a held settings change's proposed `instructions`, a typed
+    /// approval card's `arguments` (labelled display rows the card shows), and
+    /// a template's `instructions` beside its version.
+    private static func isAllowedBotUXKey(
+        _ key: String,
+        root: String,
+        object: [String: Any],
+        parentPath: [String]
+    ) -> Bool {
+        let sessionRoots = ["botSession", "botSessionEvents", "botSessionCards"]
+        if key == "instructions", sessionRoots.contains(root) {
+            return object["type"] as? String == "settings_change" && object["changeId"] is String
+        }
+        if key == "arguments", sessionRoots.contains(root) {
+            return parentPath.last == "card" && object["kind"] is String && object["buttons"] is [Any]
+        }
+        if key == "instructions", root == "botPresets" {
+            return parentPath == ["presets", "[]"] && object["version"] is NSNumber
+        }
+        return false
     }
 
     private static func isAllowedKnownIdentityKey(
@@ -3856,6 +3881,9 @@ struct AidenRemoteRunApproval: Decodable, Equatable, Sendable {
     let scopes: [AidenApprovalScope]?
     /// Contract revision 39 (`schedule:cards`): display-only, nil when absent or invalid.
     let schedule: AidenApprovalSchedule?
+    /// Contract revision 61 (`approval:cards`): the typed card. When present,
+    /// `canAllow` and `scopes` agree with its buttons, or the payload is refused.
+    var card: AidenApprovalCardModel? = nil
 
     init(
         approvalId: String,
@@ -3909,10 +3937,13 @@ struct AidenRemoteRunApproval: Decodable, Equatable, Sendable {
         }
         // A card that fails validation is dropped; the approval still decodes.
         schedule = try? values.decodeIfPresent(AidenApprovalSchedule.self, forKey: .schedule)
+        // Revision 61: strict, like the host's `parseAidenRemotePhoneRunApproval`.
+        card = try values.decodeIfPresent(AidenApprovalCardModel.self, forKey: .card)
+        try card?.validateSummary(canAllow: canAllow, scopes: scopes?.map(\.rawValue))
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case approvalId, summary, toolCallId, toolName, canAllow, scopes, schedule
+        case approvalId, summary, toolCallId, toolName, canAllow, scopes, schedule, card
     }
 }
 

@@ -77,6 +77,7 @@ function fixture(
     noWorkspace?: ConstructorParameters<typeof AidenRemoteChatService>[0]["noWorkspace"];
     isFolderWorkspace?: ConstructorParameters<typeof AidenRemoteChatService>[0]["isFolderWorkspace"];
     deviceIsPeer?: ConstructorParameters<typeof AidenRemoteChatService>[0]["deviceIsPeer"];
+    deviceReportsAnalytics?: ConstructorParameters<typeof AidenRemoteChatService>[0]["deviceReportsAnalytics"];
     modelSupportsImages?: () => boolean;
     imageArtifactRecoveryPending?: boolean;
     imageArtifactRecoveryUnavailable?: boolean;
@@ -105,6 +106,7 @@ function fixture(
 ) {
   let current: Chat | null = structuredClone(initial);
   let creates = 0;
+  const createOptions: Array<{ reportAnalytics?: boolean } | undefined> = [];
   let appends = 0;
   let notifications = 0;
   let begins = 0;
@@ -143,8 +145,9 @@ function fixture(
           reconciliation: null,
         };
       },
-      create: async (input) => {
+      create: async (input, _owner, options) => {
         creates += 1;
+        createOptions.push(options);
         current = chat({
           id: `chat-${creates + 1}`,
           workspaceId: input.workspaceId,
@@ -302,6 +305,7 @@ function fixture(
     ...(fixtureOptions.noWorkspace ? { noWorkspace: fixtureOptions.noWorkspace } : {}),
     ...(fixtureOptions.isFolderWorkspace ? { isFolderWorkspace: fixtureOptions.isFolderWorkspace } : {}),
     ...(fixtureOptions.deviceIsPeer ? { deviceIsPeer: fixtureOptions.deviceIsPeer } : {}),
+    ...(fixtureOptions.deviceReportsAnalytics ? { deviceReportsAnalytics: fixtureOptions.deviceReportsAnalytics } : {}),
     ...(fixtureOptions.workspaceFolderRefusal
       ? { workspaceFolderRefusal: fixtureOptions.workspaceFolderRefusal }
       : {}),
@@ -334,6 +338,7 @@ function fixture(
     service,
     streams,
     creates: () => creates,
+    createOptions: () => createOptions,
     appends: () => appends,
     notifications: () => notifications,
     begins: () => begins,
@@ -1954,7 +1959,7 @@ test("a phone turn in a workspace whose folder moved is refused before it is sto
         error instanceof AidenRemoteServiceError &&
         error.code === "workspace_unavailable" &&
         error.status === 409 &&
-        /folder is missing on your Mac/u.test(error.message) &&
+        /folder is missing on your computer/u.test(error.message) &&
         // Remote errors never carry a path.
         !error.message.includes(root),
     );
@@ -3349,7 +3354,7 @@ test("an older phone hears only the missing-folder sentence, and may not continu
   assert.ok(refusal instanceof AidenRemoteServiceError);
   assert.equal(refusal.code, "workspace_unavailable");
   assert.equal(refusal.details, undefined, "older iPhones refuse detail keys they do not know");
-  assert.match(refusal.message, /folder is missing on your Mac/u);
+  assert.match(refusal.message, /folder is missing on your computer/u);
 
   const { revision } = await app.service.get(app.source.id);
   await assert.rejects(
@@ -3406,7 +3411,7 @@ test("Continue in a new chat refuses malformed bodies, a present folder, the sam
   await assert.rejects(fork({ continueIn: { workspaceId: "workspace-9" } }), hasCode("not_found", 404));
   await rm(app.folders["workspace-2"]!, { recursive: true });
   await assert.rejects(fork({ continueIn: { workspaceId: "workspace-2" } }), (error: unknown) =>
-    hasCode("operation_in_progress", 409)(error) && /folder is missing too/u.test((error as Error).message));
+    hasCode("workspace_unavailable", 409)(error) && /folder is missing too/u.test((error as Error).message));
   assert.equal((await app.store.list()).length, 1, "no refusal created a chat");
 
   const bot = await continueFixture(t, { botId: "bot-1" });
@@ -3554,6 +3559,24 @@ test("a paired Mac's message is not counted as a phone's", async (t) => {
   await app.service.startTurn("device-1", "chat-1", "counted-turn-00000006", { text: "hello" });
   await analyticsSettled();
   assert.equal(sent[0]?.props?.origin, "peer");
+});
+
+test("an outside MCP app's new chat and turns send no usage data, and a phone's still do", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const app = fixture(chat({ workspaceId: "workspace-9" }), {
+    deviceReportsAnalytics: async (deviceId) => deviceId !== "app-1",
+  });
+  await app.service.startTurn("app-1", "chat-1", "counted-turn-00000007", { text: "hello" });
+  await app.service.create("app-1", "chat-create-key-app01", { workspaceId: "workspace-1" });
+  await app.service.create("device-1", "chat-create-key-phone1", { workspaceId: "workspace-1" });
+  await analyticsSettled();
+  assert.deepEqual(sent, [], "the app's turn is not a phone's message");
+  // The chat service is told to keep only the app's create out of chat_created.
+  assert.deepEqual(app.createOptions().map((options) => options?.reportAnalytics !== false), [false, true]);
+
+  await app.service.startTurn("device-1", "chat-3", "counted-turn-00000008", { text: "hello" });
+  await analyticsSettled();
+  assert.deepEqual(sent.map(({ event, props }) => [event, (props as { origin?: unknown } | undefined)?.origin]), [["chat_message_sent", "phone"]]);
 });
 
 test("a phone's message outside a real workspace is not counted as in one", async (t) => {
