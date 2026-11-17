@@ -105,6 +105,7 @@ test("an app needs a name of up to 80 characters and one of the two access level
     { name: "", access: "read" },
     { name: "   ", access: "read" },
     { name: "x".repeat(81), access: "read" },
+    { name: "🤖".repeat(81), access: "read" },
     { name: "Codex", access: "full" },
     { name: "Codex" },
   ]) {
@@ -113,6 +114,9 @@ test("an app needs a name of up to 80 characters and one of the two access level
   assert.deepEqual(await invoke("remote:mcpListApps"), []);
   const added = (await invoke("remote:mcpIssueApp", { name: "x".repeat(80), access: "read" })) as { app: { access: string } };
   assert.equal(added.app.access, "read");
+  // 80 emoji are 160 UTF-16 units but 80 characters, the same count the CLI and Remote state use.
+  const emoji = (await invoke("remote:mcpIssueApp", { name: "🤖".repeat(80), access: "read" })) as { app: { name: string } };
+  assert.equal([...emoji.app.name].length, 80);
 });
 
 test("the list shows live apps newest first, and a revoked app's token stops working", async () => {
