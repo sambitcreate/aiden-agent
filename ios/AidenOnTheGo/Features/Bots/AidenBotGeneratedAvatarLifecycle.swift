@@ -21,7 +21,7 @@ enum AidenBotGeneratedAvatarError: Error, LocalizedError, Equatable {
         case .invalidImage:
             "Aiden couldn’t prepare that image. Choose another image."
         case .unavailable:
-            "Reconnect to your paired desktop before saving this Bot photo."
+            "Reconnect to your paired computer before saving this Bot photo."
         }
     }
 }
@@ -469,7 +469,7 @@ final class AidenBotGeneratedAvatarModel {
                     self.candidateBytes = nil
                     candidateImage = nil
                     phase = .idle
-                    errorMessage = "The Bot photo changed on your paired desktop. Review it before choosing a new image."
+                    errorMessage = "The Bot photo changed on your paired computer. Review it before choosing a new image."
                     return
                 }
                 attempt = .init(
@@ -574,7 +574,7 @@ final class AidenBotGeneratedAvatarModel {
                 }
                 guard fresh.avatar.asset?.assetRevision == observedAssetRevision else {
                     phase = .idle
-                    errorMessage = "The Bot photo changed on your paired desktop. Review it before removing it."
+                    errorMessage = "The Bot photo changed on your paired computer. Review it before removing it."
                     return
                 }
                 attempt = .init(
@@ -735,7 +735,7 @@ final class AidenBotGeneratedAvatarModel {
                 candidateBytes = nil
                 candidateImage = nil
                 phase = .idle
-                errorMessage = "The Bot photo changed on your paired desktop. Review the current photo before replacing it."
+                errorMessage = "The Bot photo changed on your paired computer. Review the current photo before replacing it."
             }
         } catch is CancellationError {
             if isCurrent(attempt.context, generation: generation), uploadAttempt == attempt {
@@ -750,7 +750,7 @@ final class AidenBotGeneratedAvatarModel {
             }
             guard isCurrent(attempt.context, generation: generation), uploadAttempt == attempt else { return }
             phase = .ready
-            errorMessage = "Aiden couldn’t verify which photo reached your paired desktop. Reconnect, then retry this same upload."
+            errorMessage = "Aiden couldn’t verify which photo reached your paired computer. Reconnect, then retry this same upload."
         }
     }
 
@@ -804,7 +804,7 @@ final class AidenBotGeneratedAvatarModel {
             } else {
                 deleteAttempt = nil
                 phase = .idle
-                errorMessage = "The Bot photo changed on your paired desktop. Review it before trying again."
+                errorMessage = "The Bot photo changed on your paired computer. Review it before trying again."
             }
         } catch is CancellationError {
             if isCurrent(attempt.context, generation: generation), deleteAttempt == attempt {

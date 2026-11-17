@@ -65,7 +65,7 @@ final class AidenReadAloudPlayback {
                         throw AidenReadAloudFailure.unavailable
                     }
                     if job.phase == "failed" {
-                        self.errorMessage = job.error?.message ?? "Read Aloud could not generate this response. Check the desktop settings."
+                        self.errorMessage = job.error?.message ?? "Read Aloud could not generate this response. Check Read Aloud in Aiden Agent on your computer."
                         return
                     }
                     try await Task.sleep(for: .milliseconds(500)); try check()

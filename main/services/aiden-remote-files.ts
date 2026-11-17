@@ -286,7 +286,7 @@ export class AidenRemoteFileService {
       if (error instanceof AidenRemoteServiceError) throw error;
       throw new AidenRemoteServiceError(
         "workspace_unavailable",
-        "This workspace's files are not currently available on the desktop.",
+        "This workspace's files are not currently available on your computer.",
         409,
       );
     });
@@ -493,7 +493,7 @@ export class AidenRemoteFileService {
             this.handles.updateReservedFileIdentity(id, saved.device, saved.inode);
             return { id, displayPath: resolved.displayPath, content: input.content,
               version: createHash("sha256").update(buffer).digest("hex"), truncated: false,
-              warning: `Saved your draft. The previous version remains at ${saved.recoveryName}. Up to 16 recovery copies are retained per folder; review and remove them on the Mac when no longer needed.` };
+              warning: `Saved your draft. The previous version remains at ${saved.recoveryName}. Up to 16 recovery copies are retained per folder; review and remove them on your computer when no longer needed.` };
           } catch (error) {
             this.handles.discard(id);
             throw error;
@@ -510,19 +510,19 @@ export class AidenRemoteFileService {
         return projectedDocument(fileId, resolved.displayPath, document);
       } catch (error) {
         if (error instanceof ManagedWorktreeFileIoError && error.code === "recovery_limit") {
-          throw new AidenRemoteServiceError("workspace_unavailable", "Review and remove unneeded .aiden-recovery files in this folder on the Mac before saving again.", 409);
+          throw new AidenRemoteServiceError("workspace_unavailable", "Review and remove unneeded .aiden-recovery files in this folder on your computer before saving again.", 409);
         }
         if ((error instanceof WorkspaceFileError && error.code === "changed_on_disk") ||
             (error instanceof ManagedWorktreeFileIoError && ["source_changed", "destination_exists"].includes(error.code))) {
           throw new AidenRemoteServiceError(
             "revision_conflict",
-            "This file changed on the desktop. Reload it before saving.",
+            "This file changed on your computer. Reload it before saving.",
             409,
           );
         }
         throw new AidenRemoteServiceError(
           "workspace_unavailable",
-          "Aiden could not safely save this file on the desktop.",
+          "Aiden could not safely save this file on your computer.",
           409,
         );
       }

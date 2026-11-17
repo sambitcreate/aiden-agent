@@ -2,7 +2,7 @@ import "../../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { BotIssue, BotIssueAction, BotIssueResolution } from "../../shared/bot-issues";
+import type { BotIssue, BotIssueAction } from "../../shared/bot-issues";
 import { BotIssueCard } from "./bot-issue-card";
 
 afterEach(() => cleanup());
@@ -19,12 +19,11 @@ const ISSUE: BotIssue = {
   createdAt: 1_000,
 };
 
-function mount(status: "open" | BotIssueResolution = "open") {
+function mount() {
   const actions: BotIssueAction[] = [];
   render(
     <BotIssueCard
       issue={ISSUE}
-      status={status}
       onAct={async (action) => {
         actions.push(action);
       }}
@@ -48,26 +47,11 @@ test("an open issue shows its title, body and action buttons and calls onAct", a
 
 test("an access issue offers Allow this folder and calls onAct with allow_folder", async () => {
   const actions: BotIssueAction[] = [];
-  render(<BotIssueCard issue={{ ...ISSUE, kind: "access_needed", actions: [{ kind: "allow_folder" }] }} status="open" onAct={(action) => { actions.push(action); }} />);
+  render(<BotIssueCard issue={{ ...ISSUE, kind: "access_needed", actions: [{ kind: "allow_folder" }] }} onAct={(action) => { actions.push(action); }} />);
   const button = screen.getByRole("button", { name: "Allow this folder" });
   button.focus(); assert.equal(document.activeElement, button);
   fireEvent.click(button);
   await waitFor(() => assert.deepEqual(actions, [{ kind: "allow_folder" }]));
-});
-
-test("a resolved issue shows a quiet resolved line and no buttons", () => {
-  for (const [status, line] of [
-    ["fixed", "Fixed"],
-    ["dismissed", "Dismissed"],
-    ["superseded", "Superseded"],
-  ] as const) {
-    mount(status);
-    screen.getByText(ISSUE.title);
-    screen.getByText(line);
-    assert.equal(screen.queryAllByRole("button").length, 0, `${status}: nothing left to press`);
-    assert.equal(screen.queryByText(ISSUE.body), null, `${status}: the detail is history now`);
-    cleanup();
-  }
 });
 
 test("buttons keep focus-visible styling", () => {
@@ -87,7 +71,7 @@ test("buttons keep focus-visible styling", () => {
 
 test("an access issue has a Not now exit that sends only dismissal", async () => {
   const actions: BotIssueAction[] = [];
-  render(<BotIssueCard issue={{ ...ISSUE, kind: "access_needed", actions: [{kind: "dismiss_access"}, {kind: "open_settings", section: "access"}] }} status="open" onAct={(action) => { actions.push(action); }} />);
+  render(<BotIssueCard issue={{ ...ISSUE, kind: "access_needed", actions: [{kind: "dismiss_access"}, {kind: "open_settings", section: "access"}] }} onAct={(action) => { actions.push(action); }} />);
   assert.deepEqual(buttonNames(), ["Not now", "Review access"]);
   const dismiss = screen.getByRole("button", {name: "Not now"});
   dismiss.focus();

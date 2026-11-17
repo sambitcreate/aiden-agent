@@ -119,6 +119,9 @@
   border-radius: 9px;
   background: var(--oa-fill);
 }
+.oa-bots-replies { display: flex; gap: 4px; }
+.oa-bots-replies .oa-chip { height: 14px; padding: 0 6px; }
+.oa-bots-receipt { color: var(--text-tertiary); text-align: center; font-size: 7.5px; }
 .oa-bots-routine { position: absolute; height: 18px; padding: 0 7px; background: var(--surface-popover); box-shadow: var(--elevation-control); color: var(--text-primary); }
 .oa-bots-routine .oa-icon { color: var(--accent); }
 

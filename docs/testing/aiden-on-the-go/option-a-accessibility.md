@@ -22,11 +22,11 @@ Task 35 removed that flag and the launch argument: the tab shell is now the only
 What stops it passing by accident:
 
 - The screens are pinned. The test asserts that the list of audited screens equals the eight above, in order, for each appearance. A screen it can't reach fails the test instead of being skipped.
-- It covers both layouts. In the compact layout (the phone, or a window 500 pt wide or less) every finding must match a rule below, within that rule's ceiling. In the regular-width layout (iPad's tab strip and split views) the findings aren't worked through yet, so each screen is held to a pinned count and set of audit types (`wideBaseline`, below). It no longer skips there.
+- It covers both layouts, under the same rules. In the compact layout (the phone, or a window 500 pt wide or less) and in the regular-width layout (iPad's tab strip and split views) every finding must match a rule below, within that rule's ceiling for the layout. A rule with no regular-width ceiling excuses nothing there. The per-screen `wideBaseline` it held the iPad to before is gone.
 - Each audit asserts at least four texts and cells on screen first, not counting the tab bar's own words, so an empty or loading screen can't pass an audit with nothing to find.
 - Every audit type runs (`.all`). The test runs them in two passes: every type except Dynamic Type and clipped text, then those two. In one pass the Dynamic Type checks change the text size, the screen lays itself out again, and checks in the same pass lost their element. That showed up as "Contrast failed on no element" on a different screen each run. Run alone, contrast found no such issue (probe, run 7b below), and with the two passes every contrast finding names its element.
 - The launch sets no content size override (`AidenStateMatrix.ContentSize.system`). A `-UIPreferredContentSizeCategoryName` argument pins the size, and the audit's Dynamic Type checks then report every text as not scaling.
-- Every finding is printed (`AUDIT ISSUE`, `AUDIT ALLOWED` or, in the regular-width layout, `AUDIT WIDE` with a per-screen `AUDIT WIDE TALLY`) and collected. The test fails if any finding is not allowed, or a rule excuses more than its ceiling, or a wide screen goes over its baseline or shows a new type. It lists all of them, and attaches the allowed ones to the result as `accessibility-audit-allowed`.
+- Every finding is printed (`AUDIT ISSUE` or `AUDIT ALLOWED`) and collected. The test fails if any finding is not allowed, or a rule excuses more than its ceiling. It lists all of them, and attaches the allowed ones to the result as `accessibility-audit-allowed`.
 - The scripts that run the lane's tests (`t-text*.sh`) set the simulator's text size to Large (`xcrun simctl ui <device> content_size large`) before each run, so a size left over from a capture run can't change what the audit sees.
 
 ## What the gate allows, and why
@@ -53,22 +53,21 @@ Last phone runs: 77 findings allowed on iOS 27 and 101 on iOS 26.5, none over a 
 
 ### The regular-width layout
 
-On "Aiden Lane iPad" (834 pt wide) the same audit runs, but no rule applies. Each screen may have at most this many findings of any kind in one appearance, of these types only (`AidenShellUITests.wideBaseline`). The numbers are the larger of the light and dark counts in the fix round 1 run (`task-34-fix1-ipad-c.log`):
+On an 834 pt iPad ("Aiden iPad Audit", iPad Pro 11-inch on iOS 27.0, and "Aiden iPad Audit 26", the same iPad on iOS 26.5) the gate runs the rules above. Each rule has its own ceilings in a regular width (`ceilingInRegularWidth`, and `ceilingInRegularWidthOnIOS26` where 26.5 finds more), the most it excused on each screen in one appearance. Two rules are for the regular width only, and two others take more labels there.
 
-| Screen | Most findings | Types |
+| Rule | Regular-width ceiling per screen | Why it isn't a fault in the app |
 | --- | --- | --- |
-| inbox | 7 | contrast, Dynamic Type, clipped text |
-| bots | 5 | contrast, Dynamic Type, clipped text |
-| bot | 8 | contrast, hit area, Dynamic Type |
-| chat | 9 | hit area, Dynamic Type, clipped text |
-| machines | 10 | contrast, Dynamic Type |
-| machine editor | 9 | contrast, Dynamic Type |
-| settings | 13 | contrast, Dynamic Type |
-| search | 5 (2 before Task 35) | hit area, Dynamic Type |
+| Text size of the floating tab strip's titles and badge (new, tried first) | inbox, bots, machines, machine editor, settings, search: 4 each | Dynamic Type "partially unsupported" on no element, only while iPad's floating tab strip shows. The audit's own description names three `UILabel`s and a `_UIBarBadgeView`: the Inbox, Bots and Workspaces titles (Search has only its symbol) and the Inbox badge. XCTest logs that it can't resolve the strip's `_UIFloatingTabBarItemCell`, which is why there's no element. With the strip hidden (a chat, a Bot) or the sidebar open in its place there are none (probe: 4 with the strip, 0 with the sidebar). The system draws the strip at one size, as it does the phone's tab bar. The test finds the strip by its tab buttons and adds it to the glass it measures against, since `app.tabBars` is empty on iPad. |
+| Text drawn in a bar | inbox 1, bot 1 | The status item and the Bot's title, as on the phone |
+| System secondary text in a Form | settings 10, machines 6, machine editor 2 | As on the phone. The wider Form shows more footers at once. |
+| A machine filter chip, with its tile / A machine chip in the filter strip | inbox 1, bots 1 each | As on the phone |
+| Selectable transcript text | chat 3. iOS 26.5: chat 5, bot 5 | As on the phone. In a regular width the reply's first paragraph fits on one line, so it is under 44 pt tall. |
+| The composer's text view / the search field's clear button | chat 1, bot 1 / search 1 | As on the phone |
+| Text pushed below the screen | machines 2, machine editor 5, settings 1, search 1 | The phone's labels, plus the machine editor's Connection header and row, Identity and Reconnect, and Settings' "Read Aloud is unavailable" footer. At AX5 none of them is on the screen (probe below); at Large they sit low on the page. The editor's Hide from Inbox footer ("A hidden machine stays paired…"), the section just above Connection, is reported in every iOS 26.5 run and in some iOS 27 runs (not gate1, yes in the suite run). |
+| Transcript and Search result text measured growing at every size (new) | bot 4, chat 3, search 3 | Dynamic Type "partially unsupported" on the demo Bot reply (its first line and three list items), the first chat's reply (its first line and two list items) and Search's Bot result (name, snippet, "Bot conversation · Home Mini"). Launched at each of the nine sizes from Large to AX5, each one grows at every step and stays on the screen: "Monday: roadmap review" 230 by 52 pt at Large, then 253, 266, 286, 332, 381, 452, 524 and 572 pt wide at AX5. The reply is MarkdownUI's, scaled with the body style; the Search rows are system text styles. The phone gate audits the same lines, where they wrap, and finds nothing, so a real size limit would fail there. Matched by screen and label (`textThatGrowsAtEverySize`). |
+| Contrast of text in or under glass | inbox 1, bot 2 | The status item, the Bot's title and its connection hint. iOS 26.5 on iPad found nothing in the scroll-edge band: there's no bottom bar, and nothing faded under the navigation bar. |
 
-The contrast, hit area and clipped text findings there are the kinds the compact rules explain (Form secondary text, the filter strip, transcript text, the composer, message times, glass). The Dynamic Type findings are the open work: "partially unsupported" with no element on Inbox, Machines, the machine editor and Settings, and on transcript text in the chat and the Bot chat. Clearing them is parked; until then the baseline only stops the count rising.
-
-Search went from 2 to 5 in Task 35 (`task-35-ipad-shell.log`), when it started keeping its bar while its field is up (check N1). The two it had are unchanged: the system field's Clear text button (hit area) and the unsearched-machines note, which is the same growing footnote the compact rule excuses, pushed under the keyboard rather than below the screen. The three new ones are Dynamic Type "partially unsupported" on no element. They came with the bar, whose controls (the tabs and the sidebar button the field used to hide) are the system's and the likeliest owners, but the audit names no element, so that isn't proven. They join the parked findings below.
+Last iPad runs: see the regular-width run record below.
 
 ## What the audit found, and what changed
 
@@ -91,6 +90,8 @@ Runs are logs in the task's working folder (`task-34-audit*.log`).
 | Code block language and Copy | Primary colour. |
 | Offline machine row detail ("Never connected") on the warning tint | Foreground colour, and two lines before it truncates. |
 | Bot "Connecting…" hint | Foreground colour. On glass it still fails without Reduce Transparency (allowed above). |
+| On iOS 26.5 in a regular width the app stopped during the machine editor's Dynamic Type check (regular-width task) | UIKit asserted after `UICollectionView _updateVisibleCellsNow:` called itself a hundred deep: the Form's two adaptive `LazyVGrid`s (Symbol and Colour) sized their rows again on every pass at a new text size. A person changing the text size on that page could hit the same loop. They are now `AidenTileGrid`, a `Layout` with the same columns that measures every tile at once; the page looks the same (`audit-machine editor-*` before and after). `AidenMachineChromeTests.testTheTileGridFitsAsManyColumnsAsItsMinimumAllows` and `testTheTileGridStacksItsRows` cover its columns. Three Dynamic Type passes on the editor in a row: the app gone after the first before, running after all three since. |
+| "Modifying state during view update" at launch on an iPad (regular-width task) | Not the tab binding. A breakpoint on `os_log_fault_default_callback` stopped twice in the first frame's commit: `UIKitAdaptableTabView.updateUIViewController` → `UIKitTabBarController.updateSidebarToConfiguration` → `-[UITabBarControllerSidebar _setHidden:source:]` → `TabViewCoordinator_Phone.tabBarController(_:sidebarVisibilityWillChange:animator:)`, which sets SwiftUI's own sidebar-visibility binding during the update. No app code in the stack. It came from `.defaultAdaptableTabBarPlacement(.sidebar)`: without it the same launch logs nothing. The shell now uses the system's placement, as the Option A spec has it ("iPad uses `.sidebarAdaptable` — same code, system behaviour"): an iPad opens on the tab strip, and the sidebar is one tap away. `testIPadUsesASidebar` opens it from the sidebar button. The gate's result bundles no longer carry the runtime warning. |
 
 ### Differentiate Without Colour
 
@@ -130,7 +131,7 @@ Simulator "Aiden Lane text" (iPhone, iOS 27). The screenshots are in the task's 
 
 ## Parked, not for Task 36
 
-- The regular-width layout's Dynamic Type findings (above). The baseline holds the line; clearing them needs its own task.
+- ~~The regular-width layout's Dynamic Type findings~~ Done: the regular width runs the rules above (see "The regular-width layout").
 - ~~In a regular-width window the Search tab's active field replaces the tab strip~~ Fixed in Task 35 (check N1): Search keeps its bar in a regular width, and `testSearchInARegularWidthLeavesAWayBackToTheOtherTabs` opens Workspaces from the sidebar with the field up. The gate still audits Search last.
 
 ## Run record
@@ -182,3 +183,26 @@ Logs are `task-34-fix1-*.log` in the task's working folder.
 | fix1-breakcheck | Aiden Lane text | With each Differentiate Without Colour cue broken on purpose (the row chip's name always on, no status symbol, no filter checkmark, no symbol outline, no separator) and the no-longer-paired message back to "This machine is no longer paired", every matching test failed: all five "Without colour" tests in `AidenMachineChromeTests` (6 failures) and the five naming tests in `AidenOwnerRoutingTests` (7 failures). The code went back afterwards. |
 
 The iPad drag test (`testDraggingTheResultsPutsTheKeyboardAwayAndKeepsTheQuery`) failed in earlier iPad rounds (Task 25) before `d33215a7b`, which measured the drag in the window instead of the app frame and gave the window back its width after a narrowing test. Since then it passed in every iPad run (Task 25 and 31 reruns, four in a row here, and after the narrowing tests in the suite run). The width is now restored in a teardown block, so a narrowing test that fails part way still leaves the window wide.
+
+### The gate on iPad
+
+Each run used a simulator made for it and deleted afterwards: "Aiden iPad Audit" (iPad, iOS 27.0), "Aiden iPad Audit 26" (iPad, iOS 26.5) and "Aiden Phone Audit" (iPhone 17 Pro, iOS 27.0), with Xcode 27.1.
+
+| Run | Where | Result |
+| --- | --- | --- |
+| phone0, from `origin/main` | Aiden Phone Audit | The gate passed, 75 allowed |
+| gate0, the gate with `wideBaseline` | Aiden iPad Audit | Failed: 125 findings in the regular width, several screens over their baseline |
+| lldb, a symbolic breakpoint on `os_log_fault_default_callback` | Aiden iPad Audit | Two faults at launch, both from SwiftUI writing its sidebar state while drawing the first frame (`UIKitAdaptableTabView.updateUIViewController` to `TabViewCoordinator_Phone.tabBarController(_:sidebarVisibilityWillChange:animator:)`), with no app code in the stack. Without `defaultAdaptableTabBarPlacement(.sidebar)`: none. |
+| Tab strip probe | Aiden iPad Audit | The four Dynamic Type findings with no element on every screen are the floating tab strip: the three tab titles and the Inbox badge (`_UIFloatingTabBarItemCell`, which XCTest reports as an automation type mismatch) |
+| Growth probe | Aiden iPad Audit | The transcript and Search result text the audit calls partially unsupported grows at every size from L to AX5 (for example "Monday: roadmap review", 230 to 572 pt wide) |
+| gate1, the regular-width rules | Aiden iPad Audit | Passed, 122 allowed |
+| ipad26 r1 | Aiden iPad Audit 26 | Failed with "No Inbox menu": the app had been killed in the machine editor. The audit's text size check made the adaptive `LazyVGrid` in the Form rows re-size on each pass until UIKit stopped the app. |
+| Machine editor probe | Aiden iPad Audit 26 | Three text size passes on the editor: the app died in the first with `LazyVGrid`, survived all three with `AidenTileGrid` |
+| ipad26b, ipad26c | Aiden iPad Audit 26 | -b failed on 15 findings over the iOS 27 ceilings (hit areas in both chats, the hidden machine footer), which set the iOS 26.5 regular-width ceilings. -c passed, 134 allowed. No finding in the scroll-edge band. |
+| `AidenMachineChromeTests`, `AidenMachineDetailTests` | Aiden iPad Audit 26 | 71 passed, including the two tile grid tests |
+| phone2 | Aiden Phone Audit | The gate passed, 75 allowed, the same findings as phone0 |
+| `npm run test:ios-release` | | 53 of 53 passed (20 Ruby, 33 Node) |
+| ipad-suite: `AidenShellUITests` | Aiden iPad Audit | 59 run, 2 skipped (the opt-in capture, and the tab bar minimizing, which is iPhone only), 56 passed, 1 failed: the gate, on a fifth machine editor finding over the ceiling of 4 (the Hide from Inbox footer, which gate1 didn't report). That set the editor's ceiling to 5 on both systems. The three menu-shell failures of earlier iPad runs (`testCaptureBaselineScreens`, `testLoadEarlierKeepsTheReaderOnTheMessageTheyWereReading`, `testAShortChatStaysAtTheTop`) all passed. An iPad now opens on the tab strip, which is the likely reason; none was changed for it. |
+| gate2 | Aiden iPad Audit | Passed, 123 allowed |
+| ipad26d, on the final build | Aiden iPad Audit 26 | Passed, 134 allowed |
+| phone3, on the final build | Aiden Phone Audit | Passed, 75 allowed |

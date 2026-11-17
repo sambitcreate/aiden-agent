@@ -13,6 +13,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenSkeletonBlock
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
@@ -56,7 +57,12 @@ data class AidenBotCreateDraft(
     val name: String = "",
     val help: String = "",
     /** Null keeps the Mac's recommended model (access omitted, Full). */
-    val model: AidenModelRoute? = null
+    val model: AidenModelRoute? = null,
+    /**
+     * Revision 61 (`bot:templates`): New bot asks only for a name. The Mac writes the rest, and
+     * the Bot learns what it is for in its first chat.
+     */
+    val oneField: Boolean = false
 ) {
     val canCreate: Boolean
         get() = name.isNotBlank()
@@ -76,6 +82,10 @@ data class AidenBotCreateDraft(
      */
     fun request(catalog: AidenBotCapabilityCatalog? = null): AidenBotCreateRequest? {
         if (!canCreate) return null
+        if (oneField) {
+            val trimmed = name.trim().take(AidenBotWire.MAX_NAME_LENGTH)
+            return AidenBotCreateRequest.oneField(trimmed, AidenBotSemanticAvatar.Recipe(AidenBotCharacter.autoAssigned(trimmed)))
+        }
         val access = model?.let { route ->
             val cat = catalog ?: return null
             if (!cat.containsAvailable(route.providerId, route.modelId)) return null
@@ -527,7 +537,8 @@ private fun AidenBotCreateScreen(
     // the save host outlive the form, so a retry keeps its answers and its idempotency key.
     val flow = remember(client) { coordinator.botCreateFlow() }
     val saveHost = remember(client) { coordinator.botSaveHost() }
-    var draft by remember { mutableStateOf(flow.reopening() ?: AidenBotCreateDraft()) }
+    val oneField = coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(AidenRemoteCapability.BOT_TEMPLATES) == true
+    var draft by remember { mutableStateOf(flow.reopening() ?: AidenBotCreateDraft(oneField = oneField)) }
     // Closed without Create after Try again: that Bot is let go.
     val close = {
         flow.closeReopened()
@@ -539,8 +550,13 @@ private fun AidenBotCreateScreen(
     // Until the Mac answers (or while it connects) the field is a placeholder, never a spinner.
     var catalog by remember { mutableStateOf<AidenBotCapabilityCatalog?>(null) }
     var catalogSettled by remember { mutableStateOf(false) }
-    LaunchedEffect(client) {
+    LaunchedEffect(client, draft.oneField) {
         val cl = client ?: return@LaunchedEffect
+        // One-field New bot has no model field, so it never asks for the catalog.
+        if (draft.oneField) {
+            catalogSettled = true
+            return@LaunchedEffect
+        }
         // A failed refetch keeps the catalog already loaded.
         try {
             catalog = cl.botCapabilityCatalog()
@@ -577,7 +593,7 @@ private fun AidenBotCreateScreen(
             placeholder = stringResource(R.string.bot_editor_name_placeholder),
             singleLine = true
         )
-        AidenBotLabeledField(
+        if (!draft.oneField) AidenBotLabeledField(
             label = stringResource(R.string.bot_editor_help_label),
             value = draft.help,
             onValueChange = { draft = draft.copy(help = it.take(AidenBotWire.MAX_INSTRUCTIONS_LENGTH)) },
@@ -624,7 +640,7 @@ private fun AidenBotCreateScreen(
             }
         }
         Text(
-            text = stringResource(R.string.bot_editor_later_hint),
+            text = stringResource(if (draft.oneField) R.string.bot_editor_one_field_hint else R.string.bot_editor_later_hint),
             style = MaterialTheme.typography.bodySmall,
             color = palette.secondary
         )

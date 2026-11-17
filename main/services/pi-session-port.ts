@@ -79,7 +79,12 @@ export interface PiSessionPort<Metadata extends PiSessionMetadata = PiSessionMet
   }): Promise<string>;
   appendCustomEntry(customType: string, data?: unknown): Promise<string>;
   appendMessage(message: AgentMessage): Promise<string>;
-  buildContext(): Promise<PiSessionContext>;
+  /**
+   * The model context of the current branch. `branch` is that branch as
+   * `getBranch()` just returned it, for a caller that reads both; without it
+   * the branch is read here.
+   */
+  buildContext(branch?: readonly PiSessionEntry[]): Promise<PiSessionContext>;
   getBranch(): Promise<PiSessionEntry[]>;
   getEntries(): Promise<PiSessionEntry[]>;
   getLeafId(): Promise<string | null>;
@@ -169,8 +174,8 @@ class CurrentPiSessionPort<Metadata extends PiSessionMetadata>
   appendMessage: PiSessionPort<Metadata>["appendMessage"] = async (message) =>
     (await this.#branch()).appendMessage(withoutUndefined(message), TODO_CONTEXT);
 
-  async buildContext(): Promise<PiSessionContext> {
-    const branch = await this.getBranch();
+  async buildContext(given?: readonly PiSessionEntry[]): Promise<PiSessionContext> {
+    const branch = given ?? await this.getBranch();
     let thinkingLevel = "off";
     let model: PiSessionContext["model"] = null;
     let activeToolNames: string[] | null = null;

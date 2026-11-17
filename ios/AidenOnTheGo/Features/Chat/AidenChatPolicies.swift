@@ -469,9 +469,9 @@ enum AidenChatModelAuthority {
               let agentLabel = macOnlyAgentProviders[providerId],
               catalog?.providers.contains(where: { $0.id == providerId }) != true else { return nil }
         if let replyModelLabel {
-            return String(localized: "This chat used \(agentLabel), which runs only on your machine. Replies from here use \(replyModelLabel).")
+            return String(localized: "This chat used \(agentLabel), which runs only on your computer. Replies from here use \(replyModelLabel).")
         }
-        return String(localized: "This chat used \(agentLabel), which runs only on your machine. Choose a model for replies from here.")
+        return String(localized: "This chat used \(agentLabel), which runs only on your computer. Choose a model for replies from here.")
     }
 
     /// The chat's own provider/model pair, when the host still offers it.

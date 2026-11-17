@@ -725,7 +725,7 @@ final class AidenBotGeneratedAvatarTests: XCTestCase {
         XCTAssertEqual(model.authoritativeBot?.avatar.asset?.assetRevision, macRevision)
         XCTAssertNotNil(model.currentImage)
         XCTAssertEqual(model.phase, .idle)
-        XCTAssertTrue(model.errorMessage?.contains("changed on your paired desktop") == true)
+        XCTAssertTrue(model.errorMessage?.contains("changed on your paired computer") == true)
     }
 
     @MainActor
@@ -806,7 +806,7 @@ final class AidenBotGeneratedAvatarTests: XCTestCase {
         XCTAssertEqual(model.phase, .idle)
         XCTAssertEqual(model.authoritativeBot?.avatar.asset?.assetRevision, replacementRevision)
         XCTAssertNotNil(model.currentImage)
-        XCTAssertTrue(model.errorMessage?.contains("changed on your paired desktop") == true)
+        XCTAssertTrue(model.errorMessage?.contains("changed on your paired computer") == true)
     }
 
     @MainActor

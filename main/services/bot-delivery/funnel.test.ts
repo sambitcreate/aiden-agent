@@ -13,6 +13,7 @@ import {
 } from "./funnel.js";
 import { BotDeliveryHistoryFullError, createBotDeliveryLog } from "./log.js";
 import type { ScheduledTask } from "../types.js";
+import { createBotNotificationFeed } from "../bot-routine-notifications.js";
 
 const NOW = Date.parse("2026-10-27T09:00:00.000Z");
 const HOUR = 60 * 60 * 1_000;
@@ -51,7 +52,7 @@ function routineResult(overrides: Partial<BotDeliveryInput> = {}): BotDeliveryIn
 
 async function harness(
   gate: BotDeliveryGate = ALWAYS_NOW_GATE,
-  ports: { mac?(input: BotDeliveryInput): Promise<void>; telegram?(input: BotDeliveryInput): Promise<void>; ownsPeerFinal?(botId:string,requestId:string):Promise<boolean> } = {},
+  ports: { mac?(input: BotDeliveryInput): Promise<void>; telegram?(input: BotDeliveryInput): Promise<void>; ownsPeerFinal?(botId:string,requestId:string):Promise<boolean>; inFront?(botId: string): boolean } = {},
 ) {
   const profile = await mkdtemp(path.join(os.tmpdir(), "aiden-bot-delivery-"));
   const log = createBotDeliveryLog({ profileDir: () => profile, now: () => NOW });
@@ -60,6 +61,7 @@ async function harness(
     log,
     gate,
     ownsPeerFinal: ports.ownsPeerFinal,
+    ...(ports.inFront ? { inFront: ports.inFront } : {}),
     mac: async (input) => {
       calls.mac.push(input);
       await ports.mac?.(input);
@@ -108,6 +110,37 @@ test("sends a routine result to mac, telegram and the phone feed once", async (t
     },
   );
   assert.ok(rows[0]!.id.length > 0);
+});
+
+test("a message for a Bot whose chat is in front of the person pings nowhere and does not count toward the day", async (t) => {
+  let gateAsked = 0;
+  const h = await harness(
+    { decide: async () => { gateAsked += 1; return { kind: "now" }; } },
+    { inFront: (botId) => botId === "bot:scout" },
+  );
+  t.after(h.cleanup);
+  const phones = createBotNotificationFeed({ log: h.log, botName: async () => "Scout", now: () => NOW + 1 });
+  const issue: BotDeliveryInput = { botId: "bot:scout", class: "issue", dedupeKey: "issue:i1", title: "Morning brief needs you", body: "Sign in again.", status: "info" };
+
+  assert.equal(await h.funnel.deliver(issue), "suppressed");
+  assert.equal(await h.funnel.deliver(routineResult()), "suppressed");
+  assert.equal(h.calls.mac.length + h.calls.telegram.length, 0, "no banner, no Telegram");
+  assert.deepEqual((await phones.list(undefined, { issues: true })).notifications, [], "no phone alert");
+  assert.equal(gateAsked, 0, "nothing was held for quiet hours or spent from the daily limit");
+  assert.equal(countedToday(await h.log.list("bot:scout"), NOW - HOUR, NOW), 0);
+  assert.equal((await h.log.list("bot:scout")).length, 2, "both stay in the record");
+
+  // Another Bot, whose chat is not the one in front, still reaches the person.
+  assert.equal(await h.funnel.deliver({ ...issue, botId: "bot:ada" }), "sent");
+  assert.equal(h.calls.mac.length, 1);
+  assert.deepEqual((await phones.list(undefined, { issues: true })).notifications.map((n) => n.botId), ["bot:ada"]);
+});
+
+test("a chat probe that fails counts as not in front, so the person is still told", async (t) => {
+  const h = await harness(ALWAYS_NOW_GATE, { inFront: () => { throw new Error("the window went away"); } });
+  t.after(h.cleanup);
+  assert.equal(await h.funnel.deliver(routineResult()), "sent");
+  assert.equal(h.calls.mac.length, 1);
 });
 
 test("a deferred row is invisible to phones until it is due", async (t) => {

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import {
+  botFullComputerLabel,
   validateSelectionAgainstCatalog,
   type BotCustomSelection,
 } from "../../renderer/shared/bot-capabilities.js";
@@ -264,7 +265,7 @@ test("file choices enforce Full Mac exclusivity and approved-location Bot folder
         catalogRevision: current.catalog.revision,
         snapshot: current,
       }),
-    /Full Mac, Bot folder/u,
+    /Full (Mac|computer), Bot folder/u,
   );
   assert.throws(
     () =>
@@ -273,7 +274,7 @@ test("file choices enforce Full Mac exclusivity and approved-location Bot folder
         catalogRevision: current.catalog.revision,
         snapshot: current,
       }),
-    /Full Mac, Bot folder/u,
+    /Full (Mac|computer), Bot folder/u,
   );
   assert.doesNotThrow(() =>
     bindBotCustomSelection({
@@ -701,7 +702,7 @@ test("main catalog service uses injected inventories, stable persisted key, and 
   assert.deepEqual(
     first.catalog.fileScopes.slice(0, 2).map(({ kind, label }) => ({ kind, label })),
     [
-      { kind: "full_mac", label: "Full Mac" },
+      { kind: "full_mac", label: botFullComputerLabel(process.platform) },
       { kind: "bot_home", label: "Bot folder" },
     ],
   );

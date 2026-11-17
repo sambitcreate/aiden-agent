@@ -41,7 +41,7 @@ enum AidenSpendingCopy {
         case .reached:
             return Notice(
                 title: "\(who) reached its \(usd(spending.allowedUsd)) spending limit\(period).",
-                body: "It has spent \(usd(spending.spentUsd)). \(allowMore) to keep going, or change the limit on your machine.",
+                body: "It has spent \(usd(spending.spentUsd)). \(allowMore) to keep going, or change the limit on your computer.",
                 allowMore: allowMore
             )
         }
