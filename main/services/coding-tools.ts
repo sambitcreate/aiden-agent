@@ -1796,6 +1796,8 @@ export interface RunCommandLeftovers {
   begin(): {
     signal?: AbortSignal;
     release?(): void;
+    /** After each command, however it ended (a cancelled push may still have landed); e.g. to notice a push. */
+    finished?(command: string): void;
     env: Record<string, string>;
     /**
      * Returns a line for the tool result, if any. `output` is what they still
@@ -1906,6 +1908,11 @@ function makeRunCommand(workspace: WorkspaceRootGuard, options: CodingToolOption
         }, result);
       } finally {
         leftovers?.release?.();
+        try {
+          leftovers?.finished?.(command);
+        } catch {
+          // Noticing what the command did never fails the command.
+        }
       }
     },
   };

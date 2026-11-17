@@ -351,7 +351,7 @@ test("idle waiters see work through a reservation handing off to its generation"
 // C11: a tool call in an `ask` workspace waits on the person's answer.
 
 /** Runs one turn up to its approval prompt. */
-async function awaitingApproval(f, chatId, { tool = "ls", args = { path: "." }, owner = ownerFor() } = {}) {
+async function awaitingApproval(f, chatId, { tool = "list_dir", args = { path: "." }, owner = ownerFor() } = {}) {
   f.steps.push(callTool(tool, args), reply("Finished"));
   const turn = await beginTurn(f, chatId, { owner });
   await until(() => owner.of("chat:approval").length > 0, "the approval prompt");
@@ -361,7 +361,7 @@ test("every raised approval reports one decision, and it matches the outcome", a
   const run = async ({ raised = () => {}, publish }) => {
     const decisions = [];
     const approvals = api.createDaemonApprovals({ raised, resolved: (id, decision) => decisions.push(decision) });
-    const outcome = await approvals.request({ streamId: "stream", toolCallId: "call", toolName: "ls", summary: "List" }, new AbortController().signal, "owner", (prompt) => publish(approvals, prompt));
+    const outcome = await approvals.request({ streamId: "stream", toolCallId: "call", toolName: "list_dir", summary: "List" }, new AbortController().signal, "owner", (prompt) => publish(approvals, prompt));
     return { outcome, decisions };
   };
   const allow = (approvals, prompt) => assert.equal(approvals.approve(prompt.approvalId, "allow", "owner"), true);
@@ -382,7 +382,7 @@ test("an allowed tool call runs once, and only the owner or a host may answer", 
   const f = await fixture(t, { access: "ask" });
   writeFileSync(join(f.dir, "visible.txt"), "x");
   const { owner, approval } = await awaitingApproval(f, "allow");
-  assert.equal(approval.toolName, "ls");
+  assert.equal(approval.toolName, "list_dir");
   assert.equal(approval.summary, "List folder: .");
   assert.deepEqual(f.daemon.activity.snapshot().approvalChatIds, ["allow"]);
   assert.equal(f.daemon.llmClient.approve(approval.approvalId, "allow", "stranger"), false, "another owner cannot answer");
@@ -434,7 +434,7 @@ test("access revoked during an approval wait wins over a later allow", async (t)
 
 test("a tool request too large for the phone is refused without a prompt", async (t) => {
   const f = await fixture(t, { access: "ask" });
-  f.steps.push(callTool("ls", { path: "x".repeat(2_000) }), reply("Finished"));
+  f.steps.push(callTool("list_dir", { path: "x".repeat(2_000) }), reply("Finished"));
   const { owner } = await beginTurn(f, "oversized");
   await f.daemon.llmClient.waitForChatIdle("oversized");
   assert.equal(owner.of("chat:approval").length, 0);
@@ -444,13 +444,13 @@ test("a tool request too large for the phone is refused without a prompt", async
 test("a tool in a full-access workspace needs no prompt and one in a disabled workspace never runs", async (t) => {
   const f = await fixture(t, { access: "full" });
   writeFileSync(join(f.dir, "visible.txt"), "x");
-  f.steps.push(callTool("ls", { path: "." }), reply("Finished"));
+  f.steps.push(callTool("list_dir", { path: "." }), reply("Finished"));
   const open = await beginTurn(f, "full-access");
   await f.daemon.llmClient.waitForChatIdle("full-access");
   assert.equal(open.owner.of("chat:approval").length, 0);
   assert.match(toolResultSeen(f.requests[1]), /visible\.txt/u);
   await api.workspaceCommand(f.dir, ["access", f.workspace.id, "none"]);
-  f.steps.push(callTool("ls", { path: "." }), reply("Finished"));
+  f.steps.push(callTool("list_dir", { path: "." }), reply("Finished"));
   const closed = await beginTurn(f, "no-access");
   await f.daemon.llmClient.waitForChatIdle("no-access");
   assert.equal(closed.owner.of("chat:approval").length, 0);
@@ -594,7 +594,7 @@ test("a deletion that cannot finish keeps its chat closed without stopping the r
 function approvalsFixture(options = {}) {
   const raised = [], resolved = [];
   const approvals = api.createDaemonApprovals({ raised: (prompt) => raised.push(prompt.approvalId), resolved: (id, decision) => resolved.push([id, decision]), ...options });
-  const prompt = { streamId: "stream", toolCallId: "call", toolName: "ls", summary: "List" };
+  const prompt = { streamId: "stream", toolCallId: "call", toolName: "list_dir", summary: "List" };
   return { approvals, prompt, raised, resolved };
 }
 
@@ -781,7 +781,7 @@ test("a long hook reason can't push the end of the tool request out of the phone
 test("a hook's ask on a turn nobody attends is refused without a prompt", posix, async (t) => {
   const f = await fixture(t, { hooks: askBeforeListing });
   writeFileSync(join(f.dir, "visible.txt"), "x");
-  f.steps.push(callTool("ls", { path: "." }), reply("Finished"));
+  f.steps.push(callTool("list_dir", { path: "." }), reply("Finished"));
   const { owner } = await beginTurn(f, "hook-unattended", { usageSource: "scheduled" });
   await f.daemon.llmClient.waitForChatIdle("hook-unattended");
   assert.equal(owner.of("chat:approval").length, 0);
