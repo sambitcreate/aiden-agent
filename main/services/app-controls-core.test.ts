@@ -164,7 +164,7 @@ test("paired clients need current serving-owner consent even with a valid contro
   const f = fixture();
   await assert.rejects(
     f.service.apply(f.operation(), { ...f.context, remote: true }),
-    /Paired-host/u,
+    /paired devices are disabled/u,
   );
   assert.equal(f.commits(), 0);
 });

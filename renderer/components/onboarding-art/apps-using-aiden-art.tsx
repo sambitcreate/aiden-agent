@@ -1,12 +1,13 @@
 import { AppWindow, Eye, Lock, ShieldCheck } from "lucide-react";
-import { ArtChip, ArtIcon, ArtWindow, Bar, Toggle } from "./art-kit";
+import { thisComputerLabel } from "../../shared/computer-noun";
+import { ArtChip, ArtIcon, ArtWindow, Bar, Toggle, type ArtProps } from "./art-kit";
 
 /** Settings → Connections → Apps using Aiden: the switch and two added apps, one just connecting. */
-export function AppsUsingAidenArt() {
+export function AppsUsingAidenArt({ platform }: ArtProps) {
   return <>
     <div className="oa-stack" style={{ position: "absolute", left: 12, top: 12, gap: 5, justifyItems: "start" }}>
-      <ArtChip icon={Lock}>This computer only</ArtChip>
-      <ArtChip icon={ShieldCheck}>You approve</ArtChip>
+      <ArtChip icon={Lock}>{thisComputerLabel(platform)} only</ArtChip>
+      <ArtChip icon={ShieldCheck}>You answer approvals</ArtChip>
     </div>
     <ArtWindow style={{ left: 120, top: 8, width: 166, padding: 10 }}>
       <div className="oa-stack" style={{ gap: 9 }}>

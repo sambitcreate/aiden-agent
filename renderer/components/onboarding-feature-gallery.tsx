@@ -35,6 +35,7 @@ import {
 import { Text } from "./ui";
 import { onboardingModelDescription } from "../lib/onboarding-provider";
 import { pauseWhenUnseen } from "../lib/offscreen-pause";
+import { localComputerNoun, type LocalComputerNoun } from "../shared/computer-noun";
 import type { KeyboardPlatform } from "../shared/keybindings";
 import {
   FeatureArt,
@@ -49,9 +50,15 @@ export interface OnboardingFeature {
   id: FeatureArtId;
   group: FeatureGroupId;
   title: string;
-  description: string;
+  /** Plain text, or text that names this computer ("Mac" on macOS, "computer" elsewhere). */
+  description: string | ((computer: LocalComputerNoun) => string);
   icon: LucideIcon;
   size: FeatureArtSize;
+}
+
+/** A tile's description as this platform reads it. */
+export function onboardingFeatureDescription(feature: Pick<OnboardingFeature, "description">, platform: string): string {
+  return typeof feature.description === "function" ? feature.description(localComputerNoun(platform)) : feature.description;
 }
 
 const featureGroups: ReadonlyArray<{ id: FeatureGroupId; title: string }> = [
@@ -238,7 +245,8 @@ export const onboardingFeatures: OnboardingFeature[] = [
     id: "otherApps",
     group: "extend",
     title: "Apps using Aiden",
-    description: "Let apps like Claude Code or Codex on this computer list and read your Aiden chats, or start supervised work you approve in Aiden. Turn it on and add each app in Settings → Connections → Apps using Aiden; nothing listens until you do.",
+    description: (computer) =>
+      `Let apps like Claude Code or Codex on this ${computer} list and read your Aiden chats. With Supervised access they can also start work, which follows each workspace's approval mode, and only you answer approvals. Turn it on and add each app in Settings → Connections → Apps using Aiden; nothing listens until you do.`,
     icon: AppWindow,
     size: "wide",
   },
@@ -256,7 +264,7 @@ export const onboardingFeatures: OnboardingFeature[] = [
     group: "control",
     title: "Meet your Bots",
     description:
-      "Bots remember, ask each other for help, run routines, and hand steps back to you. Approve a whole plan on desktop or phone, follow its checklist, or stop it. Approval covers only listed actions within the Bot's access and limits, for this run and up to 60 minutes.",
+      "Your first Bot asks what you need and sets itself up. Bots remember, ask each other for help, run routines, and hand steps back to you. Approve a whole plan in Aiden Agent or on your phone, follow its checklist, or stop it. Approval covers only listed actions within the Bot's access and limits, for this run and up to 60 minutes.",
     icon: Bot,
     size: "standard",
   },
@@ -273,7 +281,7 @@ export const onboardingFeatures: OnboardingFeature[] = [
     id: "botWatches",
     group: "control",
     title: "Connected-app watches",
-    description: "Watch upcoming Calendar events on Mac or Linux, or a Mail mailbox on Mac. Choose the connected source in a Bot’s Profile, preview its matching metadata, and tell the Bot what to do. Checks continue while Aiden is running and the computer is awake. Manage them from desktop or a paired phone.",
+    description: "Watch upcoming Calendar events on Mac or Linux, or a Mail mailbox on Mac. Choose the connected source in a Bot’s Profile, preview its matching metadata, and tell the Bot what to do. Checks continue while Aiden is running and the computer is awake. Manage them from Aiden Agent or a paired phone.",
     icon: CalendarClock,
     size: "standard",
   },
@@ -281,7 +289,7 @@ export const onboardingFeatures: OnboardingFeature[] = [
     id: "botOpenWork",
     group: "control",
     title: "Open work",
-    description: "Bots keep track of tasks they accept. See what is open or waiting, edit a note, mark work done, dismiss it or undo a change from desktop or a paired phone.",
+    description: "Bots keep track of tasks they accept. See what is open or waiting, edit a note, mark work done, dismiss it or undo a change from Aiden Agent or a paired phone.",
     icon: ListTodo,
     size: "standard",
   },
@@ -289,7 +297,7 @@ export const onboardingFeatures: OnboardingFeature[] = [
     id: "botRoutineModels",
     group: "control",
     title: "Models for each routine",
-    description: "Choose a model, thinking level and optional fallback for each Bot routine. Each accepted run keeps its choice, including after a restart. Manage these choices from desktop or a paired phone.",
+    description: "Choose a model, thinking level and optional fallback for each Bot routine. Each accepted run keeps its choice, including after a restart. Manage these choices from Aiden Agent or a paired phone.",
     icon: Blocks,
     size: "standard",
   },
@@ -297,7 +305,7 @@ export const onboardingFeatures: OnboardingFeature[] = [
     id: "botPeers",
     group: "control",
     title: "Bot messaging",
-    description: "Approve named Bot pairs to exchange requests. Each Bot keeps its own rules and access. Inspect exchanges and ask the host to stop linked work from desktop or a paired phone.",
+    description: "Approve named Bot pairs to exchange requests. Each Bot keeps its own rules and access. Inspect exchanges and ask its computer to stop linked work from Aiden Agent or a paired phone.",
     icon: UsersRound,
     size: "standard",
   },
@@ -314,8 +322,8 @@ export const onboardingFeatures: OnboardingFeature[] = [
     id: "voice",
     group: "control",
     title: "Voice & Dictation",
-    description:
-      "Speak in the composer or dictate system-wide. Tap, hold, or both, and teach Aiden your names and terms in Voice & Speech settings. On-device models keep audio on this computer, and on Apple silicon your words appear as you speak. Or explicitly connect cloud transcription and review what it can access.",
+    description: (computer) =>
+      `Speak in the composer or dictate system-wide. Tap, hold, or both, and teach Aiden your names and terms in Voice & Speech settings. On-device models keep audio on this ${computer}, and on Apple silicon your words appear as you speak. Or explicitly connect cloud transcription and review what it can access.`,
     icon: Mic2,
     size: "standard",
   },
@@ -332,7 +340,7 @@ export const onboardingFeatures: OnboardingFeature[] = [
     group: "control",
     title: "Settings in chat",
     description:
-      "Ask how Aiden works or request settings in a conversation. Change theme, memory, Web Search, and skills with real controls. Enabling features needs confirmation; paired host controls start off until you allow them in Appearance.",
+      "Ask how Aiden works or request settings in a conversation. Change theme, memory, Web Search, and skills with real controls. Enabling features needs confirmation; controls for paired devices start off until you allow them in Appearance.",
     icon: Settings2,
     size: "standard",
   },
@@ -349,7 +357,8 @@ export const onboardingFeatures: OnboardingFeature[] = [
     id: "aidenOnTheGo",
     group: "control",
     title: "Aiden On The Go",
-    description: "Connect your phone or tablet with a guided setup and one-time code. Add custom providers from the paired client; connections and keys stay on your Mac.",
+    description: (computer) =>
+      `Connect your phone or tablet with a guided setup and one-time code. Add custom providers from the paired client; connections and keys stay on your ${computer}.`,
     icon: Smartphone,
     size: "standard",
   },
@@ -357,7 +366,7 @@ export const onboardingFeatures: OnboardingFeature[] = [
     id: "peerProjects",
     group: "control",
     title: "Projects on paired computers",
-    description: "Clone a local repository onto a paired computer from the new-chat machine menu. Choose an approved destination and optionally copy selected environment files. Git credentials stay on each computer; environment files are never selected automatically.",
+    description: "Clone a local repository onto a paired computer from the new-chat computer menu. Choose an approved destination and optionally copy selected environment files. Git credentials stay on each computer; environment files are never selected automatically.",
     icon: FolderGit2,
     size: "standard",
   },
@@ -373,7 +382,7 @@ export const onboardingFeatures: OnboardingFeature[] = [
     id: "permissions",
     group: "control",
     title: "Permissioned by Default",
-    description: "Choose No access, Ask first, or Full per workspace; keys stay encrypted.",
+    description: "Choose Auto, Ask, or Never ask, per workspace if you like; keys stay encrypted.",
     icon: ShieldCheck,
     size: "wide",
   },
@@ -438,7 +447,7 @@ export function OnboardingFeatureGallery({
                     key={feature.id}
                     ref={pauseWhenUnseen}
                     tabIndex={0}
-                    aria-label={`${feature.title}. ${feature.description}`}
+                    aria-label={`${feature.title}. ${onboardingFeatureDescription(feature, platform)}`}
                     data-onboarding-feature={feature.id}
                     style={featureArtTintStyle(feature.id)}
                     className={`oa-tile group relative overflow-hidden rounded-card shadow-control outline-none transition-[background-color,box-shadow] duration-150 hover:shadow-control-hover focus-visible:shadow-control-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring motion-reduce:transition-none ${FEATURE_LAYOUTS[feature.size]}`}
@@ -470,7 +479,7 @@ export function OnboardingFeatureGallery({
                           className="mt-1 block text-small leading-4"
                           data-onboarding-feature-description
                         >
-                          {feature.description}
+                          {onboardingFeatureDescription(feature, platform)}
                         </Text>
                       </div>
                     </div>

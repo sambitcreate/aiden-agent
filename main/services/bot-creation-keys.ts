@@ -1,11 +1,12 @@
-// Which Bot each idempotent creation key (`preset:<id>`) made, so Start Chat
-// on a starter Bot opens the same Bot every time. A key whose Bot is gone
-// (deleted) is forgotten, and the next Start Chat creates a fresh one.
+// Which Bot each idempotent creation key made: `preset:<id>` for a Template's
+// Create bot, `first-bot` for the silent first Bot onboarding makes. A repeat
+// opens the same Bot every time. A key whose Bot is gone (deleted) is
+// forgotten, and the next create makes a fresh one.
 
 import { DataStore } from "./data-store.js";
 
 export const BOT_CREATION_KEYS_FILE = "bot-creation-keys.json";
-const KEY_PATTERN = /^preset:[a-z0-9][a-z0-9-]{0,63}$/u;
+const KEY_PATTERN = /^(?:preset:[a-z0-9][a-z0-9-]{0,63}|first-bot)$/u;
 const MAX_BOT_ID_CHARS = 160;
 
 interface BotCreationKeyState {

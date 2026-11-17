@@ -31,7 +31,8 @@ export function parseAidenMcpAppInput(value: unknown): { name: string; access: "
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid app details.");
   const record = value as Record<string, unknown>;
   const name = typeof record.name === "string" ? record.name.trim() : "";
-  if (!name || name.length > MAX_APP_NAME_LENGTH) throw new Error("Give the app a name of up to 80 characters.");
+  // Characters are code points, as Aiden's Remote state and `aiden apps connect` count them.
+  if (!name || [...name].length > MAX_APP_NAME_LENGTH) throw new Error("Give the app a name of up to 80 characters.");
   if (record.access !== "read" && record.access !== "supervised") throw new Error("Choose Read only or Supervised.");
   return { name, access: record.access };
 }

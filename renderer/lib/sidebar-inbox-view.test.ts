@@ -72,6 +72,7 @@ function order(partial: Partial<Record<keyof InboxDisplayOrder, string[]>>): Inb
 
 test("local entries list Assistant and scheduled chats under their own labels, and skip Bot and removed-workspace chats", () => {
   const entries = localInboxEntries({
+    platform: "darwin",
     chats: [
       chat("work"),
       chat("assistant", { workspaceId: ASSISTANT_WORKSPACE_ID }),
@@ -96,6 +97,7 @@ test("local entries list Assistant and scheduled chats under their own labels, a
 
 test("a local chat's pending wait carries its time and a detached prompt into the row", () => {
   const [row] = localInboxEntries({
+    platform: "darwin",
     chats: [chat("a")],
     workspaces,
     rowState: () => "idle",
@@ -125,13 +127,14 @@ test("remote entries leave out blocked hosts and name an unnamed host", () => {
   const entries = remoteInboxEntries(rows, hosts);
   assert.deepEqual(
     entries.map((item) => [item.title, item.project, item.hostLabel, item.signals.hostOnline]),
-    [["Deploy", "site", "Paired Mac", false]],
+    [["Deploy", "site", "Paired computer", false]],
   );
 });
 
 test("a chat's triage places its local and remote rows", () => {
   const triage = { revision: 2, updatedAt: NOW, pinnedAt: NOW - MINUTE };
   const [local] = localInboxEntries({
+    platform: "darwin",
     chats: [chat("a")],
     workspaces,
     rowState: () => "idle",
@@ -298,6 +301,7 @@ function botEntries(
   options: { openBotId?: string | null; seen?: Record<string, number> } = {},
 ): InboxEntry[] {
   return botInboxEntries({
+    platform: "darwin",
     bots: rows.map((row) => ({
       bot: bot(row.id),
       ...(row.running ? { state: { kind: "running" } } : {}),
@@ -342,6 +346,7 @@ test("a Bot with an unread reply is in Updates and offers Mark read; a read or m
 
 test("Bots the Inbox doesn't list still have rows, with their live state, for the list to hold in place", () => {
   const { listed, unlisted } = botInboxRows({
+    platform: "darwin",
     bots: [
       { bot: bot("fresh"), activityAt: NOW, needsYou: false, lastReplyAt: NOW - MINUTE },
       { bot: bot("seen"), activityAt: NOW, needsYou: false, lastReplyAt: NOW - HOUR },
@@ -360,6 +365,7 @@ test("Bots the Inbox doesn't list still have rows, with their live state, for th
 test("a local Bot whose last turn failed is Failed in Needs you with no prompt, issue or unread reply, until it runs again", () => {
   const rowsFor = (state: { kind: string } | undefined, openBotId: string | null = null) =>
     botInboxRows({
+    platform: "darwin",
       bots: [{ bot: bot("b1"), ...(state ? { state } : {}), activityAt: NOW - 4 * MINUTE, needsYou: false, lastReplyAt: NOW - HOUR }],
       openBotId,
       // Its last reply was already seen.

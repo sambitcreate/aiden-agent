@@ -213,7 +213,13 @@ final class AidenMarkdownContentCache {
         let split = AidenMarkdownBlockSplitter.split(markdown)
         guard !split.settled.isEmpty else {
             let text = streaming ? AidenStreamingMarkdownTail.displayText(markdown) : markdown
-            return [AidenMarkdownChunk(index: 0, text: text, content: parse(text), leadingGap: 0)]
+            return [AidenMarkdownChunk(
+                index: 0,
+                text: text,
+                content: parse(text),
+                leadingGap: 0,
+                openCode: streaming ? AidenStreamingMarkdownTail.openCodeBlock(in: text) : nil
+            )]
         }
         var pieces = split.settled.map { (text: String($0), sealed: true) }
         if !split.tail.isEmpty {
@@ -230,7 +236,9 @@ final class AidenMarkdownContentCache {
                 index: index,
                 text: piece.text,
                 content: piece.sealed ? cachedContent(for: piece.text) : parse(piece.text),
-                leadingGap: gap
+                leadingGap: gap,
+                // Only the open tail is looked at, so sealed chunks cost nothing extra.
+                openCode: streaming && !piece.sealed ? AidenStreamingMarkdownTail.openCodeBlock(in: piece.text) : nil
             ))
         }
         return chunks
@@ -284,6 +292,10 @@ struct AidenMarkdownChunk {
     let text: String
     let content: MarkdownContent
     let leadingGap: CGFloat
+    /// Set only for a streaming tail that is one fenced code block still being
+    /// written. It is drawn as a code block directly, because a block drawn through
+    /// Markdown gets a new identity on every token and loses its copy button's state.
+    var openCode: AidenStreamingMarkdownTail.OpenCodeBlock? = nil
 }
 
 /// Which chunks of a streaming reply fade in. Only a chunk whose text starts
@@ -434,6 +446,45 @@ enum AidenMarkdownChunkSpacing {
 /// left alone because intraword underscores (`snake_case`) are not emphasis.
 /// The settled reply is always drawn from the real text.
 enum AidenStreamingMarkdownTail {
+    /// A code block whose closing fence has not arrived.
+    struct OpenCodeBlock: Equatable {
+        /// The info string after the opening fence (`swift` in "```swift"), if any.
+        let info: String?
+        /// The code that has arrived, as the block would show it: no fences, and no
+        /// newline after the last line.
+        let code: String
+    }
+
+    /// The tail as an open code block, when the tail starts with a fence and the
+    /// fence has not closed. Nil for anything else, so only a block being written
+    /// is treated differently.
+    static func openCodeBlock(in tail: String) -> OpenCodeBlock? {
+        var lines = tail.split(separator: "\n", omittingEmptySubsequences: false)
+            .map { $0.hasSuffix("\r") ? $0.dropLast() : $0 }
+        guard !lines.isEmpty else { return nil }
+        let opener = lines.removeFirst()
+        guard let fence = AidenMarkdownBlockSplitter.Fence(opening: opener.utf8) else { return nil }
+        for line in lines where fence.isClosed(by: line.utf8) { return nil }
+        // A newline after the last line that arrived is not part of the code.
+        if lines.last?.isEmpty == true { lines.removeLast() }
+
+        // An indented fence takes that much indentation off the code.
+        let indent = opener.prefix(while: { $0 == " " }).count
+        let code = lines.map { line -> Substring in
+            var line = line
+            var removable = indent
+            while removable > 0, line.first == " " {
+                line = line.dropFirst()
+                removable -= 1
+            }
+            return line
+        }.joined(separator: "\n")
+
+        let info = opener.drop(while: { $0 == " " }).drop(while: { $0 == "`" || $0 == "~" })
+            .trimmingCharacters(in: .whitespaces)
+        return OpenCodeBlock(info: info.isEmpty ? nil : info, code: code)
+    }
+
     static func displayText(_ tail: String) -> String {
         guard !tail.isEmpty else { return tail }
         let lines = tail.split(separator: "\n", omittingEmptySubsequences: false)

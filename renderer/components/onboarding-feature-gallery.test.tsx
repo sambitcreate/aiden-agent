@@ -49,37 +49,38 @@ test("Mac and Linux tours show a Calendar watch example while unsupported Bots h
   assert.equal(visibleOnboardingFeatures(onboardingFeatures, { ...hostPlatformCapabilities("linux"), bots: false }).some((feature) => feature.id === "botWatches"), false);
 });
 
-test("the existing Bots tile explains bounded plan approval alongside collaboration, routines, and hand-offs", () => {
+test("the Bots tile introduces the first Bot's set-up chat and still explains bounded plan approval", () => {
   const { container, unmount } = render(<OnboardingFeatureGallery features={onboardingFeatures} platform="darwin" />);
   const tile = container.querySelector<HTMLElement>('[data-onboarding-feature="bots"]');
   assert.ok(tile);
   assert.equal(container.querySelectorAll('[data-onboarding-feature="bots"]').length, 1);
-  assert.ok(within(tile).getByText("Bots remember, ask each other for help, run routines, and hand steps back to you. Approve a whole plan on desktop or phone, follow its checklist, or stop it. Approval covers only listed actions within the Bot's access and limits, for this run and up to 60 minutes."));
-  assert.match(tile.getAttribute("aria-label") ?? "", /Approve a whole plan on desktop or phone/u);
+  assert.ok(within(tile).getByText("Your first Bot asks what you need and sets itself up. Bots remember, ask each other for help, run routines, and hand steps back to you. Approve a whole plan in Aiden Agent or on your phone, follow its checklist, or stop it. Approval covers only listed actions within the Bot's access and limits, for this run and up to 60 minutes."));
+  assert.match(tile.getAttribute("aria-label") ?? "", /Approve a whole plan in Aiden Agent or on your phone/u);
   assert.equal(tile.tabIndex, 0, "the tile remains reachable by keyboard");
   assert.ok(within(tile).getByText("COS replied"));
   unmount();
   cleanup();
 });
 
-test("the Bots illustration shows an approved plan's checklist, bounded coverage, and Stop alongside existing Bot work", () => {
+test("the Bots illustration is the first Bot's chat: it asks, the person answers, and it sets itself up", () => {
   const { container, unmount } = render(<BotsArt />);
   const art = within(container);
-  const plan = art.getByRole("group", { name: "Meal Planner's approved plan" });
-  assert.ok(within(plan).getByText("Approved · ends in 45 min"));
-  const steps = within(plan).getByRole("list", { name: "Plan steps" });
-  assert.equal(within(steps).getAllByRole("listitem").length, 2);
-  assert.ok(within(steps).getByRole("img", { name: "Done" }));
-  assert.ok(within(steps).getByRole("img", { name: "Pending" }));
-  const coverage = within(plan).getByRole("list", { name: "Plan coverage" });
-  assert.ok(within(coverage).getByText("Calendar · create events (up to 5)"));
-  assert.ok(within(coverage).getByText("1 of 5 used"));
-  assert.ok(within(plan).getByText("Stop plan"));
-  assert.ok(within(plan).getByText("Show details"));
-  assert.ok(art.getByText("Needs you"));
+  const chat = art.getByRole("group", { name: "Chief's first chat" });
+  assert.ok(art.getByText("Chief"));
+  const ask = within(chat).getByRole("group", { name: "Chief asks what it should help with" });
+  assert.ok(within(ask).getByText("What should I help with?"));
+  assert.equal(within(within(ask).getByRole("list", { name: "Replies to tap" })).getAllByRole("listitem").length, 2);
+  assert.ok(within(chat).getByRole("group", { name: "Your answer" }));
+  assert.ok(within(within(chat).getByRole("group", { name: "Chief set itself up" })).getByText("Instructions updated · Undo"));
   assert.ok(art.getByText("Every Sunday at 9:00 AM"));
   assert.ok(art.getByText("COS replied"));
   assert.equal(art.queryAllByRole("button").length, 0, "the drawing does not add fake keyboard actions");
+  // Only the shared oa-anim-* classes move, so Reduce Motion leaves a still pose.
+  for (const element of container.querySelectorAll<HTMLElement>("[class*='anim']")) {
+    for (const name of element.className.split(/\s+/u).filter((part) => part.includes("anim"))) {
+      assert.match(name, /^oa-anim-[a-z]+$/u);
+    }
+  }
   unmount();
   cleanup();
 });
@@ -136,7 +137,8 @@ test("Mac and Linux tours introduce Apps using Aiden with its local-only switch 
       assert.match(tile.getAttribute("aria-label") ?? "", /^Apps using Aiden\. .*Settings → Connections → Apps using Aiden; nothing listens until you do\./u);
       const art = within(tile);
       assert.ok(art.getByText("Let apps use Aiden"), "the drawing shows the real switch label");
-      assert.ok(art.getByText("This computer only"));
+      assert.ok(art.getByText(platform === "darwin" ? "This Mac only" : "This computer only"), "the local-only chip names this computer as the platform does");
+      assert.match(tile.getAttribute("aria-label") ?? "", platform === "darwin" ? /on this Mac/u : /on this computer/u);
       assert.ok(art.getByText("Supervised"));
       assert.ok(art.getByText("Read only"));
       assert.equal(tile.querySelectorAll("img").length, 0, "the settings slice is code-drawn");

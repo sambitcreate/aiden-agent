@@ -1,11 +1,6 @@
 import type { SubagentWorkspaceWriteApprovalDetails } from "../shared/assistant";
 import { Text } from "./ui";
-
-const OPERATION_LABELS: Record<SubagentWorkspaceWriteApprovalDetails["operation"], string> = {
-  create: "Create file",
-  replace: "Replace file",
-  edit: "Edit file",
-};
+import { subagentWorkspaceWriteOperationLabel } from "../shared/approval-card-model";
 
 function formatBytes(bytes: number): string {
   if (bytes < 1_024) return `${bytes} B`;
@@ -13,11 +8,7 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1_024 * 1_024)).toFixed(1)} MB`;
 }
 
-export function subagentWorkspaceWriteOperationLabel(
-  operation: SubagentWorkspaceWriteApprovalDetails["operation"],
-): string {
-  return OPERATION_LABELS[operation];
-}
+export { subagentWorkspaceWriteOperationLabel } from "../shared/approval-card-model";
 
 export function SubagentWorkspaceWriteApproval({
   details,

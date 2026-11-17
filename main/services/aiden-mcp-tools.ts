@@ -284,7 +284,7 @@ export class AidenMcpToolRunner {
         capability: "chat:write",
         title: "Start a chat",
         description:
-          "Start a new Aiden chat in a workspace and send its first message. Tools run with that workspace's permissions; approvals go to the person in Aiden. Follow the run with aiden_chat_wait.",
+          "Start a new Aiden chat in a workspace and send its first message. Tools follow that workspace's approval mode (Ask, Auto or Never ask, plus anything allowed in that workspace); whatever still needs approval goes to the person in Aiden. Follow the run with aiden_chat_wait.",
         schema: Type.Object(
           {
             clientRequestId: CLIENT_REQUEST_ID,

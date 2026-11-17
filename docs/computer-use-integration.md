@@ -286,7 +286,8 @@ a second artifact:
    providers receive object-valued JSON Schema `items`; runtime validation still
    independently requires two finite nonnegative values.
 3. **Product surface:** persisted global enablement, a per-chat access card
-   (Deny / Allow for this chat / Always allow) raised by the first call, and
+   ("Use your Mac with Computer Use?": Deny / Allow in this chat, with Always
+   allow in its menu) raised by the first call, and
    Always allow / Reset chat permissions in Settings;
    readiness/doctor/permission IPC; lifecycle cleanup.
 4. **Release and acceptance:** isolated development output plus transactional
@@ -316,7 +317,7 @@ AIDEN_COMPUTER_USE_ACCEPTANCE=1 npm run test:computer-use:packaged
 ```
 
 The acceptance command intentionally stops for visible macOS TCC decisions and
-one Computer Use access card (choose **Allow for this chat**); the type,
+one Computer Use access card (choose **Allow in this chat**); the type,
 save-key and stale-click actions then run without further cards. On success it writes
 an evidence-only receipt to `build/computer-use-acceptance-receipt.json`, bound
 to the tested app's signed CDHash, app-ASAR hash, bundle ID, and versions. A new

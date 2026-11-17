@@ -71,7 +71,16 @@ At most 16 apps can be connected at once, separately from the phone and Mac devi
 
 Arguments are validated against each tool's schema, and unknown properties are rejected. A message can be at most 200,000 characters, and messages read back are capped at 20,000 characters each. A chat `aiden_chat_list` leaves out (Bot, feature or assistant) cannot be read, waited on, sent to or stopped by id, even when the id is known. Every chat tool answers it exactly as it answers an unknown id (`This Aiden chat no longer exists.`), so an app cannot tell such a chat exists. MCP apps are trusted less than paired phones, which can open assistant chats.
 
-There is deliberately no tool for approvals or questions. When a turn needs one, `aiden_chat_wait` says so and where, and the person answers it in Aiden on that computer. A turn runs with the permissions of its workspace. In a Full-access workspace, tools run without asking, exactly as if the person had typed the message.
+There is deliberately no tool for approvals or questions. When a turn needs one, `aiden_chat_wait` says so and where, and the person answers it in Aiden on that computer.
+
+A turn an app starts is approved exactly like a turn the person types in that workspace, and like one a paired phone starts. Aiden reads the workspace's approval policy before every tool call: the global mode in Settings → Approvals, or the workspace's own mode if the person chose Customize, plus the "Allowed in this workspace" grants:
+
+- **Ask:** anything that sends, spends or changes something waits for the person. Only what the workspace's grants allow (running commands, changing files, Computer Use) runs without a card.
+- **Auto:** a model approves routine actions and the rest wait for the person. A Supervised app's turn can therefore run routine tools with nobody watching.
+- **Never ask:** only purchases, sharing the person's data and the first use of the computer wait for the person. Everything else runs unattended.
+- **Chat only** workspaces cannot read or change their folder in any mode.
+
+`aiden_workspace_list` reports each workspace's `toolPermission` as the same tier a phone sees (`legacyWorkspaceTier`): `none` for Chat only, `ask` for Ask with nothing allowed in the workspace, and `full` whenever something can run without a card (Auto, Never ask, or any grant). A well-behaved app that should not run tools unattended can start turns only where `toolPermission` is `ask`, but Aiden does not enforce that for it.
 
 ## Limits
 
@@ -95,7 +104,7 @@ Who could call the server:
 - **A connected app that misbehaves.**
   - It is limited to its access level, its own runs, ordinary chats and offered workspaces, and the rate and concurrency limits.
   - It cannot settle an approval or answer a question.
-  - A Supervised app can still ask Aiden to do anything the chosen workspace allows without approval, which is why Supervised is a deliberate choice and Full-access workspaces run unattended.
+  - A Supervised app can still ask Aiden to do anything the chosen workspace's approval mode and grants allow without a card: routine actions in Auto, nearly everything in Never ask, and whatever is allowed in that workspace in Ask. That is why Supervised is a deliberate choice. Aiden does not narrow a workspace's policy for app turns, and a Supervised app may start turns in any offered workspace, so an app that must never act unattended should be given Read access instead.
 
 Revoking an app:
 

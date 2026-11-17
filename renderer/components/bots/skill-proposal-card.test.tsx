@@ -6,7 +6,7 @@ import { SkillProposalCard } from "./skill-proposal-card";
 
 afterEach(cleanup);
 
-test("shows the skill, the reason and what would load; Add skill responds add", async () => {
+test("shows the skill, the reason and what would load; Add responds add and settles to a receipt", async () => {
   const answers: string[] = [];
   render(
     <SkillProposalCard
@@ -21,8 +21,9 @@ test("shows the skill, the reason and what would load; Add skill responds add", 
   assert.ok(screen.getByText("Add a skill?"));
   assert.ok(screen.getByText("You asked twice."));
   assert.match(screen.getByLabelText("What would load").textContent ?? "", /List seven dinners/u);
-  fireEvent.click(screen.getByRole("button", { name: "Add skill" }));
-  await waitFor(() => assert.ok(screen.getByText("Added ✓")));
+  assert.deepEqual(screen.getAllByRole("button").map((button) => button.textContent), ["Not now", "Add"]);
+  fireEvent.click(screen.getByRole("button", { name: "Add" }));
+  await waitFor(() => assert.ok(screen.getByText("Added skill: meal-plan")));
   assert.deepEqual(answers, ["add"]);
 });
 
@@ -34,6 +35,6 @@ test("a folder skill asks Use this skill? and a decided card shows no buttons", 
       onRespond={async () => null}
     />,
   );
-  assert.ok(screen.getByText("Not added"));
+  assert.ok(screen.getByText("Not added: notes"));
   assert.equal(screen.queryByRole("button"), null);
 });

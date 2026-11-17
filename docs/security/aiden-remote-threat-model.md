@@ -185,7 +185,7 @@ Outside app (Claude Code, Codex, any MCP client) on this computer
 - **Reach.**
   - Apps see ordinary chats and offered workspaces only. Bot, feature and assistant chats are not listed, and every chat tool refuses them by id with the same not-found answer as an unknown id, so an app cannot learn they exist. MCP apps are trusted less than paired phones, which can open assistant chats. New chats cannot be started in one-chat folders or the assistant workspace.
   - An app can wait on and stop only runs it started.
-- **Residual risk.** A Supervised app is delegated the person's own authority in the chosen workspace. In a Full-access workspace its turns run tools without approval. Supervised access and Full-access workspaces are the person's informed choices; neither is containment.
+- **Residual risk.** A Supervised app is delegated the person's own authority in the chosen workspace. Its turns follow the workspace's approval mode and grants like the person's own: in Auto a model approves routine tools, in Never ask nearly everything runs without a card, and in Ask whatever is allowed in that workspace runs without one. Supervised access and the approval mode are the person's informed choices; neither is containment.
 - **Revocation** goes through `revokeAidenRemoteRuntimeDevice`:
   - It rejects the token at once, ends open waits and stops the app's runs.
   - It denies the runs' pending approvals.

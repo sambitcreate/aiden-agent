@@ -59,8 +59,8 @@ test("Live finds Settings in Aiden's real window, presses its way to Aiden Live,
   try {
     const home = await call("look_at_aiden");
     expect(home.ok).toBe(true);
-    // The composer's workspace access picker is the user's alone.
-    numberOf(home.screen, /button “Workspace access: [^”]*”.*\(only you can use this\)/u);
+    // The composer's approvals chip (always shown in a No workspace chat) is the user's alone.
+    numberOf(home.screen, /button “Approvals: [^”]*”.*\(only you can use this\)/u);
     const settings = await call("use_aiden", { element: numberOf(home.screen, /^\d+ button “Settings”/u), action: "press" });
     expect(settings.ok).toBe(true);
     await expect(page.getByRole("navigation", { name: "Settings" })).toBeVisible();

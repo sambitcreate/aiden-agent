@@ -36,7 +36,7 @@ final class AidenBotPeersModel {
         self.store = store; self.scope = scope; storageGeneration = scope.flatMap { store?.generation(for: $0) }
         if let store, let scope {
             do { if let state = try store.load(scope) { baseline = state.baseline; draft = state.draft ?? ""; pending = state.attempt } }
-            catch { storageBlocked = true; message = "This phone couldn’t read its saved peer change. Inspect the host before making changes." }
+            catch { storageBlocked = true; message = "This phone couldn’t read its saved peer change. Inspect the computer before making changes." }
         }
         restoring = false
     }
@@ -92,7 +92,7 @@ final class AidenBotPeersModel {
     }
     func retry(now: Date = Date()) async {
         guard canWrite, !busy, let pending else { return }
-        guard now.timeIntervalSince(pending.createdAt) >= 0, now.timeIntervalSince(pending.createdAt) < 23 * 3600 else { message = "This change is too old to replay safely. Its outcome remains unknown. Refresh the host; no new request has been created."; return }
+        guard now.timeIntervalSince(pending.createdAt) >= 0, now.timeIntervalSince(pending.createdAt) < 23 * 3600 else { message = "This change is too old to replay safely. Its outcome remains unknown. Refresh the computer; no new request has been created."; return }
         await send(pending, previousUnknown: true)
     }
     private func send(_ attempt: AidenPeerAttempt, previousUnknown: Bool) async {
@@ -109,7 +109,7 @@ final class AidenBotPeersModel {
                 if let snapshot { try apply(snapshot) }; guard pending == attempt else { return }
                 if code != .unavailable && !previousUnknown { pending = nil; persist(settling: request.mutationId) }
                 if code == .conflict { needsReview = true }
-                message = pending == nil ? "This change wasn’t saved. Refresh and review the current settings. Your draft is kept." : "The host may have saved this change. Refresh or retry the same request before making another change."
+                message = pending == nil ? "This change wasn’t saved. Refresh and review the current settings. Your draft is kept." : "The computer may have saved this change. Refresh or retry the same request before making another change."
             }
         } catch {
             guard current, visit == generation, pending == attempt else { return }
@@ -155,7 +155,7 @@ final class AidenBotPeerExchangeModel {
     init(botID: String, exchangeID: String, transport: any AidenBotPeersTransport, isCurrent: @escaping @MainActor () -> Bool = { true }, mayWrite: @escaping @MainActor () -> Bool = { true }, store: AidenBotPeerControlStore? = nil, scope: AidenBotPeerControlStore.Scope? = nil) {
         self.botID = botID; self.exchangeID = exchangeID; self.transport = transport; self.isCurrent = isCurrent; self.mayWrite = mayWrite
         self.store = store; self.scope = scope; storageGeneration = scope.flatMap { store?.generation(for: $0) }
-        if let store, let scope { do { pending = try store.load(scope)?.attempt } catch { storageBlocked = true; message = "This phone couldn’t read its saved Stop. Inspect the host before making changes." } }
+        if let store, let scope { do { pending = try store.load(scope)?.attempt } catch { storageBlocked = true; message = "This phone couldn’t read its saved Stop. Inspect the computer before making changes." } }
     }
     private var current: Bool { active && isCurrent() && scope.flatMap { store?.generation(for: $0) } == storageGeneration }
     var canWrite: Bool { current && mayWrite() && !storageBlocked }
@@ -174,8 +174,8 @@ final class AidenBotPeerExchangeModel {
         detail = value
         if authoritative { needsRefresh = false }
         guard let nonce = pending?.nonce, let receipt = value.summary.lastStop, receipt.mutationId == nonce else { protectedPendingNonce = nil; return }
-        if receipt.state.terminal { pending = nil; protectedPendingNonce = nil; persist(settling: nonce); message = receipt.state == .blocked ? "Stop was blocked. This exchange remains unfinished; effects have not been undone." : receipt.state == .notRunning ? "No linked work was running." : "The host acknowledged Stop." }
-        else { if authoritative { protectedPendingNonce = nonce }; message = receipt.state == .requested ? "Stop requested. Waiting for the host to acknowledge the linked work." : "Stop is uncertain. The exchange has not been reported as cancelled." }
+        if receipt.state.terminal { pending = nil; protectedPendingNonce = nil; persist(settling: nonce); message = receipt.state == .blocked ? "Stop was blocked. This exchange remains unfinished; effects have not been undone." : receipt.state == .notRunning ? "No linked work was running." : "The computer acknowledged Stop." }
+        else { if authoritative { protectedPendingNonce = nonce }; message = receipt.state == .requested ? "Stop requested. Waiting for the computer to acknowledge the linked work." : "Stop is uncertain. The exchange has not been reported as cancelled." }
     }
     func stop() async {
         guard canStop, let detail else { return }
@@ -187,7 +187,7 @@ final class AidenBotPeerExchangeModel {
         let age = now.timeIntervalSince(pending.createdAt)
         if age >= 23 * 3600 { protectedPendingNonce = nil; await load() }
         guard self.pending == pending else { return }
-        guard age >= 0, age < 23 * 3600 || protectedPendingNonce == pending.nonce else { message = "This Stop is too old to replay without the host’s matching pending receipt. Its outcome remains unknown; no new Stop was sent."; return }
+        guard age >= 0, age < 23 * 3600 || protectedPendingNonce == pending.nonce else { message = "This Stop is too old to replay without the computer’s matching pending receipt. Its outcome remains unknown; no new Stop was sent."; return }
         await send(pending, previousUnknown: true)
     }
     private func send(_ attempt: AidenPeerAttempt, previousUnknown: Bool) async {
@@ -220,7 +220,7 @@ final class AidenBotPeerExchangeModel {
             guard value.exchangeId == exchangeID, value.kind == kind, let detail,
                   value.botId == (kind == .source ? detail.summary.sender.botId : detail.summary.recipient.botId) else { throw AidenRemoteClientError.invalidResponse }
             evidence = value
-        } catch { if current, visit == generation { message = "The host couldn’t provide this evidence. It may no longer be retained." } }
+        } catch { if current, visit == generation { message = "The computer couldn’t provide this evidence. It may no longer be retained." } }
     }
     func clearEvidence() { evidenceGeneration += 1; evidence = nil }
     @discardableResult private func persist(settling nonce: UUID? = nil) -> Bool {

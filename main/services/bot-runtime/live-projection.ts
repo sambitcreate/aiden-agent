@@ -1,4 +1,11 @@
 import { BOT_PEER_MESSAGE_ENTRY_KIND, parseBotPeerTranscriptData } from "../../../renderer/shared/bot-peers.js";
+import {
+  BOT_SETTINGS_CHANGE_ENTRY_KIND,
+  BOT_SETTINGS_CHANGE_STATUS_ENTRY_KIND,
+  botSettingsChangeOf,
+  botSettingsChangeStatusOf,
+  type BotSettingsChangeStatus,
+} from "../../../renderer/shared/bot-settings-changes.js";
 import { BOT_PEER_INPUT_KIND, } from "./bot-input-entry.js";
 import type { BotPlanView } from "../../../renderer/shared/bot-plans.js";
 import type { BotPendingAccessRequest } from "../../../renderer/shared/bot-access-requests.js";
@@ -170,7 +177,7 @@ function botMessageInputOf(value: unknown): Omit<Extract<BotTranscriptEntry, {ty
 }
 
 /** Entries that stay visible when the turn they follow is hidden as `[SILENT]`. */
-const OUTLIVES_SILENT_TURN = new Set<BotTranscriptEntry["type"]>(["bot_message_status", "connect_card", "memory_update", "routine_proposal", "skill_proposal", "lesson_proposal", "lesson_learned", "memory_tidy", "wake_up"]);
+const OUTLIVES_SILENT_TURN = new Set<BotTranscriptEntry["type"]>(["bot_message_status", "connect_card", "memory_update", "routine_proposal", "skill_proposal", "settings_change", "lesson_proposal", "lesson_learned", "memory_tidy", "wake_up"]);
 
 /** Host-owned saved notices still validate and bound text before reaching any display. */
 function botMessageStatusOf(value: unknown): BotMessageStatusEntryData | null {
@@ -353,6 +360,7 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
   };
   const issued = new Map<string, number>();
   const skillStatus = new Map<string, "added" | "dismissed">();
+  const settingsStatus = new Map<string, BotSettingsChangeStatus>();
   const lessonStatus = new Map<string, "active" | "dismissed" | "retired">();
   for (const record of entries) {
     if (record.kind === BOT_LESSON_STATUS_ENTRY_KIND) {
@@ -366,6 +374,9 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
     } else if (record.kind === BOT_SKILL_PROPOSAL_STATUS_ENTRY_KIND) {
       const status = botSkillProposalStatusOf(record.data);
       if (status) skillStatus.set(status.proposalId, status.status);
+    } else if (record.kind === BOT_SETTINGS_CHANGE_STATUS_ENTRY_KIND) {
+      const status = botSettingsChangeStatusOf(record.data);
+      if (status) settingsStatus.set(status.changeId, status.status);
     } else if (record.kind === BOT_ISSUE_STATUS_ENTRY_KIND) {
       const status = botIssueStatusOf(record.data);
       if (status) issueStatus.set(status.issueId, status.resolution);
@@ -476,6 +487,12 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
       continue;
     }
     if (record.kind === BOT_SKILL_PROPOSAL_STATUS_ENTRY_KIND) continue;
+    if (record.kind === BOT_SETTINGS_CHANGE_ENTRY_KIND) {
+      const change = botSettingsChangeOf(record.data);
+      if (change) mapped.push({ entry: { id, type: "settings_change", change, status: settingsStatus.get(change.changeId) ?? "pending" }, turn });
+      continue;
+    }
+    if (record.kind === BOT_SETTINGS_CHANGE_STATUS_ENTRY_KIND) continue;
     if (record.kind === BOT_LESSON_PROPOSAL_ENTRY_KIND || record.kind === BOT_LESSON_LEARNED_ENTRY_KIND) {
       const lesson = botLessonCardOf(record.data);
       if (lesson) {

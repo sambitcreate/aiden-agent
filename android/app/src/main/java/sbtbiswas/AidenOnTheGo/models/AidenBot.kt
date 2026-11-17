@@ -381,7 +381,14 @@ object AidenBotDetailSerializer : AidenBotRetiredGreetingSerializer<AidenBotDeta
         if ((it as? JsonObject)?.get("botMessaging") is JsonNull) throw AidenBotContractException.InvalidField("botMessaging")
     }
 }
-object AidenBotCreateRequestSerializer : AidenBotRetiredGreetingSerializer<AidenBotCreateRequest>(AidenBotCreateRequest.generatedSerializer())
+object AidenBotCreateRequestSerializer : AidenBotRetiredGreetingSerializer<AidenBotCreateRequest>(AidenBotCreateRequest.generatedSerializer()) {
+    /** A one-field create (no instructions, empty purpose) sends only the name and look. */
+    override fun transformSerialize(element: JsonElement): JsonElement {
+        val body = element as? JsonObject ?: return element
+        val purpose = body["purpose"] as? JsonPrimitive
+        return if ("instructions" !in body && purpose?.isString == true && purpose.content.isEmpty()) JsonObject(body - "purpose") else body
+    }
+}
 object AidenBotIdentityPatchSerializer : AidenBotRetiredGreetingSerializer<AidenBotIdentityPatch>(AidenBotIdentityPatch.generatedSerializer()) {
     override fun transformDeserialize(element: JsonElement): JsonElement = super.transformDeserialize(element).also {
         if ((it as? JsonObject)?.get("botMessaging") is JsonNull) throw AidenBotContractException.InvalidField("botMessaging")
@@ -515,7 +522,11 @@ data class AidenBotDetail(
 data class AidenBotCreateRequest(
     val name: String,
     val purpose: String,
-    val instructions: String,
+    /**
+     * Revision 61 one-field create (`bot:templates` holders only): left out, the Mac starts the
+     * Bot from its starter instructions and the Bot asks what to help with.
+     */
+    val instructions: String?,
     val avatar: AidenBotSemanticAvatar,
     /** Optional since revision 25: omitted means Full access. */
     val access: AidenBotAccessUpdate? = null
@@ -523,7 +534,16 @@ data class AidenBotCreateRequest(
     init {
         AidenBotWire.validateString(name, "name", AidenBotWire.MAX_NAME_LENGTH)
         AidenBotWire.validateString(purpose, "purpose", AidenBotWire.MAX_PURPOSE_LENGTH, allowEmpty = true)
-        AidenBotWire.validateString(instructions, "instructions", AidenBotWire.MAX_INSTRUCTIONS_LENGTH)
+        instructions?.let { AidenBotWire.validateString(it, "instructions", AidenBotWire.MAX_INSTRUCTIONS_LENGTH) }
+    }
+
+    companion object {
+        /**
+         * One-field create: the name and a look. Neither `purpose` nor `instructions` goes out; the
+         * Mac starts the Bot from its starter instructions.
+         */
+        fun oneField(name: String, avatar: AidenBotSemanticAvatar): AidenBotCreateRequest =
+            AidenBotCreateRequest(name = name, purpose = "", instructions = null, avatar = avatar)
     }
 }
 

@@ -13,7 +13,10 @@ import {
   Dialog,
 } from "../ui";
 import { resolveAppControlPolicy, type AppControlPolicy } from "../../shared/app-controls";
+import { useAppCapabilities } from "../../lib/app-capabilities";
+import { localComputerNoun } from "../../shared/computer-noun";
 export function AppControlSettings() {
+  const { platform } = useAppCapabilities();
   const [policy, setPolicy] = React.useState<AppControlPolicy>("safe");
   const [remote, setRemote] = React.useState(false);
   const [ready, setReady] = React.useState(false);
@@ -85,7 +88,7 @@ export function AppControlSettings() {
         </Field>
         <Field
           label="Paired-device chat controls"
-          description="Allow paired clients to request access to supported host settings through chat. A phone's own appearance stays separate."
+          description={`Allow paired clients to request access to supported settings on this ${localComputerNoun(platform)} through chat. A phone's own appearance stays separate.`}
         >
           <Switch
             aria-label="Paired-device chat controls"
@@ -124,7 +127,7 @@ export function AppControlSettings() {
         open={confirm}
         onOpenChange={setConfirm}
         title="Allow paired-device chat controls?"
-        description="Paired clients may request access to theme, chat width, Memory, Web Search and Skills controls on this host. Their pairing and workspace grants, app policy and existing setup requirements still apply. This does not allow credentials, terminal access or arbitrary app administration."
+        description={`Paired clients may request access to theme, chat width, Memory, Web Search and Skills controls on this ${localComputerNoun(platform)}. Their pairing and workspace grants, app policy and existing setup requirements still apply. This does not allow credentials, terminal access or arbitrary app administration.`}
         confirmLabel="Allow chat controls"
         onConfirm={() => {
           setConfirm(false);
