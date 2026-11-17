@@ -116,6 +116,14 @@ Phones and Macs paired with the server see its workspaces, chats, Bots, schedule
 - **Connector-watch management.** The optional `bot:watches` surface belongs to the Electron desktop on Mac and Linux. This server does not wire or advertise it; ordinary Composio MCP tools keep their existing CLI behavior.
 - **Scheduled-run notifications.** Run completions show up through `aiden schedule runs <id>`, `aiden schedule notifications` and, for tasks with `notify`, local notifications on paired phones via the Remote `scheduled-tasks/notifications` feed.
 
+## Workspace tools and generation limits
+
+Workspace chats hosted by `aiden serve` use the desktop's file and search tools: `read_file`, `list_dir`, `glob`, `grep`, `write_file` and `edit_file`, plus `run_command`. File-tool paths stay inside the workspace. CLI read and search tools apply the existing credential-path policy to supplied paths and canonical targets, refusing `.env` files and protected credential/private-key file paths. Public keys, credential-named source files and `.env.example` stay readable. Ask, Full and None workspace access still control tool admission, and file tools cannot change hook or agent configuration. Telegram and scheduled workspace chat turns still require Full access. Read-only scheduled inference receives only `read_file`, `list_dir`, `glob` and `grep`; Full scheduled inference also receives the file mutation and shell tools.
+
+`run_command` starts a bounded shell in the workspace with Aiden's filtered environment. It is not a filesystem sandbox: an approved shell command retains the server user's OS access, including paths outside the workspace. Use workspace and Bot permissions with that distinction in mind.
+
+Daemon chat and scheduled inference runs stop after five minutes without a model message update or tool execution event. Streaming text, thinking, tool arguments and tool start, update or completion events refresh this inactivity deadline. An absolute six-hour limit still stops a run that keeps producing events. A tool approval expires after five minutes; activity never extends that approval's own expiry. Existing scheduled turn, tool-call and response-size budgets also remain in force.
+
 ## Bots
 
 `aiden serve` hosts Bots with managed homes, exact Custom grants, MCP, skills, web search, companion vision and uploaded photos. Bot subagents perform read-only investigations within the admitted file scopes. Bot fires are saved before schedule advancement and reconciled by Pi request ID after a restart; failed Bot runs record a failure kind.

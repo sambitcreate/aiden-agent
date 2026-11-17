@@ -20,6 +20,12 @@ cannot clear its previous checkout, the run stops before extracting or running a
 The Space reuses installed dependencies only when `package.json`, `package-lock.json`,
 the Node version, and the architecture match the previous install.
 
+After a run the script suspends the Space, which keeps those dependencies for the next
+run. A Space that run created under a custom `CUA_SPACE` name is deleted instead. Set
+`CUA_SPACE_KEEP=1` to leave the Space running, which `--watch` also does. A Space
+another run has taken is left running. On a Mac the script then trims cua's runtime
+disk so freed space returns to macOS. Delete a Space by hand with `cua sb rm <name>`.
+
 The Space is Linux, so specs take their non-darwin branches there. Changes to a spec's
 darwin branch or to macOS-only behavior still need `npm run test:e2e` on the host (or
 the macOS CI gate). On Linux, follow CI's Linux E2E step: its apt packages,

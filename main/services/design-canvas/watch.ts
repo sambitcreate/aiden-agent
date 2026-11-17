@@ -234,7 +234,7 @@ export class DesignFileWatcher {
         else writes.set(relativePath, before);
       }
       // The page was just stamped by the clock that stamps the files beside it.
-      if (written && root !== undefined) write.fileClockOffset = fileClockOffset(path.join(root, relativePath), this.wallNow);
+      if (written && root !== undefined) write.fileClockOffset = fileClockOffset(path.join(root, relativePath), this.wallNow());
       write.settledAt = this.now();
       settle();
       if (write.beside !== NOTHING_NOTED) this.letGoOfNoteAtDeadline(chatId, write);
@@ -260,10 +260,13 @@ export class DesignFileWatcher {
     const timer = setTimeout(() => {
       timers.delete(timer);
       if (timers.size === 0 && this.noteTimers.get(chatId) === timers) this.noteTimers.delete(chatId);
-      this.forgetStaleNotes(chatId);
+      // One reading decides both what is let go and whether to wait again, so a
+      // window that closes between two readings can't leave the note held.
+      const now = this.now();
+      this.forgetStaleNotes(chatId, now);
       // A timer may run a moment before the clock the window is measured on reaches its end.
       const current = [...(this.ownWrites.get(chatId)?.values() ?? [])].includes(write);
-      if (current && write.beside !== NOTHING_NOTED && this.now() <= until) this.letGoOfNoteAtDeadline(chatId, write);
+      if (current && write.beside !== NOTHING_NOTED && now <= until) this.letGoOfNoteAtDeadline(chatId, write);
     }, Math.max(0, until - this.now()) + 1);
     timer.unref?.();
     timers.add(timer);
@@ -414,11 +417,10 @@ export class DesignFileWatcher {
    * no event still queued for the page arrived inside the window. A later
    * event arrives after the window and is reported without one.
    */
-  private forgetStaleNotes(chatId: string): void {
+  private forgetStaleNotes(chatId: string, now = this.now()): void {
     if (this.flushing.has(chatId)) return;
     const writes = this.ownWrites.get(chatId);
     if (!writes) return;
-    const now = this.now();
     const pending = this.chats.get(chatId)?.pending;
     for (const [relative, write] of writes) {
       if (write.settledAt === null || write.beside === NOTHING_NOTED) continue;
@@ -516,12 +518,15 @@ async function besidePage(root: string, relativePath: string, noting?: () => Pro
 }
 
 /**
- * How far the clock that stamps `file` runs behind this Mac's, from the time
- * it was just stamped: 0 or less, and 0 when it can't be read. A clock that
- * runs ahead needs nothing: the files beside the page then look newer, so
- * more of them count as touched since the write began.
+ * How far the clock that stamps `file` runs behind this Mac's, from a write
+ * to it that had finished by `writtenAt`: 0 or less, and 0 when it can't be
+ * read. The stamp is measured against `writtenAt`, not the time the stat
+ * answers: a slow stat would otherwise count its own delay as the clock
+ * lagging, and move the write's start back past files changed before it. A
+ * clock that runs ahead needs nothing: the files beside the page then look
+ * newer, so more of them count as touched since the write began.
  */
-async function fileClockOffset(file: string, wallNow: () => number): Promise<number> {
+async function fileClockOffset(file: string, writtenAt: number): Promise<number> {
   const stats = await fsp.stat(file).catch(() => null);
-  return stats === null ? 0 : Math.min(0, Math.max(stats.mtimeMs, stats.ctimeMs) - wallNow());
+  return stats === null ? 0 : Math.min(0, Math.max(stats.mtimeMs, stats.ctimeMs) - writtenAt);
 }

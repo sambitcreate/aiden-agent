@@ -203,4 +203,6 @@ session type, package format, and the exact error shown by Aiden.
 
 On a Linux box with no display, build and run the headless server (`aiden serve`) from a clone and pair your phone or Mac with it; see [the server guide](../packages/cli/README.md). It has no interactive terminal UI. `aiden service install` runs it as a systemd user service that starts at boot, reachable on the local network, over Tailscale, or both.
 
+Server workspace chats and scheduled inference use Aiden's file tools, including workspace path checks and secret-read refusals. Full access also offers `run_command`, a bounded shell that starts in the workspace and retains the server user's OS filesystem access. These inference runs use a five-minute inactivity deadline refreshed by model and tool events, plus a six-hour absolute limit. See [workspace tools and generation limits](../packages/cli/README.md#workspace-tools-and-generation-limits).
+
 The server supports an explicit `aiden bots enable-durable` migration followed by a daemon restart. It preserves legacy chats and journals, requires the existing profile/credential authority, and exposes only the supported Remote capabilities. See [migration, recovery and capability limits](cli-durable-bots.md).

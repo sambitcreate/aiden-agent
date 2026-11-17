@@ -204,6 +204,84 @@ test("failed work is counted for review and states why", () => {
   assert.match(markup, /Success not verified/u);
 });
 
+test("a compaction the person stopped reads stopped, not as an issue", () => {
+  const markup = renderToStaticMarkup(
+    <ActivityFeed
+      timeline={timeline(
+        "cancelled",
+        [step(0, "compact_context", "cancelled", { label: "Compact context", stoppedByUser: true })],
+        { cancellationOrigin: "user_stop" },
+      )}
+    />,
+  );
+  assert.match(markup, /Compact context stopped/u);
+  assert.doesNotMatch(markup, /cancelled/u);
+  assert.doesNotMatch(markup, /\bissues?\b/u);
+  assert.doesNotMatch(markup, /text-support-warning|text-red/u);
+  // One quiet line: no disclosure is forced open to show it.
+  assert.doesNotMatch(markup, /data-state="open"/u);
+  assert.doesNotMatch(markup, /<details[^>]* open/u);
+});
+
+test("a stopped call among other work leaves the trail closed", () => {
+  const markup = renderToStaticMarkup(
+    <ActivityFeed
+      timeline={timeline(
+        "cancelled",
+        [step(0, "read_file", "completed", { target: "package.json" }), step(1, "run_command", "cancelled", { label: "Run command", stoppedByUser: true })],
+        { cancellationOrigin: "user_stop" },
+      )}
+    />,
+  );
+  assert.match(markup, /data-state="closed"/u);
+  assert.doesNotMatch(markup, /\bissues?\b/u);
+  assert.match(markup, /Run command stopped/u);
+});
+
+test("cancellations the person did not ask for, and failures, are still flagged", () => {
+  const cases: Array<[string, GenerationTimeline]> = [
+    [
+      "compact_context cancelled",
+      timeline("cancelled", [step(0, "compact_context", "cancelled")], {
+        cancellationOrigin: "application_shutdown",
+      }),
+    ],
+    [
+      "compact_context cancelled",
+      timeline("cancelled", [step(0, "compact_context", "cancelled")]),
+    ],
+    [
+      "compact_context failed",
+      timeline("cancelled", [step(0, "compact_context", "failed")], { cancellationOrigin: "user_stop" }),
+    ],
+    // A Stop ends the generation, but this call was cancelled earlier for
+    // another reason (an agent permission cancelled on detach): no mark.
+    [
+      "compact_context cancelled",
+      timeline("cancelled", [step(0, "compact_context", "cancelled")], { cancellationOrigin: "user_stop" }),
+    ],
+  ];
+  for (const [line, flagged] of cases) {
+    const markup = renderToStaticMarkup(<ActivityFeed timeline={flagged} />);
+    assert.match(markup, />1 issue</u, line);
+    assert.match(markup, new RegExp(line, "u"));
+    assert.match(markup, /data-state="open"/u, line);
+  }
+});
+
+test("a stopped call that a claim check names stays an issue", () => {
+  const markup = renderToStaticMarkup(
+    <ActivityFeed
+      timeline={timeline("cancelled", [step(0, "read_file"), step(1, "run_command", "cancelled", { stoppedByUser: true })], {
+        cancellationOrigin: "user_stop",
+        claimCheck: { kind: "unverified_success", stepIds: ["tool-2"] },
+      })}
+    />,
+  );
+  assert.match(markup, />1 issue</u);
+  assert.match(markup, /run_command cancelled/u);
+});
+
 test("a compact-only trail is one line, not a second Compacted context disclosure", () => {
   const markup = renderToStaticMarkup(
     <ActivityFeed
