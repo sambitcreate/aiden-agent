@@ -70,6 +70,8 @@ export async function startFakeOAuthServer(options: FakeOAuthServerOptions = {})
     registrations: [] as Record<string, unknown>[],
     authorizations: [] as URL[],
     tokenRequests: [] as FakeTokenRequest[],
+    /** The bearer token (or undefined for none) of each MCP request answered with 401. */
+    unauthorized: [] as (string | undefined)[],
   };
   const control = {
     /** Answer refresh-token requests with this HTTP status (a server error). */
@@ -201,6 +203,7 @@ export async function startFakeOAuthServer(options: FakeOAuthServerOptions = {})
     const authorized = !control.rejectAllTokens && token !== undefined && accessTokens.has(token);
     if (!authorized && !options.anonymousInitialize) {
       const scope = options.emptyChallengeScope ? ', scope=""' : "";
+      seen.unauthorized.push(token);
       res.writeHead(401, { "www-authenticate": `Bearer resource_metadata="${base}/.well-known/oauth-protected-resource/mcp"${scope}` });
       return res.end();
     }

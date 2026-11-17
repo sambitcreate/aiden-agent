@@ -11,6 +11,7 @@ import {
   sessionForFreshMcpAuthorization,
   sessionForMcpAuthorizationAttempt,
   MCP_REJECTED_REFRESH_RESTORE_MS,
+  mcpTokenRefreshDueAt,
   sessionAfterTokenInvalidation,
   sessionWithRefreshedMcpTokens,
   sessionWithMcpClientInformation,
@@ -703,6 +704,50 @@ test("a rotation of a refresh token another client gave up on is restored only f
   assert.equal(sessionWithRefreshedMcpTokens(newer, binding, presented, rotation, undefined, at + 1_000), undefined);
   // A malformed marker is dropped rather than making the stored sign-in unreadable.
   assert.equal(parseMcpOAuthSession({ ...rejected, rejectedRefresh: { refreshTokenHash: "nope", at } }).rejectedRefresh, undefined);
+});
+
+test("saved tokens record when they expire, and a refresh is due 30 seconds before that", () => {
+  const binding = mcpAuthorizationBinding("https://mcp.example.test/mcp");
+  const savedAt = 1_000_000;
+  const saved = sessionWithSavedMcpTokens({ authorizationBinding: binding }, binding,
+    { access_token: "access-1", token_type: "Bearer", refresh_token: "refresh-1", expires_in: 3600 }, undefined, savedAt);
+  // The expiry survives the encrypted store's JSON round trip.
+  const stored = parseMcpOAuthSession(JSON.parse(JSON.stringify(saved)));
+  assert.equal(stored.expiresAt, savedAt + 3_600_000);
+  assert.equal(mcpTokenRefreshDueAt(stored), savedAt + 3_600_000 - 30_000);
+  // A refresh replaces the expiry with the new token's.
+  const refreshed = sessionWithRefreshedMcpTokens(stored, binding, { access_token: "access-1", refresh_token: "refresh-1" },
+    { access_token: "access-2", token_type: "Bearer", refresh_token: "refresh-2", expires_in: 600 }, undefined, savedAt + 3_000_000);
+  assert.equal(refreshed?.expiresAt, savedAt + 3_000_000 + 600_000);
+  // Giving the tokens up drops their expiry with them.
+  assert.equal(sessionAfterTokenInvalidation(stored, undefined, savedAt)?.expiresAt, undefined);
+});
+
+test("a token lifetime shorter than a minute is refreshed at half its life, not on every request", () => {
+  const binding = mcpAuthorizationBinding("https://mcp.example.test/mcp");
+  const saved = sessionWithSavedMcpTokens({ authorizationBinding: binding }, binding,
+    { access_token: "access-1", token_type: "Bearer", refresh_token: "refresh-1", expires_in: 20 }, undefined, 5_000);
+  assert.equal(mcpTokenRefreshDueAt(saved), 5_000 + 10_000);
+});
+
+test("tokens without a lifetime, without a refresh token or from an older record are refreshed only after a 401", () => {
+  const binding = mcpAuthorizationBinding("https://mcp.example.test/mcp");
+  const noLifetime = sessionWithSavedMcpTokens({ authorizationBinding: binding }, binding,
+    { access_token: "access-1", token_type: "Bearer", refresh_token: "refresh-1" }, undefined, 5_000);
+  assert.equal(noLifetime.expiresAt, undefined);
+  assert.equal(mcpTokenRefreshDueAt(noLifetime), undefined);
+  const notRefreshable = sessionWithSavedMcpTokens({ authorizationBinding: binding }, binding,
+    { access_token: "access-1", token_type: "Bearer", expires_in: 60 }, undefined, 5_000);
+  assert.equal(mcpTokenRefreshDueAt(notRefreshable), undefined);
+  // A record written before expiries were stored keeps a relative lifetime only.
+  const older = parseMcpOAuthSession({ authorizationBinding: binding, tokens: { access_token: "access-1", token_type: "Bearer", refresh_token: "refresh-1", expires_in: 3600 } });
+  assert.equal(mcpTokenRefreshDueAt(older), undefined);
+  // A malformed expiry is dropped rather than making the stored sign-in unreadable.
+  for (const expiresAt of ["soon", -1, Number.NaN, null]) {
+    const parsed = parseMcpOAuthSession({ ...older, expiresAt });
+    assert.equal(parsed.expiresAt, undefined);
+    assert.equal(parsed.tokens?.access_token, "access-1");
+  }
 });
 
 test("a 403 insufficient_scope on another path of the service origin is remembered for the server", async () => {
