@@ -137,7 +137,8 @@ test("Mac and Linux tours introduce Apps using Aiden with its local-only switch 
       assert.match(tile.getAttribute("aria-label") ?? "", /^Apps using Aiden\. .*Settings → Connections → Apps using Aiden; nothing listens until you do\./u);
       const art = within(tile);
       assert.ok(art.getByText("Let apps use Aiden"), "the drawing shows the real switch label");
-      assert.ok(art.getByText("This computer only"));
+      assert.ok(art.getByText(platform === "darwin" ? "This Mac only" : "This computer only"), "the local-only chip names this computer as the platform does");
+      assert.match(tile.getAttribute("aria-label") ?? "", platform === "darwin" ? /on this Mac/u : /on this computer/u);
       assert.ok(art.getByText("Supervised"));
       assert.ok(art.getByText("Read only"));
       assert.equal(tile.querySelectorAll("img").length, 0, "the settings slice is code-drawn");

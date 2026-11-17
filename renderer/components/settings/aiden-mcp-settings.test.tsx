@@ -225,6 +225,30 @@ test("a failed add keeps the sheet open with the reason", async () => {
   assert.ok(absent(screen.queryByRole("dialog", { name: /^Connect/u })));
 });
 
+test("a name counts characters as Aiden does, so 80 emoji fit and 81 do not", async () => {
+  const server = mcpServer({ status: { enabled: true, running: true, port: 49400, url: "http://127.0.0.1:49400/mcp" } });
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Add app" }));
+  const addDialog = await screen.findByRole("dialog", { name: "Add an app" });
+  const add = within(addDialog).getByRole("button", { name: "Add app" }) as HTMLButtonElement;
+  const name = within(addDialog).getByRole("textbox");
+  fireEvent.change(name, { target: { value: "🤖".repeat(81) } });
+  assert.equal(add.disabled, true, "81 characters are too many");
+  assert.match(within(addDialog).getByRole("alert").textContent ?? "", /up to 80 characters/u);
+  fireEvent.change(name, { target: { value: "🤖".repeat(80) } });
+  assert.equal(add.disabled, false, "80 emoji are 160 UTF-16 units but 80 characters");
+  fireEvent.click(add);
+  await screen.findByRole("dialog", { name: /^Connect/u });
+  assert.deepEqual(server.calls("remote:mcpIssueApp").map((call) => call.args), [[{ name: "🤖".repeat(80), access: "read" }]]);
+});
+
+test("the page names this computer as the platform does", async () => {
+  mcpServer({ status: { enabled: true, running: true, port: 49400, url: "http://127.0.0.1:49400/mcp" } });
+  mount();
+  assert.ok(await screen.findByText("Apps on this Mac connect here."));
+  assert.ok(screen.getByText("Only apps on this Mac can connect, and each one needs its own token."));
+});
+
 test("revoking an app asks first, and Cancel leaves it connected", async () => {
   const server = mcpServer({ apps: [CODEX] });
   mount();

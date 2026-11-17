@@ -22,6 +22,7 @@ import { BotPageSkeleton } from "../../main/bots/bot-page-shell";
 import { useAppCapabilities } from "../../lib/app-capabilities";
 import { aidenMcpApi } from "../../lib/ipc";
 import { aidenMcpQueryKeys } from "../../lib/aiden-mcp";
+import { localComputerNoun, type LocalComputerNoun } from "../../shared/computer-noun";
 import {
   AIDEN_MCP_ACCESS_LABELS,
   aidenMcpClientSnippets,
@@ -31,6 +32,11 @@ import {
 } from "../../shared/aiden-mcp";
 
 const MAX_APP_NAME_LENGTH = 80;
+
+/** Characters as Aiden counts them for a name: code points, so an emoji is one. */
+function nameLength(name: string): number {
+  return [...name].length;
+}
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
@@ -49,7 +55,7 @@ export interface AidenMcpStatusPresentation {
 }
 
 /** What the enable row says about the server. */
-export function aidenMcpStatusPresentation(status: AidenMcpServerStatusView): AidenMcpStatusPresentation {
+export function aidenMcpStatusPresentation(status: AidenMcpServerStatusView, computer: LocalComputerNoun): AidenMcpStatusPresentation {
   if (!status.enabled) {
     return {
       label: "Off",
@@ -63,7 +69,7 @@ export function aidenMcpStatusPresentation(status: AidenMcpServerStatusView): Ai
       label: `Listening on port ${status.port}`,
       tone: "green",
       canRetry: false,
-      detail: "Only apps on this computer can connect, and each one needs its own token.",
+      detail: `Only apps on this ${computer} can connect, and each one needs its own token.`,
     };
   }
   if (status.problem === "port_in_use") {
@@ -90,7 +96,7 @@ const ACCESS_CHOICES: ReadonlyArray<readonly [AidenMcpAccess, string]> = [
   ["read", "Can list and read your chats and workspaces. It can't send messages."],
   [
     "supervised",
-    "Can also start chats and send messages, which run with each workspace's permissions. Approvals and questions wait for you here.",
+    "Can also start chats and send messages. Their tools follow each workspace's approval mode, and approvals and questions wait for you here.",
   ],
 ];
 
@@ -114,8 +120,9 @@ function AddAppDialog({
     setFailure(null);
   }, [open]);
   const trimmed = name.trim();
+  const tooLong = nameLength(trimmed) > MAX_APP_NAME_LENGTH;
   const add = async () => {
-    if (!trimmed || saving) return;
+    if (!trimmed || tooLong || saving) return;
     setSaving(true);
     try {
       const issued = await aidenMcpApi.issueApp({ name: trimmed, access });
@@ -133,7 +140,7 @@ function AddAppDialog({
       title="Add an app"
       description="Aiden makes a token for this app. You'll copy it into the app next."
       confirmLabel="Add app"
-      confirmDisabled={!trimmed}
+      confirmDisabled={!trimmed || tooLong}
       busy={saving}
       submitOnEnter
       onConfirm={add}
@@ -144,9 +151,8 @@ function AddAppDialog({
           <Input
             value={name}
             autoFocus
-            maxLength={MAX_APP_NAME_LENGTH}
             placeholder="Claude Code"
-            aria-invalid={failure !== null || undefined}
+            aria-invalid={failure !== null || tooLong || undefined}
             onChange={(event) => {
               setName(event.target.value);
               setFailure(null);
@@ -180,7 +186,9 @@ function AddAppDialog({
             ))}
           </RadioGroup>
         </div>
-        {failure ? (
+        {tooLong ? (
+          <Text as="p" variant="small" color="status-red" role="alert">Give the app a name of up to {MAX_APP_NAME_LENGTH} characters.</Text>
+        ) : failure ? (
           <Text as="p" variant="small" color="status-red" role="alert">{failure}</Text>
         ) : null}
       </div>
@@ -278,10 +286,10 @@ export function AidenMcpAppRow({ app, onRevoke }: AidenMcpAppRowProps) {
 export function AidenMcpSettings() {
   const capabilities = useAppCapabilities();
   if (!capabilities.mcpServer) return null;
-  return <AidenMcpSettingsView />;
+  return <AidenMcpSettingsView computer={localComputerNoun(capabilities.platform)} />;
 }
 
-function AidenMcpSettingsView() {
+function AidenMcpSettingsView({ computer }: { computer: LocalComputerNoun }) {
   const queryClient = useQueryClient();
   const status = useQuery({ queryKey: aidenMcpQueryKeys.status(), queryFn: aidenMcpApi.status });
   const apps = useQuery({ queryKey: aidenMcpQueryKeys.apps(), queryFn: aidenMcpApi.listApps });
@@ -342,7 +350,7 @@ function AidenMcpSettingsView() {
   }
 
   const server = status.data;
-  const presentation = aidenMcpStatusPresentation(server);
+  const presentation = aidenMcpStatusPresentation(server, computer);
   const appList = apps.data ?? [];
 
   return (
@@ -360,7 +368,7 @@ function AidenMcpSettingsView() {
           </div>
         </Field>
         {server.enabled && server.url ? (
-          <Field label="Address" description="Apps on this computer connect here.">
+          <Field label="Address" description={`Apps on this ${computer} connect here.`}>
             <div className="flex items-center justify-end gap-2 max-[540px]:justify-start">
               <code className="min-w-0 truncate font-mono text-small text-secondary">{server.url}</code>
               <CopyButton text={server.url} label="Copy address" />
@@ -409,8 +417,9 @@ function AidenMcpSettingsView() {
         )}
       </FieldSet>
       <Text as="p" variant="small" color="secondary" className="-mt-4 mb-7 px-4 text-pretty">
-        Apps never answer approvals or questions; those wait for you in Aiden. A Supervised app's turns run
-        with its workspace's permissions, so in a Full-access workspace its tools run without asking.
+        Apps never answer approvals or questions; those wait for you in Aiden. A Supervised app's turns follow
+        the workspace's approval mode like your own: in Auto a model approves routine actions, in Never ask
+        almost everything runs without asking, and in Ask only what you've allowed in that workspace does.
       </Text>
 
       <AddAppDialog

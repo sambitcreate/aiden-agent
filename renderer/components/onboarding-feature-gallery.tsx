@@ -245,7 +245,8 @@ export const onboardingFeatures: OnboardingFeature[] = [
     id: "otherApps",
     group: "extend",
     title: "Apps using Aiden",
-    description: "Let apps like Claude Code or Codex on this computer list and read your Aiden chats, or start supervised work you approve in Aiden. Turn it on and add each app in Settings → Connections → Apps using Aiden; nothing listens until you do.",
+    description: (computer) =>
+      `Let apps like Claude Code or Codex on this ${computer} list and read your Aiden chats. With Supervised access they can also start work, which follows each workspace's approval mode, and only you answer approvals. Turn it on and add each app in Settings → Connections → Apps using Aiden; nothing listens until you do.`,
     icon: AppWindow,
     size: "wide",
   },
