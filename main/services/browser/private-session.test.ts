@@ -12,13 +12,17 @@ test("private browsing cycles reuse one session and remove the prior cycle's sta
   let created = 0;
   const cookies = new Map<string, string>();
   const cache = new Set<string>();
+  // Basic/NTLM credentials Chromium keeps per session, apart from storage and cache.
+  const auth = new Set<string>();
   const sessions = new BrowserPrivateSession(() => {
     created++;
     return {
       cookies,
       cache,
+      auth,
       clearStorageData: async () => { cookies.clear(); },
       clearCache: async () => { cache.clear(); },
+      clearAuthCache: async () => { auth.clear(); },
     };
   });
   let original: unknown;
@@ -28,8 +32,10 @@ test("private browsing cycles reuse one session and remove the prior cycle's sta
       assert.equal(session, original);
       assert.equal(session.cookies.size, 0);
       assert.equal(session.cache.size, 0);
+      assert.equal(session.auth.size, 0);
       session.cookies.set("login", `cycle-${cycle}`);
       session.cache.add("private-response");
+      session.auth.add("intranet.example:basic");
     });
     sessions.clear();
   }
@@ -44,6 +50,7 @@ test("opening waits for both private storage and cache cleanup", async () => {
   const sessions = new BrowserPrivateSession(() => ({
     clearStorageData: () => { cleanupStarted.resolve(); return storage.promise; },
     clearCache: () => cache.promise,
+    clearAuthCache: async () => {},
   }));
   await sessions.open(() => {});
   sessions.clear();
@@ -64,6 +71,7 @@ test("cleanup failure refuses reuse after both cleanup operations settle", async
   const sessions = new BrowserPrivateSession(() => ({
     clearStorageData: async () => { if (fail) throw new Error("storage cleanup failed"); },
     clearCache: () => cache.promise,
+    clearAuthCache: async () => {},
   }));
   await sessions.open(() => {});
   sessions.clear();
@@ -84,6 +92,7 @@ test("a last-close cleanup that starts while opening waits is also awaited", asy
   const sessions = new BrowserPrivateSession(() => ({
     clearStorageData: () => storage.promise,
     clearCache: async () => {},
+    clearAuthCache: async () => {},
   }));
   await sessions.open(() => {});
   let opened = false;

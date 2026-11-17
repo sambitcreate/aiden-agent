@@ -2,6 +2,7 @@
 export class BrowserPrivateSession<T extends {
   clearStorageData(): Promise<void>;
   clearCache(): Promise<void>;
+  clearAuthCache(): Promise<void>;
 }> {
   private session?: T;
   private cleanup: Promise<void> = Promise.resolve();
@@ -23,10 +24,12 @@ export class BrowserPrivateSession<T extends {
     const session = this.session;
     if (!session) return;
     this.cleanup = this.cleanup.catch(() => {}).then(async () => {
-      // Wait for both operations, including when one fails before the other.
+      // Wait for every operation, including when one fails before the others.
+      // HTTP auth (Basic/NTLM) lives apart from storage and cache.
       const results = await Promise.allSettled([
         session.clearStorageData(),
         session.clearCache(),
+        session.clearAuthCache(),
       ]);
       const failure = results.find((result) => result.status === "rejected");
       if (failure?.status === "rejected") throw failure.reason;
