@@ -8,6 +8,7 @@ import { createBotCreationKeyStore } from "../bot-creation-keys.js";
 import { BOT_DESKTOP_AUDIENCE_ID } from "../bot-runtime-authority-main.js";
 import { botStore } from "../bot-store.js";
 import { botSessionRuntime } from "./bot-session-main.js";
+import { botPresetRoutineSchedule } from "../../../renderer/shared/bot-presets.js";
 import { createBotStarter, type BotStarter } from "./bot-starter.js";
 
 const creationKeys = createBotCreationKeyStore({ root: () => app.getPath("userData") });
@@ -30,17 +31,28 @@ export function botStarter(): BotStarter {
         audienceId: BOT_DESKTOP_AUDIENCE_ID,
         botId,
         bot: input,
-        presetId,
+        ...(presetId === undefined ? { source: "onboarding" as const } : { presetId, source: "template" as const }),
         ...(access === undefined ? {} : { access }),
-        // The starter cards say every Bot can search the web.
+        // Templates and the first Bot say every Bot can search the web.
         grantFullWebSearch: true,
       }),
+    addPausedRoutine: async (botId, routine) => {
+      const { botRoutineService } = await import("../scheduled-bot-routines-main.js");
+      await botRoutineService.create({
+        botId,
+        name: routine.name,
+        prompt: routine.prompt,
+        schedule: botPresetRoutineSchedule(routine.schedule),
+        enabled: false,
+      });
+    },
     session: {
       send: async (botId, input) => (await botSessionRuntime()).send(botId, input),
       state: async (botId) => (await botSessionRuntime()).state(botId),
       conversation: async (botId) => (await botSessionRuntime()).conversation(botId),
     },
     onIntroError: (botId, error) => logger.warn("bots", `Bot ${botId} could not introduce itself.`, error),
+    onRoutineError: (botId, error) => logger.warn("bots", `Bot ${botId}'s template routine could not be added.`, error),
   });
   return starter;
 }

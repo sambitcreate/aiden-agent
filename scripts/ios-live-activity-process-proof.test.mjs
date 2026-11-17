@@ -5,6 +5,7 @@ import {
   destinationArtifactPlistCommands,
   parseActivityProcessProofOptions,
   physicalDestination,
+  unitTestTargetPath,
   validatePhysicalDeviceDetails,
 } from "./ios-live-activity-process-proof.mjs";
 
@@ -93,10 +94,30 @@ test("CoreDevice details must match the Xcode UDID and report physical iOS hardw
 });
 
 test("relaunch phase reuses destination artifacts instead of reinstalling the app", () => {
-  const commands = destinationArtifactPlistCommands();
-  assert(commands.includes("Add :TestConfigurations:0:TestTargets:0:UseDestinationArtifacts bool true"));
+  const path = ":TestConfigurations:0:TestTargets:1";
+  const commands = destinationArtifactPlistCommands(path);
+  assert(commands.includes(`Add ${path}:UseDestinationArtifacts bool true`));
   assert(commands.some((command) => command.includes("TestBundleDestinationRelativePath")));
-  assert(commands.includes("Delete :TestConfigurations:0:TestTargets:0:TestBundlePath"));
-  assert(commands.includes("Delete :TestConfigurations:0:TestTargets:0:TestHostPath"));
-  assert(commands.includes("Delete :TestConfigurations:0:TestTargets:0:DependentProductPaths"));
+  assert(commands.includes(`Delete ${path}:TestBundlePath`));
+  assert(commands.includes(`Delete ${path}:TestHostPath`));
+  assert(commands.includes(`Delete ${path}:DependentProductPaths`));
+});
+
+test("the proof edits the unit test target whichever position the xctestrun lists it in", () => {
+  const target = (BlueprintName) => ({ BlueprintName });
+  const xctestrun = (...names) => ({ TestConfigurations: [{ TestTargets: names.map(target) }] });
+  assert.equal(
+    unitTestTargetPath(xctestrun("AidenOnTheGoTests", "AidenOnTheGoUITests")),
+    ":TestConfigurations:0:TestTargets:0",
+  );
+  assert.equal(
+    unitTestTargetPath(xctestrun("AidenOnTheGoUITests", "AidenOnTheGoTests")),
+    ":TestConfigurations:0:TestTargets:1",
+  );
+  assert.throws(() => unitTestTargetPath(xctestrun("AidenOnTheGoUITests")), /exactly one AidenOnTheGoTests/u);
+  assert.throws(
+    () => unitTestTargetPath(xctestrun("AidenOnTheGoTests", "AidenOnTheGoTests")),
+    /exactly one AidenOnTheGoTests/u,
+  );
+  assert.throws(() => unitTestTargetPath({}), /exactly one AidenOnTheGoTests/u);
 });

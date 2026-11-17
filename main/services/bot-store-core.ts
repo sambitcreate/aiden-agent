@@ -14,6 +14,7 @@ import {
   type BotUpdateInput,
 } from "../../renderer/shared/bots.js";
 import { isBoundedBotText } from "../../renderer/shared/bot-capabilities.js";
+import { BOT_ROUTINE_THINKING_LEVELS, type BotRoutineThinkingLevel } from "../../renderer/shared/bot-routine-models.js";
 
 /*
  * Pre-1.0, no migrations: the record stores the current avatar recipe
@@ -140,9 +141,15 @@ function projectBot(value: unknown): StoredBotDefinition | null {
     ...(bot.selfWakeUps === false ? { selfWakeUps: false as const } : {}),
     ...(bot.acceptsBotMessages === false ? { acceptsBotMessages: false as const } : {}),
     ...(bot.messagesOtherBots === false ? { messagesOtherBots: false as const } : {}),
+    // Only a level other than "off" is stored; one this build does not know reads as off.
+    ...(storedThinkingLevel(bot.thinkingLevel) ? { thinkingLevel: storedThinkingLevel(bot.thinkingLevel)! } : {}),
     ...(typeof bot.selfWakeUpGeneration === "string" ? { selfWakeUpGeneration: bot.selfWakeUpGeneration } : {}),
   };
   return projected;
+}
+
+function storedThinkingLevel(value: unknown): BotRoutineThinkingLevel | undefined {
+  return value !== "off" && BOT_ROUTINE_THINKING_LEVELS.includes(value as BotRoutineThinkingLevel) ? value as BotRoutineThinkingLevel : undefined;
 }
 
 function normalizeState(value: unknown): BotState {
@@ -287,6 +294,7 @@ export function createBotStore(options: {
         const chatActivity = input.chatActivity === undefined ? undefined : parseBotChatActivity(input.chatActivity);
         if (input.chatActivity !== undefined && !chatActivity) throw new Error("Choose a valid chat activity.");
         const interruptions = input.interruptions === undefined ? undefined : parseBotInterruptions(input.interruptions);
+        if (input.thinkingLevel !== undefined && !BOT_ROUTINE_THINKING_LEVELS.includes(input.thinkingLevel)) throw new Error("Choose a valid thinking level.");
         await loadBotState();
         return store.update((draft) => {
           const bot = draft.bots.find((entry) => entry.id === input.id);
@@ -318,6 +326,9 @@ export function createBotStore(options: {
             delete bot[key];
             if (off) bot[key] = false;
           }
+          const thinkingLevel = input.thinkingLevel === undefined ? storedThinkingLevel(bot.thinkingLevel) : storedThinkingLevel(input.thinkingLevel);
+          delete bot.thinkingLevel;
+          if (thinkingLevel) bot.thinkingLevel = thinkingLevel;
           if (generation !== undefined) bot.selfWakeUpGeneration = generation;
           bot.updatedAt = nextIdentityTimestamp(bot.updatedAt, now);
           return structuredClone(botForRenderer(bot));

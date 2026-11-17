@@ -82,16 +82,16 @@ const machines = {
   onGroupingChange: noop,
 };
 
-test("with paired hosts the menu offers a machine filter and, for workspaces, cross-machine grouping", () => {
+test("with paired hosts the menu offers a computer filter and, for workspaces, cross-computer grouping", () => {
   const groups = renderMenu({ machines });
   assert.deepEqual(groups.slice(3), [
     {
-      label: "Machines",
-      options: ["All machines", "This Mac", "Studio", "Laptop"],
+      label: "Computers",
+      options: ["All computers", "This computer", "Studio", "Laptop"],
       checked: ["Laptop"],
     },
     {
-      label: "Group across machines",
+      label: "Group across computers",
       options: ["Keep separate", "Same repository", "Same repository and path"],
       checked: ["Same repository"],
     },
@@ -99,7 +99,7 @@ test("with paired hosts the menu offers a machine filter and, for workspaces, cr
   // Grouping applies to workspaces only; the machine filter stays for every view.
   assert.deepEqual(
     renderMenu({ view: "inbox", machines }).map((group) => group.label),
-    ["View", "Machines"],
+    ["View", "Computers"],
   );
 });
 

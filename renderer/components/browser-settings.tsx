@@ -5,12 +5,14 @@ import { BROWSER_DEVICE_PRESETS, validBrowserViewport } from "../lib/browser-ui-
 import { browserApi } from "../lib/ipc";
 import { AlertDialog, Button, Dialog, Input, Text, toast } from "./ui";
 
+import { useAppCapabilities } from "../lib/app-capabilities";
 export function BrowserSettings({ state, open, onOpenChange, run, error = null }: {
   state: BrowserState; open: boolean; onOpenChange: (open: boolean) => void;
   run: (command: BrowserCommand) => Promise<BrowserCommandResult | null>;
   /** The latest browser action error, shown here because the modal hides the panel's error strip. */
   error?: string | null;
 }) {
+  const { platform } = useAppCapabilities();
   const [profileId, setProfileId] = React.useState(state.defaults.profileId);
   const [name, setName] = React.useState("");
   const [newName, setNewName] = React.useState("");
@@ -113,7 +115,7 @@ export function BrowserSettings({ state, open, onOpenChange, run, error = null }
           <Button size="small" disabled={busy} onClick={() => void operate({ action: "import_sources" }).then((result) => { if (result) { setSources(result.importSources ?? []); setSourceId(result.importSources?.[0]?.id ?? ""); } })}>Import browser cookies…</Button>
           {sources ? sources.length ? <>
             <label className="browser-setting-row">Import from<select aria-label="Source browser profile" className="browser-select" value={sourceId} onChange={(event) => setSourceId(event.target.value)}>{sources.map((source) => <option key={source.id} value={source.id}>{source.browser} — {source.profile}{source.running ? " (quit browser first)" : ""}</option>)}</select></label>
-            <Text variant="small" color="secondary">Copy cookies into {profile.name}. Your source browser stays unchanged. macOS may ask for Keychain access.</Text>
+            <Text variant="small" color="secondary">Copy cookies into {profile.name}. Your source browser stays unchanged.{platform === "darwin" ? " macOS may ask for Keychain access." : ""}</Text>
             {sources.find((source) => source.id === sourceId)?.running ? <Text variant="small" color="secondary">Quit the source browser, then click Import browser cookies again to refresh its status.</Text> : null}
             <Button size="small" disabled={busy || !sourceId || sources.find((source) => source.id === sourceId)?.running} onClick={() => void operate({ action: "import_cookies", sourceId, profileId: profile.id }).then((result) => { if (result?.importResult) setImportMessage(`Imported ${result.importResult.imported} cookies. ${result.importResult.skipped} skipped.${result.importResult.warnings.length ? ` ${result.importResult.warnings.join(" ")}` : ""}`); })}>{busy ? "Importing…" : `Import into ${profile.name}`}</Button>
           </> : <Text variant="small" color="secondary">No supported browser profiles found.</Text> : null}

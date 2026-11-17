@@ -77,6 +77,7 @@ final class AidenNetworkPathMonitor {
 
     let availability = AidenNetworkAvailability()
     private let monitor = NWPathMonitor()
+    private var pathChangeListeners: [UUID: AsyncStream<Void>.Continuation] = [:]
 
     private init() {
         // Deliver on the main queue and apply synchronously: hopping through
@@ -88,9 +89,25 @@ final class AidenNetworkPathMonitor {
             MainActor.assumeIsolated {
                 self?.availability.setAvailable(available)
                 self?.availability.setConstrained(constrained)
+                if available {
+                    self?.pathChangeListeners.values.forEach { $0.yield() }
+                }
             }
         }
         monitor.start(queue: .main)
+    }
+
+    /// Yields each time the path changes to one that may reach somewhere new:
+    /// a network returning, or Wi-Fi handing over to cellular. A path going
+    /// away reaches nothing, so it yields nothing.
+    func pathChanges() -> AsyncStream<Void> {
+        let (stream, continuation) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let id = UUID()
+        pathChangeListeners[id] = continuation
+        continuation.onTermination = { [weak self] _ in
+            Task { @MainActor in self?.pathChangeListeners[id] = nil }
+        }
+        return stream
     }
 }
 
@@ -181,13 +198,16 @@ struct AidenStreamNetworkRecovery {
         return seconds * 1_000
     }
 
+    /// Whether a stream failure now would park until the path returns.
+    var parksAfterStreamFailure: Bool {
+        policy.afterStreamFailure(isNetworkAvailable: path.isNetworkAvailable) == .waitForNetwork
+    }
+
     /// After the event stream fails. Returns `true` when the caller should
     /// probe status, or `false` after parking offline until the path returned,
     /// in which case the caller reopens the stream directly.
     func shouldProbeAfterStreamFailure(onWaiting: (Bool) async -> Void) async throws -> Bool {
-        guard policy.afterStreamFailure(isNetworkAvailable: path.isNetworkAvailable) == .waitForNetwork else {
-            return true
-        }
+        guard parksAfterStreamFailure else { return true }
         try await park(onWaiting: onWaiting)
         return false
     }

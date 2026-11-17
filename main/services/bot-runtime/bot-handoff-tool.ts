@@ -15,6 +15,7 @@
 //   admission while it waits (`interactive` on the candidate).
 
 import { randomUUID } from "node:crypto";
+import { localComputerNoun } from "../../../renderer/shared/computer-noun.js";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
 import {
@@ -40,8 +41,8 @@ const DESCRIPTION =
   "Hand one step of the task to the person when you must not or cannot do it yourself: entering a password or " +
   "2FA code, changing account security, a payment, a CAPTCHA, a legal sign-off, or anything your rules hand to " +
   "them. `action` is the step as a short imperative (\"Enter the 2FA code for your bank\"); `why` says in a " +
-  "sentence why it needs them; `open.url` is an https page that helps them do it. The app shows a card with Done " +
-  "and Skip, and their answer comes back as this tool's result: wait for it, then check the result before you " +
+  "sentence why it needs them; `open.url` is an https page that helps them do it. The app shows a card: the person " +
+  "takes control, then answers I'm done or Skip, and their answer comes back as this tool's result: wait for it, then check the result before you " +
   "continue. Never ask for passwords or codes in the chat.";
 
 /** Where this Bot can hand a step over in its own browser or on its own computer, this turn. */
@@ -59,8 +60,8 @@ export function botHandoffDescription(targets: BotHandoffTargets = { browser: fa
   if (where.length === 0) return DESCRIPTION;
   return (
     `${DESCRIPTION} When the step is in your own ${targets.browser && targets.computer ? "browser or computer" : targets.browser ? "browser" : "computer"}, ` +
-    `pass ${where.join(", or ")} (with \`open.url\` for the page): the person does it there, on the Mac or by ` +
-    "finishing on the Mac from their phone, never in their own browser."
+    `pass ${where.join(", or ")} (with \`open.url\` for the page): the person does it there, on the ${localComputerNoun(process.platform)} or by ` +
+    `finishing on the ${localComputerNoun(process.platform)} from their phone, never in their own browser.`
   );
 }
 

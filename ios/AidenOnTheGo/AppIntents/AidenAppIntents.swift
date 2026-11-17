@@ -173,7 +173,9 @@ struct AidenWorkspaceIntentQuery: EntityQuery {
 }
 
 /// In-process delivery survives a cold foreground launch before ContentView mounts.
-/// Nothing in a URL, App Group, saved state, or notification can claim this provenance.
+/// An `Action` only comes from an App Intent: nothing in a URL, App Group, saved state,
+/// or notification can claim that provenance. A route only says where to go, and a
+/// notification tap can queue one too.
 @MainActor @Observable
 final class AidenForegroundIntentRouter {
     struct Action: Equatable {
@@ -183,18 +185,201 @@ final class AidenForegroundIntentRouter {
         let startsVoice: Bool
         let createdAt: Date
     }
-    static let shared = AidenForegroundIntentRouter()
-    private(set) var pending: Action?
 
-    func submit(instanceID: String?, workspaceID: String?, startsVoice: Bool, now: Date = Date()) {
-        guard pending == nil else { return }
-        pending = Action(instanceID: instanceID, workspaceID: workspaceID, startsVoice: startsVoice, createdAt: now)
+    /// A place waiting for the shell. `startsVoice` rides beside the route,
+    /// because routes are saved between launches and this must never be. Queued,
+    /// it's only a request: `takeRoutes` decides whether it still stands.
+    struct QueuedRoute: Equatable {
+        let route: AidenAppRoute
+        let startsVoice: Bool
+        let requestedAt: Date
     }
 
-    func take(now: Date = Date()) -> Action? {
-        defer { pending = nil }
-        guard let pending, (0..<60).contains(now.timeIntervalSince(pending.createdAt)) else { return nil }
-        return pending
+    static let shared = AidenForegroundIntentRouter()
+    private(set) var actions: [Action] = []
+    /// Kept until the shell takes them, so a tap or an intent can arrive before
+    /// it mounts.
+    private(set) var routes: [QueuedRoute] = []
+    var pending: Action? { actions.first }
+
+    @ObservationIgnored private var isOpeningChats = false
+
+    func submit(instanceID: String?, workspaceID: String?, startsVoice: Bool, now: Date = Date()) {
+        actions.append(Action(instanceID: instanceID, workspaceID: workspaceID, startsVoice: startsVoice, createdAt: now))
+    }
+
+    /// For what ends an intent's claim on the foreground. Routes stay: they only
+    /// say where to go, and a tap is still owed its screen.
+    func discardActions() {
+        actions = []
+    }
+
+    func submit(route: AidenAppRoute, startsVoice: Bool = false, requestedAt: Date = Date()) {
+        routes.append(QueuedRoute(route: route, startsVoice: startsVoice, requestedAt: requestedAt))
+    }
+
+    /// Empties the queue, so each route reaches exactly one shell. A route whose
+    /// machine left or was revoked while it waited is dropped here. The microphone
+    /// only opens in front of the person, within the minute of them asking; a route
+    /// that misses either still opens its chat, silently.
+    func takeRoutes(
+        openableOn coordinator: AidenRemoteCoordinator,
+        isForeground: @MainActor () -> Bool = { AidenRunAlertNotifier.currentAppState() == .active },
+        now: Date = Date()
+    ) -> [QueuedRoute] {
+        defer { routes = [] }
+        let isInFront = isForeground()
+        return routes.filter { coordinator.canOpen($0.route) }.map { queued in
+            QueuedRoute(
+                route: queued.route,
+                startsVoice: queued.startsVoice && isInFront && Self.isFresh(queued.requestedAt, now: now),
+                requestedAt: queued.requestedAt
+            )
+        }
+    }
+
+    /// Leaves nothing behind for a machine that's gone.
+    func dropUnopenable(on coordinator: AidenRemoteCoordinator) {
+        routes.removeAll { !coordinator.canOpen($0.route) }
+        actions.removeAll { machine(for: $0, on: coordinator) == nil }
+    }
+
+    /// The way through the queue. Each chat is created on the
+    /// intent's own machine, one at a time and in order, and leaves a route.
+    /// The selection never moves. An intent whose machine is still connecting
+    /// stays queued and holds up nobody else.
+    func openWaitingChats(
+        coordinator: AidenRemoteCoordinator,
+        connect: @MainActor (String) -> Void = { _ in },
+        isForeground: @MainActor () -> Bool = { AidenRunAlertNotifier.currentAppState() == .active },
+        now: @MainActor () -> Date = { Date() }
+    ) async {
+        guard !isOpeningChats else { return }
+        isOpeningChats = true
+        defer { isOpeningChats = false }
+        while isForeground(), let (action, connection) = nextReadyAction(on: coordinator, now: now()) {
+            await openChat(for: action, on: connection, coordinator: coordinator)
+        }
+        guard isForeground() else { return }
+        // A machine that wakes with no change of network gives nothing else a
+        // reason to try it.
+        for action in actions {
+            if let connection = machine(for: action, on: coordinator), connection.connectionState != .connected {
+                connect(connection.instanceId)
+            }
+        }
+    }
+
+    /// How long until the next waiting intent runs out, so whoever's waiting
+    /// can come back then. Nil with none waiting.
+    func timeUntilNextExpiry(now: Date = Date()) -> TimeInterval? {
+        actions.map { max(0, Self.lifetime - now.timeIntervalSince($0.createdAt)) }.min()
+    }
+
+    private func nextReadyAction(
+        on coordinator: AidenRemoteCoordinator,
+        now: Date
+    ) -> (Action, AidenHostConnection)? {
+        // Someone asked and is still here, so a chat that never comes needs saying.
+        for action in actions where !Self.isFresh(action.createdAt, now: now) {
+            if let name = machine(for: action, on: coordinator)?.installation.name {
+                coordinator.presentedError = String(localized: "\(name) didn’t connect in time, so the chat wasn’t started.")
+            }
+        }
+        actions.removeAll { !Self.isFresh($0.createdAt, now: now) || machine(for: $0, on: coordinator) == nil }
+        for (index, action) in actions.enumerated() {
+            if let connection = machine(for: action, on: coordinator), connection.connectionState == .connected {
+                actions.remove(at: index)
+                return (action, connection)
+            }
+        }
+        return nil
+    }
+
+    /// Nil once the intent's machine has been forgotten or revoked.
+    private func machine(for action: Action, on coordinator: AidenRemoteCoordinator) -> AidenHostConnection? {
+        guard let instanceID = action.instanceID ?? coordinator.defaultInstanceId,
+              let connection = coordinator.hosts.connection(for: instanceID),
+              !connection.isRevoked else { return nil }
+        return connection
+    }
+
+    private func openChat(
+        for action: Action,
+        on connection: AidenHostConnection,
+        coordinator: AidenRemoteCoordinator
+    ) async {
+        guard connection.installation.hasNegotiatedAccess(to: .chatWrite),
+              let owner = try? coordinator.ownerContext(for: connection.instanceId) else { return }
+        guard let workspace = Self.workspace(for: action, on: connection, coordinator: coordinator) else {
+            coordinator.presentedError = String(localized: "Open this installation and choose an available workspace before starting a chat.")
+            return
+        }
+        do {
+            let client = try coordinator.remoteClient(for: owner)
+            let chat = try await client.createChat(workspaceId: workspace.id, noWorkspace: workspace.noWorkspace)
+            guard coordinator.isLive(owner), !chat.isBotChat,
+                  chat.workspaceId == workspace.id || workspace.noWorkspace else { return }
+            // A No workspace chat can land in a fresh hidden workspace the phone hasn't listed yet.
+            if !connection.workspaces.contains(where: { $0.id == chat.workspaceId }) {
+                await refreshWorkspaces(of: connection, client: client, owner: owner, coordinator: coordinator)
+                guard coordinator.isLive(owner) else { return }
+                guard connection.workspaces.contains(where: { $0.id == chat.workspaceId }) else {
+                    coordinator.presentedError = AidenNoWorkspace.startedButUnlistedMessage
+                    return
+                }
+            }
+            submit(
+                route: .chat(AidenHostObjectID(instanceId: owner.instanceId, deviceId: owner.deviceId, objectId: chat.id)),
+                startsVoice: action.startsVoice,
+                requestedAt: action.createdAt
+            )
+        } catch where aidenIsCancellation(error) {
+            return
+        } catch {
+            if await coordinator.handleCredentialRevocation(error, context: owner) { return }
+            // A mutation is never retried after an uncertain result.
+            if coordinator.isLive(owner) { coordinator.presentedError = error.localizedDescription }
+        }
+    }
+
+    /// Reads the list of the machine that holds the chat, selected or not. The chat
+    /// already exists, so a failed read leaves it to the caller to say so.
+    private func refreshWorkspaces(
+        of connection: AidenHostConnection,
+        client: AidenRemoteClient,
+        owner: AidenRemoteRequestContext,
+        coordinator: AidenRemoteCoordinator
+    ) async {
+        do {
+            let listed = try await client.workspaces()
+            guard coordinator.isLive(owner) else { return }
+            connection.applyWorkspaceSnapshot(listed)
+        } catch {
+            _ = await coordinator.handleCredentialRevocation(error, context: owner)
+        }
+    }
+
+    /// The workspace the intent named, else the one last used on that machine,
+    /// else its first. A chat's own hidden folder is listed under the Chats home.
+    private static func workspace(
+        for action: Action,
+        on connection: AidenHostConnection,
+        coordinator: AidenRemoteCoordinator
+    ) -> AidenWorkspace? {
+        let instanceID = connection.instanceId
+        let archived = coordinator.workspaceArchiveStore.archivedWorkspaceIDs(for: instanceID)
+        let available = AidenNoWorkspace.grouped(connection.workspaces).filter { !archived.contains($0.id) }
+        let selected = (action.workspaceID ?? AidenProductNavigationStore.shared.selectedWorkspace(for: instanceID))
+            .map { AidenNoWorkspace.groupID(for: $0, in: connection.workspaces) }
+        return selected.flatMap { id in available.first { $0.id == id } }
+            ?? (action.workspaceID == nil ? available.first : nil)
+    }
+
+    private static let lifetime: TimeInterval = 60
+
+    private static func isFresh(_ requestedAt: Date, now: Date) -> Bool {
+        (0..<lifetime).contains(now.timeIntervalSince(requestedAt))
     }
 }
 

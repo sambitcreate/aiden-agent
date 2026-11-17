@@ -21,7 +21,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { createGzip } from "node:zlib";
 import {
-  parseToolApprovalScope,
+  parseRemoteToolApprovalScope,
   type ToolApprovalScope,
 } from "../../renderer/shared/tool-approval-scope.js";
 import { VISUAL_VIEWER_CSP } from "../../renderer/shared/visual-viewer.js";
@@ -74,6 +74,11 @@ import {
   AIDEN_REMOTE_BOT_ATTACHMENTS_FEATURE,
   AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
   AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
+  AIDEN_REMOTE_APPROVAL_CARD_CAPABILITIES,
+  AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES,
+  AIDEN_REMOTE_BOT_SETTINGS_CHANGE_CAPABILITIES,
+  AIDEN_REMOTE_BOT_SUGGESTION_CAPABILITIES,
+  AIDEN_REMOTE_BOT_TEMPLATE_CAPABILITIES,
   AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
   AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
   AIDEN_REMOTE_RAW_UPLOAD_MIME_TYPES,
@@ -151,6 +156,7 @@ import type { AidenRemoteMemorySettingsService } from "./aiden-remote-memory-set
 import type { AidenRemoteSpendingService } from "./aiden-remote-spending.js";
 import type { AidenRemoteBackgroundJobService } from "./aiden-remote-background-jobs.js";
 import type { AidenRemoteBotService } from "./aiden-remote-bots.js";
+import type { AidenRemoteApprovalSettingsService } from "./aiden-remote-approval-settings.js";
 import type { UsageDateRange, UsageSummary } from "./types.js";
 import { MAX_AIDEN_REMOTE_ATTACHMENT_REQUEST_BYTES } from "./aiden-remote-attachments.js";
 import { MAX_IMAGE_BYTES } from "./attachments.js";
@@ -340,6 +346,11 @@ export interface AidenRemoteRouterDependencies {
    * feature tokens are never advertised.
    */
   botAllowed?: AidenRemoteBotAllowList;
+  /**
+   * Contract revision 61 (`approvals:settings`): the Mac's approval mode and
+   * rules page. Absent: the routes are `not_found` and the grant is never offered.
+   */
+  approvalSettings?: Pick<AidenRemoteApprovalSettingsService, "mode" | "setMode" | "rules" | "picker" | "addRule" | "changeRule" | "removeRule">;
   botSessions?: Pick<
     AidenRemoteBotSessionService,
     | "session"
@@ -395,6 +406,17 @@ export interface AidenRemoteRouterDependencies {
         | "actIssue"
         | "supportsIssues"
         | "openIssueCount"
+        // Contract revision 61 (`bot:settings-changes`, `bot:suggestions`, `bot:templates`).
+        | "supportsSettingsChanges"
+        | "respondSettingsChange"
+        | "supportsSuggestions"
+        | "respondSkillProposal"
+        | "respondLesson"
+        | "removeLesson"
+        | "undoLearning"
+        | "supportsTemplates"
+        | "templates"
+        | "introduceCreated"
       >
     >;
   /**
@@ -465,6 +487,9 @@ export type AidenRemoteRouteLabel =
   | "botQuestionAnswer"
   | "botAllowed"
   | "botAllowedRemove"
+  | "botSettingsChange"
+  | "botSuggestion"
+  | "approvalSettings"
   | "botPlanRespond"
   | "botAccessRequestAnswer"
   | "botHandoffAnswer"
@@ -574,6 +599,14 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   botQuestionAnswer: ["/bots/:botId/questions/:waitId/answer"],
   botAllowed: ["/bots/:botId/allowed"],
   botAllowedRemove: ["/bots/:botId/allowed/:entryId/remove"],
+  botSettingsChange: ["/bots/:botId/settings-changes/:changeId/respond"],
+  botSuggestion: [
+    "/bots/:botId/skill-proposals/:proposalId/respond",
+    "/bots/:botId/lessons/:lessonId/respond",
+    "/bots/:botId/lessons/:lessonId/remove",
+    "/bots/:botId/learning/:changeId/undo",
+  ],
+  approvalSettings: ["/approvals/mode", "/approvals/rules", "/approvals/rules/picker", "/approvals/rules/change", "/approvals/rules/remove"],
   botPlanRespond: ["/bots/:botId/plans/:planId/respond"],
   botAccessRequestAnswer: ["/bots/:botId/access-requests/:waitId/answer"],
   botHandoffAnswer: ["/bots/:botId/handoffs/:waitId/answer"],
@@ -1598,7 +1631,8 @@ function approvalDecision(value: unknown): {
     ? value as Record<string, unknown>
     : null;
   const keys = record ? Object.keys(record) : [];
-  const scope = record && "scope" in record ? parseToolApprovalScope(record.scope) : undefined;
+  // "workspace" is desktop-only: a Remote answer naming it is invalid.
+  const scope = record && "scope" in record ? parseRemoteToolApprovalScope(record.scope) : undefined;
   if (
     !record ||
     keys.some((key) => key !== "decision" && key !== "scope") ||
@@ -1954,7 +1988,7 @@ function hostFeedCursor(request: IncomingMessage, query: string): string | undef
   let after: string | undefined;
   if (query) {
     if (!query.startsWith("after=") || query.includes("&")) {
-      throw new AidenRemoteServiceError("invalid_request", "The host feed cursor is invalid.", 400);
+      throw new AidenRemoteServiceError("invalid_request", "The feed cursor is invalid.", 400);
     }
     after = decodeURIComponent(query.slice("after=".length));
   }
@@ -1968,7 +2002,7 @@ function hostFeedCursor(request: IncomingMessage, query: string): string | undef
   const value = after ?? lastEventId;
   if (value === undefined || value === "") return undefined;
   if (!/^[\x21-\x7e]{1,128}$/u.test(value)) {
-    throw new AidenRemoteServiceError("invalid_request", "The host feed cursor is invalid.", 400);
+    throw new AidenRemoteServiceError("invalid_request", "The feed cursor is invalid.", 400);
   }
   return value;
 }
@@ -2001,6 +2035,40 @@ function holdsBotMessaging(device: AidenRemoteRouterAuthenticatedDevice, depende
 /** Revision 39: schedule cards ride on stream approvals and phone run approvals. */
 function scheduleCardsWired(dependencies: AidenRemoteRouterDependencies): boolean {
   return Boolean(dependencies.streams || dependencies.hostRuns);
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Revision 61: typed cards ride on stream approvals, phone run approvals and Bot approvals. */
+function approvalCardsWired(dependencies: AidenRemoteRouterDependencies): boolean {
+  return Boolean(dependencies.streams || dependencies.hostRuns || dependencies.botSessions);
+}
+function holdsApprovalCards(device: Pick<AidenRemoteRouterAuthenticatedDevice, "capabilities">): boolean {
+  return device.capabilities.has("approval:cards");
+}
+/** Revision 61: the Mac's approval mode and rules page. */
+function approvalSettingsWired(dependencies: AidenRemoteRouterDependencies): boolean {
+  return dependencies.approvalSettings !== undefined;
+}
+function botSettingsChangesWired(dependencies: AidenRemoteRouterDependencies): boolean {
+  return dependencies.botSessions?.supportsSettingsChanges === true && typeof dependencies.botSessions.respondSettingsChange === "function";
+}
+function holdsBotSettingsChanges(device: AidenRemoteRouterAuthenticatedDevice, dependencies: AidenRemoteRouterDependencies): boolean {
+  return device.capabilities.has("bot:settings-changes") && botSettingsChangesWired(dependencies);
+}
+function botSuggestionsWired(dependencies: AidenRemoteRouterDependencies): boolean {
+  return dependencies.botSessions?.supportsSuggestions === true && typeof dependencies.botSessions.respondLesson === "function";
+}
+function holdsBotSuggestions(device: AidenRemoteRouterAuthenticatedDevice, dependencies: AidenRemoteRouterDependencies): boolean {
+  return device.capabilities.has("bot:suggestions") && botSuggestionsWired(dependencies);
+}
+function botTemplatesWired(dependencies: AidenRemoteRouterDependencies): boolean {
+  return dependencies.botSessions?.supportsTemplates === true && typeof dependencies.botSessions.templates === "function";
+}
+function holdsBotTemplates(device: AidenRemoteRouterAuthenticatedDevice, dependencies: AidenRemoteRouterDependencies): boolean {
+  return device.capabilities.has("bot:templates") && botTemplatesWired(dependencies);
 }
 
 /** The `schedule` card is sent only to a device that opted in and may read schedules. */
@@ -2258,6 +2326,12 @@ function advertisedServerCapabilities(
       : []),
     // Revision 39: a display opt-in for any device type while approvals are served.
     ...(scheduleCardsWired(dependencies) ? AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES : []),
+    // Revision 61: typed approval cards and the approval settings, offered only where wired.
+    ...(approvalCardsWired(dependencies) ? AIDEN_REMOTE_APPROVAL_CARD_CAPABILITIES : []),
+    ...(approvalSettingsWired(dependencies) ? AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES : []),
+    ...(device.acceptsBotCapabilities === true && botSettingsChangesWired(dependencies) ? AIDEN_REMOTE_BOT_SETTINGS_CHANGE_CAPABILITIES : []),
+    ...(device.acceptsBotCapabilities === true && botSuggestionsWired(dependencies) ? AIDEN_REMOTE_BOT_SUGGESTION_CAPABILITIES : []),
+    ...(device.acceptsBotCapabilities === true && botTemplatesWired(dependencies) ? AIDEN_REMOTE_BOT_TEMPLATE_CAPABILITIES : []),
     // Revision 49: offered only while the host runs background jobs.
     ...(dependencies.backgroundJobs ? AIDEN_REMOTE_CHAT_JOB_CAPABILITIES : []),
     // Revision 50: offered while chat or Bot uploads are served.
@@ -2665,7 +2739,7 @@ export function createAidenRemoteRequestHandler(
           );
         }
         for (const capability of input.accepts) {
-          if (capability.startsWith("app-controls:") && !await dependencies.appControls?.enabled()) throw new AidenRemoteServiceError("capability_denied", "Paired-host controls require desktop owner consent.", 403);
+          if (capability.startsWith("app-controls:") && !await dependencies.appControls?.enabled()) throw new AidenRemoteServiceError("capability_denied", "Allow paired-device chat controls in Aiden Agent on your computer first.", 403);
           if ((AIDEN_REMOTE_BOT_CARD_CAPABILITIES as readonly string[]).includes(capability)) {
             // An opt-in to two session entry types, not an authority: any
             // device may hold it while the host serves Bot sessions.
@@ -2700,6 +2774,17 @@ export function createAidenRemoteRequestHandler(
             }
           } else if ((AIDEN_REMOTE_BOT_MESSAGING_CAPABILITIES as readonly string[]).includes(capability)) {
             if (!botMessagingWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Bot messaging is unavailable on this Aiden installation.", 404);
+          } else if ((AIDEN_REMOTE_APPROVAL_CARD_CAPABILITIES as readonly string[]).includes(capability)) {
+            // Revision 61: typed approval cards; answers still need approval:respond.
+            if (!approvalCardsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Approval cards are unavailable on this Aiden installation.", 404);
+          } else if ((AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES as readonly string[]).includes(capability)) {
+            if (!approvalSettingsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Approval settings are unavailable on this Aiden installation.", 404);
+          } else if ((AIDEN_REMOTE_BOT_SETTINGS_CHANGE_CAPABILITIES as readonly string[]).includes(capability)) {
+            if (!botSettingsChangesWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Bot settings changes are unavailable on this Aiden installation.", 404);
+          } else if ((AIDEN_REMOTE_BOT_SUGGESTION_CAPABILITIES as readonly string[]).includes(capability)) {
+            if (!botSuggestionsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Bot suggestions are unavailable on this Aiden installation.", 404);
+          } else if ((AIDEN_REMOTE_BOT_TEMPLATE_CAPABILITIES as readonly string[]).includes(capability)) {
+            if (!botTemplatesWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Bot templates are unavailable on this Aiden installation.", 404);
           } else if ((AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES as readonly string[]).includes(capability)) {
             // Revision 39: a display opt-in for scheduled-task approvals; it never changes canAllow.
             if (!scheduleCardsWired(dependencies)) {
@@ -2725,7 +2810,7 @@ export function createAidenRemoteRequestHandler(
             if (device.type !== "mac" && device.type !== "linux") {
               throw new AidenRemoteServiceError(
                 "capability_denied",
-                "Only paired desktops may control this Mac's simulators.",
+                "Only paired computers may control this Mac's simulators.",
                 403,
               );
             }
@@ -2735,7 +2820,7 @@ export function createAidenRemoteRequestHandler(
             if (isDesktopDevice(device)) {
               throw new AidenRemoteServiceError(
                 "capability_denied",
-                "Paired desktops control simulators with simulators:control.",
+                "Paired computers control simulators with simulators:control.",
                 403,
               );
             }
@@ -2749,14 +2834,14 @@ export function createAidenRemoteRequestHandler(
             ) {
               throw new AidenRemoteServiceError(
                 "capability_denied",
-                "Only paired desktops may observe or control this host's runs.",
+                "Only paired computers may observe or control this computer's runs.",
                 403,
               );
             }
             if (!hostCapabilitySupported(dependencies, capability as AidenRemoteHostCapability)) {
               throw new AidenRemoteServiceError(
                 "not_found",
-                "Host control is unavailable on this Aiden installation.",
+                "Run control is not available on this computer.",
                 404,
               );
             }
@@ -2823,7 +2908,20 @@ export function createAidenRemoteRequestHandler(
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-        await writeBotDetail(response, 201, await dependencies.bots.create(device.id, key, body), device, dependencies);
+        // Revision 61 one-field create: only a device that negotiated
+        // `bot:templates` may leave out `purpose` or `instructions` (the parser
+        // fills in an empty purpose and the starter text, and the new Bot then
+        // introduces itself). Every other device keeps the earlier rule that
+        // both are required.
+        const omitsLegacyField = isPlainRecord(body)
+          && (!Object.prototype.hasOwnProperty.call(body, "purpose") || !Object.prototype.hasOwnProperty.call(body, "instructions"));
+        if (omitsLegacyField && !holdsBotTemplates(device, dependencies)) {
+          throw new AidenRemoteServiceError("invalid_request", "A Bot needs a purpose and instructions.", 400);
+        }
+        const oneField = omitsLegacyField && isPlainRecord(body) && !Object.prototype.hasOwnProperty.call(body, "instructions");
+        const created = await dependencies.bots.create(device.id, key, body);
+        if (oneField) dependencies.botSessions!.introduceCreated!(created.id);
+        await writeBotDetail(response, 201, created, device, dependencies);
         return;
       }
       if (path === "/bot-capabilities" && request.method === "GET") {
@@ -2980,12 +3078,81 @@ export function createAidenRemoteRequestHandler(
         );
         return;
       }
+      // Revision 61 (`bot:settings-changes`): Apply, Dismiss or Undo a settings change.
+      const botSettingsChangeMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/settings-changes\/([A-Za-z0-9._:-]{1,160})\/respond$/u.exec(path);
+      if (botSettingsChangeMatch && request.method === "POST") {
+        route = "botSettingsChange"; requireNoQuery(query);
+        const device = await authenticate(request, dependencies.devices, "bot:write");
+        deviceIdSuffix = device.id.slice(-8);
+        if (!botSettingsChangesWired(dependencies)) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        requireDeviceCapabilities(device, ["bot:read", "bot:settings-changes"]);
+        const body = await readJsonBody(request, 256);
+        writeJson(response, 200, await dependencies.botSessions!.respondSettingsChange!(botSettingsChangeMatch[1]!, botSettingsChangeMatch[2]!, body));
+        return;
+      }
+      // Revision 61 (`bot:suggestions`): skill and lesson cards, and Undo on learning receipts.
+      const botSkillProposalMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/skill-proposals\/([A-Za-z0-9._:-]{1,160})\/respond$/u.exec(path);
+      const botLessonRespondMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/lessons\/([A-Za-z0-9._:-]{1,160})\/respond$/u.exec(path);
+      const botLessonRemoveMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/lessons\/([A-Za-z0-9._:-]{1,160})\/remove$/u.exec(path);
+      const botLearningUndoMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/learning\/([A-Za-z0-9._:-]{1,160})\/undo$/u.exec(path);
+      const botSuggestion = botSkillProposalMatch ?? botLessonRespondMatch ?? botLessonRemoveMatch ?? botLearningUndoMatch;
+      if (botSuggestion && request.method === "POST") {
+        route = "botSuggestion"; requireNoQuery(query);
+        const device = await authenticate(request, dependencies.devices, "bot:write");
+        deviceIdSuffix = device.id.slice(-8);
+        if (!botSuggestionsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        requireDeviceCapabilities(device, ["bot:read", "bot:suggestions"]);
+        const body = await readJsonBody(request, 256);
+        const sessions = dependencies.botSessions!;
+        const [botId, itemId] = [botSuggestion[1]!, botSuggestion[2]!];
+        writeJson(response, 200, botSkillProposalMatch
+          ? await sessions.respondSkillProposal!(botId, itemId, body)
+          : botLearningUndoMatch
+            ? await sessions.undoLearning!(botId, itemId, body)
+            : botLessonRemoveMatch
+              ? await sessions.removeLesson!(botId, itemId, body)
+              : await sessions.respondLesson!(botId, itemId, body));
+        return;
+      }
+      // Revision 61 (`approvals:settings`): the Mac's approval mode and rules
+      // page. Person-only and owner-only: a paired device answering approvals
+      // (`approval:respond`) that opted in; nothing a Bot or agent can reach.
+      if (path === "/approvals/mode" || path === "/approvals/rules" || path === "/approvals/rules/picker" || path === "/approvals/rules/change" || path === "/approvals/rules/remove") {
+        const write = path === "/approvals/mode" ? request.method === "PUT" : path === "/approvals/rules" ? request.method === "POST" : path !== "/approvals/rules/picker";
+        const allowed = path === "/approvals/mode"
+          ? request.method === "GET" || request.method === "PUT"
+          : path === "/approvals/rules"
+            ? request.method === "GET" || request.method === "POST"
+            : path === "/approvals/rules/picker" ? request.method === "GET" : request.method === "POST";
+        if (allowed) {
+          route = "approvalSettings"; requireNoQuery(query);
+          const body = write ? await readJsonBody(request, 8_192) : undefined;
+          const device = await authenticate(request, dependencies.devices, "approval:respond");
+          deviceIdSuffix = device.id.slice(-8);
+          const settings = dependencies.approvalSettings;
+          if (!settings) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+          requireDeviceCapabilities(device, ["approvals:settings"]);
+          writeJson(response, 200, path === "/approvals/mode"
+            ? write ? await settings.setMode(body) : await settings.mode()
+            : path === "/approvals/rules"
+              ? write ? await settings.addRule(body) : await settings.rules()
+              : path === "/approvals/rules/picker"
+                ? await settings.picker()
+                : path === "/approvals/rules/change"
+                  ? await settings.changeRule(body)
+                  : await settings.removeRule(body));
+          return;
+        }
+      }
       if (path === "/bot-presets" && request.method === "GET") {
         requireNoQuery(query);
         route = "botPresets";
         const device = await authenticate(request, dependencies.devices, "bot:read");
         deviceIdSuffix = device.id.slice(-8);
-        writeJson(response, 200, botSessionsOrNotFound(dependencies).presets());
+        // Revision 61: a `bot:templates` holder also gets each template's version, sample and Open.
+        writeJson(response, 200, holdsBotTemplates(device, dependencies)
+          ? await dependencies.botSessions!.templates!()
+          : botSessionsOrNotFound(dependencies).presets());
         return;
       }
       if (path === "/bots/from-preset" && request.method === "POST") {
@@ -2996,7 +3163,7 @@ export function createAidenRemoteRequestHandler(
         deviceIdSuffix = device.id.slice(-8);
         requireDeviceCapabilities(device, ["bot:read"]);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-        const result = await botSessionsOrNotFound(dependencies).createFromPreset(device.id, key, body);
+        const result = await botSessionsOrNotFound(dependencies).createFromPreset(device.id, key, body, { templates: holdsBotTemplates(device, dependencies) });
         writeJson(response, result.created ? 201 : 200, {
           ...result,
           bot: await botSummaryForAudience(result.bot, device, dependencies),
@@ -3023,6 +3190,9 @@ export function createAidenRemoteRequestHandler(
             plans: holdsBotPlans(device, dependencies),
             allowed: holdsBotAllowed(device, dependencies),
             peers: holdsBotPeers(device, dependencies),
+            approvalCards: holdsApprovalCards(device),
+            settingsChanges: holdsBotSettingsChanges(device, dependencies),
+            suggestions: holdsBotSuggestions(device, dependencies),
           });
         const current = await authenticateCredential(request, dependencies.devices, "bot:read");
         requireDeviceCapabilities(current, ["chat:read"]);
@@ -3030,6 +3200,7 @@ export function createAidenRemoteRequestHandler(
         requireRetainedBotProjectionGrants(device, current, [
           "bot:cards", "bot:activity", "bot:handoffs", "bot:handoff-notes", "bot:handoff-on-mac",
           "bot:images", "bot:issues", "bot:access-requests", "bot:plans", "bot:allowed",
+          "approval:cards", "bot:settings-changes", "bot:suggestions",
         ]);
         writeJson(response, 200, holdsBotPeers(current, dependencies) ? session : { ...session, entries: session.entries.filter((entry) => entry.type !== "peer") });
         return;
@@ -3059,6 +3230,9 @@ export function createAidenRemoteRequestHandler(
             accessRequests: holdsBotAccessRequests(device, dependencies),
             plans: holdsBotPlans(device, dependencies),
             allowed: holdsBotAllowed(device, dependencies),
+            approvalCards: holdsApprovalCards(device),
+            settingsChanges: holdsBotSettingsChanges(device, dependencies),
+            suggestions: holdsBotSuggestions(device, dependencies),
           },
         );
         return;
@@ -3334,7 +3508,7 @@ export function createAidenRemoteRequestHandler(
       const routineModelDirectoryMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/routine-models$/u.exec(path);
       if (routineModelDirectoryMatch && request.method === "GET") {
         requireNoQuery(query); route = "botRoutineModels";
-        if (!botRoutineModelsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Routine models are not served by this host.", 404);
+        if (!botRoutineModelsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Routine models are not available on this computer.", 404);
         const device = await authenticate(request, dependencies.devices, "bot:read"); deviceIdSuffix = device.id.slice(-8);
         requireDeviceCapabilities(device, ["chat:read", "bot:routine-models"]);
         if (device.acceptsBotCapabilities !== true) throw new AidenRemoteServiceError("capability_denied", "Negotiate Bot capabilities first.", 403);
@@ -3348,7 +3522,7 @@ export function createAidenRemoteRequestHandler(
       const routineResumeStatusMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/routine-resume-status$/u.exec(path);
       if (routineResumeStatusMatch && request.method === "GET") {
         requireNoQuery(query); route = "botRoutineModels";
-        if (!botRoutineModelsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Routine resume status is not served by this host.", 404);
+        if (!botRoutineModelsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Routine resume status is not available on this computer.", 404);
         const device = await authenticate(request, dependencies.devices, "bot:write"); deviceIdSuffix = device.id.slice(-8);
         requireDeviceCapabilities(device, ["bot:read", "chat:read", "bot:routine-models"]);
         if (device.acceptsBotCapabilities !== true) throw new AidenRemoteServiceError("capability_denied", "Negotiate Bot capabilities first.", 403);
@@ -3365,7 +3539,7 @@ export function createAidenRemoteRequestHandler(
       const routineModelMatch = routineModelSettingsMatch ?? routineModelCatalogMatch ?? routineModelRunsMatch;
       if (routineModelMatch && (request.method === "GET" || request.method === "POST" && routineModelSettingsMatch)) {
         requireNoQuery(query); route = "botRoutineModels";
-        if (!botRoutineModelsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Routine models are not served by this host.", 404);
+        if (!botRoutineModelsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Routine models are not available on this computer.", 404);
         const editing = request.method === "POST", catalog = Boolean(routineModelCatalogMatch);
         const device = await authenticate(request, dependencies.devices, editing || catalog ? "bot:write" : "bot:read");
         deviceIdSuffix = device.id.slice(-8);
@@ -3410,7 +3584,7 @@ export function createAidenRemoteRequestHandler(
       const peerMatch = peerSettingsMatch ?? peerCatalogMatch ?? peerListMatch ?? peerDetailMatch ?? peerStopMatch ?? peerEvidenceMatch;
       if (peerMatch && (request.method === "GET" && !peerStopMatch || request.method === "POST" && (peerSettingsMatch || peerStopMatch))) {
         requireNoQuery(query); route = "botPeers";
-        if (!botPeersWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Bot messaging is not served by this host.", 404);
+        if (!botPeersWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Bot messaging is not available on this computer.", 404);
         const editing = request.method === "POST", content = Boolean(peerListMatch || peerDetailMatch || peerStopMatch || peerEvidenceMatch);
         const device = await authenticate(request, dependencies.devices, editing ? "bot:write" : "bot:read");
         deviceIdSuffix = device.id.slice(-8);
@@ -3474,7 +3648,7 @@ export function createAidenRemoteRequestHandler(
       const openWorkEvidenceMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/open-work\/([A-Za-z0-9._:-]{1,160})\/evidence\/(source|result)$/u.exec(path);
       if (openWorkEvidenceMatch && request.method === "GET") {
         requireNoQuery(query); route = "botOpenWork";
-        if (!botOpenWorkWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Open work is not served by this host.", 404);
+        if (!botOpenWorkWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Open work is not available on this computer.", 404);
         const device = await authenticate(request, dependencies.devices, "bot:read"); deviceIdSuffix = device.id.slice(-8);
         requireDeviceCapabilities(device, ["chat:read", "bot:open-work"]);
         if (device.acceptsBotCapabilities !== true) throw new AidenRemoteServiceError("capability_denied", "Negotiate Bot capabilities first.", 403);
@@ -3490,7 +3664,7 @@ export function createAidenRemoteRequestHandler(
       const openWorkMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/open-work$/u.exec(path);
       if (openWorkMatch && (request.method === "GET" || request.method === "POST")) {
         requireNoQuery(query); route = "botOpenWork";
-        if (!botOpenWorkWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Open work is not served by this host.", 404);
+        if (!botOpenWorkWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Open work is not available on this computer.", 404);
         const device = await authenticate(request, dependencies.devices, request.method === "GET" ? "bot:read" : "bot:write");
         deviceIdSuffix = device.id.slice(-8);
         requireDeviceCapabilities(device, ["bot:read", "chat:read", "bot:open-work"]);
@@ -3529,7 +3703,7 @@ export function createAidenRemoteRequestHandler(
         : watchSourcesMatch ? [...watchSourcesMatch, "sources"] : watchTestMatch ? [...watchTestMatch, "test"] : watchItemMatch ?? watchListMatch;
       if (botWatchesMatch) {
         requireNoQuery(query); route = "botWatches";
-        if (!botWatchesWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Connector watches are not served by this host.", 404);
+        if (!botWatchesWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Connector watches are not available on this computer.", 404);
         const device = await authenticate(request, dependencies.devices, request.method === "GET" ? "bot:read" : "bot:write");
         deviceIdSuffix = device.id.slice(-8); requireDeviceCapabilities(device, ["bot:read", "bot:watches"]);
         if (device.acceptsBotCapabilities !== true) throw new AidenRemoteServiceError("capability_denied", "Negotiate Bot capabilities first.", 403);
@@ -3855,7 +4029,7 @@ export function createAidenRemoteRequestHandler(
         if (!dependencies.workspaces) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
         const cloning = body !== null && typeof body === "object" && (body as { mode?: unknown }).mode === "clone";
-        if (cloning && (!isDesktopDevice(device) || !device.capabilities.has("workspace:browse"))) throw new AidenRemoteServiceError("capability_denied", "Cloning projects requires a paired desktop with folder browsing access.", 403);
+        if (cloning && (!isDesktopDevice(device) || !device.capabilities.has("workspace:browse"))) throw new AidenRemoteServiceError("capability_denied", "Cloning projects requires a paired computer with folder browsing access.", 403);
         const controller = new AbortController();
         const abort = () => controller.abort();
         if (cloning) {
@@ -4292,7 +4466,7 @@ export function createAidenRemoteRequestHandler(
         const device = await authenticate(request, dependencies.devices, "workspace:manage");
         requireDeviceCapabilities(device, ["server:read"]);
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.providers) throw new AidenRemoteServiceError("not_found", "Provider creation requires an updated desktop app.", 404);
+        if (!dependencies.providers) throw new AidenRemoteServiceError("not_found", "Creating providers needs a newer Aiden Agent on your computer.", 404);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
         const body = await readJsonBody(request);
         const release = dependencies.devices.acquireDeviceAuthorization(device.id, true);
@@ -4331,7 +4505,7 @@ export function createAidenRemoteRequestHandler(
         const device = await authenticate(request, dependencies.devices, method === "GET" ? "chat:read" : "chat:write");
         deviceIdSuffix = device.id.slice(-8);
         const service = dependencies.readAloud;
-        if (!service || !dependencies.chats) throw new AidenRemoteServiceError("not_found", "Read Aloud requires an updated desktop app.", 404);
+        if (!service || !dependencies.chats) throw new AidenRemoteServiceError("not_found", "Read Aloud needs a newer Aiden Agent on your computer.", 404);
         if (!readAloudMatch) { writeJson(response, 200, await service.status()); return; }
         const chatId = readAloudMatch[1]!;
         await requireChatAccess(dependencies.chats, device, chatId, method === "GET" ? "read" : "write");
@@ -4348,7 +4522,7 @@ export function createAidenRemoteRequestHandler(
         } else if (method === "POST" && !readAloudAudioMatch) {
           const body = await readJsonBody(request, 4096);
           writeJson(response, 200, readAloudStopMatch ? service.stop(authority, body) : await service.start(authority, body));
-        } else throw new AidenRemoteServiceError("not_found", "Read Aloud configuration is available only on the desktop.", 404);
+        } else throw new AidenRemoteServiceError("not_found", "Read Aloud is set up in Aiden Agent on your computer.", 404);
         return;
       }
       if (path === "/speech" && request.method === "GET") {
@@ -4968,7 +5142,7 @@ export function createAidenRemoteRequestHandler(
         const pending = dependencies.streams.pendingApproval(
           device.id,
           streamApprovalMatch[1]!,
-          { scheduleCard: holdsScheduleCards(device) },
+          { scheduleCard: holdsScheduleCards(device), card: holdsApprovalCards(device) },
         );
         const requiredCapability = pending
           ? dependencies.streams.approvalRequiredCapability(
@@ -5136,6 +5310,7 @@ export function createAidenRemoteRequestHandler(
                 return action();
               }),
             scope,
+            { card: holdsApprovalCards(device) },
           ),
         );
         return;

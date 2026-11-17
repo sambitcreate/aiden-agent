@@ -140,9 +140,9 @@ struct AidenOpenWorkExecution: Codable, Equatable, Sendable {
     }
     var explanation: String? {
         switch blockedReason {
-        case .mixedInputs: "This run includes other inputs. Stop it on your host to avoid interrupting unrelated work."
+        case .mixedInputs: "This run includes other inputs. Stop it on your computer to avoid interrupting unrelated work."
         case .notLinked: "There is no linked run to stop."
-        case .hostUnavailable: "Your host can’t currently confirm the linked run."
+        case .hostUnavailable: "Your computer can’t currently confirm the linked run."
         case nil: nil
         }
     }
@@ -172,12 +172,12 @@ struct AidenOpenWorkStop: Codable, Equatable, Sendable {
     }
     var description: String {
         switch state {
-        case .requested: "Stop requested. Waiting for host acknowledgement."
-        case .uncertain: "Stop outcome is unknown. This item stays unfinished until the host confirms it."
+        case .requested: "Stop requested. Waiting for the computer’s acknowledgement."
+        case .uncertain: "Stop outcome is unknown. This item stays unfinished until the computer confirms it."
         case .stopped: "The linked run stopped."
         case .alreadyFinished: "The linked run had already finished."
         case .notRunning: "No linked run was running."
-        case .blocked: "The host refused Stop. This item has not been dismissed by that request."
+        case .blocked: "The computer refused Stop. This item has not been dismissed by that request."
         }
     }
     private enum CodingKeys: String, CodingKey { case mutationId, state, requestedAt, finishedAt, reason }

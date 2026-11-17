@@ -4,14 +4,14 @@ import { afterEach, test } from "node:test";
 import * as React from "react";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { DEFAULT_BOT_AVATAR, type BotAvatar, type BotAvatarAppearance } from "../../shared/bots";
-import { BotCharacterCard } from "./bot-character-card";
+import { BotLookPicker } from "./bot-character-card";
 
 afterEach(cleanup);
 
 function Harness({ initial, onSave }: { initial: BotAvatar; onSave(avatar: BotAvatarAppearance): void }) {
   const [avatar, setAvatar] = React.useState<BotAvatar>(initial);
   return (
-    <BotCharacterCard
+    <BotLookPicker
       avatar={avatar}
       onChange={(next) => {
         setAvatar(next);
@@ -33,22 +33,6 @@ test("picking a colour and a shape changes only the Bot's character", () => {
   assert.deepEqual(saved[saved.length - 1], { ...DEFAULT_BOT_AVATAR, color: "mint", shape: "hex" });
   assert.equal(within(colours).getByRole("radio", { name: "Mint" }).getAttribute("aria-checked"), "true");
   assert.equal(within(shapes).getByRole("radio", { name: "Hex" }).getAttribute("aria-checked"), "true");
-});
-
-test("Reset to default restores the default character", () => {
-  const saved: BotAvatarAppearance[] = [];
-  render(
-    <Harness
-      initial={{ ...DEFAULT_BOT_AVATAR, shape: "peak", color: "coral" }}
-      onSave={(avatar) => saved.push(avatar)}
-    />,
-  );
-  fireEvent.click(screen.getByRole("button", { name: "Reset to default" }));
-  assert.deepEqual(saved, [DEFAULT_BOT_AVATAR]);
-  assert.equal(
-    (screen.getByRole("button", { name: "Reset to default" }) as HTMLButtonElement).disabled,
-    true,
-  );
 });
 
 test("arrow keys move the colour selection like a radio group", () => {

@@ -366,6 +366,15 @@ export function useBotCapabilityCatalog(enabled: boolean, botId?: string) {
   });
 }
 
+/** The thinking levels one catalog model supports; rereads whenever the catalog does. */
+export function useBotModelThinkingLevels(botId: string, providerId: string | undefined, modelId: string | undefined) {
+  return useQuery({
+    queryKey: [...queryKeys.botCapabilityCatalog, "thinking-levels", botId, providerId, modelId],
+    queryFn: () => botsApi.getModelThinkingLevels({ botId, providerId: providerId!, modelId: modelId! }),
+    enabled: Boolean(providerId && modelId),
+  });
+}
+
 /** Current Bot access policy and its model selection. */
 export function useBotAccess(botId: string | undefined) {
   return useQuery({

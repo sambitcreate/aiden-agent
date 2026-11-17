@@ -870,14 +870,29 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         const before = await currentState(botId, !deps.execution);
         if (before.kind === "interrupted" && (input.ifNotInterrupted || peer)) throw new BotSessionError("bot_paused");
         if (input.ifIdle && before.kind !== "idle") throw new BotSessionError("bot_busy");
-        const execution = await deps.execution?.claim(botId, { requestId: input.requestId, ...(routineOrigin ? { routineOrigin } : {}), ...(input.peerOrigin ? { peerOrigin: input.peerOrigin } : {}), ...(input.routineTiming ?? {}), ...(input.retryOf ? { retryOf: input.retryOf } : {}), ...(botConnectorInventoryServer() ? { connectorServerId: botConnectorInventoryServer() } : {}), ...(botConnectorExecutionRestriction() ? { connectorRestriction: botConnectorExecutionRestriction() } : {}) });
-        const model = execution && deps.execution
-          ? await withBotExecutionAdmission(botId, execution, deps.execution, async () => {
-            await registry.refresh();
-            const admitted = botExecutionScope(botId)!.runtime.model;
-            return { provider: admitted.provider, modelId: admitted.id };
-          }, { allowFallback: true })
-          : await prepareToRun(botId, conversation, registry);
+        // A choice that cannot be admitted refuses before anything is submitted,
+        // so a phone's retry is not answered with a saved server failure. A
+        // plain message also drops its claim, so that retry binds the Bot's
+        // current model instead of the one that was refused.
+        const admit = async () => {
+          const execution = await deps.execution?.claim(botId, { requestId: input.requestId, ...(routineOrigin ? { routineOrigin } : {}), ...(input.peerOrigin ? { peerOrigin: input.peerOrigin } : {}), ...(input.routineTiming ?? {}), ...(input.retryOf ? { retryOf: input.retryOf } : {}), ...(botConnectorInventoryServer() ? { connectorServerId: botConnectorInventoryServer() } : {}), ...(botConnectorExecutionRestriction() ? { connectorRestriction: botConnectorExecutionRestriction() } : {}) });
+          const model = execution && deps.execution
+            ? await withBotExecutionAdmission(botId, execution, deps.execution, async () => {
+              await registry.refresh();
+              const admitted = botExecutionScope(botId)!.runtime.model;
+              return { provider: admitted.provider, modelId: admitted.id };
+            }, { allowFallback: true })
+            : await prepareToRun(botId, conversation, registry);
+          return { execution, model };
+        };
+        const { execution, model } = await admit().catch(async (error: unknown) => {
+          // Released by request, so a claim saved before claim() itself failed
+          // goes too. If the release fails the refusal still stands: the stale
+          // claim is refused again on retry, and that retry releases it again.
+          if (deps.execution && !routineOrigin && !peer && !input.retryOf) await deps.execution.releaseUnsubmittedClaim?.(botId, input.requestId).catch(() => undefined);
+          if (error instanceof BotSessionError) throw error;
+          throw new BotSessionError("model_error", error instanceof Error && error.message.length > 0 ? error.message : defaultMessage("model_error"), authorityOf(error));
+        });
         if (before.kind === "interrupted") {
           await dismissPaused(botId, conversation, before.submissionId);
           blocked.delete(botId);
