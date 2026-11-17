@@ -31,7 +31,9 @@ function elapsed(from: number, to: number): string {
 export function backgroundJobStatus(job: BackgroundJobView, now: number): string {
   if (job.state === "running") return `Running for ${elapsed(job.startedAt, now)}`;
   if (job.state === "stopped") {
-    return job.endReason === "output-limit" ? "Stopped: too much output" : "Stopped";
+    if (job.endReason === "output-limit") return "Stopped: too much output";
+    if (job.endReason === "chat-settled") return "Stopped after the chat went quiet";
+    return "Stopped";
   }
   if (job.origin === "command") return "Ended";
   if (job.signal) return `Ended by ${job.signal}`;
