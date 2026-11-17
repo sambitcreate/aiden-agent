@@ -465,9 +465,10 @@ test("the selection action leaves when its text moves or goes away", async ({ ai
   const { drawer, output, run } = await openTerminal(page);
   const selectAll = process.platform === "darwin" ? "Meta+A" : "Control+Shift+A";
   const action = drawer.getByRole("button", { name: "Add to chat" });
-  // New output retires the action, so the sleep holds back the prompt that would otherwise print after the numbers.
-  await run("seq 1 300; sleep 60");
-  await expect(output).toContainText(/\b300\b/u);
+  // New output retires the action, so the selection waits for the last line the command prints: the echoed command
+  // line never contains "lines-done", and the sleep holds back the prompt that would otherwise follow it.
+  await run(`M=lines; seq 1 300; echo "$M-done"; sleep 60`);
+  await expect(output).toContainText("lines-done");
 
   await page.keyboard.press(selectAll);
   await expect(action).toBeVisible();
