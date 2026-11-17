@@ -6,8 +6,10 @@
 //
 // - A routine run is stopped and recorded as `stalled`, so routine recovery
 //   retries it in the same conversation, which keeps the partial work.
-// - A run the person started is never stopped on its own. The person gets one
-//   issue with Stop and Keep waiting; Keep waiting snoozes another 10 minutes.
+// - A run the person started is never stopped on its own, and the watchdog
+//   never asks about it: the chat's status line already shows the time and
+//   says when a reply is taking longer than usual, and Stop is in the
+//   composer. A card and a banner every 10 minutes only interrupted people.
 // - Time the computer spent asleep is not a stall: on wake every running Bot
 //   gets a fresh window, since no run can make progress while suspended. The
 //   wake is noticed from the system's resume event, or from a gap of more than
@@ -24,13 +26,13 @@ export interface BotRunWatchdogDependencies {
   /** A request of this Bot's is held back until a provider's usage limit clears (not one already sent). */
   isWaitingOnUsageLimit?(botId: string): boolean;
   stopForStall(botId: string): Promise<void>;
-  raiseStall(botId: string): Promise<void>;
   now(): number;
   setInterval(fn: () => void, ms: number): { cancel(): void };
   onError?(botId: string, error: unknown): void;
 }
 
 export interface BotRunWatchdog {
+  /** Another full window before this Bot's run is looked at again. */
   snooze(botId: string): void;
   /** Restart every running Bot's window; call it when the computer wakes from sleep. */
   resume(): void;
@@ -61,16 +63,11 @@ export function createBotRunWatchdog(dependencies: BotRunWatchdogDependencies): 
       }
       const progress = Math.max(dependencies.lastProgressAt(botId) ?? now, handledUntil.get(botId) ?? 0);
       if (now - progress < BOT_RUN_STALL_MS) continue;
-      const kind = dependencies.runKind(botId);
-      if (!kind) continue;
+      // Only an unattended routine run is acted on; an unknown run never is.
+      if (dependencies.runKind(botId) !== "routine") continue;
       acting.add(botId);
       try {
-        if (kind === "routine") await dependencies.stopForStall(botId);
-        else {
-          await dependencies.raiseStall(botId);
-          // Flag once per stall: wait another full window before asking again.
-          handledUntil.set(botId, now);
-        }
+        await dependencies.stopForStall(botId);
       } catch (error) {
         dependencies.onError?.(botId, error);
       } finally {

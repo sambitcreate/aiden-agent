@@ -65,3 +65,59 @@ test("a failed capture keeps the snapshot the frame already had", async () => {
   assert.equal(await captureFrameSnapshot(cache, "page", 2, { x: 0, y: 0, width: 10, height: 10 }), undefined);
   assert.equal(cache.get("page", 2), "data:kept");
 });
+
+test("a capture still on its way when the frame's picture is forgotten is not kept", async () => {
+  let answer: (value: { dataUrl: string }) => void = () => undefined;
+  installBotTestIpc({ "designCanvas:capture": () => new Promise((resolve) => (answer = resolve)) });
+  const cache = new FrameSnapshotCache();
+  const capture = captureFrameSnapshot(cache, "page", 2, { x: 0, y: 0, width: 10, height: 10 });
+  // The page is edited in place while the capture runs.
+  cache.forget("page");
+  answer({ dataUrl: "data:before-the-edit" });
+  assert.equal(await capture, undefined);
+  assert.equal(cache.get("page", 2), undefined, "the picture from before the edit is not kept");
+
+  // A capture that starts after the edit is kept as usual.
+  installBotTestIpc({ "designCanvas:capture": () => ({ dataUrl: "data:after-the-edit" }) });
+  assert.equal(await captureFrameSnapshot(cache, "page", 2, { x: 0, y: 0, width: 10, height: 10 }), "data:after-the-edit");
+  assert.equal(cache.get("page", 2), "data:after-the-edit");
+});
+
+test("a capture that ends after a later picture was kept leaves that picture in place", async () => {
+  let answer: (value: { dataUrl: string }) => void = () => undefined;
+  installBotTestIpc({ "designCanvas:capture": () => new Promise((resolve) => (answer = resolve)) });
+  const cache = new FrameSnapshotCache();
+  const capture = captureFrameSnapshot(cache, "page", 2, { x: 0, y: 0, width: 10, height: 10 });
+  // The page reloaded as version 3 and was pictured while the first capture ran.
+  cache.set("page", 3, "data:newer");
+  answer({ dataUrl: "data:older" });
+  assert.equal(await capture, undefined);
+  assert.equal(cache.get("page", 3), "data:newer");
+});
+
+test("of two captures on their way at once, the picture from the one that started last is kept", async () => {
+  const answers: Array<(value: { dataUrl: string }) => void> = [];
+  installBotTestIpc({ "designCanvas:capture": () => new Promise((resolve) => answers.push(resolve)) });
+  const rect = { x: 0, y: 0, width: 10, height: 10 };
+
+  // The earlier capture comes back first: the later one still replaces it.
+  const cache = new FrameSnapshotCache();
+  const first = captureFrameSnapshot(cache, "page", 2, rect);
+  const second = captureFrameSnapshot(cache, "page", 2, rect);
+  answers[0]!({ dataUrl: "data:first" });
+  assert.equal(await first, "data:first");
+  answers[1]!({ dataUrl: "data:second" });
+  assert.equal(await second, "data:second");
+  assert.equal(cache.get("page", 2), "data:second");
+
+  // The later capture comes back first: the earlier one does not replace it.
+  answers.length = 0;
+  const other = new FrameSnapshotCache();
+  const earlier = captureFrameSnapshot(other, "page", 2, rect);
+  const later = captureFrameSnapshot(other, "page", 2, rect);
+  answers[1]!({ dataUrl: "data:later" });
+  assert.equal(await later, "data:later");
+  answers[0]!({ dataUrl: "data:earlier" });
+  assert.equal(await earlier, undefined);
+  assert.equal(other.get("page", 2), "data:later");
+});

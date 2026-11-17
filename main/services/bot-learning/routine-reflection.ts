@@ -17,6 +17,7 @@ import { escapePromptText } from "../bot-system-prompt.js";
 import type { BotLessonStore } from "../bot-lessons/store.js";
 import type { ScheduledRun, ScheduledTask } from "../types.js";
 import type { BotLearningBudget } from "./budget.js";
+import type { BotSuggestionBudget } from "../bot-runtime/bot-suggestion-budget.js";
 
 export const BOT_ROUTINE_REFLECTION_INTERVAL = 5;
 export const BOT_ROUTINE_REFLECTION_OUTPUT_CHARS = 1_500;
@@ -92,10 +93,11 @@ export interface RoutineReflectionDependencies {
   notes(botId: string, taskId: string): Promise<string>;
   lessons: BotLessonStore;
   budget: BotLearningBudget;
+  /** The shared cap on a Bot's own suggestions; a lesson over it is not offered. */
+  suggestionBudget?: BotSuggestionBudget;
   admit(botId: string): Promise<BotMemoryAdmission>;
   appendEntry(botId: string, kind: string, data: Record<string, unknown>): Promise<void>;
   state: { lastReflected(taskId: string): Promise<number | undefined>; set(taskId: string, at: number): Promise<void> };
-  timeoutMs?: number;
 }
 
 /** Settled runs that say something about the routine: successes and failures. */
@@ -105,6 +107,9 @@ function telling(run: ScheduledRun): boolean {
 
 export function createRoutineReflection(deps: RoutineReflectionDependencies) {
   const running = new Set<string>();
+  /** A lesson card is one of the Bot's own suggestions, under the shared cap. */
+  const offerLesson = (botId: string, show: () => Promise<boolean>) =>
+    deps.suggestionBudget ? deps.suggestionBudget.offer(botId, "lesson", show) : show();
   return {
     async afterRun(task: ScheduledTask, _run: ScheduledRun): Promise<ReflectionOutcome> {
       const botId = task.botId;
@@ -132,7 +137,9 @@ export function createRoutineReflection(deps: RoutineReflectionDependencies) {
             content: reflectionMessage({ routineName: task.name, prompt: task.prompt ?? "", notes: await deps.notes(botId, task.id), lessons, runs: views }),
             timestamp: Date.now(),
           }];
-          const signal = AbortSignal.any([AbortSignal.timeout(deps.timeoutMs ?? 60_000), admission.lease.signal]);
+          // No timer on the request: one cut off after it was sent may still be
+          // billed, and its unknown cost would block the Bot's next request.
+          const signal = admission.lease.signal;
           await admission.lease.revalidate();
           let answer: AssistantMessage;
           try {
@@ -175,45 +182,53 @@ export function createRoutineReflection(deps: RoutineReflectionDependencies) {
                 continue;
               }
               if (verdict !== "helped" || !BOT_LESSON_COMPONENTS.includes(args.component as BotLessonComponent)) continue;
-              const added = await deps.lessons.add(botId, {
-                scope: { kind: "routine", routineId: task.id },
-                cue: String(args.cue ?? ""),
-                lesson: String(args.lesson ?? ""),
-                component: args.component as BotLessonComponent,
-                evidence,
-                verdict,
-                source: "reflection",
-                status: "proposed",
+              const offered = await offerLesson(botId, async () => {
+                const added = await deps.lessons.add(botId, {
+                  scope: { kind: "routine", routineId: task.id },
+                  cue: String(args.cue ?? ""),
+                  lesson: String(args.lesson ?? ""),
+                  component: args.component as BotLessonComponent,
+                  evidence,
+                  verdict,
+                  source: "reflection",
+                  status: "proposed",
+                });
+                if (!added.ok) return false;
+                await deps.appendEntry(botId, BOT_LESSON_PROPOSAL_ENTRY_KIND, {
+                  lessonId: added.lesson.id,
+                  lesson: added.lesson.lesson,
+                  routineName: task.name,
+                  runs: evidence.length,
+                });
+                return true;
               });
-              if (!added.ok) continue;
-              await deps.appendEntry(botId, BOT_LESSON_PROPOSAL_ENTRY_KIND, {
-                lessonId: added.lesson.id,
-                lesson: added.lesson.lesson,
-                routineName: task.name,
-                runs: evidence.length,
-              });
+              if (!offered) continue;
               outcome = "proposed";
             } else if (call.name === "retire_lesson") {
               const target = lessons.find((lesson) => lesson.id === args.lessonId && lesson.status === "active");
               if (!target) continue;
-              const added = await deps.lessons.add(botId, {
-                scope: { kind: "routine", routineId: task.id },
-                cue: target.cue,
-                lesson: `Stop: ${target.lesson}`.slice(0, 300),
-                component: target.component,
-                evidence,
-                verdict: "hurt",
-                source: "reflection",
-                status: "proposed",
-                retires: target.id,
+              const offered = await offerLesson(botId, async () => {
+                const added = await deps.lessons.add(botId, {
+                  scope: { kind: "routine", routineId: task.id },
+                  cue: target.cue,
+                  lesson: `Stop: ${target.lesson}`.slice(0, 300),
+                  component: target.component,
+                  evidence,
+                  verdict: "hurt",
+                  source: "reflection",
+                  status: "proposed",
+                  retires: target.id,
+                });
+                if (!added.ok) return false;
+                await deps.appendEntry(botId, BOT_LESSON_PROPOSAL_ENTRY_KIND, {
+                  lessonId: added.lesson.id,
+                  lesson: added.lesson.lesson,
+                  routineName: task.name,
+                  runs: evidence.length,
+                });
+                return true;
               });
-              if (!added.ok) continue;
-              await deps.appendEntry(botId, BOT_LESSON_PROPOSAL_ENTRY_KIND, {
-                lessonId: added.lesson.id,
-                lesson: added.lesson.lesson,
-                routineName: task.name,
-                runs: evidence.length,
-              });
+              if (!offered) continue;
               outcome = "proposed";
             }
           }

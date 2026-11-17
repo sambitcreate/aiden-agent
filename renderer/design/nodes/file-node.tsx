@@ -222,7 +222,7 @@ export function FileFrame({
 export function FileNode({ id, data, selected }: NodeProps<DesignNode>) {
   const canvas = useDesignNodeContext();
   const { frame } = data;
-  const version = canvas.versionOf(frame.path);
+  const version = canvas.frameVersionOf(frame);
   return (
     <>
       <DesignNodeResizer selected={selected} />

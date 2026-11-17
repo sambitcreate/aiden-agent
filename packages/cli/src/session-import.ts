@@ -54,7 +54,7 @@ export async function importSession(agentDir: string, cwd: string, source: strin
       writeFileSync(join(staging, "workspace", "snapshot.jsonl"), text, { flag: "wx", mode: 0o600 });
       const repository = createCurrentPiSessionRepository(staging);
       const metadata = (await repository.list())[0];
-      if (!metadata) throw new Error("No valid desktop v4 journal was found.");
+      if (!metadata) throw new Error("No valid Aiden Agent v4 journal was found.");
       const port = await repository.open(metadata);
       const context = await port.buildContext();
       messages = importContext(context.messages);

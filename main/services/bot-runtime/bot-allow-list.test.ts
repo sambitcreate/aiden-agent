@@ -45,7 +45,7 @@ test("service: three approvals offer Always, once assigns one durable weekly hin
   const f = await fixture(t); await f.seed();
   assert.deepEqual(await f.service.offer("bot", CAL), { count: 3 });
   const once = await f.input("fourth", "allow", true), result = await f.service.settle(once);
-  assert.equal(result.hint, botApprovalNudgeHint({ label: "Google Calendar · Create event", count: 4, choice: "Always allow for Jester", place: "Allowed without asking on your profile" }));
+  assert.equal(result.hint, botApprovalNudgeHint({ label: "Google Calendar · Create event", count: 4, choice: "Always allow for Jester", place: "add a rule in Settings → Approvals" }));
   assert.deepEqual(await createBotAllowList(f.deps).settle(once), result);
   f.advance(86_400_000);
   assert.deepEqual(await f.service.settle(await f.input("next-day", "allow", true)), {});

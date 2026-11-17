@@ -1,4 +1,5 @@
 import { COMPOSIO_SERVICE_SERVER_ID } from "../../renderer/shared/composio-service.js";
+import { localComputerNoun } from "../../renderer/shared/computer-noun.js";
 import { createBotCapabilityOpaqueIdMint } from "./bot-capability-bindings.js";
 import { botConnectionCapabilityIdentity, COMPOSIO_SERVICE_ACCESS_IDENTITY } from "./bot-connection-capability-identity.js";
 import { createBotSkillApprovals } from "./bot-skill-approvals.js";
@@ -254,7 +255,7 @@ export const botCapabilityCatalog = createBotCapabilityCatalogMainService(
       return roots.map((root) => ({
         sourceId: root.id,
         label: root.label,
-        description: "A folder approved on this Mac.",
+        description: `A folder approved on this ${localComputerNoun(process.platform)}.`,
         available: true,
         scopeFingerprint: botCapabilityFactsFingerprint({
           device: root.device,

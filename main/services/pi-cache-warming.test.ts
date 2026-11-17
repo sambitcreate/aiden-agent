@@ -354,6 +354,7 @@ async function cancellationHost() {
     "./chat-owed-turn-prompts.js": await import("./chat-owed-turn-prompts.js"),
     "./subagents/child-agent-runtime.js": { subagentRuntimeRegistry: { setHealthMetrics() {}, setLimits() {}, setRuntimeFaultReporter() {}, abortGeneration: (id: string) => children.push(id) } },
     "./tool-approval.js": { ToolApprovalCoordinator: class { cancelStream(id: string) { approvals.push(id); } } },
+    "./approval-gate/approval-analytics.js": { ApprovalAnalytics: UnusedService },
     "./ask-user-question-coordinator.js": { AskUserQuestionCoordinator: UnusedService },
     "./workspace-files-touched.js": { createWorkspaceFilesTouchedNotifier: () => () => {} },
     "./acp/scratch-directory.js": { createAcpScratchDirectories: () => ({ directoryFor: async () => "", forget: async () => {} }) },

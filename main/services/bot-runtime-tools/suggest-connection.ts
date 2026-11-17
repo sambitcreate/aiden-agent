@@ -163,7 +163,7 @@ export function createSuggestConnectionTool(
       name: SUGGEST_CONNECTION_TOOL_NAME,
       label: "Suggest Connection",
       description:
-        "Show the person a card offering to connect an app (for example Gmail, Google Calendar, Notion, or Composio for 500+ apps) when that would clearly help with what they asked. The card has a Connect button and a Not now button; you do not connect anything yourself. Give one short, plain reason written to the person. Do not suggest an app that is already connected or that they turned down.",
+        "Show the person a card offering to connect an app (for example Gmail, Google Calendar, Notion, or Composio for 500+ apps) when that would clearly help with what they asked. The card has a Connect button and a Not now button; you do not connect anything yourself. Give one short, plain reason written to the person. Do not suggest an app that is already connected or that they turned down. Mention a missing app at most once: if the person doesn't connect it, don't suggest it or bring it up again.",
       parameters: Type.Object({
         pluginId: Type.String({
           description: "Catalog id, for example gmail, google-calendar, notion, outlook-email, or composio.",

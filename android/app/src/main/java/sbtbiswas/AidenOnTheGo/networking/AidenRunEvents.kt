@@ -11,9 +11,11 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
+import sbtbiswas.AidenOnTheGo.models.AidenApprovalCard
 import sbtbiswas.AidenOnTheGo.models.AidenApprovalDecision
 import sbtbiswas.AidenOnTheGo.models.AidenApprovalSchedule
 import sbtbiswas.AidenOnTheGo.models.AidenApprovalScope
+import sbtbiswas.AidenOnTheGo.models.AidenBotUxContractException
 import sbtbiswas.AidenOnTheGo.models.AidenGenerationTimeline
 import sbtbiswas.AidenOnTheGo.models.AidenQuestionContractCodec
 import sbtbiswas.AidenOnTheGo.models.AidenRemoteRunQuestion
@@ -51,7 +53,9 @@ data class AidenRemoteRunApproval(
     val canAllow: Boolean,
     val scopes: List<AidenApprovalScope>?,
     /** Contract revision 39 (`schedule:cards`): a scheduled-task card, or null when absent or invalid. */
-    val schedule: AidenApprovalSchedule? = null
+    val schedule: AidenApprovalSchedule? = null,
+    /** Contract revision 61 (`approval:cards`): the typed card, agreeing with [canAllow] and [scopes]. */
+    val card: AidenApprovalCard? = null
 )
 
 /** A run snapshot. `reason: "gap"` restates the pending prompts after missed
@@ -198,7 +202,10 @@ object AidenRunEventCodec {
         // Tool arguments and host previews (`details`) stay on the Mac. Revision 39 adds the
         // display-only `schedule` card, which fails closed on its own: an invalid card reads as
         // no card and never fails the approval or changes `canAllow` and `scopes`.
-        assertKeys(obj, setOf("approvalId", "summary", "toolCallId", "toolName", "canAllow", "scopes", "schedule"), label)
+        // Revision 61 adds the typed `card` (`approval:cards`), which must agree with `canAllow`
+        // and every offered scope; a card that disagrees refuses the approval, as the Mac's own
+        // parser does.
+        assertKeys(obj, setOf("approvalId", "summary", "toolCallId", "toolName", "canAllow", "scopes", "schedule", "card"), label)
         val canAllow = (obj["canAllow"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull
             ?: throw AidenRemoteContractException.UnsafePayloadField("canAllow")
         val scopes = obj["scopes"]?.let { element ->
@@ -213,6 +220,15 @@ object AidenRunEventCodec {
             }
             parsed
         }
+        val card = obj["card"]?.let { element ->
+            try {
+                AidenApprovalCard.parse(element).also { card ->
+                    AidenApprovalCard.requireAgrees(card, canAllow, scopes?.map { it.wireName })
+                }
+            } catch (_: AidenBotUxContractException) {
+                throw AidenRemoteContractException.UnsafePayloadField("card")
+            }
+        }
         return AidenRemoteRunApproval(
             approvalId = obj.string("approvalId", label),
             summary = obj.string("summary", label, AidenRemoteProtocol.MAX_APPROVAL_SUMMARY_LENGTH, allowEmpty = true),
@@ -220,7 +236,8 @@ object AidenRunEventCodec {
             toolName = obj.string("toolName", label, AidenRemoteProtocol.MAX_TOOL_NAME_LENGTH),
             canAllow = canAllow,
             scopes = scopes,
-            schedule = AidenApprovalSchedule.parseOrNull(obj["schedule"])
+            schedule = AidenApprovalSchedule.parseOrNull(obj["schedule"]),
+            card = card
         )
     }
 

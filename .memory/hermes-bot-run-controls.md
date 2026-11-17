@@ -84,7 +84,7 @@ per-prompt records (device/stream/chat/renderer-document binding + expiry) and
 projects a non-terminal `question_required` event under the existing
 `waiting_for_approval` state so legacy clients degrade safely. Remote
 generation excludes `ask_user_question` unless the device negotiated the
-grant. iOS (`AidenQuestionCard` in `AidenChatFeature.swift`) and Android
+grant. iOS (`AidenQuestionCard` in `Features/Chat/AidenChatCards.swift`) and Android
 (`AidenQuestionCard.kt` + `models/AidenQuestion.kt` strict codec) share one
 decision table: stacked option/multi/custom answers, skip = `cancelled: true`,
 unaddressed questions sent as skipped, stable per-submission idempotency key,

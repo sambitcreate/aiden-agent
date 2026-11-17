@@ -1,10 +1,15 @@
 import SwiftUI
 
 /// Shared chrome glass for compact controls across remote surfaces. Applies
-/// interactive Liquid Glass on iOS 26+, an opaque `palette.raised` fill with a
-/// hairline stroke under Reduce Transparency, and an ultra-thin material
-/// fallback on earlier releases.
+/// interactive Liquid Glass, or an opaque `palette.raised` fill with a hairline
+/// stroke under Reduce Transparency.
 struct AidenChromeGlassModifier<GlassShape: InsettableShape>: ViewModifier {
+    /// What the chrome renders as, decided from Reduce Transparency alone.
+    enum Mode: Equatable {
+        case glass(interactive: Bool)
+        case opaque
+    }
+
     @Environment(\.accessibilityReduceTransparency) private var environmentReduceTransparency
     @Environment(\.aidenPalette) private var palette
 
@@ -14,23 +19,24 @@ struct AidenChromeGlassModifier<GlassShape: InsettableShape>: ViewModifier {
     /// system Reduce Transparency setting.
     let reduceTransparency: Bool?
 
+    static func mode(reduceTransparency: Bool, isInteractive: Bool) -> Mode {
+        reduceTransparency ? .opaque : .glass(interactive: isInteractive)
+    }
+
     @ViewBuilder
     func body(content: Content) -> some View {
-        let resolvedReduceTransparency = reduceTransparency ?? environmentReduceTransparency
-        if #available(iOS 26, *), !resolvedReduceTransparency {
-            if isInteractive {
-                content.glassEffect(.regular.interactive(), in: shape)
-            } else {
-                content.glassEffect(.regular, in: shape)
-            }
-        } else if resolvedReduceTransparency {
+        switch Self.mode(
+            reduceTransparency: reduceTransparency ?? environmentReduceTransparency,
+            isInteractive: isInteractive
+        ) {
+        case .glass(interactive: true):
+            content.glassEffect(.regular.interactive(), in: shape)
+        case .glass(interactive: false):
+            content.glassEffect(.regular, in: shape)
+        case .opaque:
             content
                 .background(palette.raised, in: shape)
                 .overlay(shape.stroke(palette.foreground.opacity(0.14), lineWidth: 0.5))
-        } else {
-            content
-                .background(.ultraThinMaterial, in: shape)
-                .overlay(shape.stroke(palette.foreground.opacity(0.10), lineWidth: 0.5))
         }
     }
 }

@@ -92,7 +92,7 @@ test("Manage opens the provider dialog with its key and model list, and closing 
   const trigger = await screen.findByRole("button", { name: "Manage OpenRouter" });
   const dialog = await openSetup("Manage OpenRouter");
   assert.match(dialog.textContent ?? "", /OpenRouter/u);
-  assert.match(dialog.textContent ?? "", /encrypted on this Mac/u);
+  assert.match(dialog.textContent ?? "", /encrypted on this computer/u);
   assert.ok(within(dialog).getByText("Key saved"));
   assert.ok(within(dialog).getByRole("button", { name: "Replace OpenRouter key" }));
   assert.ok(within(dialog).getByRole("button", { name: "Remove OpenRouter key" }));
