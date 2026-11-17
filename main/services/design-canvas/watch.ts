@@ -260,10 +260,13 @@ export class DesignFileWatcher {
     const timer = setTimeout(() => {
       timers.delete(timer);
       if (timers.size === 0 && this.noteTimers.get(chatId) === timers) this.noteTimers.delete(chatId);
-      this.forgetStaleNotes(chatId);
+      // One reading decides both what is let go and whether to wait again, so a
+      // window that closes between two readings can't leave the note held.
+      const now = this.now();
+      this.forgetStaleNotes(chatId, now);
       // A timer may run a moment before the clock the window is measured on reaches its end.
       const current = [...(this.ownWrites.get(chatId)?.values() ?? [])].includes(write);
-      if (current && write.beside !== NOTHING_NOTED && this.now() <= until) this.letGoOfNoteAtDeadline(chatId, write);
+      if (current && write.beside !== NOTHING_NOTED && now <= until) this.letGoOfNoteAtDeadline(chatId, write);
     }, Math.max(0, until - this.now()) + 1);
     timer.unref?.();
     timers.add(timer);
@@ -414,11 +417,10 @@ export class DesignFileWatcher {
    * no event still queued for the page arrived inside the window. A later
    * event arrives after the window and is reported without one.
    */
-  private forgetStaleNotes(chatId: string): void {
+  private forgetStaleNotes(chatId: string, now = this.now()): void {
     if (this.flushing.has(chatId)) return;
     const writes = this.ownWrites.get(chatId);
     if (!writes) return;
-    const now = this.now();
     const pending = this.chats.get(chatId)?.pending;
     for (const [relative, write] of writes) {
       if (write.settledAt === null || write.beside === NOTHING_NOTED) continue;
