@@ -79,6 +79,7 @@ test("only online desktop peers from tailscale status become candidates", () => 
   );
   assert.deepEqual(names, ["studio.tail0.ts.net", "build-box.tail0.ts.net"]);
   assert.deepEqual(parseTailscalePeerNames("not json"), []);
+  assert.deepEqual(parseTailscalePeerNames(JSON.stringify({ Self: { Online: true } })), []);
   assert.deepEqual(parseTailscalePeerNames(JSON.stringify({ Peer: [] })), []);
   assert.deepEqual(
     parseTailscalePeerNames(" ".repeat(PEER_TAILSCALE_STATUS_MAX_BYTES + 1)),
@@ -127,6 +128,7 @@ test("an oversized or unreadable tailnet status is reported rather than silently
       },
     }, ["invalid-response"]],
     [{ run: async () => " ".repeat(PEER_TAILSCALE_STATUS_MAX_BYTES + 1) }, ["invalid-response"]],
+    [{ run: async () => "not json" }, ["invalid-response"]],
     [{
       run: async () => {
         throw Object.assign(new Error("Command failed"), { killed: true, signal: "SIGTERM" });
@@ -147,10 +149,42 @@ test("an oversized or unreadable tailnet status is reported rather than silently
       tailscaleUnavailable: (category) => reported.push(category),
     });
     subject.start();
-    assert.deepEqual(await seen.until(settled), { scanning: false, devices: [] });
+    assert.deepEqual(await seen.until(settled), {
+      scanning: false,
+      devices: [],
+      ...(expected.length ? { tailscale: { status: "unavailable", reason: expected[0] } } : {}),
+    });
     assert.deepEqual(reported, expected);
     subject.stop();
   }
+});
+
+test("a failed Tailscale scan publishes its reason and refresh clears it", async () => {
+  const seen = publications();
+  let fail = true;
+  const subject = discovery({
+    tailscale: async () => fail ? { run: async () => { throw new Error("offline"); } } : { run: async () => tailscaleStatus([]) },
+    bootstrap: () => { throw new Error("no probe expected"); },
+    publish: seen.publish,
+  });
+  subject.start();
+  assert.equal((await seen.until(settled)).tailscale?.reason, "command-failed");
+  fail = false;
+  subject.refresh();
+  assert.deepEqual(await seen.until((state) => settled(state) && !state.tailscale), { scanning: false, devices: [] });
+  subject.stop();
+});
+
+test("failure to create the Tailscale runner is visible as a command failure", async () => {
+  const seen = publications();
+  const subject = discovery({
+    tailscale: async () => { throw new Error("runner unavailable"); },
+    bootstrap: () => { throw new Error("no probe expected"); },
+    publish: seen.publish,
+  });
+  subject.start();
+  assert.equal((await seen.until(settled)).tailscale?.reason, "command-failed");
+  subject.stop();
 });
 
 test("a desktop reachable over Tailscale and the LAN is listed once, by Tailscale", async (t) => {
@@ -437,9 +471,7 @@ test("stopping ends the scan: probes abort, the browse closes and late answers a
 test("without Tailscale or Bonjour the scan still finishes empty", async () => {
   const seen = publications();
   const subject = discovery({
-    tailscale: async () => {
-      throw new Error("tailscale is not installed");
-    },
+    tailscale: async () => null,
     browse: () => {
       throw new Error("multicast is unavailable");
     },
