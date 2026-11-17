@@ -2,6 +2,7 @@ import * as React from "react";
 import { skipToken, useQueries, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "../components/ui";
+import { useAppCapabilities } from "../lib/app-capabilities";
 import { hostQueryKeys } from "../lib/hosts/host-query-keys";
 import { remoteBotGroups, type RemoteBotGroup } from "../lib/hosts/new-chat-targets";
 import { hostSharesBotSessions } from "../lib/hosts/remote-bot-session";
@@ -42,7 +43,11 @@ export function useRemoteBots(): {
     combine: (results) =>
       new Map(views.map((view, index) => [view.id, results[index]?.data as PeerHostFeedSnapshot | null | undefined])),
   });
-  const groups = React.useMemo(() => remoteBotGroups(views, statuses.data ?? [], feeds), [views, statuses.data, feeds]);
+  const { platform } = useAppCapabilities();
+  const groups = React.useMemo(
+    () => remoteBotGroups(views, statuses.data ?? [], feeds, platform),
+    [views, statuses.data, feeds, platform],
+  );
   const [opening, setOpening] = React.useState<string | null>(null);
   const controls = React.useRef(new Map<string, HostBotControl>());
 

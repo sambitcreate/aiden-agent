@@ -14,7 +14,7 @@ const STUDIO = {
   capabilities: ["workspace:manage", "workspace:browse"],
 };
 
-test("Add this project to another machine is offered only for a Git project, and starts with no environment file chosen", async ({ aiden }) => {
+test("Add this project to another computer is offered only for a Git project, and starts with no environment file chosen", async ({ aiden }) => {
   const { page } = aiden;
   // HOME is the test root, so ~/widget and ~/notes resolve inside it.
   const widget = path.join(aiden.rootDir, "widget");
@@ -43,7 +43,7 @@ test("Add this project to another machine is offered only for a Git project, and
   }, STUDIO);
   await page.reload();
   const machine = page.getByRole("button", { name: /Choose where this chat runs/u });
-  const addProject = page.getByRole("menuitem", { name: "Add this project to another machine…" });
+  const addProject = page.getByRole("menuitem", { name: "Add this project to another computer…" });
 
   // A No workspace chat has no project folder to clone.
   await machine.click();
@@ -72,7 +72,7 @@ test("Add this project to another machine is offered only for a Git project, and
   await openFolder("widget");
   await machine.click();
   await addProject.click();
-  const dialog = page.getByRole("dialog", { name: "Add project to another machine" });
+  const dialog = page.getByRole("dialog", { name: "Add project to another computer" });
   await expect(dialog.getByRole("button", { name: "Projects" })).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Clone project" })).toBeDisabled();
   for (const name of [".env", ".dev.vars"]) {

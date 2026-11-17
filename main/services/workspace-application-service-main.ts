@@ -29,6 +29,12 @@ export const workspaceApplicationService = createWorkspaceApplicationService({
   browserService,
   gitWatcher: workspaceGitWatcher,
   workspaceArtifacts: workspaceArtifactStore,
+  approvalRules: {
+    forgetWorkspace: async (workspaceId) => {
+      const { approvalRules } = await import("./approval-rules/store-main.js");
+      await approvalRules.forgetOwner({ kind: "workspace", workspaceId });
+    },
+  },
   designGrants,
   followThrough: { closeForWorkspace: closeWorkspaceFollowThrough },
   workspaceMutationGate,

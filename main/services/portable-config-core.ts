@@ -61,6 +61,7 @@ import {
 import { GOOGLE_PROVIDER_ID } from "../../renderer/shared/google-provider.js";
 import { normalizeProviderArtwork } from "../../renderer/shared/provider-artwork.js";
 import { parseOnboardingState } from "../../renderer/shared/onboarding.js";
+import { parseApprovalMode, parseApprovalModel } from "../../renderer/shared/approval-mode.js";
 import { parseWebSearchSettings } from "./web-search-provider-registry-core.js";
 import { parseWebFetchSettings } from "../../renderer/shared/web-fetch-settings.js";
 import { parseTtsSettingsDocument } from "./tts/settings.js";
@@ -748,6 +749,9 @@ export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
   if (settings.usageLimitWaitHours !== undefined && !isUsageLimitWaitHours(settings.usageLimitWaitHours)) delete runtime.usageLimitWaitHours;
   // Only a literal true lets routines go ahead; anything else hand-edited reads as off.
   if (settings.botRoutinesGoAhead !== undefined && settings.botRoutinesGoAhead !== true) delete runtime.botRoutinesGoAhead;
+  // A hand-edited approval mode that isn't one of the three reads as Ask, never as unset (which may be Auto).
+  if (settings.approvalMode !== undefined && parseApprovalMode(settings.approvalMode) === undefined) runtime.approvalMode = "ask";
+  if (settings.approvalModel !== undefined && parseApprovalModel(settings.approvalModel) === undefined) delete runtime.approvalModel;
   if (settings.spendingLimits !== undefined) {
     const spendingLimits = parseSpendingLimitsSettings(settings.spendingLimits);
     if (spendingLimits === undefined) delete runtime.spendingLimits;
@@ -1130,7 +1134,7 @@ change up without a restart.
 
 ## config.json
 
-Your portable configuration. Copy it to another machine to take your setup with
+Your portable configuration. Copy it to another computer to take your setup with
 you.
 
 | Field | What it holds |
@@ -1156,20 +1160,20 @@ Windows permissions depend on its ACLs; chmod is not an equivalent guarantee.
 ## What is deliberately not here
 
 **API keys and OAuth tokens, plus MCP environment and header values.** They are
-encrypted against this machine's keychain and stay in Aiden's application-support
-folder. After copying \`config.json\` to a new machine your providers appear with no
+encrypted against this computer's keychain and stay in Aiden's application-support
+folder. After copying \`config.json\` to a new computer your providers appear with no
 key attached and MCP servers ask for their values again; re-enter them there.
 The generic launch card keeps saved values masked. Review and approve opens the
 exact command, arguments and stored environment overrides in a native confirmation;
 Cancel is the default, and changed values require a fresh review.
 
 **Model lists.** \`providers[].models\` is discovery output rather than
-configuration, so it is cached per machine and refilled when you refresh a
+configuration, so it is cached per computer and refilled when you refresh a
 provider's models.
 
 **Workspaces, UI preferences, and chat history.** Workspaces point at absolute
-folder paths and git worktrees that exist on one machine only, so they stay
-machine-local along with your theme, sidebar, and window state.
+folder paths and git worktrees that exist on one computer only, so they stay
+on that computer along with your theme, sidebar, and window state.
 
 ## skill/ and skills/
 

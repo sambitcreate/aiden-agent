@@ -103,6 +103,7 @@ async function fixture(
       clear: (chatId) => {
         watched.push(["clear", chatId]);
       },
+      ownWrite: () => () => undefined,
     },
     pickFile: async (event, pickOptions) => {
       dialogs.push(pickOptions);

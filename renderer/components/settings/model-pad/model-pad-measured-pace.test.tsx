@@ -239,7 +239,7 @@ test("Clear measured speeds asks first, forgets the speeds, and leaves the Pad a
   const server = editorServer(measured);
   const pad = await mountEditor();
   const data = screen.getByRole("group", { name: "Measured speed" });
-  await within(data).findByText("3 models · from your chats on this Mac");
+  await within(data).findByText("3 models · from your chats on this computer");
   fireEvent.click(await within(data).findByRole("button", { name: "Clear measured speeds" }));
 
   const confirm = await screen.findByRole("button", { name: "Clear speeds" });

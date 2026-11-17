@@ -232,7 +232,7 @@ test("an action the host does not grant is refused instead of running on this Ma
   const host = new FakeHost();
   host.granted = new Set<HostChatCapability>(["send"]);
   const { control } = session(host);
-  assert.match(control.refusal("respondApproval") ?? "", /other Mac/);
+  assert.match(control.refusal("respondApproval") ?? "", /other computer/);
   await assert.rejects(control.respondApproval({ runId: "run-1", approvalId: "a1", decision: "deny" }), { code: "unsupported" });
   await assert.rejects(control.submitInput("run-1", "steer", "left"), { code: "unsupported" });
   assert.deepEqual(host.calls, []);

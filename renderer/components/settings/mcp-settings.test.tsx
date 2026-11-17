@@ -339,7 +339,7 @@ test("provider key consent identifies the exact endpoint and separates saving fr
   assert.match(html, /Allow the key/u);
   assert.match(html, /Saving the server does not grant access/u);
   assert.match(html, /each device needs your approval/u);
-  assert.match(html, /Only attended desktop workspace chats/u);
+  assert.match(html, /Only attended workspace chats in Aiden Agent/u);
   const approved = renderToStaticMarkup(<McpProviderAuthFields {...props} approved />);
   assert.match(approved, /Stop sharing the key/u);
   assert.match(approved, /Approved on this device/u);

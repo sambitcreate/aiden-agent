@@ -121,28 +121,9 @@ test("chat shell keeps local interactions isolated and keyboard-accessible", asy
   await expect(terminal).toBeDisabled();
   await expect(terminal).toHaveAttribute("aria-pressed", "false");
 
-  const permission = page.getByRole("button", {
-    name: /^Workspace access: Ask first/u,
-  });
-  await permission.click();
-  const accessOptions = page.getByRole("radiogroup", {
-    name: "Workspace access",
-  });
-  const askFirst = accessOptions.getByRole("radio", {
-    name: /^Workspace access: Ask first/u,
-  });
-  const noAccess = accessOptions.getByRole("radio", {
-    name: /^Workspace access: No access/u,
-  });
-  await expect(askFirst).toHaveAttribute("aria-checked", "true");
-  await expect(noAccess).toHaveAttribute("aria-checked", "false");
-  await noAccess.click();
-  const noAccessTrigger = page.getByRole("button", { name: /^Workspace access: No access/u });
-  await expect(noAccessTrigger).toHaveAttribute("aria-expanded", "false");
-  await expect(composer).toBeFocused();
-  await noAccessTrigger.click();
-  await askFirst.click();
-  await expect(permission).toBeVisible();
+  // A workspace that follows Settings → Approvals shows no approvals chip;
+  // the chip's own interactions are covered "with a workspace" below.
+  await expect(page.getByRole("button", { name: /^Approvals:/u })).toHaveCount(0);
 
   await composer.fill("Draft and attachment stay with this chat only.");
   await pasteImage(page);
@@ -616,12 +597,13 @@ test.describe("with a workspace", () => {
     await expect.poll(workspaceOrder).toEqual([third, second, first]);
   });
 
-  test("workspace access arrows move focus and explicit keys commit", async ({ aiden }) => {
+  test("approvals chip arrows move focus and explicit keys commit", async ({ aiden }) => {
     const { page } = aiden;
     await finishLmStudioOnboarding(page);
 
+    // The seeded workspace was Full access, which reads as a customized Never ask.
     const permission = page.getByRole("button", {
-      name: /^Workspace access: Full access/u,
+      name: /^Approvals: Never ask/u,
     });
     await page.getByRole("button", { name: "Attach files or images" }).focus();
     await page.keyboard.press("Tab");
@@ -629,55 +611,46 @@ test.describe("with a workspace", () => {
     await expect(permission).toHaveCSS("opacity", "1");
     await expect(permission).toHaveCSS("outline-style", "solid");
     await permission.click();
-    const accessOptions = page.getByRole("radiogroup", {
-      name: "Workspace access",
-    });
-    const fullAccess = accessOptions.getByRole("radio", {
-      name: /^Workspace access: Full access/u,
-    });
-    const askFirst = accessOptions.getByRole("radio", {
-      name: /^Workspace access: Ask first/u,
-    });
-    const noAccess = accessOptions.getByRole("radio", {
-      name: /^Workspace access: No access/u,
-    });
+    const options = page.getByRole("radiogroup", { name: "Approvals" });
+    const useSettings = options.getByRole("radio", { name: /^Approvals: Use Settings \(/u });
+    const ask = options.getByRole("radio", { name: "Approvals: Ask", exact: true });
+    const neverAsk = options.getByRole("radio", { name: "Approvals: Never ask", exact: true });
     await expect(permission).toHaveAttribute("aria-expanded", "true");
     await expect(permission).not.toHaveAttribute("aria-haspopup");
-    await expect(accessOptions).toHaveAttribute("id", await permission.getAttribute("aria-controls") as string);
-    // Clicking the already-selected Full option dismisses without a new grant.
-    await fullAccess.click();
+    await expect(options).toHaveAttribute("id", await permission.getAttribute("aria-controls") as string);
+    // Clicking the already-selected mode dismisses without a change.
+    await neverAsk.click();
     await expect(permission).toHaveAttribute("aria-expanded", "false");
     await expect(page.locator(".composer-shell textarea")).toBeFocused();
     await permission.click();
-    await fullAccess.focus();
-    await expect(fullAccess).toBeFocused();
+    await neverAsk.focus();
+    await expect(neverAsk).toBeFocused();
 
-    await fullAccess.press("ArrowDown");
-    await expect(askFirst).toBeFocused();
-    await expect(fullAccess).toHaveAttribute("aria-checked", "true");
-    await askFirst.press("Enter");
-    await expect(askFirst).toHaveAttribute("aria-checked", "true");
+    await neverAsk.press("ArrowUp");
+    await expect(ask).toBeFocused();
+    await expect(neverAsk).toHaveAttribute("aria-checked", "true");
+    await ask.press("Enter");
+    await expect(ask).toHaveAttribute("aria-checked", "true");
 
-    await askFirst.press("ArrowUp");
-    await expect(fullAccess).toBeFocused();
-    await expect(page.getByRole("dialog", { name: "Enable Full Access?" })).toHaveCount(0);
-    await expect(askFirst).toHaveAttribute("aria-checked", "true");
+    await ask.press("ArrowDown");
+    await expect(neverAsk).toBeFocused();
+    await expect(ask).toHaveAttribute("aria-checked", "true");
+    await neverAsk.press(" ");
+    await expect(neverAsk).toHaveAttribute("aria-checked", "true");
 
-    await fullAccess.press("ArrowDown");
-    await askFirst.press("ArrowDown");
-    await expect(noAccess).toBeFocused();
-    await expect(askFirst).toHaveAttribute("aria-checked", "true");
-    await noAccess.press(" ");
-    await expect(noAccess).toHaveAttribute("aria-checked", "true");
+    // Arrows wrap from the last choice to Use Settings without choosing it.
+    await neverAsk.press("ArrowDown");
+    await expect(useSettings).toBeFocused();
+    await expect(neverAsk).toHaveAttribute("aria-checked", "true");
+    await useSettings.press("Escape");
+    await expect(permission).toHaveAttribute("aria-expanded", "false");
+    await expect(options).toBeHidden();
+    await expect(page.locator(".composer-shell textarea")).toBeFocused();
 
-    await noAccess.press("ArrowUp");
-    await expect(askFirst).toBeFocused();
-    await expect(noAccess).toHaveAttribute("aria-checked", "true");
-    await askFirst.press("Enter");
-    await expect(askFirst).toHaveAttribute("aria-checked", "true");
-    await askFirst.press("Escape");
-    await expect(page.getByRole("button", { name: /^Workspace access: Ask first/u })).toHaveAttribute("aria-expanded", "false");
-    await expect(accessOptions).toBeHidden();
+    // Use Settings hands the workspace back to Settings → Approvals, and the chip goes away.
+    await permission.click();
+    await useSettings.click();
+    await expect(page.getByRole("button", { name: /^Approvals:/u })).toHaveCount(0);
     await expect(page.locator(".composer-shell textarea")).toBeFocused();
   });
 
@@ -685,7 +658,8 @@ test.describe("with a workspace", () => {
     const { page } = aiden;
     await finishLmStudioOnboarding(page);
     const composer = page.locator(".composer-responsive");
-    const permission = page.getByRole("button", { name: /^Workspace access: Full access/u });
+    // The seeded Full access workspace reads as a customized Never ask, so its chip shows.
+    const permission = page.getByRole("button", { name: /^Approvals: Never ask/u });
     const controls = [
       page.getByRole("button", { name: "Attach files or images" }),
       permission,
@@ -712,12 +686,12 @@ test.describe("with a workspace", () => {
           boxes[index - 1]!.x + boxes[index - 1]!.width - 0.5,
         );
       }
-      // The access control drops its label before anything wraps.
+      // The approvals chip drops its label before anything wraps.
       const labelVisible = await permission.evaluate((element) => {
         const label = element.querySelector("span");
         return label ? label.getBoundingClientRect().width > 0 : false;
       });
-      expect(labelVisible, `Full access label at ${width}px`).toBe(width > 560);
+      expect(labelVisible, `Never ask label at ${width}px`).toBe(width > 560);
     }
   });
 });
@@ -823,8 +797,9 @@ test("composer selector menus use opaque theme surfaces on hover and keyboard fo
     host.innerHTML = markup;
     document.body.append(host);
   }, thinkingMarkup);
-  const permission = page.getByRole("button", { name: /^Workspace access:/u });
-  const access = page.getByRole("radiogroup", { name: "Workspace access", exact: true });
+  // A fresh install starts in No workspace, whose composer always shows the approvals chip.
+  const permission = page.getByRole("button", { name: /^Approvals:/u });
+  const access = page.getByRole("radiogroup", { name: "Approvals", exact: true });
   const thinking = page.getByRole("radiogroup", { name: "Gemini thinking level" });
   const selectedThinking = thinking.getByRole("radio", { name: "Thinking: medium effort" });
   for (const scheme of ["light", "dark"] as const) {

@@ -107,14 +107,18 @@ test("composer dictation on device sends the raw recording to the model and deli
   await act(() => result.current.start());
   assert.equal(result.current.recording, true);
   act(() => result.current.stop());
-  await waitFor(() => assert.deepEqual(heard, ["hello there"]));
+  // The transcript arrives from an async callback, outside act, so the render
+  // that clears `recording` can land a moment after it: wait for both.
+  await waitFor(() => {
+    assert.deepEqual(heard, ["hello there"]);
+    assert.equal(result.current.recording, false);
+  });
 
   const sent = calls.find((call) => call.channel === "voice:transcribeLocal");
   assert.equal((sent?.args[0] as ArrayBuffer).byteLength, 3_200);
   assert.equal(sent?.args[1], "parakeet-v3");
   assert.equal(decodes, 0);
   assert.equal(mediaRecorders, 0);
-  assert.equal(result.current.recording, false);
 });
 
 test("a model that can keep up shows live words while recording, and the final decode replaces them", async () => {
@@ -145,10 +149,13 @@ test("a model that can keep up shows live words while recording, and the final d
   assert.deepEqual(result.current.liveTranscript, { committed: "hello", tentative: "there" });
 
   act(() => result.current.stop());
-  await waitFor(() => assert.deepEqual(heard, ["Hello there, friend."]));
+  // The preview clears in the same async callback, after the transcript, outside act.
+  await waitFor(() => {
+    assert.deepEqual(heard, ["Hello there, friend."]);
+    assert.deepEqual(result.current.liveTranscript, { committed: "", tentative: "" });
+  });
   const order = calls.map((call) => call.channel);
   assert.ok(order.indexOf("voice:localLiveStop") < order.indexOf("voice:transcribeLocal"), order.join(", "));
-  assert.deepEqual(result.current.liveTranscript, { committed: "", tentative: "" });
   // The final decode still gets the whole recording, not just what the preview saw.
   const final = calls.find((call) => call.channel === "voice:transcribeLocal")!;
   assert.ok((final.args[0] as ArrayBuffer).byteLength > 6_400);
@@ -170,8 +177,10 @@ test("a composer recording that reaches the on-device limit stops and transcribe
     FakeAudioWorkletNode.latest!.speak();
     FakeAudioWorkletNode.latest!.speak();
   });
-  await waitFor(() => assert.deepEqual(heard, ["kept words"]));
-  assert.equal(result.current.recording, false, "the composer no longer shows recording");
+  await waitFor(() => {
+    assert.deepEqual(heard, ["kept words"]);
+    assert.equal(result.current.recording, false, "the composer no longer shows recording");
+  });
   assert.equal(contextsClosed, 1, "the audio graph is released");
   assert.ok(tracksStopped >= 1, "the microphone is released");
 

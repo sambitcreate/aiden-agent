@@ -5,8 +5,8 @@ import SwiftUI
 // each mirrors one desktop feature-tour tile: WorkspaceAgentArt, ModelFreedomArt,
 // and ScheduledAutomationsArt.
 
-/// Bots and Workspaces: a workspace chat with an edit landing, the Aiden-logo
-/// switcher menu open on Workspaces, and the file tree it works in.
+/// Bots and Workspaces: a workspace chat with an edit landing, the app's tabs
+/// with Workspaces chosen, and the file tree it works in.
 struct AidenOnboardingBuildArt: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenOnboardingArtColors) private var colors
@@ -16,13 +16,8 @@ struct AidenOnboardingBuildArt: View {
         ZStack(alignment: .topLeading) {
             OnboardingArtWindow(origin: CGPoint(x: 16, y: 14), width: 184, height: 232, cornerRadius: 20, padding: 10) {
                 HStack(spacing: 5) {
-                    HStack(spacing: 2) {
-                        Circle().fill(colors.ink).frame(width: 9, height: 9)
-                        OnboardingArtSymbol(name: "chevron.down", size: 5)
-                    }
-                    .padding(.horizontal, 4)
-                    .frame(height: 15)
-                    .background(colors.fill, in: Capsule())
+                    OnboardingArtSymbol(name: "chevron.left", size: 7)
+                        .frame(height: 15)
                     OnboardingArtBar(width: 50, tone: .ink)
                     Spacer(minLength: 0)
                     OnboardingArtSymbol(name: "ellipsis", size: 7)
@@ -60,14 +55,17 @@ struct AidenOnboardingBuildArt: View {
             }
 
             OnboardingArtWindow(origin: CGPoint(x: 166, y: 38), width: 118, raised: true, cornerRadius: 12) {
-                switcherRow(selected: false) {
-                    AidenBotShapeSwatch(shape: .wisp, color: AidenBotAvatarColor.peach.swatch, size: 11)
-                    OnboardingArtText("Bots", size: 8.5, style: .primary)
+                tabRow(selected: false) {
+                    OnboardingArtSymbol(name: "tray.fill", size: 8)
+                    OnboardingArtText("Inbox", size: 8.5, style: .primary)
                 }
-                OnboardingArtSeparator(leadingInset: 24)
-                switcherRow(selected: true) {
+                tabRow(selected: true) {
                     OnboardingArtSymbol(name: "folder.fill", size: 8, color: palette.accent)
                     OnboardingArtText("Workspaces", size: 8.5, weight: .semibold, style: .primary)
+                }
+                tabRow(selected: false) {
+                    AidenBotShapeSwatch(shape: .wisp, color: AidenBotAvatarColor.peach.swatch, size: 11)
+                    OnboardingArtText("Bots", size: 8.5, style: .primary)
                 }
             }
             .offset(y: motion.float)
@@ -122,16 +120,13 @@ struct AidenOnboardingBuildArt: View {
         .shadow(color: colors.surfaceShadow, radius: 3, y: 1)
     }
 
-    private func switcherRow<Content: View>(
+    private func tabRow<Content: View>(
         selected: Bool,
         @ViewBuilder content: () -> Content
     ) -> some View {
         HStack(spacing: 6) {
             content()
             Spacer(minLength: 0)
-            if selected {
-                OnboardingArtSymbol(name: "checkmark", size: 7, weight: .bold, color: palette.accent)
-            }
         }
         .padding(.horizontal, 7)
         .frame(height: 22)
