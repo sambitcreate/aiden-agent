@@ -1,0 +1,8 @@
+[env]
+# The containment guard and the driver launcher snapshot the open descriptors
+# and fork, which is only sound while the process is single-threaded (as the
+# broker is when it calls them). The test harness runs tests on parallel
+# threads, so a Foundation test could reuse a snapshotted descriptor number for
+# a guarded descriptor, and the forked child's close() of it gets the child
+# killed (EXC_GUARD, signal 9). Tests run one at a time to keep that true.
+RUST_TEST_THREADS = "1"

@@ -103,6 +103,12 @@ export interface BrowserState {
   history: BrowserHistoryEntry[];
   servers: BrowserServer[];
 }
+/** Renderer labels only. A native menu returns the index in this invocation, or null on dismissal. */
+export type BrowserMenuItem = { label: string; enabled: boolean; checked?: boolean } | null;
+export interface BrowserMenuChoice {
+  index: number;
+  shiftKey: boolean;
+}
 export interface BrowserBounds {
   x: number;
   y: number;
