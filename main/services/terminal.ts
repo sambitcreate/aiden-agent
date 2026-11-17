@@ -243,6 +243,32 @@ function trySpawnShell(
   );
 }
 
+/**
+ * Keeps each session's input in the order it arrived. Every write is checked
+ * (workspace access, a managed worktree) before it reaches the shell, and
+ * those checks wait on disk, so one keystroke's check can finish before the
+ * one typed just ahead of it. A write takes its place here first and is
+ * written only once every earlier write of the session was written or refused.
+ */
+export class TerminalInputOrder {
+  private readonly tails = new Map<string, Promise<void>>();
+
+  /** `previous` settles once every earlier write of the session has; call `done` once this one has. */
+  enter(sessionId: string): { previous: Promise<void>; done: () => void } {
+    const previous = this.tails.get(sessionId) ?? Promise.resolve();
+    let done = () => {};
+    const settled = new Promise<void>((resolve) => {
+      done = () => resolve();
+    });
+    const tail = previous.then(() => settled);
+    this.tails.set(sessionId, tail);
+    void tail.then(() => {
+      if (this.tails.get(sessionId) === tail) this.tails.delete(sessionId);
+    });
+    return { previous, done };
+  }
+}
+
 export class TerminalService {
   private outputObserver?: (workspaceId: string, data: string) => void;
 

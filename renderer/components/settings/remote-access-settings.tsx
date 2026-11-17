@@ -53,6 +53,7 @@ import type {
   AidenRemoteTailscaleTakeoverReviewView,
 } from "../../shared/aiden-remote";
 import { isAidenRemoteTlsEndpointFailure } from "../../shared/aiden-remote";
+import { localComputerNoun, thisComputerLabel, type LocalComputerNoun } from "../../shared/computer-noun";
 import {
   groupRemoteDevices,
   remoteConnectionSummary,
@@ -85,7 +86,7 @@ function connectionModeLabel(mode: AidenRemoteConnectionMode): string {
   }
 }
 
-function tailscaleRouteCopy(status: AidenRemoteSettingsSnapshot["status"]): {
+function tailscaleRouteCopy(status: AidenRemoteSettingsSnapshot["status"], hostLabel: LocalComputerNoun): {
   badge: string;
   description: string;
 } {
@@ -106,9 +107,9 @@ function tailscaleRouteCopy(status: AidenRemoteSettingsSnapshot["status"]): {
           description: "Run `sudo tailscale set --operator=$USER` in a terminal, then connect again.",
         };
       }
-      return { badge: "Available", description: "The Aiden mobile route is available on this desktop." };
+      return { badge: "Available", description: `The Aiden mobile route is available on this ${hostLabel}.` };
     case "other_aiden_live":
-      return { badge: "In use", description: "Another running Aiden profile owns this desktop’s mobile route. Stop or disconnect it before connecting here." };
+      return { badge: "In use", description: `Another running Aiden profile owns this ${hostLabel}’s mobile route. Stop or disconnect it before connecting here.` };
     case "other_aiden_stale":
       return { badge: "Previous route found", description: "A previous Aiden profile left this route behind. Review it before taking over." };
     case "unrelated_conflict":
@@ -141,7 +142,7 @@ function tailscaleRouteCopy(status: AidenRemoteSettingsSnapshot["status"]): {
   }
 }
 
-function friendlyTailscaleError(error: unknown): string {
+function friendlyTailscaleError(error: unknown, hostLabel: LocalComputerNoun): string {
   const message = (error instanceof Error ? error.message : "")
     .replace(/^Error invoking remote method ['"][^'"]+['"]:\s*/iu, "")
     .replace(/^Error:\s*/iu, "");
@@ -155,11 +156,11 @@ function friendlyTailscaleError(error: unknown): string {
   if (message.includes("tailscale_reconciliation_conflict")) return "The route changed after the uncertain update. Aiden left it untouched; inspect Tailscale Serve.";
   if (message.includes("tailscale_reconciliation_unhealthy")) return "The route exists but this Aiden service did not answer its health check. Nothing was claimed.";
   if (message.includes("tailscale_reconciliation_required")) return "Verify the previous Tailscale update before starting another route change.";
-  if (message.includes("tailscale_not_installed")) return "Install Tailscale on your desktop and phone, then sign in to the same private network. You can also choose On the same Wi-Fi.";
+  if (message.includes("tailscale_not_installed")) return `Install Tailscale on this ${hostLabel} and your phone, then sign in to the same private network. You can also choose On the same Wi-Fi.`;
   if (message.includes("tailscale_not_connected")) return "Open Tailscale and sign in before connecting Aiden.";
   if (message.includes("tailscale_https_unavailable")) return "Enable HTTPS for this Tailscale device name before connecting Aiden.";
   if (message.includes("tailscale_permission_denied")) return "On Linux, allow your user to manage Tailscale once with: sudo tailscale set --operator=$USER";
-  if (message.includes("tailscale_route_busy")) return "Another Aiden profile is updating this desktop’s mobile route. Wait a moment and try again.";
+  if (message.includes("tailscale_route_busy")) return `Another Aiden profile is updating this ${hostLabel}’s mobile route. Wait a moment and try again.`;
   return message && !message.startsWith("tailscale_") ? message : "Aiden couldn’t safely update the Tailscale route.";
 }
 
@@ -201,7 +202,8 @@ function SettingsDeviceRow({
 
 export function RemoteAccessSettings() {
   const capabilities = useAppCapabilities();
-  const hostLabel = capabilities.platform === "darwin" ? "Mac" : "computer";
+  const hostLabel = localComputerNoun(capabilities.platform);
+  const tailscaleError = (error: unknown) => friendlyTailscaleError(error, hostLabel);
   const queryClient = useQueryClient();
   const settingsQuery = useAidenRemoteSettings(true);
   const [setupTransport, setSetupTransport] = React.useState<"lan" | "tailscale" | null>(null);
@@ -305,7 +307,7 @@ export function RemoteAccessSettings() {
       setPairing(null);
       toast.error(settingsQuery.data.pairing
         ? "This pairing code was replaced by a newer pairing window."
-        : "This pairing window was closed on this desktop.");
+        : `This pairing window was closed on this ${hostLabel}.`);
       return;
     }
     if (pairingLifecycle.state === "cancelled") {
@@ -334,7 +336,7 @@ export function RemoteAccessSettings() {
     }).catch(() => {
       toast.error("The device connected, but Aiden couldn't close the pairing window.");
     }).finally(() => setBusy(null));
-  }, [busy, pairing, pairingLifecycle, settingsQuery.data]);
+  }, [busy, hostLabel, pairing, pairingLifecycle, settingsQuery.data]);
 
   const commit = React.useCallback((next: AidenRemoteSettingsSnapshot) => {
     queryClient.setQueryData(queryKeys.aidenRemote, next);
@@ -400,7 +402,7 @@ export function RemoteAccessSettings() {
       return true;
     } catch (error) {
       if (mounted.current && pairingRequestGeneration.current === requestGeneration) {
-        const message = friendlyTailscaleError(error);
+        const message = tailscaleError(error);
         setSetupError(message);
         toast.error(message);
         await queryClient.invalidateQueries({ queryKey: queryKeys.aidenRemote });
@@ -419,7 +421,7 @@ export function RemoteAccessSettings() {
     try {
       setTakeoverReview(await aidenRemoteApi.reviewTailscaleTakeover());
     } catch (error) {
-      toast.error(friendlyTailscaleError(error));
+      toast.error(tailscaleError(error));
       await queryClient.invalidateQueries({ queryKey: queryKeys.aidenRemote });
     } finally {
       setBusy(null);
@@ -434,7 +436,7 @@ export function RemoteAccessSettings() {
       setTakeoverReview(null);
       toast.success("This Aiden profile now owns the mobile route.");
     } catch (error) {
-      toast.error(friendlyTailscaleError(error));
+      toast.error(tailscaleError(error));
       setTakeoverReview(null);
       await queryClient.invalidateQueries({ queryKey: queryKeys.aidenRemote });
     } finally {
@@ -485,7 +487,7 @@ export function RemoteAccessSettings() {
   const transportAllowsLan = status.connectionMode === "lan" || status.connectionMode === "both";
   const transportAllowsTailscale = status.connectionMode === "tailscale" || status.connectionMode === "both";
   const groups = groupRemoteDevices(snapshot.devices, { serviceRunning: status.running });
-  const tailscalePresentation = tailscaleRouteCopy(status);
+  const tailscalePresentation = tailscaleRouteCopy(status, hostLabel);
   const effectivePairingLifecycle = effectiveRemotePairingLifecycle(pairingLifecycle, pairingSeconds);
   const pairingPresentation = remotePairingPresentation(effectivePairingLifecycle, pairingSeconds);
   const pairingTransport = pairing?.endpoint.includes(".ts.net/") ? "tailscale" : "lan";
@@ -550,12 +552,12 @@ export function RemoteAccessSettings() {
         </Field>
       </FieldSet>
 
-      <SettingsDisclosure title={`This ${hostLabel} settings`} summary={`${snapshot.displayName} · ${summary}`}>
+      <SettingsDisclosure title={`${thisComputerLabel(capabilities.platform)} settings`} summary={`${snapshot.displayName} · ${summary}`}>
         <Field
-          label="This desktop"
+          label={thisComputerLabel(capabilities.platform)}
           hint={(
             <InfoHint topic="Remote Access security">
-              Aiden On The Go uses only the capabilities and folders approved on this desktop.
+              Aiden On The Go uses only the capabilities and folders approved on this {hostLabel}.
               Provider keys never leave Aiden.
             </InfoHint>
           )}
@@ -586,7 +588,7 @@ export function RemoteAccessSettings() {
           />
         ) : null}
         <Field
-          label="Desktop name"
+          label="Computer name"
           description={`Shown on paired devices. Identity remains ${snapshot.instanceId.slice(-6)}.`}
         >
           <form
@@ -600,7 +602,7 @@ export function RemoteAccessSettings() {
               value={displayNameDraft}
               onChange={(event) => setDisplayNameDraft(event.target.value)}
               maxLength={80}
-              aria-label="Desktop display name"
+              aria-label="Computer display name"
               disabled={busy !== null}
             />
             <Button
@@ -665,7 +667,7 @@ export function RemoteAccessSettings() {
           </div>
         </Field> : null}
         {groups.active.length === 0 && groups.pending.length === 0 && groups.inactive.length === 0 ? (
-          <div className="p-4 text-small text-secondary">No devices are paired with this desktop.</div>
+          <div className="p-4 text-small text-secondary">No devices are paired with this {hostLabel}.</div>
         ) : (
           <>
             {groups.active.map((device) => (
@@ -802,7 +804,7 @@ export function RemoteAccessSettings() {
                     size="small"
                     variant="filled"
                     disabled={!status.enabled || busy !== null}
-                    onClick={() => void mutate("tailscale", aidenRemoteApi.disconnectTailscale, friendlyTailscaleError)}
+                    onClick={() => void mutate("tailscale", aidenRemoteApi.disconnectTailscale, tailscaleError)}
                   >
                     {busy === "tailscale" ? <Loader2 className="animate-spin" /> : <Network />}
                     Disconnect
@@ -812,7 +814,7 @@ export function RemoteAccessSettings() {
                     size="small"
                     variant="accent"
                     disabled={!status.enabled || busy !== null || !status.tailscaleInstalled}
-                    onClick={() => void mutate("tailscale", aidenRemoteApi.connectTailscale, friendlyTailscaleError)}
+                    onClick={() => void mutate("tailscale", aidenRemoteApi.connectTailscale, tailscaleError)}
                   >
                     {busy === "tailscale" ? <Loader2 className="animate-spin" /> : <Network />}
                     Connect
@@ -832,7 +834,7 @@ export function RemoteAccessSettings() {
                     size="small"
                     variant="accent"
                     disabled={!status.enabled || busy !== null}
-                    onClick={() => void mutate("tailscale", aidenRemoteApi.reconcileTailscale, friendlyTailscaleError)}
+                    onClick={() => void mutate("tailscale", aidenRemoteApi.reconcileTailscale, tailscaleError)}
                   >
                     {busy === "tailscale" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
                     Verify update
@@ -930,11 +932,11 @@ export function RemoteAccessSettings() {
             </Badge>
             <div className="w-full rounded-control bg-well px-4 py-3 text-left">
               <Text variant="small" color="secondary" className="block">
-                {pairingTransport === "tailscale" ? "Private Tailscale address" : "Nearby desktop address"}
+                {pairingTransport === "tailscale" ? "Private Tailscale address" : "Nearby computer address"}
               </Text>
               <div className="mt-1 flex items-center justify-between gap-3">
                 <code className="min-w-0 break-all font-mono text-small text-primary">{pairing.endpoint}</code>
-                <CopyButton text={pairing.endpoint} label="Copy desktop address" />
+                <CopyButton text={pairing.endpoint} label="Copy computer address" />
               </div>
             </div>
             <div
@@ -956,7 +958,7 @@ export function RemoteAccessSettings() {
               <Text variant="small" color="secondary" className="mt-2 block">
                 {pairingTransport === "tailscale"
                   ? "Enter this private address and the setup code on your phone or tablet."
-                  : "Select this discovered desktop, then enter the setup code on your phone or tablet."}
+                  : `Select this discovered ${hostLabel}, then enter the setup code on your phone or tablet.`}
               </Text>
             </div>
             <Text variant="small" color="secondary" role="status" aria-live="polite">
@@ -982,7 +984,7 @@ export function RemoteAccessSettings() {
         open={movePortReview}
         onOpenChange={setMovePortReview}
         title="Move this Remote Access endpoint?"
-        description="Aiden will choose an available private port and keep your device credentials. Previously paired devices may need to discover this desktop again on the local network. If this profile owns a Tailscale Serve route, disconnect that route first."
+        description={`Aiden will choose an available private port and keep your device credentials. Previously paired devices may need to discover this ${hostLabel} again on the local network. If this profile owns a Tailscale Serve route, disconnect that route first.`}
         confirmLabel="Use Another Port"
         busy={busy === "movePort"}
         keepOpenOnConfirm

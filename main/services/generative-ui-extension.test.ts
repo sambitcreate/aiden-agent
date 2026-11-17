@@ -158,6 +158,37 @@ test("the system prompt points the model at the guide and keeps replies complete
   assert.match(preferred.systemPrompt ?? "", /\/visualize/u);
 });
 
+test("with the design canvas offered, mockups and pages go to design files rather than inline visuals", () => {
+  const steering = (extension: ReturnType<typeof createGenerativeUiExtension>) => {
+    const renderArtifact = extension.tools?.find((tool) => tool.name === "render_artifact");
+    assert.ok(renderArtifact);
+    return { prompt: extension.systemPrompt ?? "", description: renderArtifact.description };
+  };
+  const chat = steering(createGenerativeUiExtension({ workspaceRoot: undefined, onArtifact: () => undefined }));
+  assert.match(chat.prompt, /UI mockup/u);
+  assert.match(chat.description, /UI mockups/u);
+  assert.doesNotMatch(chat.prompt, /design canvas/iu);
+
+  for (const preferArtifactThisTurn of [false, true]) {
+    const canvas = steering(
+      createGenerativeUiExtension({
+        workspaceRoot: undefined,
+        designCanvas: true,
+        preferArtifactThisTurn,
+        onArtifact: () => undefined,
+      }),
+    );
+    for (const text of [canvas.prompt, canvas.description]) {
+      assert.match(text, /design\/\*\.html/u);
+      assert.match(text, /design canvas/iu);
+    }
+    // Mockups, screens and dashboards are only ever named as what does not belong inline.
+    const inlineUses = canvas.prompt.replace(/[^.]*design canvas[^.]*\./giu, "");
+    assert.doesNotMatch(inlineUses, /mockup|dashboard|screen/iu);
+    assert.doesNotMatch(canvas.description.replace(/[^;.]*design canvas[^;.]*/giu, ""), /mockup|dashboard|screen/iu);
+  }
+});
+
 test("render_artifact takes a column or wide layout and hands it to the host", async () => {
   const seen: Array<string | undefined> = [];
   const extension = createGenerativeUiExtension({

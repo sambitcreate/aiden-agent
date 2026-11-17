@@ -1,4 +1,4 @@
-import type { ElectronApplication } from "playwright";
+import type { ElectronApplication, Page } from "playwright";
 import { BOT_FULL_ACCESS_NOTICE_VERSION, type BotCapabilityCatalog } from "../../renderer/shared/bot-capabilities";
 import { botFixture } from "../../renderer/main/bots/test-fixtures";
 import { E2E_PROFILE_NAME, expect, finishLmStudioOnboarding, connectOnboardingLmStudio, test } from "./fixtures";
@@ -66,8 +66,9 @@ test("computer control respects platform support and explains access before enab
 });
 
 // The e2e profile has no macOS Keychain authority, so the real Bot store cannot
-// open. Only the Bot IPC is substituted (as in bots-starter.spec.ts); the create
-// flow, Advanced page, and their renderer state are the shipped code.
+// open. Only the Bot IPC is substituted (as in bots-starter.spec.ts); the New
+// bot dialog, the side panel's Advanced tab, and their renderer state are the
+// shipped code.
 async function substituteBotIpc(app: ElectronApplication, options: { failFirstCreate: boolean }) {
   const catalog: BotCapabilityCatalog = {
     revision: "catalog-editor-fixture", providers: [{ id: "custom:lmstudio", label: "LM Studio", available: true,
@@ -119,62 +120,62 @@ async function botCreateE2e(app: ElectronApplication) {
   } }).botCreateE2e);
 }
 
-test("Create a bot keeps the draft after a failed save, then creates it with Full access", async ({ aiden }) => {
+/** Opens New bot from the Create (+) menu at the top of the Bots sidebar. */
+async function openNewBot(page: Page) {
+  await page.getByRole("button", { name: "Bots", exact: true }).click();
+  await page.locator("[data-sidebar]").getByRole("button", { name: "Create", exact: true }).click();
+  await page.getByRole("menuitem", { name: "New bot", exact: true }).click();
+  return page.getByRole("dialog", { name: "New bot", exact: true });
+}
+
+test("New bot keeps the typed name after a failed create, then creates it with Full access", async ({ aiden }) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   await substituteBotIpc(aiden.app, { failFirstCreate: true });
-  await page.getByRole("button", { name: "Bots", exact: true }).click();
-  // On Bots pages the sidebar lists only Bots, with New Bot at its top.
-  await page.locator("[data-sidebar]").getByRole("button", { name: "New Bot", exact: true }).click();
-  const editor = page.getByRole("dialog", { name: "New Bot", exact: true });
-  await editor.getByRole("textbox", { name: "Name" }).fill("Meal Planner");
-  await editor.getByRole("textbox", { name: "What should it help with?" }).fill("Plan my meals and grocery list every week");
-  await editor.getByRole("button", { name: "Next", exact: true }).click();
-  // The second step renames the dialog to "Connections".
-  const connections = page.getByRole("dialog", { name: "Connections", exact: true });
-  await expect(connections.getByRole("list", { name: "Suggested connections" })).toBeVisible();
-  // Connections are optional; Create goes ahead without any.
-  await connections.getByRole("button", { name: "Create", exact: true }).click();
-  await expect(connections.getByRole("alert")).toContainText("The test storage is unavailable.");
-  await connections.getByRole("button", { name: "Back", exact: true }).click();
-  await expect(editor.getByRole("textbox", { name: "Name" })).toHaveValue("Meal Planner");
-  await expect(editor.getByRole("textbox", { name: "What should it help with?" })).toHaveValue("Plan my meals and grocery list every week");
+  const dialog = await openNewBot(page);
+  const name = dialog.getByRole("textbox", { name: "Name your Bot" });
+  await name.fill("Meal Planner");
+  await name.press("Enter");
+  await expect(dialog.getByRole("alert")).toContainText("The test storage is unavailable.");
+  await expect(name).toHaveValue("Meal Planner");
+  await dialog.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(page.getByPlaceholder("Ask Meal Planner")).toBeVisible();
+  const { createCalls } = await botCreateE2e(aiden.app);
+  expect(createCalls).toBe(2);
 });
 
-test("Create a bot from a name and a help answer, then switch its Advanced access to Only what I choose", async ({ aiden }) => {
+test("New bot from just a name, then disable a tool in the Advanced tab", async ({ aiden }) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   await substituteBotIpc(aiden.app, { failFirstCreate: false });
-  await page.getByRole("button", { name: "Bots", exact: true }).click();
-  // On Bots pages the sidebar lists only Bots, with New Bot at its top.
-  await page.locator("[data-sidebar]").getByRole("button", { name: "New Bot", exact: true }).click();
-  const editor = page.getByRole("dialog", { name: "New Bot", exact: true });
-  await editor.getByRole("textbox", { name: "Name" }).fill("Meal Planner");
-  await editor.getByRole("textbox", { name: "What should it help with?" }).fill("Plan my meals and grocery list every week");
-  await editor.getByRole("button", { name: "Next", exact: true }).click();
-  await page.getByRole("dialog", { name: "Connections", exact: true }).getByRole("button", { name: "Create", exact: true }).click();
+  const dialog = await openNewBot(page);
+  await dialog.getByRole("textbox", { name: "Name your Bot" }).fill("Meal Planner");
+  await dialog.getByRole("button", { name: "Create", exact: true }).click();
 
-  // Creating opens the Bot's chat; the request carries the name, the answer as
-  // the subtitle, and Full access by default (no custom selection).
+  // Creating opens the Bot's chat; the request carries the name, the starter
+  // instructions (it asks what it is for), no description yet, and Full access
+  // by default (no custom selection).
   await expect(page.getByPlaceholder("Ask Meal Planner")).toBeVisible();
   const { creates } = await botCreateE2e(aiden.app);
   expect(creates).toHaveLength(1);
   const created = creates[0];
   expect(created).toMatchObject({
-    bot: { name: "Meal Planner", description: "Plan my meals and grocery list every week" },
+    bot: { name: "Meal Planner" },
     access: { accessMode: "full", catalogRevision: "catalog-editor-fixture", providerId: "custom:lmstudio", modelId: "aiden-e2e-vision" },
   });
+  expect(created).not.toHaveProperty("bot.description");
   expect(created).not.toHaveProperty("access.custom");
 
-  // Advanced is in the Bot's menu, which its row in the Bots sidebar opens on right-click.
-  await page.getByRole("navigation", { name: "Bots", exact: true }).getByRole("button", { name: /^Meal Planner/u }).click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Advanced", exact: true }).click();
-  const onlyChoose = page.getByRole("radio", { name: "Only what I choose", exact: true });
-  await expect(page.getByRole("radio", { name: "Everything", exact: true })).toBeChecked();
-  await onlyChoose.click();
-  await expect(onlyChoose).toBeChecked();
-  await page.getByRole("button", { name: "Save", exact: true }).click();
+  // The Bot's name in its chat opens its settings in the side panel.
+  await page.getByRole("button", { name: "Meal Planner settings", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "Advanced", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByText(/^Everything Aiden can use on this Mac/u)).toBeVisible();
+  await page.getByRole("button", { name: "Disable a tool", exact: true }).click();
+  await page.getByRole("dialog", { name: "Disable a tool", exact: true }).getByRole("option", { name: /^Run commands/u }).click();
+  await expect(page.getByRole("button", { name: "Turn on Run commands", exact: true })).toBeVisible();
+  await page.getByRole("region", { name: "Unsaved changes" }).getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Unsaved changes" })).toHaveCount(0);
 
   const { accessUpdates } = await botCreateE2e(aiden.app);
   expect(accessUpdates).toMatchObject([{

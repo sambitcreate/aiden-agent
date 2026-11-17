@@ -22,7 +22,8 @@ export type BotLessonAddInput = Omit<BotLesson, "id" | "botId" | "createdAt" | "
 
 export interface BotLessonStore {
   add(botId: string, input: BotLessonAddInput): Promise<{ ok: true; lesson: BotLesson; retired: BotLesson[] } | { ok: false; code: "blocked" | "full" | "invalid" | "duplicate"; error: string }>;
-  setStatus(botId: string, id: string, status: BotLessonStatus): Promise<BotLesson | undefined>;
+  /** With `from`, changes only a lesson whose status is `from` now; otherwise (or when missing) returns undefined. */
+  setStatus(botId: string, id: string, status: BotLessonStatus, options?: { from?: BotLessonStatus }): Promise<BotLesson | undefined>;
   list(botId: string, filter?: { scope?: BotLessonScope; status?: BotLessonStatus }): Promise<BotLesson[]>;
   revision(botId: string): Promise<string>;
   forgetRoutine(botId: string, routineId: string): Promise<void>;
@@ -102,11 +103,12 @@ export function createBotLessonStore(options: { profileDir(): string; now?(): nu
       });
     },
 
-    setStatus(botId, id, status) {
+    setStatus(botId, id, status, options = {}) {
       return serial(botId, async () => {
         let lessons = await load(botId);
         const index = lessons.findIndex((lesson) => lesson.id === id);
         if (index < 0) return undefined;
+        if (options.from !== undefined && lessons[index]!.status !== options.from) return undefined;
         const next = { ...lessons[index]!, status, decidedAt: now() };
         lessons[index] = next;
         // Activating (Keep this, or Undo of a removal) respects the same cap as add.

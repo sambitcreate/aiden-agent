@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { localComputerNoun } from "../../../renderer/shared/computer-noun.js";
 import { DataStore } from "../data-store.js";
 
 /**
@@ -71,7 +72,7 @@ export interface TelegramBotBindingAuthorityTransitionHooks {
 }
 
 export const TELEGRAM_BOT_BINDING_STORE_UNAVAILABLE_MESSAGE =
-  "Telegram routing data is unavailable. Open Aiden on the Mac to repair it.";
+  `Telegram routing data is unavailable. Open Aiden on your ${localComputerNoun(process.platform)} to repair it.`;
 
 export class TelegramBotBindingStoreUnavailableError extends Error {
   constructor() {

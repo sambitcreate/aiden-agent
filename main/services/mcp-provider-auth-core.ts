@@ -109,7 +109,7 @@ export function canUseProviderAuthenticatedMcp(input: {
 
 export function admitMcpProviderAuthServers(servers: readonly McpServer[], allowed: boolean, strict: boolean): McpServer[] {
   const unavailable = servers.some((server) => server.authProvider !== undefined);
-  if (unavailable && !allowed && strict) throw new Error("Provider-authenticated MCP servers require an attended desktop workspace.");
+  if (unavailable && !allowed && strict) throw new Error("Provider-authenticated MCP servers need a workspace chat you have open in Aiden Agent.");
   return servers.filter((server) => allowed || server.authProvider === undefined);
 }
 

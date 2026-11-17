@@ -47,6 +47,8 @@ import type { BotDefinition } from "../../../renderer/shared/bots.js";
 import type { ConnectCardEntry } from "../../../renderer/shared/bot-connections.js";
 import { connectionSourceIdFor, resolveConnectCardStatus } from "../bot-runtime-tools/suggest-connection.js";
 import { botRoutinesGoAhead, defaultBotRules } from "../../../renderer/shared/bot-rules.js";
+import { effectiveApprovalMode, parseApprovalModel } from "../../../renderer/shared/approval-mode.js";
+import { createBotApprovalJudge } from "./bot-approval-judge.js";
 import { botApplicationService } from "../bot-application-service-main.js";
 import { botCapabilityCatalog, botCapabilityStore, botManagedWorkspace, botServiceRoot } from "../bot-capability-services-main.js";
 import { desktopBotProtectedRoots } from "../bot-desktop-protected-settings.js";
@@ -63,7 +65,7 @@ import type { BotRuntimeAuthorityAdmission } from "../bot-runtime-authority.js";
 import { admitWithBotConnectorInventoryScope, botConnectorInventoryServer } from "../bot-connector-inventory-scope.js";
 import { botExecutionScope, createBotBackgroundExecutionModels, withoutBotExecutionScope, type BotExecutionPort, type BotExecutionRuntime } from "./bot-execution.js";
 import { botRoutineModels } from "../bot-routine-models-main.js";
-import { botRoutineModelThinkingLevels, inspectBotRoutineModelGrant, type BotExecutionClaim } from "../bot-routine-models.js";
+import { BotRoutineModelUnavailableError, botRoutineModelThinkingLevels, inspectBotRoutineModelGrant, type BotExecutionClaim } from "../bot-routine-models.js";
 import { assertBotExecutionConnectorSource } from "./bot-execution-source.js";
 import { randomUUID } from "node:crypto";
 import { createBotDispatchCoordinator } from "./bot-dispatch-coordinator.js";
@@ -72,10 +74,10 @@ import { assertBoundBotProviderModelCurrent } from "../bot-capability-bindings.j
 import type { BotRoutineThinkingLevel } from "../../../renderer/shared/bot-routine-models.js";
 import { acknowledgeBotExecutionUnknown, botExecutionAccountableResponse, botExecutionInputSpendingRefusal, botExecutionSpendingOwner, botExecutionUnknownCostReceipt, isBotExecutionDispatchSettled, recordKnownBotExecutionResponse, recordKnownBotExecutionCost } from "./bot-execution-spending.js";
 import { botStore } from "../bot-store.js";
-import { botRoutineGuidance, withBotManagedWorkspace, withBotPersona, type BotWorkspacePromptAuthority } from "../bot-system-prompt.js";
+import { botRoutineGuidance, botSettingsGuidance, withBotManagedWorkspace, withBotPersona, type BotWorkspacePromptAuthority } from "../bot-system-prompt.js";
 import { buildSystemPrompt } from "../chat-system-prompt.js";
 import { runtimeSupportsImages } from "../generation-runtime.js";
-import { resolveBotModelRuntime, type ResolvedModelRuntime } from "../model-runtime.js";
+import { resolveBotModelRuntime, resolveModelRuntime, type ResolvedModelRuntime } from "../model-runtime.js";
 import { registerSubagentProviderAuthority } from "../subagents/subagent-runtime-authority.js";
 import { telegramBotBindingAuthority, telegramBotBindings } from "../telegram/telegram-bot-bindings.js";
 import { botApprovals, configureBotApprovalDecisionLookup } from "./bot-approvals-main.js";
@@ -107,6 +109,7 @@ import { botRunStarts, botTurnIntents } from "./bot-turn-intents-main.js";
 import type { BotExtensionDeps } from "./bot-extension.js";
 import { renderBotOpenWork } from "../bot-open-work/prompt.js";
 import { createBotRuntimeModels, type BotModelRuntime } from "./bot-models.js";
+import type { BotReplySilenceOptions } from "./bot-reply-silence.js";
 import type { Models } from "@earendil-works/pi-ai";
 import {
   BOT_NOTICE_ENTRY_KIND,
@@ -122,6 +125,8 @@ import { BOT_COMPACTION_FOCUS, createBotCompactionSteering } from "../bot-memory
 import { renderBotMemorySection } from "../bot-memory/prompt.js";
 import { renderBotRulesSection } from "../bot-rules/prompt.js";
 import { botRules } from "../bot-rules/store-main.js";
+import { approvalRules } from "../approval-rules/store-main.js";
+import { pageTextRulesFor } from "../approval-rules/resolve-main.js";
 import { botIssues } from "../bot-issues/service-main.js";
 import { createBotMemoryReview, type BotMemoryAdmission } from "../bot-memory/review.js";
 import { BOT_MEMORY_TOOL_NAME, botMemoryToolEntry, withBotMemoryIngress } from "../bot-memory/tool.js";
@@ -142,12 +147,18 @@ const profileDir = () => app.getPath("userData");
 setBotFileToolProtectedRoots(() => desktopBotProtectedRoots(profileDir(), aidenConfigDir(), botServiceRoot()));
 // Temporary Home/whole-Mac access must not expose any app-private store.
 setBotFileToolTemporaryPrivateRoots(() => botAccessPrivateRoots(profileDir(), aidenConfigDir()));
+/** A reply quiet after its words ends as finished; this only logs it. */
+function botReplySilence(): BotReplySilenceOptions {
+  return { onSilenced: (message) => logger.warn("bots", `A Bot reply from ${message.provider} went quiet after its text; it was ended as finished.`) };
+}
+
 // A Bot's replies and routines wait out provider usage limits like a chat's.
 const runtimeModels = createBotRuntimeModels({
   usageLimits: (botId, runtime) =>
     runtime.provider && isAcpHarnessProvider(runtime.provider.id)
       ? undefined
       : usageLimits.streamOptions({ kind: "bot", id: botId }, runtime.provider?.label ?? runtime.model.provider),
+  replySilence: botReplySilence,
 });
 const dismissals = createBotConnectionDismissalStore({ root: profileDir });
 // The pause store is shared with the legacy chat path (`bot-pause-main.ts`).
@@ -320,6 +331,31 @@ const planAuthority = createBotPlanAuthority({
 });
 configureBotPlanAuthority({ revalidate: planAuthority.revalidate, revokeAccess: planAuthority.revokeAccess });
 
+// The Auto judge for Bots: the approval model named in Advanced, else the
+// Bot's own model, never another provider Aiden picks itself. An ACP agent
+// can't judge, so its Bot's calls show their cards.
+const botApprovalJudge = createBotApprovalJudge({
+  job: async (botId) => (await botStore.get(botId))?.instructions,
+  runtime: async (botId, signal) => {
+    const configured = parseApprovalModel((await configStore.getSettings()).approvalModel);
+    const runtime = configured
+      ? await resolveModelRuntime(configured.providerId, configured.model, signal, `bot:${botId}`)
+      : await withAdmission(botId, ({ authority }) =>
+          resolveBotModelRuntime(authority.provider.sourceProviderId, authority.provider.sourceModelId, signal, botId));
+    if (isAcpHarnessProvider(runtime.provider.id)) return undefined;
+    return {
+      judge: { model: runtime.model, provider: runtime.provider, apiKey: runtime.apiKey, ...(runtime.headers ? { headers: runtime.headers } : {}), streams: runtime.streams },
+      countsSpend: () => spendCounts({ local: isLocalModelProvider(runtime.provider), provider: runtime.provider, models: runtime.models }),
+    };
+  },
+  recordUsage: async (record) => {
+    const { usageStore } = await import("../usage-store.js");
+    await usageStore.record(record);
+  },
+  recordSpend: (botId, requestIds, usd) => spending.record(botSpendingOwner(botId, requestIds), usd),
+  onSpendError: (botId, error) => logger.warn("bots", `Bot ${botId} approval judge spending could not be counted.`, error),
+});
+
 const tools = createBotToolAssembly({
   allowList: botAllowList,
   admit,
@@ -327,16 +363,34 @@ const tools = createBotToolAssembly({
   rules: (botId) => botRules.rules(botId),
   botName: async (botId) => (await botStore.get(botId))?.name,
   routinesGoAhead: async () => botRoutinesGoAhead(await configStore.getSettings()),
+  approvalMode: async () => effectiveApprovalMode(await configStore.getSettings(), true),
   plans: botPlans,
+  pageRules: async (botId) => (await approvalRules.list()).filter((rule) =>
+    rule.owner.kind === "mac" || (rule.owner.kind === "bot" && rule.owner.botId === botId)),
+  judge: botApprovalJudge,
 });
 
 /** The Bot's rules for its prompt; the defaults when the file can't be read (calls still fail closed). */
 async function promptRules(botId: string) {
+  let own;
   try {
-    return await botRules.rules(botId);
+    own = await botRules.rules(botId);
   } catch (error) {
     logger.warn("bots", `Bot ${botId} rules could not be read for its prompt.`, error);
-    return defaultBotRules();
+    own = defaultBotRules();
+  }
+  try {
+    // Settings → Approvals' "When a Bot wants to …" rules ask (or hand off) the same way.
+    const words = (await pageTextRulesFor(botId)).filter((rule) => rule.decision === "ask");
+    return [...own, ...words.map((rule) => ({
+      id: `custom.${rule.id}`,
+      text: rule.target.kind === "text" ? rule.target.text : "",
+      behavior: rule.handOff ? "hand_off" as const : "ask" as const,
+      locked: false,
+    }))];
+  } catch (error) {
+    logger.warn("bots", "The approval rules could not be read for a Bot's prompt.", error);
+    return own;
   }
 }
 
@@ -430,9 +484,30 @@ const botSpending: NonNullable<BotExtensionDeps["spending"]> = {
 };
 
 const dispatchCoordinator = createBotDispatchCoordinator();
-const executionIssues = createBotExecutionIssues(botIssues, spending);
+const executionIssues = createBotExecutionIssues(botIssues, spending, {
+  // A quiet try is the person's Resume, made for them while the block may be
+  // passing. Anything but the same interrupted run (resumed, dismissed,
+  // paused by the person) ends the tries without a card.
+  retry: async (botId, claim, attempt) => {
+    const service = await botSessionRuntime();
+    const before = await service.state(botId);
+    if (before.kind !== "interrupted" || before.blocked) return "moot";
+    try {
+      const after = await service.resume(botId, `auto-retry:${claim.id}:${attempt}`);
+      return after.kind === "running" ? "resumed" : after.kind === "interrupted" ? "failed" : "moot";
+    } catch {
+      return "failed";
+    }
+  },
+  setTimer: (fn, ms) => {
+    const timer = setTimeout(fn, ms);
+    timer.unref?.();
+    return { cancel: () => clearTimeout(timer) };
+  },
+  onError: (botId, error) => logger.warn("bots", `Bot ${botId} quiet retry failed.`, error),
+});
 async function buildBotExecutionRuntime(botId: string, claim: BotExecutionClaim, runtime: ResolvedModelRuntime, signal: AbortSignal, revalidate: () => Promise<void>, release: () => void, thinkingLevel?: BotRoutineThinkingLevel): Promise<BotExecutionRuntime> {
-  const invocation = createBotRuntimeModels({ usageLimits: () => usageLimits.streamOptions({ kind: "bot", id: claim.root.botId }, runtime.provider.label) });
+  const invocation = createBotRuntimeModels({ usageLimits: () => usageLimits.streamOptions({ kind: "bot", id: claim.root.botId }, runtime.provider.label), replySilence: botReplySilence });
   invocation.register(botId, runtime as unknown as BotModelRuntime);
   const models = invocation.modelsFor(botId), counts = await spendCounts({ local: isLocalModelProvider(runtime.provider), provider: runtime.provider, models: runtime.models });
   const owner = botExecutionSpendingOwner(claim);
@@ -470,6 +545,7 @@ const execution: BotExecutionPort = {
   getClaim: (botId, id, requestId) => botRoutineModels.getClaim(botId, id, requestId),
   selectFallback: (botId, id, reason) => botRoutineModels.selectFallback(botId, id, reason),
   recordSubmission: (botId, id, submissionId) => botRoutineModels.recordSubmission(botId, id, submissionId),
+  releaseUnsubmittedClaim: (botId, requestId) => botRoutineModels.releaseUnsubmittedClaim(botId, requestId),
   async hasUnknown(_botId, claim) { await reconcileBotPendingKnownCost(claim); return Boolean(await spending.pendingDispatch(botExecutionSpendingOwner(claim))); },
   async unknownDispatch(_botId, claim) { await reconcileBotPendingKnownCost(claim); return (await spending.pendingDispatch(botExecutionSpendingOwner(claim)))?.dispatchId; },
   unknownCostReceipt: async (botId, claim, submissionId, scopeId) => {await reconcileBotPendingKnownCost(claim);return botExecutionUnknownCostReceipt(spending, botId, claim, submissionId, scopeId, botRoutineModels);},
@@ -530,7 +606,7 @@ const execution: BotExecutionPort = {
       await sourceCurrent();
       const selected = claim.actual === "fallback" ? claim.fallback! : claim.primary;
       const runtime = await resolveBotModelRuntime(proof.binding.sourceProviderId, proof.binding.sourceModelId, boundSignal, botId);
-      if (!botRoutineModelThinkingLevels(runtime.model).includes(selected.thinkingLevel)) throw new Error("This routine's model no longer supports its selected thinking level.");
+      if (!botRoutineModelThinkingLevels(runtime.model).includes(selected.thinkingLevel)) throw new BotRoutineModelUnavailableError("model_unavailable", "This run's model can't use its thinking level, so retrying it won't help. Choose another level in the Bot's or routine's Model settings, then send a new message or run the routine again.");
       return await buildBotExecutionRuntime(botId, claim, runtime, boundSignal,
         async () => { boundSignal.throwIfAborted(); await peerLease?.revalidate(); await proof.assertCurrent(); await sourceCurrent(); await admission.revalidateBeforeEffect(); boundSignal.throwIfAborted(); },
         () => {admission.release();peerLease?.release();}, selected.thinkingLevel);
@@ -589,7 +665,7 @@ export function bindBotExecutionHelperRuntime(botId: string, kind: string, runti
   if (!binding || binding.owner !== owner || !owner?.bindHelperRuntime || runtime.model.provider !== binding.execution.model.provider || runtime.model.id !== binding.execution.model.id) throw new Error("This helper runtime does not belong to the active task.");
   // Resolved runtimes own the stream transport. Their Models collection may
   // still own other providers, so dispatch through streams after isolation.
-  const transport = createBotRuntimeModels({ usageLimits: () => usageLimits.streamOptions({ kind: "bot", id: owner.claim.root.botId }, runtime.provider.label) });
+  const transport = createBotRuntimeModels({ usageLimits: () => usageLimits.streamOptions({ kind: "bot", id: owner.claim.root.botId }, runtime.provider.label), replySilence: botReplySilence });
   transport.register(botId, runtime as unknown as BotModelRuntime);
   const models = owner.bindHelperRuntime(kind, { ...binding.execution, models: transport.modelsFor(botId) });
   return { ...runtime, models, streams: { streamSimple: models.streamSimple.bind(models) } };
@@ -636,6 +712,7 @@ const extension: BotExtensionDeps = {
           .join("\n\n"),
         [
           botRoutineGuidance(toolNames),
+          botSettingsGuidance(toolNames, bot),
           openWorkSummary,
           tools.guidance(bot.id, offered.toolNames),
           // How-to lessons from the person's corrections: below authority, as data.
@@ -939,7 +1016,16 @@ interface WatchedRun {
 const watchedRuns = new Map<string, WatchedRun>();
 const RUN_STALL_ISSUE_KEY = "run_stalled";
 
+/** Bots whose "Still working?" card from an earlier version was settled this launch. */
+const legacyStallsSettled = new Set<string>();
+
 function watchRun(botId: string, state: BotSessionState): void {
+  // Aiden no longer asks "Still working?". A card an earlier version left open
+  // can't be answered usefully, so it settles the first time this Bot is seen.
+  if (!legacyStallsSettled.has(botId)) {
+    legacyStallsSettled.add(botId);
+    void botIssues.resolve(botId, RUN_STALL_ISSUE_KEY, "dismissed").catch(() => undefined);
+  }
   const current = watchedRuns.get(botId);
   if (state.kind !== "running") {
     if (!current) return;
@@ -983,7 +1069,7 @@ const runWatchdog = createBotRunWatchdog({
   // Unknown until the request id is read; an unknown run is never stopped.
   runKind: (botId) => {
     const run = watchedRuns.get(botId);
-    // A routine with the person's messages waiting is asked about, never stopped.
+    // A routine with the person's messages waiting is left running, never stopped.
     if (run?.quiet === true) return run.queued > 0 ? "attended" : "routine";
     return run?.quiet === false ? "attended" : null;
   },
@@ -1002,16 +1088,6 @@ const runWatchdog = createBotRunWatchdog({
       botRunStalls.consume(botId);
       throw error;
     }
-  },
-  raiseStall: async (botId) => {
-    await botIssues.raise({
-      botId,
-      kind: "run_stalled",
-      dedupeKey: RUN_STALL_ISSUE_KEY,
-      title: "Still working?",
-      body: "This reply hasn't moved in 10 minutes.",
-      actions: [{ kind: "stop_run" }, { kind: "keep_waiting" }],
-    });
   },
   now: Date.now,
   setInterval: (fn, ms) => {

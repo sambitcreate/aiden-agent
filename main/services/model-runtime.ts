@@ -1,7 +1,8 @@
 // Main-process dependency wiring for the Electron-free runtime resolver.
 
-import type { AnthropicMessagesCompat, Models } from "@earendil-works/pi-ai";
+import type { AnthropicMessagesCompat, Api, Model, Models } from "@earendil-works/pi-ai";
 import { configStore } from "./config-store.js";
+import type { StoredProvider } from "./types.js";
 import { OPENAI_CODEX_PROVIDER_ID } from "./codex-provider.js";
 import {
   buildModel,
@@ -33,6 +34,20 @@ const codexRuntimeModels = new Proxy(providerRegistry.models, {
   },
 }) as Models;
 
+/** A configured provider's limits, with Pi's exact record (thinking map, adaptive thinking) when Pi knows the model. */
+function exactRuntimeLimits(provider: StoredProvider, id: string) {
+  const piProviderId = catalogProviderSlug(provider.id);
+  const piModel = piProviderId
+    ? providerRegistry.models.getModel(piProviderId, id)
+    : undefined;
+  const forceAdaptiveThinking =
+    piModel?.api === "anthropic-messages"
+      ? (piModel.compat as AnthropicMessagesCompat | undefined)?.forceAdaptiveThinking
+      : undefined;
+  const exact = piModel ? { ...piModel, forceAdaptiveThinking } : undefined;
+  return modelsCatalog.runtimeLimits(provider, id, exact);
+}
+
 export async function resolveModelRuntime(
   providerId: string,
   modelId: string,
@@ -53,18 +68,7 @@ export async function resolveModelRuntime(
       getProvider: (id) => configStore.getProvider(id),
       getApiKey: (provider) =>
         secrets.getProviderKey(provider.id, JSON.stringify(providerConnectionSnapshot(provider))),
-      resolveRuntimeLimits: (provider, id) => {
-        const piProviderId = catalogProviderSlug(provider.id);
-        const piModel = piProviderId
-          ? providerRegistry.models.getModel(piProviderId, id)
-          : undefined;
-        const forceAdaptiveThinking =
-          piModel?.api === "anthropic-messages"
-            ? (piModel.compat as AnthropicMessagesCompat | undefined)?.forceAdaptiveThinking
-            : undefined;
-        const exact = piModel ? { ...piModel, forceAdaptiveThinking } : undefined;
-        return modelsCatalog.runtimeLimits(provider, id, exact);
-      },
+      resolveRuntimeLimits: exactRuntimeLimits,
       codex: {
         models: codexRuntimeModels,
         prepareRuntimeModel: providerRegistry.codex.prepareRuntimeModel.bind(
@@ -139,6 +143,32 @@ export async function preflightBotModelAuth(
   const auth = await providerRegistry.models.getAuth(runtime.model);
   if (!auth) throw new Error("This Bot's AI connection is no longer configured.");
   if (signal?.aborted) throw signal.reason;
+}
+
+/**
+ * The model record a run of this choice will use, built the way
+ * `resolveModelRuntime` builds it (provider aliases, Codex, Pi's exact
+ * record and limits) but offline: no credentials, auth or network. Bot model
+ * choices check thinking levels against this so the check agrees with the run.
+ */
+export async function resolveRuntimeModelMetadata(providerId: string, modelId: string): Promise<Model<Api>> {
+  const resolvedProviderId = await configStore.resolveProviderId(providerId);
+  if (!resolvedProviderId) throw new Error("Saved model metadata is unavailable.");
+  if (resolvedProviderId === OPENAI_CODEX_PROVIDER_ID) {
+    const model = providerRegistry.codex.getModel(modelId);
+    if (!model) throw new Error("Saved model metadata is unavailable.");
+    return model;
+  }
+  if (providerRegistry.builtinProvider(resolvedProviderId)) {
+    // Offline hydration of Pi's catalogs (no network), as a run does first.
+    await providerRegistry.ensureBuiltinCatalogs();
+    const model = providerRegistry.getBuiltinModel(resolvedProviderId, modelId);
+    if (!model) throw new Error("Saved model metadata is unavailable.");
+    return model;
+  }
+  const provider = await configStore.getProvider(resolvedProviderId);
+  if (!provider || !provider.models.includes(modelId)) throw new Error("Saved model metadata is unavailable.");
+  return buildModel(provider, modelId, await exactRuntimeLimits(provider, modelId));
 }
 
 /** Offline model metadata only: no credential migration, auth, discovery or provider I/O. */
