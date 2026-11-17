@@ -89,6 +89,9 @@ export interface WorkbenchTabStripProps<T extends WorkbenchTab> {
   onClose: () => void;
 }
 
+/** How wide the strip's edge fades, and how far a revealed tab stays clear of them. */
+const TAB_FADE_PX = 16;
+
 export function WorkbenchTabStrip<T extends WorkbenchTab>({
   tabs,
   idPrefix,
@@ -107,14 +110,49 @@ export function WorkbenchTabStrip<T extends WorkbenchTab>({
   const toggleShortcutBinding = useShortcutBinding("environment.toggle");
   const tabMenuSelectionRef = React.useRef(false);
   const headerRef = React.useRef<HTMLElement>(null);
+  const listRef = React.useRef<HTMLDivElement>(null);
   const trailingClearance = useTrailingWindowControlsClearance(headerRef);
+  const selectedId = tabs.find((entry) => entry.selected)?.id;
+  // Which edges have tabs scrolled past them: those edges fade, so a tab cut
+  // by the edge reads as more to scroll rather than a clipped label.
+  const [fade, setFade] = React.useState({ start: false, end: false });
+  const measureFade = React.useCallback(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const start = list.scrollLeft > 1;
+    const end = list.scrollLeft + list.clientWidth < list.scrollWidth - 1;
+    setFade((current) => (current.start === start && current.end === end ? current : { start, end }));
+  }, []);
+  // The strip scrolls when its tabs outgrow the panel: keep the selected one in view, clear
+  // of the faded edge, so a tab opened by a link or restored at launch is never hidden.
+  React.useLayoutEffect(() => {
+    const list = listRef.current;
+    const tab = activeTabRef.current?.closest<HTMLElement>('[role="tablist"] > *');
+    if (list && tab && selectedId !== undefined) {
+      const listBox = list.getBoundingClientRect();
+      const tabBox = tab.getBoundingClientRect();
+      if (tabBox.left < listBox.left + TAB_FADE_PX) list.scrollLeft = Math.max(0, list.scrollLeft - (listBox.left + TAB_FADE_PX - tabBox.left));
+      else if (tabBox.right > listBox.right - TAB_FADE_PX) list.scrollLeft += tabBox.right - (listBox.right - TAB_FADE_PX);
+    }
+    measureFade();
+  }, [activeTabRef, selectedId, tabs.length, measureFade]);
+  React.useEffect(() => {
+    const list = listRef.current;
+    if (!list || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measureFade);
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, [measureFade]);
+  const fadeMask = fade.start || fade.end
+    ? `linear-gradient(to right, ${fade.start ? "transparent" : "black"} 0, black ${TAB_FADE_PX}px, black calc(100% - ${TAB_FADE_PX}px), ${fade.end ? "transparent" : "black"} 100%)`
+    : undefined;
   return (
     <header
       ref={headerRef}
       className="drag-region flex h-13 shrink-0 items-center gap-1 border-b border-separator px-2"
       style={trailingClearance ? { paddingRight: trailingClearance + 4 } : undefined}
     >
-      <div className="no-drag flex min-w-0 flex-1 gap-1 overflow-x-auto py-1" role="tablist" aria-label={tabListLabel}>
+      <div ref={listRef} onScroll={measureFade} style={fadeMask ? { maskImage: fadeMask, WebkitMaskImage: fadeMask } : undefined} data-fade-start={fade.start || undefined} data-fade-end={fade.end || undefined} className="no-drag flex min-w-0 flex-1 gap-1 overflow-x-auto py-1" role="tablist" aria-label={tabListLabel}>
         {tabs.map((entry, index) => {
           const Icon = entry.icon;
           const closable = entry.closable !== false;

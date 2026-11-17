@@ -31,6 +31,8 @@ import type { BenchmarkCoverage } from "../../../lib/model-picker-data";
 import { MODEL_PAD_METRIC_LABELS, type ModelPadMetric } from "../../../lib/model-pad-layout";
 import { cn } from "../../../lib/ui-utils";
 
+import { useAppCapabilities } from "../../../lib/app-capabilities";
+import { localComputerNoun } from "../../../shared/computer-noun";
 type ModelInsightsOperation = "connect" | "refresh" | "disconnect";
 /** Which key row is showing under the benchmark row, if any. */
 type KeyRowMode = "connect" | "replace";
@@ -183,6 +185,7 @@ function ModelPadBenchmarkRow({
   fallbackFocus: () => HTMLElement | null;
 }) {
   const queryClient = useQueryClient();
+  const { platform } = useAppCapabilities();
   const statusQuery = useModelInsightsStatus();
   const status = statusQuery.data;
   const [keyDraft, setKeyDraft] = React.useState("");
@@ -523,7 +526,7 @@ function ModelPadBenchmarkRow({
         open={confirmDisconnect}
         onOpenChange={setConfirmDisconnect}
         title="Disconnect benchmark scores?"
-        description="Aiden removes the benchmark key and cached scores from this Mac. Your providers, model list and Pad stay as they are."
+        description={`Aiden removes the benchmark key and cached scores from this ${localComputerNoun(platform)}. Your providers, model list and Pad stay as they are.`}
         confirmLabel="Disconnect"
         confirmVariant="destructive"
         busy={operation === "disconnect"}
@@ -547,6 +550,7 @@ function ModelPadMeasuredSpeedRow({
   fallbackFocus: () => HTMLElement | null;
 }) {
   const queryClient = useQueryClient();
+  const { platform } = useAppCapabilities();
   const [confirmClear, setConfirmClear] = React.useState(false);
   const [clearing, setClearing] = React.useState(false);
   const clearButtonRef = React.useRef<HTMLButtonElement | null>(null);
@@ -571,13 +575,13 @@ function ModelPadMeasuredSpeedRow({
         label="Measured speed"
         hint={
           <>
-            <p>Time to first token and tokens per second, taken from real replies. Stays on this Mac.</p>
+            <p>Time to first token and tokens per second, taken from real replies. Stays on this {localComputerNoun(platform)}.</p>
             <p>A model needs 3 chats before Arrange can use it.</p>
           </>
         }
         secondary={
           measuredCount > 0
-            ? `${measuredCount} ${plural(measuredCount, "model")} · from your chats on this Mac`
+            ? `${measuredCount} ${plural(measuredCount, "model")} · from your chats on this ${localComputerNoun(platform)}`
             : "Nothing measured yet"
         }
         trailing={
@@ -598,7 +602,7 @@ function ModelPadMeasuredSpeedRow({
         open={confirmClear}
         onOpenChange={setConfirmClear}
         title="Clear measured speeds?"
-        description="Aiden forgets the response speeds it measured from your chats on this Mac. Models stay where they are on your Pad."
+        description={`Aiden forgets the response speeds it measured from your chats on this ${localComputerNoun(platform)}. Models stay where they are on your Pad.`}
         confirmLabel="Clear speeds"
         confirmVariant="destructive"
         busy={clearing}

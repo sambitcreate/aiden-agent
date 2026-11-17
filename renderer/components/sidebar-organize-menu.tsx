@@ -17,7 +17,8 @@ import {
   type SidebarProjectSort,
   type SidebarView,
 } from "../lib/sidebar-organization";
-import { LOCAL_MACHINE_LABEL } from "../lib/sidebar-remote-groups";
+import { useAppCapabilities } from "../lib/app-capabilities";
+import { localMachineLabel } from "../lib/sidebar-remote-groups";
 
 /** Machine choices; only offered while at least one paired host is enabled. */
 export interface SidebarMachineMenuOptions {
@@ -60,6 +61,7 @@ export function SidebarOrganizeMenuItems({
   machines,
 }: SidebarOrganizeMenuItemsProps) {
   const id = React.useId();
+  const { platform } = useAppCapabilities();
   const showMachines = machines !== undefined && machines.hosts.length > 0;
   const machineFilters: SidebarMachineFilter[] = showMachines
     ? ["all", "local", ...machines.hosts.map((host) => `host:${host.id}` as const)]
@@ -119,14 +121,14 @@ export function SidebarOrganizeMenuItems({
       {showMachines ? (
         <>
           <DropdownMenuSeparator />
-          <DropdownMenuLabel id={`${id}-machines`}>Machines</DropdownMenuLabel>
+          <DropdownMenuLabel id={`${id}-machines`}>Computers</DropdownMenuLabel>
           <DropdownMenuRadioGroup
             aria-labelledby={`${id}-machines`}
             value={machines.filter}
             onValueChange={pick(machineFilters, machines.onFilterChange)}
           >
-            <DropdownMenuRadioItem value="all">All machines</DropdownMenuRadioItem>
-            <DropdownMenuRadioItem value="local">{LOCAL_MACHINE_LABEL}</DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="all">All computers</DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="local">{localMachineLabel(platform)}</DropdownMenuRadioItem>
             {machines.hosts.map((host) => (
               <DropdownMenuRadioItem key={host.id} value={`host:${host.id}`}>
                 <span className="min-w-0 truncate">{host.label}</span>
@@ -136,7 +138,7 @@ export function SidebarOrganizeMenuItems({
           {view === "projects" ? (
             <>
               <DropdownMenuSeparator />
-              <DropdownMenuLabel id={`${id}-grouping`}>Group across machines</DropdownMenuLabel>
+              <DropdownMenuLabel id={`${id}-grouping`}>Group across computers</DropdownMenuLabel>
               <DropdownMenuRadioGroup
                 aria-labelledby={`${id}-grouping`}
                 value={machines.grouping}

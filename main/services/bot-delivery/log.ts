@@ -56,7 +56,11 @@ export interface BotDeliveryRow {
   sentAt?: number;
   /** Sent inside one "While you were away" digest: the group counts as one notification. */
   coveredBy?: string;
-  /** The routine's notifications are off: kept for the record, never a phone alert. */
+  /**
+   * Kept for the record, never a banner or phone alert: the routine's
+   * notifications are off, the issue is only a heads-up, or the Bot's chat
+   * was open in front of the person when it arrived.
+   */
   quiet?: boolean;
   /** Display-only roots whose original owner must still exist before delayed delivery. */
   peerRootIds?: string[];

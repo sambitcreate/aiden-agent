@@ -2251,7 +2251,7 @@ final class AidenBotContractTests: XCTestCase {
             return XCTFail("the legacy session ends on the notice")
         }
         XCTAssertEqual(notice.role, .assistant)
-        XCTAssertEqual(notice.text, "Scout needs you on your Mac: Enter the 2FA code your bank sent you")
+        XCTAssertEqual(notice.text, "Scout needs you on your computer: Enter the 2FA code your bank sent you")
         XCTAssertNil(notice.createdAt)
         XCTAssertEqual(legacy.events.map(\.wireType), ["entry", "snapshot", "entry", "state"])
         // The settled hand-off is a snapshot, which replaces an older phone's
