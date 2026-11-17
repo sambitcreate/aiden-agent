@@ -14,10 +14,24 @@ Covered by `terminal screen reaches every edge of its area in both placements` i
 
 Source read at `pingdotgg/t3code` 337c5858 (2026-11-05, MIT). Aiden's `ghostty-vt.wasm` and `ghostty-write-pty.wasm` are byte-identical to T3's desktop/web build, and both pin Ghostty 9f62873bf. The engine needs no upgrade. T3's mobile app uses a newer native pin (cf8edc23f), which is a different build.
 
-T3's adapter has moved on from the copy Aiden took. Not yet ported to `renderer/lib/ghostty-terminal/`:
+## Ported on 2026-11-05 (`feature/terminal-upgrades`, stacked on #770)
 
-- `core.ts`, `surface.ts`: synchronized output (mode 2026) with a 500ms render timeout; batched cell queries.
-- `renderer.ts`: solid powerline separators drawn from cell edges; selection no longer splits text runs.
-- `surface.ts`: selection autoscroll past the edge, select all, Shift+PageUp/PageDown and Home/End scrollback keys, links on wide-character rows, link press then drag starts a selection, `setVisible` pauses rendering while hidden, fit sized from the mount, touch scrolling, middle-click paste on Linux, Ctrl+Insert copy.
+From T3's adapter: synchronized output with the 500ms deadline, `setVisible`, Select All, Shift+PageUp/PageDown and primary+Shift+Home/End, the speed ramp on selection autoscroll, drag selection that follows moving output, solid powerline separators, links on wide-character rows, and press-then-drag from a link gesture.
 
-Product features T3 has that Aiden lacks: selection or right-click "Add to chat" as a composer context chip, file-path links that open in the editor, running-subprocess detection (tab activity and a close confirmation), restart of exited sessions, and terminals that survive switching threads.
+Kept different from T3 on purpose:
+
+- Links still need Cmd/Ctrl. T3 moved to plain click, which is a separate behaviour change.
+- `fit()` still sizes from the canvas, which `terminal-drawer.test.tsx` locks; #770 removed the padding that made mount and canvas differ.
+- Aiden keeps its screen-reader log and host-reserved Command chords.
+
+Aiden's own additions:
+
+- **Add to chat** reuses the `kind: "text"` attachment path browser annotations use, so there is no message contract or phone change. `ComposerDeliveryRegistry` (`renderer/lib/composer-delivery.ts`) now backs both. `terminalContextText` frames output as untrusted and keeps the tail of long selections.
+- **Synchronized deadline**: a per-group 500ms timer alone lets back-to-back groups hold painting forever (found in review of the port). Aiden keeps that timer for a stuck group and adds one paint deadline across groups; once it passes, the next group close paints.
+- **Running program** uses node-pty's `pty.process` (the PTY foreground process group) instead of T3's `ps -eo` table. It spawns nothing and ignores background jobs, so a job left running with `&` does not trigger the close confirmation. A program must hold across two 1s polls before the tab shows it, because prompt themes run short foreground commands. Close reads it fresh over `terminal:foregroundCommand`, and when that name equals the shell's it also runs `ps -o tpgid= -o stat=` once, so a script under the shell's own interpreter (`./deploy.sh` under bash) and a shell looping on its own builtins (group equals the shell, state `R`) still prompt. A shell blocked in a builtin such as `read` or `wait` sleeps exactly like one at its prompt, so it reads as idle. The tab dot does not show those scripts: polling `ps` every second per terminal was not worth it. gVisor reports 0 for `tpgid` and reads as idle.
+
+## Not ported
+
+- `core.ts`, `runtime.ts`: batched cell queries and cached memory views. Performance only.
+- `surface.ts`: touch scrolling, middle-click paste on Linux, Ctrl+Insert copy, plain-click links, `encodedKeyCodes` key tracking, fit sized from the mount, shared PTY grids.
+- Product: file-path links that open in the editor, restart of exited sessions, terminals that survive switching threads.

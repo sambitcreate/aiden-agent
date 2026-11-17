@@ -164,4 +164,7 @@ export function registerTerminalHandlers(): void {
   ipcMain.handle("terminal:close", (event, sessionId: unknown) =>
     terminalService.close(asSessionId(sessionId), terminalOwner(event)),
   );
+  ipcMain.handle("terminal:foregroundCommand", (event, sessionId: unknown) =>
+    terminalService.foregroundCommand(asSessionId(sessionId), terminalOwner(event)),
+  );
 }
