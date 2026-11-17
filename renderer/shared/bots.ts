@@ -1,3 +1,5 @@
+import type { BotRoutineThinkingLevel } from "./bot-routine-models";
+
 export const BOT_AVATAR_SHAPES = [
   "wisp",
   "orb",
@@ -127,6 +129,28 @@ export function resolveBotChatActivity(value: BotChatActivity | undefined): BotC
 }
 
 /**
+ * Whether Bot chats on this device show tool activity (plan §4.5): the
+ * device's Show tool activity switch once the person has set it. Until then
+ * it is on only if some Bot was set to Detailed, the old per-Bot level it
+ * replaces (§7), so nobody loses what they chose.
+ */
+export function showsBotToolActivity(
+  setting: boolean | undefined,
+  bots: readonly { chatActivity?: BotChatActivity }[],
+): boolean {
+  return setting ?? bots.some((bot) => bot.chatActivity?.level === "detailed");
+}
+
+/**
+ * The chat activity a Bot chat renders with: Detailed while tool activity
+ * shows, Quiet (nothing but the reply) when it is hidden. The status line
+ * keeps the Bot's stored wording, which phones can still change.
+ */
+export function botChatActivityOnDevice(show: boolean, stored: BotChatActivity | undefined): BotChatActivity {
+  return { level: show ? "detailed" : "quiet", wording: resolveBotChatActivity(stored).wording };
+}
+
+/**
  * How much a Bot may interrupt the person (spec §6 P4): quiet hours, in the
  * Mac's time zone, and a cap on proactive notifications per local day.
  */
@@ -192,6 +216,12 @@ export interface BotDefinition {
   selfWakeUps?: boolean;
   acceptsBotMessages?: boolean;
   messagesOtherBots?: boolean;
+  /**
+   * How much the Bot's model thinks when nothing else chooses (Advanced → Model).
+   * Absent: off (main never stores "off"). A model that cannot run this level
+   * uses its nearest supported one.
+   */
+  thinkingLevel?: BotRoutineThinkingLevel;
   createdAt: number;
   updatedAt: number;
 }
@@ -220,6 +250,8 @@ export interface BotUpdateInput extends BotCreateInput {
   selfWakeUps?: boolean;
   acceptsBotMessages?: boolean;
   messagesOtherBots?: boolean;
+  /** Absent keeps the stored level; "off" clears it. */
+  thinkingLevel?: BotRoutineThinkingLevel;
 }
 
 export interface TelegramBotBindingView {

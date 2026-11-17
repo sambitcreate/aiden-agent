@@ -132,7 +132,7 @@ final class AidenBotWatchModel {
                 }
             } catch {
                 storageBlocked = true
-                message = "The saved watch draft couldn’t be read. Inspect watches on your host before making changes."
+                message = "The saved watch draft couldn’t be read. Inspect watches on your computer before making changes."
             }
         }
         isRestoring = false
@@ -178,7 +178,7 @@ final class AidenBotWatchModel {
             reconcile(loaded)
         } catch {
             guard generation == loadGeneration, isCurrent() else { return }
-            loadError = "Watches couldn’t be loaded. Connect to your paired host and try again."
+            loadError = "Watches couldn’t be loaded. Connect to your paired computer and try again."
         }
     }
 
@@ -239,7 +239,7 @@ final class AidenBotWatchModel {
             }
         } catch {
             if isCurrent(), generation == editorGeneration {
-                message = "Sources couldn’t be found. Connect the provider or grant access on your host, then try again."
+                message = "Sources couldn’t be found. Connect the provider or grant access on your computer, then try again."
             }
         }
     }
@@ -298,7 +298,7 @@ final class AidenBotWatchModel {
     func retryPending() async {
         guard canWrite, !isBusy, let pending else { return }
         guard let pendingSince, (0..<(23 * 3600)).contains(Date().timeIntervalSince(pendingSince)) else {
-            message = "This outcome is still unknown. Inspect the watch on your host before making another change."
+            message = "This outcome is still unknown. Inspect the watch on your computer before making another change."
             return
         }
         await perform(pending, replay: true)
@@ -348,7 +348,7 @@ final class AidenBotWatchModel {
                 let result = try await transport.runBotWatch(botId: botID, id: id, request: request)
                 guard isCurrent(), result.id == id else { return }
                 clearPending()
-                message = result.admitted ? "Run requested on your host." : "Run was not started. Check the Bot’s current policy and limits on your host."
+                message = result.admitted ? "Run requested on your computer." : "Run was not started. Check the Bot’s current policy and limits on your computer."
             }
         } catch {
             guard isCurrent() else { return }
@@ -357,11 +357,11 @@ final class AidenBotWatchModel {
             guard pending?.mutationID == mutation.mutationID else { return }
             if hadUnknownOutcome || aidenBotSessionFailureIsAmbiguous(error) {
                 uncertain = true
-                message = "The host may have accepted this change. Refresh to check, or retry the same request. Your draft is kept."
+                message = "The computer may have accepted this change. Refresh to check, or retry the same request. Your draft is kept."
             } else {
                 clearPending()
                 if case let AidenRemoteClientError.server(status, _) = error, status == 409 {
-                    message = "This watch changed on your host. Your draft is kept. Review the latest saved version before saving again."
+                    message = "This watch changed on your computer. Your draft is kept. Review the latest saved version before saving again."
                 } else {
                     message = "That change wasn’t confirmed. Refresh and review the watch before trying again. Your draft is kept."
                 }
@@ -382,7 +382,7 @@ final class AidenBotWatchModel {
             try draftStore.save(.init(draft: draft, baseline: baseline, pending: pending, pendingSince: pendingSince), scope: draftScope, settling: mutationID)
         } catch {
             storageBlocked = true
-            message = "This phone couldn’t retain the watch draft safely. Inspect the watch on your host before making changes."
+            message = "This phone couldn’t retain the watch draft safely. Inspect the watch on your computer before making changes."
         }
     }
 
@@ -393,13 +393,13 @@ final class AidenBotWatchModel {
             // Creation uses its mutation UUID as the resource ID. Never match by labels or text.
             if loaded.watches.contains(where: { UUID(uuidString: $0.id) == request.mutationId }) {
                 draft = nil; baseline = nil; conflict = nil; clearPending()
-                message = "Watch saved on your host."
+                message = "Watch saved on your computer."
             }
         case let .remove(id, _):
             if !loaded.watches.contains(where: { $0.id == id }) {
                 clearPending()
                 if baseline?.id == id { draft = nil; baseline = nil }
-                message = "Watch deleted on your host."
+                message = "Watch deleted on your computer."
             }
         case .save, .enabled, .run:
             // Another client can publish the same values at a newer revision.

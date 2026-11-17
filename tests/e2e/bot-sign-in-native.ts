@@ -171,7 +171,7 @@ void app.whenReady().then(async () => {
   }).execute("call-sign-in", { site: `https://${SITE}/login?next=/settings`, why: "To read your project settings." } as never);
   const card = await until(() => handoffs.pending(BOT)[0], "the sign-in card");
 
-  // 2. The person presses Open sign-in on the desktop.
+  // 2. The person presses Take control on the desktop.
   const elsewhere: string[] = [];
   const opened = await openBotHandoff(card, "desktop", {
     external: async (url) => void elsewhere.push(`external ${url}`),

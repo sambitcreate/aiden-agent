@@ -398,7 +398,7 @@ final class AidenMachineDetailTests: XCTestCase {
 
     func testSettingsLinksTheMachinesPage() throws {
         let labels = try settingsLabels()
-        XCTAssertTrue(labels.contains { $0.hasPrefix("Machines") }, "\(labels)")
+        XCTAssertTrue(labels.contains { $0.hasPrefix("Computers") }, "\(labels)")
         XCTAssertFalse(labels.contains { $0.contains("Paired Installations") }, "\(labels)")
     }
 
@@ -414,7 +414,7 @@ final class AidenMachineDetailTests: XCTestCase {
         defer { close(window) }
 
         XCTAssertTrue(
-            runMainLoop(until: { accessibleElements(in: window).contains { $0.accessibilityLabel == "Pair a machine" } }),
+            runMainLoop(until: { accessibleElements(in: window).contains { $0.accessibilityLabel == "Pair a computer" } }),
             "The shell still shows a placeholder for Machines"
         )
     }
@@ -440,7 +440,7 @@ final class AidenMachineDetailTests: XCTestCase {
         let window = try show(AidenAppShellView(coordinator: coordinator, inboxStore: inbox, navigationStore: store))
         defer { close(window) }
         XCTAssertTrue(
-            runMainLoop(until: { accessibleElements(in: window).contains { $0.accessibilityLabel == "Pair a machine" } }),
+            runMainLoop(until: { accessibleElements(in: window).contains { $0.accessibilityLabel == "Pair a computer" } }),
             "The shell lost its saved route"
         )
         XCTAssertGreaterThan(defaults.snapshotReads, 0)

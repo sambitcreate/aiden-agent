@@ -52,6 +52,7 @@ import { defaultGeminiUsageScope } from "../../shared/gemini-usage-scope";
 
 import { useAppCapabilities } from "../../lib/app-capabilities";
 
+import { localComputerNoun } from "../../shared/computer-noun";
 function statusBadge(p: Provider): React.ReactNode {
   if (p.isBuiltin) {
     return p.hasKey ? <Badge>Configured</Badge> : <Badge color="warning">Needs attention</Badge>;
@@ -418,7 +419,7 @@ export function ProvidersSettings() {
       <div className={hasConnections ? "grid justify-items-start gap-3" : "settings-card grid justify-items-start gap-3 p-4"}>
         {!hasConnections && providers.isSuccess && codex.isSuccess && <div>
           <Text as="h2" variant="strong">Give Aiden a way to reply</Text>
-          <Text as="p" variant="small" color="secondary">Connect an account, use an API key or run a model on your computer.</Text>
+          <Text as="p" variant="small" color="secondary">Connect an account, use an API key or run a model on your {localComputerNoun(capabilities.platform)}.</Text>
         </div>}
         <Button ref={addProviderTriggerRef} variant={hasConnections ? "filled" : "accent"} aria-expanded={chooserOpen}
           onClick={() => setChooserOpen(!chooserOpen)}><Plus />{hasConnections ? "Connect another AI" : "Connect AI"}</Button>
@@ -509,7 +510,7 @@ export function ProvidersSettings() {
               </Text>
               <Text variant="small" color="tertiary" as="p" className="mt-0.5">
                 {titleProviderId === "apple-foundation-models"
-                  ? "On-device titles are unavailable on this computer. Choose Automatic or Selected chat model to allow your selected model to generate titles."
+                  ? `On-device titles are unavailable on this ${localComputerNoun(capabilities.platform)}. Choose Automatic or Selected chat model to allow your selected model to generate titles.`
                   : "Automatic uses your selected chat model. Choose Selected chat model to make that preference explicit."}
               </Text>
             </div>

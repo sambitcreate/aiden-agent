@@ -210,6 +210,8 @@ const connection = new AgentSideConnection(
             if (entry.permission) {
               const decision = await connection.requestPermission({ sessionId: session.id, toolCall: entry.permission, options: [{ optionId: "allow", name: "Allow once", kind: "allow_once" }, { optionId: "deny", name: "Deny", kind: "reject_once" }] });
               log({ method: "permissionResult", outcome: decision.outcome });
+            } else if (entry.write) {
+              await connection.writeTextFile({ sessionId: session.id, path: entry.write.path, content: entry.write.content });
             } else {
               await connection.sessionUpdate({ sessionId: session.id, update: entry });
             }

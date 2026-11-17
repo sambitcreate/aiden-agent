@@ -3,6 +3,7 @@ import path from "node:path";
 import { deflateSync } from "node:zlib";
 import type { ElectronApplication, Locator, Page } from "@playwright/test";
 import {
+  canvasRegion,
   capture,
   chooseWorkspace,
   designCanvas,
@@ -1296,4 +1297,74 @@ test("words edited inside a page are written into its file and ⌘Z puts them ba
   await expect(live.getByRole("heading", { name: "Ship faster" })).toBeVisible();
   await page.waitForTimeout(500);
   expect(await readFile(hero, "utf8")).toBe(original);
+});
+
+test("pages Aiden writes land on the canvas by themselves and follow its edits, including pages it wrote before design mode opened", async ({
+  aiden,
+}) => {
+  const { app, page, lmStudio, userDataDir } = aiden;
+  await finishLmStudioOnboarding(page);
+  await waitForToastsToClear(page);
+  await setDisplayWidth(app, 1440);
+  await setWindowWidth(app, page, 1440);
+  await chooseWorkspace(page, new RegExp(`^${WORKSPACE_NAME}`, "u"));
+  await sendFirstMessage(page, "Design the Northwind landing page");
+  const composer = page.locator("textarea").first();
+
+  // Before design mode is on, Aiden writes the first page.
+  const firstPrompt = "Live canvas test: write the home page.";
+  const first = lmStudio.enqueueToolScenario!({
+    prompt: firstPrompt,
+    calls: [{ name: "write_file", arguments: { path: "design/home.html", content: page_("Home", "Ship faster", "#3b6cf6") } }],
+    finalText: "Wrote design/home.html.",
+  });
+  await composer.fill(firstPrompt);
+  await composer.press("Enter");
+  await expect.poll(() => first.completed).toBe(true);
+  expect(first.error).toBeUndefined();
+
+  // Opening design mode puts that page on the empty canvas.
+  await typeSlashCommand(page, "/design");
+  await expect(frame(page, "home.html")).toBeVisible();
+  await expect(designCanvas(page).getByText("Ask Aiden to design something, or add a note.")).toHaveCount(0);
+  // The canvas fits the page it was handed, so it is seen whole.
+  await expect
+    .poll(async () => {
+      const [box, region] = await Promise.all([frame(page, "home.html").boundingBox(), canvasRegion(page).boundingBox()]);
+      if (!box || !region) return false;
+      return box.x >= region.x && box.x + box.width <= region.x + region.width;
+    })
+    .toBe(true);
+  await waitForToastsToClear(page);
+  await capture(page, "1440-canvas-earlier-page");
+
+  // While design mode is on, a new page lands as it is written and an edit reloads the page already there.
+  const secondPrompt = "Live canvas test: add a library page and soften the headline.";
+  const second = lmStudio.enqueueToolScenario!({
+    prompt: secondPrompt,
+    calls: [
+      { name: "write_file", arguments: { path: "design/library.html", content: page_("Library", "Every recipe in one place", "#1f9d6b") } },
+      { name: "edit_file", arguments: { path: "design/home.html", old_string: "Ship faster", new_string: "Ship calmer" } },
+    ],
+    finalText: "Added design/library.html and changed the headline in design/home.html.",
+  });
+  await composer.fill(secondPrompt);
+  await composer.press("Enter");
+  await expect(frame(page, "library.html")).toBeVisible();
+  await expect.poll(() => second.completed).toBe(true);
+  expect(second.error).toBeUndefined();
+  expect(JSON.stringify(second.results)).toContain("Edited design/home.html.");
+  // The new frame is brought into view and runs live.
+  await expect(pageInFrame(page, "library.html").locator("h1")).toHaveText("Every recipe in one place");
+  await zoomToFrame(page, "home.html");
+  await expect(pageInFrame(page, "home.html").locator("h1")).toHaveText("Ship calmer");
+
+  // Each page is on the canvas once, as Aiden's.
+  const [saved] = await savedCanvases(userDataDir);
+  expect(saved?.frames.map((entry) => entry.title).sort()).toEqual(["home.html", "library.html"]);
+
+  await zoomToolbar(page).getByRole("button", { name: "Fit to screen" }).click();
+  await clickEmptyCanvas(page);
+  await waitForToastsToClear(page);
+  await capture(page, "1440-canvas-live-pages");
 });

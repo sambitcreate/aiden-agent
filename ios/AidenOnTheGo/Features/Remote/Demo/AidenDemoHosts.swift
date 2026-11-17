@@ -439,6 +439,11 @@ enum AidenDemoHosts {
             installation.serverCapabilities? += [.runsObserve, .runsControl]
             installation.serverFeatures.append(AidenServer.phoneRunControlFeature)
         }
+        if AidenDemoBotUX.isRequested {
+            // Revision 61: the Mac offers the five opt-ins and this phone holds them.
+            installation.deviceCapabilities += AidenRemoteCapability.botUX + [.botMessaging, .botAllowed]
+            installation.serverCapabilities? += AidenRemoteCapability.botUX + [.botMessaging, .botAllowed]
+        }
         return installation
     }
 
@@ -716,6 +721,9 @@ enum AidenDemoHosts {
             responder.reply(instanceId: id, path: "/bots", status: 200, json: AidenDemoContent.botListJSON())
             responder.reply(instanceId: id, path: botPath, status: 200, json: AidenDemoContent.botDetailJSON())
             responder.reply(instanceId: id, path: "\(botPath)/session", status: 200, json: AidenDemoContent.botSessionJSON())
+            if AidenDemoBotUX.isRequested {
+                AidenDemoBotUX.register(instanceId: id, botId: AidenDemoContent.botId, responder: responder)
+            }
             if AidenDemoRunOptions.raisesALateBotApproval {
                 responder.reply(instanceId: id, path: "\(botPath)/session/events", status: 200) { _ in
                     AidenDemoContent.botSessionEventsBody(withApproval: AidenDemoRunOptions.lateApprovalIsDue())
@@ -954,7 +962,9 @@ private enum AidenDemoContent {
     }
 
     static func botListJSON() -> Data {
-        data(["bots": [botSummaryObject()], "maxBots": 256])
+        var list: [String: Any] = ["bots": [botSummaryObject()], "maxBots": 256]
+        if AidenDemoBotUX.isRequested { list["messaging"] = ["enabled": true] }
+        return data(list)
     }
 
     /// `GET /bot-conversations`: Scout's one chat, when it matches the `query` item.
@@ -984,6 +994,7 @@ private enum AidenDemoContent {
     static func botDetailJSON() -> Data {
         var detail = botSummaryObject()
         detail["instructions"] = "Find the important signal, explain it plainly, and keep the owner in control."
+        if AidenDemoBotUX.isRequested { detail["botMessaging"] = ["receive": true, "send": true] }
         detail["access"] = [
             "botId": botId,
             "accessMode": "full",
@@ -1026,6 +1037,19 @@ private enum AidenDemoContent {
     }
 
     private static func botSessionObject() -> [String: Any] {
+        var session = baseBotSessionObject()
+        if AidenDemoBotUX.isRequested {
+            session["entries"] = (session["entries"] as? [[String: Any]] ?? []) + AidenDemoBotUX.entries(now: Date())
+            if AidenDemoBotUX.waitsOnAHandoff {
+                session["handoff"] = AidenDemoBotUX.handoff()
+            } else {
+                session["approval"] = AidenDemoBotUX.botApproval()
+            }
+        }
+        return session
+    }
+
+    private static func baseBotSessionObject() -> [String: Any] {
         let now = Date()
         return [
             "botId": botId,
@@ -1065,7 +1089,7 @@ private enum AidenDemoContent {
             ("approval_required", [
                 "approvalId": "approval_demo_late", "summary": lateApprovalSummary,
                 "toolCallId": "call_demo_late", "toolName": "run_command", "canAllow": true,
-            ]),
+            ].merging(AidenDemoBotUX.isRequested ? AidenDemoBotUX.runApprovalFields(summary: lateApprovalSummary) : [:]) { $1 }),
         ]
         let frames = events.enumerated().map { index, event in
             let frame: [String: Any] = [

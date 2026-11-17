@@ -32,7 +32,7 @@ export async function fetchBotWatchUrl(
   options: { fetch?: FetchLike; timeoutMs?: number; maxBytes?: number; signal?: AbortSignal } = {},
 ): Promise<BotWatchCheck> {
   const url = parseBotWatchUrl(rawUrl);
-  if (!url) return failed("This address isn't allowed. Use https, or http only for this Mac.");
+  if (!url) return failed("This address isn't allowed. Use https, or http only for this computer.");
   const maxBytes = options.maxBytes ?? BOT_WATCH_LIMITS.urlBytes;
   const controller = new AbortController();
   let timedOut = false;
@@ -180,7 +180,7 @@ export function checkBotWatchSource(
   options: { authorize: BotWatchScriptAuthorizer; fetch?: FetchLike; run?: BotWatchScriptRunner; signal?: AbortSignal },
 ): Promise<BotWatchCheck> {
   if (source.type === "url") return fetchBotWatchUrl(source.url, { ...(options.fetch ? { fetch: options.fetch } : {}), signal: options.signal });
-  if (source.type === "connector") return Promise.resolve(failed("Connector watches require the owning host service."));
+  if (source.type === "connector") return Promise.resolve(failed("Connector watches need the computer that runs this Bot."));
   return home().then(
     (folder) => runBotWatchScript(folder, source.script, { authorize: options.authorize, ...(options.run ? { run: options.run } : {}), signal: options.signal }),
     () => failed("Aiden couldn't find the Bot's folder."),

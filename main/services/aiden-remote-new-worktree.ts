@@ -47,15 +47,15 @@ function refusal(message: string, code: "git_capability_denied" | "workspace_una
 function remoteFailure(error: unknown, baseRef: string): AidenRemoteServiceError {
   const cause = error instanceof FirstMessageWorktreeError ? error.cause : error;
   if (cause instanceof InsufficientDiskSpaceError) {
-    return refusal("There isn't enough free disk space on your Mac for a new worktree. Free some space, then try again.");
+    return refusal("There isn't enough free disk space on your computer for a new worktree. Free some space, then try again.");
   }
   if (cause instanceof WorktreeCapacityUnavailableError) {
-    return refusal("Your Mac couldn't check its free disk space for a new worktree. Check its storage, then try again.");
+    return refusal("Your computer couldn't check its free disk space for a new worktree. Check its storage, then try again.");
   }
   if (error instanceof FirstMessageWorktreeError && error.phase === "fetching") {
-    return refusal(`Aiden couldn't fetch ${baseRef} from its remote on your Mac. Check the Mac's network, then try again.`);
+    return refusal(`Aiden couldn't fetch ${baseRef} from its remote on your computer. Check the computer's network, then try again.`);
   }
-  return refusal("Aiden couldn't make the worktree on your Mac. Try again, or send without New worktree.");
+  return refusal("Aiden couldn't make the worktree on your computer. Try again, or send without New worktree.");
 }
 
 export function createAidenRemoteNewWorktrees(dependencies: AidenRemoteNewWorktreeDependencies) {
@@ -96,7 +96,7 @@ export function createAidenRemoteNewWorktrees(dependencies: AidenRemoteNewWorktr
       try {
         branches = await dependencies.branches(workspace.folderPath);
       } catch {
-        throw refusal("Aiden couldn't read this workspace's Git branches on your Mac. Try again.");
+        throw refusal("Aiden couldn't read this workspace's Git branches on your computer. Try again.");
       }
       if (!branches.isRepo) throw refusal("This workspace isn't a Git repository, so it can't have a worktree.");
       const base = resolveWorktreeDefaults(branches);

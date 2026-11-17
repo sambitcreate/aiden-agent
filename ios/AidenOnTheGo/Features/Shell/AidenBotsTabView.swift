@@ -201,7 +201,7 @@ final class AidenBotRouteModel {
         try? connection(for: id, coordinator: coordinator)?.requestContext(scope: .owner)
     }
 
-    static let machineGoneMessage = String(localized: "This machine is no longer paired. Pair it again to open this Bot.")
+    static let machineGoneMessage = String(localized: "This computer is no longer paired. Pair it again to open this Bot.")
 
     func accept(_ chat: AidenChat) {
         guard case .chat(let current, let allowsMutations) = state, current.id == chat.id else { return }
@@ -414,7 +414,7 @@ struct AidenBotRouteView: View {
                 } description: {
                     Text(canStart
                         ? String(localized: "Start a chat with \(name).")
-                        : String(localized: "\(name) has no chat yet, and its machine can’t start one right now."))
+                        : String(localized: "\(name) has no chat yet, and its computer can’t start one right now."))
                 } actions: {
                     if canStart {
                         Button("Start chat") {
@@ -566,7 +566,7 @@ struct AidenMachineSectionStatus: View {
         case .offline?:
             String(localized: "Offline — showing saved \(savedListName)")
         case .needsPairing?:
-            String(localized: "Pair this machine again to see its \(savedListName).")
+            String(localized: "Pair this computer again to see its \(savedListName).")
         case .connecting?:
             String(localized: "Connecting…")
         case .connected?, nil:

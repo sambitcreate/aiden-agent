@@ -3,7 +3,7 @@ import { emitBotTestNotification, installBotTestIpc, type BotTestIpcCall } from 
 import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 import { afterEach, test } from "node:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as React from "react";
 import { Toaster } from "../components/ui";
@@ -374,16 +374,18 @@ test("a page edited in place does not show its picture from before the edit once
   region.focus();
   fireEvent.keyDown(region, { key: "Escape", code: "Escape" });
   fireEvent.keyDown(region, { key: "Escape", code: "Escape" });
-  // Polled between acts, because RTL's waitFor hung here under happy-dom: it
-  // never returned, nor timed out, while the leaving frame's capture settled.
-  const deadline = Date.now() + SAVE_WAIT.timeout;
-  while (document.querySelector('iframe[data-frame-id="kept-1"]') !== null && Date.now() < deadline) {
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    });
-  }
-  assert.equal(document.querySelector('iframe[data-frame-id="kept-1"]'), null, "the page left the live set");
-  assert.notEqual(picture(), before, "the picture from before the edit is gone");
+  // Compared as a boolean: a failed strict assert on the element itself diffs
+  // happy-dom's whole inspected iframe against null, which takes long enough
+  // that waitFor's interval and timeout never get to run.
+  await waitFor(() => assert.equal(document.querySelector('iframe[data-frame-id="kept-1"]') === null, true, "the page left the live set"), SAVE_WAIT);
+  // Its capture as it left came back empty, so it has no picture of the edited page yet.
+  const hero = screen.getByRole("group", { name: "Hero" });
+  assert.equal(picture(), null, "the picture from before the edit is gone");
+  assert.ok(within(hero).getByRole("img", { name: "Hero" }), "the frame shows its skeleton instead");
+
+  // Live again, it runs the page, which shows the edit.
+  fireEvent.doubleClick(hero);
+  await waitFor(() => assert.equal(document.querySelector('iframe[data-frame-id="kept-1"]') === null, false));
 });
 
 test("a visual Aiden draws again under the same title replaces the one in its frame", async () => {

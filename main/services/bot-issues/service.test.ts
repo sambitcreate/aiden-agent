@@ -12,6 +12,7 @@ import {
 } from "../../../renderer/shared/bot-issues.js";
 import type { BotDeliveryInput } from "../bot-delivery/funnel.js";
 import {
+  BOT_ISSUE_REMIND_AFTER_MS,
   createBotIssueService,
   resolveDeletedRoutineIssues,
   type BotIssueResumeResult,
@@ -139,6 +140,9 @@ function setup(
     tick(by = 1) {
       clock += by;
       return clock;
+    },
+    failNextDelivery() {
+      deliveryFailures += 1;
     },
   };
 }
@@ -330,6 +334,94 @@ test("raise delivers once through the funnel with class issue", async () => {
       status: "info",
     },
   ]);
+});
+
+test("a heads-up is logged quiet: it alerts nobody, never leaves the chat's list and is never reminded", async () => {
+  const harness = setup();
+  const issue = await harness.issues.raise({ ...ISSUE, dedupeKey: "execution:claim-1", quiet: true });
+
+  assert.equal(harness.deliveries.length, 1);
+  assert.equal(harness.deliveries[0]!.quiet, true, "the funnel keeps it for the record without a banner or phone alert");
+  assert.deepEqual((await harness.issues.list(BOT_ID, { open: true })).map((open) => open.id), [issue.id], "it still waits in Needs you");
+  assert.equal("quiet" in (await harness.issues.list(BOT_ID))[0]!, false, "the flag is host bookkeeping, not part of the card");
+
+  harness.tick(BOT_ISSUE_REMIND_AFTER_MS + 1);
+  assert.equal(await harness.issues.remind(BOT_ID), 0);
+  assert.equal(harness.deliveries.length, 1);
+});
+
+test("an ask still open after four hours is reminded once; a newer or settled one is not", async () => {
+  const harness = setup();
+  const waiting = await harness.issues.raise(ISSUE);
+  const settled = await harness.issues.raise({ ...ISSUE, dedupeKey: "routine:r2:failed", routineId: "r2", actions: [] });
+  await harness.issues.resolve(BOT_ID, settled.dedupeKey, "fixed");
+
+  harness.tick(BOT_ISSUE_REMIND_AFTER_MS - 1);
+  const fresh = await harness.issues.raise({ ...ISSUE, dedupeKey: "routine:r3:failed", routineId: "r3", actions: [] });
+  assert.equal(await harness.issues.remind(BOT_ID), 0, "nothing has waited four hours yet");
+
+  harness.tick(1);
+  assert.equal(await harness.issues.remind(BOT_ID), 1);
+  const reminder = harness.deliveries[harness.deliveries.length - 1]!;
+  assert.equal(reminder.class, "issue");
+  assert.equal(reminder.title, `Reminder: ${ISSUE.title}`);
+  assert.equal(reminder.body, ISSUE.body);
+  assert.notEqual(reminder.dedupeKey, `issue:${waiting.id}`, "a reminder is its own delivery, not a repeat of the first");
+  assert.equal(reminder.quiet, undefined);
+
+  // Later sweeps send nothing more, not even for an ask that is still open.
+  harness.tick(BOT_ISSUE_REMIND_AFTER_MS);
+  assert.equal(await harness.issues.remind(BOT_ID), 1, "only the newer ask, now due");
+  assert.equal(harness.deliveries[harness.deliveries.length - 1]!.title, `Reminder: ${fresh.title}`);
+  assert.equal(await harness.issues.remind(BOT_ID), 0);
+  assert.equal((await harness.issues.list(BOT_ID, { open: true })).length, 2, "a reminder never settles the ask");
+});
+
+test("a heads-up saved before quiet existed is not reminded, while an older routine block still is", async () => {
+  const harness = setup();
+  // Rows an earlier version wrote: no quiet flag on either.
+  await harness.issues.raise({ ...ISSUE, kind: "preflight_failed", dedupeKey: "execution:claim-1", routineId: undefined, title: "Review this run before resuming", actions: [{ kind: "open_chat" }] });
+  await harness.issues.raise({ ...ISSUE, kind: "run_stalled", dedupeKey: "stall:run-1", routineId: undefined, title: "Still working?", actions: [{ kind: "keep_waiting" }, { kind: "stop_run" }] });
+  await harness.issues.raise({ ...ISSUE, kind: "preflight_failed", dedupeKey: "execution:claim-2", title: "Review this run before resuming", actions: [{ kind: "open_chat" }] });
+  harness.tick(BOT_ISSUE_REMIND_AFTER_MS);
+  assert.equal(await harness.issues.remind(BOT_ID), 1);
+  assert.equal(harness.deliveries[harness.deliveries.length - 1]!.title, "Reminder: Review this run before resuming");
+  assert.equal(harness.deliveries.filter((delivery) => delivery.dedupeKey.startsWith("issue-reminder:")).length, 1);
+});
+
+test("an ask settled before its reminder goes out is never reminded; a failed reminder is tried again", async () => {
+  const harness = setup();
+  const answered = await harness.issues.raise(ISSUE);
+  harness.tick(BOT_ISSUE_REMIND_AFTER_MS);
+  await harness.issues.resolve(BOT_ID, answered.dedupeKey, "fixed");
+  assert.equal(await harness.issues.remind(BOT_ID), 0);
+
+  const failing = setup();
+  await failing.issues.raise(ISSUE);
+  failing.tick(BOT_ISSUE_REMIND_AFTER_MS);
+  failing.failNextDelivery();
+  await assert.rejects(failing.issues.remind(BOT_ID));
+  assert.equal(await failing.issues.remind(BOT_ID), 1, "nothing was marked, so the next sweep sends it");
+});
+
+test("a reminder whose bookkeeping never landed is offered again under the same key", async () => {
+  const harness = setup();
+  const issue = await harness.issues.raise(ISSUE);
+  harness.tick(BOT_ISSUE_REMIND_AFTER_MS);
+  assert.equal(await harness.issues.remind(BOT_ID), 1);
+  // As if the process exited after the delivery log took it, before `reminded` was written.
+  await harness.store.change(BOT_ID, (issues) => ({ issues: issues.map((row) => ({ ...row, reminded: false })), result: undefined }));
+  assert.equal(await harness.issues.remind(BOT_ID), 1);
+  const reminders = harness.deliveries.filter((delivery) => delivery.dedupeKey.startsWith("issue-reminder:"));
+  assert.deepEqual(new Set(reminders.map((delivery) => delivery.dedupeKey)), new Set([`issue-reminder:${issue.id}`]), "one key, which the funnel dedupes");
+});
+
+test("an access ask's reminder keeps the access audience gate", async () => {
+  const harness = setup();
+  await harness.issues.raise(ACCESS_ISSUE);
+  harness.tick(BOT_ISSUE_REMIND_AFTER_MS);
+  assert.equal(await harness.issues.remind(BOT_ID), 1);
+  assert.equal(harness.deliveries[harness.deliveries.length - 1]!.requiredCapability, "bot:access-requests");
 });
 
 test("a removed Bot leaves no issues behind", async () => {

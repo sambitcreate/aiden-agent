@@ -54,6 +54,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Bots/AidenBotAllowedView.swift",
   "AidenOnTheGo/Features/Bots/AidenBotCharacter.swift",
   "AidenOnTheGo/Features/Bots/AidenBotCreateView.swift",
+  "AidenOnTheGo/Features/Bots/AidenBotDisableTool.swift",
   "AidenOnTheGo/Features/Bots/AidenBotGeneratedAvatarLifecycle.swift",
   "AidenOnTheGo/Features/Bots/AidenBotHandoffCard.swift",
   "AidenOnTheGo/Features/Bots/AidenBotImagePlaygroundView.swift",
@@ -68,6 +69,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Bots/AidenBotResumeModel.swift",
   "AidenOnTheGo/Features/Bots/AidenBotRoutineModelsModel.swift",
   "AidenOnTheGo/Features/Bots/AidenBotRoutineModelsView.swift",
+  "AidenOnTheGo/Features/Bots/AidenBotSuggestionCards.swift",
   "AidenOnTheGo/Features/Bots/AidenBotRoutinesView.swift",
   "AidenOnTheGo/Features/Bots/AidenBotSemanticAvatarView.swift",
   "AidenOnTheGo/Features/Bots/AidenBotSessionChatView.swift",
@@ -97,6 +99,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Chat/AidenChatViewModel+ComposerPower.swift",
   "AidenOnTheGo/Features/Chat/AidenChatViewModel+ForeignRuns.swift",
   "AidenOnTheGo/Features/Chat/AidenChatCards.swift",
+  "AidenOnTheGo/Features/Chat/AidenTypedApprovalCard.swift",
   "AidenOnTheGo/Features/Chat/AidenChronologicalTranscript.swift",
   "AidenOnTheGo/Features/Chat/AidenChatComposer.swift",
   "AidenOnTheGo/Features/Chat/AidenChatRows.swift",
@@ -122,6 +125,8 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Workspace/AidenHomeModel.swift",
   "AidenOnTheGo/Features/Workspace/AidenUsageView.swift",
   "AidenOnTheGo/Features/Workspace/AidenAppSettingsView.swift",
+  "AidenOnTheGo/Features/Workspace/AidenApprovalSettingsModel.swift",
+  "AidenOnTheGo/Features/Workspace/AidenApprovalSettingsView.swift",
   "AidenOnTheGo/Features/Workspace/AidenMacTranscriptionSettingsView.swift",
   "AidenOnTheGo/Features/Workspace/AidenFolderBrowserView.swift",
   "AidenOnTheGo/Features/Workspace/AidenWorkspaceSettingsView.swift",
@@ -129,6 +134,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Workspace/AidenWorkspaceDirectoryView.swift",
   "AidenOnTheGo/Features/Remote/AidenBotChatToolsView.swift",
   "AidenOnTheGo/Features/Remote/Demo/AidenDemoHosts.swift",
+  "AidenOnTheGo/Features/Remote/Demo/AidenDemoBotUX.swift",
   "AidenOnTheGo/Features/Remote/Hosts/AidenHostConnectScheduler.swift",
   "AidenOnTheGo/Features/Shell/AidenAppNavigation.swift",
   "AidenOnTheGo/Features/Shell/AidenAppShellView.swift",
@@ -176,6 +182,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Models/AidenBotRoutine.swift",
   "AidenOnTheGo/Models/AidenBotRoutineModels.swift",
   "AidenOnTheGo/Models/AidenBotSession.swift",
+  "AidenOnTheGo/Models/AidenBotUX.swift",
   "AidenOnTheGo/Models/AidenBotWatch.swift",
   "AidenOnTheGo/Models/AidenChat.swift",
   "AidenOnTheGo/Models/AidenChatProgress.swift",
@@ -300,6 +307,7 @@ const testSources = [
   "AidenBotMemoryTests.swift",
   "AidenBotOpenWorkTests.swift",
   "AidenBotPeersTests.swift",
+  "AidenBotUXTests.swift",
   "AidenBotRoutineModelsTests.swift",
   "AidenBotPlanTests.swift",
   "AidenBotSessionTests.swift",
@@ -332,6 +340,7 @@ const testSources = [
 // UI tests never ship. They launch the Debug app against demo machines.
 const uiTestSources = [
   "AidenShellUITests.swift",
+  "AidenBotUXUITests.swift",
   "AidenStateMatrix.swift",
 ];
 
@@ -724,7 +733,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   }
   assert.match(
     shell,
-    /AidenWorkspacesDirectoryView[\s\S]*?Label\("New Workspace"[\s\S]*?Label\("Add Desktop Folder"/u,
+    /AidenWorkspacesDirectoryView[\s\S]*?Label\("New Workspace"[\s\S]*?Label\("Add Folder"/u,
   );
   // Compose's "Opening chat…" status floats on glass that never reacts to touch.
   assert.match(shell, /if flow\.isCreating \{[\s\S]{0,800}?\.glassEffect\(\.regular, in: \.capsule\)/u);
@@ -755,7 +764,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(shell, /swipeActions\(edge: \.trailing, allowsFullSwipe: false\)/u);
   assert.match(
     shell,
-    /Archive on This Device\?[\s\S]*?stays available in Aiden Agent on your desktop and on other devices/u,
+    /Archive on This Device\?[\s\S]*?stays available in Aiden Agent on your computer and on other devices/u,
   );
   assert.match(
     shell,
@@ -776,7 +785,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(pairing, /case \.scanQRCode: return String\(localized: "Scan QR Code"\)/u);
   assert.match(
     pairing,
-    /case \.nearbyMac: return String\(localized: "Nearby Desktop \+ Setup Code"\)/u,
+    /case \.nearbyMac: return String\(localized: "Nearby Computer \+ Setup Code"\)/u,
   );
   assert.match(
     pairing,
@@ -794,7 +803,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(pairing, /BOTS AND WORKSPACES/u);
   assert.match(
     pairing,
-    /When Bots are available on your paired desktop[\s\S]*?use them as reusable helpers from the Bots tab\./u,
+    /When Bots are available on your paired computer[\s\S]*?use them as reusable helpers from the Bots tab\./u,
   );
   assert.match(pairing, /Image\("AidenAppIcon"\)[\s\S]*?Text\("Aiden On The Go"\)/u);
   assert.doesNotMatch(pairing, /AidenSidebarLogo/u);
@@ -833,8 +842,8 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(content, /showsIntroduction: !hasCompletedMobileOnboarding/u);
   assert.match(content, /onIntroductionComplete:[\s\S]*?hasCompletedMobileOnboarding = true/u);
   assert.match(pairing, /The QR already contains the selected Local Network or Tailscale address/u);
-  assert.match(pairing, /https:\/\/desktop-name\.local:49220\/api\/aiden\/v1/u);
-  assert.match(pairing, /https:\/\/desktop-name\.tailnet\.ts\.net\/api\/aiden\/v1/u);
+  assert.match(pairing, /https:\/\/computer-name\.local:49220\/api\/aiden\/v1/u);
+  assert.match(pairing, /https:\/\/computer-name\.tailnet\.ts\.net\/api\/aiden\/v1/u);
   assert.doesNotMatch(pairing, /ForEach\(AidenPairingMethod\.primary\)[\s\S]*?NavigationLink/u);
   assert.match(
     chat,
@@ -933,7 +942,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   );
   assert.match(
     chat,
-    /String\(localized: "This request can only be approved on your paired desktop\."\)/u,
+    /String\(localized: "This request can only be approved on your paired computer\."\)/u,
   );
   assert.doesNotMatch(chat, /(?:request can only|task must) be approved on your Mac/iu);
   assert.match(chat, /glassEffect\(\.regular\.interactive\(\), in: Capsule\(\)\)/u);
@@ -1134,7 +1143,7 @@ test("Bot catalog requests stay scoped through create, advanced settings, chat, 
 test("workspace revision conflicts retain a visible reload action", async () => {
   const source = await readFile(new URL("../ios/AidenOnTheGo/Features/Remote/AidenWorkspaceEnvironmentView.swift", import.meta.url), "utf8");
   const conflictMessage = source.match(/body\.code\.rawValue == "revision_conflict"[\s\S]*?errorMessage = "([^"]+)"/u)?.[1];
-  const reloadCondition = source.match(/if message\.contains\("([^"]+)"\) \{\s*Button\("Reload from desktop"/u)?.[1];
+  const reloadCondition = source.match(/if message\.contains\("([^"]+)"\) \{\s*Button\("Reload from computer"/u)?.[1];
   assert.ok(conflictMessage, "revision conflicts must publish a recovery message");
   assert.ok(reloadCondition, "revision conflicts must offer a reload action");
   assert.ok(conflictMessage.includes(reloadCondition), "the reload condition must match the actual conflict message");

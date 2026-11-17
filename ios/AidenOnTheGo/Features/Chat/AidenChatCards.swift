@@ -190,7 +190,7 @@ struct AidenApprovalCard: View {
 /// A request, instructions or script on an approval card. Past six lines it
 /// folds behind Show all; expanded, it scrolls in a bounded box (the Bot chat
 /// keeps the card in its footer) with a Scroll for more cue while text is hidden.
-private struct AidenApprovalFoldingText: View {
+struct AidenApprovalFoldingText: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
     @State private var isExpanded = false
@@ -690,13 +690,13 @@ struct AidenQuestionCard: View {
                     ? String(localized: "Moves to the next question and keeps your answers")
                     : answers.isEmpty
                     ? String(localized: "Select an option or type an answer first")
-                    : String(localized: "Sends your answers to your machine"))
+                    : String(localized: "Sends your answers to your computer"))
             }
         }
     }
 }
 
-private struct AidenApprovalActionGlassModifier: ViewModifier {
+struct AidenApprovalActionGlassModifier: ViewModifier {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.aidenPalette) private var palette
 
@@ -720,7 +720,7 @@ private struct AidenApprovalActionGlassModifier: ViewModifier {
     }
 }
 
-private extension View {
+extension View {
     func aidenApprovalActionGlass(tint: Color? = nil) -> some View {
         modifier(AidenApprovalActionGlassModifier(tint: tint))
     }
@@ -742,7 +742,7 @@ struct AidenNativeAppControlPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(snapshot?.title ?? "Aiden settings").font(.headline)
-            Text("Paired host · These controls change the serving app, not this phone.").font(.caption).foregroundStyle(palette.secondary)
+            Text("Paired computer · These controls change the serving app, not this phone.").font(.caption).foregroundStyle(palette.secondary)
             if available, let snapshot {
                 ForEach(snapshot.rows) { row in
                     VStack(alignment: .leading, spacing: 4) {
@@ -770,10 +770,10 @@ struct AidenNativeAppControlPanel: View {
         .background(palette.raised, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .task(id: available) { localSnapshot = nil; confirmation = nil; if available { await refresh() } else { cache?.remove(panel) } }
         .onDisappear { cache?.remove(panel) }
-        .confirmationDialog("Change this preference on the paired host?", isPresented: Binding(get: { confirmation != nil }, set: { if !$0 { confirmation = nil } }), titleVisibility: .visible) {
+        .confirmationDialog("Change this preference on the paired computer?", isPresented: Binding(get: { confirmation != nil }, set: { if !$0 { confirmation = nil } }), titleVisibility: .visible) {
             Button("Apply change") { if let operation = confirmation { confirmation = nil; Task { await commit(operation) } } }
             Button("Cancel", role: .cancel) { confirmation = nil }
-        } message: { Text(snapshot?.rows.first { $0.id == confirmation?.control }?.scope ?? "Paired host") }
+        } message: { Text(snapshot?.rows.first { $0.id == confirmation?.control }?.scope ?? "Paired computer") }
     }
     private func propose(_ row: AidenAppControlRow, _ value: AidenAppControlValue) {
         guard !pending, row.disabledReason == nil, value != row.value else { return }
@@ -782,7 +782,7 @@ struct AidenNativeAppControlPanel: View {
     @MainActor private func refresh() async {
         do { guard available, let load else { return }; let value = try await load(panel); if cache == nil { localSnapshot = value } }
         catch is CancellationError { return }
-        catch { localSnapshot = nil; status = "Current settings are unavailable. Reconnect or enable paired chat controls on the desktop." }
+        catch { localSnapshot = nil; status = "Current settings are unavailable. Reconnect, or turn on paired chat controls in Aiden Agent on your computer." }
     }
     @MainActor private func commit(_ operation: AidenAppControlOperation) async {
         guard !pending, available, let apply else { return }

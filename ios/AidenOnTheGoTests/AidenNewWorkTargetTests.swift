@@ -121,7 +121,7 @@ final class AidenNewWorkTargetTests: XCTestCase {
 
         XCTAssertEqual(picker.target, AidenNewWorkTarget(instanceId: "studio"), "It never moves to another machine by itself")
         XCTAssertFalse(picker.canStart)
-        XCTAssertEqual(picker.refusalMessage, "Studio is offline. Pick another machine, or try again once it’s back.")
+        XCTAssertEqual(picker.refusalMessage, "Studio is offline. Pick another computer, or try again once it’s back.")
         XCTAssertTrue(picker.pick("laptop"))
         XCTAssertTrue(picker.canStart)
         XCTAssertNil(picker.refusalMessage)
@@ -343,7 +343,7 @@ final class AidenNewWorkTargetTests: XCTestCase {
         let workspace = try workspaceFixture()
 
         let work = Task { await flow.create(in: workspace) }
-        await assertSettles { flow.status == "Waiting for your machine…" }
+        await assertSettles { flow.status == "Waiting for your computer…" }
         XCTAssertEqual(posts("/chats", on: "laptop"), 0)
         await coordinator.hosts.connection(for: "laptop")?.connect()
         await work.value
@@ -412,7 +412,7 @@ final class AidenNewWorkTargetTests: XCTestCase {
         let created = try await coordinator.createChat(on: AidenNewWorkTarget(instanceId: "laptop"), in: workspaceFixture())
 
         XCTAssertNil(created)
-        XCTAssertEqual(coordinator.presentedError, "Laptop can’t start chats from this phone. Pick another machine.")
+        XCTAssertEqual(coordinator.presentedError, "Laptop can’t start chats from this phone. Pick another computer.")
         XCTAssertEqual(posts("/chats", on: "laptop"), 0)
     }
 
@@ -422,7 +422,7 @@ final class AidenNewWorkTargetTests: XCTestCase {
         let created = try await coordinator.createChat(on: AidenNewWorkTarget(instanceId: "gone"), in: workspaceFixture())
 
         XCTAssertNil(created)
-        XCTAssertEqual(coordinator.presentedError, "This machine is no longer paired. Pair it again to continue.")
+        XCTAssertEqual(coordinator.presentedError, "This computer is no longer paired. Pair it again to continue.")
     }
 
     func testTheDefaultPermissionIsAskedForOnceAndKeepsTheWorkspaceWhenRefused() async throws {
@@ -489,7 +489,7 @@ final class AidenNewWorkTargetTests: XCTestCase {
         flow.picker.startOver(preferring: chrome().composeMachine)
         XCTAssertEqual(flow.picker.target, AidenNewWorkTarget(instanceId: "mini"), "It stays on the filtered machine")
         XCTAssertFalse(flow.canStart)
-        XCTAssertEqual(flow.picker.refusalMessage, "Mini is offline. Pick another machine, or try again once it’s back.")
+        XCTAssertEqual(flow.picker.refusalMessage, "Mini is offline. Pick another computer, or try again once it’s back.")
 
         flow.picker.startOver(preferring: chrome(grouped: false).composeMachine)
         XCTAssertEqual(flow.picker.target, AidenNewWorkTarget(instanceId: "studio"), "One machine listed starts on the default")
@@ -1119,7 +1119,7 @@ final class AidenNewWorkTargetTests: XCTestCase {
     }
 
     func testSettingsHasADefaultMachineRow() throws {
-        XCTAssertTrue(try settingsLabels().contains { $0.hasPrefix("Default machine") })
+        XCTAssertTrue(try settingsLabels().contains { $0.hasPrefix("Default computer") })
     }
 
     func testTheDefaultRowOffersOfflineMachinesAndKeepsAHiddenDefault() async throws {

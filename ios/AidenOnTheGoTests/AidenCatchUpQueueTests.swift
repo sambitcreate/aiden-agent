@@ -307,20 +307,20 @@ final class AidenCatchUpQueueTests: XCTestCase {
         XCTAssertEqual(copy(walked: true, unreached: 0), ["Catch Up finished", "You’ve been through every chat in Catch Up."])
         XCTAssertEqual(
             copy(walked: true, unreached: 1),
-            ["Catch Up finished", "You’ve been through every chat you can reach. 1 more is on an offline machine."]
+            ["Catch Up finished", "You’ve been through every chat you can reach. 1 more is on an offline computer."]
         )
         XCTAssertEqual(
             copy(walked: true, unreached: 3),
-            ["Catch Up finished", "You’ve been through every chat you can reach. 3 more are on offline machines."]
+            ["Catch Up finished", "You’ve been through every chat you can reach. 3 more are on offline computers."]
         )
         XCTAssertEqual(copy(walked: false, unreached: 0), ["Nothing to catch up on", "There’s nothing in Catch Up right now."])
         XCTAssertEqual(
             copy(walked: false, unreached: 1),
-            ["Nothing to catch up on yet", "1 chat needs you on an offline machine."]
+            ["Nothing to catch up on yet", "1 chat needs you on an offline computer."]
         )
         XCTAssertEqual(
             copy(walked: false, unreached: 2),
-            ["Nothing to catch up on yet", "2 chats need you on offline machines."]
+            ["Nothing to catch up on yet", "2 chats need you on offline computers."]
         )
     }
 
