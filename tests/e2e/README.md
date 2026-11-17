@@ -60,7 +60,8 @@ fails. When Electron does not exit within 35 seconds of the quit, teardown
 prints to stderr the dev log's quit and shutdown records (main records "quit was
 not started" with a reason whenever it drops a quit) and the stuck main
 process's threads: the main thread's call graph from `sample` on macOS, or the
-thread states from `/proc` on Linux.
+thread states from `/proc` on Linux. The production journal keeps no such
+records, so a production-profile run prints only the threads.
 
 A spec that needs the real Bot store opts into `test.use({ isolatedKeychain: true })`
 (macOS only). Before launch, the fixture creates an unlocked, passwordless keychain

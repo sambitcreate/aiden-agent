@@ -4,6 +4,7 @@
 import { execFile } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
+import process from "node:process";
 
 const LIFECYCLE_SCOPES = new Set(["electron-lifecycle", "main"]);
 const MAX_MESSAGE = 240;
@@ -93,6 +94,9 @@ export async function describeStuckShutdown({ pid, devLogPath, platform = proces
     const devLog = await readFile(devLogPath, "utf8").catch(() => null);
     const records = devLog === null ? [] : lifecycleRecords(devLog);
     sections.push(`Quit and shutdown records:\n${records.length ? records.join("\n") : "  (none)"}`);
+  } else {
+    // The production journal keeps no legacy info records, so it has none to give.
+    sections.push("Quit and shutdown records:\n  (only a development-profile dev log keeps them)");
   }
   if (platform === "darwin") {
     const output = await run("/usr/bin/sample", [String(pid), "1", "-mayDie"], 20_000);

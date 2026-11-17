@@ -872,8 +872,8 @@ async function terminateOwnedProcess(child: ChildProcess): Promise<void> {
 
 /**
  * Close Electron and fail observably if its test-owned main process leaks.
- * `devLogPath` is the app's dev log: a quit that never finishes prints its
- * quit records from it, with the stuck process's threads.
+ * `devLogPath` is the app's development dev log: a quit that never finishes
+ * prints its quit records from it, with the stuck process's threads.
  */
 export async function closeAiden(app: ElectronApplication | undefined, devLogPath?: string): Promise<void> {
   if (!app) return;
@@ -1015,6 +1015,11 @@ const MAX_PRINTED_DEV_LOG_PROBLEMS = 40;
 
 function devLogFile(rootDir: string): string {
   return path.join(rootDir, "user-data", "logs", process.env.AIDEN_E2E_RUNTIME_PROFILE === "production" ? "aiden.log" : "aiden-dev.log");
+}
+
+/** Only the development journal keeps the quit records; production drops them by design. */
+function quitRecordsLog(rootDir: string): string | undefined {
+  return process.env.AIDEN_E2E_RUNTIME_PROFILE === "production" ? undefined : devLogFile(rootDir);
 }
 
 /** The dev log's warn and error records, one short line each (the log is already redacted). */
@@ -1172,7 +1177,7 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
           if (nextAppEnvironment) extraAppEnvironment = nextAppEnvironment;
           const previous = app;
           app = undefined;
-          await closeAiden(previous, devLogFile(testRootDir));
+          await closeAiden(previous, quitRecordsLog(testRootDir));
           await afterClose?.();
           return launch();
         },
@@ -1247,7 +1252,7 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
 
     const teardownFailures: unknown[] = [];
     try {
-      await closeAiden(app, rootDir ? devLogFile(rootDir) : undefined);
+      await closeAiden(app, rootDir ? quitRecordsLog(rootDir) : undefined);
     } catch (error) {
       teardownFailures.push(error);
     }

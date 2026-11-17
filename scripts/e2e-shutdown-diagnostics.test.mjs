@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import process from "node:process";
 import test from "node:test";
 import { describeStuckShutdown, lifecycleRecords, procThreadLine, sampleMainThread } from "./e2e-shutdown-diagnostics.mjs";
 
@@ -73,4 +74,9 @@ test("a live process is described with its quit records and its threads", async 
 test("a process that is already gone and a missing dev log still produce a report", async () => {
   const report = await describeStuckShutdown({ pid: 2 ** 22 + 7, devLogPath: path.join(os.tmpdir(), "missing-aiden-dev.log"), platform: "linux" });
   assert.equal(report, "Quit and shutdown records:\n  (none)\nThreads (tid name state wchan):\n  (unavailable)");
+});
+
+test("a run without a development dev log says its quit records aren't kept", async () => {
+  const report = await describeStuckShutdown({ pid: 2 ** 22 + 7, platform: "linux" });
+  assert.match(report, /^Quit and shutdown records:\n {2}\(only a development-profile dev log keeps them\)\n/u);
 });
