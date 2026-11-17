@@ -1373,4 +1373,12 @@
     <string name="bot_access_always">Always for this folder</string>
     <string name="bot_issue_allow_folder">Allow this folder</string>
     <string name="bot_access_not_now">Not now</string>
+    <string name="git_commit_unavailable">Commit is unavailable for this review.</string>
+    <plurals name="git_hidden_title">
+        <item quantity="one">%1$d change hidden</item>
+        <item quantity="other">%1$d changes hidden</item>
+    </plurals>
+    <string name="git_hidden_body">The computer didn\'t share these files with this phone.</string>
+    <string name="git_hidden_commit_unavailable">Commit is unavailable because these changes are hidden.</string>
+    <string name="git_hidden_commit_unavailable_reason">Commit is unavailable because these changes are hidden. %1$s</string>
 </resources>
