@@ -465,7 +465,8 @@ test("the selection action leaves when its text moves or goes away", async ({ ai
   const { drawer, output, run } = await openTerminal(page);
   const selectAll = process.platform === "darwin" ? "Meta+A" : "Control+Shift+A";
   const action = drawer.getByRole("button", { name: "Add to chat" });
-  await run("seq 1 300");
+  // New output retires the action, so the sleep holds back the prompt that would otherwise print after the numbers.
+  await run("seq 1 300; sleep 60");
   await expect(output).toContainText(/\b300\b/u);
 
   await page.keyboard.press(selectAll);
