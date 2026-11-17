@@ -335,12 +335,15 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         let scheduler = scheduler(for: coordinator, pathChanges: pathChanges)
         await scheduler.foregrounded()
         scheduler.backgrounded()
-        let before = responder.requests(instanceId: "build").count
+        // Every connect asks for `/server` once. Other requests from the
+        // foreground pass can still arrive: a connect that fails cancels its
+        // `/workspaces`, and the request may reach the machine afterwards.
+        let before = serverRequests("build")
 
         pathChanged.yield()
         try await settle()
 
-        XCTAssertEqual(responder.requests(instanceId: "build").count, before)
+        XCTAssertEqual(serverRequests("build"), before)
     }
 
     func testAFailedProbeOnTheSelectedMachineRaisesNoAlert() async throws {
@@ -350,12 +353,12 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         let (pathChanges, pathChanged) = AsyncStream<Void>.makeStream()
         let scheduler = scheduler(for: coordinator, pathChanges: pathChanges)
         await scheduler.foregrounded()
-        let before = responder.requests(instanceId: "build").count
+        let before = serverRequests("build")
         coordinator.presentedError = "Shown to the person"
 
         pathChanged.yield()
         try await waitUntil("another attempt on build") {
-            responder.requests(instanceId: "build").count > before && !(coordinator.selectedConnection?.isConnectInFlight ?? true)
+            self.serverRequests("build") > before && !(coordinator.selectedConnection?.isConnectInFlight ?? true)
         }
 
         XCTAssertEqual(coordinator.presentedError, "Shown to the person")
