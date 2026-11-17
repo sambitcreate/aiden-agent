@@ -120,6 +120,16 @@ export function mcpScopedAgentToolName(
   return `${name.slice(0, MCP_AGENT_TOOL_NAME_LIMIT - suffix.length)}${suffix}`;
 }
 
+/**
+ * Whether `name` has the shape of an MCP tool name (`<server>__<tool>`), judged
+ * without the configured server list. Built-in tools never contain `__`, so a
+ * name that does belonged to a connection when it was called, even if that
+ * server has since been removed or renamed.
+ */
+export function hasMcpAgentToolNameShape(name: string): boolean {
+  return name.includes("__");
+}
+
 /** Fold case and treat any run of separators (`-`, `_`, spaces) as one, for alias lookups. */
 export function normalizeMcpNamespaceAlias(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");

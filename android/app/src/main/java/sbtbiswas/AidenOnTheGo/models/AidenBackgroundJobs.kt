@@ -104,7 +104,7 @@ object AidenBackgroundJobCopy {
         AidenBackgroundJob.State.RUNNING -> "Running for ${elapsed(Instant.parse(job.startedAt), now)}"
         AidenBackgroundJob.State.STOPPED -> when (job.endReason) {
             "output-limit" -> "Stopped: too much output"
-            // Revision 62: the agent asked for it to stop once the chat went quiet.
+            // Revision 63: the agent asked for it to stop once the chat went quiet.
             "chat-settled" -> "Stopped after the chat went quiet"
             // A reason this version does not know reads as plain Stopped.
             else -> "Stopped"

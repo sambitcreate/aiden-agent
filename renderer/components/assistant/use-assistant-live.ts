@@ -130,7 +130,24 @@ function normalizeMicrophonePermission(status: string): AssistantLiveMicrophoneP
 
 export function assistantLiveMicrophonePermissionDetail(
   permission: AssistantLiveMicrophonePermission,
+  platform: string | null | undefined,
 ): string {
+  if (platform !== "darwin") {
+    switch (permission) {
+      case "checking":
+        return "Checking microphone permission…";
+      case "granted":
+        return "Microphone permission is allowed.";
+      case "not-determined":
+        return "Microphone permission has not been requested. You may be asked after you choose Start.";
+      case "denied":
+        return "Microphone permission is denied. Allow Aiden to use the microphone in your system settings.";
+      case "restricted":
+        return "Microphone access is restricted by system or device policy.";
+      case "unavailable":
+        return "Aiden could not verify microphone permission. Start stays unavailable.";
+    }
+  }
   switch (permission) {
     case "checking":
       return "Checking macOS microphone permission…";
@@ -437,6 +454,8 @@ interface AssistantLiveApi {
 
 export interface AssistantLiveDependencies {
   geminiLive: boolean;
+  /** This computer's platform, which decides how microphone permission is explained. */
+  platform?: string;
   /** Changes after provider credential/catalog state is authoritatively refreshed. */
   availabilityRefreshToken?: number;
   /** False while the provider query is fetching, so Live reads only settled credential state. */
@@ -1608,7 +1627,7 @@ export function useAssistantLiveWithDependencies(
 
   const availabilityDetail = assistantLiveAvailabilityDetail(snapshot);
   const microphonePermissionReady = ["granted", "not-determined"].includes(microphonePermission);
-  const microphonePermissionDetail = assistantLiveMicrophonePermissionDetail(microphonePermission);
+  const microphonePermissionDetail = assistantLiveMicrophonePermissionDetail(microphonePermission, dependencies.platform);
   const setupComplete =
     snapshot.available &&
     microphonePermission === "granted" &&
@@ -1676,7 +1695,7 @@ export function useAssistantLiveWithDependencies(
 export function useAssistantLive(
   ordinaryBusyReason: string | null = null,
 ): AssistantLiveController {
-  const { geminiLive } = useAppCapabilities();
+  const { geminiLive, platform } = useAppCapabilities();
   const providers = useProviders();
   // Audio ownership survives capability refresh; playerRef must share this same player.
   const [audioDependencies] = React.useState(() => defaultDependencies(false));
@@ -1684,11 +1703,12 @@ export function useAssistantLive(
     () => ({
       ...audioDependencies,
       geminiLive,
+      platform,
       availabilityRefreshReady: providers.fetchStatus === "idle",
       availabilityRefreshToken: providers.dataUpdatedAt,
       ordinaryBusyReason,
     }),
-    [audioDependencies, geminiLive, ordinaryBusyReason, providers.dataUpdatedAt, providers.fetchStatus],
+    [audioDependencies, geminiLive, ordinaryBusyReason, platform, providers.dataUpdatedAt, providers.fetchStatus],
   );
   return useAssistantLiveWithDependencies(dependencies);
 }

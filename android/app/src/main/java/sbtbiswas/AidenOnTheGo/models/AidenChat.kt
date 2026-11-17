@@ -293,7 +293,14 @@ data class AidenAgentStep(
     val extraction: AidenWebExtractRecap? = null,
     /** Decoded leniently: a malformed recap is dropped, never the step (revision 46). */
     @Serializable(with = AidenBrowserRecordingRecapSerializer::class)
-    val recording: AidenBrowserRecordingRecap? = null
+    val recording: AidenBrowserRecordingRecap? = null,
+    /**
+     * Contract revision 62: `true` only on a cancelled tool step the Mac
+     * cancelled because the person pressed Stop. Any other value reads as
+     * null without rejecting the step.
+     */
+    @Serializable(with = AidenTolerantTrueSerializer::class)
+    val stoppedByUser: Boolean? = null
 ) {
     @Serializable
     enum class Kind {
@@ -527,8 +534,32 @@ data class AidenGenerationTimeline(
     val cancellationOrigin: AidenGenerationCancellationOrigin? = null,
     val claimCheck: AidenGenerationClaimCheck? = null
 ) {
+    /**
+     * Display-only: a tool call the person ended with Stop. The Mac marks
+     * exactly the calls it cancelled because of Stop with `stoppedByUser`
+     * (revision 62), so the call stopping is what they asked for, not a
+     * problem to review. A call cancelled for any other reason (an earlier
+     * agent detach, app shutdown, chat deletion, a scheduled task's cancel)
+     * carries no mark and keeps the cancelled treatment, even in a run the
+     * person later stopped, and so does a call the claim check names.
+     * `isIssue` and the claim-check validation below still count every
+     * cancelled call. Matches desktop's `isStoppedByUser`.
+     */
+    fun isStoppedByUser(step: AidenAgentStep): Boolean =
+        step.kind == AidenAgentStep.Kind.TOOL &&
+            step.status == AidenAgentStepStatus.CANCELLED &&
+            step.stoppedByUser == true &&
+            claimCheck?.stepIds?.contains(step.id) != true
+
+    /** The steps [isStoppedByUser] matches, for rows drawn away from the timeline. */
+    val userStoppedStepIds: Set<String>
+        get() = steps.filter(::isStoppedByUser).mapTo(mutableSetOf()) { it.id }
+
+    /** Issues the activity header counts; calls the person stopped are not issues. */
     val issueCount: Int
-        get() = steps.count { it.kind == AidenAgentStep.Kind.TOOL && it.status?.isIssue == true }
+        get() = steps.count {
+            it.kind == AidenAgentStep.Kind.TOOL && it.status?.isIssue == true && !isStoppedByUser(it)
+        }
 
     fun isRendererSafe(contentLength: Int? = null, reasoningLength: Int? = null): Boolean {
         if (version !in 1..3 || generationId.isEmpty() || generationId.length > 128 ||
@@ -559,7 +590,10 @@ data class AidenGenerationTimeline(
                     step.status != AidenAgentStepStatus.COMPLETED ||
                     step.lineChanges.additions !in 0..100_000_000 ||
                     step.lineChanges.deletions !in 0..100_000_000
-                ))
+                )) ||
+                // Revision 62 marks stopped calls only in version 3 timelines;
+                // an older timeline carrying the mark is invalid, as on desktop.
+                (step.stoppedByUser != null && version != 3)
             ) return false
 
             if (version == 3) {
@@ -717,7 +751,20 @@ object AidenAgentActivityPresentation {
         return if (hasActiveToolStep(timeline, RENDER_ARTIFACT_TOOL_NAME)) "Visualizing" else null
     }
 
-    fun line(step: AidenAgentStep): String {
+    /** The leading mark on an activity row. */
+    enum class StepMark { DONE, ISSUE, STOPPED }
+
+    /**
+     * A call the person stopped gets a neutral stop mark instead of the
+     * issue mark every other failed, denied or cancelled call keeps.
+     */
+    fun stepMark(step: AidenAgentStep, stoppedByUser: Boolean = false): StepMark = when {
+        stoppedByUser && step.status == AidenAgentStepStatus.CANCELLED -> StepMark.STOPPED
+        step.status?.isIssue == true -> StepMark.ISSUE
+        else -> StepMark.DONE
+    }
+
+    fun line(step: AidenAgentStep, stoppedByUser: Boolean = false): String {
         if (step.kind == AidenAgentStep.Kind.THINKING) {
             return if (step.isActive) "Thinking" else "Thought ${duration(step.durationMs)}"
         }
@@ -732,7 +779,7 @@ object AidenAgentActivityPresentation {
             AidenAgentStepStatus.AWAITING_APPROVAL -> "$label needs approval"
             AidenAgentStepStatus.FAILED -> "$label failed"
             AidenAgentStepStatus.BLOCKED -> "$label denied"
-            AidenAgentStepStatus.CANCELLED -> "$label cancelled"
+            AidenAgentStepStatus.CANCELLED -> if (stoppedByUser) "$label stopped" else "$label cancelled"
             null -> label
         }
         val obj: String? = if (step.toolName == "grep" && step.detail != null && step.target != null) {
@@ -1600,8 +1647,18 @@ data class AidenStreamPendingApproval(
     val scopes: List<String>? = null,
     /** Contract revision 39 (`schedule:cards`): a scheduled-task card. An invalid one reads as null. */
     @Serializable(with = AidenApprovalScheduleLenientSerializer::class)
-    val schedule: AidenApprovalSchedule? = null
-)
+    val schedule: AidenApprovalSchedule? = null,
+    /**
+     * Contract revision 61 (`approval:cards`): the typed card the desktop shows. It must agree
+     * with [canAllow] and every offered scope, or the approval is refused.
+     */
+    @Serializable(with = AidenApprovalCardSerializer::class)
+    val card: AidenApprovalCard? = null
+) {
+    init {
+        card?.let { AidenApprovalCard.requireAgrees(it, canAllow, scopes) }
+    }
+}
 
 @Serializable
 data class AidenStreamApprovalSnapshot(
@@ -1814,7 +1871,13 @@ data class AidenPendingApproval(
      * only: it never changes [canAllow] or [scopes]. Approvals are never persisted, so a
      * relaunch reads it again from the host.
      */
-    val schedule: AidenApprovalSchedule? = null
+    val schedule: AidenApprovalSchedule? = null,
+    /**
+     * Revision 61 (`approval:cards`): the typed card. When present it replaces the summary
+     * card, and its buttons are the only answers offered: each sends exactly its decision and
+     * scope.
+     */
+    val card: AidenApprovalCard? = null
 )
 
 data class AidenApprovalCapabilities(
@@ -1943,7 +2006,15 @@ object AidenPendingApprovalResolution {
             } else {
                 listOf(AidenApprovalScope.ONCE)
             },
-            schedule = AidenApprovalSchedule.forTool(approval.toolName, approval.schedule)
+            schedule = AidenApprovalSchedule.forTool(approval.toolName, approval.schedule),
+            // Deny stays answerable; only the allows go, saying why.
+            card = approval.card?.let {
+                when {
+                    canAllow -> it
+                    capabilities.canRespond && !hasRequiredWriteCapability -> it.denyOnly(AidenApprovalCard.SCHEDULE_WRITE_REQUIRED)
+                    else -> it.denyOnly()
+                }
+            }
         )
     }
 }
@@ -2399,6 +2470,23 @@ object AidenTolerantStringSerializer : KSerializer<String?> {
         val json = decoder as? JsonDecoder ?: return decoder.decodeString()
         val primitive = json.decodeJsonElement() as? JsonPrimitive ?: return null
         return if (primitive.isString) primitive.content.takeIf { it.length <= 64 } else null
+    }
+}
+
+/** A `true` marker: any other value, `false` included, reads as null. */
+object AidenTolerantTrueSerializer : KSerializer<Boolean?> {
+    override val descriptor: SerialDescriptor =
+        PrimitiveSerialDescriptor("AidenTolerantTrue", PrimitiveKind.BOOLEAN).nullable
+
+    override fun serialize(encoder: Encoder, value: Boolean?) {
+        if (value == true) encoder.encodeBoolean(true) else encoder.encodeNull()
+    }
+
+    override fun deserialize(decoder: Decoder): Boolean? {
+        val json = decoder as? JsonDecoder ?: return decoder.decodeBoolean().takeIf { it }
+        val primitive = json.decodeJsonElement() as? JsonPrimitive ?: return null
+        if (primitive.isString) return null
+        return primitive.content.toBooleanStrictOrNull()?.takeIf { it }
     }
 }
 

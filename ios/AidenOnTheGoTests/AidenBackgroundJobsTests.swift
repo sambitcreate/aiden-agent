@@ -43,7 +43,7 @@ final class AidenBackgroundJobsTests: XCTestCase {
         )
         XCTAssertEqual(
             AidenBackgroundJobCopy.addresses(job("job_00000001", ports: [5173, 24678])),
-            "localhost:5173, localhost:24678 on your machine"
+            "localhost:5173, localhost:24678 on your computer"
         )
         XCTAssertNil(AidenBackgroundJobCopy.addresses(job("job_00000001")))
         XCTAssertNil(AidenBackgroundJobCopy.chip(running: 0), "nothing shows while nothing runs")
@@ -51,13 +51,13 @@ final class AidenBackgroundJobsTests: XCTestCase {
         XCTAssertEqual(AidenBackgroundJobCopy.chipAccessibilityLabel(running: 1), "1 background job running")
     }
 
-    /// Revision 62: a job the agent asked to stop once its chat went quiet
+    /// Revision 63: a job the agent asked to stop once its chat went quiet
     /// says so; one the person stopped, or a reason this version does not
     /// know, reads as plain Stopped.
     func testAJobStoppedAfterTheChatWentQuietSaysSo() throws {
         let fixtureURL = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
         let root = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL)) as? [String: Any])
-        XCTAssertEqual(root["contractRevision"] as? Int, 62)
+        XCTAssertEqual(root["contractRevision"] as? Int, 63)
         let section = try XCTUnwrap(root["backgroundJobsChatSettled"] as? [String: Any])
         let data = try JSONSerialization.data(withJSONObject: try XCTUnwrap(section["list"]))
         let list = try AidenRemoteJSONDecoder.decode(AidenBackgroundJobs.self, from: data)

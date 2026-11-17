@@ -43,8 +43,8 @@ test("Bot pairs review both names, preserve lost requests and inspect Stop outco
     };
     for (const [channel, handler] of Object.entries(handlers)) { ipcMain.removeHandler(channel); ipcMain.handle(channel, (_event, ...args) => handler(...args)); }
   }, { bot, rules: defaultBotRulesView(bot.id), peers });
-  await page.reload(); await page.getByRole("button", { name: "Bots", exact: true }).click(); await page.getByRole("button", { name: "Planner profile", exact: true }).click();
-  await page.getByRole("button", { name: "Manage Bot messaging", exact: true }).click();
+  await page.reload(); await page.getByRole("button", { name: "Bots", exact: true }).click(); await page.getByRole("button", { name: "Planner settings", exact: true }).click();
+  await page.getByRole("button", { name: "Approved Bot pairs", exact: true }).click();
   const manager = page.getByRole("dialog", { name: "Bot messaging · Planner", exact: true });
   await manager.getByRole("combobox", { name: "Bot to approve", exact: true }).click(); await page.getByRole("option", { name: "Researcher", exact: true }).click();
   await manager.getByRole("button", { name: "Review pair", exact: true }).click();
@@ -54,7 +54,7 @@ test("Bot pairs review both names, preserve lost requests and inspect Stop outco
   await review.getByRole("button", { name: "Approve both directions", exact: true }).click();
   await expect(manager.getByRole("alert")).toContainText("Lost accepted pair reply.");
   await manager.getByRole("button", { name: "Close", exact: true }).click();
-  await page.getByRole("button", { name: "Manage Bot messaging", exact: true }).click();
+  await page.getByRole("button", { name: "Approved Bot pairs", exact: true }).click();
   await manager.getByRole("button", { name: "Retry saved change", exact: true }).click();
   await expect(manager.getByText("Bot messaging settings saved.", { exact: true })).toBeVisible();
   const changes = await aiden.app.evaluate(() => (globalThis as { peerChanges?: unknown[] }).peerChanges!); expect(changes).toHaveLength(2); expect(changes[1]).toEqual(changes[0]);
@@ -66,7 +66,7 @@ test("Bot pairs review both names, preserve lost requests and inspect Stop outco
   await exchange.getByRole("button", { name: "Stop exchange", exact: true }).click(); await page.getByRole("dialog", { name: "Stop this exchange?", exact: true }).getByRole("button", { name: "Confirm Stop", exact: true }).click();
   await expect(exchange.getByRole("button", { name: "Retry saved Stop", exact: true })).toBeVisible();
   await exchange.getByRole("button", { name: "Retry saved Stop", exact: true }).click();
-  await expect(exchange.getByText("The host refused Stop because this run includes other inputs.", { exact: true })).toBeVisible();
+  await expect(exchange.getByText("The computer refused Stop because this run includes other inputs.", { exact: true })).toBeVisible();
   const stops = await aiden.app.evaluate(() => (globalThis as { peerStops?: unknown[] }).peerStops!); expect(stops).toHaveLength(2); expect(stops[1]).toEqual(stops[0]);
   for (const width of [1280, 600, 390]) {
     await aiden.app.evaluate(({ BrowserWindow }, w) => BrowserWindow.getAllWindows()[0]!.setSize(w, 900), width);

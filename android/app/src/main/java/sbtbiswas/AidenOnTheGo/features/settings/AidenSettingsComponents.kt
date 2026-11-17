@@ -361,21 +361,25 @@ fun AidenSettingsRadioRow(
     selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    supporting: String? = null
+    supporting: String? = null,
+    enabled: Boolean = true
 ) {
     val palette = AidenTheme.palette
     AidenSettingsListItem(
         headline = headline,
-        modifier = modifier.selectable(selected = selected, role = Role.RadioButton, onClick = onClick),
+        modifier = modifier
+            .selectable(selected = selected, enabled = enabled, role = Role.RadioButton, onClick = onClick),
         supporting = supporting?.let { { Text(it) } },
         leading = {
             RadioButton(
                 selected = selected,
                 onClick = null,
+                enabled = enabled,
                 colors = RadioButtonDefaults.colors(selectedColor = palette.accent, unselectedColor = palette.secondary)
             )
         },
-        trailing = null
+        trailing = null,
+        enabled = enabled
     )
 }
 

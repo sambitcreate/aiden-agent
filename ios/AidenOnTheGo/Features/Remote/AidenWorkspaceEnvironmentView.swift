@@ -364,7 +364,7 @@ final class AidenWorkspaceFilesModel {
             guard stillHolds(context, coordinator) else { return false }
             if case AidenRemoteClientError.server(_, let body) = error,
                body.code.rawValue == "revision_conflict" {
-                errorMessage = "This file changed on the paired desktop. Reload it before saving again."
+                errorMessage = "This file changed on the paired computer. Reload it before saving again."
                 coordinator.haptics.play(.warning, scope: hapticScope)
             } else {
                 errorMessage = error.localizedDescription
@@ -521,8 +521,8 @@ private struct AidenWorkspaceFileEditorView: View {
                     if let message = model.errorMessage {
                         VStack(spacing: 8) {
                             Text(message).font(.footnote).foregroundStyle(.secondary)
-                            if message.contains("changed on the paired desktop") {
-                                Button("Reload from desktop") {
+                            if message.contains("changed on the paired computer") {
+                                Button("Reload from computer") {
                                     Task { await model.reloadDocument(coordinator: coordinator) }
                                 }
                             }
@@ -585,6 +585,7 @@ private enum AidenPendingGitMutation {
 final class AidenWorkspaceGitModel {
     var review: AidenGitReview?
     var reviewSnapshotId: String?
+    var commitCapability: AidenGitCapability?
     var branches: AidenGitBranches?
     var branchesSnapshotId: String?
     var worktrees: [AidenGitWorktree] = []
@@ -613,6 +614,29 @@ final class AidenWorkspaceGitModel {
 
     var canRetryPendingMutation: Bool { pendingMutation != nil }
 
+    var canCommitReviewedChanges: Bool {
+        commitCapability?.allowed == true && review?.files.isEmpty == false && reviewSnapshotId != nil && !isLoading
+    }
+
+    /// How many changes the computer counted but sent no file for. They exist, but this phone
+    /// can't see them, so the review is neither clean nor committable.
+    var hiddenChangeCount: Int? {
+        guard let review, review.files.isEmpty, review.uncommitted > 0 else { return nil }
+        return review.uncommitted
+    }
+
+    var commitUnavailableReason: String? {
+        guard review != nil else { return nil }
+        if hiddenChangeCount != nil {
+            if commitCapability?.allowed != true, let reason = commitCapability?.reason {
+                return String(localized: "Commit is unavailable because these changes are hidden. \(reason)")
+            }
+            return String(localized: "Commit is unavailable because these changes are hidden.")
+        }
+        guard commitCapability?.allowed != true else { return nil }
+        return commitCapability?.reason ?? String(localized: "Commit is unavailable for this review.")
+    }
+
     /// Reads Git on the target's machine, once it's connected.
     func refresh(on target: AidenWorkspaceGitTarget, workspaceId: String) async {
         guard target.isConnected else {
@@ -638,6 +662,7 @@ final class AidenWorkspaceGitModel {
             if case .review(let value) = reviewResult.result {
                 review = value
                 reviewSnapshotId = reviewResult.snapshotId
+                commitCapability = reviewResult.capability
             }
             let branchResult = try await client.gitBranches(workspaceId: workspaceId)
             guard isCurrent() else { return }
@@ -682,6 +707,7 @@ final class AidenWorkspaceGitModel {
     }
 
     func commit(client: AidenRemoteClient, workspaceId: String, message: String, stagedOnly: Bool, isCurrent: @escaping @MainActor () -> Bool) async {
+        guard canCommitReviewedChanges else { return }
         let operation = AidenPendingGitMutation.commit(
             UUID(),
             snapshot: reviewSnapshotId ?? "",
@@ -948,7 +974,18 @@ struct AidenWorkspaceGitView: View {
                     LabeledContent("Changes", value: "\(review.uncommitted)")
                 }
                 Section("Working changes") {
-                    if review.files.isEmpty {
+                    if let hidden = model.hiddenChangeCount {
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("^[\(hidden) change](inflect: true) hidden")
+                                Text("The computer didn't share these files with this phone.")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                        } icon: {
+                            Image(systemName: "eye.slash")
+                        }
+                    } else if review.files.isEmpty {
                         Label("Working tree is clean", systemImage: "checkmark.circle")
                     }
                     ForEach(review.files) { file in
@@ -965,7 +1002,10 @@ struct AidenWorkspaceGitView: View {
 
             Section("Actions") {
                 Button("Commit reviewed changes", systemImage: "checkmark.circle") { isShowingCommit = true }
-                    .disabled(model.review?.files.isEmpty != false)
+                    .disabled(!model.canCommitReviewedChanges)
+                if let reason = model.commitUnavailableReason {
+                    Text(reason).font(.footnote).foregroundStyle(.secondary)
+                }
                 Button("Push reviewed commit", systemImage: "arrow.up.circle") {
                     Task {
                         await withRemoteContext { client, context in
@@ -1159,6 +1199,9 @@ struct AidenWorkspaceGitView: View {
     private var commitSheet: some View {
         NavigationStack {
             Form {
+                if let reason = model.commitUnavailableReason {
+                    Section { Text(reason).foregroundStyle(.secondary) }
+                }
                 Section("Commit message") {
                     TextField("Describe the change", text: $commitMessage, axis: .vertical)
                 }
@@ -1171,11 +1214,12 @@ struct AidenWorkspaceGitView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Review Commit") { isConfirmingCommit = true }
-                        .disabled(commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(!model.canCommitReviewedChanges || commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
             .confirmationDialog("Commit the reviewed snapshot?", isPresented: $isConfirmingCommit) {
                 Button("Commit Changes") {
+                    guard model.canCommitReviewedChanges else { return }
                     let message = commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
                     isShowingCommit = false
                     Task {
@@ -1190,6 +1234,7 @@ struct AidenWorkspaceGitView: View {
                         }
                     }
                 }
+                .disabled(!model.canCommitReviewedChanges)
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("Aiden Agent will create a Git commit from the exact reviewed snapshot.")

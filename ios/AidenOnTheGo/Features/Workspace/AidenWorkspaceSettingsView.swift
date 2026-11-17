@@ -72,7 +72,7 @@ struct AidenWorkspaceSettingsView: View {
                 } header: {
                     Text("Memory")
                 } footer: {
-                    Text("When off, Aiden does not index this workspace or expose memory tools in its chats. Existing memory stays on your machine.")
+                    Text("When off, Aiden does not index this workspace or expose memory tools in its chats. Existing memory stays on your computer.")
                 }
 
                 Section("Workspace tools") {
@@ -106,7 +106,7 @@ struct AidenWorkspaceSettingsView: View {
                     } footer: {
                         Text(workspace.isManagedWorktree
                              ? "Deleting an Aiden-managed worktree removes its checkout and may remove its branch when safe."
-                             : "Removing unregisters this workspace from Aiden Agent and paired clients. Its folder, files, and chats stay on your desktop, but its chats will no longer be listed.")
+                             : "Removing unregisters this workspace from Aiden Agent and paired clients. Its folder, files, and chats stay on your computer, but its chats will no longer be listed.")
                     }
                 }
             }
@@ -167,7 +167,7 @@ struct AidenWorkspaceSettingsView: View {
             } message: {
                 Text(workspace.isManagedWorktree
                      ? "This destructive Git operation is performed by Aiden Agent using its persisted worktree ownership record."
-                     : "The folder, its files, and chats remain on your desktop, but the chats will no longer be listed. Delete the folder separately in your system file manager if you no longer need it.")
+                     : "The folder, its files, and chats remain on your computer, but the chats will no longer be listed. Delete the folder separately in your system file manager if you no longer need it.")
             }
         }
         // The shell's alert sits under this sheet, so a failed Save or Remove says

@@ -21,7 +21,7 @@ enum AidenBackgroundJobCopy {
         case .stopped:
             switch job.endReason {
             case "output-limit": return "Stopped: too much output"
-            // Revision 62: the agent asked for it to stop once the chat went quiet.
+            // Revision 63: the agent asked for it to stop once the chat went quiet.
             case "chat-settled": return "Stopped after the chat went quiet"
             // A reason this version does not know reads as plain Stopped.
             default: return "Stopped"
@@ -37,7 +37,7 @@ enum AidenBackgroundJobCopy {
     /// shows them as text rather than opening them.
     static func addresses(_ job: AidenBackgroundJob) -> String? {
         guard job.state == .running, !job.ports.isEmpty else { return nil }
-        return job.ports.map { "localhost:\($0)" }.joined(separator: ", ") + " on your machine"
+        return job.ports.map { "localhost:\($0)" }.joined(separator: ", ") + " on your computer"
     }
 
     /// The chip above the composer: shown only while something runs.
@@ -150,7 +150,7 @@ struct AidenBackgroundJobsSheet: View {
                         if let errorMessage = model.errorMessage {
                             Text(errorMessage).foregroundStyle(palette.danger)
                         }
-                        Text("These run on your machine. Open an address in a browser there.")
+                        Text("These run on your computer. Open an address in a browser there.")
                             .foregroundStyle(palette.secondary)
                     }
                     .font(.footnote)

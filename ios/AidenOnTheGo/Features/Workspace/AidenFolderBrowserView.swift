@@ -42,7 +42,7 @@ struct AidenFolderBrowserView: View {
                     }
                 }
             }
-            .navigationTitle("Add Desktop Folder")
+            .navigationTitle("Add Folder")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

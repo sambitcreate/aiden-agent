@@ -10,9 +10,11 @@ import type {
   AskUserQuestionResponseV1,
   AskUserQuestionV1,
 } from "../../../renderer/shared/ask-user-question.js";
+import type { ProducedFile } from "../../../renderer/shared/produced-file.js";
 import type { ToolApprovalScope } from "../../../renderer/shared/tool-approval-scope.js";
 import type { AgentStepStatus } from "../../../renderer/shared/generation-timeline.js";
 import type { ToolApprovalOutcome } from "../tool-approval.js";
+import { relativeDisplayPath } from "./activity.js";
 import type { AcpRootIdentity } from "./client-files.js";
 import type { AcpHostPermission, AcpQuestion } from "./harness.js";
 import type { AcpApprovalOutcome, AcpApprovalRequest, AcpTurnHost } from "./host.js";
@@ -38,6 +40,7 @@ export interface GenerationTimelinePort {
     toolCallId: string,
     status: Extract<AgentStepStatus, "completed" | "failed" | "blocked" | "cancelled">,
     resultDetails?: unknown,
+    options?: { stoppedByUser?: boolean },
   ): void;
   publicToolCallId(toolCallId: string): string | undefined;
 }
@@ -54,6 +57,12 @@ export interface AcpGenerationHostOptions {
   scratchDir: string;
   permission(): AcpHostPermission;
   timeline: GenerationTimelinePort;
+  /**
+   * True while the turn is being cancelled because the person pressed Stop.
+   * A step the agent reports cancelled then reads as stopped, not as an issue;
+   * any other cancellation (detach, shutdown) keeps the issue treatment.
+   */
+  stoppedByUser?(): boolean;
   requestApproval(
     prompt: { streamId: string; toolCallId: string; toolName: string; summary: string; scopes?: readonly ToolApprovalScope[] },
     signal: AbortSignal,
@@ -65,6 +74,7 @@ export interface AcpGenerationHostOptions {
     questions: AskUserQuestionV1[],
     signal: AbortSignal,
   ): Promise<AskUserQuestionResponseV1>;
+  onFileWrite?(producedFile: ProducedFile): void;
 }
 
 const CARD_TOOL: Record<AcpApprovalRequest["kind"], string> = {
@@ -146,12 +156,13 @@ export function questionFor(
 
 export function createAcpGenerationHost(options: AcpGenerationHostOptions): AcpTurnHost {
   let notices = 0;
+  // Fail closed: without the identity captured at turn start there is no
+  // file access at all, never a fallback to the mutable pathname.
+  const roots = () => (options.folderIdentity && options.permission() !== "none" ? [options.folderIdentity] : []);
   return {
     chatId: options.chatId,
-    cwd: options.folderPath ?? options.scratchDir,
-    // Fail closed: without the identity captured at turn start there is no
-    // file access at all, never a fallback to the mutable pathname.
-    roots: options.folderIdentity && options.permission() !== "none" ? [options.folderIdentity] : [],
+    cwd: options.folderIdentity?.path ?? options.folderPath ?? options.scratchDir,
+    roots: roots(),
     permission: options.permission,
     async requestApproval(request, signal): Promise<AcpApprovalOutcome> {
       const id = request.activityId ?? request.toolCallId;
@@ -190,7 +201,10 @@ export function createAcpGenerationHost(options: AcpGenerationHostOptions): AcpT
     activity: {
       started: (id, toolName, args) => options.timeline.toolStarted(id, toolName, args),
       running: (id) => options.timeline.toolRunning(id),
-      finished: (id, status, details) => options.timeline.toolFinished(id, status, details),
+      finished: (id, status, details) =>
+        status === "cancelled" && options.stoppedByUser?.() === true
+          ? options.timeline.toolFinished(id, status, details, { stoppedByUser: true })
+          : options.timeline.toolFinished(id, status, details),
     },
     bridgeableTools(tools: readonly Tool[]): Tool[] {
       return tools.filter((tool) => !AGENT_DUPLICATED_TOOL_NAMES.has(tool.name));
@@ -202,6 +216,19 @@ export function createAcpGenerationHost(options: AcpGenerationHostOptions): AcpT
       options.timeline.toolStarted(id, CONTEXT_REBUILT_STEP, {});
       options.timeline.toolFinished(id, "completed");
     },
+    ...(options.onFileWrite
+      ? {
+          onFileWrite(absolutePath, before, after) {
+            const relativePath = relativeDisplayPath(absolutePath, roots());
+            if (!relativePath) return;
+            options.onFileWrite!({
+              relativePath,
+              operation: before === undefined ? "written" : "edited",
+              bytes: Buffer.byteLength(after, "utf8"),
+            });
+          },
+        }
+      : {}),
   };
 }
 

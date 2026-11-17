@@ -36,6 +36,7 @@ import {
   type WorktreeFirstSend,
 } from "../lib/draft-worktree-send";
 import { isValidBranchName, type FirstMessageWorktreeRequest } from "../shared/worktree-on-send";
+import { localComputerNoun } from "../shared/computer-noun";
 import { DraftWorktreeSendView } from "../components/draft-worktree-send-view";
 import type { GitBranchPickerDraft } from "../components/git-branch-picker";
 import { QueuedMessages } from "../components/queued-messages";
@@ -64,6 +65,8 @@ import {
   chatMessageQueue,
   committedRunInputNotice,
   steerQueuedMessage,
+  steerDraftOrQueue,
+  lateSteerQueuedNotice,
   steerRejectionMessage,
   withCommittedRunInput,
 } from "../lib/chat-message-queue";
@@ -109,7 +112,7 @@ import { GitFork, TerminalSquare } from "lucide-react";
 import { MessageList } from "../components/message-list";
 import { useReadAloud } from "../lib/tts-client";
 import type { ReadAloudActionProps } from "../components/read-aloud-button";
-import { Composer } from "../components/composer";
+import { Composer, type ComposerApprovalsPatch } from "../components/composer";
 import { AskUserQuestionComposer } from "../components/ask-user-question-composer";
 import { DesignModeConsentCard, useDesignModeConsent } from "../design/design-mode-consent";
 import { useCanvasFocusRequests } from "../design/canvas-focus-requests";
@@ -158,7 +161,10 @@ import { ContextMeter } from "../components/context-meter";
 import { ContextPressureFeed } from "../lib/context-pressure-feed";
 import type { ChatContextPressureV1 } from "../shared/context-pressure";
 import { ReasoningVisibilityControl } from "../components/reasoning-visibility-control";
-import { ChatApprovalCard } from "../components/chat-approval-card";
+import { ApprovalStatusLine, ChatApprovalCard } from "../components/chat-approval-card";
+import { noteWorkspaceAllow, repeatableApproval, useWorkspaceRepeatNudge } from "../lib/switch-to-auto";
+import { useApprovalStatusLine } from "../lib/use-approval-status-line";
+import { isComputerUseAccessApprovalDetails } from "../shared/computer-use-access";
 import { liveOpenChat } from "../lib/live-open-chat";
 import {
   useLiveApprovalVoiceHint,
@@ -216,7 +222,6 @@ import {
   type ChatMeta,
   type GitBranches,
   type Workspace,
-  type WorkspacePermission,
 } from "../lib/types";
 import { COMPUTER_USE_CONTINUE_PROMPT } from "../shared/computer-use-access";
 import { userFacingErrorMessage } from "../lib/ipc-error";
@@ -813,6 +818,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
   // After a Deny, the composer invites the user to say what to do instead,
   // until they send something or leave the chat.
   const [deniedApprovalChatId, setDeniedApprovalChatId] = React.useState<string | null>(null);
+  const approvalStatus = useApprovalStatusLine(chatId);
+  const showApprovalStatus = approvalStatus.show;
   const [questionnaire, setQuestionnaire] = React.useState<(AskUserQuestionPromptV1 & { source?: "remote" }) | null>(null);
   const [questionnaireSubmitting, setQuestionnaireSubmitting] = React.useState(false);
   // Aiden's "Open design mode?" card for this chat, while one is waiting.
@@ -2447,30 +2454,34 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (text.length > MAX_RUN_INPUT_TEXT) {
         throw new Error("Guidance is too long to steer. Queue it as a follow-up instead.");
       }
-      const streamId = generationRef.current?.streamId ?? steerableDetachedProjection?.streamId;
-      if (!streamId || isStoppingGeneration || stopRequestedRef.current) {
-        throw new Error("The current response has ended. Send your message normally.");
-      }
       // The same main-owned admission as Remote and Telegram: the guidance is
-      // durable in the transcript before Pi reads it.
-      let receipt;
-      try {
-        receipt = await admitSteer(streamId, text);
-      } catch {
+      // durable in the transcript before Pi reads it. A run that already
+      // ended, or ends unsaved while admission waits, queues the draft as the
+      // next turn instead; a run the person is stopping keeps the draft.
+      const outcome = await steerDraftOrQueue({
+        queue: messageQueue,
+        message: { id: createChatTurnId(), text, attachments: [] },
+        streamId: generationRef.current?.streamId ?? steerableDetachedProjection?.streamId,
+        stopping: () => isStoppingGeneration || stopRequestedRef.current,
+        admit: (streamId, guidance) => admitSteer(streamId, guidance),
+      });
+      if (outcome.kind === "admitted") {
+        toast.info("Guidance sent. Aiden will read it at the next step.");
+      } else if (outcome.kind === "committed") {
+        // Main already saved it; resolving consumes the draft so it is not resent.
+        toast.info(committedRunInputNotice(outcome.reason));
+      } else if (outcome.kind === "queued") {
+        // Resolving consumes the draft: the queue now owns the only copy.
+        toast.info(lateSteerQueuedNotice(outcome.paused));
+      } else if (outcome.kind === "unknown") {
         throw new Error(
           "Aiden couldn't confirm the guidance. Check the conversation before sending it again.",
         );
-      }
-      if (receipt.admitted) {
-        toast.info("Guidance sent. Aiden will read it at the next step.");
-      } else if (receipt.committed) {
-        // Main already saved it; resolving consumes the draft so it is not resent.
-        toast.info(committedRunInputNotice(receipt.reason));
       } else {
-        throw new Error(steerRejectionMessage(receipt.reason));
+        throw new Error(steerRejectionMessage(outcome.reason));
       }
     },
-    [admitSteer, isStoppingGeneration, steerableDetachedProjection],
+    [admitSteer, isStoppingGeneration, messageQueue, steerableDetachedProjection],
   );
 
   const canSteerQueued =
@@ -2481,8 +2492,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const steerQueued = React.useCallback(
     async (id: string) => {
       const streamId = generationRef.current?.streamId ?? steerableDetachedProjection?.streamId;
-      if (!streamId || isStoppingGeneration || stopRequestedRef.current) {
-        toast.error("The current response has ended. The message stays queued.");
+      const stopping = () => isStoppingGeneration || stopRequestedRef.current;
+      if (stopping()) {
+        toast.error(`${steerRejectionMessage("cancelled")} The message stays queued.`);
+        return;
+      }
+      if (!streamId) {
+        // The row is already queued; it sends as the next turn once the run settles.
+        toast.info(lateSteerQueuedNotice(messageQueue.getSnapshot().paused));
         return;
       }
       const queuedSource = messageQueue
@@ -2492,11 +2509,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
         queue: messageQueue,
         id,
         admit: (text) => admitSteer(streamId, text, queuedSource),
+        stopping,
       });
       if (outcome.kind === "admitted") {
         toast.info("Guidance sent. Aiden will read it at the next step.");
       } else if (outcome.kind === "committed") {
         toast.info(committedRunInputNotice(outcome.reason));
+      } else if (outcome.kind === "rejected" && outcome.reason === "run_not_active") {
+        // Nothing was saved and the row stays queued, so the queue sends it
+        // as the next turn once the run settles.
+        toast.info(lateSteerQueuedNotice(messageQueue.getSnapshot().paused));
       } else if (outcome.kind === "rejected") {
         toast.error(`${steerRejectionMessage(outcome.reason)} The message stays queued.`);
       } else if (outcome.kind === "unknown") {
@@ -2616,6 +2638,20 @@ export function ChatPane({ chatId }: { chatId: string }) {
           prev.filter((approval) => approval.approvalId !== prompt.approvalId),
         );
         setDeniedApprovalChatId(decision === "deny" ? decisionChatId : null);
+        const workspaceId = effectiveWorkspaceIdRef.current;
+        if (decision === "allow" && options?.scope === undefined && workspaceId && repeatableApproval(prompt)) {
+          noteWorkspaceAllow(workspaceId, prompt.toolName);
+        }
+        showApprovalStatus(
+          decision === "deny"
+            ? { decision: "deny" }
+            : {
+                decision: "allow",
+                ...(options?.scope ? { scope: options.scope } : {}),
+                // Computer Use's always covers every chat; elsewhere it is this workspace's list.
+                always: isComputerUseAccessApprovalDetails(prompt.details) ? "everywhere" : "workspace",
+              },
+        );
       } catch (approvalError) {
         if (chatIdRef.current !== decisionChatId) return;
         if (prompt.source === "remote") {
@@ -2635,7 +2671,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         }
       }
     },
-    [chatControl, chatId],
+    [chatControl, chatId, showApprovalStatus],
   );
   // Aiden Live answers the first approval by voice through this same decide.
   usePublishLiveChatApprovals(chatId, approvals, decideApproval);
@@ -2742,21 +2778,21 @@ export function ChatPane({ chatId }: { chatId: string }) {
     if (effectiveWorkspace?.folderPath) void workspacesApi.openFolder(effectiveWorkspace.id);
   }, [effectiveWorkspace?.folderPath, effectiveWorkspace?.id]);
 
-  const changePermission = React.useCallback(
-    async (permission: WorkspacePermission) => {
+  const changeApprovals = React.useCallback(
+    async (patch: ComposerApprovalsPatch) => {
       if (!effectiveWorkspace) return;
       if (getChatDraft(chatId)?.sending)
         throw new Error("Wait for the first message to finish saving.");
       if (environmentPanel.gitOperationBusy)
         throw new Error(
-          "Wait for the current Git operation to finish before changing workspace access.",
+          "Wait for the current Git operation to finish before changing approvals.",
         );
       if (environmentPanel.editorState.saving)
         throw new Error(
-          "Wait for the open file to finish saving before changing workspace access.",
+          "Wait for the open file to finish saving before changing approvals.",
         );
       if (environmentPanel.editorState.dirty)
-        throw new Error("Save or discard the open file's edits before changing workspace access.");
+        throw new Error("Save or discard the open file's edits before changing approvals.");
       if (environmentPanel.agentBusy) environmentPanel.cancelAgent?.();
       let targetId = effectiveWorkspace.id;
       // A No workspace draft shares its folder with an existing chat until it
@@ -2772,7 +2808,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           targetId = separateId;
         }
       }
-      await workspacesApi.update(targetId, { permission });
+      await workspacesApi.update(targetId, patch);
       await Promise.all([
         qc.invalidateQueries({ queryKey: queryKeys.workspaces }),
         qc.invalidateQueries({
@@ -3250,6 +3286,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
 
   const pending = approvals[0];
+  // Allowed again and again in Ask: the card offers Auto.
+  const repeatNudge = useWorkspaceRepeatNudge(effectiveWorkspace, pending);
   const pendingLiveVoice = useLiveApprovalVoiceHint(pending?.approvalId);
   const showComputerUseContinue =
     computerUsePendingContinue &&
@@ -3774,7 +3812,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         footer={
           <ScrollAreaFooterStack>
             <EventPresence
-              present={Boolean(pending)}
+              present={Boolean(pending) || approvalStatus.status !== null}
               className="aiden-dock-inset chat-content-column flex min-h-0 flex-col pb-2"
             >
               {pending ? (
@@ -3787,7 +3825,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   pendingCount={approvals.length}
                   keyboardShortcuts
                   liveVoice={pendingLiveVoice}
+                  {...repeatNudge}
                 />
+              ) : approvalStatus.status ? (
+                <ApprovalStatusLine status={approvalStatus.status} />
               ) : null}
             </EventPresence>
             <EventPresence
@@ -3932,6 +3973,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 }
                 onSend={(...args) => {
                   setDeniedApprovalChatId(null);
+                  approvalStatus.clear();
                   return handleSend(...args);
                 }}
                 freezeWhileSending={Boolean(draft)}
@@ -3990,7 +4032,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 gitUnborn={git.data?.unborn}
                 gitStatus={git.data?.isRepo ? git.data : undefined}
                 onOpenFolder={openFolder}
-                onChangePermission={changePermission}
+                onChangeApprovals={changeApprovals}
                 workspacePickerEnabled={isNewChat}
                 machinePicker={
                   // A new chat may run on a paired Mac instead.
@@ -4286,7 +4328,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           saveComposerDraftText(key, cloneDraftRef.current.text);
           seedComposerAttachments(key, cloneDraftRef.current.attachments);
         } else if (cloneDraftRef.current.text || cloneDraftRef.current.attachments.length) {
-          toast.info("The paired computer already has a draft. Your current prompt remains saved on this computer.");
+          toast.info(`The paired computer already has a draft. Your current prompt remains saved on this ${localComputerNoun(capabilities.platform)}.`);
         }
         qc.setQueryData<import("../shared/peer-host").PeerHostFeedSnapshot | null>(hostQueryKeys.feed(hostId), current => current ? { ...current, workspaces: [...current.workspaces.filter(row => row.id !== workspace.id), workspace] } : current);
         void navigate({ to: "/host/$hostId/new", params: { hostId }, search: { workspaceId: workspace.id } });

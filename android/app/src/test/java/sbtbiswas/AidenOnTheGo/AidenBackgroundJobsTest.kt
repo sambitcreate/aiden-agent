@@ -152,11 +152,11 @@ class AidenBackgroundJobsTest {
         assertEquals("1 background job running", AidenBackgroundJobCopy.chipDescription(1))
     }
 
-    /** Revision 62: a job the agent asked to stop once its chat went quiet says so; one the
+    /** Revision 63: a job the agent asked to stop once its chat went quiet says so; one the
      * person stopped, or a reason this version does not know, reads as plain Stopped. */
     @Test
     fun aJobStoppedAfterTheChatWentQuietSaysSo() {
-        assertEquals(62, contract.getValue("contractRevision").jsonPrimitive.int)
+        assertEquals(63, contract.getValue("contractRevision").jsonPrimitive.int)
         val list = contract.getValue("backgroundJobsChatSettled").jsonObject.getValue("list")
         val decoded = AidenBackgroundJobs.decode(list.toString())
         val labels = decoded.jobs.associate { it.id to AidenBackgroundJobCopy.status(it, start) }

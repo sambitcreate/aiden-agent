@@ -17,7 +17,7 @@ struct AidenBotRoutineModelsView: View {
                     AidenRoutineModelForm(model: model)
                 } else {
                     ContentUnavailableView("Routine models unavailable", systemImage: "slider.horizontal.3",
-                        description: Text("Connect to a host that supports routine models and grants Bot and chat access."))
+                        description: Text("Connect to a computer that supports routine models and grants Bot and chat access."))
                 }
             }
             .navigationTitle("Routine model")
@@ -55,13 +55,13 @@ struct AidenRoutineModelForm: View {
             if let message = model.message { Section { Text(message).foregroundStyle(palette.secondary) } }
             if model.pending != nil {
                 Section("Waiting for confirmation") {
-                    Text("The host may have saved this selection. Other changes wait until its outcome is known.")
+                    Text("The computer may have saved this selection. Other changes wait until its outcome is known.")
                     Button("Refresh saved selection") { Task { await model.load() } }
                     Button("Retry same request") { Task { await model.retry() } }.disabled(!model.canWrite || model.busy)
                 }
             }
             if model.needsReview {
-                Section("Changed on your host") {
+                Section("Changed on your computer") {
                     Text("Review the current selection before saving your retained draft.")
                     if let saved = model.settings { selectionSummary(saved.selection) }
                     Button("Keep draft and use current revision") { model.keepDraft() }.disabled(!model.canEdit)
@@ -233,7 +233,7 @@ struct AidenBotRoutineModelDirectoryView: View {
     @MainActor private func load() async {
         guard coordinator.botServer(on: machine)?.supportsBotRoutineModels == true,
               let current = try? coordinator.botContext(on: machine), let client = try? coordinator.remoteClient(for: current) else {
-            routines = []; loading = false; error = "Connect to a host that supports routine model choices."; return
+            routines = []; loading = false; error = "Connect to a computer that supports routine model choices."; return
         }
         context = current; loading = true; defer { loading = false }
         do {

@@ -157,7 +157,7 @@ struct AidenWorkspaceRouteView: View {
 
     private var unavailableMessage: String {
         guard let connection, connection.installation.deviceId == id.deviceId else {
-            return String(localized: "This machine is no longer paired. Pair it again to open this workspace.")
+            return String(localized: "This computer is no longer paired. Pair it again to open this workspace.")
         }
         return String(localized: "This workspace is no longer available on \(connection.installation.name).")
     }

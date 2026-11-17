@@ -51,7 +51,7 @@ While a job runs, Aiden checks which TCP ports its processes listen on: every 3 
 
 The composer shows a **N in background** chip while jobs run. Its list shows each job's state and output, a button for each address a running job serves (for example **localhost:5173**, which opens in the browser), and **Stop** ends one.
 
-On Aiden On The Go for iPhone and Android, a workspace chat shows the same **N in background** chip when the phone is paired with a Mac that runs background jobs. Its list shows each job's state and its addresses as text ("localhost:5173 on your Mac", since they are addresses on the Mac), and **Stop** ends one. A job stopped after its chat went quiet reads **Stopped after the chat went quiet** (revision 62); an older phone shows it as **Stopped**. See "Background jobs on phones, revision 49" and "Stopped after the chat went quiet, revision 62" in the [Aiden Remote API](aiden-remote-api-v1.md).
+On Aiden On The Go for iPhone and Android, a workspace chat shows the same **N in background** chip when the phone is paired with a Mac that runs background jobs. Its list shows each job's state and its addresses as text ("localhost:5173 on your Mac", since they are addresses on the Mac), and **Stop** ends one. A job stopped after its chat went quiet reads **Stopped after the chat went quiet** (revision 63); an older phone shows it as **Stopped**. See "Background jobs on phones, revision 49" and "Stopped after the chat went quiet, revision 63" in the [Aiden Remote API](aiden-remote-api-v1.md).
 
 ## Following a pull request
 
