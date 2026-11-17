@@ -15,6 +15,8 @@ import { HarnessRuntimeSection, useHarnessStatus } from "./harness-runtime-secti
 import { ProviderModelVisibility } from "./provider-model-visibility";
 import { ProviderConnectorKeySharing } from "./provider-connector-key-sharing";
 
+import { useAppCapabilities } from "../../lib/app-capabilities";
+import { localComputerNoun } from "../../shared/computer-noun";
 interface BuiltinProviderEditorProps {
   provider: Provider;
   open: boolean;
@@ -50,6 +52,7 @@ export function BuiltinProviderEditor({
   requireChatModel = true,
   layer,
 }: BuiltinProviderEditorProps) {
+  const { platform } = useAppCapabilities();
   const sessionRef = React.useRef<ProviderAuthSession | null>(null);
   const mountedRef = React.useRef(true);
   const openRef = React.useRef(open);
@@ -218,7 +221,7 @@ export function BuiltinProviderEditor({
       title={`Set up ${provider.label}`}
       description={
         harness
-          ? `${provider.label} runs ${harnessStatus?.publisher ? `${harnessStatus.publisher}'s` : "its own"} agent on this computer. It follows each folder's permission setting: in Ask, its changes and commands wait for your approval.`
+          ? `${provider.label} runs ${harnessStatus?.publisher ? `${harnessStatus.publisher}'s` : "its own"} agent on this ${localComputerNoun(platform)}. It follows each folder's permission setting: in Ask, its changes and commands wait for your approval.`
           : "Pi owns this provider's endpoint, models, credentials, and request transport."
       }
       confirmLabel={chosenMethod === "api_key" && prompt?.type === "secret" ? "Save key" : "Continue"}

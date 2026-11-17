@@ -16,19 +16,14 @@ final class AidenChatSimulatorsModel {
 
     var deviceCount: Int { listing?.showsChatDeviceButton == true ? listing?.chatDeviceIds.count ?? 0 : 0 }
 
-    static func isAvailable(coordinator: AidenRemoteCoordinator) -> Bool {
-        guard coordinator.server?.supportsMobileSimulators == true,
-              let installation = coordinator.installationStore.activeInstallation else { return false }
-        return installation.hasNegotiatedAccess(to: .simulatorsMobile)
-    }
-
-    func refresh(coordinator: AidenRemoteCoordinator?, chatId: String) async {
-        guard let coordinator, Self.isAvailable(coordinator: coordinator) else {
+    /// `client` is the chat's own machine's, nil when it doesn't offer simulators.
+    func refresh(client: AidenRemoteClient?, chatId: String) async {
+        guard let client else {
             listing = nil
             return
         }
         do {
-            let value = try await coordinator.remoteClient().simulators(chatId: chatId)
+            let value = try await client.simulators(chatId: chatId)
             guard !Task.isCancelled else { return }
             listing = value
         } catch {
@@ -37,9 +32,8 @@ final class AidenChatSimulatorsModel {
         }
     }
 
-    func makeViewer(coordinator: AidenRemoteCoordinator?) -> AidenSimulatorViewerModel? {
-        guard let coordinator, let listing, listing.showsChatDeviceButton,
-              let client = try? coordinator.remoteClient() else { return nil }
+    func makeViewer(client: AidenRemoteClient?) -> AidenSimulatorViewerModel? {
+        guard let client, let listing, listing.showsChatDeviceButton else { return nil }
         return AidenSimulatorViewerModel(client: client, listing: listing)
     }
 }

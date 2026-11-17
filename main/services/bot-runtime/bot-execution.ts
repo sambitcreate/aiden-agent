@@ -51,6 +51,8 @@ export interface BotExecutionPort {
   resolve(botId: string, claim: BotExecutionClaim, signal: AbortSignal): Promise<BotExecutionRuntime>;
   selectFallback(botId: string, claimId: string, reason: "model_unavailable" | "credentials_unavailable"): Promise<void>;
   recordSubmission?(botId: string, claimId: string, submissionId: string): Promise<void>;
+  /** Drops a plain message's claim that was refused before submission; anything else is kept. */
+  releaseUnsubmittedClaim?(botId: string, requestId: string): Promise<void>;
   /** Exact private receipt identity captured before durable person consent. */
   unknownDispatch?(botId: string, claim: BotExecutionClaim): Promise<string | undefined>;
   unknownCostReceipt?(botId: string, claim: BotExecutionClaim, submissionId: string, scopeId: string): Promise<{ dispatchId: string; costReceiptId: string } | undefined>;

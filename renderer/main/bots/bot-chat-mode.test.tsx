@@ -35,7 +35,7 @@ function renderComposer(surfaces: ComposerSurfaces) {
           surfaces={surfaces}
           workspace={workspace}
           gitBranch="main"
-          onChangePermission={() => undefined}
+          onChangeApprovals={() => undefined}
           onRenameChat={() => undefined}
           onExportChat={async () => "saved"}
         />
@@ -50,14 +50,14 @@ async function typeSlash() {
   return screen.queryAllByRole("option").map((option) => option.textContent ?? "");
 }
 
-test("a Bot chat composer keeps attach, voice, and send but hides workspace access", () => {
+test("a Bot chat composer keeps attach, voice, and send but hides the approvals chip", () => {
   renderComposer(LOCAL_COMPOSER_SURFACES);
-  // The same composer outside Bot mode does offer the access control.
-  assert.ok(screen.getByRole("button", { name: /Workspace access/u }));
+  // The same composer outside Bot mode shows this customized workspace's approvals chip.
+  assert.ok(screen.getByRole("button", { name: /^Approvals:/u }));
   cleanup();
 
   renderComposer(BOT_CHAT_COMPOSER_SURFACES);
-  assert.equal(screen.queryByRole("button", { name: /Workspace access/u }), null);
+  assert.equal(screen.queryByRole("button", { name: /^Approvals:/u }), null);
   assert.ok(screen.getByRole("button", { name: "Attach files or images" }));
   assert.ok(screen.getByRole("button", { name: "Start voice input" }));
   assert.ok(screen.getByRole("button", { name: "Send message" }));

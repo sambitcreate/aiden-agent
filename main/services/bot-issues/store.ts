@@ -25,6 +25,10 @@ export interface StoredBotIssue extends BotIssue {
   entryAppended?: boolean;
   delivered?: boolean;
   statusAppended?: boolean;
+  /** A heads-up, not an ask: it never alerts the person and is never reminded. */
+  quiet?: boolean;
+  /** The one reminder for an ask still open after hours has been sent. */
+  reminded?: boolean;
 }
 
 export interface BotIssueChange<T> {
@@ -75,6 +79,8 @@ function storedOf(row: unknown, botId: string): StoredBotIssue | null {
     ...(typeof fields.entryAppended === "boolean" ? { entryAppended: fields.entryAppended } : {}),
     ...(typeof fields.delivered === "boolean" ? { delivered: fields.delivered } : {}),
     ...(typeof fields.statusAppended === "boolean" ? { statusAppended: fields.statusAppended } : {}),
+    ...(fields.quiet === true ? { quiet: true } : {}),
+    ...(fields.reminded === true ? { reminded: true } : {}),
   };
 }
 

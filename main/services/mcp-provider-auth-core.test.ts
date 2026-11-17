@@ -91,7 +91,7 @@ test("provider-backed MCP stays out of Bot, scheduled, remote and child scopes e
   const regular = { ...server, id: "ordinary", authProvider: undefined };
   assert.deepEqual(admitMcpProviderAuthServers([server, regular], true, true).map((item) => item.id), ["docs", "ordinary"]);
   assert.deepEqual(admitMcpProviderAuthServers([server, regular], false, false).map((item) => item.id), ["ordinary"]);
-  assert.throws(() => admitMcpProviderAuthServers([server], false, true), /attended desktop/u);
+  assert.throws(() => admitMcpProviderAuthServers([server], false, true), /open in Aiden Agent/u);
 });
 
 

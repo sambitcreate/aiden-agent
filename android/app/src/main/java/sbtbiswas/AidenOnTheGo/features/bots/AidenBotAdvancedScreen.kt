@@ -404,6 +404,10 @@ fun AidenBotAdvancedSheet(
                                 usesFullAccess = current.usesFullAccess,
                                 onUsesFullAccessChange = { draft = current.copy(usesFullAccess = it) }
                             )
+                            if (current.usesFullAccess && messagingCoordinator?.installationStore?.activeInstallation?.offersBotUx == true) {
+                                // Revision 61: turn one tool off without picking everything else.
+                                AidenBotDisableToolMenu(cat) { tool -> draft = current.disabling(tool, cat) }
+                            }
                             AnimatedVisibility(visible = !current.usesFullAccess) {
                                 AidenBotCustomAccessSections(
                                     catalog = cat,

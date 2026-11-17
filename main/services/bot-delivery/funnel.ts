@@ -6,6 +6,9 @@
 // Quiet hours and the daily cap enter here as the gate (Plan B). The gate is
 // checked on admission and again when a deferred group actually goes out.
 // A retry of a released row sends only the channels that are still owed.
+//
+// A message that arrives while that Bot's chat is open in front of the person
+// is logged quiet: they are already looking at it, so nothing pings them.
 
 import { createHash } from "node:crypto";
 import { createKeyedSerial } from "../bot-routine-notes.js";
@@ -80,6 +83,8 @@ export function createBotDeliveryFunnel(deps: {
   peerPending?(botId:string,rootId:string):Promise<void>;
   /** The Bot's name for a digest's title; falls back to "Your Bot". */
   botName?(botId: string): Promise<string | undefined>;
+  /** Whether that Bot's chat is open in a focused window while the person is at the Mac. */
+  inFront?(botId: string): boolean;
 }): BotDeliveryFunnel {
   /**
    * Sends only the channels the row still owes, stamping each as it succeeds.
@@ -148,7 +153,9 @@ export function createBotDeliveryFunnel(deps: {
 
   /** Asks the gate and stores the row it decided for. */
   async function record(input: BotDeliveryInput, at: number): Promise<{ row: BotDeliveryRow; now: boolean }> {
-    const decision = input.quiet === true || input.routineTask?.notify === false ? {kind:"now" as const} : await deps.gate.decide(input, at);
+    let quiet = input.quiet === true || input.routineTask?.notify === false;
+    if (!quiet) { try { quiet = deps.inFront?.(input.botId) === true; } catch { /* Unknown means not in front: the person is told. */ } }
+    const decision = quiet ? {kind:"now" as const} : await deps.gate.decide(input, at);
     if (decision.kind === "suppress") await limitNote(input.botId, decision.digestKey, at, input.class === "peer_result" && input.requestId ? [input.requestId] : [], input.publication);
     await input.publication?.assertCurrent();
     const { row } = await deps.log.append({
@@ -162,7 +169,7 @@ export function createBotDeliveryFunnel(deps: {
       ...(input.routineTask !== undefined ? { routineId: input.routineTask.id } : {}),
       ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),
       ...(input.class==="peer_result"&&input.requestId?{peerRootIds:[input.requestId]}:{}),
-      ...(input.quiet === true || input.routineTask?.notify === false ? { quiet: true } : {}),
+      ...(quiet ? { quiet: true } : {}),
       createdAt: at,
       deliverAfter: decision.kind === "defer" ? decision.until : at,
       ...(decision.kind === "suppress" ? { suppressed: true } : {}),

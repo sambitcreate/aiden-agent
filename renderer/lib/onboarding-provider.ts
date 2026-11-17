@@ -1,4 +1,5 @@
 import type { Provider } from "./types";
+import { localComputerNoun, type LocalComputerNoun } from "../shared/computer-noun";
 
 export type LocalRuntime = "lmstudio" | "ollama";
 
@@ -61,10 +62,12 @@ export function onboardingModelDescription(platform: string): string {
 }
 
 /** Platform filtering must preserve setup and privacy disclosures for available features. */
-export function visibleOnboardingFeatures<T extends { id: string; description: string }>(
+export function visibleOnboardingFeatures<
+  T extends { id: string; description: string | ((computer: LocalComputerNoun) => string) },
+>(
   features: readonly T[],
   capabilities: { computerUse: boolean; bots: boolean; botComputers: boolean; platform: string; designMode?: boolean },
-): T[] {
+): (T & { description: string })[] {
   return features.filter((feature) =>
     (capabilities.computerUse || feature.id !== "computerUse") &&
     // Only AIDEN_DESIGN_MODE=0 turns design mode off.
@@ -80,5 +83,10 @@ export function visibleOnboardingFeatures<T extends { id: string; description: s
     ? { ...feature, description: onboardingModelDescription(capabilities.platform) }
     : feature.id === "commands" && capabilities.platform === "linux"
     ? { ...feature, description: "Use Ctrl-K or / for app commands, and $ to attach a reusable skill." }
-    : feature);
+    : {
+        ...feature,
+        description: typeof feature.description === "function"
+          ? feature.description(localComputerNoun(capabilities.platform))
+          : feature.description,
+      });
 }

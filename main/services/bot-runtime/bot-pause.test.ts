@@ -655,6 +655,7 @@ async function legacyChatHost() {
       },
     },
     "./tool-approval.js": { ToolApprovalCoordinator: class { cancelStream() {} } },
+    "./approval-gate/approval-analytics.js": { ApprovalAnalytics: UnusedService },
     "./ask-user-question-coordinator.js": { AskUserQuestionCoordinator: UnusedService },
     "./workspace-files-touched.js": { createWorkspaceFilesTouchedNotifier: () => () => {} },
     "./acp/scratch-directory.js": { createAcpScratchDirectories: () => ({ directoryFor: async () => "", forget: async () => {} }) },
