@@ -37,6 +37,17 @@ test("import specifiers include static, export-from, and require forms", () => {
   );
 });
 
+test("import specifiers keep multiline named imports and ignore comment delimiters in line comments", () => {
+  assert.deepEqual(
+    parseImportSpecifiers('import {\n  parseRemoteFrame,\n} from "./aiden-remote-parse.js";\n'),
+    ["./aiden-remote-parse.js"],
+  );
+  assert.deepEqual(
+    parseImportSpecifiers('// keep /* inside this line\nimport helper from "./helper.js";\n'),
+    ["./helper.js"],
+  );
+});
+
 test("a source change selects its test file and importers, not an unrelated test", () => {
   const selected = selectRelatedUnitFiles({
     changedPaths: ["main/services/x.ts"],
@@ -52,6 +63,8 @@ test("package locks, CI scripts, and unknown paths keep the full unit suite", ()
   for (const changedPaths of [
     ["package-lock.json"],
     ["scripts/ci-related-tests.mjs"],
+    ["scripts/patch-electron-builder-keychain.mjs"],
+    ["renderer/styles.css"],
     ["resources/generative-ui/runtime.js"],
   ]) {
     const selected = selectRelatedUnitFiles({
@@ -117,9 +130,18 @@ test("an unmapped desktop path or shared fixture keeps every E2E spec", () => {
 
 test("every deterministic spec has a source map entry, and dropping one fails", () => {
   const specs = discoverSpecs();
-  const map = validateE2ESpecMap(specs, readE2ESpecMap());
+  const map = validateE2ESpecMap(specs, readE2ESpecMap(), { requireMatchingFiles: true });
   assert.ok(Object.keys(map.specs).length > 0);
   const copy = structuredClone(map);
   delete copy.specs["settings-unification.spec.ts"];
   assert.throws(() => validateE2ESpecMap(specs, copy), /settings-unification\.spec\.ts/u);
+});
+
+test("a chat-fork service change selects the fork spec rather than falling through to chat-shell only", () => {
+  const selected = selectRelatedE2ESpecs({
+    changedPaths: ["main/services/chat-fork-service.ts"],
+    specs: discoverSpecs(),
+  });
+  assert.equal(selected.mode, "related");
+  assert.ok(selected.specs.includes("chat-fork.spec.ts"));
 });

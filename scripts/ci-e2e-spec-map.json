@@ -3,16 +3,14 @@
   "full": [
     "playwright.config.ts",
     "vite.config.ts",
-    "electron-builder.yml",
-    "electron-builder.yaml",
     "package.json",
     "package-lock.json",
     "renderer/main/",
-    "renderer/index.html",
+    "main-window.html",
     "renderer/styles.css",
+    "renderer/preload.ts",
     "main/index.ts",
     "main/windows/",
-    "preload/",
     "tests/e2e/fixtures.ts",
     "tests/e2e/global-setup.ts",
     "tests/e2e/fake-openrouter.ts",
@@ -41,20 +39,20 @@
     ],
     "bot-access-requests.spec.ts": [
       "renderer/components/bot",
-      "main/services/bot-access",
+      "main/services/bot-runtime/bot-access",
       "renderer/shared/bot-access-requests.ts"
     ],
     "bot-browser.spec.ts": [
       "renderer/components/bot",
       "renderer/components/browser",
-      "main/services/bot-browser",
+      "main/services/bot-runtime/bot-browser",
       "main/services/browser"
     ],
     "bot-computer-tab.spec.ts": [
       "renderer/components/bot",
       "renderer/components/settings/bot-computer",
       "main/services/bot-computers",
-      "main/services/bot-computer"
+      "main/services/bot-runtime/bot-computer"
     ],
     "bot-connect-card.spec.ts": [
       "renderer/components/bot",
@@ -69,12 +67,12 @@
     ],
     "bot-handoff-own-screen.spec.ts": [
       "renderer/components/bot",
-      "main/services/bot-handoff",
+      "main/services/bot-runtime/bot-handoff",
       "renderer/shared/bot-handoffs.ts"
     ],
     "bot-messaging.spec.ts": [
       "renderer/components/bot",
-      "main/services/bot-message",
+      "main/services/bot-messages",
       "renderer/shared/bot-messages.ts"
     ],
     "bot-open-work.spec.ts": [
@@ -84,12 +82,12 @@
     ],
     "bot-peers.spec.ts": [
       "renderer/components/bot",
-      "main/services/bot-peer",
+      "main/services/bot-peers",
       "renderer/shared/bot-peers.ts"
     ],
     "bot-plans.spec.ts": [
       "renderer/components/bot",
-      "main/services/bot-plan",
+      "main/services/bot-runtime/bot-plan",
       "renderer/shared/bot-plans.ts"
     ],
     "bot-routine-models.spec.ts": [
@@ -102,7 +100,7 @@
     "bot-sign-in.spec.ts": [
       "renderer/components/bot",
       "main/services/bot-connection",
-      "main/services/bot-sign"
+      "main/services/bot-runtime/bot-sign-in"
     ],
     "bots-persistence.spec.ts": [
       "renderer/components/bot",
@@ -205,7 +203,7 @@
     "draft-agent-chats.spec.ts": [
       "renderer/components/chat",
       "main/services/chat-store",
-      "main/services/draft"
+      "renderer/lib/chat-draft"
     ],
     "environment-devices-agent.spec.ts": [
       "renderer/components/device",
@@ -247,7 +245,7 @@
       "renderer/components/guided-provider-chooser"
     ],
     "inbox-sidebar.spec.ts": [
-      "renderer/components/inbox",
+      "renderer/components/sidebar/inbox",
       "renderer/lib/inbox",
       "main/services/inbox",
       "renderer/shared/inbox-state.ts"
@@ -266,10 +264,10 @@
     "interrupted-reply-resume.spec.ts": [
       "renderer/components/message",
       "main/services/chat-generation",
-      "main/services/bot-execution-resume"
+      "renderer/shared/bot-execution-resume"
     ],
     "linux-window-controls.spec.ts": [
-      "renderer/components/titlebar",
+      "renderer/components/window-controls",
       "renderer/components/window",
       "main/windows/",
       "main/linux"
@@ -312,7 +310,7 @@
     ],
     "peer-project-clone.spec.ts": [
       "renderer/components/bot",
-      "main/services/bot-peer",
+      "main/services/bot-peers",
       "main/services/peer"
     ],
     "provider-artwork.spec.ts": [
@@ -328,7 +326,7 @@
       "renderer/components/settings/",
       "renderer/components/provider",
       "renderer/components/local-provider-dialog",
-      "renderer/components/builtin-provider"
+      "renderer/components/settings/builtin-provider"
     ],
     "quick-view-cards.spec.ts": [
       "renderer/components/quick-view"
@@ -350,13 +348,13 @@
     "settings-simulator-ssh-hosts.spec.ts": [
       "renderer/components/settings/",
       "renderer/components/settings/computer-use",
-      "main/services/simulator"
+      "main/services/aiden-remote-simulators"
     ],
     "settings-unification.spec.ts": [
       "renderer/components/settings/"
     ],
     "studio-foundation.spec.ts": [
-      "renderer/components/studio",
+      "renderer/canvas/studio",
       "main/services/studio"
     ],
     "terminal.spec.ts": [
@@ -394,7 +392,7 @@
     "worktree-folder-deleted.spec.ts": [
       "renderer/components/workspace",
       "main/services/workspace-worktree",
-      "main/services/worktree"
+      "main/services/managed-worktree"
     ]
   }
 }

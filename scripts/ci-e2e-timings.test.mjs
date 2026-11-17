@@ -34,6 +34,16 @@ test("Playwright JSON reports become per-spec seconds and ignore skipped results
   assert.equal(seconds["chat-fork.spec.ts"], 1);
 });
 
+test("nested spec paths stay nested when Playwright omits the tests/e2e prefix", () => {
+  const seconds = extractSpecSeconds({
+    suites: [{
+      file: "nested/future-flow.spec.ts",
+      specs: [{ tests: [{ results: [{ status: "passed", duration: 1500 }] }] }],
+    }],
+  });
+  assert.equal(seconds["nested/future-flow.spec.ts"], 2);
+});
+
 test("malformed or missing timing stores never fail planning", () => {
   assert.deepEqual(timingWeights(parseTimingsStore(null), "darwin"), {});
   assert.deepEqual(timingWeights(parseTimingsStore({ version: 2 }), "linux"), {});

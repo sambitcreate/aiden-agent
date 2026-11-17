@@ -37,8 +37,9 @@ reproduce one shard with
 Pull-request CI also reads `scripts/ci-e2e-spec-map.json` to run only specs whose
 listed source prefixes match the diff. Add every new deterministic spec to that
 map with the `renderer/` / `main/` paths it covers; fixtures and Playwright config
-stay in the map's `full` list so they keep the whole suite. Main, the merge queue
-and releases always run every spec.
+stay in the map's `full` list so they keep the whole suite. Prefixes must exist on
+disk (exact file, directory, or a stem continued by `/`, `.`, or `-`). Main, the
+merge queue and releases always run every spec.
 Never run these shards concurrently against the same checkout or desktop session.
 
 The production-profile diagnostics spec runs separately after the desktop build job's

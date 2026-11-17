@@ -116,13 +116,16 @@ in `scripts/ci-e2e-spec-map.json`. Pushes to `main`, merge-group runs, releases,
 and `workflow_dispatch` keep the full suites. Selection also falls back to the
 full suite when a changed path is unmapped, or when shared config, fixtures,
 `package.json`, lockfiles, CI files, or test infra change. Empty unit lanes skip
-their `node --test` invocation but still start. When you add a deterministic
+their `tsx --test` invocation but still start. When you add a deterministic
 E2E spec, add it to `scripts/ci-e2e-spec-map.json` with the `renderer/` and
-`main/` prefixes it covers; CI policy fails if a runnable spec is missing or if
-an entry names a spec that no longer exists. Shared harness files belong in the
-map's `full` list so they keep every spec. Prefixes are exact paths, directories
-(`settings/`), or dash stems (`bot-`). Changing a spec file itself selects that
-spec.
+`main/` prefixes it covers; CI policy fails if a runnable spec is missing, if
+an entry names a spec that no longer exists, or if a listed prefix matches no
+file on disk. Shared harness files belong in the map's `full` list so they keep
+every spec. Prefixes are exact paths, directories (`settings/`), or stems that
+continue with `/`, `.`, or `-` (`chat-fork` matches `chat-fork-service.ts`).
+Changing a spec file itself selects that spec. A failed-job rerun downloads the
+original `changes` job's selection artifact, not a name built from the rerun
+attempt.
 
 Use `node scripts/run-ci-tests.mjs --list` or `--dry-run` to inspect assignments.
 Use `--lane core-git`, `--lane runtime-subagents`, `--lane renderer-other`, or

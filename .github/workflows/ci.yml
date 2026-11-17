@@ -27,6 +27,7 @@ jobs:
       cli: ${{ steps.filter.outputs.cli }}
       linux: ${{ steps.filter.outputs.linux }}
       catalog: ${{ steps.filter.outputs.catalog }}
+      selection-artifact: ${{ steps.selection.outputs.artifact }}
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
@@ -44,15 +45,18 @@ jobs:
           FORCE_FULL: ${{ (github.event_name == 'push' || github.event_name == 'merge_group') && 'true' || 'false' }}
         run: node scripts/ci-changes.mjs
       - name: Select reachable tests
+        id: selection
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           FORCE_FULL: ${{ (github.event_name == 'push' || github.event_name == 'merge_group') && 'true' || 'false' }}
-        run: node scripts/ci-select-tests.mjs
+        run: |
+          node scripts/ci-select-tests.mjs
+          echo "artifact=ci-test-selection-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
       - name: Upload test selection
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: ci-test-selection-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ steps.selection.outputs.artifact }}
           path: ci-test-selection.json
           if-no-files-found: error
           retention-days: 1
@@ -130,16 +134,6 @@ jobs:
         with:
           node-version: 22.23.4
           cache: npm
-      - name: Install locked dependencies
-        run: npm ci
-      - name: Download production build
-        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
-        with:
-          # A failed-job rerun reuses the successful producer's original artifact.
-          name: ${{ needs.build.outputs.artifact-name }}
-          path: ${{ runner.temp }}/desktop-build
-      - name: Restore production build
-        run: tar -xf "$RUNNER_TEMP/desktop-build/desktop-build.tar"
       - name: Restore recorded E2E spec timings
         continue-on-error: true
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
@@ -151,9 +145,32 @@ jobs:
       - name: Download test selection
         uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
-          name: ci-test-selection-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ needs.changes.outputs.selection-artifact }}
           path: ${{ runner.temp }}/ci-test-selection
+      - name: List E2E shard
+        id: plan
+        env:
+          AIDEN_E2E_TIMINGS: test-results/e2e-spec-timings.json
+          AIDEN_E2E_TIMINGS_PLATFORM: darwin
+          AIDEN_CI_TEST_SELECTION: ${{ runner.temp }}/ci-test-selection/ci-test-selection.json
+        run: |
+          node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/4 --list > "$RUNNER_TEMP/e2e-shard.json"
+          node -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); fs.appendFileSync(process.env.GITHUB_OUTPUT, `empty=${s.files.length===0}\n`);' "$RUNNER_TEMP/e2e-shard.json"
+      - name: Install locked dependencies
+        if: ${{ steps.plan.outputs.empty != 'true' }}
+        run: npm ci
+      - name: Download production build
+        if: ${{ steps.plan.outputs.empty != 'true' }}
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+        with:
+          # A failed-job rerun reuses the successful producer's original artifact.
+          name: ${{ needs.build.outputs.artifact-name }}
+          path: ${{ runner.temp }}/desktop-build
+      - name: Restore production build
+        if: ${{ steps.plan.outputs.empty != 'true' }}
+        run: tar -xf "$RUNNER_TEMP/desktop-build/desktop-build.tar"
       - name: Run deterministic Electron E2E shard
+        if: ${{ steps.plan.outputs.empty != 'true' }}
         env:
           AIDEN_E2E_TIMINGS: test-results/e2e-spec-timings.json
           AIDEN_E2E_TIMINGS_PLATFORM: darwin
@@ -171,7 +188,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: Upload E2E spec timings
-        if: ${{ always() }}
+        if: ${{ always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: e2e-spec-timings-macOS-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
@@ -296,7 +313,7 @@ jobs:
       - name: Download test selection
         uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
-          name: ci-test-selection-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ needs.changes.outputs.selection-artifact }}
           path: ${{ runner.temp }}/ci-test-selection
       - name: Run assigned regression tests and prerequisites
         env:
@@ -893,15 +910,6 @@ jobs:
           node-version: 22.23.4
           cache: npm
 
-      - name: Install Linux test dependencies
-        run: sudo apt-get update && sudo apt-get install --yes rpm xvfb pkg-config libsecret-1-dev libselinux1-dev gnome-keyring dbus-x11
-
-      - name: Install locked dependencies
-        run: npm ci
-
-      - name: Build the app
-        run: npm run build
-
       - name: Restore recorded E2E spec timings
         continue-on-error: true
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
@@ -913,10 +921,32 @@ jobs:
       - name: Download test selection
         uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
-          name: ci-test-selection-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ needs.changes.outputs.selection-artifact }}
           path: ${{ runner.temp }}/ci-test-selection
+      - name: List E2E shard
+        id: plan
+        env:
+          AIDEN_E2E_TIMINGS: test-results/e2e-spec-timings.json
+          AIDEN_E2E_TIMINGS_PLATFORM: linux
+          AIDEN_CI_TEST_SELECTION: ${{ runner.temp }}/ci-test-selection/ci-test-selection.json
+        run: |
+          node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/3 --list > "$RUNNER_TEMP/e2e-shard.json"
+          node -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); fs.appendFileSync(process.env.GITHUB_OUTPUT, `empty=${s.files.length===0}\n`);' "$RUNNER_TEMP/e2e-shard.json"
+
+      - name: Install Linux test dependencies
+        if: ${{ steps.plan.outputs.empty != 'true' }}
+        run: sudo apt-get update && sudo apt-get install --yes rpm xvfb pkg-config libsecret-1-dev libselinux1-dev gnome-keyring dbus-x11
+
+      - name: Install locked dependencies
+        if: ${{ steps.plan.outputs.empty != 'true' }}
+        run: npm ci
+
+      - name: Build the app
+        if: ${{ steps.plan.outputs.empty != 'true' }}
+        run: npm run build
 
       - name: Run deterministic Electron E2E gate
+        if: ${{ steps.plan.outputs.empty != 'true' }}
         env:
           AIDEN_E2E_TIMINGS: test-results/e2e-spec-timings.json
           AIDEN_E2E_TIMINGS_PLATFORM: linux
@@ -952,7 +982,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: Upload E2E spec timings
-        if: ${{ always() }}
+        if: ${{ always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: e2e-spec-timings-Linux-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
@@ -963,7 +993,7 @@ jobs:
   e2e-spec-timings:
     name: Merge E2E spec timings
     needs: [changes, e2e, linux-e2e]
-    if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.desktop == 'true' }}
+    if: ${{ always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.desktop == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -991,10 +1021,11 @@ jobs:
       - name: Merge recorded spec timings
         run: node scripts/ci-e2e-timings.mjs merge-dir test-results/e2e-spec-timings.json "$RUNNER_TEMP/e2e-spec-timings" --out test-results/e2e-spec-timings.json
       - name: Save merged E2E spec timings
+        continue-on-error: true
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: test-results/e2e-spec-timings.json
-          key: e2e-spec-timings-v1-${{ github.sha }}
+          key: e2e-spec-timings-v1-${{ github.run_id }}-${{ github.run_attempt }}
 
   linux-rpm:
     name: Linux x64 · Fedora RPM

@@ -126,9 +126,7 @@ export function shardArguments(specs, selection, options = {}) {
   if (!match || Number(match[1]) > Number(match[2])) throw new Error("Use an E2E shard such as 1/3");
   const shard = planShards(specs, Number(match[2]), options)[Number(match[1]) - 1];
   if (!shard.files.length) {
-    if (options.allowEmpty) {
-      return { shard, args: ["test", "--config=playwright.config.ts", "--workers=1", "--fail-on-flaky-tests"], empty: true };
-    }
+    if (options.allowEmpty) return { shard, args: [], empty: true };
     throw new Error("E2E shard must contain tests");
   }
   const patterns = shard.files.map((file) => `(?:^|/)tests/e2e/${file.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}$`);
@@ -139,9 +137,9 @@ export function selectedSpecs(discovered, selection) {
   if (!selection || selection.e2e?.mode !== "related") return discovered;
   const wanted = selection.e2e.specs;
   if (!Array.isArray(wanted) || wanted.length === 0) return discovered;
-  const allowed = new Set(wanted);
-  const files = discovered.filter((file) => allowed.has(file));
-  return files.length > 0 ? files : discovered;
+  const present = new Set(discovered);
+  if (wanted.some((file) => !present.has(file))) return discovered;
+  return discovered.filter((file) => present.has(file) && wanted.includes(file));
 }
 
 export function readTestSelection(filePath = process.env.AIDEN_CI_TEST_SELECTION) {

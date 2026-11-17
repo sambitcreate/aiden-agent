@@ -100,4 +100,5 @@ test("related E2E selection may leave unused shards empty without dropping the s
   assert.equal(first.empty, undefined);
   assert.deepEqual(unused.shard.files, []);
   assert.equal(unused.empty, true);
+  assert.deepEqual(unused.args, []);
 });

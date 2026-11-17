@@ -26,6 +26,10 @@ export function normalizeSpecFile(file) {
   const index = posix.lastIndexOf(marker);
   if (index >= 0) return posix.slice(index + marker.length);
   if (posix.startsWith("tests/e2e/")) return posix.slice("tests/e2e/".length);
+  const relative = posix.replace(/^\.\//u, "");
+  if (relative.endsWith(".spec.ts") && !relative.startsWith("/") && !/^[A-Za-z]:\//u.test(relative)) {
+    return relative;
+  }
   return posix.split("/").filter(Boolean).at(-1) ?? "";
 }
 
@@ -93,7 +97,8 @@ export function mergeTimings(previous, extracted, options = {}) {
   for (const [file, seconds] of Object.entries(extracted ?? {})) {
     const name = normalizeSpecFile(file);
     if (!name.endsWith(".spec.ts") || !Number.isFinite(seconds) || seconds <= 0) continue;
-    const samples = [...(specs[name]?.samples ?? []), Math.round(seconds)].slice(-SAMPLE_LIMIT);
+    const previous = Array.isArray(specs[name]?.samples) ? specs[name].samples : [];
+    const samples = [...previous, Math.round(seconds)].slice(-SAMPLE_LIMIT);
     const merged = median(samples);
     if (merged === null) continue;
     specs[name] = { samples, seconds: merged };
@@ -128,7 +133,8 @@ export function writeJson(filePath, value) {
 
 export function platformFromArtifactPath(filePath) {
   const posix = filePath.replaceAll("\\", "/");
-  if (posix.includes("Linux") || posix.includes("/linux/") || posix.endsWith("-linux.json")) return "linux";
+  const parent = posix.split("/").filter(Boolean).at(-2) ?? "";
+  if (/linux/i.test(parent) || /linux/i.test(path.basename(posix))) return "linux";
   return "darwin";
 }
 

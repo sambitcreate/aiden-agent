@@ -4,7 +4,9 @@ import { PROJECT_ROOT } from "./ci-test-registry.mjs";
 
 const SOURCE_ROOTS = Object.freeze(["main", "renderer", "scripts", "packages/cli"]);
 const SOURCE_FILE = /\.(?:cjs|mjs|js|ts|tsx|json|css)$/u;
-const IMPORT_SPEC = /(?:import|export)\s+(?:[^'"\n;]*from\s*)?["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\)|require\s*\(\s*["']([^"']+)["']\s*\)/gu;
+const TEST_FILE = /\.test\.(?:cjs|mjs|js|ts|tsx)$/u;
+const IMPORT_SPEC =
+  /(?:import|export)(?:\s+type)?(?:\s+[\w*{}\s,$.]+?)?\s+from\s*["']([^"']+)["']|import\s*["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\)|require\s*\(\s*["']([^"']+)["']\s*\)/gu;
 const LOCK_FILE =
   /(?:^|\/)(?:[^/]+\.(?:lock|lockfile)|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lock(?:b)?)$/u;
 const CONFIG_FILE =
@@ -27,15 +29,38 @@ export function pathMatchesPrefix(file, prefix) {
   const pathName = posix(file);
   const needle = posix(prefix);
   if (pathName === needle) return true;
-  if (needle.endsWith("/") || needle.endsWith("-")) return pathName.startsWith(needle);
-  return pathName.startsWith(`${needle}/`) || pathName.startsWith(`${needle}.`);
+  if (!pathName.startsWith(needle)) return false;
+  if (needle.endsWith("/") || needle.endsWith("-")) return true;
+  const next = pathName[needle.length];
+  return next === "/" || next === "." || next === "-";
+}
+
+export function prefixExistsOnDisk(prefix, root = PROJECT_ROOT) {
+  const relative = posix(prefix);
+  const absolute = path.join(root, relative);
+  if (existsSync(absolute)) return true;
+  const parentRel = relative.endsWith("/")
+    ? relative.slice(0, -1)
+    : relative.includes("/")
+      ? relative.slice(0, relative.lastIndexOf("/"))
+      : ".";
+  const parent = path.join(root, parentRel);
+  if (!existsSync(parent)) return false;
+  try {
+    return readdirSync(parent).some((name) => {
+      const candidate = parentRel === "." ? name : `${parentRel}/${name}`;
+      return pathMatchesPrefix(candidate, relative);
+    });
+  } catch {
+    return false;
+  }
 }
 
 export function readE2ESpecMap(filePath = path.join(PROJECT_ROOT, "scripts/ci-e2e-spec-map.json")) {
   return JSON.parse(readFileSync(filePath, "utf8"));
 }
 
-export function validateE2ESpecMap(specs, map = readE2ESpecMap()) {
+export function validateE2ESpecMap(specs, map = readE2ESpecMap(), options = {}) {
   if (!isRecord(map) || map.version !== 1 || !isRecord(map.specs) || !Array.isArray(map.full)) {
     throw new Error("E2E spec-to-source map is missing or malformed");
   }
@@ -48,11 +73,64 @@ export function validateE2ESpecMap(specs, map = readE2ESpecMap()) {
   if (unknown.length > 0) {
     throw new Error(`E2E spec-to-source map lists unknown specs ${unknown.join(", ")}`);
   }
+  if (options.requireMatchingFiles) {
+    const unmatched = [];
+    for (const prefix of map.full) {
+      if (!prefixExistsOnDisk(prefix, options.root)) unmatched.push(`full: ${prefix}`);
+    }
+    for (const [spec, prefixes] of Object.entries(map.specs)) {
+      for (const prefix of prefixes) {
+        if (!prefixExistsOnDisk(prefix, options.root)) unmatched.push(`${spec}: ${prefix}`);
+      }
+    }
+    if (unmatched.length > 0) {
+      throw new Error(`E2E spec-to-source map prefixes match no files: ${unmatched.join("; ")}`);
+    }
+  }
   return map;
 }
 
 function stripComments(source) {
-  return source.replace(/\/\*[\s\S]*?\*\//gu, "").replace(/(^|[^:'\w])\/\/.*$/gmu, "$1");
+  const text = String(source ?? "");
+  let out = "";
+  for (let index = 0; index < text.length; ) {
+    const character = text[index];
+    const next = text[index + 1];
+    if (character === '"' || character === "'" || character === "`") {
+      const quote = character;
+      out += character;
+      index += 1;
+      while (index < text.length) {
+        out += text[index];
+        if (text[index] === "\\" && index + 1 < text.length) {
+          out += text[index + 1];
+          index += 2;
+          continue;
+        }
+        if (text[index] === quote) {
+          index += 1;
+          break;
+        }
+        index += 1;
+      }
+      continue;
+    }
+    if (character === "/" && next === "/") {
+      index += 2;
+      while (index < text.length && text[index] !== "\n") index += 1;
+      continue;
+    }
+    if (character === "/" && next === "*") {
+      index += 2;
+      while (index < text.length && !(text[index] === "*" && text[index + 1] === "/")) index += 1;
+      index += 2;
+      out += " ";
+      continue;
+    }
+    out += character;
+    index += 1;
+  }
+  return out;
 }
 
 export function parseImportSpecifiers(source) {
@@ -60,7 +138,7 @@ export function parseImportSpecifiers(source) {
   IMPORT_SPEC.lastIndex = 0;
   const text = stripComments(String(source ?? ""));
   for (const match of text.matchAll(IMPORT_SPEC)) {
-    const specifier = match[1] ?? match[2] ?? match[3];
+    const specifier = match[1] ?? match[2] ?? match[3] ?? match[4];
     if (specifier) specifiers.push(specifier);
   }
   return specifiers;
@@ -118,14 +196,8 @@ export function requiresFullUnit(pathName) {
   const baseName = file.slice(file.lastIndexOf("/") + 1);
   return (
     file.startsWith(".github/") ||
-    file.startsWith("scripts/ci-") ||
-    file.startsWith("scripts/run-ci-") ||
-    file === "scripts/ci-test-registry.json" ||
-    file === "scripts/ci-related-tests.mjs" ||
-    file === "scripts/ci-e2e-spec-map.json" ||
-    file === "scripts/ci-select-tests.mjs" ||
-    file === "scripts/ci-e2e-timings.mjs" ||
-    file === "scripts/ci-e2e-shards.mjs" ||
+    (file.startsWith("scripts/") && !TEST_FILE.test(file)) ||
+    /\.(?:css|html|svg|png|jpe?g|webp)$/iu.test(file) ||
     LOCK_FILE.test(file) ||
     CONFIG_FILE.test(file) ||
     baseName === "package.json" ||
@@ -216,6 +288,7 @@ export function selectRelatedUnitFiles({
   }
 
   const files = tests.filter((file) => reachable.has(file) || changed.includes(file)).sort();
+  if (files.length === 0) return { mode: "all", reason: "unmapped-path", files: tests };
   return { mode: "related", reason: "related", files };
 }
 

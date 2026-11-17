@@ -50,7 +50,8 @@ test("CI assigns platform work conservatively and exposes one complete required 
   assert.equal(filter.run, "node scripts/ci-changes.mjs");
   assert.equal(filter.env.FORCE_FULL, "${{ (github.event_name == 'push' || github.event_name == 'merge_group') && 'true' || 'false' }}");
   assert.equal(jobs.changes.steps[0].with["fetch-depth"], 0);
-  assert.deepEqual(Object.keys(jobs.changes.outputs).toSorted(), [...AREA_NAMES].toSorted());
+  assert.deepEqual(Object.keys(jobs.changes.outputs).toSorted(), [...AREA_NAMES, "selection-artifact"].toSorted());
+  assert.equal(jobs.changes.outputs["selection-artifact"], "${{ steps.selection.outputs.artifact }}");
   // Linux packaging still follows its own area, but the branch ruleset
   // requires its per-arch checks. A skipped matrix job reports under the
   // unexpanded name, so the job always starts and every step carries the gate.
@@ -218,7 +219,13 @@ test("desktop E2E and unit work are sharded with independent Apple and iOS check
   const runner = jobs.unit.steps.find((step) => step.run?.includes("scripts/run-ci-tests.mjs"));
   assert.equal(runner.run, "node scripts/run-ci-tests.mjs --lane ${{ matrix.lane }} --summary");
   assert.equal(runner.env.AIDEN_CI_TEST_SELECTION, "${{ runner.temp }}/ci-test-selection/ci-test-selection.json");
-  assert.ok(jobs.changes.steps.some((step) => step.run === "node scripts/ci-select-tests.mjs"));
+  assert.ok(jobs.changes.steps.some((step) => String(step.run ?? "").includes("node scripts/ci-select-tests.mjs")));
+  const selectionUpload = jobs.changes.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@") && String(step.with?.path ?? "").includes("ci-test-selection.json"));
+  assert.equal(selectionUpload.with.name, "${{ steps.selection.outputs.artifact }}");
+  for (const name of ["unit", "e2e", "linux-e2e"]) {
+    const download = jobs[name].steps.find((step) => step.uses?.startsWith("actions/download-artifact@") && String(step.with?.path ?? "").includes("ci-test-selection"));
+    assert.equal(download?.with.name, "${{ needs.changes.outputs.selection-artifact }}", name);
+  }
   assert.ok(jobs.e2e.steps.some((step) => step.uses?.startsWith("actions/cache/restore@")));
   assert.equal(jobs["e2e-spec-timings"]["runs-on"], "ubuntu-24.04");
   assert.ok(!jobs.required.needs.includes("e2e-spec-timings"));
@@ -266,8 +273,8 @@ test("desktop E2E and unit work are sharded with independent Apple and iOS check
   assert.ok(jobs.build.steps.some((step) => step.id === "bundle"));
   for (const consumer of ["e2e", "verify"]) {
     assert.ok(jobs[consumer].needs.includes("build"), consumer);
-    const download = jobs[consumer].steps.find((step) => step.uses?.startsWith("actions/download-artifact@"));
-    assert.equal(download?.with.name, "${{ needs.build.outputs.artifact-name }}", consumer);
+    const download = jobs[consumer].steps.find((step) => step.with?.name === "${{ needs.build.outputs.artifact-name }}");
+    assert.ok(download, consumer);
   }
   assert.ok(jobs.verify.steps.some((step) => step.run === "npm run test:e2e:diagnostics:production:run"));
   const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));

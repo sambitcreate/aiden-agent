@@ -319,6 +319,11 @@ async function timedRun(command, options, timings, runOptions) {
 }
 
 export async function executePlan(plan, options) {
+  for (const lane of plan.lanes ?? []) {
+    if (lane.files.length === 0) {
+      console.log(`[lane:${lane.name}] no files selected; skipping node --test`);
+    }
+  }
   const timings = [];
   const prerequisites = plan.prerequisites.map((entry) => ({
     id: `prerequisite:${entry.id}`,
