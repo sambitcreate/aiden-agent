@@ -16,6 +16,9 @@ const files = {
   "main/services/x.test.ts": 'import { x } from "./x.js";\nimport test from "node:test";\ntest("x", () => x);\n',
   "main/services/importer.test.ts": 'import { x } from "./x.js";\n',
   "main/services/unrelated.test.ts": 'import { helper } from "./helper.js";\n',
+  "main/services/acp/test-support.ts": "export const FAKE_FLASH = 1;\n",
+  "main/services/acp/runtime.test.ts":
+    'import {\n  FAKE_FLASH,\n  FakeLauncher,\n} from "./test-support.js";\n',
   "renderer/components/settings/about-settings.tsx": "export const About = 1;\n",
 };
 
@@ -23,6 +26,7 @@ const testFiles = [
   "main/services/x.test.ts",
   "main/services/importer.test.ts",
   "main/services/unrelated.test.ts",
+  "main/services/acp/runtime.test.ts",
 ];
 
 function readFile(file) {
@@ -46,6 +50,17 @@ test("import specifiers keep multiline named imports and ignore comment delimite
     parseImportSpecifiers('// keep /* inside this line\nimport helper from "./helper.js";\n'),
     ["./helper.js"],
   );
+});
+
+test("a changed module reaches a differently named test through a multiline import", () => {
+  const selected = selectRelatedUnitFiles({
+    changedPaths: ["main/services/acp/test-support.ts"],
+    testFiles,
+    sourceFiles: Object.keys(files),
+    readFile,
+  });
+  assert.equal(selected.mode, "related");
+  assert.deepEqual(selected.files, ["main/services/acp/runtime.test.ts"]);
 });
 
 test("a source change selects its test file and importers, not an unrelated test", () => {
