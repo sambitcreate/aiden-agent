@@ -59,6 +59,8 @@ import {
   type HooksWorkspaceLabel,
 } from "../../shared/hooks-settings";
 
+import { useAppCapabilities } from "../../lib/app-capabilities";
+import { localComputerNoun } from "../../shared/computer-noun";
 export const HOOKS_QUERY_KEY = ["hooks", "overview"] as const;
 const runLogKey = (hookId: string) => ["hooks", "runLog", hookId] as const;
 
@@ -261,6 +263,7 @@ function HookDetailSheet({
   onApproved: () => void;
   onDeleted: () => void;
 }) {
+  const { platform } = useAppCapabilities();
   const runLog = useQuery({ queryKey: runLogKey(listing.id), queryFn: () => hooksApi.runLog(listing.id) });
   const [testing, setTesting] = React.useState(false);
   const [confirmTest, setConfirmTest] = React.useState(false);
@@ -429,7 +432,7 @@ function HookDetailSheet({
         title="Run this command now?"
         description={
           <span className="flex flex-col gap-2">
-            <span>You haven’t approved this version. Testing runs it once on this computer.</span>
+            <span>You haven’t approved this version. Testing runs it once on this {localComputerNoun(platform)}.</span>
             <CommandBlock command={listing.handler.command} />
           </span>
         }
@@ -818,6 +821,7 @@ function AddHookSheet({
 // What hooks can see
 
 function WhatHooksSeeSheet({ onOpenChange }: { onOpenChange: (open: boolean) => void }) {
+  const { platform } = useAppCapabilities();
   const section = (title: string, body: React.ReactNode) => (
     <section className="flex flex-col gap-1.5">
       <Text as="h3" variant="small-strong">
@@ -841,7 +845,7 @@ function WhatHooksSeeSheet({ onOpenChange }: { onOpenChange: (open: boolean) => 
         {section(
           "A minimal environment",
           <p>
-            Only {mono(["PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "USER", "SHELL"])} come from this computer, plus{" "}
+            Only {mono(["PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "USER", "SHELL"])} come from this {localComputerNoun(platform)}, plus{" "}
             {mono(["AIDEN_PROJECT_DIR", "AIDEN_HOOK_EVENT", "AIDEN_SESSION_ID"])}. API keys and other variables reach a hook only if it
             names them, and that list is part of what you approve.
           </p>,
@@ -870,6 +874,7 @@ function WhatHooksSeeSheet({ onOpenChange }: { onOpenChange: (open: boolean) => 
 
 export function HooksSettings() {
   const queryClient = useQueryClient();
+  const { platform } = useAppCapabilities();
   const overview = useQuery({ queryKey: HOOKS_QUERY_KEY, queryFn: hooksApi.list });
   const [pausedOverride, setPausedOverride] = React.useState<boolean | null>(null);
   const [enabledOverrides, setEnabledOverrides] = React.useState<ReadonlyMap<string, boolean>>(new Map());
@@ -1021,7 +1026,7 @@ export function HooksSettings() {
             <span className="flex flex-col gap-2">
               <span>
                 It will run this command on {eventAndMatcher(confirmApprove)} in{" "}
-                {hookScopeLabel(confirmApprove.scope, data?.workspaces ?? [])}, on this computer.
+                {hookScopeLabel(confirmApprove.scope, data?.workspaces ?? [])}, on this {localComputerNoun(platform)}.
               </span>
               <CommandBlock command={confirmApprove.handler.command} />
               <dl className="flex flex-col">

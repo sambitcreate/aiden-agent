@@ -34,7 +34,7 @@ The owner asked for pi-web-access v0.45.0's extract mode as a native feature, wi
 - Remote revision 38, claimed at merge on 2026-10-26 after `main`'s 37. It lives in `AIDEN_REMOTE_WEB_EXTRACT_CONTRACT_REVISION`, the fixture's `contractRevision` (two places), the iOS Phase0 test and the docs.
 - OpenAPI has `WebExtractRecap` and `WebExtractRecapField`. A version 1 or 2 timeline must not carry `extraction`.
 - The Ajv agreement test is in `aiden-remote-protocol.test.ts`. The runtime parser rebuilds the recap, so it drops stray keys while the schema rejects them. That case is asserted separately.
-- iOS: `AidenWebExtractRecap` in `Models/AidenChat.swift` and `AidenWebExtractRecapView` in `AidenChatFeature.swift`.
+- iOS: `AidenWebExtractRecap` in `Models/AidenChat.swift` and `AidenWebExtractRecapView` in `Features/Chat/AidenChronologicalTranscript.swift`.
 - Android: `models/AidenWebExtractRecap.kt` and `features/chat/AidenWebExtractRecapView.kt`.
 - Both phones drop a bad recap and keep the step, emit `extraction` chronological rows after the tool group row, and count "web page(s)" in the Explored summary. Their one-line check mirrors JS `\s`.
 - The Swift and Kotlin code wasn't compiled in the cloud container. The Kotlin model was checked in a scratch JVM project.

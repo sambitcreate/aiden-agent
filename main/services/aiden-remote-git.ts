@@ -33,7 +33,7 @@ const MAX_SNAPSHOTS = 4_096;
 const MAX_FILES = 4_000;
 const MAX_DIFF_CHARACTERS = 2_000_000;
 const IDEMPOTENCY_KEY_PATTERN = /^[\x21-\x7e]{16,128}$/u;
-const HIDDEN_CHANGES_REASON = "Some changed file names cannot be shown on this device. Commit them on the Mac.";
+const HIDDEN_CHANGES_REASON = "Some changed file names cannot be shown on this device. Commit them on your computer.";
 
 type GitFileStatus = "added" | "modified" | "deleted" | "renamed" | "untracked" | "conflicted";
 
@@ -180,8 +180,8 @@ function mapGitError(error: unknown): never {
   if (error instanceof InsufficientDiskSpaceError || error instanceof WorktreeCapacityUnavailableError) {
     throw new AidenRemoteServiceError("git_capability_denied",
       error instanceof InsufficientDiskSpaceError
-        ? "There is not enough free disk space on the Mac for this managed worktree. Free space and try again."
-        : "The Mac could not verify disk capacity for this managed worktree. Check its storage and try again.",
+        ? "There is not enough free disk space on your computer for this managed worktree. Free space and try again."
+        : "Your computer could not verify disk capacity for this managed worktree. Check its storage and try again.",
       409);
   }
   if (!(error instanceof GitServiceError)) {

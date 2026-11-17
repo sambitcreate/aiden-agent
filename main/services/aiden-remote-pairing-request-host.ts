@@ -116,7 +116,3 @@ export function createAidenPairingRequestNotifier(
     }
   };
 }
-
-export function aidenPairingRequestHostNoun(platform: NodeJS.Platform): string {
-  return platform === "darwin" ? "Mac" : "computer";
-}

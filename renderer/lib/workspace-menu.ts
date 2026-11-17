@@ -4,6 +4,7 @@
 
 import { defaultFilter } from "cmdk";
 import type { Workspace } from "./types";
+import { localComputerNoun, type LocalComputerNoun } from "../shared/computer-noun";
 import type { NewChatWorkspaceChoice } from "./new-chat-workspaces";
 import type {
   WorkspaceCloneFailureCode,
@@ -101,7 +102,7 @@ export function workspacePathRow(
   }
 }
 
-const CLONE_FAILURE_FALLBACK: Readonly<Record<WorkspaceCloneFailureCode, string>> = {
+const cloneFailureFallback = (computer: LocalComputerNoun): Readonly<Record<WorkspaceCloneFailureCode, string>> => ({
   "invalid-url": "Enter an https:// or SSH repository URL, or owner/repo for GitHub.",
   "invalid-destination": "Choose a different destination folder.",
   "destination-exists": "That destination already exists. Choose another folder.",
@@ -112,10 +113,10 @@ const CLONE_FAILURE_FALLBACK: Readonly<Record<WorkspaceCloneFailureCode, string>
   "host-key": "The host's SSH key isn't trusted yet. Connect to it once from Terminal, then try again.",
   "not-found": "That repository wasn't found, or you don't have access to it.",
   network: "Git couldn't reach that host. Check the URL and your connection.",
-  "git-unavailable": "Git isn't available on this Mac.",
+  "git-unavailable": `Git isn't available on this ${computer}.`,
   failed: "Git couldn't clone that repository.",
   "register-failed": "The repository was cloned, but Aiden couldn't add it as a workspace.",
-};
+});
 
 /**
  * The inline message for a failed clone, or `null` when the user cancelled it
@@ -125,9 +126,10 @@ const CLONE_FAILURE_FALLBACK: Readonly<Record<WorkspaceCloneFailureCode, string>
  */
 export function cloneFailureMessage(
   result: Extract<WorkspaceCloneResult<unknown>, { ok: false }>,
+  platform: string | null | undefined,
 ): string | null {
   if (result.code === "cancelled") return null;
-  const reason = result.reason.trim() || CLONE_FAILURE_FALLBACK[result.code];
+  const reason = result.reason.trim() || cloneFailureFallback(localComputerNoun(platform))[result.code];
   if (result.code === "register-failed" && result.destination) {
     return `${reason} It is in ${result.destination}.`;
   }

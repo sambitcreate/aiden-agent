@@ -161,6 +161,17 @@ test("keeping a proposed lesson respects the active cap, retiring the oldest", a
   assert.equal(active.some((lesson) => lesson.lesson === "Lead with item 1."), false);
 });
 
+test("a lesson changes from an expected status only: a missing or already-answered lesson is left alone", async () => {
+  const store = createBotLessonStore({ profileDir: fixedRoot() });
+  const added = await store.add("bot-a", { scope: { kind: "bot" }, cue: "Mornings", lesson: "Lead with the weather.", component: "output_format", evidence: ["run-1"], verdict: "helped", source: "reflection", status: "active" });
+  assert.ok(added.ok);
+  assert.equal(await store.setStatus("bot-a", "no-such-lesson", "retired", { from: "active" }), undefined);
+  assert.equal((await store.setStatus("bot-a", added.lesson.id, "retired", { from: "active" }))?.status, "retired");
+  assert.equal(await store.setStatus("bot-a", added.lesson.id, "retired", { from: "active" }), undefined, "removing it twice finds nothing to remove");
+  assert.equal(await store.setStatus("bot-a", added.lesson.id, "active", { from: "proposed" }), undefined);
+  assert.equal((await store.list("bot-a"))[0]?.status, "retired");
+});
+
 test("a correction becomes one active Bot lesson with a Learned line; the same correction twice is one lesson", async () => {
   const store = createBotLessonStore({ profileDir: fixedRoot() });
   const entries: Array<{ kind: string; data: Record<string, unknown> }> = [];

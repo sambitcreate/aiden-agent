@@ -67,7 +67,7 @@ const PHASES: Record<BotActivityPhase, { word: string; mark: ActivityMark }> = {
   tidying: { word: "Tidying up its notes", mark: "bounce" },
   stopping: { word: "Stopping", mark: "bounce" },
   resuming: { word: "Picking up where it left off", mark: "bounce" },
-  reconnecting: { word: "Reconnecting to your Mac", mark: "bounce" },
+  reconnecting: { word: "Reconnecting to your computer", mark: "bounce" },
 };
 
 /** The Bot tool set's fixed tools (`bot-tool-policy.ts`, `bot-file-tool-router.ts`). */
@@ -236,6 +236,8 @@ export function botStepInfinitive(kind: BotToolPhase, app?: string): string {
 
 const BOT_ELAPSED_AFTER_MS = 20_000;
 export const BOT_STILL_GOING_AFTER_MS = 120_000;
+/** No progress at all for this long: the status line says the turn is taking longer than usual. */
+export const BOT_TAKING_LONGER_AFTER_MS = 10 * 60_000;
 
 /** "18s", "1m 12s", "2m", "1h 2m". Never less than one second. */
 export function botDurationLabel(ms: number): string {

@@ -9,7 +9,7 @@ import {
   resolveNodePtyDiskPackageDir,
   resolveNodePtySpawnHelperPaths,
 } from "./terminal-spawn-helper.js";
-import { TerminalService } from "./terminal.js";
+import { TerminalInputOrder, TerminalService } from "./terminal.js";
 import type { RendererDocumentOwner } from "./renderer-document-owner.js";
 
 function deferred() {
@@ -1092,4 +1092,34 @@ test("an opened terminal counts once, and one that could not start counts nothin
   refused.emitExit(0);
   await stopped.closeForWorkspaceAndWait("workspace-1", 10);
   assert.deepEqual(sent, []);
+});
+
+test("a session's input is written in the order it arrived, even when an earlier write's check finishes last", async () => {
+  const order = new TerminalInputOrder();
+  const written: string[] = [];
+  // What the terminal:write handler does: check, wait for its turn, write.
+  const write = async (sessionId: string, data: string, check: Promise<void>) => {
+    const place = order.enter(sessionId);
+    try {
+      await check;
+      await place.previous;
+      written.push(`${sessionId}:${data}`);
+    } finally {
+      place.done();
+    }
+  };
+  const slowCheck = deferred();
+  const e = write("one", "E", slowCheck.promise);
+  const c = write("one", "C", Promise.resolve());
+  await write("two", "x", Promise.resolve());
+  assert.deepEqual(written, ["two:x"], "another session's input is not held back");
+  slowCheck.resolve();
+  await Promise.all([e, c]);
+  assert.deepEqual(written, ["two:x", "one:E", "one:C"]);
+
+  // Refused input holds nothing back.
+  const refused = write("one", "!", Promise.reject(new Error("The workspace is changing.")));
+  await write("one", "K", Promise.resolve());
+  await assert.rejects(refused, /workspace is changing/u);
+  assert.deepEqual(written, ["two:x", "one:E", "one:C", "one:K"]);
 });
