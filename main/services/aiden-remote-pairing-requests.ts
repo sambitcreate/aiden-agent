@@ -231,7 +231,7 @@ function parseCreateBody(value: unknown): ParsedCreate {
     // Phones keep the QR and setup-code flow, which proves physical presence.
     throw new AidenRemoteServiceError(
       "capability_denied",
-      "Connection requests are available to desktop devices only.",
+      "Connection requests are available to computers only.",
       403,
     );
   }

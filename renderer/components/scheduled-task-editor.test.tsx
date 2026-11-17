@@ -74,7 +74,7 @@ test("provider guardrail is a soft inline warning only for LLM tasks that may no
   // An agent-backed default exists but cannot run unattended; the warning says so by name.
   assert.match(
     warning("antigravity"),
-    /No provider pinned, and the app default \(Google Antigravity\) runs only in chats you have open on this computer\. Pin a provider so this task can run\./u,
+    /No provider pinned, and the app default \(Google Antigravity\) runs only in chats you have open\. Pin a provider so this task can run\./u,
   );
   // A usable default, or a pinned provider, shows nothing.
   assert.equal(warning("openai"), "");

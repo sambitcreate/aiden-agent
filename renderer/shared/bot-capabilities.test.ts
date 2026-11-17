@@ -3,7 +3,8 @@ import test from "node:test";
 import {
   botCustomSelectionIsSubset,
   BOT_FULL_ACCESS_NOTICE_VERSION,
-  BOT_FILE_SCOPE_SELECTION_GUIDANCE,
+  botFileScopeSelectionGuidance,
+  botFullComputerLabel,
   botFileScopeSelectionIsCoherent,
   intersectBotCustomSelections,
   nextBotFileScopeIds,
@@ -117,7 +118,9 @@ test("Custom file-scope toggles stay binder-coherent", () => {
     ["documents", "home"].sort(),
   );
   assert.deepEqual(nextBotFileScopeIds(["home", "documents"], scopes, "home", false), []);
-  assert.equal(BOT_FILE_SCOPE_SELECTION_GUIDANCE.includes("Full Mac"), true);
+  assert.equal(botFileScopeSelectionGuidance("darwin").startsWith("Choose Full Mac, Bot folder"), true);
+  assert.equal(botFileScopeSelectionGuidance("linux").startsWith("Choose Full computer, Bot folder"), true);
+  assert.equal(botFullComputerLabel("linux"), "Full computer");
 });
 
 test("file-scope intersection preserves a chat reduction below Full Mac", () => {

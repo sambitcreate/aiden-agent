@@ -14,18 +14,18 @@ struct AidenBotWatchEditorView: View {
         NavigationStack {
             Form {
                 if !model.canWrite {
-                    Section { Text("Connect to your paired host with Bot write access to make changes. Your draft is kept.") }
+                    Section { Text("Connect to your paired computer with Bot write access to make changes. Your draft is kept.") }
                 }
                 if model.uncertain {
                     Section("Waiting for confirmation") {
-                        Text("The host may have accepted this request. Your draft stays frozen until its outcome is known.")
-                        Button("Check host") { Task { await model.load() } }
+                        Text("The computer may have accepted this request. Your draft stays frozen until its outcome is known.")
+                        Button("Check computer") { Task { await model.load() } }
                         Button("Retry same request") { Task { await model.retryPending() } }
                             .disabled(!model.canWrite || model.isBusy)
                     }
                 }
                 if let conflict = model.conflict {
-                    Section("Changed on your host") {
+                    Section("Changed on your computer") {
                         Text("Your draft is kept. Review the latest saved version before using its revision.")
                         Text(conflict.name).font(.headline)
                         Text(conflict.prompt)
@@ -44,7 +44,7 @@ struct AidenBotWatchEditorView: View {
                     }
                 }
                 if model.wasRemoved {
-                    Section { Text("This watch was removed on your host. Your draft is kept for reference.") }
+                    Section { Text("This watch was removed on your computer. Your draft is kept for reference.") }
                 }
                 Section {
                     TextField("Name", text: binding(\.name, default: ""))
@@ -100,7 +100,7 @@ struct AidenBotWatchEditorView: View {
                 Button("Delete watch", role: .destructive) {
                     if let watch = model.baseline { Task { await model.remove(watch) } }
                 }
-            } message: { Text("Future checks stop. Work already admitted on your host may still finish.") }
+            } message: { Text("Future checks stop. Work already admitted on your computer may still finish.") }
             .confirmationDialog("Run this watch now?", isPresented: $confirmingRun, titleVisibility: .visible) {
                 Button("Run now") { if let watch = model.baseline { Task { await model.run(watch) } } }
             } message: { Text("Runs the saved watch under the Bot’s current access and limits. Unsaved draft changes are not used.") }
@@ -146,7 +146,7 @@ struct AidenBotWatchEditorView: View {
                     Text(reason).font(.footnote).foregroundStyle(palette.secondary)
                 }
                 if model.eligibleSources.isEmpty {
-                    Text("No sources found. Connect or repair this provider on your paired host.")
+                    Text("No sources found. Connect or repair this provider on your paired computer.")
                         .font(.footnote).foregroundStyle(palette.secondary)
                 }
             }

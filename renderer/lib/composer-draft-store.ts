@@ -44,7 +44,7 @@ export function markComposerSubmission(chatId: string, text: string): void {
   try {
     localStorage.setItem(key(chatId), JSON.stringify({ version: 1, text, unresolvedText: text }));
   } catch {
-    throw new Error("Aiden could not save this draft on this Mac. Free local storage before sending.");
+    throw new Error("Aiden could not save this draft here. Free local storage before sending.");
   }
 }
 

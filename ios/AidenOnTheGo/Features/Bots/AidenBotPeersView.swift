@@ -2,6 +2,8 @@ import SwiftUI
 
 struct AidenBotPeersView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
+    /// The Bot's own machine; nil follows the selected one.
+    let machine: String?
     let botID: String; let botName: String
     @Environment(\.scenePhase) private var scenePhase
     @State private var visible = false
@@ -11,37 +13,37 @@ struct AidenBotPeersView: View {
     @Environment(\.aidenPalette) private var palette
     var body: some View {
         Group {
-            if let model, model.botID == botID, context.map(coordinator.isCurrent) == true, coordinator.server?.supportsBotPeers == true {
+            if let model, model.botID == botID, context.map(coordinator.holds) == true, coordinator.botServer(on: machine)?.supportsBotPeers == true {
                 AidenBotPeersForm(model: model, botName: botName) { exchange in
-                    AidenBotPeerExchangeView(coordinator: coordinator, botID: botID, exchangeID: exchange.id)
+                    AidenBotPeerExchangeView(coordinator: coordinator, machine: machine, botID: botID, exchangeID: exchange.id)
                 }
             } else {
                 ContentUnavailableView("Bot peers unavailable", systemImage: "bubble.left.and.bubble.right",
-                    description: Text("Connect to a host that supports Bot peers and grants access to this Bot."))
+                    description: Text("Connect to a computer that supports Bot peers and grants access to this Bot."))
             }
         }
         .navigationTitle("Bot peers")
         .onAppear { visible = true; updateActive() }
         .onDisappear { visible = false; updateActive() }
         .onChange(of: scenePhase) { _, _ in updateActive(); if scenePhase == .active { Task { await model?.load() } } }
-        .task(id: "\(coordinator.activeInstanceId ?? "")|\(botID)") {
+        .task(id: "\(coordinator.botInstallation(on: machine)?.id ?? "")|\(botID)") {
             resourceOwner = botID
-            guard coordinator.server?.supportsBotPeers == true, let current = try? coordinator.requestContext(), let client = try? coordinator.remoteClient(for: current) else { return }
+            guard coordinator.botServer(on: machine)?.supportsBotPeers == true, let current = try? coordinator.botContext(on: machine), let client = try? coordinator.remoteClient(for: current) else { return }
             context = current
             model = AidenBotPeersModel(botID: botID, transport: client,
-                isCurrent: { resourceOwner == botID && visible && UIApplication.shared.applicationState == .active && coordinator.isCurrent(current) && coordinator.connectionState == .connected && coordinator.server?.supportsBotPeers == true },
-                mayWrite: { coordinator.installationStore.activeInstallation?.canWriteBots == true },
-                mayReadExchanges: { coordinator.server?.supportsBotPeerExchanges == true },
+                isCurrent: { resourceOwner == botID && visible && UIApplication.shared.applicationState == .active && coordinator.holds(current) && coordinator.botConnectionState(on: machine) == .connected && coordinator.botServer(on: machine)?.supportsBotPeers == true },
+                mayWrite: { coordinator.botInstallation(on: machine)?.canWriteBots == true },
+                mayReadExchanges: { coordinator.botServer(on: machine)?.supportsBotPeerExchanges == true },
                 store: .shared, scope: .init(instanceID: current.instanceId, deviceID: current.deviceId, botID: botID))
             updateActive(); await model?.load()
         }
-        .onChange(of: coordinator.connectionState == .connected) { _, connected in
+        .onChange(of: coordinator.botConnectionState(on: machine) == .connected) { _, connected in
             updateActive(); if connected, scenePhase == .active, visible { Task { await model?.load() } }
         }
-        .onChange(of: coordinator.server?.supportsBotPeers == true) { _, supported in updateActive(); if supported, visible, scenePhase == .active { Task { await model?.load() } } }
+        .onChange(of: coordinator.botServer(on: machine)?.supportsBotPeers == true) { _, supported in updateActive(); if supported, visible, scenePhase == .active { Task { await model?.load() } } }
         .background(palette.canvas)
     }
-    private func updateActive() { model?.setActive(visible && scenePhase == .active && coordinator.connectionState == .connected && coordinator.server?.supportsBotPeers == true) }
+    private func updateActive() { model?.setActive(visible && scenePhase == .active && coordinator.botConnectionState(on: machine) == .connected && coordinator.botServer(on: machine)?.supportsBotPeers == true) }
 }
 
 struct AidenBotPeersForm<ExchangeDestination: View>: View {
@@ -64,13 +66,13 @@ struct AidenBotPeersForm<ExchangeDestination: View>: View {
             if let message = model.message { Section { Text(message).foregroundStyle(palette.secondary) } }
             if model.pending != nil {
                 Section("Waiting for confirmation") {
-                    Text("The host may have saved this change. Its exact request is kept; other changes wait until the outcome is known.")
+                    Text("The computer may have saved this change. Its exact request is kept; other changes wait until the outcome is known.")
                     Button("Refresh peer settings") { Task { await model.load() } }.disabled(model.loading || !model.canWrite)
                     Button("Retry same request") { Task { await model.retry() } }.disabled(!model.canWrite || model.busy)
                 }
             }
             if model.needsReview {
-                Section("Changed on your host") {
+                Section("Changed on your computer") {
                     if let settings = model.settings { Text(settings.routingDescription.isEmpty ? "No saved routing description" : settings.routingDescription) }
                     Text("Refresh and review the current pairs and description before saving your retained draft.")
                     Button("Keep draft with current revision") { model.keepDraft() }.disabled(!model.canEdit)
@@ -110,7 +112,7 @@ struct AidenBotPeersForm<ExchangeDestination: View>: View {
                             }
                         }.disabled(!model.canApprove(bot)).accessibilityHint("Review and approve a pair in both directions")
                     }
-                    if model.catalog?.bots.isEmpty == true { Text("No other Bots are available on this host.").foregroundStyle(palette.secondary) }
+                    if model.catalog?.bots.isEmpty == true { Text("No other Bots are available on this computer.").foregroundStyle(palette.secondary) }
                 }
             }
             Section("Exchanges") {
@@ -148,6 +150,8 @@ struct AidenBotPeersForm<ExchangeDestination: View>: View {
 
 struct AidenBotPeerExchangeView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
+    /// The Bot's own machine; nil follows the selected one.
+    let machine: String?
     let botID: String; let exchangeID: String
     @Environment(\.scenePhase) private var scenePhase
     @State private var visible = false
@@ -156,28 +160,28 @@ struct AidenBotPeerExchangeView: View {
     @State private var resourceOwner: String?
     var body: some View {
         Group {
-            if let model, model.botID == botID, model.exchangeID == exchangeID, context.map(coordinator.isCurrent) == true, coordinator.server?.supportsBotPeerExchanges == true {
+            if let model, model.botID == botID, model.exchangeID == exchangeID, context.map(coordinator.holds) == true, coordinator.botServer(on: machine)?.supportsBotPeerExchanges == true {
                 AidenBotPeerExchangeForm(model: model)
-            } else { ContentUnavailableView("Exchange unavailable", systemImage: "bubble.left.and.bubble.right", description: Text("Connect to the owning host with Bot, chat and peer access.")) }
+            } else { ContentUnavailableView("Exchange unavailable", systemImage: "bubble.left.and.bubble.right", description: Text("Connect to the computer that owns it with Bot, chat and peer access.")) }
         }
         .navigationTitle("Peer exchange").navigationBarTitleDisplayMode(.inline)
         .onAppear { visible = true; updateActive() }
         .onDisappear { visible = false; updateActive() }
         .onChange(of: scenePhase) { _, phase in updateActive(); if phase == .active { Task { await model?.load() } } }
-        .task(id: "\(coordinator.activeInstanceId ?? "")|\(botID)|\(exchangeID)") {
+        .task(id: "\(coordinator.botInstallation(on: machine)?.id ?? "")|\(botID)|\(exchangeID)") {
             resourceOwner = "\(botID)|\(exchangeID)"
-            guard coordinator.server?.supportsBotPeerExchanges == true, let current = try? coordinator.requestContext(), let client = try? coordinator.remoteClient(for: current) else { return }
+            guard coordinator.botServer(on: machine)?.supportsBotPeerExchanges == true, let current = try? coordinator.botContext(on: machine), let client = try? coordinator.remoteClient(for: current) else { return }
             context = current
             model = AidenBotPeerExchangeModel(botID: botID, exchangeID: exchangeID, transport: client,
-                isCurrent: { resourceOwner == "\(botID)|\(exchangeID)" && visible && UIApplication.shared.applicationState == .active && coordinator.isCurrent(current) && coordinator.connectionState == .connected && coordinator.server?.supportsBotPeerExchanges == true },
-                mayWrite: { coordinator.installationStore.activeInstallation?.canWriteBots == true },
+                isCurrent: { resourceOwner == "\(botID)|\(exchangeID)" && visible && UIApplication.shared.applicationState == .active && coordinator.holds(current) && coordinator.botConnectionState(on: machine) == .connected && coordinator.botServer(on: machine)?.supportsBotPeerExchanges == true },
+                mayWrite: { coordinator.botInstallation(on: machine)?.canWriteBots == true },
                 store: .shared, scope: .init(instanceID: current.instanceId, deviceID: current.deviceId, botID: botID, exchangeID: exchangeID))
             updateActive(); await model?.load()
         }
-        .onChange(of: coordinator.server?.supportsBotPeerExchanges == true) { _, supported in updateActive(); if supported, visible, scenePhase == .active { Task { await model?.load() } } }
-        .onChange(of: coordinator.connectionState == .connected) { _, connected in updateActive(); if connected, visible, scenePhase == .active { Task { await model?.load() } } }
+        .onChange(of: coordinator.botServer(on: machine)?.supportsBotPeerExchanges == true) { _, supported in updateActive(); if supported, visible, scenePhase == .active { Task { await model?.load() } } }
+        .onChange(of: coordinator.botConnectionState(on: machine) == .connected) { _, connected in updateActive(); if connected, visible, scenePhase == .active { Task { await model?.load() } } }
     }
-    private func updateActive() { model?.setActive(visible && scenePhase == .active && coordinator.connectionState == .connected && coordinator.server?.supportsBotPeerExchanges == true) }
+    private func updateActive() { model?.setActive(visible && scenePhase == .active && coordinator.botConnectionState(on: machine) == .connected && coordinator.botServer(on: machine)?.supportsBotPeerExchanges == true) }
 }
 struct AidenBotPeerExchangeForm: View {
     @Bindable var model: AidenBotPeerExchangeModel
@@ -203,7 +207,7 @@ struct AidenBotPeerExchangeForm: View {
                 if let result = detail.result {
                     Section("Result · \(peerTitle(result.outcome.rawValue))") {
                         Text(result.text).textSelection(.enabled)
-                        if result.truncated { Text("This result was truncated by the host.").font(.footnote).foregroundStyle(palette.secondary) }
+                        if result.truncated { Text("This result was truncated by the computer.").font(.footnote).foregroundStyle(palette.secondary) }
                     }
                 }
                 Section("Evidence") {
@@ -220,7 +224,7 @@ struct AidenBotPeerExchangeForm: View {
                         Text("Stop may already be accepted. The original request is retained until the linked work acknowledges its outcome.")
                         Button("Check same Stop") { Task { await model.retry() } }.disabled(!model.canWrite || model.busy)
                     } else if model.hasHostPendingStop {
-                        Text("A Stop is already pending on the host. Refresh to check its acknowledgement.")
+                        Text("A Stop is already pending on the computer. Refresh to check its acknowledgement.")
                             .foregroundStyle(palette.secondary)
                     } else {
                         Button("Stop linked exchange", role: .destructive) { Task { await model.stop() } }.disabled(!model.canStop)
@@ -236,7 +240,7 @@ struct AidenBotPeerExchangeForm: View {
                 if let evidence = model.evidence {
                     ScrollView { VStack(alignment: .leading, spacing: 16) {
                         Text(evidence.text).textSelection(.enabled)
-                        if evidence.truncated { Text("This evidence was truncated by the host.").font(.footnote).foregroundStyle(palette.secondary) }
+                        if evidence.truncated { Text("This evidence was truncated by the computer.").font(.footnote).foregroundStyle(palette.secondary) }
                     }.padding().frame(maxWidth: .infinity, alignment: .leading) }
                     .navigationTitle(evidence.title).navigationBarTitleDisplayMode(.inline)
                     .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { model.clearEvidence() } } }

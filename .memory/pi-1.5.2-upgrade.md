@@ -111,3 +111,7 @@ Pi 1.5 dropped the other pi mentions upstream. The `build.mjs` cli.md MCP anchor
   - `bot-execution.test.ts` "an accepted cost Resume replay cannot acknowledge a later unknown cost"
   - `local-device-host.test.ts` "stop kills helpers"
 - Known local environment failure, unrelated to Pi: `scripts/aiden-remote-lan-transport-spike.test.mjs` fails 4 tests on Homebrew OpenSSL 4.1.0, which rejects `x509 -days 0`.
+
+## Merge with main (2026-11-17)
+
+The branch sat 399 commits behind main. Merging `origin/main` in needed two Pi 1.5 fixes in code that landed on main meanwhile: `main/services/bot-settings-changes/` imports `Type` from `typebox` (pi-ai 1.5 no longer re-exports it) and `JsonValue` from `@earendil-works/chord/json` (chord 1.5's root no longer exports it). Both lockfiles were regenerated from main's with `npx npm@11.11.0 install`. Merged to main as PR #799 on 2026-11-17.

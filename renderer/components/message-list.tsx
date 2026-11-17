@@ -598,7 +598,7 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
             content={message.content}
             timeline={message.timeline}
             reasoning={message.reasoning}
-            // Snapshots exist for phones; this desktop draws the visual itself.
+            // Snapshots exist for phones; Aiden Agent draws the visual itself.
             attachments={attachmentsShownWithVisuals(message)}
             readAloud={readAloud}
             footer={settledTurnFooter(message)}

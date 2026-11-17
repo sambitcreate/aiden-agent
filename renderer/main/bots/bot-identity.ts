@@ -2,6 +2,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import { botsApi } from "../../lib/ipc";
 import { queryKeys } from "../../lib/queries";
 import { resolveBotChatActivity, type BotAvatar, type BotChatActivity, type BotDefinition, type BotInterruptions } from "../../shared/bots";
+import type { BotRoutineThinkingLevel } from "../../shared/bot-routine-models";
 
 export type BotIdentityPatch = Partial<{
   name: string;
@@ -16,13 +17,16 @@ export type BotIdentityPatch = Partial<{
   selfWakeUps: boolean;
   acceptsBotMessages: boolean;
   messagesOtherBots: boolean;
+  /** Advanced → Model's Thinking; "off" clears it. */
+  thinkingLevel: BotRoutineThinkingLevel;
 }>;
 
 /** The Bot as the renderer will show it once `patch` is applied to `base`. */
 function patchedBot(base: BotDefinition, patch: BotIdentityPatch): BotDefinition {
   // A cleared subtitle must not fall through to the old one: main drops the
   // description when the update omits it, and the cache has to agree.
-  const { description: baseDescription, selfWakeUps: baseSelfWakeUps, acceptsBotMessages, messagesOtherBots, ...rest } = base;
+  const { description: baseDescription, selfWakeUps: baseSelfWakeUps, acceptsBotMessages, messagesOtherBots, thinkingLevel: baseThinkingLevel, ...rest } = base;
+  const thinkingLevel = patch.thinkingLevel ?? baseThinkingLevel;
   const selfWakeUpsOff = patch.selfWakeUps === undefined ? baseSelfWakeUps === false : patch.selfWakeUps === false;
   const description = (patch.description ?? baseDescription ?? "").trim();
   return {
@@ -38,6 +42,7 @@ function patchedBot(base: BotDefinition, patch: BotIdentityPatch): BotDefinition
     ...((patch.acceptsBotMessages ?? acceptsBotMessages) === false ? {acceptsBotMessages: false} : {}),
     ...((patch.messagesOtherBots ?? messagesOtherBots) === false ? {messagesOtherBots: false} : {}),
     ...(selfWakeUpsOff ? { selfWakeUps: false as const } : {}),
+    ...(thinkingLevel && thinkingLevel !== "off" ? { thinkingLevel } : {}),
   };
 }
 
@@ -147,6 +152,7 @@ export async function updateBotIdentity(
       ...(patch.acceptsBotMessages !== undefined ? {acceptsBotMessages: patch.acceptsBotMessages} : {}),
       ...(patch.messagesOtherBots !== undefined ? {messagesOtherBots: patch.messagesOtherBots} : {}),
       ...(patch.selfWakeUps !== undefined ? { selfWakeUps: patch.selfWakeUps } : {}),
+      ...(patch.thinkingLevel !== undefined ? { thinkingLevel: patch.thinkingLevel } : {}),
     });
     settle(saved);
     void qc.invalidateQueries({ queryKey: queryKeys.bots });
