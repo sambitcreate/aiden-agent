@@ -42,7 +42,10 @@ export function createBotExecutionIssues(
   }
 
   async function raise(botId: string, claim: BotExecutionClaim, message: string, dispatchId?: string): Promise<void> {
-    await issues.raise({ botId, kind: "preflight_failed", dedupeKey: dispatchId ? `execution-cost:${dispatchId}` : `execution:${claim.id}`, title: "Review this run before resuming", body: message, ...(claim.routineId ? { routineId: claim.routineId } : {}), actions: [{ kind: "open_chat" }] });
+    // A cost decision and a blocked routine wait on the person. A chat run's
+    // block is a heads-up: its "Interrupted" card with Resume is already there.
+    const quiet = dispatchId === undefined && claim.routineId === undefined;
+    await issues.raise({ botId, kind: "preflight_failed", dedupeKey: dispatchId ? `execution-cost:${dispatchId}` : `execution:${claim.id}`, title: "Review this run before resuming", body: message, ...(claim.routineId ? { routineId: claim.routineId } : {}), actions: [{ kind: "open_chat" }], ...(quiet ? { quiet: true } : {}) });
   }
 
   async function blocked(botId: string, claim: BotExecutionClaim, message: string, kind: "spending_unknown" | "unavailable"): Promise<void> {
