@@ -33,6 +33,21 @@ class AidenWorkspaceEnvironmentTest {
         assertFalse(allowed.copy(review = allowed.review!!.copy(files = emptyList())).canCommitReviewedChanges)
     }
 
+    @Test fun aReviewThatCountsChangesButListsNoFilesHasHiddenChanges() {
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+        val hidden = json.decodeFromString(AidenGitResultWire, """
+            {"operationId":"review-1","status":"snapshot","snapshotId":"snapshot-1",
+             "capability":{"allowed":false,"reason":"A file could not be shown."},
+             "result":{"kind":"review","branch":"main","uncommitted":2,"files":[]}}
+        """)
+        assertEquals(2, hidden.review?.hiddenChangeCount)
+        assertFalse(hidden.canCommitReviewedChanges)
+        assertFalse(hidden.copy(capability = AidenGitCapability(allowed = true)).canCommitReviewedChanges)
+
+        val clean = hidden.review!!.copy(uncommitted = 0)
+        assertEquals(null, clean.hiddenChangeCount)
+    }
+
     @Test fun gitReviewPreservesUnavailableLineCounts() {
         val review = kotlinx.serialization.json.Json.decodeFromString<AidenGitReview>(
             """{"kind":"review","branch":"main","uncommitted":2,"files":[{"id":"known","displayPath":"small.txt","status":"untracked","additions":3,"deletions":0},{"id":"unknown","displayPath":"budgeted.txt","status":"untracked"}]}""")

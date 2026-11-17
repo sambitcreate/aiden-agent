@@ -618,8 +618,22 @@ final class AidenWorkspaceGitModel {
         commitCapability?.allowed == true && review?.files.isEmpty == false && reviewSnapshotId != nil && !isLoading
     }
 
+    /// How many changes the computer counted but sent no file for. They exist, but this phone
+    /// can't see them, so the review is neither clean nor committable.
+    var hiddenChangeCount: Int? {
+        guard let review, review.files.isEmpty, review.uncommitted > 0 else { return nil }
+        return review.uncommitted
+    }
+
     var commitUnavailableReason: String? {
-        guard review != nil, commitCapability?.allowed != true else { return nil }
+        guard review != nil else { return nil }
+        if hiddenChangeCount != nil {
+            if commitCapability?.allowed != true, let reason = commitCapability?.reason {
+                return String(localized: "Commit is unavailable because these changes are hidden. \(reason)")
+            }
+            return String(localized: "Commit is unavailable because these changes are hidden.")
+        }
+        guard commitCapability?.allowed != true else { return nil }
         return commitCapability?.reason ?? String(localized: "Commit is unavailable for this review.")
     }
 
@@ -960,7 +974,18 @@ struct AidenWorkspaceGitView: View {
                     LabeledContent("Changes", value: "\(review.uncommitted)")
                 }
                 Section("Working changes") {
-                    if review.files.isEmpty {
+                    if let hidden = model.hiddenChangeCount {
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("^[\(hidden) change](inflect: true) hidden")
+                                Text("The computer didn't share these files with this phone.")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                        } icon: {
+                            Image(systemName: "eye.slash")
+                        }
+                    } else if review.files.isEmpty {
                         Label("Working tree is clean", systemImage: "checkmark.circle")
                     }
                     ForEach(review.files) { file in

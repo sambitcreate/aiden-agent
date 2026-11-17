@@ -52,6 +52,32 @@ final class AidenWorkspaceEnvironmentTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testHiddenChangesAreNeitherCleanNorCommittable() throws {
+        let model = AidenWorkspaceGitModel()
+        model.review = try AidenRemoteJSONDecoder.decode(
+            AidenGitReview.self,
+            from: Data(#"{"kind":"review","branch":"main","uncommitted":2,"files":[]}"#.utf8)
+        )
+        model.reviewSnapshotId = "snapshot-1"
+        model.commitCapability = AidenGitCapability(allowed: false, reason: "A file could not be shown.")
+
+        XCTAssertEqual(model.hiddenChangeCount, 2)
+        XCTAssertFalse(model.canCommitReviewedChanges)
+        XCTAssertEqual(model.commitUnavailableReason, "Commit is unavailable because these changes are hidden. A file could not be shown.")
+
+        model.commitCapability = AidenGitCapability(allowed: true, reason: nil)
+        XCTAssertFalse(model.canCommitReviewedChanges)
+        XCTAssertEqual(model.commitUnavailableReason, "Commit is unavailable because these changes are hidden.")
+
+        model.review = try AidenRemoteJSONDecoder.decode(
+            AidenGitReview.self,
+            from: Data(#"{"kind":"review","branch":"main","uncommitted":0,"files":[]}"#.utf8)
+        )
+        XCTAssertNil(model.hiddenChangeCount)
+        XCTAssertNil(model.commitUnavailableReason)
+    }
+
     func testGitReviewPreservesUnavailableLineCounts() throws {
         let data = Data(#"{"kind":"review","branch":"main","uncommitted":2,"files":[{"id":"known","displayPath":"small.txt","status":"untracked","additions":3,"deletions":0},{"id":"unknown","displayPath":"budgeted.txt","status":"untracked"}]}"#.utf8)
         let review = try AidenRemoteJSONDecoder.decode(AidenGitReview.self, from: data)

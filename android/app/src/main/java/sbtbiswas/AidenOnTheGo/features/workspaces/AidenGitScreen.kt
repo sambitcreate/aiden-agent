@@ -378,13 +378,7 @@ fun AidenGitScreen(
                                 .padding(40.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = palette.success, modifier = Modifier.size(56.dp))
-                                Spacer(modifier = Modifier.height(12.dp))
-                                Text(stringResource(R.string.git_clean_title), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = palette.foreground)
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(stringResource(R.string.git_clean_body), style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
-                            }
+                            AidenGitEmptyReview(review = review, capability = gitReviewResult?.capability)
                         }
                     } else {
                         LazyColumn(
@@ -1120,6 +1114,39 @@ internal fun AidenGitActionBar(
                 loading = label == pushLabel && pushInFlight,
                 modifier = Modifier.weight(1f)
             )
+        }
+    }
+}
+
+/**
+ * The review with no files to list: either the working tree is clean, or the computer counted
+ * changes it did not share with this phone. Hidden changes are never shown as clean, and the
+ * commit that they block says why.
+ */
+@Composable
+internal fun AidenGitEmptyReview(review: AidenGitReview, capability: AidenGitCapability?) {
+    val palette = AidenTheme.palette
+    val hidden = review.hiddenChangeCount
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        if (hidden != null) {
+            Icon(Icons.Default.VisibilityOff, contentDescription = null, tint = palette.warning, modifier = Modifier.size(56.dp))
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(pluralStringResource(R.plurals.git_hidden_title, hidden, hidden), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = palette.foreground)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(stringResource(R.string.git_hidden_body), style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
+            Spacer(modifier = Modifier.height(8.dp))
+            val reason = capability?.reason?.takeIf { capability.allowed != true }
+            Text(
+                text = if (reason != null) stringResource(R.string.git_hidden_commit_unavailable_reason, reason) else stringResource(R.string.git_hidden_commit_unavailable),
+                style = MaterialTheme.typography.bodySmall,
+                color = palette.secondary
+            )
+        } else {
+            Icon(Icons.Default.CheckCircle, contentDescription = null, tint = palette.success, modifier = Modifier.size(56.dp))
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(stringResource(R.string.git_clean_title), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = palette.foreground)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(stringResource(R.string.git_clean_body), style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
         }
     }
 }

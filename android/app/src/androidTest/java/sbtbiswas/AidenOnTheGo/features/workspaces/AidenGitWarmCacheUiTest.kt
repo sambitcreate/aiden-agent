@@ -99,6 +99,35 @@ class AidenGitWarmCacheUiTest {
         assertEquals(1, taps)
     }
 
+    @Test
+    fun hiddenChangesAreNotShownAsCleanAndSayWhyCommitIsUnavailable() {
+        compose.setContent {
+            AidenTheme {
+                AidenGitEmptyReview(
+                    review = AidenGitReview(branch = "main", uncommitted = 2, files = emptyList()),
+                    capability = AidenGitCapability(false, "A file could not be shown.")
+                )
+            }
+        }
+        compose.onNodeWithText("Working tree is clean").assertDoesNotExist()
+        compose.onNodeWithText("2 changes hidden").assertIsDisplayed()
+        compose.onNodeWithText("Commit is unavailable because these changes are hidden. A file could not be shown.").assertIsDisplayed()
+    }
+
+    @Test
+    fun aReviewWithNoChangesIsClean() {
+        compose.setContent {
+            AidenTheme {
+                AidenGitEmptyReview(
+                    review = AidenGitReview(branch = "main", uncommitted = 0, files = emptyList()),
+                    capability = AidenGitCapability(true)
+                )
+            }
+        }
+        compose.onNodeWithText("Working tree is clean").assertIsDisplayed()
+        compose.onNodeWithText("Commit is unavailable", substring = true).assertDoesNotExist()
+    }
+
     private fun commitReview(allowed: Boolean) = AidenGitResult(
         operationId = "review-1", status = AidenGitOperationStatus.SNAPSHOT, snapshotId = "snapshot-1",
         capability = AidenGitCapability(allowed, if (allowed) null else "A file could not be shown."),
