@@ -313,14 +313,33 @@ export class GhosttyTerminalCore {
     this.resize(cols, rows, cellWidth, cellHeight);
   }
 
-  write(data: string | Uint8Array): void {
+  /**
+   * `onSynchronizedOutputEnd` fires once when an open synchronized update closes
+   * partway through these bytes. An existing render deadline belongs to that one
+   * group, so the write checks Ghostty before the next escape can reopen it;
+   * Ghostty still parses OSC/DCS and split sequences itself.
+   */
+  write(data: string | Uint8Array, onSynchronizedOutputEnd?: () => void): void {
     this.ensureActive();
     const bytes = typeof data === "string" ? encoder.encode(data) : data;
     if (bytes.length === 0) return;
     const pointer = this.runtime.alloc(bytes.length);
     this.runtime.bytes(pointer, bytes.length).set(bytes);
-    this.runtime.call("ghostty_terminal_vt_write", this.terminal, pointer, bytes.length);
-    this.runtime.free(pointer, bytes.length);
+    let synchronized = onSynchronizedOutputEnd !== undefined && this.isSynchronizedOutput();
+    try {
+      for (let start = 0; start < bytes.length; ) {
+        const nextEscape = synchronized ? bytes.indexOf(0x1b, start + 1) : -1;
+        const end = nextEscape === -1 ? bytes.length : nextEscape;
+        this.runtime.call("ghostty_terminal_vt_write", this.terminal, pointer + start, end - start);
+        start = end;
+        if (synchronized && !this.isSynchronizedOutput()) {
+          synchronized = false;
+          onSynchronizedOutputEnd?.();
+        }
+      }
+    } finally {
+      this.runtime.free(pointer, bytes.length);
+    }
   }
 
   resetAndWrite(data: string): void {
@@ -448,6 +467,24 @@ export class GhosttyTerminalCore {
     return (
       this.runtime.call("ghostty_terminal_get", this.terminal, 11, this.scratch) ===
         GHOSTTY_SUCCESS && this.runtime.bytes(this.scratch, 1)[0] !== 0
+    );
+  }
+
+  /** DEC mode 2026: the program is mid-frame and asked not to be drawn yet. */
+  isSynchronizedOutput(): boolean {
+    this.ensureActive();
+    this.runtime.bytes(this.scratch, 1)[0] = 0;
+    return (
+      this.runtime.call("ghostty_terminal_mode_get", this.terminal, 2026, this.scratch) ===
+        GHOSTTY_SUCCESS && this.runtime.bytes(this.scratch, 1)[0] !== 0
+    );
+  }
+
+  endSynchronizedOutput(): void {
+    this.ensureActive();
+    this.assertSuccess(
+      "ghostty_terminal_mode_set",
+      this.runtime.call("ghostty_terminal_mode_set", this.terminal, 2026, 0),
     );
   }
 
@@ -664,17 +701,46 @@ export class GhosttyTerminalCore {
     }
   }
 
-  selectAll(): void {
+  selectAll(): GhosttySelectionRange["screen"] | null {
     this.ensureActive();
     const layout = this.runtime.layout("GhosttySelection");
     const selection = this.runtime.alloc(layout.size);
-    this.runtime.setField(selection, "GhosttySelection", "size", layout.size);
-    if (
-      this.runtime.call("ghostty_terminal_select_all", this.terminal, selection) === GHOSTTY_SUCCESS
-    ) {
+    try {
+      this.runtime.setField(selection, "GhosttySelection", "size", layout.size);
+      if (
+        this.runtime.call("ghostty_terminal_select_all", this.terminal, selection) !==
+        GHOSTTY_SUCCESS
+      ) {
+        return null;
+      }
+      const start = this.pointFromGridRef(selection + layout.fields.start!.offset, 2);
+      const end = this.pointFromGridRef(selection + layout.fields.end!.offset, 2);
+      if (!start || !end) return null;
       this.runtime.call("ghostty_terminal_set", this.terminal, 21, selection);
+      return { start, end };
+    } finally {
+      this.runtime.free(selection, layout.size);
     }
-    this.runtime.free(selection, layout.size);
+  }
+
+  /** The live selection in screen coordinates; Ghostty moves it along with output. */
+  selectionRange(): GhosttySelectionRange["screen"] | null {
+    this.ensureActive();
+    const layout = this.runtime.layout("GhosttySelection");
+    const selection = this.runtime.alloc(layout.size);
+    try {
+      this.runtime.setField(selection, "GhosttySelection", "size", layout.size);
+      if (
+        this.runtime.call("ghostty_terminal_get", this.terminal, 31, selection) !== GHOSTTY_SUCCESS
+      ) {
+        return null;
+      }
+      const start = this.pointFromGridRef(selection + layout.fields.start!.offset, 2);
+      const end = this.pointFromGridRef(selection + layout.fields.end!.offset, 2);
+      return start && end ? { start, end } : null;
+    } finally {
+      this.runtime.free(selection, layout.size);
+    }
   }
 
   selectWord(col: number, row: number): GhosttySelectionRange | null {
@@ -995,7 +1061,8 @@ export class GhosttyTerminalCore {
         this.runtime.free(codepoints, bufferSize);
       }
       let wide = 0;
-      if (text.length === 0 && cells[cells.length - 1]?.text.length) {
+      // A wrap spacer in the final column can follow a spacer tail.
+      if (text.length === 0 && (cells[cells.length - 1]?.text.length || cells.length === cols - 1)) {
         this.assertSuccess(
           "ghostty_render_state_row_cells_get(raw)",
           this.runtime.call(
