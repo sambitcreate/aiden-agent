@@ -36,7 +36,7 @@ async function waitForLinkedTaskPassively(harness: Harness, task: TaskId, contex
   try {
     let resolveTerminal!: () => void;
     const terminal = new Promise<void>((resolve) => { resolveTerminal = resolve; });
-    watch.start(async (graph) => { if (!graph.tasks[String(task)]) resolveTerminal(); });
+    watch.start(async (call) => { if (call.kind === "value" && !call.value.tasks[String(task)]) resolveTerminal(); });
     if (!watch.value.tasks[String(task)]) resolveTerminal();
     if ((await harness.getTask(task, context))?.state.status === "terminal") return true;
     // A persisted abort mark still needs its cleanup phase. The person must

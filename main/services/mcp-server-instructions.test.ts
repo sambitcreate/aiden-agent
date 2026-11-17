@@ -4,7 +4,8 @@ import { McpClient } from "@earendil-works/pi-mcp";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { connectSdkServer } from "./mcp-test-support.js";
 import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { Type, createInitialSystemMessage, getCurrentSystemPrompt } from "@earendil-works/pi-ai";
+import { createInitialSystemMessage, getCurrentSystemPrompt } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { markMcpAgentTool, mcpAgentToolNames, mcpServerToolPrefix } from "./mcp-tool-identity.js";
 import type { PiDiscoverableTool } from "./pi-tool-discovery.js";
 import {

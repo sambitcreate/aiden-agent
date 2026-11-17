@@ -4,6 +4,8 @@ import { createAgentSession, DefaultResourceLoader, SessionManager } from "@eare
 import type { AssistantMessage, AssistantMessageEvent } from "@earendil-works/pi-ai";
 import type { ScheduledTask } from "../../../main/services/types.js";
 import { assertScheduledMcpServerBindings } from "../../../main/services/schedule-mcp-binding.js";
+import { withoutMessageThreads } from "../../../main/services/pi-message-threads.js";
+import { daemonSettingsManager } from "./daemon-session-settings.ts";
 import { createCliModelRuntime } from "./providers.ts";
 import { createCliMcpPool } from "./mcp.ts";
 import { createCliWebSearch } from "./extensions/web-search.ts";
@@ -76,8 +78,9 @@ export async function runScheduledInference(agentDir: string, cwd: string, task:
     combined.throwIfAborted(); return selected;
   };
   try {
-    const runtime = await createCliModelRuntime(agentDir), model = runtime.getModel(task.providerId!, task.model!);
-    if (!model) throw new Error("Scheduled provider/model is unavailable.");
+    const runtime = await createCliModelRuntime(agentDir), found = runtime.getModel(task.providerId!, task.model!);
+    if (!found) throw new Error("Scheduled provider/model is unavailable.");
+    const model = withoutMessageThreads(found);
     const selected = await check();
     const tools: AgentTool[] = (await Promise.all(selected.map((server) => pool.agentTools(server, combined)))).flat();
     tools.push(...cliWorkspaceCodingTools(cwd, task.permission !== "full"));
@@ -89,7 +92,7 @@ export async function runScheduledInference(agentDir: string, cwd: string, task:
       } }],
     });
     await loader.reload();
-    const created = await createAgentSession({ cwd, agentDir, modelRuntime: runtime, model, sessionManager: SessionManager.inMemory(cwd), resourceLoader: loader,
+    const created = await createAgentSession({ cwd, agentDir, settingsManager: daemonSettingsManager(cwd, agentDir), modelRuntime: runtime, model, sessionManager: SessionManager.inMemory(cwd), resourceLoader: loader,
       tools: tools.map(({ name }) => name),
     });
     session = created.session;

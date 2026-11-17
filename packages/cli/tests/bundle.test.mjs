@@ -74,8 +74,9 @@ test("the system prompt presents as Aiden, not Pi", () => {
 	const chunkFiles = readdirSync(join(appDir, "chunks"));
 	const chunks = chunkFiles.map((name) => readFileSync(join(appDir, "chunks", name), "utf-8"));
 	const everything = [cliBundle, ...chunks].join("\n");
-	assert.ok(everything.includes("operating inside Aiden, a coding agent harness"), "system prompt identity");
-	assert.ok(!everything.includes("operating inside pi, a coding agent harness"), "pi's identity must not ship");
+	assert.ok(everything.includes("running inside Aiden, a coding agent harness"), "system prompt identity");
+	assert.ok(!everything.includes("inside pi, a coding agent harness"), "pi's identity must not ship");
+	assert.ok(!everything.includes("Pi documentation (read only"), "pi's docs heading must not ship");
 });
 
 test("pi telemetry is removed, not just disabled", () => {

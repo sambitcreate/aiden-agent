@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Type, type JsonObject } from "@earendil-works/pi-ai";
+import { type JsonObject } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { parseMcpServer } from "../handlers/phase2-parse.js";
 import { isMcpServer } from "./portable-config-core.js";

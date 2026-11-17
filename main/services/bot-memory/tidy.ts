@@ -3,7 +3,8 @@
 // can never add a fact, and the result must be smaller. Applied at once with
 // "Tidied memory · Undo" (D5); the whole before-state is in the history.
 
-import { Type, type Message, type Tool, type ToolCall } from "@earendil-works/pi-ai";
+import { type Message, type Tool, type ToolCall } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { BotMemoryTarget, BotMemoryView } from "../../../renderer/shared/bot-memory.js";
 import { escapePromptText } from "../bot-system-prompt.js";
 import type { BotMemoryAdmission } from "./review.js";

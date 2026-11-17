@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { assertArtifactFilePath } from "./file-policy.js";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { compileAum } from "../../../renderer/shared/aiden-ui/compile.js";
 import { AIDEN_UI_CATALOG_VERSION, type AidenUiDiagnostic, type ChatUiVisualV1 } from "../../../renderer/shared/aiden-ui/types.js";
 import { parseChatUiVisualV1 } from "../../../renderer/shared/aiden-ui/visual.js";

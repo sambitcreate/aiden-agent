@@ -3,7 +3,7 @@
 // output, list jobs, or stop one. The chat hears about a job that ends on its
 // own through a follow-up notice, so the agent does not have to poll.
 
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { fenceAsData } from "../../../renderer/shared/agent-notices.js";
 import {

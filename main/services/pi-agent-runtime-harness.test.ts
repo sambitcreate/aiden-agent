@@ -8,7 +8,8 @@ import test from "node:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createAssistantMessageEventStream, getCurrentSystemPrompt, getCurrentTools, Type } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream, getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import {
   createFauxCore,
   fauxAssistantMessage,

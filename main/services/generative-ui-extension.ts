@@ -3,7 +3,7 @@ import { realpathSync, statSync } from "node:fs";
 import * as path from "node:path";
 import { isPathInside } from "../shared/path-containment.js";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { ChatHtmlArtifactV1, HtmlArtifactLayout } from "../../renderer/shared/chat-artifacts.js";
 import { CHAT_ARTIFACT_VERSION, isHtmlArtifactLayout } from "../../renderer/shared/chat-artifacts.js";
 import {

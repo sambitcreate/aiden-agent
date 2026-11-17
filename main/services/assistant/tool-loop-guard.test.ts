@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createAssistantMessageEventStream, createModels, getCurrentTools, Type, type AssistantMessage } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream, createModels, getCurrentTools, type AssistantMessage } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { createFauxCore, fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import type { AgentContext, AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import { PiAgentRuntimeHarness } from "../pi-agent-runtime-harness.js";

@@ -5,7 +5,7 @@
 
 import { randomUUID } from "node:crypto";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { reportAnalyticsEvent } from "../analytics/analytics-report.js";
 import type { ChatGenerationOwner } from "../chat-generation-owner.js";
 import { declarePiRuntimeReplay } from "../pi-runtime-tool.js";
