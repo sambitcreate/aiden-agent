@@ -3,6 +3,7 @@
 import type { AidenMcpServerStatus } from "../../../main/services/aiden-mcp-server.js";
 import type { AidenRemoteAgentAppProjection } from "../../../main/services/aiden-remote-state.js";
 import { aidenMcpTokenEnvName } from "../../../renderer/shared/aiden-mcp-token-env.js";
+import { localComputerNoun } from "../../../renderer/shared/computer-noun.js";
 
 /**
  * The first port the server's `/mcp` endpoint tries (then the next seven).
@@ -53,7 +54,7 @@ export function renderAppConnection(connection: CliAppConnection): string {
   if (server.running && server.url) {
     const snippets = aidenMcpClientSnippets(server.url, token, app);
     lines.push(
-      `Aiden's MCP server is listening at ${server.url} (this computer only).`,
+      `Aiden's MCP server is listening at ${server.url} (this ${localComputerNoun(process.platform)} only).`,
       "",
       "Set the token where Claude Code or Codex runs (for example in your shell profile):",
       `  ${snippets.environment}`,

@@ -1,4 +1,5 @@
 import { ensurePrivateDirectory } from "../../../main/services/private-storage.ts";
+import { localComputerNoun } from "../../../renderer/shared/computer-noun.ts";
 import { createServer } from "node:net";
 import { chmodSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -117,7 +118,7 @@ async function serveOwned(agentDir: string, signal: AbortSignal, options: { remo
       const status = await remote.service.status().catch(() => undefined);
       process.stderr.write(`Aiden Remote listening${status ? ` on port ${status.lanPort}${status.lanEndpoint ? ` (${status.lanEndpoint})` : ""}` : ""}. Pair a device with \`aiden remote pair lan|tailscale\`.\n`);
       const mcp = await remote.mcp.status().catch(() => undefined);
-      if (mcp?.running && mcp.url) process.stderr.write(`Aiden MCP server listening at ${mcp.url} for connected apps (this computer only).\n`);
+      if (mcp?.running && mcp.url) process.stderr.write(`Aiden MCP server listening at ${mcp.url} for connected apps (this ${localComputerNoun(process.platform)} only).\n`);
     } else process.stderr.write("Aiden Remote is off.\n");
     if (signal.aborted) return;
     lifetime.markServing();
