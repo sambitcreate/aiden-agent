@@ -66,6 +66,7 @@ function harness(
     model?: string;
     signal?: AbortSignal;
     tools?: ConstructorParameters<typeof GeminiLiveProtocol>[0]["tools"];
+    voice?: string;
   } = {},
 ) {
   const server = new FakeGeminiLiveServer();
@@ -77,6 +78,7 @@ function harness(
     model: options.model ?? "gemini-3.1-flash-live-preview",
     onEvent: (event) => events.push(event),
     ...(options.tools ? { tools: options.tools } : {}),
+    ...(options.voice ? { voice: options.voice } : {}),
     ...(options.connectTimeoutMs
       ? { connectTimeoutMs: options.connectTimeoutMs }
       : {}),
@@ -145,6 +147,18 @@ test("seeds ordered history once, then sends conversational text through realtim
   assert.ok(config.abortSignal instanceof AbortSignal);
 });
 
+test("a chosen voice asks Gemini for that prebuilt voice; without one the provider default stays", async () => {
+  const chosen = harness({ voice: "Kore" });
+  await chosen.protocol.start();
+  assert.deepEqual(chosen.server.latest.params.config!.speechConfig, {
+    voiceConfig: { prebuiltVoiceConfig: { voiceName: "Kore" } },
+  });
+
+  const unchosen = harness();
+  await unchosen.protocol.start();
+  assert.equal(unchosen.server.latest.params.config!.speechConfig, undefined);
+});
+
 test("extended-thinking sessions enable low thinking and a voice-first action contract", async () => {
   const subject = harness({
     model: "gemini-3.8-live-extended-thinking",
@@ -163,6 +177,18 @@ test("without screen tools, Live is told it cannot act on the screen", async () 
   const instruction = String(subject.server.latest.params.config!.systemInstruction);
   assert.match(instruction, /fully voice-first/u);
   assert.match(instruction, /cannot click, type or act on the user's screen/u);
+  assert.doesNotMatch(instruction, /Execute the user's requested screen actions/u);
+});
+
+test("with Aiden's own window tools, Live may act only inside Aiden", async () => {
+  const subject = harness({
+    model: "gemini-3.8-live-extended-thinking",
+    tools: [{ functionDeclarations: [{ name: "look_at_aiden" }, { name: "use_aiden" }] }],
+  });
+  await subject.protocol.start();
+  const instruction = String(subject.server.latest.params.config!.systemInstruction);
+  assert.match(instruction, /act inside Aiden's own window only through your Aiden tools/u);
+  assert.match(instruction, /cannot act on other apps or the user's screen outside Aiden/u);
   assert.doesNotMatch(instruction, /Execute the user's requested screen actions/u);
 });
 

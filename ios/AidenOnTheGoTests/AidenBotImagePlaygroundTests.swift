@@ -11,10 +11,6 @@ final class AidenBotImagePlaygroundTests: XCTestCase {
         guard ProcessInfo.processInfo.environment["AIDEN_EXPECT_IMAGE_PLAYGROUND_UNAVAILABLE"] == "1" else {
             throw XCTSkip("Enable only for a known ineligible physical iPhone acceptance run.")
         }
-        guard #available(iOS 18.1, *) else {
-            XCTFail("The physical acceptance device must run iOS 18.1 or later.")
-            return
-        }
         XCTAssertEqual(UIDevice.current.userInterfaceIdiom, .phone)
         XCTAssertFalse(
             ImagePlaygroundViewController.isAvailable,
@@ -209,6 +205,26 @@ final class AidenBotImagePlaygroundTests: XCTestCase {
             try fileManager.contentsOfDirectory(at: owned, includingPropertiesForKeys: nil)
                 .contains { $0.lastPathComponent.hasPrefix("candidate-") }
         )
+    }
+
+    @MainActor
+    func testAppInitializationRemovesCrashResidueWithoutTouchingUnrelatedFiles() throws {
+        let fileManager = FileManager.default
+        let directory = AidenBotImagePlaygroundCandidateStore().directory
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        let residue = directory.appending(path: "candidate-launch-\(UUID().uuidString).image")
+        let unrelated = directory.appending(path: "unrelated-launch-\(UUID().uuidString).txt")
+        defer {
+            try? fileManager.removeItem(at: residue)
+            try? fileManager.removeItem(at: unrelated)
+        }
+        try Data([0x01]).write(to: residue)
+        try Data([0x02]).write(to: unrelated)
+
+        _ = AidenOnTheGoApp()
+
+        XCTAssertFalse(fileManager.fileExists(atPath: residue.path))
+        XCTAssertEqual(try Data(contentsOf: unrelated), Data([0x02]))
     }
 
     func testProcessLaunchCleanupRemovesCrashResidueWithoutTouchingUnrelatedFiles() throws {

@@ -21,7 +21,7 @@ import {
   type Conversation,
   type HarnessInspection,
   type HarnessSettings,
-  type Registry,
+  type RegistryReader,
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { DatabaseSync } from "node:sqlite";
@@ -59,7 +59,7 @@ export interface BotHarnessHostOptions {
    * Installed on every open, before anything can run (`createBotRegistry`).
    * A registry with `attachHarness` is bound to the harness it serves.
    */
-  buildRegistry(botId: string): Registry & { attachHarness?(harness: Harness): void };
+  buildRegistry(botId: string): RegistryReader & { attachHarness?(harness: Harness): void };
   /** pi-ai model access for generation: one view for every Bot, or each Bot's own. */
   models: Models | ((botId: string) => Models);
   settings?: HarnessSettings;

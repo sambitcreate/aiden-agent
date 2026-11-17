@@ -1,6 +1,11 @@
 package sbtbiswas.AidenOnTheGo.features.bots
 
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
@@ -27,6 +32,10 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import sbtbiswas.AidenOnTheGo.features.shared.activitymarks.AidenActivityMarkKind
 import sbtbiswas.AidenOnTheGo.models.*
+import sbtbiswas.AidenOnTheGo.peerFixture
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
+import java.time.Instant
+import sbtbiswas.AidenOnTheGo.COST_RECEIPT_A
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorEnvelope
@@ -353,13 +362,20 @@ class AidenBotSessionControllerTest {
         val resumeKeys = mutableListOf<UUID>()
         var resumeGate: CompletableDeferred<Unit>? = null
         var failNextResume = false
+        var resumeNeedsConsent = false
+        val resumeRequests = mutableListOf<AidenBotResumeRequest>()
+        var sessionGate: CompletableDeferred<AidenBotSession>? = null
+        override suspend fun resumeStatus(botId:String)=AidenBotResumeStatus(resumeNeedsConsent,if(resumeNeedsConsent)"9007199254740993" else null,if(resumeNeedsConsent)COST_RECEIPT_A else null)
+        override suspend fun resumeWithAcknowledgement(botId:String,key:UUID,request:AidenBotResumeRequest):AidenBotSessionStateView {
+            resumeRequests+=request;return resume(botId,key)
+        }
 
         /** Failures the next session reads throw, in order. */
         val sessionFailures = ArrayDeque<Exception>()
         override suspend fun session(botId: String): AidenBotSession {
             sessionReads += 1
             sessionFailures.removeFirstOrNull()?.let { throw it }
-            return session
+            return sessionGate?.await() ?: session
         }
 
         /** Feeds the next `events` calls return, in order; then a feed that ends at once. */
@@ -806,6 +822,131 @@ class AidenBotSessionControllerTest {
         assertNotEquals("another answer is another request", transport.answerKeys[0], transport.answerKeys[1])
     }
 
+    @Test fun managedResumeRequiresCostConsentWhileUnpauseDoesNotReadOrAcknowledgeCost() = runTest {
+        val paused=HandoffTransport(pausedSession)
+        var statusReads=0
+        val requests=mutableListOf<AidenBotResumeRequest>()
+        val transport=object:AidenBotSessionTransport by paused {
+            override suspend fun resumeStatus(botId:String):AidenBotResumeStatus { statusReads++;return AidenBotResumeStatus(true,"9007199254740993",COST_RECEIPT_A) }
+            override suspend fun resumeWithAcknowledgement(botId:String,key:UUID,request:AidenBotResumeRequest):AidenBotSessionStateView {
+                requests+=request;return AidenBotSessionStateView(AidenBotSessionState.RUNNING,false)
+            }
+        }
+        val secure=sbtbiswas.AidenOnTheGo.auth.InMemoryAidenSecureStore()
+        val journal=sbtbiswas.AidenOnTheGo.persistence.AidenBotWatchJournalStore(secure,"bot-routine-controls",1088)
+            .journal("host","device",java.time.Instant.EPOCH,"bot|resume"){true}
+        val controller=AidenBotSessionController(pausedSession.botId,transport,backgroundScope,
+            routineModelsSupported={true},resumeJournal=journal)
+        controller.refetch();paused.unpauseView=AidenBotSessionStateView(AidenBotSessionState.INTERRUPTED,true)
+        assertTrue(controller.unpause());assertEquals(0,statusReads);assertTrue(requests.isEmpty())
+        assertFalse(controller.resume());assertEquals(1,statusReads);assertTrue(requests.isEmpty())
+        assertTrue(controller.state.value.isInterrupted)
+        assertEquals("9007199254740993",controller.resumeController!!.state.value.consentSubmissionId)
+        assertTrue(controller.confirmResume());assertEquals("9007199254740993",requests.single().expectedSubmissionId)
+        assertEquals(true,requests.single().acknowledgeUnknownCost)
+        assertEquals(AidenBotSessionState.RUNNING,controller.state.value.state)
+    }
+
+    private enum class ResumeReplayMode { LEGACY, ORDINARY, ACKNOWLEDGED }
+    private fun replayController(transport:FakeTransport,scope:CoroutineScope,mode:ResumeReplayMode,
+        lifetime:()->String={"visit1"},mayResume:()->Boolean={true},
+        resumeJournalOverride:sbtbiswas.AidenOnTheGo.persistence.AidenBotWatchJournal?=null):AidenBotSessionController {
+        transport.resumeNeedsConsent=mode==ResumeReplayMode.ACKNOWLEDGED
+        val journal=resumeJournalOverride ?: if(mode==ResumeReplayMode.LEGACY)null else {
+            val secure=sbtbiswas.AidenOnTheGo.auth.InMemoryAidenSecureStore()
+            sbtbiswas.AidenOnTheGo.persistence.AidenBotWatchJournalStore(secure,"bot-routine-controls",1088)
+                .journal("host","device",java.time.Instant.EPOCH,"bot|resume"){true}
+        }
+        return AidenBotSessionController(transport.session.botId,transport,scope,routineModelsSupported={true},
+            resumeLifetime=lifetime,mayResume=mayResume,resumeJournal=journal,retryDelaysMillis=emptyList(),nowMs={started})
+    }
+    private suspend fun loseResume(controller:AidenBotSessionController,transport:FakeTransport,mode:ResumeReplayMode) {
+        transport.failNextResume=true
+        if(mode==ResumeReplayMode.ACKNOWLEDGED) { assertFalse(controller.resume());assertFalse(controller.confirmResume()) }
+        else assertFalse(controller.resume())
+    }
+    @Test fun unknownResumeReplaySettlesThenReadsCurrentInterruptionWithoutChangingHeldStateOrWakingOutbox()=runTest {
+        for(mode in ResumeReplayMode.entries) {
+            val transport=FakeTransport(interruptedSession)
+            val controller=replayController(transport,backgroundScope,mode);controller.refetch()
+            transport.sendFailures+=IOException("Keep this message deferred")
+            assertTrue(controller.send("Wait for a deliberate reconnect"));assertTrue(controller.state.value.outbox.single().deferred)
+            loseResume(controller,transport,mode)
+            // A newer interruption is already visible before the retry; no frame arrives during it.
+            controller.frame(AidenBotSessionEventPayload.State(AidenBotSessionStateView(AidenBotSessionState.INTERRUPTED,true)))
+            val current=controller.state.value.session!!;transport.session=current
+            val waitingKey=controller.state.value.outbox.single().key
+            transport.sessionGate=CompletableDeferred()
+            val reads=transport.sessionReads;val sends=transport.sends.size
+            val replay=async{controller.resume()};runCurrent()
+            assertEquals(2,transport.resumeKeys.size);assertEquals(transport.resumeKeys[0],transport.resumeKeys[1])
+            assertEquals(reads+1,transport.sessionReads)
+            assertTrue(controller.state.value.isInterrupted);assertFalse(controller.state.value.isPickingUp)
+            assertFalse(controller.resume())
+            transport.sessionGate!!.complete(current);assertTrue(replay.await());runCurrent()
+            assertTrue(controller.state.value.isInterrupted);assertEquals(current.seq,controller.state.value.session!!.seq)
+            assertEquals(sends,transport.sends.size)
+            assertEquals(waitingKey,controller.state.value.outbox.single().key);assertTrue(controller.state.value.outbox.single().deferred)
+            if(mode!=ResumeReplayMode.LEGACY) {
+                assertNull(controller.resumeController!!.state.value.pending)
+                assertEquals(transport.resumeRequests[0],transport.resumeRequests[1])
+                assertEquals(mode==ResumeReplayMode.ACKNOWLEDGED,transport.resumeRequests[1].acknowledgeUnknownCost==true)
+            }
+        }
+    }
+    @Test fun failedPassiveReadAfterResumeReplayKeepsFreshInterruptionAndReportsOnlyRefreshFailure()=runTest {
+        for(mode in ResumeReplayMode.entries) {
+            val transport=FakeTransport(interruptedSession);val controller=replayController(transport,backgroundScope,mode)
+            controller.refetch();loseResume(controller,transport,mode)
+            transport.sessionFailures+=IOException("Cannot read current session")
+            assertTrue(controller.resume());assertTrue(controller.state.value.isInterrupted);assertFalse(controller.state.value.isPickingUp)
+            assertEquals(AidenBotSessionController.RESUME_REFRESH_FAILED,controller.state.value.actionError)
+            assertEquals(2,transport.resumeKeys.size);assertTrue(transport.sends.isEmpty())
+            if(mode!=ResumeReplayMode.LEGACY)assertNull(controller.resumeController!!.state.value.pending)
+        }
+    }
+    @Test fun passiveResumeReadCannotOverrideNewerFramesEpochOrEndedForegroundPairingVisit()=runTest {
+        for(change in listOf("sequence","epoch","foreground","released","pairing","deleted")) {
+            val transport=FakeTransport(interruptedSession);var lifetime="visit1";var active=true
+            val secure=sbtbiswas.AidenOnTheGo.auth.InMemoryAidenSecureStore()
+            val journals=sbtbiswas.AidenOnTheGo.persistence.AidenBotWatchJournalStore(secure,"bot-routine-controls",1088)
+            val journal=journals.journal("host","device",java.time.Instant.EPOCH,"bot|resume"){true}
+            val controller=replayController(transport,backgroundScope,ResumeReplayMode.ORDINARY,{lifetime},{active},journal)
+            controller.refetch();loseResume(controller,transport,ResumeReplayMode.ORDINARY)
+            transport.sessionGate=CompletableDeferred();val replay=async{controller.resume()};runCurrent()
+            when(change) {
+                "sequence"->controller.frame(AidenBotSessionEventPayload.State(AidenBotSessionStateView(AidenBotSessionState.INTERRUPTED,true)))
+                "epoch"->{val next=interruptedSession.copy(epoch="epoch_new_replay",seq=1);controller.handle(AidenBotSessionEvent(next.botId,next.epoch,next.seq,AidenBotSessionEventPayload.Snapshot(next)))}
+                "foreground"->lifetime="visit2"
+                "released"->controller.stopFollowing()
+                "pairing"->active=false
+                "deleted"->journals.purgeBot("host","device",java.time.Instant.EPOCH,"bot")
+            }
+            val shown=controller.state.value.session!!
+            transport.sessionGate!!.complete(interruptedSession.copy(state=AidenBotSessionState.RUNNING,interrupted=false,blocked=null))
+            assertTrue(replay.await());assertEquals(shown,controller.state.value.session)
+            assertTrue(controller.state.value.isInterrupted);assertEquals(2,transport.resumeKeys.size);assertTrue(transport.sends.isEmpty())
+            assertNull(controller.resumeController!!.state.value.pending)
+        }
+    }
+
+    @Test fun legacyFirstTypedUnknownOutcomeKeepsItsUuidAndReconcilesCachedStateWithoutAnotherMutation()=runTest {
+        for(code in listOf("idempotency_in_flight","internal_error","new_resume_recovery","revision_conflict")) {
+            val base=FakeTransport(interruptedSession);val seen=mutableListOf<UUID>();var first=true
+            val transport=object:AidenBotSessionTransport by base {
+                override suspend fun resume(botId:String,key:UUID):AidenBotSessionStateView {
+                    seen+=key
+                    if(first) {first=false;throw AidenRemoteClientException.Server(409,AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode(code),"Uncertain receipt","req",false))}
+                    return AidenBotSessionStateView(AidenBotSessionState.RUNNING,false)
+                }
+            }
+            val controller=AidenBotSessionController(interruptedSession.botId,transport,backgroundScope)
+            controller.refetch();assertFalse(controller.resume());assertTrue(controller.state.value.isInterrupted)
+            assertTrue(controller.resume());assertEquals(2,seen.size);assertEquals(seen[0],seen[1])
+            assertEquals(2,base.sessionReads);assertTrue(controller.state.value.isInterrupted);assertTrue(base.sends.isEmpty())
+        }
+    }
+
     @Test
     fun doubleResumeSendsOneRequestAndARetryReusesItsKey() = runTest {
         val transport = FakeTransport(interruptedSession)
@@ -827,12 +968,14 @@ class AidenBotSessionControllerTest {
 
         // The failed Resume is retried with the same Idempotency-Key.
         transport.resumeGate = null
+        transport.session=interruptedSession.copy(state=AidenBotSessionState.RUNNING,interrupted=false,blocked=null)
         assertTrue(controller.resume())
         assertEquals(2, transport.resumeKeys.size)
         assertEquals(transport.resumeKeys[0], transport.resumeKeys[1])
         assertEquals(AidenBotSessionState.RUNNING, controller.state.value.state)
 
         // A later, separate Resume of another pause is a new logical action with a new key.
+        transport.session=interruptedSession
         controller.refetch()
         controller.resume()
         assertNotEquals(transport.resumeKeys[1], transport.resumeKeys[2])
@@ -1170,7 +1313,7 @@ class AidenBotSessionControllerTest {
                 keys += key
                 if (refuse) {
                     refuse = false
-                    throw serverError(409, AidenRemoteErrorCode.REVISION_CONFLICT)
+                    throw serverError(409, AidenRemoteErrorCode.OPERATION_STALE)
                 }
                 return AidenBotSessionStateView(AidenBotSessionState.RUNNING, false)
             }
@@ -1522,6 +1665,53 @@ class AidenBotSessionControllerTest {
         assertTrue(controller.state.value.outgoing.isEmpty())
     }
 
+    private fun outboxDeliveryFixture(): kotlinx.serialization.json.JsonObject {
+        val relative = "protocol/aiden-remote/v1/fixtures/bot-outbox-delivery.json"
+        val root = generateSequence(java.io.File(System.getProperty("user.dir")!!).absoluteFile) { it.parentFile }
+            .first { java.io.File(it, relative).isFile }
+        return kotlinx.serialization.json.Json.parseToJsonElement(java.io.File(root, relative).readText()).jsonObject
+    }
+
+    @Test
+    fun failuresThatMayHaveReachedTheMacKeepTheirKeyByTheSharedFixture() {
+        for (element in outboxDeliveryFixture().getValue("classification").jsonArray) {
+            val row = element.jsonObject
+            val error = serverError(
+                row.getValue("status").jsonPrimitive.int,
+                AidenRemoteErrorCode(row.getValue("code").jsonPrimitive.content)
+            )
+            assertEquals(
+                row.getValue("name").jsonPrimitive.content,
+                row.getValue("ambiguous").jsonPrimitive.boolean,
+                aidenBotMessageFailureIsAmbiguous(error)
+            )
+        }
+    }
+
+    @Test
+    fun everyFailedSendTakesTheStepBothPhonesAgreeOn() {
+        val fixture = outboxDeliveryFixture()
+        val maxAttempts = fixture.getValue("maxConnectionAttempts").jsonPrimitive.int
+        assertEquals(AidenBotSessionController.MAX_CONNECTION_ATTEMPTS, maxAttempts)
+        for (element in fixture.getValue("steps").jsonArray) {
+            val row = element.jsonObject
+            // Android has no Bot attachment sending.
+            if (row["iosOnly"]?.jsonPrimitive?.boolean == true) continue
+            val step = aidenBotOutboxFailureStep(
+                ambiguous = row.getValue("ambiguous").jsonPrimitive.boolean,
+                attempts = row.getValue("attempts").jsonPrimitive.int,
+                maxAttempts = maxAttempts,
+                echoed = row.getValue("echoed").jsonPrimitive.boolean,
+                echoNamesSubmission = row.getValue("echoNamesSubmission").jsonPrimitive.boolean
+            )
+            assertEquals(
+                row.getValue("name").jsonPrimitive.content,
+                row.getValue("step").jsonPrimitive.content.uppercase(),
+                step.name
+            )
+        }
+    }
+
     @Test
     fun aDeferredMessageHoldsBackTheOnesBehindIt() = runTest {
         val transport = FakeTransport(runningSession)
@@ -1560,6 +1750,35 @@ class AidenBotSessionControllerTest {
         assertEquals(transport.sends[0].second, transport.sends[3].second)
         assertEquals(AidenBotOutgoingStatus.SENT, controller.state.value.outbox.single().status)
         assertEquals("the bubble keeps its identity", failed.id, controller.state.value.outbox.single().id)
+    }
+
+    @Test
+    fun aRefusedMessageGivesBackTheEntryItClaimedToTheMessageBehindIt() = runTest {
+        val transport = FakeTransport(runningSession)
+        val controller = AidenBotSessionController(runningSession.botId, transport, backgroundScope)
+        controller.refetch()
+        transport.sendGate = CompletableDeferred()
+        transport.sendFailures += serverError(400, AidenRemoteErrorCode.INVALID_REQUEST)
+        val refused = async { controller.send("Yes.") }
+        val behind = async { controller.send("Yes.") }
+        runCurrent()
+        // Its text matches, but it is the entry of the message behind, as that one's receipt will say.
+        controller.frame(AidenBotSessionEventPayload.Entry(userEntry("entry_41", "Yes.", "1")))
+        val claiming = controller.state.value.outbox.first()
+        assertEquals("entry_41", claiming.echoEntryId)
+
+        transport.sendGate!!.complete(Unit)
+        refused.await()
+        behind.await()
+        runCurrent()
+
+        val failed = controller.state.value.outbox.single()
+        assertEquals(claiming.id, failed.id)
+        assertEquals(AidenBotOutgoingStatus.FAILED, failed.status)
+        assertFalse(failed.keepsKey)
+        assertFalse(failed.echoed)
+        assertNull(failed.echoEntryId)
+        assertNull(failed.echoSubmissionId)
     }
 
     @Test
@@ -3037,4 +3256,85 @@ class AidenBotSessionControllerTest {
         runCurrent()
         assertEquals("a closed chat opens no feed", 2, opens)
     }
+    @Test
+    fun peerAudienceGainLossAndRegainReopenTheSameChatWithoutRepeatingSends() = runTest {
+        val base = handoffSession.copy(handoff = null)
+        val peer = json.decodeFromJsonElement(AidenBotSessionEntry.serializer(), peerFixture().getValue("peerEntry"))
+        val issue = json.decodeFromJsonElement(AidenBotSession.serializer(), fixture.getValue("botIssues").jsonObject.getValue("session")).issues!!.first()
+        val ordinary = listOf(AidenRemoteCapability.BOT_READ, AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.BOT_IMAGES)
+        val offered = ordinary + AidenRemoteCapability.BOT_PEERS + AidenRemoteCapability.BOT_PLANS + AidenRemoteCapability.BOT_ISSUES
+        var installation = AidenInstallation(instanceId = "host", deviceId = "phone", name = "Mac", endpoint = "https://fixture.invalid/api/aiden/v1", serverSpkiSha256 = "sha256/test", deviceCapabilities = ordinary, serverCapabilities = offered, createdAt = Instant.EPOCH)
+        val reads = FakeTransport(base)
+        val audiences = mutableListOf<Boolean>()
+        val closed = mutableListOf<Int>()
+        val transport = object : AidenBotSessionTransport by reads {
+            override fun events(botId: String): Flow<AidenBotSessionEvent> = flow {
+                val open = audiences.size + 1
+                // The server fixes its projection from actual held access at subscribe time.
+                val peers = installation.hasNegotiatedAccess(AidenRemoteCapability.BOT_PEERS)
+                audiences += peers
+                emit(snapshotOf(base.copy(epoch = "audience_$open", entries = base.entries + if (peers) listOf(peer) else emptyList(), issues = if (installation.hasNegotiatedAccess(AidenRemoteCapability.BOT_ISSUES)) listOf(issue) else emptyList())))
+                try { awaitCancellation() } finally { closed += open }
+            }
+        }
+        val initialGrants = aidenBotSessionFeedGrants(installation).toMutableSet()
+        val controller = AidenBotSessionController(base.botId, transport, backgroundScope, initialFeedGrants = initialGrants)
+        initialGrants.clear()
+        controller.updateFeedGrants(aidenBotSessionFeedGrants(installation))
+        runCurrent()
+        assertTrue(audiences.isEmpty())
+        controller.start()
+        runCurrent()
+        assertEquals(listOf(false), audiences)
+        assertFalse(controller.state.value.session!!.entries.any { it is AidenBotSessionEntry.Peer })
+        assertTrue(controller.send("Keep this accepted message"))
+        runCurrent()
+        assertEquals(1, reads.sends.size)
+
+        fun grants(peers: Boolean, plans: Boolean = false, issues: Boolean = false): Set<AidenRemoteCapability> {
+            installation = installation.copy(deviceCapabilities = ordinary + (if (peers) listOf(AidenRemoteCapability.BOT_PEERS) else emptyList()) + (if (plans) listOf(AidenRemoteCapability.BOT_PLANS) else emptyList()) + (if (issues) listOf(AidenRemoteCapability.BOT_ISSUES) else emptyList()))
+            return aidenBotSessionFeedGrants(installation)
+        }
+        val granted = grants(peers = true).toMutableSet()
+        controller.updateFeedGrants(granted)
+        runCurrent()
+        granted.clear()
+        assertEquals(listOf(false, true), audiences)
+        assertEquals(listOf(1), closed)
+        assertEquals(peer, controller.state.value.session!!.entries.filterIsInstance<AidenBotSessionEntry.Peer>().single())
+        controller.updateFeedGrants(aidenBotSessionFeedGrants(installation))
+        runCurrent()
+        assertEquals("the same effective set does not reopen", 2, audiences.size)
+
+        controller.updateFeedGrants(grants(peers = false))
+        runCurrent()
+        assertEquals(listOf(false, true, false), audiences)
+        assertFalse("a fresh non-peer snapshot removes the old peer row", controller.state.value.session!!.entries.any { it is AidenBotSessionEntry.Peer })
+        controller.updateFeedGrants(grants(peers = true))
+        runCurrent()
+        assertEquals(listOf(false, true, false, true), audiences)
+        assertEquals(1, controller.state.value.session!!.entries.filterIsInstance<AidenBotSessionEntry.Peer>().size)
+        controller.updateFeedGrants(grants(peers = true, plans = true))
+        runCurrent()
+        controller.updateFeedGrants(grants(peers = true, plans = false))
+        runCurrent()
+        assertEquals("losing a different grant also returns to the last adopted peer set", 6, audiences.size)
+        controller.updateFeedGrants(grants(peers = true, issues = true))
+        runCurrent()
+        assertEquals(7, audiences.size)
+        assertEquals(listOf(issue), controller.state.value.openIssues)
+        controller.updateFeedGrants(grants(peers = true, issues = false))
+        runCurrent()
+        assertEquals(8, audiences.size)
+        assertTrue("a fresh non-issue snapshot removes the previous issue", controller.state.value.openIssues.isEmpty())
+        assertEquals("issue loss leaves the independent peer audience", 1, controller.state.value.session!!.entries.filterIsInstance<AidenBotSessionEntry.Peer>().size)
+        assertEquals(1, reads.sends.size)
+        assertTrue(aidenBotSessionFeedGrants(installation).contains(AidenRemoteCapability.BOT_IMAGES))
+        controller.stopFollowing()
+        runCurrent()
+        controller.updateFeedGrants(grants(peers = false))
+        runCurrent()
+        assertEquals("a closed chat opens no feed", 8, audiences.size)
+    }
+
 }

@@ -39,6 +39,7 @@ import {
 } from "./ui";
 import { Progress } from "./ui-primitives";
 import {
+  ChevronLeft,
   Folder,
   FolderPlus,
   Loader2,
@@ -66,6 +67,7 @@ import { useHeldModifierReveal } from "../lib/use-held-modifier-reveal";
 import { queryKeys, useAllRegularChats, useFoundationModelsConnection, useSidebarChatPullRequests } from "../lib/queries";
 import { MAX_SIDEBAR_PULL_REQUEST_CHATS } from "../shared/chat-pull-requests";
 import type { ChatTriageEntry } from "../shared/chat-triage";
+import { localComputerNoun } from "../shared/computer-noun";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useEnvironmentPanel } from "./environment-panel";
 import type { ChatMeta, Workspace } from "../lib/types";
@@ -120,6 +122,7 @@ import { AvatarFace } from "./bot-avatar";
 import {
   localSidebarChats,
   localSidebarProjects,
+  scopedLocalSidebar,
   type LocalSidebarChat,
   type LocalSidebarProject,
 } from "../lib/sidebar-workspace-groups";
@@ -140,6 +143,7 @@ import {
   type SidebarProjectGrouping,
   type SidebarPreferences,
   type SidebarProjectSort,
+  type SidebarView,
 } from "../lib/sidebar-organization";
 import {
   readSidebarPreferences,
@@ -180,6 +184,21 @@ interface ChatSidebarProps {
   /** The open chat when it lives on a paired host; kept apart from local chat IDs. */
   activeRemoteChat?: { hostId: string; chatId: string } | null;
   titleReveal?: ChatTitleRevealEvent | null;
+  /**
+   * Shows only this workspace's chats, under a ‹ All workspaces row (design
+   * mode scopes the sidebar to the open chat's workspace). Null or left out
+   * shows every workspace, as does a scope with no chats in it right now.
+   */
+  scopeWorkspaceId?: string | null;
+  /** The person chose ‹ All workspaces. */
+  onClearScope?: () => void;
+  /**
+   * The workspace the person cleared the scope from, offered back as a
+   * "Show only <workspace>" row above the full list.
+   */
+  restorableScopeWorkspaceId?: string | null;
+  /** The person chose "Show only <workspace>". */
+  onRestoreScope?: () => void;
 }
 
 type SidebarEntry = SidebarProjectEntry<LocalSidebarProject>;
@@ -451,7 +470,15 @@ export function ChatSidebar(props: ChatSidebarProps) {
     : <WorkspaceChatSidebar {...props} />;
 }
 
-function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReveal }: ChatSidebarProps) {
+function WorkspaceChatSidebar({
+  activeChatId,
+  activeRemoteChat = null,
+  titleReveal,
+  scopeWorkspaceId = null,
+  onClearScope,
+  restorableScopeWorkspaceId = null,
+  onRestoreScope,
+}: ChatSidebarProps) {
   const pathPreferences = useWorkspacePathPreferences();
   const navigate = useNavigate();
   const capabilities = useAppCapabilities();
@@ -548,6 +575,15 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
     () => localSidebarChats(workspaces, chats.data ?? []),
     [chats.data, workspaces],
   );
+  const scope = React.useMemo(
+    () => scopedLocalSidebar(scopeWorkspaceId, workspaces, sidebarProjects, sidebarChats),
+    [scopeWorkspaceId, sidebarChats, sidebarProjects, workspaces],
+  );
+  // A scope with nothing in it right now (still loading, its last chat
+  // archived, or the workspace removed) shows the full list without ending the
+  // scope, so it comes back as soon as the workspace has chats again.
+  // A scoped sidebar is one project's chats, whatever view the person keeps.
+  const shownView: SidebarView = scope ? "projects" : view;
   const workspaceIds = React.useMemo(() => workspaces.map((workspace) => workspace.id), [workspaces]);
   const localRepositories = useLocalRepositoryIdentities(
     workspaceIds,
@@ -583,8 +619,11 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
   const combined = React.useMemo(
     () =>
       combineSidebarRows({
-        local: { projects: sidebarProjects, chats: sidebarChats },
-        remote: remoteRows,
+        local: scope
+          ? { projects: [scope.project], chats: scope.chats }
+          : { projects: sidebarProjects, chats: sidebarChats },
+        // A scope is a project on this Mac, so paired hosts' rows stay out of it.
+        remote: scope ? [] : remoteRows,
         hosts: peerHosts.hosts,
         filter: shownMachines,
         grouping: projectGrouping,
@@ -595,6 +634,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
       peerHosts.hosts,
       projectGrouping,
       remoteRows,
+      scope,
       shownMachines,
       sidebarChats,
       sidebarProjects,
@@ -606,16 +646,16 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
         projects: combined.projects,
         chats: combined.chats,
         search,
-        view,
+        view: shownView,
         chatSort,
         projectSort,
         projectOrder,
         now: Date.now(),
       }),
-    [chatSort, combined, projectOrder, projectSort, search, view],
+    [chatSort, combined, projectOrder, projectSort, search, shownView],
   );
   const chatViewTitle = view === "inbox" ? "Inbox" : "Recents";
-  const inboxActive = view === "inbox";
+  const inboxActive = shownView === "inbox";
   // Local waits, prompt times and request text. Change events (activity, and
   // anything that invalidates the chat list) refetch it; nothing polls.
   // The request names its ids by count and hash, and the query function sends
@@ -649,9 +689,10 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
             bots: botRows.rows,
             openBotId,
             unread: (botId, lastReplyAt) => isBotUnread(botPreferences, botId, lastReplyAt),
+            platform: capabilities.platform,
           })
         : { listed: [], unlisted: [] },
-    [botPreferences, botRows.rows, inboxBotsShown, openBotId],
+    [botPreferences, botRows.rows, capabilities.platform, inboxBotsShown, openBotId],
   );
   // Paired hosts' Bots join while their host says they need the person or failed (revision 50).
   const openRemoteBotKey = hostBotChatRouteKey(pathname);
@@ -679,6 +720,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
         pending,
         triage: (chatId) =>
           triage.entryFor({ key: projectOrderKey(LOCAL_SIDEBAR_HOST_ID, chatId), hostId: LOCAL_SIDEBAR_HOST_ID, chatId }),
+        platform: capabilities.platform,
       }),
       ...remoteInboxEntries(
         remoteRows,
@@ -694,6 +736,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
     activeRemoteChat,
     botInbox.listed,
     remoteBotInbox.listed,
+    capabilities.platform,
     chatActivity,
     chats.data,
     environmentPanel.agentBusy,
@@ -753,21 +796,24 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
     () => new Map(inboxShortcutKeys.slice(0, INBOX_SHORTCUT_LIMIT).map((key, index) => [key, index + 1] as const)),
     [inboxShortcutKeys],
   );
-  const manualReorderEnabled = view === "projects" && projectSort === "manual" && !searching;
+  const manualReorderEnabled = !scope && view === "projects" && projectSort === "manual" && !searching;
   const displayOptions = React.useMemo(
     () => ({
       search,
+      // The scoped project shows every chat, with no folder row to open.
       isExpanded: ({ key, primary }: SidebarEntry) =>
-        isRemoteSidebarProject(primary)
+        key === scope?.project.key ||
+        (isRemoteSidebarProject(primary)
           ? expandedRemoteKeys.has(key)
-          : expandedWorkspaceIds.has(primary.workspace.id),
+          : expandedWorkspaceIds.has(primary.workspace.id)),
       isFullyRevealed: ({ key, primary }: SidebarEntry) =>
-        isRemoteSidebarProject(primary)
+        key === scope?.project.key ||
+        (isRemoteSidebarProject(primary)
           ? revealedRemoteKeys.has(key)
-          : fullyRevealedWorkspaceIds.has(primary.workspace.id),
+          : fullyRevealedWorkspaceIds.has(primary.workspace.id)),
       collapsedChatLimit: COLLAPSED_WORKSPACE_CHAT_LIMIT,
     }),
-    [expandedRemoteKeys, expandedWorkspaceIds, fullyRevealedWorkspaceIds, revealedRemoteKeys, search],
+    [expandedRemoteKeys, expandedWorkspaceIds, fullyRevealedWorkspaceIds, revealedRemoteKeys, scope, search],
   );
   // The chat list takes one Tab stop; arrow keys move between its rows. The
   // region spans the Inbox's Working shelf, which sits below the scrolling list.
@@ -777,10 +823,10 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
   // Jump shortcuts and previous/next cover this Mac's chats only.
   const shortcutGroups = React.useMemo(
     () =>
-      displayedSidebarChats(organized, view, displayOptions).map((section) => ({
+      displayedSidebarChats(organized, shownView, displayOptions).map((section) => ({
         chats: section.chats.flatMap((summary) => (isRemoteSidebarChat(summary) ? [] : [summary.chat])),
       })),
-    [displayOptions, organized, view],
+    [displayOptions, organized, shownView],
   );
   const shortcutAssignments = React.useMemo(
     () => createSidebarChatShortcutAssignments(shortcutGroups),
@@ -870,6 +916,13 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
     }
     void navigate({ to: "/settings", search: { section: "remoteAccess" } });
   }, [navigate, settingsBlockedReason]);
+  const openPeerHostSettings = React.useCallback(() => {
+    if (settingsBlockedReason) {
+      toast.info(settingsBlockedReason);
+      return;
+    }
+    void navigate({ to: "/settings", search: { section: "peerHosts" } });
+  }, [navigate, settingsBlockedReason]);
   const openRemoteChat = React.useCallback(
     async (chat: RemoteSidebarChat) => {
       if (settingsBlockedReason) {
@@ -899,7 +952,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
   const sendRemoteChatRead = React.useCallback(
     async (chat: RemoteSidebarChat) => {
       const view = peerHosts.views.get(chat.hostId);
-      if (!view) throw new Error("That Mac is no longer paired with this one.");
+      if (!view) throw new Error("That computer is no longer paired with this one.");
       const adapter = new RemoteHostAdapter(view);
       try {
         await adapter.ready();
@@ -928,7 +981,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
     const view = peerHosts.views.get(target.hostId);
     if (!view) {
       setRemoteRenaming(null);
-      toast.error(`${target.hostLabel} is no longer paired with this Mac.`);
+      toast.error(`${target.hostLabel} is no longer paired with this ${localComputerNoun(capabilities.platform)}.`);
       return;
     }
     const currentRevision = () =>
@@ -967,12 +1020,12 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
       adapter.dispose();
       setRemoteRenameBusy(false);
     }
-  }, [peerHosts.views, remoteRenaming, renameValue]);
+  }, [capabilities.platform, peerHosts.views, remoteRenaming, renameValue]);
   const reconnectHost = React.useCallback(async (hostId: string) => {
     try {
       await peerHostsApi.reconnect(hostId);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Aiden could not reconnect to that Mac.");
+      toast.error(error instanceof Error ? error.message : "Aiden could not reconnect to that computer.");
     }
   }, []);
 
@@ -1411,11 +1464,11 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
     }
     return grouped;
   }, [chatDrafts, chats.data, searching, workspaces]);
-  const renderDraftRow = (draft: ChatMeta) => (
+  const renderDraftRow = (draft: ChatMeta, indented = true) => (
     <SidebarListItem
       key={`draft:${draft.id}`}
       data-roving-item
-      className="pl-8"
+      className={indented ? "pl-8" : undefined}
       data-draft-chat={draft.id}
       aria-description="Unsent draft"
       title={<span className="italic">New chat</span>}
@@ -1843,7 +1896,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
                   ) : null}
                   <span className="truncate">{primary.hostLabel}</span>
                 </span>
-                <MachineBadges labels={projectEntryMachineLabels(group.project)} />
+                <MachineBadges labels={projectEntryMachineLabels(group.project, capabilities.platform)} />
               </span>
         }
         actions={
@@ -1895,10 +1948,76 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
   const machineFilterChip =
     hasHosts && shownMachines !== "all" ? (
       <MachineFilterChip
-        label={machineFilterLabel(shownMachines, peerHosts.hosts)}
+        label={machineFilterLabel(shownMachines, peerHosts.hosts, capabilities.platform)}
         onClear={() => setMachineFilter("all")}
       />
     ) : null;
+  // Design mode's sidebar: ‹ All workspaces, then the one workspace's heading,
+  // drawn like its row in the full list, and every chat in it.
+  const renderScopedProject = (workspace: Workspace) => {
+    const chatsGroup = isNoWorkspace(workspace);
+    const name = chatsGroup ? NO_WORKSPACE_GROUP_LABEL : workspaceDisplayName(workspace, workspaces);
+    const group = organized.projectGroups[0];
+    const drafts = draftsByWorkspace.get(workspace.id) ?? [];
+    return (
+      <div data-sidebar-scope-list className="flex flex-col gap-3">
+        <SidebarListItem
+          data-roving-item
+          className="text-secondary"
+          icon={<ChevronLeft />}
+          title="All workspaces"
+          onClick={() => onClearScope?.()}
+        />
+        <div data-sidebar-scope className="flex flex-col gap-0.5">
+          <div
+            data-sidebar-scope-heading
+            className="flex min-h-9 min-w-0 items-center gap-2.5 px-2.5 py-1.5 text-regular text-primary"
+          >
+            <span aria-hidden="true" className="flex shrink-0 text-secondary [&_svg]:size-4.5">
+              {chatsGroup ? <MessageCircle /> : <Folder />}
+            </span>
+            <span className="flex min-w-0 flex-1 flex-col">
+              <h2 className="truncate text-regular font-normal">{name}</h2>
+              {!chatsGroup && workspace.folderPath ? (
+                <span className="flex min-w-0 items-center gap-1 text-small text-tertiary">
+                  {workspace.managedWorktree?.branch ? (
+                    <span className="max-w-[45%] truncate">{workspace.managedWorktree.branch} ·</span>
+                  ) : null}
+                  <WorkspacePathLabel path={workspace.folderPath} format={pathPreferences.workspacePathFormat} />
+                </span>
+              ) : null}
+            </span>
+          </div>
+          {drafts.map((draft) => renderDraftRow(draft, false))}
+          {group ? (
+            group.chats.map((summary) => renderSidebarChat(summary))
+          ) : drafts.length === 0 ? (
+            <EmptyState placement="inline" title="No matches" description="Try a different search." />
+          ) : null}
+        </div>
+      </div>
+    );
+  };
+  // After ‹ All workspaces, one row offers the design chat's workspace back,
+  // while that workspace has chats to show.
+  const restorableScopeWorkspace =
+    !scope && scopedLocalSidebar(restorableScopeWorkspaceId, workspaces, sidebarProjects, sidebarChats)
+      ? workspaces.find((workspace) => workspace.id === restorableScopeWorkspaceId)
+      : undefined;
+  const restoreScopeRow = restorableScopeWorkspace ? (
+    <SidebarListItem
+      data-roving-item
+      data-sidebar-restore-scope
+      className="mb-3 text-secondary"
+      icon={<Folder />}
+      title={`Show only ${
+        isNoWorkspace(restorableScopeWorkspace)
+          ? NO_WORKSPACE_GROUP_LABEL
+          : workspaceDisplayName(restorableScopeWorkspace, workspaces)
+      }`}
+      onClick={() => onRestoreScope?.()}
+    />
+  ) : null;
 
   const sidebarOrganizationMenu = (
     <SidebarOverflowMenu
@@ -2017,12 +2136,15 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
             hosts={peerHosts.hosts}
             filter={shownMachines}
             onReconnect={reconnectHost}
-            onManage={openRemoteSettings}
+            onManage={openPeerHostSettings}
           />
         ) : null}
 
         <SidebarList>
-          {view === "projects" ? (
+          {restoreScopeRow}
+          {scope ? (
+            renderScopedProject(scope.project.workspace)
+          ) : view === "projects" ? (
             <SidebarListGroup
               title={
                 <SectionHeader
@@ -2059,14 +2181,14 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
                     search.trim()
                       ? "No matches"
                       : shownMachines !== "all"
-                        ? `No workspaces on ${machineFilterLabel(shownMachines, peerHosts.hosts)}`
+                        ? `No workspaces on ${machineFilterLabel(shownMachines, peerHosts.hosts, capabilities.platform)}`
                         : "No workspaces yet"
                   }
                   description={
                     search.trim()
                       ? "Try a different search."
                       : shownMachines !== "all"
-                        ? "Choose All machines in Organize to see every workspace."
+                        ? "Choose All computers in Organize to see every workspace."
                         : "Add a folder or create an empty workspace to begin."
                   }
                 />
@@ -2193,7 +2315,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
                                   <WorkspacePathLabel path={workspace.folderPath} format={pathPreferences.workspacePathFormat} />
                                 </span>
                               ) : secondaryLabel ? <span className="truncate text-small text-tertiary">{secondaryLabel}</span> : null}
-                              <MachineBadges labels={projectEntryMachineLabels(group.project)} />
+                              <MachineBadges labels={projectEntryMachineLabels(group.project, capabilities.platform)} />
                             </span>
                       }
                       actions={
@@ -2274,7 +2396,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
                         </>
                       }
                     >
-                          {draftsByWorkspace.get(workspace.id)?.map(renderDraftRow)}
+                          {draftsByWorkspace.get(workspace.id)?.map((draft) => renderDraftRow(draft))}
                           {visibleChats.map((summary) => renderSidebarChat(summary, true, explicitlyExpanded))}
                           {group.chats.length === 0 &&
                           !draftsByWorkspace.has(workspace.id) ? (

@@ -12,7 +12,8 @@ export interface QueuedChatMessage {
   text: string;
   attachments: Attachment[];
   skillInvocation?: SkillInvocationV1;
-  options?: { visualize?: boolean };
+  /** inputSource is set only by Aiden Live's chat tools ("By voice"). */
+  options?: { visualize?: boolean; inputSource?: import("../shared/chat-input-source").ChatInputSourceV1 };
 }
 
 interface QueueSnapshot {
@@ -99,11 +100,16 @@ export class ChatMessageQueue {
   update(message: QueuedChatMessage) {
     if (this.snapshot.editingId !== message.id || this.snapshot.sendingId) return;
     this.validate(message);
+    // The person rewrote it, so it is no longer what Aiden Live sent: no "By voice".
+    const edited = structuredClone(message);
+    if (edited.options?.inputSource) {
+      const { inputSource: _voice, ...options } = edited.options;
+      if (Object.keys(options).length > 0) edited.options = options;
+      else delete edited.options;
+    }
     this.publish({
       ...this.snapshot,
-      messages: this.snapshot.messages.map((item) =>
-        item.id === message.id ? structuredClone(message) : item,
-      ),
+      messages: this.snapshot.messages.map((item) => (item.id === message.id ? edited : item)),
       editingId: undefined,
     });
   }
@@ -359,6 +365,9 @@ export function committedRunInputNotice(reason: ChatRunInputRejectionReason | un
       return "Saved to the chat — the run was cancelled before it could use it";
     case "capacity":
       return "Saved to the chat — the run queue was full";
+    case "invalid":
+      // A UserPromptSubmit hook refused it; the chat shows the hook's reason.
+      return "Saved to the chat — it wasn't sent to the run";
     default:
       return "Saved to the chat — the run ended before it could use it";
   }
@@ -414,7 +423,7 @@ export async function steerQueuedMessage(input: {
  */
 export function withCommittedRunInput<T extends { messages: ChatMessage[] }>(
   chat: T,
-  committed: { messageId: string; text: string; createdAt: number },
+  committed: { messageId: string; text: string; createdAt: number; inputSource?: ChatMessage["inputSource"] },
 ): T {
   if (chat.messages.some((message) => message.id === committed.messageId)) return chat;
   return {
@@ -426,6 +435,7 @@ export function withCommittedRunInput<T extends { messages: ChatMessage[] }>(
         role: "user",
         content: committed.text,
         createdAt: committed.createdAt,
+        ...(committed.inputSource ? { inputSource: committed.inputSource } : {}),
       },
     ],
   };

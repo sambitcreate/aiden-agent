@@ -505,6 +505,15 @@ export async function createDiagnosticExport(options: ExportOptions): Promise<Di
   }
 }
 
+/** Crashpad files dumps in subfolders; a link is neither a file nor a folder here, so none is followed. */
+async function deleteCrashDumpsUnder(directory: string): Promise<void> {
+  for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+    const candidate = path.join(directory, entry.name);
+    if (entry.isDirectory()) await deleteCrashDumpsUnder(candidate);
+    else if (entry.isFile() && entry.name.endsWith(".dmp")) await fs.rm(candidate, { force: true });
+  }
+}
+
 export async function deleteAllDiagnosticData(roots: DiagnosticSupportRoots): Promise<void> {
   await ensurePrivateDirectory(roots.logsPath);
   const journalPath = diagnosticJournalStatus().path;
@@ -537,10 +546,6 @@ export async function deleteAllDiagnosticData(roots: DiagnosticSupportRoots): Pr
   forgetDiagnosticRefSalt();
   await withCrashMaintenance(async () => {
     await ensurePrivateDirectory(roots.crashDumpsPath);
-    for (const entry of await fs.readdir(roots.crashDumpsPath, { withFileTypes: true })) {
-      if (entry.isFile() && entry.name.endsWith(".dmp")) {
-        await fs.rm(path.join(roots.crashDumpsPath, entry.name), { force: true });
-      }
-    }
+    await deleteCrashDumpsUnder(roots.crashDumpsPath);
   });
 }

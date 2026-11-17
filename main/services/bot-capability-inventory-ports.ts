@@ -4,6 +4,7 @@ import {
   type BotNoticeStatus,
 } from "../../renderer/shared/bot-capabilities.js";
 import { isNonChatModel } from "../../renderer/shared/model-eligibility.js";
+import { BOT_WEB_SEARCH_CAPABILITY_LABEL } from "../../renderer/shared/bot-capabilities.js";
 import { isModelHidden } from "../../renderer/shared/model-visibility.js";
 import type { AppSettings, McpServer, Provider } from "./types.js";
 import { mcpServerOffersTools } from "../../renderer/shared/mcp-exposure.js";
@@ -21,6 +22,8 @@ import type {
 } from "./bot-capability-catalog-main.js";
 import type { SubagentMcpScopeV2 } from "./subagents/authority-v2.js";
 import { isAcpHarnessProvider } from "../../renderer/shared/acp-harness.js";
+import { isComposioServiceServer } from "./composio-service-tool.js";
+import { COMPOSIO_SERVICE_ACCESS_IDENTITY } from "./bot-connection-capability-identity.js";
 
 export interface BotCapabilityInventoryPortDependencies {
   loadOpaqueSelectionKey(): Promise<Uint8Array>;
@@ -201,6 +204,7 @@ function connectionInventory(
     const scope = offered ? scopeByServer.get(server.id) : undefined;
     return {
       sourceId: server.id,
+      ...(isComposioServiceServer(server) ? { accessIdentity: COMPOSIO_SERVICE_ACCESS_IDENTITY } : {}),
       label: server.name,
       description: server.enabled
         ? !offered
@@ -281,7 +285,7 @@ function ordinaryInventory(input: {
   }> = [
     {
       kind: "web",
-      label: "Web search",
+      label: BOT_WEB_SEARCH_CAPABILITY_LABEL,
       description: "Search the web through Aiden's configured service.",
       available: input.webSearchReady,
     },

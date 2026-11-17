@@ -15,6 +15,18 @@ export const chatForkService = createChatForkService({
   chatStore,
   beginChatCopy: (chatId) => llmClient.beginChatCopy(chatId),
   workspaceExists: async (workspaceId) => Boolean(await configStore.getWorkspace(workspaceId)),
+  prepareWorkspace: async (workspaceId) => {
+    // Resolve after startup: the workspace service also depends on chat/LLM services.
+    const { workspaceApplicationService } = await import("./workspace-application-service-main.js");
+    const target = await workspaceApplicationService.reserveNoWorkspaceChat(workspaceId);
+    if (target.workspaceId !== workspaceId) ipcMain.broadcast("workspaces:changed", {});
+    return target;
+  },
+  releaseUnusedWorkspace: async (workspaceId) => {
+    const { workspaceApplicationService } = await import("./workspace-application-service-main.js");
+    await workspaceApplicationService.releaseNoWorkspaceAfterChat(workspaceId);
+    ipcMain.broadcast("workspaces:changed", {});
+  },
   blockedReason: async (chatId) => {
     const unresolved = await unresolvedGuiArtifactMessage(chatId);
     return unresolved

@@ -4,6 +4,7 @@ import type { ChatGenerationOwner } from "./chat-generation-owner.js";
 export const AIDEN_APP_DESTINATIONS = [
   "appearance",
   "memory",
+  "limits",
   "skills",
   "providers",
   "web-search",

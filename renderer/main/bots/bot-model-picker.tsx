@@ -74,7 +74,7 @@ export function BotModelPicker({
   disabled = false,
   onSelect,
 }: {
-  catalog: BotCapabilityCatalog;
+  catalog: Pick<BotCapabilityCatalog, "providers">;
   /** The trigger's accessible name, e.g. "AI model" or "Model for photos". */
   label: string;
   providerId?: string;

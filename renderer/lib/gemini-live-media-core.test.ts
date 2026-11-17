@@ -161,3 +161,47 @@ test("the standalone packaged AudioWorklet keeps the reviewed chunk and transfer
   assert.match(source, /\[data\]/u);
   assert.match(source, new RegExp(`registerProcessor\\("${GEMINI_LIVE_PCM_WORKLET_NAME}"`, "u"));
 });
+
+test("the packaged worklet stamps each chunk with a capture time no earlier than its newest sample", async () => {
+  const globals = globalThis as Record<string, unknown>;
+  const rate = 48_000;
+  const posted: Array<{ capturedUntil: number; durationMs: number; data: ArrayBuffer }> = [];
+  let Processor: (new () => { process(inputs: Float32Array[][]): boolean }) | undefined;
+  globals.sampleRate = rate;
+  globals.currentTime = 0;
+  globals.AudioWorkletProcessor = class {
+    readonly port = { postMessage: (message: (typeof posted)[number]) => posted.push(message) };
+  };
+  globals.registerProcessor = (_name: string, processor: typeof Processor) => {
+    Processor = processor;
+  };
+  try {
+    await import(`../../public/gemini-live-pcm-worklet.js?capture-clock=${rate}`);
+    const processor = new Processor!();
+    // Each quantum's samples are captured from `currentTime` on; remember
+    // when every sample was captured to check the chunks against it.
+    const capturedAt: number[] = [];
+    for (let quantum = 0; quantum < 40; quantum += 1) {
+      const start = quantum * 128;
+      globals.currentTime = start / rate;
+      for (let index = 0; index < 128; index += 1) capturedAt.push((start + index) / rate);
+      processor.process([[new Float32Array(128)]]);
+    }
+    assert.ok(posted.length >= 5);
+    const sourceSamples = Math.round((rate * 20) / 1_000);
+    posted.forEach((chunk, index) => {
+      const first = capturedAt[index * sourceSamples]!;
+      const last = capturedAt[(index + 1) * sourceSamples - 1]!;
+      assert.ok(chunk.capturedUntil >= last, "nothing in the chunk was captured after its stamp");
+      assert.ok(
+        chunk.capturedUntil - (2 * chunk.durationMs) / 1_000 <= first,
+        "the onset tracker's bound reaches back to the chunk's oldest sample",
+      );
+    });
+  } finally {
+    delete globals.sampleRate;
+    delete globals.currentTime;
+    delete globals.AudioWorkletProcessor;
+    delete globals.registerProcessor;
+  }
+});

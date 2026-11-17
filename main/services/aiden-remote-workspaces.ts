@@ -1,10 +1,12 @@
 import type { ManagedWorktreeRootIdentity } from "./managed-worktree-file-io.js";
 import { capturePeerProjectRoot, assertPeerProjectRoot, createPeerProjectFile } from "./peer-project-file-io.js";
+import { peerProjectGit } from "./peer-project-source.js";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { parsePeerProjectClone, PEER_PROJECT_CLONE_TIMEOUT_MS, type PeerProjectCloneRequest } from "../../renderer/shared/peer-project-clone.js";
 import { parseCloneUrl } from "../../renderer/shared/workspace-intake.js";
 import type { WorkspaceIntakeService } from "./workspace-intake.js";
+import { executeAidenDurableOperation } from "./aiden-remote-durable-operation.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import {
   AidenIdempotencyLedger,
@@ -15,6 +17,7 @@ import {
 import type { AidenRemoteWorkspaceBrowserService } from "./aiden-remote-workspace-browser.js";
 import type { createWorkspaceApplicationService } from "./workspace-application-service.js";
 import type { Workspace, WorkspacePermission } from "./types.js";
+import { legacyWorkspaceTier, type ApprovalMode } from "../../renderer/shared/approval-mode.js";
 
 const WORKSPACE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/u;
 const IDEMPOTENCY_KEY_PATTERN = /^[\x21-\x7e]{16,128}$/u;
@@ -91,13 +94,19 @@ function displayNameFromPath(value: string | undefined): string | undefined {
   return components[components.length - 1]?.slice(0, 120);
 }
 
+/**
+ * A workspace as a Remote client sees it. Phones know only the access tiers,
+ * so `permission` is the tier that never reads narrower than what runs under
+ * `globalMode` (`legacyWorkspaceTier`). The revision stays the stored one.
+ */
 export function projectAidenRemoteWorkspace(
   workspace: Workspace,
+  globalMode: ApprovalMode = "ask",
 ): AidenRemoteWorkspaceProjection {
   return {
     id: workspace.id,
     name: workspace.name,
-    permission: workspace.permission,
+    permission: legacyWorkspaceTier(workspace, globalMode),
     memoryEnabled: workspace.memoryEnabled !== false,
     hasFolder: Boolean(workspace.folderPath),
     isManagedWorktree: Boolean(workspace.managedWorktree),
@@ -161,6 +170,8 @@ function parsePatch(value: unknown): {
   name?: string;
   permission?: WorkspacePermission;
   memoryEnabled?: boolean;
+  approvalMode?: "ask";
+  clearMacGrants?: true;
 } {
   const record = ownRecord(value);
   if (
@@ -183,6 +194,9 @@ function parsePatch(value: unknown): {
     ...(record.permission !== undefined
       ? { permission: record.permission as WorkspacePermission }
       : {}),
+    // An older client's Ask means Ask: the workspace's own mode becomes Ask
+    // and its Mac grants go, which only ever narrows what runs.
+    ...(record.permission === "ask" ? { approvalMode: "ask" as const, clearMacGrants: true as const } : {}),
     ...(typeof record.memoryEnabled === "boolean"
       ? { memoryEnabled: record.memoryEnabled }
       : {}),
@@ -233,6 +247,8 @@ export class AidenRemoteWorkspaceService {
       persistIdempotency?: (snapshot: AidenIdempotencySnapshot) => Promise<void>;
       notifyChanged?: () => void;
       clone?: WorkspaceIntakeService["clone"];
+      /** The global approval mode the projected access tier reads under; Ask when absent. */
+      approvalMode?: () => ApprovalMode | Promise<ApprovalMode>;
     },
   ) {
     this.idempotency = options.idempotency ?? new AidenIdempotencyLedger();
@@ -245,57 +261,26 @@ export class AidenRemoteWorkspaceService {
     input: unknown,
     action: () => Promise<T>,
   ): Promise<T> {
-    if (!this.options.persistIdempotency) {
-      return this.idempotency.execute(scope, input, action);
-    }
-    let release!: () => void;
-    let reject!: (error: unknown) => void;
-    const durableAdmission = new Promise<void>((resolve, rejectPromise) => {
-      release = resolve;
-      reject = rejectPromise;
-    });
-    const pending = this.idempotency.execute(scope, input, async () => {
-      await durableAdmission;
-      return action();
-    });
-    try {
-      await this.options.persistIdempotency(this.idempotency.snapshot());
-      release();
-    } catch (error) {
-      reject(error);
-      await pending.catch(() => undefined);
-      throw new AidenRemoteServiceError(
-        "internal_error",
-        "Aiden could not durably prepare this workspace request.",
-        500,
-      );
-    }
-    let result: T;
-    let actionError: unknown;
-    let actionFailed = false;
-    try {
-      result = await pending;
-    } catch (error) {
-      actionFailed = true;
-      actionError = error;
-    }
-    try {
-      await this.options.persistIdempotency(this.idempotency.snapshot());
-    } catch {
-      throw new AidenRemoteServiceError(
-        "idempotency_in_flight",
-        "The workspace change may have completed, but Aiden could not durably record its outcome.",
-        409,
-      );
-    }
-    if (actionFailed) throw actionError;
-    return result!;
+    return executeAidenDurableOperation(
+      {
+        ledger: this.idempotency,
+        persist: this.options.persistIdempotency,
+        notPreparedMessage: "Aiden could not durably prepare this workspace request.",
+        outcomeUnrecordedMessage: "The workspace change may have completed, but Aiden could not durably record its outcome.",
+      },
+      scope,
+      input,
+      action,
+    );
+  }
+
+  private async globalMode(): Promise<ApprovalMode> {
+    return (await this.options.approvalMode?.()) ?? "ask";
   }
 
   async list(): Promise<{ workspaces: AidenRemoteWorkspaceProjection[] }> {
-    return {
-      workspaces: (await this.options.application.list()).map(projectAidenRemoteWorkspace),
-    };
+    const [workspaces, mode] = await Promise.all([this.options.application.list(), this.globalMode()]);
+    return { workspaces: workspaces.map((workspace) => projectAidenRemoteWorkspace(workspace, mode)) };
   }
 
   async get(workspaceId: string): Promise<AidenRemoteWorkspaceProjection> {
@@ -303,7 +288,7 @@ export class AidenRemoteWorkspaceService {
     if (!workspace) {
       throw new AidenRemoteServiceError("not_found", "This Aiden workspace no longer exists.", 404);
     }
-    return projectAidenRemoteWorkspace(workspace);
+    return projectAidenRemoteWorkspace(workspace, await this.globalMode());
   }
 
   async create(
@@ -328,7 +313,7 @@ export class AidenRemoteWorkspaceService {
         async () => {
           let workspace: Workspace;
           if (parsed.mode === "clone") {
-            if (!this.options.clone) throw new AidenRemoteServiceError("not_found", "Project cloning is unavailable on this host.", 404);
+            if (!this.options.clone) throw new AidenRemoteServiceError("not_found", "Project cloning is not available on this computer.", 404);
             const selection = await this.options.browser.consumeSelection(deviceId, parsed.selection);
             const current = () => this.options.browser.revalidateConsumedSelection(deviceId, selection);
             await current();
@@ -352,6 +337,16 @@ export class AidenRemoteWorkspaceService {
                   await assertPeerProjectRoot(root);
                   for (const file of parsed.files) {
                     controller.signal.throwIfAborted();
+                    try {
+                      // A staging-path Git config can differ after the clone is moved.
+                      // Require protection under both case-matching modes.
+                      for (const ignoreCase of ["false", "true"]) {
+                        await peerProjectGit(root.path, ["-c", "core.excludesFile=/dev/null", "-c", `core.ignoreCase=${ignoreCase}`, "check-ignore", "-q", "--", file.name]);
+                      }
+                    } catch {
+                      throw new AidenRemoteServiceError("invalid_request", "The destination repository must ignore each selected environment file.", 400);
+                    }
+                    await assertPeerProjectRoot(root);
                     await createPeerProjectFile(root, file.name, file.content, controller.signal);
                   }
                   await current();
@@ -365,11 +360,11 @@ export class AidenRemoteWorkspaceService {
                   },
                 },
               });
-              if (!repository.ok) throw new AidenRemoteServiceError("invalid_request", repository.code === "cancelled" ? "Project clone was stopped. Check the host project list before trying again." : repository.code === "register-failed" ? "The repository was cloned, but it could not be registered. Check the destination computer before retrying." : repository.reason, 400);
+              if (!repository.ok) throw new AidenRemoteServiceError("invalid_request", repository.code === "cancelled" ? "Project clone was stopped. Check the computer's project list before trying again." : repository.code === "register-failed" ? "The repository was cloned, but it could not be registered. Check the destination computer before retrying." : repository.reason, 400);
               workspace = repository.workspace;
             } catch (error) {
               if (error instanceof AidenRemoteServiceError) throw error;
-              throw new AidenRemoteServiceError("invalid_request", "The project could not be cloned with the selected environment files. Nothing existing was overwritten. Check the host project list before retrying.", 400);
+              throw new AidenRemoteServiceError("invalid_request", "The project could not be cloned with the selected environment files. Nothing existing was overwritten. Check the computer's project list before retrying.", 400);
             } finally {
               clearTimeout(deadline);
               signal?.removeEventListener("abort", cancel);
@@ -422,7 +417,7 @@ export class AidenRemoteWorkspaceService {
             }
           }
           this.options.notifyChanged?.();
-          return projectAidenRemoteWorkspace(workspace);
+          return projectAidenRemoteWorkspace(workspace, await this.globalMode());
         },
       );
     } catch (error) {
@@ -447,7 +442,7 @@ export class AidenRemoteWorkspaceService {
       assertCurrent: (workspace) => requireWorkspaceRevision(expectedRevision, workspace),
     });
     this.options.notifyChanged?.();
-    return projectAidenRemoteWorkspace(updated);
+    return projectAidenRemoteWorkspace(updated, await this.globalMode());
   }
 
   async remove(workspaceId: string, expectedRevision: string): Promise<void> {

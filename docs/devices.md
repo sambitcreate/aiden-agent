@@ -126,11 +126,11 @@ Each control appears only where it works. `deviceFeatureCapabilities(platform, {
 Settings → **Simulator** appears in the settings list and command palette only when the feature flag is on. It contains:
 
 - **Simulator streaming**, **Agent access** and **Share with paired Macs** switches. Turning on either of the first two asks before anything is downloaded from npm. Turning streaming off also turns the other two off.
-- **Helper tools**: the pinned version of each helper, whether it is installed or running, and any older versions still on disk. Reading this touches only the disk. An outdated helper shows **Update** when its permission is on.
-- **Check device tool versions**: re-reads the versions on this Mac and on each SSH host. It installs and changes nothing.
-- **Prune old versions**: deletes every helper version except the pinned ones and any version a running helper uses. It runs under the maintenance lock, and an install in progress is left alone.
+- **Helper tools**: a fold whose summary row names the helpers' state, with an **Update available** or **Up to date** badge. It opens by itself when an update is waiting. Inside are the pinned version of each helper, whether it is installed or running, and any older versions still on disk. Reading this touches only the disk. An outdated helper shows **Update** when its permission is on.
+  - **Check device tool versions**: re-reads the versions on this Mac and on each SSH host. It installs and changes nothing.
+  - **Prune old versions**: deletes every helper version except the pinned ones and any version a running helper uses. It runs under the maintenance lock, and an install in progress is left alone.
 - **SSH hosts**: add, edit, test, connect, install on, and remove SSH device hosts (see [Simulators on SSH hosts](#simulators-on-ssh-hosts)).
-- **Remove installed tools**: asks first, then turns every permission off, stops both helpers, and deletes them together with saved screenshots and agent state. Your simulators and their apps are not touched.
+- **Remove installed tools**: outside the fold, so it is always in reach. It asks first, then turns every permission off, stops both helpers, and deletes them together with saved screenshots and agent state. Your simulators and their apps are not touched.
 
 ## Network and privacy
 

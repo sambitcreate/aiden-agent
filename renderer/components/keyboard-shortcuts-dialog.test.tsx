@@ -13,6 +13,7 @@ import { KeyboardShortcutsDialog } from "./keyboard-shortcuts-dialog";
 import { ShortcutSettings } from "./settings/shortcut-settings";
 import { TooltipProvider } from "./ui";
 import { CommandSystemProvider, useCommandHandler, useCommandSystem } from "../lib/command-system";
+import { AppCapabilitiesProvider, DISABLED_APP_CAPABILITIES } from "../lib/app-capabilities";
 import { applyKeybindingMutation, effectiveBindings, type CommandId } from "../shared/keybindings";
 
 let calls: BotTestIpcCall[] = [];
@@ -139,6 +140,23 @@ test("Settings lists the built-in keys below the ones you can change, and its se
   );
   assert.equal(screen.queryByText("Next / previous area"), null);
   queryClient.clear();
+});
+
+test("Settings offers the design mode shortcut only while design mode is on", async () => {
+  for (const designMode of [false, true]) {
+    const queryClient = createBotTestQueryClient();
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <AppCapabilitiesProvider capabilities={{ ...DISABLED_APP_CAPABILITIES, designMode }}>
+          <ShortcutSettings />
+        </AppCapabilitiesProvider>
+      </QueryClientProvider>,
+    );
+    await screen.findByRole("heading", { name: "Built-in keys" });
+    assert.equal(screen.queryByText("Toggle design mode") !== null, designMode, `designMode: ${designMode}`);
+    view.unmount();
+    queryClient.clear();
+  }
 });
 
 function Handler({ commandId, onRun }: { commandId: CommandId; onRun: () => void }) {

@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { AuthEvent, AuthInteraction, AuthPrompt, AuthType } from "@earendil-works/pi-ai";
 
+import { analyticsProviderId } from "./analytics/analytics-ids.js";
+import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import { OPENAI_CODEX_PROVIDER_ID } from "./codex-provider.js";
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
 
@@ -165,6 +167,7 @@ interface PendingPrompt {
 interface AuthSession {
   readonly flowId: string;
   readonly providerId: string;
+  readonly authType: AuthType;
   readonly backend: ProviderAuthBackend;
   readonly owner: ProviderAuthOwner;
   readonly abortController: AbortController;
@@ -548,6 +551,7 @@ export class ProviderAuthFlowCoordinator {
     const session: AuthSession = {
       flowId: request.flowId,
       providerId,
+      authType,
       backend,
       owner,
       abortController,
@@ -698,6 +702,10 @@ export class ProviderAuthFlowCoordinator {
         session.timeout = undefined;
       }
       const committed = await session.backend.commitCredential(outcome.credential);
+      reportAnalyticsEvent("provider_connected", {
+        provider_id: analyticsProviderId(session.providerId),
+        auth: session.authType === "oauth" ? "oauth" : "key",
+      });
       this.sendDone(session, false, committed?.warning);
     } catch (error) {
       if (session.abortController.signal.aborted && !session.timedOut) {

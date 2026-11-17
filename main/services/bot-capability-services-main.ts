@@ -1,3 +1,7 @@
+import { COMPOSIO_SERVICE_SERVER_ID } from "../../renderer/shared/composio-service.js";
+import { localComputerNoun } from "../../renderer/shared/computer-noun.js";
+import { createBotCapabilityOpaqueIdMint } from "./bot-capability-bindings.js";
+import { botConnectionCapabilityIdentity, COMPOSIO_SERVICE_ACCESS_IDENTITY } from "./bot-connection-capability-identity.js";
 import { createBotSkillApprovals } from "./bot-skill-approvals.js";
 import type { DiscoveredSkill } from "./types.js";
 import * as fs from "node:fs/promises";
@@ -251,7 +255,7 @@ export const botCapabilityCatalog = createBotCapabilityCatalogMainService(
       return roots.map((root) => ({
         sourceId: root.id,
         label: root.label,
-        description: "A folder approved on this Mac.",
+        description: `A folder approved on this ${localComputerNoun(process.platform)}.`,
         available: true,
         scopeFingerprint: botCapabilityFactsFingerprint({
           device: root.device,
@@ -271,7 +275,7 @@ export const botCapabilityCatalog = createBotCapabilityCatalogMainService(
     // Loaded lazily: the browser service pulls in Electron's web contents.
     browserAgentAccess: async () =>
       (await import("./browser/service.js")).browserService.agentAccessDefaultAllowed(),
-    // Never on Linux or Intel Macs; elsewhere once Settings → Bot computers is set up.
+    // Never on Linux or Intel Macs; elsewhere once Settings → Computers & VMs → Bot computers is set up.
     botComputersReady: async () => {
       const { botComputers, botComputersEnabled } = await import("./bot-computers/bot-computers-main.js");
       return botComputersEnabled() && (await botComputers().host.baseReady());
@@ -286,3 +290,9 @@ export const botCapabilityCatalog = createBotCapabilityCatalogMainService(
     },
   },
 );
+
+/** Model-free source ceilings; no providers, MCP inventory or credentials are read. */
+export async function botConnectorSourceSelectionIds(serverId:string){
+  const mint=createBotCapabilityOpaqueIdMint(await opaqueKeyStore.load());
+  return {connectionId:mint("connection",botConnectionCapabilityIdentity({sourceId:serverId,...(serverId===COMPOSIO_SERVICE_SERVER_ID?{accessIdentity:COMPOSIO_SERVICE_ACCESS_IDENTITY}:{})}),"0".repeat(64)),schedulesId:mint("other","schedules","0".repeat(64))};
+}

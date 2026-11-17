@@ -8,6 +8,7 @@ import {
   type DictationActivationMode,
 } from "../../renderer/shared/dictation-preferences.js";
 import { MAX_TIMER_DELAY_MS, transcriptionBudgetMs } from "../../renderer/lib/dictation-operation-gate.js";
+import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import type { PasteDeliveryResult, PasteOutcome } from "./dictation-paste.js";
 
 export type DictationStage = "idle" | "starting" | "recording" | "transcribing" | "delivering";
@@ -74,7 +75,7 @@ export interface DictationTiming {
 }
 
 export const VOICE_CHECK_FAILED_MESSAGE =
-  "Aiden couldn't check your voice setup. Open Settings → Voice and try again.";
+  "Aiden couldn't check your voice setup. Open Settings → Voice & Speech and try again.";
 
 const RESULT_HIDE_DELAY_MS = 1_200;
 // The pill window cannot take focus, so an error is readable only while it is
@@ -598,6 +599,12 @@ export class DictationCoordinator {
         const reason = typeof pasteResult === "string" ? undefined : pasteResult.reason;
         this.stage = "idle";
         this.operationId = null;
+        if (this.voice) {
+          reportAnalyticsEvent("voice_used", {
+            mode: "dictation",
+            engine: this.voice.provider === "local" ? "local" : "cloud",
+          });
+        }
         this.reportTiming(operationId, resultAt, outcome);
         this.deps.broadcast({
           state: outcome,

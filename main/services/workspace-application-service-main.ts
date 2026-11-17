@@ -11,6 +11,7 @@ import { terminalService } from "./terminal.js";
 import { browserService } from "./browser/service.js";
 import { workspaceGitWatcher } from "./workspace-git-watcher-main.js";
 import { workspaceArtifactStore } from "./workspace-artifacts/main.js";
+import { designGrants } from "./design-canvas/main.js";
 import { closeWorkspaceFollowThrough } from "./follow-through/follow-through-main.js";
 import { workspaceMutationGate } from "./workspace-mutation-gate.js";
 import { workspaceOperationRegistry } from "./workspace-operation-registry.js";
@@ -28,6 +29,13 @@ export const workspaceApplicationService = createWorkspaceApplicationService({
   browserService,
   gitWatcher: workspaceGitWatcher,
   workspaceArtifacts: workspaceArtifactStore,
+  approvalRules: {
+    forgetWorkspace: async (workspaceId) => {
+      const { approvalRules } = await import("./approval-rules/store-main.js");
+      await approvalRules.forgetOwner({ kind: "workspace", workspaceId });
+    },
+  },
+  designGrants,
   followThrough: { closeForWorkspace: closeWorkspaceFollowThrough },
   workspaceMutationGate,
   workspaceOperationRegistry,

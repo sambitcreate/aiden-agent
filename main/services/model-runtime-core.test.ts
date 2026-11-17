@@ -292,6 +292,10 @@ test("pins resolved Bot auth without asking Models to resolve ambient authority 
       source: "ambient",
     },
     providerStream,
+    {
+      fetchDeferred: (model, _handle, options) => { capturedModel = model; capturedOptions = options; const result = createAssistantMessageEventStream(); result.end({} as Awaited<ReturnType<typeof result.result>>); return result; },
+      cancelDeferred: async (model, _handle, options) => { capturedModel = model; capturedOptions = options; },
+    },
   );
 
   await pinned.streams.streamSimple(
@@ -311,6 +315,12 @@ test("pins resolved Bot auth without asking Models to resolve ambient authority 
     "X-Request": "kept",
   });
   assert.equal(capturedOptions?.env?.GOOGLE_APPLICATION_CREDENTIALS, "/pinned/adc.json");
+  const handle = { provider: googleModel.provider, modelId: googleModel.id, api: googleModel.api, id: "saved-request" };
+  for (const operation of [pinned.models.fetchDeferred.bind(pinned.models), pinned.models.cancelDeferred.bind(pinned.models)]) {
+    await operation(googleModel, handle, { apiKey: "ambient-new-key", headers: { Authorization: "Ambient" }, env: { GOOGLE_APPLICATION_CREDENTIALS: "/ambient/other-profile.json" } });
+    assert.equal(capturedModel?.baseUrl, "https://pinned.example.test/v1"); assert.equal(capturedOptions?.apiKey, "pinned-key"); assert.equal(capturedOptions?.headers?.Authorization, "Pinned"); assert.equal(capturedOptions?.env?.GOOGLE_APPLICATION_CREDENTIALS, "/pinned/adc.json");
+    await assert.rejects(operation({ ...googleModel, id: "different-model" }, handle), /another model/u);
+  }
 });
 
 test("rejects models absent from Pi's native catalog", async () => {

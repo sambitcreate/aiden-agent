@@ -254,7 +254,7 @@ test("a run started on the host streams into the open chat, and its composer can
   assert.equal(stop.hasAttribute("disabled"), false);
   assert.ok(view.button(/Queue message|Steer response/), "typing while it runs goes to the host's run");
   // Nothing on this Mac is offered for a chat that runs elsewhere.
-  for (const label of [/Attach files/i, /Workspace access/i, /terminal/i, /Open in/i, /Reveal/i]) {
+  for (const label of [/Attach files/i, /^Approvals:/i, /terminal/i, /Open in/i, /Reveal/i]) {
     assert.equal(view.button(label), undefined, `unexpected ${label} control`);
   }
   assert.doesNotMatch(view.text, /last-known transcript/);
@@ -387,7 +387,7 @@ test("a host that grants reading only shows no composer and says why", () => {
     chat: session(online, ["messagesWindow", "observe"]).chat(),
   });
   assert.equal(view.typing.length, 0);
-  assert.match(view.text, /This chat runs on Studio\. That Mac doesn't allow sending from here\./);
+  assert.match(view.text, /This chat runs on Studio\. That computer doesn't allow sending from here\./);
   assert.equal(view.button(/Chat actions/), undefined);
 });
 
@@ -398,7 +398,7 @@ test("an offline host keeps the composer but refuses to send, stop or answer unt
     chat: session(offline).chat(),
   });
 
-  assert.match(view.text, /That Mac is offline\. Nothing is sent until it is back online\./);
+  assert.match(view.text, /That computer is offline\. Nothing is sent until it is back online\./);
   assert.ok(view.button(/Stop generating/)?.hasAttribute("disabled"), "no stop is queued for later");
   // The approval stays visible, disabled with the reason, never answered locally.
   assert.ok(view.button(/Allow once/)?.hasAttribute("disabled"));
@@ -457,7 +457,7 @@ test("a host that does not grant run control shows its prompts read-only, to be 
     chat: session(online, ["messagesWindow", "observe"]).chat(),
   });
 
-  assert.match(view.text, /Allow Run shell\?/);
+  assert.match(view.text, /Review before Run shell/);
   assert.match(view.text, /Run the release script/);
   assert.match(view.text, /Approve or deny it on Studio\./);
   assert.match(view.text, /Which branch should I tag\?/);
@@ -616,6 +616,16 @@ test("a finished run leaves no prompts behind", () => {
 
 test("the pane shows loading before the first window and the read failure when nothing loaded", () => {
   assert.match(render({ host: online, snapshot: null }).text, /Loading…/);
+  const replay = render({
+    host: online,
+    snapshot: snapshot(online, {
+      loaded: false,
+      loading: true,
+      transcript: { chatId: "chat-1", revision: null, messages: [], hasOlder: false },
+      run: run([event(90, "snapshot", { reason: "gap", state: "working", replyText: "Already built the level." })]),
+    }),
+  });
+  assert.match(replay.text, /Already built the level/);
   const failed = render({
     host: online,
     snapshot: snapshot(online, {
@@ -679,16 +689,16 @@ test("opening a remote chat directly waits for the paired hosts before calling t
 
 test("a remote chat whose Mac is unpaired, turned off or unreadable says so once the hosts are known", async () => {
   const unpaired = await route((client) => client.setQueryData(hostQueryKeys.list(), []));
-  assert.match(unpaired, /This Mac is not connected/);
+  assert.match(unpaired, /That computer isn't connected/);
 
   const off = await route((client) => client.setQueryData(hostQueryKeys.list(), [{ ...studioView, enabled: false }]));
-  assert.match(off, /This Mac is not connected/);
+  assert.match(off, /That computer isn't connected/);
 
   const failed = await route((client) =>
     client.prefetchQuery({ queryKey: hostQueryKeys.list(), queryFn: () => Promise.reject(new Error("Keychain locked")) }),
   );
   assert.doesNotMatch(failed, /Loading…/);
-  assert.match(failed, /Paired Macs could not be read/);
+  assert.match(failed, /Paired computers could not be read/);
   assert.match(failed, /Keychain locked/);
 });
 

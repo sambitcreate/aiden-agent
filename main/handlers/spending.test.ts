@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { AidenRemoteSpendingService } from "../services/aiden-remote-spending.js";
 import { SpendingService } from "../services/spending-service.js";
 import { registerSpendingHandlers } from "./spending.js";
 
@@ -25,7 +26,8 @@ test("a chat's status and Allow more go through the ledger; no limit reads as nu
     ownerKind: "chat", ownerId: "chat-1", period: "chat", limitUsd: 2, extraUsd: 0, spentUsd: 0, state: "under",
   });
   await spending.record({ kind: "chat", id: "chat-1" }, 2.2);
-  const allowed = (await invoke("spending:allowMore", "chat", "chat-1")) as { extraUsd: number; state: string };
+  const notice = await invoke("spending:status", "chat", "chat-1");
+  const allowed = (await invoke("spending:allowMore", "chat", "chat-1", notice)) as { extraUsd: number; state: string };
   assert.deepEqual([allowed.extraUsd, allowed.state], [2, "under"]);
   assert.equal(await register({}).invoke("spending:status", "chat", "chat-1"), null);
   await assert.rejects(invoke("spending:status", "team", "x"), /Invalid spending request/u);
@@ -45,3 +47,26 @@ test("a Bot's own monthly limit can be the default, none or an amount, and a bad
     await assert.rejects(invoke("spending:setBotLimit", "ada", bad), /Invalid spending limit/u, String(bad));
   }
 });
+
+for (const first of ["phone", "desktop"]) {
+  test(`crossed Allow more taps on one notice grant once, ${first} first`, async () => {
+    const { spending, invoke } = register({ chatUsd: 1 });
+    await spending.record({ kind: "chat", id: "c" }, 1.7);
+    const remote = new AidenRemoteSpendingService({ spending, requireBot: async () => {} });
+    const revision = (await remote.chat("c")).spending!.revision;
+    const notice = await invoke("spending:status", "chat", "c");
+    const desktop = () => invoke("spending:allowMore", "chat", "c", notice);
+    const phone = () => remote.allowMoreChat("c", revision);
+    if (first === "phone") {
+      await phone();
+      await desktop();
+    } else {
+      await desktop();
+      await assert.rejects(phone(), { code: "revision_conflict" });
+    }
+    assert.equal((await remote.chat("c")).spending?.allowedUsd, 2);
+    const refreshed = await invoke("spending:status", "chat", "c");
+    await invoke("spending:allowMore", "chat", "c", refreshed);
+    assert.equal((await remote.chat("c")).spending?.allowedUsd, 3);
+  });
+}

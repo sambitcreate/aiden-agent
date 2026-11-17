@@ -1,4 +1,12 @@
 import * as path from "node:path";
+import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
+import { reportApprovalModeChanged } from "./approval-gate/approval-analytics.js";
+import {
+  applyWorkspaceApprovalChange,
+  parseWorkspaceApprovalChange,
+  type MacGrantClass,
+} from "../../renderer/shared/approval-mode.js";
+import { workspaceWithMacGrant } from "./approval-gate/run-approval.js";
 import type { configStore } from "./config-store.js";
 import type { llmClient } from "./llm-client.js";
 import type { scheduleService } from "./schedule-service.js";
@@ -24,6 +32,13 @@ function nonEmptyString(value: unknown, name: string): string {
   return value;
 }
 
+/** The approval fields a concurrent Mac grant may change under an update. */
+function approvalFieldsOf(workspace: Workspace | undefined): string {
+  return JSON.stringify([workspace?.permission, workspace?.approvalMode ?? null, workspace?.macGrants ?? null]);
+}
+
+class StaleWorkspaceGrant extends Error {}
+
 function defaultWorkspaceId(): string {
   return `w-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -47,6 +62,10 @@ export interface WorkspaceApplicationDependencies {
   followThrough?: { closeForWorkspace(workspaceId: string): Promise<FinishWorkspaceFollowThrough | void> };
   /** Drops the workspace's artifacts once its record is gone. */
   workspaceArtifacts?: { removeWorkspace(workspaceId: string): Promise<void> };
+  /** Drops the workspace's own rules on the rules page once its record is gone. */
+  approvalRules?: { forgetWorkspace(workspaceId: string): Promise<void> };
+  /** Ends aiden-design grants that serve the removed workspace's folder. */
+  designGrants?: { revokeRoot(workspaceRoot: string): void };
   workspaceMutationGate: Pick<typeof workspaceMutationGate, "begin">;
   workspaceOperationRegistry: Pick<typeof workspaceOperationRegistry, "cancelAndSettle">;
   createScratchWorkspaceDirectory: typeof createScratchWorkspaceDirectory;
@@ -73,12 +92,20 @@ export interface WorkspaceApplicationDependencies {
   logError(area: string, message: string, error: unknown): void;
 }
 
+/** A private folder cannot be assigned to another chat until this operation settles. */
+export interface WorkspaceChatAssignment {
+  workspaceId: string;
+  release(): void;
+}
+
 export interface WorkspaceApplicationMutationOptions {
   assertCurrent?: (workspace: Workspace) => void;
   beforeSave?: (workspace: Workspace | undefined) => void | Promise<void>;
 }
 
 export interface WorkspaceFolderCreationOptions {
+  /** Added by a typed path or a clone rather than the folder picker; for usage data. */
+  fromPath?: boolean;
   assertCurrent?: (identity: {
     canonicalPath: string;
     filesystemDevice?: string;
@@ -88,6 +115,8 @@ export interface WorkspaceFolderCreationOptions {
 
 export function createWorkspaceApplicationService(deps: WorkspaceApplicationDependencies) {
   let folderCreationTail: Promise<void> = Promise.resolve();
+  let assignmentTail: Promise<unknown> = Promise.resolve();
+  const assignedPrivateWorkspaces = new Set<string>();
 
   const serializeFolderCreation = <T>(operation: () => Promise<T>): Promise<T> => {
     const result = folderCreationTail.then(operation, operation);
@@ -117,7 +146,7 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
         throw new Error("That folder is already registered as an Aiden workspace.");
       }
       const now = deps.now();
-      return deps.configStore.saveWorkspace({
+      const saved = await deps.configStore.saveWorkspace({
         id: deps.createId(),
         name: name?.trim() || path.basename(canonicalPath) || "Workspace",
         folderPath: canonicalPath,
@@ -134,6 +163,8 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
           ...(current.ino === undefined ? {} : { filesystemInode: String(current.ino) }),
         });
       } : undefined);
+      reportAnalyticsEvent("workspace_added", { kind: options.fromPath ? "path" : "folder" });
+      return saved;
     });
   };
 
@@ -193,6 +224,9 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
         permission,
         createdAt: now,
         updatedAt: now,
+      }).then((saved) => {
+        reportAnalyticsEvent("workspace_added", { kind: "folder" });
+        return saved;
       });
     },
 
@@ -222,7 +256,9 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
         updatedAt: now,
       };
       try {
-        return await deps.configStore.saveWorkspace(workspace);
+        const saved = await deps.configStore.saveWorkspace(workspace);
+        reportAnalyticsEvent("workspace_added", { kind: "scratch" });
+        return saved;
       } catch (error) {
         await deps.removeEmptyDirectory(scratch.folderPath).catch(() => undefined);
         throw error;
@@ -295,15 +331,34 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
      * A hidden record that is gone (its last chat was deleted, so it was
      * released) also gets a fresh one: the device asked for No workspace and
      * still lists the old record as the group's home. Returns the workspace
-     * to use; any other workspace is unchanged.
+     * to use; any other workspace is unchanged. Hold the reservation through
+     * commit and failure cleanup, then release it. Unknown outcomes stay held
+     * until restart reconciles the chat store.
      */
-    async workspaceForNoWorkspaceChat(workspaceId: string) {
-      if (!deps.noWorkspace) return workspaceId;
-      const workspace = await deps.configStore.getWorkspace(workspaceId);
-      if (!workspace) return (await service.createNoWorkspace()).id;
-      if (!workspace.noWorkspace) return workspaceId;
-      if ((await deps.noWorkspace.chatIdsIn(workspaceId)).length === 0) return workspaceId;
-      return (await service.createNoWorkspace()).id;
+    reserveNoWorkspaceChat(workspaceId: string): Promise<WorkspaceChatAssignment> {
+      const reserve = async (): Promise<WorkspaceChatAssignment> => {
+        const workspace = await deps.configStore.getWorkspace(workspaceId);
+        if (!deps.noWorkspace || (workspace && !workspace.noWorkspace)) {
+          return { workspaceId, release: () => undefined };
+        }
+        const available = workspace && !assignedPrivateWorkspaces.has(workspaceId) &&
+          (await deps.noWorkspace.chatIdsIn(workspaceId)).length === 0;
+        const target = available ? workspaceId : (await service.createNoWorkspace()).id;
+        assignedPrivateWorkspaces.add(target);
+        let released = false;
+        return {
+          workspaceId: target,
+          release: () => {
+            if (released) return;
+            released = true;
+            assignedPrivateWorkspaces.delete(target);
+          },
+        };
+      };
+      // Separate from folder creation: reservation may need to create a folder.
+      const result = assignmentTail.then(reserve, reserve);
+      assignmentTail = result.catch(() => undefined);
+      return result;
     },
 
     /** After a chat is deleted: its hidden No workspace folder goes too once no chat uses it. */
@@ -334,7 +389,7 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
         if ("folderPath" in fields) {
           throw new Error("Workspace folders cannot be changed from renderer input.");
         }
-        const next: Workspace = {
+        let next: Workspace = {
           ...existing,
           name:
             typeof fields.name === "string" && fields.name.trim()
@@ -359,12 +414,31 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
         };
         if (!next.disabledSkills) delete next.disabledSkills;
         if (!next.disabledMcpServerIds) delete next.disabledMcpServerIds;
+        const approvalChange = parseWorkspaceApprovalChange(fields);
+        if (fields.permission === "full") {
+          // An older client choosing Full: the legacy reading (Never ask with
+          // shell and files allowed) applies, so drop any own mode or grants.
+          delete next.approvalMode;
+          delete next.macGrants;
+        } else if (approvalChange) {
+          next = applyWorkspaceApprovalChange(next, approvalChange);
+        }
+        const reportModeChange = () => reportApprovalModeChanged("workspace", existing.approvalMode, next.approvalMode);
+        // A Mac card answered "Allow in this workspace" after this update read
+        // the workspace: refuse rather than save over the new grant.
+        const beforeSave = async (current: Workspace | undefined) => {
+          if (current && approvalFieldsOf(current) !== approvalFieldsOf(existing)) {
+            throw new Error("This workspace's approvals changed while saving. Try again.");
+          }
+          await options.beforeSave?.(current);
+        };
         const authorityChanged =
           next.permission !== existing.permission ||
           next.memoryEnabled !== existing.memoryEnabled;
         if (!authorityChanged) {
-          const saved = await deps.configStore.saveWorkspace(next, options.beforeSave);
+          const saved = await deps.configStore.saveWorkspace(next, beforeSave);
           deps.onChanged?.();
+          reportModeChange();
           return saved;
         }
         return await withWorkspaceScheduleRestoration(
@@ -386,9 +460,10 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
             if (next.permission !== existing.permission) followThroughChange.finish = await deps.followThrough?.closeForWorkspace(existing.id);
             await deps.scheduleService.cancelWorkspace(existing.id);
             options.assertCurrent?.(await deps.configStore.getWorkspace(id) ?? existing);
-            const saved = await deps.configStore.saveWorkspace(next, options.beforeSave);
+            const saved = await deps.configStore.saveWorkspace(next, beforeSave);
             followThroughChange.committed = true;
             deps.onChanged?.();
+            reportModeChange();
             if (saved.permission !== "none") {
               ensureResumedOnExit();
               await deps.scheduleService.resumeWorkspace(saved.id);
@@ -404,6 +479,30 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
           finishMutation();
         }
       }
+    },
+
+    /**
+     * "Allow in this workspace" on a Mac card: adds that grant and nothing else.
+     * It neither cancels nor waits for the workspace's chats (the chat that
+     * asked is about to run the call), and a save that lands in between is
+     * read again rather than overwritten. A workspace that no longer exists
+     * gets nothing.
+     */
+    async grantMac(workspaceId: string, grant: MacGrantClass): Promise<Workspace | undefined> {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const existing = await deps.configStore.getWorkspace(workspaceId);
+        if (!existing) return undefined;
+        try {
+          const saved = await deps.configStore.saveWorkspace(workspaceWithMacGrant(existing, grant), (current) => {
+            if (!current || current.updatedAt !== existing.updatedAt) throw new StaleWorkspaceGrant();
+          });
+          deps.onChanged?.();
+          return saved;
+        } catch (error) {
+          if (!(error instanceof StaleWorkspaceGrant)) throw error;
+        }
+      }
+      throw new Error("The workspace kept changing; its Mac permission was not saved.");
     },
 
     async remove(
@@ -438,8 +537,12 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
             await deps.scheduleService.cancelWorkspace(id);
             await deps.configStore.removeWorkspace(id);
             followThroughChange.committed = true;
+            if (existing?.folderPath) deps.designGrants?.revokeRoot(existing.folderPath);
             await deps.workspaceArtifacts?.removeWorkspace(id).catch((error: unknown) => {
               deps.logError("workspace", "Could not remove the workspace's artifacts.", error);
+            });
+            await deps.approvalRules?.forgetWorkspace(id).catch((error: unknown) => {
+              deps.logError("workspace", "Could not remove the workspace's approval rules.", error);
             });
             deps.onChanged?.();
             keepPaused();

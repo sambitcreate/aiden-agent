@@ -16,6 +16,7 @@ import { app } from "../platform.js";
 import { verifyApprovedRootIdentity } from "./aiden-remote-approved-roots.js";
 import { botRuntimeInventoryLeases } from "./bot-runtime-inventory-lease.js";
 import { configStore } from "./config-store.js";
+import type { BotRoutineModelGrant } from "./bot-routine-models.js";
 
 const resolver = createBotRuntimeAuthorityResolver({
   botStore,
@@ -31,7 +32,7 @@ export const BOT_DESKTOP_AUDIENCE_ID = "desktop:local";
 
 /** The sole production admission path for Bot turns and effects. */
 export const botRuntimeAuthority = {
-  async admit(input: { audienceId: string; botId: string; chatId: string }) {
+  async admit(input: { audienceId: string; botId: string; chatId: string; routineModelGrant?: BotRoutineModelGrant }) {
     await initializeBotApplicationService();
     return resolver.admit(input);
   },

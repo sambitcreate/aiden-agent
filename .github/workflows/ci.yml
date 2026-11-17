@@ -100,7 +100,7 @@ jobs:
           retention-days: 1
 
   e2e:
-    name: Electron E2E (${{ matrix.shard }}/3)
+    name: Electron E2E (${{ matrix.shard }}/4)
     needs: [changes, build]
     if: ${{ needs.changes.outputs.desktop == 'true' }}
     runs-on: macos-26
@@ -108,7 +108,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4]
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
@@ -128,7 +128,7 @@ jobs:
       - name: Restore production build
         run: tar -xf "$RUNNER_TEMP/desktop-build/desktop-build.tar"
       - name: Run deterministic Electron E2E shard
-        run: node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/3
+        run: node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/4
       - name: Build sanitized E2E failure receipt
         if: ${{ failure() }}
         run: npm run diagnostics:failure-receipt -- test-results/e2e-safe-receipt.json electron-e2e test-failed test-results/safe-test-details.json
@@ -220,16 +220,24 @@ jobs:
     needs: changes
     # Catalog refreshes run these too: the runtime takes model limits from it.
     if: ${{ needs.changes.outputs.desktop == 'true' || needs.changes.outputs.catalog == 'true' }}
-    runs-on: macos-26
+    # macOS slots are the scarce runner, so pull requests keep only the macos
+    # lane there. Main runs every lane on macOS to catch what Ubuntu cannot see.
+    runs-on: ${{ github.event_name == 'pull_request' && matrix.runner || 'macos-26' }}
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        lane: [core-git, runtime-subagents, renderer-other]
+        lane: [core-git, runtime-subagents, renderer-other, macos]
         include:
           - lane: core-git
+            runner: ubuntu-24.04
             chromium: true
+          - lane: runtime-subagents
+            runner: ubuntu-24.04
           - lane: renderer-other
+            runner: ubuntu-24.04
+          - lane: macos
+            runner: macos-26
             chromium: true
     steps:
       - name: Check out source
@@ -239,11 +247,14 @@ jobs:
         with:
           node-version: 22.23.4
           cache: npm
+      - name: Install Linux test dependencies
+        if: ${{ runner.os == 'Linux' }}
+        run: sudo apt-get update && sudo apt-get install --yes rpm xvfb pkg-config libsecret-1-dev libselinux1-dev gnome-keyring dbus-x11
       - name: Install locked dependencies
         run: npm ci
       - name: Install Playwright Chromium for containment
         if: ${{ matrix.chromium == true }}
-        run: npx playwright install chromium
+        run: npx playwright install --with-deps chromium
       - name: Run assigned regression tests and prerequisites
         env:
           AIDEN_SKIP_VIRTUALIZED_LAUNCH_CONSTRAINT_TESTS: "1"
@@ -353,6 +364,22 @@ jobs:
           -derivedDataPath '${{ runner.temp }}/AidenOnTheGoDerivedData'
           -clonedSourcePackagesDirPath '${{ runner.temp }}/AidenOnTheGoSourcePackages'
           -resultBundlePath '${{ runner.temp }}/AidenOnTheGoSimulator.xcresult'
+          -skip-testing:AidenOnTheGoUITests
+          CODE_SIGNING_ALLOWED=NO
+
+      # One smoke test: the real shell launches against every demo scenario. The
+      # screenshot matrix and accessibility audit stay a local tool.
+      - name: Run Aiden On The Go shell UI smoke test on the simulator
+        run: >-
+          xcodebuild test-without-building -quiet
+          -project ios/AidenOnTheGo.xcodeproj
+          -scheme AidenOnTheGo
+          -configuration Debug
+          -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}'
+          -derivedDataPath '${{ runner.temp }}/AidenOnTheGoDerivedData'
+          -clonedSourcePackagesDirPath '${{ runner.temp }}/AidenOnTheGoSourcePackages'
+          -resultBundlePath '${{ runner.temp }}/AidenOnTheGoShellUI.xcresult'
+          -only-testing:AidenOnTheGoUITests/AidenShellUITests/testShellLaunchesForEveryScenario
           CODE_SIGNING_ALLOWED=NO
 
       - name: Print failed iOS simulator test messages
@@ -360,20 +387,148 @@ jobs:
         shell: bash
         run: |
           # Parallel test runs print only test names; the failure messages
-          # live in the result bundle.
-          xcrun xcresulttool get test-results summary --compact \
-            --path '${{ runner.temp }}/AidenOnTheGoSimulator.xcresult' | python3 -c '
+          # live in the result bundles. A bundle is missing when its step never
+          # ran, so each one is optional.
+          for bundle in AidenOnTheGoSimulator AidenOnTheGoShellUI; do
+            path='${{ runner.temp }}'/"$bundle.xcresult"
+            [[ -d "$path" ]] || continue
+            xcrun xcresulttool get test-results summary --compact --path "$path" | python3 -c '
           import json, sys
           for failure in json.load(sys.stdin).get("testFailures", []):
               print("::error title=" + failure.get("testName", "test") + "::" + failure.get("failureText", "").replace("\n", " "))
           ' || true
+          done
 
       - name: Preserve failed iOS simulator test results
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: ios-simulator-results-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/AidenOnTheGoSimulator.xcresult
+          path: |
+            ${{ runner.temp }}/AidenOnTheGoSimulator.xcresult
+            ${{ runner.temp }}/AidenOnTheGoShellUI.xcresult
+          retention-days: 7
+          if-no-files-found: warn
+
+  # Same simulator steps on the Xcode 27 image, to see early whether the app
+  # still builds and tests with the toolchain people's phones run. Policy checks
+  # run once, in the ios job.
+  ios-27:
+    name: iOS build and simulator tests (Xcode 27, non-blocking)
+    needs: changes
+    if: ${{ needs.changes.outputs.ios == 'true' }}
+    runs-on: xcode-27
+    timeout-minutes: 50
+    # The xcode-27 image is a preview, so a failure here reports without
+    # blocking the PR. Release builds stay on Xcode 26.6 in the ios job.
+    continue-on-error: true
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      # Only the resolved Swift package checkouts are cached. Build products
+      # stay uncached because a fresh checkout invalidates them anyway.
+      - name: Restore Swift package checkouts
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ runner.temp }}/AidenOnTheGoSourcePackages
+          key: ios-spm-xcode-27.1-${{ hashFiles('ios/AidenOnTheGo.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+      - name: Compile Aiden On The Go tests for generic iOS hardware
+        run: >-
+          xcodebuild build-for-testing -quiet
+          -project ios/AidenOnTheGo.xcodeproj
+          -scheme AidenOnTheGo
+          -configuration Debug
+          -destination 'generic/platform=iOS'
+          -derivedDataPath '${{ runner.temp }}/AidenOnTheGoDerivedData'
+          -clonedSourcePackagesDirPath '${{ runner.temp }}/AidenOnTheGoSourcePackages'
+          CODE_SIGNING_ALLOWED=NO
+      - name: Select the newest available iPhone simulator
+        id: simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          udid="$(xcrun simctl list devices available --json | python3 -c '
+          import json, re, sys
+          runtimes = json.load(sys.stdin)["devices"]
+          def version(key):
+              return [int(part) for part in re.findall(r"\d+", key.rsplit(".", 1)[-1])]
+          for key in sorted((k for k in runtimes if ".SimRuntime.iOS-" in k), key=version, reverse=True):
+              phones = [d for d in runtimes[key] if d["name"].startswith("iPhone")]
+              if phones:
+                  print(phones[0]["udid"])
+                  break
+          ')"
+          if [[ -z "$udid" ]]; then
+            echo "No available iPhone simulator on this runner." >&2
+            xcrun simctl list devices available >&2
+            exit 1
+          fi
+          echo "udid=$udid" >> "$GITHUB_OUTPUT"
+      - name: Build Aiden On The Go tests for the simulator
+        run: >-
+          xcodebuild build-for-testing -quiet
+          -project ios/AidenOnTheGo.xcodeproj
+          -scheme AidenOnTheGo
+          -configuration Debug
+          -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}'
+          -derivedDataPath '${{ runner.temp }}/AidenOnTheGoDerivedData'
+          -clonedSourcePackagesDirPath '${{ runner.temp }}/AidenOnTheGoSourcePackages'
+          CODE_SIGNING_ALLOWED=NO
+      - name: Run Aiden On The Go XCTest on the simulator
+        run: >-
+          xcodebuild test-without-building -quiet
+          -project ios/AidenOnTheGo.xcodeproj
+          -scheme AidenOnTheGo
+          -configuration Debug
+          -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}'
+          -derivedDataPath '${{ runner.temp }}/AidenOnTheGoDerivedData'
+          -clonedSourcePackagesDirPath '${{ runner.temp }}/AidenOnTheGoSourcePackages'
+          -resultBundlePath '${{ runner.temp }}/AidenOnTheGoSimulator.xcresult'
+          -skip-testing:AidenOnTheGoUITests
+          CODE_SIGNING_ALLOWED=NO
+
+      # One smoke test: the real shell launches against every demo scenario. The
+      # screenshot matrix and accessibility audit stay a local tool.
+      - name: Run Aiden On The Go shell UI smoke test on the simulator
+        run: >-
+          xcodebuild test-without-building -quiet
+          -project ios/AidenOnTheGo.xcodeproj
+          -scheme AidenOnTheGo
+          -configuration Debug
+          -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}'
+          -derivedDataPath '${{ runner.temp }}/AidenOnTheGoDerivedData'
+          -clonedSourcePackagesDirPath '${{ runner.temp }}/AidenOnTheGoSourcePackages'
+          -resultBundlePath '${{ runner.temp }}/AidenOnTheGoShellUI.xcresult'
+          -only-testing:AidenOnTheGoUITests/AidenShellUITests/testShellLaunchesForEveryScenario
+          CODE_SIGNING_ALLOWED=NO
+
+      - name: Print failed iOS simulator test messages
+        if: failure()
+        shell: bash
+        run: |
+          # Parallel test runs print only test names; the failure messages
+          # live in the result bundles. A bundle is missing when its step never
+          # ran, so each one is optional.
+          for bundle in AidenOnTheGoSimulator AidenOnTheGoShellUI; do
+            path='${{ runner.temp }}'/"$bundle.xcresult"
+            [[ -d "$path" ]] || continue
+            xcrun xcresulttool get test-results summary --compact --path "$path" | python3 -c '
+          import json, sys
+          for failure in json.load(sys.stdin).get("testFailures", []):
+              print("::error title=" + failure.get("testName", "test") + "::" + failure.get("failureText", "").replace("\n", " "))
+          ' || true
+          done
+
+      - name: Preserve failed iOS simulator test results
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ios-27-simulator-results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/AidenOnTheGoSimulator.xcresult
+            ${{ runner.temp }}/AidenOnTheGoShellUI.xcresult
           retention-days: 7
           if-no-files-found: warn
 
@@ -518,7 +673,7 @@ jobs:
   linux-required:
     name: Linux ${{ matrix.arch }}
     if: ${{ always() }}
-    needs: [changes, linux]
+    needs: [changes, linux, linux-e2e]
     strategy:
       fail-fast: false
       matrix:
@@ -531,15 +686,16 @@ jobs:
           CHANGES_RESULT: ${{ needs.changes.result }}
           LINUX_SELECTED: ${{ needs.changes.outputs.linux }}
           LINUX_RESULT: ${{ needs.linux.result }}
+          LINUX_E2E_RESULT: ${{ needs.linux-e2e.result }}
         run: |
-          case "$CHANGES_RESULT:$LINUX_SELECTED:$LINUX_RESULT" in
+          case "$CHANGES_RESULT:$LINUX_SELECTED:$LINUX_RESULT:$LINUX_E2E_RESULT" in
             # Unselected, the always-started linux matrix skips its steps and reports success.
-            success:true:success|success:false:success|success:false:skipped) exit 0 ;;
-            *) echo "Linux gate failed: $CHANGES_RESULT:$LINUX_SELECTED:$LINUX_RESULT"; exit 1 ;;
+            success:true:success:success|success:false:success:skipped|success:false:skipped:skipped) exit 0 ;;
+            *) echo "Linux gate failed: $CHANGES_RESULT:$LINUX_SELECTED:$LINUX_RESULT:$LINUX_E2E_RESULT"; exit 1 ;;
           esac
 
-  # Linux packaging and its E2E gate run for Linux-relevant changes and on
-  # every main push. The matrix job always starts and skips its steps
+  # Linux packaging runs for Linux-relevant changes and on every main push,
+  # beside the sharded linux-e2e job. The matrix job always starts and skips its steps
   # otherwise, because a skipped matrix job reports under the unexpanded
   # name and never satisfies the required "Linux x64"/"Linux arm64" checks.
   linux:
@@ -667,8 +823,42 @@ jobs:
             exit 1
           fi
 
+  # Electron specs run on three runners beside packaging, not after it, because
+  # this was the longest step on the path to the required Linux checks.
+  linux-e2e:
+    name: Linux E2E (${{ matrix.shard }}/3)
+    needs: changes
+    if: ${{ needs.changes.outputs.linux == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22.23.4
+          cache: npm
+
+      - name: Install Linux test dependencies
+        run: sudo apt-get update && sudo apt-get install --yes rpm xvfb pkg-config libsecret-1-dev libselinux1-dev gnome-keyring dbus-x11
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Build the app
+        run: npm run build
+
       - name: Run deterministic Electron E2E gate
-        if: ${{ needs.changes.outputs.linux == 'true' && matrix.arch == 'x64' }}
         run: |
           set -euo pipefail
           # Ubuntu 24.04 blocks unprivileged user namespaces through AppArmor,
@@ -685,17 +875,17 @@ jobs:
           echo "previous core_pattern: $(cat /proc/sys/kernel/core_pattern)"
           sudo sysctl -w kernel.core_pattern=core
           ulimit -c 0
-          xvfb-run --auto-servernum npm run test:e2e
+          xvfb-run --auto-servernum node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/3
 
       - name: Build sanitized E2E failure receipt
-        if: ${{ failure() && matrix.arch == 'x64' }}
+        if: ${{ failure() }}
         run: npm run diagnostics:failure-receipt -- test-results/e2e-safe-receipt.json electron-e2e test-failed test-results/safe-test-details.json
 
       - name: Upload sanitized E2E failure receipt
-        if: ${{ failure() && matrix.arch == 'x64' }}
+        if: ${{ failure() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: playwright-e2e-linux-${{ github.run_id }}-${{ github.run_attempt }}
+          name: playwright-e2e-linux-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
           path: test-results/e2e-safe-receipt.json
           if-no-files-found: error
           retention-days: 7

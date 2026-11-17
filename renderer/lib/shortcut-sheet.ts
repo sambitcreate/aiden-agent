@@ -4,12 +4,12 @@
 import {
   COMMANDS,
   prettyAcceleratorForPlatform,
+  type CommandCapability,
   type CommandCategory,
   type CommandId,
   type KeyboardPlatform,
 } from "../shared/keybindings";
 import { BUILT_IN_KEYS, type BuiltInKeySection } from "../shared/built-in-keys";
-import type { StudioFeature } from "../shared/studio-routes";
 
 export interface ShortcutSheetRow {
   id: string;
@@ -27,7 +27,7 @@ export interface ShortcutSheetSection {
   rows: ShortcutSheetRow[];
 }
 
-const SECTION_ORDER = ["General", "Moving around", "In a chat", "Workspace"] as const;
+const SECTION_ORDER = ["General", "Moving around", "In a chat", "Workspace", "Design canvas"] as const;
 type SheetSectionTitle = (typeof SECTION_ORDER)[number];
 
 const CATEGORY_SECTION: Record<CommandCategory, SheetSectionTitle> = {
@@ -58,6 +58,7 @@ const sectionOf = (id: CommandId, category: CommandCategory) =>
 const BUILT_IN_SECTION: Record<BuiltInKeySection, SheetSectionTitle> = {
   "Moving around": "Moving around",
   "In a chat": "In a chat",
+  "Design canvas": "Design canvas",
 };
 
 const JUMP_IDS = Array.from({ length: 9 }, (_, index) => `chat.jump.${index + 1}` as CommandId);
@@ -69,7 +70,7 @@ export function shortcutSheet(
     platform,
     query = "",
   }: {
-    capabilities?: Partial<Record<StudioFeature, boolean>>;
+    capabilities?: Partial<Record<CommandCapability, boolean>>;
     platform: KeyboardPlatform;
     query?: string;
   },
@@ -126,6 +127,7 @@ export function shortcutSheet(
     );
   }
   for (const key of BUILT_IN_KEYS) {
+    if (key.requiresCapability && !capabilities[key.requiresCapability]) continue;
     add(BUILT_IN_SECTION[key.section], {
       id: `built-in.${key.id}`,
       title: key.title,

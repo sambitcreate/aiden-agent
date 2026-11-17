@@ -115,6 +115,9 @@ test("a deleted Bot leaves the cached list at once, before the list is read agai
   });
   const queryClient = createBotTestQueryClient();
   queryClient.setQueryData([...queryKeys.bots, "active"], [botFixture(), botFixture({ id: "bot-2", name: "Scout" })]);
+  queryClient.setQueryData(["bot-open-work", bot.id], { note: "deleted Bot responsibility" });
+  queryClient.setQueryData(["bot-routine-models", bot.id, "routine-1"], { selection: "deleted Bot choice" });
+  queryClient.setQueryData(["bot-open-work", "bot-2"], { note: "other Bot responsibility" });
   const harness = await mountWithBotRouter(<BotDeleteDialog bot={bot} open onOpenChange={() => undefined} />, {
     initialPath: "/bots/bot-1",
     queryClient,
@@ -126,4 +129,7 @@ test("a deleted Bot leaves the cached list at once, before the list is read agai
     queryClient.getQueryData<ReturnType<typeof botFixture>[]>([...queryKeys.bots, "active"])?.map((row) => row.id),
     ["bot-2"],
   );
+  assert.equal(queryClient.getQueryData(["bot-open-work", bot.id]), undefined);
+  assert.equal(queryClient.getQueryData(["bot-routine-models", bot.id, "routine-1"]), undefined);
+  assert.deepEqual(queryClient.getQueryData(["bot-open-work", "bot-2"]), { note: "other Bot responsibility" });
 });

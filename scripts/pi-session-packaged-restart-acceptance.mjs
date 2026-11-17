@@ -311,7 +311,7 @@ try {
       if (snapshot.chatId !== chatId) throw new Error("VCC chat did not reopen.");
     }, vccChat.id);
     await localRestart.page.getByRole("button", { name: "Settings", exact: true }).click();
-    await localRestart.page.getByRole("button", { name: "Memory", exact: true }).click();
+    await localRestart.page.getByRole("button", { name: "Context & Limits", exact: true }).click();
     const llmRadio = localRestart.page.getByRole("radio", { name: "LLM Compaction", exact: true });
     const vccRadio = localRestart.page.getByRole("radio", {
       name: "pi-vcc Compaction — Experimental",

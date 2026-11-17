@@ -155,7 +155,7 @@ export function remoteComposerActions(
       if (!control) throw new Error(`Connecting to ${hostLabel}…`);
       // A running turn on the host takes text only; nothing is dropped silently.
       if (attachments.length > 0 || skill) throw new Error("Send attachments and skills as a new message after this run.");
-      if (!runId) throw new Error("Wait for the run to start on that Mac.");
+      if (!runId) throw new Error(`Wait for the run to start on ${hostLabel}.`);
       try {
         const result = await control.submitInput(runId, mode, text);
         if (result.admitted) return;
@@ -373,7 +373,8 @@ export function RemoteChatPane({
   const row = snapshot ? remoteRunTranscript(snapshot.run, messages) : null;
   const stale = host.availability !== "online";
   const unavailable = host.availability === "offline" || host.availability === "blocked";
-  const loading = !snapshot || (!snapshot.loaded && snapshot.error === null);
+  const hasLiveContent = Boolean(row?.streamingText || row?.streamingReasoning || row?.timeline);
+  const loading = !snapshot || (!snapshot.loaded && !hasLiveContent && snapshot.error === null);
   const live = Boolean(run && !run.ended);
   const approvals = live && run ? run.approvals : [];
   const questions = live && run ? run.questions : [];
@@ -773,7 +774,7 @@ export function RemoteChatPane({
                   deciding={state?.decidingApprovalId === openApproval.approvalId}
                   onDecide={(decision, options) => decide(openApproval, decision, options)}
                   disabledReason={
-                    refusal("respondApproval") ?? (runId ? undefined : "Waiting for the run on that Mac.")
+                    refusal("respondApproval") ?? (runId ? undefined : "Waiting for the run on that computer.")
                   }
                   pendingCount={approvals.length}
                   keyboardShortcuts
@@ -822,8 +823,8 @@ export function RemoteChatPane({
                 </ControlNotice>
               ) : null}
               {state?.unresolvedFork ? (
-                <ControlNotice tone="warning" role="alert" actions={<Button size="small" onClick={() => { void control?.dismissFork().catch(() => toast.error("Couldn’t dismiss this saved fork.")); }}>I checked the host</Button>}>
-                  <Text as="p" variant="small">Couldn't confirm the earlier fork. Check this computer's chat list before creating another. Repeating the same fork can recover it within the safe retry window.</Text>
+                <ControlNotice tone="warning" role="alert" actions={<Button size="small" onClick={() => { void control?.dismissFork().catch(() => toast.error("Couldn’t dismiss this saved fork.")); }}>{`I checked ${host.label}`}</Button>}>
+                  <Text as="p" variant="small">{`Couldn't confirm the earlier fork. Check the chat list on ${host.label} before creating another. Repeating the same fork can recover it within the safe retry window.`}</Text>
                 </ControlNotice>
               ) : null}
               {state?.recoveryError ? (
@@ -987,7 +988,7 @@ export function RemoteChatPane({
               Loading…
             </Text>
           </div>
-        ) : !snapshot.loaded ? (
+        ) : !snapshot.loaded && !hasLiveContent ? (
           <div className="flex min-h-full items-center justify-center">
             <EmptyState title="This chat could not be opened" description={snapshot.error ?? undefined} />
           </div>
@@ -1017,6 +1018,7 @@ export function RemoteChatPane({
               // Save and Copy read this Mac's stored chats; this chat is stored on its host.
               storedImageActions={false}
               streamingText={row!.streamingText}
+              replayedTextLength={run?.replayedTextLength}
               streamingReasoning={row!.streamingReasoning}
               streamComplete={row!.streamComplete}
               persistedHandoffMessageId={row!.persistedHandoffMessageId}
@@ -1145,7 +1147,7 @@ function useRemoteChatSession(host: PeerHostView | undefined, chatId: string): R
     };
   }, [qc, hostId, grants, chatId]);
 
-  return binding;
+  return binding?.adapter.hostId === hostId && binding?.session.getSnapshot().chatId === chatId ? binding : null;
 }
 
 type RemoteChatFrameProps = Omit<RemoteChatPaneProps, "chat">;
@@ -1290,7 +1292,7 @@ function feedRowLineage(row: Record<string, unknown> | undefined): ChatForkLinea
 export function RemoteChatView({ hostId, chatId }: { hostId: string; chatId: string }) {
   const navigate = useNavigate();
   const manage = React.useCallback(() => {
-    void navigate({ to: "/settings", search: { section: "remoteAccess" } });
+    void navigate({ to: "/settings", search: { section: "peerHosts" } });
   }, [navigate]);
   const removed = React.useCallback(() => {
     void navigate({ to: "/" });
@@ -1309,7 +1311,7 @@ export function RemoteChatView({ hostId, chatId }: { hostId: string; chatId: str
 export interface RemoteChatRouteProps {
   hostId: string;
   chatId: string;
-  /** Opens Settings → Remote Access. */
+  /** Opens Settings → Connections. */
   onManage(): void;
   /** Leaves the route after the open chat was deleted. */
   onRemoved(): void;
@@ -1335,7 +1337,7 @@ export function RemoteChatRoute({ hostId, chatId, onManage, onRemoved, onOpenCha
     try {
       await peerHostsApi.reconnect(id);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Aiden could not reconnect to that Mac.");
+      toast.error(error instanceof Error ? error.message : "Aiden could not reconnect to that computer.");
     }
   }, []);
   const loadOlder = React.useCallback(() => {
@@ -1356,7 +1358,7 @@ export function RemoteChatRoute({ hostId, chatId, onManage, onRemoved, onOpenCha
     return (
       <div className="flex h-full min-h-0 items-center justify-center">
         <EmptyState
-          title="Paired Macs could not be read"
+          title="Paired computers could not be read"
           description={list.error instanceof Error ? list.error.message : "Try again in a moment."}
         />
       </div>
@@ -1368,8 +1370,8 @@ export function RemoteChatRoute({ hostId, chatId, onManage, onRemoved, onOpenCha
     return (
       <div className="flex h-full min-h-0 items-center justify-center">
         <EmptyState
-          title="This Mac is not connected"
-          description="Pair it again or turn it back on in Settings → Remote Access to open its chats."
+          title="That computer isn't connected"
+          description="Pair it again or turn it back on in Settings → Connections → Control other devices to open its chats."
         />
       </div>
     );

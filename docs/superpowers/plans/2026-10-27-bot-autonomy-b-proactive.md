@@ -14,6 +14,10 @@ Event triggers add a `routineTrigger` beside `routineSchedule` on Bot routines, 
 
 **Depends on:** Plan A Tasks 2 and 3 (the delivery funnel and Bot issues). It can start after those merge.
 
+## 2026-11-03 amendment: connector watches
+
+The owner selected email/calendar watches and full desktop/iOS/Android management in the [Bot continuity plan](../../plans/bot-continuity-plan.md). Accepted connector watches may poll while Aiden is running and the owning computer is awake, including after leaving Bots. This explicitly supersedes this dated plan's screen-open requirement below. D2's read-only/current-grant, deterministic-spike, no-model-per-poll and 15-minute-minimum constraints remain; sleep, quit, pause and revoked access stop checks. This is an implementation decision, not a claim that connector watches have shipped.
+
 ## Global Constraints
 
 - Everything in Plan A's Global Constraints applies.

@@ -1,3 +1,4 @@
+import { RunTranscriptCheckpoint } from "./run-transcript-checkpoint.js";
 import { randomUUID } from "node:crypto";
 import type {
   PeerRunEvent,
@@ -117,6 +118,8 @@ export class PeerRunStream {
   private floor: number;
   private buffer: { event: PeerRunEvent; bytes: number }[] = [];
   private bytes = 0;
+  /** Public reply content through the last evicted event. */
+  private transcript: RunTranscriptCheckpoint;
   /**
    * What the dropped events still had pending. A viewer whose replay starts
    * below `floor` gets it as a `gap` snapshot, so an unanswered approval or
@@ -141,6 +144,7 @@ export class PeerRunStream {
     this.chatId = "chatId" in target ? target.chatId : null;
     this.cursor = openAfter;
     this.floor = openAfter;
+    this.transcript = new RunTranscriptCheckpoint(openAfter === 0);
   }
 
   /** A chat target moved on to a newer run: start its buffer from scratch. */
@@ -149,6 +153,7 @@ export class PeerRunStream {
     this.runId = runId;
     this.cursor = 0;
     this.floor = 0;
+    this.transcript = new RunTranscriptCheckpoint();
     this.ended = false;
     this.buffer = [];
     this.bytes = 0;
@@ -177,6 +182,7 @@ export class PeerRunStream {
         this.floor = event.sequence - 1;
         // The snapshot itself carries what was pending before it.
         this.evicted = noAttention();
+        this.transcript = new RunTranscriptCheckpoint(false);
       }
     } else if (event.sequence <= this.cursor) return false;
     this.cursor = event.sequence;
@@ -191,6 +197,7 @@ export class PeerRunStream {
       this.bytes -= dropped.bytes;
       this.floor = Math.max(this.floor, dropped.event.sequence);
       foldAttention(this.evicted, dropped.event);
+      this.transcript.apply(dropped.event.type, dropped.event.payload);
     }
     return true;
   }
@@ -212,6 +219,7 @@ export class PeerRunStream {
       terminal: false,
       payload: {
         reason: "gap",
+        ...this.transcript.payload(),
         state: approvals.size > 0 ? "needs_approval" : questions.size > 0 ? "needs_input" : "working",
         approvals: [...approvals.values()],
         questions: [...questions.values()],

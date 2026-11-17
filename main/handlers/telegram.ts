@@ -19,6 +19,7 @@ export interface TelegramStatusResponse {
   providerId?: string;
   model?: string;
   polling: boolean;
+  botUsername?: string;
   workspaceId?: string;
   queuedCount: number;
   thinkingLevel?: import("../../renderer/shared/generation-thinking.js").GenerationThinkingLevel;
@@ -45,6 +46,7 @@ export function registerTelegramHandlers(): void {
       model: settings.telegramModel,
       workspaceId: settings.telegramWorkspaceId,
       polling: status.status !== "disabled",
+      botUsername: status.botUsername,
       queuedCount: status.queuedCount,
       thinkingLevel: settings.telegramThinkingLevel,
       draftPreviews: settings.telegramDraftPreviews ?? false,

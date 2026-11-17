@@ -214,14 +214,14 @@ function eventRoutineSummary(routine: BotEventRoutine): { id: string; name: stri
  * off. `changed` re-arms its watches after a pause.
  */
 export function eventRoutinesToolSource(
-  services: () => Promise<{ store: Pick<BotEventRoutineStore, "list" | "update">; changed(botId: string): void }>,
+  services: () => Promise<{ store: Pick<BotEventRoutineStore, "list" | "pause">; changed(botId: string): void }>,
 ): NonNullable<BotRoutinesToolDependencies["eventRoutines"]> {
   return {
-    list: async (botId) => (await (await services()).store.list(botId)).map(eventRoutineSummary),
+    list: async (botId) => (await (await services()).store.list(botId)).filter((routine) => routine.connector?.deletedAt === undefined).map(eventRoutineSummary),
     pause: async (botId, routineId) => {
       const { store, changed } = await services();
-      if (!(await store.list(botId)).some((routine) => routine.id === routineId)) return undefined;
-      const paused = await store.update(botId, routineId, { enabled: false });
+      if (!(await store.list(botId)).some((routine) => routine.id === routineId && routine.connector?.deletedAt === undefined)) return undefined;
+      const paused = await store.pause(botId, routineId);
       changed(botId);
       return eventRoutineSummary(paused);
     },
@@ -289,3 +289,5 @@ export function proposeSkillCandidate(
     bind: (call) => build((kind, data) => call.appendEntry(kind, data as JsonValue)),
   };
 }
+
+export { botOpenWorkCandidate } from "../bot-open-work/tool.js";

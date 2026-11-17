@@ -5,6 +5,7 @@ import * as path from "node:path";
 import test from "node:test";
 import {
   ChatCreateReconciliationRequiredError,
+  ChatStoreError,
   createChatStore,
 } from "./chat-store-core.js";
 import type { GenerationTimeline } from "../../renderer/shared/generation-timeline.js";
@@ -824,6 +825,24 @@ test("follow-up notices survive a restart on user messages only, in their exact 
   assert.equal(loaded?.messages[1]?.notice, undefined, "assistant messages never carry a notice");
   assert.equal(loaded?.messages[2]?.notice, undefined, "an unknown shape is dropped");
   assert.deepEqual(chatForRenderer(loaded)?.messages[0]?.notice, notice);
+});
+
+test("the By voice marker survives a restart on user messages only", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-voice-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const store = createChatStore(async () => directory);
+  const chat = await store.create({});
+  await store.appendMessage(chat.id, { role: "user", content: "Check the reset page too.", inputSource: "voice" });
+  await store.appendMessage(chat.id, { role: "assistant", content: "On it.", inputSource: "voice" } as never);
+  await store.appendMessage(chat.id, { role: "user", content: "Thanks.", inputSource: "dictation" } as never);
+
+  const loaded = await createChatStore(async () => directory).get(chat.id);
+  assert.deepEqual(
+    loaded?.messages.map((message) => message.inputSource),
+    ["voice", undefined, undefined],
+    "only a user message keeps the marker, and only the known value",
+  );
+  assert.equal(chatForRenderer(loaded)?.messages[0]?.inputSource, "voice");
 });
 
 test("renderer ownership is checked again at the atomic append commit", async (t) => {
@@ -1919,4 +1938,126 @@ test("renderer-authored appends cannot write into a feature-owned conversation",
   assert.equal((await store.get(owned.id))?.messages.length, 1);
   await store.appendMessage(regular.id, { role: "user", content: "hello" }, { rejectFeatureOwned: true });
   assert.equal((await store.get(regular.id))?.messages.length, 1);
+});
+
+test("design mode persists per chat across a restart without reordering it", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-design-mode-store-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const first = createChatStore(async () => directory);
+  const chat = await first.create({ workspaceId: "workspace-1", title: "Landing hero" });
+  const other = await first.create({ workspaceId: "workspace-1", title: "Pricing" });
+
+  const on = await first.setDesignMode(chat.id, true);
+  assert.equal(on.designMode, true);
+  assert.equal(on.updatedAt, chat.updatedAt);
+
+  const restarted = createChatStore(async () => directory);
+  assert.equal((await restarted.get(chat.id))?.designMode, true);
+  const metas = await restarted.list();
+  assert.equal(metas.find((meta) => meta.id === chat.id)?.designMode, true);
+  assert.equal("designMode" in metas.find((meta) => meta.id === other.id)!, false);
+  assert.equal("designMode" in (await restarted.get(other.id))!, false);
+
+  const off = await restarted.setDesignMode(chat.id, false);
+  assert.equal("designMode" in off, false);
+  const again = createChatStore(async () => directory);
+  assert.equal("designMode" in (await again.get(chat.id))!, false);
+  assert.equal("designMode" in (await again.list()).find((meta) => meta.id === chat.id)!, false);
+});
+
+test("repeating a design mode change leaves the chat untouched", async (t) => {
+  const store = await testStore(t);
+  const chat = await store.create({ workspaceId: "workspace-1" });
+  const first = await store.setDesignMode(chat.id, true);
+  const [revision] = (await store.list()).map((meta) => meta.summaryRevision);
+  const second = await store.setDesignMode(chat.id, true);
+  assert.equal(second.updatedAt, first.updatedAt);
+  assert.equal((await store.list())[0]?.summaryRevision, revision);
+  const cleared = await store.setDesignMode(chat.id, false);
+  const clearedAgain = await store.setDesignMode(chat.id, false);
+  assert.equal(clearedAgain.updatedAt, cleared.updatedAt);
+});
+
+test("a fork or copy of a design-mode chat starts in the normal layout", async (t) => {
+  const store = await testStore(t);
+  const chat = await store.create({ workspaceId: "workspace-1" });
+  await store.appendMessage(chat.id, { role: "user", content: "Make a pricing page" });
+  const saved = await store.appendMessage(chat.id, { role: "assistant", content: "Here are three." });
+  await store.setDesignMode(chat.id, true);
+  const forked = await store.copyVisibleHistory({
+    sourceChatId: chat.id,
+    throughAssistantMessageId: saved.messages[1]!.id,
+  });
+  assert.equal("designMode" in forked, false);
+  assert.equal("designMode" in (await store.get(forked.id))!, false);
+  assert.equal((await store.get(chat.id))?.designMode, true);
+});
+
+test("design mode is refused for Bot, Assistant and feature-owned chats", async (t) => {
+  const store = await testStore(t);
+  const bot = await store.create({ botId: "bot:designer" });
+  const assistant = await store.create({ workspaceId: "assistant" });
+  const owned = await store.create({ owner: { kind: "design-project", projectId: "project-1" } });
+  for (const chat of [bot, assistant, owned]) {
+    await assert.rejects(
+      store.setDesignMode(chat.id, true),
+      (error: unknown) => error instanceof ChatStoreError && error.code === "design-mode-unavailable",
+    );
+    assert.equal("designMode" in (await store.get(chat.id))!, false);
+  }
+  await assert.rejects(store.setDesignMode("missing-chat", true), /not found/u);
+});
+
+test("a design mode change and a rename on the same chat both survive", async (t) => {
+  const store = await testStore(t);
+  const chat = await store.create({ workspaceId: "workspace-1", title: "Draft" });
+  await Promise.all([store.rename(chat.id, "Landing hero"), store.setDesignMode(chat.id, true)]);
+  const saved = await store.get(chat.id);
+  assert.equal(saved?.title, "Landing hero");
+  assert.equal(saved?.designMode, true);
+});
+
+test("a stored design mode value other than true reads as off", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-design-mode-garbled-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const store = createChatStore(async () => directory);
+  const chat = await store.create({ workspaceId: "workspace-1" });
+  const file = path.join(directory, `${chat.id}.json`);
+  const payload = JSON.parse(await fs.readFile(file, "utf8")) as Record<string, unknown>;
+  await fs.writeFile(file, JSON.stringify({ ...payload, designMode: "yes" }));
+  const restarted = createChatStore(async () => directory);
+  const restored = await restarted.get(chat.id);
+  assert.ok(restored);
+  assert.equal("designMode" in restored, false);
+});
+
+test("getMeta answers from the index without reading the chat's transcript", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-meta-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const seeding = createChatStore(async () => directory);
+  const chat = await seeding.create({ workspaceId: "workspace-1", title: "Landing hero" });
+  await seeding.setDesignMode(chat.id, true);
+
+  const transcriptReads: string[] = [];
+  const store = createChatStore(async () => directory, undefined, {
+    readFile: async (target) => {
+      if (path.basename(target) === `${chat.id}.json`) transcriptReads.push(target);
+      return fs.readFile(target, "utf-8");
+    },
+  });
+  // Opening the store verifies the index against its payloads once; per-chat reads come after.
+  await store.list();
+  transcriptReads.length = 0;
+  const meta = await store.getMeta(chat.id);
+  assert.equal(meta?.id, chat.id);
+  assert.equal(meta?.workspaceId, "workspace-1");
+  assert.equal(meta?.designMode, true);
+  assert.equal(meta?.title, "Landing hero");
+  assert.deepEqual(transcriptReads, []);
+  await store.get(chat.id);
+  assert.equal(transcriptReads.length > 0, true, "a full read does open the transcript");
+
+  assert.equal(await store.getMeta("no-such-chat"), null);
+  await store.setDesignMode(chat.id, false);
+  assert.equal("designMode" in (await store.getMeta(chat.id))!, false);
 });

@@ -1,3 +1,4 @@
+import type { ChildProcess } from "node:child_process";
 import type { CuaDriverInvocation } from "./contract.js";
 import { CuaDriverError } from "./contract.js";
 import {
@@ -9,6 +10,7 @@ import { verifyCuaDriverBridgeProcess } from "./binary.js";
 export interface CuaDriverHostTestHooks {
   brokerInvocation: CuaDriverInvocation;
   verifyBridgeProcess?: typeof verifyCuaDriverBridgeProcess;
+  exitConfirmed?: (child: ChildProcess) => boolean;
 }
 
 /**
@@ -32,6 +34,10 @@ export class TestCuaDriverHost extends CuaDriverHost {
 
   protected override directBrokerInvocation(): CuaDriverInvocation {
     return this.hooks.brokerInvocation;
+  }
+
+  protected override exitConfirmed(child: ChildProcess): boolean {
+    return this.hooks.exitConfirmed?.(child) ?? super.exitConfirmed(child);
   }
 
   protected override verifySpawnedBridge(

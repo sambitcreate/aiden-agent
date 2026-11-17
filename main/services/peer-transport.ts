@@ -37,6 +37,7 @@ export interface PeerRequest {
   rawBody?: PeerRawBody;
   /** SSE resume cursor sent as `Last-Event-ID`. */
   lastEventId?: string;
+  runCheckpoint?: boolean;
   /**
    * Streams only: called once the host accepted the stream, before any frame.
    * A resumed feed may legitimately send nothing until something changes.
@@ -395,6 +396,7 @@ function headers(input: PeerRequest, mode: ReadMode): Record<string, string> {
       throw new Error("Invalid peer credential.");
     result.Authorization = `Bearer ${input.credential}`;
   }
+  if (input.runCheckpoint) result["Aiden-Run-Checkpoint"] = "1";
   for (const [name, value] of [
     ["Idempotency-Key", input.idempotencyKey],
     ["If-Match", input.revision],

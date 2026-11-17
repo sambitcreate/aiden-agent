@@ -116,7 +116,7 @@ test("an on-device worker that crashed twice asks for a retry, not a model downl
   assert.doesNotMatch(message, /Download/u);
   assert.match(message, /couldn.t finish/u);
   assert.match(
-    voiceErrorMessage(new Error("The selected voice model isn't downloaded. Download it in Settings → Voice.")),
+    voiceErrorMessage(new Error("The selected voice model isn't downloaded. Download it in Settings → Voice & Speech.")),
     /Download/u,
   );
 });
@@ -129,7 +129,7 @@ test("committed live text survives an empty or failed final handshake", () => {
 test("an on-device engine that can't start advises a restart, not a model download", () => {
   const message = voiceErrorMessage(
     new Error(
-      "Error invoking remote method 'voice:transcribeLocal': Error: On-device voice couldn't start. Restart Aiden, or choose a cloud provider in Settings → Voice.",
+      "Error invoking remote method 'voice:transcribeLocal': Error: On-device voice couldn't start. Restart Aiden, or choose a cloud provider in Settings → Voice & Speech.",
     ),
   );
   assert.match(message, /couldn.t start/u);

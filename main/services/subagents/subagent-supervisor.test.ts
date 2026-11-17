@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
+import { captureAnalyticsEvents } from "../analytics/test-support.js";
 import { createModels, type AssistantMessage } from "@earendil-works/pi-ai";
 import type { Agent, AgentEvent, AgentTool, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { createFauxCore, fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
@@ -24,6 +25,7 @@ import {
 import { projectSubagentCompletedSummary, runSubagentChild } from "./subagent-child-runner.js";
 import { SubagentRuntimeRegistry, type SubagentRuntimeChild } from "./child-agent-runtime.js";
 import { SubagentSupervisor, type PreparedSubagentRun } from "./subagent-supervisor.js";
+import { chatSurfaceHooks } from "../agent-surface-hooks.js";
 import { createForegroundSubagentPersistenceV2 } from "./subagent-foreground-persistence-v2.js";
 import type { ProductionSubagentRunStore } from "./subagent-run-store-production.js";
 import { createSubagentTool } from "./subagent-tool.js";
@@ -966,6 +968,83 @@ test("supervisor records only canonical non-interrupted terminal outcomes", asyn
 
   assert.deepEqual(health.terminals, ["completed", "failed", "timed_out"]);
   assert.equal(health.cleanupFailures, 0);
+});
+
+test("a desktop chat's subagents each fire SubagentStop once with the chat's hooks and show their messages", async () => {
+  const dispatched: Array<{ event: string; payload: Record<string, unknown>; scopes: unknown; idempotencyKey?: string }> = [];
+  const reported: string[][] = [];
+  const supervisor = new SubagentSupervisor({
+    generationId: "subagent-stop",
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/workspace",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    stopHooks: chatSurfaceHooks(
+      { chatId: "chat-test", cwd: "/workspace", workspaceRoot: "/workspace" },
+      () => ({
+        hasHooks: (event) => event === "SubagentStop",
+        dispatch: async (event, payload, context) => {
+          dispatched.push({ event, payload, scopes: context.scopes, idempotencyKey: context.idempotencyKey });
+          return payload.aiden_status === "failed"
+            ? { ranHooks: ["notify"], systemMessages: ["Subagent failed; paged you."], notices: ["Hook notify timed out."] }
+            : { ranHooks: ["notify"] };
+        },
+      }),
+      { report: (lines) => reported.push(lines) },
+    ),
+    runChild: async ({ request: task }) =>
+      task.label === "Failed"
+        ? { role: task.role, label: task.label, status: "failed", summary: "", warning: "Not completed." }
+        : completed(task.label, "Found the cause."),
+  });
+
+  await supervisor.execute(request(["Done", "Failed"]));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(
+    dispatched.map(({ event, payload }) => [event, payload.aiden_label, payload.aiden_status, payload.session_id, payload.cwd]).sort(),
+    [
+      ["SubagentStop", "Done", "completed", "chat-test", "/workspace"],
+      ["SubagentStop", "Failed", "failed", "chat-test", "/workspace"],
+    ],
+  );
+  assert.equal(dispatched.find((entry) => entry.payload.aiden_label === "Done")?.payload.last_assistant_message, "Found the cause.");
+  assert.deepEqual(dispatched[0]?.scopes, [
+    { kind: "global" },
+    { kind: "workspace", workspaceRoot: "/workspace" },
+    { kind: "chat", chatId: "chat-test" },
+  ]);
+  assert.equal(new Set(dispatched.map((entry) => entry.idempotencyKey)).size, 2);
+  // Only the run whose hook had something to say reaches the person; the quiet one reports nothing.
+  assert.deepEqual(reported, [["Hook notify: Subagent failed; paged you.", "Hook notify timed out."]]);
+});
+
+test("a No workspace chat's subagents skip workspace hooks", async () => {
+  const scopes: unknown[] = [];
+  const supervisor = new SubagentSupervisor({
+    generationId: "subagent-stop-no-workspace",
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/hidden",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    stopHooks: chatSurfaceHooks({ chatId: "chat-test", cwd: "/hidden" }, () => ({
+      hasHooks: () => true,
+      dispatch: async (_event, _payload, context) => {
+        scopes.push(context.scopes);
+        return { ranHooks: [] };
+      },
+    })),
+    runChild: async ({ request: task }) => completed(task.label),
+  });
+
+  await supervisor.execute(request(["One"]));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(scopes, [[{ kind: "global" }, { kind: "chat", chatId: "chat-test" }]]);
 });
 
 test("projection failures cannot publish a false terminal health outcome", async () => {
@@ -3322,4 +3401,27 @@ test("model-supplied task and label text preserve semantic content before child 
   });
   assert.match(output, /Users\/alice|SecretProject/);
   assert.doesNotMatch(output, /REDACTED ABSOLUTE PATH/);
+});
+
+test("each foreground subagent counts once, and a batch over budget counts nothing", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const supervisor = new SubagentSupervisor({
+    generationId: "generation",
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    thinkingLevel: "high",
+    compactionEngine: "vcc",
+    workspaceRoot: "/workspace",
+    permission: "ask",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    policy: { launchBudget: 2 },
+    runChild: async ({ request: task }) => completed(task.label),
+  });
+  const batch = request(["1", "2"]);
+  await supervisor.execute(batch);
+  assert.deepEqual(sent, batch.tasks.map((task) => ({ event: "subagent_launched", props: { role: task.role } })));
+
+  sent.length = 0;
+  await assert.rejects(supervisor.execute(request(["3"])), /launch budget exceeded/i);
+  assert.deepEqual(sent, []);
 });

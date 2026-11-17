@@ -11,6 +11,7 @@ interface DiagnosticProcess {
   readonly version: string;
   readonly versions: NodeJS.ProcessVersions;
   cwd(): string;
+  emitWarning(warning: string, type: string): void;
   kill(pid: number, signal: DiagnosticSignal): boolean;
   memoryUsage(): NodeJS.MemoryUsage;
   on(event: string, listener: (...args: any[]) => void): this;
@@ -86,7 +87,30 @@ export function installProcessDiagnostics(target: DiagnosticProcess = process): 
         errorType: projected.errorType,
         fingerprint: projected.fingerprint ?? null,
       },
-    });
+    }, { rawError: error });
+  });
+  // Electron runs Node with rejections in warn mode: a rejection never reaches
+  // uncaughtExceptionMonitor and the process carries on, so this listener does
+  // not change whether one is fatal. It does silence Node's two warnings, so the
+  // one that carries the reason is raised again for stderr and node-warning.
+  target.on("unhandledRejection", (reason: unknown) => {
+    try {
+      const projected = projectDiagnosticError(reason);
+      writeDiagnosticEvent({
+        level: "error",
+        area: "app",
+        event: "unhandled-rejection",
+        outcome: "failed",
+        code: projected.code,
+        fields: {
+          errorType: projected.errorType,
+          fingerprint: projected.fingerprint ?? null,
+        },
+      }, { rawError: reason });
+      target.emitWarning(reason instanceof Error ? reason.stack ?? reason.message : String(reason), "UnhandledPromiseRejectionWarning");
+    } catch {
+      // A rejection whose value cannot be read must not become a second failure.
+    }
   });
   target.on("warning", (warning: unknown) => {
     const projected = projectDiagnosticError(warning);

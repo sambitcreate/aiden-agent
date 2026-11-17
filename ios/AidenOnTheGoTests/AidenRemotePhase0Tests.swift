@@ -171,7 +171,7 @@ final class AidenRemotePhase0Tests: XCTestCase {
             from: data
         )
 
-        XCTAssertEqual(fixture.contractRevision, 57)
+        XCTAssertEqual(fixture.contractRevision, 61)
         XCTAssertEqual(fixture.scheduleCards?.capability, .scheduleCards)
         XCTAssertEqual(fixture.botIssues?.capability, .botIssues)
         // Revision 19 run-control losers learn the winning decision; phones keep
@@ -1481,7 +1481,7 @@ final class AidenRemotePhase0Tests: XCTestCase {
         XCTAssertNil(projection.pendingApproval)
         XCTAssertEqual(projection.state, .running)
         if case let .answeredElsewhere(resolution) = lost.first {
-            XCTAssertEqual(resolution.notice, "Answered on Mac: allowed")
+            XCTAssertEqual(resolution.notice, "Answered on your computer: allowed")
         }
 
         // A host-only approval reaches the phone as deny-only, without scopes.
@@ -1524,6 +1524,40 @@ final class AidenRemotePhase0Tests: XCTestCase {
         XCTAssertEqual(projection.timeline?.status, .completed)
         _ = projection.apply(try frame(0, "snapshot", #"{"runId":"run-1","chatId":"chat-1","reason":"gap","epoch":"e1","state":"running","pendingApprovalIds":[],"pendingQuestionIds":[],"approvals":[],"questions":[],"nextSequence":1}"#))
         XCTAssertNil(projection.timeline)
+    }
+
+    func testRunCheckpointTextBoundsAndPrivatePayloadFieldsFailClosed() throws {
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: XCTUnwrap(sharedContractFixtureURL))) as? [String: Any])
+        let wire = try XCTUnwrap(root["runCheckpoint"] as? [String: Any])
+        let payload = try XCTUnwrap(wire["payload"] as? [String: Any])
+        for field in ["replyText", "replyReasoning"] {
+            var changed = wire; var body = payload
+            body[field] = String(repeating: "🙂", count: 32_768); changed["payload"] = body
+            let maximum = try AidenRemoteJSONDecoder.decodeRunSSEEvent(from: JSONSerialization.data(withJSONObject: changed))
+            guard case let .snapshot(snapshot) = maximum.kind else { return XCTFail("Expected a checkpoint snapshot") }
+            XCTAssertEqual((field == "replyText" ? snapshot.replyText : snapshot.replyReasoning)?.unicodeScalars.count, 32_768)
+            body[field] = String(repeating: "🙂", count: 32_769); changed["payload"] = body
+            XCTAssertThrowsError(try AidenRemoteJSONDecoder.decodeRunSSEEvent(from: JSONSerialization.data(withJSONObject: changed)))
+        }
+        for field in ["replyText", "replyReasoning", "timeline"] {
+            var changed = wire; var body = payload; body[field] = NSNull(); changed["payload"] = body
+            XCTAssertThrowsError(try AidenRemoteJSONDecoder.decodeRunSSEEvent(from: JSONSerialization.data(withJSONObject: changed)))
+        }
+        var changed = wire; var body = payload; body["credentials"] = "private"; changed["payload"] = body
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decodeRunSSEEvent(from: JSONSerialization.data(withJSONObject: changed)))
+    }
+
+    func testRunCheckpointRestoresVisibleWorkBeforeTheNextDelta() throws {
+        let fixture = try Data(contentsOf: XCTUnwrap(sharedContractFixtureURL))
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: fixture) as? [String: Any])
+        let wire = try JSONSerialization.data(withJSONObject: XCTUnwrap(root["runCheckpoint"]))
+        var projection = AidenForeignRunProjection(runId: "run-1")
+        _ = projection.apply(try AidenRemoteJSONDecoder.decodeRunSSEEvent(from: wire))
+        XCTAssertEqual(projection.liveText, "Checked the build.")
+        XCTAssertEqual(projection.reasoning, "Reviewing results")
+        XCTAssertEqual(projection.timeline?.steps.first?.toolName, "run_command")
+        XCTAssertEqual(projection.state, .running)
+        XCTAssertEqual(projection.lastSequence, 90)
     }
 
     func testRunStreamGapSnapshotAtSequenceZeroRestatesPendingPrompts() throws {
@@ -1615,11 +1649,11 @@ final class AidenRemotePhase0Tests: XCTestCase {
             from: AidenRemoteClientError.server(statusCode: 409, body: fixtureError)
         ))
         XCTAssertEqual(denied.prompt, .approval(.deny))
-        XCTAssertEqual(denied.notice, "Answered on Mac: denied")
+        XCTAssertEqual(denied.notice, "Answered on your computer: denied")
         XCTAssertNotNil(denied.resolvedAt)
 
         let expired = try XCTUnwrap(loser(status: 409, #"{"error":{"code":"question_already_resolved","message":"Resolved.","requestId":"r1","retryable":false,"details":{"outcome":"expired","resolvedAt":"2026-10-05T10:00:00.000Z"}}}"#))
-        XCTAssertEqual(expired.notice, "Question expired on Mac")
+        XCTAssertEqual(expired.notice, "Question expired on your computer")
         XCTAssertNil(try loser(status: 403, #"{"error":{"code":"capability_denied","message":"No.","requestId":"r2","retryable":false}}"#))
         XCTAssertNil(AidenForeignRunResolution.loser(from: AidenRemoteClientError.invalidResponse))
     }

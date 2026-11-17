@@ -1,4 +1,5 @@
 import { validateMcpServerMetadata } from "../../../renderer/shared/mcp-oauth-config.js";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { isMcpFieldSecretMarker, MCP_FIELD_SECRET_PREFIX } from "../../../renderer/shared/mcp-field-secrets.js";
 import { mcpServerOffersTools, mcpToolsOfferedToModel } from "../../../renderer/shared/mcp-exposure.js";
 import { mcpAuthorityConnectionSnapshot } from "../../../main/services/mcp-credential-cleanup-core.js";
@@ -32,6 +33,7 @@ import type { PiToolDiscoveryMetadata } from "../../../main/services/pi-tool-dis
 import { executeMcpAgentTool } from "../../../main/services/mcp-tool-result.js";
 import { normalizeMcpToolInputSchema } from "../../../main/services/mcp-tool-schema.js";
 import { tagMcpAgentTool } from "../../../main/services/mcp-agent-tool-descriptor.js";
+import { createComposioServiceAgentTool, isComposioServiceServer, projectComposioServiceInventory } from "../../../main/services/composio-service-tool.js";
 import { callMcpTool, createMcpToolCallGuard, createMcpToolInventoryCache, listMcpToolInventory, listMcpToolPage, readGuardedMcpInventory } from "../../../main/services/mcp-tool-inventory.js";
 import { JsonStore, readJson } from "./state.ts";
 import { insightCredentials } from "./credentials.ts";
@@ -125,7 +127,7 @@ function isMacAppConnector(server: McpServer): boolean {
 export function validateMcpServer(value: unknown): McpServer {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid MCP server.");
   const server = value as McpServer;
-  if (server.authProvider !== undefined) throw new Error("Desktop MCP provider approvals do not apply to the CLI.");
+  if (server.authProvider !== undefined) throw new Error("MCP provider approvals from Aiden Agent do not apply to the CLI.");
   // Types first: a non-string id would otherwise stringify past the pattern ("undefined", "123").
   if (typeof server.id !== "string" || !server.id) throw new Error("MCP server needs a string id.");
   // Pi reads a leading + or - in tool lists as an include/exclude modifier.
@@ -345,9 +347,9 @@ export async function mcpCommand(agentDir: string, args: string[]) {
     if (!value) throw new Error("Provide a server JSON file or preset id.");
     const preset = action === "preset" ? getMcpPreset(value) : undefined;
     if (action === "preset" && !preset) throw new Error("MCP preset not found.");
-    if (preset?.transport === "stdio") throw new Error(`Set up ${preset.name} in Settings → Connectors in the Aiden desktop app on your Mac.`);
+    if (preset?.transport === "stdio") throw new Error(`Set up ${preset.name} in Settings → Connectors in Aiden Agent.`);
     const parsed = validateMcpServer(preset ? serverFromPreset(preset) : JSON.parse(readFileSync(value, "utf8")));
-    if (isMacAppConnector(parsed)) throw new Error("Set up Mac app connectors in the Aiden desktop app on your Mac.");
+    if (isMacAppConnector(parsed)) throw new Error("Set up Mac app connectors in Aiden Agent on your Mac.");
     const existing = (await store.load()).find((item) => item.id === parsed.id);
     const server = await storeClientSecret(agentDir, parsed, existing);
     let replaced: McpServer | undefined;
@@ -485,7 +487,7 @@ export function createCliMcpPool(agentDir: string, options: { child?: boolean } 
     catch (error) { if (clients.get(server.id) === entry) clients.delete(server.id); throw error; }
   }
   /** The complete guarded inventory for the server's current live client. */
-  async function inventory(server: McpServer, signal?: AbortSignal): Promise<McpInventory & { client: McpClient }> {
+  async function inventory(server: McpServer, signal?: AbortSignal, fresh = false): Promise<McpInventory & { client: McpClient }> {
     const client = await connection(server);
     const assertCurrent = () => { if (closed || clients.get(server.id)?.client !== client) throw new Error("MCP connection changed or was closed."); };
     // A shared (cached) read is bounded by the inventory deadline, not one caller's signal.
@@ -503,12 +505,12 @@ export function createCliMcpPool(agentDir: string, options: { child?: boolean } 
         },
       }) : [], () => { assertCurrent(); assertInventoryCurrent(); });
     };
-    const loaded = await inventories.load(client, read, signal);
+    const loaded = await inventories.load(client, read, signal, fresh);
     assertCurrent();
     return { ...loaded, client };
   }
-  async function inspectTools(server: McpServer, signal?: AbortSignal) { return (await inventory(server, signal)).tools; }
-  async function agentTools(server: McpServer, signal?: AbortSignal) {
+  async function inspectTools(server: McpServer, signal?: AbortSignal) { return projectComposioServiceInventory(server, (await inventory(server, signal)).tools); }
+  async function agentTools(server: McpServer, signal?: AbortSignal): Promise<AgentTool[]> {
     // A server switched off for the model offers nothing; hidden tools are withheld.
     if (!mcpServerOffersTools(server)) return [];
     const { tools, client } = await inventory(server, signal);
@@ -526,6 +528,22 @@ export function createCliMcpPool(agentDir: string, options: { child?: boolean } 
       alias: mcpServerToolPrefix(server, configured),
       ...(instructions ? { instructions: instructions.instructions } : {}),
     });
+    if (isComposioServiceServer(server)) {
+      if (!projectComposioServiceInventory(server, tools).length) return [];
+      return [Object.assign(createComposioServiceAgentTool({
+        server,
+        inspect: async (callerSignal) => {
+          const current = await inventory(server, callerSignal, true);
+          return { tools: current.tools, call: async (name, args, callSignal) => {
+            callSignal?.throwIfAborted();
+            current.guard.assertCallable(name);
+            const result = await callMcpTool(current.client, { name, arguments: args }, { signal: callSignal, timeoutMs: 60_000, beforeSend: () => current.guard.assertCallable(name) });
+            current.guard.validateResult(name, result);
+            return result;
+          } };
+        },
+      }), { discovery })];
+    }
     // Identity for grant joins, plus the exact tools/list entry for live schema/effect checks.
     return offered.map((tool) => tagMcpAgentTool(markMcpAgentTool({ name: names.get(tool.name)!, label: `${server.name}: ${tool.name}`, discovery, description: [server.description, tool.description ?? tool.name].filter(Boolean).join("\n\n"),
       parameters: Type.Unsafe<Record<string, unknown>>(normalizeMcpToolInputSchema(tool.inputSchema)),

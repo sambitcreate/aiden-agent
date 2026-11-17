@@ -1,4 +1,5 @@
-// Profile → When something happens (spec §6 P1): routines that run on a file
+import { BotRoutineModelButton } from "./bot-routine-models";
+// When something happens, in the Bot panel's Routines tab (spec §6 P1): routines that run on a file
 // change in the Bot's folder, when the routine's own link is called on this
 // Mac's network, or when a page or script the person chose gives a different
 // answer than last time (a watch). A link is shown once, right after it is
@@ -24,6 +25,7 @@ import {
   Textarea,
   toast,
 } from "../../components/ui";
+import { routineLinkDescription } from "../../components/bots/routine-proposal-card";
 import { botsApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import { formatRelativeTime } from "../../lib/relative-time";
@@ -36,6 +38,8 @@ import {
 } from "../../shared/bot-routine-trigger";
 import type { BotDefinition } from "../../shared/bots";
 
+import { useAppCapabilities } from "../../lib/app-capabilities";
+import { localComputerNoun } from "../../shared/computer-noun";
 type Draft = {
   /** The routine being edited; a new one otherwise. */
   id?: string;
@@ -66,6 +70,7 @@ function draftOf(routine: BotEventRoutineView): Draft {
   if (routine.trigger.kind === "file_change") return { ...draft, folder: routine.trigger.folder };
   if (routine.trigger.kind !== "watch") return draft;
   const { source, everyMinutes } = routine.trigger;
+  if (source.type === "connector") return draft;
   return source.type === "url"
     ? { ...draft, watchType: "url", url: source.url, everyMinutes }
     : { ...draft, watchType: "script", script: source.script, everyMinutes };
@@ -82,13 +87,13 @@ function triggerOf(draft: Draft): BotRoutineTrigger {
 }
 
 /** Why the draft can't be saved yet, or null. An address gets a hint the person can act on. */
-function draftProblem(draft: Draft): { hint?: string } | null {
+function draftProblem(draft: Draft, platform: string): { hint?: string } | null {
   if (!draft.name.trim() || !draft.prompt.trim()) return {};
   if (draft.kind === "file_change" && !draft.folder.trim()) return {};
   if (draft.kind !== "watch") return null;
   if (draft.watchType === "script") return draft.script.trim() ? null : {};
   if (!draft.url.trim()) return {};
-  return parseBotWatchUrl(draft.url.trim()) ? null : { hint: "Use an https address, or http only for this Mac (localhost)." };
+  return parseBotWatchUrl(draft.url.trim()) ? null : { hint: `Use an https address, or http only for this ${localComputerNoun(platform)} (localhost).` };
 }
 
 /** An interval as the picker lists it: "15 minutes", "1 hour", "6 hours", "1 day". */
@@ -134,6 +139,7 @@ export function BotEventRoutines({
   /** The time relative labels are measured from; the current time by default. */
   now?: number;
 }) {
+  const { platform } = useAppCapabilities();
   const [routines, setRoutines] = React.useState<BotEventRoutineView[] | null>(null);
   const [draft, setDraft] = React.useState<Draft | null>(null);
   const [link, setLink] = React.useState<{ name: string; link: string | null } | null>(null);
@@ -171,7 +177,7 @@ export function BotEventRoutines({
     }
   };
 
-  const problem = draft ? draftProblem(draft) : null;
+  const problem = draft ? draftProblem(draft, platform) : null;
   const intervals = draft && !WATCH_INTERVALS.includes(draft.everyMinutes)
     ? [...WATCH_INTERVALS, draft.everyMinutes].sort((a, b) => a - b)
     : WATCH_INTERVALS;
@@ -193,7 +199,7 @@ export function BotEventRoutines({
               </>
             }
           >
-            <span className="flex items-center gap-2 justify-self-end">
+            <span className="flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2 justify-self-end">
               <Switch
                 aria-label={`${routine.name} on`}
                 checked={routine.enabled}
@@ -220,6 +226,7 @@ export function BotEventRoutines({
                   <Pencil />
                 </Button>
               ) : null}
+              <BotRoutineModelButton botId={bot.id} routineId={routine.id} routineName={routine.name} />
               <Button
                 iconOnly
                 size="small"
@@ -239,8 +246,8 @@ export function BotEventRoutines({
         <Field
           label={`${link.name}'s link`}
           description={link.link
-            ? "Works on your network or Tailscale while this Mac is awake. It is shown only now; New link makes another and stops this one. The Mac's certificate is self-signed, so callers may need to allow that (curl -k)."
-            : "Turn on Aiden On The Go in Settings to use this routine's link."}
+            ? routineLinkDescription(platform)
+            : "Turn on remote access in Settings → Connections to use this routine's link."}
         >
           {link.link ? (
             <Button

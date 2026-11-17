@@ -66,6 +66,6 @@ try {
     outcome: "failed",
     code: projected.code,
     fields: { errorType: projected.errorType, fingerprint: projected.fingerprint ?? null },
-  });
+  }, { rawError: error });
   throw error;
 }

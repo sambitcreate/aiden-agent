@@ -1,18 +1,19 @@
-import type { ElectronApplication } from "playwright";
+import type { ElectronApplication, Page } from "playwright";
 import { BOT_FULL_ACCESS_NOTICE_VERSION, type BotCapabilityCatalog } from "../../renderer/shared/bot-capabilities";
 import { botFixture } from "../../renderer/main/bots/test-fixtures";
-import { E2E_PROFILE_NAME, expect, finishLmStudioOnboarding, skipBotsOnboardingStep, test } from "./fixtures";
+import { E2E_PROFILE_NAME, expect, finishLmStudioOnboarding, connectOnboardingLmStudio, test } from "./fixtures";
 
-test("onboarding exposes the four primary AI choices and validates custom setup", async ({ aiden }) => {
+test("onboarding groups connection methods and validates custom setup", async ({ aiden }) => {
   const { page } = aiden;
   const onboarding = page.locator('section[aria-label="Set up Aiden"]');
   await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
   await onboarding.getByRole("button", { name: /^Next/u }).click();
-  for (const name of [/^ChatGPT /u, /^LM Studio /u, /^Ollama /u, /^Other Custom Provider /u]) {
+  for (const name of [/I have an account/u, /I have an API key/u, /I run a local model/u]) {
     await expect(onboarding.getByRole("button", { name })).toBeVisible();
   }
-  await expect(onboarding.getByRole("button", { name: /^Other ways/u })).toHaveAttribute("aria-expanded", "false");
-  await onboarding.getByRole("button", { name: /^Other Custom Provider /u }).click();
+  await expect(onboarding.getByRole("button", { name: "Custom endpoint" })).toBeHidden();
+  await onboarding.getByText("Advanced connection", { exact: true }).click();
+  await onboarding.getByRole("button", { name: "Custom endpoint" }).click();
   const custom = page.getByRole("dialog", { name: "Configure Custom Provider" });
   await expect(custom).toBeVisible();
   await custom.getByRole("button", { name: "Save", exact: true }).click();
@@ -21,23 +22,15 @@ test("onboarding exposes the four primary AI choices and validates custom setup"
   await expect(onboarding.getByRole("heading", { name: "Connect your AI" })).toBeVisible();
 });
 
-test("skipping provider setup explains the blocked Next and leaves a route to Providers", async ({ aiden }) => {
+test("skipping provider setup leaves a route to Providers", async ({ aiden }) => {
   const { page } = aiden;
   const onboarding = page.locator('section[aria-label="Set up Aiden"]');
   await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
   await onboarding.getByRole("button", { name: /^Next/u }).click();
   await expect(onboarding.getByRole("heading", { name: "Connect your AI" })).toBeVisible();
 
-  const next = onboarding.getByRole("button", { name: /^Next/u });
-  await expect(next).toBeDisabled();
-  await expect(next).toHaveAccessibleDescription(
-    "Sign in with ChatGPT to continue, or choose another connection.",
-  );
-  await expect(onboarding.getByText(/setup required/u)).toHaveCount(0);
-
-  await onboarding.getByRole("button", { name: "Skip provider" }).click();
+  await onboarding.getByRole("button", { name: "Set up later" }).click();
   await expect(onboarding.getByText("Provider setup skipped")).toBeVisible();
-  await skipBotsOnboardingStep(onboarding);
   await onboarding.getByRole("button", { name: "Start using Aiden" }).click();
   await expect(onboarding).toBeHidden();
 
@@ -48,7 +41,7 @@ test("skipping provider setup explains the blocked Next and leaves a route to Pr
   await expect(connect.first()).toBeVisible();
   await connect.first().click();
   await expect(
-    page.getByText(/Connect with credentials when required; Aiden keeps their model catalogs current/u),
+    page.getByRole("button", { name: /Connect (?:another )?AI/u }),
   ).toBeVisible();
 });
 
@@ -56,7 +49,7 @@ test("computer control respects platform support and explains access before enab
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  const computerUse = page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Computer Use", exact: true });
+  const computerUse = page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: /^Computer(s & VMs| Use)$/u });
   if (process.platform !== "darwin") {
     await expect(computerUse).toHaveCount(0);
     await expect(page.getByRole("switch", { name: "Enable Computer Use beta" })).toHaveCount(0);
@@ -73,8 +66,9 @@ test("computer control respects platform support and explains access before enab
 });
 
 // The e2e profile has no macOS Keychain authority, so the real Bot store cannot
-// open. Only the Bot IPC is substituted (as in bots-starter.spec.ts); the create
-// flow, Advanced page, and their renderer state are the shipped code.
+// open. Only the Bot IPC is substituted (as in bots-starter.spec.ts); the New
+// bot dialog, the side panel's Advanced tab, and their renderer state are the
+// shipped code.
 async function substituteBotIpc(app: ElectronApplication, options: { failFirstCreate: boolean }) {
   const catalog: BotCapabilityCatalog = {
     revision: "catalog-editor-fixture", providers: [{ id: "custom:lmstudio", label: "LM Studio", available: true,
@@ -126,62 +120,62 @@ async function botCreateE2e(app: ElectronApplication) {
   } }).botCreateE2e);
 }
 
-test("Create a bot keeps the draft after a failed save, then creates it with Full access", async ({ aiden }) => {
+/** Opens New bot from the Create (+) menu at the top of the Bots sidebar. */
+async function openNewBot(page: Page) {
+  await page.getByRole("button", { name: "Bots", exact: true }).click();
+  await page.locator("[data-sidebar]").getByRole("button", { name: "Create", exact: true }).click();
+  await page.getByRole("menuitem", { name: "New bot", exact: true }).click();
+  return page.getByRole("dialog", { name: "New bot", exact: true });
+}
+
+test("New bot keeps the typed name after a failed create, then creates it with Full access", async ({ aiden }) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   await substituteBotIpc(aiden.app, { failFirstCreate: true });
-  await page.getByRole("button", { name: "Bots", exact: true }).click();
-  // On Bots pages the sidebar lists only Bots, with New Bot at its top.
-  await page.locator("[data-sidebar]").getByRole("button", { name: "New Bot", exact: true }).click();
-  const editor = page.getByRole("dialog", { name: "New Bot", exact: true });
-  await editor.getByRole("textbox", { name: "Name" }).fill("Meal Planner");
-  await editor.getByRole("textbox", { name: "What should it help with?" }).fill("Plan my meals and grocery list every week");
-  await editor.getByRole("button", { name: "Next", exact: true }).click();
-  // The second step renames the dialog to "Connections".
-  const connections = page.getByRole("dialog", { name: "Connections", exact: true });
-  await expect(connections.getByRole("list", { name: "Suggested connections" })).toBeVisible();
-  // Connections are optional; Create goes ahead without any.
-  await connections.getByRole("button", { name: "Create", exact: true }).click();
-  await expect(connections.getByRole("alert")).toContainText("The test storage is unavailable.");
-  await connections.getByRole("button", { name: "Back", exact: true }).click();
-  await expect(editor.getByRole("textbox", { name: "Name" })).toHaveValue("Meal Planner");
-  await expect(editor.getByRole("textbox", { name: "What should it help with?" })).toHaveValue("Plan my meals and grocery list every week");
+  const dialog = await openNewBot(page);
+  const name = dialog.getByRole("textbox", { name: "Name your Bot" });
+  await name.fill("Meal Planner");
+  await name.press("Enter");
+  await expect(dialog.getByRole("alert")).toContainText("The test storage is unavailable.");
+  await expect(name).toHaveValue("Meal Planner");
+  await dialog.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(page.getByPlaceholder("Ask Meal Planner")).toBeVisible();
+  const { createCalls } = await botCreateE2e(aiden.app);
+  expect(createCalls).toBe(2);
 });
 
-test("Create a bot from a name and a help answer, then switch its Advanced access to Only what I choose", async ({ aiden }) => {
+test("New bot from just a name, then disable a tool in the Advanced tab", async ({ aiden }) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   await substituteBotIpc(aiden.app, { failFirstCreate: false });
-  await page.getByRole("button", { name: "Bots", exact: true }).click();
-  // On Bots pages the sidebar lists only Bots, with New Bot at its top.
-  await page.locator("[data-sidebar]").getByRole("button", { name: "New Bot", exact: true }).click();
-  const editor = page.getByRole("dialog", { name: "New Bot", exact: true });
-  await editor.getByRole("textbox", { name: "Name" }).fill("Meal Planner");
-  await editor.getByRole("textbox", { name: "What should it help with?" }).fill("Plan my meals and grocery list every week");
-  await editor.getByRole("button", { name: "Next", exact: true }).click();
-  await page.getByRole("dialog", { name: "Connections", exact: true }).getByRole("button", { name: "Create", exact: true }).click();
+  const dialog = await openNewBot(page);
+  await dialog.getByRole("textbox", { name: "Name your Bot" }).fill("Meal Planner");
+  await dialog.getByRole("button", { name: "Create", exact: true }).click();
 
-  // Creating opens the Bot's chat; the request carries the name, the answer as
-  // the subtitle, and Full access by default (no custom selection).
+  // Creating opens the Bot's chat; the request carries the name, the starter
+  // instructions (it asks what it is for), no description yet, and Full access
+  // by default (no custom selection).
   await expect(page.getByPlaceholder("Ask Meal Planner")).toBeVisible();
   const { creates } = await botCreateE2e(aiden.app);
   expect(creates).toHaveLength(1);
   const created = creates[0];
   expect(created).toMatchObject({
-    bot: { name: "Meal Planner", description: "Plan my meals and grocery list every week" },
+    bot: { name: "Meal Planner" },
     access: { accessMode: "full", catalogRevision: "catalog-editor-fixture", providerId: "custom:lmstudio", modelId: "aiden-e2e-vision" },
   });
+  expect(created).not.toHaveProperty("bot.description");
   expect(created).not.toHaveProperty("access.custom");
 
-  // Advanced is in the Bot's menu, which its row in the Bots sidebar opens on right-click.
-  await page.getByRole("navigation", { name: "Bots", exact: true }).getByRole("button", { name: /^Meal Planner/u }).click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Advanced", exact: true }).click();
-  const onlyChoose = page.getByRole("radio", { name: "Only what I choose", exact: true });
-  await expect(page.getByRole("radio", { name: "Everything", exact: true })).toBeChecked();
-  await onlyChoose.click();
-  await expect(onlyChoose).toBeChecked();
-  await page.getByRole("button", { name: "Save", exact: true }).click();
+  // The Bot's name in its chat opens its settings in the side panel.
+  await page.getByRole("button", { name: "Meal Planner settings", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "Advanced", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByText(/^Everything Aiden can use on this Mac/u)).toBeVisible();
+  await page.getByRole("button", { name: "Disable a tool", exact: true }).click();
+  await page.getByRole("dialog", { name: "Disable a tool", exact: true }).getByRole("option", { name: /^Run commands/u }).click();
+  await expect(page.getByRole("button", { name: "Turn on Run commands", exact: true })).toBeVisible();
+  await page.getByRole("region", { name: "Unsaved changes" }).getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Unsaved changes" })).toHaveCount(0);
 
   const { accessUpdates } = await botCreateE2e(aiden.app);
   expect(accessUpdates).toMatchObject([{
@@ -197,9 +191,8 @@ test("feature gallery reveals complete descriptions through keyboard focus at na
   const onboarding = page.locator('section[aria-label="Set up Aiden"]');
   await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
   await onboarding.getByRole("button", { name: /^Next/u }).click();
-  await onboarding.getByRole("button", { name: /LM Studio.*Use models running in LM Studio/u }).click();
-  await onboarding.getByRole("button", { name: /^Next/u }).click();
-  await skipBotsOnboardingStep(onboarding);
+  await connectOnboardingLmStudio(onboarding);
+  await onboarding.getByText("Explore Aiden’s features", { exact: true }).click();
   await page.emulateMedia({ reducedMotion: "reduce" });
   for (const width of [1000, 600, 390]) {
     await aiden.app.evaluate(({ BrowserWindow }, nextWidth) => {
@@ -250,8 +243,8 @@ for (const platform of ["linux", "darwin"] as const) {
     const onboarding = aiden.page.locator('section[aria-label="Set up Aiden"]');
     await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
     await onboarding.getByRole("button", { name: /^Next/u }).click();
-    await onboarding.getByRole("button", { name: /LM Studio.*Use models running in LM Studio/u }).click();
-    await onboarding.getByRole("button", { name: /^Next/u }).click();
+    await connectOnboardingLmStudio(onboarding);
+  await onboarding.getByText("Explore Aiden’s features", { exact: true }).click();
     const card = onboarding.getByRole("article", { name: /^Model Freedom\./u });
     await card.focus();
     const description = card.locator("[data-onboarding-feature-description]");
@@ -262,7 +255,7 @@ for (const platform of ["linux", "darwin"] as const) {
       await expect(description).not.toContainText("Apple");
       await expect(card).not.toHaveAttribute("aria-label", /Apple/u);
     }
-    await expect(description).toContainText("Enable local llama.cpp classification in a custom provider’s More options");
+    await expect(description).toContainText("Enable local llama.cpp classification in a custom provider’s Advanced panel under Model options");
     await expect(description).toContainText("approve sending it; provider charges may apply");
   });
 }
@@ -281,9 +274,8 @@ for (const [host, botComputers] of [["an Apple silicon Mac", true], ["an Intel M
     const onboarding = aiden.page.locator('section[aria-label="Set up Aiden"]');
     await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
     await onboarding.getByRole("button", { name: /^Next/u }).click();
-    await onboarding.getByRole("button", { name: /LM Studio.*Use models running in LM Studio/u }).click();
-    await onboarding.getByRole("button", { name: /^Next/u }).click();
-    await skipBotsOnboardingStep(onboarding);
+    await connectOnboardingLmStudio(onboarding);
+  await onboarding.getByText("Explore Aiden’s features", { exact: true }).click();
     const tile = onboarding.getByRole("article", { name: /^Bot computers\./u });
     if (!botComputers) {
       await expect(onboarding.getByRole("article", { name: /^Meet your Bots\./u })).toBeVisible();
@@ -299,7 +291,7 @@ for (const [host, botComputers] of [["an Apple silicon Mac", true], ["an Intel M
     await tile.focus();
     const description = tile.locator("[data-onboarding-feature-description]");
     await expect(description).toBeVisible();
-    await expect(description).toContainText("Set it up in Settings → Bot computers; nothing downloads until you choose Set up.");
+    await expect(description).toContainText("Set it up in Settings → Computers & VMs → Bot computers; nothing downloads until you choose Set up.");
   });
 }
 
@@ -307,9 +299,8 @@ test("feature tour explains image and classifier disclosure on rendered cards", 
   const onboarding = aiden.page.locator('section[aria-label="Set up Aiden"]');
   await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
   await onboarding.getByRole("button", { name: /^Next/u }).click();
-  await onboarding.getByRole("button", { name: /LM Studio.*Use models running in LM Studio/u }).click();
-  await onboarding.getByRole("button", { name: /^Next/u }).click();
-  await skipBotsOnboardingStep(onboarding);
+  await connectOnboardingLmStudio(onboarding);
+  await onboarding.getByText("Explore Aiden’s features", { exact: true }).click();
   const images = onboarding.getByRole("article", { name: /Generate or edit attached images/u });
   await images.hover();
   await expect(images.getByText(/approving the prompt, reference images, and possible provider charges/u)).toBeVisible();

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { chatSurface, isUserVisibleChat, parseChatOwnerV1 } from "./chat-visibility.js";
+import { chatRunRefusal, chatSurface, isUserVisibleChat, parseChatOwnerV1 } from "./chat-visibility.js";
 
 const owner = { kind: "design-project", projectId: "project-1" } as const;
 
@@ -61,5 +61,29 @@ test("the owner project id is bounded to 128 characters and must start with a le
       undefined,
       JSON.stringify(projectId),
     );
+  }
+});
+
+test("a feature-owned chat is refused as an ordinary agent run, with the retired-feature message", () => {
+  const message = "This conversation belongs to a feature that is no longer available.";
+  assert.equal(chatRunRefusal({ workspaceId: "workspace-1", owner }), message);
+  // Ownership still wins when the chat also names the Assistant workspace.
+  assert.equal(chatRunRefusal({ workspaceId: "assistant", owner }), message);
+});
+
+test("ordinary, Assistant, Bot and legacy chats may run", () => {
+  assert.equal(chatRunRefusal({ workspaceId: "workspace-1" }), null);
+  assert.equal(chatRunRefusal({}), null);
+  assert.equal(chatRunRefusal({ workspaceId: "assistant" }), null);
+  assert.equal(chatRunRefusal({ workspaceId: "workspace-1", botId: "bot-1" }), null);
+});
+
+test("a malformed owner the parser rejects still refuses the run: fail closed", () => {
+  // The store never loads such a chat (its meta fails validation), but the run
+  // guard must not depend on that: any present owner refuses.
+  for (const malformed of [{ kind: "bot", projectId: "project-1" }, { kind: "design-project" }, "design-project", null]) {
+    assert.equal(parseChatOwnerV1(malformed), undefined, JSON.stringify(malformed));
+    const chat = { workspaceId: "workspace-1", owner: malformed } as unknown as Parameters<typeof chatRunRefusal>[0];
+    assert.notEqual(chatRunRefusal(chat), null, JSON.stringify(malformed));
   }
 });

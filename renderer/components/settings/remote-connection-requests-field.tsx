@@ -1,7 +1,7 @@
 import { Loader2 } from "lucide-react";
 import { Field, Switch } from "../ui";
 
-/** The Remote Access row that lets other desktops ask to control this one. */
+/** The Remote Access row that lets other computers ask to control this one. */
 export function AcceptConnectionRequestsField({
   accept,
   hostLabel,
@@ -27,6 +27,7 @@ export function AcceptConnectionRequestsField({
           onCheckedChange={onChange}
           disabled={disabled}
           aria-label="Accept connection requests"
+          data-live-guard="you"
         />
       </div>
     </Field>

@@ -130,6 +130,26 @@ test("cancellation kills descendants even after the script leader exits", async 
   }
 });
 
+test("a background job that cannot be confirmed gone is not reported stopped", async () => {
+  if (process.platform === "win32") return;
+  const files = await fixture();
+  try {
+    const script = path.join(files.root, "stuck.sh");
+    await fs.writeFile(script, "#!/bin/bash\nsleep 30 &\necho started", { mode: 0o755 });
+    const result = await runScheduledScript(script, {
+      cwd: files.root,
+      // Falls inside cleanup: the script itself finished well before this.
+      timeoutMs: 1_500,
+      groupProbe: { exists: () => true, stillRuns: async () => true },
+    });
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.timedOut, false);
+    assert.equal(result.backgroundStopped, false);
+  } finally {
+    await files.cleanup();
+  }
+});
+
 test("a script that leaves a background job on its output still finishes", async () => {
   if (process.platform === "win32") return;
   const files = await fixture();

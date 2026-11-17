@@ -2,7 +2,7 @@
 // messages render markdown full-width, native-transcript style.
 
 import * as React from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Mic } from "lucide-react";
 import { Button, Callout, ErrorBoundary, Text } from "./ui";
 import { AidenIcon } from "./aiden-icon";
 import { Markdown } from "./markdown";
@@ -13,6 +13,7 @@ import { ForkMessageButton, type MessageForkAction } from "./fork-message-button
 import type { ReadAloudActionProps } from "./read-aloud-button";
 import type { Attachment, ChatMessage } from "../lib/types";
 import type { SkillProvenanceV1 } from "../shared/slash-commands";
+import { CHAT_VOICE_INPUT_LABEL, type ChatInputSourceV1 } from "../shared/chat-input-source";
 import { MessageAttachments } from "./message-attachments";
 import {
   describeRichLink,
@@ -29,9 +30,12 @@ export interface MessageBubbleProps {
   content: string;
   attachments?: Attachment[];
   skill?: SkillProvenanceV1;
+  /** Aiden Live sent this user message for the person: show "By voice" under it. */
+  inputSource?: ChatInputSourceV1;
   /** Render the assistant reply through the stable streaming reveal path. */
   streaming?: boolean;
   streamComplete?: boolean;
+  replayedTextLength?: number;
   /** A later step has closed this text: it can no longer grow, though the turn runs on. */
   textClosed?: boolean;
   onStreamHandoffComplete?: () => void;
@@ -64,8 +68,10 @@ export function MessageBubble({
   content,
   attachments,
   skill,
+  inputSource,
   streaming,
   streamComplete,
+  replayedTextLength,
   textClosed,
   onStreamHandoffComplete,
   showCopy = true,
@@ -98,6 +104,7 @@ export function MessageBubble({
             <MessageAttachments attachments={attachments} role="user" />
           ) : null}
           {content ? <UserMessageBody content={content} showCopy={showCopy} /> : null}
+          {inputSource === "voice" ? <VoiceInputLabel /> : null}
           {fork ? (
             <div className="flex items-center gap-0.5">
               <ForkMessageButton
@@ -124,6 +131,7 @@ export function MessageBubble({
           <StreamingMarkdownReveal
             imageScope={imageScope}
             content={content}
+            replayedTextLength={replayedTextLength}
             // Text that settled or whose turn ended shows in full in the same
             // tree; text a tool step closed still joins at the next release.
             complete={streaming ? Boolean(streamComplete) : true}
@@ -146,6 +154,19 @@ export function MessageBubble({
         </div>
       </div>
     </RichLinkBudget>
+  );
+}
+
+/** A small, quiet mark under a message Aiden Live sent for the person. */
+function VoiceInputLabel() {
+  return (
+    <div
+      data-message-input-source="voice"
+      className="-mt-1 flex items-center gap-1 px-1 text-mini text-tertiary"
+    >
+      <Mic aria-hidden="true" className="size-3 shrink-0" />
+      <span>{CHAT_VOICE_INPUT_LABEL}</span>
+    </div>
   );
 }
 

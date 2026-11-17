@@ -68,6 +68,7 @@ export const DIAGNOSTIC_BASE_EVENT_NAMES = [
   "renderer-route-error",
   "renderer-invalidation-listener-failed",
   "child-process-gone",
+  "browser-tab-process-gone",
   "electron-ready",
   "startup-reconciled",
   "remote-request-failed",
@@ -76,6 +77,7 @@ export const DIAGNOSTIC_BASE_EVENT_NAMES = [
   "peer-host-repinned",
   "process-monitor-installed",
   "uncaught-exception",
+  "unhandled-rejection",
   "node-warning",
   "process-exit",
   "process-signal",
@@ -301,6 +303,7 @@ const ENUM_STRING_FIELDS: Readonly<Record<string, ReadonlySet<string>>> = {
     "integrity-failure",
     "killed",
     "launch-failed",
+    "memory-eviction",
     "not-ready",
     "oom",
     "unknown",
@@ -397,6 +400,19 @@ function normalizedDiagnosticRoute(value: string): string | undefined {
 function boundedNumber(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.max(-Number.MAX_SAFE_INTEGER, Math.min(Number.MAX_SAFE_INTEGER, value));
+}
+
+/**
+ * Credentials in free text, and nothing else: `password=…` and `api_key: …`
+ * assignments, Basic/Bearer values, self-identifying tokens and URL userinfo.
+ * Unlike `sanitizeDiagnosticText` it keeps URLs and paths.
+ */
+export function redactCredentialText(value: string, replacement = "[withheld]"): string {
+  return value
+    .replace(CREDENTIAL_ASSIGNMENT, `$1${replacement}`)
+    .replace(AUTHORIZATION_VALUE, replacement)
+    .replace(BARE_CREDENTIAL_TOKEN, replacement)
+    .replace(CREDENTIAL_URL, `$1${replacement}@`);
 }
 
 export function sanitizeDiagnosticText(value: string, maxLength = MAX_DIAGNOSTIC_FIELD_LENGTH): string {

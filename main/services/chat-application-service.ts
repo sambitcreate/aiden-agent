@@ -1,4 +1,6 @@
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
+import { analyticsWorkspaceKind } from "./analytics/analytics-ids.js";
+import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import type { AidenRemoteAttachmentStore } from "./aiden-remote-attachments.js";
 import { appendReconciliationFailureMessage } from "../../renderer/shared/chat-message-contract.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
@@ -8,8 +10,13 @@ import type { ChatPullRequestStore } from "./chat-pull-request-store.js";
 import type { configStore } from "./config-store.js";
 import type { displayImageArtifactStore } from "./display-image-artifact-store.js";
 import type { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
+import type { DesignCanvasStore } from "./design-canvas/store.js";
 import type { ToolOutputStore } from "./tool-output-store.js";
-import { isChatCreateReconciliationRequiredError } from "./chat-store-core.js";
+import {
+  ChatStoreError,
+  DESIGN_MODE_UNAVAILABLE_MESSAGE,
+  isChatCreateReconciliationRequiredError,
+} from "./chat-store-core.js";
 import type { llmClient } from "./llm-client.js";
 import type { Chat } from "./types.js";
 import { assertRenameAllowedFromChat } from "./chat-title-policy.js";
@@ -50,6 +57,7 @@ export interface ChatApplicationDependencies {
     | "create"
     | "rename"
     | "setChatModelSelection"
+    | "setDesignMode"
     | "moveEmptyChatToWorkspace"
     | "remove"
   > & Partial<Pick<typeof chatStore, "listSummaryMetadata" | "getWithImageReferences">>;
@@ -83,6 +91,15 @@ export interface ChatApplicationDependencies {
   piRuntimeEffectStore: Pick<typeof piRuntimeEffectStore, "deleteChat">;
   piCompactionSessionStore: Pick<typeof piCompactionSessionStore, "deleteChat">;
   chatPullRequestStore?: Pick<ChatPullRequestStore, "deleteChat">;
+  /** The chat's design canvas document goes with it; forks never copy it. */
+  designCanvasStore?: Pick<DesignCanvasStore, "delete">;
+  /** aiden-design grants: a chat's ends when design mode turns off, it moves or it is deleted. */
+  designGrants?: { revokeChat(chatId: string): void };
+  /**
+   * Runs once design mode turns on: puts the HTML pages this chat's earlier
+   * replies wrote on an empty canvas. Never awaited by the switch.
+   */
+  designPagesOnEntry?(chat: Chat, workspaceRoot: string): Promise<unknown>;
   /** Queued visual snapshots; a deleted chat's are dropped, not captured. */
   visualSnapshots?: { cancelChat(chatId: string): void };
   /** Stops a deleted chat's background jobs and drops its followed pull requests and check. */
@@ -135,6 +152,22 @@ export async function forgetChatInboxState(
       ),
     ),
   );
+}
+
+/**
+ * How a delete attempt ended. Admission reopens only when no durable tombstone
+ * can remain, so without a removed chat it means the delete rolled back and the
+ * chat stays in use. While a tombstone may remain, including when its status
+ * could not be read, the fences stay closed for startup to roll forward.
+ */
+type ChatDeletionSettlement = "completed" | "rolled_back" | "roll_forward_pending";
+
+function chatDeletionSettlement(
+  admissionReleased: boolean,
+  chatRemoved: boolean,
+): ChatDeletionSettlement {
+  if (!admissionReleased) return "roll_forward_pending";
+  return chatRemoved ? "completed" : "rolled_back";
 }
 
 export function createChatApplicationService(deps: ChatApplicationDependencies) {
@@ -227,7 +260,8 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
           owner,
           input.workspaceId,
         );
-        if (!(await deps.configStore.getWorkspace(input.workspaceId))) {
+        const workspace = await deps.configStore.getWorkspace(input.workspaceId);
+        if (!workspace) {
           throw new Error("The selected workspace is no longer available.");
         }
         const assertCurrent = () => {
@@ -242,7 +276,9 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
           }
         };
         try {
-          return chatForRenderer(await deps.chatStore.create({ ...input, assertCurrent }));
+          const chat = chatForRenderer(await deps.chatStore.create({ ...input, assertCurrent }));
+          reportAnalyticsEvent("chat_created", { workspace_kind: analyticsWorkspaceKind(workspace) });
+          return chat;
         } catch (error) {
           if (isChatCreateReconciliationRequiredError(error)) {
             return markReconciliationRequired(owner);
@@ -286,6 +322,35 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
       );
     },
 
+    /**
+     * Turn design mode on or off for one chat. It needs a project chat: one
+     * whose workspace has a folder, or a No workspace chat in Aiden's own
+     * folder. Turning it off is always allowed. A running reply is not
+     * affected, because design mode only changes the layout.
+     */
+    async setDesignMode(chatId: string, enabled: boolean, options: ChatApplicationMutationOptions = {}) {
+      let turnedOn = false;
+      let workspaceRoot: string | undefined;
+      const updated = await deps.chatStore.setDesignMode(chatId, enabled, async (chat) => {
+        assertRenameAllowedFromChat(chat, options);
+        await options.assertCurrent?.(chat);
+        if (!enabled) return;
+        const workspace = await deps.configStore.getWorkspace(persistedChatWorkspaceId(chat.workspaceId));
+        if (!workspace || (!workspace.folderPath && workspace.noWorkspace !== true)) {
+          throw new ChatStoreError("design-mode-unavailable", DESIGN_MODE_UNAVAILABLE_MESSAGE);
+        }
+        turnedOn = chat.designMode !== true;
+        workspaceRoot = workspace.folderPath;
+      });
+      if (!enabled) deps.designGrants?.revokeChat(chatId);
+      if (turnedOn && workspaceRoot && deps.designPagesOnEntry) {
+        void deps.designPagesOnEntry(updated, workspaceRoot).catch((error) => {
+          deps.logError("design", "Could not put earlier pages on the design canvas.", error);
+        });
+      }
+      return chatForRenderer(updated);
+    },
+
     async moveEmptyToWorkspace(
       chatId: string,
       workspaceId: string,
@@ -306,18 +371,19 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         if (!(await deps.configStore.getWorkspace(workspaceId))) {
           throw new Error(`Workspace ${workspaceId} not found.`);
         }
-        return chatForRenderer(
-          await deps.chatStore.moveEmptyChatToWorkspace(
-            chatId,
-            workspaceId,
-            async (chat) => {
-              if (chat.botId) {
-                throw new Error("Bot conversations stay in their Aiden-managed folder.");
-              }
-              await options.assertCurrent?.(chat);
-            },
-          ),
+        const moved = await deps.chatStore.moveEmptyChatToWorkspace(
+          chatId,
+          workspaceId,
+          async (chat) => {
+            if (chat.botId) {
+              throw new Error("Bot conversations stay in their Aiden-managed folder.");
+            }
+            await options.assertCurrent?.(chat);
+          },
         );
+        // A grant names the old workspace root; the canvas asks again for the new one.
+        deps.designGrants?.revokeChat(chatId);
+        return chatForRenderer(moved);
       } finally {
         finishFollowThroughMove?.();
         finishMove();
@@ -415,12 +481,25 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
           deps.logError("git", "Could not delete the chat's pull request links.", error);
           throw new Error("Aiden could not delete this chat's pull request links.");
         }
+        deps.designGrants?.revokeChat(chatId);
+        try {
+          await deps.designCanvasStore?.delete(chatId);
+        } catch (error) {
+          deps.logError("design", "Could not delete the chat's design canvas.", error);
+          throw new Error("Aiden could not delete this chat's design canvas.");
+        }
         await deps.chatStore.remove(chatId, async (chat) => {
           if (!chat) throw new Error(`Chat ${chatId} not found`);
           assertRenameAllowedFromChat(chat, options);
           await options.assertCurrent?.(chat);
         });
         chatRemoved = true;
+        // A canvas save or grant that passed its chat check before the remove
+        // committed may have landed since the first cleanup; repeat it.
+        deps.designGrants?.revokeChat(chatId);
+        await deps.designCanvasStore?.delete(chatId).catch((error: unknown) => {
+          deps.logError("design", "Could not delete the deleted chat's design canvas.", error);
+        });
         void forgetChatInboxState(deps.inboxState, chatId, deps.logError);
         await deps.subagentRunStore.completeChatDeletion(chatId);
         releaseAdmission = true;
@@ -443,14 +522,12 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
             );
           }
         }
+        const settlement = chatDeletionSettlement(releaseAdmission, chatRemoved);
         // A delete that rolled back keeps the chat, so it keeps its context
         // (interrupted waits, Unavailable prompts, spending) too.
-        const rolledBack = releaseAdmission && !chatRemoved;
-        if (!rolledBack) deps.releaseChatContext?.(chatId);
-        if (releaseAdmission) {
-          // Admission reopening without a removed chat means the delete rolled back
-          // before any durable tombstone, so the chat stays in use.
-          if (!chatRemoved) deps.followThrough?.restoreChat?.(chatId);
+        if (settlement === "rolled_back") deps.followThrough?.restoreChat?.(chatId);
+        else deps.releaseChatContext?.(chatId);
+        if (settlement !== "roll_forward_pending") {
           finishAttachmentDeletion?.();
           finishDeletion();
         }

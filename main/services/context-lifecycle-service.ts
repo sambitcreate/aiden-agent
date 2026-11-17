@@ -74,6 +74,17 @@ export interface ContextLifecycleServiceDeps {
     runtime: ResolvedModelRuntime,
   ): Promise<ThinkingLevel>;
   recordUsage?(message: AssistantMessage, runtime: ResolvedModelRuntime, chatId: string): void | Promise<void>;
+  /**
+   * The chat's PreCompact hooks, asked once the compaction starts. Returns
+   * extra summary instructions, or nothing. It bounds its own wait; a throw
+   * adds none and never fails the compaction.
+   */
+  preCompact?(
+    chat: Chat,
+    input: { audience: ContextLifecycleAudience; trigger: "manual" | "auto"; signal: AbortSignal },
+  ): Promise<string | undefined>;
+  /** A compaction of `chat` finished and was saved. */
+  compacted?(chat: Chat, audience: ContextLifecycleAudience): void;
 }
 
 function cancelled(cause: unknown): boolean {
@@ -102,7 +113,7 @@ export class ContextLifecycleService {
   async compactChat(
     chatId: string,
     audience: ContextLifecycleAudience,
-    _source: ContextLifecycleSource,
+    source: ContextLifecycleSource,
     engineOverride?: CompactionEngine,
   ): Promise<CompactChatResult> {
     const startedAt = performance.now();
@@ -206,6 +217,16 @@ export class ContextLifecycleService {
           ? await this.deps.resolveThinkingLevel(chat, audience, runtime)
           : "off",
         signal: operationAbort.signal,
+        ...(this.deps.preCompact
+          ? {
+              summaryInstructions: (_reason: unknown, signal: AbortSignal) =>
+                this.deps.preCompact!(chat, {
+                  audience,
+                  trigger: source === "operator" ? "manual" : "auto",
+                  signal,
+                }),
+            }
+          : {}),
       });
       const result = await coordinator.compact();
       if (operationAbort.signal.aborted) {
@@ -216,6 +237,11 @@ export class ContextLifecycleService {
       }
       if (!result.compacted) {
         return { compacted: false, reason: "already_compact" };
+      }
+      try {
+        this.deps.compacted?.(chat, audience);
+      } catch {
+        // Bookkeeping never turns a saved compaction into a failure.
       }
       const entries = await session.getBranch();
       const latest = [...entries].reverse().find((entry) => entry.type === "compaction");

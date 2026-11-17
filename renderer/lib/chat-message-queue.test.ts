@@ -180,6 +180,18 @@ test("editing pauses dispatch; cancel preserves the original and save preserves 
   assert.equal(queue.claim()?.id, "one");
 });
 
+test("a queued message the person edits is no longer marked By voice", () => {
+  const queue = new ChatMessageQueue();
+  queue.add({ ...message("one"), options: { inputSource: "voice" } });
+  queue.add({ ...message("two"), options: { inputSource: "voice", visualize: true } });
+  queue.edit("one");
+  queue.update({ ...queue.getSnapshot().messages[0]!, text: "my words now" });
+  queue.edit("two");
+  queue.update({ ...queue.getSnapshot().messages[1]! });
+  assert.equal(queue.getSnapshot().messages[0]!.options, undefined);
+  assert.deepEqual(queue.getSnapshot().messages[1]!.options, { visualize: true });
+});
+
 test("blank and oversized edits leave the editor and original message intact", () => {
   const queue = new ChatMessageQueue();
   queue.add(message("one"));
@@ -488,7 +500,8 @@ test("input saved as history but not taken by the run reads the same as on the p
     "Saved to the chat — the run was cancelled before it could use it",
   );
   assert.equal(committedRunInputNotice("capacity"), "Saved to the chat — the run queue was full");
-  for (const reason of ["run_not_active", "invalid", undefined] as const) {
+  assert.equal(committedRunInputNotice("invalid"), "Saved to the chat — it wasn't sent to the run");
+  for (const reason of ["run_not_active", undefined] as const) {
     assert.equal(
       committedRunInputNotice(reason),
       "Saved to the chat — the run ended before it could use it",

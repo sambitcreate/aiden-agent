@@ -554,6 +554,66 @@ test("protocol timeout terminates the owned SDK socket before setupComplete", as
   }
 });
 
+test("the chosen Live voice reaches Google's setup message through the owned SDK connector", async () => {
+  const sdkRequire = createRequire(
+    path.join(modulesRoot, "@google/genai/package.json"),
+  );
+  const { WebSocketServer } = sdkRequire("ws") as {
+    WebSocketServer: LocalWebSocketServerConstructor;
+  };
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await deadline(
+    new Promise<void>((resolve, reject) => {
+      server.once("listening", resolve);
+      server.once("error", reject);
+    }),
+    "Voice server startup",
+  );
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  let socket: LocalWebSocket | undefined;
+  let setup: Record<string, unknown> | undefined;
+  server.on("connection", (connected) => {
+    socket = connected;
+    connected.on("message", (payload) => {
+      const message = JSON.parse(payload.toString()) as Record<string, unknown>;
+      if ("setup" in message) {
+        setup = message.setup as Record<string, unknown>;
+        connected.send(JSON.stringify({ setupComplete: {} }));
+      }
+    });
+  });
+
+  const protocol = new GeminiLiveProtocol({
+    connector: createOwnedGoogleGenAIConnector({
+      apiKey: "phase-zero-loopback-only",
+      httpOptions: {
+        apiVersion: "v1beta",
+        baseUrl: `http://127.0.0.1:${address.port}`,
+      },
+    }),
+    model: "phase-zero-live-model",
+    voice: "Charon",
+    onEvent: () => undefined,
+  });
+  try {
+    await deadline(protocol.start(), "Voice protocol setup");
+    const generationConfig = setup?.generationConfig as Record<string, unknown> | undefined;
+    assert.deepEqual(generationConfig?.speechConfig, {
+      voiceConfig: { prebuiltVoiceConfig: { voiceName: "Charon" } },
+    });
+  } finally {
+    protocol.stop();
+    socket?.terminate();
+    await deadline(
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+      "Voice server shutdown",
+    );
+  }
+});
+
 test("the owned connector rejects and settles an oversized loopback frame", async () => {
   const sdkRequire = createRequire(
     path.join(modulesRoot, "@google/genai/package.json"),

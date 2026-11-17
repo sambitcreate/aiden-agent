@@ -57,14 +57,60 @@ test("page reading is on, and extract mode cannot turn on until it is set up", a
   const extract = screen.getByRole("switch", { name: "Extract only the values asked for" });
   assert.equal(extract.hasAttribute("disabled"), true);
   assert.ok(screen.getByText("Needs setup"));
+  assert.ok(screen.getByRole("button", { name: "Set up Cloudflare…" }));
+});
+
+const startSetup = () => fireEvent.click(screen.getByRole("button", { name: "Set up Cloudflare…" }));
+const setupForm = () => screen.queryByRole("textbox", { name: "Cloudflare account ID" });
+
+test("the setup form stays folded until asked for, and Cancel folds it again", async () => {
+  webFetchServer();
+  await mount();
+  assert.equal(setupForm() === null, true);
+
+  startSetup();
+  const field = setupForm();
+  assert.equal(document.activeElement === field, true);
   assert.ok(screen.getByText(/Add your Cloudflare account ID and an API key/u));
   // The Cloudflare key goes into the same write-only pool editor Web Search uses.
   assert.ok(screen.getByRole("textbox", { name: "Cloudflare key label" }));
+  // Whoever sees the form sees where the page text goes.
+  assert.ok(screen.getByText(/the page's text and the field names go to Cloudflare/u));
+
+  fireEvent.change(field as HTMLElement, { target: { value: "half-typed" } });
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  assert.equal(setupForm() === null, true);
+  assert.equal(document.activeElement === screen.getByRole("button", { name: "Set up Cloudflare…" }), true);
+
+  startSetup();
+  assert.equal((setupForm() as HTMLInputElement).value, "");
+});
+
+test("anything saved keeps the form open, even after the last of it is removed", async () => {
+  const settings = { ...defaultWebFetchSettings(), extract: { enabled: false, model: "cloudflare-clairic" as const, accountId: ACCOUNT_ID } };
+  webFetchServer({ settings });
+  await mount();
+  const field = setupForm() as HTMLInputElement;
+  assert.equal(screen.queryByRole("button", { name: "Set up Cloudflare…" }) === null, true);
+
+  fireEvent.change(field, { target: { value: "" } });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+  });
+  await screen.findByText("Account ID removed.");
+  assert.equal(setupForm() === field, true);
+});
+
+test("a key with no account ID still shows the form", async () => {
+  webFetchServer({ keys: 1 });
+  await mount();
+  assert.ok(setupForm());
 });
 
 test("a malformed account ID is not sent; a valid one is saved lowercase", async () => {
   const server = webFetchServer();
   await mount();
+  startSetup();
   const field = screen.getByRole("textbox", { name: "Cloudflare account ID" });
   fireEvent.change(field, { target: { value: "acct-123" } });
   assert.ok(screen.getByText(/32 letters and digits/u));
@@ -120,7 +166,7 @@ test("turning page reading off hides the extract setup", async () => {
   await act(async () => {
     fireEvent.click(screen.getByRole("switch", { name: "Read web pages" }));
   });
-  await waitFor(() => assert.equal(screen.queryByRole("switch", { name: "Extract only the values asked for" }), null));
+  await waitFor(() => assert.equal(screen.queryByRole("switch", { name: "Extract only the values asked for" }) === null, true));
   assert.equal(server.current().enabled, false);
 });
 

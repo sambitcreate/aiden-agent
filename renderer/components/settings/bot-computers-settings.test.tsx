@@ -118,6 +118,14 @@ test("a failed setup shows why and offers Try again", async () => {
   assert.match(document.body.textContent ?? "", /The download stalled/u);
 });
 
+test("the running limit shows the memory cost and explains what happens at the limit in a hint", async () => {
+  mount(status(READY));
+  const row = await screen.findByRole("group", { name: "Computers running at once" });
+  assert.match(row.textContent ?? "", /about 8 GB of memory/u);
+  fireEvent.click(within(row).getByRole("button", { name: "About running limit" }));
+  assert.match((await screen.findByRole("tooltip")).textContent ?? "", /used longest ago stops/u);
+});
+
 test("changing a setting saves only that choice, and a refused save shows the old choice again", async () => {
   const { calls } = mount(status(READY));
   fireEvent.click(await screen.findByRole("combobox", { name: "Computers running at once" }));

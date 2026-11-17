@@ -223,13 +223,13 @@ function fakeHost(
   logPath: string,
   flags: string[] = [],
   overrides: Partial<CuaDriverHostOptions> &
-    Pick<CuaDriverHostTestHooks, "verifyBridgeProcess"> = {},
+    Pick<CuaDriverHostTestHooks, "verifyBridgeProcess" | "exitConfirmed"> = {},
 ): CuaDriverHost {
   const invocation = {
     command: process.execPath,
     prefixArgs: [fixture, "--log", logPath, ...flags],
   };
-  const { verifyBridgeProcess, ...hostOverrides } = overrides;
+  const { verifyBridgeProcess, exitConfirmed, ...hostOverrides } = overrides;
   return new TestCuaDriverHost(
     {
       invocation,
@@ -237,7 +237,7 @@ function fakeHost(
       tempRoot: root,
       ...hostOverrides,
     },
-    { brokerInvocation: invocation, verifyBridgeProcess },
+    { brokerInvocation: invocation, verifyBridgeProcess, exitConfirmed },
   );
 }
 
@@ -1155,6 +1155,114 @@ for (const phase of ["before fixture initialization", "during bridge verificatio
     }
   });
 }
+
+test("a bridge whose exit was not seen fails shutdown and keeps its lease directory", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-stuck-"));
+  const logPath = path.join(root, "events.jsonl");
+  // SIGKILL cannot be ignored, so the host is told the exit never showed up.
+  const host = fakeHost(root, logPath, [], { exitConfirmed: () => false });
+  try {
+    await host.createSession();
+    await assert.rejects(
+      host.shutdown(),
+      (error: unknown) => error instanceof CuaDriverError && error.code === "cleanup_unconfirmed",
+    );
+    const leases = (await readdir(root)).filter((name) => name.startsWith("acu-"));
+    assert.equal(leases.length, 1, "nothing may reclaim what a live bridge could still hold");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a bridge seen exiting late no longer fails shutdown, and its lease directory is reclaimed", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-late-"));
+  const logPath = path.join(root, "events.jsonl");
+  let exitSeen = false;
+  const host = fakeHost(root, logPath, [], { exitConfirmed: () => exitSeen });
+  try {
+    const session = await host.createSession();
+    await session.close();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal((await readdir(root)).filter((name) => name.startsWith("acu-")).length, 1);
+    exitSeen = true;
+    await host.shutdown();
+    assert.deepEqual((await readdir(root)).filter((name) => name.startsWith("acu-")), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a bridge that exits after shutdown already failed is still reclaimed", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-after-"));
+  const logPath = path.join(root, "events.jsonl");
+  let exitSeen = false;
+  const host = fakeHost(root, logPath, [], { exitConfirmed: () => exitSeen });
+  const leases = async () => (await readdir(root)).filter((name) => name.startsWith("acu-"));
+  try {
+    await host.createSession();
+    await assert.rejects(host.shutdown(), { code: "cleanup_unconfirmed" });
+    assert.equal((await leases()).length, 1);
+    exitSeen = true;
+    for (let attempt = 0; attempt < 150 && (await leases()).length > 0; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.deepEqual(await leases(), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a late exit's lease directory gets its bounded retries after shutdown failed", async (t) => {
+  for (const [name, failures, expectedAttempts, expectedLeases] of [
+    ["one failed removal is retried until it succeeds", 1, 2, 0],
+    ["a removal that never succeeds stops at the retry limit", Infinity, 3, 1],
+  ] as const) {
+    await t.test(name, async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-retry-"));
+      const logPath = path.join(root, "events.jsonl");
+      let exitSeen = false;
+      let attempts = 0;
+      const host = fakeHost(root, logPath, [], {
+        exitConfirmed: () => exitSeen,
+        removeDirectory: async (directory, options) => {
+          if (!exitSeen) return rm(directory, options);
+          attempts += 1;
+          if (attempts <= failures) throw new Error("simulated cleanup failure");
+          await rm(directory, options);
+        },
+      });
+      const leases = async () => (await readdir(root)).filter((entry) => entry.startsWith("acu-"));
+      try {
+        await host.createSession();
+        await assert.rejects(host.shutdown(), { code: "cleanup_unconfirmed" });
+        exitSeen = true;
+        for (let wait = 0; wait < 250 && attempts < expectedAttempts; wait += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        // One more poll interval shows the retries have stopped, not paused.
+        await new Promise((resolve) => setTimeout(resolve, 1_200));
+        assert.equal(attempts, expectedAttempts);
+        assert.equal((await leases()).length, expectedLeases);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+test("a session whose bridge exited normally still shuts down cleanly", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-clean-"));
+  const logPath = path.join(root, "events.jsonl");
+  const host = fakeHost(root, logPath);
+  try {
+    const session = await host.createSession();
+    await session.close();
+    await host.shutdown();
+    assert.deepEqual((await readdir(root)).filter((name) => name.startsWith("acu-")), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("shutdown racing session startup cannot return an orphan session", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-race-"));

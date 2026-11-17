@@ -1,3 +1,5 @@
+import { reportAnalyticsEvent } from "../analytics/analytics-report.js";
+
 export interface ComputerUseSettingsDependencies {
   readPersisted(): Promise<boolean>;
   persist(enabled: boolean, isCurrent?: () => boolean): Promise<void>;
@@ -110,5 +112,7 @@ export class ComputerUseSettingsCoordinator {
 
     this.disableRequired = false;
     this.dependencies.setRuntimeEnabled(true);
+    // Only the switch going from off to on counts, not saving it on again.
+    if (!previous) reportAnalyticsEvent("computer_use_enabled", {});
   }
 }

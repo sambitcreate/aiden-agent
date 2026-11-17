@@ -3,6 +3,8 @@ import https from "node:https";
 import type { Page } from "@playwright/test";
 import { expect, finishLmStudioOnboarding, test } from "./fixtures";
 
+test.use({ appEnvironment: { AIDEN_ANALYTICS: "0" } });
+
 type RemoteRuntimeStatus = {
   enabled: boolean;
   running: boolean;
@@ -218,13 +220,20 @@ test("adding another computer by setup code reports an unreachable address and r
   await expect(otherDevices).toBeFocused();
   await expect(otherDevices).toHaveAttribute("aria-selected", "true");
   await expect(page.getByText("No computers yet", { exact: true })).toBeVisible();
+  await page.keyboard.press("ArrowRight");
+  const telegram = segments.getByRole("tab", { name: "Telegram", exact: true });
+  await expect(telegram).toBeFocused();
+  await expect(telegram).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("ArrowLeft");
+  await expect(otherDevices).toBeFocused();
+  await expect(page.getByText("No computers yet", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "Add device", exact: true }).click();
   const sheet = page.getByRole("dialog", { name: "Add device" });
   await expect(sheet).toBeVisible();
   await sheet.getByRole("button", { name: "Enter setup code", exact: true }).click();
   const form = page.getByRole("dialog", { name: "Enter setup code" });
-  const address = form.getByRole("textbox", { name: "Desktop address" });
+  const address = form.getByRole("textbox", { name: "Computer address" });
   await expect(address).toBeFocused();
   const pair = form.getByRole("button", { name: "Pair", exact: true });
   await expect(pair).toBeDisabled();
@@ -261,6 +270,11 @@ test("paired-computer load and removal failures preserve context and offer recov
   await page.getByRole("tab", { name: "Control other devices", exact: true }).click();
   await expect(page.getByText("Couldn't load paired computers. Your saved connections have not been removed.")).toBeVisible();
   await expect(page.getByText("No computers yet", { exact: true })).toBeHidden();
+  const retry = page.getByRole("button", { name: "Try again", exact: true });
+  // Settings can show the sidebar's cached error while its mount refetch is
+  // still running. Keep the fault installed until that read (and its retry)
+  // settles; otherwise it can recover and remove this button before the click.
+  await expect(retry).toBeEnabled();
   await app.evaluate(({ ipcMain }) => {
     let hosts = [{ id: "recovery_host", name: "Recovery computer", enabled: false, state: "disabled", features: [], capabilities: [] }];
     let removals = 0;
@@ -273,7 +287,7 @@ test("paired-computer load and removal failures preserve context and offer recov
       event.sender.send("remote:peers-changed", {});
     });
   });
-  await page.getByRole("button", { name: "Try again", exact: true }).click();
+  await retry.click();
   await expect(page.getByText("Recovery computer", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "More for Recovery computer" }).click();
   await page.getByRole("menuitem", { name: "Forget…", exact: true }).click();

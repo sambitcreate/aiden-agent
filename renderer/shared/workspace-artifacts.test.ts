@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import {
+  isWorkspaceArtifactTitle,
   parseWorkspaceArtifactActions,
   parseWorkspaceArtifactOutput,
   parseWorkspaceArtifactRefresh,
@@ -330,6 +331,34 @@ test("filled-in values are checked against their declared types", () => {
 test("commands and labels reject characters that hide what runs", () => {
   assert.throws(() => parseWorkspaceArtifactSources([{ name: "a", kind: "shell", command: "ls \u202e-la" }]), /control/u);
   assert.throws(() => parseWorkspaceArtifactActions([{ name: "a", label: "Me\u200brge", command: "x" }]), /label/u);
+  const shell = (command: string) => parseWorkspaceArtifactSources([{ name: "a", kind: "shell", command }]);
+  // Format, default-ignorable and bidi characters render as nothing or reorder text.
+  for (const hidden of ["\u2066", "\u061c", "\u00ad", "\u034f", "\u180e", "\ufeff", "\u{e0041}", "\u3164"]) {
+    assert.throws(() => shell(`ls ${hidden}-la`), /invisible/u, JSON.stringify(hidden));
+    assert.throws(() => parseWorkspaceArtifactActions([{ name: "a", label: `G${hidden}o`, command: "x" }]), /label/u);
+  }
+  // A carriage return can redraw a line over what came before it.
+  assert.throws(() => shell("echo safe\rrm -rf ~"), /\\r/u);
+  // Blank lines can push the rest of a command out of view in a review dialog.
+  assert.throws(() => shell("echo a\n\n\nrm -rf ~"), /blank line/u);
+  assert.throws(() => shell("echo a\n \t\n\nrm -rf ~"), /blank line/u);
+  // Ordinary multi-line scripts still read as they run.
+  assert.deepEqual(shell("set -e\n\techo a\n\necho b"), [{ name: "a", kind: "shell", command: "set -e\n\techo a\n\necho b", parse: "json" }]);
+});
+
+test("a title is one line of visible characters", () => {
+  assert.equal(isWorkspaceArtifactTitle("Open PRs"), true);
+  assert.equal(isWorkspaceArtifactTitle("Open\tPRs"), false);
+  assert.equal(isWorkspaceArtifactTitle("Open\nPRs"), false);
+  assert.equal(isWorkspaceArtifactTitle("Open\u2028PRs"), false);
+  assert.equal(isWorkspaceArtifactTitle("Open\u200bPRs"), false);
+  // The invisible parts of a visible emoji are fine; the same characters alone are not.
+  for (const title of ["\u2764\ufe0f Alerts", "1\ufe0f\u20e3 First", "\u{1f468}\u200d\u{1f469}\u200d\u{1f467} Family", "\u{1f44b}\u{1f3fd}\u200d\u2642\ufe0f Hi"]) {
+    assert.equal(isWorkspaceArtifactTitle(title), true, title);
+  }
+  for (const title of ["Open\ufe0fPRs", "Open\u200dPRs", "\u2764\ufe0f\ufe0f Alerts", "\u{1f468}\u200d"]) {
+    assert.equal(isWorkspaceArtifactTitle(title), false, JSON.stringify(title));
+  }
 });
 
 test("output parses as JSON, non-empty lines or text, within the data cap", () => {

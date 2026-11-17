@@ -23,6 +23,7 @@ import {
   parseAidenRemoteSpendingStatus,
   parseAidenRemoteBackgroundJobs,
   parseAidenRemoteChatNewWorktreeResponse,
+  parseAidenRemoteBotCreateRequest,
   type AidenRemoteCapability,
   type AidenRemoteStreamInputResult,
 } from "./aiden-remote-protocol.js";
@@ -30,6 +31,7 @@ import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import { AidenOperationNotExecutedError } from "./aiden-remote-operation-contract.js";
 import type { BackgroundJobView } from "../../renderer/shared/background-jobs.js";
 import { VISUAL_VIEWER_CSP } from "../../renderer/shared/visual-viewer.js";
+import { BOT_STARTER_INSTRUCTIONS } from "../../renderer/shared/bot-presets.js";
 import { AidenRemoteBotSessionService } from "./aiden-remote-bot-session.js";
 import { AidenRemoteBotService } from "./aiden-remote-bots.js";
 import { BotSessionError, type BotSessionState } from "./bot-runtime/bot-session-service.js";
@@ -75,6 +77,8 @@ async function fixture(options: {
   /** A recording durable-session service for the Bot session, routine and preset routes. */
   botSessions?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botSessions"];
   botAllowed?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botAllowed"];
+  /** Contract revision 61: the Mac's approval mode and rules page. */
+  approvalSettings?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["approvalSettings"];
   acceptsProgressCapabilities?: boolean;
   progressAvailable?: boolean;
   authorizationBlocked?: () => boolean;
@@ -130,6 +134,7 @@ async function fixture(options: {
 } = {}) {
   const logs: unknown[] = [];
   const calls: string[] = [];
+  const createBodies: unknown[] = [];
   const workspace = {
     id: "workspace-1",
     name: "Project",
@@ -291,7 +296,12 @@ async function fixture(options: {
               capability !== "schedule:cards" &&
               capability !== "chat:jobs" &&
               capability !== "attachments:raw" &&
-              capability !== "chat:new-worktree",
+              capability !== "chat:new-worktree" &&
+              capability !== "approval:cards" &&
+              capability !== "approvals:settings" &&
+              capability !== "bot:settings-changes" &&
+              capability !== "bot:suggestions" &&
+              capability !== "bot:templates",
           )
         ) {
           return null;
@@ -489,7 +499,7 @@ async function fixture(options: {
             supportsBrowserRecordings: true,
             browserRecording: async (id: string, recordingId: string) => {
               calls.push(`browser-recording:${id}:${recordingId}`);
-              if (!recordingId.startsWith("recording-")) throw new AidenRemoteServiceError("not_found", "This recording is no longer on the Mac.", 404);
+              if (!recordingId.startsWith("recording-")) throw new AidenRemoteServiceError("not_found", "This recording is no longer on your computer.", 404);
               return { bytes: Buffer.from("fake mp4"), mimeType: "video/mp4" };
             },
           }
@@ -649,8 +659,9 @@ async function fixture(options: {
           ...detailChatActivity,
         };
       },
-      create: async (deviceId, key) => {
+      create: async (deviceId, key, body) => {
         calls.push(`bots:create:${deviceId}:${key}`);
+        createBodies.push(body);
         return { ...botDetail, ...detailChatActivity };
       },
       updateIdentity: async (botId, revision) => {
@@ -731,6 +742,7 @@ async function fixture(options: {
     },
     ...(options.botSessions ? { botSessions: options.botSessions } : {}),
     ...(options.botAllowed ? { botAllowed: options.botAllowed } : {}),
+    ...(options.approvalSettings ? { approvalSettings: options.approvalSettings } : {}),
     ...(options.streamsAvailable === false ? {} : { streams: {
       streamChatId: () => "chat-1",
       status: (_deviceId, streamId) => ({
@@ -1083,8 +1095,8 @@ async function fixture(options: {
               return "chat-1";
             },
             currentRunId: () => "run-1",
-            openRunEvents: (device, runId, after, response) => {
-              calls.push(`run-events:${device.id}:${runId}:${after}`);
+            openRunEvents: (device, runId, after, response, _admit, checkpoint) => {
+              calls.push(`run-events:${device.id}:${runId}:${after}${checkpoint ? ":checkpoint" : ""}`);
               response.writeHead(200, { "content-type": "text/event-stream" });
               response.end();
             },
@@ -1127,6 +1139,7 @@ async function fixture(options: {
     base: `http://127.0.0.1:${address.port}/api/aiden/v1`,
     logs,
     calls,
+    createBodies,
     close: () => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())),
   };
 }
@@ -1975,6 +1988,7 @@ test("progress support is advertised and upgraded only when the Mac can serve it
       "schedule:read",
       "schedule:write",
       "schedule:cards",
+      "approval:cards",
       "attachments:raw",
       "skills:invoke",
     ]);
@@ -4260,6 +4274,8 @@ function concreteRequestPath(template: string): string {
           return "t".repeat(43);
         case ":attachmentName":
           return `x${parameterIndex}.png`;
+        case ":kind":
+          return template.includes("/open-work/") || template.includes("/peer-exchanges/") ? "source" : `x${parameterIndex}`;
         case ":action":
           if (template.includes("/git/")) return "review";
           return template.includes("/fork-summary/") ? "retry" : "run";
@@ -4750,7 +4766,7 @@ test("the simulator vocabulary is advertised only to paired desktops", async () 
 
 test("chat controls require both scoped grants and advertise owner-enabled negotiation separately", async () => {
   let reads = 0, writes = 0;
-  const appControls = { enabled: async () => false, get: async () => { reads++; return { version: 1 as const, title: "Memory", target: "Paired host", policy: "safe" as const, rows: [] }; }, apply: async () => { writes++; throw new Error("unexpected write"); } };
+  const appControls = { enabled: async () => false, get: async () => { reads++; return { version: 1 as const, title: "Memory", target: "Paired computer", policy: "safe" as const, rows: [] }; }, apply: async () => { writes++; throw new Error("unexpected write"); } };
   const app = await fixture({ appControls, capabilities: ["server:read", "chat:read", "app-controls:read"], acceptsProgressCapabilities: true });
   const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
   try {
@@ -4771,7 +4787,7 @@ test("foreground invalidation stream admits control readers without task or agen
   let enabled = true;
   const appControls = {
     enabled: async () => enabled,
-    get: async () => ({ version: 1 as const, title: "Memory", target: "Paired host", policy: "safe" as const, rows: [] }),
+    get: async () => ({ version: 1 as const, title: "Memory", target: "Paired computer", policy: "safe" as const, rows: [] }),
     apply: async () => { throw new Error("unexpected write"); },
   };
   const app = await fixture({ appControls, capabilities: ["server:read", "chat:read", "app-controls:read"], acceptsProgressCapabilities: true });
@@ -4918,10 +4934,10 @@ test("a phone's run grants reach a foreign run only through its own per-chat gra
   const controlHeaders = (key: string) => ({ ...HOST_HEADERS, "content-type": "application/json", "idempotency-key": key });
   const phone = await fixture({ hostRuns: true, deviceType: "iphone", capabilities: PHONE_RUN_GRANTS });
   try {
-    const current = await fetch(`${phone.base}/chats/chat-1/runs/current/events`, { headers: HOST_HEADERS });
+    const current = await fetch(`${phone.base}/chats/chat-1/runs/current/events`, { headers: { ...HOST_HEADERS, "aiden-run-checkpoint": "1" } });
     assert.equal(current.status, 200);
     await current.text();
-    const resumed = await fetch(`${phone.base}/runs/run-1/events`, { headers: { ...HOST_HEADERS, "last-event-id": "4" } });
+    const resumed = await fetch(`${phone.base}/runs/run-1/events`, { headers: { ...HOST_HEADERS, "last-event-id": "4", "aiden-run-checkpoint": "1" } });
     assert.equal(resumed.status, 200);
     await resumed.text();
     const cancelled = await fetch(`${phone.base}/runs/run-1/cancel`, {
@@ -4939,8 +4955,8 @@ test("a phone's run grants reach a foreign run only through its own per-chat gra
     assert.deepEqual(
       phone.calls.filter((call) => call.startsWith("run-")),
       [
-        "run-events:device-authorized-12345678:run-1:0",
-        "run-events:device-authorized-12345678:run-1:4",
+        "run-events:device-authorized-12345678:run-1:0:checkpoint",
+        "run-events:device-authorized-12345678:run-1:4:checkpoint",
         "run-cancel:device-authorized-12345678:run-1:key-phone-cancel-01",
         "run-approval:device-authorized-12345678:run-1:approval-1:key-phone-approve-1",
       ],
@@ -5939,7 +5955,7 @@ test("only a device holding bot:activity is served activity frames and a Bot's c
     ["create", () => fetch(`${base}/bots`, {
       method: "POST",
       headers: { ...write, "idempotency-key": "bot-create-key-0000001" },
-      body: JSON.stringify({ name: "Planner" }),
+      body: JSON.stringify({ name: "Planner", purpose: "", instructions: "Help me plan." }),
     })],
     ["patch", () => fetch(`${base}/bots/bot-1`, { method: "PATCH", headers: write, body: JSON.stringify({ name: "Planner" }) })],
     ["avatar delete", () => fetch(`${base}/bots/bot-1/avatar`, { method: "DELETE", headers: write })],
@@ -6416,7 +6432,7 @@ test("a paused Bot reads paused only to a device holding bot:handoffs, on every 
     ["create", () => fetch(`${base}/bots`, {
       method: "POST",
       headers: { ...write, "idempotency-key": "bot-create-key-0000036" },
-      body: JSON.stringify({ name: "Planner" }),
+      body: JSON.stringify({ name: "Planner", purpose: "", instructions: "Help me plan." }),
     }), (body) => body],
     ["patch", () => fetch(`${base}/bots/bot-1`, { method: "PATCH", headers: write, body: JSON.stringify({ name: "Planner" }) }), (body) => body],
     ["avatar delete", () => fetch(`${base}/bots/bot-1/avatar`, { method: "DELETE", headers: write }), (body) => body],
@@ -6556,7 +6572,7 @@ test("a phone answers a real hand-off and pauses its Bot over HTTP, while a lega
     assert.deepEqual(session.handoff, { waitId: HANDOFF_WAIT, kind: "action", action: "Enter the 2FA code" });
     const legacySession = await (await fetch(`${legacy.base}/bots/bot-1/session`, { headers })).json();
     assert.equal("handoff" in legacySession, false);
-    assert.equal(legacySession.entries[legacySession.entries.length - 1].text, "Planner needs you on your Mac: Enter the 2FA code");
+    assert.equal(legacySession.entries[legacySession.entries.length - 1].text, "Planner needs you on your computer: Enter the 2FA code");
 
     const shown = await fetch(`${holder.base}/bots/bot-1/handoffs/${HANDOFF_WAIT}/open-on-mac`, post("open-request-000036"));
     assert.deepEqual(await shown.json(), { waitId: HANDOFF_WAIT, opened: true });
@@ -7290,4 +7306,122 @@ test("D shared approval route forwards Always only with the separate wired Bot g
     try { assert.equal((await fetch(`${app.base}/approvals/allowed-57/respond`, { method: "POST", headers, body: JSON.stringify({ decision: "allow", scope: "always" }) })).status, expected); } finally { await app.close(); }
   }
   assert.equal(seen.length, 1); assert.deepEqual(seen[0]!.slice(-2), ["always", { allowed: true }]);
+});
+
+
+const REV61_HEADERS = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1", "content-type": "application/json" };
+
+test("revision 61 approval settings are offered where wired and need approval:respond with the opt-in", async () => {
+  const seen: unknown[][] = [];
+  const view = { rows: [] };
+  const approvalSettings = {
+    mode: async () => { seen.push(["mode"]); return { mode: "ask" as const, autoAvailable: true }; },
+    setMode: async (body: unknown) => { seen.push(["setMode", body]); return { mode: "never" as const, autoAvailable: true }; },
+    rules: async () => { seen.push(["rules"]); return view; },
+    picker: async () => { seen.push(["picker"]); return { options: [] }; },
+    addRule: async (body: unknown) => { seen.push(["add", body]); return view; },
+    changeRule: async (body: unknown) => { seen.push(["change", body]); return view; },
+    removeRule: async (body: unknown) => { seen.push(["remove", body]); return view; },
+  };
+  for (const [caps, wired, status] of [
+    [["server:read", "approval:respond", "approvals:settings"], true, 200],
+    [["server:read", "approval:respond"], true, 403],
+    [["server:read", "approvals:settings"], true, 403],
+    [["server:read", "approval:respond", "approvals:settings"], false, 404],
+  ] as const) {
+    const app = await fixture({ capabilities: [...caps], acceptsProgressCapabilities: true, ...(wired ? { approvalSettings } : {}) });
+    try {
+      const server = await (await fetch(`${app.base}/server`, { headers: REV61_HEADERS })).json();
+      assert.equal(server.serverCapabilities.includes("approvals:settings"), wired);
+      assert.equal((await fetch(`${app.base}/approvals/mode`, { headers: REV61_HEADERS })).status, status);
+      assert.equal((await fetch(`${app.base}/approvals/mode`, { method: "PUT", headers: REV61_HEADERS, body: JSON.stringify({ mode: "never" }) })).status, status);
+      assert.equal((await fetch(`${app.base}/approvals/rules/picker`, { headers: REV61_HEADERS })).status, status);
+      assert.equal((await fetch(`${app.base}/approvals/rules/change`, { method: "POST", headers: REV61_HEADERS, body: JSON.stringify({ ref: { source: "rule", id: "rule_1" }, decision: "block" }) })).status, status);
+      assert.equal((await fetch(`${app.base}/approvals/rules/change`, { headers: REV61_HEADERS })).status, 404, "the change route is POST only");
+      assert.equal((await fetch(`${app.base}/device/capabilities`, { method: "POST", headers: REV61_HEADERS, body: JSON.stringify({ accepts: ["approvals:settings"] }) })).status, wired ? 200 : 404);
+    } finally { await app.close(); }
+  }
+  assert.deepEqual(seen, [["mode"], ["setMode", { mode: "never" }], ["picker"], ["change", { ref: { source: "rule", id: "rule_1" }, decision: "block" }]]);
+});
+
+test("revision 61 settings-change and suggestion routes need their opt-ins and reach the Bot's own services", async () => {
+  const seen: unknown[][] = [];
+  const BOT = "bot:00000000-0000-4000-8000-000000000061";
+  const sessions = (wired: boolean) => ({
+    ...recordingBotSessions([], { routines: false, presets: false, connections: false }),
+    ...(wired ? {
+      supportsSettingsChanges: true,
+      supportsSuggestions: true,
+      respondSettingsChange: async (...args: unknown[]) => { seen.push(["settings", ...args]); return { changeId: "change-1", status: "applied" }; },
+      respondSkillProposal: async (...args: unknown[]) => { seen.push(["skill", ...args]); return { proposalId: "p", status: "added" }; },
+      respondLesson: async (...args: unknown[]) => { seen.push(["lesson", ...args]); return { lessonId: "l", status: "active" }; },
+      removeLesson: async (...args: unknown[]) => { seen.push(["lesson-remove", ...args]); return { lessonId: "l", status: "retired" }; },
+      undoLearning: async (...args: unknown[]) => { seen.push(["undo", ...args]); return { changeId: "c", undone: true }; },
+    } : {}),
+  }) as unknown as NonNullable<import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botSessions"]>;
+  const post = (base: string, path: string, body: unknown) => fetch(`${base}${path}`, { method: "POST", headers: REV61_HEADERS, body: JSON.stringify(body) });
+  for (const [caps, wired, status] of [
+    [["server:read", "bot:read", "bot:write", "bot:settings-changes", "bot:suggestions"], true, 200],
+    [["server:read", "bot:read", "bot:write"], true, 403],
+    [["server:read", "bot:write", "bot:settings-changes", "bot:suggestions"], true, 403],
+    [["server:read", "bot:read", "bot:write", "bot:settings-changes", "bot:suggestions"], false, 404],
+  ] as const) {
+    const app = await fixture({ capabilities: [...caps], acceptsBotCapabilities: true, botSessions: sessions(wired) });
+    try {
+      const server = await (await fetch(`${app.base}/server`, { headers: REV61_HEADERS })).json();
+      for (const name of ["bot:settings-changes", "bot:suggestions"]) assert.equal(server.serverCapabilities.includes(name), wired, name);
+      assert.equal(server.serverCapabilities.includes("bot:templates"), false, "templates need their own port");
+      assert.equal((await post(app.base, `/bots/${BOT}/settings-changes/change-1/respond`, { decision: "apply" })).status, status);
+      assert.equal((await post(app.base, `/bots/${BOT}/skill-proposals/p-1/respond`, { decision: "add" })).status, status);
+      assert.equal((await post(app.base, `/bots/${BOT}/lessons/l-1/respond`, { decision: "keep" })).status, status);
+      assert.equal((await post(app.base, `/bots/${BOT}/lessons/l-1/remove`, {})).status, status);
+      assert.equal((await post(app.base, `/bots/${BOT}/learning/c-1/undo`, {})).status, status);
+      assert.equal((await fetch(`${app.base}/device/capabilities`, { method: "POST", headers: REV61_HEADERS, body: JSON.stringify({ accepts: ["bot:suggestions"] }) })).status, wired ? 200 : 404);
+    } finally { await app.close(); }
+  }
+  assert.deepEqual(seen, [
+    ["settings", BOT, "change-1", { decision: "apply" }],
+    ["skill", BOT, "p-1", { decision: "add" }],
+    ["lesson", BOT, "l-1", { decision: "keep" }],
+    ["lesson-remove", BOT, "l-1", {}],
+    ["undo", BOT, "c-1", {}],
+  ]);
+});
+
+test("revision 61 templates: holders read versions, name the version on create, and create with one field", async () => {
+  const introduced: string[] = [];
+  const created: unknown[][] = [];
+  const botSessions = {
+    ...recordingBotSessions([], { routines: false, presets: true, connections: false }),
+    supportsTemplates: true,
+    templates: async () => ({ presets: [{ id: "chief", version: 3 }] }),
+    createFromPreset: async (...args: unknown[]) => { created.push(args); return { botId: "bot-1", created: false, bot: { id: "bot-1" } }; },
+    introduceCreated: (botId: string) => { introduced.push(botId); },
+  } as unknown as NonNullable<import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botSessions"]>;
+  for (const holder of [true, false]) {
+    const app = await fixture({ capabilities: ["server:read", "bot:read", "bot:write", ...(holder ? ["bot:templates" as const] : [])], acceptsBotCapabilities: true, botSessions });
+    try {
+      const presets = await (await fetch(`${app.base}/bot-presets`, { headers: REV61_HEADERS })).json();
+      assert.deepEqual(presets, holder ? { presets: [{ id: "chief", version: 3 }] } : { presets: [] });
+      await fetch(`${app.base}/bots/from-preset`, { method: "POST", headers: { ...REV61_HEADERS, "idempotency-key": "template-key-0000000061" }, body: JSON.stringify({ presetId: "chief", version: 3 }) });
+      // The shared fixture's one-field body, decoded by the real parser the Bot service uses.
+      const oneField = JSON.parse(readFileSync(new URL("../../protocol/aiden-remote/v1/fixtures/bot-ux-revision-61.json", import.meta.url), "utf8")).requests.oneFieldCreate;
+      const response = await fetch(`${app.base}/bots`, { method: "POST", headers: { ...REV61_HEADERS, "idempotency-key": "one-field-key-000000061" }, body: JSON.stringify(oneField) });
+      if (!holder) {
+        // Without the opt-in, the earlier rule stands: purpose and instructions are required.
+        assert.equal(response.status, 400);
+        const before = app.createBodies.length;
+        const full = await fetch(`${app.base}/bots`, { method: "POST", headers: { ...REV61_HEADERS, "idempotency-key": "full-create-key-0000061" }, body: JSON.stringify({ ...oneField, purpose: "Plans my week", instructions: "Help me plan." }) });
+        assert.equal(full.status, 201, "a complete request still creates the Bot");
+        assert.equal(app.createBodies.length, before + 1);
+        continue;
+      }
+      assert.equal(response.status, 201);
+      const parsed = parseAidenRemoteBotCreateRequest(app.createBodies[app.createBodies.length - 1]);
+      assert.equal(parsed.purpose, "");
+      assert.equal(parsed.instructions, BOT_STARTER_INSTRUCTIONS, "no instructions start the Bot from the starter text");
+    } finally { await app.close(); }
+  }
+  assert.deepEqual(created.map((args) => args[3]), [{ templates: true }, { templates: false }]);
+  assert.deepEqual(introduced, ["bot-1"], "only a holder's one-field Bot introduces itself, once");
 });

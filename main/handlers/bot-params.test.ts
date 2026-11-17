@@ -13,6 +13,7 @@ import {
   parseBotSend,
   parseBotSessionAction,
   parseBotUpdate,
+  parseBotModelThinkingLevelsInput,
   parseBotWithdraw,
 } from "./bot-params.js";
 
@@ -142,6 +143,11 @@ test("Resume and Dismiss take an exact Bot id and a bounded request id", () => {
   assert.throws(() => parseBotSessionAction({ botId: "bot:1", requestId: "x".repeat(201) }, "resume"), /request id/u);
   assert.throws(() => parseBotSessionAction({ botId: "../x", requestId: "r" }, "resume"), /bot id/u);
   assert.throws(() => parseBotSessionAction({ botId: "bot:1", requestId: "r", extra: true }, "resume"), /fields/u);
+  assert.deepEqual(parseBotSessionAction({ botId: "bot:1", requestId: "consent", acknowledgeUnknownCost: true, expectedSubmissionId: "9007199254740993", expectedCostReceiptId: "cost_" + "a".repeat(64) }, "resume"), { botId: "bot:1", requestId: "consent", acknowledgeUnknownCost: true, expectedSubmissionId: "9007199254740993", expectedCostReceiptId: "cost_" + "a".repeat(64) });
+  assert.throws(() => parseBotSessionAction({ botId: "bot:1", requestId: "r", acknowledgeUnknownCost: false }, "resume"));
+  assert.throws(() => parseBotSessionAction({ botId: "bot:1", requestId: "r", acknowledgeUnknownCost: true, expectedSubmissionId: "10" }, "resume"));
+  assert.throws(() => parseBotSessionAction({ botId: "bot:1", requestId: "r", acknowledgeUnknownCost: true, expectedSubmissionId: "10", expectedCostReceiptId: "another receipt" }, "resume"));
+  assert.throws(() => parseBotSessionAction({ botId: "bot:1", requestId: "r", acknowledgeUnknownCost: true }, "dismiss"));
   assert.throws(() => parseBotSessionAction(null, "dismiss"), /fields/u);
 });
 
@@ -269,6 +275,24 @@ test("the own-wake-ups switch crosses IPC only as a boolean", () => {
   assert.equal(parseBotUpdate(base).selfWakeUps, undefined);
   for (const selfWakeUps of ["off", 0, null]) {
     assert.throws(() => parseBotUpdate({ ...base, selfWakeUps }), /wake-up|Invalid/u);
+  }
+});
+
+test("the Bot thinking level crosses IPC only as a known level", () => {
+  const base = { id: "bot-1", expectedRevision: "botrev:one", name: "Planner", instructions: "Plan.", avatar: { version: 1, shape: "hex", color: "sun" } };
+  assert.equal(parseBotUpdate({ ...base, thinkingLevel: "high" }).thinkingLevel, "high");
+  assert.equal(parseBotUpdate({ ...base, thinkingLevel: "off" }).thinkingLevel, "off");
+  assert.equal(parseBotUpdate(base).thinkingLevel, undefined);
+  for (const thinkingLevel of ["ultra", "", 3, null, ["high"]]) {
+    assert.throws(() => parseBotUpdate({ ...base, thinkingLevel }), /thinking level/u);
+  }
+});
+
+test("a model thinking-level lookup takes exactly one picker model", () => {
+  assert.deepEqual(parseBotModelThinkingLevelsInput({ botId: "bot-1", providerId: "prov", modelId: "model" }), { botId: "bot-1", providerId: "prov", modelId: "model" });
+  assert.deepEqual(parseBotModelThinkingLevelsInput({ providerId: "prov", modelId: "model" }), { providerId: "prov", modelId: "model" });
+  for (const input of [null, "model", { providerId: "prov" }, { providerId: "", modelId: "m" }, { providerId: "p", modelId: "m".repeat(257) }, { providerId: "p", modelId: "m", sourceId: "x" }]) {
+    assert.throws(() => parseBotModelThinkingLevelsInput(input), /Invalid/u);
   }
 });
 

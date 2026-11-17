@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import dns from "node:dns";
 import type { LookupFunction } from "node:net";
 import test from "node:test";
+import { captureAnalyticsEvents } from "./analytics/test-support.js";
 import type { PeerDiscoveryState } from "../../renderer/shared/peer-host.js";
 import { PeerBootstrapTransport } from "./peer-bootstrap-transport.js";
 import { PeerDiscovery, type PeerBonjourService } from "./peer-discovery.js";
@@ -566,4 +567,21 @@ test("after a restart, discovery recovers a LAN host's address even when Tailsca
   await eventually(() => !state.scanning);
   assert.equal(state.devices.length, 1);
   assert.equal(discovery.target(host.instanceId)?.route, "tailscale", "Tailscale stays the pairing route");
+});
+
+test("pairing a Mac counts once by how it was paired, and a denied request counts nothing", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const host = await startPeerTestHost();
+  t.after(() => host.close());
+  const target = { instanceId: host.instanceId, endpoint: host.lanEndpoint, route: "lan" } as const;
+
+  await outcome(registryFor(host).registry.pairWithRequest(target, answer(host, "deny")));
+  assert.deepEqual(sent, []);
+
+  await registryFor(host).registry.pairWithRequest(target, answer(host, "allow"));
+  await registryFor(host).registry.pairWithSetupCode({ endpoint: host.lanEndpoint, code: host.openSetupCode("lan") });
+  assert.deepEqual(sent, [
+    { event: "peer_mac_paired", props: { method: "discovery" } },
+    { event: "peer_mac_paired", props: { method: "code" } },
+  ]);
 });

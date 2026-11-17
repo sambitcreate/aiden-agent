@@ -9,6 +9,7 @@ import {
   type BotConnectionSuggestion,
   type ConnectCardEntry,
 } from "../../shared/bot-connections";
+import { LiveGuard } from "../live-guard";
 import { ConnectCard } from "./connect-card";
 import { ConnectionChips } from "./connection-chips";
 
@@ -22,6 +23,8 @@ function hostElements(node: React.ReactNode): AnyElement[] {
   if (!React.isValidElement(node)) return [];
   const element = node as AnyElement;
   const type = element.type as unknown;
+  // The Live guard only passes a context down; its children are the card.
+  if (type === LiveGuard) return hostElements(element.props.children as React.ReactNode);
   if (typeof type === "function") {
     return hostElements((type as (props: unknown) => React.ReactNode)(element.props));
   }
@@ -71,9 +74,9 @@ const card = (status: ConnectCardEntry["status"], pluginId = "gmail"): ConnectCa
   status,
 });
 
-test("a pending card asks to connect, explains why, and offers Connect and Not now", () => {
+test("a pending card shows the app's name and why, and offers Connect and Not now", () => {
   const view = renderDocument(<ConnectCard card={card("pending")} onConnect={noop} onDismiss={noop} />);
-  assert.match(view.text, /Connect Gmail/u);
+  assert.match(view.text, /^Gmail/u);
   assert.match(view.text, /So I can sort your inbox each morning\./u);
   assert.deepEqual(
     view.buttons.map((button) => button.name).sort(),
@@ -111,7 +114,7 @@ test("a dismissed card stays as a quiet record with no actions", () => {
   assert.deepEqual(view.buttons, []);
 });
 
-test("an app connected in Aiden but left out of the Bot's access offers Add to this Bot", () => {
+test("an app connected in Aiden but left out of the Bot's access is the same Connect card, and Connect adds it to this Bot", () => {
   const calls: string[] = [];
   const element = (
     <ConnectCard
@@ -122,18 +125,17 @@ test("an app connected in Aiden but left out of the Bot's access offers Add to t
     />
   );
   const view = renderDocument(element);
-  assert.match(view.text, /Add Notion to this Bot/u);
-  assert.match(view.text, /connected in Aiden, but this Bot’s access doesn’t include it/u);
+  assert.equal(view.byRole("group")[0]?.getAttribute("aria-label"), "Connect Notion");
   assert.match(view.text, /So I can sort your inbox each morning\./u);
   assert.deepEqual(
     view.buttons.map((button) => button.name).sort(),
-    ["Add Notion to this Bot", "Not now for Notion"],
+    ["Connect Notion", "Not now for Notion"],
   );
-  press(buttonNamed(element, "Add Notion to this Bot"));
+  press(buttonNamed(element, "Connect Notion"));
   press(buttonNamed(element, "Not now for Notion"));
-  assert.deepEqual(calls, ["add:notion", "dismiss:notion"], "nothing is added without the tap");
+  assert.deepEqual(calls, ["add:notion", "dismiss:notion"], "nothing is added without the tap, and nothing new is connected");
   assert.throws(
-    () => press(buttonNamed(<ConnectCard card={card("needs_access", "notion")} busy onConnect={noop} onAddToBot={noop} />, "Add Notion to this Bot")),
+    () => press(buttonNamed(<ConnectCard card={card("needs_access", "notion")} busy onConnect={noop} onAddToBot={noop} />, "Connect Notion")),
     /disabled/u,
   );
 });

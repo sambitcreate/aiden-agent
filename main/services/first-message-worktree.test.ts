@@ -216,7 +216,7 @@ async function harness(
     markReconciliation: (ownerId) => turns.markAppendReconciliationRequired(ownerId),
     clearReconciliation: (ownerId) => turns.clearAppendReconciliationRequired(ownerId),
     admitWorkspace: (workspaceId, document) => admitOwnedWorkspaceOperation(registry, document, workspaceId),
-    workspaceExists: async (workspaceId) => workspaces.has(workspaceId),
+    getWorkspace: async (workspaceId) => (workspaces.has(workspaceId) ? {} : undefined),
     resolveSkill,
   });
   const commitInWorktree = createWorktreeFirstMessageCommitter({

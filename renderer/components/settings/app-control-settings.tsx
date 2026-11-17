@@ -2,6 +2,8 @@ import * as React from "react";
 import { settingsApi, appControlsApi } from "../../lib/ipc";
 import {
   Button,
+  Field,
+  FieldSet,
   Switch,
   Select,
   SelectTrigger,
@@ -11,7 +13,10 @@ import {
   Dialog,
 } from "../ui";
 import { resolveAppControlPolicy, type AppControlPolicy } from "../../shared/app-controls";
+import { useAppCapabilities } from "../../lib/app-capabilities";
+import { localComputerNoun } from "../../shared/computer-noun";
 export function AppControlSettings() {
+  const { platform } = useAppCapabilities();
   const [policy, setPolicy] = React.useState<AppControlPolicy>("safe");
   const [remote, setRemote] = React.useState(false);
   const [ready, setReady] = React.useState(false);
@@ -58,24 +63,12 @@ export function AppControlSettings() {
     }
   };
   return (
-    <section className="appearance-theme-section" aria-labelledby="app-controls-settings-title">
-      <h2 id="app-controls-settings-title">Controls in chat</h2>
-      <p className="appearance-section-description">
-        Ask Aiden how a feature works or to show its settings. Chat controls use the same settings
-        and permissions as the app.
-      </p>
-      <div className="settings-group-card px-4">
-        <div className="flex items-center justify-between gap-4 py-3">
-          <div>
-            <label id="app-controls-policy-label" className="text-small font-medium">
-              Agent app actions
-            </label>
-            <p className="text-mini text-secondary">
-              Safe controls permits reversible presentation changes and turning features off.
-              Enablement requires your foreground choice. Workspace file access grants no app
-              authority.
-            </p>
-          </div>
+    <>
+      <FieldSet>
+        <Field
+          label="Agent app actions"
+          description="Safe controls permits reversible presentation changes and turning features off. Enablement requires your foreground choice. Workspace file access grants no app authority."
+        >
           <Select
             value={policy}
             disabled={!ready || busy}
@@ -83,7 +76,7 @@ export function AppControlSettings() {
               void save({ appControlPolicy: value as AppControlPolicy });
             }}
           >
-            <SelectTrigger aria-labelledby="app-controls-policy-label" className="max-w-40">
+            <SelectTrigger aria-label="Agent app actions">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -92,19 +85,13 @@ export function AppControlSettings() {
               <SelectItem value="safe">Safe controls</SelectItem>
             </SelectContent>
           </Select>
-        </div>
-        <div className="flex items-center justify-between gap-4 border-t border-separator py-3">
-          <div>
-            <label htmlFor="paired-app-controls" className="text-small font-medium">
-              Paired-device chat controls
-            </label>
-            <p className="text-mini text-secondary">
-              Allow paired clients to request access to supported host settings through chat. A
-              phone's own appearance stays separate.
-            </p>
-          </div>
+        </Field>
+        <Field
+          label="Paired-device chat controls"
+          description={`Allow paired clients to request access to supported settings on this ${localComputerNoun(platform)} through chat. A phone's own appearance stays separate.`}
+        >
           <Switch
-            id="paired-app-controls"
+            aria-label="Paired-device chat controls"
             checked={remote}
             disabled={!ready || busy}
             onCheckedChange={(value) => {
@@ -112,8 +99,8 @@ export function AppControlSettings() {
               else void save({ remoteAppControlsEnabled: false });
             }}
           />
-        </div>
-      </div>
+        </Field>
+      </FieldSet>
       {error ? (
         <div role="alert" className="mt-2 flex items-center gap-2 text-small text-secondary">
           {error}
@@ -140,13 +127,13 @@ export function AppControlSettings() {
         open={confirm}
         onOpenChange={setConfirm}
         title="Allow paired-device chat controls?"
-        description="Paired clients may request access to theme, chat width, Memory, Web Search and Skills controls on this host. Their pairing and workspace grants, app policy and existing setup requirements still apply. This does not allow credentials, terminal access or arbitrary app administration."
+        description={`Paired clients may request access to theme, chat width, Memory, Web Search and Skills controls on this ${localComputerNoun(platform)}. Their pairing and workspace grants, app policy and existing setup requirements still apply. This does not allow credentials, terminal access or arbitrary app administration.`}
         confirmLabel="Allow chat controls"
         onConfirm={() => {
           setConfirm(false);
           void save({ remoteAppControlsEnabled: true });
         }}
       />
-    </section>
+    </>
   );
 }

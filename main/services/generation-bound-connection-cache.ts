@@ -266,6 +266,9 @@ export class GenerationBoundConnectionCache<T> {
     return [...new Set([...this.pending.keys(), ...this.connected.keys()])];
   }
 
+  /** Observe an already initialized client without starting or repairing a connection. */
+  peekConnected(id: string): T | undefined { return this.connected.get(id)?.value; }
+
   connectedIds(): string[] {
     return [...this.connected.keys()];
   }

@@ -121,7 +121,7 @@ function createMockApi(opts: MockApiOptions) {
     getUpdatesCalls: () => getUpdatesCalls,
     sendChatActionCalls: () => sendChatActionCalls,
     answerCallbackQueryCalls: () => answerCallbackQueryCalls,
-    async getMe(): Promise<TelegramUser> {
+    async getMe(_signal?: AbortSignal): Promise<TelegramUser> {
       getMeCalls += 1;
       calls.push("getMe");
       return opts.me ?? BOT;
@@ -536,6 +536,7 @@ interface HarnessOptions {
   ) => Promise<void>;
   compactChat?: import("./telegram-service-core.js").TelegramServiceDeps["compactChat"];
   abortChat?: (chatId: string) => Promise<void>;
+  acquireOwnership?: import("./telegram-service-core.js").TelegramServiceDeps["acquireOwnership"];
   admitRunInput?: import("./telegram-service-core.js").TelegramServiceDeps["admitRunInput"];
   mediaGroupDebounceMs?: number;
   handleExtensionUpdate?: import("./telegram-service-core.js").TelegramServiceDeps["handleExtensionUpdate"];
@@ -605,6 +606,7 @@ function harness(o: HarnessOptions = {}) {
     applyModelSelection: o.applyModelSelection,
     compactChat: o.compactChat,
     abortChat: o.abortChat,
+    acquireOwnership: o.acquireOwnership,
     admitRunInput: o.admitRunInput,
     resolveThreadWorkspace: o.resolveThreadWorkspace,
     clearThreadTargets: o.clearThreadTargets,
@@ -639,6 +641,66 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void
 // ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
+
+test("Connect fails and stays saved as off when another process owns polling", async () => {
+  const h = harness({ enabled: false, acquireOwnership: () => ({ acquired: false, recovered: false, ownerPid: 4242 }) });
+
+  await assert.rejects(h.service.setEnabled(true), /already owned by process 4242/u);
+
+  assert.equal(h.config.state.enabled, false);
+  assert.equal(h.api.getMeCalls(), 0);
+});
+
+test("Connect stops polling again when the on setting cannot be saved", async () => {
+  const h = harness({ enabled: false, autoStop: false, delayAfterFirstBatch: true });
+  h.config.setSettings = async () => { throw new Error("disk full"); };
+
+  await assert.rejects(h.service.setEnabled(true), /disk full/u);
+
+  assert.equal(h.service.getStatus().status, "disabled");
+});
+
+test("Connect starts polling and saves the bridge as on", async () => {
+  const h = harness({ enabled: false, autoStop: false, delayAfterFirstBatch: true });
+
+  await h.service.setEnabled(true);
+
+  assert.equal(h.config.state.enabled, true);
+  assert.equal(h.service.getStatus().status, "polling");
+  h.service.stop();
+});
+
+test("Disconnect fails when the running Telegram turn cannot be stopped, with polling off", async () => {
+  const h = harness({
+    enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
+    batches: [[makeUpdate(1, makeMessage(1, person(42), "long job"))]],
+    abortChat: async () => { throw new Error("The running turn did not stop in time."); },
+  });
+  await h.service.start();
+  await waitFor(() => h.turnMock.startCalls() === 1);
+
+  await assert.rejects(h.service.setEnabled(false), /did not stop in time/u);
+
+  assert.equal(h.config.state.enabled, false);
+  assert.equal(h.service.getStatus().status, "disabled");
+  h.turnMock.completePendingTurn();
+});
+
+test("Disconnect ends the running Telegram turn and succeeds", async () => {
+  const stopped: string[] = [];
+  const h = harness({
+    enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
+    batches: [[makeUpdate(1, makeMessage(1, person(42), "long job"))]],
+    abortChat: async (chatId) => { stopped.push(chatId); h.turnMock.completePendingTurn(); },
+  });
+  await h.service.start();
+  await waitFor(() => h.turnMock.startCalls() === 1);
+
+  await h.service.setEnabled(false);
+
+  assert.equal(stopped.length, 1);
+  assert.equal(h.config.state.enabled, false);
+});
 
 test("start() is a no-op when the bridge is not enabled (status stays disabled)", async () => {
   const { service, api } = harness({ enabled: false, hasToken: true });
@@ -701,6 +763,74 @@ test("stop() halts polling and clears the queue", async () => {
   // not reset it, or a concurrent dispatch on the same chat would be allowed.
   assert.equal(service.isActive, true, "in-flight turn still tracked as active");
   assert.equal(service.getStatus().status, "disabled");
+});
+
+test("stop() clears a failed start, so an off bridge no longer reads as failed", async () => {
+  const { service, api } = harness({ enabled: true, hasToken: true, autoStop: false });
+  api.getMe = async () => {
+    throw new Error("401: Unauthorized");
+  };
+
+  await service.start();
+  await waitFor(() => service.getStatus().lastError === "401: Unauthorized");
+
+  service.stop();
+
+  assert.equal(service.getStatus().lastError, undefined);
+});
+
+test("a bot check that fails after stop() leaves the stopped bridge clean", async () => {
+  const { service, api } = harness({ enabled: true, hasToken: true, autoStop: false });
+  let signal: AbortSignal | undefined;
+  let fail: (cause: Error) => void = () => undefined;
+  api.getMe = (requestSignal) => {
+    signal = requestSignal;
+    return new Promise((_resolve, reject) => { fail = reject; });
+  };
+
+  await service.start();
+  service.stop();
+  assert.equal(signal?.aborted, true, "stop() cancels the request in flight");
+  fail(new Error("401: Unauthorized"));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(service.getStatus().lastError, undefined);
+  assert.equal(service.getStatus().status, "disabled");
+});
+
+test("a stale bot check cannot end the session that replaced it", async () => {
+  const { service, api } = harness({ enabled: true, hasToken: true, autoStop: false });
+  const realGetMe = api.getMe;
+  let fail: (cause: Error) => void = () => undefined;
+  api.getMe = () => new Promise((_resolve, reject) => { fail = reject; });
+
+  await service.connect();
+  service.stop();
+  api.getMe = realGetMe;
+  await service.connect();
+  await waitFor(() => service.getStatus().botUsername === BOT.username);
+  fail(new Error("401: Unauthorized"));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(service.getStatus().status, "polling");
+  assert.equal(service.getStatus().lastError, undefined);
+  service.stop();
+});
+
+test("a reconnect forgets the bot that answered last time until the new check passes", async () => {
+  const { service, api } = harness({ enabled: true, hasToken: true, autoStop: false });
+  await service.start();
+  await waitFor(() => service.getStatus().botUsername === BOT.username);
+  service.stop();
+
+  api.getMe = async () => {
+    throw new Error("401: Unauthorized");
+  };
+  await service.start();
+  await waitFor(() => service.getStatus().lastError === "401: Unauthorized");
+
+  assert.equal(service.getStatus().botUsername, undefined);
+  service.stop();
 });
 
 test("connect() throws when no bot token is configured", async () => {
@@ -767,7 +897,7 @@ test("unhealthy binding authority blocks both pairing and ordinary Telegram fall
         hasToken: true,
         allowedUserId,
         assertBotBindingStoreHealthy: async () => {
-          throw new Error("Telegram routing data is unavailable. Open Aiden on the Mac to repair it.");
+          throw new Error("Telegram routing data is unavailable. Open Aiden on your computer to repair it.");
         },
         batches: [[makeUpdate(1, makeMessage(10, sender, "must not fall back"))]],
         autoStop: true,
@@ -2591,3 +2721,37 @@ for (const command of ["/queue", "/continue", "/interrupt"]) {
     h.service.stop(); h.turnMock.completePendingTurn();
   });
 }
+
+// Bot UX Phase 6: approvals are answered in Aiden (the Mac or a paired phone),
+// never from Telegram. A reply that reads like an answer is just a message to
+// the Bot, and an approval-shaped button press does nothing.
+test("Telegram never answers an approval: 'Allow' is a message and an approval button does nothing", async () => {
+  const owner = person(42, "owner");
+  const admitted: import("./bot-reply-outbox.js").TelegramBotMessage[] = [];
+  const h = harness({
+    enabled: true,
+    allowedUserId: 42,
+    profile: "work",
+    resolveBotBinding: async () => durableBinding,
+    existingChats: [{ id: durableBinding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" }],
+    batches: [[
+      makeUpdate(7, makeMessage(10, owner, "Allow")),
+      { update_id: 8, callback_query: { id: "approval-press", from: owner, message: makeMessage(11, BOT, "Send the note?"), data: "approval:wait-61:allow" } },
+    ]],
+    autoStop: false,
+    botIngress: {
+      admit: async (message) => {
+        admitted.push(message);
+        return { requestId: `tg:bot-a:${message.messageId}:0:1`, deduped: false };
+      },
+    },
+  });
+  try {
+    await h.service.start();
+    await waitFor(() => h.api.answerCallbackQueryCalls() > 0 && admitted.length === 1);
+    assert.deepEqual(admitted.map((message) => message.text), ["Allow"], "the reply reaches the Bot as its own words, and the button press admits nothing");
+    assert.equal(h.turnMock.startCalls(), 0);
+  } finally {
+    h.service.stop();
+  }
+});

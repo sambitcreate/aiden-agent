@@ -10,6 +10,7 @@ import {
   type BotComputersStatus,
   type BotComputerStatus,
 } from "../../../renderer/shared/bot-computers.js";
+import { reportAnalyticsEvent } from "../analytics/analytics-report.js";
 import { CUA_DRIVER_UPSTREAM_PIN } from "../computer-use/binary.js";
 import { CUA_DRIVER_VERSION } from "../computer-use/contract.js";
 import type { CuaDriverHostFactory, CuaDriverSessionLike } from "../computer-use/controller.js";
@@ -1129,12 +1130,13 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
   }
 
   /** Element control for a ready base made without it: boot it once, install, wait for the grants, shut it down. */
-  async function performElementControlSetup(signal: AbortSignal): Promise<void> {
+  /** Whether this run added element control; false when it was already there. */
+  async function performElementControlSetup(signal: AbortSignal): Promise<boolean> {
     // A Bot's computer still being copied from the base finishes before the base boots.
     await copiesSettled();
     const state = await store.read();
     if (!ready(state)) throw new BotComputerError("not_set_up", "Set up Bot computers in Settings first.");
-    if (guestDriverReady(state.setup.guestDriver)) return;
+    if (guestDriverReady(state.setup.guestDriver)) return false;
     const password = await deps.secrets.get(BOT_COMPUTER_GUEST_PASSWORD_SECRET);
     if (password === null || !/^[A-Za-z0-9]{16,128}$/u.test(password)) {
       throw new BotComputerError("start_failed", "Aiden doesn't have the base computer's password. Update the base to set up element control.");
@@ -1169,12 +1171,12 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     } finally {
       releaseBaseSlot();
     }
-    if (record) {
-      const stored = record;
-      await store.update((draft) => {
-        draft.setup.guestDriver = stored;
-      });
-    }
+    if (!record) return false;
+    const stored = record;
+    await store.update((draft) => {
+      draft.setup.guestDriver = stored;
+    });
+    return guestDriverReady(stored);
   }
 
   async function performSetup(mode: "setup" | "update", signal: AbortSignal): Promise<void> {
@@ -1299,6 +1301,13 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     const task = (async () => {
       try {
         await performSetup(mode, controller.signal);
+        if (mode === "setup") {
+          // In the background: a failed read must not turn a finished setup into a failure.
+          void store.read().then(
+            ({ setup }) => reportAnalyticsEvent("bot_computer_set_up", { element_control: guestDriverReady(setup.guestDriver) }),
+            () => undefined,
+          );
+        }
       } catch (error) {
         const resumable = (await downloader.partialBytes()) > 0 || existsSync(downloader.paths().final);
         const cancelled = error instanceof BotComputerError && error.code === "cancelled";
@@ -1331,7 +1340,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     setupAbort = controller;
     const task = (async () => {
       try {
-        await performElementControlSetup(controller.signal);
+        const added = await performElementControlSetup(controller.signal);
+        if (added) reportAnalyticsEvent("bot_computer_set_up", { element_control: true });
       } catch (error) {
         const cancelled = error instanceof BotComputerError && error.code === "cancelled";
         // The base is still ready; say why element control isn't on next to it.

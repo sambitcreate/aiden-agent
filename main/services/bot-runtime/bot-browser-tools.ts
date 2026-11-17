@@ -19,6 +19,7 @@
 //   effect.
 
 import { Type } from "@earendil-works/pi-ai";
+import { localComputerNoun } from "../../../renderer/shared/computer-noun.js";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type {
   BrowserCommand,
@@ -44,6 +45,7 @@ import { BOT_BROWSER_GATEWAY_TOOL } from "./bot-tool-disclosure.js";
 /** The browser service as a Bot uses it (`browser/service.ts`). */
 export interface BotBrowserService {
   getState(workspaceId: string): BrowserState;
+  getBotState(workspaceId: string): BrowserState;
   command(workspaceId: string, command: BrowserCommand, context: BrowserCommandContext): Promise<BrowserCommandResult>;
   getApprovalTarget(workspaceId: string, tabId?: string): BrowserApprovalTarget;
   hasOwner(workspaceId: string): boolean;
@@ -114,7 +116,7 @@ export function botVisibleBrowserState(state: BrowserState): BrowserState {
 }
 
 export function botBrowserOwnerMissing(botName: string): string {
-  return `Open Aiden on your Mac to let ${botName} use its browser.`;
+  return `Open Aiden on your ${localComputerNoun(process.platform)} to let ${botName} use its browser.`;
 }
 
 const ASKING_ACTIONS: ReadonlySet<string> = new Set(["click", "type", "press"]);
@@ -182,7 +184,7 @@ export function createBotBrowser(deps: BotBrowserDeps): BotBrowser {
         parameters: Type.Object({}, { additionalProperties: false }),
         execute: async () => {
           const service = await ensureOwner(state);
-          const current = botVisibleBrowserState(service.getState(state.workspaceId));
+          const current = botVisibleBrowserState(service.getBotState(state.workspaceId));
           if (!current.agentAccessAllowed) throw new Error("Agent browser access is off in Browser settings.");
           const tabs = current.tabs.map((tab) => ({
             tabId: tab.id,
@@ -236,7 +238,7 @@ export function createBotBrowser(deps: BotBrowserDeps): BotBrowser {
         selection: state.selection,
         profile: "bot",
         port: {
-          getState: async () => botVisibleBrowserState((await deps.service()).getState(state.workspaceId)),
+          getState: async () => botVisibleBrowserState((await deps.service()).getBotState(state.workspaceId)),
           command: async (command, signal, callId) => {
             const service = await ensureOwner(state);
             const approved = callId === undefined ? undefined : state.approvals.get(callId);
@@ -261,7 +263,7 @@ export function createBotBrowser(deps: BotBrowserDeps): BotBrowser {
               credentialBoundary: true,
               ...(beforeEffect === undefined ? {} : { beforeEffect }),
             });
-            return { ...result, state: botVisibleBrowserState(result.state) };
+            return { ...result, state: botVisibleBrowserState(service.getBotState(state.workspaceId)) };
           },
         },
       });

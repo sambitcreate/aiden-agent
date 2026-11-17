@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { buildWebExtractRecap, parseWebExtractRecap } from "../../renderer/shared/web-extract.js";
 
 import {
   WebExtractError,
@@ -11,6 +12,10 @@ import {
   type WebExtractModelRequest,
   type WebPageExtraction,
 } from "./web-extract-core.js";
+
+function sourceLineOf(result: { status: string; sourceLine?: string } | undefined): string | undefined {
+  return result?.sourceLine;
+}
 
 const PRICING_PAGE = [
   "# Pricing",
@@ -144,6 +149,154 @@ test("numbers match the page as written: separators, multipliers and signs", asy
   assert.equal(fields.patch!.status, "extracted");
   assert.equal(fields.not_negative!.status, "uncertain");
   assert.equal(fields.part!.status, "uncertain");
+});
+
+test("scaled numbers support only their scaled value, including signs and list items", async () => {
+  for (const [written, value] of [
+    ["1.2k", 1200], ["1.2K", 1200], ["1.2m", 1_200_000],
+    ["1.2bn", 1_200_000_000], ["1.2BN", 1_200_000_000],
+    ["1.2 thousand", 1200], ["1.2 MILLION", 1_200_000], ["-1.2k", -1200],
+  ] as const) {
+    const coefficient = value < 0 ? -1.2 : 1.2;
+    const fields = await extract(
+      { correct: "number", wrong: "number", list: "list.number" },
+      {
+        correct: { value, confidence: 0.99 },
+        wrong: { value: coefficient, confidence: 0.99 },
+        list: { value: [coefficient], confidence: 0.99 },
+      },
+      `Seats: ${written}`,
+    );
+    assert.equal(fields.correct!.status, "extracted", written);
+    assert.deepEqual(fields.wrong, { status: "uncertain", guess: coefficient, confidence: 0.99, notFound: true }, written);
+    assert.equal(fields.list!.status, "uncertain", written);
+  }
+  const fields = await extract(
+    { price: "number" },
+    { price: { value: 1.2, confidence: 0.99 } },
+    "Seats: 1.2k\nActual price: $1.20",
+  );
+  assert.equal(sourceLineOf(fields.price), "Actual price: $1.20");
+  // A unit is not a scale suffix.
+  const unit = await extract(
+    { distance: "number", raw: "number" },
+    { distance: { value: 1200, confidence: 0.99 }, raw: { value: 1.2, confidence: 0.99 } },
+    "Cable: 1.2km",
+  );
+  assert.equal(unit.distance!.status, "uncertain");
+  assert.equal(unit.raw!.status, "extracted");
+});
+
+test("text citations include the complete match across line endings and normalized characters", async () => {
+  for (const separator of ["\n", "\r\n", "\n\n", "\n \t\n"]) {
+    const fields = await extract(
+      { destination: "text", destinations: "list" },
+      { destination: { value: "New York", confidence: 0.99 }, destinations: { value: ["New York", "Paris"], confidence: 0.99 } },
+      `Shipping destination: New${separator}York\nParis`,
+    );
+    assert.equal(fields.destination!.status, "extracted");
+    assert.equal(sourceLineOf(fields.destination), "Shipping destination: New York");
+    assert.equal(fields.destinations!.status, "extracted");
+    assert.match(sourceLineOf(fields.destinations)!, /New York.*Paris/u);
+    assert.ok(!/\s{2}|[\r\n]/u.test(sourceLineOf(fields.destinations)!));
+  }
+  const fields = await extract(
+    { name: "text", emoji: "text" },
+    { name: { value: "Café", confidence: 0.99 }, emoji: { value: "Ready 😀", confidence: 0.99 } },
+    "Name: Cafe\u0301\nStatus: Ready\n😀",
+  );
+  assert.equal(sourceLineOf(fields.name), "Name: Cafe\u0301");
+  assert.equal(sourceLineOf(fields.emoji), "Status: Ready 😀");
+});
+
+test("a bounded citation must retain all supporting text or leave the value uncertain", async () => {
+  const value = "a".repeat(100) + " " + "b".repeat(100);
+  const fields = await extract(
+    { whole: "text", list: "list", exact_limit: "text", window: "text" },
+    {
+      whole: { value, confidence: 0.99 },
+      list: { value: ["a".repeat(100), "b".repeat(100)], confidence: 0.99 },
+      exact_limit: { value: "c".repeat(200), confidence: 0.99 },
+      window: { value: "New York", confidence: 0.99 },
+    },
+    `${"a".repeat(100)}\n${"b".repeat(100)}\n${"c".repeat(200)}\n${"x".repeat(250)} New\nYork ${"y".repeat(250)}`,
+  );
+  for (const name of ["whole", "list"]) {
+    assert.equal(fields[name]!.status, "uncertain", name);
+    assert.equal(sourceLineOf(fields[name]), undefined);
+    assert.equal("notFound" in fields[name]!, false, "the value exists but cannot be fully cited");
+  }
+  assert.equal(fields.exact_limit!.status, "extracted");
+  assert.equal(sourceLineOf(fields.exact_limit), "c".repeat(200));
+  assert.equal(fields.window!.status, "extracted");
+  assert.match(sourceLineOf(fields.window)!, /New York/u);
+  assert.ok(sourceLineOf(fields.window)!.length <= 200);
+  const distant = await extract(
+    { launch: "datetime" },
+    { launch: { value: "2026-11-03T09:00Z", confidence: 0.99 } },
+    `Launch: November 3, 2026 ${"filler ".repeat(40)}at 09:00 UTC`,
+  );
+  assert.equal(distant.launch!.status, "uncertain");
+  assert.equal(sourceLineOf(distant.launch), undefined, "the date alone cannot cite the datetime");
+  const combining = await extract(
+    { name: "text" },
+    { name: { value: "a".repeat(197) + "é", confidence: 0.99 } },
+    `${"prefix ".repeat(10)}${"a".repeat(197)}e\u0301`,
+  );
+  assert.equal(combining.name!.status, "extracted");
+  assert.equal(sourceLineOf(combining.name), "…" + "a".repeat(197) + "e\u0301");
+});
+
+test("complete astral-character support uses the recap's Unicode code-point budget", async () => {
+  for (const [page, value, source] of [
+    ["😀".repeat(101), "😀".repeat(101), "😀".repeat(101)],
+    ["😀".repeat(200), "😀".repeat(200), "😀".repeat(200)],
+    ["😀".repeat(50) + "\r\n\r\n" + "😀".repeat(51), "😀".repeat(50) + " " + "😀".repeat(51), "😀".repeat(50) + " " + "😀".repeat(51)],
+  ]) {
+    const fields = await extract({ symbols: "text" }, { symbols: { value, confidence: 0.99 } }, page);
+    assert.equal(fields.symbols!.status, "extracted");
+    assert.equal(sourceLineOf(fields.symbols), source);
+    const recap = buildWebExtractRecap({ url: "https://example.com", fields });
+    assert.ok(recap && parseWebExtractRecap(recap), "the complete source fits the real wire validator");
+    assert.equal(recap.fields[0]!.sourceLine, source, "the recap must not clip supporting characters");
+  }
+});
+
+test("astral citation windows count omission markers and translate raw UTF-16 offsets", async () => {
+  for (const [page, value, expectedSource] of [
+    ["xxx" + "😀".repeat(198) + "yyy", "😀".repeat(198), "…" + "😀".repeat(198) + "…"],
+    ["xxx" + "😀".repeat(199), "😀".repeat(199), "…" + "😀".repeat(199)],
+    ["😀".repeat(199) + "yyy", "😀".repeat(199), "😀".repeat(199) + "…"],
+  ]) {
+    const fields = await extract({ symbols: "text" }, { symbols: { value, confidence: 0.99 } }, page);
+    assert.equal(fields.symbols!.status, "extracted");
+    assert.equal(sourceLineOf(fields.symbols), expectedSource);
+    assert.equal(Array.from(sourceLineOf(fields.symbols)!).length, 200);
+  }
+  const value = "A😀".repeat(50);
+  const fields = await extract(
+    { symbols: "text" }, { symbols: { value, confidence: 0.99 } },
+    "🪶".repeat(120) + "START " + value + " END" + "🪶".repeat(120),
+  );
+  assert.equal(fields.symbols!.status, "extracted");
+  const source = sourceLineOf(fields.symbols)!;
+  assert.ok(source.includes(value), "raw UTF-16 offsets still identify the complete mixed span");
+  assert.ok(source.startsWith("…") && source.endsWith("…"));
+  assert.ok(Array.from(source).length <= 200);
+  assert.doesNotMatch(source, /[\ud800-\udfff]/u, "no unpaired surrogate at a window boundary");
+  assert.ok(buildWebExtractRecap({ url: "https://example.com", fields }));
+});
+
+test("actual code-point overflow stays uncertain even when glyphs look shorter", async () => {
+  for (const [page, value] of [
+    ["😀".repeat(201), "😀".repeat(201)],
+    ["xxx" + "😀".repeat(199) + "yyy", "😀".repeat(199)],
+    ["😀".repeat(100) + "\n" + "😀".repeat(100), "😀".repeat(100) + " " + "😀".repeat(100)],
+    ["e\u0301".repeat(101), "é".repeat(101)],
+  ]) {
+    const fields = await extract({ symbols: "text" }, { symbols: { value, confidence: 0.99 } }, page);
+    assert.deepEqual(fields.symbols, { status: "uncertain", guess: value, confidence: 0.99 });
+  }
 });
 
 test("dates, times and datetimes match the forms pages write them in", async () => {
@@ -387,6 +540,7 @@ test("a long source line is cited as a window around the value", () => {
   const line = `${"a".repeat(300)} PRICE 42 ${"b".repeat(300)}`;
   const start = line.indexOf("42");
   const cited = citeLine(line, start, start + 2);
+  assert.ok(cited);
   assert.ok(cited.includes("PRICE 42"));
   assert.ok(cited.startsWith("…") && cited.endsWith("…"));
   assert.ok(cited.length <= 200);

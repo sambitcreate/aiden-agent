@@ -205,7 +205,7 @@ test("with nothing set up, Automatic points at fixes on this page", async () => 
   await screen.findByText(
     "No voice provider yet. Download an on-device model below or add an OpenAI or Gemini key.",
   );
-  assert.equal(screen.queryByText(/in Settings → Voice/), null);
+  assert.equal(screen.queryByText(/in Settings → Voice & Speech/), null);
 });
 
 test("Gemini without a key collects one, then saves voice without needing a chat model", async () => {
@@ -248,7 +248,7 @@ test("Gemini without a key collects one, then saves voice without needing a chat
 });
 
 test("a provider change that fails to save tells the user", async () => {
-  for (const option of [/^On this (Mac|device) · Private$/, "Automatic", "Online · OpenAI"]) {
+  for (const option of [/^On this (Mac|computer) · Private$/, "Automatic", "Online · OpenAI"]) {
     const start = option === "Automatic" ? { voiceProvider: "local" as const } : {};
     mount(start, localReady("parakeet-v3", option !== "Automatic"), ["parakeet-v3"], [], { failSave: true });
     await choose("Voice provider", option);

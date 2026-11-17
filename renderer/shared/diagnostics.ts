@@ -94,6 +94,41 @@ export interface RendererDiagnosticPolicy {
   runtimeProfile: "development" | "production";
   windowMs: number;
   maxPerKey: number;
+  /** Main is sending crash reports, so uncaught errors may carry `error`. */
+  errorDetails?: boolean;
+}
+
+/** Only these kinds are crash reports. The others are caught and stay local. */
+export const RENDERER_CRASH_KINDS: readonly RendererDiagnosticKind[] = [
+  "global-error",
+  "unhandled-rejection",
+  "react-uncaught",
+];
+
+export const MAX_RENDERER_ERROR_NAME_LENGTH = 128;
+export const MAX_RENDERER_ERROR_MESSAGE_LENGTH = 2_048;
+export const MAX_RENDERER_ERROR_STACK_LENGTH = 8_192;
+
+/**
+ * An uncaught error as the renderer saw it, sent only while main says crash
+ * reports are on. It can hold anything: main sanitizes it and never stores it.
+ */
+/**
+ * V8 starts a stack with the message, which can span lines and quote anything,
+ * so frames are read only from what follows it. Only a match on the first line
+ * is that header: a short message can also turn up by chance among the frames.
+ */
+export function stackWithoutMessage(stack: string, message: unknown): string {
+  if (typeof message !== "string" || message.length === 0) return stack;
+  const header = stack.indexOf(message);
+  if (header < 0 || stack.slice(0, header).includes("\n")) return stack;
+  return stack.slice(header + message.length);
+}
+
+export interface RendererErrorDetails {
+  name?: string;
+  message?: string;
+  stack?: string;
 }
 
 export interface RendererDiagnosticReport {
@@ -102,6 +137,7 @@ export interface RendererDiagnosticReport {
   context: "root" | "router" | "subtree" | "window";
   referenceId: string;
   suppressed?: number;
+  error?: RendererErrorDetails;
 }
 
 export interface DiagnosticSupportStatusView {

@@ -1,14 +1,25 @@
 import path from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
 import type { Page } from "@playwright/test";
 import {
   E2E_PROFILE_NAME,
   expect,
   readJsonFile,
-  skipBotsOnboardingStep,
+  connectOnboardingLmStudio,
   test,
 } from "./fixtures";
 
 const USAGE_SWITCH = { name: "Share anonymous usage and crash data" } as const;
+
+async function storedUsageDataEnabled(settingsFile: string): Promise<boolean | undefined> {
+  try {
+    return (await readJsonFile<{ analytics?: { enabled?: boolean } }>(settingsFile)).analytics?.enabled;
+  } catch (error) {
+    // The optimistic switch can update before the first settings file is persisted.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
 
 async function openDiagnosticsSettings(page: Page) {
   await page.getByRole("button", { name: "Settings", exact: true }).click();
@@ -21,14 +32,26 @@ async function openDiagnosticsSettings(page: Page) {
 test.describe("usage data", () => {
   test.use({ portableConfigSeed: "empty" });
 
+  test("fresh consent-file polling treats only a missing file as pending", async () => {
+    const settingsFile = test.info().outputPath("settings.json");
+    await mkdir(path.dirname(settingsFile), { recursive: true });
+    await expect(storedUsageDataEnabled(settingsFile)).resolves.toBeUndefined();
+
+    await writeFile(settingsFile, JSON.stringify({ analytics: { enabled: false } }));
+    await expect(storedUsageDataEnabled(settingsFile)).resolves.toBe(false);
+
+    await writeFile(settingsFile, "{broken");
+    await expect(storedUsageDataEnabled(settingsFile)).rejects.toBeInstanceOf(SyntaxError);
+    const unreadableFile = test.info().outputPath("settings-directory");
+    await mkdir(unreadableFile);
+    await expect(storedUsageDataEnabled(unreadableFile)).rejects.toMatchObject({ code: "EISDIR" });
+  });
+
   test("is on in onboarding, and turning it off in Settings survives relaunch", async ({ aiden }) => {
     const onboarding = aiden.page.locator('section[aria-label="Set up Aiden"]');
     await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
     await onboarding.getByRole("button", { name: /^Next/u }).click();
-    const lmStudio = onboarding.getByRole("button", { name: /LM Studio.*Use models running in LM Studio/u });
-    await lmStudio.click();
-    await onboarding.getByRole("button", { name: /^Next/u }).click();
-    await skipBotsOnboardingStep(onboarding);
+    await connectOnboardingLmStudio(onboarding);
 
     await expect(onboarding.getByRole("switch", USAGE_SWITCH)).toBeChecked();
     await onboarding.getByRole("button", { name: "What’s sent" }).click();
@@ -48,10 +71,7 @@ test.describe("usage data", () => {
     await control.click();
     await expect(control).not.toBeChecked();
     await expect
-      .poll(async () =>
-        (await readJsonFile<{ analytics?: { enabled?: boolean } }>(path.join(aiden.userDataDir, "settings.json")))
-          .analytics?.enabled,
-      )
+      .poll(() => storedUsageDataEnabled(path.join(aiden.userDataDir, "settings.json")))
       .toBe(false);
 
     const page = await aiden.relaunch();

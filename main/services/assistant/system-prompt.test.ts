@@ -7,7 +7,7 @@ import {
 } from "../response-format-guidance.js";
 
 const base = {
-  settingsSections: ["providers", "appearance"],
+  settingsPages: ["Providers", "Appearance (Links)"],
   availableTools: [
     "aiden_help",
     "aiden_get_state",
@@ -40,9 +40,9 @@ test("shares restrained response-structure guidance across conversational surfac
   assert.match(PI_CHAT_SYSTEM_PROMPT, /using Markdown for formatting/u);
 });
 
-test("grounds the prompt in settings sections without disclosing workspace inventory", () => {
+test("grounds the prompt in settings pages without disclosing workspace inventory", () => {
   const prompt = buildAssistantSystemPrompt(base);
-  assert.match(prompt, /providers/u);
+  assert.match(prompt, /Providers, Appearance \(Links\)/u);
   assert.doesNotMatch(prompt, /The user's projects are:/u);
 });
 

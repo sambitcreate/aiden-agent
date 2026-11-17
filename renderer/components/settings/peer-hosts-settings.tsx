@@ -19,6 +19,7 @@ import {
   Text,
   toast,
 } from "../ui";
+import { useAppCapabilities } from "../../lib/app-capabilities";
 import { peerHostsApi } from "../../lib/ipc";
 import { hostQueryKeys } from "../../lib/hosts/host-query-keys";
 import {
@@ -26,6 +27,7 @@ import {
   peerHostPresentation,
   peerLocalNameError,
 } from "../../lib/peer-connections";
+import { localComputerNoun } from "../../shared/computer-noun";
 import type { PeerHostStatus, PeerHostView } from "../../shared/peer-host";
 import { PeerAddDeviceSheet } from "./peer-add-device-sheet";
 
@@ -252,7 +254,12 @@ function RenameDialog({
   );
 }
 
-/** Connections → Control other devices. */
+/** Settings → Connections → Control other devices. */
+export function PeerHostsSettingsPage() {
+  const capabilities = useAppCapabilities();
+  return <PeerHostsSettings hostLabel={localComputerNoun(capabilities.platform)} />;
+}
+
 export function PeerHostsSettings({ hostLabel }: { hostLabel: string }) {
   const { list, statuses } = usePeerConnections();
   const hosts = list.data ?? [];
@@ -364,7 +371,7 @@ export function PeerHostsSettings({ hostLabel }: { hostLabel: string }) {
         onConfirm={async () => {
           const host = forgetting;
           if (!host) return;
-          if (await act(host.id, () => peerHostsApi.remove(host.id), "Couldn't forget this computer.")) setForgetting(null);
+          if (await act(host.id, () => peerHostsApi.remove(host.id), "Couldn't forget that computer.")) setForgetting(null);
         }}
       />
     </>

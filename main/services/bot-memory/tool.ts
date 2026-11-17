@@ -14,6 +14,7 @@ import { isBotMessageRequestId } from "../../../renderer/shared/bot-messages.js"
 // Replay is `unsafe`: an interrupted batch becomes an interrupted error and
 // the model reads the live state from its next result.
 
+import { botPeerIngress } from "../bot-peers/ingress.js";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { BOT_MEMORY_LIMITS, type BotMemoryTarget } from "../../../renderer/shared/bot-memory.js";
@@ -178,7 +179,7 @@ export function botMemoryToolEntry(botId: string, memory: Pick<BotMemoryRuntime,
 
 /** Whether a run serving inputs with these request ids may save memory: never on routine or self-intro turns. */
 export function botMemoryAllowed(requestIds: readonly (string | undefined)[]): boolean {
-  return requestIds.length > 0 && !requestIds.some((id) => isBotMessageRequestId(id) || id?.startsWith("routine:") || id?.startsWith(BOT_INTRO_REQUEST_PREFIX));
+  return !botPeerIngress() && requestIds.length > 0 && !requestIds.some((id) => isBotMessageRequestId(id) || id?.startsWith("peer:") || id?.startsWith("routine:") || id?.startsWith(BOT_INTRO_REQUEST_PREFIX));
 }
 
 /** Withhold memory writes and recall on Bot-message inputs; otherwise recall follows the base policy. */

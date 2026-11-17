@@ -4,6 +4,9 @@
 
 import type { StudioFeature } from "./studio-routes.js";
 
+/** An app capability a command can depend on: a Studio, or design mode. */
+export type CommandCapability = StudioFeature | "designMode";
+
 export const COMMAND_IDS = [
   "composer.focus",
   "dictation.toggle",
@@ -27,7 +30,6 @@ export const COMMAND_IDS = [
   "provider.manage",
   "settings.search",
   "settings.open",
-  "design.open",
   "images.open",
   "workspace.openPreferredEditor",
   "workspace.openFolder",
@@ -35,6 +37,7 @@ export const COMMAND_IDS = [
   "terminal.toggle",
   "environment.toggle",
   "quick-view.toggle",
+  "design.toggle",
   "subagents.toggleTray",
   "file.save",
   "navigate.back",
@@ -87,7 +90,7 @@ export interface CommandDefinition {
   allowRepeat?: boolean;
   nativeMenu?: boolean;
   /** Hidden from the palette, and never handled, unless this capability is on. */
-  requiresCapability?: StudioFeature;
+  requiresCapability?: CommandCapability;
   /**
    * Listed in the palette only while something on screen handles it, such as
    * the open chat's actions; other commands show as disabled instead.
@@ -284,19 +287,6 @@ export const COMMANDS = [
     showInSettings: true,
   }),
   command({
-    id: "design.open",
-    title: "Open Design Studio",
-    description: "Open Design Studio projects.",
-    category: "Navigate",
-    keywords: ["design", "prototype", "screens", "studio"],
-    defaultBinding: null,
-    scope: "app",
-    global: false,
-    requiresCapability: "designStudio",
-    showInPalette: true,
-    showInSettings: false,
-  }),
-  command({
     id: "images.open",
     title: "Open Create Images",
     description: "Open image generation workflows.",
@@ -382,6 +372,21 @@ export const COMMANDS = [
     defaultBinding: null,
     scope: "app",
     global: false,
+    showInPalette: true,
+    showInSettings: true,
+  }),
+  command({
+    id: "design.toggle",
+    title: "Toggle design mode",
+    description: "Put the chat on the left and a design canvas on the right.",
+    category: "Tools",
+    keywords: ["design", "canvas", "layout", "mockup"],
+    defaultBinding: "Command+Shift+L",
+    scope: "app",
+    global: false,
+    allowInEditable: true,
+    requiresCapability: "designMode",
+    paletteWhenAvailable: true,
     showInPalette: true,
     showInSettings: true,
   }),
@@ -1064,8 +1069,29 @@ export function shouldPersistCanonicalKeybindings(
   );
 }
 
+let unavailableCapabilities: ReadonlySet<CommandCapability> = new Set();
+
+/**
+ * Tell binding resolution which capabilities this process lacks. A command
+ * whose capability is unavailable has no effective binding: it never claims
+ * an accelerator, never conflicts with one the person saves, and repair never
+ * writes a `disabled` override for it. Call once at startup, before the first
+ * snapshot or repair; pass nothing to make every capability available again.
+ */
+export function setUnavailableCommandCapabilities(
+  capabilities: Iterable<CommandCapability> = [],
+): void {
+  unavailableCapabilities = new Set(capabilities);
+}
+
+function commandUnavailable(commandId: CommandId): boolean {
+  const capability = COMMAND_BY_ID[commandId].requiresCapability;
+  return capability !== undefined && unavailableCapabilities.has(capability);
+}
+
 function defaultBinding(commandId: CommandId): string | null {
   const definition = COMMAND_BY_ID[commandId];
+  if (commandUnavailable(commandId)) return null;
   return definition.defaultEnabled === false ? null : definition.defaultBinding;
 }
 
@@ -1074,6 +1100,7 @@ function effectiveBindingFromNormalized(
   overrides: KeybindingOverridesV1 | undefined,
   legacy?: LegacyGlobalKeybindings,
 ): string | null {
+  if (commandUnavailable(commandId)) return null;
   const override =
     overrides !== undefined ? overrides.commands[commandId] : legacyBinding(commandId, legacy);
   if (override?.disabled) return null;
@@ -1202,6 +1229,7 @@ const INTRODUCED_DEFAULT_COMMANDS: readonly CommandId[] = [
   "subagents.toggleTray",
   "shortcuts.show",
   "workspace.settings",
+  "design.toggle",
 ];
 
 function yieldIntroducedDefaults(next: KeybindingOverridesV1): void {

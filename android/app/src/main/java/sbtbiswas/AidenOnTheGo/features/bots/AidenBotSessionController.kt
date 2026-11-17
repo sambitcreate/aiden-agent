@@ -27,6 +27,11 @@ interface AidenBotSessionTransport {
     fun events(botId: String): Flow<AidenBotSessionEvent>
     /** `whenBusy` is Steer or Queue while the Bot works; only a Mac announcing `bot-activity-v1` takes it. */
     suspend fun send(botId: String, text: String, key: UUID, whenBusy: AidenStreamInputMode? = null): AidenBotSessionSendResponse
+    suspend fun resumeStatus(botId: String): AidenBotResumeStatus = throw AidenRemoteClientException.InvalidResponse()
+    suspend fun resumeWithAcknowledgement(botId: String, key: UUID, request: AidenBotResumeRequest): AidenBotSessionStateView {
+        if(request.acknowledgeUnknownCost == true) throw AidenRemoteClientException.InvalidResponse()
+        return resume(botId,key)
+    }
     suspend fun resume(botId: String, key: UUID): AidenBotSessionStateView
     suspend fun dismiss(botId: String, key: UUID): AidenBotSessionStateView
     suspend fun stop(botId: String, key: UUID): AidenBotSessionStateView
@@ -83,6 +88,22 @@ interface AidenBotSessionTransport {
         request: AidenBotIssueActRequest,
         key: UUID
     ): AidenBotIssueActReceipt = throw AidenRemoteClientException.InvalidResponse()
+
+    /** Revision 61 (`bot:settings-changes`): Apply, Dismiss or Undo a settings change. */
+    suspend fun respondToSettingsChange(botId: String, changeId: String, decision: AidenBotSettingsChangeDecision): AidenBotSettingsChangeRespondResult =
+        throw AidenRemoteClientException.InvalidResponse()
+    /** Revision 61 (`bot:suggestions`): Add or Not now on a skill suggestion. */
+    suspend fun respondToSkillProposal(botId: String, proposalId: String, decision: AidenBotSkillProposalDecision): AidenBotSkillProposalRespondResult =
+        throw AidenRemoteClientException.InvalidResponse()
+    /** Revision 61: Add or Not now on a lesson suggestion. */
+    suspend fun respondToLesson(botId: String, lessonId: String, decision: AidenBotLessonDecision): AidenBotLessonRespondResult =
+        throw AidenRemoteClientException.InvalidResponse()
+    /** Revision 61: Undo on a Learned line. */
+    suspend fun removeLesson(botId: String, lessonId: String): AidenBotLessonRespondResult =
+        throw AidenRemoteClientException.InvalidResponse()
+    /** Revision 61: Undo on "Tidied memory". */
+    suspend fun undoLearning(botId: String, changeId: String): AidenBotLearningUndoResult =
+        throw AidenRemoteClientException.InvalidResponse()
 }
 
 /**
@@ -95,6 +116,8 @@ class AidenRemoteBotSessionTransport(private val client: AidenRemoteClient) : Ai
     override fun events(botId: String) = client.botSessionEvents(botId)
     override suspend fun send(botId: String, text: String, key: UUID, whenBusy: AidenStreamInputMode?) =
         client.sendBotMessage(botId, text, key, whenBusy, supportsBotActivity = whenBusy != null)
+    override suspend fun resumeStatus(botId: String) = client.botRoutineResumeStatus(botId)
+    override suspend fun resumeWithAcknowledgement(botId: String, key: UUID, request: AidenBotResumeRequest) = client.resumeBotSession(botId,key,request)
     override suspend fun resume(botId: String, key: UUID) = client.resumeBotSession(botId, key)
     override suspend fun dismiss(botId: String, key: UUID) = client.dismissBotSession(botId, key)
     override suspend fun stop(botId: String, key: UUID) = client.stopBotSession(botId, key)
@@ -135,6 +158,14 @@ class AidenRemoteBotSessionTransport(private val client: AidenRemoteClient) : Ai
         request: AidenBotIssueActRequest,
         key: UUID
     ) = client.actOnBotIssue(botId, issueId, request, key)
+    override suspend fun respondToSettingsChange(botId: String, changeId: String, decision: AidenBotSettingsChangeDecision) =
+        client.respondToBotSettingsChange(botId, changeId, decision)
+    override suspend fun respondToSkillProposal(botId: String, proposalId: String, decision: AidenBotSkillProposalDecision) =
+        client.respondToBotSkillProposal(botId, proposalId, decision)
+    override suspend fun respondToLesson(botId: String, lessonId: String, decision: AidenBotLessonDecision) =
+        client.respondToBotLesson(botId, lessonId, decision)
+    override suspend fun removeLesson(botId: String, lessonId: String) = client.removeBotLesson(botId, lessonId)
+    override suspend fun undoLearning(botId: String, changeId: String) = client.undoBotLearning(botId, changeId)
 }
 
 /** One transcript row. Consecutive `memory_update` entries share one quiet caption. */
@@ -265,6 +296,9 @@ class AidenBotActionKeys(private val newKey: () -> UUID = UUID::randomUUID) {
     fun key(action: String): UUID = keys.getOrPut(action, newKey)
 
     @Synchronized
+    fun hasPending(action: String): Boolean = keys.containsKey(action)
+
+    @Synchronized
     fun complete(action: String) {
         keys.remove(action)
     }
@@ -304,6 +338,38 @@ enum class AidenBotSessionNotice(@param:StringRes val text: Int) {
 /** A Bot session request that got no answer within its limit (FR-I3): it may have reached the Mac. */
 class AidenBotSessionTimeout : java.io.IOException("The Mac didn’t answer in time.")
 
+/**
+ * What a failed send does to a message in the outbox. Only a definite refusal gives up the key:
+ * anything that may have reached the Mac keeps it, so a retry can never become a second request.
+ */
+enum class AidenBotOutboxFailureStep {
+    /** The Mac answered without running it; Try again is a new request. */
+    REFUSED,
+
+    /** It keeps its place and key for the next connection or backoff. */
+    RETRY_LATER,
+
+    /** Out of tries, but an entry with no submission id already shows it. */
+    SETTLED_BY_ECHO,
+
+    /** Out of tries: "Couldn't send", and Try again keeps the key. */
+    OUT_OF_TRIES
+}
+
+/** [attempts] counts the tries before this failure. */
+fun aidenBotOutboxFailureStep(
+    ambiguous: Boolean,
+    attempts: Int,
+    maxAttempts: Int,
+    echoed: Boolean,
+    echoNamesSubmission: Boolean
+): AidenBotOutboxFailureStep = when {
+    !ambiguous -> AidenBotOutboxFailureStep.REFUSED
+    attempts + 1 < maxAttempts -> AidenBotOutboxFailureStep.RETRY_LATER
+    echoed && !echoNamesSubmission -> AidenBotOutboxFailureStep.SETTLED_BY_ECHO
+    else -> AidenBotOutboxFailureStep.OUT_OF_TRIES
+}
+
 /** True when a message request may have reached the Mac, so the next attempt must reuse its key. */
 fun aidenBotMessageFailureIsAmbiguous(error: Exception): Boolean = when (error) {
     is AidenRemoteClientException.Server -> error.statusCode >= 500 || error.statusCode == 408 || error.statusCode == 429 ||
@@ -327,11 +393,11 @@ fun aidenBotLostAccess(error: Exception): Boolean = when (error) {
 }
 
 /**
- * Which of `bot:cards`, `bot:activity`, `bot:handoffs`, `bot:handoff-notes`, `bot:handoff-on-mac` and `bot:images` [installation] holds. The Mac shapes a
+ * The audience-shaping Bot session grants [installation] holds. The Mac shapes a
  * Bot session feed by these (its cards, Chat activity, hand-offs and the paused state) when the
  * feed opens, and keeps that shape for the feed's life. A Bot chat can open from the pairing's
  * saved features while it connects, before this connection has negotiated a grant, so the chat
- * compares these once `/server` has answered and reopens a feed that opened without one
+ * adopts each changed grant set once `/server` has answered and reopens its feed
  * ([AidenBotSessionController.reopenFeed]).
  */
 fun aidenBotSessionFeedGrants(installation: AidenInstallation?): Set<AidenRemoteCapability> =
@@ -342,9 +408,15 @@ fun aidenBotSessionFeedGrants(installation: AidenInstallation?): Set<AidenRemote
         AidenRemoteCapability.BOT_HANDOFF_NOTES,
         AidenRemoteCapability.BOT_HANDOFF_ON_MAC,
         AidenRemoteCapability.BOT_IMAGES,
+        AidenRemoteCapability.BOT_ISSUES,
+        AidenRemoteCapability.BOT_PEERS,
         AidenRemoteCapability.BOT_ACCESS_REQUESTS,
         AidenRemoteCapability.BOT_PLANS,
-        AidenRemoteCapability.BOT_ALLOWED
+        AidenRemoteCapability.BOT_ALLOWED,
+        // Revision 61: the typed approval card and the settings, suggestion and learning entries.
+        AidenRemoteCapability.APPROVAL_CARDS,
+        AidenRemoteCapability.BOT_SETTINGS_CHANGES,
+        AidenRemoteCapability.BOT_SUGGESTIONS
     )
         .filterTo(mutableSetOf()) { installation?.hasNegotiatedAccess(it) == true }
 
@@ -364,6 +436,9 @@ enum class AidenBotComposerMode {
     /** The person paused the Bot: nothing is sent until Resume. */
     PAUSED
 }
+
+/** The line a typed approval card settles to ("Allowed once", "Denied") after a tap. */
+data class AidenBotAnsweredApproval(val waitId: String, val title: String, val answered: String)
 
 /** The Mac's answer to Finish on your Mac: whether it brought the Bot's browser forward. */
 data class AidenBotHandoffMacPrompt(val waitId: String, val opened: Boolean)
@@ -422,7 +497,15 @@ data class AidenBotSessionUiState(
     /** Stop was tapped: "Stopping" until the Mac's word stands for it or the turn ends. */
     val stopIntent: AidenBotTurnIntent = AidenBotTurnIntent.NONE,
     /** Resume was tapped: "Picking up where it left off" until the Mac says what the run is doing. */
-    val resumeIntent: AidenBotTurnIntent = AidenBotTurnIntent.NONE
+    val resumeIntent: AidenBotTurnIntent = AidenBotTurnIntent.NONE,
+    /** Revision 61: settings, suggestion and learning entries whose answer is on its way, by entry id. */
+    val uxSending: Set<String> = emptySet(),
+    /** Revision 61: why an entry's answer didn't land, by entry id, until the next answer. */
+    val uxErrors: Map<String, String> = emptyMap(),
+    /** Revision 61: "Tidied memory" lines this phone undid; the entry itself carries no status. */
+    val undoneTidyIds: Set<String> = emptySet(),
+    /** Revision 61: the typed card's answered line, shown in the card's place once a button is tapped. */
+    val answeredApproval: AidenBotAnsweredApproval? = null
 ) {
     val state: AidenBotSessionState? get() = session?.state ?: knownState
     val needsModel: Boolean get() = state == AidenBotSessionState.NEEDS_MODEL
@@ -588,11 +671,17 @@ class AidenBotSessionController(
     private val unheldGraceMillis: Long = UNHELD_GRACE_MILLIS,
     /** Revision 45: how many bytes of shared images this chat keeps in memory. */
     sharedImageBudgetBytes: Long = AidenSharedImageBytes.DEFAULT_MAX_BYTES,
-    private val nowMs: () -> Long = System::currentTimeMillis
+    private val nowMs: () -> Long = System::currentTimeMillis,
+    private val routineModelsSupported: () -> Boolean = { false },
+    private val mayResume: () -> Boolean = { true },
+    private val resumeLifetime: () -> String = { "active" },
+    resumeJournal: sbtbiswas.AidenOnTheGo.persistence.AidenBotWatchJournal? = null,
+    initialFeedGrants: Set<AidenRemoteCapability> = emptySet()
 ) {
     private val _state: MutableStateFlow<AidenBotSessionUiState>
     val state: StateFlow<AidenBotSessionUiState>
 
+    private var adoptedFeedGrants = initialFeedGrants.toSet()
     private var feedJob: Job? = null
     private var flushJob: Job? = null
     private var backoffJob: Job? = null
@@ -606,6 +695,7 @@ class AidenBotSessionController(
     /** Bumped by every access-loss purge: a disk restore that started before it is stale and is dropped, not merged. */
     private var purgeGeneration = 0
     private var released = false
+    private var resumeVisitGeneration = 0
     private var isFlushing = false
     private val inFlight = mutableSetOf<String>()
     private var pendingAnswer: Pair<String, AidenQuestionRespondRequest>? = null
@@ -631,6 +721,7 @@ class AidenBotSessionController(
     private var stopStartedAt: Long? = null
     /** Revision 45: images the Bot shared, kept in memory within a budget while this chat is open; never written to disk. */
     private val sharedImages = AidenSharedImageBytes(sharedImageBudgetBytes)
+    val resumeController: AidenBotResumeController?
 
     init {
         val cached = sessionKey?.let { store?.transcript(it) }.orEmpty()
@@ -651,6 +742,12 @@ class AidenBotSessionController(
         )
         state = _state.asStateFlow()
         if (held != null && adopted != held && sessionKey != null) store?.storeOutbox(sessionKey, this, adopted)
+        resumeController = resumeJournal?.let { journal -> AidenBotResumeController(object:AidenBotResumeTransport {
+            override suspend fun status() = bounded { transport.resumeStatus(botId) }
+            override suspend fun resume(key:UUID,request:AidenBotResumeRequest) = bounded { transport.resumeWithAcknowledgement(botId,key,request) }
+        },mayResume={mayResume() && !released && !_state.value.isAccessBlocked && !_state.value.accessLost && !_state.value.botMissing},
+            supportsPreflight=routineModelsSupported,version={"$resumeVisitGeneration|${resumeLifetime()}|$stateWrites|${_state.value.session?.entries?.lastOrNull()?.id.orEmpty()}"},journal=journal,now=nowMs) }
+
     }
 
     /**
@@ -680,6 +777,8 @@ class AidenBotSessionController(
      * messages stay, key and body, for the next visit.
      */
     fun stopFollowing() {
+        resumeVisitGeneration++
+        resumeController?.cancelConsent()
         released = true
         approvalGeneration++
         _state.update { it.copy(isRespondingToApproval = false, approvalSuccessNotice = null) }
@@ -693,6 +792,13 @@ class AidenBotSessionController(
         unheldTimers.values.forEach { it.cancel() }
         unheldTimers.clear()
         sharedImages.clear()
+    }
+
+    /** Adopt every audience transition, including a loss back to the first-open set. */
+    fun updateFeedGrants(grants: Set<AidenRemoteCapability>) {
+        if (grants == adoptedFeedGrants) return
+        adoptedFeedGrants = grants.toSet()
+        reopenFeed()
     }
 
     /**
@@ -858,6 +964,7 @@ class AidenBotSessionController(
             is AidenBotSessionEventPayload.State -> afterStateWrite(previous)
             is AidenBotSessionEventPayload.Question -> questionWrites += 1
             is AidenBotSessionEventPayload.Approval -> {
+                if (session.approval != null) _state.update { it.copy(answeredApproval = null) }
                 approvalWrites += 1
                 approvalKeys.keys.removeAll { session.approval == null || !it.startsWith("$RESPOND_APPROVAL:${session.approval.waitId}:") }
                 _state.update { it.copy(approvalSuccessNotice = null) }
@@ -865,7 +972,10 @@ class AidenBotSessionController(
             is AidenBotSessionEventPayload.AccessRequest -> accessRequestWrites += 1
             is AidenBotSessionEventPayload.Handoff -> handoffWritten(previous?.handoff, payload.handoff)
             is AidenBotSessionEventPayload.Activity -> activityArrived(payload.activity)
-            is AidenBotSessionEventPayload.Entry -> storeTranscript()
+            is AidenBotSessionEventPayload.Entry -> {
+                if (!_state.value.isRespondingToApproval) _state.update { it.copy(answeredApproval = null) }
+                storeTranscript()
+            }
             else -> Unit
         }
         reconcileOutbox(snapshot = false)
@@ -873,7 +983,7 @@ class AidenBotSessionController(
     }
 
     /** A snapshot replaces everything, and means the Mac is reachable: the outbox goes out. */
-    private fun applySnapshot(session: AidenBotSession) {
+    private fun applySnapshot(session: AidenBotSession, wakesOutbox: Boolean = true) {
         val previous = _state.value.session
         planWritten(previous?.plan, session.plan)
         _state.update { it.copy(session = if (it.plansSupported) session else session.copy(plan = null), isLoading = false, loadFailed = false, hasLoaded = true, accessLost = false) }
@@ -882,13 +992,19 @@ class AidenBotSessionController(
         accessRequestWrites += 1
         approvalWrites += 1
         approvalKeys.keys.removeAll { session.approval == null || !it.startsWith("$RESPOND_APPROVAL:${session.approval.waitId}:") }
-        _state.update { it.copy(approvalSuccessNotice = null) }
+        // Another approval is waiting: an earlier one's answered line gives way, as on a feed frame.
+        _state.update { current ->
+            current.copy(
+                approvalSuccessNotice = null,
+                answeredApproval = current.answeredApproval?.takeUnless { session.approval != null && it.waitId != session.approval.waitId }
+            )
+        }
         handoffWritten(previous?.handoff, session.handoff)
         if (session.activity != previous?.activity) activityArrived(session.activity)
         afterStateWrite(previous)
         storeTranscript()
         reconcileOutbox(snapshot = true)
-        wakeOutbox()
+        if(wakesOutbox) wakeOutbox()
     }
 
     /** The Mac wrote the hand-off: another card's Mac prompt goes, and a new card is announced once. */
@@ -1363,26 +1479,42 @@ class AidenBotSessionController(
                 purgeForAccessLoss()
                 return
             }
-            if (!aidenBotMessageFailureIsAmbiguous(error)) {
-                // Refused outright: it never reached the Mac, and Try again is a new request.
-                updateMessage(key) { it.copy(status = AidenBotOutgoingStatus.FAILED, keepsKey = false, echoed = false) }
-                return
-            }
             val attempts = latest.connectionAttempts + 1
-            if (attempts < MAX_CONNECTION_ATTEMPTS) {
-                // It keeps its place and key: the next connection, or a short wait while
-                // connected, tries again. Nothing behind it overtakes it.
-                updateMessage(key) { it.copy(keepsKey = true, connectionAttempts = attempts, deferred = true) }
-                scheduleBackoff(attempts)
-            } else {
-                updateMessage(key) {
-                    if (it.echoed && it.echoSubmissionId == null) {
-                        // An untagged entry of its text already shows it.
-                        null
-                    } else {
-                        // An entry naming another submission is not its echo: "Couldn't send · Try
-                        // again" with its key, and the entry goes back to whoever it belongs to.
-                        it.echoEntryId?.let { entry -> claimedEntries -= entry }
+            val step = aidenBotOutboxFailureStep(
+                ambiguous = aidenBotMessageFailureIsAmbiguous(error),
+                attempts = latest.connectionAttempts,
+                maxAttempts = MAX_CONNECTION_ATTEMPTS,
+                echoed = latest.echoed,
+                echoNamesSubmission = latest.echoSubmissionId != null
+            )
+            when (step) {
+                AidenBotOutboxFailureStep.REFUSED -> {
+                    // Refused outright: it never reached the Mac, Try again is a new request, and
+                    // any entry it waited on goes back to the others, as on iOS.
+                    latest.echoEntryId?.let { claimedEntries -= it }
+                    updateMessage(key) {
+                        it.copy(
+                            status = AidenBotOutgoingStatus.FAILED,
+                            keepsKey = false,
+                            echoed = false,
+                            echoEntryId = null,
+                            echoSubmissionId = null
+                        )
+                    }
+                }
+                AidenBotOutboxFailureStep.RETRY_LATER -> {
+                    // It keeps its place and key: the next connection, or a short wait while
+                    // connected, tries again. Nothing behind it overtakes it.
+                    updateMessage(key) { it.copy(keepsKey = true, connectionAttempts = attempts, deferred = true) }
+                    scheduleBackoff(attempts)
+                }
+                // An untagged entry of its text already shows it.
+                AidenBotOutboxFailureStep.SETTLED_BY_ECHO -> updateMessage(key) { null }
+                AidenBotOutboxFailureStep.OUT_OF_TRIES -> {
+                    // An entry naming another submission is not its echo: "Couldn't send · Try
+                    // again" with its key, and the entry goes back to whoever it belongs to.
+                    latest.echoEntryId?.let { claimedEntries -= it }
+                    updateMessage(key) {
                         it.copy(
                             status = AidenBotOutgoingStatus.FAILED,
                             keepsKey = true,
@@ -1437,15 +1569,31 @@ class AidenBotSessionController(
 
     /** Resume shows "Picking up where it left off" at once and goes back if the Mac didn't take it. A second tap sends nothing. */
     suspend fun resume(): Boolean {
+        resumeController?.let { control ->
+            if(!mayResume() || (!_state.value.isInterrupted && control.state.value.pending==null)) return false
+            if(RESUME in inFlight) return false
+            val replayingUnknown=control.state.value.pending!=null
+            val writes=stateWrites;val visit=resumeVisitGeneration;val lifetime=resumeLifetime();val purge=purgeGeneration
+            inFlight+=RESUME
+            _state.update{it.copy(isResuming=true)}
+            try {
+                val view=control.request() ?: return false
+                if(replayingUnknown) reconcileResumeReplay(visit,lifetime,purge)
+                else if(resumeVisitIsCurrent(visit,lifetime,purge) && stateWrites==writes) { applyStateView(view); _state.update { it.copy(resumeIntent=AidenBotTurnIntent.ACKNOWLEDGED) } }
+                return true
+            } finally { inFlight-=RESUME;_state.update{it.copy(isResuming=false)} }
+        }
         val current = _state.value
         val before = current.session ?: return false
         if (!current.isInterrupted || current.isAccessBlocked || RESUME in inFlight) return false
+        val replayingUnknown=keys.hasPending(RESUME)
+        val visit=resumeVisitGeneration;val lifetime=resumeLifetime();val purge=purgeGeneration
         inFlight += RESUME
         val writes = stateWrites
         _state.update {
             it.copy(
-                session = it.session?.copy(state = AidenBotSessionState.RUNNING, interrupted = false, blocked = null, activity = null),
-                resumeIntent = AidenBotTurnIntent.REQUESTED,
+                session = if(replayingUnknown)it.session else it.session?.copy(state = AidenBotSessionState.RUNNING, interrupted = false, blocked = null, activity = null),
+                resumeIntent = if(replayingUnknown)AidenBotTurnIntent.NONE else AidenBotTurnIntent.REQUESTED,
                 isResuming = true,
                 actionError = null
             )
@@ -1453,15 +1601,18 @@ class AidenBotSessionController(
         return try {
             val view = bounded { transport.resume(botId, keys.key(RESUME)) }
             keys.complete(RESUME)
-            if (stateWrites == writes) applyStateView(view)
-            _state.update {
-                if (it.resumeIntent == AidenBotTurnIntent.REQUESTED) it.copy(resumeIntent = AidenBotTurnIntent.ACKNOWLEDGED) else it
+            if(replayingUnknown) reconcileResumeReplay(visit,lifetime,purge)
+            else if(resumeVisitIsCurrent(visit,lifetime,purge)) {
+                if (stateWrites == writes) applyStateView(view)
+                _state.update {
+                    if (it.resumeIntent == AidenBotTurnIntent.REQUESTED) it.copy(resumeIntent = AidenBotTurnIntent.ACKNOWLEDGED) else it
+                }
             }
             true
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            keys.failed(RESUME, error)
+            if(!replayingUnknown && !aidenBotResumeFailureIsAmbiguous(error)) keys.complete(RESUME)
             _state.update {
                 it.copy(
                     session = if (stateWrites == writes) it.session?.restoringState(before) else it.session,
@@ -1476,8 +1627,43 @@ class AidenBotSessionController(
         }
     }
 
+    private fun resumeVisitIsCurrent(visit: Int, lifetime: String, purge: Int): Boolean =
+        !released && mayResume() && resumeController?.hasCurrentScope()!=false && resumeVisitGeneration==visit && resumeLifetime()==lifetime && purgeGeneration==purge &&
+            !_state.value.accessLost && !_state.value.botMissing
+
+    /** A replay settles an action, but the ledger's cached state may predate another interruption. */
+    private suspend fun reconcileResumeReplay(visit: Int, lifetime: String, purge: Int) {
+        if(!resumeVisitIsCurrent(visit,lifetime,purge)) return
+        val before=_state.value.session
+        try {
+            val session=bounded{transport.session(botId)}
+            if(!resumeVisitIsCurrent(visit,lifetime,purge)) return
+            if(session.botId!=botId) throw AidenRemoteClientException.InvalidResponse()
+            val current=_state.value.session
+            // Same-epoch stale reads and a read from an epoch replaced while it was held cannot win.
+            if(current!=null && (session.epoch==current.epoch && session.seq<current.seq ||
+                before?.epoch!=current.epoch && session.epoch!=current.epoch)) return
+            _state.update{it.copy(actionError=null)}
+            applySnapshot(session,wakesOutbox=false)
+        } catch(error: CancellationException) { throw error }
+        catch(error: Exception) {
+            if(!resumeVisitIsCurrent(visit,lifetime,purge)) return
+            if(aidenBotLostAccess(error)) purgeForAccessLoss()
+            _state.update{it.copy(actionError=RESUME_REFRESH_FAILED)}
+        }
+    }
+
+    suspend fun confirmResume(): Boolean {
+        val control=resumeController ?: return false
+        val writes=stateWrites;val visit=resumeVisitGeneration;val lifetime=resumeLifetime();val purge=purgeGeneration
+        val view=control.confirm() ?: return false
+        if(resumeVisitIsCurrent(visit,lifetime,purge) && stateWrites==writes) { applyStateView(view); _state.update { it.copy(resumeIntent=AidenBotTurnIntent.ACKNOWLEDGED) } }
+        return true
+    }
+
     /** Dismiss clears the paused card at once and brings it back if the Mac didn't take it. */
     suspend fun dismiss(): Boolean {
+        if(resumeController?.state?.value?.pending!=null || resumeController?.state?.value?.busy==true) return false
         val current = _state.value
         val before = current.session ?: return false
         if (!current.isInterrupted || DISMISS in inFlight) return false
@@ -1599,15 +1785,31 @@ class AidenBotSessionController(
         val approval = _state.value.session?.approval ?: return false
         if (decision == AidenApprovalDecision.ALLOW && !approval.canAllow) return false
         var claimed = false
-        if (released || (scope != null && scope != AidenApprovalScope.ONCE &&
+        // A typed card (revision 61) offers exactly its buttons: only those answers go out.
+        val card = approval.card
+        val button = card?.button(decision, scope ?: AidenApprovalScope.ONCE)
+        // A card shows only answers this route can send; anything else is said, never dropped quietly.
+        if (card != null && (button == null ||
+                (scope != null && scope != AidenApprovalScope.ONCE && scope != AidenApprovalScope.ALWAYS))) {
+            _state.update { it.copy(actionError = ANSWER_ON_MAC) }
+            return false
+        }
+        if (released || (scope != null && scope != AidenApprovalScope.ONCE && button == null &&
             !(scope == AidenApprovalScope.ALWAYS && decision == AidenApprovalDecision.ALLOW && allowedSupported && approval.alwaysCount != null))) return false
         val chosenScope = scope?.takeIf { it == AidenApprovalScope.ALWAYS }
         val generation = approvalGeneration
         val writes = approvalWrites
+        val answered = if (card != null && button != null) AidenBotAnsweredApproval(approval.waitId, card.title, button.answered) else null
         _state.update { current ->
             if (current.isRespondingToApproval) current else {
                 claimed = true
-                current.copy(isRespondingToApproval = true, approvalSuccessNotice = null, actionError = null, session = current.session?.copy(approval = null))
+                current.copy(
+                    isRespondingToApproval = true,
+                    approvalSuccessNotice = null,
+                    actionError = null,
+                    answeredApproval = answered,
+                    session = current.session?.copy(approval = null)
+                )
             }
         }
         if (!claimed) return false
@@ -1617,21 +1819,27 @@ class AidenBotSessionController(
             bounded { if (chosenScope == null) transport.respondToApproval(approval.waitId, decision, key) else transport.respondToApproval(approval.waitId, decision, chosenScope, key) }
             if (generation != approvalGeneration || released) return false
             approvalKeys.remove(action)
-            if (chosenScope == AidenApprovalScope.ALWAYS && approvalWrites == writes) _state.update { it.copy(approvalSuccessNotice = "Always allow requested.") }
+            if (chosenScope == AidenApprovalScope.ALWAYS && approvalWrites == writes && answered == null) _state.update { it.copy(approvalSuccessNotice = "Always allow requested.") }
             true
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            if (generation != approvalGeneration || released) return false
+            if (generation != approvalGeneration || released) {
+                // Superseded, but the answer still wasn't confirmed: its line goes.
+                _state.update { current -> current.copy(answeredApproval = current.answeredApproval?.takeUnless { it.waitId == approval.waitId }) }
+                return false
+            }
             if (aidenBotMacAnswered(error)) approvalKeys.remove(action)
             when ((error as? AidenRemoteClientException.Server)?.body?.code) {
-                AidenRemoteErrorCode.APPROVAL_EXPIRED -> _state.update { it.copy(actionError = "That request expired.") }
+                AidenRemoteErrorCode.APPROVAL_EXPIRED -> _state.update { it.copy(actionError = "That request expired.", answeredApproval = null) }
                 // Settled elsewhere, on the Mac or another phone: nothing is waiting any more.
-                AidenRemoteErrorCode.APPROVAL_ALREADY_RESOLVED -> Unit
+                AidenRemoteErrorCode.APPROVAL_ALREADY_RESOLVED -> _state.update { it.copy(answeredApproval = null) }
                 else -> _state.update { current ->
                     val session = current.session
                     current.copy(
                         session = if (approvalWrites == writes && session?.approval == null) session?.copy(approval = approval) else session,
+                        // The answered line goes back to the card it came from.
+                        answeredApproval = current.answeredApproval?.takeUnless { it.waitId == approval.waitId },
                         actionError = SEND_FAILED
                     )
                 }
@@ -2011,6 +2219,139 @@ class AidenBotSessionController(
         }
     }
 
+    // --- Revision 61: settings changes, suggestions and learning receipts ---
+
+    /** Apply or Dismiss on a held settings card (pending); Undo on a receipt that offers it. */
+    suspend fun respondToSettingsChange(entryId: String, decision: AidenBotSettingsChangeDecision): Boolean =
+        answerUxEntry<AidenBotSettingsChangeEntry>(entryId, optimistic = { entry ->
+            when (decision) {
+                AidenBotSettingsChangeDecision.APPLY -> entry.takeIf { it.awaitsAnswer }?.copy(status = AidenBotSettingsChangeStatus.APPLIED)
+                AidenBotSettingsChangeDecision.DISMISS -> entry.takeIf { it.awaitsAnswer }?.copy(status = AidenBotSettingsChangeStatus.DISMISSED)
+                AidenBotSettingsChangeDecision.UNDO -> entry.takeIf { it.offersUndo }?.copy(status = AidenBotSettingsChangeStatus.RESTORED)
+            }
+        }) { entry ->
+            val result = transport.respondToSettingsChange(botId, entry.changeId, decision)
+            val settle: (AidenBotSettingsChangeEntry) -> AidenBotSettingsChangeEntry = { it.copy(status = result.status) }
+            settle
+        }
+
+    /** Add or Not now on a skill suggestion. A skill whose preview was cut is added on the Mac only. */
+    suspend fun respondToSkillProposal(entryId: String, decision: AidenBotSkillProposalDecision): Boolean =
+        answerUxEntry<AidenBotSkillProposalEntry>(entryId, optimistic = { entry ->
+            if (entry.status != AidenBotSkillProposalStatus.PENDING) null
+            else if (decision == AidenBotSkillProposalDecision.ADD && !entry.canAddHere) null
+            else entry.copy(status = if (decision == AidenBotSkillProposalDecision.ADD) AidenBotSkillProposalStatus.ADDED else AidenBotSkillProposalStatus.DISMISSED)
+        }) { entry ->
+            val result = transport.respondToSkillProposal(botId, entry.proposalId, decision)
+            val settle: (AidenBotSkillProposalEntry) -> AidenBotSkillProposalEntry = { it.copy(status = result.status) }
+            settle
+        }
+
+    /** Add (keep) or Not now on a lesson suggestion. */
+    suspend fun respondToLesson(entryId: String, decision: AidenBotLessonDecision): Boolean =
+        answerUxEntry<AidenBotLessonEntry>(entryId, optimistic = { entry ->
+            if (entry.kind != AidenBotLessonKind.PROPOSAL || entry.status != AidenBotLessonStatus.PENDING) null
+            else entry.copy(status = if (decision == AidenBotLessonDecision.KEEP) AidenBotLessonStatus.ACTIVE else AidenBotLessonStatus.DISMISSED)
+        }) { entry ->
+            val result = transport.respondToLesson(botId, entry.lessonId, decision)
+            val settle: (AidenBotLessonEntry) -> AidenBotLessonEntry = { it.copy(status = result.status) }
+            settle
+        }
+
+    /** Undo on a "Learned: …" line: the lesson is retired. */
+    suspend fun undoLearnedLesson(entryId: String): Boolean =
+        answerUxEntry<AidenBotLessonEntry>(entryId, optimistic = { entry ->
+            entry.takeIf { it.kind == AidenBotLessonKind.LEARNED && it.status == AidenBotLessonStatus.ACTIVE }
+                ?.copy(status = AidenBotLessonStatus.RETIRED)
+        }) { entry ->
+            val result = transport.removeLesson(botId, entry.lessonId)
+            val settle: (AidenBotLessonEntry) -> AidenBotLessonEntry = { it.copy(status = result.status) }
+            settle
+        }
+
+    /** Undo on "Tidied memory". The entry has no status, so this phone remembers it undid it. */
+    suspend fun undoMemoryTidy(entryId: String): Boolean {
+        val entry = _state.value.session?.entries?.firstOrNull { it.id == entryId } as? AidenBotMemoryTidyEntry ?: return false
+        val changeId = entry.changeId ?: return false
+        if (released || entryId in _state.value.undoneTidyIds || !claimUx(entryId)) return false
+        _state.update { it.copy(undoneTidyIds = it.undoneTidyIds + entryId) }
+        return try {
+            bounded { transport.undoLearning(botId, changeId) }
+            true
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            _state.update { it.copy(undoneTidyIds = it.undoneTidyIds - entryId) }
+            uxFailed(entryId, error)
+            false
+        } finally {
+            _state.update { it.copy(uxSending = it.uxSending - entryId) }
+        }
+    }
+
+    private fun claimUx(entryId: String): Boolean {
+        var claimed = false
+        _state.update { current ->
+            if (entryId in current.uxSending) current else {
+                claimed = true
+                current.copy(uxSending = current.uxSending + entryId, uxErrors = current.uxErrors - entryId)
+            }
+        }
+        return claimed
+    }
+
+    /**
+     * One revision-61 answer, optimistic: the entry takes [optimistic]'s status at once, then the
+     * Mac's. A refusal puts the entry back as it was (unless the Mac has written it since) with
+     * why; an entry the Mac no longer has (`404`) leaves the chat.
+     */
+    private suspend inline fun <reified T : AidenBotSessionEntry> answerUxEntry(
+        entryId: String,
+        optimistic: (T) -> T?,
+        crossinline send: suspend (T) -> (T) -> T
+    ): Boolean {
+        val original = _state.value.session?.entries?.firstOrNull { it.id == entryId } as? T ?: return false
+        val next = optimistic(original) ?: return false
+        if (released || !claimUx(entryId)) return false
+        replaceUxEntry(entryId) { if (it == original) next else it }
+        return try {
+            val settle = bounded { send(original) }
+            replaceUxEntry(entryId) { current -> (current as? T)?.let(settle) ?: current }
+            true
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            replaceUxEntry(entryId) { if (it == next) original else it }
+            uxFailed(entryId, error)
+            false
+        } finally {
+            _state.update { it.copy(uxSending = it.uxSending - entryId) }
+        }
+    }
+
+    private fun uxFailed(entryId: String, error: Exception) {
+        val server = error as? AidenRemoteClientException.Server
+        if (server?.statusCode == 404) {
+            // The card is gone on the Mac (answered there, or removed): it leaves this chat too.
+            _state.update { current ->
+                val session = current.session ?: return@update current
+                current.copy(session = session.copy(entries = session.entries.filterNot { it.id == entryId }))
+            }
+            return
+        }
+        // The Mac's own refusals (a stale change, a skill too long to review here) say why.
+        val message = server?.takeIf { it.statusCode == 400 || it.statusCode == 409 }?.body?.message?.takeIf { it.isNotBlank() }
+            ?: SEND_FAILED
+        _state.update { it.copy(uxErrors = it.uxErrors + (entryId to message)) }
+    }
+
+    private fun replaceUxEntry(entryId: String, change: (AidenBotSessionEntry) -> AidenBotSessionEntry) {
+        _state.update { current ->
+            val session = current.session ?: return@update current
+            current.copy(session = session.copy(entries = session.entries.map { if (it.id == entryId) change(it) else it }))
+        }
+    }
+
     private fun settleProposal(proposalId: String, result: AidenBotRoutineProposalRespondResult) {
         val status = when (result.status) {
             AidenBotRoutineProposalOutcome.ACCEPTED -> AidenBotRoutineProposalStatus.ACCEPTED
@@ -2034,6 +2375,7 @@ class AidenBotSessionController(
         copy(state = before.state, interrupted = before.interrupted, blocked = before.blocked, activity = before.activity)
 
     companion object {
+        const val RESUME_REFRESH_FAILED = "The earlier Resume was confirmed, but the current chat state could not be refreshed."
         const val RESUME = "resume"
         const val DISMISS = "dismiss"
         const val STOP = "stop"
@@ -2046,6 +2388,8 @@ class AidenBotSessionController(
         /** Tries a message gets on a connection that keeps failing before it says "Couldn't send". */
         const val MAX_CONNECTION_ATTEMPTS = 3
         const val SEND_FAILED = "Aiden couldn’t send that. Try again."
+        /** A typed card answer this phone can't send to a Bot's approval route. */
+        const val ANSWER_ON_MAC = "Answer this on your Mac."
         const val UNREACHABLE = "Aiden couldn’t reach your Mac. Try again."
         const val ANSWER_FAILED = "Aiden couldn’t send that answer. Try again."
         /** Revision 37 copy, shared with iOS and desktop. */

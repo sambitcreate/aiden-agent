@@ -125,6 +125,8 @@ enum AidenBotRoutinesCopy {
 /// serves `bot-proactive-v1` also offers "Try a daily check-in".
 struct AidenBotRoutinesSection: View {
     @Bindable var coordinator: AidenRemoteCoordinator
+    /// The Bot's own machine; nil follows the selected one.
+    let machine: String?
     let botID: String
     let canWrite: Bool
 
@@ -135,6 +137,7 @@ struct AidenBotRoutinesSection: View {
     @State private var pendingEnabled: [String: Bool] = [:]
     @State private var isLoaded = false
     @State private var editing: AidenBotRoutineEditorTarget?
+    @State private var modelRoutine: AidenBotRoutine?
     @State private var errorMessage: String?
     @State private var suggestion: AidenBotRoutineSuggestion?
 
@@ -174,9 +177,13 @@ struct AidenBotRoutinesSection: View {
             }
         }
         .task(id: botID) { await load() }
+        .sheet(item: $modelRoutine) { routine in
+            AidenBotRoutineModelsView(coordinator: coordinator, machine: machine, botID: botID, routineID: routine.id)
+        }
         .sheet(item: $editing) { target in
             AidenBotRoutineEditorView(
                 coordinator: coordinator,
+                machine: machine,
                 botID: botID,
                 routine: target.routine,
                 prefill: target.prefill
@@ -214,6 +221,10 @@ struct AidenBotRoutinesSection: View {
             }
             .buttonStyle(.plain)
             .disabled(!canWrite)
+            if coordinator.botServer(on: machine)?.supportsBotRoutineModels == true {
+                Button("Model", systemImage: "slider.horizontal.3") { modelRoutine = routine }
+                    .labelStyle(.iconOnly).accessibilityLabel("Model for \(routine.name)")
+            }
             Toggle(routine.name, isOn: Binding(
                 get: { pendingEnabled[routine.id] ?? routine.enabled },
                 set: { enabled in
@@ -257,17 +268,17 @@ struct AidenBotRoutinesSection: View {
 
     @MainActor
     private func load() async {
-        guard let context = try? coordinator.requestContext(),
+        guard let context = try? coordinator.botContext(on: machine),
               let client = try? coordinator.remoteClient(for: context) else { return }
         do {
             let loaded = try await client.botRoutines(botId: botID)
-            guard coordinator.isCurrent(context) else { return }
+            guard coordinator.holds(context) else { return }
             routines = loaded
             isLoaded = true
             errorMessage = nil
             suggestion = await aidenBotRoutineSuggestion(
                 routines: loaded,
-                hostFeatures: coordinator.server?.features,
+                hostFeatures: coordinator.botServer(on: machine)?.features,
                 load: { try await client.botRoutineSuggestions(botId: botID) }
             )
         } catch is CancellationError {
@@ -284,7 +295,7 @@ struct AidenBotRoutinesSection: View {
     /// Sends the flip `pendingEnabled` already shows; the stored routine takes over once the Mac answers.
     private func setEnabled(_ routine: AidenBotRoutine, _ enabled: Bool) async {
         defer { pendingEnabled[routine.id] = nil }
-        guard let context = try? coordinator.requestContext(),
+        guard let context = try? coordinator.botContext(on: machine),
               let client = try? coordinator.remoteClient(for: context),
               let request = try? AidenBotRoutineUpdateRequest(enabled: enabled) else { return }
         do {
@@ -374,8 +385,8 @@ enum AidenBotRoutineFailure: Equatable {
 
     var message: String {
         switch self {
-        case .changedOnMac: "This routine changed on your Mac. Review it and try again."
-        case .removedOnMac: "This routine was removed on your Mac."
+        case .changedOnMac: "This routine changed on your computer. Review it and try again."
+        case .removedOnMac: "This routine was removed on your computer."
         case let .other(message): message
         }
     }
@@ -389,6 +400,7 @@ enum AidenBotRoutineFailure: Equatable {
 /// Name, then frequency first, then the day and time, then what to do.
 struct AidenBotRoutineEditorView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
+    let machine: String?
     let botID: String
     let routine: AidenBotRoutine?
     var prefill: AidenBotRoutineDraft?
@@ -514,7 +526,7 @@ struct AidenBotRoutineEditorView: View {
 
     @MainActor
     private func save() async {
-        guard let context = try? coordinator.requestContext(),
+        guard let context = try? coordinator.botContext(on: machine),
               let client = try? coordinator.remoteClient(for: context) else { return }
         isSaving = true
         defer { isSaving = false }
@@ -557,7 +569,7 @@ struct AidenBotRoutineEditorView: View {
 
     @MainActor
     private func delete() async {
-        guard let routine, let context = try? coordinator.requestContext(),
+        guard let routine, let context = try? coordinator.botContext(on: machine),
               let client = try? coordinator.remoteClient(for: context) else { return }
         isSaving = true
         defer { isSaving = false }

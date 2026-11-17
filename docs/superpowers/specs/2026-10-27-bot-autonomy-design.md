@@ -63,6 +63,10 @@ Owner answers, 2026-10-27:
 | D5 | Which learning needs an approval card? | Reflection lessons (L1) and skills (L2): a card. Corrections (L3) and memory tidying (L4): applied at once with a "· Undo" line, because the person already said it or the change only shrinks memory. | It trades interruptions against control. |
 | D6 | Spend on background learning (review, reflection, tidy, corrections) | At most 12 model requests and 24,000 output tokens per Bot per local day, shared by all learning jobs. | No per-Bot spend accounting exists today. Request and token caps work for subscription providers where dollar cost is unknown. |
 
+### 2026-11-03 amendment: connector-watch lifecycle
+
+The owner explicitly approved accepted connector watches checking while Aiden is running and the owning computer is awake, including after leaving the desktop Bots screen. This supersedes only D2's earlier screen-open restriction; the dated decision above remains as history. Visible person-created watches, read-only granted tools, deterministic-connector validation, no model call per poll and polling no more often than every 15 minutes remain required. Pause, sleep, quit and revoked access stop checks. No keep-awake service or separate daemon is added. Implementation and full desktop/iOS/Android management are specified in the [Bot continuity plan](../../plans/bot-continuity-plan.md); this amendment records a decision, not shipped behavior.
+
 ## 4. Shared foundations
 
 These are built once in Plan A and reused by B and C.

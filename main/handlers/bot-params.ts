@@ -1,3 +1,4 @@
+import { parseBotResumeAcknowledgement } from "../../renderer/shared/bot-execution-resume.js";
 import { parseBotAccessChoice, type BotAccessChoice } from "../../renderer/shared/bot-access-requests.js";
 import {
   BOT_LIMITS,
@@ -14,6 +15,7 @@ import {
   type BotAccessUpdate,
 } from "../../renderer/shared/bot-capabilities.js";
 import type { BotMemoryEditInput, BotMemoryTarget } from "../../renderer/shared/bot-memory.js";
+import { BOT_ROUTINE_THINKING_LEVELS, type BotRoutineThinkingLevel } from "../../renderer/shared/bot-routine-models.js";
 import { BOT_HANDOFF_NOTE_MAX_CHARS, type BotHandoffOutcome } from "../../renderer/shared/bot-handoffs.js";
 import { isBotRuleBehavior, type BotRuleBehavior, type BotRuleChange, type BotRulesUpdateInput } from "../../renderer/shared/bot-rules.js";
 import {
@@ -33,7 +35,7 @@ const CREATE_KEYS = new Set([
   "name",
 ]);
 const CREATE_WITH_ACCESS_KEYS = new Set(["access", "bot"]);
-const UPDATE_KEYS = new Set([...CREATE_KEYS, "chatActivity", "interruptions", "selfWakeUps", "acceptsBotMessages", "messagesOtherBots", "expectedRevision", "id"]);
+const UPDATE_KEYS = new Set([...CREATE_KEYS, "chatActivity", "interruptions", "selfWakeUps", "acceptsBotMessages", "messagesOtherBots", "thinkingLevel", "expectedRevision", "id"]);
 const CHAT_KEYS = new Set(["botId", "model", "providerId", "workspaceId"]);
 const ACCESS_UPDATE_KEYS = new Set(["access", "botId", "expectedRevision"]);
 function exact(value: unknown, keys: ReadonlySet<string>, label: string) {
@@ -81,11 +83,14 @@ export function parseBotCreateWithAccess(value: unknown): {
   };
 }
 
-const FROM_PRESET_KEYS = new Set(["access", "presetId"]);
+const FROM_PRESET_KEYS = new Set(["access", "presetId", "version"]);
 const PRESET_ID = /^[a-z0-9][a-z0-9-]{0,63}$/u;
 
-/** `bots:createFromPreset`: a starter Bot id and, optionally, the access the person confirmed. */
-export function parseBotCreateFromPreset(value: unknown): { presetId: string; access?: BotAccessUpdate } {
+/**
+ * `bots:createFromPreset`: a template id, optionally the template version the
+ * person was shown, and optionally the access they confirmed.
+ */
+export function parseBotCreateFromPreset(value: unknown): { presetId: string; version?: number; access?: BotAccessUpdate } {
   const record = value as Record<string, unknown> | null;
   if (!record || typeof record !== "object" || Array.isArray(record) || !Object.keys(record).every((key) => FROM_PRESET_KEYS.has(key))) {
     throw new Error("Invalid starter Bot fields.");
@@ -93,8 +98,12 @@ export function parseBotCreateFromPreset(value: unknown): { presetId: string; ac
   if (typeof record.presetId !== "string" || !PRESET_ID.test(record.presetId)) {
     throw new Error("Invalid starter Bot id.");
   }
+  if (record.version !== undefined && (typeof record.version !== "number" || !Number.isSafeInteger(record.version) || record.version < 1)) {
+    throw new Error("Invalid template version.");
+  }
   return {
     presetId: record.presetId,
+    ...(record.version === undefined ? {} : { version: record.version }),
     ...(record.access === undefined ? {} : { access: parseBotAccessUpdate(record.access) }),
   };
 }
@@ -118,7 +127,23 @@ export function parseBotUpdate(value: unknown): BotUpdateInput {
     ...(record.acceptsBotMessages !== undefined ? {acceptsBotMessages: parseMessagingSwitch(record.acceptsBotMessages)} : {}),
     ...(record.messagesOtherBots !== undefined ? {messagesOtherBots: parseMessagingSwitch(record.messagesOtherBots)} : {}),
     ...(record.selfWakeUps !== undefined ? { selfWakeUps: parseSelfWakeUps(record.selfWakeUps) } : {}),
+    ...(record.thinkingLevel !== undefined ? { thinkingLevel: parseBotThinkingLevel(record.thinkingLevel) } : {}),
   };
+}
+
+/** One catalog model to read thinking levels for: the picker's opaque ids, never provider ids. */
+export function parseBotModelThinkingLevelsInput(value: unknown): { botId?: string; providerId: string; modelId: string } {
+  const record = exact(value, new Set(["botId", "providerId", "modelId"]), "model thinking level fields");
+  const id = (raw: unknown) => {
+    if (typeof raw !== "string" || raw.length === 0 || raw.length > 256) throw new Error("Invalid model id.");
+    return raw;
+  };
+  return { ...(record.botId === undefined ? {} : { botId: parseBotId(record.botId) }), providerId: id(record.providerId), modelId: id(record.modelId) };
+}
+
+function parseBotThinkingLevel(value: unknown): BotRoutineThinkingLevel {
+  if (!BOT_ROUTINE_THINKING_LEVELS.includes(value as BotRoutineThinkingLevel)) throw new Error("Invalid Bot thinking level.");
+  return value as BotRoutineThinkingLevel;
 }
 
 function parseMessagingSwitch(value: unknown): boolean {
@@ -213,18 +238,19 @@ export function parseBotSend(input: unknown): {
 export function parseBotSessionAction(
   input: unknown,
   action: "resume" | "dismiss",
-): { botId: string; requestId: string } {
+): { botId: string; requestId: string; acknowledgeUnknownCost?: true; expectedSubmissionId?: string; expectedCostReceiptId?: string } {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new Error(`Invalid bot ${action} fields.`);
   }
   const fields = input as Record<string, unknown>;
-  if (!Object.keys(fields).every((key) => key === "botId" || key === "requestId")) {
+  if (!Object.keys(fields).every((key) => key === "botId" || key === "requestId" || action === "resume" && (key === "acknowledgeUnknownCost" || key === "expectedSubmissionId" || key === "expectedCostReceiptId"))) {
     throw new Error(`Invalid bot ${action} fields.`);
   }
   if (typeof fields.requestId !== "string" || !BOT_SESSION_REQUEST_ID.test(fields.requestId)) {
     throw new Error(`Invalid bot ${action} request id.`);
   }
-  return { botId: parseBotId(fields.botId), requestId: fields.requestId };
+  const confirmation = parseBotResumeAcknowledgement({ ...(fields.acknowledgeUnknownCost === undefined ? {} : { acknowledgeUnknownCost: fields.acknowledgeUnknownCost }), ...(fields.expectedSubmissionId === undefined ? {} : { expectedSubmissionId: fields.expectedSubmissionId }), ...(fields.expectedCostReceiptId === undefined ? {} : { expectedCostReceiptId: fields.expectedCostReceiptId }) });
+  return { botId: parseBotId(fields.botId), requestId: fields.requestId, ...confirmation };
 }
 
 /** At most 15 digits, so `Number()` stays exact (below 2^53). */
@@ -514,4 +540,17 @@ export function parseBotRulesUpdate(value: unknown): BotRulesUpdateInput {
     throw new Error("Invalid bot rules revision.");
   }
   return { botId: parseBotId(record.botId), revision, change: ruleChange(record.change) };
+}
+
+/** The person's answer to a settings change from chat (§4.6): exact keys, a known decision. */
+export function parseBotSettingsChangeResponse(input: unknown): { botId: string; changeId: string; decision: "undo" | "apply" | "edited" | "dismiss" } {
+  const fail = (): never => {
+    throw new Error("Invalid settings response.");
+  };
+  if (!input || typeof input !== "object" || Array.isArray(input)) return fail();
+  const fields = input as Record<string, unknown>;
+  if (Object.keys(fields).some((key) => key !== "botId" && key !== "changeId" && key !== "decision")) return fail();
+  if (fields.decision !== "undo" && fields.decision !== "apply" && fields.decision !== "edited" && fields.decision !== "dismiss") return fail();
+  if (typeof fields.changeId !== "string" || !/^[0-9a-f-]{36}$/iu.test(fields.changeId)) return fail();
+  return { botId: parseBotId(fields.botId), changeId: fields.changeId, decision: fields.decision };
 }

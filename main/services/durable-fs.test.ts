@@ -31,6 +31,18 @@ test("replaces a file atomically with the requested owner-only mode", async (t) 
   assert.deepEqual(await siblings(directory), ["state.json"]);
 });
 
+test("a target whose name is near the file system's limit still saves", async (t) => {
+  const directory = await scratch(t);
+  // 80 three-byte characters: 240 bytes, as a person may type into a save dialog.
+  const name = "进".repeat(80);
+  assert.equal(Buffer.byteLength(name, "utf8"), 240);
+  const target = path.join(directory, name);
+  await writeFileAtomic(target, "first");
+  await writeFileAtomic(target, "second", { mode: 0o600 });
+  assert.equal(await fs.readFile(target, "utf8"), "second");
+  assert.deepEqual(await siblings(directory), [name]);
+});
+
 test("a failed staged-file fsync keeps the previous bytes and leaves no staging file", async (t) => {
   const directory = await scratch(t);
   const target = path.join(directory, "state.json");
@@ -175,4 +187,11 @@ test("writeJsonAtomic creates missing parents and round-trips JSON", async (t) =
   assert.deepEqual(JSON.parse(text), { version: 1, items: [1, 2] });
   await assert.rejects(writeJsonAtomic(target, undefined), TypeError);
   assert.deepEqual(JSON.parse(await fs.readFile(target, "utf8")), { version: 1, items: [1, 2] });
+});
+
+test("the synchronous publication fence observes revocation queued by the last awaited validator",async t=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),"aiden-publish-fence-"));t.after(()=>fs.rm(root,{recursive:true,force:true}));
+  const target=path.join(root,"state.json");await fs.writeFile(target,"old");let current=true,published=0;
+  await assert.rejects(writeFileAtomic(target,"new",{beforePublish:async()=>{queueMicrotask(()=>{current=false;});},assertCurrent:()=>{if(!current)throw new Error("source revoked");},io:{rename:async(from,to)=>{published++;await fs.rename(from,to);}}}),/source revoked/u);
+  assert.equal(await fs.readFile(target,"utf8"),"old");assert.equal(published,0);
 });

@@ -15,8 +15,7 @@ import { botHandoffResultLine, type BotHandoffOutcome } from "../../shared/bot-h
 import type { BotChatActivityLevel } from "../../shared/bots";
 import type { ConnectCardEntry } from "../../shared/bot-connections";
 import type { BotRoutineProposalEntryData, BotRoutineProposalStatus } from "../../shared/bot-routine-proposals";
-import type { BotIssue, BotIssueResolution } from "../../shared/bot-issues";
-import { botSettleSteps, type BotRecapStep } from "./bot-activity-steps";
+import { botRecapIssues, botSettleSteps, type BotRecapStep } from "./bot-activity-steps";
 import { walkBotTurns, type BotTurn } from "./bot-turns";
 
 export interface BotTranscriptRowOptions {
@@ -33,6 +32,7 @@ export type BotTranscriptRow =
   /** The person's answer to a hand-off card, on their side: "You did this: …" with their note below. */
   | { kind: "handoff_result"; id: string; outcome: BotHandoffOutcome; signedIn: boolean; text: string; note?: string }
   | { kind: "routine"; id: string; label: string; text: string }
+  | { kind: "peer"; id: string; exchangeId: string; direction: "sent" | "received"; peerName: string; messageKind: "request" | "question" | "status" | "fyi" | "result" }
   | { kind: "assistant"; id: string; text: string; streaming?: boolean }
   /** One turn's steps; `live` while the turn runs (Detailed only). */
   | { kind: "recap"; id: string; steps: BotRecapStep[]; durationMs: number; live: boolean }
@@ -56,6 +56,13 @@ export type BotTranscriptRow =
       routineId?: string;
       supersededBy?: string;
     }
+  /** "Settings updated · Undo", or a held change the person applied. */
+  | {
+      kind: "settings_change";
+      id: string;
+      change: import("../../shared/bot-settings-changes").BotSettingsChangeEntryData;
+      status: "pending" | import("../../shared/bot-settings-changes").BotSettingsChangeStatus;
+    }
   | {
       kind: "skill_proposal";
       id: string;
@@ -72,7 +79,6 @@ export type BotTranscriptRow =
   /** "Wake-up at 3:10 PM · Cancel": a wake-up the Bot set for itself. */
   | { kind: "wake_up"; id: string; wakeUpId: string; fireAt: number }
   /** A "Needs you" issue the host raised; settles to one quiet line. */
-  | { kind: "issue"; id: string; issue: BotIssue; status: "open" | BotIssueResolution }
   /** Routines that fired while the person had paused the Bot, each with Run now. */
   | {
       kind: "routines_skipped";
@@ -94,11 +100,16 @@ export function botTranscriptRows(
   walkBotTurns(entries, running, {
     end(turn, live) {
       const steps = turn.steps.filter((step) => step.kind !== "waiting");
-      if (steps.length > 0 && (level === "detailed" || (level === "summary" && !live))) {
+      const settled = live ? steps : botSettleSteps(steps, turn.stopped || turn.interrupted);
+      // With tool activity off, a finished turn still keeps its one line when
+      // a step failed or was blocked: that is something the person may need to act on.
+      const issues = botRecapIssues(settled);
+      const needsSaying = !live && (issues.failed > 0 || issues.blocked > 0);
+      if (steps.length > 0 && (level === "detailed" || (level === "summary" && !live) || needsSaying)) {
         const recap: BotTranscriptRow = {
           kind: "recap",
           id: `${turn.start.id}:recap`,
-          steps: live ? steps : botSettleSteps(steps, turn.stopped || turn.interrupted),
+          steps: settled,
           durationMs: Math.max(0, (turn.lastAt ?? 0) - (turn.startAt ?? turn.lastAt ?? 0)),
           live,
         };
@@ -133,6 +144,9 @@ export function botTranscriptRows(
           break;
         case "routine":
           rows.push({ kind: "routine", id: entry.id, label: entry.label, text: entry.text });
+          break;
+        case "peer":
+          rows.push({ kind: "peer", id: entry.id, exchangeId: entry.exchangeId, direction: entry.direction, peerName: entry.peerName, messageKind: entry.messageKind });
           break;
         case "assistant":
           if (entry.text.trim()) {
@@ -187,11 +201,18 @@ export function botTranscriptRows(
         case "skill_proposal":
           rows.push({ kind: "skill_proposal", id: entry.id, proposal: entry.proposal, status: entry.status });
           break;
+        // A held change waits in the Needs-you slot; once applied it reads as a receipt.
+        case "settings_change":
+          if (entry.change.mode === "applied" || entry.status === "applied" || entry.status === "edited") {
+            rows.push({ kind: "settings_change", id: entry.id, change: entry.change, status: entry.status });
+          }
+          break;
         case "routines_skipped":
           rows.push({ kind: "routines_skipped", id: entry.id, since: entry.since, routines: entry.routines });
           break;
+        // An open "Needs you" issue waits in the Needs-you slot above the
+        // composer, like the phones show it; a settled one leaves no trace.
         case "issue":
-          rows.push({ kind: "issue", id: entry.id, issue: entry.issue, status: entry.status });
           break;
         case "tool_result":
           break;

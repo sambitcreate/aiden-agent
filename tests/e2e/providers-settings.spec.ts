@@ -15,7 +15,7 @@ test("provider explanations open from the keyboard", async ({ aiden }) => {
   const info = page.getByRole("button", { name: "About provider connections" });
   await info.focus();
   await page.keyboard.press("Enter");
-  const explanation = page.getByRole("dialog", { name: "Provider connections" });
+  const explanation = page.getByRole("tooltip");
   await expect(explanation).toBeVisible();
   await expect(info).toHaveAttribute("aria-expanded", "true");
   await page.keyboard.press("Escape");
@@ -141,13 +141,10 @@ async function sendAgentRuntime(app: import("@playwright/test").ElectronApplicat
 }
 
 async function openAntigravitySetup(page: import("@playwright/test").Page) {
-  const more = page.getByRole("button", { name: /^Show \d+ more providers?$/u });
-  if (await more.isVisible()) await more.click();
-  await page
-    .getByText("Google Antigravity", { exact: true })
-    .locator("xpath=ancestor::div[.//button[normalize-space()='Set up']][1]")
-    .getByRole("button", { name: "Set up", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Connect another AI" }).click();
+  await page.getByText("Advanced connection", { exact: true }).click();
+  await page.getByRole("button", { name: "Other setup methods" }).click();
+  await page.getByRole("button", { name: "Google Antigravity", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Set up Google Antigravity" });
   await expect(dialog).toBeVisible();
   return dialog;
@@ -195,4 +192,21 @@ test("agent runtime focus follows its actions when install finishes or fails in 
   await page.keyboard.press("Escape");
   await expect(dialog).toBeVisible();
   await expect(remove).toBeFocused();
+});
+
+
+test("Settings connects from a key and keeps catalog updates in Advanced", async ({ aiden }) => {
+  const { page } = aiden;
+  await openProviders(page);
+  await expect(page.getByRole("button", { name: "Update model catalogs" })).toBeHidden();
+  await page.getByRole("button", { name: "Connect another AI" }).click();
+  await page.getByRole("button", { name: /I have an API key/u }).click();
+  await page.getByRole("button", { name: "Anthropic", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Connect Anthropic" });
+  await expect(dialog.getByRole("button", { name: "Validate key" })).toBeDisabled();
+  await dialog.getByPlaceholder("Paste your API key").fill("fixture-key");
+  await expect(dialog.getByRole("button", { name: "Validate key" })).toBeEnabled();
+  await page.keyboard.press("Escape");
+  await page.getByText("Advanced", { exact: true }).click();
+  await expect(page.getByRole("button", { name: "Update model catalogs" })).toBeVisible();
 });

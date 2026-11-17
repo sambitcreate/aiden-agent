@@ -1,5 +1,7 @@
 # ADR-DS: Design Studio architecture
 
+> **Superseded (2026-10-31):** replaced by [Design mode](../superpowers/specs/2026-10-31-design-mode-design.md). Its P0 ([plan](../superpowers/plans/2026-10-31-design-mode-p0-retire-studio.md)) removed the Design Studio code (projects, design runs, generation profile, `/design` route, Design row, `designProjects:` IPC and the `AIDEN_EXPERIMENTAL_DESIGN_STUDIO` flag). The `design-project` chat owner stays parsed so hidden project chats stay hidden. This ADR is kept as history.
+
 Status: Proposed (Phase 0 deliverable; needs owner approval)
 Date: 2026-10-07
 Baseline: `main` @ `bd232b85`

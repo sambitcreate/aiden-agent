@@ -2,6 +2,9 @@
 import { emitBotTestNotification, installBotTestIpc, type BotTestIpcCall } from "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { beforeEach, test } from "node:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { DraftWorktreeSendView } from "../components/draft-worktree-send-view";
 import { chatsApi } from "./ipc";
 import {
   activeWorktreeSend,
@@ -122,6 +125,39 @@ test("a successful send reports this draft's progress and returns the chat saved
   );
   emitBotTestNotification(PROGRESS, { draftId: DRAFT_ID, phase: "ready", branch: "late" });
   assert.equal(views.length, 3, "nothing is shown after the send settles");
+});
+
+test("a first message Aiden Live sent keeps its By voice label while the worktree is made", async () => {
+  replies.push({ ok: true, chat: savedChat("ws-worktree"), worktree: WORKTREE_INFO });
+  const send = startWorktreeFirstSend({
+    api: {
+      createInWorktree: chatsApi.createWithFirstMessageInWorktree,
+      createInCheckout: chatsApi.createWithFirstMessage,
+      onProgress: chatsApi.onFirstMessageWorktreeProgress,
+    },
+    input: INPUT,
+    worktree: REQUEST,
+    message: { text: "Fix the login bug", attachments: [], inputSource: "voice" },
+  });
+  const shown = (active = activeWorktreeSend(DRAFT_ID)!) =>
+    renderToStaticMarkup(
+      createElement(DraftWorktreeSendView, {
+        text: active.text,
+        attachments: active.attachments,
+        inputSource: active.inputSource,
+        view: active.view,
+        onDecide: () => {},
+      }),
+    );
+  assert.match(shown(), /By voice/u);
+  await send.result;
+  send.release();
+
+  replies.push({ ok: true, chat: savedChat("ws-worktree"), worktree: WORKTREE_INFO });
+  const typed = start([]);
+  assert.doesNotMatch(shown(), /By voice/u, "a typed first message has no label");
+  await typed.result;
+  typed.release();
 });
 
 test("a failure waits for the user; Retry resends with the same idempotency key", async () => {

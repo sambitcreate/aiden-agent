@@ -30,6 +30,23 @@ test("navigation acknowledges only its requesting live document and closed desti
     "unavailable",
   );
 });
+test("the limits destination opens Context & Limits", async () => {
+  const navigation = new AidenAppNavigation();
+  let payload: { requestId: string; path: string } | undefined;
+  const owner: ChatGenerationOwner = {
+    id: 8,
+    documentId: "doc",
+    isDestroyed: () => false,
+    onInvalidated: () => () => {},
+    send: (_channel, value) => {
+      payload = value as typeof payload;
+    },
+  };
+  const result = navigation.open("limits", owner);
+  assert.equal(payload?.path, "/settings?section=limits");
+  navigation.acknowledge(payload?.requestId, "opened", owner);
+  assert.deepEqual(await result, { status: "opened", destination: "limits" });
+});
 test("document invalidation cannot be reported as successful navigation", async () => {
   const navigation = new AidenAppNavigation();
   let invalidate = () => {};

@@ -1,3 +1,4 @@
+import { forgetBotPendingChanges } from "../../lib/bot-local-pending";
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouter } from "@tanstack/react-router";
@@ -44,6 +45,7 @@ export function BotDeleteDialog({
     setBusy(true);
     try {
       await botsApi.delete(bot.id);
+      if (!forgetBotPendingChanges(bot.id)) toast.error("The Bot was deleted, but this device couldn’t clear all its saved changes.");
       // Here, not in a list prune: deleting the last Bot leaves an empty list, which never prunes.
       botSidebarPreferenceActions.forget(bot.id);
       forgetBotLiveView(bot.id);
@@ -52,6 +54,8 @@ export function BotDeleteDialog({
       qc.removeQueries({ queryKey: queryKeys.bot(bot.id) });
       qc.removeQueries({ queryKey: queryKeys.botChats(bot.id) });
       qc.removeQueries({ queryKey: queryKeys.botLiveSummary(bot.id) });
+      qc.removeQueries({ queryKey: ["bot-open-work", bot.id] });
+      qc.removeQueries({ queryKey: ["bot-routine-models", bot.id] });
       void qc.invalidateQueries({ queryKey: queryKeys.bots });
       onOpenChange(false);
       if (botRouteBotId(router.state.location.pathname) === bot.id) await navigate({ to: "/bots" });

@@ -166,6 +166,24 @@ test("a gap snapshot reseeds pending prompts from the host and waits for the per
   assert.equal(remoteRunTranscript(answered, []).agentActivity?.label, "Waiting for an answer");
 });
 
+test("a legacy gap still shows later tool history through the saved-message handoff", () => {
+  const { view } = fold([
+    event(40, "snapshot", { reason: "gap", state: "working" }),
+    event(41, "text_delta", { text: "missing its prefix" }),
+    event(42, "timeline", { timeline: {
+      version: 3, generationId: "run-1", status: "running", startedAt: 1000,
+      steps: [{ kind: "tool", id: "tool-1", order: 0, contentOffset: 12, toolCallId: "call-1", toolName: "read_file",
+        label: "Inspect schema", status: "completed", startedAt: 1000, updatedAt: 1100 }],
+    } }),
+  ]);
+  const live = remoteRunTranscript(view, []);
+  assert.equal(live.streamingText, "");
+  assert.equal(live.timeline?.steps[0]?.id, "tool-1");
+  const done = applyRemoteRunEvent(view, event(43, "done", { messageId: "saved" })).view;
+  assert.equal(remoteRunTranscript(done, []).timeline?.steps[0]?.id, "tool-1");
+  assert.equal(remoteRunTranscript(done, [assistant("saved", "Full answer")]).timeline, null);
+});
+
 test("a gap snapshot that reports a finished run settles it", () => {
   const { view, refetch } = fold([
     event(1, "run.started", {}),
@@ -247,6 +265,10 @@ test("a chat with no current run subscribes idle, and a gone stream settles the 
   assert.equal(gone.refetch, true);
   assert.equal(gone.view.ended, true);
   assert.equal(remoteRunTranscript(gone.view, []).agentActivity, null);
+  const parked = applyRemoteRunStreamState(running, "idle");
+  assert.equal(parked.view.ended, true);
+  assert.equal(parked.refetch, true);
+  assert.equal(remoteRunTranscript(parked.view, []).agentActivity, null);
   assert.equal(applyRemoteRunStreamState(running, "waiting").view, running);
 });
 

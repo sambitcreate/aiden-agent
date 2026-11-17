@@ -1,5 +1,6 @@
 // The renderer's chat mutations: rename, a model-titled rename, a chat's own
-// model choice, delete, append, and dismissing a Computer Use continue callout.
+// model choice, design mode, delete, append, and dismissing a Computer Use
+// continue callout.
 // Each asks its service to refuse a chat another Aiden feature owns (a Design
 // project's hidden chat). The handlers live here, apart from chats.ts, so they
 // load without Electron and the refusal is pinned by invoking them; chats.ts
@@ -26,6 +27,7 @@ import {
   commitSkillInvocationForAppend,
   requireSkillInvocationWorkspace,
 } from "../services/skill-invocation-turn.js";
+import { reportAnalyticsEvent } from "../services/analytics/analytics-report.js";
 import { chatForRenderer } from "../services/visible-chat-projection.js";
 import type { WorkspaceMutationGate } from "../services/workspace-mutation-gate.js";
 import { parseChatAppend } from "./chat-append-params.js";
@@ -45,7 +47,22 @@ function boundedId(value: unknown, name: string, maxChars: number, maxBytes: num
   return text;
 }
 
+/**
+ * The `chats:design-mode-changed` payload. It has its own channel, apart from
+ * `chats:metadata-updated`, so it never carries a title that could undo a
+ * rename and never plays the sidebar's title reveal.
+ */
+export interface ChatDesignModeChange {
+  chatId: string;
+  designMode: boolean;
+}
+
 /** The app singletons these handlers use; chats.ts passes the real ones. */
+/** How the person turned design mode on: the Design toggle, ⇧⌘L or `/design`. Anything else counts as the toggle. */
+function designModeEntrySource(source: unknown): "toggle" | "shortcut" | "slash" {
+  return source === "shortcut" || source === "slash" ? source : "toggle";
+}
+
 export interface RendererChatMutationDeps {
   chatStore: Pick<
     ReturnType<typeof createChatStore>,
@@ -53,8 +70,12 @@ export interface RendererChatMutationDeps {
   >;
   chatApplicationService: Pick<
     ReturnType<typeof createChatApplicationService>,
-    "rename" | "setModelSelection" | "remove"
+    "rename" | "setModelSelection" | "setDesignMode" | "remove"
   >;
+  /** Off only with AIDEN_DESIGN_MODE=0, when the design mode channel has no effect. */
+  designModeEnabled(): boolean;
+  /** Tells every window a chat's design mode changed (`chats:design-mode-changed`). */
+  broadcastDesignModeChanged(change: ChatDesignModeChange): void;
   chatTitleService: {
     renameWithFoundationModels(chatId: string, options: { rejectFeatureOwned?: boolean }): Promise<unknown>;
   };
@@ -91,6 +112,8 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
     artifactRecoveryMessage,
     workspaceMutationGate,
     skillRegistry,
+    designModeEnabled,
+    broadcastDesignModeChanged,
   } = deps;
   return {
     rename: async (_event: IpcMainInvokeEvent, id: unknown, title: unknown) => {
@@ -110,6 +133,25 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
         boundedId(model, "model", MAX_MODEL_ID_CHARS, MAX_MODEL_ID_BYTES),
         { rejectFeatureOwned: true },
       ),
+
+    /** Turn design mode on or off for one chat, then tell every window. */
+    setDesignMode: async (_event: IpcMainInvokeEvent, id: unknown, enabled: unknown, source: unknown) => {
+      const chatId = asString(id, "id");
+      if (typeof enabled !== "boolean") throw new Error('Expected a boolean for "enabled".');
+      if (!designModeEnabled()) throw new Error("Design mode is not available.");
+      let wasOn: boolean | undefined;
+      const chat = await chatApplicationService.setDesignMode(chatId, enabled, {
+        rejectFeatureOwned: true,
+        assertCurrent: (current) => {
+          wasOn = current.designMode === true;
+        },
+      });
+      // The store only resolves once the chat holds exactly this value.
+      broadcastDesignModeChanged({ chatId, designMode: enabled });
+      if (wasOn === false && enabled) reportAnalyticsEvent("design_mode_entered", { source: designModeEntrySource(source) });
+      else if (wasOn === true && !enabled) reportAnalyticsEvent("design_mode_exited", {});
+      return chat;
+    },
 
     /** Clear the post-restart "continue Computer Use" marker without resuming. */
     dismissComputerUseContinue: async (_event: IpcMainInvokeEvent, id: unknown) =>
@@ -142,6 +184,7 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
         autoTitle,
         turnId,
         skillReference,
+        inputSource,
         retainedBytes,
       } = parsed;
       const owner = rendererDocumentOwner(
@@ -232,6 +275,7 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
                     model: messageModel,
                     attachments,
                     skill: skill?.provenance,
+                    ...(inputSource ? { inputSource } : {}),
                     // Reasoning and generation timelines are persisted by the trusted
                     // main-process generation owner, never accepted from renderer data.
                     reasoning: undefined,

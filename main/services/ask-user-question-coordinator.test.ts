@@ -264,3 +264,113 @@ test("a withdrawn prompt says whether its owner settled it or the host ended it"
     [quitPrompt!.promptId, "host"],
   ]);
 });
+
+test("a prompt answered from inside its own publication is still withdrawn exactly once", async () => {
+  const withdrawn: Array<[string, string]> = [];
+  const answer = (promptId: string) => ({
+    version: ASK_USER_QUESTION_VERSION,
+    promptId,
+    cancelled: false,
+    answers: [{ questionIndex: 0, kind: "option", answer: "Direct" }],
+  });
+  const coordinator: AskUserQuestionCoordinator = new AskUserQuestionCoordinator(
+    (prompt) => {
+      coordinator.respond(prompt.promptId, answer(prompt.promptId), "document-one");
+    },
+    (promptId, _response, settledBy) => withdrawn.push([promptId, settledBy]),
+  );
+  const response = await coordinator.request(
+    { streamId: "s-sync", toolCallId: "call-sync", questions },
+    "document-one",
+  );
+  assert.equal(response.cancelled, false);
+  assert.deepEqual(withdrawn, [[response.promptId, "owner"]]);
+  assert.equal(coordinator.pendingCount, 0);
+});
+
+test("a publication that throws after settling its own prompt keeps the answer and still withdraws", async () => {
+  const withdrawn: string[] = [];
+  const coordinator: AskUserQuestionCoordinator = new AskUserQuestionCoordinator(
+    (prompt) => {
+      coordinator.respond(
+        prompt.promptId,
+        {
+          version: ASK_USER_QUESTION_VERSION,
+          promptId: prompt.promptId,
+          cancelled: false,
+          answers: [{ questionIndex: 0, kind: "option", answer: "Direct" }],
+        },
+        "document-one",
+      );
+      throw new Error("channel lost after the answer");
+    },
+    (promptId) => withdrawn.push(promptId),
+  );
+  const response = await coordinator.request(
+    { streamId: "s-throw", toolCallId: "call-throw", questions },
+    "document-one",
+  );
+  assert.equal(response.cancelled, false);
+  assert.deepEqual(withdrawn, [response.promptId]);
+});
+
+test("after shutdown a new question is cancelled without being shown", async () => {
+  const published: string[] = [];
+  const coordinator = new AskUserQuestionCoordinator((prompt) => published.push(prompt.promptId));
+  coordinator.shutdown();
+  const response = await coordinator.request(
+    { streamId: "s-late", toolCallId: "call-late", questions },
+    "document-one",
+  );
+  assert.equal(response.cancelled, true);
+  assert.deepEqual(published, []);
+  assert.equal(coordinator.pendingCount, 0);
+});
+
+test("the first answer wins across the owner and a paired host", async () => {
+  let published!: AskUserQuestionPromptV1;
+  const coordinator = new AskUserQuestionCoordinator((prompt) => {
+    published = prompt;
+  });
+  const pending = coordinator.request(
+    { streamId: "s-race", toolCallId: "call-race", questions },
+    "document-one",
+  );
+  const pick = (answer: string) => ({
+    version: ASK_USER_QUESTION_VERSION,
+    promptId: published.promptId,
+    cancelled: false,
+    answers: [{ questionIndex: 0, kind: "option", answer }],
+  });
+  assert.equal(coordinator.respondAsHost(published.promptId, pick("Guided")), "answered");
+  assert.equal(coordinator.respond(published.promptId, pick("Direct"), "document-one"), false);
+  assert.equal(coordinator.respondAsHost(published.promptId, pick("Direct")), "rejected");
+  assert.deepEqual((await pending).answers, [{ questionIndex: 0, kind: "option", answer: "Guided" }]);
+});
+
+test("an invalid answer leaves the question waiting for a valid one", async () => {
+  let published!: AskUserQuestionPromptV1;
+  const coordinator = new AskUserQuestionCoordinator((prompt) => {
+    published = prompt;
+  });
+  const pending = coordinator.request(
+    { streamId: "s-invalid", toolCallId: "call-invalid", questions },
+    "document-one",
+  );
+  const pick = (answer: string) => ({
+    version: ASK_USER_QUESTION_VERSION,
+    promptId: published.promptId,
+    cancelled: false,
+    answers: [{ questionIndex: 0, kind: "option", answer }],
+  });
+  assert.equal(
+    coordinator.respondWithOutcome(published.promptId, pick("Not an option"), "document-one"),
+    "rejected",
+  );
+  assert.equal(coordinator.pendingCount, 1);
+  assert.equal(
+    coordinator.respondWithOutcome(published.promptId, pick("Direct"), "document-one"),
+    "answered",
+  );
+  assert.deepEqual((await pending).answers, [{ questionIndex: 0, kind: "option", answer: "Direct" }]);
+});

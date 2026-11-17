@@ -46,6 +46,7 @@ import {
   writeSubagentRuntimeFailure,
 } from "./subagent-runtime-diagnostics.js";
 import { canDispatchSubagentModel } from "./eligibility.js";
+import { subagentProviderAuthority } from "./subagent-runtime-authority.js";
 
 function mergeHeaders(
   base: ProviderHeaders | undefined,
@@ -77,6 +78,12 @@ function closedInferenceError(model: Model<Api>, reason: "error" | "aborted"): A
         : "The isolated provider request failed.",
     timestamp: Date.now(),
   };
+}
+
+function abortedInferenceStream(model: Model<Api>): AssistantMessageEventStream {
+  const stream = createAssistantMessageEventStream();
+  stream.push({ type: "error", reason: "aborted", error: closedInferenceError(model, "aborted") });
+  return stream;
 }
 
 export function withZeroActivityStartupRetry(
@@ -496,21 +503,21 @@ export interface SubagentInferenceDiagnosticContext {
  */
 export class ElectronSubagentInferenceIsolation implements SubagentInferenceIsolation {
   private readonly shutdownController = new AbortController();
-  private readonly owner = new SubagentInferenceProcessOwner(
-    launchElectronInferenceProcess,
-    undefined,
-    (error) => {
-      writeDevLog("error", "subagents", [
-        "Could not verify isolated subagent inference process cleanup.",
-        error,
-      ]);
-    },
-  );
+  private readonly owner: Pick<SubagentInferenceProcessOwner, "stream" | "shutdown">;
+
+  constructor(owner?: Pick<SubagentInferenceProcessOwner, "stream" | "shutdown">) {
+    this.owner = owner ?? new SubagentInferenceProcessOwner(
+      launchElectronInferenceProcess, undefined, (error) => {
+        writeDevLog("error", "subagents", ["Could not verify isolated subagent inference process cleanup.", error]);
+      },
+    );
+  }
 
   wrap(
     runtime: ResolvedModelRuntime,
     diagnosticContext?: SubagentInferenceDiagnosticContext,
   ): ResolvedModelRuntime {
+    const authority = subagentProviderAuthority(runtime);
     let firstIsolatedRequest = true;
     let pendingHostFailure: "inference" | "policy" | undefined;
     const isolatedStreamSimple = (
@@ -522,6 +529,11 @@ export class ElectronSubagentInferenceIsolation implements SubagentInferenceIsol
       const startupRetryEnabled = firstIsolatedRequest;
       firstIsolatedRequest = false;
       return lazyStream(model, async () => {
+        const preparationSignal = AbortSignal.any([this.shutdownController.signal, ...(options?.signal ? [options.signal] : []), ...(authority?.signal ? [authority.signal] : [])]);
+        try {
+        preparationSignal.throwIfAborted();
+        await authority?.revalidate();
+        preparationSignal.throwIfAborted();
         const diagnosticId = createSubagentDiagnosticId();
         let requestModel: Model<Api>;
         let requestOptions: ModelsSimpleStreamOptions;
@@ -536,7 +548,7 @@ export class ElectronSubagentInferenceIsolation implements SubagentInferenceIsol
           if (!runtime.prepareIsolatedStream) {
             throw new Error("OpenAI Codex isolated dispatch is unavailable.");
           }
-          const lease = await runtime.prepareIsolatedStream(model, options);
+          const lease = await runtime.prepareIsolatedStream(model, { ...options, signal: preparationSignal });
           requestModel = lease.model;
           const allowedEnv = ambientProviderEnv(model.provider, lease.options.env);
           requestOptions = {
@@ -551,9 +563,10 @@ export class ElectronSubagentInferenceIsolation implements SubagentInferenceIsol
             env: options?.env,
           });
           if (!resolution) throw new Error(`Provider is not configured: ${model.provider}`);
-          const apiKey = options?.apiKey ?? resolution.auth.apiKey;
-          let headers = mergeHeaders(resolution.auth.headers ?? runtime.headers, options?.headers);
+          const apiKey = authority ? resolution.auth.apiKey : options?.apiKey ?? resolution.auth.apiKey;
+          let headers = authority ? mergeHeaders(options?.headers, resolution.auth.headers ?? runtime.headers) : mergeHeaders(resolution.auth.headers ?? runtime.headers, options?.headers);
           if (options?.transformHeaders) headers = await options.transformHeaders(headers ?? {});
+          if (authority) headers = mergeHeaders(headers, resolution.auth.headers ?? runtime.headers);
           requestModel = resolution.auth.baseUrl
             ? { ...model, baseUrl: resolution.auth.baseUrl }
             : model;
@@ -561,7 +574,7 @@ export class ElectronSubagentInferenceIsolation implements SubagentInferenceIsol
           // The worker bootstrap disables every child_process entry point, so
           // static/role/SSO profiles can resolve but credential_process cannot
           // escape the owned UtilityProcess.
-          const envSource = {
+          const envSource = authority ? { ...(resolution.env ?? {}) } : {
             ...process.env,
             ...(resolution.env ?? {}),
             ...(options?.env ?? {}),
@@ -570,17 +583,22 @@ export class ElectronSubagentInferenceIsolation implements SubagentInferenceIsol
           const env = Object.keys(allowedEnv).length > 0 ? allowedEnv : undefined;
           requestOptions = { ...options, apiKey, headers, env };
         }
+        await authority?.revalidate();
+        preparationSignal.throwIfAborted();
+        if (authority && (requestModel.provider !== runtime.model.provider || requestModel.id !== runtime.model.id)) throw new Error("Isolated authentication cannot switch the originating task's model.");
         const { signal } = requestOptions;
         const prepared = prepareSubagentInferenceOptions(requestOptions);
-        const requestSignals = [leaseSignal, signal, this.shutdownController.signal].filter(
+        const requestSignals = [leaseSignal, signal, preparationSignal].filter(
           (candidate): candidate is AbortSignal => candidate !== undefined,
         );
         const requestSignal =
           requestSignals.length > 1 ? AbortSignal.any(requestSignals) : requestSignals[0];
         return withZeroActivityStartupRetry(
           requestModel,
-          () =>
-            this.owner.stream(
+          () => lazyStream(requestModel, async () => {
+            await authority?.revalidate();
+            if (requestSignal?.aborted) return abortedInferenceStream(requestModel);
+            return this.owner.stream(
               {
                 kind: "start",
                 version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
@@ -626,7 +644,8 @@ export class ElectronSubagentInferenceIsolation implements SubagentInferenceIsol
                 },
               },
               requestSignal,
-            ),
+            );
+          }),
           requestSignal,
           startupRetryEnabled,
           SUBAGENT_STARTUP_RETRY_DELAYS_MS,
@@ -656,6 +675,10 @@ export class ElectronSubagentInferenceIsolation implements SubagentInferenceIsol
             ]);
           },
         );
+        } catch (error) {
+          if (preparationSignal.aborted) return abortedInferenceStream(model);
+          throw error;
+        }
       });
     };
 

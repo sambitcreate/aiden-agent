@@ -83,7 +83,7 @@ const LOCAL_STATUS: HostChatStatus = { availability: "online", generation: 0 };
 
 const NOT_A_HOST_READ = {
   code: "unsupported",
-  message: "Local chats are read from this Mac's chat store.",
+  message: "Local chats are read from the local chat store.",
 } as const;
 
 /**
@@ -249,7 +249,11 @@ export class LocalHostAdapter implements HostChatAdapter {
   }
 
   submitInput(_chatId: string, input: HostChatInput): Promise<ChatRunInputAdmissionResult> {
-    return this.apis.admitRunInput(input.runId, { mode: input.mode, text: input.text });
+    return this.apis.admitRunInput(input.runId, {
+      mode: input.mode,
+      text: input.text,
+      ...(input.inputSource ? { inputSource: input.inputSource } : {}),
+    });
   }
 
   rename(chatId: string, input: HostChatRenameInput): Promise<void> {
