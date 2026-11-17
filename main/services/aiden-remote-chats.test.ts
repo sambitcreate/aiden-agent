@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { analyticsSettled, captureAnalyticsEvents } from "./analytics/test-support.js";
 import type { Chat, ChatMessage } from "./types.js";
 import {
   AidenRemoteChatService,
@@ -73,6 +74,8 @@ function fixture(
     spendingRefusal?: (chat: { id: string; botId?: string }) => Promise<string | undefined>;
     workspaceFolderRefusal?: (workspaceId: string) => Promise<string | undefined>;
     noWorkspace?: ConstructorParameters<typeof AidenRemoteChatService>[0]["noWorkspace"];
+    isFolderWorkspace?: ConstructorParameters<typeof AidenRemoteChatService>[0]["isFolderWorkspace"];
+    deviceIsPeer?: ConstructorParameters<typeof AidenRemoteChatService>[0]["deviceIsPeer"];
     modelSupportsImages?: () => boolean;
     imageArtifactRecoveryPending?: boolean;
     imageArtifactRecoveryUnavailable?: boolean;
@@ -296,6 +299,8 @@ function fixture(
     ...(fixtureOptions.botPaused ? { botPaused: fixtureOptions.botPaused } : {}),
     ...(fixtureOptions.spendingRefusal ? { spendingRefusal: fixtureOptions.spendingRefusal } : {}),
     ...(fixtureOptions.noWorkspace ? { noWorkspace: fixtureOptions.noWorkspace } : {}),
+    ...(fixtureOptions.isFolderWorkspace ? { isFolderWorkspace: fixtureOptions.isFolderWorkspace } : {}),
+    ...(fixtureOptions.deviceIsPeer ? { deviceIsPeer: fixtureOptions.deviceIsPeer } : {}),
     ...(fixtureOptions.workspaceFolderRefusal
       ? { workspaceFolderRefusal: fixtureOptions.workspaceFolderRefusal }
       : {}),
@@ -471,6 +476,24 @@ test("a follow-up notice reaches phones as one readable line, never the output i
     ["A check failed: #42 in acme/app · unit", "Fixing the test."],
   );
   assert.doesNotMatch(JSON.stringify(projection), /ghp_secret/u);
+});
+
+test("a message Aiden Live sent reaches paired devices as By voice; nothing else does", () => {
+  const projection = projectAidenRemoteChat(chat({
+    messages: [
+      { id: "voice-1", role: "user", content: "Check the reset page too.", inputSource: "voice", createdAt: 2_000 },
+      { id: "typed-1", role: "user", content: "And the login page.", createdAt: 2_001 },
+      { id: "answer-1", role: "assistant", content: "On it.", inputSource: "voice", createdAt: 2_002 } as never,
+    ],
+  }));
+  const messages = parseAidenRemoteChatProjection(projection).messages;
+  assert.deepEqual(messages.map((message) => message.inputSource), ["voice", undefined, undefined]);
+  const wire = JSON.parse(JSON.stringify(projection)) as { messages: Array<Record<string, unknown>> };
+  assert.deepEqual(
+    wire.messages.map((message) => "inputSource" in message),
+    [true, false, false],
+    "only the voice message carries the key on the wire",
+  );
 });
 
 test("chat projection emits only parent state and rejects private child metadata", () => {
@@ -1927,7 +1950,7 @@ test("a phone turn in a workspace whose folder moved is refused before it is sto
         error instanceof AidenRemoteServiceError &&
         error.code === "workspace_unavailable" &&
         error.status === 409 &&
-        /folder is missing on your Mac/u.test(error.message) &&
+        /folder is missing on your computer/u.test(error.message) &&
         // Remote errors never carry a path.
         !error.message.includes(root),
     );
@@ -3317,4 +3340,82 @@ test("context pressure is null when the host cannot project, and Bot chats and u
   const unwired = fixture(chat());
   assert.equal(unwired.service.supportsContextPressure, false);
   await assert.rejects(unwired.service.contextPressure("chat-1"), hasCode("not_found", 404));
+});
+
+test("a chat's desktop design mode stays off the Remote projection", () => {
+  const projection = projectAidenRemoteChat(chat({ designMode: true }));
+  assert.equal(projection.id, "chat-1");
+  assert.equal("designMode" in projection, false);
+});
+
+test("a phone's message counts once for the turn it started, and a turn that never starts counts nothing", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const failed = fixture(chat(), { startThrows: true });
+  await failed.service.startTurn("device-1", "chat-1", "counted-turn-00000001", { text: "hello" }).catch(() => undefined);
+  await analyticsSettled();
+  assert.deepEqual(sent.filter(({ event }) => event === "chat_message_sent"), []);
+
+  const app = fixture(chat({ workspaceId: "workspace-9" }), {
+    isFolderWorkspace: async (workspaceId) => workspaceId === "workspace-9",
+  });
+  const accepted = await app.service.startTurn("device-1", "chat-1", "counted-turn-00000002", { text: "hello" });
+  assert.equal(accepted.status, "accepted");
+  await app.service.startTurn("device-1", "chat-1", "counted-turn-00000002", { text: "hello" });
+  await analyticsSettled();
+  assert.deepEqual(sent, [{
+    event: "chat_message_sent",
+    props: { provider_id: "custom", model_id: "custom", in_workspace: true, thinking: "other", origin: "phone" },
+  }], "a resend with the same key replays the first answer");
+});
+
+test("a paired Mac's message is not counted as a phone's", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const app = fixture(chat({ workspaceId: "workspace-9" }), { deviceIsPeer: async () => true });
+  await app.service.startTurn("device-1", "chat-1", "counted-turn-00000006", { text: "hello" });
+  await analyticsSettled();
+  assert.equal(sent[0]?.props?.origin, "peer");
+});
+
+test("a phone's message outside a real workspace is not counted as in one", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const app = fixture(chat({ workspaceId: "assistant" }), { isFolderWorkspace: async () => false });
+  await app.service.startTurn("device-1", "chat-1", "counted-turn-00000003", { text: "hello" });
+  await analyticsSettled();
+  assert.equal(sent[0]?.props?.in_workspace, false);
+  assert.equal(sent[0]?.props?.origin, "phone");
+});
+
+test("a phone's skill turn counts its skill once", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const invocationId = `sk1_${"a".repeat(43)}`;
+  const app = fixture(chat({ workspaceId: "workspace-9" }), {
+    deviceSupportsSkillInvocation: async () => true,
+    resolveSkillInvocation: async () => ({
+      stableId: "skill:review",
+      name: "review-code",
+      description: "Review changes.",
+      instructions: "Review the diff carefully.",
+      source: "workspace",
+      enabled: true,
+      available: true,
+      invocationId,
+      toolKey: "skill_review_code",
+    }),
+  });
+  await app.service.startTurn("device-1", "chat-1", "counted-turn-00000004", {
+    text: "check this diff",
+    skill: { version: 1, invocationId, displayName: "review-code", source: "workspace" },
+  });
+  assert.deepEqual(sent.filter(({ event }) => event === "skill_used"), [{ event: "skill_used", props: { source: "user" } }]);
+});
+
+test("a phone's message to a Bot counts as a Bot message, outside any workspace", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const app = fixture(chat({ botId: "bot-1", workspaceId: "workspace-9" }), {
+    retainedBotChatAuthorizer: () => true,
+    isFolderWorkspace: async () => true,
+  });
+  await app.service.startTurn("device-1", "chat-1", "counted-turn-00000005", { text: "hello" });
+  await analyticsSettled();
+  assert.deepEqual(sent.map(({ props }) => [props?.origin, props?.in_workspace]), [["bot", false]]);
 });

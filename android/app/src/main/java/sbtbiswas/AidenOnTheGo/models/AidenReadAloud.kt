@@ -3,7 +3,7 @@ package sbtbiswas.AidenOnTheGo.models
 import kotlinx.serialization.Serializable
 import java.util.Base64
 
-const val READ_ALOUD_SETUP_GUIDANCE = "Enable Read Aloud in the desktop app: Settings → Text to Speech. Voice and credentials are managed on your Mac. Selected response text is sent from your Mac to Google and may incur charges."
+const val READ_ALOUD_SETUP_GUIDANCE = "Enable Read Aloud in the desktop app: Settings → Voice & Speech → Text to Speech. Voice and credentials are managed on your Mac. Selected response text is sent from your Mac to Google and may incur charges."
 
 @Serializable data class AidenReadAloudSource(val chatId: String, val messageId: String, val sourceRevision: String)
 @Serializable data class AidenReadAloudStart(val requestId: String, val source: AidenReadAloudSource, val settingsRevision: String)

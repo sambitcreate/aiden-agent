@@ -8,8 +8,9 @@ A message shows who asked or replied. The message and final answer cross between
 
 Messaging starts on. You can change it on desktop, iOS and Android:
 
-- **Settings → Bots → Bots can message each other** controls the profile. On a phone, use the same switch on the Bots page.
-- A Bot's **Advanced → Other Bots** has **Other Bots can message {name}** and **{name} can message other Bots**.
+- **Bot messaging** in **Settings → Approvals → Advanced** controls the profile. On a phone, use **Bots can message each other** on the Bots page; it is the same setting.
+- On the desktop, a Bot's **Advanced → Permissions** has one **Can message other Bots** switch. It is on only when the Bot may both send and receive; turning it on allows both, turning it off stops both. The stored settings are still the two directions, so a phone's **Other Bots can message {name}** and **{name} can message other Bots** switches keep working, and a Bot with only one direction on shows the desktop switch off until someone turns it on. Nothing changes until someone flips a switch.
+- **Approved Bot pairs** under the same group opens the Bot's [approved pairs](bot-peers.md).
 - Turning messaging off for all Bots disables the per-Bot controls. Older paired hosts without messaging support show no messaging controls.
 
 A switch prevents new sends. An already accepted exchange keeps its original deadline. Deleting a Bot removes its private message work and prevents it from being recreated by recovery.
@@ -22,7 +23,7 @@ The recipient still follows its rules. An uncovered Ask first rule still asks; a
 
 Only a final answer is forwarded. Silence, failure and an unanswered deadline produce a status row instead of another model turn. If the sender is paused, interrupted, over budget or unable to use its model, the saved answer stays visible without resuming it. A failed or stopped reply turn also keeps the answer as a display row.
 
-The normal final result and status notifications follow the Bot's configured delivery channels. A nested child's answer is relayed into its sender's chat, or shown there as saved text; its answer is never delivered separately through the delivery funnel. Text-free child status notifications can still say that it is waiting or could not finish.
+The normal final result and status notifications follow the Bot's configured delivery channels. Phone polls retain their cursor and delivered-ID progress if the pairing changes or any original notification projection grant is lost before posting completes. A nested child's answer is relayed into its sender's chat, or shown there as saved text; its answer is never delivered separately through the delivery funnel. Text-free child status notifications can still say that it is waiting or could not finish.
 
 ## Nesting and limits
 
@@ -47,3 +48,7 @@ Refused attempts do not spend a quota slot; an accepted exchange that later fail
 The serve-only CLI daemon supports the same tool, bounded exchange, controls and durable recovery for its Bots. Paired phones use the same capability-gated Remote contract. The CLI records paid Bot response costs in its profile-local spending ledger and enforces configured monthly and routine-run limits. It does not wait out provider usage limits or offer a spending settings editor. The CLI has no terminal chat interface. See [durable CLI Bots](cli-durable-bots.md).
 
 For storage, recovery and implementation details, see [Bot messaging core](bot-messaging-core.md). The [implementation plan](plans/bot-messaging-plan.md) tracks review and acceptance; source tests and simulator checks do not establish physical-device or live-model acceptance.
+
+## Approved Bot pairs
+
+[Bot peers](bot-peers.md) provides a separate named-pair delegation contract through `message_peer`. Its exchange, spending and recipient-rule authority remains separate from `message_bot` messaging.

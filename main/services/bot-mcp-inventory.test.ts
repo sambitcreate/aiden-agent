@@ -27,8 +27,81 @@ import {
   type McpOAuthSession,
 } from "./mcp-oauth-session.js";
 import type { McpServer } from "./types.js";
+import { admitWithBotConnectorInventoryScope, botConnectorInventoryServer, withBotConnectorInventoryScope } from "./bot-connector-inventory-scope.js";
+import type { BotRuntimeEffectiveAuthority } from "./bot-runtime-authority.js";
+import { getMcpPreset, serverFromPreset } from "./mcp-presets.js";
+import type { SubagentMcpRemoteTool } from "./subagents/subagent-mcp-read.js";
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+
+test("Composio catalogs one stable service across vendor inventory edits while credential changes revoke it", async () => {
+  const server = serverFromPreset(getMcpPreset("composio")!);
+  let signature = hash("credential-one");
+  let remote: SubagentMcpRemoteTool[] = [{ name: "COMPOSIO_SEARCH_TOOLS", inputSchema: { type: "object" }, annotations: { readOnlyHint: true } }];
+  const snapshot = () => resolveBotMcpInventory(new AbortController().signal, {
+    listServers: async () => [server], credentialSignature: async () => signature, inspectTools: async () => remote,
+    incarnations: { reconcileNamespace: async (_namespace, resources) => resources.map(({ sourceId, credentialSignature }) => ({ sourceId, resourceIncarnation: "a".repeat(43), credentialIncarnation: credentialSignature.slice(0, 43) })) },
+  });
+  const before = (await snapshot())[0];
+  assert.equal(before.tools.length, 1); assert.equal(before.tools[0].toolName, "composio");
+  remote = [{ name: "COMPOSIO_SEARCH_TOOLS", inputSchema: { type: "object", properties: { newArgument: { type: "string" } } }, annotations: { readOnlyHint: true } }, { name: "COMPOSIO_MULTI_EXECUTE_TOOL", inputSchema: { type: "object" }, annotations: { readOnlyHint: false } }];
+  const changedVendor = (await snapshot())[0];
+  assert.equal(changedVendor.connectionFingerprint, before.connectionFingerprint);
+  assert.deepEqual(changedVendor.tools, before.tools);
+  signature = hash("credential-two");
+  assert.notEqual((await snapshot())[0].connectionFingerprint, before.connectionFingerprint);
+  server.hiddenTools = ["COMPOSIO_MULTI_EXECUTE_TOOL"];
+  assert.equal((await snapshot()).length, 0, "legacy partial exclusions need the person's single service allowance");
+});
+
+function connectorScopeFixture() {
+  const servers: McpServer[] = ["selected-imcp", "other-connector"].map((id) => ({ id, name: id, transport: "stdio", command: "synthetic-only", enabled: true }));
+  const inspectCalls: { id: string; selected: string | undefined }[] = [];
+  let now = 0;
+  const dependencies = { listServers: async () => servers, credentialSignature: async () => hash("synthetic-credential"),
+    scopeCache: createBotMcpScopeCache({ now: () => now }), incarnations: {
+      reconcileNamespace: async (_namespace: string, resources: readonly { sourceId: string }[]) => resources.map(({ sourceId }) => ({ sourceId, resourceIncarnation: "a".repeat(43), credentialIncarnation: "b".repeat(43) })),
+    }, inspectTools: async (server: McpServer) => {
+      inspectCalls.push({ id: server.id, selected: botConnectorInventoryServer() });
+      return [{ name: "read", inputSchema: { type: "object", properties: {} }, annotations: { readOnlyHint: true } }];
+    } };
+  return { dependencies, inspectCalls, advance: () => { now += 60_001; }, snapshot: () => resolveBotMcpInventory(new AbortController().signal, dependencies) };
+}
+
+test("returned watch authority revalidation keeps the selected scope on real inventory cache misses", async () => {
+  const f = connectorScopeFixture(); let released = 0;
+  const admission = await admitWithBotConnectorInventoryScope("selected-imcp", async () => {
+    assert.deepEqual((await f.snapshot()).map((scope) => scope.serverId), ["selected-imcp"]);
+    return { authority: {} as BotRuntimeEffectiveAuthority, signal: new AbortController().signal,
+      revalidateBeforeEffect: async () => { assert.deepEqual((await f.snapshot()).map((scope) => scope.serverId), ["selected-imcp"]); }, release: () => { released++; } };
+  });
+  assert.equal(botConnectorInventoryServer(), undefined, "the caller has left the initial admission scope");
+  f.advance(); const revalidate = admission.revalidateBeforeEffect;
+  await revalidate();
+  assert.deepEqual(f.inspectCalls.map((call) => call.id), ["selected-imcp", "selected-imcp"], "neither admission nor later cache-miss revalidation inspects the second connector");
+  assert.ok(f.inspectCalls.every((call) => call.selected === "selected-imcp"));
+  admission.release(); assert.equal(released, 1);
+  const foreground = await f.snapshot();
+  assert.deepEqual(foreground.map((scope) => scope.serverId), ["other-connector", "selected-imcp"], "ordinary foreground inventory remains available outside watch work");
+});
+
+test("watch inventory does not join an unscoped in-flight inspection or start another connector", async (t) => {
+  const f = connectorScopeFixture();
+  let release!: () => void; const blocked = new Promise<void>((resolve) => { release = resolve; }); t.after(() => release());
+  let bothStarted!: () => void; const started = new Promise<void>((resolve) => { bothStarted = resolve; }); let foregroundCalls = 0;
+  f.dependencies.inspectTools = async (server) => {
+    const selected = botConnectorInventoryServer(); f.inspectCalls.push({ id: server.id, selected });
+    if (!selected) { foregroundCalls++; if (foregroundCalls === 2) bothStarted(); await blocked; }
+    return [{ name: selected ? "existing_live_read" : "foreground_read", inputSchema: { type: "object", properties: {} }, annotations: { readOnlyHint: true } }];
+  };
+  const foreground = f.snapshot();
+  await started;
+  const watch = await withBotConnectorInventoryScope("selected-imcp", f.snapshot);
+  assert.deepEqual(watch.map((scope) => ({ id: scope.serverId, tools: scope.tools.map((tool) => tool.toolName) })), [{ id: "selected-imcp", tools: ["existing_live_read"] }], "the watch uses its own existing-session inspection while foreground work is blocked");
+  assert.deepEqual(f.inspectCalls.filter((call) => call.selected).map((call) => call.id), ["selected-imcp"]);
+  release(); await foreground;
+  await assert.rejects(withBotConnectorInventoryScope("selected-imcp", () => withBotConnectorInventoryScope("other-connector", f.snapshot)), /cannot switch/u);
+});
 
 test("Bot MCP inventory includes stdio and exceeds subagent 16x32 bounds within Bot limits", async () => {
   const servers: McpServer[] = Array.from({ length: 17 }, (_unused, index) => ({

@@ -2,6 +2,8 @@
 
 The native Compose client connects to Aiden Agent over the Remote API. The host owns execution, persistence, permissions and model configuration.
 
+Opening a chat already running on another device restores available reply text, reasoning and tool activity from a revision 58 host. The phone resumes live updates from the same point. Earlier hosts use their retained run events.
+
 On hosts that negotiate `bot:messaging` in Remote contract revision 54, the Bots list offers **Bots can message each other**. Advanced → **Other Bots** has receive and send switches for each Bot. When global messaging is off, both switches are disabled with **Turned off for all Bots**. Older hosts show no messaging controls. Each change sends only its changed field; Bot identity patches carry the latest Bot revision. Optimistic saves reconcile lost responses by reading the host and roll back with an error when unsaved.
 
 Bot messages use existing labelled transcript rows, including bounded saved answers while paused. A `message` notification opens that Bot's chat, preserves the host's redacted preview and never starts or resumes a turn.
@@ -16,6 +18,8 @@ Hosts that offer Remote revision 56's `bot:plans` are asked for it in a separate
 
 Hosts offering Remote revision 57’s `bot:allowed` are asked for that capability alone. When it is held, Bot profiles show **Allowed without asking**, with a count from the complete paginated rule-and-folder list. Remove keeps the row disabled until the host returns a fresh list; failures retain the row and show an error. Stale or foreign cursors restart from the first page. Rule rows show usage; folder rows show only their added date. Host-offered approval counts enable **Always allow for <Bot>**. B folder counts require both `bot:access-requests` and `bot:allowed`. Unknown outcomes retain the exact wait, decision and scope key/body; another scope or decision uses another key. **Always allow requested.** acknowledges the choice, while the host confirms saved access. Earlier hosts retain their existing UI.
 
+On Macs at provisional Remote revision 61, the app negotiates `approval:cards`, `approvals:settings`, `bot:settings-changes`, `bot:suggestions` and `bot:templates` separately and keeps today's screens for any it does not hold. Approval cards render the Mac's typed card and send only the decision and scope a button offers, optimistically, with rollback on refusal. Bot chats answer held settings changes and suggestions; Templates show versions and Open; New bot is one field; **Settings → Approvals** changes the Mac's mode and rules. On these Macs the two messaging switches become one **Can message other Bots** switch (on only when both directions are), hand-offs take two steps, Full access offers **Disable a tool** (only narrowing: web search is left off), and the per-Bot Chat activity page gives way to **Settings → Appearance → Chat → Show tool activity**, off by default, on this phone. An `aiden serve` host also offers `approval:cards`, so these client-only changes apply there too; they use only routes and fields older hosts have. See "Bot UX on phones, revision 61" in [`docs/aiden-remote-api-v1.md`](../docs/aiden-remote-api-v1.md).
+
 For focused allowed-list and existing Bot regressions, use the installed JDK/SDK and offline Gradle from `android/`:
 
 ```sh
@@ -29,3 +33,7 @@ ANDROID_HOME=/Users/sambitbiswas/Library/Android/sdk \
 ```
 
 `./gradlew --offline :app:lintDebug :app:compileDebugAndroidTestKotlin` checks lint and instrumented-test compilation without claiming an emulator UI run.
+
+Bot notification polls retain the fetch's original negotiated visibility through system permission and notification posting. Losing Bot/chat read, messaging, issue, access-request or peer visibility keeps the cursor and delivered IDs unchanged until a fresh authorized poll; issue rows do not expose their private subtype. Host support alone never grants visibility. Older hosts without a separate support inventory retain the existing Bot/chat read baseline for routine notifications only. A system banner already accepted before access changed cannot be withdrawn by this notifier.
+
+Git review uses the host’s commit capability. Commit stays disabled when the host refuses the review, and the phone shows the host’s reason, including when a changed file could not be shown. A missing capability also keeps Commit disabled. A permitted review still needs visible changes and a snapshot; Android also waits for a fresh review before enabling Commit. When the host counts uncommitted changes but shares none of their files, the phone says the changes are hidden instead of calling the working tree clean, and says Commit is unavailable because of that.

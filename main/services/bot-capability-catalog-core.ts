@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { types as utilTypes } from "node:util";
+import { botConnectionCapabilityIdentity, parseBotConnectionAccessIdentity, type BotConnectionAccessIdentity } from "./bot-connection-capability-identity.js";
 import {
   BOT_CAPABILITY_LIMITS,
   BOT_FULL_ACCESS_NOTICE_VERSION,
@@ -93,6 +94,7 @@ const PRIVATE_PUBLIC_KEYS = new Set([
   "mcpcredential",
   "connectioncredential",
   "authorizationheader",
+  "accessidentity",
   "providerheaders",
   "mcpheaders",
   "connectionheaders",
@@ -164,6 +166,8 @@ export interface BotMcpToolInventory {
 
 export interface BotConnectionInventory {
   sourceId: string;
+  /** Host-authored proof of the verified Composio service projection; never remote metadata. */
+  accessIdentity?: BotConnectionAccessIdentity;
   label: string;
   description?: string;
   available: boolean;
@@ -250,6 +254,7 @@ export interface BotCatalogMcpToolResource extends BotMcpToolInventory {
 export interface BotCatalogConnectionResource {
   option: BotCapabilityOption;
   sourceId: string;
+  accessIdentity?: BotConnectionAccessIdentity;
   connectionFingerprint: string;
   toolsetFingerprint: string;
   exactFingerprint: string;
@@ -716,13 +721,14 @@ function parseConnections(
   const resources = input.map((candidate, connectionIndex): BotCatalogConnectionResource => {
     const connection = assertPlainRecord(candidate, `Bot connection ${connectionIndex}`, [
       "sourceId",
+      "accessIdentity",
       "label",
       "description",
       "available",
       "connectionFingerprint",
       "tools",
     ]);
-    if (![5, 6].includes(Object.keys(connection).length)) {
+    if (Object.keys(connection).length !== 5 + Number(connection.description !== undefined) + Number(connection.accessIdentity !== undefined)) {
       throw new Error(`Bot connection ${connectionIndex} is incomplete.`);
     }
     const sourceId = privateIdentity(connection.sourceId, `Bot connection ${connectionIndex}`);
@@ -793,9 +799,11 @@ function parseConnections(
     const toolsetFingerprint = botCapabilityFactsFingerprint(
       tools.map(({ name, exactFingerprint }) => ({ name, exactFingerprint })),
     );
+    const accessIdentity = parseBotConnectionAccessIdentity(connection.accessIdentity, { sourceId, tools });
     const exactFingerprint = botCapabilityFactsFingerprint({
       connectionFingerprint,
       toolsetFingerprint,
+      ...(accessIdentity ? { accessIdentity } : {}),
     });
     const available = booleanValue(
       connection.available,
@@ -806,12 +814,13 @@ function parseConnections(
     }
     return {
       sourceId,
+      ...(accessIdentity ? { accessIdentity } : {}),
       connectionFingerprint,
       toolsetFingerprint,
       exactFingerprint,
       tools,
       option: optionFrom(
-        safeOpaqueId(mint, "connection", sourceId, exactFingerprint),
+        safeOpaqueId(mint, "connection", botConnectionCapabilityIdentity({ sourceId, accessIdentity }), exactFingerprint),
         connection.label as string,
         available,
         connection.description as string | undefined,

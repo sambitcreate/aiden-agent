@@ -1,10 +1,12 @@
+import { registerBotPendingChangeCleanup } from "./bot-pending-changes.js";
 import { registerBotAccessRequestHandlers } from "./bot-access-requests.js";
 import { registerBotPlanHandlers } from "./bot-plans.js";
 import { registerBotAllowedHandlers, registerBotApprovalDecisionHandler } from "./bot-allowed.js";
 import { botPlans } from "../services/bot-plans/plans-main.js";
 import { answerBotAccessRequest } from "../services/bot-runtime/bot-access-requests-main.js";
 import { publicBotApprovalPrompt } from "../services/bot-runtime/bot-approvals.js";
-import { ipcMain, logger } from "../platform.js";
+import { BrowserWindow, ipcMain, logger, powerMonitor } from "../platform.js";
+import { setBotChatInFrontProbe } from "../services/bot-delivery/in-front.js";
 import { chatStore } from "../services/chat-store.js";
 import { botApplicationService } from "../services/bot-application-service-main.js";
 import { configStore } from "../services/config-store.js";
@@ -37,6 +39,10 @@ import { registerBotQuestionHandlers } from "./bot-questions.js";
 import { registerBotHandoffHandlers } from "./bot-handoffs.js";
 import { registerBotIssueHandlers } from "./bot-issues.js";
 import { registerBotHealthHandlers } from "./bot-health.js";
+import { registerBotConnectorWatchHandlers } from "./bot-connector-watches.js";
+import { registerBotRoutineModels } from "./bot-routine-models.js";
+import { registerBotPeerHandlers } from "./bot-peers.js";
+import { registerBotOpenWorkHandlers } from "./bot-open-work.js";
 import { registerBotEventRoutineHandlers } from "./bot-event-routines.js";
 import { registerBotLearningHandlers } from "./bot-learning.js";
 import { botHealthReports } from "../services/bot-health/health-main.js";
@@ -67,6 +73,7 @@ import {
   parseBotSessionAction,
   parseBotUpdate,
   parseBotWithdraw,
+  parseBotSettingsChangeResponse,
 } from "./bot-params.js";
 
 async function desktopAvatarAdapter() {
@@ -108,6 +115,9 @@ async function removeBotPhoto(botId: string): Promise<void> {
   });
 }
 
+/** Idle this long and the person counts as away, even with a Bot's chat focused. */
+const BOT_CHAT_AWAY_IDLE_SECONDS = 120;
+
 export function registerBotHandlers(): void {
   const desktopAudienceId = BOT_DESKTOP_AUDIENCE_ID;
   registerBotAccessHandlers<Electron.IpcMainInvokeEvent>({
@@ -143,8 +153,8 @@ export function registerBotHandlers(): void {
     return (await botSessionRuntime()).send(botId, message);
   });
   ipcMain.handle("bots:resume", async (_event, input: unknown) => {
-    const { botId, requestId } = parseBotSessionAction(input, "resume");
-    return (await botSessionRuntime()).resume(botId, requestId);
+    const { botId, requestId, acknowledgeUnknownCost, expectedSubmissionId, expectedCostReceiptId } = parseBotSessionAction(input, "resume");
+    return (await botSessionRuntime()).resume(botId, requestId, { acknowledgeUnknownCost, expectedSubmissionId, expectedCostReceiptId });
   });
   ipcMain.handle("bots:dismiss", async (_event, input: unknown) => {
     const { botId, requestId } = parseBotSessionAction(input, "dismiss");
@@ -166,13 +176,27 @@ export function registerBotHandlers(): void {
     return stopWithIntents(botTurnIntents, botId, async () => (await botSessionRuntime()).stop(botId));
   });
   ipcMain.handle("bots:createFromPreset", async (_event, input: unknown) => {
-    const { presetId, access } = parseBotCreateFromPreset(input);
+    const { presetId, version, access } = parseBotCreateFromPreset(input);
     // The chat opens as soon as the Bot exists; its self-intro arrives in that chat.
     const starter = botStarter();
-    const { bot, created } = await starter.startFromPreset(presetId, { ...(access === undefined ? {} : { access }), introduce: false });
+    const { bot, created } = await starter.startFromPreset(presetId, {
+      ...(access === undefined ? {} : { access }),
+      ...(version === undefined ? {} : { version }),
+      introduce: false,
+    });
     if (created) void starter.introduce(bot.id);
     return { bot, created };
   });
+  // Onboarding's silent first Bot (plan §4.1): made once, a repeat returns it.
+  // It introduces itself only after the person presses Start using Aiden,
+  // which accepts its Full access (`bots:introduce`).
+  ipcMain.handle("bots:createFirst", async (_event, input: unknown) => {
+    if (input !== undefined) throw new Error("Invalid first Bot request.");
+    const { bot, created } = await botStarter().startFirst({ introduce: false });
+    return { bot, created };
+  });
+  // Templates: which ones already made a Bot, so their detail offers Open.
+  ipcMain.handle("bots:presetBots", async () => botStarter().presetBots());
   ipcMain.handle("bots:introduce", async (_event, id: unknown) => {
     // The create flow's one-time self-intro; deduped per Bot by the runtime.
     return botStarter().introduce(parseBotId(id));
@@ -198,7 +222,7 @@ export function registerBotHandlers(): void {
     await removeBotPhoto(botId);
     ipcMain.broadcast("bots:changed", { botId });
   });
-  registerBotLiveHandlers<Electron.IpcMainInvokeEvent>({
+  const botLive = registerBotLiveHandlers<Electron.IpcMainInvokeEvent>({
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     owner: (event) => {
       const owner = rendererDocumentOwner(event, () => new Error("Bot chats require the active application document."));
@@ -207,11 +231,20 @@ export function registerBotHandlers(): void {
         isDestroyed: owner.isDestroyed,
         onInvalidated: owner.onInvalidated,
         send: (channel, payload) => owner.send(channel, payload),
+        // Focused, on screen, and someone used the Mac in the last two minutes.
+        inFront: () => {
+          const focused = BrowserWindow.getFocusedWindow();
+          if (!focused || focused.isDestroyed() || focused.webContents.id !== owner.id) return false;
+          if (!focused.isVisible() || focused.isMinimized()) return false;
+          return powerMonitor.getSystemIdleState(BOT_CHAT_AWAY_IDLE_SECONDS) === "active";
+        },
       };
     },
     projection: botLiveProjection,
     parseBotId,
   });
+  // A Bot message that arrives while its chat is in front of the person pings nothing.
+  setBotChatInFrontProbe((botId) => botLive.shownInFront(botId));
   // Bot tool approvals: any desktop window may answer; the first answer wins.
   registerBotApprovalDecisionHandler({ handle: (channel, handler) => ipcMain.handle(channel, handler), approvals: botApprovals });
   registerBotAllowedHandlers({
@@ -242,11 +275,38 @@ export function registerBotHandlers(): void {
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     issues: botIssues,
   });
+  registerBotConnectorWatchHandlers<Electron.IpcMainInvokeEvent>({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    owner: (event) => rendererDocumentOwner(event, () => new Error("This watch request came from an inactive renderer.")),
+    service: async () => (await import("../services/bot-routine-events/sources-main.js")).botConnectorWatches,
+  });
+  registerBotOpenWorkHandlers<Electron.IpcMainInvokeEvent>({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    owner: (event) => rendererDocumentOwner(event, () => new Error("This Open work request came from an inactive application document.")),
+    service: async () => (await import("../services/bot-open-work/service-main.js")).botOpenWork,
+  });
+  registerBotPendingChangeCleanup<Electron.IpcMainInvokeEvent>({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    owner: (event) => rendererDocumentOwner(event, () => new Error("Saved changes belong to the active application document.")),
+    initialize: () => botApplicationService.initialize(),
+    storedIds: async () => (await import("../services/bot-store.js")).botStore.storedIds(),
+    absentAuthorities: async (ids) => (await import("../services/bot-capability-services-main.js")).botCapabilityStore.absentBotAuthorities(ids),
+  });
+  registerBotRoutineModels<Electron.IpcMainInvokeEvent>({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    owner: (event) => rendererDocumentOwner(event, () => new Error("This model request came from an inactive application document.")),
+    service: async () => ({ ...(await import("../services/bot-routine-models-main.js")).botRoutineModels, resumeStatus: async (botId: string) => (await botSessionRuntime()).executionResumeStatus(botId) }),
+  });
+  registerBotPeerHandlers<Electron.IpcMainInvokeEvent>({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    owner: (event) => rendererDocumentOwner(event, () => new Error("This Bot messaging request came from an inactive application document.")),
+    service: async () => (await import("../services/bot-peers/service-main.js")).botPeers,
+  });
   // Profile → When something happens: event routines and their links.
   registerBotEventRoutineHandlers<Electron.IpcMainInvokeEvent>({
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     store: {
-      list: async (botId) => (await import("../services/bot-routine-events/sources-main.js")).botEventRoutines.list(botId),
+      list: async (botId) => (await import("../services/bot-routine-events/sources-main.js")).botEventRoutines.list(botId).then((rows) => rows.filter((row) => !row.connector)),
       create: async (botId, input) => (await import("../services/bot-routine-events/sources-main.js")).botEventRoutines.create(botId, input),
       update: async (botId, id, input) => (await import("../services/bot-routine-events/sources-main.js")).botEventRoutines.update(botId, id, input),
       remove: async (botId, id) => {
@@ -272,15 +332,25 @@ export function registerBotHandlers(): void {
     const { botSkillProposals } = await import("../services/bot-skills/skill-proposals-main.js");
     return botSkillProposals.respond({ botId: parseBotId(fields.botId), proposalId: fields.proposalId, decision: fields.decision });
   });
+  // Settings from chat (§4.6): Undo a receipt, or Apply / Edit / Dismiss a held change.
+  ipcMain.handle("bots:settingsChanges:respond", async (_event, input: unknown) => {
+    const { botId, changeId, decision } = parseBotSettingsChangeResponse(input);
+    const { botSettingsChanges } = await import("../services/bot-settings-changes/service-main.js");
+    return botSettingsChanges.respond(botId, changeId, decision);
+  });
   // Profile → What I've learned, and the chat's lesson cards and Undo lines.
   const learning = () => import("../services/bot-learning/learning-main.js");
   registerBotLearningHandlers<Electron.IpcMainInvokeEvent>({
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     overview: async (botId) => (await learning()).botLearningOverview(botId),
     undo: async (botId, changeId) => (await learning()).undoBotLearning(botId, changeId),
-    undoLesson: async (botId, lessonId) => (await learning()).removeLesson(botId, lessonId),
+    undoLesson: async (botId, lessonId) => {
+      await (await learning()).removeLesson(botId, lessonId);
+    },
     respondLesson: async (botId, lessonId, decision) => (await learning()).respondToLesson(botId, lessonId, decision),
-    removeLesson: async (botId, lessonId) => (await learning()).removeLesson(botId, lessonId),
+    removeLesson: async (botId, lessonId) => {
+      await (await learning()).removeLesson(botId, lessonId);
+    },
   });
   // Profile → Health: the newest check, and Check now.
   registerBotHealthHandlers<Electron.IpcMainInvokeEvent>({

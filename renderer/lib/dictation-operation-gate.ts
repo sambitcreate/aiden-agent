@@ -132,7 +132,7 @@ export function voiceErrorMessage(error: unknown): string {
     return "On-device transcription couldn’t finish. Try again.";
   }
   if (/on-device|isn.t downloaded|download and select/iu.test(message)) {
-    return "On-device transcription isn’t ready. Download and select a model in Settings → Voice.";
+    return "On-device transcription isn’t ready. Download and select a model in Settings → Voice & Speech.";
   }
   if (/429|rate limit|quota/iu.test(message)) {
     return "The transcription service is busy or rate-limited. Try again shortly.";

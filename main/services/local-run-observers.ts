@@ -221,7 +221,7 @@ export class LocalRunObservers {
     while (events.length < this.maxEventsPerFlush) {
       let read;
       try {
-        read = this.options.registry.read(runId, observation.cursor, this.maxEventsPerFlush - events.length);
+        read = this.options.registry.read(runId, observation.cursor, this.maxEventsPerFlush - events.length, true);
       } catch {
         // The run was evicted while observed; the persisted transcript has the rest.
         this.endRun(observation, "gone");

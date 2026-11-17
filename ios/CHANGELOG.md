@@ -2,9 +2,42 @@
 
 ## Unreleased
 
+- **2026-11-13 — Bot UX on a revision 61 Mac.** A Mac offering provisional contract revision 61 is asked for `approval:cards`, `approvals:settings`, `bot:settings-changes`, `bot:suggestions` and `bot:templates`, each in a call of its own; without them every screen stays as it was.
+  - Chat, run and Bot approvals show the Mac's own card: the title, arguments, the command or change, what it replaces, rows and notes, then the buttons with Deny first. Each button sends only its own decision and scope. A card only the Mac may allow offers Deny and says to allow it on the Mac, and a scheduled task on a device without schedule write access still offers Deny. A tap shows the answered line at once ("Allowed once", or "Denied" with a cross) and takes it back, restoring the card when the Mac still waits, if the answer doesn't land.
+  - A Bot's chat shows a held settings change with the full new instructions, what changed, and Apply / Dismiss; an applied change reads as a receipt with Undo. Skill, lesson and memory tidy-up cards answer through their own routes. A skill too long to review on a phone offers only Not now and says to add it on the Mac. A card the Mac no longer has disappears.
+  - **Templates** (New Bot menu) shows each template's version and **Open** for one that already made a Bot, and refreshes when the Mac says a template changed. **New Bot** is one field, "Name your Bot"; the Bot asks what you want help with in its first message.
+  - **Settings → Approvals**: the Mac's mode (Auto, Ask, Never ask; Auto is unavailable until the Mac has an approval model) and its rules (Always allow, Always ask, Blocked, Allowed on this Mac), each with Allow / Ask / Block and Remove, plus **Add Rule** from the Mac's list of tools and apps. Changes show at once and roll back on failure.
+  - Without a wire change: hand-off cards are two steps (**Take Control**, then **I’m Done**, Skip or Open Again), Advanced has one **Can message other Bots** switch and **Disable a Tool** (which never turns on Web search that Full access may not have had), and tool activity in Bot chats follows a per-device **Settings → Show tool activity** switch (off by default) instead of each Bot's Chat activity page.
+
+- The app is now one tab shell: **Inbox**, **Workspaces**, **Bots** and **Search**, each with its own stack, and a sidebar at regular width. Inbox lists every paired machine's chats together. The Aiden-logo menu, its first-run tip and the per-machine sidebar views are gone, along with the build setting that chose between the two shells. Scheduled tasks, Usage, Machines and Settings open as pages in a tab. An open chat stays on its own machine when the default machine changes. A notification for a machine you've removed now does nothing instead of showing an error.
+
+- Behind the scenes, `AidenChatFeature.swift` and `AidenWorkspaceShellView.swift` are now split into focused files under `Features/Chat/` and `Features/Workspace/`. No change to behavior or appearance.
+
+- Aiden On The Go now needs iOS 26 or later (it was iOS 18). iPhones that cannot run iOS 26 stay on the last build they have. The app uses the system Liquid Glass and Image Playground APIs directly, without the older material fallbacks. Reduce Transparency still shows solid surfaces.
+
+- Debug builds can launch the real shell against fake machines: `-AidenDemoScenario <one|four|empty|busy|offline-mix|old-host>` serves every request from an in-process responder on `*.demo.invalid`, without touching your Keychain, pairings or caches. A new `AidenOnTheGoUITests` target uses it. CI runs one smoke test that opens the shell against every scenario; the screenshot matrix and accessibility audit stay a local tool. Release builds contain none of it. CI also gains a non-blocking Xcode 27 build and test check; releases stay on Xcode 26.6.
+
+- **2026-11-06 — "By voice" label (Remote revision 60).** A chat message Aiden Live sent on the Mac shows a small "By voice" label with a microphone under it. The host marks it with `inputSource: "voice"` on user messages only; the app ignores any other value or a marker on a reply. Older hosts send no marker, so nothing changes there.
+
+- **2026-11-05 — Remote revision 59 reconciliation.** Main now uses revision 58 for connected-chat live-history checkpoints. Continuity watches, Open work, routine models and approved Bot peers therefore enter the combined release at revision 59. Earlier dated revision assignments remain historical; messaging/access/plans/allowed thresholds remain 54–57.
+
+- **2026-11-05 — Notification visibility during delivery.** Bot notification polls recheck their original messaging, issue, access-request, peer and read grants before posting and saving progress, including after system permission/post callbacks. Lost access keeps the original cursor and delivered IDs. Routine notifications retain older-host baseline behavior; no Remote wire or revision change.
+
+- **2026-11-05 — Combined Remote revision 58.** Connector watches, Open work, routine model management and approved Bot peers first enter the shared release at revision 58. Earlier revision numbers below describe branch implementation checkpoints; shipped messaging, access requests, plans and allowed-list capabilities retain revisions 54–57. Both `message` and `peer` notifications remain supported.
+
+- **2026-11-04 — Verified Calendar watch support.** Supporting Mac and Linux Electron hosts now offer Composio Calendar sources after authenticated exact-account/list/events/GET acceptance. Existing Watches controls can discover, preview and manage those sources; no new native contract revision is needed. iMCP Mail remains Mac-only. Watch diagnostics report only their own inspection/check outcome and do not authorize a source or change its availability.
+
+
+- Remote revision 56: full per-routine model, thinking and explicit fallback management for existing scheduled, event and connected-app watch routines; host-projected choices and recent chosen/actual model and timing facts. Protected drafts and frozen CAS requests survive disconnect/restart, and stale choices require review. Interrupted-work Resume checks unconfirmed provider cost and requires explicit acknowledgement when needed; unknown requests keep their exact interrupted-submission and cost-receipt preconditions, consent body and UUID. A stale confirmation cannot authorize a newer unconfirmed cost on the same interrupted submission. Resume preflight and consent are scoped to one active, visible chat visit while background hand-off updates continue. First typed unknown/in-flight outcomes retain the exact pending Resume even on HTTP 409. Pending Resume blocks capability-loss fallback, and replayed historical receipts reconcile current session state passively. Profile unpause and older-host wire behavior remain unchanged.
+
+- Contract revision 55 (`bot:open-work`): a supporting paired host adds **Open work** to Bot profiles. Add and edit responsibilities, record Waiting reasons, mark Done, Reopen, Dismiss and Undo a recent metadata change. View owned source/result transcript excerpts and host-derived execution. Stop targets only safely linked work, and Stop and dismiss waits for acknowledgement. Protected local drafts and frozen requests survive disconnect and restart; Add never starts or schedules a run.
+
+- Contract revision 54 (`bot:watches`): a supporting paired host adds **Watches** to Bot profiles. Discover safe account/resource choices, create and edit typed watches, pause or resume, preview a test check, delete, or explicitly Run now. Polling and execution stay on the host. Calendar remains unavailable until exact-account and occurrence guarantees are available. Protected device-only drafts and frozen unresolved requests survive disconnect and restart, with stale-revision review and the original mutation identity retained for an explicit retry.
+
 - Remote revision 57 (`bot:allowed`): capable hosts offer Always allow for a Bot after repeated approvals, plus an Allowed without asking profile list. The list includes every rule and folder across pages. Remove waits for the host and keeps the row on failure. Unknown-outcome retries keep the exact decision/scope body and key; Always acknowledges “Always allow requested.” The host remains the authority for saved access. Eligible folder cards also show the host’s approval count. Older hosts keep their existing cards.
 
 - Stream recovery keeps a host-requested retry delay across a temporary network loss, counting time asleep toward the wait.
+- **Recording player cleanup (2026-11-02).** Leaving or replacing a browser-recording card removes its downloaded video even if the player has not appeared. A load that finishes after navigation cannot reopen the player, and repeated Plays of the same recording keep separate files so closing one preserves the other.
 
 - Leaving a Bot chat while a send is being cancelled keeps the message available to retry with its original key, even if the connection returns a receipt during cancellation.
 
@@ -51,3 +84,15 @@
 - Rebuilt Mac Usage as an Aiden-themed aggregate dashboard with real daily/model data, streaks, a 30-day token heatmap, token/activity breakdowns, and top models; replaced the home list's transparent tail row with a palette-backed safe-area inset to remove the bottom white band.
 - Mirrored Aiden Agent's complete provider-logo catalog in the iOS asset catalog, added provider identity to Usage, chat, and scheduled-task model controls, and added Hermex-style raw-Markdown Copy actions to completed and streaming assistant replies.
 - Repaired approval visibility across Mac and iOS with an authenticated resumable approval snapshot, exact stream-identity fencing, deny-only mobile handling for privileged operations, stale-refresh protection, deterministic cancellation, and bounded crash-safe journals.
+
+### 2026-11-03 — Approved Bot pairs and exchange management
+
+- Added capability-gated Profile peer setup, shared routing description, named bidirectional approvals, revocation and unavailable catalog choices. Each Bot retains its own rules and limits.
+- Added exchange history/detail, host-owned source/result evidence, honest linked Stop acknowledgement, quiet peer transcript rows and peer-linked Open-work navigation. Final peer notifications reuse foreground stable-ID deduplication and open the initiating Bot chat.
+- Added protected, backup-excluded per-resource journals and lifecycle/access/deletion fences. Unknown outcomes keep their exact action and UUID across restart and rejected retries; older Stop checks need a fresh matching host pending receipt.
+
+### 2026-11-03 — Native peer management review fixes
+
+- Keep unsaved routing-description drafts when pair approval/revocation settles directly or after restart and passive receipt recovery.
+- Recheck notification scope after posting so revoked peer access or pairing removal cannot consume or recreate old delivery progress; already accepted system banners may remain.
+- Keep host-pending Stop work in passive-refresh mode when this phone has no local Stop journal, preserving exact original-request replay.

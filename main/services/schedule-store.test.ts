@@ -105,10 +105,14 @@ test("a Bot fire claim advances the schedule and keeps its original message thro
     routineSchedule: { kind: "daily", time: "09:00" }, prompt: "Check the inbox.",
   });
   const due = task.nextRunAt!;
+  await assert.rejects(store.claimRoutineFire(task.id, due, due + 24 * 60 * 60_000, () => true, due, async () => { throw new Error("Protected choice could not be saved"); }), /Protected choice could not be saved/u);
+  assert.equal((await store.get(task.id))?.nextRunAt, due, "failed write-ahead model admission cannot advance or own the fire");
+  assert.equal((await store.get(task.id))?.pendingRoutineFires?.length ?? 0, 0);
   const claimed = await store.claimRoutineFire(task.id, due, due + 24 * 60 * 60_000);
   assert.equal(claimed.nextRunAt, due + 24 * 60 * 60_000);
   assert.deepEqual(claimed.pendingRoutineFires, [{
     fireTime: due, requestId: `routine:${task.id}:${due}`, prompt: "Check the inbox.", name: "Daily check",
+    routineTiming: { scheduledFor: due, timezone: "UTC" },
   }]);
   await assert.rejects(store.claimRoutineFire(task.id, due, due + 24 * 60 * 60_000), /no longer due/u);
 
@@ -118,7 +122,10 @@ test("a Bot fire claim advances the schedule and keeps its original message thro
   });
   assert.equal(edited.pendingRoutineFires?.[0]?.prompt, "Check the inbox.");
   assert.equal((await store.get(task.id))?.pendingRoutineFires?.[0]?.name, "Daily check");
+  await store.addRoutineRetry(task.id, { failedRunId: `routine:${task.id}:${due}`, attempt: 1, at: due + 300_000 });
+  assert.deepEqual((await store.get(task.id))?.pendingRoutineFires?.find(fire => fire.retry)?.routineTiming, { scheduledFor: due, timezone: "UTC" }, "retry due time never replaces the occurrence it retries");
   await store.settleRoutineFire(task.id, `routine:${task.id}:${due}`);
+  await store.clearRoutineRetries(task.id);
   assert.equal((await store.get(task.id))?.pendingRoutineFires?.length ?? 0, 0);
 });
 

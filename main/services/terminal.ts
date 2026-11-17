@@ -8,6 +8,7 @@ import { execFile } from "node:child_process";
 import { accessSync, constants as fsConstants } from "node:fs";
 import { createRequire } from "module";
 import { spawn, type IPty } from "node-pty";
+import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import type { RendererDocumentOwner } from "./renderer-document-owner.js";
 import { resolveNodePtySpawnHelperPaths } from "./terminal-spawn-helper.js";
 import { agentCommandEnvironment } from "./agent-command-environment.js";
@@ -115,6 +116,12 @@ export interface TerminalHistoryStoreLike {
   append(workspaceId: string, data: string): void;
   flush(workspaceId: string): Promise<void>;
   flushAll?(): Promise<void>;
+  /**
+   * Drop every workspace's scrollback, pending writes included. Used by
+   * Settings → Storage, which reports the space as freed; a debounced write
+   * from state that was never invalidated would silently bring it back.
+   */
+  clearAll?(): Promise<void>;
 }
 
 function commandBaseName(value: string): string {
@@ -288,6 +295,32 @@ function trySpawnShell(
   );
 }
 
+/**
+ * Keeps each session's input in the order it arrived. Every write is checked
+ * (workspace access, a managed worktree) before it reaches the shell, and
+ * those checks wait on disk, so one keystroke's check can finish before the
+ * one typed just ahead of it. A write takes its place here first and is
+ * written only once every earlier write of the session was written or refused.
+ */
+export class TerminalInputOrder {
+  private readonly tails = new Map<string, Promise<void>>();
+
+  /** `previous` settles once every earlier write of the session has; call `done` once this one has. */
+  enter(sessionId: string): { previous: Promise<void>; done: () => void } {
+    const previous = this.tails.get(sessionId) ?? Promise.resolve();
+    let done = () => {};
+    const settled = new Promise<void>((resolve) => {
+      done = () => resolve();
+    });
+    const tail = previous.then(() => settled);
+    this.tails.set(sessionId, tail);
+    void tail.then(() => {
+      if (this.tails.get(sessionId) === tail) this.tails.delete(sessionId);
+    });
+    return { previous, done };
+  }
+}
+
 export class TerminalService {
   private outputObserver?: (workspaceId: string, data: string) => void;
 
@@ -327,6 +360,18 @@ export class TerminalService {
       [...this.sessions.values()].map((session) => session.historyWorkspaceId),
     );
     await Promise.all([...workspaceIds].map((workspaceId) => this.historyStore!.flush(workspaceId)));
+  }
+
+  /**
+   * Erase all terminal scrollback through the installed store, so its pending
+   * writes and in-memory history are invalidated with the files. Returns false
+   * when no store is installed (nothing has opened a terminal yet), in which
+   * case the caller may remove files directly.
+   */
+  async clearAllHistory(): Promise<boolean> {
+    if (!this.historyStore?.clearAll) return false;
+    await this.historyStore.clearAll();
+    return true;
   }
 
   async create(
@@ -488,6 +533,7 @@ export class TerminalService {
     // A shell can exit while the owner subscription is being installed.
     if (this.sessions.get(id) !== session) removeOwnerInvalidation();
 
+    reportAnalyticsEvent("terminal_opened", {});
     return { id, workspaceId, cwd, resolvedShell, preferredShellSkipped };
   }
 
@@ -541,6 +587,11 @@ export class TerminalService {
       if (session.ownerWebContentsId !== webContentsId) continue;
       this.terminate(id, session);
     }
+  }
+
+  /** Whether a shell is open in this workspace, so removing it would end that shell. */
+  hasOpenSession(workspaceId: string): boolean {
+    return [...this.sessions.values()].some((session) => session.workspaceId === workspaceId);
   }
 
   closeForWorkspace(workspaceId: string): void {

@@ -5,6 +5,8 @@
  * boundary in main/services/chat-run-input-admission.ts.
  */
 
+import { parseChatInputSource, type ChatInputSourceV1 } from "./chat-input-source";
+
 export type ChatRunInputMode = "steer" | "queue";
 
 export type ChatRunInputRejectionReason =
@@ -25,15 +27,23 @@ export interface ChatRunInputAdmissionResult {
 /** Largest run input (UTF-16 code units) the admission boundary accepts. */
 export const MAX_RUN_INPUT_TEXT = 200_000;
 
-/** Validate a desktop IPC run-input payload ({mode, text}). */
-export function parseChatRunInput(value: unknown): { mode: ChatRunInputMode; text: string } {
+/**
+ * Validate a desktop IPC run-input payload ({mode, text, inputSource?}).
+ * `inputSource: "voice"` is set only by Aiden Live's chat tools.
+ */
+export function parseChatRunInput(value: unknown): {
+  mode: ChatRunInputMode;
+  text: string;
+  inputSource?: ChatInputSourceV1;
+} {
   const record =
     value !== null && typeof value === "object" && !Array.isArray(value)
       ? (value as Record<string, unknown>)
       : null;
   if (
     !record ||
-    Object.keys(record).some((key) => key !== "mode" && key !== "text") ||
+    Object.keys(record).some((key) => key !== "mode" && key !== "text" && key !== "inputSource") ||
+    (record.inputSource !== undefined && parseChatInputSource(record.inputSource) === undefined) ||
     (record.mode !== "steer" && record.mode !== "queue") ||
     typeof record.text !== "string" ||
     record.text.length === 0 ||
@@ -41,5 +51,6 @@ export function parseChatRunInput(value: unknown): { mode: ChatRunInputMode; tex
   ) {
     throw new Error("Invalid chat run input.");
   }
-  return { mode: record.mode, text: record.text };
+  const inputSource = parseChatInputSource(record.inputSource);
+  return { mode: record.mode, text: record.text, ...(inputSource ? { inputSource } : {}) };
 }

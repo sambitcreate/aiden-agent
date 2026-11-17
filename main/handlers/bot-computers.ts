@@ -1,4 +1,4 @@
-// Settings → Bot computers and the Bot profile's Computer section over IPC
+// Settings → Computers & VMs → Bot computers and the Bot profile's Computer section over IPC
 // (plan §8.1). Registered only where `hostPlatformCapabilities().botComputers`
 // is true (Apple silicon), so Linux never reaches any of this.
 //

@@ -1,4 +1,9 @@
-import type { PropsWithChildren } from "react";
+import * as React from "react";
+import { settingsTabFor, settingsTabLabel, type SettingsPageEntry, type SettingsSection } from "../../lib/settings-section";
+import { Tabs, tabIds } from "../ui-primitives";
+
+/** The spot on the page to scroll into view, such as `links` on Appearance or `bots` on Approvals. A new `request` scrolls again. */
+export const SettingsAnchorContext = React.createContext<{ section: SettingsSection; request: number } | null>(null);
 
 /** Shared Settings page hierarchy. FieldSet and Field supply its grouped cards and rows. */
 export function SettingsPage({
@@ -6,7 +11,7 @@ export function SettingsPage({
   description,
   heading = true,
   children,
-}: PropsWithChildren<{ title: string; description: string; heading?: boolean }>) {
+}: React.PropsWithChildren<{ title: string; description: string; heading?: boolean }>) {
   return (
     <div className="settings-page">
       {heading ? (
@@ -17,5 +22,38 @@ export function SettingsPage({
       ) : null}
       {children}
     </div>
+  );
+}
+
+/** A merged page's tab strip and selected panel. A page with one tab renders only its content. */
+export function SettingsPageTabs({
+  page,
+  section,
+  onSelect,
+  children,
+}: React.PropsWithChildren<{
+  page: SettingsPageEntry;
+  section: SettingsSection;
+  onSelect: (section: SettingsSection) => void;
+}>) {
+  const idBase = React.useId();
+  if (page.tabs.length < 2) return children;
+  // An anchor (Bot messaging on Approvals) shows the tab that holds it.
+  const tab = settingsTabFor(page, section);
+  const ids = tabIds(idBase, tab);
+  return (
+    <>
+      <Tabs
+        className="mb-7"
+        aria-label={page.title}
+        idBase={idBase}
+        value={tab}
+        onValueChange={onSelect}
+        items={page.tabs.map((tab) => ({ value: tab, label: settingsTabLabel(tab) }))}
+      />
+      <div role="tabpanel" id={ids.panel} aria-labelledby={ids.tab}>
+        {children}
+      </div>
+    </>
   );
 }

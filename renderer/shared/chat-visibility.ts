@@ -45,3 +45,16 @@ export function chatSurface(chat: ChatSurfaceInput): ChatSurface {
 export function isUserVisibleChat(chat: ChatSurfaceInput): boolean {
   return chatSurface(chat) === "regular";
 }
+
+/** Shown when a feature-owned chat is asked to run as an ordinary agent. */
+export const FEATURE_OWNED_CHAT_RUN_REFUSAL =
+  "This conversation belongs to a feature that is no longer available.";
+
+/**
+ * Why a chat may not start an ordinary agent run, or null when it may.
+ * A feature-owned chat (surface "feature") never runs as an ordinary agent;
+ * any present owner counts, even a malformed one.
+ */
+export function chatRunRefusal(chat: ChatSurfaceInput): string | null {
+  return chatSurface(chat) === "feature" ? FEATURE_OWNED_CHAT_RUN_REFUSAL : null;
+}

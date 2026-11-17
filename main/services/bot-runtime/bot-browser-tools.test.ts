@@ -78,6 +78,7 @@ function fakeBrowser(options: { owned?: boolean; window?: RendererDocumentOwner 
   });
   const service: BotBrowserService = {
     getState: state,
+    getBotState: state,
     async command(workspaceId, command, context) {
       duringCommand?.();
       context.beforeEffect?.();

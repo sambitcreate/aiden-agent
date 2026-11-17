@@ -36,9 +36,11 @@ export function createBotNotificationFeed(dependencies: BotNotificationFeedDepen
      */
     async list(
       since: number | undefined,
-      options: { issues?: boolean; messaging?: boolean; accessRequests?: boolean } = {},
+      options: { issues?: boolean; peers?: boolean; messaging?: boolean; accessRequests?: boolean } = {},
     ): Promise<AidenRemoteBotRoutineNotificationList> {
-      const at = now();
+      // A release can commit just after this poll reads a Bot's log. Keep the
+      // current millisecond open so the next exclusive cursor includes it.
+      const through = now() - 1;
       const names = new Map<string, Promise<string | undefined>>();
       const nameOf = (botId: string) => {
         let name = names.get(botId);
@@ -49,7 +51,7 @@ export function createBotNotificationFeed(dependencies: BotNotificationFeedDepen
         return name;
       };
       const notifications: AidenRemoteBotRoutineNotification[] = [];
-      for (const row of await dependencies.log.due(since, at)) {
+      for (const row of await dependencies.log.due(since, through)) {
         // Routine results are the revision-27 feed. Issue cards join it only
         // for a device that negotiated `bot:issues` (revision 42), whose
         // decoder accepts `kind: "issue"`; every other device still gets
@@ -60,23 +62,24 @@ export function createBotNotificationFeed(dependencies: BotNotificationFeedDepen
           const kind = await dependencies.issueKind(row.botId, row.dedupeKey.slice("issue:".length));
           if (kind === "access_needed") continue;
         }
+        const peer = row.class === "peer_result" && options.peers === true;
         const message = row.class === "bot_message" && options.messaging === true;
-        if (!issue && !message && (row.class !== "routine_result" || row.routineId === undefined)) continue;
+        if (!issue && !peer && !message && (row.class !== "routine_result" || row.routineId === undefined)) continue;
         // A routine saved with notifications off never alerts a phone.
         if (row.quiet === true) continue;
         const botName = await nameOf(row.botId);
         if (botName === undefined) continue;
-        if (issue || message) {
+        if (issue || message || peer) {
           notifications.push({
             // One local notification per issue card, never per repeat raise.
             id: row.requestId ?? row.id,
-            kind: message ? "message" : "issue",
+            kind: peer ? "peer" : message ? "message" : "issue",
             botId: row.botId,
             botName,
             // The card's title: the phone shows "{title}: {body}".
-            routineName: (message && row.title === row.body ? "Bot message" : [...row.title.trim()].slice(0, 120).join("")) || (message ? "Bot message" : "Needs you"),
+            routineName: (message && row.title === row.body ? "Bot message" : [...row.title.trim()].slice(0, 120).join("")) || (peer ? "Bot update" : message ? "Bot message" : "Needs you"),
             finishedAt: new Date(row.createdAt).toISOString(),
-            preview: redactRemoteText(row.body, AIDEN_REMOTE_BOT_ROUTINE_NOTIFICATION_PREVIEW_MAX_CHARS),
+            preview: redactRemoteText(row.body, AIDEN_REMOTE_BOT_ROUTINE_NOTIFICATION_PREVIEW_MAX_CHARS) || (peer ? "Bot update ready." : "Needs your attention."),
           });
           continue;
         }
@@ -100,7 +103,7 @@ export function createBotNotificationFeed(dependencies: BotNotificationFeedDepen
       }
       return parseAidenRemoteBotRoutineNotificationList({
         notifications: notifications.slice(0, AIDEN_REMOTE_BOT_ROUTINE_NOTIFICATIONS_MAX),
-        now: new Date(at).toISOString(),
+        now: new Date(through).toISOString(),
       });
     },
   };

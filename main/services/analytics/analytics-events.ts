@@ -28,7 +28,13 @@ const version = { kind: "version" } as const;
 export const COUNT_BUCKETS = ["0", "1", "2-3", "4-10", "11+"] as const;
 export const UPTIME_BUCKETS = ["<1m", "1-10m", "10-60m", "1h+"] as const;
 
-const RUN_TRIGGERS = enumProp("automatic", "manual", "catch_up", "retry", "file_change", "webhook");
+const RUN_TRIGGERS = enumProp("automatic", "manual", "catch_up", "retry", "file_change", "webhook", "watch");
+
+const APPROVAL_CARD = {
+  kind: enumProp("command", "file", "computer_use", "form_fill", "schedule", "subagent", "hook", "classifier", "tool"),
+  mode: enumProp("ask", "auto", "never", "full", "read_only", "none", "bot"),
+  chat: enumProp("workspace", "subagent", "bot"),
+} as const;
 
 export const ANALYTICS_EVENTS = {
   // Who's using it
@@ -37,21 +43,23 @@ export const ANALYTICS_EVENTS = {
   onboarding_finished: { outcome: enumProp("completed", "deferred"), provider_id: optional(id) },
   app_updated: { from_version: version, to_version: version },
   analytics_disabled: {},
+  // The headless server came up, and how it was started.
+  server_started: { launch: enumProp("foreground", "daemon", "service") },
 
   // Core use
   chat_message_sent: {
     provider_id: id,
     model_id: id,
     in_workspace: bool,
-    thinking: enumProp("off", "minimal", "low", "medium", "high", "xhigh", "other"),
-    origin: enumProp("desktop", "phone", "bot", "schedule"),
+    thinking: enumProp("off", "minimal", "low", "medium", "high", "xhigh", "max", "other"),
+    origin: enumProp("desktop", "phone", "peer", "bot", "schedule"),
   },
   chat_created: { workspace_kind: enumProp("folder", "scratch", "worktree", "none") },
   provider_connected: { provider_id: id, auth: enumProp("key", "oauth", "local") },
   workspace_added: { kind: enumProp("folder", "scratch", "path") },
 
   // Big features
-  bot_created: { preset_id: id, bot_count: enumProp(...COUNT_BUCKETS) },
+  bot_created: { preset_id: id, bot_count: enumProp(...COUNT_BUCKETS), source: optional(enumProp("new", "template", "onboarding")) },
   bot_routine_ran: { trigger: RUN_TRIGGERS, result: enumProp("success", "failed") },
   scheduled_task_ran: { trigger: RUN_TRIGGERS, result: enumProp("success", "silent", "failed") },
   subagent_launched: { role: enumProp("scout", "planner", "reviewer", "implementer", "other") },
@@ -64,12 +72,27 @@ export const ANALYTICS_EVENTS = {
   computer_use_enabled: {},
   bot_computer_set_up: { element_control: bool },
   terminal_opened: {},
-  git_commit: { pushed: bool },
+  git_commit: {},
   worktree_created: {},
+  design_mode_entered: { source: enumProp("toggle", "shortcut", "slash", "aiden") },
+  design_mode_exited: {},
+  design_mode_declined: {},
+  design_comments_sent: { count_bucket: enumProp(...COUNT_BUCKETS) },
+
+  // Approval cards. `chat` says which chat asked; it is not named `surface`,
+  // which every event already carries (desktop or server).
+  approval_shown: APPROVAL_CARD,
+  approval_answered: { ...APPROVAL_CARD, scope: enumProp("once", "chat", "workspace", "bot", "deny") },
+  // The person chose an approval mode: for this Mac, or for one workspace
+  // ("global" there means it went back to following this Mac's mode).
+  approval_mode_changed: {
+    mode: enumProp("ask", "auto", "never", "global"),
+    scope: enumProp("global", "workspace"),
+  },
 
   // Crashes without a JavaScript stack (process gone, unclean exit)
   app_crashed: {
-    kind: enumProp("renderer", "renderer_loop", "gpu", "utility", "unclean_exit", "other"),
+    kind: enumProp("renderer", "renderer_loop", "browser_tab", "gpu", "utility", "unclean_exit", "other"),
     reason: optional(enumProp(
       "clean_exit",
       "abnormal_exit",
@@ -87,9 +110,9 @@ export const ANALYTICS_EVENTS = {
 
 // Properties carried by every $exception event, next to $exception_list.
 export const EXCEPTION_PROPERTIES = {
-  source: enumProp("main", "renderer", "cli"),
+  source: enumProp("main", "renderer", "server"),
   level: enumProp("fatal", "error"),
-  process_type: optional(enumProp("browser", "renderer", "utility", "cli")),
+  process_type: optional(enumProp("browser", "renderer", "utility", "server")),
   origin: optional(enumProp("uncaught_exception", "unhandled_rejection", "window_error", "pending_crash")),
   uptime_bucket: optional(enumProp(...UPTIME_BUCKETS)),
 } as const satisfies PropsSpec;
@@ -100,7 +123,7 @@ export const SUPER_PROPERTIES = {
   platform: enumProp("darwin", "linux", "win32", "other"),
   arch: enumProp("arm64", "x64", "other"),
   os_major: { kind: "integer", min: 0, max: 999 },
-  surface: enumProp("desktop", "cli"),
+  surface: enumProp("desktop", "server"),
   channel: enumProp("release", "beta", "dev"),
 } as const satisfies PropsSpec;
 

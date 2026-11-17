@@ -6,6 +6,7 @@ import { syncBuiltinESMExports } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
+import { captureAnalyticsEvents } from "./analytics/test-support.js";
 import { promisify } from "node:util";
 import {
   GitManagedWorktreeDeleteError,
@@ -69,6 +70,19 @@ async function createRepository(t: test.TestContext): Promise<string> {
   await git(repository, ["commit", "-m", "Initial commit"]);
   return repository;
 }
+
+test("unpushed commits count what no remote holds, and an unreadable branch is never zero", async (t) => {
+  const repository = await createRepository(t);
+  const service = new GitService({ cacheTtlMs: 0 });
+  await git(repository, ["branch", "work"]);
+  assert.equal(await service.managedWorktreeUnpushedCommits(repository, "work"), 1, "no remote holds it");
+
+  await git(repository, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+  assert.equal(await service.managedWorktreeUnpushedCommits(repository, "work"), 0);
+
+  // "Zero unpushed" lets a worktree be deleted, so a failed read must not say so.
+  await assert.rejects(service.managedWorktreeUnpushedCommits(repository, "no-such-branch"));
+});
 
 async function persistRemovalJournal(
   created: Awaited<ReturnType<GitService["createWorktree"]>>,
@@ -5446,4 +5460,20 @@ test("GitService validates public info after joining branch-owned status work", 
     releaseStatus.resolve();
     await Promise.allSettled([branches, info]);
   }
+});
+
+test("a commit counts once, and a refused commit counts nothing", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const repository = await createRepository(t);
+  const service = new GitService({ cacheTtlMs: 0 });
+  await fs.writeFile(path.join(repository, "changed.txt"), "changed\n");
+  const review = await service.review(repository);
+  await service.commit(repository, { expectedSnapshot: review.commit.snapshot!, message: "Counted", mode: "all" });
+  assert.deepEqual(sent, [{ event: "git_commit", props: {} }]);
+
+  await fs.writeFile(path.join(repository, "again.txt"), "again\n");
+  await assert.rejects(
+    service.commit(repository, { expectedSnapshot: review.commit.snapshot!, message: "Stale", mode: "all" }),
+  );
+  assert.equal(sent.length, 1);
 });

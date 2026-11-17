@@ -24,7 +24,7 @@ function computerUseStatus(enabled: boolean): ComputerUseStatus {
   };
 }
 
-function mount(settings: Partial<AppSettings>) {
+function mount(settings: Partial<AppSettings>, formFillState = "not-downloaded") {
   let current: Partial<AppSettings> = { ...settings };
   const calls = installBotTestIpc({
     "settings:get": () => current,
@@ -33,7 +33,7 @@ function mount(settings: Partial<AppSettings>) {
       return current;
     },
     "computerUse:status": () => computerUseStatus(current.computerUseEnabled === true),
-    "formFill:status": () => ({ enabled: false, status: { state: "not-downloaded" } }),
+    "formFill:status": () => ({ enabled: false, status: { state: formFillState } }),
     "computerUse:resetChatGrants": () => {
       current = { ...current, computerUseAlwaysAllow: false };
       return { cleared: 2 };
@@ -93,4 +93,16 @@ test("resetting chat permissions clears grants and shows Always allow as off aga
   await waitFor(() => assert.equal(toggle.getAttribute("aria-checked"), "false"));
   assert.equal(calls.filter((call) => call.channel === "computerUse:resetChatGrants").length, 1);
   assert.ok(calls.filter((call) => call.channel === "settings:get").length > settingsReads);
+});
+
+test("the form fill row appears only when there is a downloaded model to remove", async () => {
+  const calls = mount({ computerUseEnabled: true });
+  await screen.findByRole("switch", { name: alwaysAllowName });
+  await waitFor(() => assert.equal(calls.some((call) => call.channel === "formFill:status"), true));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(screen.queryByText("Form fill specialist") === null, true);
+  cleanup();
+
+  mount({ computerUseEnabled: true }, "ready");
+  await screen.findByRole("button", { name: "Remove model" });
 });

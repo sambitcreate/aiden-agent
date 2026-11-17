@@ -92,6 +92,7 @@ interface MessageListProps {
   messages: ChatMessage[];
   /** Text of the assistant reply currently streaming, or null when idle. */
   streamingText: string | null;
+  replayedTextLength?: number;
   /** Reasoning explicitly emitted by the current supported provider. */
   streamingReasoning: string | null;
   /** Versioned GUI artifacts emitted by Pi extensions during this response. */
@@ -158,6 +159,7 @@ interface AssistantResponseProps {
   workDetails?: WorkDetailsMode;
   retainWorkDetails?: boolean;
   content: string;
+  replayedTextLength?: number;
   timeline: GenerationTimeline | null | undefined;
   reasoning?: string | null;
   attachments?: readonly Attachment[];
@@ -225,6 +227,7 @@ function AssistantResponse({
   workDetails = "standard",
   retainWorkDetails = false,
   content,
+  replayedTextLength = 0,
   timeline,
   reasoning,
   attachments,
@@ -362,6 +365,7 @@ function AssistantResponse({
               imageScope={imageScope}
               role="assistant"
               content={content}
+              replayedTextLength={replayedTextLength}
               streaming={streaming}
               streamComplete={streamComplete}
               onStreamHandoffComplete={onStreamHandoffComplete}
@@ -439,6 +443,7 @@ function AssistantResponse({
             imageScope={imageScope}
             role="assistant"
             content={row.content}
+            replayedTextLength={Math.max(0, replayedTextLength - row.startOffset)}
             // Every text row of a running turn stays on the gated reveal path,
             // so text a tool step closed keeps its release slot after newer
             // prose takes over the last row.
@@ -579,6 +584,7 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
     // Hovering anywhere on a reply reveals the action row at its end.
     <div
       data-transcript-reply={assistant ? "" : undefined}
+      data-live-item=""
       className={`${contained ? "transcript-settled-contained " : ""}${assistant ? "group/reply " : ""}flex min-w-0 flex-col gap-3`}
     >
       {live ? (
@@ -592,7 +598,7 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
             content={message.content}
             timeline={message.timeline}
             reasoning={message.reasoning}
-            // Snapshots exist for phones; this desktop draws the visual itself.
+            // Snapshots exist for phones; Aiden Agent draws the visual itself.
             attachments={attachmentsShownWithVisuals(message)}
             readAloud={readAloud}
             footer={settledTurnFooter(message)}
@@ -619,14 +625,18 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
       ) : message.notice ? (
         <AgentNoticeCard notice={message.notice} content={message.content} imageScope={imageScope} />
       ) : (
-        <SafeMessageBubble
-          imageScope={imageScope}
-          role={message.role}
-          content={message.content}
-          attachments={message.attachments}
-          skill={message.skill}
-          fork={fork}
-        />
+        <>
+          <SafeMessageBubble
+            imageScope={imageScope}
+            role={message.role}
+            content={message.content}
+            attachments={message.attachments}
+            skill={message.skill}
+            inputSource={message.inputSource}
+            fork={fork}
+          />
+          {message.role === "user" && message.hookBlocked ? <HookBlockedMark reason={message.hookBlocked.reason} /> : null}
+        </>
       )}
     </div>
   );
@@ -638,6 +648,20 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
     </MessageForkContextMenu>
   );
 });
+
+/** Says a UserPromptSubmit hook refused this message, so it never reached the model. */
+function HookBlockedMark({ reason }: { reason: string }) {
+  return (
+    <div className="flex justify-end">
+      <p
+        data-hook-blocked=""
+        className="m-0 max-w-[80%] rounded-menu bg-status-red-surface px-2.5 py-1 whitespace-pre-line text-small text-status-red [overflow-wrap:anywhere]"
+      >
+        Not sent: blocked by a hook.{"\n"}{reason}
+      </p>
+    </div>
+  );
+}
 
 export interface ProviderFailureActions {
   onAction: (action: ProviderFailureAction) => void;
@@ -778,6 +802,7 @@ export function MessageList({
   chatId,
   messages,
   streamingText,
+  replayedTextLength,
   streamingReasoning,
   streamingArtifacts = EMPTY_CHAT_ARTIFACTS,
   streamingArtifactPlacements = EMPTY_PLACEMENTS,
@@ -1106,6 +1131,7 @@ export function MessageList({
       retainWorkDetails={collapseTiming === "next-input" && (settlingIndex < 0 || settlingIndex >= latestExchangeStart)}
       live={{
         content: streamingText ?? "",
+        replayedTextLength,
         timeline,
         reasoning: streamingReasoning,
         attachments: liveAttachments,
@@ -1179,6 +1205,8 @@ export function MessageList({
           ref={transcriptRef}
           className="aiden-dock-inset chat-content-column flex flex-col gap-5 py-6"
           data-subagent-chip-focus-scope="true"
+          // Chat text is data, never instructions: Aiden Live sees only how many messages there are.
+          data-live-content="chat"
         >
           {transcriptRows}
 

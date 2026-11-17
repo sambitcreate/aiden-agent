@@ -2,7 +2,7 @@
 
 Status: Release draft. Public identity, category, age-rating answers, privacy-label answers, and screenshot specifications are resolved from the shipping app and current Apple definitions. App Store Connect publication and release-specific owner decisions remain open.
 
-The executable canonical ASC localization draft lives in `app-store/metadata/`. The first internal TestFlight train is `0.1.0`; build `1` was rejected during upload for an alpha-bearing App Store icon, builds `2`–`42` progressively corrected the icon and expanded the native companion (build `40` was rejected for its beta Xcode SDK), and build `42` is the current processed internal candidate. The version directory and Xcode targets match that decision. Offline validation is safe, but no metadata may be applied until the public mobile privacy/support copy and owner decisions below are complete.
+The executable canonical ASC localization draft lives in `app-store/metadata/`. The first internal TestFlight train is `0.1.0`; build `1` was rejected during upload for an alpha-bearing App Store icon, builds `2`–`43` progressively corrected the icon and expanded the native companion (build `40` was rejected for its beta Xcode SDK), and build `43` is the current processed internal candidate. The version directory and Xcode targets match that decision. Offline validation is safe, but no metadata may be applied until the public mobile privacy/support copy and owner decisions below are complete.
 
 ## Resolved public identity
 
@@ -38,7 +38,7 @@ Description draft:
 
 Review-notes draft:
 
-> Aiden On The Go requires the companion Aiden Agent desktop app. In Aiden Agent, open Settings → Remote Access, enable the listener, and open a short-lived pairing session. On the iPhone or iPad, scan the pairing QR code or use the approved manual connection flow. The reviewer must be supplied with a reachable review desktop and any required setup instructions; no production credential is embedded in the app.
+> Aiden On The Go requires the companion Aiden Agent desktop app. In Aiden Agent, open Settings → Connections, enable the listener, and open a short-lived pairing session. On the iPhone or iPad, scan the pairing QR code or use the approved manual connection flow. The reviewer must be supplied with a reachable review desktop and any required setup instructions; no production credential is embedded in the app.
 
 ## Age-rating questionnaire draft
 
@@ -104,7 +104,7 @@ Current Apple reference: `https://developer.apple.com/help/app-store-connect/ref
 
 ## Owner decisions still required
 
-- Internal TestFlight starts at marketing version `0.1.0`; build `1` was rejected before processing and build `42` is the current processed internal candidate. Advance the build number for later uploads in the same train and reserve `1.0.0` for the first public release decision.
+- Internal TestFlight starts at marketing version `0.1.0`; build `1` was rejected before processing and build `43` is the current processed internal candidate. Advance the build number for later uploads in the same train and reserve `1.0.0` for the first public release decision.
 - Enter Developer Tools / Productivity in App Store Connect, or deliberately override this documented recommendation.
 - Verify and publish the drafted 13+ age-rating answers in the exact current questionnaire.
 - Verify and publish the drafted “No data collected” App Privacy answer against the final distributed build and operational services.
@@ -120,10 +120,10 @@ Do not replace unresolved values with placeholders in App Store Connect.
 
 Provide these notes only with a reachable, reviewer-safe paired Aiden Agent environment and the final approved contact details:
 
-1. Pair the iPhone or iPad with the supplied Aiden Agent desktop, then tap the Aiden logo and choose **Bots**.
+1. Pair the iPhone or iPad with the supplied Aiden Agent desktop, then open the **Bots** tab.
 2. New Bots start with Full Access; switch to **Custom** in the Bot's Advanced settings to reduce access. Full Access uses only capabilities already enabled on the paired desktop; Custom can reduce Files, commands, Connections, and Skills.
 3. Create a Bot with the built-in semantic avatar, save it, and start a chat. Apple Intelligence is not required for this complete path.
-4. On eligible Apple Intelligence hardware with iOS/iPadOS 18.4 or later, **Create with Apple Intelligence** opens Apple's system Image Playground. Apple controls generation and may use Private Cloud Compute. Aiden disables person/Photos personalization and sends the paired desktop only the image explicitly accepted and saved.
+4. On eligible Apple Intelligence hardware with iOS/iPadOS 26 or later, **Create with Apple Intelligence** opens Apple's system Image Playground. Apple controls generation and may use Private Cloud Compute. Aiden disables person/Photos personalization and sends the paired desktop only the image explicitly accepted and saved.
 5. On unsupported hardware, including iPhone 13 Pro, the editor honestly keeps the semantic avatar available and has no dead Image Playground action.
 
 Do not claim successful Image Playground generation in review notes until it has passed on supported physical hardware. Do not include pairing credentials, private prompts, paths, or provider secrets in metadata or notes.

@@ -47,7 +47,7 @@ test("a local resolution refuses audio it cannot decode", async () => {
 
 test("needs-setup surfaces the setup message", async () => {
   const h = harness({ kind: "needs-setup", reason: "no-provider" });
-  await assert.rejects(h.transcribe(voiceNote), { message: "Set up a voice provider in Settings → Voice." });
+  await assert.rejects(h.transcribe(voiceNote), { message: "Set up a voice provider in Settings → Voice & Speech." });
   assert.deepEqual(h.calls, []);
 });
 

@@ -1,8 +1,17 @@
 import { createWorkspaceFilesTouchedNotifier } from "./workspace-files-touched.js";
 import { aidenAppNavigation } from "./aiden-app-navigation.js";
 import type { AgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
+import { botFullComputerLabel } from "../../renderer/shared/bot-capabilities.js";
+import { thisComputerLabel } from "../../renderer/shared/computer-noun.js";
 import { createAidenAppTools } from "./aiden-app-tools.js";
 import { appControlsService } from "./app-controls-main.js";
+import {
+  decideGenerationTerminal,
+  runAdmittedGeneration,
+  runEveryStep,
+  settleGenerationOwnership,
+  type GenerationOwnershipEntry,
+} from "./generation-settlement.js";
 import type { AppControlPanel } from "../../renderer/shared/app-controls.js";
 import { canUseProviderAuthenticatedMcp } from "./mcp-provider-auth-core.js";
 import { providerRegistry } from "./provider-registry.js";
@@ -13,6 +22,12 @@ import { usageLimits } from "./usage-limit-main.js";
 import { withUsageLimitWait } from "./usage-limit-stream.js";
 import { spending } from "./spending-main.js";
 import { createSpendingMeter, spendCounts } from "./spending-service.js";
+import { effectiveApprovalMode, parseApprovalModel, workspaceApprovalPolicy, type MacGrantClass } from "../../renderer/shared/approval-mode.js";
+import { currentWorkspaceApproval, legacyAccessOf } from "./approval-gate/run-approval.js";
+import { RunTaint, runTaintHistoryOfBranch } from "./approval-gate/run-taint.js";
+import { declaredReadOnlyHint } from "./approval-gate/tool-classes.js";
+import { approvalJudgeAction, createApprovalJudge, type ApprovalJudge } from "./approval-judge/judge.js";
+import { approvalJudgeComplete } from "./approval-judge/model-complete.js";
 import type { SpendingOwner } from "./spending-core.js";
 import { createLocalClassifierModels } from "./pi-local-classifier.js";
 import { piResourcesForSkillSnapshot } from "./skill-tools.js";
@@ -33,7 +48,7 @@ import { attachWorkspaceToolOutputs } from "./tool-output-runtime.js";
 // before any mutating tool (write/edit/run_command) via pi's `beforeToolCall`
 // hook and waits for the user to Allow or Deny in the UI.
 
-import { type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
+import { type AgentContext, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import { convertToLlm, DEFAULT_COMPACTION_SETTINGS } from "./pi-legacy-harness.js";
 import { createInitialSystemMessage, toToolDeclaration, type AssistantMessage } from "@earendil-works/pi-ai";
 import { access } from "node:fs/promises";
@@ -56,11 +71,11 @@ import {
 import type { PreparedBrowserFile } from "./browser/files.js";
 import { createBrowserDiscovery } from "./browser-discovery.js";
 import { resolveBrowserAgentAccess } from "../../renderer/shared/browser.js";
+import { chatRunRefusal } from "../../renderer/shared/chat-visibility.js";
 import {
   canUseDeviceTools,
   createDeviceAgentTools,
   deviceToolApprovalSummary,
-  deviceToolRequiresApproval,
   isDeviceToolName,
 } from "./devices/device-tools.js";
 import { devicesEnabled } from "./devices/feature-flag.js";
@@ -69,8 +84,6 @@ import { WEB_FETCH_TOOL_NAME } from "../../renderer/shared/web-extract.js";
 import { webFetchService } from "./web-fetch-main.js";
 import { createVisionAnalysisTool, INSPECT_IMAGE_TOOL_NAME } from "./vision-analysis-tool.js";
 import {
-  APPROVAL_TOOL_NAMES,
-  DISCLOSURE_APPROVAL_TOOL_NAMES,
   buildPinnedCodingTools,
   summarizeToolCall,
 } from "./coding-tools.js";
@@ -103,7 +116,9 @@ import {
 } from "./bot-runtime-authority-main.js";
 import type { BotRuntimeAuthorityAdmission } from "./bot-runtime-authority.js";
 import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
-import { backgroundJobRequiresApproval } from "./follow-through/background-job-tool.js";
+import { workspaceAutoWouldJudge, workspaceRuleHost, workspaceToolApproval } from "./approval-gate/workspace-tool-approval.js";
+import { pageRuleFor } from "./approval-rules/resolve-main.js";
+import { ApprovalAnalytics, approvalAnalyticsMode, type ApprovalAnalyticsMode } from "./approval-gate/approval-analytics.js";
 import {
   hostRunRegistry,
   recordRunAttentionResolved,
@@ -135,6 +150,10 @@ import { type SkillRegistrySnapshot, withoutSkills } from "./skill-registry.js";
 import { buildSystemPrompt, buildSystemPromptWithSections } from "./chat-system-prompt.js";
 import { skillRegistry } from "./skill-registry-main.js";
 import { DESKTOP_ARTIFACT_SKILLS } from "./workspace-artifacts/skill.js";
+import { DESKTOP_HOOK_SKILLS } from "./hooks-skill.js";
+import { HOOKS_TOOL_NAME, createHooksTool, offersHooksTool, runsWorkspaceChatHooks } from "./hooks-tool.js";
+import { getHookService } from "./hooks/hook-service-main.js";
+import { DESIGN_CANVAS_SKILLS } from "./design-canvas/skill.js";
 import {
   assistantTurnTextSeparator,
   buildAgentRuntimeOptions,
@@ -189,6 +208,17 @@ import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.j
 import type { ChatContextPressureV1 } from "../../renderer/shared/context-pressure.js";
 import { compactionFailureLogMetadata } from "./provider-failure.js";
 import { MAX_CUT_OFF_CONTINUATIONS } from "./cut-off-reply.js";
+import {
+  MAX_STOP_HOOK_CONTINUATIONS,
+  createRunInputContexts,
+  createWorkspaceChatHooks,
+  endWorkspaceChatSession,
+  markWorkspaceChatCompacted,
+  preCompactSummaryInstructions,
+  runPromptIntakeHooks,
+  screenRunInputWithHooks,
+} from "./workspace-chat-hooks.js";
+import { chatSurfaceHooks } from "./agent-surface-hooks.js";
 import type { ComputerUseController } from "./computer-use/controller.js";
 import {
   authorizeAllowedComputerUseAction,
@@ -209,7 +239,7 @@ import {
   type FormFillApprovalDescriptor,
 } from "./form-fill/service.js";
 import { FORM_FILL_MUTATION_AVAILABLE } from "../../renderer/shared/form-fill-availability.js";
-import { toolApprovalPreview } from "../../renderer/shared/tool-approval-preview.js";
+import { toolApprovalPreview, type ToolApprovalPreview } from "../../renderer/shared/tool-approval-preview.js";
 import { formFillArtifacts, formFillRuntime } from "./form-fill/artifacts.js";
 import {
   EDIT_AUTOMATION_TOOL_NAME,
@@ -227,12 +257,13 @@ import {
 import {
   ToolApprovalCoordinator,
   toolApprovalBlockReason,
+  toolCallApprovalEffect,
   type ToolApprovalDecisionPayload,
 } from "./tool-approval.js";
 import { botApprovals } from "./bot-runtime/bot-approvals-main.js";
 import {
   SCOPED_APPROVAL_OFFER,
-  toolApprovalRuleTarget,
+  MAC_GRANT_OFFER,
   type ToolApprovalRuleTarget,
 } from "./tool-approval-rules.js";
 import { toolApprovalRules } from "./tool-approval-rules-main.js";
@@ -246,7 +277,6 @@ import {
   projectVisibleHistoryWithoutSkills,
   ensurePiForkSummary,
   type PiVisibleTurnLease,
-  appendPiMessages,
 } from "./pi-compaction-session-store.js";
 import { piRuntimeEffectStore } from "./pi-runtime-effect-store.js";
 import { createInMemoryPiSession } from "./pi-session-repository-port.js";
@@ -314,7 +344,7 @@ import { createPiTurnContextPreparation } from "./pi-turn-context.js";
 import { endRunAfterIgnoredToolRecovery } from "./assistant/tool-loop-guard.js";
 import type { ToolApprovalDetails } from "../../renderer/shared/assistant.js";
 import { DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS } from "./subagents/subagent-child-runner.js";
-import { assistantSettingsSections } from "../../renderer/lib/settings-section.js";
+import { assistantSettingsPages } from "../../renderer/lib/settings-section.js";
 import { SubagentSupervisor } from "./subagents/subagent-supervisor.js";
 import { chatActivityRegistry } from "./chat-activity.js";
 import { interruptedWaits } from "./interrupted-waits-main.js";
@@ -380,6 +410,7 @@ import { ChatTurnAdmission } from "./chat-turn-admission.js";
 import type { ChatTurnLease } from "./chat-turn-admission.js";
 import {
   createChatRunInputAdmission,
+  type ChatRunInputHooks,
   type ChatRunInputAdmissionRequest,
   type ChatRunInputAdmissionResult,
 } from "./chat-run-input-admission.js";
@@ -398,6 +429,7 @@ import {
   resolvePiAgentRuntimeContributionSnapshot,
   resolvePiAgentRuntimeStaticContributions,
   type PiAgentRuntimeExtension,
+  type PiRuntimeStopEvent,
 } from "./pi-agent-runtime-harness.js";
 import {
   MEMORY_EXTENSION_ID,
@@ -407,7 +439,6 @@ import {
   memoryMetadataForChat,
   memoryProvenanceForGeneration,
   memoryScopeForChat,
-  REMEMBER_MEMORY_TOOL_NAME,
   FORGET_MEMORY_TOOL_NAME,
 } from "./memory-context.js";
 import { memoryStore } from "./memory-store-main.js";
@@ -468,15 +499,6 @@ import { GENERATIVE_UI_EXTENSION_ID } from "./generative-ui-extension.js";
 import { createArtifactPlacementLedger, imageAttachmentPlacements, presentPlacedImage } from "./generative-ui-placements.js";
 import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { generationHasVisibleOutput } from "./generation-visible-output.js";
-import { createGenerationHarness } from "./generation-harness.js";
-import {
-  resolveGenerationProfile,
-  selectRuntimeExtensions,
-  type DesignRunBinding,
-  type GenerationProfile,
-} from "./generation-profile.js";
-import { designGenerationWiring, designRunOutcome } from "./design/design-generation.js";
-import type { DesignRunOutcome } from "./design/store-core.js";
 import {
   createAskUserQuestionExtension,
   resolveAskUserQuestionTimeoutMs,
@@ -506,6 +528,21 @@ import { todoSnapshotDiagnostic } from "./rpiv-todo/diagnostics.js";
 import { todoSnapshotForRenderer } from "../../renderer/shared/todo.js";
 import { chatProgressEvents } from "./chat-progress-events.js";
 import { GenerationDeltaCoalescer } from "./generation-delta-coalescer.js";
+import { randomUUID } from "node:crypto";
+import { designModeEnabled } from "./studio/feature-flags.js";
+import { designCanvasSnapshots, designCanvasStore, designGrants, designModeConsent, recentWrittenPages } from "./design-canvas/main.js";
+import {
+  createDesignCanvasTools,
+  DESIGN_MODE_PROMPT_SECTION,
+  designCanvasToolsAllowed,
+  designModeToolAllowed,
+} from "./design-canvas/canvas-tools.js";
+import { createDesignModeTool, DESIGN_MODE_TOOL_NAME } from "./design-canvas/design-mode-tool.js";
+import { chatSurface } from "../../renderer/shared/chat-visibility.js";
+import { canvasPromptLine } from "../../renderer/shared/design-canvas/canvas-summary.js";
+import { placeArtifactsOnCanvas, type CanvasArtifact } from "./design-canvas/artifact-frames.js";
+import { placeWrittenPagesOnCanvas, writtenPagePath } from "./design-canvas/written-pages.js";
+import { DESIGN_CANVAS_UPDATED_CHANNEL } from "../handlers/design-canvas.js";
 
 subagentRuntimeRegistry.setHealthMetrics(subagentHealthMetrics);
 subagentRuntimeRegistry.setLimits({
@@ -517,6 +554,17 @@ subagentRuntimeRegistry.setRuntimeFaultReporter((source) => {
 });
 
 type GenerationPermission = WorkspacePermission | "read-only";
+
+/** Transcript section carrying the design-mode prompt once design mode is entered mid-reply. */
+const DESIGN_MODE_SECTION = "design-mode";
+
+/** Canvas tools held back until the person enters design mode during the turn. */
+interface EnteredCanvasTools {
+  /** Adds the held canvas tools and the design-mode prompt section once design mode is on. */
+  prepare(context: AgentContext): Promise<AgentContext>;
+  /** The held canvas tools once entered, for codemode's late deferred tools. */
+  deferred(): readonly AgentTool[];
+}
 
 /**
  * Per stream, the command digest each allowed workspace_artifact approval card
@@ -579,8 +627,6 @@ export interface GenerationExecutionOptions {
   visualAudience?: "remote";
   /** Main-owned stable principal used for the versioned Bot Full Access notice. */
   botAudienceId?: string;
-  /** Main-only Design Studio run; parseParams can never produce it (ADR-DS §4). */
-  designRun?: DesignRunBinding;
   /**
    * Main-owned follow-up turn nobody is watching (a background job ended, a
    * followed pull request or a "done when" check needs the agent). Approvals
@@ -619,35 +665,41 @@ interface ActiveGeneration {
   loadMonitor?: LoadMonitorState;
   releaseSkillReservation: () => void;
   releaseBotAuthority: () => void;
-  /** Runs that take no mid-flight input (Design Studio). */
-  inputClosed: boolean;
   /** A steered send stops this run's still-running subagents. */
   stopSubagentsForGuidance?: () => void;
+  /** UserPromptSubmit for mid-flight input, in a chat that runs hooks. */
+  inputHooks?: ChatRunInputHooks;
 }
 
 const active = new Map<string, ActiveGeneration>();
 const CHAT_CANCEL_SETTLEMENT_GRACE_MS = 5_000;
 const WORKSPACE_CANCEL_SETTLEMENT_GRACE_MS = 5_000;
-const initializing = new Map<
-  string,
-  {
-    chatId: string;
-    owner: ChatGenerationOwner;
-    removeOwnerInvalidation: () => void;
-    stopCacheWarming?: () => void;
-    workspaceId?: string;
-    cancelRequested: boolean;
-    cancellationOrigin?: GenerationCancellationOrigin;
-    rendererDetached: boolean;
-    promptsUnattended: boolean;
-    controller: AbortController;
-    computerUse?: ComputerUseController;
-    formFill?: FormFillService;
-    loadMonitor?: LoadMonitorState;
-    releaseSkillReservation: () => void;
-    releaseBotAuthority: () => void;
-  }
->();
+/** What must happen if the current step of a run's start throws. */
+interface GenerationEscape {
+  settle(): Promise<void>;
+}
+
+interface InitializingGeneration {
+  chatId: string;
+  owner: ChatGenerationOwner;
+  removeOwnerInvalidation: () => void;
+  stopCacheWarming?: () => void;
+  workspaceId?: string;
+  cancelRequested: boolean;
+  cancellationOrigin?: GenerationCancellationOrigin;
+  rendererDetached: boolean;
+  promptsUnattended: boolean;
+  controller: AbortController;
+  computerUse?: ComputerUseController;
+  formFill?: FormFillService;
+  loadMonitor?: LoadMonitorState;
+  releaseSkillReservation: () => void;
+  releaseBotAuthority: () => void;
+  skillInvocation?: PreparedSkillInvocation;
+  skillPrompt?: string;
+}
+
+const initializing = new Map<string, InitializingGeneration>();
 const computerUseGenerationGate = new ComputerUseGenerationGate();
 const chatDeletionGate = new ChatDeletionGate();
 const chatWorkspaceMutationGate = new ChatWorkspaceMutationGate();
@@ -718,18 +770,6 @@ function cancelChatGenerations(chatId: string, origin: GenerationCancellationOri
     if (entry.chatId === chatId) llmClient.cancel(streamId, origin);
   }
   subagentRuntimeRegistry.abortChat(chatId);
-}
-
-function releaseGenerationSkillReservation(entry: { releaseSkillReservation: () => void }): void {
-  const release = entry.releaseSkillReservation;
-  entry.releaseSkillReservation = () => {};
-  release();
-}
-
-function releaseGenerationBotAuthority(entry: { releaseBotAuthority: () => void }): void {
-  const release = entry.releaseBotAuthority;
-  entry.releaseBotAuthority = () => {};
-  release();
 }
 
 function botWorkspacePromptAuthority(
@@ -839,6 +879,25 @@ function ownerForStream(streamId: string): ChatGenerationOwner | undefined {
 
 const deltaCoalescer = new GenerationDeltaCoalescer();
 
+/** End this entry's ownership. Repeat calls for the same entry do nothing. */
+function settleGeneration<Entry extends GenerationOwnershipEntry>(
+  streamId: string,
+  params: { chatId: string; workspaceId?: string },
+  entry: Entry,
+  owners: Map<string, Entry>,
+): void {
+  settleGenerationOwnership(streamId, entry, owners, {
+    forgetApprovedArtifacts: () => approvedWorkspaceArtifactCalls.delete(streamId),
+    releaseApprovals: () => {
+      approvalModes.delete(streamId);
+      approvals.releaseStream(streamId);
+    },
+    releaseQuestionnaires: () => questionnaires.releaseStream(streamId),
+    broadcastSettled: () =>
+      broadcastChatSettled(streamId, params.chatId, entry.workspaceId, params.workspaceId),
+  });
+}
+
 function sendGeneration(streamId: string, channel: NotificationChannel, payload: unknown): boolean {
   const chatId = active.get(streamId)?.chatId ?? initializing.get(streamId)?.chatId;
   if (chatId && channel === "chat:todo") {
@@ -927,6 +986,8 @@ function recordShortCircuitedPrompt(streamId: string, prompt: HostRunPendingProm
   pendingAttentionRecorder.promptShortCircuited(streamId, prompt);
 }
 
+/** The workspace access each run's approval cards are asked under, for analytics. */
+const approvalModes = new Map<string, ApprovalAnalyticsMode>();
 const approvals = new ToolApprovalCoordinator(
   (prompt) => {
     if (!sendGeneration(prompt.streamId, "chat:approval", prompt)) {
@@ -959,6 +1020,7 @@ const approvals = new ToolApprovalCoordinator(
       type: "approval_required",
       payload: { summary: prompt.summary },
     }),
+  new ApprovalAnalytics({ surface: "workspace", mode: (streamId) => approvalModes.get(streamId) ?? "ask" }),
 );
 const questionnaires = new AskUserQuestionCoordinator(
   (prompt) => {
@@ -1133,58 +1195,6 @@ async function prepareGeneration(
     botContext?.prepared.runtime ??
     (await resolveModelRuntime(params.providerId, params.model, signal, chat.id));
 
-  if (options.designRun) {
-    // A design run composes exactly its binding's extension (designGenerationWiring);
-    // createGenerationHarness refuses any other extension, tool or skill (ADR-DS §4).
-    const designSettings = await configStore.getSettings();
-    const designModel = runtime.model;
-    return {
-      runtime: { ...runtime, model: designModel },
-      agentsInstructions: undefined,
-      agentsInstructionRoots: undefined,
-      browserDiscovery: undefined,
-      browserSelection: { initialized: false } as { initialized: boolean; tabId?: string },
-      browserFileApprovals: new Map<string, PreparedBrowserFile>(),
-      browserActionApprovals: new Map<
-        string,
-        { approval: BrowserToolApproval; args: Record<string, unknown> }
-      >(),
-      permission: "none" as GenerationPermission,
-      folderPath: undefined,
-      git: await generationGitContext(undefined, signal),
-      tools: [] as AgentTool[],
-      generationExtensions,
-      modelImageReferences,
-      lateMcpDiscovery: NO_LATE_MCP_DISCOVERY as McpLateDiscovery,
-      displayedImages,
-      displayedHtmlArtifacts,
-      appPanels,
-      htmlArtifactPlacements,
-      imagePlacements,
-      displayedUiVisuals,
-      uiVisualPlacements,
-      supportsImages: runtimeSupportsImages(designModel),
-      thinkingLevel: resolveGenerationThinkingLevel(
-        params.providerId,
-        designModel,
-        params.thinkingLevel ?? savedGenerationThinkingLevel(designSettings, params.providerId, params.model, runtime.provider),
-      ),
-      computerUse: undefined,
-      formFill: undefined,
-      googleWorkspaceSnapshot: undefined,
-      skillSnapshot: undefined,
-      workspaceId: undefined,
-      subagentSupervisor: undefined,
-      showLocalModelReasoning: designSettings.showLocalModelReasoning,
-      compactionEngine: compactionEngineFrom(designSettings.compactionEngine),
-      compactionModelOverrides: designSettings.compactionModelOverrides,
-      cacheWarmingEnabled: false,
-      sharedImages,
-      botContext: undefined,
-      botApprovedRoots: [] as string[],
-      botMutatingToolNames: new Set<string>(),
-    };
-  }
   const botBound = botContext !== undefined;
   const botApprovedRoots = botContext
     ? await resolveBotRuntimeApprovedRoots(botContext.admission.authority)
@@ -1240,7 +1250,16 @@ async function prepareGeneration(
     await assertWorkspaceFolderPresent(workspace);
     await assertManagedWorktreeAdmission(workspace);
   }
-  const permission: GenerationPermission = options.permission ?? workspace?.permission ?? "ask";
+  // A person's workspace chat follows the global approval mode, or the
+  // workspace's own when it is customized (plan §3.1). Internal policies
+  // (scheduled runs), Bot-bound turns and the Assistant keep their access.
+  const approvalPolicy =
+    workspace && !botBound && !assistantMode && options.permission === undefined
+      ? workspaceApprovalPolicy(workspace, effectiveApprovalMode(await configStore.getSettings(), true))
+      : undefined;
+  const permission: GenerationPermission =
+    options.permission ?? (approvalPolicy ? legacyAccessOf(approvalPolicy) : workspace?.permission ?? "ask");
+  approvalModes.set(streamId, approvalPolicy ? approvalPolicy.mode : approvalAnalyticsMode(permission));
   const folderPath = workspace?.folderPath;
   // Connectors this workspace switched off. Bots keep their own grants.
   const workspaceDisabledMcpServerIds = botBound ? undefined : workspace?.disabledMcpServerIds;
@@ -1420,6 +1439,37 @@ async function prepareGeneration(
     botContext && !botContext.admission.authority.files.botHome
       ? []
       : inheritedSubagentReadToolCeiling(options.excludeToolNames);
+  // The chats whose own turns run hooks (the same gate as `chatHooks` in
+  // runChat); Bots wire their own.
+  const subagentRunsChatHooks = runsWorkspaceChatHooks({
+    usageSource: options.usageSource,
+    interactionSurface: options.interactionSurface,
+    bot: botBound,
+    assistant: assistantMode,
+    harnessProvider: isAcpHarnessProvider(runtime.provider.id),
+  });
+  // A subagent's approval card fires Notification like the chat's own cards.
+  const notifySubagentApproval =
+    subagentRunsChatHooks && folderPath
+      ? (() => {
+          const hooks = createWorkspaceChatHooks(
+            {
+              chatId: params.chatId,
+              ...(workspace?.noWorkspace === true ? {} : { workspaceRoot: folderPath }),
+            },
+            undefined,
+            {
+              // Shown in the chat while its turn is live, else logged; never the model's.
+              onMessages: (messages) => {
+                const live = active.has(streamId) || initializing.has(streamId);
+                if (live && sendGeneration(streamId, "chat:status", { streamId, phase: "hook_messages", messages })) return;
+                logger.warn("hooks", `Notification hooks for chat ${params.chatId}: ${messages.join("\n")}`);
+              },
+            },
+          );
+          return () => hooks.notify("Aiden needs your permission for a subagent", "permission_prompt");
+        })()
+      : undefined;
   let subagentProjector: SubagentEventProjector | undefined;
   const subagentPersistence =
     allowSubagents && workspace && folderPath
@@ -1441,10 +1491,12 @@ async function prepareGeneration(
           shellEnabled: subagentShellEnabled,
           shellBinary: subagentShellEnabled ? subagentShellBinary : undefined,
           delegationEnabled: subagentDelegationEnabled,
-          requestApproval: (descriptor, approvalSignal, approvalOwnerDocumentId) =>
-            approvals
+          requestApproval: (descriptor, approvalSignal, approvalOwnerDocumentId) => {
+            notifySubagentApproval?.();
+            return approvals
               .request(descriptor, approvalSignal, approvalOwnerDocumentId)
-              .then((outcome) => outcome === "allowed"),
+              .then((outcome) => outcome === "allowed");
+          },
           currentWorkspace: async (workspaceId) =>
             botContext && workspaceId === workspace.id
               ? { ...workspace }
@@ -1588,6 +1640,27 @@ async function prepareGeneration(
           modelOptions: subagentModelOptions,
           healthMetrics: subagentHealthMetrics,
           projector: subagentProjector,
+          // SubagentStop for the chats whose own turns run hooks.
+          ...(subagentRunsChatHooks
+            ? {
+                stopHooks: chatSurfaceHooks(
+                  {
+                    chatId: params.chatId,
+                    cwd: folderPath,
+                    ...(workspace.noWorkspace === true ? {} : { workspaceRoot: folderPath }),
+                  },
+                  undefined,
+                  {
+                    // Shown in the chat while its turn is live, else logged; never the model's.
+                    report: (messages) => {
+                      const live = active.has(streamId) || initializing.has(streamId);
+                      if (live && sendGeneration(streamId, "chat:status", { streamId, phase: "hook_messages", messages })) return;
+                      logger.warn("hooks", `SubagentStop hooks for chat ${params.chatId}: ${messages.join("\n")}`);
+                    },
+                  },
+                ),
+              }
+            : {}),
         })
       : undefined;
   // Assistant modes use positive allowlists: the dock gets safe metadata plus
@@ -1595,6 +1668,28 @@ async function prepareGeneration(
   // exact MCP identities. Computer Use, skills, and delegation stay out.
   // Desktop-only: the Artifacts tab is a Mac and Linux surface, so phone,
   // Telegram and Bot turns get neither the tool nor its skill.
+  // Design mode: the canvas tools and the aiden-design skill go together.
+  const designTurn = {
+    flagEnabled: designModeEnabled(),
+    localRenderer: rendererOwner && browserOwner?.kind !== "remote",
+    ...(botContext ? { botId: botContext.admission.authority.botId } : {}),
+    assistant: assistantMode,
+    telegram: options.interactionSurface === "telegram",
+    hasWorkspaceFolder: Boolean(folderPath) && permission !== "none",
+  };
+  const designCanvasOffered =
+    !options.excludeToolNames?.has("canvas_place_frame") &&
+    designCanvasToolsAllowed({ ...designTurn, designMode: chat.designMode });
+  // Offered whether design mode is on (to leave) or off (to ask to enter).
+  const designModeToolOffered =
+    !options.excludeToolNames?.has(DESIGN_MODE_TOOL_NAME) &&
+    designModeToolAllowed({ ...designTurn, regularChat: chatSurface(chat) === "regular", inlineVisuals: params.inlineVisuals });
+  // Even when the design_mode card is not offered (for example while Inline
+  // visuals is automatic), the person can switch design mode on mid-reply.
+  const canvasHoldable =
+    !designCanvasOffered &&
+    !options.excludeToolNames?.has("canvas_place_frame") &&
+    designCanvasToolsAllowed({ ...designTurn, designMode: true });
   const offerWorkspaceArtifacts =
     !botContext &&
     !assistantMode &&
@@ -1608,6 +1703,25 @@ async function prepareGeneration(
     !assistantMode && workspace ? await skillRegistry.snapshotResolved(workspace) : undefined;
   if (skillSnapshot && !offerWorkspaceArtifacts) {
     skillSnapshot = withoutSkills(skillSnapshot, DESKTOP_ARTIFACT_SKILLS);
+  }
+  // The agent's hooks tool and its skill: where workspace chat hooks run, and
+  // only while the owner can answer its card on this computer (not on an
+  // unattended or a phone- or paired-Mac-driven turn).
+  const offerHooksTool = hostPlatformCapabilities().hooks && offersHooksTool({
+    usageSource: options.usageSource,
+    interactionSurface: options.interactionSurface,
+    bot: Boolean(botContext),
+    assistant: assistantMode,
+    harnessProvider: isAcpHarnessProvider(runtime.provider.id),
+    unattended: options.unattended === true,
+    remoteAudience: options.visualAudience === "remote",
+    excludedToolNames: options.excludeToolNames,
+  });
+  if (skillSnapshot && !offerHooksTool) {
+    skillSnapshot = withoutSkills(skillSnapshot, DESKTOP_HOOK_SKILLS);
+  }
+  if (skillSnapshot && !designCanvasOffered && !designModeToolOffered && !canvasHoldable) {
+    skillSnapshot = withoutSkills(skillSnapshot, DESIGN_CANVAS_SKILLS);
   }
   let botSkillToolNames: ReadonlySet<string> = new Set();
   if (botContext && skillSnapshot) {
@@ -1922,7 +2036,7 @@ async function prepareGeneration(
     if (authority.files.fullMac) {
       fileLocations.push({
         id: authority.files.fullMac.sourceId,
-        label: "Full Mac",
+        label: botFullComputerLabel(process.platform),
         root: "/",
       });
     }
@@ -2168,6 +2282,7 @@ async function prepareGeneration(
       existingChatHtmlCount: existingHtmlUsage.count + pendingHtmlAfterReconcile.count,
       preferArtifactThisTurn: visualize,
       ...(options.visualAudience ? { audience: options.visualAudience } : {}),
+      ...(designCanvasOffered ? { designCanvas: true } : {}),
       existingChatUiCount: displayedAssistantUiCount(chat.messages),
       onUiVisual: (visual, context) => {
         uiVisualPlacements.record(visual.id, context.toolCallId, visual.layout ?? "column");
@@ -2232,6 +2347,16 @@ async function prepareGeneration(
           takeApprovedDigest: (toolCallId) => takeApprovedWorkspaceArtifactCall(streamId, toolCallId),
           refresh: (artifact, refreshSignal) =>
             workspaceArtifactRunner.refresh(workspace.id, artifact.id, { folderPath, permission }, refreshSignal),
+          runAction: (artifactId, actionName, args, expectedDigest, runSignal) =>
+            workspaceArtifactRunner.runAction(
+              workspace.id,
+              artifactId,
+              actionName,
+              args,
+              { folderPath, permission },
+              runSignal,
+              expectedDigest,
+            ),
           workspaceExists: async () => Boolean(await configStore.getWorkspace(workspace.id)),
           onChanged: notifyWorkspaceArtifactsChanged,
         }),
@@ -2258,7 +2383,7 @@ async function prepareGeneration(
       service: appControlsService, liveState: browserOwner?.kind !== "remote",
       runtime: { interaction: "attended-workspace", workspacePermission: permission, providerId: params.providerId, modelId: params.model, availableTools: tools.map((tool) => tool.name) },
       open: browserOwner?.kind !== "remote" ? (destination, toolSignal) => aidenAppNavigation.open(destination, browserOwner, toolSignal) : undefined,
-      context: { actor: `agent:${params.chatId}`, target: browserOwner?.kind === "remote" ? "Paired host" : "This desktop", workspaceId: workspace?.id,
+      context: { actor: `agent:${params.chatId}`, target: browserOwner?.kind === "remote" ? "Paired computer" : thisComputerLabel(process.platform), workspaceId: workspace?.id,
         humanGesture: false, isCurrent: () => !signal.aborted && !browserOwner?.isDestroyed() },
       present: (panel) => {
         if (appPanels.length >= 4) throw new Error("This response already has four settings panels.");
@@ -2266,6 +2391,172 @@ async function prepareGeneration(
       },
     }).filter((tool) => !options.excludeToolNames?.has(tool.name)));
   }
+  /** Set while this turn may use the canvas: puts its committed visuals there. */
+  let placeCanvasArtifacts: ((artifacts: readonly CanvasArtifact[]) => Promise<void>) | undefined;
+  /**
+   * Canvas tools held back until the person enters design mode mid-reply,
+   * from Aiden's card or with the toggle themselves.
+   */
+  let heldCanvasTools: AgentTool[] = [];
+  let enteredDesignModeThisTurn = false;
+  // Held canvas tools exist whenever this turn could use the canvas, even when
+  // Aiden may not offer the design_mode card, since the person can switch
+  // design mode on themselves.
+  const designModeOn = async () => (await chatStore.getMeta(params.chatId))?.designMode === true;
+  if (folderPath && (designCanvasOffered || designModeToolOffered || canvasHoldable)) {
+    const canvasRoot = folderPath;
+    const canvasTools = createDesignCanvasTools({
+      chatId: params.chatId,
+      workspaceRoot: canvasRoot,
+      store: designCanvasStore,
+      broadcast: (update) => ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, update),
+      focus: (frameIds) => {
+        if (!browserOwner.isDestroyed()) browserOwner.send("designCanvas:focus", { chatId: params.chatId, frameIds });
+      },
+      snapshot: async (toolSignal) =>
+        supportsImages
+          ? designCanvasSnapshots.request({ chatId: params.chatId, owner: browserOwner, signal: toolSignal ?? signal })
+          : null,
+      // Turning design mode off, deleting the chat or moving its workspace mid-turn ends the canvas tools.
+      stillAvailable: async () => {
+        if (signal.aborted) return false;
+        const current = workspace ? await configStore.getWorkspace(workspace.id) : undefined;
+        return (await designModeOn()) && current?.folderPath === canvasRoot && current.permission !== "none";
+      },
+    }).filter((tool) => !options.excludeToolNames?.has(tool.name));
+    if (canvasTools.length > 0) {
+      placeCanvasArtifacts = async (artifacts) => {
+        if (!(await designModeOn())) return;
+        await placeArtifactsOnCanvas({
+          chatId: params.chatId,
+          artifacts,
+          store: designCanvasStore,
+          broadcast: (update) => ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, update),
+          newId: randomUUID,
+        });
+      };
+    }
+    const designModeTool = designModeToolOffered
+      ? [
+          createDesignModeTool({
+            isOn: designModeOn,
+            requestEnter: async (reason, toolSignal) => {
+              const answer = await designModeConsent.request({
+                chatId: params.chatId,
+                reason,
+                owner: browserOwner,
+                signal: toolSignal ?? signal,
+              });
+              if (answer === "entered") enteredDesignModeThisTurn = true;
+              return answer;
+            },
+            exit: async () => {
+              await chatStore.setDesignMode(params.chatId, false);
+              designGrants.revokeChat(params.chatId);
+              ipcMain.broadcast("chats:design-mode-changed", { chatId: params.chatId, designMode: false });
+            },
+          }),
+        ]
+      : [];
+    if (designCanvasOffered && canvasTools.length > 0) {
+      const canvas = await designCanvasStore.get(params.chatId);
+      generationExtensions.push({
+        id: "aiden.design-canvas",
+        systemPrompt: DESIGN_MODE_PROMPT_SECTION,
+        volatileSystemPrompt: canvasPromptLine(canvas),
+        tools: [...canvasTools, ...designModeTool],
+      });
+    } else {
+      heldCanvasTools = canvasTools;
+      if (designModeTool.length > 0) generationExtensions.push({ id: "aiden.design-mode", tools: designModeTool });
+    }
+  }
+  /**
+   * Set when this turn could use the canvas: puts an HTML page Aiden just wrote
+   * or edited on it while design mode is on, so the person watches the design
+   * take shape. Design mode is checked at each write, so turning it on
+   * mid-reply works too. Writes are placed one after another.
+   */
+  let placeWrittenPage: ((relativePath: string) => void) | undefined;
+  if (
+    folderPath &&
+    !options.excludeToolNames?.has("canvas_place_frame") &&
+    designCanvasToolsAllowed({ ...designTurn, designMode: true })
+  ) {
+    const pageRoot = folderPath;
+    let pagesPlaced: Promise<void> = Promise.resolve();
+    const canSaveWrittenPage = async () => {
+      if ((await chatStore.getMeta(params.chatId))?.designMode !== true) return false;
+      const current = workspace ? await configStore.getWorkspace(workspace.id) : undefined;
+      return current?.folderPath === pageRoot && current.permission !== "none";
+    };
+    placeWrittenPage = (relativePath) => {
+      recentWrittenPages.note(params.chatId, relativePath);
+      pagesPlaced = pagesPlaced.then(async () => {
+        // The write already happened, so Stop does not drop it; design mode
+        // and the chat's workspace folder are checked as they are now.
+        if (!(await canSaveWrittenPage())) return;
+        const placedIds = await placeWrittenPagesOnCanvas({
+          chatId: params.chatId,
+          workspaceRoot: pageRoot,
+          paths: [relativePath],
+          shouldSave: canSaveWrittenPage,
+          store: designCanvasStore,
+          broadcast: (update) => ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, update),
+          newId: randomUUID,
+        });
+        if (placedIds.length > 0 && !browserOwner.isDestroyed()) {
+          browserOwner.send("designCanvas:focus", { chatId: params.chatId, frameIds: placedIds });
+        }
+      }).catch((error) => {
+        logger.warn("pi", "Could not put a written page on the design canvas.", error);
+      });
+    };
+  }
+  /**
+   * Declares the held canvas tools, and the design-mode prompt section, from
+   * the step after the person entered design mode: through Aiden's card, or by
+   * switching it on themselves mid-reply. Entering latches for the turn, so the
+   * chat is no longer read once it is on.
+   */
+  let canvasToolsEntered = false;
+  const canvasToolsEnteredNow = async (): Promise<boolean> => {
+    if (canvasToolsEntered) return true;
+    if (heldCanvasTools.length === 0) return false;
+    if (enteredDesignModeThisTurn || (await designModeOn())) canvasToolsEntered = true;
+    return canvasToolsEntered;
+  };
+  const enteredCanvasTools: EnteredCanvasTools = {
+    prepare: async (context) => {
+      if (!(await canvasToolsEnteredNow())) return context;
+      const present = new Set(context.tools?.map((tool) => tool.name) ?? []);
+      const additions = heldCanvasTools.filter((tool) => !present.has(tool.name));
+      // The prompt is read-only here: the section is patched into the
+      // transcript once, as browser discovery and MCP servers do.
+      const sectionPresent = context.messages.some(
+        (message) =>
+          message.role === "system" &&
+          typeof (message as { sections?: Record<string, unknown> }).sections?.[DESIGN_MODE_SECTION] === "string",
+      );
+      if (additions.length === 0 && sectionPresent) return context;
+      return {
+        ...context,
+        messages: sectionPresent
+          ? context.messages
+          : [
+              ...context.messages,
+              {
+                role: "system",
+                content: "",
+                sections: { [DESIGN_MODE_SECTION]: DESIGN_MODE_PROMPT_SECTION },
+                timestamp: Date.now(),
+              },
+            ],
+        tools: [...(context.tools ?? []), ...additions],
+      };
+    },
+    deferred: () => (canvasToolsEntered ? heldCanvasTools : []),
+  };
   let googleWorkspaceSnapshot: string | undefined;
   if (
     params.providerId === GOOGLE_PROVIDER_ID &&
@@ -2297,6 +2588,8 @@ async function prepareGeneration(
     browserFileApprovals,
     browserActionApprovals,
     permission,
+    /** The run decides approvals by the mode, read fresh before each call. */
+    usesApprovalModes: approvalPolicy !== undefined,
     folderPath,
     git,
     tools,
@@ -2305,6 +2598,9 @@ async function prepareGeneration(
     lateMcpDiscovery,
     displayedImages,
     displayedHtmlArtifacts,
+    placeCanvasArtifacts,
+    placeWrittenPage,
+    enteredCanvasTools,
     appPanels,
     htmlArtifactPlacements,
     imagePlacements,
@@ -2328,6 +2624,7 @@ async function prepareGeneration(
     botContext,
     botApprovedRoots,
     botMutatingToolNames,
+    offerHooksTool,
   };
 }
 
@@ -2335,6 +2632,9 @@ const acpScratch = createAcpScratchDirectories({
   root: () => join(app.getPath("userData"), "acp", "scratch"),
   onPrepareError: (error) => logger.warn("acp", "Could not prepare the agent scratch directory.", error),
 });
+
+/** Keeps the admitted half of `start` out of reach of anything but `start`. */
+const runAdmittedStart = Symbol("runAdmittedStart");
 
 export const llmClient = {
   /**
@@ -2351,8 +2651,6 @@ export const llmClient = {
     owner: ChatGenerationOwner,
     options: GenerationExecutionOptions = {},
   ): Promise<boolean> {
-    const designRun = options.designRun;
-    const designWiring = designRun ? designGenerationWiring(designRun, appendPiMessages) : undefined;
     const turnId = options.turnId;
     const ownsTurn =
       typeof turnId === "string" &&
@@ -2383,21 +2681,14 @@ export const llmClient = {
       }
       throw error;
     }
-    const initialization = {
+    const initialization: InitializingGeneration = {
       chatId: params.chatId,
       owner,
       removeOwnerInvalidation: () => {},
-      stopCacheWarming: undefined as (() => void) | undefined,
-      workspaceId: undefined as string | undefined,
       cancelRequested: false,
-      cancellationOrigin: undefined as GenerationCancellationOrigin | undefined,
       rendererDetached: false,
       promptsUnattended: Boolean(options.unattended),
       controller: new AbortController(),
-      computerUse: undefined as ComputerUseController | undefined,
-      loadMonitor: undefined as LoadMonitorState | undefined,
-      skillInvocation: undefined as PreparedSkillInvocation | undefined,
-      skillPrompt: undefined as string | undefined,
       releaseSkillReservation: () => {},
       releaseBotAuthority: () => {},
     };
@@ -2422,11 +2713,46 @@ export const llmClient = {
         );
     } catch (error) {
       if (turnId) chatTurnAdmission.releaseMatching(params.chatId, turnId, owner.documentId);
+      // Registration can fail after publishing the run; nothing else ends it.
+      if (initializing.get(streamId) === initialization) {
+        settleGeneration(streamId, params, initialization, initializing);
+      }
       throw error;
     }
     if (!handedOff) {
       throw new Error("This message turn expired before generation could start.");
     }
+    const escape: GenerationEscape = {
+      settle: async () => {
+        endLoadMonitor(initialization, streamId, false);
+        settleGeneration(streamId, params, initialization, initializing);
+      },
+    };
+    return runAdmittedGeneration(
+      () => llmClient[runAdmittedStart](
+        streamId,
+        params,
+        owner,
+        options,
+        initialization,
+        computerUseGateSnapshot,
+        escape,
+      ),
+      () => escape.settle(),
+      (error) => logger.error("pi", `Could not settle failed start of stream ${streamId}.`, error),
+    );
+  },
+
+  /** The start of an admitted run, up to the point its completion task owns it. */
+  async [runAdmittedStart](
+    streamId: string,
+    params: ChatStartParams,
+    owner: ChatGenerationOwner,
+    options: GenerationExecutionOptions,
+    initialization: InitializingGeneration,
+    computerUseGateSnapshot: ReturnType<ComputerUseGenerationGate["snapshot"]>,
+    escape: GenerationEscape,
+  ): Promise<boolean> {
     options.onTurnAccepted?.();
     if (options.unattended) {
       // Nobody is there to answer: every approval or question this turn would
@@ -2443,7 +2769,6 @@ export const llmClient = {
     let authoritativeBot: BotDefinition | undefined;
     let botContext: BotGenerationAuthorityContext | undefined;
     let authoritativeMode: ChatStartParams["mode"];
-    let generationProfile: GenerationProfile = { kind: "default" };
     const initializationTerminalState = { attempted: false };
     const persistInitializationTerminal = async (
       status: "failed" | "cancelled",
@@ -2470,14 +2795,26 @@ export const llmClient = {
           ),
       });
     };
+    escape.settle = async () => {
+      const cancelled = initialization.cancelRequested || initialization.controller.signal.aborted;
+      await persistInitializationTerminal(
+        cancelled ? "cancelled" : "failed",
+        cancelled ? initialization.cancellationOrigin : undefined,
+      );
+      endLoadMonitor(initialization, streamId, false);
+      settleGeneration(streamId, params, initialization, initializing);
+    };
     try {
       const chat = await chatStore.get(params.chatId);
       if (!chat) {
         throw new Error("This chat is no longer available.");
       }
-      // A design-owned chat runs only with its own project's main-built binding.
-      // It throws before authoritativeChat is set, so no failure turn is written.
-      generationProfile = resolveGenerationProfile(chat, options);
+      // A feature-owned chat never runs as an ordinary agent. It throws before
+      // authoritativeChat is set, so no failure turn is written.
+      const runRefusal = chatRunRefusal(chat);
+      if (runRefusal) {
+        throw new Error(runRefusal);
+      }
       authoritativeChat = chat;
       authoritativeMode = authoritativeChatGenerationMode(chat.workspaceId, params.mode);
       if (chat.botId && !hostPlatformCapabilities().bots) {
@@ -2631,30 +2968,11 @@ export const llmClient = {
           cancelled: true,
           cancellationOrigin: initialization.cancellationOrigin,
         });
-        releaseGenerationSkillReservation(initialization);
-        releaseGenerationBotAuthority(initialization);
-        approvedWorkspaceArtifactCalls.delete(streamId);
-        initializing.delete(streamId);
-        initialization.removeOwnerInvalidation();
-        approvals.releaseStream(streamId);
-        questionnaires.releaseStream(streamId);
-        broadcastChatSettled(
-          streamId,
-          params.chatId,
-          initialization.workspaceId,
-          params.workspaceId,
-        );
+        settleGeneration(streamId, params, initialization, initializing);
         return false;
       }
       await persistInitializationTerminal("failed");
-      releaseGenerationSkillReservation(initialization);
-      releaseGenerationBotAuthority(initialization);
-      approvedWorkspaceArtifactCalls.delete(streamId);
-      initializing.delete(streamId);
-      initialization.removeOwnerInvalidation();
-      approvals.releaseStream(streamId);
-      questionnaires.releaseStream(streamId);
-      broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
+      settleGeneration(streamId, params, initialization, initializing);
       throw error;
     }
     const generationChat = authoritativeChat;
@@ -2672,12 +2990,15 @@ export const llmClient = {
       permission,
       folderPath,
       git,
-      tools,
+      tools: setupTools,
       generationExtensions,
       modelImageReferences,
       lateMcpDiscovery,
       displayedImages,
       displayedHtmlArtifacts,
+      placeCanvasArtifacts,
+      placeWrittenPage,
+      enteredCanvasTools,
       appPanels,
       htmlArtifactPlacements,
       imagePlacements,
@@ -2688,7 +3009,7 @@ export const llmClient = {
       computerUse,
       formFill,
       googleWorkspaceSnapshot,
-      skillSnapshot,
+      skillSnapshot: setupSkillSnapshot,
       workspaceId,
       noWorkspace,
       subagentSupervisor,
@@ -2700,6 +3021,8 @@ export const llmClient = {
       botContext: preparedBotContext,
       botApprovedRoots,
       botMutatingToolNames,
+      offerHooksTool,
+      usesApprovalModes,
     } = setup;
     // Claim checks tell connector failures by the tools' real MCP identity.
     const claimCheckOptions = {
@@ -2712,6 +3035,75 @@ export const llmClient = {
     // Agent-backed providers (ACP harnesses) own their conversation context:
     // Aiden neither trims nor compacts the transcript they receive.
     const harnessProvider = isAcpHarnessProvider(runtime.provider.id);
+    // Aiden hooks run for ordinary desktop chats only. Bot chats (policy-owned
+    // hooks arrive with Bots), Design Studio runs, the attended Assistant,
+    // routines, Telegram and side questions (their usage source is not
+    // "chat") and ACP harness providers (the agent runs its own tools) start
+    // none; title generation, probes, catalogs and subagents never come
+    // through here.
+    const chatHooks =
+      runsWorkspaceChatHooks({
+        usageSource: options.usageSource,
+        bot: Boolean(preparedBotContext || authoritativeBot),
+        assistant: attendedAssistant,
+        harnessProvider,
+      })
+        ? createWorkspaceChatHooks(
+            {
+              chatId: params.chatId,
+              ...(folderPath && !noWorkspace ? { workspaceRoot: folderPath } : {}),
+            },
+            undefined,
+            {
+              // Hook messages reach the person as notices, never the model.
+              onMessages: (messages) => {
+                sendGeneration(streamId, "chat:status", { streamId, phase: "hook_messages", messages });
+              },
+            },
+          )
+        : undefined;
+    // The agent's hooks tool (plan §9) where chat hooks run on an attended
+    // turn. A proposal waits for the owner's card on this Mac, raised from
+    // inside the tool so Full access and remembered approvals never answer it.
+    const hooksTool =
+      chatHooks && offerHooksTool
+        ? createHooksTool({
+            chatId: params.chatId,
+            ...(folderPath && !noWorkspace ? { workspaceRoot: folderPath } : {}),
+            service: getHookService,
+            requestApproval: async (toolCallId, card, approvalSignal) => {
+              timeline.toolAwaitingApproval(toolCallId);
+              const publicToolCallId = timeline.publicToolCallId(toolCallId);
+              if (!publicToolCallId) throw new Error("The tool approval step was not initialized.");
+              chatHooks.notify("Aiden needs your permission to save a hook", "permission_prompt");
+              try {
+                return await approvals.request(
+                  {
+                    streamId,
+                    toolCallId: publicToolCallId,
+                    toolName: HOOKS_TOOL_NAME,
+                    summary: card.summary,
+                    details: card.details,
+                  },
+                  approvalSignal,
+                  owner.documentId,
+                );
+              } finally {
+                timeline.toolRunning(toolCallId);
+              }
+            },
+          })
+        : undefined;
+    const tools = hooksTool ? [...setupTools, hooksTool] : setupTools;
+    const skillSnapshot =
+      hooksTool || !setupSkillSnapshot ? setupSkillSnapshot : withoutSkills(setupSkillSnapshot, DESKTOP_HOOK_SKILLS);
+    let hookTurnContext: string | undefined;
+    /** Outside content in this run, for the gate's new destinations (plan §3.2). */
+    let runTaint: RunTaint | undefined;
+    /** What the person asked for in this run, for the Auto judge. */
+    let approvalRequestText = "";
+    // Mid-flight input's UserPromptSubmit context, on that input's message only.
+    const hookInputContexts = createRunInputContexts();
     // Each response's price counts toward the chat's limit (a Bot chat's, its
     // month). A sign-in or a model on this Mac counts as $0.
     const spendingOwner: SpendingOwner = authoritativeBot
@@ -2723,6 +3115,35 @@ export const llmClient = {
       owner: spendingOwner,
       counts: () => spendCounts({ local: isLocalModelProvider(runtime.provider), provider: runtime.provider, models: runtime.models }),
     });
+    // The Auto judge (plan §3.2): the chat's own model, or the approval model
+    // the person named in Advanced. Built on first use; with no model that
+    // can judge (an ACP agent's run), every judged action shows its card.
+    let approvalJudge: ApprovalJudge | undefined;
+    const runApprovalJudge = async (): Promise<ApprovalJudge> => {
+      if (approvalJudge) return approvalJudge;
+      let complete: Parameters<typeof createApprovalJudge>[0]["complete"];
+      if (!harnessProvider) {
+        try {
+          const configured = parseApprovalModel((await configStore.getSettings()).approvalModel);
+          const judgeRuntime = configured
+            ? await resolveModelRuntime(configured.providerId, configured.model, initialization.controller.signal, params.chatId)
+            : runtime;
+          const judgeMeter = createSpendingMeter({
+            spending,
+            owner: spendingOwner,
+            counts: () => spendCounts({ local: isLocalModelProvider(judgeRuntime.provider), provider: judgeRuntime.provider, models: judgeRuntime.models }),
+          });
+          complete = approvalJudgeComplete(
+            { model: judgeRuntime.model, provider: judgeRuntime.provider, apiKey: judgeRuntime.apiKey, ...(judgeRuntime.headers ? { headers: judgeRuntime.headers } : {}), streams: judgeRuntime.streams },
+            { recordUsage: (record) => usageStore.record(record), countSpend: (message) => judgeMeter.count(message) },
+          );
+        } catch (error) {
+          logger.warn("pi", "The approval model is unavailable; Auto will ask instead.", error);
+        }
+      }
+      approvalJudge = createApprovalJudge({ complete });
+      return approvalJudge;
+    };
     const approvalModelSelection = {
       providerId: runtime.provider.id,
       providerName: runtime.provider.label,
@@ -2775,6 +3196,7 @@ export const llmClient = {
           status: (statusOptions) => computerUseStatus.status(statusOptions),
           requestAccess: async (toolCallId, approvalSignal) => {
             timeline.toolAwaitingApproval(toolCallId);
+            chatHooks?.notify("Aiden needs your permission to use Computer Use", "permission_prompt");
             const publicToolCallId = timeline.publicToolCallId(toolCallId);
             if (!publicToolCallId) throw new Error("The tool approval step was not initialized.");
             const outcome = await approvals.request(
@@ -2909,9 +3331,7 @@ export const llmClient = {
             reasoning: reasoning.trim() ? reasoning : undefined,
             pi: lastAssistantMessage
               ? storedPiAssistantMessage(
-                  designWiring
-                    ? designWiring.storedAssistantMessage(lastAssistantMessage)
-                    : lastAssistantMessage,
+                  lastAssistantMessage,
                 )
               : undefined,
             providerFailure,
@@ -2972,6 +3392,16 @@ export const llmClient = {
             );
           } catch (error) {
             logger.warn("pi", `Could not commit HTML artifacts for stream ${streamId}.`, error);
+          }
+        }
+        if (placeCanvasArtifacts && displayedHtmlArtifacts.length > 0) {
+          // Design mode: the turn's visuals land on the canvas too. Never fails the reply.
+          try {
+            await placeCanvasArtifacts(
+              displayedHtmlArtifacts.map(({ mediaId, title }) => ({ mediaId, title })),
+            );
+          } catch (error) {
+            logger.warn("pi", `Could not place visuals on the design canvas for stream ${streamId}.`, error);
           }
         }
         if (messageId && (displayedHtmlArtifacts.length > 0 || displayedUiVisuals.length > 0)) {
@@ -3058,9 +3488,9 @@ export const llmClient = {
         tools: [createVccRecallTool(async () => piSession!)],
       };
       let memoryExtension: PiAgentRuntimeExtension | undefined;
-      // Design runs never read or write durable memory. Bots keep their own
-      // memory files (`bot-memory/`) and never use the workspace store.
-      if (generationProfile.kind === "default" && !generationChat.botId) {
+      // Bots keep their own memory files (`bot-memory/`) and never use the
+      // workspace store.
+      if (!generationChat.botId) {
         try {
           const memoryEligible = piUpgradeMemoryEligible(piUpgradePolicy, generationChat, {
             development: !isPackagedRuntime(),
@@ -3152,10 +3582,7 @@ export const llmClient = {
       // Only the explicitly admitted task extension and history recall enter
       // Bot prompts and schemas.
       const baseRuntimeExtensions: readonly PiAgentRuntimeExtension[] =
-        generationProfile.kind === "design"
-          ? // Exactly the binding's extension; an empty base fails the composition check.
-            [...(designWiring?.extensions ?? [])]
-          : preparedBotContext
+        preparedBotContext
         ? [
             ...(todoRuntimeExtension ? [todoRuntimeExtension] : []),
             // Journalless runs must not offer VCC recall over an empty
@@ -3183,15 +3610,27 @@ export const llmClient = {
             // Journalless runs must not offer VCC recall over an empty
             // in-memory journal; history recall would be dishonest.
             ...(piJournalless ? [] : [recallExtension]),
+            // The person's hooks: PostToolUse feedback on tool results and the
+            // SessionStart/UserPromptSubmit context for this turn only.
+            ...(chatHooks
+              ? [
+                  chatHooks.extension({
+                    promptTimestamp: () =>
+                      currentPromptMessage && "timestamp" in currentPromptMessage
+                        ? currentPromptMessage.timestamp
+                        : undefined,
+                    turnContext: () => hookTurnContext,
+                    inputContext: hookInputContexts.lookup,
+                  }),
+                ]
+              : []),
           ];
       const toolsBeforeAdvisor = resolvePiAgentRuntimeStaticContributions(
         "",
         tools,
         baseRuntimeExtensions,
       ).tools;
-      // A design run composes exactly its own extension: no advisor, codemode or
-      // other base extension may join it (ADR-DS §4).
-      const advisorExtension = generationProfile.kind === "design" ? undefined : await advisorRuntime.extensionForGeneration({
+      const advisorExtension = await advisorRuntime.extensionForGeneration({
         scope: {
           usageSource: options.usageSource,
           interactionSurface: options.interactionSurface,
@@ -3242,9 +3681,7 @@ export const llmClient = {
           : {}),
       });
       const codemodeExtension: PiAgentRuntimeExtension | undefined =
-        generationProfile.kind === "design"
-          ? undefined
-          : workspaceCodemodeEnabled({
+        workspaceCodemodeEnabled({
             workspaceId,
             folderPath,
             bot: Boolean(preparedBotContext),
@@ -3268,10 +3705,11 @@ export const llmClient = {
               }).toolSearch] : [])],
             }
           : undefined;
-      const runtimeExtensions: readonly PiAgentRuntimeExtension[] = selectRuntimeExtensions(
-        generationProfile,
-        { base: baseRuntimeExtensions, advisor: advisorExtension, codemode: codemodeExtension },
-      );
+      const runtimeExtensions: readonly PiAgentRuntimeExtension[] = [
+        ...baseRuntimeExtensions,
+        ...(advisorExtension ? [advisorExtension] : []),
+        ...(codemodeExtension ? [codemodeExtension] : []),
+      ];
       const toolsWithRuntimeContributions = resolvePiAgentRuntimeStaticContributions(
         "",
         tools,
@@ -3297,13 +3735,13 @@ export const llmClient = {
       const telegramInteractive = options.interactionSurface === "telegram";
       let hostPromptSkills: string | undefined;
       const baseSystemPrompt =
-        generationProfile.kind === "design"
-          ? (designWiring?.baseSystemPrompt ?? "")
-          : authoritativeMode === "assistant" || authoritativeMode === "assistant-unattended"
+        authoritativeMode === "assistant" || authoritativeMode === "assistant-unattended"
           ? buildAssistantSystemPrompt({
-              settingsSections: assistantSettingsSections({
+              settingsPages: assistantSettingsPages({
+                computerUse: hostPlatformCapabilities().computerUse,
                 devices: devicesEnabled(),
                 botComputers: hostPlatformCapabilities().botComputers,
+                hooks: hostPlatformCapabilities().hooks,
               }),
               availableTools: toolsWithRuntimeContributions.map((tool) => tool.name),
               mcpToolNames: tools.filter((tool) => mcpAgentToolIdentity(tool) !== undefined).map((tool) => tool.name),
@@ -3425,6 +3863,9 @@ export const llmClient = {
           );
           activeCompactionStepId = undefined;
         }
+        // A completed compaction makes the chat's next turn a SessionStart
+        // `compact` turn, like Claude Code's compact source.
+        if (chatHooks && event.result && !event.aborted) markWorkspaceChatCompacted(params.chatId);
         logger.info("pi", `Finished ${event.reason} compaction for stream ${streamId}.`, {
           aborted: event.aborted,
           tokensBefore: event.result?.tokensBefore,
@@ -3461,6 +3902,15 @@ export const llmClient = {
         },
         signal: initialization.controller.signal,
         onEvent: onCompactionEvent,
+        // PreCompact: every compaction inside a turn (threshold, overflow and
+        // the emergency checkpoint) is "auto"; hook context becomes summary
+        // instructions, bounded by each hook's timeout, and errors add none.
+        ...(chatHooks
+          ? {
+              summaryInstructions: (reason: string, compactionSignal: AbortSignal) =>
+                preCompactSummaryInstructions(chatHooks, { trigger: "auto", reason, signal: compactionSignal }),
+            }
+          : {}),
       };
 
       const currentUser = [...generationChat.messages]
@@ -3469,6 +3919,22 @@ export const llmClient = {
       const priorVisibleMessages = currentUser
         ? generationChat.messages.filter((message) => message.id !== currentUser.id)
         : generationChat.messages;
+      // SessionStart, then UserPromptSubmit, before the model sees the turn.
+      // Their context rides this turn only (the `aiden.hooks` extension) and
+      // is never saved as the person's words. A SessionStart `continue: false`
+      // or a refused prompt throws here, so the turn ends with no model call.
+      // A retried prompt that was blocked before loses its mark, on
+      // `currentUser` too, so the journal takes it in order below.
+      hookTurnContext = await runPromptIntakeHooks({
+        target: chatHooks?.target ?? { chatId: params.chatId },
+        ...(chatHooks ? { dispatch: chatHooks.dispatch } : {}),
+        hasPriorMessages: priorVisibleMessages.length > 0,
+        prompt: currentUser,
+        store: chatStore,
+        idempotencyKeys: { userPromptSubmit: `UserPromptSubmit:${params.chatId}:${streamId}` },
+        signal: initialization.controller.signal,
+        onStoreError: (message, error) => logger.error("hooks", message, error),
+      });
       const skillsEnabledForTurn = (await configStore.getSettings()).skillsEnabled !== false;
       // A forked chat's summary of where its source went after the fork
       // point sits right after the last copied message.
@@ -3548,12 +4014,30 @@ export const llmClient = {
             contentOverrides.get(currentUser.id),
           )
         : undefined;
-      let initialMessages = (await promptJournal.buildContext()).messages;
+      // One read of the journal's whole branch gives both the model context
+      // and the run's starting taint. Outside content already in the
+      // transcript taints the run from the start, including what a compaction
+      // folded away.
+      const journalBranch = await promptJournal.getBranch();
+      let initialMessages = (await promptJournal.buildContext(journalBranch)).messages;
       if (onDemandTools) {
         // Tools this chat already loaded or called stay declared from the start.
         runtimeTools = onDemandTools.initialTools(initialMessages);
         generationContextOptions.tools = runtimeTools;
       }
+      const journalHistory = runTaintHistoryOfBranch(journalBranch);
+      runTaint = new RunTaint({
+        personText: generationChat.messages.filter((message) => message.role === "user").map((message) => message.content),
+        history: [
+          ...initialMessages.map((message) => ({
+            role: message.role,
+            ...("toolName" in message && typeof message.toolName === "string" ? { toolName: message.toolName } : {}),
+          })),
+          ...journalHistory,
+        ],
+        isConnectorTool: (name) => claimCheckOptions.isConnectorTool(name),
+      });
+      approvalRequestText = currentUser?.content ?? "";
       const head = createInitialSystemMessage(systemPrompt, runtimeTools.map(toToolDeclaration));
       if (head) initialMessages = [head, ...initialMessages];
       if (agentsInstructions) {
@@ -3643,7 +4127,7 @@ export const llmClient = {
             }),
           );
       const promptCacheTtl = promptCacheTtlMs(model);
-      candidate = createGenerationHarness(generationProfile, {
+      candidate = new PiAgentRuntimeHarness({
         contributions: { ...runtimeContributions, tools: runtimeTools },
         deferredTools,
         contextPromptSections,
@@ -3654,6 +4138,8 @@ export const llmClient = {
               lateDeferredTools: () => [
                 ...lateMcpDiscovery.tools().filter((tool) => !options.excludeToolNames?.has(tool.name)),
                 ...onDemandCallable,
+                // Canvas tools held until the person entered design mode mid-reply.
+                ...enteredCanvasTools.deferred(),
               ],
             }
           : {}),
@@ -3727,8 +4213,6 @@ export const llmClient = {
           compactionReserveTokens: compactionInputReserveTokens,
           signal: initialization.controller.signal,
           effects: { store: piRuntimeEffectStore, chatId: params.chatId },
-          // Design HTML lives in the project store, never in the Pi journal (ADR-DS §10).
-          ...(designWiring ? { appendMessages: designWiring.journalAppend } : {}),
           beforeQueuedUser: async (message, signal) => {
             if (message.role !== "user" || typeof message.content !== "string" || !message.content.trim()) {
               throw new Error("Queued guidance must contain text.");
@@ -3812,6 +4296,7 @@ export const llmClient = {
                 : undefined,
               runtime.provider.modelMetadata?.[model.id]?.overrides,
             );
+            prepared = await enteredCanvasTools.prepare(prepared);
             if (agentsInstructions) prepared = await agentsInstructions.apply(prepared, requestSignal);
             return mcpServersSection.apply(prepared);
           },
@@ -3829,12 +4314,74 @@ export const llmClient = {
           let summary: string;
           let approvalDetails: ToolApprovalDetails | undefined;
           let formFillApproval: FormFillApprovalDescriptor | undefined;
-          /** Commands digest an allowed workspace_artifact card showed. */
+          /** What an allowed workspace_artifact card covers (see `workspaceArtifactCallApproval`). */
           let artifactApprovalDigest: string | undefined;
+          /** The resolved command a workspace_artifact run card shows. */
+          let artifactApprovalPreview: ToolApprovalPreview | undefined;
           let attendedScheduleApproval = false;
           let browserFileApproval: PreparedBrowserFile | undefined;
           let browserActionApproval: BrowserToolApproval | undefined;
           let scopedRuleTarget: ToolApprovalRuleTarget | undefined;
+          /** A Mac card's "Allow in this workspace" grant, when the card offers it. */
+          let macGrantOffer: MacGrantClass | undefined;
+          /** In Ask, Auto would hand this call to the judge: the card may offer Auto. */
+          let autoWouldJudge = false;
+          // The approval mode and Mac grants now, and what this call reaches
+          // (plan §3.2): a connector's real name and declared hint, and
+          // whether it is a new destination after outside content.
+          const runApproval = usesApprovalModes && workspaceId
+            ? await currentWorkspaceApproval(configStore, workspaceId).catch((error: unknown) => {
+                logger.warn("pi", "Could not read the approval mode; asking as in Ask.", error);
+                return { mode: "ask" as const, macGrants: new Set<MacGrantClass>(), customized: false, chatOnly: false, legacyFull: false };
+              })
+            : undefined;
+          const calledTool = context.context.tools?.find((tool) => tool.name === context.toolCall.name);
+          const calledMcp = calledTool ? mcpAgentToolIdentity(calledTool) : undefined;
+          const taintCall = {
+            toolName: context.toolCall.name,
+            args: context.args,
+            ...(calledMcp ? { connectorId: calledMcp.serverId } : {}),
+          };
+          // PreToolUse hooks (docs/plans/aiden-hooks-plan.md §5): deny blocks,
+          // ask forces a card without a remember offer, and allow may only skip
+          // a card a remembered approval scope could already skip.
+          let hookAsk: string | undefined;
+          let hookAllow = false;
+          const runPreToolUseHooks = async () => {
+            if (!chatHooks) return undefined;
+            const hook = await chatHooks.preToolUse({
+              toolCallId: context.toolCall.id,
+              toolName: context.toolCall.name,
+              args: context.args,
+              tools: context.context.tools,
+              signal,
+            });
+            if (hook.kind === "block") {
+              if (!signal?.aborted) {
+                deniedToolCalls.add(context.toolCall.id);
+                timeline.toolFinished(context.toolCall.id, "blocked");
+              }
+              return { block: true, reason: hook.reason };
+            }
+            if (hook.kind === "ask") hookAsk = hook.reason;
+            else if (hook.kind === "allow") hookAllow = true;
+            return undefined;
+          };
+          const hookVerdict = (): "ask" | "allow" | undefined =>
+            hookAsk ? "ask" : hookAllow ? "allow" : undefined;
+          const notifyApprovalWaiting = () =>
+            chatHooks?.notify(
+              `Aiden needs your permission to use ${context.toolCall.name}`,
+              "permission_prompt",
+            );
+          // Computer Use and Form Fill check the chat's access first.
+          if (
+            context.toolCall.name !== COMPUTER_USE_TOOL_NAME &&
+            context.toolCall.name !== FORM_FILL_TOOL_NAME
+          ) {
+            const hookBlock = await runPreToolUseHooks();
+            if (hookBlock) return hookBlock;
+          }
           if (
             context.toolCall.name === "browser_open" ||
             context.toolCall.name === "browser_navigate"
@@ -3876,6 +4423,38 @@ export const llmClient = {
             }
             const access = await authorizeComputerUseAccess(context.toolCall.id, signal);
             if (!access.allowed) return blockComputerUse(access.reason);
+            const hookBlock = await runPreToolUseHooks();
+            if (hookBlock) return hookBlock;
+            const computerUseDecision = workspaceToolApproval({
+              toolName: context.toolCall.name,
+              args: context.args,
+              permission,
+              hook: hookVerdict(),
+            }).decision;
+            if (computerUseDecision.outcome === "ask") {
+              // A hook asked: this one action needs its own card.
+              const toolCallId = timeline.publicToolCallId(context.toolCall.id);
+              if (!toolCallId) return blockComputerUse("The tool approval step was not initialized.");
+              timeline.toolAwaitingApproval(context.toolCall.id);
+              notifyApprovalWaiting();
+              const hookOutcome = await approvals.request(
+                {
+                  streamId,
+                  toolCallId,
+                  toolName: context.toolCall.name,
+                  summary: `${summarizeToolCall(context.toolCall.name, context.args)}\n\n${hookAsk}`,
+                  ...(() => {
+                    const effect = toolCallApprovalEffect(context.toolCall.name, context.args);
+                    return effect ? { effect } : {};
+                  })(),
+                },
+                signal,
+                owner.documentId,
+              );
+              if (hookOutcome !== "allowed") {
+                return blockComputerUse(toolApprovalBlockReason(hookOutcome, false));
+              }
+            }
             // The chat is allowed, so input actions run without a per-action card.
             try {
               await authorizeAllowedComputerUseAction(
@@ -3909,6 +4488,9 @@ export const llmClient = {
               }
               return { block: true, reason: access.reason };
             }
+            // Form Fill always shows its card; a hook's ask adds its reason there.
+            const hookBlock = await runPreToolUseHooks();
+            if (hookBlock) return hookBlock;
             try {
               const descriptor = await formFill.approvalFor(context.args, signal);
               formFillApproval = descriptor;
@@ -3929,22 +4511,12 @@ export const llmClient = {
               scheduleToolRequiresApproval(context.args);
             const editScheduleApproval = context.toolCall.name === EDIT_AUTOMATION_TOOL_NAME;
             const scheduleApproval = createScheduleApproval || editScheduleApproval;
-            const workspaceApproval =
-              permission === "ask" &&
-              (APPROVAL_TOOL_NAMES.has(context.toolCall.name) ||
-                BROWSER_MUTATION_TOOL_NAMES.has(context.toolCall.name) ||
-                deviceToolRequiresApproval(context.toolCall.name, context.args) ||
-                backgroundJobRequiresApproval(context.toolCall.name, context.args));
-            const disclosureApproval = DISCLOSURE_APPROVAL_TOOL_NAMES.has(context.toolCall.name);
-            const memoryApproval =
-              context.toolCall.name === REMEMBER_MEMORY_TOOL_NAME ||
-              context.toolCall.name === FORGET_MEMORY_TOOL_NAME;
-            const botMcpApproval = botMutatingToolNames.has(context.toolCall.name);
             let artifactApproval: WorkspaceArtifactCallApproval | undefined;
             if (context.toolCall.name === WORKSPACE_ARTIFACT_TOOL_NAME && workspaceId) {
               try {
                 artifactApproval = await workspaceArtifactCallApproval(context.args, {
                   workspaceId,
+                  hasFolder: Boolean(folderPath),
                   permission: permission === "read-only" ? "none" : permission,
                   store: workspaceArtifactStore,
                 });
@@ -3957,46 +4529,130 @@ export const llmClient = {
                 };
               }
             }
-            if (artifactApproval?.required) artifactApprovalDigest = artifactApproval.digest;
+            if (artifactApproval?.required) {
+              artifactApprovalDigest = artifactApproval.digest;
+              artifactApprovalPreview = artifactApproval.preview;
+            }
             attendedScheduleApproval = scheduleApproval && attendedAssistant;
             let preparedStandardScheduleSummary: string | undefined;
-            if (
-              !scheduleApproval &&
-              !workspaceApproval &&
-              !disclosureApproval &&
-              !memoryApproval &&
-              !botMcpApproval &&
-              !artifactApproval?.required &&
-              !browserFileApproval?.requiresApproval
-            ) {
-              timeline.toolRunning(context.toolCall.id);
-              return undefined;
-            }
+            // Settings → Approvals: the rule for this tool, connected app or
+            // site. Every run reads it, since a Block applies wherever this
+            // gate runs; the gate input keeps Allow and Ask to runs with a
+            // mode that aren't Bot-bound (a Bot-bound turn answers to its Bot).
+            const pageHost = await workspaceRuleHost(context.toolCall.name, context.args, async () => {
+              if (!workspaceId) return undefined;
+              const { browserService } = await import("./browser/service.js");
+              const args = context.args as Record<string, unknown>;
+              const tabId = typeof args.tabId === "string" ? args.tabId
+                : browserSelection.initialized ? browserSelection.tabId : (await browserService.getState(workspaceId)).activeTabId ?? undefined;
+              return tabId ? browserService.getApprovalTarget(workspaceId, tabId).url : undefined;
+            });
+            const pageRule = await pageRuleFor({
+              ...(calledMcp
+                ? { connector: { serverId: calledMcp.serverId, tool: calledMcp.toolName } }
+                : { tool: context.toolCall.name }),
+              ...(pageHost ? { host: pageHost } : {}),
+              ...(workspaceId ? { workspaceId } : {}),
+              ...(preparedBotContext ? { botId: preparedBotContext.admission.authority.botId } : {}),
+            });
+            const workspaceGateInput = {
+              toolName: context.toolCall.name,
+              args: context.args,
+              permission,
+              hook: hookVerdict(),
+              botBound: Boolean(preparedBotContext),
+              botMutating: botMutatingToolNames.has(context.toolCall.name),
+              artifactRequired: artifactApproval?.required === true,
+              browserFileRequired: browserFileApproval?.requiresApproval === true,
+              workspaceId,
+              ...(runApproval
+                ? {
+                    approval: { mode: runApproval.mode, macGrants: runApproval.macGrants },
+                    // An ACP agent's run has no model Aiden can ask (`runApprovalJudge`).
+                    ...(harnessProvider ? {} : { judgeAvailable: true }),
+                    ...(calledMcp && !preparedBotContext
+                      ? {
+                          connector: {
+                            remoteName: calledMcp.toolName,
+                            ...declaredReadOnlyHint(calledTool ? mcpAgentToolDescriptor(calledTool)?.annotations : undefined),
+                          },
+                        }
+                      : {}),
+                    ...(runTaint?.isNewDestination(taintCall) ? { newDestination: true } : {}),
+                  }
+                : {}),
+              ...(pageRule ? { pageRule } : {}),
+            };
+            let workspaceGate = workspaceToolApproval(workspaceGateInput);
             // Only the parent's plain workspace tools can be remembered, and
             // never for Bot-bound turns whose authority is policy-owned.
-            if (
-              workspaceApproval &&
-              !preparedBotContext &&
-              APPROVAL_TOOL_NAMES.has(context.toolCall.name)
-            ) {
-              scopedRuleTarget = toolApprovalRuleTarget(
-                context.toolCall.name,
-                context.args,
-                workspaceId,
+            // A hook's ask never offers or uses a remembered approval.
+            if (workspaceGate.readsRemembered) {
+              let remembered: "chat" | "always" | undefined;
+              try {
+                remembered = await toolApprovalRules.match(params.chatId, workspaceGate.readsRemembered);
+              } catch (error) {
+                logger.warn("pi", "Could not read remembered tool approvals; asking instead.", error);
+              }
+              if (remembered) workspaceGate = workspaceToolApproval({ ...workspaceGateInput, remembered });
+            }
+            if (workspaceGate.readsJudge) {
+              // Auto: one short call on the chat's model. It passes or defers;
+              // anything but a clear pass shows the card.
+              const verdict = await (await runApprovalJudge()).judge(
+                {
+                  effect:
+                    toolCallApprovalEffect(context.toolCall.name, context.args) ??
+                    `${context.toolCall.name}\u0000${context.toolCall.id}`,
+                  action: approvalJudgeAction(
+                    context.toolCall.name,
+                    context.args,
+                    summarizeToolCall(context.toolCall.name, context.args),
+                  ),
+                  request: approvalRequestText,
+                },
+                signal,
               );
-              if (scopedRuleTarget) {
+              workspaceGate = workspaceToolApproval({ ...workspaceGateInput, judge: verdict.verdict });
+              if (workspaceGate.readsRemembered) {
                 let remembered: "chat" | "always" | undefined;
                 try {
-                  remembered = await toolApprovalRules.match(params.chatId, scopedRuleTarget);
+                  remembered = await toolApprovalRules.match(params.chatId, workspaceGate.readsRemembered);
                 } catch (error) {
                   logger.warn("pi", "Could not read remembered tool approvals; asking instead.", error);
                 }
-                if (remembered && !signal?.aborted) {
-                  timeline.toolRunning(context.toolCall.id);
-                  return undefined;
-                }
+                workspaceGate = workspaceToolApproval({ ...workspaceGateInput, judge: verdict.verdict, ...(remembered ? { remembered } : {}) });
               }
             }
+            const workspaceDecision = workspaceGate.decision;
+            if (workspaceDecision.outcome === "block" && workspaceDecision.reason === "rule") {
+              deniedToolCalls.add(context.toolCall.id);
+              timeline.toolFinished(context.toolCall.id, "blocked");
+              return { block: true, reason: "A Block rule in Settings → Approvals stops this. Do not try it another way." };
+            }
+            if (workspaceDecision.outcome === "allow") {
+              runTaint?.observeRunning(taintCall);
+              if (!workspaceDecision.via) {
+                // The question card itself is the wait; hooks hear about it.
+                if (context.toolCall.name === ASK_USER_QUESTION_TOOL_NAME) {
+                  chatHooks?.notify("Aiden is asking you a question", "elicitation_dialog");
+                }
+                timeline.toolRunning(context.toolCall.id);
+                return undefined;
+              }
+              if (!signal?.aborted) {
+                timeline.toolRunning(context.toolCall.id);
+                return undefined;
+              }
+            }
+            if (workspaceDecision.outcome === "ask") {
+              // Under a mode, a Mac card offers "Allow in this workspace" for
+              // that part of the Mac; the old exact-action scopes are only read.
+              if (runApproval) macGrantOffer = workspaceDecision.macGrant;
+              else scopedRuleTarget = workspaceDecision.ruleTarget;
+              autoWouldJudge = workspaceAutoWouldJudge(workspaceGateInput);
+            }
+            const memoryApproval = workspaceDecision.outcome === "memory";
             if (scheduleApproval && attendedAssistant) {
               try {
                 const proposal = editScheduleApproval
@@ -4064,18 +4720,21 @@ export const llmClient = {
             }
             if (memoryApproval) {
               timeline.toolAwaitingApproval(context.toolCall.id);
+              let memoryCardShown = false;
               const requestMemoryApproval = async (
                 summary: string,
                 approvalSignal?: AbortSignal,
               ) => {
                 const toolCallId = timeline.publicToolCallId(context.toolCall.id);
                 if (!toolCallId) throw new Error("The tool approval step was not initialized.");
+                memoryCardShown = true;
+                notifyApprovalWaiting();
                 return approvals.request(
                   {
                     streamId,
                     toolCallId,
                     toolName: context.toolCall.name,
-                    summary,
+                    summary: hookAsk ? `${summary}\n\n${hookAsk}` : summary,
                     details: approvalDetails,
                   },
                   approvalSignal,
@@ -4108,6 +4767,20 @@ export const llmClient = {
                   reason: memoryDecision.reason,
                 };
               }
+              if (hookAsk && !memoryCardShown) {
+                // Memory allowed this without asking; the hook's ask still shows a card.
+                const hookOutcome = await requestMemoryApproval(
+                  summarizeToolCall(context.toolCall.name, context.args),
+                  signal,
+                );
+                if (hookOutcome !== "allowed") {
+                  if (!signal?.aborted) {
+                    deniedToolCalls.add(context.toolCall.id);
+                    timeline.toolFinished(context.toolCall.id, "blocked");
+                  }
+                  return { block: true, reason: toolApprovalBlockReason(hookOutcome, false) };
+                }
+              }
               timeline.toolRunning(context.toolCall.id);
               return undefined;
             } else if (artifactApproval?.required)
@@ -4133,7 +4806,7 @@ export const llmClient = {
               const providerId = (context.args as { provider?: unknown }).provider;
               const provider = typeof providerId === "string" ? await configStore.getProvider(providerId) : undefined;
               approvalDetails = classifierApprovalFor(context.args, provider?.label ?? (typeof providerId === "string" ? providerRegistry.builtinProvider(providerId)?.label : undefined));
-              summary += ". Review the complete state and questions on the owning desktop before allowing. Full classification inputs are available only in the desktop approval.";
+              summary += ". Review the complete state and questions in Aiden Agent on your computer before allowing. Full classification inputs are available only there.";
             } catch (error) {
               deniedToolCalls.add(context.toolCall.id);
               timeline.toolFinished(context.toolCall.id, "blocked");
@@ -4182,22 +4855,37 @@ export const llmClient = {
               };
             }
           }
+          if (hookAsk) summary = `${summary}\n\n${hookAsk}`;
           timeline.toolAwaitingApproval(context.toolCall.id);
+          notifyApprovalWaiting();
           const approvalOutcome = await approvals.request(
             (() => {
               const toolCallId = timeline.publicToolCallId(context.toolCall.id);
               if (!toolCallId) throw new Error("The tool approval step was not initialized.");
+              // The exact call (its full arguments, and the browser tab it
+              // acts on), so only a truly identical parallel call shares this
+              // card, and only that action is refused again after a Deny.
+              const effect = toolCallApprovalEffect(
+                context.toolCall.name,
+                context.args,
+                browserActionApproval?.argumentsFingerprint,
+              );
               return {
                 streamId,
                 toolCallId,
                 toolName: context.toolCall.name,
                 summary,
                 details: approvalDetails,
+                ...(effect ? { effect } : {}),
                 ...(() => {
-                  const preview = approvalDetails ? undefined : toolApprovalPreview(context.toolCall.name, context.args);
+                  const preview = approvalDetails
+                    ? undefined
+                    : (artifactApprovalPreview ?? toolApprovalPreview(context.toolCall.name, context.args));
                   return preview ? { preview } : {};
                 })(),
                 ...(scopedRuleTarget ? { scopes: SCOPED_APPROVAL_OFFER } : {}),
+                ...(macGrantOffer ? { scopes: MAC_GRANT_OFFER } : {}),
+                ...(autoWouldJudge ? { autoWouldJudge: true as const } : {}),
               };
             })(),
             signal,
@@ -4228,6 +4916,22 @@ export const llmClient = {
               }
             }
           }
+          if (allowed && macGrantOffer && workspaceId) {
+            const toolCallId = timeline.publicToolCallId(context.toolCall.id);
+            const scope = toolCallId ? approvals.takeDecisionPayload(streamId, toolCallId)?.scope : undefined;
+            if (scope === "workspace") {
+              try {
+                // Through the application, so the save can't cross a settings
+                // change and the sidebar and Workspace settings refresh.
+                const { workspaceApplicationService } = await import("./workspace-application-service-main.js");
+                await workspaceApplicationService.grantMac(workspaceId, macGrantOffer);
+              } catch (error) {
+                // Allowed once already; the next call asks again.
+                logger.warn("pi", "Could not save the workspace's Mac grant.", error);
+              }
+            }
+          }
+          if (allowed) runTaint?.observeRunning(taintCall);
           if (!allowed && !signal?.aborted) deniedToolCalls.add(context.toolCall.id);
           if (allowed && (browserFileApproval || browserActionApproval)) {
             try {
@@ -4529,6 +5233,11 @@ export const llmClient = {
             });
             // A failed command may still have written files, so only a denied call is skipped.
             if (!denied) notifyWorkspaceFilesTouched(workspaceId, event.toolName);
+            // A write or edit that finished before Stop took effect already changed the file on disk.
+            if (placeWrittenPage && !denied && !event.isError) {
+              const page = writtenPagePath(event.toolName, event.result?.details);
+              if (page) placeWrittenPage(page);
+            }
             break;
           }
           default:
@@ -4550,44 +5259,18 @@ export const llmClient = {
           cancelled: true,
           cancellationOrigin: initialization.cancellationOrigin,
         });
-        releaseGenerationSkillReservation(initialization);
-        releaseGenerationBotAuthority(initialization);
-        approvedWorkspaceArtifactCalls.delete(streamId);
-        initializing.delete(streamId);
-        initialization.removeOwnerInvalidation();
-        approvals.releaseStream(streamId);
-        questionnaires.releaseStream(streamId);
-        broadcastChatSettled(
-          streamId,
-          params.chatId,
-          initialization.workspaceId,
-          params.workspaceId,
-        );
+        settleGeneration(streamId, params, initialization, initializing);
         return false;
       }
       await persistInitializationTerminal("failed");
-      releaseGenerationSkillReservation(initialization);
-      releaseGenerationBotAuthority(initialization);
-      approvedWorkspaceArtifactCalls.delete(streamId);
-      initializing.delete(streamId);
-      initialization.removeOwnerInvalidation();
-      approvals.releaseStream(streamId);
-      questionnaires.releaseStream(streamId);
-      broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
+      settleGeneration(streamId, params, initialization, initializing);
       throw error;
     }
     const agent = candidate;
     if (!agent || !piSession) {
       await persistInitializationTerminal("failed");
       endLoadMonitor(initialization, streamId, false);
-      releaseGenerationSkillReservation(initialization);
-      releaseGenerationBotAuthority(initialization);
-      approvedWorkspaceArtifactCalls.delete(streamId);
-      initializing.delete(streamId);
-      initialization.removeOwnerInvalidation();
-      approvals.releaseStream(streamId);
-      questionnaires.releaseStream(streamId);
-      broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
+      settleGeneration(streamId, params, initialization, initializing);
       throw new Error("Could not initialize the generation agent.");
     }
     const piJournal = piSession;
@@ -4755,7 +5438,35 @@ export const llmClient = {
       promptsUnattended: initialization.promptsUnattended,
       computerUse,
       formFill,
-      inputClosed: designWiring?.inputClosed ?? false,
+      ...(chatHooks
+        ? {
+            inputHooks: {
+              screen: async ({ text, messageId }) => {
+                try {
+                  const screening = await screenRunInputWithHooks({
+                    dispatch: chatHooks.dispatch,
+                    text,
+                    idempotencyKey: `UserPromptSubmit:${params.chatId}:${streamId}:${messageId}`,
+                    signal: initialization.controller.signal,
+                  });
+                  if ("blocked" in screening) {
+                    sendGeneration(streamId, "chat:status", {
+                      streamId,
+                      phase: "hook_messages",
+                      messages: [screening.blocked],
+                    });
+                  }
+                  return screening;
+                } catch (error) {
+                  // The same as a failed dispatch at the start of a turn: no outcome.
+                  logger.error("hooks", "UserPromptSubmit for run input failed.", error);
+                  return {};
+                }
+              },
+              attachContext: hookInputContexts.attach,
+            },
+          }
+        : {}),
       ...(subagentSupervisor
         ? {
             stopSubagentsForGuidance: () => {
@@ -4776,40 +5487,48 @@ export const llmClient = {
     // cannot fall into a map-transition gap and leave a privileged run alive.
     active.set(streamId, activeGeneration);
     initializing.delete(streamId);
+    let promotedRunAbandoned: Promise<void> | undefined;
+    const abandonPromotedRun = (status: "failed" | "cancelled"): Promise<void> => {
+      // One teardown per run: the escape path may follow a teardown that failed.
+      promotedRunAbandoned ??= (async () => {
+        await persistInitializationTerminal(status, activeGeneration.cancellationOrigin);
+        await piTurnLease?.rollback().catch((error) => {
+          logger.error(
+            "pi",
+            `Could not roll back the ${status} Pi turn for stream ${streamId}.`,
+            error,
+          );
+        });
+        try {
+          runEveryStep([
+            () => cacheWarmer?.dispose(),
+            () => visualDrafts.dispose(),
+            () => resetGenerationAgent(agent, streamId),
+            () => endLoadMonitor(activeGeneration, streamId, false),
+            () => formFill?.revoke(),
+          ]);
+        } finally {
+          await computerUse?.close().catch(() => {});
+        }
+      })();
+      return promotedRunAbandoned;
+    };
+    escape.settle = async () => {
+      try {
+        await abandonPromotedRun(activeGeneration.cancelRequested ? "cancelled" : "failed");
+      } finally {
+        settleGeneration(streamId, params, activeGeneration, active);
+      }
+    };
     if (initialization.cancelRequested || activeGeneration.cancelRequested) {
-      await persistInitializationTerminal("cancelled", activeGeneration.cancellationOrigin);
-      await piTurnLease?.rollback().catch((error) => {
-        logger.error(
-          "pi",
-          `Could not roll back the cancelled Pi turn for stream ${streamId}.`,
-          error,
-        );
-      });
-      cacheWarmer?.dispose();
-      visualDrafts.dispose();
-      resetGenerationAgent(agent, streamId);
-      endLoadMonitor(activeGeneration, streamId, false);
-      formFill?.revoke();
-      await computerUse?.close().catch(() => {});
+      await abandonPromotedRun("cancelled");
       sendGeneration(streamId, "chat:done", {
         streamId,
         content: "",
         cancelled: true,
         cancellationOrigin: activeGeneration.cancellationOrigin,
       });
-      releaseGenerationSkillReservation(activeGeneration);
-      releaseGenerationBotAuthority(activeGeneration);
-      approvedWorkspaceArtifactCalls.delete(streamId);
-      active.delete(streamId);
-      activeGeneration.removeOwnerInvalidation();
-      approvals.releaseStream(streamId);
-      questionnaires.releaseStream(streamId);
-      broadcastChatSettled(
-        streamId,
-        params.chatId,
-        activeGeneration.workspaceId,
-        params.workspaceId,
-      );
+      settleGeneration(streamId, params, activeGeneration, active);
       return false;
     }
 
@@ -4886,11 +5605,19 @@ export const llmClient = {
                 approvals.takeDecisionPayload(approvalStreamId, toolCallId)?.scope,
               requestQuestion: (toolCallId, questions, questionSignal) =>
                 questionnaires.request({ streamId, toolCallId, questions }, owner.documentId, questionSignal),
+              onFileWrite: (producedFile) => {
+                const toolName = producedFile.operation === "written" ? "write_file" : "edit_file";
+                notifyWorkspaceFilesTouched(workspaceId, toolName);
+                if (placeWrittenPage) {
+                  const page = writtenPagePath(toolName, { producedFile });
+                  if (page) placeWrittenPage(page);
+                }
+              },
             }),
           )
         : undefined;
-    // A throw before the outcome is known is Aiden's failure, not the provider's.
-    let designOutcome: DesignRunOutcome = "host_failed";
+    // The completion task below ends the run on every path from here.
+    escape.settle = async () => {};
     const completion = (async () => {
       try {
         const fullLengthBeforeAttempt = full.length;
@@ -4955,6 +5682,19 @@ export const llmClient = {
             onContinue: () => {
               continuingCutOffReply = true;
             },
+            // A Stop hook may keep the person's turn going, at most
+            // MAX_STOP_HOOK_CONTINUATIONS times. The harness never asks after
+            // an abort, an error or the person's Stop; a spending block wins.
+            ...(chatHooks
+              ? {
+                  onStop: async (event: PiRuntimeStopEvent) => {
+                    await spendingMeter.settled();
+                    if (await spending.block(spendingOwner).catch(() => undefined)) return undefined;
+                    return chatHooks.onStop(event);
+                  },
+                  maxStopContinuations: MAX_STOP_HOOK_CONTINUATIONS,
+                }
+              : {}),
           },
         );
         pendingPiDurabilitySettlement = agent.pendingDurabilitySettlement();
@@ -4987,52 +5727,40 @@ export const llmClient = {
           }
         }
         const emergencyError = generationEmergencyUserError(runtimeOutcome.emergencyProjection);
-        let replyNotSaved = false;
-        const spendingError = runtimeOutcome.kind === "provider_failed" ? dispatchSpendingRefusal : undefined;
-        const finalError =
-          emergencyError ?? spendingError ??
-          (runtimeOutcome.kind === "provider_failed"
-            ? runtimeOutcome.reason === "output-limit"
-              ? "The model reached its output limit."
-              : runtimeOutcome.reason === "context-overflow"
-                ? "The model context was too large to recover safely."
-                : runtimeOutcome.reason === "compaction-failed"
-                  ? "The model context could not be compacted safely."
-                  : runtimeOutcome.reason === "interrupted"
-                    ? "The provider interrupted the response."
-                    : "The model could not complete this response."
-            : runtimeOutcome.kind === "host_failed"
-              ? "The local agent runtime could not complete this response safely."
-              : null);
-        if (finalError) {
+        const terminal = decideGenerationTerminal({
+          runtime: runtimeOutcome,
+          emergencyError,
+          spendingRefusal: dispatchSpendingRefusal,
+          wasCancelled,
+          hasVisibleOutput: () => generationHasVisibleOutput(
+            full,
+            uniqueResponseImages(sharedImages, displayedImages).length +
+              displayedHtmlArtifacts.length +
+              displayedUiVisuals.length,
+          ),
+        });
+        if (terminal.kind === "failed") {
           const finalTimeline = attachClaimCheck(timeline.finish("failed"), full, claimCheckOptions);
           const persisted = await persistAssistant(
             full,
             reasoning,
             finalTimeline,
-            runtimeOutcome.kind === "provider_failed" && !spendingError ? runtimeOutcome.providerFailure : undefined,
+            terminal.attachProviderFailure && runtimeOutcome.kind === "provider_failed"
+              ? runtimeOutcome.providerFailure
+              : undefined,
           );
           await finalizePiTurnPersistence(persisted);
           sendGeneration(streamId, "chat:error", withUndeliveredGuidance({
             streamId,
             message: persisted.error
-              ? `${finalError} The partial response could not be saved: ${persisted.error}`
-              : finalError,
+              ? `${terminal.message} The partial response could not be saved: ${persisted.error}`
+              : terminal.message,
             content: full || undefined,
             reasoning: reasoning || undefined,
             timeline: finalTimeline,
             chat: chatForRenderer(persisted.chat ?? null) ?? undefined,
           }));
-        } else if (
-          !generationHasVisibleOutput(
-            full,
-            uniqueResponseImages(sharedImages, displayedImages).length +
-              displayedHtmlArtifacts.length +
-              displayedUiVisuals.length +
-              (designRun?.acceptedCount() ?? 0),
-          ) &&
-          !wasCancelled
-        ) {
+        } else if (terminal.kind === "empty") {
           const finalTimeline = attachClaimCheck(timeline.finish("failed"), full, claimCheckOptions);
           const persisted = await persistAssistant(full, reasoning, finalTimeline);
           await finalizePiTurnPersistence(persisted);
@@ -5049,7 +5777,7 @@ export const llmClient = {
           // Covers both normal completion and user abort (partial `full`).
           const finalTimeline = attachClaimCheck(
             timeline.finish(
-              wasCancelled ? "cancelled" : "completed",
+              terminal.timeline,
               wasCancelled ? activeGeneration.cancellationOrigin : undefined,
             ),
             full,
@@ -5057,7 +5785,6 @@ export const llmClient = {
           );
           const persisted = await persistAssistant(full, reasoning, finalTimeline);
           await finalizePiTurnPersistence(persisted);
-          replyNotSaved = Boolean(persisted.error);
           if (persisted.error) {
             sendGeneration(streamId, "chat:error", withUndeliveredGuidance({
               streamId,
@@ -5076,14 +5803,6 @@ export const llmClient = {
             }));
           }
         }
-        // Only after persistence: a reply that throws while saving stays host_failed.
-        designOutcome = designRunOutcome({
-          runtimeKind: runtimeOutcome.kind,
-          emergency: Boolean(emergencyError),
-          cancelled: wasCancelled,
-          cancellationOrigin: activeGeneration.cancellationOrigin,
-          persistenceFailed: replyNotSaved,
-        });
       } catch (error) {
         pendingPiDurabilitySettlement ??= agent.pendingDurabilitySettlement();
         collectUndeliveredGuidance();
@@ -5112,24 +5831,15 @@ export const llmClient = {
         } finally {
           // A run that ended for any reason (failure included) owns no more
           // child work; nothing may keep acting for it after it settles.
-          subagentRuntimeRegistry.abortGeneration(streamId);
-          unregisterAcpHost?.();
-          invalidateChatContextJournal(params.chatId);
-          releaseGenerationSkillReservation(activeGeneration);
-          releaseGenerationBotAuthority(activeGeneration);
-          approvedWorkspaceArtifactCalls.delete(streamId);
-          active.delete(streamId);
-          activeGeneration.removeOwnerInvalidation();
-          approvals.releaseStream(streamId);
-          questionnaires.releaseStream(streamId);
-          broadcastChatSettled(
-            streamId,
-            params.chatId,
-            activeGeneration.workspaceId,
-            params.workspaceId,
-          );
-          // Exactly once per started run; pre-run failures reach DesignRunService through start().
-          designRun?.onSettled(designOutcome);
+          try {
+            runEveryStep([
+              () => subagentRuntimeRegistry.abortGeneration(streamId),
+              () => unregisterAcpHost?.(),
+              () => invalidateChatContextJournal(params.chatId),
+            ]);
+          } finally {
+            settleGeneration(streamId, params, activeGeneration, active);
+          }
         }
       }
     })();
@@ -5163,6 +5873,8 @@ export const llmClient = {
     decision: ApprovalDecision,
     payload?: ToolApprovalDecisionPayload,
   ): boolean {
+    // Remote callers only: "Allow in this workspace" is answered on the host.
+    if (payload?.scope === "workspace") return false;
     return (
       approvals.decideAsHost(approvalId, decision === "allow", payload) ||
       botApprovals.decide(approvalId, decision)
@@ -5287,7 +5999,7 @@ export const llmClient = {
     input: { text: string; notice: AgentNoticeV1 },
   ): Promise<ChatRunInputAdmissionResult | null> {
     const streamId = [...active.entries()].find(
-      ([, entry]) => entry.chatId === chatId && !entry.cancelRequested && !entry.inputClosed,
+      ([, entry]) => entry.chatId === chatId && !entry.cancelRequested,
     )?.[0];
     if (!streamId) return null;
     return runInputAdmission.admit({
@@ -5357,6 +6069,10 @@ export const llmClient = {
 
   /** Remove a deleted chat's agent scratch directory. Never throws. */
   forgetDeletedChat(chatId: string): Promise<void> {
+    // SessionEnd for a chat whose hooks ran in this process; never awaited.
+    endWorkspaceChatSession(chatId, undefined, {
+      onMessages: (lines) => logger.warn("hooks", `SessionEnd hooks for a deleted chat: ${lines.join("\n")}`),
+    });
     return acpScratch.forget(chatId);
   },
 

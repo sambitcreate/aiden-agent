@@ -261,23 +261,11 @@ enum AidenBotImagePlaygroundCopy {
 }
 
 /// Reads whether Apple's Image Playground can run here with Aiden's
-/// non-personalized styles (iOS 18.4 or later on a supported device).
+/// non-personalized styles (on a supported device).
 struct AidenBotImagePlaygroundSupportReader<Content: View>: View {
     @ViewBuilder let content: (Bool) -> Content
 
-    var body: some View {
-        if #available(iOS 18.4, *) {
-            AidenBotImagePlaygroundSupportProbe(content: content)
-        } else {
-            content(false)
-        }
-    }
-}
-
-@available(iOS 18.4, *)
-private struct AidenBotImagePlaygroundSupportProbe<Content: View>: View {
     @Environment(\.supportsImagePlayground) private var supportsImagePlayground
-    let content: (Bool) -> Content
 
     var body: some View { content(supportsImagePlayground) }
 }
@@ -311,34 +299,50 @@ private struct AidenBotImagePlaygroundSheetModifier: ViewModifier {
     let onCopyFailed: () -> Void
 
     func body(content: Content) -> some View {
-        if #available(iOS 18.4, *) {
-            content
-                .imagePlaygroundSheet(
-                    isPresented: $isPresented,
-                    concepts: identity.conceptTexts.map(ImagePlaygroundConcept.text),
-                    onCompletion: { temporaryURL in
-                        do {
-                            onCandidateCopied(
-                                try candidateStore.copyImmediately(fromSystemCompletionURL: temporaryURL)
-                            )
-                        } catch {
-                            onCopyFailed()
-                        }
-                    },
-                    onCancellation: { }
-                )
-                .imagePlaygroundGenerationStyle(
-                    .illustration,
-                    in: [.animation, .illustration, .sketch]
-                )
-                .imagePlaygroundPersonalizationPolicy(.disabled)
-                .task {
-                    // Retry launch cleanup once visible, in case protected
-                    // temporary files were inaccessible while locked.
-                    candidateStore.removeAllOwnedCandidates()
-                }
+        content
+            .imagePlaygroundSheet(
+                isPresented: $isPresented,
+                concepts: identity.conceptTexts.map(ImagePlaygroundConcept.text),
+                onCompletion: { temporaryURL in
+                    do {
+                        onCandidateCopied(
+                            try candidateStore.copyImmediately(fromSystemCompletionURL: temporaryURL)
+                        )
+                    } catch {
+                        onCopyFailed()
+                    }
+                },
+                onCancellation: { }
+            )
+            .imagePlaygroundGenerationStyle(
+                .illustration,
+                in: [.animation, .illustration, .sketch]
+            )
+            .modifier(AidenBotImagePlaygroundNonPersonalizedModifier())
+            .task {
+                // Retry launch cleanup once visible, in case protected
+                // temporary files were inaccessible while locked.
+                candidateStore.removeAllOwnedCandidates()
+            }
+    }
+}
+
+/// Keeps Image Playground non-personalized: person and Photos personalization
+/// stay disabled. iOS 26.4 replaced the personalization policy with options.
+private struct AidenBotImagePlaygroundNonPersonalizedModifier: ViewModifier {
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 26.4, *) {
+            content.imagePlaygroundOptions(Self.nonPersonalizedOptions)
         } else {
-            content
+            content.imagePlaygroundPersonalizationPolicy(.disabled)
         }
+    }
+
+    @available(iOS 26.4, *)
+    private static var nonPersonalizedOptions: ImagePlaygroundOptions {
+        var options = ImagePlaygroundOptions()
+        options.personalization = .disabled
+        return options
     }
 }

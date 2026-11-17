@@ -7,6 +7,7 @@ import { Button, Text } from "./ui";
 import { AidenActivityMark } from "./aiden-activity-mark";
 import { MessageBubble } from "./message-bubble";
 import type { Attachment } from "../lib/types";
+import type { ChatInputSourceV1 } from "../shared/chat-input-source";
 import { worktreeProgressText } from "../lib/draft-git-menu";
 import type { WorktreeSendDecision, WorktreeSendView } from "../lib/draft-worktree-send";
 import { pauseWhenUnseen } from "../lib/offscreen-pause";
@@ -14,11 +15,13 @@ import { pauseWhenUnseen } from "../lib/offscreen-pause";
 export function DraftWorktreeSendView({
   text,
   attachments,
+  inputSource,
   view,
   onDecide,
 }: {
   text: string;
   attachments: readonly Attachment[];
+  inputSource?: ChatInputSourceV1;
   view: WorktreeSendView;
   onDecide: (decision: WorktreeSendDecision) => void;
 }) {
@@ -31,6 +34,7 @@ export function DraftWorktreeSendView({
         role="user"
         content={text}
         attachments={attachments.length > 0 ? [...attachments] : undefined}
+        inputSource={inputSource}
       />
       {view.status === "failed" ? (
         <div

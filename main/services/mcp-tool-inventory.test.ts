@@ -7,6 +7,8 @@ import { createInMemoryTransportPair } from "@earendil-works/pi-mcp/testing";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { connectSdkServer } from "./mcp-test-support.js";
+import { COMPOSIO_WATCH_INVENTORY_LIMITS } from "./mcp-tool-inventory.js";
+import { withBotConnectorForegroundLifetime } from "./bot-connector-inventory-scope.js";
 
 async function connectedClient(server: Server): Promise<McpClient> {
   const client = new McpClient({ name: "test-client", version: "1" });
@@ -35,6 +37,38 @@ async function rawServerClient(t: { after(fn: () => Promise<void>): void }, resp
   t.after(async () => { await client.close(); });
   return { client, requests: () => requests.filter(({ method }) => method !== "initialize") };
 }
+
+test("foreground connector inventory enforces its transport budget before requesting a fifth raw RPC page", async (t) => {
+  let pages = 0;
+  const { client } = await rawServerClient(t, () => ({ tools: [], nextCursor: `opaque-${++pages}` }));
+  await assert.rejects(listMcpToolInventory({ assertCurrent() {}, limits: COMPOSIO_WATCH_INVENTORY_LIMITS,
+    listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }, undefined, 256 * 1024) }), /page limit/u);
+  assert.equal(pages, 4);
+});
+
+test("foreground raw tool/byte limits reject the whole inventory without requesting the following RPC page", async (t) => {
+  for (const mode of ["tools", "bytes", "aggregate"] as const) {
+    let pages = 0;
+    const limits = mode === "aggregate" ? { maxPages: 4, maxTools: 128, maxPageBytes: 200, maxTotalBytes: 250 } : COMPOSIO_WATCH_INVENTORY_LIMITS;
+    const { client } = await rawServerClient(t, () => { pages++; return { tools: mode === "tools" ? Array.from({ length: 129 }, (_, i) => ({ name: `read_${i}`, inputSchema: { type: "object" } })) : [], nextCursor: "later", ignoredRawMetadata: "x".repeat(mode === "bytes" ? 256 * 1024 : mode === "aggregate" ? 100 : 0) }; });
+    await assert.rejects(listMcpToolInventory({ assertCurrent() {}, limits,
+      listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }, undefined, limits.maxPageBytes) }), /limit/u);
+    assert.equal(pages, mode === "aggregate" ? 2 : 1);
+  }
+});
+
+test("the initiating foreground lifetime fences every raw inventory RPC page, including admission reads", async (t) => {
+  for (const invalidate of ["abort", "authorization"] as const) {
+    const controller = new AbortController(); let current = true; let pages = 0;
+    const { client } = await rawServerClient(t, () => {
+      pages++; if (invalidate === "abort") controller.abort(); else current = false;
+      return { tools: [], nextCursor: "second" };
+    });
+    await assert.rejects(withBotConnectorForegroundLifetime({ signal: controller.signal, assertCurrent: () => { if (!current) throw new Error("Foreground authorization changed."); } }, () => listMcpToolInventory({ assertCurrent() {}, limits: COMPOSIO_WATCH_INVENTORY_LIMITS,
+      listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }, undefined, 256 * 1024) })));
+    assert.equal(pages, 1, "no next metadata page after the document or device lifetime ends");
+  }
+});
 
 test("inventory follows opaque cursors and retains later-page schemas and annotations", async () => {
   const cursors: Array<string | undefined> = [];
@@ -565,4 +599,35 @@ test("identical re-listings preserve active guards and conflicting concurrent li
   assert.throws(() => initial.guard.assertCallable("one"), /inventory changed/u);
   assert.throws(() => removed.guard.assertCallable("two"), /inventory changed/u);
   (await list(["two"])).guard.assertCallable("two");
+});
+
+test("cache-only observation never joins pending reads and selected renewal survives TTL without reviving changed schemas", async t => {
+  let now = 0, pages = 0, notify: (() => void) | undefined;
+  const cache = createMcpToolInventoryCache<Awaited<ReturnType<typeof readGuardedMcpInventory>>>({ ttlMs: 30, now: () => now });
+  const { client } = await rawServerClient(t, () => { pages++; return { tools: [{ name: pages < 3 ? "read" : "changed", inputSchema: { type: "object" } }] }; });
+  // The real cache's notification protocol is independent of the wire server's capabilities.
+  cache.watch({ onNotification: (_name, listener) => { notify = () => listener({}); } });
+  const source = { serverCapabilities: { tools: {} }, onNotification: (_name: string, listener: (value: unknown) => void) => { notify = () => listener({}); } }; cache.watch(source);
+  let release!: () => void; const wait = new Promise<void>(resolve => { release = resolve; });
+  const first = cache.load(source, async check => { await wait; return readGuardedMcpInventory(client, () => listMcpToolInventory({ assertCurrent: check, listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }) }), check); });
+  assert.equal(cache.peek(source), undefined); assert.equal(pages, 0); release(); await first;
+  assert.equal(cache.peek(source)?.tools[0]?.name, "read"); now = 31; assert.equal(cache.peek(source), undefined); assert.equal(pages, 1, "expiry itself performs no metadata request");
+  const publish = cache.publisher(source);
+  const renewal = await cache.load(source, check => readGuardedMcpInventory(client, () => listMcpToolInventory({ assertCurrent: check, listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }) }), check), undefined, true); publish(renewal);
+  assert.equal(cache.peek(source)?.tools[0]?.name, "read"); assert.equal(pages, 2);
+  const stalePublisher = cache.publisher(source); notify!(); assert.equal(cache.peek(source), undefined); assert.throws(() => stalePublisher(renewal), /changed/u);
+  const changed = await cache.load(source, check => readGuardedMcpInventory(client, () => listMcpToolInventory({ assertCurrent: check, listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }) }), check));
+  assert.equal(changed.tools[0]?.name, "changed"); assert.throws(() => renewal.guard.assertCallable("read"), /changed/u);
+});
+
+test("background selected-metadata renewal fences every raw page after authorization changes", async t => {
+  const { withBotConnectorMetadataRenewal, withBotConnectorCachedInventoryScope, botConnectorInventoryCacheOnly } = await import("./bot-connector-inventory-scope.js");
+  let current = true, pages = 0;
+  const { client } = await rawServerClient(t, () => { pages++; current = false; return { tools: [], nextCursor: "never-request" }; });
+  await withBotConnectorCachedInventoryScope("selected", async () => {
+    await assert.rejects(withBotConnectorMetadataRenewal({ serverId: "selected", signal: new AbortController().signal, assertCurrent: async () => { if (!current) throw new Error("source allowance revoked"); } }, () => listMcpToolInventory({ assertCurrent() {}, limits: COMPOSIO_WATCH_INVENTORY_LIMITS, listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }) })), /revoked/u);
+    assert.equal(botConnectorInventoryCacheOnly(), true);
+    await assert.rejects(withBotConnectorMetadataRenewal({ serverId: "other", signal: new AbortController().signal, assertCurrent: async () => {} }, async () => undefined), /cannot switch/u);
+  });
+  assert.equal(pages, 1, "no second page or replacement connector after the source lost authority");
 });

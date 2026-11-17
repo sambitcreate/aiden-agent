@@ -18,7 +18,7 @@ export interface BotModelChoice {
 }
 
 export function findBotModel(
-  catalog: BotCapabilityCatalog,
+  catalog: Pick<BotCapabilityCatalog, "providers">,
   providerId: string | undefined,
   modelId: string | undefined,
 ): { provider: BotProviderOption; model: BotModelOption } | undefined {

@@ -15,6 +15,7 @@ import { countedToday, createBotDeliveryGate } from "./gate.js";
 import { botStore } from "../bot-store.js";
 import { resolveBotInterruptions } from "../../../renderer/shared/bots.js";
 import { createBotDeliveryLog } from "./log.js";
+import { botChatInFront } from "./in-front.js";
 
 /** Every Bot's delivery rows, beside that Bot's session (`bots/<dir>/deliveries.json`). */
 export const botDeliveryLog = createBotDeliveryLog({ profileDir: () => app.getPath("userData") });
@@ -31,14 +32,19 @@ let liveFunnel: BotDeliveryFunnel | undefined;
 export function botDeliveryFunnel(): BotDeliveryFunnel {
   return (liveFunnel ??= createBotDeliveryFunnel({
     log: botDeliveryLog,
+    ownsPeerFinal: async (botId, requestId) => (await import("../bot-peers/host-main.js")).botPeerHost.ownsFinal(botId, requestId),
+    peerPublication:async(botId,rootId)=>(await import("../bot-peers/host-main.js")).botPeerHost.finalPublication(botId,rootId),
+    peerSettled:async(botId,rootId)=>(await import("../bot-peers/host-main.js")).botPeerHost.settleFinalPublication(botId,rootId),
+    peerPending:async(botId,rootId)=>(await import("../bot-peers/host-main.js")).botPeerHost.retainFinalPublication(botId,rootId),
     gate: createBotDeliveryGate({
       settings: async (botId) => resolveBotInterruptions((await botStore.get(botId))?.interruptions),
       // Proactive notifications that reached the person today count; held
-      // rows count once they come due, suppressed ones never do.
+      // rows count once released, suppressed ones never do.
       sentToday: async (botId, dayStart, now) => countedToday(await botDeliveryLog.list(botId), dayStart, now),
       timeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone,
     }),
     botName: async (botId) => (await botStore.get(botId))?.name,
+    inFront: botChatInFront,
     mac: async (input) => {
       // An issue, a digest, or a held routine result sent from the log is the
       // funnel's own banner, following the hand-off notifier: only while no
@@ -73,7 +79,9 @@ export function botDeliveryFunnel(): BotDeliveryFunnel {
     },
     telegram: async (input) => {
       const { telegramService } = await import("../telegram/telegram-service.js");
+      await input.publication?.assertCurrent();
       await telegramService.deliverBotRoutineResult({
+        ...(input.publication ? {botIncarnation:input.publication.incarnation,publication:input.publication}:{}),
         botId: input.botId,
         requestId: input.requestId ?? `${BOT_DELIVERY_REQUEST_PREFIX}${input.dedupeKey}`,
         routineName: input.title,

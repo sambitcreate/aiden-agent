@@ -1,4 +1,4 @@
-// Telegram settings — bot token, enable toggle, pairing status, provider/model
+// Telegram settings — bot token, Connect and Disconnect, pairing status, provider/model
 // picker, and connection controls. The bot token is stored encrypted via
 // safeStorage and never returned to the renderer.
 
@@ -22,6 +22,7 @@ import {
   Switch,
   toast,
 } from "../ui";
+import { Disclosure } from "../ui-primitives";
 import { telegramApi } from "../../lib/ipc";
 import {
   queryKeys,
@@ -49,6 +50,7 @@ export function TelegramSettings() {
   const workspaces = useWorkspaces();
   const [connectionReview, setConnectionReview] = React.useState(false);
   const [connecting, setConnecting] = React.useState(false);
+  const [disconnecting, setDisconnecting] = React.useState(false);
   const [connectionError, setConnectionError] = React.useState<string | null>(null);
   const [keyDraft, setKeyDraft] = React.useState("");
   const [profileDraft, setProfileDraft] = React.useState("");
@@ -79,17 +81,17 @@ export function TelegramSettings() {
 
   const saveKey = async () => {
     const value = keyDraft.trim();
-    await telegramApi.setKey(value);
-    setKeyDraft("");
-    await invalidate();
-    toast.success(
-      value ? "Telegram bot token saved." : "Telegram bot token removed and bridge disabled.",
-    );
-  };
-
-  const toggle = async (value: boolean) => {
-    await telegramApi.setEnabled(value);
-    await invalidate();
+    try {
+      await telegramApi.setKey(value);
+      setKeyDraft("");
+      toast.success(
+        value ? "Telegram bot token saved." : "Telegram bot token removed and bridge disabled.",
+      );
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to save the bot token.");
+    } finally {
+      await invalidate();
+    }
   };
 
   const connect = async () => {
@@ -108,9 +110,17 @@ export function TelegramSettings() {
   };
 
   const disconnect = async () => {
-    await telegramApi.setEnabled(false);
-    await invalidate();
-    toast.success("Telegram turned off.");
+    if (disconnecting) return;
+    setDisconnecting(true); setConnectionError(null);
+    try {
+      await telegramApi.setEnabled(false);
+      toast.success("Telegram turned off.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to disconnect.");
+    } finally {
+      await invalidate();
+      setDisconnecting(false);
+    }
   };
 
   const resetPairing = async () => {
@@ -250,7 +260,29 @@ export function TelegramSettings() {
           </Button>
         </div>
       </Field>
-
+      {telegram.data ? (
+        <Field orientation="vertical" className="justify-center">
+          <Disclosure key={String(hasToken)} title="How to connect" defaultOpen={!hasToken}>
+            <ol className="text-secondary list-decimal space-y-1 py-2 pl-6 text-regular">
+              <li>
+                Open Telegram and message <strong>@BotFather</strong>.
+              </li>
+              <li>
+                Send <code>/newbot</code> and follow the prompts to create a bot.
+              </li>
+              <li>Copy the bot token and paste it above, then Save.</li>
+              <li>
+                If you want workspace topics, enable Threaded Mode for the bot in{" "}
+                <strong>@BotFather</strong>.
+              </li>
+              <li>Choose a provider under Review model and access (or set one up in Settings → Providers).</li>
+              <li>
+                Choose Connect under Connect and pair your account, review access, then send <code>/start</code> to your bot from Telegram to pair.
+              </li>
+            </ol>
+          </Disclosure>
+        </Field>
+      ) : null}
     </FieldSet>
     <FieldSet title="2. Review model and access">
       <Field
@@ -365,10 +397,10 @@ export function TelegramSettings() {
           description="Keep Aiden running on this device. After connecting, send /start to your bot from your own Telegram account."
         >
           <div className="flex flex-wrap items-center gap-3">
-            <Button size="medium" variant="filled" onClick={() => { setConnectionError(null); setConnectionReview(true); }} disabled={polling || connecting}>
+            <Button size="medium" variant="filled" onClick={() => { setConnectionError(null); setConnectionReview(true); }} disabled={polling || connecting || disconnecting}>
               Connect
             </Button>
-            <Button size="medium" variant="muted" onClick={disconnect} disabled={!polling}>
+            <Button size="medium" variant="muted" onClick={disconnect} disabled={!enabled || disconnecting}>
               Disconnect
             </Button>
             <span className="min-w-0 break-words text-secondary text-regular">
@@ -379,7 +411,7 @@ export function TelegramSettings() {
         </Field>
       )}
 
-      {!hasToken ? <Text as="p" variant="small" color="secondary" className="p-4">Save your bot token in step 1 to connect.</Text> : null}
+      {!hasToken ? <Text as="p" variant="small" color="secondary" className="p-4">Save your bot token in section 1 to connect.</Text> : null}
       {connectionError ? <Callout color="red" role="alert">{connectionError}</Callout> : null}
       {allowedUserId !== undefined && (
         <Field
@@ -401,10 +433,18 @@ export function TelegramSettings() {
         </Field>
       )}
 
+      <Field
+        label="⚠ Security notice"
+        description="Telegram turns run with full unattended authority — no approval prompts. Only the paired owner can trigger turns. Disconnect to stop immediately."
+      >
+        <p className="text-secondary text-regular">
+          This is the same trust boundary as scheduled tasks: the paired owner can run mutating
+          tools silently from their phone. Keep the bot private.
+        </p>
+      </Field>
     </FieldSet>
-    <details className="settings-card mb-6 rounded-card bg-well p-4">
-      <summary className="cursor-pointer rounded-control text-small-strong focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring">Advanced Telegram settings</summary>
-      <FieldSet title="Profiles and preferences">
+    <Disclosure title="Advanced Telegram settings" className="mb-7" contentClassName="pl-0">
+      <FieldSet className="mt-2 mb-0">
       <Field
         label="Bot profile"
         description="Keep separate Telegram bots and their access settings in separate profiles."
@@ -452,22 +492,6 @@ export function TelegramSettings() {
             </Button>
           </div>
         </div>
-      </Field>
-
-      <Field
-        label="Enable Telegram bridge"
-        description={
-          hasToken
-            ? "When enabled, Aiden polls Telegram and responds to messages from your paired phone as a headless, full-access agent."
-            : "Add a bot token below before enabling the bridge."
-        }
-      >
-        <Switch
-          aria-label="Enable Telegram bridge"
-          checked={enabled}
-          onCheckedChange={(checked) => checked ? setConnectionReview(true) : void toggle(false)}
-          disabled={!hasToken}
-        />
       </Field>
 
       <Field
@@ -590,38 +614,8 @@ export function TelegramSettings() {
         </Field>
       )}
 
-      <Field label="How to connect">
-        <ol className="text-secondary list-decimal space-y-1 pl-4 text-regular">
-          <li>
-            Open Telegram and message <strong>@BotFather</strong>.
-          </li>
-          <li>
-            Send <code>/newbot</code> and follow the prompts to create a bot.
-          </li>
-          <li>Copy the bot token and paste it above, then Save.</li>
-          <li>
-            If you want workspace topics, enable Threaded Mode for the bot in{" "}
-            <strong>@BotFather</strong>.
-          </li>
-          <li>Choose a provider above (or set one up in Settings → Providers).</li>
-          <li>
-            Choose Connect in step 3, review access, then send <code>/start</code> to your bot from Telegram to pair.
-          </li>
-        </ol>
-      </Field>
-
-      <Field
-        label="⚠ Security notice"
-        description="Telegram turns run with full unattended authority — no approval prompts. Only the paired owner can trigger turns. Disconnect or disable to stop immediately."
-      >
-        <p className="text-secondary text-regular">
-          This is the same trust boundary as scheduled tasks: the paired owner can run mutating
-          tools silently from their phone. Keep the bot private.
-        </p>
-      </Field>
-
       </FieldSet>
-    </details>
+    </Disclosure>
     <Dialog open={connectionReview} onOpenChange={setConnectionReview}
       title="Connect Telegram?" confirmLabel="Enable and connect" busy={connecting} onConfirm={connect}
       description="Aiden will connect this bot and keep checking for messages while the app is running. Send /start from your own account to pair it. Keep the bot private.">

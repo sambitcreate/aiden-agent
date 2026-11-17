@@ -49,6 +49,8 @@ android {
     sourceSets {
       // JVM contract tests read the canonical Aiden Remote fixtures directly.
       getByName("test").resources.directories.add("../../protocol/aiden-remote/v1/fixtures")
+      // Instrumented UI tests render the same fixtures (the test APK's own assets, never the app's).
+      getByName("androidTest").assets.directories.add("../../protocol/aiden-remote/v1/fixtures")
     }
 
     packaging {

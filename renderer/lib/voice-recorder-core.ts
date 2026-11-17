@@ -130,7 +130,7 @@ export function transcribePcm16(
 ): Promise<string> {
   return withTranscriptionDeadline({ ...options, provider: "local" }, async (scoped, beforeDispatch) => {
     if (!scoped.localModel) {
-      throw new Error("Download and select an on-device model in Settings → Voice.");
+      throw new Error("Download and select an on-device model in Settings → Voice & Speech.");
     }
     beforeDispatch();
     return (await voiceApi.transcribeLocal(pcm.buffer, scoped.localModel, scoped.operationId)).trim();
@@ -181,7 +181,7 @@ async function convertAndTranscribeBlob(
   const operationId = options.operationId;
   if (options.provider === "local") {
     if (!options.localModel) {
-      throw new Error("Download and select an on-device model in Settings → Voice.");
+      throw new Error("Download and select an on-device model in Settings → Voice & Speech.");
     }
     const pcm = float32ToPcm16(await blobToMono16k(blob));
     beforeDispatch();

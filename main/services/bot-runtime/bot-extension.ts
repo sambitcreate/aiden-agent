@@ -1,6 +1,8 @@
 import { botMessageTurnOf, isBotMessageRequestId } from "../../../renderer/shared/bot-messages.js";
 import { BOT_MESSAGE_INPUT_KIND, type BotMessageInputMetadata } from "./bot-input-entry.js";
 import { BOT_ROUTINE_INPUT_KIND } from "./bot-input-entry.js";
+import { ownerRequestOf, type BotRunInputForJudge } from "./bot-owner-request.js";
+import { botExecutionScope } from "./bot-execution.js";
 // The `aiden-bot` Pi Durable extension: everything a Bot turn needs from
 // Aiden, installed in a Bot harness's registry before anything can run.
 //
@@ -46,6 +48,14 @@ import { BOT_ROUTINE_INPUT_KIND } from "./bot-input-entry.js";
 //   flushes memory and may supply a steered summary. `memoryOffered` gates
 //   the flush by the current run; the compacted conversation is handed over
 //   too, so the flush also reads each historical entry's own ingress.
+// - Hooks (docs/plans/aiden-hooks-plan.md §7, `hooks` dep): the person's
+//   global and Bot hooks run in the Bot's folder. PreToolUse runs only after
+//   the Bot's rules allow a call, so a hook can block it or ask for approval
+//   but never loosen a rule; on an unattended turn an ask blocks. PostToolUse
+//   adds its context after the result, Stop may continue the run (capped),
+//   PreCompact observes and SessionStart opens each process's first request.
+//   Every hook's answer is kept in the task's memo, so a durable replay never
+//   runs the hook again.
 
 import type { BotApprovalRuleTarget } from "../../../renderer/shared/tool-approval-scope.js";
 import type { BrowserApprovalTarget } from "../browser/approval.js";
@@ -76,8 +86,8 @@ import {
   type EntryRecord,
   type Extension,
   type Harness,
-  type Registry,
   type HookApi,
+  type Registry,
   type ToolHookCall,
   type ToolExecutionApi,
 } from "@earendil-works/pi-durable";
@@ -101,6 +111,21 @@ import { withheldUntilDisclosed } from "./bot-tool-disclosure.js";
 import { LOAD_TOOLS_TOOL_NAME, createOnDemandTools, withheldUntilLoaded } from "../on-demand-tools.js";
 import { adaptAidenTool, type BotToolCall, type DurableTool, type ToolReplay } from "./tool-adapter.js";
 import { isPiCodemodeCallable } from "../pi-runtime-tool.js";
+import {
+  MAX_STOP_HOOK_CONTINUATIONS,
+  botHooksWithoutFolder,
+  botSurfaceHooks,
+  hookAskText,
+  hookBlockText,
+  hookContextText,
+  hookNoticeLines,
+  hookPostToolAdditions,
+  hookStopContinuation,
+  hookToolPayload,
+  type SurfaceHooks,
+} from "../agent-surface-hooks.js";
+import { toolCallIdempotencyKey } from "../hooks/hook-config.js";
+import type { HookDispatcher } from "../hooks/hook-types.js";
 
 export const BOT_EXTENSION_NAME = "aiden-bot";
 /** Section keys, in render order. */
@@ -115,6 +140,18 @@ const NESTED_EXECUTION_MEMO = "aiden.execution.nested";
 const INPUT_IDENTITY_ENTRY = "aiden.bot-input-identity";
 /** The person's answer to a rule hand-off, kept until the call's block is recorded. */
 const HANDOFF_ANSWER_MEMO = "aiden.handoff.answer";
+/** A PreToolUse hook's answer for this call, so a replay never asks the hook again. */
+const PRE_TOOL_HOOK_MEMO = "aiden.hook.pre";
+/** The wait a hook's ask opened for this call. */
+const HOOK_ASK_MEMO = "aiden.hook.ask";
+/** The person allowed this call on a hook's card. */
+const HOOK_ASK_ALLOWED_MEMO = "aiden.hook.ask.allowed";
+/** A PostToolUse hook's additions for this call. */
+const POST_TOOL_HOOK_MEMO = "aiden.hook.post";
+/** A Stop hook's continuation (or none) for this generation. */
+const STOP_HOOK_MEMO = "aiden.hook.stop";
+/** Runs whose Stop continuations are counted at once; older counts are dropped. */
+const MAX_COUNTED_STOP_RUNS = 64;
 export const BOT_CODEMODE_TOOL_NAME = "codemode";
 /** Lookups a script may call besides workspace, connection and codemode-marked tools. */
 const BOT_SCRIPT_LOOKUPS: ReadonlySet<string> = new Set(["web_search", "bot_recall"]);
@@ -172,6 +209,48 @@ export interface BotApprovalSettlement {
   hint?: string;
   publication?: BotAllowListRelease;
 }
+/** A page of a conversation's entries, oldest first, from `minEntryId` (inclusive) on. */
+export type ContextEntryScan = (minEntryId: number | undefined, cursor: unknown) => Promise<{
+  items: readonly { id: unknown; model?: readonly { role: string; toolName?: unknown }[] }[];
+  next?: unknown;
+}>;
+
+/**
+ * Every tool result name a conversation holds, continuing from `known` (the
+ * last entry an earlier scan read, and the names up to it) when that entry is
+ * still there. A mark whose own entry is gone (the conversation was cleared,
+ * reset or replaced under the same id) is dropped and the scan starts over.
+ */
+export async function scanContextToolNames(
+  scan: ContextEntryScan, known?: { through: number; names: readonly string[] },
+): Promise<{ through: number | undefined; names: string[] }> {
+  const from = async (mark: typeof known) => {
+    const names = new Set(mark?.names);
+    let through = mark?.through;
+    let cursor: unknown;
+    let first = true;
+    do {
+      const page = await scan(mark?.through, cursor);
+      // The mark's own entry comes back first, or the mark is stale.
+      if (first && mark !== undefined && Number(page.items[0]?.id) !== mark.through) return undefined;
+      first = false;
+      for (const entry of page.items) {
+        if (mark !== undefined && Number(entry.id) <= mark.through) continue;
+        for (const message of entry.model ?? []) {
+          if (message.role === "toolResult" && typeof message.toolName === "string") names.add(message.toolName);
+        }
+        through = Number(entry.id);
+      }
+      cursor = page.next;
+    } while (cursor !== undefined);
+    return { through, names: [...names] };
+  };
+  return (known === undefined ? undefined : await from(known)) ?? (await from(undefined))!;
+}
+
+/** Conversations whose scanned tool names `contextToolNames` keeps. */
+const CONTEXT_TOOL_NAMES_KEPT = 64;
+
 export interface BotApprovalRequirement {
   evidence?: BotApprovalEvidence;
   allowFromList?(grant: BotAllowListRelease): Promise<void>;
@@ -187,8 +266,10 @@ export interface BotApprovalRequirement {
   onAllow?(): void | Promise<void>;
   /** The rule that made (or also covers) this ask. */
   rule?: BotHandoffRule;
+  /** In Ask, Auto would hand this call to the judge rather than a card. */
+  autoWouldJudge?: true;
   /**
-   * The person's Settings → Bots lets this routine run go ahead: no card,
+   * The person's Settings → Approvals → Advanced lets this routine run go ahead: no card,
    * `onAllow` still runs before the tool.
    */
   preapproved?: true;
@@ -204,7 +285,7 @@ export interface BotRuleHandoff {
   rule: BotHandoffRule;
   /** What the call was about to do, for the block text ("The person did this themselves: …"). */
   summary: string;
-  /** The card's title after "Your turn: ". */
+  /** The card’s title after "Needs you: ". */
   action: string;
   why: string;
   /** The page where the person can do it (the Bot browser's tab): the card's Open. */
@@ -270,6 +351,18 @@ export interface BotToolCallCheck {
   /** Request ids of the inputs the calling run serves (one per input; `undefined` when it has none). */
   requestIds?: readonly (string | undefined)[];
   hasRoutineInputs?(): Promise<boolean>;
+  /**
+   * What the owner asked for in the inputs the calling run serves, for the
+   * Auto judge: `undefined` when any input carries words the owner didn't
+   * write (`ownerRequestOf`).
+   */
+  ownerRequest?(): Promise<string | undefined>;
+  /**
+   * Every tool whose result this Bot's conversation has committed, earlier
+   * turns and compacted history included, since the model's context (or a
+   * compaction summary of it) may still hold what those tools brought in.
+   */
+  contextToolNames?(): Promise<string[]>;
 }
 
 export type BotReadmission = { ok: true } | { ok: false; reason: "access_changed" | "bot_missing" };
@@ -282,6 +375,8 @@ export interface BotApprovalOwner {
 export interface BotApprovalRequest {
   authorizationFingerprint: string;
   always?: { key: string; count: number };
+  /** In Ask, Auto would hand this call to the judge: the desktop card may offer Auto. */
+  autoWouldJudge?: true;
   allowList?: Pick<BotApprovalRequirements, "target" | "requirementsFingerprint" | "consentRevision">;
   assertCurrent?(): Promise<void>;
   prepareAllowListRelease?(grant: BotAllowListRelease): Promise<BotApprovalDecision | undefined>;
@@ -292,6 +387,13 @@ export interface BotApprovalRequest {
   toolCallId: string;
   toolName: string;
   summary: string;
+  /**
+   * One-way hashes of the call's exact arguments and of the reply it belongs
+   * to. Waits that match on both (and on the card) are the same action in the
+   * same run, so one card may answer them; nothing else is grouped.
+   */
+  argumentsHash?: string;
+  runHash?: string;
   /** Aborted when the turn is stopped; the approval prompt should be withdrawn. */
   signal: AbortSignal | undefined;
 }
@@ -334,6 +436,8 @@ export interface BotExtensionDeps {
   memorySection?(botId: string, offer: { memoryOffered: boolean }): Promise<string>;
   /** The Bot gave a final answer. Called without waiting; must not throw. */
   afterReply?(botId: string): void;
+  /** Awaited host peer outcome observation; never creates a new model request. */
+  peerReply?(botId: string, message: AssistantMessage, taskId: string): Promise<void>;
   /**
    * A compaction is about to summarize. Return a summary to use instead of Pi
    * Durable's own, or `undefined` to let it summarize. Errors fall back too.
@@ -394,6 +498,29 @@ export interface BotExtensionDeps {
    * host passes its own worker and wasm.
    */
   codemodeSandbox?(): CodemodeSandboxBase;
+  /**
+   * The person's hooks for this Bot: global and `bot:<id>` scopes, run in the
+   * Bot's folder. Absent: no hooks run.
+   */
+  hooks?: BotHookDeps;
+}
+
+export interface BotHookDeps {
+  /** The Bot's folder, where its hooks run. */
+  cwd(botId: string): Promise<string>;
+  /**
+   * Whether someone can answer an approval for a run serving inputs with
+   * these request ids. A hook's ask on an unattended run blocks the call.
+   */
+  attended(requestIds: readonly (string | undefined)[]): boolean;
+  /** Absent: the process-wide dispatcher. */
+  dispatcher?: () => HookDispatcher;
+  /**
+   * Hook messages and Aiden's hook notices for the person, from each hook
+   * that runs (a replay never repeats them). They never reach the model.
+   * Must not throw.
+   */
+  report?(botId: string, lines: readonly string[]): void;
 }
 
 export class BotAccessChangedError extends Error {
@@ -426,6 +553,8 @@ export interface BotRegistry extends Registry {
    * aborts the generation task instead.
    */
   attachHarness(harness: Harness): void;
+  /** Independent prompt/tool closures for one task phase; shares only its sandbox. */
+  fork(): BotRegistry;
 }
 
 function approvalHash(value: unknown): string {
@@ -477,6 +606,28 @@ interface ApprovalMemo {
   kind: "approval" | "handoff";
   /** The rule id that made it, or null. */
   rule: string | null;
+}
+
+/** A PreToolUse hook's answer, kept for replay. */
+interface PreToolHookMemo {
+  [key: string]: JsonValue;
+  kind: "none" | "block" | "ask";
+  text: string | null;
+  /** The hook's context for the model, added to the tool's result. Memos kept before it existed lack it; readers use `?? null`. */
+  context: string | null;
+}
+
+/** Text a PostToolUse hook or a Stop hook returned for this task, or null for none. */
+interface HookTextMemo {
+  [key: string]: JsonValue;
+  text: string | null;
+}
+
+/** The message with `text` appended as its own block, when it is the person's. */
+function withAppendedText(message: Message, text: string): Message {
+  if (message.role !== "user") return message;
+  const content = typeof message.content === "string" ? [{ type: "text" as const, text: message.content }] : [...message.content];
+  return { ...message, content: [...content, { type: "text" as const, text }] };
 }
 
 /** Everything needed to apply a rule hand-off's answer without asking or re-deciding. */
@@ -587,6 +738,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     api: Pick<DocumentReader, "snapshot"> & { readonly conversationId: ConversationId },
     context: Context,
   ): Promise<(string | undefined)[]> {
+    const execution = botExecutionScope(botId); if (execution) return execution.requestIds;
     return (await runOwner(api, context)).inputs.map(input => input.requestId);
   }
 
@@ -608,6 +760,75 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     }));
     return {runId: String(live?.run?.taskId ?? api.conversationId), inputs: inputs.some(input => input === undefined)
       ? [] : inputs.filter((input): input is NonNullable<typeof input> => input !== undefined)};
+  }
+
+  /** What the Auto judge reads about the calling run: the owner's words, and the tools it already ran. */
+  function judgeReads(
+    api: Pick<DocumentReader, "snapshot"> & { readonly conversationId: ConversationId }, context: Context,
+  ): Pick<BotToolCallCheck, "ownerRequest" | "contextToolNames"> {
+    return {
+      ownerRequest: async () => {
+        const inputs = await readRunInputEntries(api, context);
+        return inputs === undefined ? undefined : ownerRequestOf(inputs.map(({ input }) => input));
+      },
+      contextToolNames: async () => {
+        if (!harness) throw new Error("The conversation could not be read.");
+        const conversation = await harness.conversation(api.conversationId, context);
+        if (!conversation) throw new Error("The conversation could not be read.");
+        // Entries are only appended, so each conversation is scanned once
+        // from its start and then only past the last entry already seen. The
+        // marks belong to this harness (a new store starts over), and a mark
+        // whose own entry is gone (the conversation was cleared, reset or
+        // replaced under the same id) is dropped and the scan starts over.
+        const marks = contextToolNamesSeen.get(harness) ?? new Map<string, { through: number; names: string[] }>();
+        contextToolNamesSeen.set(harness, marks);
+        const key = String(api.conversationId);
+        const known = marks.get(key);
+        marks.delete(key);
+        const seen = await conversation.commit((tx) => scanContextToolNames(
+          (minEntryId, cursor) => tx.scanEntries({
+            conversationId: api.conversationId, order: "ascending",
+            ...(minEntryId === undefined ? {} : { minEntryId: minEntryId as never }),
+          }, 500, cursor as never),
+          known,
+        ), context);
+        if (seen.through !== undefined) marks.set(key, { through: seen.through, names: seen.names });
+        while (marks.size > CONTEXT_TOOL_NAMES_KEPT) marks.delete(marks.keys().next().value!);
+        return seen.names;
+      },
+    };
+  }
+
+  /**
+   * The committed entries of the inputs the calling run serves, with their
+   * request ids and user text, or `undefined` when any can't be read.
+   */
+  async function readRunInputEntries(
+    api: Pick<DocumentReader, "snapshot"> & { readonly conversationId: ConversationId }, context: Context,
+  ): Promise<{ entryId: number; input: BotRunInputForJudge }[] | undefined> {
+    if (!harness) return undefined;
+    const live = await api.snapshot(LiveDoc, api.conversationId, context);
+    const { submissions } = await harness.inspect(context);
+    const conversation = await harness.conversation(api.conversationId, context);
+    if (!conversation) return undefined;
+    const out: { entryId: number; input: BotRunInputForJudge }[] = [];
+    for (const id of live?.run?.inputs ?? []) {
+      const submission = submissions.find((candidate) => candidate.id === id);
+      if (submission?.type !== "input" || submission.entry === undefined) return undefined;
+      const entry = await conversation.commit((tx) => tx.entry(submission.entry!), context);
+      if (!entry) return undefined;
+      const texts: string[] = [];
+      for (const message of entry.model ?? []) {
+        if (message.role !== "user") continue;
+        if (typeof message.content === "string") texts.push(message.content);
+        else for (const part of message.content) if (part.type === "text") texts.push(part.text);
+      }
+      out.push({ entryId: Number(entry.id), input: {
+        ...(submission.requestId !== undefined ? { requestId: submission.requestId } : {}),
+        kind: entry.kind, ...(entry.data !== undefined ? { data: entry.data } : {}), text: texts.join("\n\n"),
+      } });
+    }
+    return out;
   }
 
   function botInputMetadata(requestId: string | undefined, data: JsonValue | undefined): BotMessageInputMetadata | undefined {
@@ -685,6 +906,43 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
   const executionApprovals = new Map<string, { approval: BotApprovalRequirement; invalid?: boolean; argsFingerprint?: string }>();
   const ordinaryExecutions = new Set<string>();
   const executedApprovals = new Map<string, { id: string; authorizationFingerprint: string; cacheKey: string }>();
+  /** Actions the person declined, by run: in-memory only, for the runs still going. */
+  const declinedInRuns = new Map<string, Set<string>>();
+  /** Per harness and conversation: the last entry `contextToolNames` read, and every tool result name up to it. */
+  const contextToolNamesSeen = new WeakMap<object, Map<string, { through: number; names: string[] }>>();
+  const rememberDecline = (runId: string, key: string) => {
+    const declined = declinedInRuns.get(runId) ?? new Set<string>();
+    declined.add(key);
+    declinedInRuns.delete(runId);
+    declinedInRuns.set(runId, declined);
+    // Keep only the most recent runs.
+    while (declinedInRuns.size > 64) declinedInRuns.delete(declinedInRuns.keys().next().value!);
+  };
+
+  /**
+   * A hook's ask gets a card of its own, ahead of the rule's flow: a remembered
+   * Always answers the rule, never the hook. The answer is kept in the call's
+   * memo, so a replay or a re-decision doesn't ask again. Returns the block, if any.
+   */
+  async function askForHook(summary: string, call: ToolHookCall, api: HookApi, context: Context, executionId: string,
+    owner: BotApprovalOwner, requestIds: readonly (string | undefined)[]): Promise<{ block: string } | undefined> {
+    if ((await api.memo<boolean>(HOOK_ASK_ALLOWED_MEMO, context)) === true) return undefined;
+    const fingerprint = ordinaryEvidence({ summary }, executionId, call.name, call.arguments, owner, requestIds).authorizationFingerprint;
+    const memo = await api.memo<ApprovalMemo>(HOOK_ASK_MEMO, {
+      waitId: randomUUID(), toolCallId: call.id, summary, kind: "approval", rule: null, authorizationFingerprint: fingerprint,
+    }, context);
+    const request: BotApprovalRequest = {
+      botId, waitId: memo.waitId, toolCallId: memo.toolCallId, toolName: call.name, summary: memo.summary,
+      authorizationFingerprint: fingerprint, owner, signal: context.abortSignal, assertCurrent: () => assertLive(api, context, owner),
+    };
+    const answer = deps.requestApprovalOutcome ? await deps.requestApprovalOutcome(request) : await deps.requestApproval(request);
+    if (answer.id !== memo.waitId || answer.authorizationFingerprint !== fingerprint) return { block: "This approval decision belongs to another authorization attempt." };
+    if (answer.answer === "deny") {
+      return { block: answer.source === "expiry" ? "The approval window expired. Nobody approved this action." : "The person declined this action." };
+    }
+    await api.memo(HOOK_ASK_ALLOWED_MEMO, true, context);
+    return undefined;
+  }
 
   async function authorizeTool(call: ToolHookCall, api: HookApi, context: Context, skipPlanCoverage = false, attempt = 0): Promise<{ block: string } | undefined> {
     if (attempt > 3) return { block: "This action's approval requirements kept changing. Ask again." };
@@ -733,6 +991,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
           return requestIds.length > 0;
         }, context);
       },
+      ...judgeReads(api, context),
     };
     let decision = await deps.checkPolicy(botId, call.name, check);
     if (!planAdmissionAvailable && decision.allowed && decision.approval?.evidence && !decision.approval.preapproved) {
@@ -787,6 +1046,35 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
       );
       return applyHandoffAnswer(api, context, call.id, stored);
     }
+    // Hooks see only what the rules already allow, and can only tighten it.
+    const hookAnswer = await preToolHook(call, api, context, requestIds);
+    if (hookAnswer?.kind === "block") return { block: hookAnswer.text ?? "Blocked by a hook." };
+    if (hookAnswer?.kind === "ask") {
+      const refused = await askForHook(hookAnswer.text ?? "A hook asks for your approval.", call, api, context, executionId, owner, requestIds);
+      if (refused !== undefined) return refused;
+    }
+    if (hookAnswer !== undefined) {
+      // A hook, and above all its card, holds the call: decide on today's rules
+      // and the run as it stands now.
+      try {
+        await assertLive(api, context, owner);
+      } catch (error) {
+        return { block: error instanceof Error ? error.message : "This action can no longer run." };
+      }
+      const current = await deps.checkPolicy(botId, call.name, { ...check, skipPlanCoverage: true, skipAllowList: true, approvalProbe: true });
+      if (!current.allowed) return { block: current.reason };
+      // A plan permit and an allow-list entry recheck themselves when used, and
+      // this probe skips both. A routine's go-ahead has no such check, so it
+      // must still stand here. An ordinary approval is rechecked after its card.
+      const goAhead = decision.approval?.preapproved === true && decision.approval.planPermit === undefined && decision.approval.requirements === undefined;
+      if (
+        current.handoff !== undefined ||
+        (decision.approval === undefined && current.approval !== undefined) ||
+        (goAhead && current.approval?.preapproved !== true)
+      ) {
+        return authorizeTool(call, api, context, true, attempt + 1);
+      }
+    }
     if (decision.approval === undefined) return undefined;
     if (decision.approval.planPermit) {
       await api.memo(PLAN_EXECUTION_MEMO, true, context);
@@ -819,6 +1107,12 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
         authorizationFingerprint: evidence.authorizationFingerprint,
       }, context);
     };
+    // The person already declined this exact action in this run: never ask
+    // again (the approval gate's "declined in run" rule, plan §3.3).
+    // A run is the reply to one set of inputs, across all of its model steps.
+    const declineRun = `${api.conversationId}\u0000${owner.inputs.map(input => input.submissionId).join(",")}`;
+    const declineKey = `${call.name}\u0000${approval.summary}\u0000${JSON.stringify(call.arguments ?? null)}`;
+    if (declinedInRuns.get(declineRun)?.has(declineKey)) return { block: "The person declined this action." };
     let memo = await attemptMemo(approval);
     let fingerprint = evidenceOf(approval).authorizationFingerprint;
     let releaseProof: BotAllowListRelease | undefined;
@@ -827,8 +1121,10 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     const capturedRemember = approval.remember ? structuredClone(approval.remember) : undefined;
     const request: BotApprovalRequest = {
       botId, waitId: memo.waitId, toolCallId: memo.toolCallId, toolName: call.name, summary: approval.summary,
+      argumentsHash: approvalHash({ toolName: call.name, args: call.arguments ?? null }), runHash: approvalHash(declineRun),
       authorizationFingerprint: fingerprint, owner, signal: context.abortSignal, assertCurrent: () => assertLive(api, context, owner),
       ...(capturedRemember?.offer && !approval.rule ? { always: { key: botApprovalRuleKey(capturedRemember.target), count: capturedRemember.offer.count } } : {}),
+      ...(approval.autoWouldJudge ? { autoWouldJudge: true as const } : {}),
       ...(capturedRequirements && capturedRemember && !approval.rule ? {
         allowList: { target: capturedRequirements.target, requirementsFingerprint: capturedRequirements.requirementsFingerprint,
           consentRevision: capturedRequirements.consentRevision },
@@ -897,8 +1193,11 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
       }
       settlement = cache.result as BotApprovalSettlement;
     }
-    if (answer.answer === "deny") return { block: answer.source === "expiry" ? "The approval window expired. Nobody approved this action."
-      : answer.source === "person" ? "The person declined this action." : "This action was not approved." };
+    if (answer.answer === "deny") {
+      if (answer.source === "person") rememberDecline(declineRun, declineKey);
+      return { block: answer.source === "expiry" ? "The approval window expired. Nobody approved this action."
+        : answer.source === "person" ? "The person declined this action." : "This action was not approved." };
+    }
     const current = await fresh();
     const publication = releaseProof ?? settlement.publication;
     const same = current && evidenceOf(current).authorizationFingerprint === fingerprint;
@@ -927,6 +1226,35 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     return undefined;
   }
 
+  /** The remembered-approval hint settled for this call, if it still belongs to it. */
+  async function settledHint(executed: { id: string; authorizationFingerprint: string; cacheKey: string }, api: HookApi, context: Context): Promise<string | undefined> {
+    const cache = await api.memo<ApprovalSettlementMemo>(executed.cacheKey, context);
+    if (!cache || cache.id !== executed.id || cache.authorizationFingerprint !== executed.authorizationFingerprint) return undefined;
+    return typeof cache.result.hint === "string" ? cache.result.hint : undefined;
+  }
+
+  /** Hook context for this call's result: PreToolUse's, kept in its memo, then PostToolUse's. */
+  async function hookAdditions(call: ToolHookCall, result: { output?: unknown; isError?: boolean }, api: HookApi, context: Context): Promise<string | undefined> {
+    if (!Array.isArray(result.output)) return undefined;
+    const client = await botHooks();
+    if (client === undefined) return undefined;
+    const preContext = (await api.memo<PreToolHookMemo>(PRE_TOOL_HOOK_MEMO, context))?.context ?? null;
+    let stored = await api.memo<HookTextMemo>(POST_TOOL_HOOK_MEMO, context);
+    if (stored === undefined && client.has("PostToolUse", call.name)) {
+      const text = (result.output as Array<{ type: string; text?: string }>)
+        .flatMap((block) => (block.type === "text" && typeof block.text === "string" ? [block.text] : []))
+        .join("\n");
+      const outcome = await client.dispatch(
+        "PostToolUse",
+        { ...hookToolPayload(call.name, call.arguments, call.id), tool_response: { content: text, is_error: result.isError === true } },
+        { idempotencyKey: `PostToolUse:bot:${botId}:${call.id}`, signal: context.abortSignal },
+      );
+      stored = await api.memo<HookTextMemo>(POST_TOOL_HOOK_MEMO, { text: hookPostToolAdditions(outcome) ?? null }, context);
+    }
+    const additions = [preContext, stored?.text ?? null].filter((text): text is string => typeof text === "string" && text.length > 0);
+    return additions.length === 0 ? undefined : additions.join("\n\n");
+  }
+
   async function currentExecutionApproval(toolName: string, api: HookApi, args: unknown, context: Context) {
     const owner = await runOwner(api, context), requestIds = await runRequestIds(api, context);
     const executionId = await api.memo<string>(EXECUTION_ID_MEMO, context);
@@ -934,9 +1262,171 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     const decision = await deps.checkPolicy(botId, toolName, { executionId, callId: (api as ToolExecutionApi).callId,
       args, owner, requestIds, authorizationIds: await runInputIds(api, context),
       signal: context.abortSignal, assertCurrent: () => assertLive(api, context, owner),
+      ...judgeReads(api, context),
       skipPlanCoverage: true, skipAllowList: true, approvalProbe: true });
     if (!decision.allowed || !decision.approval || decision.approval.preapproved) return undefined;
     return ordinaryEvidence(decision.approval, executionId, toolName, args, owner, requestIds);
+  }
+
+  /* Hooks: one client per Bot, built once its folder is known. */
+  let hookClient: SurfaceHooks | undefined;
+  async function botHooks(): Promise<SurfaceHooks | undefined> {
+    const hookDeps = deps.hooks;
+    if (hookDeps === undefined) return undefined;
+    if (hookClient !== undefined) return hookClient;
+    const report = (lines: string[]): void => {
+      try {
+        hookDeps.report?.(botId, lines);
+      } catch {
+        // Reporting is best effort; the hook's answer still applies.
+      }
+    };
+    const reporting = (client: SurfaceHooks): SurfaceHooks => ({
+      ...client,
+      dispatch: async (...args) => {
+        const outcome = await client.dispatch(...args);
+        const lines = hookNoticeLines(outcome);
+        if (lines.length > 0) report(lines);
+        return outcome;
+      },
+    });
+    let cwd: string;
+    try {
+      cwd = await hookDeps.cwd(botId);
+    } catch (error) {
+      // Its hooks can't run this time, so a call one of them could match doesn't either.
+      return reporting(botHooksWithoutFolder(botId, error, hookDeps.dispatcher, { report }));
+    }
+    // Observe-only events (PreCompact) report through the same channel as dispatched ones.
+    hookClient = reporting(botSurfaceHooks(botId, cwd, hookDeps.dispatcher, { report }));
+    return hookClient;
+  }
+
+  /** SessionStart opens this process's first request, and the first after a compaction. */
+  let sessionStart: "pending" | "compact" | "done" = "pending";
+  /** SessionStart context, for the requests of the run it opened. */
+  let sessionContext: { runKey: string; text: string } | undefined;
+  /** Stop continuations per run, in this process. */
+  const stopContinuations = new Map<string, number>();
+
+  async function runKey(
+    api: Pick<DocumentReader, "snapshot"> & { readonly conversationId: ConversationId },
+    context: Context,
+  ): Promise<string> {
+    const live = await api.snapshot(LiveDoc, api.conversationId, context);
+    return `${api.conversationId}\0${(live?.run?.inputs ?? []).join(",")}`;
+  }
+
+  async function startSession(
+    request: { readonly messages: readonly Message[] },
+    api: Pick<DocumentReader, "snapshot"> & { readonly conversationId: ConversationId; readonly taskId: HookApi["taskId"] },
+    context: Context,
+  ): Promise<void> {
+    if (sessionStart === "done") return;
+    const client = await botHooks();
+    const source = sessionStart === "compact"
+      ? "compact"
+      : request.messages.some((message) => message.role === "assistant") ? "resume" : "startup";
+    sessionStart = "done";
+    if (client === undefined || !client.has("SessionStart")) return;
+    const outcome = await client.dispatch(
+      "SessionStart",
+      { source },
+      { idempotencyKey: `SessionStart:bot:${botId}:${String(api.taskId)}`, signal: context.abortSignal },
+    );
+    const text = hookContextText(outcome?.additionalContext);
+    sessionContext = text === undefined ? undefined : { runKey: await runKey(api, context), text };
+  }
+
+  /** The person's hook context for the run it belongs to, on its latest user message. */
+  async function withSessionContext(
+    messages: readonly Message[],
+    api: Pick<DocumentReader, "snapshot"> & { readonly conversationId: ConversationId },
+    context: Context,
+  ): Promise<readonly Message[]> {
+    if (sessionContext === undefined) return messages;
+    if ((await runKey(api, context)) !== sessionContext.runKey) {
+      sessionContext = undefined;
+      return messages;
+    }
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (messages[index]?.role !== "user") continue;
+      const next = [...messages];
+      next[index] = withAppendedText(messages[index]!, sessionContext.text);
+      return next;
+    }
+    return messages;
+  }
+
+  /**
+   * PreToolUse for a call the Bot's rules already allow. Its answer is kept
+   * in the call's memo, so a replay or Resume applies it without running the
+   * hook again. A stopped turn throws before anything is kept.
+   */
+  async function preToolHook(
+    call: { readonly id: string; readonly name: string; readonly arguments: unknown },
+    api: { readonly conversationId: ConversationId; memo: HookApi["memo"] },
+    context: Context,
+    requestIds: readonly (string | undefined)[],
+  ): Promise<PreToolHookMemo | undefined> {
+    const client = await botHooks();
+    if (client === undefined) return undefined;
+    const stored = await api.memo<PreToolHookMemo>(PRE_TOOL_HOOK_MEMO, context);
+    if (stored !== undefined) return stored;
+    if (!client.has("PreToolUse", call.name)) return undefined;
+    const outcome = await client.dispatch("PreToolUse", hookToolPayload(call.name, call.arguments, call.id), {
+      idempotencyKey: toolCallIdempotencyKey(`PreToolUse:bot:${botId}`, call.id, call.arguments),
+      signal: context.abortSignal,
+    });
+    if (context.abortSignal?.aborted) throw new Error("The turn stopped before the hook answered.");
+    let answer: PreToolHookMemo = { kind: "none", text: null, context: outcome?.additionalContext ?? null };
+    if (outcome?.decision === "deny") {
+      answer = { kind: "block", text: hookBlockText(outcome), context: null };
+    } else if (outcome?.decision === "ask") {
+      answer = deps.hooks!.attended(requestIds)
+        ? { kind: "ask", text: hookAskText(outcome), context: outcome.additionalContext ?? null }
+        : { kind: "block", text: `${hookBlockText(outcome)} No one is here to approve it on this turn.`, context: null };
+    }
+    // `allow` and `updatedInput` change nothing: the Bot's rules already decided, on these arguments.
+    return api.memo<PreToolHookMemo>(PRE_TOOL_HOOK_MEMO, answer, context);
+  }
+
+  /** A Stop hook's next instruction for this run, or undefined to let it end. */
+  async function stopHook(
+    api: Pick<DocumentReader, "snapshot"> & { readonly conversationId: ConversationId; readonly taskId: HookApi["taskId"]; memo: HookApi["memo"] },
+    context: Context,
+  ): Promise<string | undefined> {
+    const client = await botHooks();
+    if (client === undefined) return undefined;
+    const stored = await api.memo<HookTextMemo>(STOP_HOOK_MEMO, context);
+    if (stored !== undefined) return stored.text ?? undefined;
+    const key = await runKey(api, context);
+    const count = stopContinuations.get(key) ?? 0;
+    // A stopped turn never continues, and the cap ends a hook that always says "keep going".
+    if (context.abortSignal?.aborted || count >= MAX_STOP_HOOK_CONTINUATIONS || !client.has("Stop")) {
+      stopContinuations.delete(key);
+      return undefined;
+    }
+    const outcome = await client.dispatch(
+      "Stop",
+      { stop_hook_active: count > 0 },
+      { idempotencyKey: `Stop:bot:${botId}:${String(api.taskId)}`, signal: context.abortSignal },
+    );
+    if (context.abortSignal?.aborted) {
+      stopContinuations.delete(key);
+      return undefined;
+    }
+    const kept = await api.memo<HookTextMemo>(STOP_HOOK_MEMO, { text: hookStopContinuation(outcome) ?? null }, context);
+    if (kept.text === null) {
+      stopContinuations.delete(key);
+      return undefined;
+    }
+    stopContinuations.delete(key);
+    stopContinuations.set(key, count + 1);
+    while (stopContinuations.size > MAX_COUNTED_STOP_RUNS) {
+      stopContinuations.delete(stopContinuations.keys().next().value!);
+    }
+    return kept.text;
   }
 
   const hooks = [
@@ -954,6 +1444,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
           failure = null;
           admitted = true;
         }
+        await startSession(request, api, context);
         // The step that crossed a spending limit has finished: the run stops
         // before its next request.
         if (deps.spending !== undefined) {
@@ -971,6 +1462,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
         messages = withNewestToolImages(messages, "browser_snapshot", BOT_BROWSER_SNAPSHOT_IMAGES_KEPT);
         messages = withNewestToolImages(messages, BOT_COMPUTER_TOOL_NAME, BOT_COMPUTER_CAPTURE_IMAGES_KEPT, BOT_OLDER_COMPUTER_CAPTURE_NOTE);
         if (deps.imageInput !== undefined && !(await deps.imageInput(botId))) messages = withImageReferences(messages);
+        messages = await withSessionContext(messages, api, context);
         const finalOwner = await runOwner(api, context);
         const finalExpired = expired(finalOwner);
         if (finalExpired || finalOwner.inputs.length === 0) {
@@ -987,10 +1479,15 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
           // Spending that cannot be attributed must never fail the reply.
         }
       },
-      onYield: () => {
+      onYield: async (message, api, context) => {
+        // A Stop hook may keep the run going; the answer is final only when it
+        // doesn't. A reply cut off at the length limit isn't the Bot stopping.
+        const continuation = message.stopReason === "stop" ? await stopHook(api, context) : undefined;
+        if (continuation !== undefined) return { continue: continuation };
+        await deps.peerReply?.(botId, message, String(api.taskId));
         // The review decides later whether to run; the answer never waits on it.
         try {
-          deps.afterReply?.(botId);
+          if (!botExecutionScope(botId)?.claim.peer) deps.afterReply?.(botId);
         } catch {
           // A review that cannot be scheduled must never affect the reply.
         }
@@ -999,6 +1496,16 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     }),
     hook(CompactionTask, {
       beforeCompact: async (compaction, api, context) => {
+        // Observe-only: a Pi Durable compaction takes no extra instructions.
+        const client = await botHooks();
+        if (client !== undefined) {
+          client.observe(
+            "PreCompact",
+            { trigger: compaction.reason === "manual" ? "manual" : "auto", aiden_reason: compaction.reason },
+            { idempotencyKey: `PreCompact:bot:${botId}:${String(api.taskId)}` },
+          );
+          if (sessionStart === "done") sessionStart = "compact";
+        }
         if (deps.beforeCompact === undefined) return undefined;
         const offered = await memoryOffered(api, context).catch(() => false);
         const conversation = await harness?.conversation(api.conversationId, context).catch(() => undefined);
@@ -1012,13 +1519,14 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     }),
     hook(ToolTask, {
       beforeTool: (call, api, context) => authorizeTool(call, api, context),
-      afterTool: async (_call, result, api, context) => {
+      afterTool: async (call, result, api, context) => {
         const key = String(api.taskId), executed = executedApprovals.get(key);
         executedApprovals.delete(key); executionApprovals.delete(key); ordinaryExecutions.delete(key);
-        if (!executed || result.isError || !Array.isArray(result.output)) return undefined;
-        const cache = await api.memo<ApprovalSettlementMemo>(executed.cacheKey, context);
-        if (!cache || cache.id !== executed.id || cache.authorizationFingerprint !== executed.authorizationFingerprint || typeof cache.result.hint !== "string") return undefined;
-        return { ...result, output: [...result.output, { type: "text", text: "\n\n" + cache.result.hint }] };
+        const hint = executed && !result.isError ? await settledHint(executed, api, context) : undefined;
+        const additions = [await hookAdditions(call, result, api, context), hint === undefined ? undefined : `\n\n${hint}`]
+          .filter((text): text is string => text !== undefined);
+        if (additions.length === 0 || !Array.isArray(result.output)) return undefined;
+        return { ...result, output: [...result.output, ...additions.map((text) => ({ type: "text" as const, text }))] };
       },
     }),
   ];
@@ -1160,6 +1668,11 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     },
     attachHarness(next: Harness) {
       harness = next;
+    },
+    fork() {
+      const child = createBotRegistry(botId, { ...deps, codemodeSandbox: () => sandbox ??= deps.codemodeSandbox?.() ?? new CodemodeSandbox({ memoryLimitBytes: BOT_SCRIPT_MEMORY_BYTES }) });
+      if (harness) child.attachHarness(harness);
+      return child;
     },
   });
 }

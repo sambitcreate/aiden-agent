@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 
-import { WebFetchService, WEB_FETCH_MAX_TEXT_CHARS } from "./web-fetch.js";
+import { WebFetchService, WEB_FETCH_MAX_TEXT_CHARS, type WebFetchStructuredResult } from "./web-fetch.js";
 import { WebFetchError, type WebFetchResult } from "./web-fetch-transport.js";
 import { WebSearchKeyPoolTracker, type WebSearchKeyPool } from "./web-search-key-pool-core.js";
 import { codemodeResultSchema } from "./pi-codemode.js";
@@ -181,6 +181,64 @@ test("extract mode returns typed values with source lines, and the transcript re
   const text = (result.content[0] as { text: string }).text;
   assert.doesNotMatch(text, /Team is \$1,299 per year/u);
   assert.match(text, /^pro_monthly: 20 \(0\.97\) from "Pro is \$20 per month, billed monthly\."$/mu);
+});
+
+test("extraction checks reach structured output, model text and the bounded phone recap", async () => {
+  const long = "a".repeat(100) + " " + "b".repeat(100);
+  for (const page of [
+    { mediaType: "text/html", body: `<p>Seats: 1.3k</p><p>Old: 1.2k</p><p>Price: $1.20</p><p>Ship: New<br>York</p><p>${long}</p>` },
+    { mediaType: "text/plain", body: `Seats: 1.3k\r\nOld: 1.2k\r\nPrice: $1.20\r\nShip: New\r\nYork\r\n${long}` },
+  ]) {
+    const h = harness({
+      settings: extractOn(), page,
+      clairic: () => ({ status: 200, body: { success: true, result: { answers: {
+        unsupported: { value: 1.3, confidence: 0.99 },
+        price: { value: 1.2, confidence: 0.99 },
+        destination: { value: "New York", confidence: 0.99 },
+        oversized: { value: long, confidence: 0.99 },
+      } } } }),
+    });
+    const result = await (await toolOf(h)).execute("call-1", {
+      url: "https://acme.example", mode: "extract",
+      fields: { unsupported: "number", price: "number", destination: "text", oversized: "text" },
+    });
+    const structured = result.structuredContent as WebFetchStructuredResult;
+    assert.ok(structured.mode === "extract" && "fields" in structured);
+    assert.deepEqual(structured.fields.unsupported, { status: "uncertain", guess: 1.3, confidence: 0.99, notFound: true });
+    assert.deepEqual(structured.fields.price, { status: "extracted", value: 1.2, confidence: 0.99, sourceLine: "Price: $1.20" });
+    assert.deepEqual(structured.fields.destination, { status: "extracted", value: "New York", confidence: 0.99, sourceLine: "Ship: New York" });
+    assert.deepEqual(structured.fields.oversized, { status: "uncertain", guess: long, confidence: 0.99 });
+    const recap = parseWebExtractRecap(JSON.parse(JSON.stringify(result.details)));
+    assert.ok(recap, "the result remains a valid persisted and Remote recap");
+    assert.deepEqual(recap.fields.find((field) => field.name === "destination"), {
+      name: "destination", status: "extracted", value: "New York", confidence: 0.99, sourceLine: "Ship: New York",
+    });
+    assert.equal(recap.fields.find((field) => field.name === "oversized")?.status, "uncertain");
+    const text = (result.content[0] as { text: string }).text;
+    assert.match(text, /destination: New York \(0\.99\) from "Ship: New York"/u);
+    assert.match(text, /unsupported: uncertain/u);
+    assert.match(text, /oversized: uncertain/u);
+  }
+});
+
+test("Unicode citation limits agree through extraction, structured output and the wire recap", async () => {
+  for (const [count, status] of [[101, "extracted"], [200, "extracted"], [201, "uncertain"]] as const) {
+    const value = "😀".repeat(count);
+    const h = harness({
+      settings: extractOn(), page: { mediaType: "text/plain", body: value },
+      clairic: () => ({ status: 200, body: { success: true, result: { answers: { symbols: { value, confidence: 0.99 } } } } }),
+    });
+    const result = await (await toolOf(h)).execute("unicode", { url: "https://acme.example", mode: "extract", fields: { symbols: "text" } });
+    const structured = result.structuredContent as WebFetchStructuredResult;
+    assert.ok(structured.mode === "extract" && "fields" in structured);
+    assert.deepEqual(structured.fields.symbols, status === "extracted"
+      ? { status, value, confidence: 0.99, sourceLine: value }
+      : { status, guess: value, confidence: 0.99 });
+    const recap = parseWebExtractRecap(JSON.parse(JSON.stringify(result.details)));
+    assert.ok(recap);
+    assert.equal(recap.fields[0]!.status, status);
+    assert.equal(recap.fields[0]!.sourceLine, status === "extracted" ? value : undefined);
+  }
 });
 
 test("a rejected or rate-limited key cools down and the next key is tried", async () => {

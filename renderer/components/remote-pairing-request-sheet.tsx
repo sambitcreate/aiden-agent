@@ -6,6 +6,8 @@ import { aidenRemoteApi } from "../lib/ipc";
 import { queryKeys } from "../lib/queries";
 import { useAppCapabilities } from "../lib/app-capabilities";
 import type { AidenRemotePairingRequestPrompt } from "../shared/aiden-remote";
+import { localComputerNoun } from "../shared/computer-noun";
+import { LiveGuard } from "./live-guard";
 
 /** Six digits shown as two groups of three, which are easier to compare aloud. */
 export function formatPairingMatchCode(code: string): string {
@@ -104,13 +106,13 @@ export function PairingRequestSheetBody({
 }
 
 /**
- * App-wide approval sheet for desktop connection requests. Deny is the safe
+ * App-wide approval sheet for connection requests from other computers. Deny is the safe
  * default: it takes focus whenever a request is shown, and dismissing the sheet
  * denies the request.
  */
 export function PairingRequestSheet() {
   const capabilities = useAppCapabilities();
-  const hostLabel = capabilities.platform === "darwin" ? "Mac" : "computer";
+  const hostLabel = localComputerNoun(capabilities.platform);
   const queryClient = useQueryClient();
   const requests = useQuery({
     queryKey: queryKeys.aidenRemotePairingRequests,
@@ -201,7 +203,9 @@ export function PairingRequestSheet() {
   const shown = current ?? lastShown.current;
   if (!shown) return null;
   const busyAllowing = current !== null && busy && pending?.decision !== "deny";
+  // Pairing is the user's decision: Aiden Live never answers it.
   return (
+    <LiveGuard guard="you" wrap={false}>
     <Dialog
       open={current !== null}
       cancelRef={denyRef}
@@ -215,7 +219,7 @@ export function PairingRequestSheet() {
           {shown.deviceName} wants to control this {hostLabel}
         </span>
       )}
-      description={`Allow only if you started this connection and the intended computer shows the same code. It will be able to use Aiden on this ${hostLabel} until you remove it in Remote Access settings.`}
+      description={`Allow only if you started this connection and the intended computer shows the same code. It will be able to use Aiden on this ${hostLabel} until you remove it in Connections settings.`}
       cancelLabel="Deny"
       confirmLabel={busyAllowing ? "Allowing…" : "Allow"}
       onConfirm={() => respond("allow")}
@@ -226,5 +230,6 @@ export function PairingRequestSheet() {
         waiting={waiting}
       />
     </Dialog>
+    </LiveGuard>
   );
 }

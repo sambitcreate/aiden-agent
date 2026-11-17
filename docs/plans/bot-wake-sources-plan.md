@@ -1,6 +1,6 @@
 # Bot wake sources
 
-Status: Merged (2026-10-29), unreleased. Step 1 in [PR #635](https://github.com/sambitcreate/aiden-agent/pull/635), step 2 in [PR #636](https://github.com/sambitcreate/aiden-agent/pull/636), step 3 in [PR #634](https://github.com/sambitcreate/aiden-agent/pull/634), all on top of [PR #633](https://github.com/sambitcreate/aiden-agent/pull/633) (desktop Bot sends never say "Sending…").
+Status: Core shipped in 0.63.0 (merged 2026-10-29); follow-ups remain below. Step 1 in [PR #635](https://github.com/sambitcreate/aiden-agent/pull/635), step 2 in [PR #636](https://github.com/sambitcreate/aiden-agent/pull/636), step 3 in [PR #634](https://github.com/sambitcreate/aiden-agent/pull/634), all on top of [PR #633](https://github.com/sambitcreate/aiden-agent/pull/633) (desktop Bot sends never say "Sending…").
 
 ## Why
 
@@ -48,6 +48,6 @@ Read from `NousResearch/hermes-agent` on 2026-10-28 (product reference, no copie
 ## Follow-ups (not in this stack)
 
 - Wake when a background shell job finishes (Hermes `notify_on_complete`).
-- Email and calendar watches (Bot autonomy D2 spike), likely as watch sources.
+- Email and calendar watches (Bot autonomy D2 spike) and their full desktop/iOS/Android management continue in the [Bot continuity plan](bot-continuity-plan.md), selected by the owner on 2026-11-03. That plan also specifies persistent watch-transition hand-off. The owner explicitly approved polling while Aiden is running and the host awake, including after leaving the Bots screen; this supersedes the October D2 screen-open restriction.
 - Keeping the Mac awake shortly before a due routine.
 - Remote/phone management of event and watch routines.

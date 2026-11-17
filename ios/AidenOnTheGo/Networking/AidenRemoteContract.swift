@@ -77,7 +77,7 @@ enum AidenManualPairingError: Error, Equatable, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidCode:
-            return String(localized: "Enter the 20-character setup code shown on your desktop.")
+            return String(localized: "Enter the 20-character setup code shown on your computer.")
         case .invalidBootstrap:
             return String(localized: "Aiden Agent returned an invalid manual pairing response.")
         case .decryptionFailed:
@@ -676,6 +676,13 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// Contract revision 49 adds `chat:jobs`, asked for alone.
     /// Contract revision 50 adds `attachments:raw`, asked for alone.
     /// Contract revision 53 adds `chat:new-worktree`, asked for alone.
+    /// Contract revision 59 adds `bot:watches`, asked for alone.
+    /// Contract revision 59 adds `bot:open-work`, asked for alone.
+    /// Contract revision 59 adds `bot:routine-models`, asked for alone.
+    /// Contract revision 59 adds `bot:peers`, asked for alone.
+
+    /// Contract revision 61 adds `approval:cards`, `approvals:settings`,
+    /// `bot:settings-changes`, `bot:suggestions` and `bot:templates`, each alone.
     /// Contract revision 54 adds `bot:messaging`, also asked for alone.
     static let phoneNegotiable: [Self] = v1Known + [
         Self(rawValue: "runs:observe"), Self(rawValue: "runs:control"),
@@ -688,7 +695,11 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
         Self(rawValue: "chat:jobs"),
         Self(rawValue: "attachments:raw"),
         Self(rawValue: "chat:new-worktree"),
-    ]
+        Self(rawValue: "bot:watches"),
+        Self(rawValue: "bot:open-work"),
+        Self(rawValue: "bot:routine-models"),
+        Self(rawValue: "bot:peers"),
+    ] + botUX
 
     /// Revision 27: the device renders `memory_update` and `routine_proposal`
     /// Bot session entries. It grants no authority.
@@ -762,6 +773,17 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// It grants no authority. A Mac on an earlier revision refuses the name,
     /// so the device asks for it alone, after any other negotiation.
     static let botIssues = Self(rawValue: "bot:issues")
+
+    /// Connector-watch management; reads also need bot:read, changes need bot:write.
+    static let botWatches = Self(rawValue: "bot:watches")
+
+    /// Open work metadata and owned evidence; also needs Bot and chat read.
+    static let botOpenWork = Self(rawValue: "bot:open-work")
+
+    /// Revision 59: routine-only models, run facts and explicit unknown-cost Resume.
+    static let botRoutineModels = Self(rawValue: "bot:routine-models")
+    /// Revision 59: approved pairs and bounded linked exchanges.
+    static let botPeers = Self(rawValue: "bot:peers")
 
     init(from decoder: Decoder) throws {
         let value = try decoder.singleValueContainer().decode(String.self)
@@ -2853,10 +2875,13 @@ private enum AidenBotPrivateResponseValidator {
             for (key, child) in object {
                 let normalizedKey = normalize(key)
                 if (normalizedPrivateKeys.contains(normalizedKey)
+                    || (root.hasPrefix("botOpenWork") && ["url", "filepath", "sourcepath", "resultpath", "transcript", "rawresponse", "rawentries", "messages", "binding", "bindings", "toolname"].contains(normalizedKey))
+                    || (root.hasPrefix("botWatch") && ["accountid", "resourceid", "serverid", "toolname", "binding", "bindings", "sourceid", "fingerprint"].contains(normalizedKey))
                     || isPrivateChildProjectionKey(normalizedKey)
                     || (root == "chatSummaries" && chatSummaryForbiddenKeys.contains(normalizedKey))),
                    !isAllowedKnownIdentityKey(key, root: root, parentPath: path),
-                   !isAllowedRoutineProposalPrompt(key, root: root, object: object) {
+                   !isAllowedRoutineProposalPrompt(key, root: root, object: object),
+                   !isAllowedBotUXKey(key, root: root, object: object, parentPath: path) {
                     throw AidenRemoteContractError.unsafePayloadField(key)
                 }
                 try validate(child, root: root, path: path + [key])
@@ -2936,6 +2961,28 @@ private enum AidenBotPrivateResponseValidator {
             && object["proposalId"] is String
     }
 
+    /// Revision 61: a held settings change's proposed `instructions`, a typed
+    /// approval card's `arguments` (labelled display rows the card shows), and
+    /// a template's `instructions` beside its version.
+    private static func isAllowedBotUXKey(
+        _ key: String,
+        root: String,
+        object: [String: Any],
+        parentPath: [String]
+    ) -> Bool {
+        let sessionRoots = ["botSession", "botSessionEvents", "botSessionCards"]
+        if key == "instructions", sessionRoots.contains(root) {
+            return object["type"] as? String == "settings_change" && object["changeId"] is String
+        }
+        if key == "arguments", sessionRoots.contains(root) {
+            return parentPath.last == "card" && object["kind"] is String && object["buttons"] is [Any]
+        }
+        if key == "instructions", root == "botPresets" {
+            return parentPath == ["presets", "[]"] && object["version"] is NSNumber
+        }
+        return false
+    }
+
     private static func isAllowedKnownIdentityKey(
         _ key: String,
         root: String,
@@ -2954,6 +3001,14 @@ private enum AidenBotPrivateResponseValidator {
         if root == "botIssues", key == "result" {
             return parentPath.isEmpty
                 || ["act.response.result", "notOpen.result"].contains((parentPath + [key]).joined(separator: "."))
+        }
+        if key == "prompt", (root == "botWatch" && parentPath.isEmpty
+            || root == "botWatches" && parentPath == ["watches", "[]"]) { return true }
+        if key == "result", root == "botWatchTest", parentPath.isEmpty { return true }
+        if key == "result" {
+            if root == "botOpenWork", parentPath == ["items", "[]", "completion"] { return true }
+            if root == "botOpenWorkResult", parentPath == ["snapshot", "items", "[]", "completion"] { return true }
+            if root == "botOpenWorkItem", parentPath == ["completion"] { return true }
         }
         guard key == "instructions" || key == "openingGreeting" else { return false }
         if root == "botDetail" || root == "botMessagingDetail" {
@@ -3802,6 +3857,9 @@ struct AidenRemoteRunApproval: Decodable, Equatable, Sendable {
     let scopes: [AidenApprovalScope]?
     /// Contract revision 39 (`schedule:cards`): display-only, nil when absent or invalid.
     let schedule: AidenApprovalSchedule?
+    /// Contract revision 61 (`approval:cards`): the typed card. When present,
+    /// `canAllow` and `scopes` agree with its buttons, or the payload is refused.
+    var card: AidenApprovalCardModel? = nil
 
     init(
         approvalId: String,
@@ -3855,10 +3913,13 @@ struct AidenRemoteRunApproval: Decodable, Equatable, Sendable {
         }
         // A card that fails validation is dropped; the approval still decodes.
         schedule = try? values.decodeIfPresent(AidenApprovalSchedule.self, forKey: .schedule)
+        // Revision 61: strict, like the host's `parseAidenRemotePhoneRunApproval`.
+        card = try values.decodeIfPresent(AidenApprovalCardModel.self, forKey: .card)
+        try card?.validateSummary(canAllow: canAllow, scopes: scopes?.map(\.rawValue))
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case approvalId, summary, toolCallId, toolName, canAllow, scopes, schedule
+        case approvalId, summary, toolCallId, toolName, canAllow, scopes, schedule, card
     }
 }
 
@@ -3907,6 +3968,9 @@ struct AidenRemoteRunQuestion: Decodable, Equatable, Sendable {
 struct AidenRemoteRunSnapshot: Decodable, Equatable, Sendable {
     let runId: String
     let chatId: String
+    let replyText: String?
+    let replyReasoning: String?
+    let timeline: AidenGenerationTimeline?
     let reason: String
     let state: String?
     let approvals: [AidenRemoteRunApproval]
@@ -3920,6 +3984,10 @@ struct AidenRemoteRunSnapshot: Decodable, Equatable, Sendable {
         runId = try values.decode(String.self, forKey: .runId)
         chatId = try values.decode(String.self, forKey: .chatId)
         reason = try boundedString(values, forKey: .reason, maxLength: 32, field: "reason", required: true)!
+        replyText = try boundedString(values, forKey: .replyText, maxLength: 32_768, field: "replyText", allowEmpty: true)
+        replyReasoning = try boundedString(values, forKey: .replyReasoning, maxLength: 32_768, field: "replyReasoning", allowEmpty: true)
+        timeline = try decodeOptionalNonNull(values, AidenGenerationTimeline.self, forKey: .timeline)
+        guard timeline?.isRendererSafe != false else { throw AidenRemoteContractError.unsafePayloadField("timeline") }
         state = try boundedString(values, forKey: .state, maxLength: 32, field: "state")
         if values.contains(.pendingApprovalIds) {
             _ = try values.decode([String].self, forKey: .pendingApprovalIds)
@@ -3942,7 +4010,7 @@ struct AidenRemoteRunSnapshot: Decodable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case runId, chatId, reason, epoch, state, pendingApprovalIds, pendingQuestionIds
-        case approvals, questions, nextSequence
+        case approvals, questions, nextSequence, replyText, replyReasoning, timeline
     }
 }
 

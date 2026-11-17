@@ -15,7 +15,7 @@ for emphasis; do not add a separate pill or circular button variant.
 | A custom visual that must follow a button's silhouette, such as its artwork mask | `.squircle-control` | The same button radius and corner shape |
 | Joined actions, such as an action with a separate menu trigger | `.squircle-control.squircle-action-group` around direct `Button` children | 16px outer corners, square internal seams |
 | Chat composer | `.composer-shell` | `--radius-composer: 40px` and `corner-shape: squircle` |
-| Tool approval card above the composer | `.composer-shell` on the card, `.approval-well` for its code and note wells, `.approval-icon-tile` for the icon | The composer's 40px squircle; wells use the composer radius less the card's 16px padding; the icon tile is a 14px squircle |
+| Tool approval card above the composer (workspace and Bot chats), and its answered status line | `.composer-shell` on the card, `.approval-well` for its code and note wells, `.approval-icon-tile` for the icon | The composer's 40px squircle; wells use the composer radius less the card's 16px padding; the icon tile is a 14px squircle |
 
 The renderer's action rule also covers existing `button`, `[role="button"]`, and
 `[data-slot="button"]` elements, including the compact dictation window. Reuse
@@ -35,26 +35,49 @@ so each button's keyboard outline and portaled menus remain unobstructed.
 
 ## Approval card
 
-A tool approval reads top to bottom as one centered question: an accent icon
-tile, the action as a plain question ("Run this command?", "Edit forecast.ts?"),
-the exact request in a monospaced well, one quiet line under it ("Aiden is
-paused until you choose.", or the file and its size of change), and two equal
-large buttons. Deny is the filled neutral action and keeps initial focus; Allow
-once is the accent action. In the open chat each button carries its key as a
-quiet trailing label (`⌘⌫` Deny, `⌘↩` Allow once), at reduced opacity rather
-than in a keycap, so the pair still reads as two plain actions. When the host offers remembered scopes, Allow once
-becomes a joined action whose chevron menu lists **Allow for this chat** and
-**Always allow in this workspace**, each with one line on what it covers: a
-command rule covers only that exact command, but a file rule covers any later
-edit (or write) to that file, whatever it changes, so the line says so. A
-file change shows removed and added lines on the soft red and green status
-fills, with screen-reader labels instead of relying on color. Specialized
-approvals (scheduled tasks, subagent grants, form fills, classifiers) keep their
-own review bodies inside the same card. The iPhone and Android cards use the
-same layout and wording; they show the approval summary instead of a diff,
-because phones never receive tool arguments, and a scheduled task asks the
-same question as the desktop ("Save this scheduled task?", "Change this
-automation?"). A long request folds to six lines behind **Show all**, and once
+One approval card serves workspace chats, subagents, paired hosts' chats and
+Bot chats (`ChatApprovalCard` in `renderer/components/chat-approval-card.tsx`,
+with its shared pieces in `approval-card-parts.tsx`). It reads top to bottom as
+one centered question: an accent icon tile, the question, the exact request in
+a monospaced well, one quiet line under it ("Aiden is paused until you
+choose.", a Bot's own name in a Bot chat, or the file and its size of change),
+and two equal large buttons. A call on the person's Mac names the Mac: **Run on
+your Mac?** for a command, **Change files on your Mac?** for an edit, write,
+move or delete, and **Use your Mac with Computer Use?** for Computer Use (one
+grant covers every app). Everything else reads **Review before {tool}**, adding
+"→ {site}" when the request names one. Deny is the filled neutral action and
+keeps initial focus; Allow once is the accent action. In the open chat each
+button carries its key as a quiet trailing label (`⌘⌫` Deny, `⌘↩` Allow once),
+at reduced opacity rather than in a keycap, so the pair still reads as two
+plain actions. When the host offers remembered scopes, Allow once becomes a
+joined action whose chevron menu lists **Allow in this chat** and **Allow in
+this workspace** (a Bot's card lists **Always allow for {Bot}**, its own allow
+list), each with one line on what it covers: a command rule covers only that
+exact command, but a file rule covers any later edit (or write) to that file,
+whatever it changes, so the line says so. The Computer Use card's primary is
+**Allow in this chat**, with **Always allow** (every chat) in the menu. A file
+change shows removed and added lines on the soft red and green status fills,
+with screen-reader labels instead of relying on color. Specialized approvals
+(scheduled tasks, subagent grants, form fills, classifiers, hook proposals)
+keep their own review bodies inside the same card.
+
+Cards show one at a time with "1 of N". Calls waiting in the same run share one
+card that answers all of them only when they are the same call: the same tool
+with the same arguments (and, in the browser, the same tab). Cards whose text
+matches but whose arguments differ stay separate. A card never blocks the
+composer.
+Once answered, the card collapses for a few seconds to one quiet status line
+where it was: **Allowed once**, **Allowed in this chat**, **Allowed in this
+workspace**, **Always allowed** or **Denied**, with a soft green check for an
+allow and a neutral mark otherwise. A Bot card that went away without an answer
+from this device (answered elsewhere, expired, or its run ended) reads **No
+longer active**.
+
+The iPhone and Android cards use the same layout; they show the approval
+summary instead of a diff, because phones never receive tool arguments, and a
+scheduled task asks the same question as the desktop ("Save this scheduled
+task?", "Change this automation?"). Until the typed card model reaches phones,
+their other questions keep their earlier wording. A long request folds to six lines behind **Show all**, and once
 expanded it scrolls inside a bounded well, so Show less and the buttons stay on
 screen when the card sits in a non-scrolling footer. While the end of the
 request is still out of view, the well says **Scroll for more** next to Show

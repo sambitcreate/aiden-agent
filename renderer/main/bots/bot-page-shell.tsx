@@ -6,6 +6,7 @@ import * as React from "react";
 import { ChevronLeft } from "lucide-react";
 import { AlertDialog, Button, ScrollArea } from "../../components/ui";
 import { SettingsPage } from "../../components/settings/settings-page";
+import { LiveGuard } from "../../components/live-guard";
 
 export function BotPageShell({
   scrollId,
@@ -28,7 +29,11 @@ export function BotPageShell({
   heading?: string;
   description?: string;
 }>) {
+  // A Bot's Profile, Instructions, Advanced and other pages set its access,
+  // rules, spending, routines and computer: Aiden Live can read them but
+  // never change them, including the dialogs and menus they open.
   return (
+    <LiveGuard guard="you">
     <ScrollArea
       scrollRestorationId={scrollId}
       title={title}
@@ -45,6 +50,7 @@ export function BotPageShell({
         </SettingsPage>
       </div>
     </ScrollArea>
+    </LiveGuard>
   );
 }
 

@@ -339,7 +339,7 @@ Paths below are the authoritative audit evidence. Component code takes precedenc
 
 <a id="s7"></a>**S7 — Telegram:** [settings](../../renderer/components/settings/telegram-settings.tsx), [parity plan](telegram-first-class-agent-parity-plan.md).
 
-<a id="s8"></a>**S8 — Schedules/Assistant:** [task editor](../../renderer/components/scheduled-task-editor.tsx), [tasks view](../../renderer/components/scheduled-tasks-view.tsx), [Assistant capability disclosure](../../renderer/components/settings/assistant-settings.tsx), [chat approval surface](../../renderer/main/chat-pane.tsx).
+<a id="s8"></a>**S8 — Schedules/Assistant:** [task editor](../../renderer/components/scheduled-task-editor.tsx), [tasks view](../../renderer/components/scheduled-tasks-view.tsx), [chat approval surface](../../renderer/main/chat-pane.tsx).
 
 <a id="s9"></a>**S9 — Plugins/skills:** [plugin settings](../../renderer/components/settings/mcp-settings.tsx), [preset setup](../../renderer/components/settings/mcp-preset-setup.tsx), [skills](../../renderer/components/settings/skills-settings.tsx).
 
@@ -357,7 +357,7 @@ Paths below are the authoritative audit evidence. Component code takes precedenc
 
 <a id="s16"></a>**S16 — Android pairing:** [pairing and removal screen](../../android/app/src/main/java/sbtbiswas/AidenOnTheGo/features/remote/AidenPairingScreen.kt), [remote client](../../android/app/src/main/java/sbtbiswas/AidenOnTheGo/networking/AidenRemoteClient.kt).
 
-<a id="s17"></a>**S17 — Native continuation:** [iOS coordinator](../../ios/AidenOnTheGo/Features/Remote/AidenRemoteCoordinator.swift), [iOS workspace shell](../../ios/AidenOnTheGo/Features/Remote/AidenWorkspaceShellView.swift), [Android product shell](../../android/app/src/main/java/sbtbiswas/AidenOnTheGo/features/remote/AidenProductShellScreen.kt), [Android workspace shell](../../android/app/src/main/java/sbtbiswas/AidenOnTheGo/features/workspaces/AidenWorkspaceShellScreen.kt).
+<a id="s17"></a>**S17 — Native continuation:** [iOS coordinator](../../ios/AidenOnTheGo/Features/Remote/AidenRemoteCoordinator.swift), [iOS app shell](../../ios/AidenOnTheGo/Features/Shell/AidenAppShellView.swift), [Android product shell](../../android/app/src/main/java/sbtbiswas/AidenOnTheGo/features/remote/AidenProductShellScreen.kt), [Android workspace shell](../../android/app/src/main/java/sbtbiswas/AidenOnTheGo/features/workspaces/AidenWorkspaceShellScreen.kt).
 
 <a id="s18"></a>**S18 — Voice:** [voice settings](../../renderer/components/settings/voice-settings.tsx), [local voice setup](../../renderer/components/settings/local-voice-settings.tsx), [paired-Mac speech](../aiden-on-the-go-remote-access.md#paired-mac-voice-input).
 

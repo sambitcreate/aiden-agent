@@ -78,7 +78,7 @@ test("a saved routine can be edited and deleted from its editor", async () => {
     "bots:routines:delete": () => undefined,
   });
   await mountWithBotRouter(<BotRoutines bot={bot} />, { initialPath: "/bots/bot-1" });
-  fireEvent.click(await screen.findByRole("button", { name: /Weekly meal prep/u }));
+  fireEvent.click(await screen.findByRole("button", { name: /^Weekly meal prep\b/u }));
   const dialog = await screen.findByRole("dialog", { name: "Edit routine" });
   fireEvent.click(within(dialog).getByRole("button", { name: "Delete routine" }));
   await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:routines:delete").length, 1));
@@ -101,7 +101,7 @@ test("editing a routine starts from its saved name, schedule, and message, and s
   // Open Add first, then close it: the next editor must not keep the blank form.
   fireEvent.click(await screen.findByRole("button", { name: /Add routine/u }));
   fireEvent.click(within(await screen.findByRole("dialog", { name: "Add routine" })).getByRole("button", { name: "Cancel" }));
-  fireEvent.click(await screen.findByRole("button", { name: /Weekly meal prep/u }));
+  fireEvent.click(await screen.findByRole("button", { name: /^Weekly meal prep\b/u }));
   const dialog = await screen.findByRole("dialog", { name: "Edit routine" });
   assert.equal((within(dialog).getByRole("textbox", { name: "Name" }) as HTMLInputElement).value, "Weekly meal prep");
   assert.equal(
@@ -126,7 +126,7 @@ test("editing a routine starts from its saved name, schedule, and message, and s
 
   // A second routine opens with its own values, not the first one's.
   await waitFor(() => assert.equal(screen.queryByRole("dialog", { name: "Edit routine" }), null));
-  fireEvent.click(await screen.findByRole("button", { name: /Morning brief/u }));
+  fireEvent.click(await screen.findByRole("button", { name: /^Morning brief\b/u }));
   const second = await screen.findByRole("dialog", { name: "Edit routine" });
   assert.equal((within(second).getByRole("textbox", { name: "Name" }) as HTMLInputElement).value, "Morning brief");
   assert.equal(within(second).getByRole("radio", { name: "Every day" }).getAttribute("aria-checked"), "true");
@@ -242,19 +242,19 @@ test("a saved or deleted routine changes the list at once, without waiting for i
     "bots:routines:delete": () => undefined,
   });
   await mountWithBotRouter(<BotRoutines bot={bot} />, { initialPath: "/bots/bot-1" });
-  await screen.findByRole("button", { name: /Weekly meal prep/u });
+  await screen.findByRole("button", { name: /^Weekly meal prep\b/u });
   fireEvent.click(screen.getByRole("button", { name: /Add routine/u }));
   const add = await screen.findByRole("dialog", { name: "Add routine" });
   fireEvent.change(within(add).getByRole("textbox", { name: "Name" }), { target: { value: "Morning brief" } });
   fireEvent.change(within(add).getByRole("textbox", { name: "What should it do?" }), { target: { value: "Brief me." } });
   fireEvent.click(within(add).getByRole("radio", { name: "Every day" }));
   fireEvent.click(within(add).getByRole("button", { name: "Save" }));
-  assert.ok(await screen.findByRole("button", { name: /Morning brief/u }));
-  assert.ok(screen.getByRole("button", { name: /Weekly meal prep/u }));
+  assert.ok(await screen.findByRole("button", { name: /^Morning brief\b/u }));
+  assert.ok(screen.getByRole("button", { name: /^Weekly meal prep\b/u }));
 
-  fireEvent.click(screen.getByRole("button", { name: /Weekly meal prep/u }));
+  fireEvent.click(screen.getByRole("button", { name: /^Weekly meal prep\b/u }));
   const edit = await screen.findByRole("dialog", { name: "Edit routine" });
   fireEvent.click(within(edit).getByRole("button", { name: "Delete routine" }));
-  await waitFor(() => assert.equal(screen.queryByRole("button", { name: /Weekly meal prep/u }), null));
-  assert.ok(screen.getByRole("button", { name: /Morning brief/u }));
+  await waitFor(() => assert.equal(screen.queryByRole("button", { name: /^Weekly meal prep\b/u }), null));
+  assert.ok(screen.getByRole("button", { name: /^Morning brief\b/u }));
 });

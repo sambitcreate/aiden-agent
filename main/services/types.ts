@@ -1,4 +1,5 @@
 import type { McpExposure } from "../../renderer/shared/mcp-exposure.js";
+import type { AidenLiveSettingsFields } from "../../renderer/shared/aiden-live-settings.js";
 import type { ChatOwnerV1 } from "../../renderer/shared/chat-visibility.js";
 import type { BotRoutineFailure } from "../../renderer/shared/bot-routine-failure.js";
 import type { BotRoutineSchedule } from "../../renderer/shared/bot-routine-schedule.js";
@@ -148,6 +149,14 @@ export interface Workspace {
   /** Workspace-scoped durable memory. Omitted means enabled. */
   memoryEnabled?: boolean;
   /**
+   * Present only when the person chose Customize in Workspace settings: this
+   * workspace's own approval mode instead of the global one. Earlier releases
+   * ignore it and read `permission`, which is never wider.
+   */
+  approvalMode?: import("../../renderer/shared/approval-mode.js").ApprovalMode;
+  /** "Allowed in this workspace" grants from Mac cards; removable in Workspace settings. */
+  macGrants?: import("../../renderer/shared/approval-mode.js").WorkspaceMacGrants;
+  /**
    * Skills (by canonical name) switched off for this workspace's chats. The
    * model can't see or call them here; typing `$skill` still runs one.
    * Omitted means every skill that is on in Settings is on here too.
@@ -249,6 +258,8 @@ export interface GitHubRepositoryStatus {
   /** Epoch ms when a "rate-limited" read may be retried. */
   retryAt?: number;
   repository?: GitHubRepositoryRef;
+  /** The branch name the checked-out branch pushes to; absent for an explicit repository. */
+  headBranch?: string;
 }
 
 export interface GitHubPullRequestCreateInput {
@@ -378,6 +389,10 @@ export interface ChatMessage {
   skill?: SkillProvenanceV1;
   /** A user-role follow-up notice (job ended, pull request news, check result), drawn as a card. */
   notice?: import("../../renderer/shared/agent-notices.js").AgentNoticeV1;
+  /** User messages Aiden Live sent for the person ("By voice"); display-only. */
+  inputSource?: import("../../renderer/shared/chat-input-source.js").ChatInputSourceV1;
+  /** Set when a UserPromptSubmit hook blocked this user message; it never reaches a model. */
+  hookBlocked?: import("./hook-blocked-prompt.js").HookBlockedPromptV1;
   /** Renderer-safe tool milestones associated with this assistant response. */
   timeline?: GenerationTimeline;
   /** Content-free turn duration and provider-reported token totals for the footer. */
@@ -509,6 +524,8 @@ export interface ChatMeta {
   forkedFrom?: ChatForkLineageV1;
   /** Main-owned feature owner; owned chats never appear in chat listings or Remote. */
   owner?: ChatOwnerV1;
+  /** This chat opens in design mode (narrow chat beside the canvas); absent when off. */
+  designMode?: true;
   createdAt: number;
   updatedAt: number;
 }
@@ -552,6 +569,8 @@ export interface ScheduledTask {
   /** A claimed Bot fire awaiting a durable run receipt and delivery handoff. */
   pendingRoutineFires?: Array<{
     fireTime: number;
+    /** Original occurrence facts; retry fireTime is only the retry's due time. */
+    routineTiming?: import("./bot-routines-port.js").BotRoutineTiming;
     /** Reconcile an admitted retry without starting a new turn. */
     observeOnly?: true;
     requestId: string;
@@ -611,6 +630,8 @@ export interface ScheduledRun {
   taskId: string;
   startedAt: number;
   finishedAt: number;
+  /** Private host occurrence facts; old Remote projections must omit these. */
+  routineTiming?: import("./bot-routines-port.js").BotRoutineTiming;
   result: ScheduledRunResult;
   /** Present only when `result` is "skipped". */
   reason?: ScheduledRunSkipReason;
@@ -802,7 +823,7 @@ export interface AssistantConfigSnapshot {
 }
 
 /** Persisted lightweight app settings. */
-export interface AppSettings {
+export interface AppSettings extends AidenLiveSettingsFields {
   /** App effects are separately authorized from workspace file access. */
   appControlPolicy?: import("../../renderer/shared/app-controls.js").AppControlPolicy;
   /** Explicit host-owner consent; older pairings cannot enable this. */
@@ -814,13 +835,29 @@ export interface AppSettings {
   /** Longest wait, in hours, for a usage limit to clear before a reply fails; 0 turns waiting off. Absent means 6. */
   usageLimitWaitHours?: import("../../renderer/shared/usage-limits.js").UsageLimitWaitHours;
   /**
-   * Settings → Bots: routine runs go ahead with Ask first steps and connected-app
+   * Settings → Approvals → Advanced: routine runs go ahead with Ask first steps and connected-app
    * changes instead of waiting for the person. Never lowers Hand off to me rules,
    * the password and money rules, or chat turns. Absent means off.
    */
   botRoutinesGoAhead?: boolean;
+  /**
+   * The global approval mode (Settings → Approvals). Absent on a fresh install:
+   * Auto once a usable model exists, else Ask. Written as "ask" on the first
+   * start of an install upgraded from before modes (deviation a).
+   */
+  approvalMode?: import("../../renderer/shared/approval-mode.js").ApprovalMode;
+  /**
+   * Written once, on the first start of a release with modes: "upgrade" for an
+   * install already in use (it was given Ask and sees the one-time "What
+   * changed" note), "fresh" otherwise.
+   */
+  approvalModeOrigin?: "fresh" | "upgrade";
+  /** The person dismissed the "What changed" note in Settings → Approvals. */
+  approvalChangesSeen?: boolean;
+  /** Advanced: the model the Auto judge uses. Absent: the chat's own model. */
+  approvalModel?: { providerId: string; model: string };
   botMessaging?: boolean;
-  /** Settings → Limits & spending: dollar limits per chat, Bot month and routine run. Absent amounts: no limit. */
+  /** Settings → Context & Limits: dollar limits per chat, Bot month and routine run. Absent amounts: no limit. */
   spendingLimits?: import("../../renderer/shared/spending.js").SpendingLimitsSettings;
   lastProviderId?: string;
   lastModel?: string;

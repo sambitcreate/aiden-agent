@@ -62,6 +62,7 @@ function fixture() {
       const run: ScheduledRun = {
         id: runId ?? "run-local", taskId: id, startedAt: 1, finishedAt: 2,
         result: "success", output: "read /Users/private/project and token_secretvalue123456",
+        routineTiming: { scheduledFor: 0, timezone: "Pacific/Auckland" },
       };
       histories.set(id, [run]);
       return undefined;
@@ -154,6 +155,7 @@ test("scheduled task run retries reuse one accepted run and history is bounded a
   assert.equal(history.runs[0]?.id, first.runId);
   assert.match(history.runs[0]?.summary ?? "", /\[local path\]/u);
   assert.doesNotMatch(history.runs[0]?.summary ?? "", /secretvalue|\/Users\//u);
+  assert.equal("routineTiming" in history.runs[0]!, false, "private occurrence metadata does not expand the legacy run DTO");
 });
 
 test("accepted execution remains scheduler-owned after the remote caller disconnects", async () => {
@@ -194,6 +196,7 @@ test("scheduled notifications aggregate completed runs across tasks since a curs
     ["Evening sweep", "Morning review"],
   );
   assert.ok(all.notifications.every((item) => item.status === "succeeded" && item.notify === true));
+  assert.ok(all.notifications.every((item) => !("routineTiming" in item)), "legacy notifications retain their negotiated shape");
 
   // Inclusive cursor: runs exactly at the boundary are re-delivered (clients
   // dedupe by run id) so same-millisecond siblings can never be skipped.

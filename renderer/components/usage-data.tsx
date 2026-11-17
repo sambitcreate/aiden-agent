@@ -3,6 +3,7 @@ import * as React from "react";
 
 import { analyticsApi } from "../lib/ipc";
 import { cn } from "../lib/ui-utils";
+import { LiveGuard } from "./live-guard";
 import type {
   AnalyticsNoticeChoice,
   AnalyticsPropertyView,
@@ -11,7 +12,7 @@ import type {
 } from "../shared/analytics";
 import { Button, Dialog, type DialogLayer, Field, FieldSet, Switch, Text, toast } from "./ui";
 
-// Usage-data consent shared by Settings → Diagnostics, the onboarding tour step
+// Usage-data consent shared by Settings → About, the onboarding tour step
 // and the one-time notice for people who installed Aiden before analytics.
 
 export const USAGE_DATA_LABEL = "Share anonymous usage and crash data";
@@ -159,7 +160,7 @@ export function UsageDataSheet({
       open={open}
       onOpenChange={onOpenChange}
       title="What’s sent"
-      description="Aiden can send only these events and fields, with a random install ID that isn’t tied to you. This release sends the app lifecycle events; feature use and crash reports arrive later. Your IP address is discarded."
+      description="Aiden can send only these events and fields, with a random install ID that isn’t tied to you. This release sends app lifecycle events, feature events and crash reports. Your IP address is discarded."
       confirmHidden
       size="large"
       layer={layer}
@@ -185,8 +186,8 @@ export function UsageDataSheet({
           <SheetSection title="Crash and error reports">
             <SheetRow>
               <Text as="p" variant="small" color="secondary" className="mb-1">
-                The error type and its stack trace inside Aiden, with messages cleaned of personal details and paths
-                outside Aiden removed.
+                The error type and its stack trace inside Aiden. Only messages written by the JavaScript runtime are
+                kept; every other message is withheld, and paths outside Aiden are removed.
               </Text>
               <PropertyList properties={registry.exceptionProperties} />
             </SheetRow>
@@ -274,36 +275,40 @@ export function UsageDataNotice() {
     });
   };
 
+  // Answering the usage-data notice is the person's choice: Aiden Live never does.
   return (
-    <div
-      role="region"
-      aria-labelledby={titleId}
-      data-state="open"
-      className="usage-data-notice fixed bottom-4 right-4 z-[45] w-[min(360px,calc(100vw-32px))] rounded-card bg-popover p-4 shadow-modal"
-    >
-      <div className="flex items-start gap-3">
-        <div className="min-w-0 flex-1">
-          <h2 id={titleId} className="text-strong text-primary">
-            Aiden now shares anonymous usage data
-          </h2>
-          <p className="mt-1 text-small text-secondary">
-            {USAGE_DATA_SUMMARY} You can turn it off anytime in Settings → About.
-          </p>
-          <UsageDataSheetLink className="mt-2" />
+    <LiveGuard guard="you" wrap={false}>
+      <div
+        role="region"
+        data-live-guard="you"
+        aria-labelledby={titleId}
+        data-state="open"
+        className="usage-data-notice fixed bottom-4 right-4 z-[45] w-[min(360px,calc(100vw-32px))] rounded-card bg-popover p-4 shadow-modal"
+      >
+        <div className="flex items-start gap-3">
+          <div className="min-w-0 flex-1">
+            <h2 id={titleId} className="text-strong text-primary">
+              Aiden now shares anonymous usage data
+            </h2>
+            <p className="mt-1 text-small text-secondary">
+              {USAGE_DATA_SUMMARY} You can turn it off anytime in Settings → About.
+            </p>
+            <UsageDataSheetLink className="mt-2" />
+          </div>
+          <Button variant="transparent" size="small" iconOnly aria-label="Dismiss" onClick={() => answer("ok")}>
+            <X />
+          </Button>
         </div>
-        <Button variant="transparent" size="small" iconOnly aria-label="Dismiss" onClick={() => answer("ok")}>
-          <X />
-        </Button>
+        <div className="mt-3 flex justify-end gap-2">
+          <Button variant="filled" size="small" onClick={() => answer("turn-off")}>
+            Turn off
+          </Button>
+          <Button variant="accent" size="small" onClick={() => answer("ok")}>
+            OK
+          </Button>
+        </div>
       </div>
-      <div className="mt-3 flex justify-end gap-2">
-        <Button variant="filled" size="small" onClick={() => answer("turn-off")}>
-          Turn off
-        </Button>
-        <Button variant="accent" size="small" onClick={() => answer("ok")}>
-          OK
-        </Button>
-      </div>
-    </div>
+    </LiveGuard>
   );
 }
 
@@ -324,13 +329,14 @@ export function UsageDataSettings() {
         label={USAGE_DATA_LABEL}
         description={
           <>
-            App launches, daily use, setup and updates, with a random install ID. Feature use and crash reports arrive
-            in later releases. Never your chats, files, keys or paths.
+            App launches, daily use, setup, updates, which big features you use and crash reports, with a random
+            install ID. Never your chats, files, keys or paths.
             {caption ? <span className="mt-1 block text-tertiary">{caption}</span> : null}
           </>
         }
       >
         <Switch
+          data-live-guard="you"
           aria-label={USAGE_DATA_LABEL}
           checked={Boolean(status?.enabled && !status.envDisabled)}
           disabled={!status || status.envDisabled}
@@ -376,6 +382,7 @@ export function UsageDataOnboardingRow({ onDisplay }: { onDisplay?: (enabled: bo
         <UsageDataSheetLink layer="onboarding" className="mt-1" />
       </div>
       <Switch
+        data-live-guard="you"
         aria-label={USAGE_DATA_LABEL}
         checked={Boolean(status?.enabled && !status.envDisabled)}
         disabled={!status || status.envDisabled}

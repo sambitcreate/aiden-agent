@@ -1,22 +1,23 @@
 // Production wiring of Bot event routines: the per-Bot store, the dispatcher's
 // limits, a dedicated routine executor (runs recorded in schedule-runs.json
 // under the event routine's id), folder watches, watch checks and the
-// webhook handler. Started once Bots are open, never during onboarding; at
+// webhook handler. Started after Bot storage restoration, independently of the visible screen; at
 // start, watches only arm timers for their persisted next-check times.
 
 import { promises as fsPromises, watch as fsWatch } from "node:fs";
-import { BOT_WATCH_LIMITS } from "../../../renderer/shared/bot-routine-trigger.js";
-import { app, ipcMain, logger } from "../../platform.js";
+import { app, ipcMain, logger, powerMonitor } from "../../platform.js";
 import { createBotRoutineExecutor } from "../scheduled-bot-routines.js";
 import { scheduleStore } from "../schedule-store.js";
-import type { ScheduledRun, ScheduledTask } from "../types.js";
+import { eventRoutineAfterRun } from "./after-run.js";
 import { createBotRoutineEventDispatcher } from "./dispatcher.js";
 import { createBotFolderWatches } from "./folder-watch.js";
 import { botOwnWrites } from "./own-writes.js";
-import { createBotEventRunner, eventRoutineRunStore } from "./runner.js";
-import { createBotEventRoutineStore } from "./store.js";
+import { createBotEventRunner, createEventModelOwnershipPorts, eventRoutineRunStore, eventRoutineTask } from "./runner.js";
+import { createBotEventRoutineStore, type BotEventRoutine } from "./store.js";
 import { createBotWatches } from "./watch.js";
+import { productionConnectorWatchService } from "./connector-host-main.js";
 import { checkBotWatchSource } from "./watch-sources.js";
+import { createKeyedSerial } from "../bot-routine-notes.js";
 import { createBotWebhookHandler } from "./webhook.js";
 
 const REARM_INTERVAL_MS = 5 * 60_000;
@@ -41,6 +42,7 @@ export function botEventRoutinesChanged(botId: string): void {
   void rearmBotEventRoutines();
   ipcMain.broadcast("bots:changed", { botId });
   ipcMain.broadcast("bots:eventRoutines:changed", { botId });
+  ipcMain.broadcast("bots:connectorWatches:changed", { botId });
 }
 
 /** Event runs whose result didn't reach the delivery log yet: their receipt stays for replay. */
@@ -61,60 +63,20 @@ const executor = createBotRoutineExecutor({
   },
   broadcast: (payload) => ipcMain.broadcast("bots:changed", payload),
   afterRun: async (task, run) => {
-    await eventRoutineAfterRun(task, run).catch((error: unknown) =>
+    await eventRoutineAfterRun(task, run, { store: botEventRoutines, runs: (id) => scheduleStore.runs(id),
+      issues: (await import("../bot-issues/service-main.js")).botIssues, changed: botEventRoutinesChanged }).catch((error: unknown) =>
       logger.warn("bots", `Bot event routine ${task.id} follow-up failed.`, error));
   },
 });
-
-/**
- * Healing for event routines (spec §5 S2, adapted): a failure only the person
- * can fix raises one card; three failed runs in a row of the same kind turn
- * the routine off with one card. No retries: the next event is the retry.
- */
-async function eventRoutineAfterRun(task: ScheduledTask, run: ScheduledRun): Promise<void> {
-  const botId = task.botId;
-  if (!botId) return;
-  const { botIssues } = await import("../bot-issues/service-main.js");
-  const key = `event_failed:${task.id}`;
-  if (run.result === "success" && run.failure?.kind !== "tool_error") {
-    await botIssues.resolve(botId, key, "fixed");
-    return;
-  }
-  if (run.result !== "error" && run.failure?.kind !== "tool_error") return;
-  const { failureStreak, fireOutcomes, BOT_ROUTINE_FAILURE_PAUSE_THRESHOLD } = await import("../bot-routine-recovery.js");
-  const streak = failureStreak(fireOutcomes(await scheduleStore.runs(task.id)));
-  const kind = run.failure?.kind ?? "other";
-  const needsPerson = kind === "sign_in" || kind === "access_changed" || kind === "model_setup";
-  if (streak.count >= BOT_ROUTINE_FAILURE_PAUSE_THRESHOLD) {
-    await botEventRoutines.update(botId, task.id, { enabled: false });
-    rearmBotEventRoutines();
-    await botIssues.raise({
-      botId,
-      kind: "routine_paused",
-      dedupeKey: key,
-      title: `Turned off ${task.name}`,
-      body: `It failed ${BOT_ROUTINE_FAILURE_PAUSE_THRESHOLD} times in a row. Turn it back on in the Bot's profile when it's fixed.`,
-      routineId: task.id,
-      actions: [],
-    });
-  } else if (needsPerson) {
-    await botIssues.raise({
-      botId,
-      kind: "routine_failed",
-      dedupeKey: key,
-      title: `${task.name} needs you`,
-      body: kind === "sign_in" ? "Sign in to your AI provider again so it can run." : kind === "model_setup" ? "This Bot needs a working AI model." : "This Bot's model or access changed. Check its settings.",
-      routineId: task.id,
-      actions: [{ kind: "open_settings", section: kind === "sign_in" ? "providers" : kind === "model_setup" ? "model" : "access" }],
-    });
-  }
-}
 
 /** An event routine is gone: its runs and notes go with it. */
 export async function forgetBotEventRoutine(botId: string, routineId: string): Promise<void> {
   await scheduleStore.removeRuns(routineId);
   const { botRoutineNotes } = await import("../scheduled-bot-routines-main.js");
   await botRoutineNotes.clear(botId, routineId).catch(() => undefined);
+  await watchIssueSerial(`event_claim:${botId}:${routineId}`, async () => {
+    await (await import("../bot-issues/service-main.js")).botIssues.resolve(botId, `event_claim:${routineId}`, "fixed");
+  });
 }
 
 /** A Bot is deleted: every event routine's runs go (the routine file goes with the Bot's folder). */
@@ -137,7 +99,47 @@ const runner = createBotEventRunner({
 
 const dispatcher = createBotRoutineEventDispatcher({
   store: botEventRoutines,
-  run: (routine, event) => runner.run(routine, event),
+  ...createEventModelOwnershipPorts({
+    prepare: async routine => (await import("../bot-routine-models-main.js")).botRoutineModels.prepareRoutineClaim(routine.botId, routine.id),
+    claim: async (routine, event, expectedChoiceHash) => (await import("../scheduled-bot-routines-main.js")).claimBotRoutineExecution(eventRoutineTask(routine), { kind: "event", ...event }, expectedChoiceHash),
+  }),
+  claimFailed: async (routine, error) => {
+    await watchIssueSerial(`event_claim:${routine.botId}:${routine.id}`, async () => {
+      const fresh = (await botEventRoutines.list(routine.botId)).find(row => row.id === routine.id && row.createdAt === routine.createdAt);
+      if (!fresh?.running?.some(row => row.claimPending)) return;
+      const { BotRoutineModelPreparationChangedError } = await import("../bot-routine-models.js");
+      const { botIssues } = await import("../bot-issues/service-main.js");
+      const changed = error instanceof BotRoutineModelPreparationChangedError;
+      await botIssues.raise({ botId: routine.botId, kind: "routine_failed", dedupeKey: `event_claim:${routine.id}`,
+        title: `${routine.name} needs its original model`,
+        body: changed ? "An event is safely retained, but its model, thinking or fallback choice changed before ownership was saved. Restore the original Model choices to retry it, or delete the routine to cancel the retained event. New events cannot replace its payload."
+          : "An event is safely retained while its original execution choice is unavailable. Check the routine's Model settings and access. Aiden retries while it runs; delete the routine to cancel the retained event.",
+        routineId: routine.id, actions: [] });
+      ipcMain.broadcast("bots:changed", { botId: routine.botId });
+    });
+  },
+  claimRecovered: async routine => {
+    await watchIssueSerial(`event_claim:${routine.botId}:${routine.id}`, async () => {
+      const fresh = (await botEventRoutines.list(routine.botId)).find(row => row.id === routine.id);
+      if (!fresh || fresh.running?.some(row => row.claimPending)) return;
+      const { botIssues } = await import("../bot-issues/service-main.js");
+      await botIssues.resolve(routine.botId, `event_claim:${routine.id}`, "fixed");
+    });
+  },
+  run: (routine, event, signal) => runner.run(routine, event, signal),
+  authorizeRun: async (routine) => {
+    const grant = await admitWatchDispatch(routine);
+    if ("error" in grant) {
+      const paused = await botEventRoutines.mutate(routine.botId, routine.id, (fresh) => {
+        if (!fresh.enabled || fresh.updatedAt !== routine.updatedAt || !fresh.watch) return { result: undefined };
+        const next = { ...fresh, enabled: false, watch: { ...fresh.watch, failures: fresh.watch.failures + 1,
+          unsettledFailure: true as const, lastResult: "error" as const, lastError: grant.error.slice(0, 200) } };
+        return { next, result: next };
+      });
+      if (paused) await reportWatchPaused(paused, grant.error);
+    }
+    return grant;
+  },
   isPaused: async (botId) => (await import("../bot-pause-main.js")).isBotPaused(botId),
   now: Date.now,
   timeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -206,43 +208,75 @@ const timer = (fn: () => void, ms: number) => {
   return { cancel: () => clearTimeout(handle) };
 };
 
+async function admitWatchDispatch(routine: BotEventRoutine) {
+  if (routine.trigger.kind === "watch" && routine.trigger.source.type === "connector") return botConnectorWatches.authorize(routine);
+  if (routine.trigger.kind === "watch" && routine.trigger.source.type === "script") {
+    return (await import("../bot-runtime/bot-session-main.js")).admitBotShellWork(routine.botId);
+  }
+  return { signal: new AbortController().signal, release() {} };
+}
+
+const watchIssueSerial = createKeyedSerial();
+
+async function reportWatchPaused(routine: BotEventRoutine, error: string): Promise<void> {
+  return watchIssueSerial(`${routine.botId}:${routine.id}`, async () => {
+    const fresh = (await botEventRoutines.list(routine.botId)).find((item) => item.id === routine.id);
+    if (!fresh || fresh.watch?.lastResult !== "error") return;
+    const { botIssues } = await import("../bot-issues/service-main.js");
+    await botIssues.raise({
+      botId: routine.botId, kind: "routine_paused", dedupeKey: `watch_failed:${routine.id}`,
+      title: `Turned off ${routine.name}`,
+      body: `Its watch couldn't continue${error ? `: ${error}` : "."} Check its source or access, then turn it back on.`,
+      routineId: routine.id, actions: [],
+    });
+    ipcMain.broadcast("bots:changed", { botId: routine.botId });
+    ipcMain.broadcast("bots:eventRoutines:changed", { botId: routine.botId });
+  });
+}
+
 const watches = createBotWatches({
   routines: () => botEventRoutines.all(),
   store: botEventRoutines,
-  check: (routine) => {
+  check: (routine, signal) => {
     if (routine.trigger.kind !== "watch") return Promise.resolve({ ok: false as const, error: "Not a watch." });
+    if (routine.trigger.source.type === "connector") return botConnectorWatches.check(routine, signal);
     return checkBotWatchSource(routine.trigger.source, async () => {
       const { botManagedWorkspace } = await import("../bot-capability-services-main.js");
       return (await botManagedWorkspace.resolve(routine.botId)).homePath;
     }, {
+      signal,
       // A script runs only under the Bot's current Shell access.
       authorize: async () => (await import("../bot-runtime/bot-session-main.js")).admitBotShellWork(routine.botId),
     });
   },
   dispatcher,
   isPaused: async (botId) => (await import("../bot-pause-main.js")).isBotPaused(botId),
-  paused: async (routine, error) => {
-    const { botIssues } = await import("../bot-issues/service-main.js");
-    await botIssues.raise({
-      botId: routine.botId,
-      kind: "routine_paused",
-      dedupeKey: `watch_failed:${routine.id}`,
-      title: `Turned off ${routine.name}`,
-      body: `Its check failed ${BOT_WATCH_LIMITS.failuresBeforePause} times in a row${error ? `: ${error}` : "."} Turn it back on in the Bot's profile when it's fixed.`,
-      routineId: routine.id,
-      actions: [],
-    });
-    ipcMain.broadcast("bots:changed", { botId: routine.botId });
-  },
+  paused: reportWatchPaused,
+  authorizeDispatch: admitWatchDispatch,
   recovered: async (routine) => {
-    const { botIssues } = await import("../bot-issues/service-main.js");
-    await botIssues.resolve(routine.botId, `watch_failed:${routine.id}`, "fixed");
+    await watchIssueSerial(`${routine.botId}:${routine.id}`, async () => {
+      const fresh = (await botEventRoutines.list(routine.botId)).find((item) => item.id === routine.id);
+      if (!fresh?.enabled || fresh.watch?.failures !== 0 || fresh.watch.unsettledFailure) return;
+      const { botIssues } = await import("../bot-issues/service-main.js");
+      await botIssues.resolve(routine.botId, `watch_failed:${routine.id}`, "fixed");
+    });
   },
   now: Date.now,
   setTimer: timer,
   onError: (error) => logger.warn("bots", "A Bot watch check did not finish.", error),
   // The profile's rows show when a watch last checked and whether it's on.
-  checked: (routine) => ipcMain.broadcast("bots:eventRoutines:changed", { botId: routine.botId }),
+  checked: (routine) => {
+    ipcMain.broadcast("bots:eventRoutines:changed", { botId: routine.botId });
+    if (routine.connector) {
+      ipcMain.broadcast("bots:connectorWatches:changed", { botId: routine.botId });
+      ipcMain.broadcast("bots:changed", { botId: routine.botId });
+    }
+  },
+});
+
+export const botConnectorWatches = productionConnectorWatchService({ store: botEventRoutines, dispatcher,
+  changed: botEventRoutinesChanged,
+  isPaused: async (botId) => (await import("../bot-pause-main.js")).isBotPaused(botId),
 });
 
 const webhook = createBotWebhookHandler({ store: botEventRoutines, dispatcher, now: Date.now });
@@ -253,17 +287,35 @@ let interval: ReturnType<typeof setInterval> | undefined;
 /** Re-read the routines: watch what's new, stop watching what's gone. */
 export function rearmBotEventRoutines(): void {
   if (!started) return;
+  void botEventRoutines.all().then((rows) => botConnectorWatches.rearmSources(rows)).catch((error: unknown) => logger.warn("bots", "Connector session retention failed.", error));
   void folders.rearm().catch((error: unknown) => logger.warn("bots", "Could not arm Bot folder watches.", error));
   void watches.rearm().catch((error: unknown) => logger.warn("bots", "Could not arm Bot watch checks.", error));
+  void dispatcher.rearm(botEventRoutines.all()).catch((error: unknown) => logger.warn("bots", "Could not resume Bot event receipts.", error));
 }
 
+let listeningForPower = false;
+let sleeping = false;
+let hostStopped = false;
+let powerTransition: Promise<unknown> = Promise.resolve();
 export function startBotEventRoutines(): void {
-  if (started) return;
+  if (!listeningForPower) {
+    listeningForPower = true;
+    powerMonitor.on("suspend", () => {
+      sleeping = true; botConnectorWatches.suspend();
+      powerTransition = stopBotEventRoutines({ forSleep: true }).catch((error) => logger.warn("bots", "Watch sleep suspension did not finish.", error));
+    });
+    powerMonitor.on("resume", () => {
+      sleeping = false;
+      void powerTransition.then(() => { if (!sleeping && !hostStopped) startBotEventRoutines(); });
+    });
+  }
+  if (started || sleeping) return;
+  hostStopped = false;
+  botConnectorWatches.resume();
   started = true;
   dispatcher.resume();
+  watches.resume();
   rearmBotEventRoutines();
-  // Counted by the dispatcher's idle(), and a load that resolves after a stop starts nothing.
-  void dispatcher.rearm(botEventRoutines.all()).catch(() => undefined);
   interval = setInterval(rearmBotEventRoutines, REARM_INTERVAL_MS);
   interval.unref?.();
 }
@@ -273,8 +325,10 @@ export function startBotEventRoutines(): void {
  * cancelled run is recorded (as uncertain, so its event is replayed on the
  * next start) and its receipt is written; the caller bounds the wait.
  */
-export async function stopBotEventRoutines(): Promise<void> {
+export async function stopBotEventRoutines(options: { forSleep?: boolean } = {}): Promise<void> {
+  if (!options.forSleep) hostStopped = true;
   started = false;
+  botConnectorWatches.suspend();
   if (interval) clearInterval(interval);
   interval = undefined;
   folders.dispose();

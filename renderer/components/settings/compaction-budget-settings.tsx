@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Button, Field, FieldSet, Input, Text } from "../ui";
+import { Button, Field, Input, SettingsDisclosure, Text } from "../ui";
 import { DEFAULT_COMPACTION_KEEP_RECENT_TOKENS, DEFAULT_COMPACTION_RESERVE_TOKENS, parseCompactionModelOverrides, type CompactionModelOverrides } from "../../shared/compaction";
 
 export function CompactionBudgetSettings({ overrides, modelKeys, disabled, onSave }: {
@@ -56,8 +56,12 @@ export function CompactionBudgetSettings({ overrides, modelKeys, disabled, onSav
       setSaving(false);
     }
   };
+  const savedKeys = Object.keys(overrides);
+  const summary = savedKeys.length === 0
+    ? "No overrides · models use automatic defaults"
+    : `${savedKeys.length} ${savedKeys.length === 1 ? "model has" : "models have"} a saved budget`;
   return (
-    <FieldSet title="Model compaction budgets">
+    <SettingsDisclosure title="Model compaction budgets" summary={summary} defaultOpen={savedKeys.length > 0}>
       <Field label="Model" description="Choose or enter an exact provider/model. Models with no override keep automatic defaults.">
         <Input aria-label="Model for compaction budget" list={listId} value={modelKey} onChange={(event) => choose(event.target.value)} placeholder="openai/gpt-6-sol" disabled={disabled || saving} />
         <datalist id={listId}>{suggestions.map((key) => <option key={key} value={key} />)}</datalist>
@@ -75,10 +79,10 @@ export function CompactionBudgetSettings({ overrides, modelKeys, disabled, onSav
           <Button variant="muted" disabled={disabled || saving || !modelKey.trim()} onClick={() => void save(true)}>Reset model</Button>
           <Button disabled={disabled || saving || !modelKey.trim()} onClick={() => void save(false)}>{saving ? "Saving…" : "Save budget"}</Button>
         </div>
-        {Object.keys(overrides).length ? <div className="flex flex-wrap gap-2" aria-label="Saved model budgets">
-          {Object.keys(overrides).map((key) => <Button key={key} variant="muted" className="max-w-full" disabled={disabled || saving} onClick={() => choose(key)}><span className="truncate">{key}</span></Button>)}
+        {savedKeys.length ? <div className="flex flex-wrap gap-2" aria-label="Saved model budgets">
+          {savedKeys.map((key) => <Button key={key} variant="muted" className="max-w-full" disabled={disabled || saving} onClick={() => choose(key)}><span className="truncate">{key}</span></Button>)}
         </div> : null}
       </div>
-    </FieldSet>
+    </SettingsDisclosure>
   );
 }

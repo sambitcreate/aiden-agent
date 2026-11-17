@@ -62,16 +62,31 @@ export interface WriteFileAtomicOptions {
    * condition (such as the writer's authority) that may change mid-write.
    */
   beforePublish?: () => Promise<void>;
+  /** Synchronous authority fence after the last awaited hook, immediately before the publish syscall. */
+  assertCurrent?: () => void;
   /** Test-only filesystem seams. */
   io?: Partial<DurableFsIo>;
 }
 
-/** Sibling staging name. Dot-prefixed, so directory scans that skip hidden files ignore it. */
+/**
+ * Sibling staging name. Dot-prefixed, so directory scans that skip hidden
+ * files ignore it, and bounded whatever the target is called: a target name
+ * near the file system's 255-byte limit must still have room to stage. A
+ * name up to STAGED_NAME_HINT_BYTES is kept whole (so a leftover file says
+ * what it was for); a longer one keeps only that many bytes of whole
+ * characters.
+ */
+const STAGED_NAME_HINT_BYTES = 100;
+
 export function stagedPathFor(target: string): string {
-  return path.join(
-    path.dirname(target),
-    `.${path.basename(target)}.${randomUUID()}.tmp`,
-  );
+  let hint = "";
+  let bytes = 0;
+  for (const char of path.basename(target)) {
+    bytes += Buffer.byteLength(char, "utf8");
+    if (bytes > STAGED_NAME_HINT_BYTES) break;
+    hint += char;
+  }
+  return path.join(path.dirname(target), `.${hint}.${randomUUID()}.tmp`);
 }
 
 /**
@@ -115,6 +130,7 @@ export async function writeFileAtomic(
     }
     if (durable) await io.syncFile(staged);
     await options.beforePublish?.();
+    options.assertCurrent?.();
     if (options.exclusive) {
       await io.link(staged, target);
       published = true;

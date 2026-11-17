@@ -42,6 +42,9 @@ test("resume position is derived from authoritative readiness", () => {
   assert.equal(onboardingStepIndex({ ...base, profileReady: false, providerReady: false }), 0);
   assert.equal(onboardingStepIndex({ ...base, profileReady: true, providerReady: false }), 1);
   assert.equal(onboardingStepIndex({ ...base, profileReady: true, providerReady: true }), 2);
+  const botCreated = { ...base, lastSatisfiedStep: "bots" as const, profileReady: true, providerReady: false };
+  assert.equal(onboardingStepIndex(botCreated), 2, "deferring a provider and choosing a Bot resumes at Finish");
+  assert.equal(onboardingStepIndex({ ...botCreated, selectedProviderId: "removed" }), 1, "an unavailable prior connection needs repair");
 });
 
 test("only incomplete setup opens onboarding automatically", () => {

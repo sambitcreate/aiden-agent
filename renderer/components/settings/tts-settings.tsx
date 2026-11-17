@@ -1,5 +1,5 @@
-// Settings → Text to Speech: connection, model, voice, delivery, reading
-// preferences, and privacy. Credential values never round-trip: the dedicated
+// Settings → Voice & Speech → Text to Speech: setup, voice and delivery, and
+// privacy and storage. Credential values never round-trip: the dedicated
 // key field is cleared after submission and only readiness crosses IPC.
 
 import * as React from "react";
@@ -28,6 +28,8 @@ import {
   type TtsSettingsV1,
 } from "../../shared/tts";
 
+import { useAppCapabilities } from "../../lib/app-capabilities";
+import { localComputerNoun } from "../../shared/computer-noun";
 interface TtsSettingsSnapshot {
   settings: TtsSettingsV1;
   settingsRevision: string;
@@ -49,6 +51,7 @@ const PRESET_LABELS: Record<TtsDeliveryPreset, string> = {
 };
 
 export function TtsSettings() {
+  const { platform } = useAppCapabilities();
   const [snapshot, setSnapshot] = React.useState<TtsSettingsSnapshot | null>(null);
   const [voices, setVoices] = React.useState<Array<{ providerVoiceId: string; name: string }>>([]);
   const [dedicatedKey, setDedicatedKey] = React.useState("");
@@ -148,6 +151,7 @@ export function TtsSettings() {
 
   return (
     <TtsSettingsView
+      platform={platform}
       snapshot={snapshot}
       loadError={loadError}
       voices={voices}
@@ -191,6 +195,8 @@ export async function clearGeneratedAudio(deps: {
 }
 
 export interface TtsSettingsViewProps {
+  /** This computer's platform, which names it in the copy. */
+  platform?: string | null;
   snapshot: TtsSettingsSnapshot | null;
   loadError: boolean;
   voices: ReadonlyArray<{ providerVoiceId: string; name: string }>;
@@ -212,6 +218,7 @@ export interface TtsSettingsViewProps {
 
 /** Stateless Text to Speech settings surface; the container owns IPC and playback. */
 export function TtsSettingsView({
+  platform,
   snapshot,
   loadError,
   voices,
@@ -251,7 +258,7 @@ export function TtsSettingsView({
 
   return (
     <div>
-      <FieldSet title="Read aloud">
+      <FieldSet title="Setup">
         <Field
           label="Read aloud"
           description="Only the selected response is sent to Google when you press the speaker."
@@ -262,9 +269,6 @@ export function TtsSettingsView({
             onCheckedChange={(checked) => onPatch({ enabled: checked })}
           />
         </Field>
-      </FieldSet>
-
-      <FieldSet title="Connection">
         <Field
           label="Google API key"
           description="Reuse your saved Google provider key, or save a dedicated key used only for speech."
@@ -296,7 +300,7 @@ export function TtsSettingsView({
         {settings.credentialSource === "dedicated" ? (
           <Field
             label="Dedicated key"
-            description="Stored encrypted on this Mac. The value is never read back into settings."
+            description={`Stored encrypted on this ${localComputerNoun(platform)}. The value is never read back into settings.`}
           >
             <div className="flex items-center gap-2">
               <Input
@@ -331,11 +335,8 @@ export function TtsSettingsView({
               : "Needs setup"}
           </Text>
         </Field>
-      </FieldSet>
-
-      <FieldSet title="Speech model">
         <Field
-          label="Model"
+          label="Speech model"
           description="Flash is quality-oriented; Flash-Lite is the lower-cost alternative."
         >
           <Select
@@ -357,7 +358,7 @@ export function TtsSettingsView({
         </Field>
       </FieldSet>
 
-      <FieldSet title="Voice">
+      <FieldSet title="Voice and delivery">
         <Field
           label="Voice"
           description="Prebuilt Gemini voices. Selecting a voice does not speak."
@@ -406,17 +407,16 @@ export function TtsSettingsView({
               {previewActive ? "Stop preview" : "Preview sample"}
             </Button>
           </div>
+          {previewError ? (
+            <Text as="p" variant="small" color="secondary" role="alert" className="mt-2">
+              {previewError.message}
+            </Text>
+          ) : null}
         </Field>
-      </FieldSet>
-
-      {previewError ? (
-        <Text color="secondary" role="alert">
-          {previewError.message}
-        </Text>
-      ) : null}
-
-      <FieldSet title="Delivery">
-        <Field label="Style" description="A short preset applied as the speech style instruction.">
+        <Field
+          label="Delivery style"
+          description="A short preset applied as the speech style instruction."
+        >
           <Select
             value={settings.delivery.preset}
             disabled={saving}
@@ -459,9 +459,6 @@ export function TtsSettingsView({
             }}
           />
         </Field>
-      </FieldSet>
-
-      <FieldSet title="Reading preferences">
         <Field
           label="Read inline code"
           description="Speak short inline names, commands, and flags literally."

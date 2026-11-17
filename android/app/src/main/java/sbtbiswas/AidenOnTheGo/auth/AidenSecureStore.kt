@@ -9,6 +9,9 @@ interface AidenSecureStore {
     fun getCredential(scope: String): String?
     fun setCredential(scope: String, credential: String)
     fun removeCredential(scope: String)
+    /** Durably fences a request journal before its network mutation can begin. */
+    fun setCredentialDurably(scope: String, value: String) = setCredential(scope, value)
+    fun removeCredentialDurably(scope: String) = removeCredential(scope)
     fun clearAll()
 }
 
@@ -48,6 +51,17 @@ class AndroidAidenSecureStore(context: Context) : AidenSecureStore {
         val encryptedPreferences = prefs
             ?: throw IllegalStateException("Android secure credential storage is unavailable")
         encryptedPreferences.edit().putString(scope, credential).apply()
+    }
+
+    override fun setCredentialDurably(scope: String, value: String) {
+        val encryptedPreferences = prefs
+            ?: throw IllegalStateException("Android secure storage is unavailable")
+        check(encryptedPreferences.edit().putString(scope, value).commit()) { "Secure state could not be saved" }
+    }
+
+    override fun removeCredentialDurably(scope: String) {
+        val encryptedPreferences = prefs ?: return
+        check(encryptedPreferences.edit().remove(scope).commit()) { "Secure state could not be removed" }
     }
 
     override fun removeCredential(scope: String) {

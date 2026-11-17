@@ -121,7 +121,13 @@ import {
   DeviceTabRenameInput,
   useDeviceTabs,
 } from "./device-workspace-tabs";
-import { WorkbenchPanel, useWorkbenchWidth, type WorkbenchTab, type WorkbenchView } from "./workbench-panel";
+import {
+  WorkbenchPanel,
+  useWorkbenchWidth,
+  type WorkbenchTab,
+  type WorkbenchView,
+  type WorkbenchWidthState,
+} from "./workbench-panel";
 
 // The browser and simulator tabs carry their own heavy dependencies and are
 // rarely opened, so their code loads with the panel instead of at startup.
@@ -174,8 +180,14 @@ export interface EnvironmentPanelContextValue {
   tab: EnvironmentPanelTab;
   subagentsEnabled: boolean;
   devicesEnabled: boolean;
-  /** The active workspace's artifacts; the Artifacts tab exists only while there is one. */
+  /**
+   * The active workspace's artifacts. The launcher offers the tab once the list
+   * has loaded; with no pages it shows how to start one, and it closes when the
+   * last page is deleted or the workspace changes.
+   */
   artifacts: WorkspaceArtifactsState;
+  /** The Artifacts tab is offered (launcher, ⌘K): the active workspace's list has loaded. */
+  artifactsOffered: boolean;
   selectedArtifactId: string | null;
   selectArtifact: (artifactId: string) => void;
   reviewMode: EnvironmentReviewMode;
@@ -188,6 +200,12 @@ export interface EnvironmentPanelContextValue {
   reportSurfaceLayout: (
     layout: { inline: boolean; width: number; stacked?: boolean } | null,
   ) => void;
+  /**
+   * How far from the right edge design mode wants the Live pill, or null when
+   * design mode is not showing its canvas. Split, this is the canvas width, so
+   * the pill sits at the chat column's edge clear of the canvas controls.
+   */
+  reportDesignDockInset: (inset: number | null) => void;
   setTab: (tab: EnvironmentPanelTab) => void;
   /** `returnTarget` is where focus goes when the panel closes, for callers whose own control is about to unmount. */
   showTools: (tab?: EnvironmentPanelTab, returnTarget?: HTMLElement | null) => void;
@@ -444,6 +462,11 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     [],
   );
 
+  const [designDockInset, setDesignDockInset] = React.useState<number | null>(null);
+  const reportDesignDockInset = React.useCallback((inset: number | null) => {
+    setDesignDockInset(inset !== null && Number.isFinite(inset) && inset >= 0 ? Math.round(inset) : null);
+  }, []);
+
   const reportSurfaceLayout = React.useCallback(
     (layout: { inline: boolean; width: number; stacked?: boolean } | null) => {
       const next = {
@@ -640,18 +663,28 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     showToolsRef.current("artifacts");
   }, []);
   const artifacts = useWorkspaceArtifacts(activeId ?? null, onArtifactsChanged);
+  // The launcher and ⌘K offer the tab once this workspace's list has loaded, pages or not.
+  const artifactsOffered = artifacts.loaded && artifacts.workspaceId !== null && artifacts.workspaceId === activeId;
   const artifactsSeenRef = React.useRef<{ workspaceId: string | null; count: number } | null>(null);
   const artifactsTabOpen = (surfaceState.openTabs ?? [surfaceState.toolsTab]).includes("artifacts");
   React.useEffect(() => {
     // Wait for a workspace and a list that actually loaded: a restored tab must
     // survive startup, and a failed read is not an empty workspace.
     if (artifacts.workspaceId === null || artifacts.workspaceId !== activeId) return;
-    if (!artifacts.loaded || artifacts.error) return;
+    if (!artifacts.loaded) return;
     const previous = artifactsSeenRef.current;
+    if (artifacts.error) {
+      // Remember the workspace, so a tab opened on the failure isn't taken as
+      // a workspace switch when Try again then finds no pages.
+      const sameWorkspace = previous?.workspaceId === artifacts.workspaceId;
+      artifactsSeenRef.current = { workspaceId: artifacts.workspaceId, count: sameWorkspace ? previous.count : 0 };
+      return;
+    }
     const count = artifacts.views.length;
     artifactsSeenRef.current = { workspaceId: artifacts.workspaceId, count };
-    // The tab exists only while the workspace has a page: it closes when the
-    // last one is deleted, or on a workspace that has none.
+    // The tab closes when the last page is deleted, or on a workspace that has
+    // none. Opened from the launcher on an empty workspace, it stays to show
+    // how to start a page.
     const emptied = previous?.workspaceId !== artifacts.workspaceId || previous.count > 0;
     if (count === 0 && emptied && artifactsTabOpen) dispatchSurface({ type: "close-tab", tab: "artifacts" });
   }, [activeId, artifacts.error, artifacts.loaded, artifacts.views.length, artifacts.workspaceId, artifactsTabOpen]);
@@ -1114,7 +1147,9 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       : "tools-floating";
   // Floating layouts do not have enough guaranteed room for both the tools
   // surface and Assistant. Let Assistant layer at the normal chat edge there.
-  const dockRightInset = surfaceState.toolsOpen && surfaceLayout.inline ? surfaceLayout.width : 0;
+  // Design mode keeps the pill clear of its canvas controls.
+  const dockRightInset =
+    designDockInset ?? (surfaceState.toolsOpen && surfaceLayout.inline ? surfaceLayout.width : 0);
   const toolsPresented =
     surfaceState.toolsOpen && (!surfaceLayout.stacked || surfaceState.frontSurface === "tools");
 
@@ -1136,6 +1171,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       subagentsEnabled,
       devicesEnabled,
       artifacts,
+      artifactsOffered,
       selectedArtifactId,
       selectArtifact: setSelectedArtifactId,
       reviewMode,
@@ -1144,6 +1180,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       closeTools,
       closeQuickView,
       reportSurfaceLayout,
+      reportDesignDockInset,
       setTab,
       showTools,
       showQuickView,
@@ -1220,6 +1257,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       reviewMode,
       retrySubagentDetail,
       reportSurfaceLayout,
+      reportDesignDockInset,
       stopSubagent,
       selectSubagent,
       selectedSubagentRunId,
@@ -1242,6 +1280,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       subagentsEnabled,
       devicesEnabled,
       artifacts,
+      artifactsOffered,
       selectedArtifactId,
       surfaceMode,
       surfaceState.frontSurface,
@@ -1458,9 +1497,11 @@ function EnvironmentPanelSurface({
     if (!chatId) toast.error("Open a chat in this workspace first.");
     return chatId;
   };
+  // New page drafts into the chat beside the tab, which must belong to this workspace.
+  const newPageChatId = active && panel.activeChat.workspaceId === active.id ? panel.activeChat.chatId : null;
   const viewBodies: Record<EnvironmentPanelTab, () => React.ReactNode> = {
     "new-tab": () => (
-      <WorkspaceToolLauncher hasWorkspace={Boolean(active)} hasFolderAccess={Boolean(active?.folderPath && active.permission !== "none")} canOpenTerminal={terminal.canOpen} subagents={panel.subagentsEnabled} devices={panel.devicesEnabled} artifacts={Boolean(active) && panel.artifacts.workspaceId === active?.id && panel.artifacts.views.length > 0} busy={panel.gitOperationBusy} onOpen={openTool} onQuickView={panel.showQuickView} onUrl={openBrowserUrl} />
+      <WorkspaceToolLauncher hasWorkspace={Boolean(active)} hasFolderAccess={Boolean(active?.folderPath && active.permission !== "none")} canOpenTerminal={terminal.canOpen} subagents={panel.subagentsEnabled} devices={panel.devicesEnabled} artifacts={panel.artifactsOffered} busy={panel.gitOperationBusy} onOpen={openTool} onQuickView={panel.showQuickView} onUrl={openBrowserUrl} />
     ),
     context: () => <ChatContextPanel details={panel.contextDetails} />,
     artifacts: () => (
@@ -1472,7 +1513,7 @@ function EnvironmentPanelSurface({
         onSelect={panel.selectArtifact}
         onAskAiden={(view) => {
           const chatId = artifactChat(view);
-          if (chatId) stageComposerText(chatId, workspaceArtifactChangeRequest(view));
+          if (chatId) stageComposerText(chatId, workspaceArtifactChangeRequest(view), { notice: null });
         }}
         onAction={(view, action) => {
           if (action.kind !== "send" && action.kind !== "compose") return;
@@ -1481,6 +1522,11 @@ function EnvironmentPanelSurface({
           // A confirmed follow-up sends through the chat's own path; compose only fills its composer.
           if (action.kind === "compose" || !sendPromptToChat(chatId, action.text)) stageComposerText(chatId, action.text);
         }}
+        onDraftNewPage={(request) => {
+          // Only ever staged: the person reads the request and sends it.
+          if (newPageChatId) stageComposerText(newPageChatId, request, { notice: null });
+        }}
+        newPageUnavailable={newPageChatId ? null : "Open a chat in this workspace first, then draft the page there."}
       />
     ),
     terminal: () => <TerminalSideTarget presented={presented && panel.tab === "terminal"} />,
@@ -2017,9 +2063,90 @@ function useChatColumnMetrics(): { maxWidth: number; gutter: number } {
   return metrics;
 }
 
+/** Where the panel stood when design mode began, kept so a reload mid-design still restores it. */
+const DESIGN_SAVED_WORKBENCH_STORAGE_KEY = "aiden-agent.design.saved-workbench";
+
+interface SavedWorkbench {
+  version: 1;
+  tab: EnvironmentPanelTab;
+  toolsOpen: boolean;
+  quickViewOpen: boolean;
+  width: number;
+}
+
+function readSavedWorkbench(): SavedWorkbench | null {
+  try {
+    const raw = localStorage.getItem(DESIGN_SAVED_WORKBENCH_STORAGE_KEY);
+    if (!raw) return null;
+    const value = JSON.parse(raw) as Partial<SavedWorkbench> | null;
+    const tab = parseEnvironmentPanelTab(typeof value?.tab === "string" ? value.tab : null);
+    if (value?.version !== 1 || !tab || typeof value.width !== "number" || !Number.isFinite(value.width)) {
+      return null;
+    }
+    return { version: 1, tab, toolsOpen: value.toolsOpen === true, quickViewOpen: value.quickViewOpen === true, width: value.width };
+  } catch {
+    return null;
+  }
+}
+
+/** Whether a design-mode chat is showing, and so owns the space the panel would take. */
+export type WorkbenchDesignState = "active" | "inactive" | "pending";
+
+/**
+ * Always closes the panel and Quick View when design mode begins and puts
+ * their tab, width and open state back when it ends. It reacts to the current state, not
+ * to a transition, so switching between a design chat and a normal chat (or a
+ * reload in design mode) lands in the right place. It runs before paint, so
+ * the wrong layout never shows.
+ */
+function useDesignWorkbenchSuspension(
+  design: WorkbenchDesignState,
+  panel: EnvironmentPanelContextValue,
+  panelWidth: WorkbenchWidthState,
+): void {
+  const { tab, toolsOpen, quickViewOpen, showTools, closeTools, showQuickView, closeQuickView } = panel;
+  const { preferredWidth, commitPreferredWidth } = panelWidth;
+  React.useLayoutEffect(() => {
+    if (design === "pending") return;
+    const saved = readSavedWorkbench();
+    if (design === "active") {
+      // A saved snapshot outlives a reload (or crash) mid-design; it still holds
+      // what the person had before entry only while both surfaces are still
+      // closed. An open surface means it is stale, so the current state wins.
+      if (!saved || toolsOpen || quickViewOpen) {
+        const snapshot: SavedWorkbench = { version: 1, tab, toolsOpen, quickViewOpen, width: preferredWidth };
+        try {
+          localStorage.setItem(DESIGN_SAVED_WORKBENCH_STORAGE_KEY, JSON.stringify(snapshot));
+        } catch {
+          // Without storage the panel still closes; it reopens as it was only in this window.
+        }
+      }
+      if (toolsOpen) closeTools();
+      if (quickViewOpen) closeQuickView();
+      return;
+    }
+    if (!saved) return;
+    localStorage.removeItem(DESIGN_SAVED_WORKBENCH_STORAGE_KEY);
+    if (Math.round(saved.width) !== Math.round(preferredWidth)) commitPreferredWidth(saved.width);
+    if (saved.toolsOpen) {
+      if (!toolsOpen || tab !== saved.tab) showTools(saved.tab);
+    } else if (tab !== saved.tab) {
+      // Select the saved tab without leaving the panel open.
+      showTools(saved.tab);
+      closeTools();
+    } else if (toolsOpen) {
+      closeTools();
+    }
+    if (saved.quickViewOpen && !quickViewOpen) showQuickView();
+    else if (!saved.quickViewOpen && quickViewOpen) closeQuickView();
+    // Only a change of design state acts; the panel values are read as they are then.
+  }, [design]);
+}
+
 export function EnvironmentWorkbench({
   children,
   suppressed = false,
+  design = "inactive",
 }: React.PropsWithChildren<{
   /**
    * Hides the Environment and Quick View surfaces without changing whether
@@ -2027,6 +2154,12 @@ export function EnvironmentWorkbench({
    * and for Bots pages, which have their own panel.
    */
   suppressed?: boolean;
+  /**
+   * While design mode is active the canvas takes the panel's place: the panel
+   * closes on entry, is restored on exit and, if opened meanwhile, floats over
+   * the canvas instead of squeezing it. `pending` waits for the chat to load.
+   */
+  design?: WorkbenchDesignState;
 }>) {
   const panel = useEnvironmentPanel();
   useBrowserSurface(!suppressed);
@@ -2035,12 +2168,12 @@ export function EnvironmentWorkbench({
   const containerRef = React.useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = React.useState(() => window.innerWidth);
   const panelWidth = useWorkbenchWidth(WIDTH_STORAGE_KEY);
+  useDesignWorkbenchSuspension(design, panel, panelWidth);
   const resizing = panelWidth.resizing;
   const fullOpen = toolsOpen;
-  const { width: renderedWidth, inline } = resolveEnvironmentPanelLayout(
-    panelWidth.preferredWidth,
-    containerWidth,
-  );
+  const layout = resolveEnvironmentPanelLayout(panelWidth.preferredWidth, containerWidth);
+  const renderedWidth = layout.width;
+  const inline = layout.inline && design !== "active";
   const quickViewLayout = resolveQuickViewLayout(
     containerWidth,
     toolsOpen,
@@ -2056,9 +2189,9 @@ export function EnvironmentWorkbench({
   const inlineToolsWidth = fullOpen && inline ? renderedWidth : 0;
   const chatColumn = useChatColumnMetrics();
   // Quick View docks beside the chat when it is the visible card and no floating
-  // tools surface already covers the chat.
+  // tools surface already covers the chat. In design mode it floats over the canvas.
   const chatCardInset =
-    quickViewPresented && (inline || !toolsPresented)
+    design !== "active" && quickViewPresented && (inline || !toolsPresented)
       ? resolveChatCardInset({
           chatWidth: containerWidth - inlineToolsWidth,
           maxColumnWidth: chatColumn.maxWidth,
@@ -2205,9 +2338,10 @@ export function EnvironmentPanelToggle({ disabled = false }: { disabled?: boolea
   );
 }
 
-function QuickViewIcon() {
+export function QuickViewIcon({ className }: { className?: string }) {
   return (
     <svg
+      className={className}
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"

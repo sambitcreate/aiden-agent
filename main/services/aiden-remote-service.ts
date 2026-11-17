@@ -194,6 +194,11 @@ export interface AidenRemoteServiceOptions {
         readAloud?: AidenRemoteTtsService;
         speech?: Pick<AidenRemoteSpeechService, "status" | "select" | "startDownload" | "cancelDownload" | "deleteModel" | "transcribe">;
         botSessions?: AidenRemoteRouterDependencies["botSessions"];
+        botWatches?: AidenRemoteRouterDependencies["botWatches"];
+        botOpenWork?: AidenRemoteRouterDependencies["botOpenWork"];
+        botRoutineModels?: AidenRemoteRouterDependencies["botRoutineModels"];
+        botPeers?: AidenRemoteRouterDependencies["botPeers"];
+        approvalSettings?: AidenRemoteRouterDependencies["approvalSettings"];
         bots?: Pick<
           AidenRemoteBotService,
           | "list"
@@ -234,6 +239,11 @@ export interface AidenRemoteServiceOptions {
         readAloud?: AidenRemoteTtsService;
         speech?: Pick<AidenRemoteSpeechService, "status" | "select" | "startDownload" | "cancelDownload" | "deleteModel" | "transcribe">;
         botSessions?: AidenRemoteRouterDependencies["botSessions"];
+        botWatches?: AidenRemoteRouterDependencies["botWatches"];
+        botOpenWork?: AidenRemoteRouterDependencies["botOpenWork"];
+        botRoutineModels?: AidenRemoteRouterDependencies["botRoutineModels"];
+        botPeers?: AidenRemoteRouterDependencies["botPeers"];
+        approvalSettings?: AidenRemoteRouterDependencies["approvalSettings"];
         bots?: Pick<
           AidenRemoteBotService,
           | "list"
@@ -1288,7 +1298,7 @@ export class AidenRemoteService {
       state,
       this.tlsIdentity,
     );
-    const pairing = this.pairing.begin(endpoint, serverSpkiSha256);
+    const pairing = this.pairing.begin(endpoint, serverSpkiSha256, transport);
     try {
       const qrPayload = this.pairingQrPayload(pairing.bootstrap, transport);
       this.pairing.sealManualPayload(pairing.sessionId, qrPayload);
@@ -1434,7 +1444,7 @@ export class AidenRemoteService {
   /** Persist "Accept connection requests"; turning it off cancels open requests. */
   async setAcceptPairingRequests(accept: boolean): Promise<void> {
     const settings = this.options.pairingRequestSettings;
-    if (!settings) throw new Error("Connection requests are unavailable on this host.");
+    if (!settings) throw new Error("Connection requests are not available on this computer.");
     await this.serialized(async () => {
       await settings.save(accept);
       this.acceptPairingRequests = accept;

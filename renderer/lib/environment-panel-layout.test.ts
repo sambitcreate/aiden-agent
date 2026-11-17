@@ -16,6 +16,12 @@ import {
   BOT_PANEL_WIDTH_BOUNDS,
   MIN_DOCKED_CHAT_COLUMN_WIDTH,
   SURFACE_GAP,
+  DESIGN_CANVAS_MIN_WIDTH,
+  DESIGN_SPLIT_MIN_WIDTH,
+  designChatMaxWidth,
+  resolveDesignEntryAction,
+  DESIGN_CHAT_WIDTH_BOUNDS,
+  resolveDesignCanvasLayout,
 } from "./environment-panel-layout.js";
 
 const COMPACT_TABS_BREAKPOINT = 620;
@@ -253,4 +259,52 @@ test("a saved Bot panel width narrower than the workspace's range survives, and 
     min: BOT_PANEL_WIDTH_BOUNDS.min,
     max: MAX_PANEL_WIDTH,
   });
+});
+
+test("design mode gives the chat its preferred width and the canvas the rest", () => {
+  assert.deepEqual(resolveDesignCanvasLayout(undefined, 1400), { mode: "split", chatWidth: 420, canvasWidth: 980 });
+  assert.equal(resolveDesignCanvasLayout(300, 1400).chatWidth, 360);
+  assert.deepEqual(resolveDesignCanvasLayout(900, 1400), { mode: "split", chatWidth: 560, canvasWidth: 840 });
+  assert.equal(resolveDesignCanvasLayout(Number.NaN, 1400).chatWidth, 420);
+  assert.equal(resolveDesignCanvasLayout(Number.POSITIVE_INFINITY, 1400).chatWidth, 420);
+});
+
+test("the design chat gives way to the 320 px canvas minimum before the two stack", () => {
+  assert.deepEqual(resolveDesignCanvasLayout(560, 740), { mode: "split", chatWidth: 420, canvasWidth: 320 });
+  assert.deepEqual(resolveDesignCanvasLayout(420, 680), { mode: "split", chatWidth: 360, canvasWidth: 320 });
+});
+
+test("below 680 px of content the chat and canvas stack, each at the full width", () => {
+  assert.deepEqual(resolveDesignCanvasLayout(420, 679), { mode: "stacked", chatWidth: 679, canvasWidth: 679 });
+  assert.deepEqual(resolveDesignCanvasLayout(420, 300), { mode: "stacked", chatWidth: 300, canvasWidth: 300 });
+  assert.equal(resolveDesignCanvasLayout(420, Number.NaN).mode, "stacked");
+});
+
+test("a split design layout always fills the container and respects both minimums", () => {
+  for (let containerWidth = DESIGN_SPLIT_MIN_WIDTH; containerWidth <= 2400; containerWidth += 37) {
+    for (const preferred of [360, 420, 560]) {
+      const layout = resolveDesignCanvasLayout(preferred, containerWidth);
+      assert.equal(layout.mode, "split", `${preferred}@${containerWidth}`);
+      assert.equal(layout.chatWidth + layout.canvasWidth, containerWidth, `${preferred}@${containerWidth}`);
+      assert.ok(layout.chatWidth >= DESIGN_CHAT_WIDTH_BOUNDS.min, `${preferred}@${containerWidth}`);
+      assert.ok(layout.chatWidth <= DESIGN_CHAT_WIDTH_BOUNDS.max, `${preferred}@${containerWidth}`);
+      assert.ok(layout.canvasWidth >= DESIGN_CANVAS_MIN_WIDTH, `${preferred}@${containerWidth}`);
+      assert.ok(layout.chatWidth <= preferred, `${preferred}@${containerWidth}`);
+      assert.ok(layout.chatWidth <= designChatMaxWidth(containerWidth), `${preferred}@${containerWidth}`);
+    }
+  }
+});
+
+test("a person's entry collapses the sidebar only when that makes room, and widens only when it can work", () => {
+  // Already fits: nothing changes, even with the sidebar open.
+  assert.equal(resolveDesignEntryAction({ containerWidth: 728, sidebarWidth: 272, canWiden: true }), "none");
+  // 1000 px window, sidebar open: 728 px of content splits as is.
+  assert.equal(resolveDesignEntryAction({ containerWidth: 680, sidebarWidth: 272, canWiden: true }), "none");
+  // 900 px window, sidebar open: 628 px stacks, 900 without the sidebar splits.
+  assert.equal(resolveDesignEntryAction({ containerWidth: 628, sidebarWidth: 272, canWiden: true }), "collapseSidebar");
+  // 640 px window: collapsing is not enough, so widen when the display allows it.
+  assert.equal(resolveDesignEntryAction({ containerWidth: 368, sidebarWidth: 272, canWiden: true }), "widenWindow");
+  assert.equal(resolveDesignEntryAction({ containerWidth: 640, sidebarWidth: 0, canWiden: true }), "widenWindow");
+  // Widening cannot work (full screen, maximized, small display): stay stacked.
+  assert.equal(resolveDesignEntryAction({ containerWidth: 640, sidebarWidth: 0, canWiden: false }), "none");
 });

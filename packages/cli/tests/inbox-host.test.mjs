@@ -24,7 +24,7 @@ async function fakeProvider(t, dir) {
     const parsed = JSON.parse(body); requests.push(parsed);
     const toolTurn = !parsed.messages.some((message) => message.role === "tool");
     const delta = toolTurn
-      ? { role: "assistant", tool_calls: [{ index: 0, id: "list-1", type: "function", function: { name: "ls", arguments: JSON.stringify({ path: "." }) } }] }
+      ? { role: "assistant", tool_calls: [{ index: 0, id: "list-1", type: "function", function: { name: "list_dir", arguments: JSON.stringify({ path: "." }) } }] }
       : { role: "assistant", content: "Listed the folder" };
     response.writeHead(200, { "content-type": "text/event-stream" });
     response.write(`data: ${JSON.stringify({ id: "x", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`);
@@ -104,6 +104,20 @@ function client(dir, port, credential) {
     },
   };
 }
+
+test("a Bot-negotiating phone cannot obtain desktop-only connector-watch routes from the CLI", async (t) => {
+  const dir = temporary(t);
+  const original = process.env.AIDEN_CLI_ENTRY; process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
+  t.after(() => { if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
+  const { remote, status } = await startServer(t, dir);
+  const issued = await remote.state.issueDevice({ name: "Watch phone", type: "iphone", clientVersion: "test", acceptsBotCapabilities: true });
+  const phone = client(dir, status.lanPort, issued.credential);
+  const info = await phone.request("/server");
+  assert.equal(info.status, 200);
+  assert.ok(info.data.serverCapabilities.includes("bot:read"), "the phone actually negotiated the Bot surface");
+  assert.equal(info.data.serverCapabilities.includes("bot:watches"), false);
+  assert.equal((await phone.request("/bots/bot_fixture/watches")).status, 404);
+});
 
 async function until(read, accept, label) {
   let last;

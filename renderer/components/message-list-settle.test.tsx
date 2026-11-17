@@ -732,6 +732,21 @@ test("links a reparsed reply replaces keep their previews, as the saved reply sh
   assert.equal(previews(view.container), fromHistory, "the settled reply shows what history shows");
 });
 
+test("a prompt a hook refused shows it was not sent, with the hook's reason; other prompts show no mark", () => {
+  const blocked: ChatMessage = {
+    id: "user-blocked",
+    role: "user",
+    content: "Deploy to prod",
+    createdAt: 3,
+    hookBlocked: { reason: "guard: deploys need a ticket" },
+  };
+  render(transcript({ messages: [prompt, blocked], streamingText: null }));
+  assert.ok(screen.getByText("Deploy to prod"), "the person still sees what they typed");
+  const marks = screen.getAllByText(/Not sent: blocked by a hook\./u);
+  assert.equal(marks.length, 1, "only the refused prompt is marked");
+  assert.match(marks[0]!.textContent ?? "", /deploys need a ticket/u);
+});
+
 test("latest work details retain on completion, fold on an admitted prompt, and preserve answer identity", () => {
   document.documentElement.dataset.reduceMotion = "true";
   installBotTestIpc({ "chats:htmlArtifactSrcdoc": () => new Promise(() => undefined) });

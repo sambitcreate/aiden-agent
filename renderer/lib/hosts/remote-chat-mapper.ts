@@ -1,4 +1,5 @@
 import type { Attachment, Chat, ChatMessage } from "../types";
+import { parseChatInputSource } from "../../shared/chat-input-source";
 import type { ChatImagePlacementV1 } from "../../shared/chat-artifacts";
 import { isToolStep, parseGenerationTimeline, type GenerationTimeline } from "../../shared/generation-timeline";
 import {
@@ -108,6 +109,8 @@ export function mapRemoteMessage(value: unknown): ChatMessage | null {
     if (attachments.length > 0) message.attachments = attachments;
     if (placements.length > 0) message.imagePlacements = placements;
   }
+  // Contract revision 60: a message Aiden Live sent on the host shows "By voice".
+  if (role === "user" && parseChatInputSource(input.inputSource)) message.inputSource = "voice";
   const failure = mapOutcome(input.outcome);
   if (failure) message.providerFailure = failure;
   if (role === "assistant") {
@@ -140,7 +143,7 @@ export function mapRemoteMessagesWindow(value: unknown): RemoteMessagesWindow {
   const chatId = text(input?.chatId);
   const revision = text(input?.revision);
   if (!input || !chatId || !revision || !Array.isArray(input.messages) || typeof input.hasOlder !== "boolean")
-    throw new Error("The host returned an unreadable transcript page.");
+    throw new Error("That computer returned an unreadable transcript page.");
   const providerId = text(input.providerId);
   const modelId = text(input.modelId);
   return {
@@ -196,13 +199,15 @@ export function mergeNewestWindow(current: RemoteTranscript, window: RemoteMessa
     return { chatId: window.chatId, revision: window.revision, messages: [], hasOlder: false, ...model };
   }
   const overlap = current.messages.findIndex((message) => message.id === first.id);
-  if (overlap < 0) {
+  if (overlap <= 0 || !window.hasOlder) {
     return { chatId: window.chatId, revision: window.revision, messages: window.messages, hasOlder: window.hasOlder, ...model };
   }
+  const latestIds = new Set(window.messages.map((message) => message.id));
+  const earlier = current.messages.slice(0, overlap).filter((message) => !latestIds.has(message.id));
   return {
     chatId: window.chatId,
     revision: window.revision,
-    messages: [...current.messages.slice(0, overlap), ...window.messages],
+    messages: [...earlier, ...window.messages],
     hasOlder: current.hasOlder,
     ...model,
   };

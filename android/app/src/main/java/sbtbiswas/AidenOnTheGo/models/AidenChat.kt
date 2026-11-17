@@ -870,8 +870,19 @@ data class AidenChatMessage(
     val visuals: List<AidenChatVisual>? = null,
     val outcome: AidenMessageOutcome? = null,
     val timeline: AidenGenerationTimeline? = null,
+    /**
+     * Additive in contract revision 60: `"voice"` on a user message Aiden Live
+     * sent for the person on the Mac. Kept as a plain string so a value this
+     * version does not know never rejects the message; [isByVoice] reads it.
+     */
+    @Serializable(with = AidenTolerantStringSerializer::class)
+    val inputSource: String? = null,
     @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant
 ) {
+    /** Aiden Live sent this message for the person on the Mac ("By voice"). */
+    val isByVoice: Boolean
+        get() = role == AidenChatRole.USER && inputSource == VOICE_INPUT_SOURCE
+
     /**
      * Assistant output the host counts toward `lastAssistantAt`
      * (`chat-store-core.ts` `metaOf`): visible text, attachments, artifacts,
@@ -899,7 +910,12 @@ data class AidenChatMessage(
                 (visuals?.all { it.isWireSafe } ?: true) &&
                 (outcome?.isWireSafe ?: true) &&
                 (timeline?.isRendererSafe(text.length, reasoning?.length) ?: true)
+
+    companion object {
+        const val VOICE_INPUT_SOURCE = "voice"
+    }
 }
+
 
 @Serializable
 @Immutable
@@ -1584,8 +1600,18 @@ data class AidenStreamPendingApproval(
     val scopes: List<String>? = null,
     /** Contract revision 39 (`schedule:cards`): a scheduled-task card. An invalid one reads as null. */
     @Serializable(with = AidenApprovalScheduleLenientSerializer::class)
-    val schedule: AidenApprovalSchedule? = null
-)
+    val schedule: AidenApprovalSchedule? = null,
+    /**
+     * Contract revision 61 (`approval:cards`): the typed card the desktop shows. It must agree
+     * with [canAllow] and every offered scope, or the approval is refused.
+     */
+    @Serializable(with = AidenApprovalCardSerializer::class)
+    val card: AidenApprovalCard? = null
+) {
+    init {
+        card?.let { AidenApprovalCard.requireAgrees(it, canAllow, scopes) }
+    }
+}
 
 @Serializable
 data class AidenStreamApprovalSnapshot(
@@ -1703,8 +1729,10 @@ object AidenRunInputPresentation {
                     "Saved to the chat — the run was cancelled before it could use it"
                 AidenStreamInputRejectionReason.CAPACITY ->
                     "Saved to the chat — the run queue was full"
-                AidenStreamInputRejectionReason.RUN_NOT_ACTIVE,
-                AidenStreamInputRejectionReason.INVALID, null ->
+                // A hook refused it, so it's kept in the chat but never queued.
+                AidenStreamInputRejectionReason.INVALID ->
+                    "Saved to the chat — it wasn't sent to the run"
+                AidenStreamInputRejectionReason.RUN_NOT_ACTIVE, null ->
                     "Saved to the chat — the run ended before it could use it"
             }
         }
@@ -1796,7 +1824,13 @@ data class AidenPendingApproval(
      * only: it never changes [canAllow] or [scopes]. Approvals are never persisted, so a
      * relaunch reads it again from the host.
      */
-    val schedule: AidenApprovalSchedule? = null
+    val schedule: AidenApprovalSchedule? = null,
+    /**
+     * Revision 61 (`approval:cards`): the typed card. When present it replaces the summary
+     * card, and its buttons are the only answers offered: each sends exactly its decision and
+     * scope.
+     */
+    val card: AidenApprovalCard? = null
 )
 
 data class AidenApprovalCapabilities(
@@ -1925,7 +1959,15 @@ object AidenPendingApprovalResolution {
             } else {
                 listOf(AidenApprovalScope.ONCE)
             },
-            schedule = AidenApprovalSchedule.forTool(approval.toolName, approval.schedule)
+            schedule = AidenApprovalSchedule.forTool(approval.toolName, approval.schedule),
+            // Deny stays answerable; only the allows go, saying why.
+            card = approval.card?.let {
+                when {
+                    canAllow -> it
+                    capabilities.canRespond && !hasRequiredWriteCapability -> it.denyOnly(AidenApprovalCard.SCHEDULE_WRITE_REQUIRED)
+                    else -> it.denyOnly()
+                }
+            }
         )
     }
 }

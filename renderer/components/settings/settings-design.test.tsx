@@ -63,14 +63,6 @@ test("Memory uses an SD-card silhouette and settings/onboarding use no brain ico
   }
 });
 
-test("Telegram switches have explicit accessible names and setup uses the real workspace entry", () => {
-  const telegram = read("./telegram-settings.tsx");
-  for (const label of ["Enable Telegram bridge", "Live answer drafts", "Private-chat threads"]) {
-    assert.ok(telegram.includes(`aria-label="${label}"`));
-  }
-  assert.doesNotMatch(telegram, /Settings → Workspaces/u);
-});
-
 test("Connectors settings render their title inside the shared settings page heading", () => {
   const markup = renderToStaticMarkup(
     createElement(QueryClientProvider, { client: new QueryClient() }, createElement(McpSettings)),

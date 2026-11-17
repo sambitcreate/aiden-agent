@@ -46,6 +46,22 @@ test("legacy messages render unchanged without provenance", () => {
   assert.doesNotMatch(markup, /skill/u);
 });
 
+test("a message Aiden Live sent shows By voice under it in the transcript; typed ones do not", () => {
+  const markup = renderToStaticMarkup(
+    <MessageList chatId="chat-1" messages={[
+      { id: "voice-1", role: "user", content: "Check the reset page too.", inputSource: "voice", createdAt: 1 },
+      { id: "typed-1", role: "user", content: "And the login page.", createdAt: 2 },
+    ]} streamingText={null} streamingReasoning={null} timeline={null}
+      liveSubagents={[]} subagentsEnabled={false} onOpenSubagent={() => undefined}
+      agentActivity={null} error={null} />,
+  );
+  assert.equal(markup.match(/By voice/gu)?.length, 1);
+  const voice = markup.indexOf("Check the reset page too.");
+  const label = markup.indexOf("By voice");
+  const typed = markup.indexOf("And the login page.");
+  assert.ok(voice < label && label < typed, "the label sits with the voice message, not the typed one");
+});
+
 test("a long prompt folds behind a chevron but keeps its whole text and one full copy", () => {
   const content = `Please review this.\n${"The tail of a long pasted log line. ".repeat(20)}END-OF-PROMPT`;
   const markup = renderToStaticMarkup(<MessageBubble role="user" content={content} />);

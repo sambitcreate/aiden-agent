@@ -12,7 +12,7 @@ export interface BoundedProcessResult {
   stderr: string;
 }
 
-function isChildReaped(child: ChildProcess): boolean {
+export function isChildReaped(child: ChildProcess): boolean {
   return child.exitCode !== null || child.signalCode !== null;
 }
 
@@ -54,7 +54,12 @@ export async function terminateDirectChild(
   } catch {
     return;
   }
-  if (!signalled || (await waitForChildReaped(child, terminateGraceMs))) return;
+  // A refused signal means the child is already exiting. Let its exit land.
+  if (!signalled) {
+    await waitForChildReaped(child, killGraceMs);
+    return;
+  }
+  if (await waitForChildReaped(child, terminateGraceMs)) return;
   // Recheck after the timer to close the exit-vs-escalation race.
   if (isChildReaped(child)) return;
   try {

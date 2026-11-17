@@ -1217,6 +1217,41 @@ test("a crash after replacement leaves the new target and old recovery intact", 
   assert.equal(await readFile(path.join(root, recoveryNames[0]), "utf8"), "original\n");
 });
 
+for (const [edge, pause] of [
+  ["before staging", "AIDEN_SUBAGENT_FILE_MUTATOR_TEST_PAUSE_BEFORE_STAGE"],
+  ["after staging, before the rename", "AIDEN_SUBAGENT_FILE_MUTATOR_TEST_PAUSE_BEFORE_INSTALL"],
+]) {
+  test(`a crash ${edge} leaves the old file and a fresh helper can still change it`, async (t) => {
+    if (process.platform !== "darwin" && process.platform !== "linux") return;
+    const root = await fixture(t, "aiden-file-mutator-precommit-crash-");
+    const target = path.join(root, "file.txt");
+    const marker = path.join(root, "paused.marker");
+    await writeFile(target, "original\n");
+    const helper = startHelper(t, root, testingBinary, { [pause]: marker });
+    assert.match(
+      await helper.request(
+        prepareCommand("precommit-1", sha256("original\n"), "file.txt", "replacement\n"),
+      ),
+      /^prepared precommit-1 /u,
+    );
+    const pendingCommit = helper.request("commit precommit-1").catch(() => undefined);
+    await waitForFile(marker);
+    await helper.kill();
+    await pendingCommit;
+    assert.equal(await readFile(target, "utf8"), "original\n");
+
+    const restarted = startHelper(t, root, testingBinary);
+    assert.match(
+      await restarted.request(
+        prepareCommand("precommit-2", sha256("original\n"), "file.txt", "second\n"),
+      ),
+      /^prepared precommit-2 /u,
+    );
+    assert.match(await restarted.request("commit precommit-2"), /^committed precommit-2 /u);
+    assert.equal(await readFile(target, "utf8"), "second\n");
+  });
+}
+
 test("multiple crash recoveries remain attributable to request and parent path", async (t) => {
   if (process.platform !== "darwin" && process.platform !== "linux") return;
   const root = await fixture(t, "aiden-file-mutator-multi-crash-");

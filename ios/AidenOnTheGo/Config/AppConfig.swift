@@ -5,6 +5,11 @@ enum AppConfig {
         guard let value = Bundle.main.object(forInfoDictionaryKey: "AidenBotFirstEnabled") else {
             return false
         }
+        return isFlagEnabled(value)
+    }
+
+    /// Anything other than a clear yes is no.
+    static func isFlagEnabled(_ value: Any?) -> Bool {
         if let number = value as? NSNumber { return number.boolValue }
         guard let string = value as? String else { return false }
         return ["1", "true", "yes"].contains(string.lowercased())

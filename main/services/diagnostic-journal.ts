@@ -642,19 +642,57 @@ function eventForRuntime(input: DiagnosticEventInput): DiagnosticEventV1 {
   return fields ? { ...base, fields } : base;
 }
 
-export function writeDiagnosticEvent(input: DiagnosticEventInput): DiagnosticEventV1 {
+/** Passed to the observer beside an event and never written to the journal. */
+export interface DiagnosticEventDetail {
+  /** The original error, or a renderer's raw fields. It may hold anything, so only a sanitizer reads it. */
+  readonly rawError?: unknown;
+  readonly duringShutdown?: boolean;
+}
+
+export type DiagnosticEventObserver = (event: DiagnosticEventV1, detail: DiagnosticEventDetail | undefined) => void;
+
+let eventObserver: DiagnosticEventObserver | undefined;
+let observing = false;
+
+/** One observer sees every event, including those the journal itself does not keep. */
+export function observeDiagnosticEvents(observer: DiagnosticEventObserver | undefined): void {
+  eventObserver = observer;
+}
+
+// Runs on the crash path. It cannot throw into the writer, and an event written
+// while the observer runs cannot reach the observer again.
+function notifyEventObserver(event: DiagnosticEventV1, detail: DiagnosticEventDetail | undefined): void {
+  if (!eventObserver || observing) return;
+  observing = true;
+  try {
+    eventObserver(event, detail);
+  } catch {
+    // The journal outlives any observer failure.
+  } finally {
+    observing = false;
+  }
+}
+
+export function writeDiagnosticEvent(input: DiagnosticEventInput, detail?: DiagnosticEventDetail): DiagnosticEventV1 {
   const event = eventForRuntime(input);
-  if (writeMode === "fatal-only" && event.level !== "fatal") return event;
-  recordDiagnosticHealth(event);
-  enqueueLine(diagnosticEventLine(event));
+  if (writeMode !== "fatal-only" || event.level === "fatal") {
+    recordDiagnosticHealth(event);
+    enqueueLine(diagnosticEventLine(event));
+  }
+  notifyEventObserver(event, detail);
   return event;
 }
 
-export function writeDiagnosticEventSync(input: DiagnosticEventInput): DiagnosticEventV1 {
+export function writeDiagnosticEventSync(input: DiagnosticEventInput, detail?: DiagnosticEventDetail): DiagnosticEventV1 {
   const event = eventForRuntime(input);
-  if (writeMode === "fatal-only" && event.level !== "fatal") return event;
+  if (writeMode !== "fatal-only" || event.level === "fatal") writeFatalLine(event);
+  notifyEventObserver(event, detail);
+  return event;
+}
+
+function writeFatalLine(event: DiagnosticEventV1): void {
   recordDiagnosticHealth(event);
-  if (!targetPath) return event;
+  if (!targetPath) return;
   const line = diagnosticEventLine(event);
   const target = fatalPath(targetPath);
   try {
@@ -685,7 +723,6 @@ export function writeDiagnosticEventSync(input: DiagnosticEventInput): Diagnosti
   } catch {
     writeFailed = true;
   }
-  return event;
 }
 
 const LEGACY_AREA_MAP: Readonly<Record<string, DiagnosticArea>> = {

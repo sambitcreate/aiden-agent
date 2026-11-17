@@ -24,8 +24,8 @@ test("an explicit choice always wins", () => {
   assert.deepEqual(resolveVoiceProvider({ ...base, explicit: "local", hasOpenAIKey: true }), { kind: "needs-setup", reason: "no-local-model" });
   assert.deepEqual(resolveVoiceProvider({ ...base, explicit: "local", installedLocalModels: ["parakeet-v3"], engineReady: false }), { kind: "needs-setup", reason: "local-engine-unavailable" });
 });
-test("setup messages point to Settings → Voice", () => {
-  assert.equal(voiceSetupMessage("no-local-model"), "Download a voice model in Settings → Voice.");
+test("setup messages point to Settings → Voice & Speech", () => {
+  assert.equal(voiceSetupMessage("no-local-model"), "Download a voice model in Settings → Voice & Speech.");
   assert.match(voiceSetupMessage("local-engine-unavailable"), /Restart Aiden/);
 });
 test("the Automatic caption names what dictation will use", () => {
@@ -33,7 +33,7 @@ test("the Automatic caption names what dictation will use", () => {
   assert.equal(automaticVoiceCaption(resolveVoiceProvider({ ...base, installedLocalModels: ["parakeet-v3"] }), names), "Automatic — using On-device (Parakeet TDT 0.6B v3)");
   assert.equal(automaticVoiceCaption(resolveVoiceProvider({ ...base, hasGeminiVoice: true }), names), "Automatic — using Gemini");
   assert.equal(automaticVoiceCaption(resolveVoiceProvider({ ...base, hasOpenAIKey: true }), names), "Automatic — using OpenAI");
-  // Settings → Voice phrases setup for the page the user is already on.
+  // Settings → Voice & Speech phrases setup for the page the user is already on.
   assert.equal(
     automaticVoiceCaption(resolveVoiceProvider(base), names),
     "No voice provider yet. Download an on-device model below or add an OpenAI or Gemini key.",
@@ -42,5 +42,5 @@ test("the Automatic caption names what dictation will use", () => {
     automaticVoiceCaption({ kind: "needs-setup", reason: "no-local-model" }, names),
     "Download an on-device model below.",
   );
-  assert.equal(voiceSetupMessage("no-provider"), "Set up a voice provider in Settings → Voice.");
+  assert.equal(voiceSetupMessage("no-provider"), "Set up a voice provider in Settings → Voice & Speech.");
 });

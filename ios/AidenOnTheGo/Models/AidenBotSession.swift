@@ -249,6 +249,13 @@ struct AidenBotSharedImage: Equatable, Sendable {
     }
 }
 
+struct AidenBotPeerEntry: Equatable, Sendable {
+    enum MessageKind: String, Codable, Sendable { case request, question, status, fyi, result }
+    let id: String; let exchangeId: String; let direction: AidenPeerDirection
+    let peerBotId: String; let peerName: String; let messageKind: MessageKind; let createdAt: AidenRemoteTimestamp?; let isFinal: Bool
+    var caption: String { direction == .sent ? "Messaged \(peerName)" : "Message from \(peerName)" }
+}
+
 enum AidenBotSessionEntry: Codable, Equatable, Identifiable, Sendable {
     case message(AidenBotSessionMessage)
     case connectCard(AidenBotConnectCard)
@@ -260,12 +267,21 @@ enum AidenBotSessionEntry: Codable, Equatable, Identifiable, Sendable {
     case routineProposal(AidenBotRoutineProposalCard)
     /// Revision 45 (`bot:images`): an image the Bot shared.
     case sharedImage(AidenBotSharedImage)
+    case peer(AidenBotPeerEntry)
+    /// Revision 61 (`bot:settings-changes`): a held `update_bot` card or an applied-change receipt.
+    case settingsChange(AidenBotSettingsChangeEntry)
+    /// Revision 61 (`bot:suggestions`): a skill the Bot suggests.
+    case skillProposal(AidenBotSkillProposalEntry)
+    /// Revision 61 (`bot:suggestions`): a proposed lesson or a Learned line.
+    case lesson(AidenBotLessonEntry)
+    /// Revision 61 (`bot:suggestions`): a "Tidied memory" receipt.
+    case memoryTidy(AidenBotMemoryTidyEntry)
 
     /// The entry types this client renders. A revision-27 client skips any
     /// other type instead of failing the whole session.
     static let knownTypes: Set<String> = [
         "message", "connect_card", "notice", "failed_turn", "memory_update", "routine_proposal",
-        "shared_image",
+        "shared_image", "peer", "settings_change", "skill_proposal", "lesson", "memory_tidy",
     ]
 
     var id: String {
@@ -277,6 +293,11 @@ enum AidenBotSessionEntry: Codable, Equatable, Identifiable, Sendable {
         case let .memoryUpdate(id, _): id
         case let .routineProposal(card): card.id
         case let .sharedImage(image): image.id
+        case let .peer(peer): peer.id
+        case let .settingsChange(change): change.id
+        case let .skillProposal(skill): skill.id
+        case let .lesson(lesson): lesson.id
+        case let .memoryTidy(tidy): tidy.id
         }
     }
 
@@ -290,6 +311,13 @@ enum AidenBotSessionEntry: Codable, Equatable, Identifiable, Sendable {
         let type = try values.decode(String.self, forKey: .type)
         guard Self.knownTypes.contains(type) else {
             throw AidenBotContractError.invalidField("entry.type")
+        }
+        switch type {
+        case "settings_change": self = .settingsChange(try AidenBotSettingsChangeEntry(from: decoder)); return
+        case "skill_proposal": self = .skillProposal(try AidenBotSkillProposalEntry(from: decoder)); return
+        case "lesson": self = .lesson(try AidenBotLessonEntry(from: decoder)); return
+        case "memory_tidy": self = .memoryTidy(try AidenBotMemoryTidyEntry(from: decoder)); return
+        default: break
         }
         let id = try values.decode(String.self, forKey: .id)
         try AidenBotSessionWire.validateEntryID(id, field: "entry.id")
@@ -400,6 +428,16 @@ enum AidenBotSessionEntry: Codable, Equatable, Identifiable, Sendable {
                 routineId: routineId,
                 createdAt: try AidenBotWire.optional(AidenRemoteTimestamp.self, from: values, forKey: .createdAt)
             ))
+        case "peer":
+            try AidenBotWire.requireOnlyKeys(decoder, allowed: ["id", "type", "exchangeId", "direction", "peerBotId", "peerName", "messageKind", "createdAt", "final"])
+            let exchangeId = try values.decode(String.self, forKey: .exchangeId); try AidenPeerWire.id(exchangeId)
+            let peerBotId = try values.decode(String.self, forKey: .peerBotId); try AidenPeerWire.id(peerBotId)
+            let peerName = try values.decode(String.self, forKey: .peerName); try AidenPeerWire.text(peerName)
+            let createdAt = try AidenPeerWire.optional(AidenRemoteTimestamp.self, values, .createdAt)
+            let kind = try values.decode(AidenBotPeerEntry.MessageKind.self, forKey: .messageKind)
+            let final = try AidenPeerWire.optional(Bool.self, values, .finalFlag)
+            guard final == nil || (final == true && kind == .result) else { throw AidenRemoteClientError.invalidResponse }
+            self = .peer(.init(id: id, exchangeId: exchangeId, direction: try values.decode(AidenPeerDirection.self, forKey: .direction), peerBotId: peerBotId, peerName: peerName, messageKind: kind, createdAt: createdAt, isFinal: final == true))
         case "shared_image":
             try AidenBotWire.requireOnlyKeys(decoder, allowed: ["type", "id", "name", "mimeType", "size"])
             let mimeType = try values.decode(String.self, forKey: .mimeType)
@@ -426,6 +464,13 @@ enum AidenBotSessionEntry: Codable, Equatable, Identifiable, Sendable {
     }
 
     func encode(to encoder: Encoder) throws {
+        switch self {
+        case let .settingsChange(change): return try change.encode(to: encoder)
+        case let .skillProposal(skill): return try skill.encode(to: encoder)
+        case let .lesson(lesson): return try lesson.encode(to: encoder)
+        case let .memoryTidy(tidy): return try tidy.encode(to: encoder)
+        default: break
+        }
         var values = encoder.container(keyedBy: CodingKeys.self)
         switch self {
         case let .message(message):
@@ -468,12 +513,20 @@ enum AidenBotSessionEntry: Codable, Equatable, Identifiable, Sendable {
             try values.encode(card.status, forKey: .status)
             try values.encodeIfPresent(card.routineId, forKey: .routineId)
             try values.encodeIfPresent(card.createdAt, forKey: .createdAt)
+        case let .peer(peer):
+            try values.encode("peer", forKey: .type); try values.encode(peer.id, forKey: .id)
+            try values.encode(peer.exchangeId, forKey: .exchangeId); try values.encode(peer.direction, forKey: .direction)
+            try values.encode(peer.peerBotId, forKey: .peerBotId); try values.encode(peer.peerName, forKey: .peerName)
+            try values.encode(peer.messageKind, forKey: .messageKind); try values.encodeIfPresent(peer.createdAt, forKey: .createdAt)
+            if peer.isFinal { try values.encode(true, forKey: .finalFlag) }
         case let .sharedImage(image):
             try values.encode("shared_image", forKey: .type)
             try values.encode(image.id, forKey: .id)
             try values.encode(image.name, forKey: .name)
             try values.encode(image.mimeType, forKey: .mimeType)
             try values.encode(image.size, forKey: .size)
+        case .settingsChange, .skillProposal, .lesson, .memoryTidy:
+            break
         }
     }
 
@@ -482,6 +535,8 @@ enum AidenBotSessionEntry: Codable, Equatable, Identifiable, Sendable {
         case pluginId, name, iconId, reason, status, notice, retryText
         case proposalId, prompt, routineId
         case mimeType, size
+        case exchangeId, direction, peerBotId, peerName, messageKind
+        case finalFlag = "final"
     }
 }
 
@@ -542,8 +597,11 @@ struct AidenRemoteBotApproval: Codable, Equatable, Sendable {
     let summary: String
     let canAllow: Bool
     let alwaysCount: Int?
+    /// Revision 61 (`approval:cards`): the typed card. With it, the phone
+    /// offers exactly its buttons; it never allows what `canAllow` refuses.
+    let card: AidenApprovalCardModel?
 
-    init(waitId: String, toolCallId: String, toolName: String, summary: String, canAllow: Bool, alwaysCount: Int? = nil) throws {
+    init(waitId: String, toolCallId: String, toolName: String, summary: String, canAllow: Bool, alwaysCount: Int? = nil, card: AidenApprovalCardModel? = nil) throws {
         try Self.validateWaitID(waitId)
         try AidenBotWire.validateString(toolCallId, field: "toolCallId", maxLength: Self.maxToolCallIDLength, allowEmpty: false)
         try AidenBotWire.validateString(toolName, field: "toolName", maxLength: Self.maxToolNameLength, allowEmpty: false)
@@ -555,10 +613,17 @@ struct AidenRemoteBotApproval: Codable, Equatable, Sendable {
         self.canAllow = canAllow
         guard alwaysCount == nil || (canAllow && (3...20).contains(alwaysCount!)) else { throw AidenBotContractError.invalidField("alwaysCount") }
         self.alwaysCount = alwaysCount
+        guard canAllow || card?.canAllow != true else {
+            throw AidenBotContractError.invalidCombination("a deny-only approval's card offers no allow")
+        }
+        self.card = card
     }
 
+    /// Whether this phone may allow it: the card's buttons decide when there is one.
+    var offersAllow: Bool { card?.canAllow ?? canAllow }
+
     init(from decoder: Decoder) throws {
-        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["waitId", "toolCallId", "toolName", "summary", "canAllow", "alwaysCount"])
+        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["waitId", "toolCallId", "toolName", "summary", "canAllow", "alwaysCount", "card"])
         let values = try decoder.container(keyedBy: CodingKeys.self)
         try self.init(
             waitId: try values.decode(String.self, forKey: .waitId),
@@ -566,7 +631,8 @@ struct AidenRemoteBotApproval: Codable, Equatable, Sendable {
             toolName: try values.decode(String.self, forKey: .toolName),
             summary: try values.decode(String.self, forKey: .summary),
             canAllow: try values.decode(Bool.self, forKey: .canAllow),
-            alwaysCount: try AidenBotWire.optional(Int.self, from: values, forKey: .alwaysCount)
+            alwaysCount: try AidenBotWire.optional(Int.self, from: values, forKey: .alwaysCount),
+            card: try AidenBotWire.optional(AidenApprovalCardModel.self, from: values, forKey: .card)
         )
     }
 
@@ -585,7 +651,7 @@ struct AidenRemoteBotApproval: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case waitId, toolCallId, toolName, summary, canAllow, alwaysCount
+        case waitId, toolCallId, toolName, summary, canAllow, alwaysCount, card
     }
 }
 
@@ -985,7 +1051,7 @@ struct AidenRemoteBotAccessRequest: Codable, Equatable, Sendable {
                 throw AidenBotContractError.invalidField("accessRequest.place")
             }
         }
-        guard target != .wholeMac || (label == "your whole Mac" && place == nil),
+        guard target != .wholeMac || ((label == "your whole Mac" || label == "your whole computer") && place == nil),
               choices == [.notNow, .once] || (target == .folder && choices == [.notNow, .always, .once]) else {
             throw AidenBotContractError.invalidField("accessRequest")
         }

@@ -1,4 +1,5 @@
 import { logger } from "../platform.js";
+import { reportCustomProviderConnected } from "./analytics/analytics-feature-reports.js";
 import { configStore } from "./config-store.js";
 import {
   credentialAfterProviderRotation,
@@ -19,6 +20,7 @@ import { mutatePortableConfigAndSync } from "./portable-credential-snapshot.js";
 import type { StoredProvider } from "./types.js";
 
 const JOURNAL_KEY = "__aiden_internal_provider_credential_rotation_v1__";
+
 let rotationTail: Promise<void> = Promise.resolve();
 
 function serialized<R>(operation: () => Promise<R>): Promise<R> {
@@ -87,10 +89,12 @@ export function saveProviderWithCredentialRotation(
   replacementKey: string | null,
   isCurrent: () => boolean = () => true,
 ): Promise<StoredProvider> {
+  let added = false;
   return mutatePortableConfigAndSync(() =>
     serialized(async () => {
       if (!isCurrent()) throw new Error("The renderer document is no longer active.");
       const previous = await configStore.getProvider(provider.id);
+      added = !previous;
       if (!providerTransitionNeedsCredentialAccess(previous, provider)) {
         // A fresh Linux desktop may intentionally have no keyring session.
         // Keyless local providers neither read nor write the secret backend.
@@ -155,7 +159,10 @@ export function saveProviderWithCredentialRotation(
       await reconcilePendingProviderCredentialRotationNow();
       return saved;
     }),
-  );
+  ).then((saved) => {
+    if (added) reportCustomProviderConnected(saved);
+    return saved;
+  });
 }
 
 export function removeProviderWithCredentialCleanup(

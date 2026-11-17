@@ -36,6 +36,7 @@ import {
   type WorktreeFirstSend,
 } from "../lib/draft-worktree-send";
 import { isValidBranchName, type FirstMessageWorktreeRequest } from "../shared/worktree-on-send";
+import { localComputerNoun } from "../shared/computer-noun";
 import { DraftWorktreeSendView } from "../components/draft-worktree-send-view";
 import type { GitBranchPickerDraft } from "../components/git-branch-picker";
 import { QueuedMessages } from "../components/queued-messages";
@@ -64,6 +65,8 @@ import {
   chatMessageQueue,
   committedRunInputNotice,
   steerQueuedMessage,
+  steerDraftOrQueue,
+  lateSteerQueuedNotice,
   steerRejectionMessage,
   withCommittedRunInput,
 } from "../lib/chat-message-queue";
@@ -80,6 +83,7 @@ import { retryUsageLimitNow, useUsageLimitNow, useUsageLimitWait } from "../lib/
 import { useSpendingStatus } from "../lib/use-spending-status";
 import { SpendingLimitNotice } from "../components/spending/spending-limit-notice";
 import { spendingNotice } from "../shared/spending";
+import { hookMessagesNotice } from "../shared/hooks-settings";
 import { useMarkChatRead } from "../lib/use-mark-chat-read";
 import { localHostAdapter } from "../lib/hosts/local-host-adapter";
 import { useObservedLocalRun } from "../lib/hosts/use-observed-local-run";
@@ -108,8 +112,10 @@ import { GitFork, TerminalSquare } from "lucide-react";
 import { MessageList } from "../components/message-list";
 import { useReadAloud } from "../lib/tts-client";
 import type { ReadAloudActionProps } from "../components/read-aloud-button";
-import { Composer } from "../components/composer";
+import { Composer, type ComposerApprovalsPatch } from "../components/composer";
 import { AskUserQuestionComposer } from "../components/ask-user-question-composer";
+import { DesignModeConsentCard, useDesignModeConsent } from "../design/design-mode-consent";
+import { useCanvasFocusRequests } from "../design/canvas-focus-requests";
 import {
   AskUserQuestionCountdown,
   AskUserQuestionExpiryNotice,
@@ -129,8 +135,15 @@ import { BtwCard, reduceBtwView, type BtwLiveView } from "../components/btw-card
 import { ModelPicker } from "../components/model-picker";
 import { RemoteMachinePicker } from "../components/remote-new-chat-pickers";
 import { useNewChatMachines } from "../lib/hosts/use-new-chat-machines";
-import { ChatTitleMenu, WorkspaceChip, WorkspaceToolButtons } from "../components/chat-top-bar";
+import {
+  ChatTitleMenu,
+  DesignModeToggle,
+  DesignPaneSwitch,
+  WorkspaceChip,
+  WorkspaceToolButtons,
+} from "../components/chat-top-bar";
 import { OpenInEditorPicker } from "../components/open-in-editor-picker";
+import { DesignModeBannerSlot, useDesignChatBodyHidden } from "../design/design-layout";
 import { useCommandHandler, useCommandSystem, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { useComposerTypeFocus } from "../lib/use-composer-type-focus";
 import {
@@ -148,7 +161,17 @@ import { ContextMeter } from "../components/context-meter";
 import { ContextPressureFeed } from "../lib/context-pressure-feed";
 import type { ChatContextPressureV1 } from "../shared/context-pressure";
 import { ReasoningVisibilityControl } from "../components/reasoning-visibility-control";
-import { ChatApprovalCard } from "../components/chat-approval-card";
+import { ApprovalStatusLine, ChatApprovalCard } from "../components/chat-approval-card";
+import { noteWorkspaceAllow, repeatableApproval, useWorkspaceRepeatNudge } from "../lib/switch-to-auto";
+import { useApprovalStatusLine } from "../lib/use-approval-status-line";
+import { isComputerUseAccessApprovalDetails } from "../shared/computer-use-access";
+import { liveOpenChat } from "../lib/live-open-chat";
+import {
+  useLiveApprovalVoiceHint,
+  usePublishLiveChatApprovals,
+} from "../components/assistant/use-live-chat-voice-approvals";
+import { liveChatReachable, stopForLive, useLiveChatController } from "./live-chat-controller";
+import type { ChatInputSourceV1 } from "../shared/chat-input-source";
 import { ComputerUseContinueCallout } from "../components/computer-use-access-approval";
 import {
   chatsApi,
@@ -187,6 +210,7 @@ import { useActiveWorkspace } from "../lib/workspace-context";
 import { useWorkspaceTerminal } from "../components/terminal-drawer";
 import {
   EnvironmentPanelToggle,
+  QuickViewIcon,
   QuickViewToggle,
   useEnvironmentPanel,
 } from "../components/environment-panel";
@@ -198,7 +222,6 @@ import {
   type ChatMeta,
   type GitBranches,
   type Workspace,
-  type WorkspacePermission,
 } from "../lib/types";
 import { COMPUTER_USE_CONTINUE_PROMPT } from "../shared/computer-use-access";
 import { userFacingErrorMessage } from "../lib/ipc-error";
@@ -444,6 +467,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const terminal = useWorkspaceTerminal();
   const git = useGitInfo(effectiveWorkspace?.id);
   const environmentPanel = useEnvironmentPanel();
+  const designChatBodyHidden = useDesignChatBodyHidden();
   const settingsBlockedReason = environmentPanel.gitOperationBusy
     ? "Wait for the current Git operation to finish"
     : environmentPanel.editorState.saving
@@ -794,8 +818,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
   // After a Deny, the composer invites the user to say what to do instead,
   // until they send something or leave the chat.
   const [deniedApprovalChatId, setDeniedApprovalChatId] = React.useState<string | null>(null);
+  const approvalStatus = useApprovalStatusLine(chatId);
+  const showApprovalStatus = approvalStatus.show;
   const [questionnaire, setQuestionnaire] = React.useState<(AskUserQuestionPromptV1 & { source?: "remote" }) | null>(null);
   const [questionnaireSubmitting, setQuestionnaireSubmitting] = React.useState(false);
+  // Aiden's "Open design mode?" card for this chat, while one is waiting.
+  const designModeConsent = useDesignModeConsent(capabilities.designMode ? chatId : undefined);
+  // Aiden's canvas_focus can arrive before the canvas loads; keep it until it does.
+  useCanvasFocusRequests(capabilities.designMode);
   // The prompt whose agent deadline passed while its card was still open.
   const [expiredQuestionnaireId, setExpiredQuestionnaireId] = React.useState<string | null>(null);
   // An answer submitted after the deadline, offered as a follow-up message.
@@ -1121,6 +1151,20 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const imageArtifactRecoveryUnavailable = chat.data?.imageArtifactRecoveryUnavailable === true;
   const isGenerating = streamingText !== null && !hasUnpersistedResponse;
   const contextLiveGeneration = isGenerating || isStartingGeneration;
+  // Aiden Live reads which chat is on screen (title, workspace, busy, stream).
+  const liveOpenChatOwner = React.useMemo(() => Symbol("chat-pane"), []);
+  const liveOpenChatTitle = chat.data?.title ?? "New agent";
+  const liveOpenChatStreamId = generationRef.current?.streamId ?? null;
+  React.useEffect(() => {
+    liveOpenChat.publish(liveOpenChatOwner, {
+      chatId,
+      title: liveOpenChatTitle,
+      workspaceId: chatWorkspaceId ?? null,
+      busy: contextLiveGeneration,
+      streamId: liveOpenChatStreamId,
+    });
+  }, [chatId, chatWorkspaceId, contextLiveGeneration, liveOpenChatOwner, liveOpenChatStreamId, liveOpenChatTitle]);
+  React.useEffect(() => () => liveOpenChat.clear(liveOpenChatOwner), [liveOpenChatOwner]);
   // A run this pane did not start (a paired phone's turn) streams in live
   // once main reports the chat busy, and stays until its saved reply lands.
   // A draft or this pane's own turn stops it; an idle chat holds nothing.
@@ -1223,6 +1267,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
         seedComposerAttachments(copied.id, prefill.attachments);
       }
       const copiedWorkspaceId = persistedChatWorkspaceId(copied.workspaceId);
+      if (copiedWorkspaceId !== effectiveWorkspaceIdRef.current) {
+        await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
+      }
       qc.setQueryData(queryKeys.chat(copied.id), copied);
       qc.setQueryData<ChatMeta[]>(queryKeys.chatsIn(copiedWorkspaceId), (current) => [
         {
@@ -1681,6 +1728,21 @@ export function ChatPane({ chatId }: { chatId: string }) {
               toast.info(agentsInstructionNoticeMessage(notice));
             }
           },
+          onHookMessages: (messages) => {
+            if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
+            const notice = hookMessagesNotice(messages);
+            if (!notice) return;
+            const description =
+              notice.lines.length || notice.more ? (
+                <span className="flex flex-col">
+                  {notice.lines.map((line, index) => (
+                    <span key={index}>{line}</span>
+                  ))}
+                  {notice.more ? <span>{`and ${notice.more} more`}</span> : null}
+                </span>
+              ) : undefined;
+            toast.info(notice.title, description ? { description } : undefined);
+          },
           onContextPressure: (pressure) => {
             if (mountedRef.current && generationIntentRef.current === generationIntent) {
               setContextPressure(pressure);
@@ -1944,8 +2006,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
       text: string,
       attachments: Attachment[],
       skillInvocation?: SkillInvocationV1,
-      options?: { visualize?: boolean; btw?: boolean },
+      options?: { visualize?: boolean; btw?: boolean; inputSource?: ChatInputSourceV1 },
     ) => {
+      // Only Aiden Live's chat tools set this; the message shows "By voice".
+      const inputSource = options?.inputSource;
       if (options?.btw) {
         if (getChatDraft(chatId))
           throw new Error("Send the first message before asking a side question.");
@@ -2048,24 +2112,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
       setIsStartingGeneration(true);
       try {
         let updated: Chat;
-        /** Set when this No workspace draft is saved in a fresh hidden folder. */
-        let separateNoWorkspaceId: string | undefined;
         try {
-          if (firstDraft && !worktreeRequest) {
-            const draftWorkspace = workspaces.find((entry) => entry.id === firstDraft.chat.workspaceId);
-            if (isNoWorkspace(draftWorkspace)) {
-              separateNoWorkspaceId = await noWorkspaceFolderForFirstSend(
-                { listChats: chatsApi.list, createNoWorkspace: workspacesApi.createNoWorkspace },
-                draftWorkspace!.id,
-              );
-              if (separateNoWorkspaceId) await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
-            }
-          }
           const firstMessageInput = firstDraft
             ? {
                 draftId: chatId,
                 title: firstDraft.chat.title === "New agent" ? undefined : firstDraft.chat.title,
-                workspaceId: separateNoWorkspaceId ?? firstDraft.chat.workspaceId!,
+                workspaceId: firstDraft.chat.workspaceId!,
                 providerId,
                 model,
                 turnId: messageTurnId,
@@ -2075,6 +2127,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   attachments: attachments.length ? attachments : undefined,
                 },
                 skillInvocation,
+                ...(inputSource ? { inputSource } : {}),
               }
             : undefined;
           if (firstMessageInput && worktreeRequest) {
@@ -2087,7 +2140,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
               },
               input: firstMessageInput,
               worktree: worktreeRequest,
-              message: { text, attachments },
+              message: { text, attachments, ...(inputSource ? { inputSource } : {}) },
             });
             // The progress view holds the message now; a composer that opens
             // on this draft meanwhile starts empty instead of repeating it.
@@ -2135,6 +2188,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     autoTitle: true,
                     turnId: messageTurnId,
                     skillInvocation,
+                    ...(inputSource ? { inputSource } : {}),
                   },
                 );
           }
@@ -2183,7 +2237,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         // A New worktree send saved the chat in the worktree's workspace,
         // which this render has not seen yet.
         // A No workspace draft that needed its own folder was saved in a fresh one.
-        if (worktreeRequest || separateNoWorkspaceId) effectiveWorkspaceIdRef.current = updated.workspaceId;
+        if (firstDraft) effectiveWorkspaceIdRef.current = updated.workspaceId;
         void runGeneration(messageTurnId).then((started) => {
           if (!started.ok && mountedRef.current && chatIdRef.current === chatId) {
             setError(started.error.message);
@@ -2211,7 +2265,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
       model,
       qc,
       runGeneration,
-      workspaces,
     ],
   );
 
@@ -2346,7 +2399,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       text: string,
       attachments: Attachment[],
       skillInvocation?: SkillInvocationV1,
-      options?: { visualize?: boolean; btw?: boolean },
+      options?: { visualize?: boolean; btw?: boolean; inputSource?: ChatInputSourceV1 },
     ) => {
       if (stopRequestedRef.current) {
         throw new Error("Aiden is stopping this response. Send your message after it stops.");
@@ -2356,7 +2409,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
         text,
         attachments,
         skillInvocation,
-        options: options?.visualize ? { visualize: true } : undefined,
+        options:
+          options?.visualize || options?.inputSource
+            ? {
+                ...(options.visualize ? { visualize: true } : {}),
+                ...(options.inputSource ? { inputSource: options.inputSource } : {}),
+              }
+            : undefined,
       });
     },
     [messageQueue],
@@ -2364,14 +2423,20 @@ export function ChatPane({ chatId }: { chatId: string }) {
 
   /** Admit run input and show what main committed without waiting for the run to end. */
   const admitSteer = React.useCallback(
-    async (streamId: string, text: string) => {
+    async (streamId: string, text: string, inputSource?: ChatInputSourceV1) => {
       const receipt = await admitRunInputOnceStarted({
-        admit: () => chatControl.submitInput(streamId, "steer", text),
+        admit: () =>
+          chatControl.submitInput(streamId, "steer", text, inputSource ? { inputSource } : undefined),
         // This pane's own run can still be starting; a detached one is not retried.
         live: () => generationRef.current?.streamId === streamId && !stopRequestedRef.current,
       });
       if (receipt.committed && receipt.messageId) {
-        const committed = { messageId: receipt.messageId, text, createdAt: Date.now() };
+        const committed = {
+          messageId: receipt.messageId,
+          text,
+          createdAt: Date.now(),
+          ...(inputSource ? { inputSource } : {}),
+        };
         qc.setQueryData<Chat | null>(queryKeys.chat(chatId), (current) =>
           current ? withCommittedRunInput(current, committed) : current,
         );
@@ -2389,30 +2454,34 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (text.length > MAX_RUN_INPUT_TEXT) {
         throw new Error("Guidance is too long to steer. Queue it as a follow-up instead.");
       }
-      const streamId = generationRef.current?.streamId ?? steerableDetachedProjection?.streamId;
-      if (!streamId || isStoppingGeneration || stopRequestedRef.current) {
-        throw new Error("The current response has ended. Send your message normally.");
-      }
       // The same main-owned admission as Remote and Telegram: the guidance is
-      // durable in the transcript before Pi reads it.
-      let receipt;
-      try {
-        receipt = await admitSteer(streamId, text);
-      } catch {
+      // durable in the transcript before Pi reads it. A run that already
+      // ended, or ends unsaved while admission waits, queues the draft as the
+      // next turn instead; a run the person is stopping keeps the draft.
+      const outcome = await steerDraftOrQueue({
+        queue: messageQueue,
+        message: { id: createChatTurnId(), text, attachments: [] },
+        streamId: generationRef.current?.streamId ?? steerableDetachedProjection?.streamId,
+        stopping: () => isStoppingGeneration || stopRequestedRef.current,
+        admit: (streamId, guidance) => admitSteer(streamId, guidance),
+      });
+      if (outcome.kind === "admitted") {
+        toast.info("Guidance sent. Aiden will read it at the next step.");
+      } else if (outcome.kind === "committed") {
+        // Main already saved it; resolving consumes the draft so it is not resent.
+        toast.info(committedRunInputNotice(outcome.reason));
+      } else if (outcome.kind === "queued") {
+        // Resolving consumes the draft: the queue now owns the only copy.
+        toast.info(lateSteerQueuedNotice(outcome.paused));
+      } else if (outcome.kind === "unknown") {
         throw new Error(
           "Aiden couldn't confirm the guidance. Check the conversation before sending it again.",
         );
-      }
-      if (receipt.admitted) {
-        toast.info("Guidance sent. Aiden will read it at the next step.");
-      } else if (receipt.committed) {
-        // Main already saved it; resolving consumes the draft so it is not resent.
-        toast.info(committedRunInputNotice(receipt.reason));
       } else {
-        throw new Error(steerRejectionMessage(receipt.reason));
+        throw new Error(steerRejectionMessage(outcome.reason));
       }
     },
-    [admitSteer, isStoppingGeneration, steerableDetachedProjection],
+    [admitSteer, isStoppingGeneration, messageQueue, steerableDetachedProjection],
   );
 
   const canSteerQueued =
@@ -2423,19 +2492,33 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const steerQueued = React.useCallback(
     async (id: string) => {
       const streamId = generationRef.current?.streamId ?? steerableDetachedProjection?.streamId;
-      if (!streamId || isStoppingGeneration || stopRequestedRef.current) {
-        toast.error("The current response has ended. The message stays queued.");
+      const stopping = () => isStoppingGeneration || stopRequestedRef.current;
+      if (stopping()) {
+        toast.error(`${steerRejectionMessage("cancelled")} The message stays queued.`);
         return;
       }
+      if (!streamId) {
+        // The row is already queued; it sends as the next turn once the run settles.
+        toast.info(lateSteerQueuedNotice(messageQueue.getSnapshot().paused));
+        return;
+      }
+      const queuedSource = messageQueue
+        .getSnapshot()
+        .messages.find((message) => message.id === id)?.options?.inputSource;
       const outcome = await steerQueuedMessage({
         queue: messageQueue,
         id,
-        admit: (text) => admitSteer(streamId, text),
+        admit: (text) => admitSteer(streamId, text, queuedSource),
+        stopping,
       });
       if (outcome.kind === "admitted") {
         toast.info("Guidance sent. Aiden will read it at the next step.");
       } else if (outcome.kind === "committed") {
         toast.info(committedRunInputNotice(outcome.reason));
+      } else if (outcome.kind === "rejected" && outcome.reason === "run_not_active") {
+        // Nothing was saved and the row stays queued, so the queue sends it
+        // as the next turn once the run settles.
+        toast.info(lateSteerQueuedNotice(messageQueue.getSnapshot().paused));
       } else if (outcome.kind === "rejected") {
         toast.error(`${steerRejectionMessage(outcome.reason)} The message stays queued.`);
       } else if (outcome.kind === "unknown") {
@@ -2446,6 +2529,48 @@ export function ChatPane({ chatId }: { chatId: string }) {
     },
     [admitSteer, isStoppingGeneration, messageQueue, steerableDetachedProjection],
   );
+
+  // Aiden Live's chat tools read, send to and stop this chat through the
+  // composer's own paths; the message they send shows "By voice".
+  useLiveChatController({
+    reachable: liveChatReachable(chat.data),
+    chatId,
+    workspaceId: chatWorkspaceId ?? null,
+    isDraft: Boolean(draft),
+    title: liveOpenChatTitle,
+    messages,
+    busy: isGenerating || isStartingGeneration || Boolean(visibleDetachedProjection),
+    steerAvailable: !draft && !observedRunVisible && canSteerQueued,
+    queueAvailable: !draft,
+    hasQueued: queuedState.messages.length > 0,
+    queuePaused: queuedState.paused,
+    ready: ready && !imageArtifactRecoveryPending && !imageArtifactRecoveryUnavailable,
+    firstSending: draft?.sending === true,
+    waitingForApproval: approvals.length > 0,
+    send: (text) => {
+      setDeniedApprovalChatId(null);
+      return handleSend(text, [], undefined, { inputSource: "voice" });
+    },
+    queue: (text) => {
+      setDeniedApprovalChatId(null);
+      return queueMessage(text, [], undefined, { inputSource: "voice" });
+    },
+    steer: (text) => {
+      const streamId = generationRef.current?.streamId ?? steerableDetachedProjection?.streamId;
+      if (!streamId || isStoppingGeneration || stopRequestedRef.current) return Promise.resolve(null);
+      setDeniedApprovalChatId(null);
+      return admitSteer(streamId, text, "voice");
+    },
+    stop: () =>
+      stopForLive({
+        stop: handleStop,
+        pauseQueue: () => messageQueue.pause(),
+        markStopRequested: () => {
+          stopRequestedRef.current = true;
+        },
+      }),
+    showError: (message) => toast.error(message),
+  });
 
   const cancelAgentForContextChange = React.useCallback(() => {
     generationIntentRef.current += 1;
@@ -2513,6 +2638,20 @@ export function ChatPane({ chatId }: { chatId: string }) {
           prev.filter((approval) => approval.approvalId !== prompt.approvalId),
         );
         setDeniedApprovalChatId(decision === "deny" ? decisionChatId : null);
+        const workspaceId = effectiveWorkspaceIdRef.current;
+        if (decision === "allow" && options?.scope === undefined && workspaceId && repeatableApproval(prompt)) {
+          noteWorkspaceAllow(workspaceId, prompt.toolName);
+        }
+        showApprovalStatus(
+          decision === "deny"
+            ? { decision: "deny" }
+            : {
+                decision: "allow",
+                ...(options?.scope ? { scope: options.scope } : {}),
+                // Computer Use's always covers every chat; elsewhere it is this workspace's list.
+                always: isComputerUseAccessApprovalDetails(prompt.details) ? "everywhere" : "workspace",
+              },
+        );
       } catch (approvalError) {
         if (chatIdRef.current !== decisionChatId) return;
         if (prompt.source === "remote") {
@@ -2532,8 +2671,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
         }
       }
     },
-    [chatControl, chatId],
+    [chatControl, chatId, showApprovalStatus],
   );
+  // Aiden Live answers the first approval by voice through this same decide.
+  usePublishLiveChatApprovals(chatId, approvals, decideApproval);
 
   React.useEffect(() => {
     if (!questionnaire) return;
@@ -2637,21 +2778,21 @@ export function ChatPane({ chatId }: { chatId: string }) {
     if (effectiveWorkspace?.folderPath) void workspacesApi.openFolder(effectiveWorkspace.id);
   }, [effectiveWorkspace?.folderPath, effectiveWorkspace?.id]);
 
-  const changePermission = React.useCallback(
-    async (permission: WorkspacePermission) => {
+  const changeApprovals = React.useCallback(
+    async (patch: ComposerApprovalsPatch) => {
       if (!effectiveWorkspace) return;
       if (getChatDraft(chatId)?.sending)
         throw new Error("Wait for the first message to finish saving.");
       if (environmentPanel.gitOperationBusy)
         throw new Error(
-          "Wait for the current Git operation to finish before changing workspace access.",
+          "Wait for the current Git operation to finish before changing approvals.",
         );
       if (environmentPanel.editorState.saving)
         throw new Error(
-          "Wait for the open file to finish saving before changing workspace access.",
+          "Wait for the open file to finish saving before changing approvals.",
         );
       if (environmentPanel.editorState.dirty)
-        throw new Error("Save or discard the open file's edits before changing workspace access.");
+        throw new Error("Save or discard the open file's edits before changing approvals.");
       if (environmentPanel.agentBusy) environmentPanel.cancelAgent?.();
       let targetId = effectiveWorkspace.id;
       // A No workspace draft shares its folder with an existing chat until it
@@ -2667,7 +2808,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           targetId = separateId;
         }
       }
-      await workspacesApi.update(targetId, { permission });
+      await workspacesApi.update(targetId, patch);
       await Promise.all([
         qc.invalidateQueries({ queryKey: queryKeys.workspaces }),
         qc.invalidateQueries({
@@ -3145,6 +3286,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
 
   const pending = approvals[0];
+  // Allowed again and again in Ask: the card offers Auto.
+  const repeatNudge = useWorkspaceRepeatNudge(effectiveWorkspace, pending);
+  const pendingLiveVoice = useLiveApprovalVoiceHint(pending?.approvalId);
   const showComputerUseContinue =
     computerUsePendingContinue &&
     computerUseContinueHiddenFor !== chatId &&
@@ -3547,7 +3691,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
     <>
       <ScrollArea
         focusRegion="chat"
+        bodyHidden={designChatBodyHidden}
         overlay={findBar}
+        toolbarAccessory={<DesignModeBannerSlot />}
         className="h-full min-h-0"
         alignFooterToScrollContent
         title={
@@ -3597,23 +3743,48 @@ export function ChatPane({ chatId }: { chatId: string }) {
             )}
             // A cached repository read must not outlive access being switched off.
             isRepo={git.data?.isRepo === true && effectiveWorkspace?.permission !== "none"}
-            leading={<QuickViewToggle disabled={!effectiveWorkspace} />}
-            terminalButton={
-              <Button
-                iconOnly
-                variant="bar"
-                size="small"
-                onClick={terminal.toggle}
-                disabled={!effectiveWorkspace?.folderPath || !terminal.canOpen}
-                aria-label={terminal.open ? "Hide terminal" : "Show terminal"}
-                aria-keyshortcuts={ariaKeyShortcut(terminalShortcutBinding)}
-                aria-pressed={terminal.open}
-                title={`Toggle terminal (${terminalShortcut})`}
-                data-terminal-toggle
-              >
-                <TerminalSquare />
-              </Button>
+            leading={
+              <>
+                <DesignModeToggle chatId={chatId} />
+                <DesignPaneSwitch />
+              </>
             }
+            foldable={[
+              {
+                key: "quick-view",
+                placement: "leading",
+                button: <QuickViewToggle disabled={!effectiveWorkspace} />,
+                label: environmentPanel.quickViewOpen ? "Hide Quick View" : "Show Quick View",
+                icon: QuickViewIcon,
+                onSelect: environmentPanel.toggleQuickView,
+                disabled: !effectiveWorkspace || environmentPanel.gitOperationBusy,
+                active: environmentPanel.quickViewOpen,
+              },
+              {
+                key: "terminal",
+                button: (
+                  <Button
+                    iconOnly
+                    variant="bar"
+                    size="small"
+                    onClick={terminal.toggle}
+                    disabled={!effectiveWorkspace?.folderPath || !terminal.canOpen}
+                    aria-label={terminal.open ? "Hide terminal" : "Show terminal"}
+                    aria-keyshortcuts={ariaKeyShortcut(terminalShortcutBinding)}
+                    aria-pressed={terminal.open}
+                    title={`Toggle terminal (${terminalShortcut})`}
+                    data-terminal-toggle
+                  >
+                    <TerminalSquare />
+                  </Button>
+                ),
+                label: terminal.open ? "Hide terminal" : "Show terminal",
+                icon: TerminalSquare,
+                onSelect: terminal.toggle,
+                disabled: !effectiveWorkspace?.folderPath || !terminal.canOpen,
+                active: terminal.open,
+              },
+            ]}
             trailing={
               <OpenInEditorPicker
                 workspaceId={effectiveWorkspace?.id}
@@ -3641,7 +3812,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         footer={
           <ScrollAreaFooterStack>
             <EventPresence
-              present={Boolean(pending)}
+              present={Boolean(pending) || approvalStatus.status !== null}
               className="aiden-dock-inset chat-content-column flex min-h-0 flex-col pb-2"
             >
               {pending ? (
@@ -3653,7 +3824,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   denyRef={approvalDenyRef}
                   pendingCount={approvals.length}
                   keyboardShortcuts
+                  liveVoice={pendingLiveVoice}
+                  {...repeatNudge}
                 />
+              ) : approvalStatus.status ? (
+                <ApprovalStatusLine status={approvalStatus.status} />
               ) : null}
             </EventPresence>
             <EventPresence
@@ -3741,6 +3916,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
               />
             ) : null}
             {recoveredQuestion ? <AskUserQuestionExpiryNotice state="restarted" /> : null}
+            {designModeConsent && !questionnaire ? (
+              <DesignModeConsentCard key={designModeConsent.requestId} request={designModeConsent} />
+            ) : null}
             {missingWorkspaceFolder && !questionnaire ? (
               <WorkspaceFolderMissingNotice
                 workspaceName={missingWorkspaceFolder.name}
@@ -3795,6 +3973,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 }
                 onSend={(...args) => {
                   setDeniedApprovalChatId(null);
+                  approvalStatus.clear();
                   return handleSend(...args);
                 }}
                 freezeWhileSending={Boolean(draft)}
@@ -3853,7 +4032,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 gitUnborn={git.data?.unborn}
                 gitStatus={git.data?.isRepo ? git.data : undefined}
                 onOpenFolder={openFolder}
-                onChangePermission={changePermission}
+                onChangeApprovals={changeApprovals}
                 workspacePickerEnabled={isNewChat}
                 machinePicker={
                   // A new chat may run on a paired Mac instead.
@@ -4047,6 +4226,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           <DraftWorktreeSendView
             text={worktreeSend.text}
             attachments={worktreeSend.attachments}
+            inputSource={worktreeSend.inputSource}
             view={worktreeSend.view}
             onDecide={worktreeSend.decide}
           />
@@ -4148,7 +4328,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           saveComposerDraftText(key, cloneDraftRef.current.text);
           seedComposerAttachments(key, cloneDraftRef.current.attachments);
         } else if (cloneDraftRef.current.text || cloneDraftRef.current.attachments.length) {
-          toast.info("The paired computer already has a draft. Your current prompt remains saved on this computer.");
+          toast.info(`The paired computer already has a draft. Your current prompt remains saved on this ${localComputerNoun(capabilities.platform)}.`);
         }
         qc.setQueryData<import("../shared/peer-host").PeerHostFeedSnapshot | null>(hostQueryKeys.feed(hostId), current => current ? { ...current, workspaces: [...current.workspaces.filter(row => row.id !== workspace.id), workspace] } : current);
         void navigate({ to: "/host/$hostId/new", params: { hostId }, search: { workspaceId: workspace.id } });

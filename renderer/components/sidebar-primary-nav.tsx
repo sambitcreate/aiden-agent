@@ -1,14 +1,14 @@
-import { ChevronDown, Clock3, Images, PenTool, SquarePen } from "lucide-react";
+import { ChevronDown, Clock3, Images, SquarePen } from "lucide-react";
 import type { AppCapabilities } from "../lib/app-capabilities";
 import { studioFeatureForPath } from "../shared/studio-routes";
 import { BotSidebarIcon } from "./bot-avatar";
 import { Button, SidebarListItem } from "./ui";
 
-export type SidebarPrimaryDestination = "/scheduled" | "/bots" | "/design" | "/images";
+export type SidebarPrimaryDestination = "/scheduled" | "/bots" | "/images";
 
 export interface SidebarPrimaryNavProps {
   pathname: string;
-  capabilities: Pick<AppCapabilities, "bots" | "designStudio" | "createImages">;
+  capabilities: Pick<AppCapabilities, "bots" | "createImages">;
   newAgentDisabled: boolean;
   onNewAgent: () => void;
   /** Opens the New chat in… palette; shown as a chevron beside New Agent on hover or focus. */
@@ -77,14 +77,6 @@ export function SidebarPrimaryNav({
           title="Bots"
           selected={pathname.startsWith("/bots") && !openBotShownBelow}
           onClick={() => onNavigate("/bots")}
-        />
-      ) : null}
-      {capabilities.designStudio ? (
-        <SidebarListItem
-          icon={<PenTool />}
-          title="Design"
-          selected={studio === "designStudio"}
-          onClick={() => onNavigate("/design")}
         />
       ) : null}
       {capabilities.createImages ? (

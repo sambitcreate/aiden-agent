@@ -57,6 +57,12 @@ function withTime<T extends object>(entry: T, createdAt: string | undefined): T 
 /** One host entry as a transcript entry, or null for one this Mac does not draw. */
 export function remoteBotTranscriptEntry(entry: AidenRemoteBotSessionEntry): BotTranscriptEntry | null {
   switch (entry.type) {
+    case "peer":
+      return withTime({
+        id: entry.id, type: "peer" as const, exchangeId: entry.exchangeId,
+        direction: entry.direction, peerBotId: entry.peerBotId, peerName: entry.peerName,
+        messageKind: entry.messageKind, ...(entry.final ? { final: true as const } : {}),
+      }, entry.createdAt);
     case "message":
       if (entry.role === "assistant")
         return withTime(
@@ -86,9 +92,14 @@ export function remoteBotTranscriptEntry(entry: AidenRemoteBotSessionEntry): Bot
     // (`useRemoteBotImages`); empty `data` marks an image not read yet.
     case "shared_image":
       return { id: entry.id, type: "shared_image", name: entry.name, mimeType: entry.mimeType, size: entry.size, data: "" };
-    // Cards this Mac does not opt into (`bot:cards`); the host never sends them here.
+    // Cards this Mac does not opt into (`bot:cards`, and the revision-61
+    // `bot:settings-changes` and `bot:suggestions`); the host never sends them here.
     case "memory_update":
     case "routine_proposal":
+    case "settings_change":
+    case "skill_proposal":
+    case "lesson":
+    case "memory_tidy":
       return null;
   }
 }

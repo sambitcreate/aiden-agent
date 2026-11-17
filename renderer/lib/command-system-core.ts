@@ -1,12 +1,13 @@
 import {
   COMMANDS,
   matchesAccelerator,
+  type CommandCapability,
   type CommandDefinition,
   type CommandId,
   type KeyboardEventLike,
   type KeyboardPlatform,
 } from "../shared/keybindings";
-import { isStudioPath, type StudioFeature } from "../shared/studio-routes";
+import { isStudioPath } from "../shared/studio-routes";
 
 export interface CommandDispatchContext {
   editable: boolean;
@@ -84,7 +85,7 @@ export function resolveCommandForKeyEvent(
  * nothing handles them, so the palette lists only what can run here.
  */
 export function paletteCommands(
-  capabilities: Readonly<Record<StudioFeature, boolean>>,
+  capabilities: Readonly<Partial<Record<CommandCapability, boolean>>>,
   available: (commandId: CommandId) => boolean = () => true,
 ): CommandDefinition[] {
   return COMMANDS.filter(

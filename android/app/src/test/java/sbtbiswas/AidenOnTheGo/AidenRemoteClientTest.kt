@@ -917,7 +917,7 @@ class AidenRemoteClientTest {
               {"id":"canary-180m-flash","name":"Canary 180M Flash","description":"Small and very fast. English, German, Spanish and French, with translation to English.","sizeLabel":"154 MB","quant":"int8","languagesLabel":"English, German, Spanish, French","accuracy":0.88,"speed":0.98,"recommended":false,"installed":false,"languages":["en","de","es","fr"],"capabilities":{"autoDetect":false,"languageHint":true,"translateToEnglish":true,"maxWindowSeconds":null},"license":{"name":"CC-BY-4.0 (NVIDIA)","url":"https://creativecommons.org/licenses/by/4.0/"}},
               {"id":"whisper-turbo","name":"Whisper Large v3 Turbo","description":"Broadest language coverage. Slower than the others.","sizeLabel":"564 MB","quant":"int8","languagesLabel":"99 languages","accuracy":0.88,"speed":0.35,"recommended":false,"installed":false,"languages":["en","zh","de"],"capabilities":{"autoDetect":true,"languageHint":true,"translateToEnglish":false,"maxWindowSeconds":30},"license":{"name":"MIT (OpenAI Whisper)","url":"https://github.com/openai/whisper/blob/main/LICENSE"},"download":{"id":"whisper-turbo","percentage":90,"phase":"verify","status":"downloading"}},
               {"id":"sense-voice","name":"SenseVoice Small","description":"Fast Chinese, Cantonese, English, Japanese and Korean.","sizeLabel":"163 MB","quant":"int8","languagesLabel":"Chinese, Cantonese, English, Japanese, Korean","accuracy":0.81,"speed":0.98,"recommended":false,"installed":false,"languages":["zh","yue","en","ja","ko"],"capabilities":{"autoDetect":true,"languageHint":true,"translateToEnglish":false,"maxWindowSeconds":30},"license":{"name":"FunASR Model License 1.1","url":"https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE","attribution":"SenseVoice Small, Alibaba FunAudioLLM"}},
-              {"id":"moonshine-base-en","name":"Moonshine Base","description":"Tiny English model for Macs with little free memory.","sizeLabel":"111 MB","quant":"int8","languagesLabel":"English","accuracy":0.8,"speed":0.99,"recommended":false,"installed":false,"languages":["en"],"capabilities":{"autoDetect":false,"languageHint":false,"translateToEnglish":false,"maxWindowSeconds":30},"license":{"name":"MIT (Moonshine English models)","url":"https://github.com/moonshine-ai/moonshine/blob/main/LICENSE"}}
+              {"id":"moonshine-base-en","name":"Moonshine Base","description":"Tiny English model for computers with little free memory.","sizeLabel":"111 MB","quant":"int8","languagesLabel":"English","accuracy":0.8,"speed":0.99,"recommended":false,"installed":false,"languages":["en"],"capabilities":{"autoDetect":false,"languageHint":false,"translateToEnglish":false,"maxWindowSeconds":30},"license":{"name":"MIT (Moonshine English models)","url":"https://github.com/moonshine-ai/moonshine/blob/main/LICENSE"}}
             ],
               "input":{"encoding":"pcm_s16le","sampleRate":16000,"channels":1,"maximumSeconds":60,"partialResults":false}
             }
@@ -1338,6 +1338,22 @@ class AidenRemoteClientTest {
             fail("A loser must surface the first-responder conflict.")
         } catch (error: AidenRemoteClientException.Server) {
             assertEquals("Answered on Mac: allowed", AidenForeignRunResolution.loser(error)?.notice)
+        }
+    }
+
+    @Test
+    fun bothRunFeedsRequestCheckpointWithoutChangingTheirCursorOrIdentity() = runBlocking {
+        val wire = contractFixture().getValue("runCheckpoint")
+        for (knownRun in listOf(false, true)) {
+            server.enqueue(MockResponse().setResponseCode(200).setHeader("Content-Type", "text/event-stream")
+                .setBody("id: 90\nevent: snapshot\ndata: $wire\n\n"))
+            val events = (if (knownRun) client.runEvents("run-1", after = 89) else client.currentRunEvents("chat-1")).toList()
+            val request = server.takeRequest()
+            assertEquals("1", request.getHeader("Aiden-Run-Checkpoint"))
+            assertEquals(if (knownRun) "/api/aiden/v1/runs/run-1/events?after=89" else "/api/aiden/v1/chats/chat-1/runs/current/events", request.path)
+            assertEquals(if (knownRun) "89" else null, request.getHeader("Last-Event-ID"))
+            assertEquals(listOf("run-1"), events.map { it.runId })
+            assertEquals("Checked the build.", (events.single().kind as AidenRemoteRunEvent.Kind.Snapshot).snapshot.replyText)
         }
     }
 

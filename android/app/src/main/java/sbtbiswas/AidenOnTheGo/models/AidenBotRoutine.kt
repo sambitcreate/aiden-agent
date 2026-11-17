@@ -217,9 +217,20 @@ data class AidenBotPreset(
     val subtitle: String,
     val avatar: AidenBotAvatarRecipe,
     val suggestedConnections: List<AidenBotConnectionChip>,
-    val suggestedRoutine: AidenBotPresetRoutine? = null
+    val suggestedRoutine: AidenBotPresetRoutine? = null,
+    /**
+     * Revision 61 (`bot:templates` holders only): the template's version, sent back on create;
+     * its instructions for the Adds section; a short made-up sample shown faded; and the live
+     * Bot it already made, which the detail opens instead of creating another. The first three
+     * come together or not at all.
+     */
+    @Serializable(with = AidenStrictIntSerializer::class) val version: Int? = null,
+    val instructions: String? = null,
+    val sample: List<String>? = null,
+    val existingBotId: String? = null
 ) {
     init {
+        AidenBotTemplateWire.validate(version, instructions, sample, existingBotId)
         AidenBotSessionWire.validatePluginId(id, "preset.id")
         AidenBotWire.validateString(name, "preset.name", AidenBotWire.MAX_NAME_LENGTH)
         AidenBotWire.validateString(subtitle, "preset.subtitle", AidenBotRoutineWire.MAX_PRESET_SUBTITLE_LENGTH)
@@ -239,9 +250,14 @@ data class AidenBotPresetList(val presets: List<AidenBotPreset>) {
 }
 
 @Serializable
-data class AidenBotPresetCreateRequest(val presetId: String) {
+data class AidenBotPresetCreateRequest(
+    val presetId: String,
+    /** Revision 61: the template version the detail showed; another is `409 revision_conflict`. */
+    val version: Int? = null
+) {
     init {
         AidenBotSessionWire.validatePluginId(presetId, "presetId")
+        if (version != null && version < 1) throw AidenBotContractException.InvalidField("version")
     }
 }
 
@@ -328,6 +344,7 @@ enum class AidenBotRoutineNotificationStatus {
 enum class AidenBotNotificationKind {
     @SerialName("routine") ROUTINE,
     @SerialName("issue") ISSUE,
+    @SerialName("peer") PEER,
     @SerialName("message") MESSAGE
 }
 
@@ -358,12 +375,13 @@ data class AidenBotRoutineNotification(
         routineId?.let { AidenBotWire.validateString(it, "notification.routineId", AidenBotRoutineWire.MAX_ID_LENGTH) }
         AidenBotWire.validateString(routineName, "notification.routineName", AidenBotRoutineWire.MAX_NAME_LENGTH)
         AidenBotWire.validateString(preview, "notification.preview", MAX_PREVIEW_LENGTH, allowEmpty = true)
+        if(kind==AidenBotNotificationKind.PEER){AidenOpenWorkWire.text(routineName,120,480);AidenOpenWorkWire.text(preview,160,640,true)}
         // A routine result says which routine ran and how it ended; an issue card carries neither.
         when (kind ?: AidenBotNotificationKind.ROUTINE) {
             AidenBotNotificationKind.ROUTINE -> if (routineId == null || status == null) {
                 throw AidenBotContractException.InvalidField("notification")
             }
-            AidenBotNotificationKind.ISSUE, AidenBotNotificationKind.MESSAGE -> if (routineId != null || status != null) {
+            AidenBotNotificationKind.ISSUE, AidenBotNotificationKind.PEER, AidenBotNotificationKind.MESSAGE -> if (routineId != null || status != null) {
                 throw AidenBotContractException.InvalidField("notification")
             }
         }

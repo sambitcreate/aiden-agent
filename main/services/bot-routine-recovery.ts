@@ -103,7 +103,7 @@ export function routinePausedKey(taskId: string): string { return `routine_pause
 export interface BotRoutineRecoveryDependencies {
   store: {
     runs(taskId: string): Promise<ScheduledRun[]>;
-    addRoutineRetry(id: string, retry: { failedRunId: string; attempt: 1 | 2; at: number; verifiedToolFree: true }): Promise<boolean>;
+    addRoutineRetry(id: string, retry: { failedRunId: string; attempt: 1 | 2; at: number; verifiedToolFree: true; routineTiming?: ScheduledRun["routineTiming"] }): Promise<boolean>;
   };
   canRetryRoutineRequest(botId: string, requestId: string): Promise<boolean>;
   pauseAfterFailedRun(id: string, activeRunId: string): Promise<void>;
@@ -166,6 +166,7 @@ export function createBotRoutineRecovery(dependencies: BotRoutineRecoveryDepende
           await dependencies.canRetryRoutineRequest(botId, failedRunId).catch(() => false);
         if (originalSafe && await dependencies.store.addRoutineRetry(task.id, {
           failedRunId, attempt: plan.attempt, at: plan.at, verifiedToolFree: true,
+          ...(run.routineTiming ? { routineTiming: run.routineTiming } : {}),
         })) {
           return { retrying: true };
         }

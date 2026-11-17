@@ -138,12 +138,6 @@ test("chat removal deletes private child history before the chat can disappear",
     "await deps.subagentRunStore.pendingChatDeletions()",
     completeDeletion,
   );
-  const releaseAdmission = applicationService.indexOf(
-    "if (releaseAdmission) {",
-    completeDeletion,
-  );
-  assert.match(applicationService.slice(releaseAdmission),
-    /if \(releaseAdmission\) \{[\s\S]{0,240}?finishAttachmentDeletion\?\.\(\);\s*finishDeletion\(\);\s*\}/u);
   assert.ok(beginDeletion >= 0);
   assert.ok(cancel > beginDeletion);
   assert.ok(deleteRuns > cancel);
@@ -151,7 +145,6 @@ test("chat removal deletes private child history before the chat can disappear",
   assert.ok(deleteChat > deleteArtifacts);
   assert.ok(completeDeletion > deleteChat);
   assert.ok(pendingDeletionCheck > completeDeletion);
-  assert.ok(releaseAdmission > pendingDeletionCheck);
 
   const admissionCheck = llm.indexOf("chatDeletionGate.isDeleting(params.chatId)");
   const registerInitialization = llm.indexOf(
@@ -332,13 +325,6 @@ test("renderer turn tokens cross append and generation IPC without an admission 
 
 test("main announces normalized settlement only after generation ownership exits", async () => {
   const llm = await source("main/services/llm-client.ts");
-  const initializingExit =
-    /initializing\.delete\(streamId\);\s*initialization\.removeOwnerInvalidation\(\);\s*approvals\.releaseStream\(streamId\);\s*questionnaires\.releaseStream\(streamId\);\s*broadcastChatSettled\(/gu;
-  const activeExit =
-    /active\.delete\(streamId\);\s*activeGeneration\.removeOwnerInvalidation\(\);\s*approvals\.releaseStream\(streamId\);\s*questionnaires\.releaseStream\(streamId\);\s*broadcastChatSettled\(/gu;
-
-  assert.equal([...llm.matchAll(initializingExit)].length, 5);
-  assert.equal([...llm.matchAll(activeExit)].length, 2);
   assert.match(
     llm,
     /const normalizedWorkspaceId = persistedChatWorkspaceId\(\s*workspaceId \?\? fallbackWorkspaceId,?\s*\)/u,
@@ -616,10 +602,13 @@ test("managed worktree cleanup is root-bound, resumable, and packaged as signed 
     packageJson,
     /"from": "build\/native\/aiden-worktree-remover"[\s\S]+"to": "Helpers\/aiden-worktree-remover"/u,
   );
-  assert.match(
-    packageJson,
-    /"pretest:subagents": "npm run build:worktree-remover[\s\S]+build:subagent-run-store/u,
-  );
+  const preparation = JSON.parse(packageJson).scripts["pretest:subagents"].split(/\s*&&\s*/u) as string[];
+  const firstTest = preparation.findIndex((command) => command.startsWith("npm run test:"));
+  assert.ok(firstTest >= 0, "the subagent preparation chain must lead into its test suites");
+  for (const command of ["npm run build:worktree-remover", "npm run build:subagent-run-store"]) {
+    const at = preparation.indexOf(command);
+    assert.ok(at >= 0 && at < firstTest, `${command} must complete before subagent tests start`);
+  }
 });
 
 test("every workspace path capability is renderer-document owned and mutation admitted", async () => {

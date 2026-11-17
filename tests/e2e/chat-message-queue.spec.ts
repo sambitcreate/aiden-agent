@@ -47,16 +47,17 @@ test("composer squircle follows resizing and draft growth without clipping acces
   await expect.poll(async () => (await shell.boundingBox())!.width).toBeLessThan(initial!.width);
   await assertShape();
   await composer.fill("");
-  const access = page.getByRole("button", { name: /^Workspace access: Ask first/u });
-  await access.click();
-  const options = page.getByRole("radiogroup", { name: "Workspace access" });
-  const noAccess = options.getByRole("radio", { name: /^Workspace access: No access/u });
+  // A fresh install starts in No workspace, whose composer always shows the approvals chip.
+  const approvals = page.getByRole("button", { name: /^Approvals: /u });
+  await approvals.click();
+  const options = page.getByRole("radiogroup", { name: "Approvals" });
+  const chatOnly = options.getByRole("radio", { name: "Approvals: Chat only", exact: true });
   // Clicking a choice above the shell also verifies that overflow is hit-testable.
   await expect(options).toBeVisible();
   await expectSquircleButtons(page);
   expect((await options.boundingBox())!.y).toBeLessThan((await shell.boundingBox())!.y);
-  await noAccess.click();
-  await expect(page.getByRole("button", { name: /^Workspace access: No access/u })).toBeVisible();
+  await chatOnly.click();
+  await expect(page.getByRole("button", { name: /^Approvals: Chat only\./u })).toBeVisible();
   await composer.fill("");
   await assertShape();
   await page.screenshot({ path: test.info().outputPath("squircle-composer.png") });
@@ -479,6 +480,44 @@ test("rejected and unknown Steer receipts keep the draft without replaying it", 
     JSON.stringify(request.body).includes("Keep this guidance"),
   ).length).toBe(1);
   await expect(composer).toHaveValue("Keep this guidance");
+});
+
+test("a Steer that misses the finishing response is sent once as the next turn", async ({ aiden }) => {
+  const { page, lmStudio } = aiden;
+  await finishLmStudioOnboarding(page);
+  lmStudio.holdCompletions!();
+  const composer = page.locator("textarea");
+  await composer.fill("First response before late guidance");
+  await composer.press("Enter");
+  await expect(page.getByRole("button", { name: "Stop generating" })).toBeVisible();
+  // The run is past taking input (finishing up after agent_end): main
+  // refuses guidance as run_not_active and saves nothing.
+  await aiden.app.evaluate(({ ipcMain }) => {
+    const handlers = (ipcMain as unknown as {
+      _invokeHandlers: Map<string, (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => unknown>;
+    })._invokeHandlers;
+    handlers.set("chat:admitRunInput", async () => ({
+      admitted: false,
+      reason: "run_not_active",
+      committed: false,
+    }));
+  });
+  await composer.fill("Late guidance becomes the next turn");
+  await page.getByRole("button", { name: "Choose message action" }).click();
+  await page.getByRole("menuitemradio", { name: /^Steer/u }).click();
+  lmStudio.releaseCompletions!();
+  await expect(page.getByText(/It will send as your next message/u)).toBeVisible();
+  await expect(composer).toHaveValue("");
+  await expect.poll(() => lmStudio.requests.filter((request) =>
+    JSON.stringify(request.body).includes("Late guidance becomes the next turn"),
+  ).length).toBe(1);
+  await expect(page.getByRole("button", { name: "Stop generating" })).toHaveCount(0);
+  await expect(page.getByText("Late guidance becomes the next turn", { exact: true })).toHaveCount(1);
+  await expect(page.getByRole("button", { name: /queued message/u })).toHaveCount(0);
+  // Settled with an empty queue: still exactly one provider request carried it.
+  expect(lmStudio.requests.filter((request) =>
+    JSON.stringify(request.body).includes("Late guidance becomes the next turn"),
+  ).length).toBe(1);
 });
 
 test("a response finishing while the queue editor is open waits for the saved edit", async ({

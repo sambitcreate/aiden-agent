@@ -56,7 +56,44 @@ export type BotReplyRowState =
   /** Delivery failed even after the one duplicate-labelled retry. */
   | "failed";
 
+type BotReplyRowEvent =
+  /** The Bot's answer was saved to the row. */
+  | "answered"
+  /** The wait ended without an answer, and a Resume may still produce one. */
+  | "turn_interrupted"
+  /** The wait ended without an answer, and none will ever come. */
+  | "turn_dismissed"
+  | "send_started"
+  /** The one labelled retry of a send whose outcome is unknown. */
+  | "redelivery_started"
+  | "send_confirmed"
+  /** Nothing further may be sent: retries are spent, or the target went away. */
+  | "send_abandoned";
+
+const BOT_REPLY_ROW_TRANSITIONS: Record<BotReplyRowEvent, Partial<Record<BotReplyRowState, BotReplyRowState>>> = {
+  answered: { awaiting: "pending", interrupted: "pending" },
+  turn_interrupted: { awaiting: "interrupted", interrupted: "interrupted" },
+  turn_dismissed: { awaiting: "dismissed", interrupted: "dismissed" },
+  send_started: { pending: "sending" },
+  redelivery_started: { sending: "sending" },
+  send_confirmed: { sending: "sent" },
+  send_abandoned: { pending: "failed", sending: "failed" },
+};
+
+/**
+ * The row's next state, or undefined when the event does not apply to it. Rows
+ * are copied out of the lock before they are acted on, so an event can arrive
+ * for a row that has moved on; refusing it is what keeps a finished send from
+ * being repeated. `sending` is the unknown outcome: only a confirmation, the
+ * one labelled retry, or giving up may leave it.
+ */
+function advanceBotReplyRow(state: BotReplyRowState, event: BotReplyRowEvent): BotReplyRowState | undefined {
+  return BOT_REPLY_ROW_TRANSITIONS[event][state];
+}
+
 export interface BotReplyRow {
+  /** Host-frozen original Bot identity for a peer final; display delivery only. */
+  botIncarnation?: string;
   requestId: string;
   botId: string;
   /** `reply` (absent): an answer to a Telegram message. `routine`: a routine's result. */
@@ -89,6 +126,9 @@ export interface TelegramBotMessage {
 }
 
 export interface TelegramBotReply {
+  /** Internal original owner identity, checked by the transport after its awaits. */
+  botId?: string;
+  botIncarnation?: string;
   chatId: number;
   threadId?: number;
   ownerUserId: number;
@@ -97,6 +137,8 @@ export interface TelegramBotReply {
 
 /** A routine result for the Bot's bound Telegram chat. */
 export interface TelegramBotRoutineDelivery {
+  botIncarnation?: string;
+  publication?: {assertCurrent():Promise<void>};
   botId: string;
   /** The routine run's session request id: one row per firing. */
   requestId: string;
@@ -119,7 +161,7 @@ export interface TelegramBotIngressDeps {
    * Whether a routine row may still go to its chat: the Bot's binding is
    * enabled and still targets that chat. Checked right before each send.
    */
-  routineTargetEnabled?(row: Pick<BotReplyRow, "botId" | "chatId" | "threadId">): Promise<boolean>;
+  routineTargetEnabled?(row: Pick<BotReplyRow, "botId" | "botIncarnation" | "chatId" | "threadId">): Promise<boolean>;
   /** The Bot's display name, for the paused line. */
   botName?(botId: string): Promise<string | undefined>;
   now?: () => number;
@@ -229,20 +271,27 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
     return next;
   }
 
-  async function persist(file: OutboxFile): Promise<void> {
+  async function persist(file: OutboxFile,publication?:{assertCurrent():Promise<void>}): Promise<void> {
     const settled = file.rows.filter((row) => row.state === "sent" || row.state === "failed" || row.state === "dismissed");
     if (settled.length > MAX_SETTLED_ROWS) {
       const drop = new Set(settled.slice(0, settled.length - MAX_SETTLED_ROWS));
       file.rows = file.rows.filter((row) => !drop.has(row));
     }
-    await writeJsonAtomic(deps.file, file, { mode: 0o600, mkdirMode: 0o700 });
+    await writeJsonAtomic(deps.file, file, { mode: 0o600, mkdirMode: 0o700, beforePublish:async()=>{await publication?.assertCurrent();} });
   }
 
-  function update(requestId: string, change: (row: BotReplyRow) => void): Promise<BotReplyRow | undefined> {
+  /** Applies one event under the lock; undefined when the row has moved on and nothing changed. */
+  function advance(
+    requestId: string,
+    event: BotReplyRowEvent,
+    change?: (row: BotReplyRow) => void,
+  ): Promise<BotReplyRow | undefined> {
     return locked(async (file) => {
       const row = file.rows.find((candidate) => candidate.requestId === requestId);
-      if (row === undefined) return undefined;
-      change(row);
+      const next = row && advanceBotReplyRow(row.state, event);
+      if (row === undefined || next === undefined) return undefined;
+      row.state = next;
+      change?.(row);
       row.updatedAt = now();
       await persist(file);
       return { ...row };
@@ -271,24 +320,21 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
     if (!queued) return;
     if (queued?.kind === "routine" && !(await routineTargetEnabled(queued))) {
       // Unbound or switched off since the routine ran: drop it unsent.
-      await update(requestId, (current) => {
-        if (current.state === expectedState) current.state = "failed";
-      });
+      await advance(requestId, "send_abandoned");
       return;
     }
-    const row = await locked(async (file) => {
-      const current = file.rows.find((candidate) => candidate.requestId === requestId);
-      if (current?.state !== expectedState) return undefined;
-      current.state = "sending";
-      if (duplicate) current.redelivered = true;
-      current.updatedAt = now();
-      await persist(file);
-      return { ...current };
-    });
+    const row = duplicate
+      ? await advance(requestId, "redelivery_started", (current) => void (current.redelivered = true))
+      : await advance(requestId, "send_started");
     if (row === undefined || row.text === undefined) return;
+    if (row.kind === "routine" && !(await routineTargetEnabled(row))) {
+      await advance(requestId, "send_abandoned");
+      return;
+    }
     const text = duplicate ? `${MAY_BE_DUPLICATE_PREFIX} ${row.text}` : row.text;
     try {
       await deps.deliver({
+        ...(row.botIncarnation?{botId:row.botId,botIncarnation:row.botIncarnation}:{}),
         chatId: row.chatId,
         ...(row.threadId === undefined ? {} : { threadId: row.threadId }),
         ownerUserId: row.ownerUserId,
@@ -297,10 +343,10 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
     } catch (cause) {
       // Part of the reply may have reached Telegram: retry once, labelled.
       if (!duplicate) return attemptDelivery(requestId, true);
-      await update(requestId, (current) => void (current.state = "failed"));
+      await advance(requestId, "send_abandoned");
       throw cause;
     }
-    await update(requestId, (current) => void (current.state = "sent"));
+    await advance(requestId, "send_confirmed");
   }
 
   async function deliverRow(requestId: string, duplicate: boolean): Promise<void> {
@@ -339,16 +385,12 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
       throw cause;
     }
     if (outcome.kind === "interrupted") {
-      const next = outcome.settled ? "dismissed" : "interrupted";
-      await update(row.requestId, (current) => void (current.state = next));
+      await advance(row.requestId, outcome.settled ? "turn_dismissed" : "turn_interrupted");
       return;
     }
     const text = outcome.kind === "completed" ? outcome.text : `⚠️ Error: ${outcome.error}`;
-    await update(row.requestId, (current) => {
-      current.state = "pending";
-      current.text = text;
-    });
-    await deliverRow(row.requestId, false);
+    const answered = await advance(row.requestId, "answered", (current) => void (current.text = text));
+    if (answered !== undefined) await deliverRow(row.requestId, false);
   }
 
   return {
@@ -417,10 +459,12 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
     async enqueueRoutineDelivery(delivery) {
       if (stopper.signal.aborted) return { queued: false };
       const queued = await locked(async (file) => {
+        await delivery.publication?.assertCurrent();
         if (file.rows.some((row) => row.requestId === delivery.requestId)) return false;
         file.rows.push({
           requestId: delivery.requestId,
           botId: delivery.botId,
+          ...(delivery.botIncarnation?{botIncarnation:delivery.botIncarnation}:{}),
           kind: "routine",
           submissionId: "",
           chatId: delivery.chatId,
@@ -430,7 +474,7 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
           text: telegramRoutineText(delivery.routineName, delivery.text),
           updatedAt: now(),
         });
-        await persist(file);
+        await persist(file,delivery.publication);
         return true;
       });
       if (queued) inBackground(() => deliverRow(delivery.requestId, false));
@@ -446,7 +490,7 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
         if (row.state === "awaiting" || row.state === "interrupted") trackOnce(row);
         else if (row.state === "pending") inBackground(() => deliverRow(row.requestId, false));
         else if (row.state === "sending") {
-          if (row.redelivered) await update(row.requestId, (current) => void (current.state = "failed"));
+          if (row.redelivered) await advance(row.requestId, "send_abandoned");
           else inBackground(() => deliverRow(row.requestId, true));
         }
       }

@@ -1,66 +1,19 @@
-import { CompactionBudgetSettings } from "./compaction-budget-settings";
 import { MemoryFactsSection } from "./memory-facts-section";
-import { compactionEngineFrom, type CompactionEngine, type CompactionModelBudget } from "../../shared/compaction";
 import * as React from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Field, FieldSet, RadioGroup, RadioGroupItem, Switch, Text, toast } from "../ui";
-import { providersApi, settingsApi, workspacesApi } from "../../lib/ipc";
-import { queryKeys, useSettings, useWorkspaces, useProviders } from "../../lib/queries";
+import { useQueryClient } from "@tanstack/react-query";
+import { Field, FieldSet, Switch, Text, toast } from "../ui";
+import { InfoHint } from "../ui-info-hint";
+import { settingsApi, workspacesApi } from "../../lib/ipc";
+import { queryKeys, useSettings, useWorkspaces } from "../../lib/queries";
 import type { AppSettings, Workspace } from "../../lib/types";
 
 export function MemorySettings() {
   const queryClient = useQueryClient();
   const settings = useSettings();
   const workspaces = useWorkspaces();
-  const providers = useProviders();
-  // Reuse Codex models already in the query cache without triggering an auth
-  // status request just because this page opened or regained focus.
-  const codexModels = useQuery({
-    queryKey: queryKeys.codexProviderStatus,
-    queryFn: () => providersApi.authStatus("openai-codex"),
-    enabled: false,
-  }).data?.models;
-  const budgetModelKeys = React.useMemo(
-    () => [
-      ...(providers.data ?? []).flatMap((provider) => provider.models.map((model) => `${provider.id}/${model}`)),
-      ...(codexModels ?? []).map((model) => `openai-codex/${model.id}`),
-    ],
-    [providers.data, codexModels],
-  );
-  const [compactionSaving, setCompactionSaving] = React.useState(false);
-  const [warmingSaving, setWarmingSaving] = React.useState(false);
-  const warmingSavingRef = React.useRef(false);
   const [globalSaving, setGlobalSaving] = React.useState(false);
   const [workspaceSaving, setWorkspaceSaving] = React.useState<Set<string>>(() => new Set());
   const globallyEnabled = settings.data?.memoryEnabled !== false;
-
-  const setCompactionEngine = async (engine: CompactionEngine) => {
-    if (compactionSaving) return;
-    setCompactionSaving(true);
-    try {
-      const saved = await settingsApi.set({ compactionEngine: engine });
-      queryClient.setQueryData<AppSettings>(queryKeys.settings, saved);
-    } catch {
-      toast.error("Couldn't update automatic compaction.");
-    } finally {
-      setCompactionSaving(false);
-    }
-  };
-
-  const setWarmingEnabled = async (enabled: boolean) => {
-    if (warmingSavingRef.current) return;
-    warmingSavingRef.current = true;
-    setWarmingSaving(true);
-    try {
-      const saved = await settingsApi.set({ cacheWarmingEnabled: enabled });
-      queryClient.setQueryData<AppSettings>(queryKeys.settings, saved);
-    } catch {
-      toast.error("Couldn’t update cache warming.");
-    } finally {
-      warmingSavingRef.current = false;
-      setWarmingSaving(false);
-    }
-  };
 
   const setGlobalEnabled = async (enabled: boolean) => {
     if (globalSaving) return;
@@ -96,81 +49,14 @@ export function MemorySettings() {
 
   return (
     <div className="flex flex-col gap-6">
-      <FieldSet title="Automatic compaction">
-        <RadioGroup
-          orientation="vertical"
-          aria-label="Automatic compaction engine"
-          value={compactionEngineFrom(settings.data?.compactionEngine)}
-          onValueChange={(value) => void setCompactionEngine(compactionEngineFrom(value))}
-          disabled={settings.isLoading}
-          aria-busy={compactionSaving}
-          className="gap-1 p-2"
-        >
-          {(
-            [
-              [
-                "llm",
-                "LLM Compaction",
-                "Uses your chat model to summarize older context. Takes time and uses model tokens.",
-              ],
-              [
-                "vcc",
-                "pi-vcc Compaction — Experimental",
-                "Compacts locally without a summarization call. Preserves selected excerpts and retrieves earlier details when needed.",
-              ],
-            ] as const
-          ).map(([value, label, description]) => (
-            <label
-              key={value}
-              className={`flex cursor-pointer items-start gap-3 rounded-lg p-3 transition-colors hover:bg-control-hover ${compactionEngineFrom(settings.data?.compactionEngine) === value ? "bg-control" : ""}`}
-            >
-              <RadioGroupItem
-                value={value}
-                aria-label={label}
-                className="mt-0.5 shrink-0 focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-popover"
-              />
-              <span className="flex flex-col gap-1">
-                <Text>{label}</Text>
-                <Text as="span" variant="small" color="secondary">
-                  {description}
-                </Text>
-              </span>
-            </label>
-          ))}
-        </RadioGroup>
-        <Text as="p" variant="small" color="secondary" className="px-4 pb-4 text-pretty">
-          Applies to new runs. Try /compact-LLM or /compact-VCC in an idle chat for a one-time
-          override; /compact uses this preference. Local compaction can omit details, which Aiden
-          can retrieve from the current chat. That context may be sent to your chat model when the
-          conversation continues. Current-chat recall works independently of memory below.
-        </Text>
-        <Text as="p" variant="small" color="secondary" className="px-4 pb-4 text-pretty">
-          When you come back to a chat over 100K tokens after its prompt cache expired, pi-vcc
-          compacts it right away. With LLM Compaction, Aiden asks “Compact first?” instead, since
-          summarizing uses model tokens.
-        </Text>
-      </FieldSet>
-
-      <CompactionBudgetSettings
-        overrides={settings.data?.compactionModelOverrides ?? {}}
-        modelKeys={budgetModelKeys}
-        disabled={settings.isLoading}
-        onSave={async (modelKey: string, budget: CompactionModelBudget | undefined) => {
-          const saved = await settingsApi.setCompactionModelBudget(modelKey, budget ?? null);
-          queryClient.setQueryData<AppSettings>(queryKeys.settings, saved);
-        }}
-      />
-
-      <FieldSet title="Prompt cache">
-        <Field label="Warm caches during active chats" description="Optional paid one-token requests keep an eligible provider cache warm during long desktop agent runs. Off by default; starts with your next chat run and stops when the run ends.">
-          <Switch aria-label="Warm prompt caches during active chats" checked={settings.data?.cacheWarmingEnabled === true} disabled={settings.isLoading || warmingSaving} onCheckedChange={(enabled) => void setWarmingEnabled(enabled)} />
-        </Field>
-        <Text as="p" variant="small" color="secondary" className="px-4 pb-4 text-pretty">Only refreshes when provider-reported usage and known pricing estimate at least $0.05 in savings. Charges appear in Usage. Stops after one hour, on cancellation, or when switched off. Does not warm idle chats, Bots, scheduled tasks, or subagents.</Text>
-      </FieldSet>
-
       <FieldSet title="Memory controls">
         <Field
           label="Use memory"
+          hint={
+            <InfoHint topic="turning memory off">
+              Off stops memory tools, prompt context and new indexing. Approved facts stay on this device for when you turn it back on.
+            </InfoHint>
+          }
           description="Lets Aiden recall approved facts, suggest new facts during chats, and index conversation metadata for retrieval."
         >
           <Switch
@@ -181,12 +67,15 @@ export function MemorySettings() {
           />
         </Field>
       </FieldSet>
-      <Text as="p" variant="small" color="secondary" className="text-pretty">
-        Turning memory off stops memory tools, prompt context, and new indexing. Existing approved
-        facts stay on this device and become available again if you turn it back on.
-      </Text>
 
-      <FieldSet title="Workspaces">
+      <FieldSet
+        title="Workspaces"
+        hint={
+          <InfoHint topic="workspace memory">
+            These switches affect regular workspace chats. Bot memory has its own scope and follows Use memory.
+          </InfoHint>
+        }
+      >
         {workspaces.isLoading ? (
           <Text as="p" variant="small" color="secondary" className="p-4" role="status">
             Loading workspaces…
@@ -216,10 +105,6 @@ export function MemorySettings() {
           </Text>
         )}
       </FieldSet>
-      <Text as="p" variant="small" color="secondary" className="text-pretty">
-        Workspace switches affect regular workspace chats. Bot memory has its own scope and
-        follows the global switch.
-      </Text>
 
       <MemoryFactsSection workspaces={workspaces.data ?? []} />
     </div>

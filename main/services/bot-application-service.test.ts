@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
+import { BOT_PRESETS } from "../../renderer/shared/bot-presets.js";
+import { ApprovalRuleBook, memoryApprovalRuleStore } from "./approval-rules/store.js";
+import { analyticsSettled, captureAnalyticsEvents } from "./analytics/test-support.js";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
@@ -1860,6 +1863,28 @@ test("Bot delete erases photo, browser, home, access and chats, then the record 
   assert.deepEqual(app.events, [], "deleting a deleted Bot changes nothing");
 });
 
+test("Bot delete forgets that Bot's own approval rules and nobody else's, and an unreadable rule book never stops it", async () => {
+  const owner = bot("bot:ruled");
+  const survivor = bot("bot:kept");
+  const app = fixture({ bots: [owner, survivor] });
+  const book = new ApprovalRuleBook(memoryApprovalRuleStore());
+  await book.add({ target: { kind: "tool", tool: "browser_click" }, decision: "block", owner: { kind: "bot", botId: owner.id } });
+  await book.add({ target: { kind: "tool", tool: "browser_click" }, decision: "block", owner: { kind: "bot", botId: survivor.id } });
+  await book.add({ target: { kind: "site", host: "shop.example" }, decision: "ask", owner: { kind: "mac" } });
+  (app.deps as { forgetBotApprovalRules?: (botId: string) => Promise<void> }).forgetBotApprovalRules = async (botId) => {
+    await book.forgetOwner({ kind: "bot", botId });
+  };
+  await app.service.initialize();
+  await app.service.deleteBot({ botId: owner.id });
+  assert.deepEqual((await book.list()).map((rule) => rule.owner), [{ kind: "bot", botId: survivor.id }, { kind: "mac" }]);
+
+  (app.deps as { forgetBotApprovalRules?: (botId: string) => Promise<void> }).forgetBotApprovalRules = async () => {
+    throw new Error("Your approval rules couldn’t be read.");
+  };
+  await app.service.deleteBot({ botId: survivor.id });
+  assert.deepEqual((await app.service.list()).map(({ id }) => id), [], "the Bot is deleted all the same");
+});
+
 test("an interrupted Bot delete keeps the Bot listed, and a retry finishes it", async () => {
   const owner = bot("bot:interrupted");
   const app = fixture({ bots: [owner] });
@@ -2051,6 +2076,41 @@ test("only a creator that discloses Web Search grants it to a new Full Access Bo
   const web = app.policyAccesses.map((access) =>
     access.accessMode === "full" ? access.webSearchEnabled : "custom");
   assert.deepEqual(web, [undefined, true, false]);
+});
+
+test("a paired device moving a Full Bot to Custom never adds Web search that Full did not grant", async () => {
+  for (const fullWeb of [false, true]) {
+    const app = fixture({ bots: [bot("bot:web")] });
+    await app.service.initialize();
+    // The catalog offers Web search (kind "web") beside another ordinary capability.
+    const other = (id: string, kind: "web" | "browser") => ({
+      option: { id, label: id === "other:web" ? "Web search" : "Browser", available: true },
+      kind,
+      capabilityFingerprint: "f".repeat(64),
+      exactFingerprint: "e".repeat(64),
+    });
+    const snapshot = app.deps.catalog.snapshot.bind(app.deps.catalog);
+    app.deps.catalog.snapshot = async (...args: Parameters<typeof snapshot>) => {
+      const value = await snapshot(...args);
+      value.resources.otherCapabilities = [other("other:browser", "browser"), other("other:web", "web")];
+      value.catalog.otherCapabilities = value.resources.otherCapabilities.map(({ option }) => option);
+      return value;
+    };
+    app.deps.capabilityStore.getBotWebSearchEnabled = async () => fullWeb;
+    const custom = { providerId: "provider:opaque", modelId: "model:opaque", fileScopeIds: ["scope:home"], shellEnabled: true, connectionIds: [], skillIds: [], otherCapabilityIds: ["other:browser", "other:web"] };
+    const update = (noWiderThanFull?: true) => app.service.updateBotAccess({
+      audienceId: "device:phone",
+      botId: "bot:web",
+      expectedRevision: app.policies.get("bot:web")!.revision,
+      access: { accessMode: "custom", catalogRevision: CATALOG_REVISION, custom },
+      ...(noWiderThanFull ? { noWiderThanFull } : {}),
+    });
+    const saved = await update(true);
+    assert.deepEqual(saved.custom?.otherCapabilityIds, fullWeb ? ["other:browser", "other:web"] : ["other:browser"], `Full with web ${fullWeb ? "on" : "off"}`);
+    // Already Custom: a device's later change is not a Full conversion, so its explicit choice stands.
+    const again = await update(true);
+    assert.deepEqual(again.custom?.otherCapabilityIds, ["other:browser", "other:web"]);
+  }
 });
 
 test("Bot creation retries its policy after a runtime inventory invalidation", async () => {
@@ -2481,6 +2541,28 @@ test("capability catalog retains a private binding but returns only the safe pub
   assert.equal(app.catalogTargets[app.catalogTargets.length - 1], "bot:one");
 });
 
+test("model thinking levels resolve only the named picker model, by its source ids, and answer null when it is unknown or unreadable", async () => {
+  const app = fixture({ bots: [bot("bot:one")] });
+  await app.service.initialize();
+  const asked: string[] = [];
+  Object.assign(app.deps, {
+    modelThinkingLevels: async (providerId: string, modelId: string) => {
+      asked.push(`${providerId}/${modelId}`);
+      return ["low", "high", "max"];
+    },
+  });
+  const catalog = await app.service.capabilityCatalog("device:a", "bot:one");
+  const providerId = catalog.providers[0]!.id, modelId = catalog.providers[0]!.models[0]!.id;
+  assert.deepEqual(await app.service.modelThinkingLevels("device:a", "bot:one", providerId, modelId), ["low", "high", "max"]);
+  assert.deepEqual(asked, ["provider:exact/model:exact"], "the picker's opaque ids map to the provider's own ids");
+  assert.equal(await app.service.modelThinkingLevels("device:a", "bot:one", providerId, "provider:exact"), null, "a source id is not a picker id");
+  assert.equal(await app.service.modelThinkingLevels("device:a", "bot:one", "missing", modelId), null);
+  assert.equal(asked.length, 1, "an unknown model resolves nothing");
+  Object.assign(app.deps, { modelThinkingLevels: async () => { throw new Error("Saved model metadata is unavailable."); } });
+  assert.equal(await app.service.modelThinkingLevels("device:a", "bot:one", providerId, modelId), null);
+  await assert.rejects(app.service.modelThinkingLevels("device:a", "bot:gone", providerId, modelId), /no longer available/u);
+});
+
 test("Bot and chat access catalogs are scoped to their owning Bot while create is targetless", async () => {
   const owner = bot("bot:scope");
   const app = fixture({ bots: [owner] });
@@ -2745,6 +2827,45 @@ test("disabled Full Bot catalog retains only its own saved chat-reduction skill 
   assert.doesNotMatch(JSON.stringify(result), /other-bot|sourceId|instructions/u);
 });
 
+test("a created Bot counts once with its preset and how many there are, and a failed one counts nothing", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const app = fixture();
+  await app.service.initialize();
+  await app.service.createBot({
+    audienceId: "device:a",
+    presetId: "a-preset-this-build-does-not-ship",
+    bot: { name: "Planner", instructions: "Plan.", avatar: { version: 1, shape: "wisp", color: "lilac" } },
+  });
+  await analyticsSettled();
+  assert.deepEqual(sent, [{ event: "bot_created", props: { preset_id: "custom", bot_count: "1" } }]);
+
+  sent.length = 0;
+  const preset = BOT_PRESETS[0]!;
+  const shipped = fixture();
+  await shipped.service.initialize();
+  await shipped.service.createBot({
+    audienceId: "device:a",
+    presetId: preset.id,
+    source: "template",
+    bot: { name: "Planner", instructions: "Plan.", avatar: { version: 1, shape: "wisp", color: "lilac" } },
+  });
+  await analyticsSettled();
+  assert.equal(sent[0]?.props?.preset_id, preset.id);
+  assert.equal(sent[0]?.props?.source, "template", "how the Bot was made travels with it");
+
+  sent.length = 0;
+  const failing = fixture({ failIdentityCreate: true });
+  await failing.service.initialize();
+  await assert.rejects(
+    failing.service.createBot({
+      audienceId: "device:a",
+      bot: { name: "Planner", instructions: "Plan.", avatar: { version: 1, shape: "wisp", color: "lilac" } },
+    }),
+    /identity failed/u,
+  );
+  await analyticsSettled();
+  assert.deepEqual(sent, []);
+});
 
 test("access changes notify allowed-list readers only after successful saves and unsubscribe cleanly", async t => {
   const app = await folderFixture(t), observed: string[] = [];
@@ -2905,4 +3026,20 @@ test("uncertain folder publication keeps its root and recovery fence until the r
   assert.equal(await restarted.grantBotFolder(input), "already_allowed");
   assert.equal((await app.journal.list())[0]!.rootId, record!.rootId);
   assert.ok((await fs.stat(app.folderPath)).isDirectory());
+});
+
+
+test("Bot count metadata cannot move an earlier action to a new analytics sender", async (t) => {
+  const previous = captureAnalyticsEvents(t), app = fixture();
+  await app.service.initialize();
+  const list = app.deps.botStore.list.bind(app.deps.botStore);
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  app.deps.botStore.list = async () => { await held; return list(); };
+  await app.service.createBot({ audienceId: "device:a", bot: { name: "Planner", instructions: "Plan.", avatar: { version: 1, shape: "wisp", color: "lilac" } } });
+  const current = captureAnalyticsEvents(t);
+  release();
+  await analyticsSettled();
+  assert.deepEqual(previous, []);
+  assert.deepEqual(current, [], "the earlier Bot creation cannot be attributed to the replacement sender");
 });

@@ -2,6 +2,8 @@
 
 > **For agentic workers:** This is the orchestration (umbrella) plan. Each phase below gets its own bite-sized TDD task plan (`docs/plans/<track>-phase-<n>-tasks.md`) written immediately before that phase executes, against the then-current `main`. REQUIRED SUB-SKILL for execution: superpowers:subagent-driven-development. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Superseded in part (2026-10-31):** the Design Studio half (ADR-DS, Track DS, DS-4 "Connected app") is replaced by [Design mode](../superpowers/specs/2026-10-31-design-mode-design.md), whose P0 removed the Studio code and the `AIDEN_EXPERIMENTAL_DESIGN_STUDIO` flag. Track F (Studio Foundation) and Create Images continue under this plan. The rest of this document is kept as history.
+
 Status: Active — owner approved direction 2026-10-07
 Date: 2026-10-07
 

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createAnalyticsCore, validateOutgoingEvent, type AnalyticsMessage } from "./analytics-core.js";
+import { WITHHELD_MESSAGE } from "./analytics-sanitize.js";
 import type { AnalyticsSuperProperties } from "./analytics-events.js";
 
 const APP_ROOT = "/Applications/Aiden.app/Contents/Resources/app.asar";
@@ -101,7 +102,7 @@ test("invalid super properties disable sending entirely", () => {
 test("an exception is sent in PostHog's format with the outermost frame first", () => {
   const { core, sent } = harness();
 
-  assert.equal(core.captureException(failing("disk full"), {
+  assert.equal(core.captureException(failing("Maximum call stack size exceeded"), {
     source: "main",
     level: "fatal",
     processType: "browser",
@@ -120,7 +121,7 @@ test("an exception is sent in PostHog's format with the outermost frame first", 
     mechanism: { handled: boolean };
     stacktrace: { type: string; frames: { function: string; platform: string }[] };
   }[];
-  assert.equal(entry!.value, "disk full");
+  assert.equal(entry!.value, "Maximum call stack size exceeded");
   assert.equal(entry!.mechanism.handled, false);
   assert.equal(entry!.stacktrace.type, "raw");
   assert.deepEqual(entry!.stacktrace.frames.map((frame) => frame.function), ["run", "save"]);
@@ -237,6 +238,40 @@ test("the outgoing guard rejects an exception whose fields were not built by the
   ]) {
     assert.equal(validateOutgoingEvent({ event: "$exception", properties }), null);
   }
+});
+
+test("the outgoing guard keeps a listed system error code on a server's report and nowhere else", () => {
+  const report = (source: "server" | "main" | "renderer", value: string) => {
+    const { core, sent } = harness();
+    core.captureSanitizedException(
+      { errors: [{ type: "Error", value, frames: [] }], fingerprint: "0123456789abcdef0123456789abcdef" },
+      { source, level: "fatal" },
+    );
+    const [message] = sent;
+    const checked = validateOutgoingEvent({ event: message!.event, properties: message!.properties });
+    return (checked?.properties?.$exception_list as { value: string }[])[0]!.value;
+  };
+
+  assert.equal(report("server", "EACCES"), "EACCES");
+  assert.equal(report("server", "ECONNRESET"), "ECONNRESET");
+  assert.equal(report("main", "EACCES"), WITHHELD_MESSAGE);
+  assert.equal(report("renderer", "ENOSPC"), WITHHELD_MESSAGE);
+  for (const text of ["ACME_MERGER_Q3", "EVERYONE_KNOWS_BOB", "eacces", "EACCES acme-merger-q3.md"]) {
+    assert.equal(report("server", text), WITHHELD_MESSAGE);
+  }
+});
+
+test("server_started passes with a known launch and is dropped with anything else", () => {
+  const { core, sent } = harness({ superProperties: { ...SUPER, surface: "server" } });
+  assert.equal(core.track("server_started", { launch: "service" }), true);
+  assert.equal(sent[0]!.properties.launch, "service");
+  assert.equal(sent[0]!.properties.surface, "server");
+  const checked = validateOutgoingEvent({ event: sent[0]!.event, properties: sent[0]!.properties });
+  assert.equal(checked?.properties?.launch, "service");
+
+  const argument = { launch: "/Users/jane/secret-plan.json" } as unknown as { launch: "service" };
+  assert.equal(core.track("server_started", argument), false);
+  assert.equal(sent.length, 1);
 });
 
 test("the outgoing guard rejects events outside the registry", () => {

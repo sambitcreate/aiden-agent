@@ -1,4 +1,4 @@
-import { BOT_MESSAGE_INPUT_KIND, isBotInputEntryKind } from "../bot-runtime/bot-input-entry.js";
+import { BOT_PEER_INPUT_KIND, BOT_MESSAGE_INPUT_KIND, isBotInputEntryKind } from "../bot-runtime/bot-input-entry.js";
 // Background memory review (spec 2026-10-09 §10).
 //
 // After a reply, the Bot's conversation is looked at again outside the turn:
@@ -161,16 +161,17 @@ export interface MemoryReviewResult {
 
 /**
  * One add-only review: up to `maxRounds` requests, each answered tool call
- * applied through the memory service. Throws when the model fails or the run
- * times out or is aborted, and `BotMemoryAuthorityLostError` when its
- * authority is revoked or no longer revalidates.
+ * applied through the memory service. Once `timeoutMs` has passed it starts no
+ * further request and returns what it saved. Throws when the model fails or
+ * the run is aborted, and `BotMemoryAuthorityLostError` when its authority is
+ * revoked or no longer revalidates.
  */
 export async function runMemoryReview(run: MemoryReviewRun): Promise<MemoryReviewResult> {
-  const signal = AbortSignal.any([
-    AbortSignal.timeout(run.timeoutMs),
-    run.authority.signal,
-    ...(run.signal ? [run.signal] : []),
-  ]);
+  // The time limit never cuts off a request already sent: an abandoned request
+  // may still be billed, and its unknown cost blocks the Bot's next request
+  // until the person reviews it.
+  const deadline = AbortSignal.timeout(run.timeoutMs);
+  const signal = AbortSignal.any([run.authority.signal, ...(run.signal ? [run.signal] : [])]);
   let added = 0;
   const targets = new Set<BotMemoryTarget>();
   const lost = () => new BotMemoryAuthorityLostError(added, [...targets], run.authority.signal.reason);
@@ -208,7 +209,10 @@ export async function runMemoryReview(run: MemoryReviewRun): Promise<MemoryRevie
     },
   ];
   for (let round = 0; round < run.maxRounds; round += 1) {
+    if (deadline.aborted) break;
     await fence();
+    // The access check can itself take long enough to cross the limit.
+    if (deadline.aborted) break;
     let answer: AssistantMessage;
     try {
       answer = await run.model.models.completeSimple(
@@ -314,15 +318,15 @@ function unattendedNoticeRequestId(entry: EntryRecord): string | undefined {
 
 /** What the ownership walk needs from one entry. */
 type Step =
-  | { id: EntryId; kind: "input"; botMessage: boolean }
+  | { id: EntryId; kind: "input"; botMessage: boolean; peerRequestId?: string; unattended?: true }
   | { id: EntryId; kind: "output" }
-  | { id: EntryId; kind: "notice"; requestId: string; botMessage: boolean };
+  | { id: EntryId; kind: "notice"; requestId: string; botMessage: boolean; peerRequestId?: string; unattended?: true };
 
 function stepOf(entry: EntryRecord): Step | undefined {
   const requestId = unattendedNoticeRequestId(entry);
   if (requestId !== undefined) return { id: entry.id, kind: "notice", requestId, botMessage: (entry.data as NoticeData).notice === "bot_message" };
   const role = entry.model?.[0]?.role;
-  if (isBotInputEntryKind(entry.kind) && role === "user") return { id: entry.id, kind: "input", botMessage: entry.kind === BOT_MESSAGE_INPUT_KIND };
+  if (isBotInputEntryKind(entry.kind) && role === "user") { const requestId = (entry.data as { peerRequestId?: unknown } | undefined)?.peerRequestId; return { id: entry.id, kind: "input", botMessage: entry.kind === BOT_MESSAGE_INPUT_KIND, ...(entry.kind === BOT_PEER_INPUT_KIND ? { unattended: true as const, ...(typeof requestId === "string" ? { peerRequestId: requestId } : {}) } : {}) }; }
   if (entry.kind === "pi.assistant" && role === "assistant") return { id: entry.id, kind: "output" };
   return undefined;
 }
@@ -358,8 +362,8 @@ function ownership(steps: readonly Step[], unattended: ReadonlyMap<string, Unatt
     if (step.kind === "input") {
       known = true;
       // A routine/intro guess cannot cross a different, host-owned input kind.
-      if (step.botMessage) pendingGuess = false;
-      let isUnattended = step.botMessage || answers.has(step.id);
+      if (step.botMessage || step.unattended) pendingGuess = false;
+      let isUnattended = step.botMessage || step.unattended === true || answers.has(step.id);
       if (!isUnattended && pendingGuess) {
         isUnattended = true;
         pendingGuess = false;
@@ -382,7 +386,7 @@ export type SubmissionLookup = (requestIds: readonly string[]) => Promise<Readon
 
 /** Each routine or self-intro notice's request id, resolved to the input it became and the entry that answered it. */
 async function resolveUnattended(steps: readonly Step[], lookup: SubmissionLookup): Promise<Map<string, UnattendedInput>> {
-  const ids = [...new Set(steps.flatMap((step) => (step.kind === "notice" ? [step.requestId] : [])))];
+  const ids = [...new Set(steps.flatMap((step) => (step.kind === "notice" ? [step.requestId] : step.kind === "input" && step.peerRequestId ? [step.peerRequestId] : [])))];
   const unattended = new Map<string, UnattendedInput>();
   if (ids.length === 0) return unattended;
   const records = await lookup(ids);
@@ -634,7 +638,7 @@ export function createBotMemoryReview(deps: BotMemoryReviewDeps): BotMemoryRevie
           }
           return { kind: "revoked", added: error.added, targets: error.targets };
         }
-        // A model error or the timeout still writes the marker, so the next try waits another interval.
+        // A model error still writes the marker, so the next try waits another interval.
         deps.onError?.(botId, error);
         if (!(await writeMarker(botId, controller, { source: "review", added: 0, targets: [], failed: true }))) {
           return { kind: "aborted" };

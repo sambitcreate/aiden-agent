@@ -1,5 +1,9 @@
-// Transcript connect card appended by the Bot's `suggest_connection` tool.
-// The shared Bot notice card, with the app's icon in the squircle tile; no coloured borders.
+// Transcript connect card appended by the Bot's `suggest_connection` tool
+// (docs/plans/bot-ux-simplification.md §4.7): the app's logo, its name and
+// why, then Connect, which settles to "Connected". One shape for every case:
+// an app connected in Aiden that a Custom-access Bot leaves out still reads
+// Connect, and pressing it adds the app to this Bot (the stored grant is
+// unchanged). The shared Bot notice card, with no coloured borders.
 
 import { Badge, Button } from "../ui";
 import { cn } from "../../lib/ui-utils";
@@ -46,11 +50,11 @@ export interface ConnectCardProps {
   /** Visible Connect text; phones use "Finish on your Mac". The accessible name stays "Connect {name}". */
   connectLabel?: string;
   /**
-   * "Add to this Bot", for an app that is connected in Aiden but left out of
-   * this Bot's access. Without it such a card falls back to Connect.
+   * What Connect does for an app that is connected in Aiden but left out of
+   * this Bot's access: add it to the Bot. Without it, Connect connects.
    */
   onAddToBot?: (pluginId: string) => void;
-  /** Setup, a connection request, or Add to this Bot is in progress. */
+  /** Setup, a connection request, or adding the app to this Bot is in progress. */
   busy?: boolean;
 }
 
@@ -76,39 +80,6 @@ export function ConnectCard({
     </Button>
   ) : null;
 
-  if (card.status === "needs_access" && onAddToBot) {
-    const addTitle = `Add ${suggestion.name} to this Bot`;
-    return (
-      <div data-connect-card-status="needs_access" className="max-w-md">
-        <BotNoticeCard
-          label={addTitle}
-          iconTile={<ConnectionIconTile suggestion={suggestion} className="bg-control" />}
-          title={addTitle}
-          actions={
-            <>
-              {notNow}
-              <Button
-                variant="accent"
-                size="small"
-                aria-label={addTitle}
-                disabled={busy}
-                aria-busy={busy || undefined}
-                onClick={() => onAddToBot(card.pluginId)}
-              >
-                Add to this Bot
-              </Button>
-            </>
-          }
-        >
-          <p>{card.reason}</p>
-          <p className="mt-1 text-tertiary">
-            {suggestion.name} is connected in Aiden, but this Bot’s access doesn’t include it yet.
-          </p>
-        </BotNoticeCard>
-      </div>
-    );
-  }
-
   if (card.status === "connected" || card.status === "dismissed") {
     const connected = card.status === "connected";
     return (
@@ -131,12 +102,15 @@ export function ConnectCard({
     );
   }
 
+  // An app already connected in Aiden joins this Bot on Connect; where the
+  // Bot's access can't be changed from here, Connect goes the usual way.
+  const addsToBot = card.status === "needs_access" && onAddToBot !== undefined;
   return (
-    <div data-connect-card-status="pending" className="max-w-md">
+    <div data-connect-card-status={addsToBot ? "needs_access" : "pending"} className="max-w-md">
       <BotNoticeCard
         label={title}
         iconTile={<ConnectionIconTile suggestion={suggestion} className="bg-control" />}
-        title={title}
+        title={suggestion.name}
         actions={
           <>
             {notNow}
@@ -146,7 +120,7 @@ export function ConnectCard({
               aria-label={title}
               disabled={busy}
               aria-busy={busy || undefined}
-              onClick={() => onConnect(card.pluginId)}
+              onClick={() => (addsToBot ? onAddToBot(card.pluginId) : onConnect(card.pluginId))}
             >
               {connectLabel}
             </Button>

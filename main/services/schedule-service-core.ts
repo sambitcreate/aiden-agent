@@ -14,15 +14,17 @@ import type {
  * run, so repeating the catch-up reuses the same idempotency key.
  */
 export type ScheduledRunTrigger =
-  | { kind: "automatic"; fireTime: number }
+  | { kind: "automatic"; fireTime: number; routineTiming?: import("./bot-routines-port.js").BotRoutineTiming }
   | { kind: "manual"; key: string }
-  | { kind: "catch_up"; missedRunId: string; missedAt: number }
+  | { kind: "catch_up"; missedRunId: string; missedAt: number; routineTiming?: import("./bot-routines-port.js").BotRoutineTiming }
   /** A delayed retry of a failed Bot routine fire, replayed from its pending entry. */
-  | { kind: "retry"; requestId: string; failedRunId: string; attempt: 1 | 2; verifiedToolFree?: true; observeOnly?: true }
+  | { kind: "retry"; requestId: string; failedRunId: string; attempt: 1 | 2; verifiedToolFree?: true; observeOnly?: true; routineTiming?: import("./bot-routines-port.js").BotRoutineTiming }
   /** An event routine's run: what happened, as untrusted data for the Bot. */
   | { kind: "event"; eventId: string; source: "file_change" | "webhook" | "watch"; payload: string };
 
 interface ScheduleExecutionLike {
+  /** Protected choice is saved before the pending-fire receipt is published. */
+  claimRoutineExecution?(task: ScheduledTask, trigger: ScheduledRunTrigger): Promise<unknown>;
   run(task: ScheduledTask, runId?: string, trigger?: ScheduledRunTrigger): Promise<ScheduledRun>;
   cancel(taskId: string): boolean;
   cancelAll(): void;
@@ -54,6 +56,23 @@ type DispatchResult =
  * it would execute early under a future fire's idempotency key.
  */
 export class UnclaimableScheduledFire extends Error {}
+
+/** Structured Bot recurrences coalesce sleep into their newest due occurrence. */
+function latestBotOccurrence(task: ScheduledTask, due: number, now: number): number {
+  if (!task.botId || !task.routineSchedule || task.routineSchedule.kind === "once" || due > now) return due;
+  // Supported daily/weekday/weekly schedules have at most9 fires in8days,
+  // including a DST fold. An arbitrary legacy cron is not reinterpreted here.
+  let next = nextScheduledRun(task.cron, task.timezone, new Date(Math.max(due, now - 8 * 24 * 60 * 60_000) - 1));
+  let latest = due;
+  for (let count = 0; next !== undefined && next <= now && count < 32; count++) {
+    latest = next;
+    const following = nextScheduledRun(task.cron, task.timezone, new Date(next + 1));
+    if (following !== undefined && following <= next) throw new Error("This routine's occurrences could not be determined safely.");
+    next = following;
+  }
+  if (next !== undefined && next <= now) throw new Error("This routine has too many due occurrences.");
+  return latest;
+}
 
 const ignoreUnclaimableFire = (error: unknown): void => {
   if (!(error instanceof UnclaimableScheduledFire)) throw error;
@@ -224,12 +243,13 @@ export function createScheduleServiceCore(
     task: ScheduledTask,
     fireTime: number,
     isCurrent: () => boolean,
+    occurrenceTime = fireTime,
   ): Promise<ScheduledTask> {
     if (task.botId) {
       const nextRunAt = task.routineSchedule?.kind === "once"
         ? undefined
         : nextScheduledRun(task.cron, task.timezone, new Date(Date.now() + 1));
-      return store.claimRoutineFire(task.id, fireTime, nextRunAt, isCurrent);
+      return store.claimRoutineFire(task.id, fireTime, nextRunAt, isCurrent, occurrenceTime, !task.wakeUp && execution.claimRoutineExecution ? current => execution.claimRoutineExecution!(current, { kind: "automatic", fireTime: occurrenceTime, routineTiming: { scheduledFor: occurrenceTime, timezone: current.timezone } }).then(() => undefined) : undefined);
     }
     // A one-off routine is spent by the claim itself, so cron (which has no
     // year field) can never repeat it on the same date next year.
@@ -365,8 +385,9 @@ export function createScheduleServiceCore(
           (task.nextRunAt !== undefined && task.nextRunAt <= Date.now()) ||
           (task.lastRunAt ?? 0) > pendingFire.fireTime
         );
+        const occurrenceTime = options.automatic && !options.recovery ? latestBotOccurrence(task, fireTime!, Date.now()) : fireTime;
         const claimed = options.automatic && !options.recovery
-          ? await advanceBeforeRun(task, fireTime!, isCurrent)
+          ? await advanceBeforeRun(task, fireTime!, isCurrent, occurrenceTime)
           : task;
         if (!isCurrent())
           throw new Error("This scheduled task was cancelled.");
@@ -376,12 +397,12 @@ export function createScheduleServiceCore(
         }
         state.executionStarted = true;
         const trigger: ScheduledRunTrigger = pendingFire?.retry
-          ? { kind: "retry", requestId: pendingFire.requestId, ...pendingFire.retry, ...(observeOnly && { observeOnly: true }) }
+          ? { kind: "retry", requestId: pendingFire.requestId, ...pendingFire.retry, ...(pendingFire.routineTiming ? { routineTiming: pendingFire.routineTiming } : {}), ...(observeOnly && { observeOnly: true }) }
           : options.automatic
-          ? { kind: "automatic", fireTime: fireTime! }
+          ? { kind: "automatic", fireTime: occurrenceTime!, ...(task.botId ? { routineTiming: pendingFire?.routineTiming ?? { scheduledFor: occurrenceTime!, timezone: claimed.timezone } } : {}) }
           : options.catchUp ?? { kind: "manual", key: options.runId ?? `${Date.now()}-${++manualRunSequence}` };
         const executionTask = pendingFire
-          ? { ...claimed, prompt: pendingFire.prompt, name: pendingFire.name }
+          ? { ...claimed, prompt: pendingFire.prompt, name: pendingFire.name, ...(pendingFire.routineTiming?.timezone ? { timezone: pendingFire.routineTiming.timezone } : {}) }
           : claimed;
         return execution.run(executionTask, pendingFire?.requestId ?? options.runId, trigger);
       } finally {
@@ -915,11 +936,11 @@ export function createScheduleServiceCore(
      */
     catchUp(
       id: string,
-      missed: { runId: string; at: number },
+      missed: { runId: string; at: number; routineTiming?: import("./bot-routines-port.js").BotRoutineTiming },
     ): Promise<ScheduledRun> | undefined {
       const result = dispatch(id, {
         automatic: false,
-        catchUp: { kind: "catch_up", missedRunId: missed.runId, missedAt: missed.at },
+        catchUp: { kind: "catch_up", missedRunId: missed.runId, missedAt: missed.at, ...(missed.routineTiming ? { routineTiming: missed.routineTiming } : {}) },
       });
       return result.kind === "dispatched" ? result.completion : undefined;
     },

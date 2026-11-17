@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
+import { captureAnalyticsEvents } from "./analytics/test-support.js";
 import { mkdtemp, open, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -8,7 +9,7 @@ import {
   resolveNodePtyDiskPackageDir,
   resolveNodePtySpawnHelperPaths,
 } from "./terminal-spawn-helper.js";
-import { TerminalService, foregroundCommandName, parseForegroundState, type ForegroundState } from "./terminal.js";
+import { TerminalInputOrder, TerminalService, foregroundCommandName, parseForegroundState, type ForegroundState } from "./terminal.js";
 import type { RendererDocumentOwner } from "./renderer-document-owner.js";
 
 function deferred() {
@@ -816,7 +817,12 @@ test("terminal teardown is scoped by workspace and renderer web contents", async
   const second = await service.create("workspace-b", "/tmp", firstOwner.owner);
   const third = await service.create("workspace-b", "/tmp", secondOwner.owner);
 
+  assert.equal(service.hasOpenSession("workspace-a"), true);
+  assert.equal(service.hasOpenSession("workspace-c"), false);
+
   service.closeForWorkspace("workspace-a");
+  assert.equal(service.hasOpenSession("workspace-a"), false, "a closed shell no longer holds the worktree");
+  assert.equal(service.hasOpenSession("workspace-b"), true);
   assert.equal(children[0]!.killed(), true);
   assert.equal(children[1]!.killed(), false);
   assert.equal(children[2]!.killed(), false);
@@ -1169,4 +1175,63 @@ test("an exited shell stops being polled", async (t) => {
   pty.process = "npm";
   settle();
   assert.deepEqual(activity(), []);
+});
+
+test("an opened terminal counts once, and one that could not start counts nothing", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const owner = ownerState();
+  const child = fakePty();
+  const service = new TerminalService({
+    prepareSpawnHelper: async () => undefined,
+    spawnPty: (() => child.pty) as typeof spawn,
+  });
+  await service.create("workspace-1", "/tmp", owner.owner);
+  assert.deepEqual(sent, [{ event: "terminal_opened", props: {} }]);
+  child.emitExit(0);
+  await service.closeForWorkspaceAndWait("workspace-1", 10);
+
+  sent.length = 0;
+  const leaving = ownerState("document-2", 43);
+  const refused = fakePty();
+  const stopped = new TerminalService({
+    prepareSpawnHelper: async () => undefined,
+    spawnPty: (() => {
+      leaving.destroy();
+      return refused.pty;
+    }) as typeof spawn,
+  });
+  await assert.rejects(stopped.create("workspace-1", "/tmp", leaving.owner));
+  refused.emitExit(0);
+  await stopped.closeForWorkspaceAndWait("workspace-1", 10);
+  assert.deepEqual(sent, []);
+});
+
+test("a session's input is written in the order it arrived, even when an earlier write's check finishes last", async () => {
+  const order = new TerminalInputOrder();
+  const written: string[] = [];
+  // What the terminal:write handler does: check, wait for its turn, write.
+  const write = async (sessionId: string, data: string, check: Promise<void>) => {
+    const place = order.enter(sessionId);
+    try {
+      await check;
+      await place.previous;
+      written.push(`${sessionId}:${data}`);
+    } finally {
+      place.done();
+    }
+  };
+  const slowCheck = deferred();
+  const e = write("one", "E", slowCheck.promise);
+  const c = write("one", "C", Promise.resolve());
+  await write("two", "x", Promise.resolve());
+  assert.deepEqual(written, ["two:x"], "another session's input is not held back");
+  slowCheck.resolve();
+  await Promise.all([e, c]);
+  assert.deepEqual(written, ["two:x", "one:E", "one:C"]);
+
+  // Refused input holds nothing back.
+  const refused = write("one", "!", Promise.reject(new Error("The workspace is changing.")));
+  await write("one", "K", Promise.resolve());
+  await assert.rejects(refused, /workspace is changing/u);
+  assert.deepEqual(written, ["two:x", "one:E", "one:C", "one:K"]);
 });

@@ -17,12 +17,13 @@ export const INVOKE_PREFIXES = [
   "devices:",
   "chats:",
   "computerUse:",
-  "designProjects:",
+  "designCanvas:",
   "dictation:",
   "diagnostics:",
   "exa:",
   "formFill:",
   "git:",
+  "hooks:",
   "imageGeneration:",
   "imageWorkflows:",
   "localModels:",
@@ -40,6 +41,7 @@ export const INVOKE_PREFIXES = [
   "settings:",
   "shortcut:",
   "skills:",
+  "storage:",
   "telegram:",
   "subagents:",
   "terminal:",
@@ -68,6 +70,7 @@ export const NATIVE_INVOKE_CHANNELS = {
 
 export const NOTIFICATION_CHANNEL_VALUES = [
   "settings:controls-changed",
+  "chat:approvalRules:changed",
   "app:config-externally-changed",
   "app:command",
   "app:navigate",
@@ -90,10 +93,16 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "chat:timeline",
   "chat:todo",
   "chat:tool",
+  /** Crash reporting started or stopped: `{sending}`. Raw error fields go to main only while it is on. */
+  "analytics:sending-changed",
   "bots:changed",
   "bots:memory:changed",
   /** A Bot's event routines changed, or a watch saved a check: `{botId}`. Its profile re-reads the list. */
   "bots:eventRoutines:changed",
+  "bots:connectorWatches:changed",
+  "bots:openWork:changed",
+  /** Pair decisions or exchange state changed: `{botId}`. Read current owner metadata. */
+  "bots:peers:changed",
   /** A paired phone asked to finish connecting an app for a Bot: `{botId, pluginId}`. */
   "bots:live:event",
   "bots:connections:setup",
@@ -114,6 +123,20 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "chats:triage-changed",
   "chats:changed",
   "chats:metadata-updated",
+  /** A chat's design mode changed: `{chatId, designMode}`. */
+  "chats:design-mode-changed",
+  /** A chat's design canvas was saved or edited by Aiden: `{chatId, revision}`. */
+  "designCanvas:updated",
+  /** Workspace files a chat's design canvas shows changed: `{chatId, paths}`. */
+  "designCanvas:filesChanged",
+  /** Aiden asks to enter design mode; the turn's window shows a card: `{requestId, chatId, reason}`. */
+  "designCanvas:consent",
+  /** That card stopped waiting (answered, stopped or timed out): `{requestId}`. */
+  "designCanvas:consentClosed",
+  /** Aiden asks the canvas to fit frames (all when empty): `{chatId, frameIds}`. */
+  "designCanvas:focus",
+  /** Aiden asks for a picture of the canvas: `{requestId, chatId}`; answered with `designCanvas:snapshotAnswer`. */
+  "designCanvas:snapshot",
   "chats:fork-summary-changed",
   "chats:btw-event",
   "chats:pull-requests-changed",
@@ -123,8 +146,6 @@ export const NOTIFICATION_CHANNEL_VALUES = [
    */
   "chats:follow-through-changed",
   "chats:settled",
-  "designProjects:changed",
-  "designProjects:run-changed",
   "git:changed",
   "imageWorkflows:run-changed",
   "dictation:state",
@@ -159,9 +180,13 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "terminal:exit",
   "telegram:model-selection-changed",
   "tts:event",
+  /** Settings → Storage's background scan started or finished: `{ kind }`. */
+  "storage:changed",
   /** The replies waiting for a usage limit changed: `UsageLimitsChangedEvent`. */
   "usageLimits:changed",
   "spending:changed",
+  /** Hooks, hook proposals, a hook run or an auto-disable changed: `HooksChangedEvent`. */
+  "hooks:changed",
   "voice:stream-text",
   "workspaces:changed",
   /** An agent tool may have changed files in this workspace's folder: `{ workspaceId }`. */

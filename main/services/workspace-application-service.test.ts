@@ -5,10 +5,13 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
+import { captureAnalyticsEvents } from "./analytics/test-support.js";
 import { compileAum } from "../../renderer/shared/aiden-ui/compile.js";
 import { AIDEN_UI_CATALOG_VERSION } from "../../renderer/shared/aiden-ui/types.js";
+import { DesignGrantRegistry } from "./design-canvas/grants.js";
 import { createScratchWorkspaceDirectory } from "./scratch-workspace.js";
 import { WorkspaceArtifactStore } from "./workspace-artifacts/store.js";
+import { ApprovalRuleBook, memoryApprovalRuleStore } from "./approval-rules/store.js";
 import type { Workspace } from "./types.js";
 import {
   createWorkspaceApplicationService,
@@ -329,7 +332,6 @@ test("removing a workspace drops its artifacts, and a failure there does not und
       actions: [],
       refresh: { onOpen: true },
     },
-    { approved: false },
   );
   const application = fixture();
   (application.deps as { workspaceArtifacts?: unknown }).workspaceArtifacts = store;
@@ -345,6 +347,34 @@ test("removing a workspace drops its artifacts, and a failure there does not und
   };
   await failing.service.remove("workspace-1");
   assert.ok(failing.events.includes("remove-record"));
+});
+
+test("removing a workspace forgets its own approval rules, and a failure there does not undo the removal", async () => {
+  const book = new ApprovalRuleBook(memoryApprovalRuleStore());
+  await book.add({ target: { kind: "tool", tool: "web_fetch" }, decision: "block", owner: { kind: "workspace", workspaceId: "workspace-1" } });
+  await book.add({ target: { kind: "tool", tool: "web_fetch" }, decision: "block", owner: { kind: "workspace", workspaceId: "workspace-2" } });
+  const application = fixture();
+  (application.deps as { approvalRules?: unknown }).approvalRules = {
+    forgetWorkspace: async (workspaceId: string) => void (await book.forgetOwner({ kind: "workspace", workspaceId })),
+  };
+  await application.service.remove("workspace-1");
+  assert.deepEqual((await book.list()).map((rule) => rule.owner), [{ kind: "workspace", workspaceId: "workspace-2" }]);
+
+  const failing = fixture();
+  (failing.deps as { approvalRules?: unknown }).approvalRules = { forgetWorkspace: async () => { throw new Error("unreadable"); } };
+  await failing.service.remove("workspace-1");
+  assert.ok(failing.events.includes("remove-record"));
+});
+
+test("removing a workspace ends the design grants on its folder and no others", async () => {
+  const designGrants = new DesignGrantRegistry();
+  const inside = designGrants.issue("chat-1", "/work/site");
+  const elsewhere = designGrants.issue("chat-2", "/work/other");
+  const application = fixture({ existing: workspace({ folderPath: "/work/site" }) });
+  (application.deps as { designGrants?: unknown }).designGrants = designGrants;
+  await application.service.remove("workspace-1");
+  assert.equal(designGrants.resolve(inside), null);
+  assert.notEqual(designGrants.resolve(elsewhere), null);
 });
 
 async function noWorkspaceFixture(t: { after(fn: () => Promise<void>): void }, initial: Workspace[]) {
@@ -464,20 +494,156 @@ test("a paired device's chat in a No workspace folder that holds another chat ge
     workspace({ id: "default", name: "No workspace", folderPath: "/data/chat-folders/home", noWorkspace: true }),
     workspace({ id: "project", folderPath: "/code/project" }),
   ]);
-  assert.equal(await app.service.workspaceForNoWorkspaceChat("default"), "default", "an unused hidden folder is used");
+  const first = await app.service.reserveNoWorkspaceChat("default");
+  assert.equal(first.workspaceId, "default", "an unused hidden folder is used");
+  first.release();
   assert.equal(app.registry.size, 2);
 
   app.chatsIn.set("default", ["older"]);
-  const fresh = await app.service.workspaceForNoWorkspaceChat("default");
+  const fresh = (await app.service.reserveNoWorkspaceChat("default")).workspaceId;
   assert.notEqual(fresh, "default");
   assert.equal(app.registry.get(fresh)?.noWorkspace, true);
 
   app.chatsIn.set("project", ["a", "b"]);
-  assert.equal(await app.service.workspaceForNoWorkspaceChat("project"), "project", "a real workspace is shared");
+  assert.equal((await app.service.reserveNoWorkspaceChat("project")).workspaceId, "project", "a real workspace is shared");
 
   // A phone still aims at a hidden home that was released with its last chat.
-  const replacement = await app.service.workspaceForNoWorkspaceChat("released-home");
+  const replacement = (await app.service.reserveNoWorkspaceChat("released-home")).workspaceId;
   assert.notEqual(replacement, "released-home");
   assert.equal(app.registry.get(replacement)?.noWorkspace, true, "a gone home gets a fresh hidden folder");
   assert.equal(app.registry.has("released-home"), false);
+});
+
+test("private workspace assignment excludes concurrent drafts and forks until commit settles", async (t) => {
+  const app = await noWorkspaceFixture(t, [workspace({ id: "home", folderPath: "/data/chat-folders/home", noWorkspace: true, permission: "none" })]);
+  const [first, second] = await Promise.all([
+    app.service.reserveNoWorkspaceChat("home"), app.service.reserveNoWorkspaceChat("home"),
+  ]);
+  assert.equal(first.workspaceId, "home");
+  assert.notEqual(second.workspaceId, first.workspaceId);
+  assert.equal(app.registry.get(first.workspaceId)?.permission, "none", "chosen draft access stays on its unused home");
+  // A newly published private target is not free while its owning copy prepares.
+  const third = await app.service.reserveNoWorkspaceChat(second.workspaceId);
+  assert.notEqual(third.workspaceId, second.workspaceId);
+  first.release(); second.release(); third.release();
+  const retried = await app.service.reserveNoWorkspaceChat("home");
+  assert.equal(retried.workspaceId, "home", "a failed uncommitted claim becomes reusable");
+  retried.release();
+});
+
+test("each way of adding a workspace counts once, and a failed save counts nothing", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const application = fixture({ existing: null });
+  await application.service.create({ name: "Named" });
+  await application.service.createFromFolder("/approved/picked");
+  await application.service.createFromFolder("/approved/typed", undefined, { fromPath: true });
+  await application.service.createScratch();
+  assert.deepEqual(sent, [
+    { event: "workspace_added", props: { kind: "folder" } },
+    { event: "workspace_added", props: { kind: "folder" } },
+    { event: "workspace_added", props: { kind: "path" } },
+    { event: "workspace_added", props: { kind: "scratch" } },
+  ]);
+
+  sent.length = 0;
+  const failing = fixture({ existing: null, saveError: new Error("persistence failed") });
+  await assert.rejects(failing.service.createScratch(), /persistence failed/u);
+  await assert.rejects(failing.service.create({ name: "Named" }), /persistence failed/u);
+  await assert.rejects(failing.service.createFromFolder("/approved/project"), /persistence failed/u);
+  assert.deepEqual(sent, []);
+});
+
+test("a workspace's own approval mode and Mac grants change without stopping its chats, and count by mode only", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const application = fixture();
+  const customized = await application.service.update("workspace-1", { approvalMode: "never" });
+  assert.equal(customized.approvalMode, "never");
+  assert.equal(customized.permission, "ask");
+  // The gate reads the mode per call, so a running reply is not cancelled.
+  assert.deepEqual(application.events, ["save"]);
+
+  // Saving the same mode again counts nothing; going back to the global mode does.
+  await application.service.update("workspace-1", { approvalMode: "never", name: "Same" });
+  const following = await application.service.update("workspace-1", { approvalMode: null });
+  assert.equal("approvalMode" in following, false);
+  assert.deepEqual(sent, [
+    { event: "approval_mode_changed", props: { mode: "never", scope: "workspace" } },
+    { event: "approval_mode_changed", props: { mode: "global", scope: "workspace" } },
+  ]);
+
+  await assert.rejects(application.service.update("workspace-1", { approvalMode: "full" }), /approval mode/u);
+  await assert.rejects(application.service.update("workspace-1", { revokeMacGrant: "everything" }), /Mac permission/u);
+});
+
+test("changing a Full workspace keeps its shell and file grants and stores Ask for an older release", async () => {
+  const application = fixture({ existing: workspace({ permission: "full" }) });
+  const updated = await application.service.update("workspace-1", { revokeMacGrant: "files" });
+  assert.equal(updated.permission, "ask", "an older release reads Ask, never wider");
+  assert.equal(updated.approvalMode, "never", "this release keeps the reach it had");
+  assert.deepEqual(updated.macGrants, { shell: true });
+  // The stored access changed, so running chats stop as for any access change.
+  assert.ok(application.events.includes("cancel-generations"));
+
+  const cleared = await application.service.update("workspace-1", { revokeMacGrant: "shell" });
+  assert.equal("macGrants" in cleared, false);
+
+  // An older client choosing Full gets the legacy reading back, with no own mode left over.
+  const full = await application.service.update("workspace-1", { permission: "full" });
+  assert.equal(full.permission, "full");
+  assert.equal("approvalMode" in full, false);
+});
+
+test("Allow in this workspace saves the grant through the application, without stopping the chat that asked", async () => {
+  let changed = 0;
+  const application = fixture();
+  (application.deps as { onChanged?: () => void }).onChanged = () => { changed += 1; };
+  const service = createWorkspaceApplicationService(application.deps);
+  const saved = await service.grantMac("workspace-1", "shell");
+  assert.deepEqual(saved?.macGrants, { shell: true });
+  assert.equal(changed, 1, "the sidebar and Workspace settings refresh");
+  assert.deepEqual(application.events, ["save"], "nothing is cancelled: the card's own call is about to run");
+  assert.equal(await service.grantMac("missing", "shell").then(() => "ok", () => "threw"), "ok");
+});
+
+test("a grant and a settings change that cross never lose the grant", async () => {
+  let current = workspace();
+  let racing: (() => void) | undefined;
+  const application = fixture();
+  const store = application.deps.configStore as unknown as {
+    getWorkspace: (id: string) => Promise<Workspace | undefined>;
+    saveWorkspace: (value: Workspace, guard?: (current: Workspace | undefined) => void | Promise<void>) => Promise<Workspace>;
+  };
+  store.getWorkspace = async () => {
+    const read = current;
+    // Another save lands between this read and the write that follows it.
+    const race = racing;
+    racing = undefined;
+    race?.();
+    return read;
+  };
+  store.saveWorkspace = async (value, guard) => {
+    await guard?.(current);
+    current = { ...value, updatedAt: current.updatedAt + 1 };
+    return current;
+  };
+  const service = createWorkspaceApplicationService(application.deps);
+
+  racing = () => { current = { ...current, name: "Renamed elsewhere", updatedAt: current.updatedAt + 1 }; };
+  await service.grantMac("workspace-1", "files");
+  assert.equal(current.name, "Renamed elsewhere");
+  assert.deepEqual(current.macGrants, { files: true });
+
+  // A settings update that read the workspace before a grant landed does not drop the grant.
+  racing = undefined;
+  let updateRead = false;
+  store.getWorkspace = async () => {
+    const read = current;
+    if (!updateRead) {
+      updateRead = true;
+      current = { ...current, macGrants: { files: true, shell: true }, updatedAt: current.updatedAt + 1 };
+    }
+    return read;
+  };
+  await assert.rejects(service.update("workspace-1", { name: "Mine" }), /changed/u);
+  assert.deepEqual(current.macGrants, { files: true, shell: true });
 });

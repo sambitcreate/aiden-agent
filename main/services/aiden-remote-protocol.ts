@@ -1,5 +1,17 @@
+import { parseChatInputSource } from "../../renderer/shared/chat-input-source.js";
+import { BOT_STARTER_INSTRUCTIONS } from "../../renderer/shared/bot-presets.js";
+import {
+  AIDEN_REMOTE_BOT_SETTINGS_CHANGE_ENTRY_TYPES,
+  AIDEN_REMOTE_BOT_SUGGESTION_ENTRY_TYPES,
+  parseAidenRemoteApprovalCard,
+  parseAidenRemoteBotUxEntry,
+  type AidenRemoteBotUxEntry,
+} from "./aiden-remote-bot-ux.js";
+import { approvalCardAllows, type ApprovalCard } from "../../renderer/shared/approval-card-model.js";
+import type { ToolApprovalScope } from "../../renderer/shared/tool-approval-scope.js";
 import { botPendingAccessRequestOf, parseBotAccessChoice, type BotAccessChoice } from "../../renderer/shared/bot-access-requests.js";
 import { parseAppControlPanels } from "../../renderer/shared/app-controls.js";
+import { parseBotPeerId } from "../../renderer/shared/bot-peers.js";
 import {
   parseAidenRemoteApprovalSchedule,
   type AidenRemoteApprovalSchedule,
@@ -292,7 +304,30 @@ export const AIDEN_REMOTE_BOT_MESSAGING_CONTRACT_REVISION = 54 as const;
 export const AIDEN_REMOTE_BOT_ACCESS_REQUESTS_CONTRACT_REVISION = 55 as const;
 export const AIDEN_REMOTE_BOT_PLANS_CONTRACT_REVISION = 56 as const;
 export const AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION = 57 as const;
-export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION;
+/** Revision59: negotiated connector-watch management; no feature-token expansion. */
+export const AIDEN_REMOTE_BOT_WATCHES_CONTRACT_REVISION = 59 as const;
+export const AIDEN_REMOTE_BOT_OPEN_WORK_CONTRACT_REVISION = 59 as const;
+export const AIDEN_REMOTE_BOT_ROUTINE_MODELS_CONTRACT_REVISION = 59 as const;
+export const AIDEN_REMOTE_BOT_PEERS_CONTRACT_REVISION = 59 as const;
+/**
+ * Contract revision 60 (provisional; re-claim the next revision after
+ * `main`'s at merge by changing only this constant): a user message may carry
+ * `inputSource: "voice"` when Aiden Live sent it for the person on the Mac.
+ * Display-only, no capability; clients show "By voice" and older ones ignore it.
+ */
+export const AIDEN_REMOTE_VOICE_INPUT_CONTRACT_REVISION = 60 as const;
+/**
+ * Contract revision 61 (provisional; re-claim the next revision after
+ * `main`'s at merge by changing only this constant): Phase 6 of the Bot UX
+ * simplification. Four opt-ins, each negotiated on its own and advertised only
+ * where wired: `approval:cards` (the typed approval card), `approvals:settings`
+ * (the global approval mode and the rules page), `bot:settings-changes` and
+ * `bot:suggestions` (held and applied settings changes, skill and lesson
+ * suggestions and their receipts) and `bot:templates` (versioned Templates and
+ * one-field create).
+ */
+export const AIDEN_REMOTE_BOT_UX_CONTRACT_REVISION = 61 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BOT_UX_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -517,6 +552,10 @@ export const AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES = ["bot:images"] as const;
  * any device type may hold.
  */
 export const AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES = ["bot:issues"] as const;
+export const AIDEN_REMOTE_BOT_WATCH_CAPABILITIES = ["bot:watches"] as const;
+export const AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES = ["bot:open-work"] as const;
+export const AIDEN_REMOTE_BOT_ROUTINE_MODEL_CAPABILITIES = ["bot:routine-models"] as const;
+export const AIDEN_REMOTE_BOT_PEER_CAPABILITIES = ["bot:peers"] as const;
 
 export type AidenRemoteBotIssueCapability = (typeof AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES)[number];
 
@@ -525,6 +564,12 @@ export const AIDEN_REMOTE_BOT_ACCESS_REQUEST_CAPABILITIES = ["bot:access-request
 
 export const AIDEN_REMOTE_BOT_PLAN_CAPABILITIES = ["bot:plans"] as const;
 export const AIDEN_REMOTE_BOT_ALLOWED_CAPABILITIES = ["bot:allowed"] as const;
+/** Revision 61: held `update_bot` cards, applied-change receipts and their answer route. */
+export const AIDEN_REMOTE_BOT_SETTINGS_CHANGE_CAPABILITIES = ["bot:settings-changes"] as const;
+/** Revision 61: skill and lesson suggestion cards, learning receipts and their answer routes. */
+export const AIDEN_REMOTE_BOT_SUGGESTION_CAPABILITIES = ["bot:suggestions"] as const;
+/** Revision 61: template versions, samples and Open on the preset list, and one-field create. */
+export const AIDEN_REMOTE_BOT_TEMPLATE_CAPABILITIES = ["bot:templates"] as const;
 
 export const AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
@@ -536,7 +581,30 @@ export const AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_ALLOWED_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_WATCH_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_ROUTINE_MODEL_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_PEER_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_SETTINGS_CHANGE_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_SUGGESTION_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_TEMPLATE_CAPABILITIES,
 ] as const;
+
+/**
+ * Contract revision 61: a device holding `approval:cards` receives the typed
+ * `card` on every pending approval it is sent (stream approvals, phone run
+ * approvals and Bot approvals) and may allow a specialized card the card shows
+ * in full. It widens no grant: answers still need `approval:respond` (and the
+ * Bot grants for a Bot card).
+ */
+export const AIDEN_REMOTE_APPROVAL_CARD_CAPABILITIES = ["approval:cards"] as const;
+
+/**
+ * Contract revision 61: a device holding `approvals:settings` may read and set
+ * the Mac's approval mode and read and change the rules page. Person-only
+ * routes: no Bot or agent path reaches them.
+ */
+export const AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES = ["approvals:settings"] as const;
 
 /**
  * Contract revision 39: a device holding `schedule:cards` (with
@@ -585,6 +653,8 @@ export const AIDEN_REMOTE_OPT_IN_CAPABILITIES = [
   ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
   ...AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES,
+  ...AIDEN_REMOTE_APPROVAL_CARD_CAPABILITIES,
+  ...AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES,
 ] as const;
 
 /** Vocabulary a paired device may add after pairing through `POST /device/capabilities`. */
@@ -602,10 +672,19 @@ export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_ALLOWED_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_WATCH_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_ROUTINE_MODEL_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_PEER_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
   ...AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_SETTINGS_CHANGE_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_SUGGESTION_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_TEMPLATE_CAPABILITIES,
+  ...AIDEN_REMOTE_APPROVAL_CARD_CAPABILITIES,
+  ...AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteNegotiableCapability =
@@ -627,10 +706,19 @@ export const AIDEN_REMOTE_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_ALLOWED_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_WATCH_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_ROUTINE_MODEL_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_PEER_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
   ...AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_SETTINGS_CHANGE_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_SUGGESTION_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_TEMPLATE_CAPABILITIES,
+  ...AIDEN_REMOTE_APPROVAL_CARD_CAPABILITIES,
+  ...AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteCapability = (typeof AIDEN_REMOTE_CAPABILITIES)[number];
@@ -1294,7 +1382,9 @@ export interface AidenRemoteBotList {
 
 export interface AidenRemoteBotCreateRequest {
   name: string;
+  /** Optional on the wire (revision 61); absent reads as "". */
   purpose: string;
+  /** Optional on the wire (revision 61); absent reads as `BOT_STARTER_INSTRUCTIONS`. */
   instructions: string;
   avatar: AidenRemoteBotSemanticAvatar;
   /** Omitted means Full access (contract revision 25 dropped the notice wall). */
@@ -1493,6 +1583,8 @@ export type AidenRemoteBotSessionEntry =
    * `retryText` is omitted when there is nothing to resend.
    */
   | { type: "failed_turn"; id: string; createdAt?: string; retryText?: string }
+  /** Revision 59, only for `bot:peers`: quiet exchange navigation, never message authority. */
+  | { type: "peer"; id: string; exchangeId: string; direction: "sent" | "received"; peerBotId: string; peerName: string; messageKind: "request" | "question" | "status" | "fyi" | "result"; createdAt?: string; final?: true }
   /**
    * Contract revision 27, only for devices holding `bot:cards`: the Bot saved
    * something to its memory. Clients show a quiet "Memory updated" line.
@@ -1526,7 +1618,13 @@ export type AidenRemoteBotSessionEntry =
       mimeType: AidenRemoteBotSharedImageMimeType;
       /** Bytes, at most `AIDEN_REMOTE_BOT_SHARED_IMAGE_MAX_BYTES`. */
       size: number;
-    };
+    }
+  /**
+   * Contract revision 61: `settings_change` only for `bot:settings-changes`
+   * devices; `skill_proposal`, `lesson` and `memory_tidy` only for
+   * `bot:suggestions` devices (`aiden-remote-bot-ux.ts`).
+   */
+  | AidenRemoteBotUxEntry;
 
 /** Revision 45: the image types a Bot can share (`share_image` accepts PNG and JPEG). */
 export const AIDEN_REMOTE_BOT_SHARED_IMAGE_MIME_TYPES = ["image/png", "image/jpeg"] as const;
@@ -1628,7 +1726,7 @@ export interface AidenRemoteBotRoutineSuggestionList {
   suggestions: AidenRemoteBotRoutineSuggestion[];
 }
 
-export const AIDEN_REMOTE_BOT_ROUTINE_NOTIFICATION_KINDS = ["routine", "issue", "message"] as const;
+export const AIDEN_REMOTE_BOT_ROUTINE_NOTIFICATION_KINDS = ["routine", "issue", "peer", "message"] as const;
 export type AidenRemoteBotNotificationKind = (typeof AIDEN_REMOTE_BOT_ROUTINE_NOTIFICATION_KINDS)[number];
 
 /**
@@ -1745,6 +1843,8 @@ export interface AidenRemoteBotApproval {
   canAllow: boolean;
   /** Only bot:allowed holders, on an offered card. Never the private class key. */
   alwaysCount?: number;
+  /** Contract revision 61, only for `approval:cards` holders: the typed card. Its Always button only for `bot:allowed` holders. */
+  card?: ApprovalCard;
 }
 
 /**
@@ -2238,6 +2338,8 @@ export interface AidenRemoteContractFixture {
   rawUploads?: AidenRemoteRawUploadsFixture;
   /** Revision 53 (`chat:new-worktree`): an empty chat moved into a new worktree, and a chat with messages refused. */
   chatNewWorktree?: AidenRemoteChatNewWorktreeFixture;
+  /** Revision 60: a user message Aiden Live sent ("By voice"), and values clients must ignore. */
+  voiceInput?: AidenRemoteVoiceInputFixture;
   taskProgress: AidenRemoteChatTaskProgress;
   agentRoster: AidenRemoteChatAgentRoster;
   agentInterrupt: AidenRemoteChatAgentInterruptFixture;
@@ -3286,8 +3388,11 @@ export function parseAidenRemoteBotCreateRequest(value: unknown): AidenRemoteBot
   ignoreRetiredBotGreeting(value, "Bot create");
   return {
     name: boundedText(value.name, "Bot create name", 80),
-    purpose: boundedText(value.purpose, "Bot create purpose", 280, true),
-    instructions: boundedText(value.instructions, "Bot create instructions", 32_000),
+    // Revision 61 one-field create: `{name, avatar}` is a whole request. No
+    // purpose is an empty one; no instructions are the starter text, with
+    // which the Bot asks what to help with.
+    purpose: hasOwn(value, "purpose") ? boundedText(value.purpose, "Bot create purpose", 280, true) : "",
+    instructions: hasOwn(value, "instructions") ? boundedText(value.instructions, "Bot create instructions", 32_000) : BOT_STARTER_INSTRUCTIONS,
     avatar: parseBotSemanticAvatar(value.avatar, true),
     ...(hasOwn(value, "access")
       ? { access: parseAidenRemoteBotAccessUpdateRequest(value.access) }
@@ -3823,6 +3928,10 @@ export function parseAidenRemoteChatProjection(
                 `${label} message ${index}`,
               ),
             }
+          : {}),
+        // Revision 60: display-only, user messages only; an unknown value is ignored.
+        ...(entry.role === "user" && parseChatInputSource(entry.inputSource)
+          ? { inputSource: "voice" as const }
           : {}),
       };
       if (hasOwn(entry, "timeline")) {
@@ -5937,6 +6046,12 @@ const BOT_SESSION_ENTRY_ID = /^[A-Za-z0-9._:-]{1,128}$/u;
 
 export function parseAidenRemoteBotSessionEntry(value: unknown): AidenRemoteBotSessionEntry {
   if (!isRecord(value)) throw new Error("Bot session entry must be an object.");
+  if (
+    (AIDEN_REMOTE_BOT_SETTINGS_CHANGE_ENTRY_TYPES as readonly unknown[]).includes(value.type) ||
+    (AIDEN_REMOTE_BOT_SUGGESTION_ENTRY_TYPES as readonly unknown[]).includes(value.type)
+  ) {
+    return parseAidenRemoteBotUxEntry(value);
+  }
   const id = boundedText(value.id, "Bot session entry id", 128);
   if (!BOT_SESSION_ENTRY_ID.test(id)) throw new Error("Bot session entry id is invalid.");
   switch (value.type) {
@@ -6013,6 +6128,12 @@ export function parseAidenRemoteBotSessionEntry(value: unknown): AidenRemoteBotS
           ? { retryText: boundedText(value.retryText, "Bot failed turn retryText", AIDEN_REMOTE_BOT_SESSION_MAX_TEXT_CHARS) }
           : {}),
       };
+    case "peer": {
+      assertExactKeys(value, ["type", "id", "exchangeId", "direction", "peerBotId", "peerName", "messageKind", "createdAt", "final"], "Bot peer entry");
+      const messageKind = enumMember(value.messageKind, ["request", "question", "status", "fyi", "result"] as const, "Peer message kind");
+      if (hasOwn(value, "final") && (value.final !== true || messageKind !== "result")) throw new Error("Only a final peer result may carry the final flag.");
+      return { type: "peer", id, exchangeId: parseBotPeerId(value.exchangeId), direction: enumMember(value.direction, ["sent", "received"] as const, "Peer direction"), peerBotId: parseBotPeerId(value.peerBotId), peerName: boundedText(value.peerName, "Peer name", 160), messageKind, ...(hasOwn(value, "createdAt") ? { createdAt: dateTimeValue(value.createdAt, "Peer entry createdAt") } : {}), ...(value.final === true ? { final: true as const } : {}) };
+    }
     case "memory_update":
       assertExactKeys(value, ["type", "id", "createdAt"], "Bot memory update");
       return {
@@ -6232,9 +6353,9 @@ export function parseAidenRemoteBotRoutineNotificationList(value: unknown): Aide
       : "routine";
     // A routine result says which routine ran and how it ended; an issue card
     // carries neither, and its `routineName` is the card's own title.
-    if (kind === "issue" || kind === "message") {
+    if (kind === "issue" || kind === "peer" || kind === "message") {
       if (hasOwn(notification, "routineId") || hasOwn(notification, "status")) {
-        throw new Error("Bot issue or message notification must not carry routineId or status.");
+        throw new Error("Bot issue, peer and message notifications must not carry routineId or status.");
       }
     } else if (!hasOwn(notification, "routineId") || !hasOwn(notification, "status")) {
       throw new Error("Bot routine notification must carry routineId and status.");
@@ -6545,7 +6666,7 @@ export function parseAidenRemoteBotAllowedList(value: unknown): AidenRemoteBotAl
 
 export function parseAidenRemoteBotApproval(value: unknown): AidenRemoteBotApproval {
   if (!isRecord(value)) throw new Error("Bot approval must be an object.");
-  assertExactKeys(value, ["waitId", "toolCallId", "toolName", "summary", "canAllow", "alwaysCount"], "Bot approval");
+  assertExactKeys(value, ["waitId", "toolCallId", "toolName", "summary", "canAllow", "alwaysCount", "card"], "Bot approval");
   if (hasOwn(value, "alwaysCount") && value.canAllow !== true) throw new Error("This Bot approval cannot offer Always.");
   return {
     waitId: parseBotQuestionWaitId(value.waitId, "Bot approval waitId"),
@@ -6554,6 +6675,7 @@ export function parseAidenRemoteBotApproval(value: unknown): AidenRemoteBotAppro
     summary: boundedText(value.summary, "Bot approval summary", 2_000),
     canAllow: requiredBooleanValue(value.canAllow, "Bot approval canAllow"),
     ...(hasOwn(value, "alwaysCount") ? { alwaysCount: parseBotApprovalCount(value.alwaysCount) } : {}),
+    ...(hasOwn(value, "card") ? { card: parseAidenRemoteApprovalCard(value.card) } : {}),
   };
 }
 
@@ -7146,12 +7268,7 @@ function parseScheduleCardsFixture(value: unknown): AidenRemoteScheduleCardsFixt
     throw new Error("Schedule cards streamApproval must carry an approval.");
   }
   const approval = value.streamApproval.approval;
-  assertExactKeys(
-    approval,
-    ["approvalId", "streamId", "chatId", "summary", "toolCallId", "toolName", "expiresAt", "canAllow", "scopes", "schedule"],
-    "Schedule cards stream approval",
-  );
-  if (typeof approval.canAllow !== "boolean") throw new Error("Schedule cards stream approval canAllow must be boolean.");
+  parseAidenRemotePhoneStreamApproval(approval);
   const schedule = parseAidenRemoteApprovalSchedule(approval.schedule);
   parseRunEventSequence(value.phoneRunEvents, "Schedule cards phone run events", "phone");
   const runApprovals = (value.phoneRunEvents as Array<Record<string, any>>)
@@ -8318,6 +8435,13 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     }
     chatNewWorktree = parseChatNewWorktreeFixture(value.chatNewWorktree);
   }
+  let voiceInput: AidenRemoteVoiceInputFixture | undefined;
+  if (value.voiceInput !== undefined) {
+    if (contractRevision < AIDEN_REMOTE_VOICE_INPUT_CONTRACT_REVISION) {
+      throw new Error(`Voice input fixtures require contract revision ${AIDEN_REMOTE_VOICE_INPUT_CONTRACT_REVISION}.`);
+    }
+    voiceInput = parseVoiceInputFixture(value.voiceInput);
+  }
   let botAllowed: AidenRemoteBotAllowedFixture | undefined;
   if (value.botAllowed !== undefined) {
     if (contractRevision < AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION) throw new Error("Bot allowed fixtures require revision 57.");
@@ -8442,7 +8566,29 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     ...(backgroundJobs ? { backgroundJobs } : {}),
     ...(rawUploads ? { rawUploads } : {}),
     ...(chatNewWorktree ? { chatNewWorktree } : {}),
+    ...(voiceInput ? { voiceInput } : {}),
   };
+}
+
+/** Revision 60 fixture: the chat as sent, and which of its messages read as "By voice". */
+export interface AidenRemoteVoiceInputFixture {
+  chat: AidenRemoteChatProjection;
+  voiceMessageIds: string[];
+}
+
+function parseVoiceInputFixture(value: unknown): AidenRemoteVoiceInputFixture {
+  if (!isRecord(value)) throw new Error("Voice input fixture must be an object.");
+  assertExactKeys(value, ["chat", "voiceMessageIds"], "Voice input fixture");
+  const chat = parseAidenRemoteChatProjection(value.chat, "Voice input chat");
+  if (!Array.isArray(value.voiceMessageIds) || !value.voiceMessageIds.every((id) => typeof id === "string")) {
+    throw new Error("Voice input fixture voiceMessageIds must be strings.");
+  }
+  const expected = value.voiceMessageIds as string[];
+  const marked = chat.messages.filter((message) => message.inputSource === "voice").map((message) => message.id);
+  if (marked.length !== expected.length || marked.some((id, index) => id !== expected[index])) {
+    throw new Error("Voice input fixture marks different messages than the parser.");
+  }
+  return { chat, voiceMessageIds: expected };
 }
 
 const ERROR_DETAIL_DECISIONS = ["allow", "deny", "expired", "cancelled"] as const;
@@ -9286,6 +9432,60 @@ function parsePairingRequestsFixture(value: unknown): AidenRemotePairingRequests
  * what a phone holding the phone-scoped run subset receives: approvals carry a
  * summary, `canAllow` and offered scopes but never tool details.
  */
+/**
+ * Revision 61: a typed card on a phone's approval must agree with the summary
+ * fields: `canAllow` is exactly whether the card has an allow button, and every
+ * offered scope is one the card's buttons offer.
+ */
+function parsePhoneApprovalCard(payload: Record<string, unknown>, label: string): void {
+  if (!hasOwn(payload, "card")) return;
+  const card = parseAidenRemoteApprovalCard(payload.card);
+  if (payload.canAllow !== approvalCardAllows(card)) throw new Error(`${label} canAllow must match its card.`);
+  if (Array.isArray(payload.scopes) && payload.scopes.some((scope) => !approvalCardAllows(card, scope as ToolApprovalScope))) {
+    throw new Error(`${label} scopes must be ones its card offers.`);
+  }
+}
+
+function parsePhoneApprovalCommon(payload: Record<string, unknown>, label: string): void {
+  // Revision 39: a display-only card for `schedule:cards` holders; it never changes canAllow.
+  if (payload.schedule !== undefined) parseAidenRemoteApprovalSchedule(payload.schedule);
+  assertBoundedString(payload, "approvalId", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
+  assertBoundedString(payload, "summary", 2_000);
+  assertBoundedString(payload, "toolCallId", 128, true);
+  assertBoundedString(payload, "toolName", 120);
+  if (typeof payload.canAllow !== "boolean") throw new Error(`${label} canAllow must be boolean.`);
+  if (payload.scopes !== undefined) {
+    if (!payload.canAllow) throw new Error(`A deny-only ${label.toLocaleLowerCase("en-US")} offers no scopes.`);
+    if (
+      !Array.isArray(payload.scopes) ||
+      payload.scopes.some((scope) => !["once", "chat", "always"].includes(scope as string))
+    ) {
+      throw new Error(`${label} scopes are invalid.`);
+    }
+  }
+  parsePhoneApprovalCard(payload, label);
+}
+
+/** A phone's `approval_required` run payload (and a gap snapshot's approvals). */
+export function parseAidenRemotePhoneRunApproval(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) throw new Error("Phone run approval must be an object.");
+  assertExactKeys(value, ["approvalId", "summary", "toolCallId", "toolName", "canAllow", "scopes", "schedule", "card"], "Phone run approval");
+  parsePhoneApprovalCommon(value, "Phone run approval");
+  return value;
+}
+
+/** A phone's own stream approval (`GET /streams/{id}/approval`). */
+export function parseAidenRemotePhoneStreamApproval(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) throw new Error("Stream approval must be an object.");
+  assertExactKeys(
+    value,
+    ["approvalId", "streamId", "chatId", "summary", "toolCallId", "toolName", "expiresAt", "canAllow", "scopes", "schedule", "card"],
+    "Stream approval",
+  );
+  parsePhoneApprovalCommon(value, "Stream approval");
+  return value;
+}
+
 function parseRunEventSequence(value: unknown, label: string, projection: "host" | "phone"): void {
   if (!Array.isArray(value) || value.length === 0) {
     throw new Error(`${label} must be a non-empty array.`);
@@ -9319,24 +9519,10 @@ function parseRunEventSequence(value: unknown, label: string, projection: "host"
       assertExactKeys(event.payload, ["promptId", "outcome"], "Question resolved");
       boundedText(event.payload.promptId, "Question resolved promptId", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
     } else if (projection === "phone" && event.type === "approval_required") {
-      const payload = event.payload;
-      assertExactKeys(payload, ["approvalId", "summary", "toolCallId", "toolName", "canAllow", "scopes", "schedule"], "Phone run approval");
-      // Revision 39: a display-only card for `schedule:cards` holders; it never changes canAllow.
-      if (payload.schedule !== undefined) parseAidenRemoteApprovalSchedule(payload.schedule);
-      assertBoundedString(payload, "approvalId", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
-      assertBoundedString(payload, "summary", 2_000);
-      assertBoundedString(payload, "toolCallId", 128, true);
-      assertBoundedString(payload, "toolName", 120);
-      if (typeof payload.canAllow !== "boolean") throw new Error("Phone run approval canAllow must be boolean.");
-      if (payload.scopes !== undefined) {
-        if (!payload.canAllow) throw new Error("A deny-only phone run approval offers no scopes.");
-        if (
-          !Array.isArray(payload.scopes) ||
-          payload.scopes.some((scope) => !["once", "chat", "always"].includes(scope as string))
-        ) {
-          throw new Error("Phone run approval scopes are invalid.");
-        }
-      }
+      parseAidenRemotePhoneRunApproval(event.payload);
+    } else if (projection === "phone" && event.type === "snapshot" && Array.isArray(event.payload.approvals)) {
+      // A gap snapshot repeats each waiting approval as the phone would have read it.
+      event.payload.approvals.forEach((approval) => parseAidenRemotePhoneRunApproval(approval));
     } else if (projection === "phone" && event.type === "question_required") {
       const payload = event.payload;
       assertExactKeys(payload, ["promptId", "questions", "toolCallId", "expiresAt"], "Phone run question");
@@ -9701,3 +9887,8 @@ export function reconcileAidenSseFrames(
   }
   return { events, reconcileRequired: false };
 }
+
+export type { BotConnectorWatchList, BotConnectorWatchView, BotConnectorWatchSourceList, BotConnectorWatchTestResult } from "../../renderer/shared/bot-connector-watches.js";
+
+export type { BotOpenWorkSnapshot, BotOpenWorkItem, BotOpenWorkMutation, BotOpenWorkResult, BotOpenWorkEvidence } from "../../renderer/shared/bot-open-work.js";
+export { parseBotOpenWorkSnapshot, parseBotOpenWorkResult, parseBotOpenWorkMutation, parseBotOpenWorkEvidence } from "../../renderer/shared/bot-open-work.js";

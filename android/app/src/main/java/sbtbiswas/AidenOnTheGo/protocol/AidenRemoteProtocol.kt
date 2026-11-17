@@ -393,7 +393,8 @@ object AidenBotPrivateResponseValidator {
                             (rejectPrivateChildFields &&
                                 (isPrivateChildProjectionKey(key) || privateSummaryProjectionKeys.contains(normalize(key))))) &&
                         !isAllowedKnownIdentityKey(key, root, path, reasoningAllowed) &&
-                        !isAllowedRoutinePrompt(key, root, path, element)
+                        !isAllowedRoutinePrompt(key, root, path, element) &&
+                        !isAllowedBotUxKey(key, root, path, element)
                     ) {
                         throw AidenRemoteContractException.UnsafePayloadField(key)
                     }
@@ -460,10 +461,35 @@ object AidenBotPrivateResponseValidator {
         parent: kotlinx.serialization.json.JsonObject
     ): Boolean {
         if (key != "prompt") return false
+        if (root == "botWatch") return parentPath.isEmpty()
+        if (root == "botWatches") return parentPath == listOf("watches", "[]")
         if (root == "botRoutineSuggestions") return parentPath == listOf("suggestions", "[]")
         if (root !in botSessionRoots) return false
         val type = (parent["type"] as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content
         if (type != "routine_proposal") return false
+        return parentPath.lastOrNull() == "entry" || parentPath.takeLast(2) == listOf("entries", "[]")
+    }
+
+    /**
+     * Revision 61: a held `settings_change` entry carries the Bot's proposed `instructions` (what
+     * the person reviews before Apply); a Bot approval's typed `card` carries display
+     * `arguments` (short key/value lines the Mac already redacted); and a template row on
+     * `GET /bot-presets` carries its own `instructions` for the Adds section. Only those shapes.
+     */
+    private fun isAllowedBotUxKey(
+        key: String,
+        root: String,
+        parentPath: List<String>,
+        parent: kotlinx.serialization.json.JsonObject
+    ): Boolean {
+        if (key == "instructions" && root == "botPresets") return parentPath == listOf("presets", "[]")
+        if (root !in botSessionRoots) return false
+        if (key == "arguments") {
+            return parentPath.lastOrNull() == "card" && parentPath.dropLast(1).lastOrNull() == "approval"
+        }
+        if (key != "instructions") return false
+        val type = (parent["type"] as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content
+        if (type != "settings_change") return false
         return parentPath.lastOrNull() == "entry" || parentPath.takeLast(2) == listOf("entries", "[]")
     }
 
@@ -479,6 +505,11 @@ object AidenBotPrivateResponseValidator {
         if (key == "reasoning" && root in listOf("chat", "chatProjection") &&
             (parentPath == listOf("messages", "[]") ||
                 parentPath == listOf("chats", "[]", "messages", "[]")) && regularChat) return true
+        if (root == "botPeers" && key == "result" && parentPath in listOf(emptyList(),listOf("exchange"))) return true
+        if (root == "botWatchTest" && key == "result" && parentPath.isEmpty()) return true
+        // Open-work completion result is an owned pair of opaque numeric transcript IDs.
+        if (key == "result" && root in listOf("botOpenWork", "botOpenWorkResult") &&
+            parentPath in listOf(listOf("items", "[]", "completion"), listOf("snapshot", "items", "[]", "completion"))) return true
         // Revision 42: the issue act route's receipt is `{ result: ... }`, not a tool result.
         if (root == "botIssues" && key == "result") {
             return parentPath.isEmpty() ||
@@ -534,6 +565,10 @@ data class AidenRemoteCapability(val rawValue: String) {
         val SCHEDULE_WRITE = AidenRemoteCapability("schedule:write")
         val BOT_READ = AidenRemoteCapability("bot:read")
         val BOT_WRITE = AidenRemoteCapability("bot:write")
+        val BOT_WATCHES = AidenRemoteCapability("bot:watches")
+        val BOT_OPEN_WORK = AidenRemoteCapability("bot:open-work")
+        val BOT_ROUTINE_MODELS = AidenRemoteCapability("bot:routine-models")
+        val BOT_PEERS = AidenRemoteCapability("bot:peers")
         val TASKS_READ = AidenRemoteCapability("tasks:read")
         val AGENTS_READ = AidenRemoteCapability("agents:read")
         val QUESTIONS_RESPOND = AidenRemoteCapability("questions:respond")
@@ -570,6 +605,21 @@ data class AidenRemoteCapability(val rawValue: String) {
         val BOT_PLANS = AidenRemoteCapability("bot:plans")
         /** Revision 55: access cards and folder-access issues, negotiated alone. */
         val BOT_ACCESS_REQUESTS = AidenRemoteCapability("bot:access-requests")
+        /**
+         * Revision 61 (provisional): the typed approval `card` on stream, run and Bot approvals. A
+         * holder may allow exactly what the card's buttons offer. Negotiated alone, never at pairing.
+         */
+        val APPROVAL_CARDS = AidenRemoteCapability("approval:cards")
+        /** Revision 61: the Mac's approval mode and rules page (`/approvals/mode`, `/approvals/rules…`). */
+        val APPROVALS_SETTINGS = AidenRemoteCapability("approvals:settings")
+        /** Revision 61: held `update_bot` cards and their receipts (`settings_change` entries). */
+        val BOT_SETTINGS_CHANGES = AidenRemoteCapability("bot:settings-changes")
+        /** Revision 61: skill proposals, lessons and memory tidy-ups in a Bot's chat. */
+        val BOT_SUGGESTIONS = AidenRemoteCapability("bot:suggestions")
+        /** Revision 61: versioned Templates (`version`, `existingBotId`) and one-field create. */
+        val BOT_TEMPLATES = AidenRemoteCapability("bot:templates")
+        /** Revision 61: each is asked for in a call of its own, so a refusal leaves the rest. */
+        val BOT_UX = listOf(APPROVAL_CARDS, APPROVALS_SETTINGS, BOT_SETTINGS_CHANGES, BOT_SUGGESTIONS, BOT_TEMPLATES)
         /**
          * Contract revision 40: a hand-off card that takes no note says so (`takesNote`). It
          * grants no authority. A Mac on an earlier revision refuses the name, so this phone asks
@@ -680,12 +730,16 @@ data class AidenRemoteCapability(val rawValue: String) {
         /** Every grant `POST /device/capabilities` may add. */
         val NEGOTIABLE = PROGRESS + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY +
             PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_IMAGES + PHONE_BOT_ISSUES + PHONE_CHAT_JOBS +
-            PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE + PHONE_BOT_MESSAGING + listOf(BOT_ACCESS_REQUESTS, BOT_PLANS, BOT_ALLOWED)
+            PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE + PHONE_BOT_MESSAGING +
+            listOf(BOT_WATCHES, BOT_OPEN_WORK, BOT_ROUTINE_MODELS, BOT_PEERS, BOT_ACCESS_REQUESTS, BOT_PLANS, BOT_ALLOWED) +
+            BOT_UX
 
         /** The pairing vocabulary plus the negotiable phone-scoped subsets. */
         val PHONE_KNOWN = V1_KNOWN + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY +
             PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_IMAGES + PHONE_BOT_ISSUES + PHONE_CHAT_JOBS +
-            PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE + PHONE_BOT_MESSAGING + listOf(BOT_ACCESS_REQUESTS, BOT_PLANS, BOT_ALLOWED)
+            PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE + PHONE_BOT_MESSAGING +
+            listOf(BOT_WATCHES, BOT_OPEN_WORK, BOT_ROUTINE_MODELS, BOT_PEERS, BOT_ACCESS_REQUESTS, BOT_PLANS, BOT_ALLOWED) +
+            BOT_UX
     }
 }
 

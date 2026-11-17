@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { captureAnalyticsEvents } from "./analytics/test-support.js";
 
 import { WebSearchService } from "./web-search.js";
 import {
@@ -687,4 +688,27 @@ test("a pooled Tavily route fails over between keys, charges each keyed request,
   const third = await service.search({ query: QUERY });
   assert.equal(third.providerId, "parallel-mcp");
   assert.deepEqual(sentKeys, [], "a fully cooling pool sends no Tavily request");
+});
+
+test("a search that returned evidence counts its provider, and a failed or fenced one counts nothing", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const working = new WebSearchService({
+    getSettings: async () => baseSettings({ mode: "fixed", providerId: "exa", credentialMode: "anonymous" }),
+    adapterFactories: { exa: adapter("exa", async () => evidence()) },
+  });
+  await working.search({ query: QUERY }, { signal: new AbortController().signal });
+  assert.deepEqual(sent, [{ event: "web_search_used", props: { search_provider: "exa" } }]);
+
+  sent.length = 0;
+  const failing = new WebSearchService({
+    getSettings: async () => baseSettings({ mode: "fixed", providerId: "exa", credentialMode: "anonymous" }),
+    adapterFactories: {
+      exa: adapter("exa", async () => {
+        throw webSearchError("quota", "exa");
+      }),
+    },
+  });
+  await assert.rejects(failing.search({ query: QUERY }, { signal: new AbortController().signal }));
+  await assert.rejects(working.search({ query: QUERY }, { revalidateAfterAttempt: () => false }));
+  assert.deepEqual(sent, []);
 });

@@ -5,6 +5,7 @@ import { DeviceViewer } from "./device-viewer";
 import { DeviceFloatingPlaceholder } from "./device-floating-placeholder";
 import { deviceTabKey } from "../lib/device-tabs";
 import { DeviceHostDiagnostics } from "./device-host-diagnostics";
+import { LiveGuard } from "./live-guard";
 import { devicesApi } from "../lib/ipc";
 import {
   DEVICE_PLATFORM_LABELS,
@@ -445,23 +446,26 @@ export function DevicesPanelView({
     case "disabled":
     case "needs-consent":
       return (
-        <Empty icon={<Smartphone aria-hidden />} title="Simulators">
-          <p className={explain}>
-            Watch and control iOS Simulators from Xcode and Android Emulators from Android Studio here, and let
-            Aiden drive them while you watch.
-          </p>
-          <p className={explain}>{detail ?? DEVICE_SETUP_NOTICE}</p>
-          {errorLine}
-          <Button
-            variant="muted"
-            size="small"
-            disabled={state.hostStatus === "disabled" || pending !== null}
-            onClick={onSetup}
-          >
-            {pending === "setup" ? spinner : null}
-            Set up simulator streaming
-          </Button>
-        </Empty>
+        // Setup downloads helper tools: the person's to agree to, never Aiden Live's.
+        <LiveGuard guard="you">
+          <Empty icon={<Smartphone aria-hidden />} title="Simulators">
+            <p className={explain}>
+              Watch and control iOS Simulators from Xcode and Android Emulators from Android Studio here, and let
+              Aiden drive them while you watch.
+            </p>
+            <p className={explain}>{detail ?? DEVICE_SETUP_NOTICE}</p>
+            {errorLine}
+            <Button
+              variant="muted"
+              size="small"
+              disabled={state.hostStatus === "disabled" || pending !== null}
+              onClick={onSetup}
+            >
+              {pending === "setup" ? spinner : null}
+              Set up simulator streaming
+            </Button>
+          </Empty>
+        </LiveGuard>
       );
     case "installing":
     case "starting":

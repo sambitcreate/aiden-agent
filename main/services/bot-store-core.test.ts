@@ -455,3 +455,34 @@ test('messaging switches store only off and survive unrelated edits',async()=>{
   const stored=await createBotStore({root:()=>root}).get(bot.id);assert.equal(stored?.revision,on.revision);
  } finally {await rm(root,{recursive:true,force:true});}
 });
+
+test("a Bot's thinking level is stored only when not off, survives unrelated edits and reloads, and an unknown stored level reads as off", async () => {
+  const { root, store } = await fixture();
+  try {
+    const created = await store.create({ name: "Thinker", instructions: "Think.", avatar: DEFAULT_BOT_AVATAR });
+    assert.equal(created.thinkingLevel, undefined, "off by default");
+    const base = { id: created.id, name: created.name, instructions: created.instructions, avatar: created.avatar };
+    const high = await store.update({ ...base, expectedRevision: created.revision, thinkingLevel: "high" });
+    assert.equal(high.thinkingLevel, "high");
+    assert.notEqual(high.revision, created.revision);
+    const renamed = await store.update({ ...base, expectedRevision: high.revision, name: "Deep thinker", selfWakeUps: false, messagesOtherBots: false });
+    assert.equal(renamed.thinkingLevel, "high", "an edit that leaves it out keeps it");
+    const reopened = await createBotStore({ root: () => root }).get(created.id);
+    assert.equal(reopened?.thinkingLevel, "high");
+    assert.equal(reopened?.revision, renamed.revision, "a reload hashes to the same revision");
+    const off = await store.update({ ...base, expectedRevision: renamed.revision, thinkingLevel: "off" });
+    assert.equal(Object.prototype.hasOwnProperty.call(off, "thinkingLevel"), false, "off is not stored");
+    assert.equal((await createBotStore({ root: () => root }).get(created.id))?.revision, off.revision);
+
+    await assert.rejects(store.update({ ...base, expectedRevision: off.revision, thinkingLevel: "High" as never }), /thinking level/u);
+    assert.equal((await store.get(created.id))?.revision, off.revision, "a bad level changes nothing");
+    const stored = JSON.parse(await readFile(join(root, "bots.json"), "utf8")) as { bots: Record<string, unknown>[] };
+    stored.bots[0]!.thinkingLevel = "ultra";
+    await writeFile(join(root, "bots.json"), JSON.stringify(stored));
+    const unknown = await createBotStore({ root: () => root }).get(created.id);
+    assert.ok(unknown, "no Bot is lost to a bad setting");
+    assert.equal(unknown.thinkingLevel, undefined);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

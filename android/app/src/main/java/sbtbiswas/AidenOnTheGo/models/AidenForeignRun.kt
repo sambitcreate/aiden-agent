@@ -164,12 +164,14 @@ class AidenForeignRunProjection(val runId: String) {
             }
             is AidenRemoteRunEvent.Kind.Snapshot -> {
                 _tools.clear()
-                timeline = null
+                timeline = kind.snapshot.timeline
                 _approvals.clear()
                 _approvals.addAll(kind.snapshot.approvals.filter { it.approvalId !in locallyAnswered })
                 _questions.clear()
                 _questions.addAll(kind.snapshot.questions.filter { it.promptId !in locallyAnswered })
-                state = AidenStreamState.RECONCILING
+                val snapshot = kind.snapshot
+                val hasCheckpoint = snapshot.replyText != null || snapshot.replyReasoning != null || snapshot.timeline != null
+                state = if (snapshot.state == "working" && hasCheckpoint) AidenStreamState.RUNNING else AidenStreamState.RECONCILING
                 refreshWaitingState()
                 listOf(Effect.Reconcile)
             }

@@ -303,6 +303,7 @@ function fakeBotBrowser() {
   const opened: BrowserCommand[] = [];
   const service: BotBrowserHandoffService & BotBrowserService = {
     getState: () => state(),
+    getBotState: () => state(),
     hasOwner: () => true,
     transferOwner: () => undefined,
     async command(_workspaceId, command, context) {

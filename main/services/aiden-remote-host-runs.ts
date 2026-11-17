@@ -1,6 +1,8 @@
 import type { ServerResponse } from "node:http";
+import { approvalCardAllows, buildApprovalCard, type ApprovalCard } from "../../renderer/shared/approval-card-model.js";
 import {
-  parseToolApprovalScope,
+  parseRemoteToolApprovalScope,
+  remoteOfferedScopes,
   type ToolApprovalScope,
 } from "../../renderer/shared/tool-approval-scope.js";
 import type { ChatRunInputAdmissionResult } from "../../renderer/shared/chat-run-input.js";
@@ -11,6 +13,7 @@ import {
 } from "../../renderer/shared/assistant.js";
 import {
   AIDEN_REMOTE_PROTOCOL_VERSION,
+  AIDEN_REMOTE_MAX_SSE_FRAME_BYTES,
   type AidenRemoteCapability,
   type AidenRemoteErrorCode,
   type AidenRemoteErrorEnvelope,
@@ -157,7 +160,7 @@ type ControlOutcome<T> =
     };
 
 function runGone(): AidenRemoteServiceError {
-  return new AidenRemoteServiceError("run_gone", "This run is no longer available on this Aiden host.", 404);
+  return new AidenRemoteServiceError("run_gone", "This run is no longer available on this computer.", 404);
 }
 
 function staleRun(): AidenRemoteServiceError {
@@ -181,34 +184,62 @@ function ownRecord(value: unknown): Record<string, unknown> | undefined {
  * holding `schedule:cards` and `schedule:read` (contract revision 39): it adds
  * the display-only `schedule` card to scheduled-task approvals.
  */
-export type RunProjection = "full" | "observer" | "phone" | "phone-schedule";
+export type RunProjection = "full" | "observer" | "phone" | "phone-schedule" | "phone-cards" | "phone-schedule-cards";
 
 function projectPayload(
   type: string,
   payload: Record<string, unknown>,
   projection: RunProjection,
 ): Record<string, unknown> {
-  if (type !== "approval_required" || projection === "full") return payload;
-  const { details: _details, detailsOmitted: _omitted, scopes, ...summary } = payload;
+  if (type !== "approval_required") return payload;
+  // "Allow in this workspace" is answered only on the host, for every reader.
+  const { scopes: hostScopes, ...rest } = payload;
+  const offered = remoteOfferedScopes(hostScopes);
+  const remote: Record<string, unknown> = offered ? { ...rest, scopes: offered } : rest;
+  if (projection === "full") return remote;
+  const { details: _details, detailsOmitted: _omitted, scopes, ...summary } = remote;
   if (projection === "observer") return scopes === undefined ? summary : { ...summary, scopes };
   // The phone projection matches the phone's own stream approvals: a summary,
   // whether it may allow from the phone, and allow scopes only when it may.
-  const canAllow = phoneMayAllow(payload);
-  const schedule = projection === "phone-schedule" ? approvalScheduleCard(payload.details) : undefined;
+  const card = projection.endsWith("-cards") ? runApprovalCard(payload) : undefined;
+  const canAllow = card ? approvalCardAllows(card) : phoneMayAllow(payload);
+  // A card holder is offered exactly the scopes its card's buttons offer.
+  const cardScopes = card && Array.isArray(scopes)
+    ? scopes.filter((scope) => typeof scope === "string" && approvalCardAllows(card, scope as ToolApprovalScope))
+    : scopes;
+  const schedule = projection.startsWith("phone-schedule") ? approvalScheduleCard(payload.details) : undefined;
   return {
     ...summary,
     canAllow,
-    ...(canAllow && scopes !== undefined ? { scopes } : {}),
+    ...(canAllow && cardScopes !== undefined && (!Array.isArray(cardScopes) || cardScopes.length > 0) ? { scopes: cardScopes } : {}),
     ...(schedule ? { schedule } : {}),
+    ...(card ? { card } : {}),
   };
+}
+
+/**
+ * The typed card for a run's approval (contract revision 61): built from the
+ * journaled payload with the one card model. Details too large to journal
+ * leave a deny-only card.
+ */
+function runApprovalCard(payload: Record<string, unknown>): ApprovalCard {
+  const offered = remoteOfferedScopes(payload.scopes);
+  return buildApprovalCard({
+    toolName: typeof payload.toolName === "string" ? payload.toolName : "tool",
+    summary: typeof payload.summary === "string" ? payload.summary : "",
+    canAllow: payload.canAllow !== false,
+    ...(offered ? { scopes: offered.map((scope) => parseRemoteToolApprovalScope(scope)).filter((scope) => scope !== undefined) } : {}),
+    ...(payload.details !== undefined ? { details: payload.details } : {}),
+    ...(payload.detailsOmitted === true ? { detailsOmitted: true } : {}),
+  });
 }
 
 /** The run projection for a reader, from its device type and grants. */
 export function runProjectionForDevice(device: AidenRemoteHostRunDevice): RunProjection {
   if (isPhoneRunDevice(device)) {
-    return device.capabilities.has("schedule:cards") && device.capabilities.has("schedule:read")
-      ? "phone-schedule"
-      : "phone";
+    const schedule = device.capabilities.has("schedule:cards") && device.capabilities.has("schedule:read");
+    const cards = device.capabilities.has("approval:cards");
+    return schedule ? (cards ? "phone-schedule-cards" : "phone-schedule") : cards ? "phone-cards" : "phone";
   }
   return device.capabilities.has("runs:control") ? "full" : "observer";
 }
@@ -244,7 +275,8 @@ export function hostRunWireEvent(
 /**
  * The `gap` snapshot a reader gets when its cursor fell behind retention: the
  * run's state and every pending prompt, so it can rebuild attention and read
- * the persisted transcript. It sits at the sequence before the oldest event.
+ * the persisted transcript. A checkpoint covers the current head. A legacy
+ * snapshot sits immediately before the oldest retained event.
  */
 export function hostRunGapSnapshotEvent(
   read: Extract<HostRunRead, { kind: "snapshot_required" }>,
@@ -263,6 +295,7 @@ export function hostRunGapSnapshotEvent(
       chatId: summary.chatId,
       reason: "gap",
       epoch: read.epoch,
+      ...read.transcript,
       state: summary.state,
       pendingApprovalIds: summary.pendingApprovalIds,
       pendingQuestionIds: summary.pendingQuestionIds,
@@ -327,7 +360,7 @@ function requireInformedAllow(payload: Record<string, unknown>, scope: ToolAppro
   if (payload.detailsOmitted === true) {
     throw new AidenRemoteServiceError(
       "capability_denied",
-      "Review this approval on the Aiden host; its details are too large to send.",
+      "Review this approval in Aiden Agent on your computer; its details are too large to send.",
       403,
     );
   }
@@ -339,7 +372,7 @@ function requireInformedAllow(payload: Record<string, unknown>, scope: ToolAppro
 
 function parseRunApproval(value: unknown): { decision: "allow" | "deny"; scope?: ToolApprovalScope } {
   const record = ownRecord(value);
-  const scope = record && "scope" in record ? parseToolApprovalScope(record.scope) : undefined;
+  const scope = record && "scope" in record ? parseRemoteToolApprovalScope(record.scope) : undefined;
   if (
     !record ||
     Object.keys(record).some((key) => key !== "decision" && key !== "scope") ||
@@ -425,6 +458,7 @@ export class AidenRemoteHostRunService {
     after: number,
     response: ServerResponse,
     admit: () => void = () => {},
+    checkpoint = false,
   ): void {
     admit();
     const registry = this.options.registry;
@@ -441,18 +475,27 @@ export class AidenRemoteHostRunService {
       if (endedSent) return { frames: [], end: true };
       let read;
       try {
-        read = registry.read(runId, cursor, MAX_EVENTS_PER_PULL);
+        read = registry.read(runId, cursor, MAX_EVENTS_PER_PULL, checkpoint);
       } catch {
         // The run was evicted while observed: drop so a reconnect learns run_gone.
         return { abort: true };
       }
       const frames: string[] = [];
       if (read.kind === "snapshot_required") {
-        const resume = read.nextSequence - 1;
         const gap = hostRunGapSnapshotEvent(read, projection);
-        frames.push(sseFrame(String(gap.sequence), gap.type, gap));
-        cursor = resume;
-        return { frames };
+        const frame = sseFrame(String(gap.sequence), gap.type, gap);
+        if (!read.transcript || Buffer.byteLength(frame) <= AIDEN_REMOTE_MAX_SSE_FRAME_BYTES) {
+          cursor = gap.sequence;
+          return { frames: [frame] };
+        }
+        // A large prompt plus optional content can exceed the frame budget.
+        // Fall back to the original replay cursor so retained events still arrive.
+        read = registry.read(runId, cursor, MAX_EVENTS_PER_PULL);
+        if (read.kind === "snapshot_required") {
+          const legacy = hostRunGapSnapshotEvent(read, projection);
+          cursor = legacy.sequence;
+          return { frames: [sseFrame(String(cursor), legacy.type, legacy)] };
+        }
       }
       for (const event of read.events) {
         const wire = hostRunWireEvent(event, read.summary.chatId, projection);
@@ -546,10 +589,14 @@ export class AidenRemoteHostRunService {
         return access(summary.chatId, async () => {
           const prompt = this.options.registry.pendingPrompt(approvalId);
           if (prompt && decision === "allow") {
-            if (options.phoneScoped === true && !phoneMayAllow(prompt.payload)) {
+            // A phone holding `approval:cards` may allow exactly what its card offers (revision 61).
+            const card = options.phoneScoped === true && options.capabilities?.has("approval:cards") === true
+              ? runApprovalCard(prompt.payload)
+              : undefined;
+            if (card ? !approvalCardAllows(card, scope) : options.phoneScoped === true && !phoneMayAllow(prompt.payload)) {
               throw new AidenRemoteServiceError(
                 "capability_denied",
-                "This approval can only be allowed from the Aiden desktop app.",
+                "Allow this in Aiden Agent on your computer.",
                 403,
               );
             }
