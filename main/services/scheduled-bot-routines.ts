@@ -744,6 +744,8 @@ export interface BotRoutineCreateInput {
   sourceProposalId?: string;
   /** Main-only (never parsed from IPC or Remote): the Bot's own wake-up (`wake_up`). */
   wakeUp?: ScheduledTask["wakeUp"];
+  /** Main-only (never parsed from IPC or Remote): false adds it paused (a Template's routine). */
+  enabled?: boolean;
 }
 
 export interface BotRoutineUpdateInput {
@@ -1018,6 +1020,7 @@ export function createBotRoutineService(dependencies: BotRoutineServiceDependenc
         routineSchedule: input.schedule,
         ...(input.sourceProposalId !== undefined ? { sourceProposalId: input.sourceProposalId } : {}),
         ...(input.wakeUp !== undefined ? { wakeUp: input.wakeUp } : {}),
+        ...(input.enabled === false ? { enabled: false } : {}),
         notify: true,
       });
       dependencies.notifyChanged({ botId: input.botId, routineId: task.id });

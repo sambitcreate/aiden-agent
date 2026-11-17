@@ -17,7 +17,7 @@ import { calendarWatchCallAllowed } from "../bot-routine-events/connector-calend
 //   rule hands the call to the person instead of running it. On a turn nobody
 //   is watching (routine, Telegram) neither waits: the call is blocked with
 //   what the person needs to do.
-// - Routines go ahead (Settings → Bots & Approvals, off by default): on a run made only of
+// - Routines go ahead (Settings → Approvals → Advanced, off by default): on a run made only of
 //   routine inputs, an approval (today's or a rule's Ask first) is granted
 //   without a card. Hand-offs, the locked rules, Computer Use on the person's
 //   Mac and every turn a person or Telegram joined are unchanged.
@@ -51,6 +51,8 @@ import type { BotRuntimeEffectiveAuthority } from "../bot-runtime-authority.js";
 import { summarizeToolCall } from "../coding-tools.js";
 import { COMPUTER_USE_TOOL_NAME } from "../computer-use/tool.js";
 import { renderMcpServersSection } from "../mcp-server-instructions.js";
+import { hasMcpAgentToolNameShape } from "../mcp-tool-identity.js";
+import { BOT_FILE_TOOL_NAMES } from "../bot-file-tool-router.js";
 import { piRuntimeReplayPolicy } from "../pi-runtime-tool.js";
 import type { SkillRegistrySnapshot } from "../skill-registry.js";
 import type {
@@ -62,6 +64,54 @@ import type {
   BotTurnContext,
 } from "./bot-extension.js";
 import { ruleAskUnattendedBlock, ruleUnattendedBlock } from "./bot-handoff-text.js";
+import { planActionGate, type GateAction, type GateAttendance, type GateContext, type GateDecision } from "../approval-gate/gate.js";
+import { approvalJudgeAction } from "../approval-judge/judge.js";
+import { toolCallApprovalEffect } from "../tool-approval.js";
+import {
+  approvalRuleHostOf,
+  approvalTextRulesFor,
+  describeApprovalRuleTarget,
+  resolveApprovalRule,
+  type ApprovalRule,
+  type ApprovalRuleDecision,
+  type ApprovalRuleSubject,
+} from "../../../renderer/shared/approval-rules.js";
+import { BOT_EXEMPT_TOOL_NAMES, bringsOutsideContent, DISCLOSURE_TOOL_NAMES } from "../approval-gate/tool-classes.js";
+
+/** A Bot's built-in rules that only mark an action consequential: Auto judges them (plan §3.2 tool classes). */
+const BOT_JUDGED_RULE_CLASSES: ReadonlySet<string> = new Set(["communicate", "delete", "publish", "install"]);
+/**
+ * A Bot's own tools whose results bring outside content, besides the shared
+ * list and every connection: its computer's screen and shell output, its
+ * browser, and an image it inspects.
+ */
+const BOT_TAINT_SOURCE_TOOL_NAMES: ReadonlySet<string> = new Set(["computer", "computer_shell", "browser", "inspect_image"]);
+function botBringsOutsideContent(toolName: string): boolean {
+  return bringsOutsideContent(toolName) || BOT_TAINT_SOURCE_TOOL_NAMES.has(toolName);
+}
+
+/**
+ * A Bot's own tools whose results never carry outside content: its memory and
+ * notes, its wake-ups, questions and hand-offs to the person, its plans and
+ * access requests, its own settings (`update_bot`), and files in its home or selected folders (as a workspace's
+ * files don't taint).
+ */
+const BOT_NON_TAINTING_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "bot_memory", "bot_recall", "tidy_memory", "routine_notes", "wake_up", "ask_user_question", "hand_off", "sign_in",
+  "propose_plan", "request_access", "update_bot", ...BOT_FILE_TOOL_NAMES,
+]);
+
+/**
+ * Whether a tool result already in the conversation's history taints it,
+ * judged from the name alone: grants change between turns (a connection
+ * removed, renamed or granted again), so a connector's earlier result must
+ * still count. Anything not known to be harmless counts, a connector's
+ * `<server>__<tool>` name above all.
+ */
+export function botHistoryToolTaints(toolName: string): boolean {
+  return botBringsOutsideContent(toolName) || hasMcpAgentToolNameShape(toolName) || !BOT_NON_TAINTING_TOOL_NAMES.has(toolName);
+}
+import type { ApprovalMode } from "../../../renderer/shared/approval-mode.js";
 import { botIngressAllowsTool, botToolApprovalSummary, botToolVerdict, botTurnOf, SUBAGENT_TOOL, type BotToolFacts } from "./bot-tool-policy.js";
 import type { BotToolCall, ToolReplay } from "./tool-adapter.js";
 
@@ -136,9 +186,37 @@ export interface BotToolAssemblyPorts {
   rules?(botId: string): Promise<readonly BotRule[]>;
   /** The Bot's name, for the hand-off card's "why". */
   botName?(botId: string): Promise<string | undefined>;
-  /** Settings → Bots & Approvals, read fresh on every call: routine runs go ahead without asking. Absent: off. */
+  /** The legacy routines switch "Go ahead without asking", read fresh on every call. Absent: off. */
   routinesGoAhead?(): Promise<boolean>;
+  /** The global approval mode, read fresh on every call. Absent: Ask. */
+  approvalMode?(): Promise<ApprovalMode>;
   plans?: Pick<BotPlans, "cover" | "admit">;
+  /**
+   * Settings → Approvals' rules that answer for this Bot (the whole Mac's and
+   * its own), read fresh on every call. Absent: the page has no say.
+   */
+  pageRules?(botId: string): Promise<readonly ApprovalRule[]>;
+  /**
+   * The Auto judge (plan §3.2) for one Bot call: the owner's request for this
+   * run and the action, with secrets withheld. The host adds the Bot's job,
+   * picks the model, caches verdicts per effect within the run and counts the
+   * call's cost as "approval-judge" spending. Anything but a clear pass is
+   * "defer", which shows the card. Absent: Auto shows the card, as Ask does.
+   */
+  judge?(botId: string, input: BotApprovalJudgeInput, signal?: AbortSignal): Promise<"pass" | "defer">;
+}
+
+export interface BotApprovalJudgeInput {
+  /** The run the call belongs to: verdicts are cached for it alone. */
+  run: string;
+  /** The routine run's request id, when the run is a routine's, for its spending. */
+  requestIds: readonly (string | undefined)[];
+  /** Identifies the effect (tool and exact arguments). */
+  effect: string;
+  /** The action as the card shows it, arguments redacted (`approvalJudgeAction`). */
+  action: string;
+  /** What the owner asked for in this run. */
+  request: string;
 }
 
 export interface BotToolAssembly {
@@ -164,6 +242,8 @@ function accessChangedReason(error: unknown): string {
 }
 
 const RULES_UNREADABLE = "This Bot's rules couldn't be read, so this action didn't run. Tell the person.";
+/** A routine has nobody to ask, so a step that needs the person's OK is skipped and reported. */
+const ROUTINE_NEEDS_PERSON = "This step needs the person's OK, and nobody is here to give it during a routine, so it didn't run. Tell them in your reply.";
 
 function bounded(text: string, maximum: number): string {
   const characters = [...text];
@@ -216,6 +296,34 @@ function operationIdentity(toolName: string, args: unknown, action: BotClassifia
   try { return createHash("sha256").update(canonical({ toolName, args, action, target })).digest("hex"); } catch { return undefined; }
 }
 
+const PAGE_RULE_BLOCK = "A Block rule in Settings → Approvals stops this. Don't try it another way; tell the person if it matters.";
+
+/** A natural-language page rule, as the Bot rules classifier reads one. */
+function pageTextBotRule(rule: ApprovalRule): BotRule {
+  return {
+    id: `custom.${rule.id}`,
+    text: rule.target.kind === "text" ? rule.target.text : "",
+    behavior: rule.decision === "ask" && rule.handOff ? "hand_off" : "ask",
+    locked: false,
+  };
+}
+
+/** What the call is to the rules page: its tool or connected app, and the site it names. */
+async function pageSubjectOf(botId: string, toolName: string, args: unknown, action: BotClassifiableAction | undefined,
+  facts: BotToolFacts): Promise<ApprovalRuleSubject> {
+  // A connection tool is named as it was granted, whether it reads or
+  // changes something, so one name answers for both. (A server that renamed
+  // the tool has already made it unavailable, so the two never differ here.)
+  let connector: ApprovalRuleSubject["connector"];
+  const grant = (await facts.mcpTools()).get(toolName);
+  const connection = grant && facts.authority.connections.find((candidate) =>
+    candidate.tools.some((tool) => tool === grant || tool.toolId === grant.toolId));
+  if (grant && connection?.sourceId) connector = { serverId: connection.sourceId, tool: grant.name };
+  else if (action?.surface === "mcp" && action.serverId) connector = { serverId: action.serverId, tool: action.remoteName };
+  const host = action?.surface === "browser" && action.url ? approvalRuleHostOf({ url: action.url }) : approvalRuleHostOf(args);
+  return { botId, ...(connector ? { connector } : { tool: toolName }), ...(host ? { host } : {}) };
+}
+
 export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssembly {
   const offered = new Map<string, { connectionTools: readonly AgentTool[]; skillSnapshot?: SkillRegistrySnapshot }>();
 
@@ -242,17 +350,44 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
     const scopedWatch = botExecutionScope(botId)?.claim.connectorRestriction;
     const calendarRead = scopedWatch?.binding.adapter === "composio-calendar-v1" && calendarWatchCallAllowed(scopedWatch, call.args);
     const action = structuredClone(live !== undefined ? live.action : calendarRead ? undefined : await describeMcpAction(toolName, call.args, facts));
+    const pageOf = async () => {
+      if (!ports.pageRules) return undefined;
+      let page: ApprovalRule[];
+      try { page = structuredClone([...await ports.pageRules(botId)]); } catch { throw new Error(RULES_UNREADABLE); }
+      const text = approvalTextRulesFor(page, botId);
+      // Ask and "Do it myself" words join the Bot's own rules; Block words refuse.
+      const asks = text.filter((rule) => rule.decision === "ask").map(pageTextBotRule);
+      const blocks = text.filter((rule) => rule.decision === "block").map(pageTextBotRule);
+      const blocked = action !== undefined && blocks.length > 0
+        ? blocks.find((rule) => classifyBotAction(action, blocks).customRuleIds.has(rule.id)) : undefined;
+      const resolved = resolveApprovalRule(page, await pageSubjectOf(botId, toolName, call.args, action, facts));
+      const decision: ApprovalRuleDecision | undefined = blocked ? "block" : resolved?.decision;
+      const label = blocked ? blocked.text ?? "" : resolved ? describeApprovalRuleTarget(resolved.rule.target) : "";
+      return { asks, decision, label, key: decision ? canonical([blocked?.id ?? null, resolved?.rule.id ?? null, decision]) : undefined };
+    };
+    const readRules = async () => {
+      // The Bot's own rules classify actions only; a call with none never reads them.
+      const own = action !== undefined && ports.rules ? await ports.rules(botId) : [];
+      const page = await pageOf();
+      return { rules: [...own, ...(page?.asks ?? [])], page };
+    };
     let rules: readonly BotRule[] = [];
-    if (action !== undefined && (ports.rules || ports.plans || ports.allowList)) {
-      try { rules = structuredClone(ports.rules ? await ports.rules(botId) : []); } catch { throw new Error(RULES_UNREADABLE); }
+    let page: Awaited<ReturnType<typeof pageOf>>;
+    if (ports.pageRules || (action !== undefined && (ports.rules || ports.plans || ports.allowList))) {
+      try { ({ rules, page } = structuredClone(await readRules())); } catch { throw new Error(RULES_UNREADABLE); }
     }
-    const identity = ruleIdentity(rules);
-    const decision = action === undefined || !(ports.rules || ports.plans || ports.allowList) ? { ruled: botBaselineOf(baseline), rule: undefined, allMatchingAsk: [] }
+    // Unchanged from before the page while no page rule decides this call.
+    const identityOf = (read: { rules: readonly BotRule[]; page: Awaited<ReturnType<typeof pageOf>> }) =>
+      read.page?.key === undefined ? ruleIdentity(read.rules) : canonical([ruleIdentity(read.rules), read.page.key]);
+    const identity = identityOf({ rules, page });
+    const ruledByRules = action !== undefined && (ports.rules || ports.plans || ports.allowList || ports.pageRules);
+    const decision = !ruledByRules ? { ruled: botBaselineOf(baseline), rule: undefined, allMatchingAsk: [] }
       : decideBotRule(botBaselineOf(baseline), rules, classifyBotAction(action, rules));
     return { live, baseline, action, rule: decision.rule, ruled: decision.ruled, matchingAsk: decision.allMatchingAsk,
+      page: page?.decision ? { decision: page.decision, label: page.label } : undefined,
       rulesIdentity: identity,
       rulesCurrent: async () => {
-        try { return ruleIdentity(ports.rules ? await ports.rules(botId) : []) === identity; } catch { return false; }
+        try { return identityOf(await readRules()) === identity; } catch { return false; }
       } };
   }
 
@@ -429,6 +564,260 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
     };
   }
 
+  // Runs that already read outside content: their calls are never judged.
+  const taintedRuns = new Set<string>();
+  const TAINTED_RUNS_KEPT = 500;
+  /**
+   * A run is the inputs it serves: every step answering them shares its
+   * verdicts and its taint. A call that names none is a run of its own.
+   */
+  function botJudgeRun(botId: string, call: Pick<BotToolCallCheck, "owner" | "requestIds" | "callId">): string {
+    const inputs = call.owner?.inputs.map((input) => input.submissionId) ?? [];
+    if (inputs.length > 0) return canonical([botId, "inputs", inputs]);
+    const requests = [...(call.requestIds ?? [])].filter((id): id is string => typeof id === "string" && id.length > 0);
+    if (requests.length > 0) return canonical([botId, "requests", requests]);
+    if (call.owner?.runId) return canonical([botId, "task", call.owner.runId]);
+    return canonical([botId, "call", call.callId]);
+  }
+  /** Calls whose result brings outside content: a page, a search, a connection's data. */
+  const bringsOutside = new WeakMap<BotToolCallCheck, boolean>();
+  function noteOutsideContent(botId: string, call: BotToolCallCheck): void {
+    if (bringsOutside.get(call) !== true) return;
+    const run = botJudgeRun(botId, call);
+    taintedRuns.delete(run);
+    taintedRuns.add(run);
+    while (taintedRuns.size > TAINTED_RUNS_KEPT) taintedRuns.delete(taintedRuns.values().next().value!);
+  }
+
+  /**
+   * Whether the conversation's committed tool results (earlier turns and
+   * compacted history included, which the model may still see) already
+   * brought outside content; this survives a restart. A conversation that
+   * can't be read, or a host that can't say, counts as having read it.
+   */
+  async function runReadOutside(call: BotToolCallCheck): Promise<boolean> {
+    if (!call.contextToolNames) return true;
+    try {
+      return (await call.contextToolNames()).some(botHistoryToolTaints);
+    } catch {
+      return true;
+    }
+  }
+
+  async function decidePolicy(botId: string, toolName: string, original?: BotToolCallCheck): Promise<BotPolicyDecision> {
+    if (original?.executionId && !original.approvalProbe) entryExecutions.delete(original.executionId);
+    let call: BotToolCallCheck | undefined;
+    try { call = original === undefined ? undefined : snapshot(original); } catch { return { allowed: false, reason: "This action's authorization could not be read." }; }
+    let admission: BotAdmission;
+    try {
+      admission = await ports.admit(botId);
+    } catch (error) {
+      return { allowed: false, reason: accessChangedReason(error) };
+    }
+    try {
+      await admission.revalidateBeforeEffect();
+      const facts = await ports.sources.facts(botId, admission);
+      if (original) bringsOutside.set(original, botBringsOutsideContent(toolName) || (await facts.mcpTools()).has(toolName));
+      // The calling run's own ingress, not whoever refreshed the tools last.
+      if (call?.requestIds && !botIngressAllowsTool(toolName, call.requestIds)) return {allowed: false, reason: "This tool is not available on this turn."};
+      const turns = (call?.requestIds ?? []).map(botTurnOf);
+      const taskIngress = botTurnOf(undefined);
+      if (taskIngress.peer) turns.push(taskIngress);
+      const verdict = await botToolVerdict(toolName, facts, {
+        botMessage: turns.some((turn) => turn.botMessage),
+        telegram: turns.some((turn) => turn.telegram),
+        routine: turns.some((turn) => turn.routine),
+        peer: turns.some((turn) => turn.peer),
+      }, call?.args);
+      if (!verdict.allowed) return verdict;
+      if (call === undefined) return { allowed: true };
+      const policy = await describePolicy(botId, toolName, call, facts);
+      const { live, baseline, action, rule, matchingAsk, ruled, rulesCurrent, page } = policy;
+      const label = rule ? botRuleLabel(rule) : "";
+      const ruleRef = rule ? { id: rule.id, label } : undefined;
+      const ownSummary = baseline?.summary ?? live?.summary ?? summarizeToolCall(toolName, call.args);
+      const callSummary = rule?.locked && action ? lockedRuleSummary(action, ownSummary) : ownSummary;
+      if (ruled === "hand_off" && (!rule || !ruleRef)) return { allowed: false, reason: RULES_UNREADABLE };
+      // Build the approval only once, after rules have decided whether it may run.
+      // A page Ask rule on a call that needed no card makes one.
+      const pageAsk = page?.decision === "ask" && baseline === undefined ? { summary: `Rule · ${page.label} — ${callSummary}` } : undefined;
+      const approval: BotApprovalRequirement | undefined = ruled === "hand_off" ? undefined : rule === undefined ? baseline ?? pageAsk : {
+        ...baseline, summary: `Rule · ${label} — ${callSummary}`, rule: ruleRef,
+      };
+      const routineOnly = turns.length > 0 && turns.every(turn => turn.routine && !turn.telegram && !turn.peer);
+      const attendance: GateAttendance = turns.some(turn => turn.peer) ? "peer"
+        : routineOnly ? "routine"
+          : turns.some(turn => turn.routine || turn.telegram) ? "unattended"
+            : turns.some(turn => turn.botMessage) ? "bot-message" : "person";
+      const computerUse = toolName === COMPUTER_USE_TOOL_NAME;
+      const routineGoAhead = approval !== undefined && routineOnly && !computerUse &&
+        (await ports.routinesGoAhead?.().catch(() => false)) === true && (await call.hasRoutineInputs?.()) === true;
+      // Every Bot follows the global mode. In Auto the judge may pass a
+      // consequential call (plan §3.2 step 8); a run that already read
+      // outside content, or a host without a judge, shows the card.
+      const mode = (await ports.approvalMode?.().catch(() => "ask" as const)) ?? "ask";
+      const run = botJudgeRun(botId, call);
+      // Only a run the person (or a routine they accepted) started is judged:
+      // a Bot message, Telegram, a peer or a self-intro carries words nobody
+      // here wrote. A run whose conversation already read outside content, in
+      // an earlier turn, in this process or before a restart, is never judged.
+      const ownerStarted = turns.length > 0 && turns.every((turn) => !turn.botMessage && !turn.telegram && !turn.peer && !turn.intro);
+      const judging = mode === "auto" && ports.judge !== undefined && ownerStarted &&
+        !taintedRuns.has(run) && !(await runReadOutside(call));
+      const gateContext: GateContext = { surface: "bot", access: "ask", mode, attendance,
+        ...(routineGoAhead ? { routineGoAhead } : {}), ...(judging ? { judge: true } : {}) };
+      // A built-in rule that only asks (send a message, delete, publish,
+      // install) marks a consequential action: Auto judges it like any
+      // other. Purchases, locked rules, hand-offs and rules the person
+      // wrote (here or on the rules page) always ask.
+      // Only when the judge will really be asked: with no judge the rule's
+      // own card stands. A Bot's exempt tools (its computer, shell,
+      // subagents) keep their rule, since exempt calls never reach the judge.
+      const judgedRuleWhen = (judge: boolean) => judge && ruled === "ask" && rule !== undefined && matchingAsk.length > 0 &&
+        !BOT_EXEMPT_TOOL_NAMES.has(toolName) &&
+        matchingAsk.every((candidate) => candidate.actionClass !== undefined && !candidate.locked && BOT_JUDGED_RULE_CLASSES.has(candidate.actionClass));
+      const remembered = baseline && !rule && !computerUse ? botApprovalTargetOf(toolName, action) : undefined;
+      const actionFor = (judgedRule: boolean): GateAction => ({
+        toolName,
+        ...(computerUse ? { mac: true } : {}),
+        // The shell runs on the person's Mac: its first use asks in every mode.
+        ...(toolName === "run_command" ? { mac: true, macClass: "shell" as const } : {}),
+        ...(BOT_EXEMPT_TOOL_NAMES.has(toolName) ? { exempt: true } : {}),
+        // Sharing the person's data asks once in every mode, Never ask
+        // included, and no Always-allow rule skips it.
+        ...(DISCLOSURE_TOOL_NAMES.has(toolName) ? { explicitOnly: true } : {}),
+        ...(baseline !== undefined || judgedRule ? { consequential: true } : {}),
+        ...(ruled === "hand_off" ? { rule: { behavior: "hand_off" as const, locked: rule?.locked === true } }
+          : rule !== undefined && !judgedRule ? { rule: { behavior: "ask" as const, locked: rule.locked === true } } : {}),
+        ...(ports.plans && !call.skipPlanCoverage && call.executionId ? { planAvailable: true } : {}),
+        ...(ports.allowList && !call.skipAllowList && remembered ? { allowListAvailable: true } : {}),
+        ...(page ? { pageRule: page.decision } : {}),
+      });
+      const gateAction = actionFor(judgedRuleWhen(judging));
+      /**
+       * In Ask, whether this run's card would go to the judge in Auto instead,
+       * so the card may offer Switch to Auto: the same checks as `judging`,
+       * an owner-only request, and the Auto gate reaching its judge step
+       * once nothing pre-approved the call.
+       */
+      const autoWouldJudge = async (): Promise<boolean> => {
+        if (mode !== "ask" || !ports.judge || !ownerStarted || taintedRuns.has(run)) return false;
+        if (await runReadOutside(call)) return false;
+        if ((await call.ownerRequest?.().catch(() => undefined)) === undefined) return false;
+        const inAuto = { ...actionFor(judgedRuleWhen(true)), plan: "not-covered" as const, allowList: "no-match" as const };
+        const planned = planActionGate({ ...gateContext, mode: "auto", judge: true }, inAuto);
+        return planned.outcome === "lookup" && planned.lookup === "judge";
+      };
+      const withAutoOffer = async (value: BotApprovalRequirement): Promise<BotApprovalRequirement> =>
+        (await autoWouldJudge()) ? { ...value, autoWouldJudge: true } : value;
+      /** Asks the judge when the gate says to, and plans again with its verdict. */
+      const judged = async (planned: GateDecision, action: GateAction): Promise<GateDecision> => {
+        if (planned.outcome !== "lookup" || planned.lookup !== "judge" || !ports.judge) return planned;
+        let verdict: "pass" | "defer" = "defer";
+        try {
+          const effect = toolCallApprovalEffect(toolName, call.args, live?.browserTarget) ?? `${toolName}\u0000${call.callId}`;
+          // Only words the owner wrote: a run whose inputs carry anything
+          // else (an event's payload, routine notes, another Bot's message)
+          // is never judged.
+          const request = await call.ownerRequest?.().catch(() => undefined);
+          if (request === undefined) throw new Error("The run's inputs are not only the owner's words.");
+          verdict = await ports.judge(botId, {
+            run, requestIds: call.requestIds ?? [], effect, request,
+            action: approvalJudgeAction(toolName, call.args, callSummary),
+          }, call.signal);
+        } catch { /* Fails closed: the card. */ }
+        return planActionGate(gateContext, { ...action, judge: verdict === "pass" ? "pass" : "defer" });
+      };
+      let decision = await judged(planActionGate(gateContext, gateAction), gateAction);
+      let permit: Awaited<ReturnType<NonNullable<BotToolAssemblyPorts["plans"]>["cover"]>> | undefined;
+      if (decision.outcome === "lookup" && decision.lookup === "plan" && ports.plans && call.executionId) {
+        const operationFingerprint = operationIdentity(toolName, call.args, action, live?.browserTarget);
+        permit = operationFingerprint === undefined ? undefined : await ports.plans.cover(botId, {
+          executionId: call.executionId, operationFingerprint, toolName,
+          requestIds: call.authorizationIds ?? call.requestIds ?? [], action, baseline: baseline !== undefined,
+          rules: matchingAsk.map(rule => ({ id: rule.id, fingerprint: botPlanRuleFingerprint(rule) })),
+        }).catch(() => undefined);
+        const planned = { ...gateAction, plan: permit ? "covered" as const : "not-covered" as const };
+        decision = await judged(planActionGate(gateContext, planned), planned);
+      }
+      if (decision.outcome === "lookup" && decision.lookup === "allow-list" && ports.allowList && remembered && baseline && approval) {
+        let requirements: BotApprovalRequirements | undefined;
+        try { requirements = await requirementsFrom(botId, toolName, call, original!, admission, facts, policy); } catch { /* Ask normally. */ }
+        if (requirements?.matchedRuleId) {
+          const expected = requirements;
+          return { allowed: true, approval: { ...approval, requirements: expected, preapproved: true,
+            onAllow: () => allowEntry(botId, toolName, call, expected, baseline) } };
+        }
+        if (!requirements) return decidePolicy(botId, toolName, { ...call, skipPlanCoverage: true, skipAllowList: true });
+        // Not on the allow list: in Auto the judge may still pass it.
+        const unlisted = { ...gateAction, allowList: "no-match" as const };
+        const afterList = await judged(planActionGate(gateContext, unlisted), unlisted);
+        if (afterList.outcome === "allow" && afterList.via === "judge") {
+          return { allowed: true, approval: { ...approval, preapproved: true } };
+        }
+        let offer: { count: number } | undefined;
+        try { offer = await ports.allowList.offer(botId, remembered.target); } catch { /* No offer. */ }
+        // Offering can await disk; stale evidence must never attach to a new card.
+        const fresh = await approvalRequirements(botId, toolName, call);
+        if (!fresh || fresh.authorizationFingerprint !== requirements.authorizationFingerprint)
+          return decidePolicy(botId, toolName, { ...call, skipPlanCoverage: true, skipAllowList: true });
+        return { allowed: true, approval: await withAutoOffer(await ordinaryApproval(botId, toolName, call, original!, admission, facts, policy,
+          { ...approval, remember: { ...remembered, ...(offer ? { offer } : {}) }, requirements })) };
+      }
+      switch (decision.outcome) {
+        case "block":
+          return { allowed: false, reason: decision.reason === "rule" ? PAGE_RULE_BLOCK
+            : decision.reason === "needs-person" ? ruleUnattendedBlock(label)
+            : decision.reason === "unattended-rule" ? ruleAskUnattendedBlock(label)
+              : decision.reason === "peer" ? "Peer work cannot obtain fresh person approval for this action."
+                : decision.reason === "unattended" ? ROUTINE_NEEDS_PERSON
+                  : RULES_UNREADABLE };
+        case "hand-off": {
+          if (!rule || !ruleRef) return { allowed: false, reason: RULES_UNREADABLE };
+          const botName = (await ports.botName?.(botId).catch(() => undefined)) ?? "Your Bot";
+          const open = live?.open !== undefined && isBotHandoffOpenUrl(live.open.url) ? { url: live.open.url } : undefined;
+          return {
+            allowed: true,
+            handoff: {
+              rule: ruleRef,
+              summary: callSummary,
+              action: ruleActionText(rule),
+              why: ruleWhyText(label, botName, callSummary),
+              ...(live?.browserTarget && { browserTarget: live.browserTarget }),
+              ...(open === undefined ? {} : { open }),
+            },
+          };
+        }
+        case "allow":
+          if (!approval) return { allowed: true };
+          if (decision.via === "routine-go-ahead" || decision.via === "never-ask" || decision.via === "exempt" || decision.via === "rule" ||
+            decision.via === "judge") {
+            return { allowed: true, approval: { ...approval, preapproved: true } };
+          }
+          if (decision.via === "plan" && permit) {
+            return { allowed: true, approval: { ...approval, preapproved: true, planPermit: permit,
+              planOperation: args => operationIdentity(toolName, args, action, live?.browserTarget), planRulesCurrent: rulesCurrent } };
+          }
+          break;
+        case "ask": {
+          if (!approval) break;
+          const described = call.skipAllowList && baseline && !rule ? botApprovalTargetOf(toolName, action) : undefined;
+          return { allowed: true, approval: await withAutoOffer(await ordinaryApproval(botId, toolName, call, original!, admission, facts, policy,
+            described ? { ...approval, remember: described } : approval)) };
+        }
+        default:
+          break;
+      }
+      // The gate asked for a fact this call cannot supply, or allowed a
+      // call that needs a card: never run it unasked.
+      return { allowed: false, reason: RULES_UNREADABLE };
+    } catch (error) {
+      return { allowed: false, reason: accessChangedReason(error) };
+    } finally {
+      admission.release();
+    }
+  }
+
   const assembly: BotToolAssembly = {
     async approvalEvidence(botId, toolName, call) {
       const decision = await assembly.checkPolicy(botId, toolName, { ...call, skipPlanCoverage: true, skipAllowList: true, approvalProbe: true });
@@ -467,105 +856,11 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
     approvalRequirements,
 
     checkPolicy: async function checkPolicy(botId, toolName, original): Promise<BotPolicyDecision> {
-      if (original?.executionId && !original.approvalProbe) entryExecutions.delete(original.executionId);
-      let call: BotToolCallCheck | undefined;
-      try { call = original === undefined ? undefined : snapshot(original); } catch { return { allowed: false, reason: "This action's authorization could not be read." }; }
-      let admission: BotAdmission;
-      try {
-        admission = await ports.admit(botId);
-      } catch (error) {
-        return { allowed: false, reason: accessChangedReason(error) };
-      }
-      try {
-        await admission.revalidateBeforeEffect();
-        const facts = await ports.sources.facts(botId, admission);
-        // The calling run's own ingress, not whoever refreshed the tools last.
-        if (call?.requestIds && !botIngressAllowsTool(toolName, call.requestIds)) return {allowed: false, reason: "This tool is not available on this turn."};
-        const turns = (call?.requestIds ?? []).map(botTurnOf);
-        const taskIngress = botTurnOf(undefined);
-        if (taskIngress.peer) turns.push(taskIngress);
-        const verdict = await botToolVerdict(toolName, facts, {
-          botMessage: turns.some((turn) => turn.botMessage),
-          telegram: turns.some((turn) => turn.telegram),
-          routine: turns.some((turn) => turn.routine),
-          peer: turns.some((turn) => turn.peer),
-        }, call?.args);
-        if (!verdict.allowed) return verdict;
-        if (call === undefined) return { allowed: true };
-        const policy = await describePolicy(botId, toolName, call, facts);
-        const { live, baseline, action, rule, matchingAsk, ruled, rulesCurrent } = policy;
-        const unattended = turns.some((turn) => turn.routine || turn.telegram || turn.peer);
-        const label = rule ? botRuleLabel(rule) : "";
-        const ruleRef = rule ? { id: rule.id, label } : undefined;
-        const ownSummary = baseline?.summary ?? live?.summary ?? summarizeToolCall(toolName, call.args);
-        const callSummary = rule?.locked && action ? lockedRuleSummary(action, ownSummary) : ownSummary;
-        if (ruled !== "hand_off") {
-          // Build the approval only once, after rules have decided whether it may run.
-          const approval: BotApprovalRequirement | undefined = rule === undefined ? baseline : {
-            ...baseline, summary: `Rule · ${label} — ${callSummary}`, rule: ruleRef,
-          };
-          if (!approval) return { allowed: true };
-          if (turns.some(turn => turn.peer)) return { allowed: false, reason: "Peer work cannot obtain fresh person approval for this action." };
-          const routineOnly = turns.length > 0 && turns.every(turn => turn.routine && !turn.telegram && !turn.peer);
-          const goAhead = routineOnly && toolName !== COMPUTER_USE_TOOL_NAME &&
-            (await ports.routinesGoAhead?.().catch(() => false)) === true && (await call.hasRoutineInputs?.()) === true;
-          if (goAhead) return { allowed: true, approval: { ...approval, preapproved: true } };
-          if (ports.plans && !call.skipPlanCoverage && call.executionId) {
-            const operationFingerprint = operationIdentity(toolName, call.args, action, live?.browserTarget);
-            const permit = operationFingerprint === undefined ? undefined : await ports.plans.cover(botId, {
-              executionId: call.executionId, operationFingerprint, toolName,
-              requestIds: call.authorizationIds ?? call.requestIds ?? [], action, baseline: baseline !== undefined,
-              rules: matchingAsk.map(rule => ({ id: rule.id, fingerprint: botPlanRuleFingerprint(rule) })),
-            }).catch(() => undefined);
-            if (permit) return { allowed: true, approval: { ...approval, preapproved: true, planPermit: permit,
-              planOperation: args => operationIdentity(toolName, args, action, live?.browserTarget), planRulesCurrent: rulesCurrent } };
-          }
-          if (ports.allowList && !call.skipAllowList && baseline && !rule && toolName !== COMPUTER_USE_TOOL_NAME) {
-            const described = botApprovalTargetOf(toolName, action);
-            if (described) {
-              let requirements: BotApprovalRequirements | undefined;
-              try { requirements = await requirementsFrom(botId, toolName, call, original!, admission, facts, policy); } catch { /* Ask normally. */ }
-              if (requirements?.matchedRuleId) {
-                const expected = requirements;
-                return { allowed: true, approval: { ...approval, requirements: expected, preapproved: true,
-                  onAllow: () => allowEntry(botId, toolName, call, expected, baseline) } };
-              }
-              if (!requirements) return checkPolicy(botId, toolName, { ...call, skipPlanCoverage: true, skipAllowList: true });
-              let offer: { count: number } | undefined;
-              try { offer = await ports.allowList.offer(botId, described.target); } catch { /* No offer. */ }
-              // Offering can await disk; stale evidence must never attach to a new card.
-              const fresh = await approvalRequirements(botId, toolName, call);
-              if (!fresh || fresh.authorizationFingerprint !== requirements.authorizationFingerprint)
-                return checkPolicy(botId, toolName, { ...call, skipPlanCoverage: true, skipAllowList: true });
-              return { allowed: true, approval: await ordinaryApproval(botId, toolName, call, original!, admission, facts, policy,
-                { ...approval, remember: { ...described, ...(offer ? { offer } : {}) }, requirements }) };
-            }
-          }
-          if (baseline === undefined && rule && unattended) return { allowed: false, reason: ruleAskUnattendedBlock(label) };
-          const described = call.skipAllowList && baseline && !rule ? botApprovalTargetOf(toolName, action) : undefined;
-          return { allowed: true, approval: await ordinaryApproval(botId, toolName, call, original!, admission, facts, policy,
-            described ? { ...approval, remember: described } : approval) };
-        }
-        if (!rule || !ruleRef) return { allowed: false, reason: RULES_UNREADABLE };
-        if (unattended || turns.some(turn => turn.botMessage)) return { allowed: false, reason: ruleUnattendedBlock(label) };
-        const botName = (await ports.botName?.(botId).catch(() => undefined)) ?? "Your Bot";
-        const open = live?.open !== undefined && isBotHandoffOpenUrl(live.open.url) ? { url: live.open.url } : undefined;
-        return {
-          allowed: true,
-          handoff: {
-            rule: ruleRef,
-            summary: callSummary,
-            action: ruleActionText(rule),
-            why: ruleWhyText(label, botName, callSummary),
-            ...(live?.browserTarget && { browserTarget: live.browserTarget }),
-            ...(open === undefined ? {} : { open }),
-          },
-        };
-      } catch (error) {
-        return { allowed: false, reason: accessChangedReason(error) };
-      } finally {
-        admission.release();
-      }
+      const decision = await decidePolicy(botId, toolName, original);
+      // A call that may run and brings outside content (a page, a connection's
+      // data) ends this run's judging: later calls show their cards.
+      if (decision.allowed && original !== undefined && !original.approvalProbe) noteOutsideContent(botId, original);
+      return decision;
     },
 
     guidance(botId, toolNames) {

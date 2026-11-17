@@ -45,7 +45,7 @@ func aidenTranscribeSpeech(
         throw NSError(
             domain: "AidenVoiceInput",
             code: 1,
-            userInfo: [NSLocalizedDescriptionKey: status.engine.error ?? String(localized: "The desktop speech engine is unavailable.")]
+            userInfo: [NSLocalizedDescriptionKey: status.engine.error ?? String(localized: "The computer’s speech engine is unavailable.")]
         )
     }
     guard let model = status.models.first(where: { $0.id == status.selectedModelId && $0.installed })
@@ -54,7 +54,7 @@ func aidenTranscribeSpeech(
         throw NSError(
             domain: "AidenVoiceInput",
             code: 2,
-            userInfo: [NSLocalizedDescriptionKey: String(localized: "Download a desktop speech model in App settings before using this option.")]
+            userInfo: [NSLocalizedDescriptionKey: String(localized: "Download a computer speech model in App settings before using this option.")]
         )
     }
     if status.selectedModelId != model.id { _ = try await speech.selectSpeechModel(model.id) }

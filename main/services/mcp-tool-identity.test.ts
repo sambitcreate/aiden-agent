@@ -3,6 +3,7 @@ import test from "node:test";
 import { toCodemodeIdentifier } from "@earendil-works/pi-codemode";
 import {
   assertUniqueMcpAgentToolNames,
+  hasMcpAgentToolNameShape,
   markMcpAgentTool,
   mcpAgentToolIdentity,
   mcpAgentToolName,
@@ -94,4 +95,26 @@ test("built tools carry their real MCP identity through object copies", () => {
   assert.deepEqual(mcpAgentToolIdentity({ ...tool }), { serverId: github.id, toolName: "create_issue" });
   assert.equal(mcpAgentToolIdentity({ name: "a__b" }), undefined);
   assert.throws(() => assertUniqueMcpAgentToolNames([tool, { ...tool }]), /identity collision/iu);
+});
+
+test("every name a connection's tool can get keeps the MCP shape without the server list", () => {
+  const odd = [
+    github,
+    { id: "srv-empty", name: "   " },
+    { id: "srv-digits", name: "123 Tools" },
+    { id: "srv-underscores", name: "__weird__name__" },
+    { id: "srv-long", name: "a".repeat(80) },
+  ];
+  for (const server of odd) {
+    for (const tool of ["", "x", "create-issue", "Create Issue", "b".repeat(90), "__"]) {
+      const names = [
+        mcpAgentToolName(server, tool, { configured: odd, inventory: ["create_issue", tool] }),
+        mcpScopedAgentToolName(server, tool, odd),
+      ];
+      for (const name of names) assert.equal(hasMcpAgentToolNameShape(name), true, `${server.name} / ${tool} -> ${name}`);
+    }
+  }
+  for (const builtIn of ["read_file", "web_fetch", "browser_snapshot", "subagent", "bot_memory"]) {
+    assert.equal(hasMcpAgentToolNameShape(builtIn), false, builtIn);
+  }
 });

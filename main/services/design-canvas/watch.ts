@@ -63,6 +63,8 @@ type WatchFn = (
 type ChatWatch = {
   root: string;
   generation: number;
+  /** The pages this watch reports. */
+  paths: ReadonlySet<string>;
   folders: Array<{ close(): void }>;
   /** Each queued path → what the events that queued it say about it. */
   pending: Map<string, Queued>;
@@ -90,6 +92,12 @@ type OwnWrite = {
   settledAt: number | null;
   /** Wall-clock time the write began, as file times are kept. */
   startedAt: number;
+  /**
+   * How far the clock that stamps the page's file times ran behind this
+   * Mac's as the write settled, in milliseconds: 0 or less. A network volume
+   * stamps files by its own clock.
+   */
+  fileClockOffset: Promise<number>;
   beside: Promise<Neighbours | null>;
 };
 
@@ -104,7 +112,10 @@ export class DesignFileWatcher {
   private readonly neighbourLookbackMs: number;
   /** Per chat, how many flushes are reading the canvas's notes of the files beside its pages. */
   private readonly flushing = new Map<string, number>();
+  /** Per chat, the timers that let go of its writes' notes once their windows pass. */
+  private readonly noteTimers = new Map<string, Set<ReturnType<typeof setTimeout>>>();
   private readonly now: () => number;
+  private readonly wallNow: () => number;
 
   constructor(
     private readonly deps: {
@@ -116,6 +127,8 @@ export class DesignFileWatcher {
       ownWriteWindowMs?: number;
       /** A monotonic clock in milliseconds. */
       now?: () => number;
+      /** Wall-clock time in milliseconds, as file times are kept. */
+      wallNow?: () => number;
       /**
        * How long before the canvas's write began a neighbour modified or
        * changed then still counts as touched since; by default the
@@ -132,6 +145,7 @@ export class DesignFileWatcher {
     this.ownWriteWindowMs = deps.ownWriteWindowMs ?? DESIGN_OWN_WRITE_WINDOW_MS;
     this.neighbourLookbackMs = deps.neighbourLookbackMs ?? this.ownWriteWindowMs;
     this.now = deps.now ?? (() => performance.now());
+    this.wallNow = deps.wallNow ?? (() => Date.now());
   }
 
   /** Replaces the chat's watched set. An empty list stops watching. */
@@ -143,10 +157,17 @@ export class DesignFileWatcher {
     const byFolder = await this.groupByRealFolder(root, unique);
     // A newer `set` (or a `clear`) ran while we checked the disk.
     if (this.generations.get(chatId) !== generation) return;
+    // Changes queued under the old set and not reported yet still count for
+    // the pages that stay watched: a frame landing while Aiden edits another
+    // page must not swallow that edit.
+    const previous = this.chats.get(chatId);
+    const carried = previous && previous.root === root
+      ? [...previous.pending].filter(([relative]) => unique.includes(relative))
+      : [];
     this.close(chatId);
     if (!byFolder) return;
 
-    const entry: ChatWatch = { root, generation, folders: [], pending: new Map(), timer: null };
+    const entry: ChatWatch = { root, generation, paths: new Set(unique), folders: [], pending: new Map(), timer: null };
     for (const [folder, { paths, recursive }] of byFolder) {
       try {
         const handle = this.watch(folder, { recursive, persistent: false }, (_event, filename) => {
@@ -167,12 +188,19 @@ export class DesignFileWatcher {
         // The folder vanished between the check and the watch: nothing to watch there.
       }
     }
-    if (entry.folders.length > 0) this.chats.set(chatId, entry);
+    if (entry.folders.length === 0) return;
+    this.chats.set(chatId, entry);
+    if (carried.length > 0) {
+      for (const [relative, queued] of carried) entry.pending.set(relative, queued);
+      entry.timer = setTimeout(() => this.flush(chatId, entry), this.debounceMs);
+    }
   }
 
   clear(chatId: string): void {
     this.generations.set(chatId, (this.generations.get(chatId) ?? 0) + 1);
     this.ownWrites.delete(chatId);
+    for (const timer of this.noteTimers.get(chatId) ?? []) clearTimeout(timer);
+    this.noteTimers.delete(chatId);
     this.close(chatId);
   }
 
@@ -195,7 +223,8 @@ export class DesignFileWatcher {
       digest: digest(content),
       settled: new Promise<void>((resolve) => (settle = resolve)),
       settledAt: null,
-      startedAt: Date.now(),
+      startedAt: this.wallNow(),
+      fileClockOffset: Promise.resolve(0),
       beside: root === undefined ? NOTHING_NOTED : besidePage(root, relativePath, this.deps.noting),
     };
     writes.set(relativePath, write);
@@ -204,9 +233,40 @@ export class DesignFileWatcher {
         if (before === undefined) writes.delete(relativePath);
         else writes.set(relativePath, before);
       }
+      // The page was just stamped by the clock that stamps the files beside it.
+      if (written && root !== undefined) write.fileClockOffset = fileClockOffset(path.join(root, relativePath), this.wallNow);
       write.settledAt = this.now();
       settle();
+      if (write.beside !== NOTHING_NOTED) this.letGoOfNoteAtDeadline(chatId, write);
     };
+  }
+
+  /** How many of the chat's latest page writes still keep a note of the files beside their page. */
+  heldNotes(chatId: string): number {
+    return [...(this.ownWrites.get(chatId)?.values() ?? [])].filter((write) => write.beside !== NOTHING_NOTED).length;
+  }
+
+  /**
+   * Lets go of a write's note of the files beside its page once its window
+   * has passed, without waiting for another event's report. An event still
+   * queued from inside the window, or a report reading the note, keeps it,
+   * and that report lets go of it.
+   */
+  private letGoOfNoteAtDeadline(chatId: string, write: OwnWrite): void {
+    if (write.settledAt === null) return;
+    const until = write.settledAt + this.ownWriteWindowMs;
+    const timers = this.noteTimers.get(chatId) ?? new Set<ReturnType<typeof setTimeout>>();
+    this.noteTimers.set(chatId, timers);
+    const timer = setTimeout(() => {
+      timers.delete(timer);
+      if (timers.size === 0 && this.noteTimers.get(chatId) === timers) this.noteTimers.delete(chatId);
+      this.forgetStaleNotes(chatId);
+      // A timer may run a moment before the clock the window is measured on reaches its end.
+      const current = [...(this.ownWrites.get(chatId)?.values() ?? [])].includes(write);
+      if (current && write.beside !== NOTHING_NOTED && this.now() <= until) this.letGoOfNoteAtDeadline(chatId, write);
+    }, Math.max(0, until - this.now()) + 1);
+    timer.unref?.();
+    timers.add(timer);
   }
 
   /** Resolves once the files beside the page of the canvas's latest write to it have been noted. */
@@ -321,14 +381,24 @@ export class DesignFileWatcher {
         // page. The canvas never writes those, so one touched since shortly
         // before its write began is someone else's change, even one the
         // noting walk took in.
-        const [then, beside] = await Promise.all([write.beside, besidePage(entry.root, relative)]);
+        const [then, beside, offset] = await Promise.all([write.beside, besidePage(entry.root, relative), write.fileClockOffset]);
         if (then === null || beside === null || beside.rows !== then.rows) return relative;
-        return beside.latest < write.startedAt - this.neighbourLookbackMs ? null : relative;
+        // The files' times and the write's start are compared on the files' clock.
+        return beside.latest < write.startedAt + offset - this.neighbourLookbackMs ? null : relative;
       }),
     )
       .then((paths) => {
-        if (this.chats.get(chatId) !== entry) return;
-        this.report(chatId, paths.filter((relative): relative is string => relative !== null));
+        // A newer set may have replaced this watch meanwhile; the pages it still watches are reported.
+        const current = this.chats.get(chatId);
+        if (!current || current.root !== entry.root) return;
+        if (this.deps.allowed && !this.deps.allowed(chatId, current.root)) {
+          this.clear(chatId);
+          return;
+        }
+        this.report(
+          chatId,
+          paths.filter((relative): relative is string => relative !== null && current.paths.has(relative)),
+        );
       })
       .finally(() => {
         const left = (this.flushing.get(chatId) ?? 1) - 1;
@@ -386,7 +456,9 @@ export class DesignFileWatcher {
  * entered: the watcher ignores them. Null, so nothing beside the page counts
  * as unchanged, when a folder can't be read, more than
  * `DESIGN_NEIGHBOURHOOD_LIMIT` entries are met (the walk stops early in a
- * large tree), or a link's target is missing or outside the workspace.
+ * large tree), or a link's target is missing, outside the workspace, or a
+ * folder: the walk never enters one through a link, so a file inside it
+ * could change unseen.
  *
  * The walk is not atomic: a file changed while it runs may be noted either
  * way, which is why a report also compares the files' times with when the
@@ -434,9 +506,22 @@ async function besidePage(root: string, relativePath: string, noting?: () => Pro
     const target = await fsp.realpath(file).catch(() => null);
     if (target === null || !isPathInside(realRoot, target, { allowRoot: true })) return null;
     const pointed = await fsp.stat(target).catch(() => null);
-    return pointed === null ? null : `${name}\0${times(own)}\0${target}\0${times(pointed)}`;
+    // A linked folder is never walked, so a file inside it could change with neither row changing.
+    if (pointed === null || pointed.isDirectory()) return null;
+    return `${name}\0${times(own)}\0${target}\0${times(pointed)}`;
   };
   const rows = await Promise.all(files.map(note));
   if (rows.some((row) => row === null)) return null;
   return { rows: rows.sort().join("\n"), latest };
+}
+
+/**
+ * How far the clock that stamps `file` runs behind this Mac's, from the time
+ * it was just stamped: 0 or less, and 0 when it can't be read. A clock that
+ * runs ahead needs nothing: the files beside the page then look newer, so
+ * more of them count as touched since the write began.
+ */
+async function fileClockOffset(file: string, wallNow: () => number): Promise<number> {
+  const stats = await fsp.stat(file).catch(() => null);
+  return stats === null ? 0 : Math.min(0, Math.max(stats.mtimeMs, stats.ctimeMs) - wallNow());
 }

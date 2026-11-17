@@ -79,7 +79,7 @@ struct AidenMachineRow: Identifiable, Equatable {
 
     var accessibilityValue: String {
         var parts: [String] = []
-        if isSelected { parts.append(String(localized: "Default machine")) }
+        if isSelected { parts.append(String(localized: "Default computer")) }
         if isHidden { parts.append(String(localized: "Hidden from Inbox, still paired")) }
         parts.append(transport)
         if status != .online { parts.append(AidenInstallationPresentation.lastConnection(lastConnectedAt)) }
@@ -237,11 +237,11 @@ final class AidenMachinesModel {
 
     /// What the forget confirmation says will happen.
     func forgetMessage(for instanceId: String) -> String {
-        var message = String(localized: "This removes its pairing from this phone, along with its name, symbol and colour here, drafts, queued Bot messages and chats saved on this phone. Nothing is deleted on the machine, and you can pair it again later.")
+        var message = String(localized: "This removes its pairing from this phone, along with its name, symbol and colour here, drafts, queued Bot messages and chats saved on this phone. Nothing is deleted on the computer, and you can pair it again later.")
         if coordinator.installationStore.installations.count == 1 {
-            message += " " + String(localized: "It is your only machine, so you will be asked to pair again.")
+            message += " " + String(localized: "It is your only computer, so you will be asked to pair again.")
         } else if coordinator.defaultInstanceId == instanceId {
-            message += " " + String(localized: "Another machine will become the default.")
+            message += " " + String(localized: "Another computer will become the default.")
         }
         return message
     }
@@ -308,9 +308,9 @@ struct AidenMachinesView: View {
             if model.hasNoMachines {
                 Section {
                     ContentUnavailableView(
-                        "No machines paired",
+                        "No computers paired",
                         systemImage: "desktopcomputer",
-                        description: Text("Pair a machine to see its chats here.")
+                        description: Text("Pair a computer to see its chats here.")
                     )
                     .listRowBackground(Color.clear)
                 }
@@ -334,17 +334,17 @@ struct AidenMachinesView: View {
                         }
                     }
                 } footer: {
-                    Text("Hiding a machine keeps it paired. It only leaves the Inbox, and you can still open it here.")
+                    Text("Hiding a computer keeps it paired. It only leaves the Inbox, and you can still open it here.")
                 }
             }
 
             Section {
                 Button(action: addMachine) {
-                    Label("Pair a machine", systemImage: "plus")
+                    Label("Pair a computer", systemImage: "plus")
                 }
             }
         }
-        .navigationTitle("Machines")
+        .navigationTitle("Computers")
         .navigationBarTitleDisplayMode(.inline)
         .task(id: model.machineIDs) { model.register() }
         .onAppear { model.activateHaptics(scope: hapticScope) }
@@ -357,7 +357,7 @@ struct AidenMachinesView: View {
             ),
             titleVisibility: .visible
         ) {
-            Button("Forget machine", role: .destructive) {
+            Button("Forget computer", role: .destructive) {
                 guard let id = machineToForget else { return }
                 machineToForget = nil
                 Task {
@@ -370,7 +370,7 @@ struct AidenMachinesView: View {
             if let id = machineToForget { Text(model.forgetMessage(for: id)) }
         }
         .alert(
-            "Could not forget this machine",
+            "Could not forget this computer",
             isPresented: Binding(get: { forgetFailure != nil }, set: { if !$0 { forgetFailure = nil } })
         ) {
             Button("OK", role: .cancel) {}
@@ -386,7 +386,7 @@ struct AidenMachinesView: View {
     }
 
     private var forgetTitle: String {
-        guard let id = machineToForget, let row = model.row(id) else { return String(localized: "Forget this machine?") }
+        guard let id = machineToForget, let row = model.row(id) else { return String(localized: "Forget this computer?") }
         return String(localized: "Forget \(row.name)?")
     }
 
@@ -466,7 +466,7 @@ private struct AidenMachineRowView: View {
                         .foregroundStyle(.secondary)
                 }
                 if stacked, row.isSelected {
-                    Text("Default machine")
+                    Text("Default computer")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

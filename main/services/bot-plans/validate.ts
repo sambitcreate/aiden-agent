@@ -4,6 +4,7 @@ import { botToolApp } from "../../../renderer/shared/bot-activity.js";
 import { BOT_LOCKED_RULES, botRuleLabel, normalizeBotRuleText, type BotRule } from "../../../renderer/shared/bot-rules.js";
 import { withoutBotHandoffControls } from "../../../renderer/shared/bot-handoffs.js";
 import { botAccessAuthorizationOf } from "../../../renderer/shared/bot-access-requests.js";
+import { localComputerNoun } from "../../../renderer/shared/computer-noun.js";
 import { describeMcpAction } from "../bot-rules/mcp-action.js";
 import { isPaymentHost } from "../bot-rules/words.js";
 import { COMPUTER_USE_TOOL_NAME } from "../computer-use/tool.js";
@@ -115,7 +116,7 @@ export async function validateBotPlanProposal(input: unknown, context: BotPlanVa
     } else if ("files" in raw) {
       if (!keys(raw, ["files", "action"]) || typeof raw.files !== "string" || !raw.files.trim() || raw.files.includes("\0") || Buffer.byteLength(raw.files) > 4096 || (raw.action !== "read" && raw.action !== "write")) { problems.push(`Item ${index + 1} needs a folder and read or write access.`); continue; }
       const requested = raw.files.trim();
-      if (requested === "/" || requested === "whole_mac") { problems.push("Ask for the whole Mac with request_access on its own."); continue; }
+      if (requested === "/" || requested === "whole_mac") { problems.push(`Ask for the whole ${localComputerNoun(process.platform)} with request_access on its own.`); continue; }
       try {
         const scope = await context.access?.scopeOf(context.botId, requested, raw.action);
         if (scope?.kind === "inside") items.push({ id, kind: "files", path: requested, access: raw.action, grant: false });

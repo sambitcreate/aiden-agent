@@ -78,10 +78,16 @@ export class DesignCanvasStore {
     });
   }
 
-  /** Applies `mutate` to the latest canvas and stores the result at the next revision. */
+  /**
+   * Applies `mutate` to the latest canvas and stores the result at the next
+   * revision. `beforeWrite` runs on the chat's chain just before the file is
+   * written, so a check that may change while the update waits (design mode
+   * still on, say) is made as late as possible; throwing there writes nothing.
+   */
   async update(
     chatId: string,
     mutate: (doc: DesignCanvas) => DesignCanvas,
+    options: { beforeWrite?: () => Promise<void> | void } = {},
   ): Promise<DesignCanvas> {
     assertDesignCanvasChatId(chatId);
     return this.serialize(chatId, async () => {
@@ -91,6 +97,7 @@ export class DesignCanvasStore {
       const parsed = parseDesignCanvas(isRecord(next) ? { ...next, revision } : next);
       if (!parsed.ok) throw new Error(`The canvas update is invalid: ${parsed.issues.join(" ")}`);
       if (this.tooLarge(parsed.doc)) throw new Error("The canvas is too large to save.");
+      await options.beforeWrite?.();
       await this.write(chatId, parsed.doc);
       return parsed.doc;
     });

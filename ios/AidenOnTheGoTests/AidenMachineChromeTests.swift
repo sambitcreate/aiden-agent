@@ -223,7 +223,7 @@ final class AidenMachineChromeTests: XCTestCase {
         defer { close(window) }
 
         let elements = accessibleElements(in: window)
-        XCTAssertEqual(elements.compactMap(\.accessibilityLabel), ["All machines", "Studio Mac", "Laptop"])
+        XCTAssertEqual(elements.compactMap(\.accessibilityLabel), ["All computers", "Studio Mac", "Laptop"])
         XCTAssertTrue(elements[0].accessibilityTraits.contains(.selected), "Selection isn't left to colour")
         XCTAssertFalse(elements[2].accessibilityTraits.contains(.selected))
 
@@ -634,7 +634,7 @@ final class AidenMachineChromeTests: XCTestCase {
 
         XCTAssertEqual(AidenHostStatusItem.title(online: 3, total: 4), "3 of 4")
         let item = try XCTUnwrap(accessibleElements(in: window).first)
-        XCTAssertEqual(item.accessibilityLabel, "3 of 4 machines online")
+        XCTAssertEqual(item.accessibilityLabel, "3 of 4 computers online")
         XCTAssertTrue(item.accessibilityTraits.contains(.button))
         XCTAssertTrue(item.accessibilityActivate())
         XCTAssertEqual(opens, 1)
@@ -647,9 +647,9 @@ final class AidenMachineChromeTests: XCTestCase {
             return accessibleElements(in: window).first?.accessibilityLabel
         }
 
-        XCTAssertEqual(try spoken(online: 1, total: 1), "1 of 1 machine online")
-        XCTAssertEqual(try spoken(online: 0, total: 1), "0 of 1 machine online")
-        XCTAssertEqual(try spoken(online: 1, total: 2), "1 of 2 machines online")
+        XCTAssertEqual(try spoken(online: 1, total: 1), "1 of 1 computer online")
+        XCTAssertEqual(try spoken(online: 0, total: 1), "0 of 1 computer online")
+        XCTAssertEqual(try spoken(online: 1, total: 2), "1 of 2 computers online")
     }
 
     // MARK: Chat subtitle
@@ -822,6 +822,31 @@ final class AidenMachineChromeTests: XCTestCase {
             RunLoop.main.run(until: Date().addingTimeInterval(0.01))
         }
         return condition()
+    }
+
+    /// The editor's tiles take as many columns as fit at their smallest width,
+    /// as the adaptive grid they replace did.
+    func testTheTileGridFitsAsManyColumnsAsItsMinimumAllows() {
+        XCTAssertEqual(AidenTileGrid.columnCount(width: 300, minimumWidth: 52, spacing: 8), 5)
+        XCTAssertEqual(AidenTileGrid.columnCount(width: 292, minimumWidth: 52, spacing: 8), 5)
+        XCTAssertEqual(AidenTileGrid.columnCount(width: 291, minimumWidth: 52, spacing: 8), 4)
+        XCTAssertEqual(AidenTileGrid.columnCount(width: 794, minimumWidth: 52, spacing: 8), 13)
+        XCTAssertEqual(AidenTileGrid.columnCount(width: 30, minimumWidth: 52, spacing: 8), 1, "A narrow row still shows a column")
+        XCTAssertEqual(AidenTileGrid.columnCount(width: .infinity, minimumWidth: 52, spacing: 8), 1)
+    }
+
+    /// Ten 44 pt tiles in 300 pt: two rows of five, so two tile heights and one gap.
+    func testTheTileGridStacksItsRows() {
+        let grid = AidenTileGrid(minimumWidth: 52, spacing: 8) {
+            ForEach(0..<10, id: \.self) { _ in
+                Color.clear.frame(maxWidth: .infinity, minHeight: 44, maxHeight: 44)
+            }
+        }
+        let host = UIHostingController(rootView: grid)
+        let size = host.sizeThatFits(in: CGSize(width: 300, height: CGFloat.greatestFiniteMagnitude))
+        XCTAssertEqual(size.height, 44 * 2 + 8, accuracy: 0.5)
+        let wide = host.sizeThatFits(in: CGSize(width: 794, height: CGFloat.greatestFiniteMagnitude))
+        XCTAssertEqual(wide.height, 44, accuracy: 0.5, "Ten tiles fit in one row of thirteen columns")
     }
 }
 #endif

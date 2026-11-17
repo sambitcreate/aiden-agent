@@ -129,11 +129,11 @@ enum AidenVisualDocumentLoad: Sendable {
 
     static func failureMessage(for error: Error) -> String {
         if error is URLError {
-            return String(localized: "Can't reach your machine. Check the connection and try again.")
+            return String(localized: "Can't reach your computer. Check the connection and try again.")
         }
         switch error as? AidenRemoteClientError {
         case .server(404, _)?:
-            return String(localized: "This visual is no longer available on your machine.")
+            return String(localized: "This visual is no longer available on your computer.")
         case .missingCredential?, .installationChanged?:
             return String(localized: "This visual can't be opened right now.")
         default:

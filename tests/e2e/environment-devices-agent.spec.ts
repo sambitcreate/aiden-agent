@@ -195,12 +195,12 @@ test.describe("Simulator agent tools", () => {
       expect(agentCalls.some(({ args }) => args[0] === "devices")).toBe(true);
       expect(agentCalls.every(({ daemonEnv }) => !daemonEnv)).toBe(true);
 
-      // Ask first holds device_close for review.
+      // Ask holds device_close for review. The seeded Full access workspace reads as a customized Never ask.
       await page.getByRole("button", { name: "Close environment panel", exact: true }).click();
-      await page.getByRole("button", { name: /^Workspace access: Full access/u }).click();
+      await page.getByRole("button", { name: /^Approvals: Never ask/u }).click();
       await page
-        .getByRole("radiogroup", { name: "Workspace access" })
-        .getByRole("radio", { name: /^Workspace access: Ask first/u })
+        .getByRole("radiogroup", { name: "Approvals" })
+        .getByRole("radio", { name: "Approvals: Ask", exact: true })
         .click();
       const closePrompt = "Simulator agent scenario: close the phone when I allow it.";
       const closing = lmStudio.enqueueToolScenario!({

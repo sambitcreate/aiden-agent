@@ -50,7 +50,7 @@ final class AidenBotResumeModel {
         self.storageGeneration = scope.flatMap { store?.generation(for: $0) }
         if let store, let scope {
             do { pending = try store.load(scope)?.resume }
-            catch { storageBlocked = true; message = "This phone couldn’t recover its earlier Resume request. Inspect the host before resuming." }
+            catch { storageBlocked = true; message = "This phone couldn’t recover its earlier Resume request. Inspect the computer before resuming." }
         }
     }
     /// Resume authority belongs to one visible, active visit. Backgrounding
@@ -90,7 +90,7 @@ final class AidenBotResumeModel {
             return await begin(acknowledge: false, submissionID: nil, costReceiptID: nil)
         } catch {
             busy = false
-            if canUseVisit, visitGeneration == visit { message = "The host couldn’t confirm whether another charge may be needed. Try Resume again when connected." }
+            if canUseVisit, visitGeneration == visit { message = "The computer couldn’t confirm whether another charge may be needed. Try Resume again when connected." }
             return nil
         }
     }
@@ -111,7 +111,7 @@ final class AidenBotResumeModel {
         guard canUseVisit, !busy, !storageBlocked else { return nil }
         let age = Date().timeIntervalSince(attempt.createdAt)
         guard age >= 0, age < 23 * 3600 else {
-            message = "The earlier Resume request is too old to replay safely. Its outcome remains unknown; inspect the host."
+            message = "The earlier Resume request is too old to replay safely. Its outcome remains unknown; inspect the computer."
             return nil
         }
         busy = true; defer { busy = false }
@@ -129,13 +129,13 @@ final class AidenBotResumeModel {
             if !previouslyUnknown, !aidenBotResumeFailureIsAmbiguous(error) {
                 pending = nil; persist(settling: attempt.key)
             }
-            message = pending == nil ? "The Bot wasn’t resumed. Try again to review the host’s current status." : "The Resume response was lost. Retry keeps the same request and cost acknowledgement."
+            message = pending == nil ? "The Bot wasn’t resumed. Try again to review the computer’s current status." : "The Resume response was lost. Retry keeps the same request and cost acknowledgement."
             return nil
         }
     }
     @discardableResult private func persist(settling nonce: UUID? = nil) -> Bool {
         guard let store, let scope else { return true }
         do { try store.save(pending.map { .init(resume: $0) }, scope: scope, settling: nonce, generation: storageGeneration); return true }
-        catch { storageBlocked = true; message = "The Resume request couldn’t be safely retained on this phone. Inspect the host before trying again."; return false }
+        catch { storageBlocked = true; message = "The Resume request couldn’t be safely retained on this phone. Inspect the computer before trying again."; return false }
     }
 }

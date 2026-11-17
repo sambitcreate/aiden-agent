@@ -329,7 +329,7 @@ export function applyRemoteRunEvent(current: RemoteRunView, event: PeerRunEvent)
         view: {
           ...settledPrompts(view),
           status: "error",
-          errorMessage: str(payload.message) ?? "The run on the host failed.",
+          errorMessage: str(payload.message) ?? "The run on that computer failed.",
         },
         refetch: true,
       };
