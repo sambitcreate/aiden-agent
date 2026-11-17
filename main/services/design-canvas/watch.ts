@@ -234,7 +234,7 @@ export class DesignFileWatcher {
         else writes.set(relativePath, before);
       }
       // The page was just stamped by the clock that stamps the files beside it.
-      if (written && root !== undefined) write.fileClockOffset = fileClockOffset(path.join(root, relativePath), this.wallNow);
+      if (written && root !== undefined) write.fileClockOffset = fileClockOffset(path.join(root, relativePath), this.wallNow());
       write.settledAt = this.now();
       settle();
       if (write.beside !== NOTHING_NOTED) this.letGoOfNoteAtDeadline(chatId, write);
@@ -518,12 +518,15 @@ async function besidePage(root: string, relativePath: string, noting?: () => Pro
 }
 
 /**
- * How far the clock that stamps `file` runs behind this Mac's, from the time
- * it was just stamped: 0 or less, and 0 when it can't be read. A clock that
- * runs ahead needs nothing: the files beside the page then look newer, so
- * more of them count as touched since the write began.
+ * How far the clock that stamps `file` runs behind this Mac's, from a write
+ * to it that had finished by `writtenAt`: 0 or less, and 0 when it can't be
+ * read. The stamp is measured against `writtenAt`, not the time the stat
+ * answers: a slow stat would otherwise count its own delay as the clock
+ * lagging, and move the write's start back past files changed before it. A
+ * clock that runs ahead needs nothing: the files beside the page then look
+ * newer, so more of them count as touched since the write began.
  */
-async function fileClockOffset(file: string, wallNow: () => number): Promise<number> {
+async function fileClockOffset(file: string, writtenAt: number): Promise<number> {
   const stats = await fsp.stat(file).catch(() => null);
-  return stats === null ? 0 : Math.min(0, Math.max(stats.mtimeMs, stats.ctimeMs) - wallNow());
+  return stats === null ? 0 : Math.min(0, Math.max(stats.mtimeMs, stats.ctimeMs) - writtenAt);
 }
