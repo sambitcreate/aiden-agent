@@ -67,6 +67,8 @@ export interface IsolatedSubagentMcpClientDependencies {
     operation: () => Promise<T>,
     isCurrent: () => boolean,
   ): Promise<T>;
+  /** Child agents read results as received; a result that breaks its output schema is reported here. */
+  reportOutputSchemaDiagnostic?(diagnostic: string): void;
 }
 
 export interface SubagentMcpConfigurationLease {
@@ -226,7 +228,9 @@ export async function withIsolatedSubagentMcpClientCore<T>(input: {
           const current = await input.dependencies.resolveCredentialBoundary(input.server, signal);
           if (current.revision !== credentialBoundary.revision) throw new Error("MCP credential revision changed.");
           registerCredentialRedactor(current.redactText);
-          guard?.validateResult(toolName, result);
+          // Advisory: the call already ran, so a schema mismatch must not read as a failure to retry.
+          const diagnostic = guard?.validateResult(toolName, result, "advisory");
+          if (diagnostic !== undefined) input.dependencies.reportOutputSchemaDiagnostic?.(diagnostic);
           return redactTextResult(result, { revision: current.revision, redactText: redactCredentialText });
         };
         return await input.operation({

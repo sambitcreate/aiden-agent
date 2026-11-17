@@ -76,7 +76,7 @@ test("Remote production wires Bot notice and retained-chat policy authority", ()
   assert.match(remote, /revokeNoticeAudience\(deviceId\)/u);
   assert.match(
     remote,
-    /const revoked = await revokeAidenRemoteRuntimeDevice[\s\S]*if \(hostPlatformCapabilities\(\)\.bots\) \{\s*await botApplicationService\.revokeNoticeAudience\(deviceId\);\s*\}\s*return revoked;/u,
+    /const revoked = await revokeAidenRemoteRuntimeDevice[\s\S]*if \(hostPlatformCapabilities\(\)\.bots\) \{\s*await revokeBotNoticeAudience\(\(\) => botApplicationService\.revokeNoticeAudience\(deviceId\), botNotices,[\s\S]*?\);\s*\}\s*return revoked;/u,
   );
 });
 

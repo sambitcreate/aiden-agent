@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { MAX_PULL_REQUEST_FOLLOWS_PER_CHAT } from "../../../renderer/shared/follow-through.js";
-import type { FollowReadResult } from "./pull-request-follow-github.js";
+import type { FollowProbe, FollowReadResult } from "./pull-request-follow-github.js";
 import type { FollowedCheck, FollowNotice, PullRequestObservation } from "./pull-request-follow.js";
-import { PullRequestFollows, type StartFollowInput } from "./pull-request-follows.js";
+import { PullRequestFollows, type FollowTimers, type StartFollowInput } from "./pull-request-follows.js";
 
 const T0 = Date.parse("2026-10-26T12:00:00Z");
 
@@ -38,9 +38,27 @@ function harness(options: { answering?: (chatId: string, at: number) => boolean 
   const persisted: number[] = [];
   let answer: (follow: { number: number }) => FollowReadResult | Promise<FollowReadResult> = () => ({ kind: "ok", observation: open() });
   const logReads: string[] = [];
+  const reads: Array<{ number: number; at: number; probe?: FollowProbe }> = [];
+  // Fake one-shot timers: they fire only when the test moves the clock past them.
+  const pending = new Map<number, { at: number; run: () => void }>();
+  let nextTimer = 0;
+  const timers: FollowTimers = {
+    set: (run, ms) => {
+      nextTimer += 1;
+      pending.set(nextTimer, { at: now + ms, run });
+      return nextTimer;
+    },
+    clear: (handle) => {
+      pending.delete(handle as number);
+    },
+  };
   const follows = new PullRequestFollows({
+    timers,
     reader: {
-      read: async (follow) => answer(follow),
+      read: async (follow, _signal, probe) => {
+        reads.push({ number: follow.number, at: now, ...(probe ? { probe } : {}) });
+        return answer(follow);
+      },
       jobLogTail: async (_follow, check: FollowedCheck) => {
         logReads.push(check.name);
         return "Error: expected 2, got 3";
@@ -56,11 +74,27 @@ function harness(options: { answering?: (chatId: string, at: number) => boolean 
     posted,
     persisted,
     logReads,
+    reads,
+    timers: pending,
+    now: () => now,
     setAnswer: (next: typeof answer) => {
       answer = next;
     },
     advance: (ms: number) => {
       now += ms;
+    },
+    /** Move the clock, fire the timers that came due, and wait for the reads they start. */
+    elapse: async (ms: number) => {
+      now += ms;
+      let fired = false;
+      for (const [id, timer] of [...pending]) {
+        if (timer.at > now) continue;
+        pending.delete(id);
+        timer.run();
+        fired = true;
+      }
+      // The fired timer started a pass; this waits for that pass, it starts none.
+      if (fired) await follows.kick();
     },
   };
 }
@@ -234,4 +268,304 @@ test("a workspace change suspends a due poll until commit or rollback", async ()
   await follows.kick();
   assert.equal(posted.length, 1);
   assert.equal(posted[0]?.chatId, "chat-1");
+});
+
+const MINUTE = 60_000;
+const PR_PATH = "/repos/acme/app/pulls/42";
+
+/** A settled pull request: checks passed, nothing to say. */
+function quiet(overrides: Partial<PullRequestObservation> = {}): PullRequestObservation {
+  return open({ checksState: "passing", checks: [{ name: "unit", status: "success" }], ...overrides });
+}
+
+function nextCheckIn(h: ReturnType<typeof harness>): number {
+  return h.follows.all()[0]!.nextCheckAt - h.now();
+}
+
+test("a burst of nudges reads the follow once, after the burst settles, from the nudge timer", async () => {
+  const h = harness();
+  h.setAnswer(() => ({ kind: "ok", observation: quiet() }));
+  h.follows.follow(input());
+  await h.follows.kick();
+  assert.equal(h.reads.length, 1);
+
+  h.advance(MINUTE);
+  for (let index = 0; index < 4; index += 1) {
+    assert.equal(h.follows.nudge("chat-1", "action"), 1);
+    await h.elapse(1_000);
+  }
+  assert.equal(h.reads.length, 1, "nudges still arriving: nothing is read yet");
+  assert.equal(h.timers.size, 1, "one timer stands for the whole burst");
+
+  await h.elapse(5_000);
+  assert.equal(h.reads.length, 2, "the burst cost exactly one read");
+  assert.equal(h.timers.size, 0);
+  await h.elapse(30_000);
+  await h.follows.kick();
+  assert.equal(h.reads.length, 2, "and no second one");
+});
+
+test("a nudge that arrives while its follow is being read gets one more read, not more", async () => {
+  const h = harness();
+  h.setAnswer(() => ({ kind: "ok", observation: quiet() }));
+  h.follows.follow(input());
+  await h.follows.kick();
+  h.advance(MINUTE);
+
+  let release!: (result: FollowReadResult) => void;
+  h.setAnswer(() => new Promise<FollowReadResult>((resolve) => (release = resolve)));
+  h.follows.nudge("chat-1", "action");
+  h.advance(5_000);
+  const reading = h.follows.kick();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(h.reads.length, 2);
+  h.follows.nudge("chat-1", "action");
+  h.follows.nudge("chat-1", "action");
+  h.setAnswer(() => ({ kind: "ok", observation: quiet() }));
+  release({ kind: "ok", observation: quiet() });
+  await reading;
+  assert.equal(h.reads.length, 2, "the nudges during the read wait their own turn");
+
+  await h.elapse(30_000);
+  assert.equal(h.reads.length, 3);
+  await h.elapse(MINUTE);
+  assert.equal(h.reads.length, 3);
+});
+
+test("a timed read that comes due inside a nudge's debounce does not use the nudge up", async () => {
+  const h = harness();
+  h.setAnswer(() => ({ kind: "ok", observation: quiet() }));
+  h.follows.follow(input());
+  await h.follows.kick();
+  const timedReadIn = nextCheckIn(h);
+
+  // A push two seconds before the timed read: that read may be too early to show it.
+  h.advance(timedReadIn - 2_000);
+  h.follows.nudge("chat-1", "action");
+  h.advance(2_000);
+  await h.follows.kick();
+  assert.equal(h.reads.length, 2, "the timed read ran");
+
+  await h.elapse(30_000);
+  assert.equal(h.reads.length, 3, "the nudge still reads once, after its interval");
+  await h.elapse(MINUTE);
+  assert.equal(h.reads.length, 3, "and only once");
+});
+
+test("a nudge never reads sooner than the follow's minimum interval or before a rate limit lifts", async () => {
+  const h = harness();
+  h.setAnswer(() => ({ kind: "ok", observation: quiet() }));
+  h.follows.follow(input());
+  await h.follows.kick();
+
+  // Focus right after a read: wait for the settled cadence, not the debounce.
+  h.follows.nudgeAll("ambient");
+  await h.elapse(10_000);
+  assert.equal(h.reads.length, 1);
+
+  h.setAnswer(() => ({ kind: "retry", message: "GitHub's rate limit was reached.", retryAt: h.now() + 20 * MINUTE }));
+  await h.elapse(5 * MINUTE);
+  assert.equal(h.reads.length, 2, "the ambient nudge read at the settled cadence");
+
+  h.setAnswer(() => ({ kind: "ok", observation: quiet() }));
+  h.follows.nudge("chat-1", "action");
+  await h.elapse(MINUTE);
+  await h.elapse(10 * MINUTE);
+  assert.equal(h.reads.length, 2, "nothing goes out while GitHub asked Aiden to wait");
+  await h.elapse(9 * MINUTE);
+  assert.equal(h.reads.length, 3);
+});
+
+test("a stopped follow sends no request, however it is nudged", async () => {
+  const h = harness();
+  h.follows.follow(input());
+  await h.follows.kick();
+  h.advance(MINUTE);
+  h.follows.nudge("chat-1", "action");
+  assert.equal(h.timers.size, 1);
+  h.follows.stop("chat-1", input(), "person");
+  assert.equal(h.timers.size, 0, "stopping drops the pending nudge");
+  assert.equal(h.follows.nudge("chat-1", "action"), 0);
+  assert.equal(h.follows.nudgeAll("ambient"), 0);
+  await h.elapse(60 * MINUTE);
+  await h.follows.kick();
+  assert.equal(h.reads.length, 1);
+
+  // A deleted chat and a shut-down loop are just as quiet.
+  const deleted = harness();
+  deleted.follows.follow(input());
+  await deleted.follows.kick();
+  deleted.advance(MINUTE);
+  deleted.follows.nudge("chat-1", "action");
+  deleted.follows.deleteChat("chat-1");
+  deleted.follows.follow(input(7, "chat-2"));
+  await deleted.follows.kick();
+  deleted.follows.shutdown();
+  assert.equal(deleted.follows.nudgeAll("action"), 0);
+  assert.equal(deleted.timers.size, 0);
+  await deleted.elapse(60 * MINUTE);
+  assert.deepEqual(deleted.reads.map((read) => read.number), [42, 7]);
+});
+
+test("a nudge waits while its chat's workspace is changing", async () => {
+  const h = harness();
+  h.setAnswer(() => ({ kind: "ok", observation: quiet() }));
+  h.follows.follow(input());
+  await h.follows.kick();
+  h.advance(MINUTE);
+  const resume = h.follows.pauseChats(["chat-1"]);
+  h.follows.nudge("chat-1", "action");
+  await h.elapse(MINUTE);
+  await h.follows.kick();
+  assert.equal(h.reads.length, 1);
+  resume();
+  await h.follows.kick();
+  assert.equal(h.reads.length, 2);
+});
+
+test("an unchanged probe posts nothing, reads no logs and keeps the status", async () => {
+  const h = harness();
+  const etags = { [PR_PATH]: 'W/"pr-1"' };
+  h.setAnswer(() => ({ kind: "ok", observation: quiet(), etags }));
+  h.follows.follow(input());
+  await h.follows.kick();
+  const before = h.follows.list("chat-1")[0]!;
+  const postedBefore = h.posted.length;
+
+  h.setAnswer(() => ({ kind: "unchanged" }));
+  h.advance(nextCheckIn(h));
+  await h.follows.kick();
+  assert.equal(h.reads.length, 2);
+  assert.deepEqual(h.reads[1]!.probe, { etags, skipIfUnchanged: true }, "the stored tags go out as If-None-Match");
+  assert.equal(h.posted.length, postedBefore);
+  assert.deepEqual(h.logReads, []);
+  const after = h.follows.list("chat-1")[0]!;
+  assert.equal(after.status, before.status);
+  assert.equal(after.noticesSent, before.noticesSent);
+  assert.equal(h.follows.all()[0]!.lastCheckedAt, h.now(), "an unchanged answer still counts as a look");
+});
+
+test("a quiet pull request is read less and less often, and back at the normal cadence once it changes", async () => {
+  const h = harness();
+  const etags = { [PR_PATH]: 'W/"pr-1"' };
+  h.setAnswer(() => ({ kind: "ok", observation: quiet(), etags }));
+  h.follows.follow(input());
+  await h.follows.kick();
+  assert.equal(nextCheckIn(h), 5 * MINUTE, "a settled read keeps today's five-minute cadence");
+
+  h.setAnswer(() => ({ kind: "unchanged" }));
+  const delays: number[] = [];
+  for (let index = 0; index < 4; index += 1) {
+    h.advance(nextCheckIn(h));
+    await h.follows.kick();
+    delays.push(nextCheckIn(h));
+  }
+  // The third look would wait 20 minutes, but the full read is due 30 minutes
+  // after the last one (T+20 then T+30); after that the backoff is at its cap.
+  assert.deepEqual(delays, [5, 10, 10, 30].map((minutes) => minutes * MINUTE));
+
+  // A new comment changes the pull request: the backoff starts over.
+  h.setAnswer(() => ({
+    kind: "ok",
+    etags: { [PR_PATH]: 'W/"pr-2"' },
+    observation: quiet({
+      comments: [{ id: "c1", kind: "comment", author: "reviewer", trusted: true, body: "Please rename this.", createdAt: h.now() }],
+    }),
+  }));
+  h.advance(nextCheckIn(h));
+  await h.follows.kick();
+  assert.ok(h.posted.some((post) => /Please rename this/u.test(post.notice.text)));
+  assert.equal(nextCheckIn(h), 5 * MINUTE);
+
+  h.setAnswer(() => ({ kind: "unchanged" }));
+  h.advance(nextCheckIn(h));
+  await h.follows.kick();
+  assert.deepEqual(h.reads[h.reads.length - 1]!.probe?.etags, { [PR_PATH]: 'W/"pr-2"' }, "the new tags are the ones probed");
+});
+
+test("checks still running keep the two-minute cadence even when nothing changes", async () => {
+  const h = harness();
+  h.setAnswer(() => ({
+    kind: "ok",
+    etags: { [PR_PATH]: 'W/"pr-1"' },
+    observation: open({ checksState: "pending", checks: [{ name: "unit", status: "pending" }] }),
+  }));
+  h.follows.follow(input());
+  await h.follows.kick();
+  h.setAnswer(() => ({ kind: "unchanged" }));
+  for (let index = 0; index < 3; index += 1) {
+    h.advance(nextCheckIn(h));
+    await h.follows.kick();
+    assert.equal(nextCheckIn(h), 2 * MINUTE);
+  }
+});
+
+test("a failing check is never probed, and a full read half an hour old is never skipped", async () => {
+  const failing = harness();
+  failing.setAnswer(() => ({ kind: "ok", observation: open(), etags: { [PR_PATH]: 'W/"pr-1"' } }));
+  failing.follows.follow(input());
+  await failing.follows.kick();
+  failing.advance(nextCheckIn(failing));
+  await failing.follows.kick();
+  assert.equal(failing.reads[1]!.probe, undefined, "the failing-for-an-hour clock needs a full read, so no probe goes out");
+
+  const stale = harness();
+  stale.setAnswer(() => ({ kind: "ok", observation: quiet(), etags: { [PR_PATH]: 'W/"pr-1"' } }));
+  stale.follows.follow(input());
+  await stale.follows.kick();
+  stale.setAnswer(() => ({ kind: "unchanged" }));
+  for (let index = 0; index < 3; index += 1) {
+    stale.advance(nextCheckIn(stale));
+    await stale.follows.kick();
+  }
+  // 5 + 5 + 10 minutes since the full read. The backoff would wait 20 more,
+  // but the full read is due 30 minutes after the last one, so 10 more.
+  assert.equal(nextCheckIn(stale), 10 * MINUTE);
+  stale.advance(nextCheckIn(stale));
+  await stale.follows.kick();
+  assert.equal(stale.reads[stale.reads.length - 1]!.probe?.skipIfUnchanged, false);
+});
+
+test("a probe that comes back after the full read fell due is followed by the full read at once", async () => {
+  const h = harness();
+  const etags = { [PR_PATH]: 'W/"pr-1"' };
+  h.setAnswer(() => ({ kind: "ok", observation: quiet(), etags }));
+  h.follows.follow(input());
+  await h.follows.kick();
+  h.setAnswer(() => ({ kind: "unchanged" }));
+  for (let index = 0; index < 2; index += 1) {
+    h.advance(nextCheckIn(h));
+    await h.follows.kick();
+  }
+  // The probe leaves at T+20, inside the half hour, and GitHub answers it 11
+  // minutes later; only a probe may come back unchanged, as with the real reader.
+  h.advance(nextCheckIn(h));
+  const fullReadAt = h.now() - 20 * MINUTE;
+  const before = h.reads.length;
+  h.setAnswer(() => {
+    if (!h.reads[h.reads.length - 1]!.probe?.skipIfUnchanged) return { kind: "ok", observation: quiet(), etags };
+    h.advance(11 * MINUTE);
+    return { kind: "unchanged" };
+  });
+  await h.follows.kick();
+  const looks = h.reads.slice(before);
+  assert.deepEqual(looks.map(({ at, probe }) => ({ after: at - fullReadAt, skip: probe?.skipIfUnchanged })), [
+    { after: 20 * MINUTE, skip: true },
+    // Not another 20-minute backoff: the full read the probe stood in for went
+    // due while it was out, so it runs as soon as the probe returns.
+    { after: 31 * MINUTE, skip: false },
+  ]);
+});
+
+test("a forced full read that found what the probe said, nothing new, keeps backing off", async () => {
+  const h = harness();
+  h.setAnswer(() => ({ kind: "ok", observation: quiet(), etags: { [PR_PATH]: 'W/"pr-1"' } }));
+  h.follows.follow(input());
+  await h.follows.kick();
+  h.setAnswer(() => ({ kind: "ok", observation: quiet(), etags: { [PR_PATH]: 'W/"pr-1"' }, probedUnchanged: true }));
+  h.advance(nextCheckIn(h));
+  await h.follows.kick();
+  h.advance(nextCheckIn(h));
+  await h.follows.kick();
+  assert.equal(nextCheckIn(h), 10 * MINUTE);
 });

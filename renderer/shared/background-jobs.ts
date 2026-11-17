@@ -11,7 +11,9 @@ export type BackgroundJobEndReason =
   | "output-limit"
   | "chat-deleted"
   | "access-changed"
-  | "app-quit";
+  | "app-quit"
+  /** The agent asked for the job to stop once its chat went quiet, and it did. */
+  | "chat-settled";
 
 export interface BackgroundJobView {
   /** Short id the agent and the person refer to, e.g. `job_1a2b3c4d`. */
@@ -37,6 +39,11 @@ export interface BackgroundJobView {
   origin?: "command";
   /** TCP ports the job's processes listen on, lowest first, while it runs. */
   ports?: number[];
+  /**
+   * The agent started it only to check its current work, so Aiden stops it
+   * once the chat has been quiet for a while (`chat-settled`).
+   */
+  stopWhenChatSettles?: true;
 }
 
 export interface BackgroundJobOutput {

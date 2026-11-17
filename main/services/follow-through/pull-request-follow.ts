@@ -21,6 +21,13 @@ const MINUTE = 60_000;
 /** Read again this soon while checks run; slower once they settle. */
 export const FOLLOW_POLL_PENDING_MS = 2 * MINUTE;
 export const FOLLOW_POLL_SETTLED_MS = 5 * MINUTE;
+/** A settled pull request that reads the same again and again backs off to this. */
+export const FOLLOW_POLL_QUIET_MAX_MS = 30 * MINUTE;
+/**
+ * An unchanged probe may skip the full read only this long after the last one,
+ * since the probed REST objects do not show every change (reviews may not).
+ */
+export const FOLLOW_FULL_READ_MS = 30 * MINUTE;
 /** Report failures while other checks still run once the first failure is this old. */
 export const FOLLOW_EARLY_FAILURE_MS = 15 * MINUTE;
 /** Stop following when checks stay failing this long after the agent heard. */
@@ -97,6 +104,16 @@ export interface PullRequestFollowRecord {
   reportedPassSha?: string;
   reportedConflictSha?: string;
   seenCommentIds: string[];
+  /** The last full read saw checks still running. */
+  checksPending?: boolean;
+  /** Reads in a row that found nothing new, for backing off a quiet pull request. */
+  quietReads?: number;
+  /** GitHub asked Aiden to wait until then (a rate limit); nudges wait too. */
+  holdUntil?: number;
+  /** Entity tags of the probed REST objects, by path, as of `etagsAt`. */
+  etags?: Record<string, string>;
+  /** When the full read that matches `etags` ran. */
+  etagsAt?: number;
 }
 
 export interface FollowNotice {
@@ -235,6 +252,8 @@ export function evaluateFollow(
     seenCommentIds: [...previous.seenCommentIds],
   };
   delete record.problem;
+  delete record.holdUntil;
+  delete record.quietReads;
   const notices: FollowNotice[] = [];
   const counted = () => previous.noticesSent + notices.length;
   const end = (reason: PullRequestFollowEndReason) => {
@@ -404,8 +423,80 @@ export function evaluateFollow(
     });
     end("quiet");
   }
-  record.nextCheckAt = now + (pending.length ? FOLLOW_POLL_PENDING_MS : FOLLOW_POLL_SETTLED_MS);
+  if (pending.length) record.checksPending = true;
+  else delete record.checksPending;
+  record.nextCheckAt = now + followPollDelay(pending.length > 0, 0);
   return finish();
+}
+
+/**
+ * How long to wait before the next timed read: two minutes while checks run,
+ * five once they settle, doubling for a settled pull request after the second
+ * read in a row that found nothing new, up to half an hour. Never sooner than
+ * these base intervals.
+ */
+export function followPollDelay(checksPending: boolean, quietReads: number): number {
+  if (checksPending) return FOLLOW_POLL_PENDING_MS;
+  return Math.min(FOLLOW_POLL_QUIET_MAX_MS, FOLLOW_POLL_SETTLED_MS * 2 ** Math.min(Math.max(0, quietReads - 1), 3));
+}
+
+/**
+ * A full read after an unchanged probe: when it brought no notice and the
+ * same status line, the pull request is still quiet, so keep backing off.
+ */
+export function followStayedQuiet(previous: PullRequestFollowRecord, evaluated: FollowEvaluation, now: number): FollowEvaluation {
+  const { record, notices } = evaluated;
+  if (record.state !== "following" || notices.length || record.status !== previous.status) return evaluated;
+  const quietReads = (previous.quietReads ?? 0) + 1;
+  return { notices, record: { ...record, quietReads, nextCheckAt: now + followPollDelay(Boolean(record.checksPending), quietReads) } };
+}
+
+/**
+ * The probe showed nothing changed: no read, no notice, and the quiet backoff
+ * grows, but never past the moment the last full read turns half an hour old.
+ * `probeAdmitted` says the look was sent as a probe that may stand in for the
+ * full read, which `followMayProbe` allows only before that moment.
+ */
+export function followUnchanged(previous: PullRequestFollowRecord, now: number, probeAdmitted: boolean): PullRequestFollowRecord {
+  const quietReads = (previous.quietReads ?? 0) + 1;
+  const backedOff = now + followPollDelay(Boolean(previous.checksPending), quietReads);
+  const fullReadDue = previous.etagsAt === undefined ? backedOff : previous.etagsAt + FOLLOW_FULL_READ_MS;
+  const record: PullRequestFollowRecord = {
+    ...previous,
+    lastCheckedAt: now,
+    readFailures: 0,
+    quietReads,
+    // A deadline that went by while an admitted probe was out makes the full read
+    // it stood in for due at once. A look sent after the deadline was the full
+    // read, so it never makes the next look immediate.
+    nextCheckAt: fullReadDue > now ? Math.min(backedOff, fullReadDue) : probeAdmitted ? now : backedOff,
+  };
+  delete record.problem;
+  delete record.holdUntil;
+  return record;
+}
+
+/**
+ * Whether an unchanged probe may stand in for the full read. Not while a
+ * check is failing (the early-failure and failing-for-an-hour decisions need
+ * the clock, not a change), and not once the last full read is old.
+ */
+export function followMayProbe(record: PullRequestFollowRecord, now: number): boolean {
+  return (
+    record.etags !== undefined &&
+    Object.keys(record.etags).length > 0 &&
+    record.etagsAt !== undefined &&
+    now - record.etagsAt < FOLLOW_FULL_READ_MS &&
+    record.failingSince === undefined
+  );
+}
+
+/**
+ * A `run_command` the agent ran that may have changed a pull request it
+ * follows: a push, or a `gh` call that comments, reviews or edits.
+ */
+export function commandMayChangePullRequest(command: string): boolean {
+  return /\bgit\b[^\n;&|]*\bpush\b/u.test(command) || /\bgh\s+(?:pr|api|issue)\b/u.test(command);
 }
 
 /** A read failed: keep following, back off, and remember why for the chip. */
@@ -417,13 +508,16 @@ export function followReadFailed(
 ): PullRequestFollowRecord {
   const readFailures = previous.readFailures + 1;
   const backoff = Math.min(30 * MINUTE, FOLLOW_POLL_SETTLED_MS * 2 ** Math.min(readFailures - 1, 3));
-  return {
+  const record: PullRequestFollowRecord = {
     ...previous,
     readFailures,
     problem,
     lastCheckedAt: now,
     nextCheckAt: Math.max(now + backoff, retryAt ?? 0),
   };
+  if (retryAt !== undefined && retryAt > now) record.holdUntil = retryAt;
+  else delete record.holdUntil;
+  return record;
 }
 
 /** The pull request is gone or unreadable for good. */

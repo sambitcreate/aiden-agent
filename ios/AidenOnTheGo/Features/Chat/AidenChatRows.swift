@@ -376,6 +376,7 @@ struct AidenMessageView: View, Equatable {
                 AidenChronologicalTranscript(
                     rows: rows,
                     active: false,
+                    stoppedStepIDs: message.timeline?.userStoppedStepIDs ?? [],
                     visualContent: { visual in AnyView(visualRow(visual)) },
                     loadRecording: loadBrowserRecording,
                     imageContent: { images in

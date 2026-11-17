@@ -8,7 +8,10 @@ class FakeDocument implements BotLiveOwner {
   readonly received: Array<{ channel: string; event: BotLiveEvent }> = [];
   private listeners = new Set<() => void>();
   private destroyed = false;
+  /** Whether this document's window is focused with the person at the Mac. */
+  focused = false;
   constructor(readonly key: string) {}
+  inFront = () => this.focused;
   isDestroyed = () => this.destroyed;
   onInvalidated = (listener: () => void) => {
     this.listeners.add(listener);
@@ -78,8 +81,12 @@ function fakeProjection() {
 }
 
 function register(projection: BotLiveProjection) {
+  return registerWithProbe(projection).invoke;
+}
+
+function registerWithProbe(projection: BotLiveProjection) {
   const handlers = new Map<string, (event: FakeDocument, ...args: unknown[]) => unknown>();
-  registerBotLiveHandlers<FakeDocument>({
+  const live = registerBotLiveHandlers<FakeDocument>({
     handle: (channel, handler) => handlers.set(channel, handler),
     owner: (event) => event,
     projection: () => projection,
@@ -88,7 +95,10 @@ function register(projection: BotLiveProjection) {
       return value;
     },
   });
-  return (channel: string, document: FakeDocument, ...args: unknown[]) => handlers.get(channel)!(document, ...args);
+  return {
+    live,
+    invoke: (channel: string, document: FakeDocument, ...args: unknown[]) => handlers.get(channel)!(document, ...args),
+  };
 }
 
 test("a document gets its snapshot, then only its own Bot's events", async () => {
@@ -203,4 +213,26 @@ test("two windows on one Bot each get the events, and one leaving keeps the othe
   fake.push("bot:a", 3);
   assert.deepEqual(first.received.map(({ event }) => event.seq), [2]);
   assert.deepEqual(second.received.map(({ event }) => event.seq), [2, 3]);
+});
+
+test("a Bot's chat is in front only while a focused document is subscribed to that Bot", async () => {
+  const fake = fakeProjection();
+  const { live, invoke } = registerWithProbe(fake.projection);
+  const front = new FakeDocument("window-1");
+  const behind = new FakeDocument("window-2");
+  await invoke("bots:live:subscribe", front, "bot:a");
+  await invoke("bots:live:subscribe", behind, "bot:b");
+  assert.equal(live.shownInFront("bot:a"), false, "open but not focused");
+
+  front.focused = true;
+  assert.equal(live.shownInFront("bot:a"), true);
+  assert.equal(live.shownInFront("bot:b"), false, "another Bot open in a window behind it");
+  assert.equal(live.shownInFront("bot:c"), false, "a Bot nobody has open");
+
+  await invoke("bots:live:unsubscribe", front, "bot:a");
+  assert.equal(live.shownInFront("bot:a"), false, "the person left the chat");
+
+  await invoke("bots:live:subscribe", front, "bot:a");
+  front.reload();
+  assert.equal(live.shownInFront("bot:a"), false, "a reloaded document no longer shows it");
 });

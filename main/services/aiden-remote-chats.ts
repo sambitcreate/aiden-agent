@@ -1482,6 +1482,11 @@ export class AidenRemoteChatService {
       isFolderWorkspace?: (workspaceId: string) => Promise<boolean>;
       /** For usage data: this device is another paired Mac or Linux host, not a phone. */
       deviceIsPeer?: (deviceId: string) => Promise<boolean>;
+      /**
+       * For usage data: false for a device whose chats and turns send no
+       * analytics (an outside MCP app). Absent or true: they are reported.
+       */
+      deviceReportsAnalytics?: (deviceId: string) => Promise<boolean>;
       /** The Mac's Settings → Appearance inline visuals choice for remote turns. */
       inlineVisuals?: () => Promise<InlineVisualsMode | undefined>;
       /**
@@ -1763,6 +1768,22 @@ export class AidenRemoteChatService {
     );
   }
 
+  /**
+   * True when this device already made this create or turn request under
+   * `key`, so repeating it replays the recorded answer and starts nothing new.
+   */
+  hasRecordedRequest(
+    deviceId: string,
+    target: { kind: "create" } | { kind: "turn"; chatId: string },
+    key: string,
+  ): boolean {
+    return this.idempotency.holds(
+      target.kind === "create"
+        ? { deviceId, route: "POST /chats", resourceId: "chat-registry", key }
+        : { deviceId, route: "POST /chats/{id}/turns", resourceId: safeId(target.chatId, "chat"), key },
+    );
+  }
+
   private async executeIdempotent<T>(
     scope: { deviceId: string; route: string; resourceId: string; key: string },
     input: unknown,
@@ -1941,6 +1962,17 @@ export class AidenRemoteChatService {
           .map((meta) => meta.id),
       ),
     };
+  }
+
+  /**
+   * True when `listSummaries` would show this chat: an ordinary chat with a
+   * safe id, workspace and timestamps. Never a Bot, assistant or
+   * feature-owned chat. Transcript-free: one read of the metadata index.
+   */
+  async isListedChat(chatId: string): Promise<boolean> {
+    const id = safeId(chatId, "chat");
+    const metadata = (await this.options.application.list()).find((entry) => entry.id === id);
+    return metadata !== undefined && safeSummaryMetadata(metadata) !== null;
   }
 
   /**
@@ -2155,6 +2187,7 @@ export class AidenRemoteChatService {
             const workspaceId = assignment?.workspaceId ?? (typeof target === "string" ? target : parsed.workspaceId);
             let uncertain = false;
             try {
+              const reportAnalytics = (await this.options.deviceReportsAnalytics?.(deviceId)) !== false;
               return await this.options.application.create(
                 {
                   workspaceId,
@@ -2163,6 +2196,7 @@ export class AidenRemoteChatService {
                     : {}),
                 },
                 owner,
+                ...(reportAnalytics ? [] : [{ reportAnalytics: false }] as const),
               );
             } catch (error) {
               uncertain = isChatCreateReconciliationRequiredError(error);
@@ -2938,7 +2972,7 @@ export class AidenRemoteChatService {
               surface,
               owner.owner,
             );
-            if (started) {
+            if (started && (await this.options.deviceReportsAnalytics?.(deviceId)) !== false) {
               reportChatMessageSent({
                 providerId: selection.providerId,
                 model: selection.modelId,

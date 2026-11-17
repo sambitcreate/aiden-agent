@@ -10,6 +10,11 @@
 // conversation, so the card is the transcript's own history, and every new
 // issue also leaves through the Bot delivery funnel (`class: "issue"`), so the
 // Mac banner and Telegram agree with the chat.
+//
+// Only asks alert the person. A raise marked `quiet` is a heads-up the person
+// can see in the Needs you slot but is never pinged about. An ask still open
+// after {@link BOT_ISSUE_REMIND_AFTER_MS} is sent once more, as one reminder,
+// by `remind` (the host calls it on a timer).
 
 import { randomUUID } from "node:crypto";
 import {
@@ -32,13 +37,32 @@ export type BotIssueActResult = "done" | "not_open" | "invalid";
 /** What the routine service said when a card asked it to turn a routine back on. */
 export type BotIssueResumeResult = "resumed" | "missing";
 
+/** How long an ask waits on the person before its one reminder. */
+export const BOT_ISSUE_REMIND_AFTER_MS = 4 * 60 * 60_000;
+
+/** The reminder's title: the ask's own title, marked as a reminder. */
+export function botIssueReminderTitle(title: string): string {
+  return `Reminder: ${title}`;
+}
+
+/** What a host raises: the issue, and whether it is only a heads-up. */
+export type BotIssueRaise = Omit<BotIssue, "id" | "createdAt" | "resolvedAt" | "resolution"> & {
+  /** Not an ask: no Mac banner, phone alert or reminder, only the Needs you slot. */
+  quiet?: boolean;
+};
+
 export interface BotIssueService {
   /** The open issue already stored for this key, or a new one. */
-  raise(input: Omit<BotIssue, "id" | "createdAt" | "resolvedAt" | "resolution">): Promise<BotIssue>;
+  raise(input: BotIssueRaise): Promise<BotIssue>;
   /** Settles the open issue under this key; false when there is none. */
   resolve(botId: string, dedupeKey: string, resolution: BotIssueResolution): Promise<boolean>;
   act(botId: string, issueId: string, action: BotIssueAction): Promise<BotIssueActResult>;
   list(botId: string, options?: { open?: boolean }): Promise<BotIssue[]>;
+  /**
+   * Sends the one reminder for each of this Bot's asks still open
+   * {@link BOT_ISSUE_REMIND_AFTER_MS} after it was raised; returns how many went out.
+   */
+  remind(botId: string): Promise<number>;
   /** A Bot's issues changed (raise, settle); the sidebar re-reads that Bot. */
   onChange(listener: (botId: string) => void): () => void;
   forgetBot(botId: string): Promise<void>;
@@ -117,7 +141,7 @@ function published(stored: StoredBotIssue): BotIssue {
  * because it would never dedupe and every repeat raise would become a new card.
  */
 function buildIssue(
-  input: Omit<BotIssue, "id" | "createdAt" | "resolvedAt" | "resolution">,
+  input: BotIssueRaise,
   id: string,
   at: number,
 ): StoredBotIssue {
@@ -137,6 +161,7 @@ function buildIssue(
     ...(input.access === undefined ? {} : { access: structuredClone(input.access) }),
     actions: input.actions.slice(0, 2),
     createdAt: at,
+    ...(input.quiet === true ? { quiet: true } : {}),
   };
   if (botIssueOf(issue, input.botId) === null) throw new Error("This issue can’t be stored.");
   if (issue.kind !== "access_needed" && issue.actions.some((action) => action.kind === "dismiss_access")) throw new Error("Only access issues can offer Not now.");
@@ -153,6 +178,20 @@ function statusEntry(issue: BotIssue): BotIssueStatusEntryData & { effectId: str
     resolution: issue.resolution ?? "dismissed",
     ...(issue.resolvedAt === undefined ? {} : { resolvedAt: issue.resolvedAt }),
   };
+}
+
+/**
+ * A heads-up, not an ask. Rows saved before `quiet` existed are judged by
+ * what raised them: a stall card, or a chat reply's "Review this run".
+ */
+function isHeadsUp(issue: StoredBotIssue): boolean {
+  if (issue.quiet === true || issue.kind === "run_stalled") return true;
+  return issue.kind === "preflight_failed" && issue.routineId === undefined && issue.dedupeKey.startsWith("execution:");
+}
+
+/** An ask that went out once, is still open, waited long enough and was never reminded. */
+function remindable(issue: StoredBotIssue, due: number): boolean {
+  return isOpen(issue) && !isHeadsUp(issue) && issue.reminded !== true && issue.delivered === true && issue.createdAt <= due;
 }
 
 export function createBotIssueService(dependencies: BotIssueServiceDependencies): BotIssueService {
@@ -187,7 +226,7 @@ export function createBotIssueService(dependencies: BotIssueServiceDependencies)
   function remember(
     botId: string,
     issueId: string,
-    patch: Pick<StoredBotIssue, "entryAppended" | "delivered" | "statusAppended">,
+    patch: Pick<StoredBotIssue, "entryAppended" | "delivered" | "statusAppended" | "reminded">,
   ): Promise<void> {
     return dependencies.store.change(botId, (issues) => ({
       issues: issues.map((row) => (row.id === issueId ? { ...row, ...patch } : row)),
@@ -298,7 +337,7 @@ export function createBotIssueService(dependencies: BotIssueServiceDependencies)
 
   /** Write the new issue, then every side effect it has not landed yet. */
   async function deliverRaise(
-    input: Omit<BotIssue, "id" | "createdAt" | "resolvedAt" | "resolution">,
+    input: BotIssueRaise,
   ): Promise<BotIssue> {
     const raised = await dependencies.store.change(input.botId, (issues) => {
       const existing = issues.find((issue) => isOpen(issue) && issue.dedupeKey === input.dedupeKey);
@@ -338,6 +377,8 @@ export function createBotIssueService(dependencies: BotIssueServiceDependencies)
         title: issue.title,
         body: issue.body,
         status: "info",
+        // Kept in the log for the record; nothing alerts the person.
+        ...(issue.quiet === true ? { quiet: true } : {}),
       });
       await remember(input.botId, issue.id, { delivered: true });
     }
@@ -459,6 +500,36 @@ export function createBotIssueService(dependencies: BotIssueServiceDependencies)
       repairStatusesInBackground(botId);
       const issues = await dependencies.store.read(botId);
       return (options?.open ? issues.filter(isOpen) : issues).map(published);
+    },
+
+    async remind(botId) {
+      const due = dependencies.now() - BOT_ISSUE_REMIND_AFTER_MS;
+      let sent = 0;
+      for (const candidate of await dependencies.store.read(botId)) {
+        if (!remindable(candidate, due)) continue;
+        // Re-check in the same serialized lane a settlement writes through, as
+        // late as possible, so an ask answered first is not reminded.
+        const issue = await dependencies.store.change(botId, (issues) => {
+          const row = issues.find((stored) => stored.id === candidate.id);
+          return { issues, result: row && remindable(row, due) ? row : undefined };
+        });
+        if (!issue) continue;
+        // `reminded` is written only after the delivery log took the reminder.
+        // A crash in between sends it again on the next sweep, and the funnel
+        // dedupes on the key, so it reaches the person once.
+        await dependencies.funnel.deliver({
+          botId,
+          class: "issue",
+          ...(issue.kind === "access_needed" ? { requiredCapability: "bot:access-requests" as const } : {}),
+          dedupeKey: `issue-reminder:${issue.id}`,
+          title: botIssueReminderTitle(issue.title),
+          body: issue.body,
+          status: "info",
+        });
+        await remember(botId, issue.id, { reminded: true });
+        sent += 1;
+      }
+      return sent;
     },
 
     onChange(listener) {

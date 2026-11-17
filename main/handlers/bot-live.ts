@@ -4,6 +4,9 @@
 // `bots:live:event` to that renderer document only. A document holds at most
 // one subscription per Bot: subscribing again (a reload, a remount) replaces
 // it. Every subscription ends with its document.
+//
+// A subscription is also how main knows a Bot's chat is open: `shownInFront`
+// says whether a document that holds one is in front of the person now.
 
 import type { BotLiveEvent, BotLiveSnapshot, BotLiveSummary } from "../../renderer/shared/bot-live.js";
 import type { BotLiveProjection } from "../services/bot-runtime/live-projection.js";
@@ -17,6 +20,13 @@ export interface BotLiveOwner {
   isDestroyed(): boolean;
   onInvalidated(listener: () => void): () => void;
   send(channel: typeof BOT_LIVE_EVENT_CHANNEL, event: BotLiveEvent): void;
+  /** The document's window is focused and the person is at the Mac. */
+  inFront?(): boolean;
+}
+
+export interface BotLiveHandlers {
+  /** Whether a document showing this Bot's chat is in front of the person now. */
+  shownInFront(botId: string): boolean;
 }
 
 export interface BotLiveHandlerDependencies<Event> {
@@ -29,10 +39,12 @@ export interface BotLiveHandlerDependencies<Event> {
 
 const INACTIVE = "The application document changed.";
 
-export function registerBotLiveHandlers<Event>(dependencies: BotLiveHandlerDependencies<Event>): void {
+export function registerBotLiveHandlers<Event>(dependencies: BotLiveHandlerDependencies<Event>): BotLiveHandlers {
   const { handle } = dependencies;
   /** owner key → botId → unsubscribe. */
   const subscriptions = new Map<string, Map<string, () => void>>();
+  /** owner key → the newest owner seen for it, while it holds a subscription. */
+  const owners = new Map<string, BotLiveOwner>();
   /**
    * owner key → botId → the newest subscribe request still wanted. An
    * unsubscribe (or a newer subscribe) withdraws it, so a subscribe that
@@ -56,7 +68,10 @@ export function registerBotLiveHandlers<Event>(dependencies: BotLiveHandlerDepen
       byBot.delete(id);
       unsubscribe();
     }
-    if (byBot.size === 0) subscriptions.delete(ownerKey);
+    if (byBot.size === 0) {
+      subscriptions.delete(ownerKey);
+      owners.delete(ownerKey);
+    }
   };
 
   handle("bots:live:subscribe", async (event, rawBotId): Promise<BotLiveSnapshot> => {
@@ -96,6 +111,7 @@ export function registerBotLiveHandlers<Event>(dependencies: BotLiveHandlerDepen
     if (!byBot) subscriptions.set(owner.key, (byBot = new Map()));
     byBot.get(botId)?.();
     byBot.set(botId, subscription.unsubscribe);
+    owners.set(owner.key, owner);
     return subscription.snapshot;
   });
 
@@ -109,4 +125,20 @@ export function registerBotLiveHandlers<Event>(dependencies: BotLiveHandlerDepen
     if (owner.isDestroyed()) throw new Error(INACTIVE);
     return dependencies.projection().summary(dependencies.parseBotId(rawBotId));
   });
+
+  return {
+    shownInFront(botId) {
+      for (const [key, byBot] of subscriptions) {
+        if (!byBot.has(botId)) continue;
+        const owner = owners.get(key);
+        if (!owner || owner.isDestroyed()) continue;
+        try {
+          if (owner.inFront?.() === true) return true;
+        } catch {
+          // A window that can't say is not in front.
+        }
+      }
+      return false;
+    },
+  };
 }
