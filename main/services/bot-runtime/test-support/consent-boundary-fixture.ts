@@ -10,7 +10,7 @@ import { recordingDeps } from "./fixtures.js";
 import { acknowledgeBotExecutionUnknown, botExecutionAccountableResponse, botExecutionSpendingOwner, botExecutionUnknownCostReceipt, recordKnownBotExecutionResponse, recordKnownBotExecutionCost } from "../bot-execution-spending.js";
 import { botExecutionScope, type BotExecutionPort } from "../bot-execution.js";
 
-export async function openConsentBoundaryFixture(root: string, options: { firstUnknown?: boolean; legacyEvidence?: boolean; crash?: "after-control" | "after-approval" | "before-ack" | "after-ack" | "after-generation" | "before-response-proof" | "after-response-proof" | "after-response-memo"; multiCall?: { failSlot?: number; changedFirstBody?: boolean } } = {}) {
+export async function openConsentBoundaryFixture(root: string, options: { firstUnknown?: boolean; legacyEvidence?: boolean; crash?: "after-control" | "after-approval" | "before-ack" | "after-ack" | "after-generation" | "before-response-proof" | "after-response-proof" | "after-response-memo"; multiCall?: { failSlot?: number; changedFirstBody?: boolean }; retry?: boolean } = {}) {
   const protectedClaims = await openProtectedRoutineClaims(path.join(root, "protected"), "bot:one", "routine:one");
   const document = new DataStore("spending.json", emptySpendingDocument(), () => root, { fileMode: 0o600, compact: true });
   const spending = new SpendingService({ persistence: { load: () => document.load(), save: (next) => document.save(next) }, settings: async () => ({ botMonthUsd: 1, routineRunUsd: 1 }), broadcast() {} });
@@ -56,6 +56,6 @@ export async function openConsentBoundaryFixture(root: string, options: { firstU
     finally { currentSlot = undefined; }
     return { summary };
   };
-  const service = await createBotSessionService({ profileDir: root, models, execution, extension, resolveModel: async () => ({ provider: "fixture", modelId: "A" }), knownBotIds: async () => new Set(["bot:one"]), settings: { compaction: options.multiCall ? { enabled: true, reserveTokens: 128, keepRecentTokens: 30, backgroundTokens: 0 } : { enabled: false }, retry: { enabled: false } } });
+  const service = await createBotSessionService({ profileDir: root, models, execution, extension, resolveModel: async () => ({ provider: "fixture", modelId: "A" }), knownBotIds: async () => new Set(["bot:one"]), settings: { compaction: options.multiCall ? { enabled: true, reserveTokens: 128, keepRecentTokens: 30, backgroundTokens: 0 } : { enabled: false }, retry: options.retry ? { enabled: true, maxRetries: 1, baseDelayMs: 1 } : { enabled: false } } });
   return { service, spending, document, effects, execution, protectedClaims, providerCalls: () => providerCalls };
 }

@@ -7,7 +7,7 @@
  * `numResults`; provider and credential state remains in this process.
  */
 
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import {

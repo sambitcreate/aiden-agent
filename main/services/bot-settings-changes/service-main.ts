@@ -1,7 +1,7 @@
 // Production wiring of settings from chat (plan §4.6): the real Bot and
 // access stores behind `createBotSettingsPorts`.
 
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import { app, ipcMain } from "../../platform.js";
 import { botApplicationService } from "../bot-application-service-main.js";
 import { BOT_DESKTOP_AUDIENCE_ID } from "../bot-runtime-authority-main.js";

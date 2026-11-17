@@ -22,7 +22,7 @@ import { AIDEN_MCP_CLIENT_NAME, connectMcpClient, createMcpClient } from "./mcp-
 import { createMcpStdioTransport } from "./mcp-stdio-transport.js";
 import { imcpLauncherPath } from "./imcp-launcher-path.js";
 import { desktopStdioLaunch, isMcpMacAppOpen } from "./mcp-mac-apps.js";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { projectDiagnosticError } from "./diagnostics-contract.js";
 import { logger } from "../platform.js";

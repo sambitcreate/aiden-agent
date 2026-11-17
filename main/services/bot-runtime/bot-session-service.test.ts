@@ -1372,7 +1372,7 @@ test("issue status append remains one durable entry across marker failures and s
     };
     return { disk, issues: createBotIssueService({
       store, now: () => 2000,
-      appendEntry: async (id, kind, data) => { await runtime.appendEntry(id, kind, data as import("@earendil-works/chord").JsonValue); },
+      appendEntry: async (id, kind, data) => { await runtime.appendEntry(id, kind, data as import("@earendil-works/chord/json").JsonValue); },
       onError: () => { failures++; },
       funnel: { deliver: async () => "sent" },
       actions: { resumeRoutine: async () => "missing", stopRun: async () => {}, snoozeStall() {}, openSettings() {} },

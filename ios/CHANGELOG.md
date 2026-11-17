@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **2026-11-11 — "Stopped after the chat went quiet" (Remote revision 63).** A background job the agent asked the Mac to stop once its chat went quiet now reads "Stopped after the chat went quiet" in the chat's job list. The host sends it as `endReason: "chat-settled"`; any reason this version does not know still reads as Stopped. The revision is re-claimed at merge.
+
 - **2026-11-11 — Stopped calls read as stopped (Remote revision 62).** A tool call the person ended with Stop on the Mac reads "<Step> stopped" with a neutral mark and is not counted as an issue. The host marks exactly those calls with `stoppedByUser: true`; a call cancelled for any other reason, even earlier in a run the person later stopped, keeps the cancelled issue treatment. Older hosts send no mark, so their cancelled calls stay issues.
 
 - **2026-11-13 — Bot UX on a revision 61 Mac.** A Mac offering provisional contract revision 61 is asked for `approval:cards`, `approvals:settings`, `bot:settings-changes`, `bot:suggestions` and `bot:templates`, each in a call of its own; without them every screen stays as it was.

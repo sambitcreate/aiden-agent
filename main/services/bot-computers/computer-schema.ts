@@ -1,4 +1,4 @@
-import { Type, type Static } from "@earendil-works/pi-ai";
+import { Type, type Static } from "typebox";
 
 /**
  * The `computer` tool's arguments (plan §8.6): a subset of

@@ -4,7 +4,7 @@
 import { promises as fsPromises } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { mock } from "node:test";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { BotDefinition } from "../../../../renderer/shared/bots.js";
 import type { BotHandoffAnswer } from "../../../../renderer/shared/bot-handoffs.js";

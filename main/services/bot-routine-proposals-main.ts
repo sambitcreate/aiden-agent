@@ -1,7 +1,7 @@
 // Production wiring of Bot routine proposals.
 
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import { app } from "../platform.js";
 import { createBotRoutineProposalService } from "./bot-routine-proposals.js";
 import { systemTimezone } from "./schedule-store.js";

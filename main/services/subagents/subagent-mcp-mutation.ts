@@ -1,6 +1,6 @@
 import { McpToolCallNotSentError } from "./subagent-effect-v2.js";
 import { createHash, randomUUID } from "node:crypto";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type {
   AgentTool,
   AgentToolResult,

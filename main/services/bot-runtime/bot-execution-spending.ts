@@ -5,6 +5,7 @@ import type { BotExecutionClaim, BotRoutineModelService } from "../bot-routine-m
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { normalizeSpendingDispatch, sameSpendingDispatch, type SpendingDispatchInput } from "../spending-dispatch-ledger.js";
 import { createHash } from "node:crypto";
+import { botResponseDigest } from "./bot-response-digest.js";
 type RetiredFinancialRecovery = Pick<BotRoutineModelService, "retiredResponseReservation" | "ownedResponseReservation">;
 async function assertCostOwner(botId: string, claim: BotExecutionClaim, pending: SpendingDispatchInput, recovery?: RetiredFinancialRecovery): Promise<string | undefined> {
   if (claim.botId !== botId || pending.owner.kind !== "bot") throw new Error("The uncertain request belongs to another owner or root budget. Review that work before resuming.");
@@ -60,7 +61,7 @@ export async function acknowledgeBotExecutionUnknown(spending: Pick<SpendingServ
 }
 /** Known receipts remain accountable after model revocation or a person dismissing their old task. */
 export async function recordKnownBotExecutionResponse(spending: Pick<SpendingService, "dispatchReceipt" | "afterDispatch">, botId: string, dispatchId: string, message: AssistantMessage, evidence: SpendingDispatchInput, responseDigest: string): Promise<void> {
-  if (createHash("sha256").update(JSON.stringify(message)).digest("hex") !== responseDigest) throw new Error("The saved response differs from the authentic provider observation.");
+  if (botResponseDigest(message) !== responseDigest) throw new Error("The saved response differs from the authentic provider observation.");
   if (message.stopReason === "deferred" || message.stopReason === "pending") return;
   const input = normalizeSpendingDispatch(evidence);
   if (input.dispatchId !== dispatchId) throw new Error("The authentic response belongs to another provider charge.");

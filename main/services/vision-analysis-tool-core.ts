@@ -1,5 +1,6 @@
 import { normalizeContext } from "@earendil-works/pi-ai";
-import { Type, type AssistantMessage, type ImageContent, type TextContent } from "@earendil-works/pi-ai";
+import { type AssistantMessage, type ImageContent, type TextContent } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Attachment } from "./types.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";

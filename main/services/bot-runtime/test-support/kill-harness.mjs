@@ -1,4 +1,4 @@
-/* global clearInterval, process, setInterval, setTimeout */
+/* global process, setInterval, setTimeout */
 
 // Child process for the Bot runtime crash tests. The parent spawns it with
 // `node --import tsx kill-harness.mjs <mode> ...`, waits for a marker line on
@@ -9,7 +9,6 @@
 //   lock <botsDir>                     acquire the profile lock, print LOCK <json>
 //   host <profileDir>                  create a host, print HOST <json>
 //   stream <profileDir> <botId> <rid>  start a slow streamed answer, print STREAMING <submissionId>
-//   resume <profileDir> <botId>        Resume an interrupted turn, print STREAMING once it streams again
 //   scenario <file> <json>             run `run(args, emit)` from a test-owned scenario module
 
 import { pathToFileURL } from "node:url";
@@ -51,32 +50,26 @@ if (mode === "lock") {
   const { models } = createFauxModels([slowAnswer()], { tokensPerSecond: 40 });
   const host = await createBotHarnessHost({ profileDir, buildRegistry: () => createRegistry(), models });
   if ("unavailable" in host) throw new Error("profile locked");
-  const { conversation } = await host.open(botId);
+  const { harness, conversation } = await host.open(botId);
   await conversation.configure({ model: FAUX_MODEL_REF }, ctx);
   const submission = await conversation.submit({ type: "input", content: "hello", requestId }, ctx);
-  const view = await conversation.viewState(ctx);
+  // Pi Durable 1.5 shows a partial answer at once but stores it up to a second
+  // later, so announce only once Storage holds it: a kill before that leaves
+  // no partial to recover.
   let announced = false;
-  view.subscribe((value) => {
-    if (announced) return;
-    if (JSON.stringify(value.docs?.["pi.live"] ?? {}).includes("word word word")) {
-      announced = true;
-      emit("STREAMING", String(submission.id));
-    }
+  harness.observeCommits({
+    advance: (publication) => {
+      if (announced) return;
+      const stored = publication.changes.some(
+        (change) => change.type === "document" && change.kind === "change" && JSON.stringify(change.value).includes("word word word"),
+      );
+      if (stored) {
+        announced = true;
+        emit("STREAMING", String(submission.id));
+      }
+    },
+    end: () => {},
   });
-  holdForever();
-} else if (mode === "resume") {
-  const [profileDir, botId] = args;
-  const { models, calls } = createFauxModels([slowAnswer()], { tokensPerSecond: 40 });
-  const host = await createBotHarnessHost({ profileDir, buildRegistry: () => createRegistry(), models });
-  if ("unavailable" in host) throw new Error("profile locked");
-  const { harness } = await host.open(botId);
-  harness.resume();
-  // This process's provider was asked, so the turn is running here.
-  const timer = setInterval(() => {
-    if (calls() === 0) return;
-    clearInterval(timer);
-    emit("STREAMING", botId);
-  }, 10);
   holdForever();
 } else if (mode === "scenario") {
   const [file, json] = args;
