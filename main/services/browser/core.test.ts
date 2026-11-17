@@ -9,6 +9,7 @@ import {
   browserDisplayUrl,
   browserRedactPreviewUrls,
   browserPageCaptureBounds,
+  browserMeasuredViewport,
   browserPartition,
   browserDeadline,
   browserResult,
@@ -155,6 +156,17 @@ test("local preview capabilities are omitted from exported URLs without changing
     "https://example.com/?__aiden_preview=site-value",
   );
 });
+test("viewport measurements reject unsafe dimensions and retain small fill slots", () => {
+  assert.deepEqual(browserMeasuredViewport({ width: 120, height: 90 }), { width: 120, height: 90 });
+  assert.deepEqual(browserMeasuredViewport({ width: 3840, height: 2160 }), { width: 3840, height: 2160 });
+  assert.deepEqual(browserMeasuredViewport({ width: 7680, height: 4320 }), { width: 7680, height: 4320 });
+  for (const dimension of [0, -1, NaN, Infinity, -Infinity, Number.MAX_SAFE_INTEGER + 1, 1e100, 1.5, "640", null, undefined]) {
+    assert.equal(browserMeasuredViewport({ width: dimension, height: 480 }), undefined);
+    assert.equal(browserMeasuredViewport({ width: 640, height: dimension }), undefined);
+  }
+  assert.equal(browserMeasuredViewport(null), undefined);
+});
+
 test("responsive captures exclude mismatched-aspect native slot letterboxing", () => {
   assert.deepEqual(
     browserPageCaptureBounds(

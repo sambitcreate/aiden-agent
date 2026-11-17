@@ -90,6 +90,17 @@ export function browserRedactPreviewUrls<T>(value: T): T {
   )) as T;
 }
 
+/** Validate measured CSS pixels without coercing page values into dimensions. */
+export function browserMeasuredViewport(value: unknown): { width: number; height: number } | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const { width, height } = value as { width?: unknown; height?: unknown };
+  // Live CSS sizes include guest zoom and need not fit responsive preset limits.
+  if (typeof width !== "number" || typeof height !== "number" ||
+      !Number.isSafeInteger(width) || !Number.isSafeInteger(height) ||
+      width < 1 || height < 1) return undefined;
+  return { width, height };
+}
+
 /** Native slot bounds include letterboxing; captures must contain only the scaled page. */
 export function browserPageCaptureBounds(
   slot: { width: number; height: number },

@@ -46,7 +46,18 @@ On Aiden On The Go for iPhone and Android, a workspace chat shows the same **N i
 
 Type `/follow` in a chat whose pull request chip shows a pull request, or ask the agent: its `follow_pull_request` tool follows the chat's pull request or one it names by URL.
 
-Aiden reads the pull request through the same GitHub sign-in the pull request chip uses (the `gh` command-line tool's credentials). It reads every two minutes while checks run and every five minutes otherwise, and waits longer after a failed read. The chat hears about:
+Aiden reads the pull request through the same GitHub sign-in the pull request chip uses (the `gh` command-line tool's credentials). It reads every two minutes while checks run and every five minutes otherwise, and waits longer after a failed read or when GitHub's rate limit says to wait.
+
+Most reads are cheap. Before the full read, Aiden asks GitHub with `If-None-Match` whether the pull request, its head commit's check runs or its commit status changed. When all three answer `304 Not Modified`, Aiden does no further work: no full read, no logs, no message. A 304 does not count against GitHub's rate limit. A settled pull request that stays quiet is then looked at less often: after 5, then 10, 20 and at most 30 minutes, and back to every five minutes as soon as anything changes. Checks that are still running stay at two minutes. Aiden still does a full read at least every 30 minutes, in case a change does not show in those three answers, so a longer wait is cut short to land on that read, and skips the probe while a check is failing. A push or comment that lands just before a timed read still gets its own look once its few seconds have passed.
+
+Some moments ask for a sooner look, a few seconds later rather than at the next scheduled read:
+
+- the agent's `run_command` runs `git push` or a `gh pr`, `gh issue` or `gh api` command (this is how it comments on or reviews a pull request);
+- a push from the Git panel or a paired phone to a repository with a followed pull request;
+- opening the **Following #N** list;
+- Aiden's window coming back into focus, the computer waking or unlocking, or the network coming back. These never read sooner than the five-minute cadence.
+
+Several of these close together give one read. A pull request is never read more than once every 30 seconds this way, never during a rate-limit wait, and never once its follow has stopped. The chat hears about:
 
 - **Failed checks**, once per commit, with the end of the log (last 3,000 characters) for up to three failed GitHub Actions jobs. A failure is held while other checks still run, until it is 15 minutes old.
 - **A merge conflict**, once per commit. The agent is told to merge the base branch in, never to rebase or force-push.
@@ -72,4 +83,4 @@ Aiden records the check’s process group before running its command. If Aiden c
 
 ## Network
 
-Background jobs and checks run on this computer and contact nothing themselves beyond what the command does. Following a pull request reads the GitHub API (`api.github.com`, or the GitHub Enterprise host of that pull request) for that pull request only, until the follow ends. Nothing is polled for chats that follow no pull request.
+Background jobs and checks run on this computer and contact nothing themselves beyond what the command does. Following a pull request reads the GitHub API (`api.github.com`, or the GitHub Enterprise host of that pull request) for that pull request only, until the follow ends. Each look first sends up to three conditional REST requests (the pull request, its head commit's check runs and its commit status) and only then the full read. Nothing is polled for chats that follow no pull request, and Aiden does not receive GitHub webhooks.
