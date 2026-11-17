@@ -27,6 +27,7 @@ if (command === "ls") {
   process.stdout.write(process.env.FAKE_CUA_LS ?? "[]");
 } else if (command === "cp") {
   const [source, target] = args.slice(2);
+  if (target.startsWith("local:") && process.env.FAKE_CUA_UPLOAD_STATUS) process.exit(Number(process.env.FAKE_CUA_UPLOAD_STATUS));
   if (!target.startsWith("local:")) {
     // A download from the Space: hand back FAKE_CUA_RESULTS as the run's artifact archive, if set.
     if (!process.env.FAKE_CUA_RESULTS) process.exit(1);
@@ -261,6 +262,28 @@ test("a finished run suspends the shared Space and keeps it for the next run", a
     const recorded = await calls(space.fake);
     assert.deepEqual(recorded.at(-1), ["sb", "suspend", "local:aiden-e2e"]);
     assert.ok(recorded.every((call) => call[1] !== "rm"));
+  }
+});
+
+test("a run that fails before the guest starts still tears the Space down and keeps its failure", async (t) => {
+  const space = await checkout();
+  t.after(() => rm(space.root, { recursive: true, force: true }));
+  const bin = path.join(space.root, "bin");
+  await mkdir(bin);
+  await writeFile(path.join(bin, "tar"), "#!/bin/sh\nexit 2\n", { mode: 0o755 });
+
+  const cases = [
+    ["a failed copy into the Space", { FAKE_CUA_UPLOAD_STATUS: "4" }, 4],
+    ["a failed pack of the checkout", { PATH: `${bin}:${process.env.PATH}` }, 2],
+  ];
+  for (const [name, env, status] of cases) {
+    for (const [spaceName, teardown] of [["aiden-e2e", ["sb", "suspend", "local:aiden-e2e"]], ["aiden-pr-1", ["sb", "rm", "-f", "local:aiden-pr-1"]]]) {
+      await rm(path.join(space.fake, "calls.jsonl"), { force: true });
+      assertStatus(await run(space, ["--run", "true"], { CUA_SPACE: spaceName, ...env }), status, name);
+      const recorded = await calls(space.fake);
+      assert.ok(recorded.every((call) => call[1] !== "exec" || call.includes("flock")), `${name} never starts the guest`);
+      assert.deepEqual(recorded.at(-1), teardown, `${name} still tears down ${spaceName}`);
+    }
   }
 });
 
