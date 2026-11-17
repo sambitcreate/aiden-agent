@@ -1422,7 +1422,8 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(AidenRemoteCapability(rawValue: capability), .chatContinueInNewChat)
         XCTAssertFalse(AidenRemoteCapability.v1Known.contains(.chatContinueInNewChat))
         XCTAssertTrue(AidenRemoteCapability.phoneNegotiable.contains(.chatContinueInNewChat))
-        XCTAssertTrue(AidenRemoteCoordinator.capabilitiesAskedForAlone.contains([.chatContinueInNewChat]))
+        let askedForAlone = await MainActor.run { AidenRemoteCoordinator.capabilitiesAskedForAlone }
+        XCTAssertTrue(askedForAlone.contains([.chatContinueInNewChat]))
         AidenRemoteMockURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/api/aiden/v1/device/capabilities")
             XCTAssertEqual(try Self.jsonBody(request)["accepts"] as? [String], [capability])
