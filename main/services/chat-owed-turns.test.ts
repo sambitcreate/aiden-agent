@@ -5,7 +5,11 @@ import {
   createChatRunInputAdmission,
   type ChatRunInputGenerationRef,
 } from "./chat-run-input-admission.js";
-import type { Chat } from "./types.js";
+import type { Chat, Workspace } from "./types.js";
+import { owedTurnStartRequest, type OwedTurnContext } from "./chat-owed-turn-start.js";
+import { generationApprovalPolicy, legacyAccessOf } from "./approval-gate/run-approval.js";
+import { workspaceToolApproval } from "./approval-gate/workspace-tool-approval.js";
+import type { ApprovalMode } from "../../renderer/shared/approval-mode.js";
 
 type Origin = "user_stop" | "chat_deletion" | "application_shutdown";
 type Context = { model: string };
@@ -273,4 +277,58 @@ test("a Stop naming another document leaves the settled run's owed turn alone", 
   assert.notEqual(owedTurns.hold("s"), undefined);
   assert.equal(owedTurns.stop("s", "user_stop", "doc-a"), true);
   assert.equal(owedTurns.hold("s"), undefined, "a stopped run takes no more owed input");
+});
+
+/**
+ * The owed turn a workspace chat's run leaves behind, started the way main
+ * starts it, and the gate's answer for a connector send in that turn under
+ * the approval mode the workspace has now.
+ */
+async function owedTurnConnectorSend(options: {
+  globalMode: ApprovalMode;
+  workspace: Workspace;
+}): Promise<string> {
+  const plans: Array<OwedTurnPlan<OwedTurnContext, Origin>> = [];
+  const owedTurns = createChatOwedTurns<OwedTurnContext, Origin>({ refuses: () => false, start: (plan) => plans.push(plan) });
+  owedTurns.open("s", {
+    chatId: "c",
+    ownerDocumentId: "doc-a",
+    context: { workspaceId: options.workspace.id, providerId: "p", model: "m" },
+  });
+  owedTurns.settleAfter("s", () => undefined, { committed: [{ messageId: "late" }], recordedStop: false });
+  assert.equal(plans.length, 1);
+  const request = owedTurnStartRequest(plans[0]!, "owed-1", ["hooks"]);
+  const workspaces = new Map([[options.workspace.id, options.workspace]]);
+  const policy = await generationApprovalPolicy(
+    {
+      workspace: request.params.workspaceId ? workspaces.get(request.params.workspaceId) : undefined,
+      botBound: false,
+      mode: request.params.mode,
+      permission: request.options.permission,
+    },
+    async () => ({ approvalMode: options.globalMode }),
+  );
+  assert.ok(policy, "an owed workspace turn follows the approval mode");
+  const gate = workspaceToolApproval({
+    toolName: "mcp__gmail__gmail_send_message",
+    args: {},
+    connector: { remoteName: "gmail_send_message" },
+    permission: legacyAccessOf(policy),
+    workspaceId: options.workspace.id,
+    approval: { mode: policy.mode, macGrants: policy.macGrants },
+    judgeAvailable: true,
+  });
+  if (gate.readsJudge) return "judge";
+  return gate.decision.outcome === "allow" ? "run" : gate.decision.outcome;
+}
+
+test("an owed turn in an Ask workspace still asks, and one in an Auto workspace follows Auto", async () => {
+  const following = { id: "w1", name: "Work", folderPath: "/tmp/work", permission: "ask" } as Workspace;
+  assert.equal(await owedTurnConnectorSend({ globalMode: "ask", workspace: following }), "ask");
+  assert.equal(await owedTurnConnectorSend({ globalMode: "auto", workspace: following }), "judge");
+  // A workspace's own mode wins over the global one, both ways.
+  const customizedAuto = { ...following, approvalMode: "auto" } as Workspace;
+  const customizedAsk = { ...following, approvalMode: "ask" } as Workspace;
+  assert.equal(await owedTurnConnectorSend({ globalMode: "ask", workspace: customizedAuto }), "judge");
+  assert.equal(await owedTurnConnectorSend({ globalMode: "auto", workspace: customizedAsk }), "ask");
 });

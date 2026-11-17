@@ -22,8 +22,8 @@ import { usageLimits } from "./usage-limit-main.js";
 import { withUsageLimitWait } from "./usage-limit-stream.js";
 import { spending } from "./spending-main.js";
 import { createSpendingMeter, spendCounts } from "./spending-service.js";
-import { effectiveApprovalMode, parseApprovalModel, workspaceApprovalPolicy, type MacGrantClass } from "../../renderer/shared/approval-mode.js";
-import { currentWorkspaceApproval, legacyAccessOf } from "./approval-gate/run-approval.js";
+import { parseApprovalModel, type MacGrantClass } from "../../renderer/shared/approval-mode.js";
+import { currentWorkspaceApproval, generationApprovalPolicy, legacyAccessOf } from "./approval-gate/run-approval.js";
 import { RunTaint, runTaintHistoryOfBranch } from "./approval-gate/run-taint.js";
 import { declaredReadOnlyHint } from "./approval-gate/tool-classes.js";
 import { approvalJudgeAction, createApprovalJudge, type ApprovalJudge } from "./approval-judge/judge.js";
@@ -416,6 +416,7 @@ import {
   type ChatRunInputGenerationRef,
 } from "./chat-run-input-admission.js";
 import { createChatOwedTurns, type OwedTurnPlan } from "./chat-owed-turns.js";
+import { owedTurnStartRequest, type OwedTurnContext } from "./chat-owed-turn-start.js";
 import { createOwedTurnPrompts } from "./chat-owed-turn-prompts.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { btwOperationRegistry, btwService } from "./rpiv-btw/service.js";
@@ -729,19 +730,6 @@ const runInputAdmission = createChatRunInputAdmission({
 const chatCopyGate = new ChatWorkspaceMutationGate();
 const chatTurnAdmission = new ChatTurnAdmission();
 
-/** What a run that can owe its chat a turn ran with, for that turn. */
-interface OwedTurnContext {
-  workspaceId?: string;
-  providerId: string;
-  model: string;
-  thinkingLevel?: ChatStartParams["thinkingLevel"];
-  inlineVisuals?: ChatStartParams["inlineVisuals"];
-  /** A paired device sent the run, so its visuals stay snapshots. */
-  visualAudience?: GenerationExecutionOptions["visualAudience"];
-  /** Tools the run's surface withheld, which the owed turn withholds too. */
-  excludeToolNames?: ReadonlySet<string>;
-}
-
 /**
  * Saved input a run ended without answering: Pi closed its queue while the
  * input was being saved, or the run ended on a turn that never read it.
@@ -780,36 +768,8 @@ function startOwedTurn(plan: OwedTurnPlan<OwedTurnContext, GenerationCancellatio
     return;
   }
   lease.settleAsyncWork();
-  const prompt = plan.inputs[plan.inputs.length - 1]!;
-  const hookContext = plan.inputs
-    .map((input) => input.hookContext)
-    .filter((context): context is string => Boolean(context))
-    .join("\n\n");
-  const { context } = plan;
-  const excludeToolNames = new Set(context.excludeToolNames);
-  excludeToolNames.add(HOOKS_TOOL_NAME);
-  const started = llmClient.start(
-    streamId,
-    {
-      chatId: plan.chatId,
-      ...(context.workspaceId !== undefined ? { workspaceId: context.workspaceId } : {}),
-      providerId: context.providerId,
-      model: context.model,
-      ...(context.thinkingLevel !== undefined ? { thinkingLevel: context.thinkingLevel } : {}),
-      ...(context.inlineVisuals !== undefined ? { inlineVisuals: context.inlineVisuals } : {}),
-      messages: [],
-    },
-    owner,
-    {
-      turnId: streamId,
-      usageSource: "chat",
-      allowSubagents: true,
-      allowComputerUse: false,
-      excludeToolNames,
-      ...(context.visualAudience !== undefined ? { visualAudience: context.visualAudience } : {}),
-      screenedPrompt: { messageId: prompt.messageId, ...(hookContext ? { context: hookContext } : {}) },
-    },
-  );
+  const request = owedTurnStartRequest(plan, streamId, [HOOKS_TOOL_NAME]);
+  const started = llmClient.start(streamId, request.params, owner, request.options);
   // The start registers the turn before its first await, so this Stop finds it.
   if (plan.stopOrigin) llmClient.cancel(streamId, plan.stopOrigin);
   started.then(
@@ -1392,10 +1352,10 @@ async function prepareGeneration(
   // A person's workspace chat follows the global approval mode, or the
   // workspace's own when it is customized (plan §3.1). Internal policies
   // (scheduled runs), Bot-bound turns and the Assistant keep their access.
-  const approvalPolicy =
-    workspace && !botBound && !assistantMode && options.permission === undefined
-      ? workspaceApprovalPolicy(workspace, effectiveApprovalMode(await configStore.getSettings(), true))
-      : undefined;
+  const approvalPolicy = await generationApprovalPolicy(
+    { workspace, botBound, mode: params.mode, permission: options.permission },
+    () => configStore.getSettings(),
+  );
   const permission: GenerationPermission =
     options.permission ?? (approvalPolicy ? legacyAccessOf(approvalPolicy) : workspace?.permission ?? "ask");
   approvalModes.set(streamId, approvalPolicy ? approvalPolicy.mode : approvalAnalyticsMode(permission));
