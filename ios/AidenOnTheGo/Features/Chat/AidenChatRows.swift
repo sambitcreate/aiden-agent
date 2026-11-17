@@ -568,7 +568,7 @@ struct AidenMessageOutcomePresentation: Equatable {
         case "rate_limit":
             detail = "The model provider is receiving too many requests. Try again shortly."
         case "authentication":
-            detail = "The model provider rejected its credentials. Check Provider Settings on your desktop."
+            detail = "The model provider rejected its credentials. Check Provider Settings in Aiden Agent on your computer."
         case "quota":
             detail = "The model provider account has no available quota."
         case "invalid_request":

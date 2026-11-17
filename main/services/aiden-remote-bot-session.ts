@@ -1,4 +1,22 @@
 import { parseBotResumeAcknowledgement } from "../../renderer/shared/bot-execution-resume.js";
+import { buildApprovalCard } from "../../renderer/shared/approval-card-model.js";
+import { BOT_TEMPLATE_STALE_MESSAGE } from "../../renderer/shared/bot-presets.js";
+import {
+  AIDEN_REMOTE_BOT_SETTINGS_CHANGE_ENTRY_TYPES,
+  AIDEN_REMOTE_BOT_SUGGESTION_ENTRY_TYPES,
+  BOT_LESSON_REMOTE_DECISIONS,
+  BOT_SETTINGS_CHANGE_REMOTE_DECISIONS,
+  BOT_SKILL_PROPOSAL_REMOTE_DECISIONS,
+  botApprovalCardForAudience,
+  botTemplateFields,
+  parseAidenRemoteBotTemplateCreateRequest,
+  parseAidenRemoteBotTemplateList,
+  type AidenRemoteBotTemplateFields,
+  parseBotUxDecision,
+  parseEmptyBody,
+  projectBotUxEntry,
+  BOT_SKILL_ADD_ON_MAC_MESSAGE,
+} from "./aiden-remote-bot-ux.js";
 import type { BotPlans } from "./bot-plans/plans.js";
 import { homedir } from "node:os";
 import type { BotPlanItemView, BotPlanView } from "../../renderer/shared/bot-plans.js";
@@ -56,7 +74,7 @@ import {
   type ConnectCardEntry,
   type ConnectCardStatus,
 } from "../../renderer/shared/bot-connections.js";
-import type { BotPreset } from "../../renderer/shared/bot-presets.js";
+import { botPresetRoutineSchedule, type BotPreset } from "../../renderer/shared/bot-presets.js";
 import { botHandoffResultLine } from "../../renderer/shared/bot-handoffs.js";
 import { BOT_ISSUE_ID_PATTERN } from "../../renderer/shared/bot-issues.js";
 import { formatBotRoutineLabel } from "../../renderer/shared/bot-routine-label.js";
@@ -134,6 +152,7 @@ import {
   type AidenRemoteBotConnectionRequestReceipt,
   type AidenRemoteBotMessageReceipt,
   type AidenRemoteBotPresetCreateResult,
+  type AidenRemoteBotPreset,
   type AidenRemoteBotPresetList,
   type AidenRemoteBotQuestion,
   type AidenRemoteBotQuestionAnswerReceipt,
@@ -262,6 +281,22 @@ export interface AidenRemoteBotSessionServiceOptions {
   /** The Bot's waiting tool approvals (the same bridge the desktop answers through). */
   approvals?: Pick<BotApprovals, "pending" | "decide" | "onChange">;
   /**
+   * Revision 61 (`bot:settings-changes`): the desktop's settings-from-chat
+   * service, so Apply, Dismiss and Undo keep its compare-and-swap and refusals.
+   */
+  settingsChanges?: {
+    respond(botId: string, changeId: string, decision: "apply" | "dismiss" | "undo"): Promise<{ ok: true; status: string; message?: string } | { ok: false; message: string }>;
+  };
+  /** Revision 61 (`bot:suggestions`): the desktop's skill, lesson and learning services. */
+  suggestions?: {
+    respondSkill(botId: string, proposalId: string, decision: "add" | "dismiss"): Promise<{ ok: true; status: "added" | "dismissed" } | { ok: false; code: "not_found" }>;
+    /** Only a lesson still waiting for an answer is answered; any other is `answered`. */
+    respondLesson(botId: string, lessonId: string, decision: "keep" | "dismiss"): Promise<{ ok: true; status: "active" | "dismissed" } | { ok: false; code: "not_found" | "answered" }>;
+    /** Only an active lesson is removed. */
+    removeLesson(botId: string, lessonId: string): Promise<{ ok: true } | { ok: false; code: "not_found" }>;
+    undoLearning(botId: string, changeId: string): Promise<{ ok: true } | { ok: false; code: "conflict" | "not_found" | "already_undone" }>;
+  };
+  /**
    * Revision 37: the Bot's waiting hand-off cards (the same bridge the desktop
    * answers through). With it the host announces `bot:handoffs`.
    */
@@ -319,7 +354,11 @@ export interface AidenRemoteBotSessionServiceOptions {
      * uses too (`botStarter()`), so a Mac tap and a phone tap converge on one
      * Bot and only the creating call sends the self-intro.
      */
-    create(presetId: string, options: { audienceId: string }): Promise<{ botId: string; created: boolean }>;
+    create(presetId: string, options: { audienceId: string; version?: number }): Promise<{ botId: string; created: boolean }>;
+    /** Revision 61 (`bot:templates`): template id → the live Bot it made, for Open. */
+    presetBots?(): Promise<Record<string, string>>;
+    /** Revision 61: the one-time self-intro of a Bot made by one-field create, so it asks what to help with. */
+    introduce?(botId: string): Promise<unknown>;
   };
   /**
    * What a connect card shows now (connected, or answered with Not now since
@@ -379,7 +418,7 @@ function remotePlanFileScope(scope: NonNullable<BotPlanItemView["fileScope"]>): 
   const summary = safe ? shortPlace : basename.trim() && safePlanLocationText(basename)
     ? "…/" + elidePlanLocation(basename, available - 2) : "[folder location unavailable]";
   return { line: prefix + summary + suffix,
-    details: complete ? [...chunks, ...lifetime] : ["Review the full folder location on the host desktop.", ...lifetime], complete };
+    details: complete ? [...chunks, ...lifetime] : ["Review the full folder location in Aiden Agent on your computer.", ...lifetime], complete };
 }
 
 /** Bound each public member before budgeting it; select fields explicitly. */
@@ -623,6 +662,17 @@ export function projectBotSessionEntries(
         });
         break;
       }
+      // Revision 61: settings changes (`bot:settings-changes`), suggestions and
+      // learning receipts (`bot:suggestions`); `entriesFor` drops them for other devices.
+      case "settings_change":
+      case "skill_proposal":
+      case "lesson_proposal":
+      case "lesson_learned":
+      case "memory_tidy": {
+        const projected = projectBotUxEntry(entry, id, isoOf(entry.at));
+        if (projected) output.push(projected);
+        break;
+      }
       case "shared_image": {
         // Revision 45: name, type and size only; the bytes have their own route.
         const image = sharedImageWireOf(entry);
@@ -653,13 +703,21 @@ function sharedImageWireOf(image: {
 
 /** What a device without `bot:images` reads for a shared image (revision 45). */
 export function botSharedImageLegacyText(name: string): string {
-  return `I shared an image: ${name}. Open this chat on your Mac to see it.`;
+  return `I shared an image: ${name}. Open this chat on your computer to see it.`;
 }
 
 /** A shared image as a device without `bot:images` reads it: an assistant line under the same id. */
 function withoutSharedImage(entry: AidenRemoteBotSessionEntry): AidenRemoteBotSessionEntry {
   if (entry.type !== "shared_image") return entry;
   return { type: "message", id: entry.id, role: "assistant", text: botSharedImageLegacyText(entry.name) };
+}
+
+/** Revision 61 entries reach only the devices that opted into them; earlier decoders are closed. */
+function botUxEntryVisible(entry: { type: string } | undefined, audience: Pick<Audience, "settingsChanges" | "suggestions">): boolean {
+  if (!entry) return true;
+  if ((AIDEN_REMOTE_BOT_SETTINGS_CHANGE_ENTRY_TYPES as readonly string[]).includes(entry.type)) return audience.settingsChanges;
+  if ((AIDEN_REMOTE_BOT_SUGGESTION_ENTRY_TYPES as readonly string[]).includes(entry.type)) return audience.suggestions;
+  return true;
 }
 
 /** The entries a device without `bot:cards` may see: revision-26 parsers throw on the card types. */
@@ -681,7 +739,8 @@ function withoutSubmissionId(entry: AidenRemoteBotSessionEntry): AidenRemoteBotS
  * `bot:activity`, shared images for `bot:images` (a line for everyone else).
  */
 function entriesFor(entries: readonly AidenRemoteBotSessionEntry[], audience: Audience): AidenRemoteBotSessionEntry[] {
-  const peered = audience.peers ? [...entries] : entries.filter((entry) => entry.type !== "peer");
+  const peered = (audience.peers ? [...entries] : entries.filter((entry) => entry.type !== "peer"))
+    .filter((entry) => botUxEntryVisible(entry, audience));
   const carded = audience.cards ? peered : withoutBotCards(peered);
   const shown = audience.images ? carded : carded.map(withoutSharedImage);
   return audience.activity ? shown : shown.map(withoutSubmissionId);
@@ -843,6 +902,12 @@ interface Audience {
   accessRequests: boolean;
   plans: boolean;
   allowed: boolean;
+  /** `approval:cards`: the typed `card` on the Bot's approval (revision 61). */
+  approvalCards: boolean;
+  /** `bot:settings-changes`: `settings_change` entries (revision 61). */
+  settingsChanges: boolean;
+  /** `bot:suggestions`: `skill_proposal`, `lesson` and `memory_tidy` entries (revision 61). */
+  suggestions: boolean;
 }
 
 /**
@@ -1027,7 +1092,7 @@ class BotLiveProjector {
     const state = stateViewForAudience(this.state, audience);
     const handoff = handoffForAudience(this.handoff?.handoff ?? null, audience);
     const issues = this.issuesFor(audience);
-    const approval = approvalForAudience(this.approval, audience.allowed);
+    const approval = approvalForAudience(this.approval, audience.allowed, audience.approvalCards);
     const accessRequest = accessForAudience(this.accessRequest?.card ?? null, audience.allowed);
     let used = 2 + memberBytes("botId", this.botId) + memberBytes("epoch", this.epoch) + memberBytes("seq", this.seq);
     for (const [key, value] of Object.entries(state)) used += memberBytes(key, value);
@@ -1103,7 +1168,7 @@ class BotLiveProjector {
         // A stalled client is dropped; it reconnects and gets a fresh snapshot.
         subscriber.overflowed = true;
       } else {
-        const key = `${subscriber.cards}:${subscriber.activity}:${subscriber.handoffs}:${subscriber.notes}:${subscriber.onMac}:${subscriber.images}:${subscriber.issues}:${subscriber.accessRequests}:${subscriber.plans}:${subscriber.allowed}:${subscriber.peers}`;
+        const key = `${subscriber.cards}:${subscriber.activity}:${subscriber.handoffs}:${subscriber.notes}:${subscriber.onMac}:${subscriber.images}:${subscriber.issues}:${subscriber.accessRequests}:${subscriber.plans}:${subscriber.allowed}:${subscriber.peers}:${subscriber.approvalCards}:${subscriber.settingsChanges}:${subscriber.suggestions}`;
         let text = rendered.get(key);
         if (text === undefined) {
           text = render(subscriber);
@@ -1165,8 +1230,9 @@ class BotLiveProjector {
     this.broadcast((audience) => {
       if ((card && !audience.cards) || (activityOnly && !audience.activity)) return noOp(audience);
       if (entry?.type === "peer" && !audience.peers) return noOp(audience);
+      if (!botUxEntryVisible(entry, audience)) return noOp(audience);
       if (event.type === "approval") {
-        const approval = approvalForAudience((event.payload as { approval: AidenRemoteBotApproval | null }).approval, audience.allowed);
+        const approval = approvalForAudience((event.payload as { approval: AidenRemoteBotApproval | null }).approval, audience.allowed, audience.approvalCards);
         return sseFrame(id, "approval", { ...data, payload: { approval } });
       }
       if (event.type === "access_request" && audience.accessRequests) {
@@ -1531,9 +1597,14 @@ class BotLiveProjector {
 // Service
 // ---------------------------------------------------------------------------
 
-function approvalForAudience(approval: AidenRemoteBotApproval | null, allowed: boolean): AidenRemoteBotApproval | null {
-  if (!approval || allowed) return approval;
-  const { alwaysCount: _count, ...legacy } = approval; return legacy;
+function approvalForAudience(approval: AidenRemoteBotApproval | null, allowed: boolean, cards: boolean): AidenRemoteBotApproval | null {
+  if (!approval) return approval;
+  const { alwaysCount, card, ...legacy } = approval;
+  return {
+    ...legacy,
+    ...(allowed && alwaysCount !== undefined ? { alwaysCount } : {}),
+    ...(cards && card ? { card: botApprovalCardForAudience(card, allowed) } : {}),
+  };
 }
 function accessForAudience(card: AidenRemoteBotAccessRequest | null, allowed: boolean): AidenRemoteBotAccessRequest | null {
   if (!card || allowed) return card;
@@ -1542,6 +1613,9 @@ function accessForAudience(card: AidenRemoteBotAccessRequest | null, allowed: bo
 
 /** A waiting Bot approval as phones see it. */
 function wireApproval(prompt: { waitId: string; toolCallId: string; toolName: string; summary: string; always?: { count: number } }): AidenRemoteBotApproval {
+  const alwaysCount = !isComputerUseCapabilityTool(prompt.toolName) && prompt.always && Number.isInteger(prompt.always.count) && prompt.always.count >= 3 && prompt.always.count <= 20
+    ? prompt.always.count
+    : undefined;
   return {
     waitId: prompt.waitId,
     toolCallId: wireText(prompt.toolCallId, 128),
@@ -1549,7 +1623,15 @@ function wireApproval(prompt: { waitId: string; toolCallId: string; toolName: st
     summary: wireText(prompt.summary, 2_000) || "Aiden needs approval.",
     // Computer Use acts on the Mac's screen: it is allowed there, never from a phone.
     canAllow: !isComputerUseCapabilityTool(prompt.toolName),
-    ...(!isComputerUseCapabilityTool(prompt.toolName) && prompt.always && Number.isInteger(prompt.always.count) && prompt.always.count >= 3 && prompt.always.count <= 20 ? { alwaysCount: prompt.always.count } : {}),
+    ...(alwaysCount !== undefined ? { alwaysCount } : {}),
+    // Revision 61: the one card model, for `approval:cards` holders.
+    card: buildApprovalCard({
+      toolName: prompt.toolName,
+      summary: wireText(prompt.summary, 2_000) || "Aiden needs approval.",
+      canAllow: !isComputerUseCapabilityTool(prompt.toolName),
+      ...(alwaysCount !== undefined ? { scopes: ["always"], alwaysLabel: "Always allow this tool" } : {}),
+      ...(alwaysCount !== undefined ? { notes: [`You’ve allowed this ${alwaysCount} times in the last 2 weeks.`] } : {}),
+    }),
   };
 }
 
@@ -1751,7 +1833,7 @@ function routineError(error: unknown): never {
 const HOLDER_AUDIENCE: AidenRemoteBotHandoffAudience = { handoffs: true };
 
 /** The opt-ins a route was called with, from the device's grants. */
-type AudienceOptions = { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; handoffOnMac?: boolean; images?: boolean; issues?: boolean; peers?: boolean; accessRequests?: boolean; plans?: boolean; allowed?: boolean };
+type AudienceOptions = { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; handoffOnMac?: boolean; images?: boolean; issues?: boolean; peers?: boolean; accessRequests?: boolean; plans?: boolean; allowed?: boolean; approvalCards?: boolean; settingsChanges?: boolean; suggestions?: boolean };
 
 /** Ledger route of each session control. */
 const CONTROL_ROUTES = {
@@ -2046,7 +2128,7 @@ export class AidenRemoteBotSessionService {
       why: prompt.why, choices: [...prompt.choices], ...(prompt.place === undefined ? {} : { place: prompt.place }),
       ...(prompt.approvalCount === undefined ? {} : { approvalCount: prompt.approvalCount }) });
     const { name } = await this.options.bots.bot(botId);
-    return { card, notice: { type: "message", id: `access-notice:${card.waitId}`, role: "assistant", text: `${name} needs you on your Mac: allow access to ${card.label}` } };
+    return { card, notice: { type: "message", id: `access-notice:${card.waitId}`, role: "assistant", text: `${name} needs you on your computer: allow access to ${card.label}` } };
   }
 
   private async handoffOf(botId: string): Promise<ProjectedHandoff | null> {
@@ -2098,6 +2180,85 @@ export class AidenRemoteBotSessionService {
     return prompt === undefined ? null : wireApproval(prompt);
   }
 
+  /** Revision 61: these routes exist only where the desktop services are wired. */
+  get supportsSettingsChanges(): boolean {
+    return this.options.settingsChanges !== undefined;
+  }
+  get supportsSuggestions(): boolean {
+    return this.options.suggestions !== undefined;
+  }
+
+  /**
+   * Revision 61: Apply, Dismiss or Undo one settings change, through the
+   * desktop's own service (the same serialization and compare-and-swap). A
+   * refusal (the Bot's settings moved, the change is gone) is
+   * `revision_conflict` with the service's message; Undo that finds the
+   * settings changed again is a success whose status is `undo_refused`.
+   */
+  async respondSettingsChange(botId: string, changeId: string, input: unknown): Promise<{ changeId: string; status: string; message?: string }> {
+    const port = this.options.settingsChanges;
+    if (!port) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+    const decision = parseOrInvalid((value) => parseBotUxDecision(value, BOT_SETTINGS_CHANGE_REMOTE_DECISIONS, "Settings change response"), input, "The settings change response is invalid.");
+    await this.options.bots.bot(botId);
+    const result = await port.respond(botId, changeId, decision);
+    if (!result.ok) throw new AidenRemoteServiceError("revision_conflict", result.message, 409);
+    return { changeId, status: result.status, ...(result.message ? { message: result.message } : {}) };
+  }
+
+  /** Revision 61: Add or Not now on a skill suggestion. */
+  async respondSkillProposal(botId: string, proposalId: string, input: unknown): Promise<{ proposalId: string; status: "added" | "dismissed" }> {
+    const port = this.suggestionsOrNotFound();
+    const decision = parseOrInvalid((value) => parseBotUxDecision(value, BOT_SKILL_PROPOSAL_REMOTE_DECISIONS, "Skill response"), input, "The skill response is invalid.");
+    await this.options.bots.bot(botId);
+    if (decision === "add") {
+      // Add approves the exact content: a phone adds only a skill it was shown in full.
+      const shown = (await this.projector(botId)).entries.find((entry) => entry.type === "skill_proposal" && entry.proposalId === proposalId);
+      if (!shown) throw new AidenRemoteServiceError("not_found", SKILL_GONE, 404);
+      if (shown.type === "skill_proposal" && shown.previewTruncated) throw new AidenRemoteServiceError("revision_conflict", BOT_SKILL_ADD_ON_MAC_MESSAGE, 409);
+    }
+    const result = await port.respondSkill(botId, proposalId, decision);
+    if (!result.ok) throw new AidenRemoteServiceError("not_found", SKILL_GONE, 404);
+    return { proposalId, status: result.status };
+  }
+
+  /** Revision 61: Keep or Not now on a lesson card. */
+  async respondLesson(botId: string, lessonId: string, input: unknown): Promise<{ lessonId: string; status: "active" | "dismissed" }> {
+    const port = this.suggestionsOrNotFound();
+    const decision = parseOrInvalid((value) => parseBotUxDecision(value, BOT_LESSON_REMOTE_DECISIONS, "Lesson response"), input, "The lesson response is invalid.");
+    await this.options.bots.bot(botId);
+    const result = await port.respondLesson(botId, lessonId, decision);
+    if (!result.ok) throw new AidenRemoteServiceError("not_found", LESSON_GONE, 404);
+    return { lessonId, status: result.status };
+  }
+
+  /** Revision 61: Undo on a Learned line: the lesson is retired. */
+  async removeLesson(botId: string, lessonId: string, input: unknown): Promise<{ lessonId: string; status: "retired" }> {
+    const port = this.suggestionsOrNotFound();
+    parseOrInvalid((value) => parseEmptyBody(value, "Lesson undo"), input, "The lesson undo is invalid.");
+    await this.options.bots.bot(botId);
+    if (!(await port.removeLesson(botId, lessonId)).ok) throw new AidenRemoteServiceError("not_found", LESSON_GONE, 404);
+    return { lessonId, status: "retired" };
+  }
+
+  /** Revision 61: Undo on a memory tidy line, through the learning history's own Undo. */
+  async undoLearning(botId: string, changeId: string, input: unknown): Promise<{ changeId: string; undone: true }> {
+    const port = this.suggestionsOrNotFound();
+    parseOrInvalid((value) => parseEmptyBody(value, "Learning undo"), input, "The learning undo is invalid.");
+    await this.options.bots.bot(botId);
+    const result = await port.undoLearning(botId, changeId);
+    if (!result.ok) {
+      if (result.code === "not_found") throw new AidenRemoteServiceError("not_found", "This change is no longer available.", 404);
+      if (result.code === "already_undone") throw new AidenRemoteServiceError("revision_conflict", "This change was already undone.", 409);
+      throw new AidenRemoteServiceError("revision_conflict", "This change can’t be undone any more. Its memory changed since.", 409);
+    }
+    return { changeId, undone: true };
+  }
+
+  private suggestionsOrNotFound(): NonNullable<AidenRemoteBotSessionServiceOptions["suggestions"]> {
+    if (!this.options.suggestions) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+    return this.options.suggestions;
+  }
+
   /** Whether `waitId` names a Bot approval (waiting now, or answered here recently). */
   ownsApproval(waitId: string): boolean {
     return this.answeredApprovals.has(waitId) || (this.options.approvals?.pending().some((prompt) => prompt.waitId === waitId) ?? false);
@@ -2131,7 +2292,7 @@ export class AidenRemoteBotSessionService {
         if (decision === "allow" && !wireApproval(prompt).canAllow) {
           throw new AidenRemoteServiceError(
             "capability_denied",
-            "This approval can only be allowed from the Aiden desktop app.",
+            "Allow this in Aiden Agent on your computer.",
             403,
           );
         }
@@ -2210,7 +2371,7 @@ export class AidenRemoteBotSessionService {
           const before = await plans.current(bot.id, id);
           if (!before || before.status !== (parsed.decision === "stop" ? "active" : "pending")) throw new AidenOperationNotExecutedError(expired());
           if (parsed.decision === "approve" && projectAidenRemoteBotPlan(before) === null) {
-            throw new AidenOperationNotExecutedError(new AidenRemoteServiceError("plan_expired", "Review this plan on the host desktop.", 409));
+            throw new AidenOperationNotExecutedError(new AidenRemoteServiceError("plan_expired", "Review this plan in Aiden Agent on your computer.", 409));
           }
           const result = await plans.respond(bot.id, id, parsed.decision);
           if (result !== "done") throw new AidenOperationNotExecutedError(expired());
@@ -2299,7 +2460,7 @@ export class AidenRemoteBotSessionService {
           const prompt = handoffs.get(bot.id, id);
           if (!prompt) throw handoffExpired();
           if (prompt.kind === "sign_in" && parsed.outcome === "done") {
-            throw new AidenRemoteServiceError("invalid_request", "Finish signing in on your Mac, or skip it.", 400);
+            throw new AidenRemoteServiceError("invalid_request", "Finish signing in on your computer, or skip it.", 400);
           }
           const outcome = handoffs.answer(bot.id, id, parsed);
           if (outcome === "invalid") {
@@ -2493,6 +2654,9 @@ export class AidenRemoteBotSessionService {
       accessRequests: options.accessRequests === true && this.supportsAccessRequests,
       plans: options.plans === true && this.supportsPlans,
       allowed: options.allowed === true,
+      approvalCards: options.approvalCards === true,
+      settingsChanges: options.settingsChanges === true && this.options.settingsChanges !== undefined,
+      suggestions: options.suggestions === true && this.options.suggestions !== undefined,
     };
   }
 
@@ -2912,7 +3076,7 @@ export class AidenRemoteBotSessionService {
             ? {
                 suggestedRoutine: {
                   name: routine.name,
-                  label: formatBotRoutineLabel(presetRoutineSchedule(routine.schedule), { currentYear }),
+                  label: formatBotRoutineLabel(botPresetRoutineSchedule(routine.schedule), { currentYear }),
                 },
               }
             : {}),
@@ -2921,11 +3085,42 @@ export class AidenRemoteBotSessionService {
     });
   }
 
-  async createFromPreset(deviceId: string, key: string, input: unknown): Promise<AidenRemoteBotPresetCreateResult> {
+  /** Revision 61: whether this host serves Templates (versions and Open). */
+  get supportsTemplates(): boolean {
+    return typeof this.options.presets?.presetBots === "function";
+  }
+
+  /**
+   * Revision 61 (`bot:templates`): the preset list with each template's
+   * version, instructions, faded sample and, when it already made a Bot, that
+   * Bot's id (the detail offers Open instead of Create bot).
+   */
+  async templates(): Promise<{ presets: Array<AidenRemoteBotPreset & AidenRemoteBotTemplateFields> }> {
+    const presets = this.options.presets;
+    if (!presets?.presetBots) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+    const [made, list] = [await presets.presetBots(), this.presets()];
+    return parseAidenRemoteBotTemplateList({
+      presets: list.presets.map((row) => {
+        const preset = presets.list().find((candidate) => candidate.id === row.id)!;
+        return { ...row, ...botTemplateFields(preset, made[row.id]) };
+      }),
+    });
+  }
+
+  /** Revision 61: the one-time self-intro after one-field create (deduped per Bot by the runtime). */
+  introduceCreated(botId: string): void {
+    void this.options.presets?.introduce?.(botId).catch(() => undefined);
+  }
+
+  async createFromPreset(deviceId: string, key: string, input: unknown, options: { templates?: boolean } = {}): Promise<AidenRemoteBotPresetCreateResult> {
     if (!this.options.presets) {
       throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
     }
-    const parsed = parseOrInvalid(parseAidenRemoteBotPresetCreateRequest, input, "The starter Bot request is invalid.");
+    // Revision 61: a `bot:templates` holder names the version it was shown; another version refuses.
+    const versioned = options.templates === true && input !== null && typeof input === "object" && Object.prototype.hasOwnProperty.call(input, "version");
+    const parsed: { presetId: string; version?: number } = versioned
+      ? parseOrInvalid(parseAidenRemoteBotTemplateCreateRequest, input, "The template request is invalid.")
+      : parseOrInvalid(parseAidenRemoteBotPresetCreateRequest, input, "The starter Bot request is invalid.");
     if (!this.options.presets.list().some((preset) => preset.id === parsed.presetId)) {
       throw new AidenRemoteServiceError("not_found", "That starter Bot isn't available.", 404);
     }
@@ -2934,21 +3129,21 @@ export class AidenRemoteBotSessionService {
       parsed,
       // Remote creations resolve access against the requesting device's audience,
       // like `POST /bots`.
-      () => this.options.presets!.create(parsed.presetId, { audienceId: deviceId }),
+      async () => {
+        try {
+          return await this.options.presets!.create(parsed.presetId, { audienceId: deviceId, ...(parsed.version !== undefined ? { version: parsed.version } : {}) });
+        } catch (error) {
+          if (error instanceof Error && error.message === BOT_TEMPLATE_STALE_MESSAGE) throw new AidenRemoteServiceError("revision_conflict", BOT_TEMPLATE_STALE_MESSAGE, 409);
+          throw error;
+        }
+      },
     );
     if (created) this.options.notifyBotsChanged?.(botId);
     return { created, bot: await this.options.bots.summaryOf(botId) };
   }
 }
 
-/** The preset's friendly schedule in the routines backend's shape. */
-function presetRoutineSchedule(
-  schedule: NonNullable<BotPreset["suggestedRoutine"]>["schedule"],
-): Parameters<typeof formatBotRoutineLabel>[0] {
-  const [hour, minute] = schedule.time.split(":");
-  const time = `${hour!.padStart(2, "0")}:${minute!.padStart(2, "0")}`;
-  return schedule.frequency === "weekly"
-    ? { kind: "weekly", days: [...schedule.days], time }
-    : { kind: schedule.frequency, time };
-}
 import { isBotInputEntryKind } from "./bot-runtime/bot-input-entry.js";
+
+const SKILL_GONE = "This skill suggestion is no longer available.";
+const LESSON_GONE = "This lesson is no longer waiting for an answer.";

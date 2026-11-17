@@ -745,3 +745,14 @@ test("chat presentation preferences migrate, round-trip, and reject unsupported 
   assert.throws(() => parseAppearanceConfig({ ...migrated, busySendBehavior: "interrupt" }), /busy send behavior/i);
   assert.equal(normalizeAppearanceConfig({ workDetails: "bad", busySendBehavior: false }).workDetails, "standard");
 });
+
+test("Show tool activity stays unset until chosen, round-trips per device, and rejects non-boolean values", () => {
+  const legacy = createDefaultAppearanceConfig();
+  // Unset means "decide from the Bots", so normalizing must not invent a value.
+  assert.equal(normalizeAppearanceConfig(legacy).showToolActivity, undefined);
+  assert.equal(parseAppearanceConfig(legacy).showToolActivity, undefined);
+  const chosen = parseAppearanceConfig(JSON.parse(JSON.stringify({ ...legacy, showToolActivity: false })));
+  assert.equal(chosen.showToolActivity, false);
+  assert.equal(normalizeAppearanceConfig({ ...chosen, showToolActivity: "yes" }).showToolActivity, undefined);
+  assert.throws(() => parseAppearanceConfig({ ...legacy, showToolActivity: "true" }), /tool activity/i);
+});

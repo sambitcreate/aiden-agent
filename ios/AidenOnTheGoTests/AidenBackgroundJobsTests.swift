@@ -43,7 +43,7 @@ final class AidenBackgroundJobsTests: XCTestCase {
         )
         XCTAssertEqual(
             AidenBackgroundJobCopy.addresses(job("job_00000001", ports: [5173, 24678])),
-            "localhost:5173, localhost:24678 on your machine"
+            "localhost:5173, localhost:24678 on your computer"
         )
         XCTAssertNil(AidenBackgroundJobCopy.addresses(job("job_00000001")))
         XCTAssertNil(AidenBackgroundJobCopy.chip(running: 0), "nothing shows while nothing runs")

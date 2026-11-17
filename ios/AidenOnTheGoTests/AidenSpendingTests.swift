@@ -32,7 +32,7 @@ final class AidenSpendingTests: XCTestCase {
         )
         let reached = AidenSpendingCopy.notice(spending(.reached, period: .month, spent: 5.37), botName: "Ada")
         XCTAssertEqual(reached?.title, "Ada reached its $5.00 spending limit this month.")
-        XCTAssertEqual(reached?.body, "It has spent $5.37. Allow $5.00 more to keep going, or change the limit on your machine.")
+        XCTAssertEqual(reached?.body, "It has spent $5.37. Allow $5.00 more to keep going, or change the limit on your computer.")
         XCTAssertEqual(reached?.allowMore, "Allow $5.00 more")
         XCTAssertEqual(AidenSpendingCopy.notice(spending(.reached, period: .month), botName: "  ")?.title,
                        "This Bot reached its $5.00 spending limit this month.")

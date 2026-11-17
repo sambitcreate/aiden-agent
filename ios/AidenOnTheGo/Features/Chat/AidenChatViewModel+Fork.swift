@@ -95,7 +95,7 @@ extension AidenChatViewModel {
             if await coordinator.handleCredentialRevocation(error, context: context) { return nil }
             guard !isRemoved, coordinator.isLive(context) else { return nil }
             if case AidenRemoteClientError.server(_, let body) = error, body.code.rawValue == "revision_conflict" {
-                presentedError = String(localized: "This chat changed on your machine. Try again.")
+                presentedError = String(localized: "This chat changed on your computer. Try again.")
                 _ = await refreshForkChat(context: context)
             } else {
                 presentedError = error.localizedDescription

@@ -107,7 +107,7 @@ export class BtwService {
     const chat = await this.deps.getChat(chatIdValue);
     if (!chat) throw new Error("This chat is no longer available.");
     if (chatSurface(chat) !== "regular") {
-      throw new Error("Side questions are currently available only in ordinary desktop chats.");
+      throw new Error("Side questions are currently available only in ordinary chats in Aiden Agent.");
     }
     const binding = fingerprint(chat);
     if (!binding || !chat.providerId || !chat.model) {
