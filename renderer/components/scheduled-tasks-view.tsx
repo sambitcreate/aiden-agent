@@ -1,4 +1,5 @@
 import * as React from "react";
+import { LiveGuard } from "./live-guard";
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -426,8 +427,10 @@ export function ScheduledTasksView() {
     mcpServers.isLoading ||
     mcpServers.isError ||
     tasks.isError;
+  // Scheduled tasks run prompts in the background: Aiden Live can read this
+  // page but never create, resume or change a task.
   return (
-    <>
+    <LiveGuard guard="you">
       <ScrollArea
         title="Scheduled tasks"
         actions={
@@ -861,6 +864,6 @@ export function ScheduledTasksView() {
           }
         }}
       />
-    </>
+    </LiveGuard>
   );
 }

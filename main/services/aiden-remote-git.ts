@@ -2,6 +2,7 @@ import { InsufficientDiskSpaceError, WorktreeCapacityUnavailableError } from "./
 import { ManagedWorktreeProcessActiveError } from "./managed-worktree-cleanup-errors.js";
 import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
+import { executeAidenDurableOperation } from "./aiden-remote-durable-operation.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import {
   AidenIdempotencyLedger,
@@ -32,7 +33,7 @@ const MAX_SNAPSHOTS = 4_096;
 const MAX_FILES = 4_000;
 const MAX_DIFF_CHARACTERS = 2_000_000;
 const IDEMPOTENCY_KEY_PATTERN = /^[\x21-\x7e]{16,128}$/u;
-const HIDDEN_CHANGES_REASON = "Some changed file names cannot be shown on this device. Commit them on the Mac.";
+const HIDDEN_CHANGES_REASON = "Some changed file names cannot be shown on this device. Commit them on your computer.";
 
 type GitFileStatus = "added" | "modified" | "deleted" | "renamed" | "untracked" | "conflicted";
 
@@ -179,8 +180,8 @@ function mapGitError(error: unknown): never {
   if (error instanceof InsufficientDiskSpaceError || error instanceof WorktreeCapacityUnavailableError) {
     throw new AidenRemoteServiceError("git_capability_denied",
       error instanceof InsufficientDiskSpaceError
-        ? "There is not enough free disk space on the Mac for this managed worktree. Free space and try again."
-        : "The Mac could not verify disk capacity for this managed worktree. Check its storage and try again.",
+        ? "There is not enough free disk space on your computer for this managed worktree. Free space and try again."
+        : "Your computer could not verify disk capacity for this managed worktree. Check its storage and try again.",
       409);
   }
   if (!(error instanceof GitServiceError)) {
@@ -303,39 +304,17 @@ export class AidenRemoteGitService {
     if (!IDEMPOTENCY_KEY_PATTERN.test(scope.key)) {
       throw new AidenRemoteServiceError("invalid_request", "Idempotency-Key is invalid.", 400);
     }
-    if (!this.options.persistIdempotency) return this.idempotency.execute(scope, input, action);
-    let release!: () => void;
-    let reject!: (error: unknown) => void;
-    const admission = new Promise<void>((resolve, rejectPromise) => {
-      release = resolve;
-      reject = rejectPromise;
-    });
-    const pending = this.idempotency.execute(scope, input, async () => {
-      await admission;
-      return action();
-    });
-    try {
-      await this.options.persistIdempotency(this.idempotency.snapshot());
-      release();
-    } catch (error) {
-      reject(error);
-      await pending.catch(() => undefined);
-      throw new AidenRemoteServiceError("internal_error", "Aiden could not durably prepare this Git operation.", 500);
-    }
-    let result: T | undefined;
-    let failure: unknown;
-    try { result = await pending; } catch (error) { failure = error; }
-    try {
-      await this.options.persistIdempotency(this.idempotency.snapshot());
-    } catch {
-      throw new AidenRemoteServiceError(
-        "idempotency_in_flight",
-        "The Git operation may have completed, but Aiden could not durably record its outcome.",
-        409,
-      );
-    }
-    if (failure) throw failure;
-    return result!;
+    return executeAidenDurableOperation(
+      {
+        ledger: this.idempotency,
+        persist: this.options.persistIdempotency,
+        notPreparedMessage: "Aiden could not durably prepare this Git operation.",
+        outcomeUnrecordedMessage: "The Git operation may have completed, but Aiden could not durably record its outcome.",
+      },
+      scope,
+      input,
+      action,
+    );
   }
 
   private run<T>(

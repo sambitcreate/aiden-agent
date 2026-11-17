@@ -1,4 +1,5 @@
 import type { ServerResponse } from "node:http";
+import { approvalCardAllows, buildApprovalCard, type ApprovalCard } from "../../renderer/shared/approval-card-model.js";
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
 import type { ToolApprovalDetails } from "../../renderer/shared/assistant.js";
 import {
@@ -17,6 +18,7 @@ import {
   approvalScheduleCard,
   type AidenRemoteApprovalSchedule,
 } from "./aiden-remote-approval-schedule.js";
+import { executeAidenDurableOperation } from "./aiden-remote-durable-operation.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import { openCursorSse, type CursorSseHandle } from "./aiden-remote-sse.js";
 import {
@@ -134,6 +136,11 @@ export interface AidenRemotePendingApproval {
    * device holding `schedule:cards` and `schedule:read`. Never changes `canAllow`.
    */
   schedule?: AidenRemoteApprovalSchedule;
+  /**
+   * The typed approval card (contract revision 61), sent only to a device
+   * holding `approval:cards`. For that device `canAllow` is the card's answer.
+   */
+  card?: ApprovalCard;
   /** Exact renderer-safe facts are host-only and never enter the mobile wire contract. */
   details?: ToolApprovalDetails;
 }
@@ -242,6 +249,40 @@ function offeredScopes(value: unknown): ToolApprovalScope[] | undefined {
 
 function approvalIsHostOnly(details: ToolApprovalDetails | undefined): boolean {
   return details !== undefined && details.kind !== "scheduled-task";
+}
+
+/**
+ * A phone's view of its own stream approval: host-only details dropped, and
+ * for an `approval:cards` holder (revision 61) the typed card, whose allow
+ * buttons decide `canAllow` and the scopes offered.
+ */
+export function projectPhoneStreamApproval(
+  approval: AidenRemotePendingApproval,
+  options: { scheduleCard?: boolean; card?: boolean } = {},
+): AidenRemotePendingApproval {
+  const { details: _hostOnly, scopes, ...mobile } = approval;
+  const card = options.card === true ? streamApprovalCard(approval) : undefined;
+  const canAllow = card ? approvalCardAllows(card) : approvalIsHostOnly(approval.details) ? false : approval.canAllow;
+  const offered = card && scopes ? scopes.filter((scope) => approvalCardAllows(card, scope)) : scopes;
+  const schedule = options.scheduleCard === true ? approvalScheduleCard(approval.details) : undefined;
+  return {
+    ...mobile,
+    canAllow,
+    ...(canAllow && offered && offered.length > 0 ? { scopes: offered } : {}),
+    ...(schedule ? { schedule } : {}),
+    ...(card ? { card } : {}),
+  };
+}
+
+/** The typed card for a phone's own stream approval (revision 61), from the one card model. */
+function streamApprovalCard(approval: Pick<ApprovalRecord, "toolName" | "summary" | "canAllow" | "scopes" | "details">): ApprovalCard {
+  return buildApprovalCard({
+    toolName: approval.toolName,
+    summary: approval.summary,
+    canAllow: approval.canAllow,
+    ...(approval.scopes ? { scopes: approval.scopes } : {}),
+    ...(approval.details ? { details: approval.details } : {}),
+  });
 }
 
 function terminal(state: AidenRemoteStreamState): boolean {
@@ -608,55 +649,17 @@ export class AidenRemoteStreamService {
     if (!/^[\x21-\x7e]{16,128}$/u.test(scope.key)) {
       throw new AidenRemoteServiceError("invalid_request", "Idempotency-Key is invalid.", 400);
     }
-    if (!this.options.persistIdempotency) {
-      try {
-        return await this.idempotency.execute(scope, input, action);
-      } catch (error) {
-        return this.mapIdempotencyError(error);
-      }
-    }
-    let admit!: () => void;
-    let reject!: (error: unknown) => void;
-    const durable = new Promise<void>((resolve, rejectPromise) => {
-      admit = resolve;
-      reject = rejectPromise;
-    });
-    // Replays never invoke the wrapper: keep a sink so a rejected gate cannot
-    // surface as an unhandled rejection.
-    void durable.catch(() => undefined);
-    let actionGated = false;
-    const pending = this.idempotency.execute(scope, input, async () => {
-      actionGated = true;
-      await durable;
-      return action();
-    });
-    try {
-      await this.options.persistIdempotency(this.idempotency.snapshot());
-      admit();
-    } catch (error) {
-      reject(error);
-      await pending.catch(() => undefined);
-      // Only discard when this call created the entry: the wrapper ran but the
-      // action provably never did (admit() was never called), so nothing could
-      // have committed. Replays and concurrent in-flight entries keep their
-      // recorded outcome intact.
-      if (actionGated) this.idempotency.discardUnexecuted(scope);
-      throw new AidenRemoteServiceError("internal_error", "Aiden could not prepare this stream request.", 500);
-    }
-    let result: T | undefined;
-    let failure: unknown;
-    try {
-      result = await pending;
-    } catch (error) {
-      failure = error;
-    }
-    try {
-      await this.options.persistIdempotency(this.idempotency.snapshot());
-    } catch {
-      throw new AidenRemoteServiceError("idempotency_in_flight", "The stream request outcome is unknown.", 409);
-    }
-    if (failure) throw failure;
-    return result!;
+    return executeAidenDurableOperation(
+      {
+        ledger: this.idempotency,
+        persist: this.options.persistIdempotency,
+        notPreparedMessage: "Aiden could not prepare this stream request.",
+        outcomeUnrecordedMessage: "The stream request outcome is unknown.",
+      },
+      scope,
+      input,
+      action,
+    );
   }
 
   private mapIdempotencyError(error: unknown): never {
@@ -1514,20 +1517,11 @@ export class AidenRemoteStreamService {
   pendingApproval(
     deviceId: string,
     streamId: string,
-    options: { scheduleCard?: boolean } = {},
+    options: { scheduleCard?: boolean; card?: boolean } = {},
   ): AidenRemotePendingApproval | null {
     const stream = this.requireStream(deviceId, streamId);
     const approval = this.pendingApprovalForStream(stream.streamId);
-    if (!approval) return null;
-    const { details: _hostOnly, scopes, ...mobile } = approval;
-    const canAllow = approvalIsHostOnly(approval.details) ? false : approval.canAllow;
-    const schedule = options.scheduleCard === true ? approvalScheduleCard(approval.details) : undefined;
-    return {
-      ...mobile,
-      canAllow,
-      ...(canAllow && scopes ? { scopes } : {}),
-      ...(schedule ? { schedule } : {}),
-    };
+    return approval ? projectPhoneStreamApproval(approval, options) : null;
   }
 
   approvalChatId(deviceId: string, approvalId: string): string {
@@ -1926,6 +1920,7 @@ export class AidenRemoteStreamService {
       action: () => Promise<AidenRemoteApprovalResolution>,
     ) => Promise<AidenRemoteApprovalResolution>,
     scope?: ToolApprovalScope,
+    options: { card?: boolean } = {},
   ): Promise<AidenRemoteApprovalResolution> {
     try {
       return await this.executeIdempotent(
@@ -1937,10 +1932,20 @@ export class AidenRemoteStreamService {
           if (!approval || approval.deviceId !== deviceId || approval.expiresAt <= this.options.now()) {
             throw new AidenRemoteServiceError("approval_expired", "This approval is no longer available.", 409);
           }
-          if (decision === "allow" && (approvalIsHostOnly(approval.details) || !approval.canAllow)) {
+          // A device holding `approval:cards` may allow exactly what its card
+          // offers (revision 61); every other device keeps the summary rule.
+          const card = options.card === true ? streamApprovalCard(approval) : undefined;
+          if (decision === "allow" && card && !approvalCardAllows(card, scope)) {
             throw new AidenRemoteServiceError(
               "capability_denied",
               "This approval can only be allowed from the Aiden desktop app.",
+              403,
+            );
+          }
+          if (decision === "allow" && !card && (approvalIsHostOnly(approval.details) || !approval.canAllow)) {
+            throw new AidenRemoteServiceError(
+              "capability_denied",
+              "Allow this in Aiden Agent on your computer.",
               403,
             );
           }

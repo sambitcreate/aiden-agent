@@ -2,8 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   SubagentApprovalLedgerV2,
+  nextSubagentRunGrantPhaseV2,
   subagentApprovalArgumentDigestV2,
   type PrepareSubagentApprovalV2Input,
+  type SubagentRunGrantEventV2,
+  type SubagentRunGrantPhaseV2,
 } from "./approval-v2.js";
 
 function input(argumentsValue: unknown = { path: "README.md", line: 1 }) {
@@ -207,6 +210,86 @@ test("expiry, duplicate call ownership, denial, and run cancellation fail closed
   );
   ledger.cancelRun("run-1");
   assert.equal(ledger.pendingCount, 0);
+});
+
+test("an approval cannot be consumed unless it was authorized, and a failed attempt does not burn it", () => {
+  const ledger = new SubagentApprovalLedgerV2(() => 1_000, () => "approval-order");
+  const { approvalId } = ledger.prepare(input());
+  assert.equal(ledger.consume(approvalId, input()), false);
+  assert.equal(ledger.authorize(approvalId, "document-1", input()), true);
+  assert.equal(ledger.consume(approvalId, input({ path: "OTHER" })), false);
+  assert.equal(ledger.consume(approvalId, input()), true);
+});
+
+test("an authorized approval dies with its run, its denial, or its deadline", () => {
+  let now = 1_000;
+  let id = 0;
+  const ledger = new SubagentApprovalLedgerV2(() => now, () => `approval-end-${++id}`);
+  const authorized = () => {
+    const { approvalId } = ledger.prepare(input());
+    assert.equal(ledger.authorize(approvalId, "document-1", input()), true);
+    return approvalId;
+  };
+
+  const cancelled = authorized();
+  ledger.cancelRun("run-1");
+  assert.equal(ledger.consume(cancelled, input()), false);
+
+  const denied = authorized();
+  assert.equal(ledger.deny(denied, "wrong-document"), false);
+  assert.equal(ledger.deny(denied, "document-1"), true);
+  assert.equal(ledger.consume(denied, input()), false);
+
+  const expired = authorized();
+  now = 2_000;
+  assert.equal(ledger.consume(expired, input()), false);
+  now = 1_000;
+  assert.equal(ledger.consume(expired, input()), false, "a clock rollback must not revive it");
+});
+
+test("cancelling one run leaves another run's approval consumable", () => {
+  let id = 0;
+  const ledger = new SubagentApprovalLedgerV2(() => 1_000, () => `approval-run-${++id}`);
+  const other = { ...input(), runId: "run-2" };
+  const first = ledger.prepare(input());
+  const second = ledger.prepare(other);
+  assert.equal(ledger.authorize(second.approvalId, "document-1", other), true);
+  ledger.cancelRun("run-1");
+  assert.equal(ledger.authorize(first.approvalId, "document-1", input()), false);
+  assert.equal(ledger.consume(second.approvalId, other), true);
+});
+
+test("a run grant is granted only by an answer to its own open request", () => {
+  const events: readonly SubagentRunGrantEventV2[] = ["request", "allow", "deny", "revoke"];
+  const sequences = (length: number): SubagentRunGrantEventV2[][] =>
+    length === 0
+      ? [[]]
+      : sequences(length - 1).flatMap((prefix) => events.map((event) => [...prefix, event]));
+  for (const sequence of sequences(6)) {
+    const phases = sequence.reduce<SubagentRunGrantPhaseV2[]>(
+      (seen, event) => [...seen, nextSubagentRunGrantPhaseV2(seen[seen.length - 1]!, event)],
+      ["unrequested"],
+    );
+    const firstRevoke = sequence.indexOf("revoke");
+    const firstDeny = sequence.indexOf("deny", sequence.indexOf("request") + 1);
+    const firstRequest = sequence.indexOf("request");
+    const firstAllow = sequence.indexOf("allow", firstRequest + 1);
+    const answeredBeforeEnd =
+      firstRequest !== -1 &&
+      firstAllow !== -1 &&
+      (firstRevoke === -1 || firstAllow < firstRevoke) &&
+      (firstDeny === -1 || firstAllow < firstDeny) &&
+      (firstRevoke === -1 || firstRequest < firstRevoke);
+    const everGranted = phases.includes("granted");
+    assert.equal(everGranted, answeredBeforeEnd, sequence.join(" "));
+    const closedAt = phases.findIndex((phase) => phase === "denied" || phase === "revoked");
+    if (closedAt !== -1) {
+      assert.ok(
+        phases.slice(closedAt).every((phase) => phase === phases[closedAt]),
+        `a closed grant reopened: ${sequence.join(" ")}`,
+      );
+    }
+  }
 });
 
 test("expired approvals release both capacity and tool-call ownership", () => {

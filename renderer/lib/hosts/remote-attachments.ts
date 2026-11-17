@@ -48,18 +48,18 @@ function remoteName(name: string): string {
  */
 export function remoteAttachmentUploads(attachments: readonly Attachment[]): HostChatAttachmentUpload[] {
   if (attachments.length > MAX_REMOTE_ATTACHMENTS_PER_TURN) {
-    throw new RemoteAttachmentError(`Another Mac takes up to ${MAX_REMOTE_ATTACHMENTS_PER_TURN} attachments per message.`);
+    throw new RemoteAttachmentError(`Another computer takes up to ${MAX_REMOTE_ATTACHMENTS_PER_TURN} attachments per message.`);
   }
   return attachments.map((attachment): HostChatAttachmentUpload => {
     const name = remoteName(attachment.name);
     if (attachment.kind === "image") {
       const mimeType = attachment.mimeType.toLowerCase();
       if (mimeType !== "image/png" && mimeType !== "image/jpeg") {
-        throw new RemoteAttachmentError(`${attachment.name} can't be sent to another Mac. Use a PNG or JPEG image.`);
+        throw new RemoteAttachmentError(`${attachment.name} can't be sent to another computer. Use a PNG or JPEG image.`);
       }
       if (!attachment.data) throw new RemoteAttachmentError(`${attachment.name} could not be read.`);
       if (attachment.size > MAX_INLINE_IMAGE_BYTES) {
-        throw new RemoteAttachmentError(`${attachment.name} is too large to send to another Mac.`);
+        throw new RemoteAttachmentError(`${attachment.name} is too large to send to another computer.`);
       }
       return { name, mimeType, kind: "image", data: attachment.data };
     }
@@ -106,7 +106,7 @@ function renamed(name: string, mimeType: RemoteImageType): string {
   return `${stem || "image"}${extension}`;
 }
 
-const TOO_LARGE_TOGETHER = "These attachments are too large to send to another Mac together. Send fewer at a time.";
+const TOO_LARGE_TOGETHER = "These attachments are too large to send to another computer together. Send fewer at a time.";
 
 /** What the host counts against a turn's attachment limit: image bytes and text as UTF-8. */
 function inlineBytes(attachment: Attachment): number {
@@ -126,12 +126,12 @@ async function remoteReadyImage(attachment: Attachment, decode: RemoteImageDecod
   // Chromium cannot decode HEIC, so this Mac cannot redraw one.
   if (mimeType === "image/heic" || mimeType === "image/heif") {
     throw new RemoteAttachmentError(
-      `${attachment.name} is a HEIC photo, which can't be sent to another Mac yet. Export it as a JPEG and attach it again.`,
+      `${attachment.name} is a HEIC photo, which can't be sent to another computer yet. Export it as a JPEG and attach it again.`,
     );
   }
   const image = await decode(base64Bytes(attachment.data), mimeType).catch(() => null);
   if (!image) {
-    throw new RemoteAttachmentError(`${attachment.name} can't be sent to another Mac. Save it as a PNG or JPEG and attach it again.`);
+    throw new RemoteAttachmentError(`${attachment.name} can't be sent to another computer. Save it as a PNG or JPEG and attach it again.`);
   }
   try {
     const targets: RemoteImageType[] = mimeType === "image/jpeg" ? ["image/jpeg"] : ["image/png", "image/jpeg"];
@@ -155,7 +155,7 @@ async function remoteReadyImage(attachment: Attachment, decode: RemoteImageDecod
   } finally {
     image.close();
   }
-  throw new RemoteAttachmentError(`${attachment.name} is too large to send to another Mac.`);
+  throw new RemoteAttachmentError(`${attachment.name} is too large to send to another computer.`);
 }
 
 /** Decodes with the browser and redraws on a canvas; JPEG gets a white backdrop for transparent pixels. */

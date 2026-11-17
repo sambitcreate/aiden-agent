@@ -37,7 +37,9 @@ import { parseGenerationTimeline } from "../../renderer/shared/generation-timeli
 import { parseSubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
 import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
 import { parseSkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
+import { parseChatInputSource } from "../../renderer/shared/chat-input-source.js";
 import { parseAgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
+import { boundedHookBlockedReason, hookBlockedField } from "./hook-blocked-prompt.js";
 import { safeStoredAttachments } from "./attachment-contract.js";
 import { CHAT_IMAGES_DIRECTORY, createChatImageStore, rememberImageHash, type ChatImageStore } from "./chat-image-store.js";
 import { imagePixelSize } from "../../renderer/shared/image-dimensions.js";
@@ -147,6 +149,21 @@ export class ChatCreateReconciliationRequiredError extends Error {
     this.chatId = chatId;
   }
 }
+
+export type ChatStoreErrorCode = "design-mode-unavailable";
+
+/** A store refusal whose message is safe to show the person. */
+export class ChatStoreError extends Error {
+  readonly code: ChatStoreErrorCode;
+
+  constructor(code: ChatStoreErrorCode, message: string) {
+    super(message);
+    this.name = "ChatStoreError";
+    this.code = code;
+  }
+}
+
+export const DESIGN_MODE_UNAVAILABLE_MESSAGE = "Design mode is available in project chats only.";
 
 export function isChatCreateReconciliationRequiredError(
   error: unknown,
@@ -446,7 +463,8 @@ export function createChatStore(
           Number.isSafeInteger(meta.lastAssistantAt) &&
           meta.lastAssistantAt >= 0)) &&
       (meta.lastAssistantFailed === undefined || meta.lastAssistantFailed === true) &&
-      (meta.forkedFrom === undefined || parseChatForkLineageV1(meta.forkedFrom) !== undefined)
+      (meta.forkedFrom === undefined || parseChatForkLineageV1(meta.forkedFrom) !== undefined) &&
+      (meta.designMode === undefined || meta.designMode === true)
     );
   }
 
@@ -842,6 +860,16 @@ export function createChatStore(
       if (lineage) record.forkedFrom = lineage;
       else delete record.forkedFrom;
     }
+    if (
+      parsed !== null &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed) &&
+      Object.prototype.hasOwnProperty.call(parsed, "designMode") &&
+      (parsed as Record<string, unknown>).designMode !== true
+    ) {
+      // A layout preference only: anything but a literal true reads as off.
+      delete (parsed as Record<string, unknown>).designMode;
+    }
     const messages = (parsed as { messages?: unknown } | null)?.messages;
     if (
       policy !== "pure" &&
@@ -941,6 +969,12 @@ export function createChatStore(
           message.role === "user"
             ? parseAgentNoticeV1(message.notice)
             : undefined,
+        inputSource:
+          message.role === "user"
+            ? parseChatInputSource(message.inputSource)
+            : undefined,
+        // Only a blocked prompt carries the key, so unmarked messages keep their old shape.
+        ...hookBlockedField(message),
       };
     });
     if (policy !== "pure") {
@@ -1236,6 +1270,7 @@ export function createChatStore(
       ...(lastAssistantAt !== undefined ? { lastAssistantAt, lastAssistantSequence, lastAssistantMessageId: lastAssistant.id } : {}),
       ...(lastAssistant && isFailedAssistantTurn(lastAssistant) ? { lastAssistantFailed: true } : {}),
       ...(chat.forkedFrom ? { forkedFrom: indexedForkLineage(chat.forkedFrom) } : {}),
+      ...(chat.designMode === true ? { designMode: true as const } : {}),
       createdAt: chat.createdAt,
       updatedAt: chat.updatedAt,
     };
@@ -1416,6 +1451,14 @@ export function createChatStore(
       return shared([id], false, () => readChat(id, "owner"));
     },
 
+    /** One chat's index metadata, without reading its transcript. Null when unknown. */
+    async getMeta(id: string): Promise<ChatMeta | null> {
+      return shared([id], true, () => withIndexLock(async () => {
+        const meta = (await loadIndex()).find((entry) => entry.id === id);
+        return meta ? { ...meta, workspaceId: meta.workspaceId ?? DEFAULT_WORKSPACE_ID } : null;
+      }));
+    },
+
     /** One stored image's bytes, or undefined when its file is missing or damaged. */
     async readImage(sha256: string, size: number): Promise<Buffer | undefined> {
       return images.read(sha256, size);
@@ -1488,7 +1531,7 @@ export function createChatStore(
       model?: string;
       turnId: string;
       fingerprint: string;
-      message: Pick<ChatMessage, "id" | "content" | "attachments" | "skill" | "model">;
+      message: Pick<ChatMessage, "id" | "content" | "attachments" | "skill" | "model" | "inputSource">;
       assertCurrent: () => void;
     }): Promise<Chat> {
       return withImageData(await shared([input.id], true, async () => {
@@ -1528,6 +1571,7 @@ export function createChatStore(
           model: input.message.model,
           attachments: safeStoredAttachments(input.message.attachments),
           skill: parseSkillProvenanceV1(input.message.skill),
+          inputSource: parseChatInputSource(input.message.inputSource),
           createdAt: now,
         };
         const chat: Chat = {
@@ -1798,6 +1842,11 @@ export function createChatStore(
               message.role === "user"
                 ? parseAgentNoticeV1(message.notice)
                 : undefined,
+            inputSource:
+              message.role === "user"
+                ? parseChatInputSource(message.inputSource)
+                : undefined,
+            ...hookBlockedField(message),
             providerFailure:
               message.role === "assistant"
                 ? parseProviderFailureV1(message.providerFailure)
@@ -1976,6 +2025,31 @@ export function createChatStore(
       }));
     },
 
+    /**
+     * Turn design mode on or off for one chat. It is a layout preference: the
+     * history, the title and the sidebar order stay as they are. Bot, Assistant
+     * and feature-owned chats never take it.
+     */
+    async setDesignMode(
+      id: string,
+      enabled: boolean,
+      assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
+    ): Promise<Chat> {
+      return shared([id], true, async () => {
+        const chat = await readChat(id, "owner");
+        if (!chat) throw new Error(`Chat ${id} not found`);
+        await assertCurrent(chat);
+        if (enabled && chatSurface(chat) !== "regular") {
+          throw new ChatStoreError("design-mode-unavailable", DESIGN_MODE_UNAVAILABLE_MESSAGE);
+        }
+        if ((chat.designMode === true) === enabled) return chat;
+        if (enabled) chat.designMode = true;
+        else delete chat.designMode;
+        await writeChatAndMeta(chat);
+        return chat;
+      });
+    },
+
     /** Persist the user's per-chat Computer Use grant without reordering history. */
     async setComputerUseAllowed(id: string, allowed: boolean): Promise<Chat> {
       return withImageData(await updateComputerUseAccess(id, (chat) => {
@@ -2014,6 +2088,31 @@ export function createChatStore(
         if (pending) chat.computerUsePendingContinue = true;
         else delete chat.computerUsePendingContinue;
       }));
+    },
+
+    /**
+     * Mark a user message as blocked by a UserPromptSubmit hook (reason set)
+     * or clear that mark (reason undefined). A blocked prompt stays visible but
+     * is excluded from every model projection. Returns whether it changed.
+     */
+    async setPromptHookBlock(
+      chatId: string,
+      messageId: string,
+      reason: string | undefined,
+    ): Promise<boolean> {
+      return shared([chatId], true, async () => {
+        const chat = await readChat(chatId, "owner");
+        const message = chat?.messages.find((candidate) => candidate.id === messageId && candidate.role === "user");
+        if (!chat || !message) return false;
+        if (reason === undefined) {
+          if (!message.hookBlocked) return false;
+          delete message.hookBlocked;
+        } else {
+          message.hookBlocked = { reason: boundedHookBlockedReason(reason) };
+        }
+        await writeChatAndMeta(chat);
+        return true;
+      });
     },
 
     /**
@@ -2152,6 +2251,12 @@ export function createChatStore(
         isCurrent?: () => boolean;
         /** Renderer-authored appends refuse feature-owned (Design Studio) conversations. */
         rejectFeatureOwned?: boolean;
+        /**
+         * Host-only: a user message a UserPromptSubmit hook refused, saved
+         * with its blocked mark in this same write. Never read from the
+         * message itself, so a renderer append can't set it.
+         */
+        hookBlockedReason?: string;
       },
     ): Promise<Chat> {
       return withImageData(await shared([id], true, async () => {
@@ -2218,6 +2323,10 @@ export function createChatStore(
             message.role === "user"
               ? parseAgentNoticeV1(message.notice)
               : undefined,
+          inputSource:
+            message.role === "user"
+              ? parseChatInputSource(message.inputSource)
+              : undefined,
           timeline:
             message.role === "assistant"
               ? parseGenerationTimeline(message.timeline, message.content.length)
@@ -2231,6 +2340,9 @@ export function createChatStore(
               ? parseSubagentMessageReferenceV1(message.subagents)
               : undefined,
           createdAt: message.createdAt ?? Date.now(),
+          ...(message.role === "user" && meta?.hookBlockedReason !== undefined
+            ? { hookBlocked: { reason: boundedHookBlockedReason(meta.hookBlockedReason) } }
+            : {}),
         };
         const isFirstUserMessage =
           full.role === "user" &&

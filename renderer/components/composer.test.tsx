@@ -1,7 +1,16 @@
+// Installs happy-dom and the fake IPC bridge for the mounted approvals-chip tests; must stay the first import.
+import { installBotTestIpc } from "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import test from "node:test";
+import test, { afterEach } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { CommandSystemProvider } from "../lib/command-system";
+import { LOCAL_COMPOSER_SURFACES } from "../lib/hosts/composer-surfaces";
+import type { AppSettings, Provider, Workspace } from "../lib/types";
+import { createBotTestQueryClient } from "../main/bots/test-providers";
+import { Composer, type ComposerApprovalsPatch } from "./composer";
 import { ProviderIcon } from "./provider-icon";
 import type { ProviderArtwork } from "../shared/provider-artwork";
 import {
@@ -140,23 +149,7 @@ test("composer context controls stay compact without exposing provider copy", ()
   const composer = source("./composer.tsx");
   const modelPicker = source("./model-picker.tsx");
 
-  assert.match(composer, /group\/access relative h-8 w-34/u);
-  assert.match(composer, /role="radiogroup"\s*aria-label="Workspace access"/u);
-  assert.match(composer, /absolute bottom-full left-0/u);
-  assert.doesNotMatch(composer, /group-hover\/access:visible/u);
-  assert.doesNotMatch(composer, /group-focus-within\/access:visible/u);
-  assert.match(composer, /aria-expanded=\{permissionMenuOpen\}/u);
-  assert.match(composer, /aria-controls=\{permissionOptionsId\}/u);
-  assert.doesNotMatch(composer, /aria-haspopup=\{true\}/u);
-  assert.match(composer, /group-data-\[open=true\]\/access:visible/u);
-  assert.match(composer, /rounded-dialog bg-popover p-1/u);
   assert.doesNotMatch(composer, /bg-control\/80/u);
-  assert.match(composer, /selected\s*\? "bg-popover shadow-control"/u);
-  assert.doesNotMatch(composer, /group-hover\/access:max-h/u);
-  assert.match(composer, /aria-disabled=\{disabled \|\| undefined\}/u);
-  assert.doesNotMatch(composer, /group\/access[^\n]*disabled:opacity-45/u);
-  assert.doesNotMatch(composer, /DropdownMenuCheckboxItem/u);
-  assert.doesNotMatch(composer, /<DropdownMenuLabel>Workspace access/u);
   assert.match(modelPicker, /\? selected\.label\s*: hasUnavailableSelection/u);
   assert.match(modelPicker, /`Selected model: \$\{selected\.label\}\. Choose a model\.`/u);
   assert.doesNotMatch(modelPicker, /ChevronsUpDown/u);
@@ -321,16 +314,6 @@ test("workspace picker closes and exposes a persistent reason when workspace cha
   assert.match(composer, /Workspace unavailable: \$\{workspaceChangeBlockedReason\}/u);
 });
 
-test("workspace access keyboard navigation moves focus without changing permission", () => {
-  const composer = source("./composer.tsx");
-  assert.match(
-    composer,
-    /event\.key === "Enter" \|\| event\.key === " "\) \{\s*event\.preventDefault\(\);\s*if \(value !== permission\) requestPermission\(value\);/u,
-  );
-  assert.match(composer, /radios\?\.\[nextIndex\]\?\.focus\(\)/u);
-  assert.doesNotMatch(composer, /requestPermission\(nextPermission\)/u);
-});
-
 test("model picker details sit beside the menu without overlapping the pad", () => {
   const modelPicker = source("./model-picker.tsx");
   const pad = source("./model-picker-pad.tsx");
@@ -420,4 +403,150 @@ test("compaction keeps draft attachment and skill removal aligned with input loc
   const composer = source("./composer.tsx");
   assert.match(composer, /disabled=\{composerInputLocked\}\s*onClick=\{\(\) => removeAttachment/u);
   assert.match(composer, /disabled=\{composerInputLocked\}\s*onClick=\{\(\) => \{\s*dispatchSkillSelection\(\{ type: "remove"/u);
+});
+
+afterEach(cleanup);
+
+const USABLE_MODEL = {
+  id: "openai",
+  kind: "openai",
+  label: "OpenAI",
+  baseUrl: "https://api.openai.com/v1",
+  models: ["gpt-5"],
+  needsKey: true,
+  hasKey: true,
+} as Provider;
+
+function mountApprovals(
+  workspace: Partial<Workspace>,
+  options: { settings?: Partial<AppSettings>; providers?: Provider[] } = {},
+) {
+  installBotTestIpc({
+    "settings:get": () => options.settings ?? { approvalModeOrigin: "fresh" },
+    "providers:list": () => options.providers ?? [USABLE_MODEL],
+  });
+  const patches: ComposerApprovalsPatch[] = [];
+  render(
+    <QueryClientProvider client={createBotTestQueryClient()}>
+      <CommandSystemProvider>
+        <Composer
+          ready
+          hasMessages
+          chatId="approvals-chat"
+          onSend={async () => undefined}
+          onStop={() => undefined}
+          isGenerating={false}
+          surfaces={LOCAL_COMPOSER_SURFACES}
+          workspace={{ id: "site", name: "Site", folderPath: "/tmp/site", permission: "ask", createdAt: 1, updatedAt: 1, ...workspace } as Workspace}
+          onChangeApprovals={(patch) => {
+            patches.push(patch);
+          }}
+        />
+      </CommandSystemProvider>
+    </QueryClientProvider>,
+  );
+  return patches;
+}
+
+/** Waits for settings and providers to load, so the chip reflects them. */
+async function settled() {
+  await waitFor(() => assert.ok(screen.getByRole("textbox")));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+}
+
+function approvalOptions() {
+  return within(screen.getByRole("radiogroup", { name: "Approvals" }))
+    .getAllByRole("radio")
+    .map((radio) => `${radio.getAttribute("aria-label")}${radio.getAttribute("aria-checked") === "true" ? " (on)" : ""}`);
+}
+
+test("a workspace that follows Settings → Approvals shows no approvals chip", async () => {
+  mountApprovals({}, { settings: { approvalMode: "ask" } });
+  await settled();
+  assert.equal(screen.queryByRole("button", { name: /^Approvals:/u }), null);
+  assert.equal(screen.queryByRole("radiogroup", { name: "Approvals" }), null);
+});
+
+test("a customized workspace shows its mode, and Use Settings hands it back to the global mode", async () => {
+  const patches = mountApprovals({ approvalMode: "never" }, { settings: { approvalMode: "ask" } });
+  await settled();
+  const chip = await screen.findByRole("button", { name: "Approvals: Never ask. Show options." });
+  fireEvent.click(chip);
+  assert.deepEqual(approvalOptions(), [
+    "Approvals: Use Settings (Ask)",
+    "Approvals: Auto",
+    "Approvals: Ask",
+    "Approvals: Never ask (on)",
+  ]);
+  fireEvent.click(screen.getByRole("radio", { name: "Approvals: Ask" }));
+  // Choices wait while a change is saving.
+  await waitFor(() => assert.equal(screen.getByRole("button", { name: /^Approvals:/u }).textContent, "Never ask"));
+  fireEvent.click(screen.getByRole("radio", { name: "Approvals: Use Settings (Ask)" }));
+  assert.deepEqual(patches, [{ approvalMode: "ask" }, { approvalMode: null }]);
+});
+
+test("choosing an approvals option from the keyboard keeps the menu open for the next choice", async () => {
+  const patches = mountApprovals({ approvalMode: "never" }, { settings: { approvalMode: "ask" } });
+  await settled();
+  const chip = await screen.findByRole("button", { name: "Approvals: Never ask. Show options." });
+  fireEvent.click(chip);
+  // Keyboard activation carries no click count (detail 0); a pointer click closes the menu instead.
+  fireEvent.click(screen.getByRole("radio", { name: "Approvals: Ask" }), { detail: 0 });
+  assert.equal(chip.getAttribute("aria-expanded"), "true");
+  assert.deepEqual(patches, [{ approvalMode: "ask" }]);
+});
+
+test("a workspace stored as Full access reads as Never ask, and Auto needs a usable model", async () => {
+  mountApprovals({ permission: "full" }, { providers: [] });
+  await settled();
+  fireEvent.click(await screen.findByRole("button", { name: "Approvals: Never ask. Show options." }));
+  // With no usable model the global mode is Ask, and Auto isn't offered.
+  assert.deepEqual(approvalOptions(), ["Approvals: Use Settings (Ask)", "Approvals: Ask", "Approvals: Never ask (on)"]);
+});
+
+test("a Chat only workspace keeps its chip and points to Workspace settings instead of changing it here", async () => {
+  const patches = mountApprovals({ permission: "none" });
+  await settled();
+  fireEvent.click(await screen.findByRole("button", { name: "Approvals: Chat only. Show options." }));
+  assert.equal(screen.queryByRole("radiogroup", { name: "Approvals" }), null);
+  fireEvent.click(screen.getByRole("button", { name: "Workspace settings…" }));
+  assert.deepEqual(patches, []);
+});
+
+test("a No workspace chat always shows the chip and can switch to Chat only and back", async () => {
+  const patches = mountApprovals({ noWorkspace: true }, { settings: { approvalMode: "auto" } });
+  await settled();
+  fireEvent.click(await screen.findByRole("button", { name: "Approvals: Auto. Show options." }));
+  assert.deepEqual(approvalOptions(), [
+    "Approvals: Use Settings (Auto) (on)",
+    "Approvals: Auto",
+    "Approvals: Ask",
+    "Approvals: Never ask",
+    "Approvals: Chat only",
+  ]);
+  fireEvent.click(screen.getByRole("radio", { name: "Approvals: Chat only" }));
+  assert.deepEqual(patches, [{ permission: "none" }]);
+  cleanup();
+
+  const fromChatOnly = mountApprovals({ noWorkspace: true, permission: "none" });
+  await settled();
+  fireEvent.click(await screen.findByRole("button", { name: "Approvals: Chat only. Show options." }));
+  fireEvent.click(screen.getByRole("radio", { name: "Approvals: Ask" }));
+  // Leaving Chat only turns folder work back on with the chosen mode.
+  assert.deepEqual(fromChatOnly, [{ approvalMode: "ask", permission: "ask" }]);
+});
+
+test("arrow keys move between approval choices without changing them; Enter chooses", async () => {
+  const patches = mountApprovals({ approvalMode: "ask" });
+  await settled();
+  fireEvent.click(await screen.findByRole("button", { name: "Approvals: Ask. Show options." }));
+  const current = screen.getByRole("radio", { name: "Approvals: Ask" });
+  current.focus();
+  fireEvent.keyDown(current, { key: "ArrowDown" });
+  assert.equal(document.activeElement, screen.getByRole("radio", { name: "Approvals: Never ask" }));
+  fireEvent.keyDown(document.activeElement!, { key: "Home" });
+  assert.equal(document.activeElement, screen.getByRole("radio", { name: "Approvals: Use Settings (Auto)" }));
+  assert.deepEqual(patches, []);
+  fireEvent.keyDown(document.activeElement!, { key: "Enter" });
+  assert.deepEqual(patches, [{ approvalMode: null }]);
 });

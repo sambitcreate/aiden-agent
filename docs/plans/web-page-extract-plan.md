@@ -34,3 +34,7 @@ Bring pi-web-access v0.45.0's extract mode into Aiden as a native feature, witho
 
 - Hand-check the card, and take iPhone and Android screenshots, on the next TestFlight and Android builds. CI builds both apps and runs their tests.
 - Later, possibly: give Bots and schedules the tool, add extraction models, and give the CLI `web_fetch`.
+
+## 2026-11-02 correctness follow-up
+
+Backlog findings 9.1 and 9.2 were reproduced on main `9b2875d65f316265323d3d06a73904fbe00e2277`. The follow-up requires scaled numbers to match only their scaled value and keeps complete multiline/list/datetime support in each bounded citation. Support that cannot fit becomes an uncertain guess; the recap schema and Remote revision stay unchanged. See [the project memory](../../.memory/web-fetch-extract.md) for validation and PR status.

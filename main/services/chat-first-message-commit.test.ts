@@ -12,6 +12,7 @@ import { ChatTurnAdmission, type ChatTurnAdmissionOptions } from "./chat-turn-ad
 import { WorkspaceOperationRegistry, admitOwnedWorkspaceOperation } from "./workspace-operation-registry.js";
 import { isAppendReconciliationRequiredError } from "./chat-append-commit.js";
 import { chatForRenderer } from "./visible-chat-projection.js";
+import { SkillRegistry } from "./skill-registry.js";
 import type { RegisteredSkill } from "./skill-registry.js";
 
 let nextTurn = 0;
@@ -234,6 +235,43 @@ test("workspace cancellation drains first-message preparation before releasing i
   assert.deepEqual(await f.store.list(), []);
 });
 
+test("an owner lost during the durable write keeps ownership until that write settles", async (t) => {
+  let reachedWrite = () => {};
+  let finishWrite = () => {};
+  const writing = new Promise<void>((resolve) => { reachedWrite = resolve; });
+  const held = new Promise<void>((resolve) => { finishWrite = resolve; });
+  const f = await fixture(t, {
+    syncFile: async (target) => {
+      if (target.endsWith(".chat-write.tmp")) { reachedWrite(); await held; }
+      const handle = await fs.open(target, "r");
+      try { await handle.sync(); } finally { await handle.close(); }
+    },
+  });
+  const input = parseChatFirstMessage(request());
+  const outcome = createFirstMessageCommitter(f.deps)(input, f.owner)
+    .then((chat) => ({ chat }), (error: unknown) => ({ error }));
+  await writing;
+  f.owner.invalidate();
+  let drained = false;
+  const drain = f.workspaces.cancelAndSettle("workspace").then(() => { drained = true; });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(drained, false, "the workspace must wait for the write that is still running");
+
+  finishWrite();
+  const settled = await outcome;
+  await drain;
+  const durable = await f.store.get(input.chatId);
+  // The sender's answer and the disk agree, and the message exists at most once.
+  assert.equal(durable?.messages.length ?? 0, "chat" in settled ? 1 : 0);
+
+  const next = documentOwner();
+  t.after(() => next.invalidate());
+  const retry = createFirstMessageCommitter(f.deps);
+  const replayed = await retry(input, next);
+  assert.equal(replayed.messages.length, 1);
+  assert.deepEqual((await f.store.list()).map((chat) => chat.id), [input.chatId]);
+});
+
 test("payload failure keeps draft retryable; index uncertainty blocks retry and recovers a nonempty chat", async (t) => {
   for (const phase of ["chat-write", "index-write"] as const) {
     const f = await fixture(t, {
@@ -245,7 +283,16 @@ test("payload failure keeps draft retryable; index uncertainty blocks retry and 
     });
     const input = parseChatFirstMessage(request());
     let failure: unknown;
-    try { await createFirstMessageCommitter(f.deps)(input, f.owner); } catch (error) { failure = error; }
+    let assignmentReleased = false;
+    const removed: string[] = [];
+    const commit = createFirstMessageCommitter({
+      ...f.deps,
+      prepareWorkspace: async () => ({ workspaceId: "private-target", release: () => { assignmentReleased = true; } }),
+      releaseUnusedWorkspace: async (id) => { removed.push(id); },
+    });
+    try { await commit(input, f.owner); } catch (error) { failure = error; }
+    assert.equal(assignmentReleased, phase === "chat-write", "an uncertain target stays reserved until reconciliation");
+    assert.deepEqual(removed, phase === "chat-write" ? ["private-target"] : []);
     assert.ok(failure);
     assert.equal(isAppendReconciliationRequiredError(failure), phase === "index-write");
     assert.equal(f.turns.requiresAppendReconciliation(f.owner.documentId), phase === "index-write");
@@ -254,6 +301,41 @@ test("payload failure keeps draft retryable; index uncertainty blocks retry and 
     assert.equal(chat?.messages.length ?? 0, phase === "index-write" ? 1 : 0);
     assert.equal((await restart.list()).length, phase === "index-write" ? 1 : 0);
   }
+});
+
+test("private first send keeps its selected skill authoritative through folder allocation and replay", async (t) => {
+  const f = await fixture(t);
+  const registry = new SkillRegistry({
+    getWorkspace: async (id) => ({ id, name: id, folderPath: `/private/${id}`, permission: "ask", noWorkspace: true, createdAt: 1, updatedAt: 1 }),
+    listConfigured: async () => [{ id: "review", name: "Review", description: "Review changes", instructions: "Look for incorrect behavior.", enabled: true }],
+    discover: async () => [],
+  });
+  const [skill] = (await registry.catalog("workspace"));
+  let allocated = 0;
+  const commit = createFirstMessageCommitter({
+    ...f.deps,
+    prepareWorkspace: async () => ({ workspaceId: `private-${++allocated}`, release: () => undefined }),
+    resolveSkill: (id, invocationId) => registry.resolveFresh(id, invocationId),
+  });
+  const parsed = parseChatFirstMessage(request({
+    skillInvocation: { version: 1, invocationId: skill!.invocationId, displayName: "Review", source: "configured" },
+  }));
+  const chat = await commit(parsed, f.owner);
+  assert.equal(chat.workspaceId, "private-1");
+  assert.equal(chat.messages[0]?.skill?.name, "Review");
+  let preparedWorkspace: string | undefined;
+  let preparedPrompt: string | undefined;
+  assert.equal(f.turns.handoff(chat.id, parsed.turnId, f.owner.documentId, (prepared) => {
+    preparedWorkspace = prepared?.workspaceId;
+    preparedPrompt = prepared?.formattedPrompt;
+  }), true);
+  assert.equal(preparedWorkspace, chat.workspaceId);
+  assert.ok(preparedPrompt?.includes("Look for incorrect behavior."));
+  f.turns.releaseMatching(chat.id, parsed.turnId, f.owner.documentId);
+  const replay = await commit(parsed, f.owner);
+  assert.equal(replay.id, chat.id);
+  assert.equal(replay.workspaceId, "private-1");
+  assert.equal(allocated, 1, "a replay never allocates another folder");
 });
 
 test("a first message counts its new chat once, not on a replay and not when the workspace is gone", async (t) => {

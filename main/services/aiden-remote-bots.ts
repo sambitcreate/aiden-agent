@@ -19,6 +19,7 @@ import {
 } from "./bot-capability-store-core.js";
 import { BotIdentityRevisionConflictError } from "./bot-store-core.js";
 import { projectAidenRemoteChat, type AidenRemoteChatProjection } from "./aiden-remote-chats.js";
+import { executeAidenDurableOperation } from "./aiden-remote-durable-operation.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import {
   AidenIdempotencyLedger,
@@ -144,7 +145,7 @@ function mapBotMutationError(error: unknown): never {
   if (error instanceof BotCapabilityUnavailableError) {
     throw new AidenRemoteServiceError(
       "operation_stale",
-      "Some selected Bot access is unavailable. Refresh and review it on your Mac.",
+      "Some selected Bot access is unavailable. Refresh and review it on your computer.",
       409,
       true,
     );
@@ -243,6 +244,8 @@ type BotApplicationPort = {
     botId: string;
     expectedRevision: string;
     access: BotAccessUpdate;
+    /** Full → Custom from a device never adds Web search Full did not grant. */
+    noWiderThanFull?: true;
   }): Promise<BotAccessView>;
   withBotMutation?<Result>(
     botId: string,
@@ -341,49 +344,17 @@ export class AidenRemoteBotService {
     if (!IDEMPOTENCY_KEY.test(scope.key)) {
       throw new AidenRemoteServiceError("invalid_request", "Idempotency-Key is invalid.", 400);
     }
-    if (!this.options.persistIdempotency) {
-      return this.idempotency.execute(scope, input, action);
-    }
-    let admit!: () => void;
-    let reject!: (error: unknown) => void;
-    const durableAdmission = new Promise<void>((resolve, rejectPromise) => {
-      admit = resolve;
-      reject = rejectPromise;
-    });
-    const pending = this.idempotency.execute(scope, input, async () => {
-      await durableAdmission;
-      return action();
-    });
-    try {
-      await this.options.persistIdempotency(this.idempotency.snapshot());
-      admit();
-    } catch (error) {
-      reject(error);
-      await pending.catch(() => undefined);
-      throw new AidenRemoteServiceError(
-        "internal_error",
-        "Aiden could not durably prepare this Bot request.",
-        500,
-      );
-    }
-    let result: Result | undefined;
-    let failure: unknown;
-    try {
-      result = await pending;
-    } catch (error) {
-      failure = error;
-    }
-    try {
-      await this.options.persistIdempotency(this.idempotency.snapshot());
-    } catch {
-      throw new AidenRemoteServiceError(
-        "idempotency_in_flight",
-        "The Bot change may have completed, but Aiden could not record its outcome.",
-        409,
-      );
-    }
-    if (failure) throw failure;
-    return result!;
+    return executeAidenDurableOperation(
+      {
+        ledger: this.idempotency,
+        persist: this.options.persistIdempotency,
+        notPreparedMessage: "Aiden could not durably prepare this Bot request.",
+        outcomeUnrecordedMessage: "The Bot change may have completed, but Aiden could not record its outcome.",
+      },
+      scope,
+      input,
+      action,
+    );
   }
 
   /** A live Bot. A deleted Bot reads as missing. */
@@ -804,6 +775,7 @@ export class AidenRemoteBotService {
         botId: existing.id,
         expectedRevision,
         access: parsed as BotAccessUpdate,
+        noWiderThanFull: true,
       });
       this.options.notifyBotsChanged?.(existing.id);
       const canonical = await this.options.application.getCanonicalChat(existing.id);

@@ -108,7 +108,7 @@ schedules, terminal, Git, file editor, generative UI artifacts, workspace
 artifacts, coding follow-through (background jobs, followed pull requests and
 `/until` checks), diagnostics,
 Gemini voice transcription, remote access, notifications, profile, themes, and
-native subagents use the same contracts as macOS. Linux-specific integrations include:
+native subagents and [hooks](hooks.md) use the same contracts as macOS. Linux-specific integrations include:
 
 - Aiden's own title bar: no separate desktop title bar or menu bar strip.
   Minimize, maximize/restore and close sit at the right end of Aiden's top bar,
@@ -170,7 +170,7 @@ placement of the dictation pill, so exact bottom-center positioning may vary.
 Provider inventories may refresh only from the provider services the user has
 configured. Descriptive model metadata uses the bundled release snapshot or a validated
 device-local display cache. The explicit **Update model catalogs** action in
-Settings may refresh that cache; startup and ordinary reads stay offline.
+Settings → Providers → Advanced may refresh that cache; startup and ordinary reads stay offline.
 
 ## Updates and troubleshooting
 

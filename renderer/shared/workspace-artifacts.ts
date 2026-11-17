@@ -1,6 +1,6 @@
 import { isHtmlArtifactTitle } from "./generative-ui.js";
 import { AIDEN_UI_LIMITS, type ChatUiVisualV1 } from "./aiden-ui/types.js";
-import { isWireSafeKey, parseChatUiVisualV1 } from "./aiden-ui/visual.js";
+import { isWireSafeKey, parseAidenUiState, parseChatUiVisualV1 } from "./aiden-ui/visual.js";
 
 /**
  * Workspace artifacts: persistent Aiden UI pages a workspace owns and the
@@ -37,6 +37,8 @@ export const WORKSPACE_ARTIFACT_LIMITS = {
   actionTimeoutMs: 120_000,
   minIntervalSeconds: 60,
   maxIntervalSeconds: 24 * 60 * 60,
+  /** Earlier versions kept per page; the oldest is dropped first. */
+  history: 5,
 } as const;
 
 export type WorkspaceArtifactParse = "json" | "lines" | "text";
@@ -72,6 +74,12 @@ export interface WorkspaceArtifactV1 {
   description?: string;
   /** The page: a compiled render_ui visual whose id is the artifact id. */
   visual: ChatUiVisualV1;
+  /**
+   * The state the markup declared (`<Visual state={{…}}>`), kept apart from
+   * `visual.state`, which the person's own choices overwrite. Export writes
+   * this, never the person's state.
+   */
+  initialState?: Record<string, unknown>;
   sources: WorkspaceArtifactSourceV1[];
   actions: WorkspaceArtifactActionV1[];
   refresh: WorkspaceArtifactRefreshV1;
@@ -112,6 +120,45 @@ export interface WorkspaceArtifactView {
   digest: string;
 }
 
+/** One earlier version of a page that Restore can bring back. */
+export interface WorkspaceArtifactRevisionSummary {
+  revision: number;
+  /** When that version was replaced. */
+  savedAt: number;
+  /** The page's name at that time; a restore keeps the current name. */
+  title: string;
+  /**
+   * It runs commands other than the ones allowed for the current page, so under
+   * Ask a restore leaves them waiting to be allowed again.
+   */
+  needsApproval: boolean;
+}
+
+/**
+ * What a page file would add, shown before anything is saved. Confirming
+ * sends back only the token; main keeps the page itself until then.
+ */
+export type WorkspaceArtifactImportPreview =
+  | { status: "cancelled" }
+  | {
+      status: "ready";
+      token: string;
+      title: string;
+      description?: string;
+      /** Every command the page can run, as the Review dialog lists them. */
+      commands: { label: string; command: string }[];
+      /** Workspace files its sources read. */
+      files: string[];
+      /**
+       * When the page's sources are read by themselves: as it opens (and an
+       * imported page opens at once) and on a timer. Absent when it has no
+       * sources.
+       */
+      refresh?: { onOpen: boolean; intervalSeconds?: number };
+      /** Whether any source is a command, so refreshing the page runs commands rather than only reading files. */
+      shellSources: boolean;
+    };
+
 export type WorkspaceArtifactChangeReason = "created" | "updated" | "deleted" | "refreshed";
 
 export interface WorkspaceArtifactsChangedEvent {
@@ -134,29 +181,33 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+/** Format, default-ignorable and bidi-control characters: zero-width marks, joiners, overrides, BOM. */
+const INVISIBLE = /[\p{Cf}\p{Default_Ignorable_Code_Point}\p{Bidi_Control}]/u;
 /**
- * Control characters, plus the invisible ones (zero-width, bidi overrides,
- * line separators, BOM) that could make text on an approval card read
- * differently from what runs.
+ * The invisible characters that are part of a visible emoji: a variation
+ * selector right after an emoji or keycap base ("❤️", "1️⃣"), and a joiner
+ * between two emoji ("👨‍👩‍👧"). Anywhere else they hide, so they are refused.
+ */
+const EMOJI_PARTS = /(?<=[\p{Extended_Pictographic}#*0-9])[︎️]|(?<=\p{Extended_Pictographic}[\p{Emoji_Modifier}️]?)‍(?=\p{Extended_Pictographic})/gu;
+
+/**
+ * Whether text holds a C0 or C1 control character (other than `\n` and `\t`
+ * when `allowLineBreaks`), a line or paragraph separator, or an invisible
+ * character (see `INVISIBLE`) that isn't part of an emoji (see `EMOJI_PARTS`). These are refused in commands, labels, titles,
+ * descriptions, file paths and button values, so text shown for review can't
+ * hide characters or reorder itself. Visible look-alike letters (homoglyphs)
+ * are not caught.
  */
 function hasControlCharacter(value: string, allowLineBreaks: boolean): boolean {
   for (const char of value) {
     const code = char.codePointAt(0)!;
     if (code < 0x20 || code === 0x7f) {
-      if (allowLineBreaks && (code === 0x09 || code === 0x0a || code === 0x0d)) continue;
+      if (allowLineBreaks && (code === 0x09 || code === 0x0a)) continue;
       return true;
     }
-    if (
-      (code >= 0x80 && code <= 0x9f) ||
-      (code >= 0x200b && code <= 0x200f) ||
-      (code >= 0x2028 && code <= 0x202e) ||
-      (code >= 0x2060 && code <= 0x2069) ||
-      code === 0xfeff
-    ) {
-      return true;
-    }
+    if ((code >= 0x80 && code <= 0x9f) || code === 0x2028 || code === 0x2029) return true;
   }
-  return false;
+  return INVISIBLE.test(value.replace(EMOJI_PARTS, ""));
 }
 
 const WORD_BREAK_AFTER = /[\s;&|)]/u;
@@ -502,6 +553,11 @@ export function isWorkspaceArtifactId(value: unknown): value is string {
   return typeof value === "string" && ARTIFACT_ID.test(value);
 }
 
+/** A page revision number: a positive safe integer. */
+export function isWorkspaceArtifactRevision(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
+}
+
 export function isWorkspaceArtifactWorkspaceId(value: unknown): value is string {
   return typeof value === "string" && WORKSPACE_ID.test(value);
 }
@@ -518,7 +574,7 @@ export function isWorkspaceArtifactName(value: unknown): value is string {
 }
 
 export function isWorkspaceArtifactTitle(value: unknown): value is string {
-  return isHtmlArtifactTitle(value) && value.length <= WORKSPACE_ARTIFACT_LIMITS.titleChars;
+  return isHtmlArtifactTitle(value) && value.length <= WORKSPACE_ARTIFACT_LIMITS.titleChars && !hasControlCharacter(value, false);
 }
 
 function invalid(message: string): never {
@@ -549,7 +605,11 @@ function command(value: unknown, where: string): string {
   if (!trimmed || trimmed.length > WORKSPACE_ARTIFACT_LIMITS.commandChars) {
     return invalid(`${where}: command must be 1–${WORKSPACE_ARTIFACT_LIMITS.commandChars} characters.`);
   }
-  if (hasControlCharacter(trimmed, true)) return invalid(`${where}: command contains control characters.`);
+  if (hasControlCharacter(trimmed, true)) {
+    return invalid(`${where}: command contains control or invisible characters (line breaks must be \\n, not \\r).`);
+  }
+  // Blank lines could push the rest of a command out of an approval card's view.
+  if (/\n(?:[ \t]*\n){2,}/u.test(trimmed)) return invalid(`${where}: command has more than one blank line in a row.`);
   return trimmed;
 }
 
@@ -677,10 +737,12 @@ export function parseWorkspaceArtifactV1(value: unknown): WorkspaceArtifactV1 | 
   const refresh = tryParse(() => parseWorkspaceArtifactRefresh(value.refresh));
   const description = tryParse(() => parseWorkspaceArtifactDescription(value.description));
   if (!sources || !actions || !refresh || (value.description !== undefined && description === undefined)) return undefined;
+  const initialState = value.initialState === undefined ? undefined : parseAidenUiState(value.initialState);
+  if (value.initialState !== undefined && !initialState) return undefined;
   const revision = value.revision;
   const createdAt = finiteTime(value.createdAt);
   const updatedAt = finiteTime(value.updatedAt);
-  if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 1) return undefined;
+  if (!isWorkspaceArtifactRevision(revision)) return undefined;
   if (createdAt === undefined || updatedAt === undefined) return undefined;
   const approvedDigest =
     typeof value.approvedDigest === "string" && /^[a-f0-9]{64}$/u.test(value.approvedDigest) ? value.approvedDigest : undefined;
@@ -692,6 +754,7 @@ export function parseWorkspaceArtifactV1(value: unknown): WorkspaceArtifactV1 | 
     workspaceId: value.workspaceId,
     ...(description ? { description } : {}),
     visual,
+    ...(initialState ? { initialState } : {}),
     sources,
     actions,
     refresh,
@@ -707,7 +770,7 @@ export function parseWorkspaceArtifactSnapshotV1(value: unknown): WorkspaceArtif
   if (!isRecord(value) || !isRecord(value.sources)) return undefined;
   const revision = value.revision;
   const refreshedAt = finiteTime(value.refreshedAt);
-  if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 1 || refreshedAt === undefined) {
+  if (!isWorkspaceArtifactRevision(revision) || refreshedAt === undefined) {
     return undefined;
   }
   const sources: Record<string, WorkspaceArtifactSourceResultV1> = {};
@@ -900,6 +963,19 @@ export function describeWorkspaceArtifactCommands(
   return workspaceArtifactCommandList(sources, actions)
     .map((entry) => `• ${entry.label}: ${entry.command}`)
     .join("\n");
+}
+
+/**
+ * Whether saving these commands leaves them waiting for the person under Ask:
+ * they run something, and they are not the exact set already allowed.
+ */
+export function workspaceArtifactCommandsNeedApproval(
+  sources: readonly WorkspaceArtifactSourceV1[],
+  actions: readonly WorkspaceArtifactActionV1[],
+  digest: string,
+  approvedDigest: string | undefined,
+): boolean {
+  return workspaceArtifactHasCommands(sources, actions) && digest !== approvedDigest;
 }
 
 export function workspaceArtifactHasCommands(

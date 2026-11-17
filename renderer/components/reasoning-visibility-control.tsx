@@ -29,7 +29,7 @@ export function ReasoningVisibilityControl({
       )}
     >
       <Icon aria-hidden="true" className="size-3.5" />
-      <span>Reasoning</span>
+      <span className="composer-reasoning-label">Reasoning</span>
     </button>
   );
 }

@@ -151,6 +151,8 @@ export interface WorkspaceWorktreeApplicationDependencies {
   ): Promise<GitCreatedWorktree>;
   saveWorkspace(workspace: Workspace): Promise<Workspace>;
   removeWorkspace(workspaceId: string): Promise<void>;
+  /** Ends aiden-design grants that serve a removed worktree's folder. */
+  designGrants?: { revokeRoot(workspaceRoot: string): void };
   beginWorkspaceMutation(workspaceId: string): () => void;
   workspaceIsChanging(workspaceId: string): boolean;
   cancelWorkspaceOperations(workspaceId: string, exceptSignal: AbortSignal): Promise<void>;
@@ -165,6 +167,29 @@ export interface WorkspaceWorktreeApplicationDependencies {
   now(): number;
   notifyChanged(): void;
   logError(area: string, message: string, error: unknown): void;
+  /**
+   * Runs once a new managed worktree is saved (the `WorktreeSetup` hook).
+   * Awaited, so setup finishes before the caller uses the worktree, but it
+   * can never undo the creation: a failure is logged and the worktree stays.
+   */
+  onWorktreeCreated?(event: ManagedWorktreeCreatedEvent): Promise<void>;
+}
+
+/** A managed worktree Aiden just created and saved. */
+export interface ManagedWorktreeCreatedEvent {
+  /** The new worktree's workspace record. */
+  workspace: Workspace;
+  /** The new worktree's workspace folder (inside the checkout for a subfolder workspace). */
+  workspacePath: string;
+  /** The workspace it was created from; its hooks are the ones that run. */
+  sourceWorkspace: Workspace;
+  /** The source workspace's folder. */
+  sourceFolderPath: string;
+  /** The source checkout's top level. */
+  sourceRoot: string;
+  /** The new worktree's checkout root. */
+  worktreePath: string;
+  branch: string;
 }
 
 /** A new worktree from a chosen base, with an explicit or automatic branch name. */
@@ -257,6 +282,16 @@ export function createWorkspaceWorktreeApplicationService(
   // restores of the same snapshot are serialized here per process.
   const restoreLocks = new Map<string, Promise<void>>();
 
+  /** The WorktreeSetup hook: never fails or rolls back the saved worktree. */
+  const announceCreated = async (event: ManagedWorktreeCreatedEvent): Promise<void> => {
+    if (!dependencies.onWorktreeCreated) return;
+    try {
+      await dependencies.onWorktreeCreated(event);
+    } catch (error) {
+      dependencies.logError("hooks", "A WorktreeSetup hook could not finish; the worktree was kept.", error);
+    }
+  };
+
   const createIn = async (
     resolved: { folderPath: string; workspace: Workspace },
     signal: AbortSignal,
@@ -287,9 +322,10 @@ export function createWorkspaceWorktreeApplicationService(
         : []),
     );
     const provisionedFiles: string[] = [];
+    let sourceRoot = repository.topLevel;
     try {
       await dependencies.checkCreateCapacity(worktree.path, provisionedReserve);
-      const sourceRoot = (await dependencies.repositoryPaths(resolved.folderPath)).topLevel;
+      sourceRoot = (await dependencies.repositoryPaths(resolved.folderPath)).topLevel;
       await dependencies.provisionIncludedFiles({
         sourceRoot,
         worktreePath: worktree.path,
@@ -351,13 +387,25 @@ export function createWorkspaceWorktreeApplicationService(
             throw new Error("The source workspace changed while Aiden was saving the worktree.");
           }
         },
-        removeWorkspaceRecord: (savedWorkspace) => dependencies.removeWorkspace(savedWorkspace.id),
+        removeWorkspaceRecord: async (savedWorkspace) => {
+          await dependencies.removeWorkspace(savedWorkspace.id);
+          if (savedWorkspace.folderPath) dependencies.designGrants?.revokeRoot(savedWorkspace.folderPath);
+        },
         rollbackWorktree: () =>
           dependencies.rollbackWorktree(resolved.folderPath, worktree, {
             provisionedIgnored: provisionedFiles,
           }),
       });
       dependencies.notifyChanged();
+      await announceCreated({
+        workspace: saved,
+        workspacePath: worktree.workspacePath,
+        sourceWorkspace: resolved.workspace,
+        sourceFolderPath: resolved.folderPath,
+        sourceRoot,
+        worktreePath: worktree.path,
+        branch,
+      });
       reportAnalyticsEvent("worktree_created", {});
       return saved;
     } catch (error) {
@@ -695,7 +743,10 @@ export function createWorkspaceWorktreeApplicationService(
                 followThroughChange.committed = true;
                 keepPaused();
               },
-              removeWorkspaceRecord: () => dependencies.removeWorkspace(workspaceId),
+              removeWorkspaceRecord: async () => {
+                await dependencies.removeWorkspace(workspaceId);
+                if (workspace.folderPath) dependencies.designGrants?.revokeRoot(workspace.folderPath);
+              },
               reconciledResult: () => ({ branchDeleted: false }),
             });
             if (managed.worktreeGitDir && managed.ownershipToken) {

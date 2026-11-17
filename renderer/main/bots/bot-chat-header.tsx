@@ -12,16 +12,17 @@ import {
 import { useShortcutBinding, useShortcutLabel } from "../../lib/command-system";
 import { ariaKeyShortcut } from "../../shared/keybindings";
 import type { BotDefinition } from "../../shared/bots";
-import { BotMenuItems, useBotMenuFocusGuard, type BotMenuAction } from "./bot-menu";
+import { BotMenuItems, type BotMenuAction } from "./bot-menu";
 import { BOT_PANEL_ID, useBotPanel } from "./bot-panel-context";
 
-/** The chat toolbar's title: the Bot's avatar and name, which open its Profile. */
+/** The chat toolbar's title: the Bot's avatar and name, which open its settings in the side panel. */
 export function BotChatNamePill({
   bot,
   onOpenProfile,
   working = false,
 }: {
   bot: Pick<BotDefinition, "id" | "name" | "avatar">;
+  /** Opens the side panel on the Advanced tab. */
   onOpenProfile(): void;
   /** The Bot is in a running turn: its face glances. */
   working?: boolean;
@@ -33,7 +34,8 @@ export function BotChatNamePill({
       // The heading clips overflow for the ellipsis, so the focus ring is drawn inside.
       style={{ "--keyboard-focus-offset": "-2px" } as React.CSSProperties}
       className="max-w-full min-w-0 shrink gap-1.5 pl-0.5 pr-2 text-primary"
-      aria-label={`${bot.name} profile`}
+      aria-label={`${bot.name} settings`}
+      aria-controls={BOT_PANEL_ID}
       onClick={onOpenProfile}
     >
       <BotAvatar botId={bot.id} avatar={bot.avatar} name={bot.name} photoLoading="immediate" size="small" working={working} />
@@ -53,9 +55,8 @@ export function BotChatActions({
   pinned: boolean;
   /** The person paused this Bot: the menu offers Resume Bot. */
   paused?: boolean;
-  onAction(action: BotMenuAction, returnFocus?: HTMLElement | null): void;
+  onAction(action: BotMenuAction): void;
 }) {
-  const focusGuard = useBotMenuFocusGuard();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -63,13 +64,12 @@ export function BotChatActions({
           <Ellipsis />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" onCloseAutoFocus={focusGuard.onCloseAutoFocus}>
+      <DropdownMenuContent align="end">
         <BotMenuItems
           pinned={pinned}
           paused={paused}
           Item={DropdownMenuItem}
           Separator={DropdownMenuSeparator}
-          focusGuard={focusGuard}
           onAction={onAction}
         />
       </DropdownMenuContent>

@@ -12,7 +12,13 @@ export interface AidenUiScope {
   /** BCP 47 locale for `fmt`; defaults to en-US so results are reproducible. */
   locale?: string;
   budget?: { steps: number };
+  /** Page checks only: told about each `$name` and member read the evaluation actually took. */
+  onRead?: (read: AidenUiRead) => void;
 }
+
+export type AidenUiRead =
+  | { kind: "var"; expr: Extract<AidenUiExprV1, { op: "var" }>; found: boolean }
+  | { kind: "member"; expr: Extract<AidenUiExprV1, { op: "get" }>; object: unknown; key: unknown; value: unknown };
 
 const DEFAULT_STEPS = 20_000;
 /** Longest string `+` may build; repeated concatenation cannot balloon memory. */
@@ -166,10 +172,18 @@ function run(expr: AidenUiExprV1, scope: AidenUiScope, budget: { steps: number }
       return expr.v;
     case "json":
       return expr.v;
-    case "var":
-      return hasOwn(scope.vars, expr.name) ? scope.vars[expr.name] : undefined;
-    case "get":
-      return readMember(run(expr.of, scope, budget), run(expr.key, scope, budget));
+    case "var": {
+      const found = hasOwn(scope.vars, expr.name);
+      scope.onRead?.({ kind: "var", expr, found });
+      return found ? scope.vars[expr.name] : undefined;
+    }
+    case "get": {
+      const object = run(expr.of, scope, budget);
+      const key = run(expr.key, scope, budget);
+      const value = readMember(object, key);
+      scope.onRead?.({ kind: "member", expr, object, key, value });
+      return value;
+    }
     case "not":
       return !truthy(run(expr.e, scope, budget));
     case "if":

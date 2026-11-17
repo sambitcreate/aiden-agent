@@ -1,6 +1,6 @@
 {
   "target": "linux-x64",
-  "builtAt": "2026-10-16T03:49:16.518Z",
+  "builtAt": "2026-11-05T01:07:58.947Z",
   "helpers": {
     "worktree-remover": {
       "sha256": "2164f941716de1ac9a8f0fd3e37c8c9524150d4e4e126c764919e1ca7f0543e8",
@@ -19,8 +19,8 @@
       "source": "4dbcd343b4f0c0546f7a64b21d67c3115d29f50128e03c02d9ca149cc62b8cb7"
     },
     "subagent-file-mutator": {
-      "sha256": "878bf58134892ba9f2b00c743fd1bc04fe3728db141e6941767c6393c79bde98",
-      "source": "6df6e44fd44d1611bce415dc7d697fcee0d83302c0349f6c053c3784bdfdcd8c"
+      "sha256": "bc729382a59be1f92b5e51246201663297c47dbe15ef8791f913313f76e5f9db",
+      "source": "4843ac1264748c6b3376a2af0ebec983a0e4cb79268aca1c3ba851d42b7c5d69"
     }
   }
 }

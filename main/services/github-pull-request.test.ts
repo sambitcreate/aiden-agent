@@ -381,6 +381,13 @@ test("current branch lookup ignores same-named branches from other forks and pre
   assert.equal((await service.currentPullRequest("/repo")).pullRequest?.number, 3);
 });
 
+test("repository status reports the branch name the checkout pushes to", async () => {
+  const { service } = setup({ local: { branch: "feature", headBranch: "user-feature" } });
+  const status = await service.resolveRepository("/repo");
+  assert.equal(status.availability, "ready");
+  assert.equal(status.headBranch, "user-feature");
+});
+
 test("a branch with no pull request and a detached HEAD are both no-pull-request", async () => {
   const none = setup();
   assert.equal((await none.service.currentPullRequest("/repo")).availability, "no-pull-request");

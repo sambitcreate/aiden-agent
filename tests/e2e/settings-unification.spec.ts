@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { E2E_ASSISTANT_RESPONSE, expect, finishLmStudioOnboarding, skipBotsOnboardingStep, test } from "./fixtures";
+import { E2E_ASSISTANT_RESPONSE, expect, finishLmStudioOnboarding, connectOnboardingLmStudio, test } from "./fixtures";
 
 test.use({ workspaceSeed: true });
 
@@ -532,10 +532,9 @@ test("paid cache warming stays off until explicitly enabled and can be disabled 
   const onboarding = page.locator('section[aria-label="Set up Aiden"]');
   await onboarding.getByPlaceholder("Your name").fill("E2E Local User");
   await onboarding.getByRole("button", { name: /^Next/u }).click();
+  await connectOnboardingLmStudio(onboarding);
+  await onboarding.getByText("Other features and privacy", { exact: true }).click();
   await expect(onboarding.getByText(/optional prompt cache warming/u)).toContainText("off by default");
-  await onboarding.getByRole("button", { name: /LM Studio.*Use models running in LM Studio/u }).click();
-  await onboarding.getByRole("button", { name: /^Next/u }).click();
-  await skipBotsOnboardingStep(onboarding);
   await onboarding.getByRole("button", { name: "Start using Aiden" }).click();
   await expect(onboarding).toBeHidden();
   const openContextAndLimits = async () => {
@@ -663,8 +662,8 @@ test("the Bot messaging switch persists through the real settings handler", asyn
   let page = aiden.page;
   await finishLmStudioOnboarding(page);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Bots & Approvals", exact: true }).click();
-  const toggle = () => page.getByRole("switch", { name: "Bots can message each other", exact: true });
+  await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Approvals", exact: true }).click();
+  const toggle = () => page.getByRole("switch", { name: "Bot messaging", exact: true });
   await expect(toggle()).toBeChecked();
   await toggle().click();
   await expect(toggle()).not.toBeChecked();
@@ -673,7 +672,7 @@ test("the Bot messaging switch persists through the real settings handler", asyn
   )).toBe(false);
   page = await aiden.relaunch();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Bots & Approvals", exact: true }).click();
+  await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Approvals", exact: true }).click();
   await expect(toggle()).not.toBeChecked();
   const invalid = await page.evaluate(async () => {
     try { await window.aidenAPI.ipc.invoke("settings:set", { botMessaging: "false" }); return "accepted"; }
@@ -709,7 +708,7 @@ test("a merged Settings page switches tabs in place and Back to app leaves in on
   await expect(navigation).toHaveCount(0);
 });
 
-test("settings search opens the tab that matched, and the Links row on Appearance", async ({ aiden }) => {
+test("settings search opens the tab that matched, the Links row on Appearance and Bot messaging on Approvals", async ({ aiden }) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
@@ -731,4 +730,10 @@ test("settings search opens the tab that matched, and the Links row on Appearanc
   await expect(links).not.toBeInViewport();
   await navigation.getByRole("button", { name: "Appearance", exact: true }).click();
   await expect(links).toBeInViewport();
+
+  // Bot messaging is a spot on Approvals: its tab shows and the switch scrolls into view.
+  await search.fill("message each other");
+  await navigation.getByRole("button", { name: "Approvals", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "Approvals", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("switch", { name: "Bot messaging", exact: true })).toBeInViewport();
 });

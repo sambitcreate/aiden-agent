@@ -31,6 +31,18 @@ test("replaces a file atomically with the requested owner-only mode", async (t) 
   assert.deepEqual(await siblings(directory), ["state.json"]);
 });
 
+test("a target whose name is near the file system's limit still saves", async (t) => {
+  const directory = await scratch(t);
+  // 80 three-byte characters: 240 bytes, as a person may type into a save dialog.
+  const name = "进".repeat(80);
+  assert.equal(Buffer.byteLength(name, "utf8"), 240);
+  const target = path.join(directory, name);
+  await writeFileAtomic(target, "first");
+  await writeFileAtomic(target, "second", { mode: 0o600 });
+  assert.equal(await fs.readFile(target, "utf8"), "second");
+  assert.deepEqual(await siblings(directory), [name]);
+});
+
 test("a failed staged-file fsync keeps the previous bytes and leaves no staging file", async (t) => {
   const directory = await scratch(t);
   const target = path.join(directory, "state.json");

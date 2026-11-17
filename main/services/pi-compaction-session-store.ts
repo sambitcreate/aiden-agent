@@ -11,6 +11,7 @@ import { ensureUserDataDir } from "./data-store.js";
 import { writeFileAtomic } from "./durable-fs.js";
 import { isDevelopmentRuntime } from "../runtime-mode-core.js";
 import { chatMessageToPiMessage } from "./generation-messages.js";
+import { isHookBlockedPrompt, withoutHookBlockedPrompts } from "./hook-blocked-prompt.js";
 import type { PiPersistentSessionMetadata, PiSessionMetadata, PiSessionPort, PiSessionEntry, PiEntryProjector } from "./pi-session-port.js";
 import {
   createCurrentPiSessionRepository,
@@ -408,6 +409,9 @@ export async function syncChatMessagesToPiSession(
 
   for (const message of messages) {
     if (synchronized.has(message.id)) continue;
+    // A prompt a UserPromptSubmit hook blocked never reaches the model, now or
+    // on any later turn, so it is never journaled.
+    if (isHookBlockedPrompt(message)) continue;
     const desired = chatMessageToPiMessage(
       message,
       model,
@@ -441,10 +445,11 @@ export async function syncChatMessagesToPiSession(
  */
 export async function projectVisibleHistoryWithoutSkills<M extends PiSessionMetadata>(
   session: PiSessionPort<M>,
-  messages: readonly ChatMessage[],
+  visibleMessages: readonly ChatMessage[],
   model: Model<Api>,
   forkSummary?: ChatForkSummaryV1,
 ): Promise<PiSessionPort<M>> {
+  const messages = withoutHookBlockedPrompts(visibleMessages);
   const originalEntries = await session.getEntries();
   const originalLeafId = await session.getLeafId();
   const cutoff = originalEntries.reduce((latest, entry) => Math.max(latest, entry.seq), -1);
@@ -495,8 +500,8 @@ export async function projectVisibleHistoryWithoutSkills<M extends PiSessionMeta
       getBranch,
       // Recall must not bypass the projection by traversing historical branches.
       getEntries: getBranch,
-      buildContext: async () => {
-        const branch = await getBranch();
+      buildContext: async (given) => {
+        const branch = given ?? await getBranch();
         const lastCompaction = branch.findIndex((entry, index) =>
           entry.type === "compaction" && !branch.slice(index + 1).some((later) => later.type === "compaction"));
         const entries = lastCompaction < 0 ? branch : branch.slice(lastCompaction);

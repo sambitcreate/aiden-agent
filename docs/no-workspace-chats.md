@@ -23,6 +23,10 @@ Each No workspace chat gets its own folder in Aiden's app data, named like a scr
 
 The folder is created when the chat is first sent, so a draft you abandon leaves nothing behind. If the folder goes missing (cleared app data, a manual delete), Aiden makes it again, empty, on the next message. The model is told the folder is private to the chat, so it can use it for downloads, clones and scratch files.
 
+Copying a chat or forking from a reply gives the new chat a separate, empty private folder and its own **Ask first** access setting. Conversation history is copied; files and workspace access are not shared. This also applies when copying an older chat from the migrated shared home. Previously created shared copies keep their existing files and access; Aiden does not move or duplicate that existing data automatically.
+
+A skill selected before the first send is validated in the draft's original workspace, while its one-turn instructions run in the newly assigned private folder.
+
 The chat's header chip reads **No workspace**; its menu can still show the folder in Finder or a file manager.
 
 ## Settings, access and memory

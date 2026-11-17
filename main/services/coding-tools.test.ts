@@ -9,6 +9,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { ForegroundReadOperations, ForegroundReadCleanupError, closeForegroundResource } from "./foreground-read-scope.js";
 import os from "node:os";
 import * as path from "node:path";
+import { setProtectedAgentConfigRoots } from "./protected-agent-config-paths.js";
 import { promisify } from "node:util";
 import test from "node:test";
 import {
@@ -244,6 +245,122 @@ test("parent coding tools retain hidden-metadata reads and JavaScript regex sema
   } finally {
     await fs.rm(parent, { recursive: true, force: true });
   }
+});
+
+test("parent file tools refuse to write hook and agent settings files but still read them", async () => {
+  const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-protected-config-")));
+  const root = path.join(parent, "workspace");
+  try {
+    await fs.mkdir(path.join(root, ".claude", "hooks"), { recursive: true });
+    await fs.mkdir(path.join(root, ".codex"), { recursive: true });
+    await fs.mkdir(path.join(root, "src"), { recursive: true });
+    const original = '{"hooks":{}}\n';
+    await fs.writeFile(path.join(root, ".claude", "settings.json"), original, "utf8");
+    await fs.writeFile(path.join(root, ".codex", "config.toml"), "model = \"x\"\n", "utf8");
+    await fs.symlink(path.join(root, ".claude"), path.join(root, "claude-link"));
+    const tools = buildCodingTools(root);
+    const write = tools.find((tool) => tool.name === "write_file");
+    const edit = tools.find((tool) => tool.name === "edit_file");
+    const read = tools.find((tool) => tool.name === "read_file");
+    assert.ok(write && edit && read);
+    const refusal = /cannot change hook or agent settings files[\s\S]*Settings → Hooks/u;
+
+    for (const target of [
+      ".claude/settings.json",
+      ".claude/settings.local.json",
+      ".claude/hooks/pre.sh",
+      ".aiden/hooks.json",
+      "packages/app/.aiden/hooks.json",
+      ".codex/config.toml",
+      ".codex/hooks/run.sh",
+      ".CLAUDE/Settings.JSON",
+      "src/../.claude/settings.json",
+      "claude-link/settings.json",
+      ".git/config",
+      ".git/hooks/pre-commit",
+      "packages/app/.git/hooks/post-checkout",
+    ]) {
+      await assert.rejects(write.execute("w", { path: target, content: "{}\n" }), refusal, target);
+    }
+    await assert.rejects(
+      edit.execute("e", { path: ".claude/settings.json", old_string: "{}", new_string: "{\"x\":1}" }),
+      refusal,
+    );
+    await assert.rejects(
+      edit.execute("e", { path: "claude-link/settings.json", old_string: "{}", new_string: "{\"x\":1}" }),
+      refusal,
+    );
+    assert.equal(await fs.readFile(path.join(root, ".claude", "settings.json"), "utf8"), original);
+    await assert.rejects(fs.stat(path.join(root, ".aiden")), { code: "ENOENT" });
+    await assert.rejects(fs.stat(path.join(root, ".claude", "settings.local.json")), { code: "ENOENT" });
+    await assert.rejects(fs.stat(path.join(root, ".claude", "hooks", "pre.sh")), { code: "ENOENT" });
+
+    const readResult = await read.execute("r", { path: ".claude/settings.json" });
+    const readBlock = readResult.content[0];
+    assert.equal(readBlock?.type === "text" ? readBlock.text : "", original);
+
+    // Other agent content keeps its ordinary behavior.
+    for (const target of [".claude/skills/x/SKILL.md", ".claude/agents/x.md", "CLAUDE.md"]) {
+      await write.execute("ok", { path: target, content: "# notes\n" });
+      assert.equal(await fs.readFile(path.join(root, target), "utf8"), "# notes\n");
+    }
+    await edit.execute("ok", { path: ".claude/skills/x/SKILL.md", old_string: "notes", new_string: "steps" });
+    assert.equal(await fs.readFile(path.join(root, ".claude", "skills", "x", "SKILL.md"), "utf8"), "# steps\n");
+  } finally {
+    await fs.rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("a workspace opened inside .claude cannot write its settings file", async () => {
+  const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-protected-root-")));
+  const root = path.join(parent, ".claude");
+  try {
+    await fs.mkdir(root);
+    const write = buildCodingTools(root).find((tool) => tool.name === "write_file");
+    assert.ok(write);
+    await assert.rejects(
+      write.execute("w", { path: "settings.json", content: "{}\n" }),
+      /cannot change hook or agent settings files/u,
+    );
+    await assert.rejects(fs.stat(path.join(root, "settings.json")), { code: "ENOENT" });
+    await write.execute("ok", { path: "skills/x/SKILL.md", content: "# ok\n" });
+    assert.equal(await fs.readFile(path.join(root, "skills", "x", "SKILL.md"), "utf8"), "# ok\n");
+  } finally {
+    await fs.rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("the file tools refuse a registered hook store however it is spelled, and leave its neighbours writable", async (t) => {
+  const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-hook-root-")));
+  const store = path.join(parent, "profile", "hooks");
+  await fs.mkdir(path.join(store, "nested"), { recursive: true });
+  await fs.writeFile(path.join(store, "hooks.json"), "{}\n", "utf8");
+  await fs.writeFile(path.join(store, "nested", "state.json"), "{}\n", "utf8");
+  await fs.symlink(store, path.join(parent, "alias"));
+  setProtectedAgentConfigRoots([store]);
+  t.after(async () => {
+    setProtectedAgentConfigRoots([]);
+    await fs.rm(parent, { recursive: true, force: true });
+  });
+
+  const tools = buildCodingTools(parent);
+  const write = tools.find((tool) => tool.name === "write_file");
+  const edit = tools.find((tool) => tool.name === "edit_file");
+  assert.ok(write && edit);
+  for (const target of ["profile/hooks/hooks.json", "profile/hooks/nested/state.json", "profile/hooks/new.json", "alias/hooks.json", "profile/../profile/hooks/hooks.json"]) {
+    await assert.rejects(write.execute("w", { path: target, content: "changed\n" }), /cannot change hook or agent settings files/u, target);
+  }
+  for (const target of ["profile/hooks/hooks.json", "alias/nested/state.json"]) {
+    await assert.rejects(edit.execute("e", { path: target, old_string: "{}", new_string: "changed" }), /cannot change hook or agent settings files/u, target);
+  }
+  assert.equal(await fs.readFile(path.join(store, "hooks.json"), "utf8"), "{}\n");
+  assert.equal(await fs.readFile(path.join(store, "nested", "state.json"), "utf8"), "{}\n");
+  await assert.rejects(fs.stat(path.join(store, "new.json")), { code: "ENOENT" });
+
+  // A sibling whose name only starts the same is not the store.
+  await write.execute("ok", { path: "profile/hooks-notes/plan.md", content: "fine\n" });
+  await edit.execute("ok", { path: "profile/hooks-notes/plan.md", old_string: "fine", new_string: "still fine" });
+  assert.equal(await fs.readFile(path.join(parent, "profile", "hooks-notes", "plan.md"), "utf8"), "still fine\n");
 });
 
 test("workspace search and read tools exclude credential paths from model-visible results", async () => {

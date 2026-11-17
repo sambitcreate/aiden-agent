@@ -71,17 +71,32 @@ async function setup(
           reserve: (row: Parameters<typeof durable.reserve>[0]) =>
             durable.reserve({ ...row, deadline: Date.now() + windowMs }),
         };
-  let calls = 0;
-  const countedLedger = {
-    ...ledger,
-    get: async (id: string) => {
+  let calls = 0,
+    running = 0,
+    readDelayMs = 0;
+  const observed =
+    <Args extends unknown[], Result>(operation: (...args: Args) => Promise<Result>) =>
+    async (...args: Args): Promise<Result> => {
       calls++;
+      running++;
+      try {
+        return await operation(...args);
+      } finally {
+        running--;
+      }
+    };
+  const countedLedger: typeof ledger = {
+    receipt: observed(ledger.receipt),
+    receipts: observed(ledger.receipts),
+    collectReceipt: observed(ledger.collectReceipt),
+    get: observed(async (id) => {
+      if (readDelayMs) await new Promise((resolve) => setTimeout(resolve, readDelayMs));
       return ledger.get(id);
-    },
-    update: async (...args: Parameters<typeof ledger.update>) => {
-      calls++;
-      return ledger.update(...args);
-    },
+    }),
+    reserve: observed(ledger.reserve),
+    update: observed(ledger.update),
+    open: observed(ledger.open),
+    forgetBot: observed(ledger.forgetBot),
   };
   const sends: Array<{
     botId: string;
@@ -184,6 +199,16 @@ async function setup(
     timers,
     deliveries,
     counts: () => ({ ledger: calls, timer: timerCalls, waits: waitCount }),
+    slowLedgerReads: (ms: number) => {
+      readDelayMs = ms;
+    },
+    // A worker still reads the row after its last write, so a settled ledger doesn't mean it has
+    // exited. Its calls follow each other in promise callbacks, so a fresh event-loop turn with no
+    // call running and no timer pending means the courier has stopped until something wakes it.
+    workersStopped: async () => {
+      await new Promise((resolve) => setImmediate(resolve));
+      return running === 0 && timers.size === 0;
+    },
   };
 }
 
@@ -250,8 +275,15 @@ test("two senders share one busy-submission wait and drain through a real target
   assert.deepEqual(f.errors, []);
 });
 
-for (const outcome of ["expired", "silent"] as const) {
-  test(`real timers and ledger operations become quiescent after ${outcome}`, async (t) => {
+for (const [outcome, readDelayMs] of [
+  ["expired", 0],
+  ["silent", 0],
+  // Longer than one waitFor poll, so the settled row is visible while the worker is still reading.
+  ["expired", 30],
+  ["silent", 30],
+] as const) {
+  const reads = readDelayMs ? " with slow ledger reads" : "";
+  test(`real timers and ledger operations become quiescent after ${outcome}${reads}`, async (t) => {
     const busy = gate("Person result");
     t.after(busy.release);
     const f = await setup(
@@ -262,19 +294,19 @@ for (const outcome of ["expired", "silent"] as const) {
       },
       outcome === "expired" ? 80 : undefined,
     );
+    f.slowLedgerReads(readDelayMs);
     if (outcome === "expired") {
       await f.runtime.send("B", { text: "person", requestId: "person" });
       await waitFor(() => f.models.get("B")!.calls() === 1);
     }
     const sent = await f.post();
     await waitFor(
-      async () =>
-        (await f.ledger.get(sent.deliveryId))?.outcome === outcome &&
-        !(await f.ledger.open()).length &&
-        f.timers.size === 0,
+      async () => (await f.ledger.get(sent.deliveryId))?.outcome === outcome && !(await f.ledger.open()).length,
     );
-    const before = f.counts(),
-      inode = (await stat(f.file)).ino;
+    // Every effect is acknowledged on disk, so nothing may write from here on.
+    const inode = (await stat(f.file)).ino;
+    await waitFor(f.workersStopped);
+    const before = f.counts();
     await new Promise((resolve) => setTimeout(resolve, 140));
     assert.deepEqual(f.counts(), before);
     assert.equal((await stat(f.file)).ino, inode);
@@ -438,7 +470,7 @@ for (const unavailable of ["needs_model", "model_error"] as const) {
     assert.equal(f.models.get("A")!.calls(), 0);
     assert.equal(f.sends.length, 1);
     assert.ok((await f.ledger.get(accepted.deliveryId))!.effects.find((e) => e.kind === "reply")!.acknowledgedAt);
-    await waitFor(() => f.timers.size === 0);
+    await waitFor(f.workersStopped);
     const counts = f.counts();
     await new Promise((resolve) => setTimeout(resolve, 80));
     assert.deepEqual(f.counts(), counts);

@@ -417,6 +417,33 @@ test("a phone may deny a host-only approval but allowing it is refused with no e
   assert.deepEqual(effects.approvals, ["approval-1:deny"]);
 });
 
+test("a hook the agent proposed can be denied from a paired Mac but allowed only on the host", async () => {
+  const { registry, service, access, effects } = harness();
+  registry.publish("run-1", "chat:approval", approval("approval-1", {
+    toolName: "hooks",
+    details: { kind: "hook-proposal" },
+  }));
+  const controlled = open(service, controller("device-mac"), "run-1");
+  const prompt = controlled.frames().find((frame) => frame.event === "approval_required")!.data.payload;
+  // The journal's details allowlist does not know the kind, so a paired
+  // controller sees the summary marked as withheld, never the hook itself.
+  assert.equal(prompt.detailsOmitted, true);
+  assert.equal("details" in prompt, false);
+
+  const refused = await rejection(
+    service.respondApproval("device-mac", "run-1", "approval-1", { decision: "allow" }, KEY_A, access),
+  );
+  assert.equal(refused.code, "capability_denied");
+  assert.equal(refused.status, 403);
+  assert.deepEqual(effects.approvals, []);
+
+  const denied = await service.respondApproval(
+    "device-mac", "run-1", "approval-1", { decision: "deny" }, KEY_B, access,
+  );
+  assert.equal(denied.decision, "deny");
+  assert.deepEqual(effects.approvals, ["approval-1:deny"]);
+});
+
 test("a phone losing an approval race to the Mac learns the Mac's decision and when it was made", async () => {
   const { registry, service, access } = harness();
   registry.publish("run-1", "chat:approval", approval("approval-1"));
@@ -676,4 +703,67 @@ test("a capped channel preserves the other live content and a provider reset sta
   const retry = open(service, observer("retry"), "run-1", 0, true).frames()[0]!.data.payload;
   assert.equal(retry.replyText, "");
   assert.equal(retry.replyReasoning, "Retrying");
+});
+
+test("a Mac card's Allow in this workspace never reaches a Remote reader and cannot be answered from one", async () => {
+  const { registry, service, access, effects } = harness();
+  registry.publish("run-1", "chat:approval", approval("approval-1", {
+    toolName: "computer_use",
+    details: { kind: "computer-use-access" },
+    scopes: ["once", "chat", "workspace"],
+  }));
+  for (const device of [controller("device-a"), observer("device-o"), phone("device-phone")]) {
+    const prompt = open(service, device, "run-1").frames().find((frame) => frame.event === "approval_required")!.data.payload;
+    assert.equal(Array.isArray(prompt.scopes) && prompt.scopes.includes("workspace"), false, device.id);
+  }
+
+  for (const [key, phoneScoped] of [[KEY_A, false], [KEY_B, true]] as const) {
+    const refused = await rejection(
+      service.respondApproval("device-a", "run-1", "approval-1", { decision: "allow", scope: "workspace" }, key, access, {
+        phoneScoped,
+      }),
+    );
+    assert.equal(refused.code, "invalid_request");
+  }
+  assert.deepEqual(effects.approvals, []);
+  const denied = await service.respondApproval("device-a", "run-1", "approval-1", { decision: "deny" }, "key-controller-c-0001", access);
+  assert.equal(denied.decision, "deny");
+});
+
+test("a Mac card left with only a one-time allow carries no scopes to any Remote reader", async () => {
+  const { registry, service } = harness();
+  registry.publish("run-1", "chat:approval", approval("approval-1", {
+    toolName: "computer_use",
+    details: { kind: "computer-use-access" },
+    scopes: ["once", "workspace"],
+  }));
+  for (const device of [controller("device-a"), observer("device-o"), phone("device-phone")]) {
+    const prompt = open(service, device, "run-1").frames().find((frame) => frame.event === "approval_required")!.data.payload;
+    assert.equal("scopes" in prompt, false, device.id);
+  }
+});
+
+test("revision 61: a phone holding approval:cards gets the typed card and may allow exactly what it offers", async () => {
+  const { registry, service, access, effects } = harness();
+  registry.publish("run-1", "chat:approval", approval("approval-1", { summary: "Run command: npm test", details: undefined }));
+  registry.publish("run-1", "chat:approval", approval("approval-2", { details: { kind: "unrecognized" } }));
+  const carded = { ...phone("device-cards"), capabilities: new Set<AidenRemoteCapability>(["runs:observe", "runs:control", "approval:cards"]) };
+  const prompts = open(service, carded, "run-1").frames().filter((frame) => frame.event === "approval_required").map((frame) => frame.data.payload as Record<string, any>);
+  assert.equal(prompts[0]!.card.kind, "mac");
+  assert.deepEqual(prompts[0]!.card.body, { format: "command", text: "npm test" });
+  assert.deepEqual(prompts[0]!.card.buttons.map((button: { label: string }) => button.label), ["Deny", "Allow once", "Allow in this chat"]);
+  assert.equal(prompts[0]!.canAllow, true);
+  // A kind the card model does not know is deny-only, on the card and in canAllow.
+  assert.deepEqual(prompts[1]!.card.buttons.map((button: { decision: string }) => button.decision), ["deny"]);
+  assert.equal(prompts[1]!.canAllow, false);
+  // A phone without the opt-in sees no card.
+  assert.equal(open(service, phone("device-plain"), "run-1").frames().some((frame) => frame.event === "approval_required" && "card" in (frame.data.payload as object)), false);
+
+  const always = await rejection(service.respondApproval("device-cards", "run-1", "approval-1", { decision: "allow", scope: "always" }, KEY_A, access, { phoneScoped: true, capabilities: carded.capabilities }));
+  assert.equal(always.code, "capability_denied", "a scope the card does not offer is refused");
+  const refused = await rejection(service.respondApproval("device-cards", "run-1", "approval-2", { decision: "allow" }, KEY_B, access, { phoneScoped: true, capabilities: carded.capabilities }));
+  assert.equal(refused.code, "capability_denied");
+  assert.deepEqual(effects.approvals, []);
+  await service.respondApproval("device-cards", "run-1", "approval-1", { decision: "allow", scope: "chat" }, "key-controller-c-0001", access, { phoneScoped: true, capabilities: carded.capabilities });
+  assert.deepEqual(effects.approvals, ["approval-1:allow"]);
 });

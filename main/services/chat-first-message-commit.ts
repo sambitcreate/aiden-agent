@@ -1,3 +1,4 @@
+import type { WorkspaceChatAssignment } from "./workspace-application-service.js";
 import { createHash, randomUUID } from "node:crypto";
 import type { ParsedChatFirstMessage } from "../handlers/chat-first-message-params.js";
 import { analyticsWorkspaceKind } from "./analytics/analytics-ids.js";
@@ -34,6 +35,9 @@ interface Dependencies {
   clearReconciliation(ownerId: string): void;
   admitWorkspace(workspaceId: string, owner: Owner): WorkspaceOperationAdmission;
   getWorkspace(workspaceId: string): Promise<Pick<Workspace, "noWorkspace" | "managedWorktree" | "scratch"> | null | undefined>;
+  /** Main-owned assignment of a private No workspace folder before the first commit. */
+  prepareWorkspace?(sourceWorkspaceId: string): Promise<WorkspaceChatAssignment>;
+  releaseUnusedWorkspace?(workspaceId: string): Promise<void>;
   resolveSkill(workspaceId: string, invocationId: string): Promise<RegisteredSkill>;
 }
 
@@ -77,12 +81,15 @@ export function createFirstMessageCommitter(deps: Dependencies) {
     entry.promise = (async () => {
       let committed = false;
       let workSettled = false;
-      let workspace: WorkspaceOperationAdmission | undefined;
-      try {
-        workspace = deps.admitWorkspace(input.workspaceId, owner);
-        const admittedWorkspace = workspace;
+      const workspaces: WorkspaceOperationAdmission[] = [];
+      let workspaceId = input.workspaceId;
+      let preserveWorkspace = false;
+      let assignment: WorkspaceChatAssignment | undefined;
+      const admit = (id: string) => {
+        const admittedWorkspace = deps.admitWorkspace(id, owner);
+        workspaces.push(admittedWorkspace);
         const abortTurn = () => turn.release();
-        workspace.signal.addEventListener("abort", abortTurn, { once: true });
+        admittedWorkspace.signal.addEventListener("abort", abortTurn, { once: true });
         turn.onReleased(() => {
           admittedWorkspace.signal.removeEventListener("abort", abortTurn);
           // Revocation must drain an in-flight store write before the owning
@@ -92,8 +99,11 @@ export function createFirstMessageCommitter(deps: Dependencies) {
             turn.settleAsyncWork();
           }
         });
-        if (workspace.signal.aborted) abortTurn();
-        const isCurrent = () => turn.isActive() && !owner.isDestroyed() && !workspace!.signal.aborted;
+        if (admittedWorkspace.signal.aborted) abortTurn();
+      };
+      try {
+        admit(input.workspaceId);
+        const isCurrent = () => turn.isActive() && !owner.isDestroyed() && workspaces.every((workspace) => !workspace.signal.aborted);
         const assertCurrent = () => {
           if (!isCurrent()) throw new Error("The workspace or message turn changed before the chat could be saved.");
           if (deps.requiresReconciliation(owner.documentId)) {
@@ -116,11 +126,15 @@ export function createFirstMessageCommitter(deps: Dependencies) {
           throw new Error("The selected workspace is no longer available.");
         }
         assertCurrent();
+        assignment = await deps.prepareWorkspace?.(input.workspaceId);
+        workspaceId = assignment?.workspaceId ?? input.workspaceId;
+        if (workspaceId !== input.workspaceId) admit(workspaceId);
+        assertCurrent();
         const userMessageId = randomUUID();
         const append = (prepared?: { provenance: SkillProvenanceV1 }) => deps.store.createWithFirstMessage({
           id: input.chatId,
           title: input.title,
-          workspaceId: input.workspaceId,
+          workspaceId,
           providerId: input.providerId,
           model: input.metaModel,
           turnId: input.turnId,
@@ -131,6 +145,7 @@ export function createFirstMessageCommitter(deps: Dependencies) {
             model: input.messageModel,
             attachments: input.attachments,
             skill: prepared?.provenance,
+            ...(input.inputSource ? { inputSource: input.inputSource } : {}),
           },
           assertCurrent,
         });
@@ -140,13 +155,13 @@ export function createFirstMessageCommitter(deps: Dependencies) {
               role: "user",
               content: input.content,
               attachments: input.attachments,
-              workspaceId: input.workspaceId,
+              workspaceId,
               userMessageId,
             }, {
-              // A first send in a new worktree carries a skill chosen (and
-              // bound) in the draft's source workspace; resolve it there.
-              resolveFresh: (workspaceId, invocationId) =>
-                deps.resolveSkill(input.skillWorkspaceId ?? workspaceId, invocationId),
+              // Skills remain bound to the workspace where the person selected
+              // them; the prepared turn belongs to the new private folder/worktree.
+              resolveFresh: (_workspaceId, invocationId) =>
+                deps.resolveSkill(input.skillWorkspaceId ?? input.workspaceId, invocationId),
               isCurrent,
               prepareLease: (prepared) => turn.prepareSkillInvocation(prepared),
               append,
@@ -157,6 +172,7 @@ export function createFirstMessageCommitter(deps: Dependencies) {
         return chat;
       } catch (error) {
         if (isChatCreateReconciliationRequiredError(error)) {
+          preserveWorkspace = true;
           deps.markReconciliation(owner.documentId);
           owner.onInvalidated(() => deps.clearReconciliation(owner.documentId));
           throw new AppendReconciliationRequiredError();
@@ -165,7 +181,12 @@ export function createFirstMessageCommitter(deps: Dependencies) {
       } finally {
         workSettled = true;
         if (!committed) turn.release();
-        if (!turn.isActive()) workspace?.release();
+        if (!turn.isActive()) for (const workspace of workspaces) workspace.release();
+        if (!committed && !preserveWorkspace && workspaceId !== input.workspaceId) {
+          // The release implementation checks for a durable owner before removal.
+          await deps.releaseUnusedWorkspace?.(workspaceId).catch(() => undefined);
+        }
+        if (!preserveWorkspace) assignment?.release();
         // A successful receipt remains in pending until handoff/abandon/expiry.
         // Keep its payload capacity reserved for exactly that same lifetime.
         turn.settleAsyncWork({ retainAppendPayloadUntilRelease: committed && turn.isActive() });

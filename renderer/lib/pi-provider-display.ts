@@ -21,7 +21,6 @@ export const FEATURED_PI_PROVIDER_IDS = [
 
 const featuredProviderIds = new Set<string>(FEATURED_PI_PROVIDER_IDS);
 
-const ONBOARDING_PRIMARY_PROVIDER_IDS = new Set(["openai", "openai-codex", "anthropic"]);
 
 export const PROVIDER_ICON_SLUGS = [
   "amazon-bedrock",
@@ -123,78 +122,4 @@ export function splitPiBuiltinProviders<T extends { id: string }>(
     featured,
     more: providers.filter((provider) => !featuredProviderIds.has(provider.id)),
   };
-}
-
-/**
- * Every Pi-native option that is not already represented in onboarding's
- * compact first view. Product-curated providers stay first, while newly added
- * Pi providers remain discoverable without a renderer update.
- */
-export function getOnboardingMoreProviders<T extends { id: string; isBuiltin?: boolean }>(
-  providers: readonly T[],
-): T[] {
-  const additionalBuiltins = providers.filter(
-    (provider) => provider.isBuiltin === true && !ONBOARDING_PRIMARY_PROVIDER_IDS.has(provider.id),
-  );
-  const { featured, more } = splitPiBuiltinProviders(additionalBuiltins);
-  return [...featured, ...more];
-}
-
-type OnboardingBuiltinProvider = {
-  hasKey: boolean;
-  models: readonly string[];
-  authMethods?: ReadonlyArray<{
-    type: "api_key" | "oauth";
-    canLogin: boolean;
-  }>;
-};
-
-export function isOnboardingBuiltinProviderReady(provider: OnboardingBuiltinProvider): boolean {
-  // Pi projects ambient and stored credentials alike through hasKey, while
-  // builtinProviderRecord marks every provider in this catalog as needsKey.
-  return provider.models.length > 0 && provider.hasKey;
-}
-
-/** Prefer current OpenAI sign-in while retaining an already connected legacy Codex account. */
-export function onboardingChatGptSelection(
-  openai: (OnboardingBuiltinProvider & { defaultModel?: string }) | undefined,
-  codex: { configured: boolean; needsAttention?: boolean; models: readonly { id: string }[] } | undefined,
-): { providerId: string; model: string } | undefined {
-  if (openai && isOnboardingBuiltinProviderReady(openai)) {
-    const model = openai.defaultModel && openai.models.includes(openai.defaultModel)
-      ? openai.defaultModel : openai.models[0]!;
-    return { providerId: "openai", model };
-  }
-  if (codex?.configured && codex.needsAttention === false && codex.models[0]) {
-    return { providerId: "openai-codex", model: codex.models[0].id };
-  }
-  return undefined;
-}
-
-/**
- * First-run setup can use every Pi-owned interactive credential flow. Providers
- * that resolve credentials from the system remain selectable once they are
- * actually ready, without presenting a credential form Aiden cannot fulfill.
- */
-export function canConfigureOnboardingBuiltinProvider(
-  provider: OnboardingBuiltinProvider,
-): boolean {
-  return (
-    isOnboardingBuiltinProviderReady(provider) ||
-    provider.authMethods?.some((method) => method.canLogin) === true
-  );
-}
-
-export function onboardingBuiltinProviderSetupLabel(provider: OnboardingBuiltinProvider): string {
-  if (isOnboardingBuiltinProviderReady(provider)) return "Ready to use";
-
-  const methods = (provider.authMethods ?? []).filter((method) => method.canLogin);
-  const supportsApiKey = methods.some((method) => method.type === "api_key");
-  const supportsOAuth = methods.some((method) => method.type === "oauth");
-  if (supportsApiKey && supportsOAuth) return "Add an API key or sign in";
-  if (supportsApiKey) return "Add your API key";
-  if (supportsOAuth) return "Sign in to connect";
-  return provider.hasKey
-    ? "Configured; refresh in Settings"
-    : "Available in Settings after onboarding";
 }

@@ -68,6 +68,39 @@ internal val LocalAidenBrowserRecordingPlayback = compositionLocalOf<AidenBrowse
 
 private enum class AidenBrowserRecordingPhase { IDLE, LOADING, MISSING, FAILED }
 
+/** Main-thread owner installed with the card, before any download can finish. */
+private class AidenBrowserRecordingOwner(private val releaseFile: (AidenBrowserRecordingFile) -> Unit) {
+    private var disposed = false
+    private var owned: AidenBrowserRecordingFile? = null
+
+    fun adopt(file: AidenBrowserRecordingFile): Boolean {
+        if (disposed) {
+            releaseFile(file)
+            return false
+        }
+        if (owned != file) {
+            clear()
+            owned = file
+        }
+        return true
+    }
+
+    fun clear() {
+        val file = owned
+        owned = null
+        if (file != null) releaseFile(file)
+    }
+
+    fun release(file: AidenBrowserRecordingFile) {
+        if (owned == file) clear()
+    }
+
+    fun dispose() {
+        disposed = true
+        clear()
+    }
+}
+
 /**
  * The video the agent recorded of a browser tab, under its activity line, so the
  * owner can watch what the agent saw. The bytes stay on the Mac until Play is
@@ -81,8 +114,12 @@ internal fun AidenBrowserRecordingCard(
 ) {
     val playback = LocalAidenBrowserRecordingPlayback.current
     val scope = rememberCoroutineScope()
-    var phase by remember(recording.id) { mutableStateOf(AidenBrowserRecordingPhase.IDLE) }
-    var playing by remember(recording.id) { mutableStateOf<AidenBrowserRecordingFile?>(null) }
+    val owner = remember(recording.id, playback) { AidenBrowserRecordingOwner { playback?.release?.invoke(it) } }
+    var phase by remember(owner) { mutableStateOf(AidenBrowserRecordingPhase.IDLE) }
+    var playing by remember(owner) { mutableStateOf<AidenBrowserRecordingFile?>(null) }
+    DisposableEffect(owner) {
+        onDispose { owner.dispose() }
+    }
     val duration = recording.durationLabel
     val description = stringResource(R.string.chat_browser_recording_cd, duration)
     Surface(
@@ -138,12 +175,20 @@ internal fun AidenBrowserRecordingCard(
                             phase = AidenBrowserRecordingPhase.LOADING
                             scope.launch {
                                 val result = playback.load(recording)
+                                val file = (result as? AidenBrowserRecordingLoad.Ready)?.recording
+
+                                // Adopt before the player's first frame; reject late delivery after disposal.
+                                if (file != null) {
+                                    if (!owner.adopt(file)) return@launch
+                                } else {
+                                    owner.clear()
+                                }
                                 phase = when (result) {
                                     is AidenBrowserRecordingLoad.Ready -> AidenBrowserRecordingPhase.IDLE
                                     AidenBrowserRecordingLoad.Missing -> AidenBrowserRecordingPhase.MISSING
                                     AidenBrowserRecordingLoad.Failed -> AidenBrowserRecordingPhase.FAILED
                                 }
-                                playing = (result as? AidenBrowserRecordingLoad.Ready)?.recording
+                                playing = file
                             }
                         }
                     )
@@ -165,11 +210,10 @@ internal fun AidenBrowserRecordingCard(
         }
     }
     playing?.let { file ->
-        // Closing the player, or the card leaving the screen, drops the saved video.
-        DisposableEffect(file) {
-            onDispose { playback?.release?.invoke(file) }
-        }
-        AidenBrowserRecordingPlayer(recording = file, title = description, onDismiss = { playing = null })
+        AidenBrowserRecordingPlayer(recording = file, title = description, onDismiss = {
+            owner.release(file)
+            if (playing == file) playing = null
+        })
     }
 }
 

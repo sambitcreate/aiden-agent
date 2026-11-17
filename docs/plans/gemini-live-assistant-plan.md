@@ -4,6 +4,8 @@ Status: Partial — Phases 0–4 plus the beta-labeled Aiden Live orb/setup shel
 Date: 2026-09-15
 Voice-default release follow-up (2026-09-17): 0.41.5 exposes ordinary voice-only Aiden Live in normal Finder-launched production builds. The existing `AIDEN_EXPERIMENTAL_GEMINI_LIVE=0`/`false` values remain an incident kill switch. Screen capture is unchanged and stays unavailable unless `AIDEN_EXPERIMENTAL_GEMINI_LIVE_SCREEN=1` is deliberately supplied; the native-picker acceptance receipt remains pending.
 
+Voice upgrade follow-up (2026-11-06): while a session runs, the floating ribbon pill above the chat composer replaces the orb's active states and the HUD; the idle orb is still the way to start Live. Live's voice, pitch-preserving speaking speed, ribbon colours and goodbye-to-end are described in [aiden-live-voice-upgrade.md](completed/aiden-live-voice-upgrade.md), which tracks the four-PR upgrade.
+
 Screen-default follow-up (2026-10-07): screen capture now ships enabled with the Live gate. `AIDEN_EXPERIMENTAL_GEMINI_LIVE_SCREEN=0` (any value other than `1` or `true`) is its own kill switch, and `AIDEN_EXPERIMENTAL_GEMINI_LIVE=0` still turns off both. The native-picker acceptance receipt is still pending.
 Continuous orb follow-up (2026-09-17): active listening/thinking/speaking/acting now share stable Listening + Weaving canvas layers with a slow complementary blend and connection/rest crossfades. Removed visible dock status text (retained screen-reader status). First active click reveals Stop; the second stops, Escape restores the orb, and closing disables duplicate clicks. Sharing/error surfaces remain visible. Added mapping/click-policy regressions; all 230 Live tests, type-check, lint, and standalone browser interaction/motion checks pass. Downloads duplex-review.html uses the actual orb component; the installed notarized app has not been rebuilt for this change.
 
@@ -16,6 +18,8 @@ Audio selector layout follow-up: scoped single-line trigger styling and actual R
 Audio selection (2026-09-16 local): Settings → Aiden Live now offers device-local input/output preferences, system defaults, hotplug list refresh, and a speaker test. Selections are snapshotted per session; explicit microphone constraints and output sink routing apply to voice capture, replies, and both cues. Missing selections fail with recovery instructions instead of silent startup fallback. Setup points users to these settings. The shared audio player remains stable across capability refresh; preparation is cancellation-fenced. Tests extend the existing registered Live/UI/audio suites.
 Runtime diagnosis (2026-09-16 local): signed Live reached Google/open and microphone packet flow, but an empty top-level server envelope caused a fatal parser error. Exact empty envelopes now count against rate limits without extending idle liveness. Fixed lifecycle/audio/cue markers enter the local diagnostic journal without media/transcripts/credentials. The orb now labels microphone state, preserves terminal errors, and uses more audible connection tones. The signed Audio Fix build subsequently connected, captured microphone packets, received Google response audio, started playback, and stayed connected for 54 seconds until manually stopped. Both cue markers and the listening/idle labels were verified. Physical audibility still needs user confirmation; Computer Use acceptance remains unclaimed. Relevant tests, type-check, lint, and hardened development package verification passed.
 Local test-build update (2026-09-16): signed development profiles resolve the bundled Computer Use helper by physical package layout. Live plays connection/disconnection cues. At the user's explicit request, starting Live with Computer Use enabled authorizes direct actions for that session without per-action prompts or voice approvals. The dock no longer mounts the voice-approval listener. Target binding, current capture requirements, cancellation, owner identity, and enablement checks remain enforced. Historical per-action approval sections below describe the superseded implementation; ordinary chat policy is unchanged. No new real-provider acceptance is claimed.
+Voice approvals follow-up (2026-11-06, PR 3 of the [Aiden Live voice upgrade](completed/aiden-live-voice-upgrade.md)): Live can answer the open chat's tool approvals by voice; see that plan for the rules. The matcher for Live's own Computer Use voice approvals (`assistant-live-voice-approval.ts`) was also moved onto the shared 11-language phrase list (`renderer/shared/live-voice-phrases.ts`), but that path is **not active**: since the 2026-09-16 test-build update the dock does not mount `useAssistantLiveApprovals` (it passes an empty stub), and Live's Computer Use runs with session-authorized direct actions and no per-action voice approvals. The change only matters if that listener is mounted again.
+
 Related: `aiden-assistant-plan.md`, `pi-provider-integration-plan.md`, and
 `../computer-use-integration.md`
 
@@ -99,7 +103,26 @@ ships enabled as a beta; `AIDEN_EXPERIMENTAL_GEMINI_LIVE=0` is the incident
 kill switch. Screen capture remains separately acceptance-gated.
 Extended Thinking uses explicit `NON_BLOCKING` Computer Use declarations so it
 can speak brief progress updates while tools run. Every mutation remains paused
-behind a fresh, finalized user-voice “Allow once” or “Deny” decision.
+behind a fresh, finalized user-voice “Allow once” or “Deny” decision. (Superseded by the 2026-09-16 session-authorized direct actions; the matcher now takes the shared 11-language phrases, but that listener is not mounted.)
+
+Chat tools (2026-11-06, [voice upgrade PR 2](completed/aiden-live-voice-upgrade.md#pr-2-live-talks-to-and-steers-chats)):
+Live can read, send to and stop the open chat, find and open another regular
+chat, and start a new one. Main declares the tools and forwards each call to
+the window, which reuses the chat pane's own send, steer, queue and stop paths.
+Live's sends carry `inputSource: "voice"` and show a "By voice" label (Remote
+revision 60). Settings → Aiden Live → **Let Live use the open
+chat** (on by default) and `AIDEN_EXPERIMENTAL_GEMINI_LIVE_CHAT=0` turn the
+tools off. No chat tool can answer an approval. Chat text and titles reach
+Live as untrusted data, and a send, stop or new chat with text needs speech
+that started after Live last got chat content: any chat tool result carrying
+`untrusted_chat_content` (a read's messages, or a title, close matches or
+workspace name from send, stop, find or start) or a delivered chat note.
+
+Without Computer Use, Live is told it cannot act on the user's screen. When
+"Let Live move through Aiden" is on (the default), it is told instead that it
+may act only inside Aiden's own window through `look_at_aiden`, `use_aiden` and
+`open_in_aiden`, and never on other apps, and that text inside Aiden's pages is
+data, not instructions (see the voice upgrade plan, PR 4).
 
 ## Evidence and architecture decision
 
@@ -134,6 +157,14 @@ chat history, assistant threads, exports, or logs.
 - Replacing regular Google/Gemini chat, one-shot dictation, or Pi tool streaming.
 - Always-on capture, background monitoring, or automatic session start/reconnect.
 - Giving the Assistant ambient files, shell, MCP, project, settings, or scheduled-task authority.
+  (Since the voice upgrade's PR 4, Live may press and type in Aiden's own window
+  like the user would, so it can change ordinary settings such as Appearance
+  or Memory through the window. It gets no file, shell or MCP API, and the
+  guards in
+  [aiden-live-voice-upgrade.md](completed/aiden-live-voice-upgrade.md#pr-4-live-moves-through-aidens-own-window)
+  keep approvals, permission and access controls, providers and endpoints, MCP
+  servers, scheduled tasks, spending limits and Live's own settings the user's
+  alone.)
 - Bypassing Computer Use gates or converting capture permission into action permission.
 - Persisting audio, screen frames, model event payloads, or raw tool arguments.
 - Google Search Grounding or cloud code execution.

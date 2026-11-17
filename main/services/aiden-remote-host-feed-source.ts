@@ -15,10 +15,13 @@ import type {
 import type { AidenRemoteBotList, AidenRemoteBotSummary } from "./aiden-remote-protocol.js";
 import { projectAidenRemoteWorkspace } from "./aiden-remote-workspaces.js";
 import type { Workspace } from "./types.js";
+import type { ApprovalMode } from "../../renderer/shared/approval-mode.js";
 
 export interface AidenRemoteHostFeedSourceInputs {
   chats: Pick<AidenRemoteChatService, "hostFeedChats">;
   listWorkspaces(): Promise<readonly Workspace[]>;
+  /** The global approval mode workspace access tiers read under; Ask when absent. */
+  approvalMode?(): ApprovalMode | Promise<ApprovalMode>;
   /** Credential-free repository identity from the cached origin; never a git call. */
   repositoryIdentity?(folderPath: string): AidenRemoteRepositoryIdentity | undefined;
   /** Undefined when the host serves no Bots. */
@@ -37,10 +40,11 @@ export function createAidenRemoteHostFeedSource(
 ): AidenRemoteHostFeedSource {
   return {
     read: async () => {
-      const [{ summaries, botChatIds }, workspaceRows, botList] = await Promise.all([
+      const [{ summaries, botChatIds }, workspaceRows, botList, approvalMode] = await Promise.all([
         inputs.chats.hostFeedChats(),
         inputs.listWorkspaces(),
         inputs.listBots ? inputs.listBots() : Promise.resolve(undefined),
+        inputs.approvalMode ? inputs.approvalMode() : Promise.resolve("ask" as const),
       ]);
       const bots = botList?.bots ?? [];
       const signals = bots.length > 0 && inputs.botSignals ? await inputs.botSignals(bots) : undefined;
@@ -52,7 +56,7 @@ export function createAidenRemoteHostFeedSource(
             ? inputs.repositoryIdentity?.(workspace.folderPath)
             : undefined;
           return {
-            ...projectAidenRemoteWorkspace(workspace),
+            ...projectAidenRemoteWorkspace(workspace, approvalMode),
             ...(repository ? { repository } : {}),
           };
         }),

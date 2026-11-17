@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
   parseBotAccessUpdate,
   parseBotChatAccessUpdate,
@@ -198,6 +199,7 @@ export class BotCapabilityStore {
     audienceId: string,
     acknowledgement: unknown,
     assertCurrent?: () => void,
+    options?: { keepReviewFirst?: boolean },
   ): Promise<BotNoticeStatus> {
     this.requireInitialized();
     return this.serialized(async () => {
@@ -205,7 +207,7 @@ export class BotCapabilityStore {
       const prior = projectBotNoticeStatus(before, audienceId);
       const next = await this.persistence.update((state) => {
         assertCurrent?.();
-        return this.editor(state).acknowledgeNotice(audienceId, acknowledgement);
+        return this.editor(state).acknowledgeNotice(audienceId, acknowledgement, options);
       });
       if (
         !prior.requiresAcknowledgement &&
@@ -306,11 +308,20 @@ export class BotCapabilityStore {
     options: BotCapabilityIncarnationReconcileOptions = {},
   ): Promise<readonly BotCapabilityIncarnation[]> {
     this.requireInitialized();
-    return this.serialized(() =>
-      this.persistence.update((state) =>
+    return this.serialized(async () => {
+      // Each catalog snapshot reconciles every namespace and nearly always finds
+      // nothing new. Answer those from the in-memory state that startup verified
+      // against the rollback authority and that only checkpointed commits change.
+      // Only a real change pays for a commit, whose authority reads and writes are
+      // each a `security` subprocess on macOS.
+      const current = await this.persistence.load();
+      const probe = structuredClone(current);
+      const unchanged = this.editor(probe).reconcileIncarnationNamespace(namespace, resources, options);
+      if (isDeepStrictEqual(probe, current)) return unchanged;
+      return this.persistence.update((state) =>
         this.editor(state).reconcileIncarnationNamespace(namespace, resources, options),
-      ),
-    );
+      );
+    });
   }
 
   /** Main-only private binding clone for catalog reconciliation and tombstones. */

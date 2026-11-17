@@ -144,6 +144,16 @@ class AidenRunInputTest {
                 )
             )
         )
+        assertEquals(
+            "Saved to the chat — it wasn't sent to the run",
+            AidenRunInputPresentation.receipt(
+                result(
+                    AidenStreamInputStatus.REJECTED,
+                    reason = AidenStreamInputRejectionReason.INVALID,
+                    committed = true
+                )
+            )
+        )
         assertNull(AidenRunInputPresentation.receipt(
             result(
                 AidenStreamInputStatus.REJECTED,

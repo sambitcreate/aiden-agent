@@ -232,6 +232,13 @@ test("does not expose raw command, search, content, or absolute path arguments",
   assert.equal(serialized.includes("../outside"), false);
 });
 
+test("labels a workspace artifact restore as a restore, not an update", () => {
+  assert.deepEqual(safeToolDescriptor("workspace_artifact", { operation: "restore", id: "art1", revision: 2 }), {
+    label: "Restore artifact",
+  });
+  assert.equal(safeToolDescriptor("workspace_artifact", { operation: "update", id: "art1" }).label, "Update artifact");
+});
+
 test("projects display_image as a safe relative GUI artifact action", () => {
   assert.deepEqual(safeToolDescriptor("display_image", { path: "previews/page.png" }), {
     label: "Display image",

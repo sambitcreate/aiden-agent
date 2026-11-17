@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import test from "node:test";
 import Ajv from "ajv";
 import { createAidenRemoteRequestHandler, type AidenRemoteRouterDependencies } from "./aiden-remote-router.js";
-import { AIDEN_REMOTE_CONTRACT_REVISION, parseAidenRemoteBotRoutineNotificationList, parseAidenRemoteBotSession, type AidenRemoteCapability } from "./aiden-remote-protocol.js";
+import { AIDEN_REMOTE_BOT_PEERS_CONTRACT_REVISION, parseAidenRemoteBotRoutineNotificationList, parseAidenRemoteBotSession, type AidenRemoteCapability } from "./aiden-remote-protocol.js";
 import { projectRemoteBotOpenWork, projectRemoteBotOpenWorkResult, remoteBotOpenWorkMutationVisible } from "./aiden-remote-bot-open-work.js";
 import type { BotPeerOwnerService } from "./bot-peers/service-main.js";
 import { parseBotPeerExchangeDetail } from "../../renderer/shared/bot-peers.js";
@@ -36,7 +36,7 @@ async function host(t: test.TestContext, port?: BotPeerOwnerService, initial: Ai
     request: (resource: string, method = "GET", body?: unknown, signal?: AbortSignal) => fetch(`http://127.0.0.1:${address.port}/api/aiden/v1${resource}`, { method, signal, headers: { authorization: `Bearer ${"p".repeat(43)}`, "aiden-protocol-version": "1", ...(body === undefined ? {} : { "content-type": "application/json" }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }) };
 }
 test("peer readiness and grants distinguish owner metadata from conversation content", async (t) => {
-  assert.equal(AIDEN_REMOTE_CONTRACT_REVISION, fixture.contractRevision);
+  assert.equal(AIDEN_REMOTE_BOT_PEERS_CONTRACT_REVISION, fixture.contractRevision);
   const f = service(), server = await host(t, f.port, ["server:read", "bot:read", "bot:peers"]);
   assert.ok((await (await server.request("/server")).json()).serverCapabilities.includes("bot:peers"));
   assert.equal((await server.request(base + "/peers")).status, 200); assert.equal((await server.request(base + "/peers/catalog")).status, 200);

@@ -1,3 +1,5 @@
+import { parseChatInputSource } from "../../renderer/shared/chat-input-source.js";
+import type { WorkspaceChatAssignment } from "./workspace-application-service.js";
 import { agentNoticeDisplayText, parseAgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
 import { reportChatMessageSent } from "./analytics/analytics-feature-reports.js";
 import { parseAppControlPanels, REMOTE_APP_CONTROL_TOPICS } from "../../renderer/shared/app-controls.js";
@@ -63,6 +65,7 @@ import {
 } from "./chat-append-commit.js";
 import type { createChatApplicationService } from "./chat-application-service.js";
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
+import { executeAidenDurableOperation } from "./aiden-remote-durable-operation.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import {
   AidenIdempotencyLedger,
@@ -162,6 +165,11 @@ export interface AidenRemoteMessageProjection {
   visuals?: AidenRemoteVisualProjection[];
   outcome?: AidenRemoteMessageOutcomeProjection;
   timeline?: GenerationTimeline;
+  /**
+   * Additive (contract revision 60): a user message Aiden Live sent for the
+   * person on this Mac. Clients show a small "By voice" label; older ones ignore it.
+   */
+  inputSource?: "voice";
 }
 
 /**
@@ -854,6 +862,9 @@ function projectMessage(
     ...(visuals.length > 0 ? { visuals } : {}),
     ...(outcome ? { outcome } : {}),
     ...(timeline ? { timeline } : {}),
+    ...(message.role === "user" && !message.notice && parseChatInputSource(message.inputSource)
+      ? { inputSource: "voice" as const }
+      : {}),
   };
 }
 
@@ -1344,7 +1355,7 @@ function requireRevision(expected: string, chat: Chat): void {
 
 /** What an older Mac sees when it sends to a Bot through the workspace chat routes. */
 export const AIDEN_REMOTE_LEGACY_BOT_TURN_MESSAGE =
-  "Update Aiden on this device to chat with this Bot. Bots now keep one conversation on the Mac that runs them.";
+  "Update Aiden on this device to chat with this Bot. Bots now keep one conversation on the computer that runs them.";
 
 export class AidenRemoteChatService {
   private readonly idempotency: AidenIdempotencyLedger;
@@ -1464,7 +1475,7 @@ export class AidenRemoteChatService {
        * workspaces are used as requested.
        */
       noWorkspace?: {
-        target(workspaceId: string): Promise<string>;
+        target(workspaceId: string): Promise<string | WorkspaceChatAssignment>;
         release(workspaceId: string): Promise<void>;
       };
       /** For usage data: a real workspace record, not a hidden folder or a default. */
@@ -1707,7 +1718,7 @@ export class AidenRemoteChatService {
     const { throughMessageId } = parseMarkRead(input);
     const readMarkers = this.options.readMarkers;
     if (!readMarkers) {
-      throw new AidenRemoteServiceError("not_found", "Chat read state is unavailable on this host.", 404);
+      throw new AidenRemoteServiceError("not_found", "Chat read state is not available on this computer.", 404);
     }
     await readMarkers.markRead(chatId, throughMessageId);
   }
@@ -1760,43 +1771,17 @@ export class AidenRemoteChatService {
     if (!IDEMPOTENCY_KEY.test(scope.key)) {
       throw new AidenRemoteServiceError("invalid_request", "Idempotency-Key is invalid.", 400);
     }
-    if (!this.options.persistIdempotency) return this.idempotency.execute(scope, input, action);
-    let admit!: () => void;
-    let reject!: (error: unknown) => void;
-    const durable = new Promise<void>((resolve, rejectPromise) => {
-      admit = resolve;
-      reject = rejectPromise;
-    });
-    const pending = this.idempotency.execute(scope, input, async () => {
-      await durable;
-      return action();
-    });
-    try {
-      await this.options.persistIdempotency(this.idempotency.snapshot());
-      admit();
-    } catch (error) {
-      reject(error);
-      await pending.catch(() => undefined);
-      throw new AidenRemoteServiceError("internal_error", "Aiden could not prepare this chat request.", 500);
-    }
-    let result: T | undefined;
-    let failure: unknown;
-    try {
-      result = await pending;
-    } catch (error) {
-      failure = error;
-    }
-    try {
-      await this.options.persistIdempotency(this.idempotency.snapshot());
-    } catch {
-      throw new AidenRemoteServiceError(
-        "idempotency_in_flight",
-        "The chat request may have completed, but its outcome could not be recorded.",
-        409,
-      );
-    }
-    if (failure) throw failure;
-    return result!;
+    return executeAidenDurableOperation(
+      {
+        ledger: this.idempotency,
+        persist: this.options.persistIdempotency,
+        notPreparedMessage: "Aiden could not prepare this chat request.",
+        outcomeUnrecordedMessage: "The chat request may have completed, but its outcome could not be recorded.",
+      },
+      scope,
+      input,
+      action,
+    );
   }
 
   private async chat(chatId: string): Promise<Chat> {
@@ -1810,7 +1795,7 @@ export class AidenRemoteChatService {
     if (result.imageArtifactRecoveryUnavailable) {
       throw new AidenRemoteServiceError(
         "operation_in_progress",
-        "This chat is waiting for image-artifact storage repair on the desktop.",
+        "This chat is waiting for image-artifact storage repair on your computer.",
         409,
         true,
       );
@@ -2165,18 +2150,29 @@ export class AidenRemoteChatService {
           const created = await this.assigningNoWorkspace(async () => {
             // Only a phone that knows the Chats group (revision 51) asks for a folder of its own;
             // an older phone keeps the workspace it named, as it always has.
-            const workspaceId = parsed.noWorkspace
-              ? ((await this.options.noWorkspace?.target(parsed.workspaceId)) ?? parsed.workspaceId)
-              : parsed.workspaceId;
-            return this.options.application.create(
-              {
-                workspaceId,
-                ...(selection
-                  ? { providerId: selection.providerId, model: selection.modelId }
-                  : {}),
-              },
-              owner,
-            );
+            const target = parsed.noWorkspace ? await this.options.noWorkspace?.target(parsed.workspaceId) : undefined;
+            const assignment = typeof target === "object" ? target : undefined;
+            const workspaceId = assignment?.workspaceId ?? (typeof target === "string" ? target : parsed.workspaceId);
+            let uncertain = false;
+            try {
+              return await this.options.application.create(
+                {
+                  workspaceId,
+                  ...(selection
+                    ? { providerId: selection.providerId, model: selection.modelId }
+                    : {}),
+                },
+                owner,
+              );
+            } catch (error) {
+              uncertain = isChatCreateReconciliationRequiredError(error);
+              if (!uncertain && workspaceId !== parsed.workspaceId) {
+                await this.options.noWorkspace?.release(workspaceId).catch(() => undefined);
+              }
+              throw error;
+            } finally {
+              if (!uncertain) assignment?.release();
+            }
           });
           if (!created) throw new AidenRemoteServiceError("internal_error", "Aiden could not create the chat.", 500);
           this.options.notifyChanged?.(created.id);
@@ -2306,7 +2302,7 @@ export class AidenRemoteChatService {
             if (error instanceof AidenRemoteServiceError) throw error;
             throw new AidenRemoteServiceError(
               "git_capability_denied",
-              "Aiden couldn't make the worktree on your Mac. Try again, or send without New worktree.",
+              "Aiden couldn't make the worktree on your computer. Try again, or send without New worktree.",
               409,
             );
           }
@@ -2408,7 +2404,7 @@ export class AidenRemoteChatService {
       throw new AidenRemoteServiceError("invalid_request", "The recording identifier is invalid.", 400);
     }
     const chat = await this.chat(chatId);
-    const unavailable = () => new AidenRemoteServiceError("not_found", "This recording is no longer on the Mac.", 404);
+    const unavailable = () => new AidenRemoteServiceError("not_found", "This recording is no longer on your computer.", 404);
     const named = chat.messages.some((message) =>
       parseGenerationTimeline(message.timeline, message.content.length)?.steps.some(
         (step) => isToolStep(step) && step.recording?.id === recordingId,
@@ -2453,7 +2449,7 @@ export class AidenRemoteChatService {
         });
       } catch (error) {
         if (error instanceof AidenRemoteServiceError && error.code === "invalid_request") {
-          throw new AidenRemoteServiceError("invalid_request", "That provider and model are not available on this Mac.", 400);
+          throw new AidenRemoteServiceError("invalid_request", "That provider and model are not available on this computer.", 400);
         }
         throw error;
       }
@@ -2503,7 +2499,7 @@ export class AidenRemoteChatService {
     }
     const parsed = parseFork(input);
     if (parsed.summary && !this.supportsForkSummaries) {
-      throw new AidenRemoteServiceError("not_found", "Fork with summary is unavailable on this host.", 404);
+      throw new AidenRemoteServiceError("not_found", "Fork with summary is not available on this computer.", 404);
     }
     try {
       return await this.executeIdempotent(
@@ -2582,7 +2578,7 @@ export class AidenRemoteChatService {
     const tooLarge = () =>
       new AidenRemoteServiceError(
         "payload_too_large",
-        "This chat is too large to fork from a paired device. Fork it on the Mac.",
+        "This chat is too large to fork from a paired device. Fork it on your computer.",
         413,
       );
     if (Buffer.byteLength(JSON.stringify(result), "utf8") > AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES) {

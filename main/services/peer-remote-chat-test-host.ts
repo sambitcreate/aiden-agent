@@ -196,6 +196,8 @@ export class FakeHost {
   turnGate: (() => Promise<void> | undefined) | undefined;
   /** Turn answers to lose after the host applied them, as a dropped connection would. */
   dropAcks = 0;
+  /** Turn requests the host answers with its own unresolved outcome, as after a crash mid-turn. */
+  unresolvedTurns = 0;
   /** The host is unreachable: every request fails before it arrives. */
   down = false;
   /** The grants and features this host gives paired devices. */
@@ -360,6 +362,10 @@ export class FakeHost {
     }
     if (url.pathname === "/chats/chat-1/turns" && method === "POST") {
       const text = String((input.body as { text?: unknown } | undefined)?.text ?? "");
+      if (this.unresolvedTurns > 0) {
+        this.unresolvedTurns -= 1;
+        throw new AidenRemoteServiceError("idempotency_in_flight", "This request's outcome is unknown.", 409);
+      }
       const receipt = await this.ledger.execute(
         { deviceId: device.id, route: "POST /chats/{id}/turns", resourceId: "chat-1", key },
         { text },

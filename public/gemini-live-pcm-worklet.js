@@ -1,4 +1,4 @@
-/* global AudioWorkletProcessor, registerProcessor, sampleRate */
+/* global AudioWorkletProcessor, registerProcessor, sampleRate, currentTime */
 
 const TARGET_SAMPLE_RATE = 16000;
 const CHUNK_MS = 20;
@@ -41,6 +41,9 @@ class AidenGeminiLivePcmProcessor extends AudioWorkletProcessor {
 
   process(inputs) {
     const mono = inputs[0]?.[0];
+    // Capture clock (the context's currentTime) at the end of this quantum:
+    // no sample in a chunk posted now was captured later than this.
+    const capturedUntil = currentTime + (mono?.length ?? 128) / sampleRate;
     if (mono) {
       for (const sample of mono) this.pending.push(Number.isFinite(sample) ? sample : 0);
     }
@@ -54,6 +57,7 @@ class AidenGeminiLivePcmProcessor extends AudioWorkletProcessor {
           channels: 1,
           durationMs: CHUNK_MS,
           sampleRate: TARGET_SAMPLE_RATE,
+          capturedUntil,
           data,
         },
         [data],

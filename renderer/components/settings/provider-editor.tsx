@@ -485,8 +485,8 @@ export function ProviderEditor({
       </FieldSet>
       <details className="settings-card mb-6 min-w-0 rounded-card bg-well">
         <summary className="cursor-pointer px-4 py-3 text-small-strong text-primary">
-          Connection options
-          <Text as="span" variant="small" color="tertiary" className="mt-1 block font-normal">API format, deployment, and provider icon</Text>
+          Advanced
+          <Text as="span" variant="small" color="tertiary" className="mt-1 block font-normal">Connection settings and model options</Text>
         </summary>
         <FieldSet className="mb-0">
           <Field label="API format">
@@ -585,7 +585,6 @@ export function ProviderEditor({
           </Field>
 
         </FieldSet>
-      </details>
 
       <Button
         className="mt-4"
@@ -665,6 +664,7 @@ export function ProviderEditor({
           />
         </section>
       ) : null}
+      </details>
     </Dialog>
   );
 }

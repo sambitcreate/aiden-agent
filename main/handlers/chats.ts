@@ -40,6 +40,7 @@ import {
   parseChatCreate,
 } from "./chat-create-params.js";
 import { isChatCreateReconciliationRequiredError } from "../services/chat-store-core.js";
+import { designModeEnabled } from "../services/studio/feature-flags.js";
 import {
   parseChatContextPressureRequest,
   parseChatCopyRequest,
@@ -92,6 +93,8 @@ export function registerChatHistoryHandlers(): void {
     artifactRecoveryMessage,
     workspaceMutationGate,
     skillRegistry,
+    designModeEnabled: () => designModeEnabled(),
+    broadcastDesignModeChanged: (change) => ipcMain.broadcast("chats:design-mode-changed", change),
   });
   const commitFirstMessage = createFirstMessageCommitter({
     store: chatStore,
@@ -122,6 +125,18 @@ export function registerChatHistoryHandlers(): void {
     },
     getWorkspace: (workspaceId) => configStore.getWorkspace(workspaceId),
     resolveSkill: (workspaceId, invocationId) => skillRegistry.resolveFresh(workspaceId, invocationId),
+    prepareWorkspace: async (workspaceId) => {
+      // Resolve after startup: the workspace service also depends on chat/LLM services.
+      const { workspaceApplicationService } = await import("../services/workspace-application-service-main.js");
+      const target = await workspaceApplicationService.reserveNoWorkspaceChat(workspaceId);
+      if (target.workspaceId !== workspaceId) ipcMain.broadcast("workspaces:changed", {});
+      return target;
+    },
+    releaseUnusedWorkspace: async (workspaceId) => {
+      const { workspaceApplicationService } = await import("../services/workspace-application-service-main.js");
+      await workspaceApplicationService.releaseNoWorkspaceAfterChat(workspaceId);
+      ipcMain.broadcast("workspaces:changed", {});
+    },
   });
   const commitFirstMessageInWorktree = createWorktreeFirstMessageCommitter({
     commit: commitFirstMessage,
@@ -351,6 +366,8 @@ export function registerChatHistoryHandlers(): void {
   ipcMain.handle("chats:renameWithFoundationModels", rendererChats.renameWithFoundationModels);
 
   ipcMain.handle("chats:setModel", rendererChats.setModel);
+
+  ipcMain.handle("chats:setDesignMode", rendererChats.setDesignMode);
 
   ipcMain.handle("chats:retryForkSummary", async (_event, input: unknown) =>
     chatForRenderer(await forkSummaryService.retry(parseChatOnlyRequest(input).chatId)),

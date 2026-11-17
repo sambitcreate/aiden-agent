@@ -44,6 +44,7 @@ export const appHandlers = {
         appUpdates: supportsAppUpdates(),
         computerUse: host.computerUse,
         botComputers: host.botComputers,
+        hooks: host.hooks,
         dockIcon: host.dockIcon,
         badgeCount: host.badgeCount,
         accessibilityPaste: host.accessibilityPaste,

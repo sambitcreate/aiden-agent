@@ -23,6 +23,7 @@ function mount(updateCatalogs: () => ProviderCatalogUpdateResult) {
       <ProvidersSettings />
     </QueryClientProvider>,
   );
+  fireEvent.click(screen.getByText("Advanced", { exact: true }));
   return calls;
 }
 

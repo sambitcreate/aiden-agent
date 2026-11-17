@@ -10,7 +10,9 @@ import {
   type ChatForkServiceDependencies,
 } from "./chat-fork-service.js";
 import { createChatStore } from "./chat-store-core.js";
-import type { Chat } from "./types.js";
+import type { Chat, Workspace } from "./types.js";
+import { createWorkspaceApplicationService, type WorkspaceApplicationDependencies } from "./workspace-application-service.js";
+import { WorkspaceMutationGate } from "./workspace-mutation-gate.js";
 
 async function fixture(t: TestContext) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-fork-service-"));
@@ -311,4 +313,97 @@ test("feature-owned chats are ineligible for copy and fork", async (t) => {
   assert.deepEqual(admitted, []);
   assert.deepEqual(published, []);
   assert.equal((await store.list()).length, 1);
+});
+
+async function privateForkWorkspaces(t: TestContext, store: ReturnType<typeof createChatStore>, hidden = true) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-private-fork-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const originalFolder = path.join(root, "original");
+  await fs.mkdir(originalFolder);
+  await fs.writeFile(path.join(originalFolder, "private.txt"), "source-only content");
+  const records = new Map<string, Workspace>([["workspace-fork", {
+    id: "workspace-fork", name: "Source", folderPath: originalFolder, permission: "none",
+    ...(hidden ? { noWorkspace: true as const } : {}), createdAt: 1, updatedAt: 1,
+  }]]);
+  let next = 0;
+  const application = createWorkspaceApplicationService({
+    configStore: {
+      listWorkspaces: async () => [...records.values()],
+      getWorkspace: async (id) => records.get(id),
+      saveWorkspace: async (workspace) => { records.set(workspace.id, workspace); return workspace; },
+      removeWorkspace: async (id) => { records.delete(id); },
+    },
+    llmClient: { cancelWorkspaceAndSettle: async () => undefined },
+    scheduleService: { cancelWorkspace: async () => undefined, resumeWorkspace: async () => undefined },
+    terminalService: { closeForWorkspace: () => undefined },
+    workspaceMutationGate: new WorkspaceMutationGate(),
+    workspaceOperationRegistry: { cancelAndSettle: async () => undefined },
+    noWorkspace: {
+      createDirectory: async () => { const folderPath = path.join(root, `fresh-${next + 1}`); await fs.mkdir(folderPath); return { folderPath }; },
+      chatIdsIn: async (id) => (await store.list(id)).map((chat) => chat.id),
+      workspaceIdsWithChats: async () => new Set((await store.list()).map((chat) => chat.workspaceId!)),
+      trash: async (folder) => { await fs.rm(folder, { recursive: true }); },
+    },
+    createScratchWorkspaceDirectory: async () => { throw new Error("Scratch creation is outside this fixture."); },
+    realpath: (folder) => fs.realpath(folder),
+    stat: (folder) => fs.stat(folder),
+    removeEmptyDirectory: (folder) => fs.rmdir(folder),
+    createId: () => `hidden-${++next}`,
+    now: () => 1,
+    logError: () => undefined,
+  } satisfies WorkspaceApplicationDependencies);
+  return { application, records, originalFolder };
+}
+
+test("No workspace copy and populated forks isolate files and access, without changing the source", async (t) => {
+  const { store, source, ids } = await fixture(t);
+  const { application, records, originalFolder } = await privateForkWorkspaces(t, store);
+  const forks = service(store, {
+    prepareWorkspace: (id) => application.reserveNoWorkspaceChat(id),
+    releaseUnusedWorkspace: (id) => application.releaseNoWorkspaceAfterChat(id),
+  });
+  const copies = [
+    await forks.fork({ chatId: source.id }, caller),
+    await forks.fork({ chatId: source.id, forkAt: { messageId: ids.firstReply, position: "after" } }, caller),
+    await forks.fork({ chatId: source.id, forkAt: { messageId: ids.secondPrompt, position: "before" } }, caller),
+  ];
+  assert.equal(new Set([source.workspaceId, ...copies.map((chat) => chat.workspaceId)]).size, 4);
+  for (const copy of copies) {
+    const target = records.get(copy.workspaceId!)!;
+    assert.equal(target.noWorkspace, true);
+    assert.notEqual(target.folderPath, originalFolder);
+    assert.deepEqual(await fs.readdir(target.folderPath!), []);
+    await application.update(target.id, { permission: "full" });
+    await fs.writeFile(path.join(target.folderPath!, "fork.txt"), "fork only");
+  }
+  assert.equal(records.get(source.workspaceId!)?.permission, "none");
+  assert.deepEqual(await fs.readdir(originalFolder), ["private.txt"]);
+  assert.equal((await store.get(source.id))?.messages.length, 4);
+});
+
+test("named-workspace forks retain their folder and access", async (t) => {
+  const { store, source, ids } = await fixture(t);
+  const { application, records } = await privateForkWorkspaces(t, store, false);
+  const copied = await service(store, {
+    prepareWorkspace: (id) => application.reserveNoWorkspaceChat(id),
+  }).fork({ chatId: source.id, forkAt: { messageId: ids.firstReply, position: "after" } }, caller);
+  assert.equal(copied.workspaceId, source.workspaceId);
+  assert.equal(records.size, 1);
+  assert.equal(records.get(copied.workspaceId!)?.permission, "none");
+});
+
+test("a refused private fork releases its unused folder, but a committed one survives cleanup", async (t) => {
+  const { store, source } = await fixture(t);
+  const { application, records } = await privateForkWorkspaces(t, store);
+  const forks = service(store, {
+    prepareWorkspace: (id) => application.reserveNoWorkspaceChat(id),
+    releaseUnusedWorkspace: (id) => application.releaseNoWorkspaceAfterChat(id),
+  });
+  await assert.rejects(forks.fork({ chatId: source.id }, {
+    ...caller, assertInstallable: () => { throw new Error("owner revoked"); },
+  }), /owner revoked/u);
+  assert.equal(records.size, 1);
+  const copy = await forks.fork({ chatId: source.id }, caller);
+  await application.releaseNoWorkspaceAfterChat(copy.workspaceId!);
+  assert.equal(records.has(copy.workspaceId!), true);
 });

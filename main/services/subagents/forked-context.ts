@@ -6,6 +6,7 @@ import { isImageSha256 } from "../chat-image-store.js";
 import { runtimeSupportsImages } from "../generation-runtime.js";
 import type { ResolvedModelRuntime } from "../model-runtime-core.js";
 import { sanitizeSubagentText } from "./safe-text.js";
+import { isHookBlockedPrompt } from "../hook-blocked-prompt.js";
 import { redactCredentialTokens } from "../../shared/redaction.js";
 
 export type SubagentContextMode = "fresh" | "fork";
@@ -397,6 +398,8 @@ export function capturePersistedSubagentContext(value: unknown): SubagentContext
     }
     // System/control records and every non-chat protocol role are excluded.
     if (candidate.role !== "user" && candidate.role !== "assistant") continue;
+    // A prompt a UserPromptSubmit hook refused never reaches any model.
+    if (isHookBlockedPrompt(candidate)) continue;
     const content = sanitizeSubagentText(
       boundedString(
         candidate.content,

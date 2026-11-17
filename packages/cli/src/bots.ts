@@ -1,4 +1,5 @@
 import { botMessagingEnabled } from "../../../renderer/shared/bot-messages.js";
+import { botFullComputerLabel } from "../../../renderer/shared/bot-capabilities.js";
 import { publicBotApprovalPrompt } from "../../../main/services/bot-runtime/bot-approvals.js";
 import type { AppSettings } from "../../../main/services/types.js";
 import { parseBotSend } from "../../../main/handlers/bot-params.js";
@@ -195,7 +196,7 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
   async function tools(admission: BotRuntimeAuthorityAdmission, context?: CliDurableBotToolContext) {
     const { authority } = admission, locations: BotFileToolLocation[] = [];
     if (authority.files.botHome) locations.push({ id: "builtin.bot_home.v1", label: "Bot folder", root: authority.workingDirectory, expectedIdentity: authority.managedHome.incarnation });
-    if (authority.files.fullMac) locations.push({ id: authority.files.fullMac.sourceId, label: "Host files", root: "/" });
+    if (authority.files.fullMac) locations.push({ id: authority.files.fullMac.sourceId, label: botFullComputerLabel(process.platform), root: "/" });
     for (const grant of authority.files.approvedLocations) {
       const candidate = approvedRoots().find((item) => item.id === grant.sourceId);
       if (!candidate) throw new Error("The approved Bot folder is unavailable.");
@@ -284,7 +285,13 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
         run: (id, requestId) => scheduler.store.runById(id, requestId),
         events: async () => [],
       });
-      scheduler.setBotPorts({ ...runtime, send: createBotRoutineOriginSender({ resolveOrigin, send: (botId, input) => runtime.send(botId, input) }) });
+      // RoutineRun / RoutineFailed hooks run in the Bot's folder.
+      scheduler.setBotPorts({
+        ...runtime,
+        send: createBotRoutineOriginSender({ resolveOrigin, send: (botId, input) => runtime.send(botId, input) }),
+        hookCwd: async (botId) => (await managedWorkspace.resolve(botId)).homePath,
+        hookReport: (botId, lines) => { for (const line of lines) process.stderr.write(`aiden: Bot ${botId} routine hook: ${line.replace(/[\r\n]+/gu, " ").slice(0, 500)}\n`); },
+      });
       routines = createBotRoutineService({ store: scheduler.store, service: scheduler.service,
         botExists: async (botId) => Boolean(await botStore.get(botId)), isPaused,
         defaultTimezone: () => Intl.DateTimeFormat().resolvedOptions().timeZone, notifyChanged: () => {},

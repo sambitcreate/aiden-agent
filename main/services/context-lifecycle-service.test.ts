@@ -391,6 +391,84 @@ test("manual compaction excludes durable skill instructions while Skills is disa
   assert.doesNotMatch(JSON.stringify(await session.buildContext()), /HIDDEN_SKILL_INSTRUCTIONS/u);
 });
 
+async function compactableChat(root: string, providerId: string, modelId: string) {
+  const { faux, model, runtime } = compactionRuntime(providerId, modelId);
+  const chat: Chat = {
+    ...baseChat,
+    providerId,
+    model: modelId,
+    messages: Array.from({ length: 12 }, (_, index) => [
+      { id: `user-${index}`, role: "user" as const, content: `Request ${index} ${"x".repeat(1_200)}`, createdAt: index * 2 + 10 },
+      { id: `assistant-${index}`, role: "assistant" as const, content: `Answer ${index}`, createdAt: index * 2 + 11 },
+    ]).flat(),
+  };
+  const session = await new PiCompactionSessionStore({ root: async () => root }).openChat(chat.id);
+  await syncChatMessagesToPiSession(session, chat.messages, model, false, new Map());
+  return { faux, runtime, chat, session };
+}
+
+test("PreCompact hook context steers an operator compaction and a finished one is reported", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-context-precompact-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const { faux, runtime, chat, session } = await compactableChat(root, "context-precompact", "context-precompact-model");
+  const providerPayloads: string[] = [];
+  faux.setResponses(
+    Array.from({ length: 4 }, () => (context) => {
+      providerPayloads.push(JSON.stringify(context));
+      return fauxAssistantMessage(validSummary("steered checkpoint"));
+    }),
+  );
+  const asked: unknown[] = [];
+  const compacted: string[] = [];
+  const { value } = deps({
+    getChat: async () => chat,
+    openSession: async () => session,
+    resolveRuntime: async () => runtime,
+    preCompact: async (target, { audience, trigger, signal }) => {
+      asked.push({ chatId: target.id, audience: audience.kind, trigger, aborted: signal.aborted });
+      return "KEEP_THE_RELEASE_CHECKLIST";
+    },
+    compacted: (target) => compacted.push(target.id),
+  });
+
+  const result = await new ContextLifecycleService(value).compactChat(
+    chat.id,
+    { kind: "desktop", ownerId: "renderer:1" },
+    "operator",
+  );
+
+  assert.equal(result.compacted, true, JSON.stringify(result));
+  assert.deepEqual(asked, [{ chatId: chat.id, audience: "desktop", trigger: "manual", aborted: false }]);
+  assert.match(providerPayloads.join("\n"), /Additional focus: KEEP_THE_RELEASE_CHECKLIST/u);
+  assert.deepEqual(compacted, [chat.id]);
+});
+
+test("a failing PreCompact source never fails a recovery compaction, which hooks see as auto", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-context-precompact-fail-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const { faux, runtime, chat, session } = await compactableChat(root, "context-precompact-fail", "context-precompact-fail-model");
+  faux.setResponses(Array.from({ length: 4 }, () => fauxAssistantMessage(validSummary("recovered checkpoint"))));
+  const triggers: string[] = [];
+  const { value } = deps({
+    getChat: async () => chat,
+    openSession: async () => session,
+    resolveRuntime: async () => runtime,
+    preCompact: async (_chat, { trigger }) => {
+      triggers.push(trigger);
+      throw new Error("hook store unavailable");
+    },
+  });
+
+  const result = await new ContextLifecycleService(value).compactChat(
+    chat.id,
+    { kind: "desktop", ownerId: "renderer:1" },
+    "automatic-recovery",
+  );
+
+  assert.equal(result.compacted, true, JSON.stringify(result));
+  assert.deepEqual(triggers, ["auto"]);
+});
+
 test("disabling Skills cancels an operator compaction already at the provider", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-context-skill-cancel-"));
   t.after(() => rm(root, { recursive: true, force: true }));

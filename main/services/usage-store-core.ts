@@ -20,7 +20,8 @@ export type UsageRequestSource =
   | "compaction"
   | "cache-warm"
   | "design"
-  | "create-images";
+  | "create-images"
+  | "approval-judge";
 export type UsageRequestStatus = "completed" | "failed" | "cancelled";
 export type UsageCostStatus = "reported" | "unavailable" | "not-applicable";
 
@@ -95,6 +96,7 @@ const REQUEST_SOURCES = new Set<UsageRequestSource>([
   "cache-warm",
   "design",
   "create-images",
+  "approval-judge",
 ]);
 
 export function emptyUsageTokens(): UsageTokenBreakdown {

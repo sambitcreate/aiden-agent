@@ -4,6 +4,7 @@ export const SETTINGS_SECTIONS = [
   "limits",
   "skills",
   "mcp",
+  "hooks",
   "websearch",
   "imageGeneration",
   "telegram",
@@ -23,6 +24,7 @@ export const SETTINGS_SECTIONS = [
   "links",
   "shortcut",
   "appearance",
+  "storage",
   "about",
 ] as const;
 
@@ -80,6 +82,11 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
     id: "mcp",
     title: "Connectors",
     keywords: ["mcp", "plugins", "apps", "integrations", "tools", "servers", "composio"],
+  },
+  {
+    id: "hooks",
+    title: "Hooks",
+    keywords: ["hooks", "hooks.json", "pretooluse", "posttooluse", "shell command", "scripts", "lint", "format", "block a tool", "claude code hooks", "automation"],
   },
   {
     id: "websearch",
@@ -149,8 +156,13 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
   },
   {
     id: "approvals",
-    title: "Tool approvals",
+    title: "Approvals",
     keywords: [
+      "auto",
+      "ask",
+      "never ask",
+      "approval mode",
+      "approval model",
       "always allow",
       "allow for this chat",
       "remembered",
@@ -172,8 +184,8 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
   },
   {
     id: "bots",
-    title: "Bots",
-    keywords: ["bot", "routines", "allow", "go ahead", "ask first", "approvals", "permissions", "stop asking me", "unattended"],
+    title: "Bot messaging",
+    keywords: ["bot", "bots", "message each other", "other bots", "bot to bot", "peers", "ask another bot"],
   },
   {
     id: "botComputers",
@@ -225,6 +237,30 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
     keywords: ["theme", "light", "dark", "mode", "system", "chat width", "layout", "wide", "narrow"],
   },
   {
+    id: "storage",
+    title: "Storage",
+    keywords: [
+      "disk",
+      "disk space",
+      "disk usage",
+      "storage",
+      "gigabytes",
+      "clean up",
+      "cleanup",
+      "worktrees",
+      "unused worktrees",
+      "chats",
+      "delete a chat",
+      "browser cache",
+      "clear cache",
+      "bot computers",
+      "voice models",
+      "logs",
+      "free space",
+      "hard drive",
+    ],
+  },
+  {
     id: "about",
     title: "About",
     keywords: ["version", "build", "github", "repository", "app information", "update", "diagnostics", "logs", "reset", "onboarding", "restart"],
@@ -252,10 +288,11 @@ export type SettingsPageId =
   | "limits"
   | "skills"
   | "mcp"
+  | "hooks"
   | "websearch"
   | "imageGeneration"
   | "memory"
-  | "botsApprovals"
+  | "approvals"
   | "scheduledTasks"
   | "computers"
   | "simulator"
@@ -263,6 +300,7 @@ export type SettingsPageId =
   | "connections"
   | "appearance"
   | "shortcut"
+  | "storage"
   | "about";
 
 export type SettingsPageEntry = {
@@ -282,10 +320,11 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
   { id: "limits", title: "Context & Limits", group: "Models & Context", tabs: ["limits"] },
   { id: "skills", title: "Skills", group: "Capabilities", tabs: ["skills"] },
   { id: "mcp", title: "Connectors", group: "Capabilities", tabs: ["mcp"] },
+  { id: "hooks", title: "Hooks", group: "Capabilities", tabs: ["hooks"] },
   { id: "websearch", title: "Web Search", group: "Capabilities", tabs: ["websearch"] },
   { id: "imageGeneration", title: "Image Generation", group: "Capabilities", tabs: ["imageGeneration"] },
   { id: "memory", title: "Memory", group: "Capabilities", tabs: ["memory"] },
-  { id: "botsApprovals", title: "Bots & Approvals", group: "Autonomy & Devices", tabs: ["bots", "approvals", "appControls"] },
+  { id: "approvals", title: "Approvals", group: "Autonomy & Devices", tabs: ["approvals", "appControls"], anchors: ["bots"] },
   { id: "scheduledTasks", title: "Scheduled tasks", group: "Autonomy & Devices", tabs: ["scheduledTasks"] },
   { id: "computers", title: "Computers & VMs", group: "Autonomy & Devices", tabs: ["computerUse", "botComputers"] },
   { id: "simulator", title: "Simulator", group: "Autonomy & Devices", tabs: ["simulator"] },
@@ -293,6 +332,7 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
   { id: "connections", title: "Connections", group: "Voice & Channels", tabs: ["remoteAccess", "peerHosts", "telegram"] },
   { id: "appearance", title: "Appearance", group: "App", tabs: ["appearance"], anchors: ["links"] },
   { id: "shortcut", title: "Keyboard shortcuts", group: "App", tabs: ["shortcut"] },
+  { id: "storage", title: "Storage", group: "App", tabs: ["storage"] },
   { id: "about", title: "About", group: "App", tabs: ["about"] },
 ];
 
@@ -301,6 +341,7 @@ export type SettingsCapabilities = {
   computerUse: boolean;
   devices: boolean;
   botComputers: boolean;
+  hooks: boolean;
 };
 
 function isSettingsSectionAvailable(
@@ -310,7 +351,8 @@ function isSettingsSectionAvailable(
   return (
     (section !== "computerUse" || capabilities.computerUse) &&
     (section !== "simulator" || capabilities.devices) &&
-    (section !== "botComputers" || capabilities.botComputers)
+    (section !== "botComputers" || capabilities.botComputers) &&
+    (section !== "hooks" || capabilities.hooks)
   );
 }
 
@@ -339,6 +381,16 @@ export function pageFor(section: SettingsSection): SettingsPageEntry {
   return SETTINGS_PAGES.find(
     (page) => page.tabs.includes(section) || page.anchors?.includes(section),
   )!;
+}
+
+/** A section that opens a spot on its page (scrolled into view) rather than a tab. */
+export function isSettingsAnchor(section: SettingsSection): boolean {
+  return pageFor(section).anchors?.includes(section) === true;
+}
+
+/** The tab a section shows: itself, or for an anchor the page's first tab. */
+export function settingsTabFor(page: SettingsPageEntry, section: SettingsSection): SettingsSection {
+  return page.tabs.includes(section) ? section : page.tabs[0]!;
 }
 
 /** What a section's tab says. */
@@ -378,8 +430,8 @@ export function resolveSettingsSection(
 
 /**
  * The section a sidebar row opens for a search, or undefined when the page doesn't match.
- * A tab that matches on its own wins, so "approvals" opens Tool approvals and not the
- * first tab of Bots & Approvals. The page title counts only after that.
+ * A tab that matches on its own wins, so "controls in chat" opens that tab and not the
+ * first tab of Approvals. The page title counts only after that.
  */
 export function firstMatchingSettingsSection(
   page: SettingsPageEntry,

@@ -148,6 +148,18 @@ test("host image placements survive mapping without admitting malformed or non-i
   assert.equal(mapRemoteMessage({ ...projected, attachments: [{ ...attachment, kind: "text", mimeType: "text/plain", toolCallId: "call-1" }] })?.imagePlacements, undefined);
 });
 
+test("another Mac's voice message keeps its By voice label; other values and roles do not", () => {
+  const messages = served([
+    { id: "voice", role: "user", content: "Check the reset page too.", inputSource: "voice", createdAt: 1 },
+    { id: "typed", role: "user", content: "Thanks.", createdAt: 2 },
+  ], { limit: 50 }).messages;
+  assert.deepEqual(messages.map((message) => message.inputSource), ["voice", undefined]);
+
+  const projected = { id: "m", text: "Hi", createdAt: "2026-11-06T00:00:00Z" };
+  assert.equal(mapRemoteMessage({ ...projected, role: "user", inputSource: "dictation" })?.inputSource, undefined);
+  assert.equal(mapRemoteMessage({ ...projected, role: "assistant", inputSource: "voice" })?.inputSource, undefined);
+});
+
 test("a summary row or chat projection maps to a chat with no transcript of its own", () => {
   const chat = mapRemoteChat({
     id: "chat-9",

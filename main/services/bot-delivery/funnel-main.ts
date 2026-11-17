@@ -15,6 +15,7 @@ import { countedToday, createBotDeliveryGate } from "./gate.js";
 import { botStore } from "../bot-store.js";
 import { resolveBotInterruptions } from "../../../renderer/shared/bots.js";
 import { createBotDeliveryLog } from "./log.js";
+import { botChatInFront } from "./in-front.js";
 
 /** Every Bot's delivery rows, beside that Bot's session (`bots/<dir>/deliveries.json`). */
 export const botDeliveryLog = createBotDeliveryLog({ profileDir: () => app.getPath("userData") });
@@ -38,11 +39,12 @@ export function botDeliveryFunnel(): BotDeliveryFunnel {
     gate: createBotDeliveryGate({
       settings: async (botId) => resolveBotInterruptions((await botStore.get(botId))?.interruptions),
       // Proactive notifications that reached the person today count; held
-      // rows count once they come due, suppressed ones never do.
+      // rows count once released, suppressed ones never do.
       sentToday: async (botId, dayStart, now) => countedToday(await botDeliveryLog.list(botId), dayStart, now),
       timeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone,
     }),
     botName: async (botId) => (await botStore.get(botId))?.name,
+    inFront: botChatInFront,
     mac: async (input) => {
       // An issue, a digest, or a held routine result sent from the log is the
       // funnel's own banner, following the hand-off notifier: only while no

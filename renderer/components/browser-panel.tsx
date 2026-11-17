@@ -27,7 +27,7 @@ export type BrowserPanelVariant = "workspace" | "bot";
 export function browserHoldNotice(reason: NonNullable<BrowserTab["heldForPerson"]>["reason"], agentName = "The Bot"): string {
   switch (reason) {
     case "sign_in":
-      return `This tab is yours: sign in, then choose I’m signed in on ${agentName}’s card. ${agentName} can’t see or use it until then.`;
+      return `This tab is yours: sign in, then choose I’m done on ${agentName}’s card. ${agentName} can’t see or use it until then.`;
     case "handoff":
       return `This tab is yours until you finish ${agentName}’s hand-off. ${agentName} can’t see or use it until then.`;
     case "takeover":
@@ -291,7 +291,7 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
   // A menu belongs to the tab and surface that opened it.
   const menuOwner = JSON.stringify([workspaceId, tab?.id, surfaceActive]);
   const defaultProfile = tab?.profileId ?? visibleState?.defaults.profileId;
-  const content = <div ref={panelRef} className="browser-panel" data-browser-workspace={workspaceId}>
+  const content = <div ref={panelRef} className="browser-panel" data-browser-workspace={workspaceId} data-live-content="web">
     <div className="browser-tab-strip">
       <div style={integratedTabs && !tab?.floating ? { display: "none" } : undefined} className="browser-tabs" role="tablist" aria-label="Browser tabs">
         {visibleState?.tabs.map((item, index) => <div key={item.id} className="browser-tab" data-selected={item.id === tab?.id}>

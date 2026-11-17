@@ -2,6 +2,7 @@ import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Keyboard, RotateCcw, Search } from "lucide-react";
 import { Badge, Button, Callout, FieldSet, Input, Switch, Text, toast } from "../ui";
+import { useAppCapabilities } from "../../lib/app-capabilities";
 import { shortcutApi } from "../../lib/ipc";
 import { queryKeys, useShortcuts } from "../../lib/queries";
 import {
@@ -172,6 +173,7 @@ function BuiltInKeyRow({ entry }: { entry: BuiltInKey }) {
 
 export function ShortcutSettings() {
   const queryClient = useQueryClient();
+  const capabilities = useAppCapabilities();
   const shortcuts = useShortcuts();
   const [query, setQuery] = React.useState("");
   const [recordingId, setRecordingId] = React.useState<CommandId | null>(null);
@@ -303,12 +305,14 @@ export function ShortcutSettings() {
         .toLocaleLowerCase();
       return (
         command.showInSettings &&
+        (!command.requiresCapability || capabilities[command.requiresCapability]) &&
         (!normalizedQuery || searchText.includes(normalizedQuery))
       );
     },
   );
   const sheetBinding = shortcuts.data.effective["shortcuts.show"];
   const builtIn = BUILT_IN_KEYS.filter((entry) => {
+    if (entry.requiresCapability && !capabilities[entry.requiresCapability]) return false;
     if (!normalizedQuery) return true;
     return [
       entry.title,

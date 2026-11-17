@@ -7,7 +7,7 @@ final class AidenBotPlanTests: XCTestCase {
     func section() throws -> [String: Any] {
         let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
         let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
-        XCTAssertEqual(root["contractRevision"] as? Int, 59)
+        XCTAssertEqual(root["contractRevision"] as? Int, 61)
         return try XCTUnwrap(root["botPlans"] as? [String: Any])
     }
     func decode<T: Decodable>(_ type: T.Type, _ value: Any) throws -> T {
@@ -71,7 +71,7 @@ extension AidenBotPlanTests {
     }
     private func loaded(supported: Bool = true) async throws -> (AidenBotSessionModel, PlanTestTransport) {
         let transport = PlanTestTransport(snapshot: try snapshot())
-        let model = AidenBotSessionModel(botID: transport.snapshot.botId, transport: transport, plansSupported: supported)
+        let model = AidenBotSessionModel(botID: transport.snapshot.botId, transport: transport, owner: .noMachine, plansSupported: supported)
         await model.load()
         return (model, transport)
     }

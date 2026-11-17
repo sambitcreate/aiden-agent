@@ -65,6 +65,32 @@ async function sentCopies(harness: Awaited<ReturnType<typeof setup>>, text: stri
   }
 }
 
+test("a host that cannot say how a turn ended keeps the send unresolved under its key", async () => {
+  const host = new FakeHost("host_b", numbered(2));
+  const harness = await setup(host);
+  try {
+    await harness.open();
+    const control = controlFor(harness);
+
+    host.unresolvedTurns = 1;
+    await assert.rejects(control.send("Ship the release"), isOutcomeUnknown);
+    const first = control.getSnapshot().unresolved;
+    assert.equal(first?.kind, "send");
+    assert.equal(first?.text, "Ship the release");
+
+    // A retry that meets the same answer is still not a refusal.
+    host.unresolvedTurns = 1;
+    await assert.rejects(control.retryUnresolved(), isOutcomeUnknown);
+    assert.equal(control.getSnapshot().unresolved?.idempotencyKey, first?.idempotencyKey);
+
+    await control.retryUnresolved();
+    assert.equal(control.getSnapshot().unresolved, null);
+    assert.deepEqual(host.turns, ["Ship the release"]);
+  } finally {
+    harness.close();
+  }
+});
+
 test("a lost send acknowledgement retried with the same key starts exactly one turn", async () => {
   const host = new FakeHost("host_b", numbered(2));
   const harness = await setup(host);

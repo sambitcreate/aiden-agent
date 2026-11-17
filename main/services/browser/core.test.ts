@@ -250,6 +250,7 @@ test("external URLs allow only web pages and mail", () => {
     "file:///etc/passwd",
     "https://user:pass@example.com",
     "ftp://example.com",
+    "aiden-design://abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrstu/design/a.html",
     "not a url",
     "",
     42,

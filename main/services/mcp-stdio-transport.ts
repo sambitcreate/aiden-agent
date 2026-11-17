@@ -7,9 +7,11 @@
 // a process outside the group holds the server's stdout.
 import type { ChildProcess } from "node:child_process";
 import process from "node:process";
+import { groupStoppedWithin, processGroupExists, processGroupStillRuns } from "../shared/process-group.js";
 import { StdioTransport, type McpTransport, type StdioTransportOptions } from "@earendil-works/pi-mcp";
 
 export interface McpStdioTransportOptions {
+  groupStillRuns?: (pid: number) => Promise<boolean>;
   command: string;
   args?: readonly string[];
   /** The server's declared environment, layered over a safe default set. */
@@ -26,6 +28,9 @@ export interface McpStdioTransportOptions {
 }
 
 const DEFAULT_CLOSE_GRACE_MS = 2_000;
+const SURVIVOR_POLL_MS = 1_000;
+// SIGKILL is asynchronous and can be denied, so sending it proves nothing.
+const KILL_CONFIRM_MS = 2_000;
 const liveGroups = new Set<number>();
 const groupListeners = new Set<(groups: readonly number[]) => void>();
 let exitHookInstalled = false;
@@ -103,18 +108,19 @@ const OVERSIZED_MESSAGE = /^MCP stdio message exceeds \d+ bytes$/u;
  */
 class AidenStdioTransport extends StdioTransport {
   private groupPid?: number;
-  /** Set once the process group's teardown has begun; it runs exactly once. */
-  private groupReaped = false;
+  /** The process group's teardown, which runs exactly once. */
+  private reaping?: Promise<void>;
 
   constructor(
     options: StdioTransportOptions,
     private readonly graceMs: number,
     private readonly processGroups: boolean,
+    private readonly groupStillRuns: (pid: number) => Promise<boolean> = processGroupStillRuns,
   ) {
     super(options);
     // Every pipe is closed, so nothing left in the group can reach Aiden. A
     // wrapper that exited on its own may still have left its server there.
-    this.onClose(() => this.reapGroup());
+    this.onClose(() => void this.reapGroup());
     // Pi drops an oversized line but keeps the connection, so a request it
     // answered would wait out its whole timeout. Close instead: pending
     // requests fail at once.
@@ -152,20 +158,39 @@ class AidenStdioTransport extends StdioTransport {
     }
     // A wrapper that already exited while its server holds the pipes never
     // reports a pipe close; the group is still reaped here.
-    this.reapGroup();
+    await this.reapGroup();
   }
 
-  /** Terminate whatever remains of the group, then forget it: SIGTERM, then SIGKILL after the grace. */
-  private reapGroup(): void {
+  /**
+   * Terminate whatever remains of the group: SIGTERM, then SIGKILL after the
+   * grace. A group is forgotten only once nothing in it runs, so whoever
+   * force-stops this process can still find one that survived.
+   */
+  private reapGroup(): Promise<void> {
     const pid = this.groupPid;
-    if (pid === undefined || this.groupReaped) return;
-    this.groupReaped = true;
-    signalGroup(pid, "SIGTERM");
-    const straggler = setTimeout(() => {
-      signalGroup(pid, "SIGKILL");
-      if (liveGroups.delete(pid)) groupsChanged();
-    }, this.graceMs);
-    straggler.unref?.();
+    if (pid === undefined) return Promise.resolve();
+    this.reaping ??= (async () => {
+      signalGroup(pid, "SIGTERM");
+      const probe = { exists: () => processGroupExists(pid), stillRuns: () => this.groupStillRuns(pid) };
+      if (!(await groupStoppedWithin(probe, this.graceMs))) {
+        signalGroup(pid, "SIGKILL");
+        await groupStoppedWithin(probe, KILL_CONFIRM_MS);
+      }
+      if (await this.groupStillRuns(pid)) this.forgetWhenGone(pid);
+      else if (liveGroups.delete(pid)) groupsChanged();
+    })();
+    return this.reaping;
+  }
+
+  /** A listed ID gets signalled later, so a dead group must not stay listed for reuse to hit. */
+  private forgetWhenGone(pid: number): void {
+    const timer = setTimeout(() => {
+      void this.groupStillRuns(pid).then((runs) => {
+        if (runs) this.forgetWhenGone(pid);
+        else if (liveGroups.delete(pid)) groupsChanged();
+      });
+    }, SURVIVOR_POLL_MS);
+    timer.unref?.();
   }
 }
 
@@ -188,5 +213,5 @@ export function createMcpStdioTransport(options: McpStdioTransportOptions): McpT
     ...(options.maxBufferSize === undefined ? {} : { maxMessageBytes: options.maxBufferSize }),
     closeTimeoutMs: graceMs,
   };
-  return new AidenStdioTransport(transportOptions, graceMs, process.platform !== "win32");
+  return new AidenStdioTransport(transportOptions, graceMs, process.platform !== "win32", options.groupStillRuns);
 }

@@ -753,18 +753,13 @@ async function assertRuntimeIsolation(
   }
 }
 
-/**
- * Hosts with Bots offer "Meet your first Bot" after provider setup. Flows that
- * only need the feature tour skip it; the Bots starter test drives it directly.
- */
-export async function skipBotsOnboardingStep(onboarding: Locator): Promise<void> {
-  const botsHeading = onboarding.getByRole("heading", { name: "Meet your first Bot" });
-  const tourHeading = onboarding.getByRole("heading", { name: "Everything Aiden brings together" });
-  await expect(botsHeading.or(tourHeading)).toBeVisible();
-  if (await botsHeading.isVisible()) {
-    await onboarding.getByRole("button", { name: "Skip", exact: true }).click();
-  }
-  await expect(tourHeading).toBeVisible();
+/** Connect through the same local discovery and checkpoint as a first-run user. */
+export async function connectOnboardingLmStudio(onboarding: Locator): Promise<void> {
+  await onboarding.getByRole("button", { name: /I run a local model/u }).click();
+  await onboarding.getByRole("button", { name: "LM Studio", exact: true }).click();
+  await onboarding.page().getByRole("dialog", { name: "Connect LM Studio" }).getByRole("button", { name: "Check for models" }).click();
+  await onboarding.getByRole("button", { name: "Continue setup" }).click();
+  await expect(onboarding.getByRole("heading", { name: "Finish setup" })).toBeVisible();
 }
 
 /** Complete first-run setup with the disposable keyless LM Studio connection. */
@@ -777,15 +772,7 @@ export async function finishLmStudioOnboarding(page: Page): Promise<void> {
   await next.click();
 
   await expect(onboarding.getByRole("heading", { name: "Connect your AI" })).toBeVisible();
-  const lmStudio = onboarding.getByRole("button", {
-    name: /LM Studio.*Use models running in LM Studio/u,
-  });
-  await lmStudio.click();
-  await expect(lmStudio).toHaveAttribute("aria-pressed", "true");
-
-  // Discovery must return and persist at least one model before onboarding can advance.
-  await next.click();
-  await skipBotsOnboardingStep(onboarding);
+  await connectOnboardingLmStudio(onboarding);
   await onboarding.getByRole("button", { name: "Start using Aiden" }).click();
   await expect(onboarding).toBeHidden();
   await expect(
