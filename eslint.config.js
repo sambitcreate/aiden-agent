@@ -26,7 +26,6 @@ export default [
       "scripts/ios-asc-monitor*.mjs",
       "scripts/ios-live-activity-process-proof*.mjs",
       "scripts/vendor-generative-ui-libs.mjs",
-      "scripts/**/*.test.mjs",
     ],
     languageOptions: {
       globals: { ...globals.node },

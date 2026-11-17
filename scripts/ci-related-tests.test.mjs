@@ -1,3 +1,5 @@
+/* global structuredClone */
+
 import assert from "node:assert/strict";
 import test from "node:test";
 import { discoverSpecs } from "./ci-e2e-shards.mjs";
