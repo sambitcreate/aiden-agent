@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createServer, request as httpRequest, type IncomingHttpHeaders } from "node:http";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import { McpClient, StreamableHttpTransport, type CallToolResult } from "@earendil-works/pi-mcp";
 
 import { AIDEN_MCP_BODY_LIMIT, AidenMcpHost } from "./aiden-mcp-server.js";
 import { AidenMcpProvenanceLog, emptyAidenMcpProvenanceDocument, type AidenMcpProvenanceDocument } from "./aiden-mcp-provenance.js";
 import { AidenMcpToolRunner, type AidenMcpLimits } from "./aiden-mcp-tools.js";
 import { AidenRemoteChatService } from "./aiden-remote-chats.js";
+import { analyticsSettled, captureAnalyticsEvents, type CapturedAnalyticsEvent } from "./analytics/test-support.js";
 import { revokeAidenRemoteRuntimeDevice } from "./aiden-remote-revocation.js";
 import {
   AidenRemoteStateRegistry,
@@ -78,6 +80,8 @@ async function freePort(): Promise<number> {
  */
 async function harness(options: {
   hold?: boolean;
+  /** Awaited before a chat's provenance is recorded: between its durable create and its first turn. */
+  beforeProvenance?: (chatId: string) => Promise<void>;
   limits?: Partial<AidenMcpLimits>;
   supported?: boolean;
   stored?: AidenRemoteStateDocument;
@@ -245,7 +249,10 @@ async function harness(options: {
   const tools = new AidenMcpToolRunner({
     services: async () => ({ chats: service, streams, workspaces: { list: async () => ({ workspaces: WORKSPACES }) } }),
     acquireAuthorization: (appId, tracksMutationDrain) => registry.acquireDeviceAuthorization(appId, tracksMutationDrain),
-    recordProvenance: (chatId, entry) => provenance.record(chatId, entry),
+    recordProvenance: async (chatId, entry) => {
+      await options.beforeProvenance?.(chatId);
+      return provenance.record(chatId, entry);
+    },
     appVersion: "9.9.9",
     hostName: async () => "Studio Mac",
     now: () => clock,
@@ -312,6 +319,11 @@ function structured(result: unknown): Record<string, unknown> {
   const call = result as CallToolResult;
   assert.notEqual(call.isError, true, JSON.stringify(call.content));
   return call.structuredContent as Record<string, unknown>;
+}
+
+/** The MCP server's own usage events, as the analytics registry would keep them. */
+function mcpEvents(captured: CapturedAnalyticsEvent[]) {
+  return captured.filter(({ event }) => event.startsWith("mcp_"));
 }
 
 function refusal(result: unknown): string {
@@ -427,12 +439,15 @@ test("the MCP server is off until turned on, keeps its port, and reports a busy 
   }
 });
 
-test("a host without the MCP capability never starts the server or connects an app", async () => {
+test("a host without the MCP capability never starts the server or connects an app", async (t) => {
+  const events = captureAnalyticsEvents(t);
   const unsupported = await harness({ supported: false });
   try {
     await assert.rejects(unsupported.host.setEnabled(true), /cannot run Aiden's MCP server/u);
     await assert.rejects(unsupported.host.issueApp({ name: "Codex", access: "read" }), /cannot run/u);
     assert.deepEqual(await unsupported.host.status(), { supported: false, enabled: false, running: false });
+    await analyticsSettled();
+    assert.deepEqual(mcpEvents(events), [], "an app that was never connected is not counted");
   } finally {
     await unsupported.close();
   }
@@ -558,7 +573,8 @@ test("a request body over 1 MiB is refused before any tool runs", async () => {
   }
 });
 
-test("a Read app sees only read tools and cannot start, send or stop a turn", async () => {
+test("a Read app sees only read tools and cannot start, send or stop a turn", async (t) => {
+  const events = captureAnalyticsEvents(t);
   const fixture = await harness({ hold: true });
   try {
     await fixture.enable();
@@ -610,6 +626,13 @@ test("a Read app sees only read tools and cannot start, send or stop a turn", as
     assert.equal(fixture.chats.size, 1);
     assert.equal(fixture.generationStarts(), 1);
     assert.deepEqual(fixture.cancelled, []);
+    // Each app is counted with its access level only; the refused start is not a chat.
+    await analyticsSettled();
+    assert.deepEqual(mcpEvents(events), [
+      { event: "mcp_app_connected", props: { access: "supervised" } },
+      { event: "mcp_chat_started", props: { model_choice: "default" } },
+      { event: "mcp_app_connected", props: { access: "read" } },
+    ]);
 
     // Reads work, and the no-workspace folders Aiden makes for one chat are not offered.
     const workspaces = structured(await reader.callTool({ name: "aiden_workspace_list", arguments: {} }));
@@ -625,7 +648,8 @@ test("a Read app sees only read tools and cannot start, send or stop a turn", as
   }
 });
 
-test("aiden_chat_start with the same clientRequestId starts one chat and one turn", async () => {
+test("aiden_chat_start with the same clientRequestId starts one chat and one turn", async (t) => {
+  const events = captureAnalyticsEvents(t);
   const fixture = await harness();
   try {
     await fixture.enable();
@@ -643,6 +667,12 @@ test("aiden_chat_start with the same clientRequestId starts one chat and one tur
     assert.equal(fixture.generationStarts(), 1);
     const started = structured(first);
     assert.equal(started.state, "running");
+    // One chat is counted once, however often the app retried it.
+    await analyticsSettled();
+    assert.deepEqual(mcpEvents(events), [
+      { event: "mcp_app_connected", props: { access: "supervised" } },
+      { event: "mcp_chat_started", props: { model_choice: "default" } },
+    ]);
 
     const finished = structured(
       await client.callTool({ name: "aiden_chat_wait", arguments: { chatId: started.chatId, runId: started.runId } }),
@@ -668,12 +698,29 @@ test("aiden_chat_start with the same clientRequestId starts one chat and one tur
     assert.equal(JSON.stringify(list).includes(app.id), false);
     assert.equal(JSON.stringify(read).includes(app.id), false);
 
+    // Continuing a chat is not a new one.
+    structured(
+      await client.callTool({
+        name: "aiden_chat_send",
+        arguments: { clientRequestId: "retry-send-1", chatId: started.chatId, text: "And the tests?" },
+      }),
+    );
     // A different id is a different request.
     const another = structured(
-      await client.callTool({ name: "aiden_chat_start", arguments: { ...args, clientRequestId: "retry-request-2" } }),
+      await client.callTool({
+        name: "aiden_chat_start",
+        arguments: { ...args, clientRequestId: "retry-request-2", providerId: "provider-2", modelId: "model-2" },
+      }),
     );
     assert.notEqual(another.chatId, started.chatId);
-    assert.equal(fixture.generationStarts(), 2);
+    assert.equal(fixture.generationStarts(), 3);
+    await analyticsSettled();
+    const sent = mcpEvents(events);
+    assert.deepEqual(sent.slice(2), [{ event: "mcp_chat_started", props: { model_choice: "chosen" } }]);
+    // Nothing the app or the person typed, and no id, reaches the report.
+    for (const secret of ["Summarize", "Claude Code", "workspace-1", "provider-2", "model-2", started.chatId, app.id, credential]) {
+      assert.equal(JSON.stringify(sent).includes(String(secret)), false, String(secret));
+    }
   } finally {
     await fixture.close();
   }
@@ -846,7 +893,9 @@ test("each app has its own turn rate limit and run cap, and a retry does not cou
   }
 });
 
-test("a retry the server's request cache has forgotten still replays, without counting as a new turn", async () => {
+test("a retry the server's request cache has forgotten still replays, without counting as a new turn", async (t) => {
+  const events = captureAnalyticsEvents(t);
+  const chatsStarted = () => mcpEvents(events).filter(({ event }) => event === "mcp_chat_started").length;
   // Room for exactly the first start, its send and 128 more: then the rate limit is spent.
   const fixture = await harness({ limits: { turnsPerMinute: 130, concurrentRuns: 130 } });
   try {
@@ -862,12 +911,129 @@ test("a retry the server's request cache has forgotten still replays, without co
     // 128 newer requests push both out of the in-memory cache.
     for (let index = 0; index < 128; index += 1) structured(await start(`filler-start-${index}`));
     assert.equal(fixture.generationStarts(), 130);
+    await analyticsSettled();
+    assert.equal(chatsStarted(), 129);
 
     assert.deepEqual(structured(await start("evicted-start-1")), first);
     assert.deepEqual(structured(await client.callTool({ name: "aiden_chat_send", arguments: sendArgs(first.chatId) })), sent);
     assert.equal(fixture.generationStarts(), 130);
     // A new request is still held to the limit.
     assert.match(refusal(await start("fresh-start-1")), /started 130 turns in the last minute/u);
+    // Neither the replay from Aiden's durable record nor the refused start is counted.
+    await analyticsSettled();
+    assert.equal(chatsStarted(), 129);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("a start still running when 128 newer requests arrive is joined by its retry and counted once", async (t) => {
+  const events = captureAnalyticsEvents(t);
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let gated = false;
+  const fixture = await harness({
+    limits: { turnsPerMinute: 200, concurrentRuns: 200 },
+    // Only the original call waits: a retry that ran on its own would pass straight through.
+    beforeProvenance: (chatId) => {
+      if (chatId !== "chat-1" || gated) return Promise.resolve();
+      gated = true;
+      return held;
+    },
+  });
+  try {
+    await fixture.enable();
+    const client = await fixture.connect((await fixture.host.issueApp({ name: "Retrier", access: "supervised" })).credential);
+    const start = (id: string) =>
+      client.callTool({ name: "aiden_chat_start", arguments: { clientRequestId: id, workspaceId: "workspace-1", text: "Go" } });
+
+    // The first start has created its chat and waits before its first turn.
+    const first = start("slow-start-1");
+    while (fixture.chats.size === 0) await new Promise((resolve) => setImmediate(resolve));
+    for (let index = 0; index < 128; index += 1) structured(await start(`filler-start-${index}`));
+    // The retry gets as long as an independent start would need; it must not finish on its own.
+    const retry = start("slow-start-1");
+    await Promise.race([retry, delay(500)]);
+    release();
+    const [original, retried] = await Promise.all([first, retry]);
+    assert.deepEqual(structured(retried), structured(original));
+    assert.equal(fixture.generationStarts(), 129);
+    await analyticsSettled();
+    assert.equal(mcpEvents(events).filter(({ event }) => event === "mcp_chat_started").length, 129);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("an app with 8 starts still unanswered is refused a new one, while a retry of a held start still joins it", async () => {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const fixture = await harness({
+    limits: { turnsPerMinute: 200, concurrentRuns: 200 },
+    // Every start stalls after creating its chat, as a stuck store or a vanished client would leave it.
+    beforeProvenance: () => held,
+  });
+  try {
+    await fixture.enable();
+    const client = await fixture.connect((await fixture.host.issueApp({ name: "Flooder", access: "supervised" })).credential);
+    const start = (id: string) =>
+      client.callTool({ name: "aiden_chat_start", arguments: { clientRequestId: id, workspaceId: "workspace-1", text: "Go" } });
+
+    const stalled = Array.from({ length: 8 }, (_, index) => start(`stalled-start-${index}`));
+    while (fixture.chats.size < 8) await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(
+      refusal(await start("one-too-many")),
+      "This app has 8 requests Aiden is still answering. Wait for one to finish, then try again.",
+    );
+    const retry = start("stalled-start-0");
+    release();
+    const answers = await Promise.all(stalled);
+    assert.deepEqual(structured(await retry), structured(answers[0]));
+    assert.equal(fixture.generationStarts(), 8, "the refused start never ran");
+
+    // Once they are answered the app may start again.
+    structured(await start("after-the-flood"));
+    assert.equal(fixture.generationStarts(), 9);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("unanswered requests of a revoked app still count toward the host's limit until they finish", async () => {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const fixture = await harness({
+    limits: { turnsPerMinute: 200, concurrentRuns: 200, hostPendingRequests: 3 },
+    beforeProvenance: () => held,
+  });
+  try {
+    await fixture.enable();
+    const startWith = (client: Awaited<ReturnType<typeof fixture.connect>>) => (id: string) =>
+      client.callTool({ name: "aiden_chat_start", arguments: { clientRequestId: id, workspaceId: "workspace-1", text: "Go" } });
+    const old = await fixture.host.issueApp({ name: "Old", access: "supervised" });
+    const startOld = startWith(await fixture.connect(old.credential));
+    const stalled = [startOld("old-start-1"), startOld("old-start-2")];
+    while (fixture.chats.size < 2) await new Promise((resolve) => setImmediate(resolve));
+    // Revocation waits for the stalled writes to drain; the replacement is connected meanwhile.
+    const revoked = fixture.host.revokeApp(old.app.id);
+    const startNew = startWith(await fixture.connect((await fixture.host.issueApp({ name: "New", access: "supervised" })).credential));
+    const third = startNew("new-start-1");
+    while (fixture.chats.size < 3) await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(
+      refusal(await startNew("new-start-2")),
+      "Aiden is still answering too many requests from apps. Try again in a moment.",
+    );
+    release();
+    await Promise.allSettled([...stalled, revoked]);
+    structured(await third);
+    // With the old app's work finished there is room again.
+    structured(await startNew("new-start-3"));
   } finally {
     await fixture.close();
   }
