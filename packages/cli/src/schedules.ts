@@ -3,8 +3,7 @@ import { scheduledMcpServerBinding } from "../../../main/services/schedule-mcp-b
 import { storeFor } from "./mcp.ts";
 import { runScheduledInference } from "./scheduled-inference.ts";
 import { join } from "node:path";
-import { readFileSync, rmSync, unlinkSync } from "node:fs";
-import { isDeepStrictEqual } from "node:util";
+import { readFileSync } from "node:fs";
 import { remoteDaemonCommand } from "./daemon-control.ts";
 import { createHash } from "node:crypto";
 import { createScheduleStore, nextScheduledRuns } from "../../../main/services/schedule-store-core.js";
@@ -14,8 +13,6 @@ import { JsonStore, acquireLease, readJson } from "./state.ts";
 import { workspaceStore, accessFor, assertCliWorkspaceFolderPresent } from "./workspaces.ts";
 import { resolveScheduledScript, runScheduledScript } from "../../../main/services/schedule-script.js";
 import { createCliModelRuntime } from "./providers.ts";
-import { AsyncLocalStorage } from "node:async_hooks";
-import { assertScheduleApproval, isScheduleMutation, reviewedScheduleInput, type ScheduleToolApproval } from "./schedule-tool-approval.ts";
 
 async function providerFingerprint(agentDir: string, providerId?: string, modelId?: string): Promise<string> {
   if (!providerId || !modelId) throw new Error("Select an explicit provider and model for unattended inference.");
@@ -25,42 +22,14 @@ async function providerFingerprint(agentDir: string, providerId?: string, modelI
   return createHash("sha256").update(JSON.stringify({ providerId, modelId, api: model.api, baseUrl: model.baseUrl, headers: model.headers ?? {} })).digest("hex");
 }
 
+const SCHEDULE_USAGE = "Usage: schedule list|status | save <json-file> | preview <cron> [timezone] | runs|notifications [since-ms]|run|pause|resume|remove <id>";
+
 export function createCliScheduler(agentDir: string) {
-  // Consent verifies the task on the first write and only the environment after it.
-  // `closed` is terminal: a rejected write or a finished command can never use it again.
-  // One receipt, one command, even if the command fails: the person reviews again.
-  const spentApprovals = new Set<string>();
-  const approvedMutation = new AsyncLocalStorage<{ approval: ScheduleToolApproval; phase: "first_write" | "follow_on" | "closed"; cancellation: AbortController }>();
   const persistence = new JsonStore<unknown[]>(join(agentDir, "schedules.json"), []);
   const tasks = {
     load: () => persistence.load(),
     update<R>(mutation: (draft: unknown[]) => R | Promise<R>, isCurrent?: () => boolean): Promise<R> {
-      return persistence.update(mutation, () => {
-        if (isCurrent && !isCurrent()) return false;
-        const current = approvedMutation.getStore();
-        if (current && current.phase !== "closed") {
-          try {
-            assertScheduleApproval(agentDir, current.approval, current.phase === "first_write");
-            // Consumed just before the write publishes: a crash after it cannot leave consent to replay.
-            // A receipt already gone was revoked since the check above, so this write may not publish.
-            if (current.phase === "first_write") {
-              try { unlinkSync(current.approval.approvalFile); }
-              catch (error) {
-                if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error("Scheduled-task approval was cancelled. Review the task again.", { cause: error });
-                throw error;
-              }
-            }
-          } catch (error) {
-            // A rejected mutation may rearm/restore the unchanged task, never reuse its consent.
-            // Aborting lets the shared lifecycle roll back writes this mutation already made.
-            current.phase = "closed";
-            current.cancellation.abort();
-            throw error;
-          }
-          current.phase = "follow_on";
-        }
-        return true;
-      });
+      return persistence.update(mutation, isCurrent);
     },
   };
   const store = createScheduleStore(tasks, new JsonStore<unknown[]>(join(agentDir, "schedule-runs.json"), []));
@@ -126,31 +95,9 @@ export function createCliScheduler(agentDir: string) {
   }
   async function command(args: string[]): Promise<unknown> {
     const [action = "list", value, timezone] = args;
-    if (isScheduleMutation(action) && timezone !== undefined) {
-      const approval = JSON.parse(timezone) as ScheduleToolApproval;
-      if (approval.action !== action) throw new Error("The approved schedule action changed.");
-      if (spentApprovals.has(approval.approvalFile)) throw new Error("Scheduled-task approval was already used. Review the task again.");
-      assertScheduleApproval(agentDir, approval);
-      spentApprovals.add(approval.approvalFile);
-      const current = { approval, phase: "first_write" as "first_write" | "follow_on" | "closed", cancellation: new AbortController() };
-      try {
-        return await approvedMutation.run(current, () => command(args.slice(0, 2)));
-      } finally {
-        // Cron callbacks can inherit this async context, but never its one-shot consent.
-        current.phase = "closed";
-        // Without the receipt no other scheduler can replay it. A leftover file stays spent here.
-        try { rmSync(approval.approvalFile, { force: true }); } catch { /* The command's own outcome stands. */ }
-      }
-    }
-    const currentApproval = approvedMutation.getStore();
-    const consentOpen = currentApproval !== undefined && currentApproval.phase !== "closed";
-    const revision = consentOpen
-      ? (JSON.parse(currentApproval.approval.snapshot) as { task?: { updatedAt?: number } }).task?.updatedAt
-      : undefined;
-    // A new task has no revision to pin, but its receipt can still be cancelled.
-    const mutationOptions = consentOpen
-      ? { ...(revision === undefined ? {} : { expectedUpdatedAt: revision }), signal: currentApproval.cancellation.signal }
-      : undefined;
+    // Only `preview` takes a third argument; extra words are a mistake, not something to ignore.
+    const maxArgs = action === "preview" ? 3 : action === "list" || action === "status" ? 1 : 2;
+    if (args.length > maxArgs) throw new Error(SCHEDULE_USAGE);
     switch (action) {
       case "list": return store.list();
       case "status": {
@@ -202,16 +149,13 @@ export function createCliScheduler(agentDir: string) {
       case "preview": if (!value) throw new Error("Provide a quoted cron expression."); return nextScheduledRuns(value, timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone, 5);
       case "save": {
         if (!value) throw new Error("Provide a JSON file containing ScheduledTaskInput.");
-        const input = JSON.parse(readFileSync(value, "utf8")) as ScheduledTaskInput;
-        // The file is read after consent, so what it holds must still be what was reviewed.
-        if (consentOpen && !isDeepStrictEqual(input, reviewedScheduleInput(currentApproval.approval))) throw new Error("The schedule changed after approval. Review it again.");
-        return saveInput(input, mutationOptions);
+        return saveInput(JSON.parse(readFileSync(value, "utf8")) as ScheduledTaskInput);
       }
-      case "remove": await service.remove(value, mutationOptions); return { removed: value };
-      case "pause": return service.pause(value, mutationOptions);
-      case "resume": return service.resume(value, mutationOptions);
+      case "remove": await service.remove(value); return { removed: value };
+      case "pause": return service.pause(value);
+      case "resume": return service.resume(value);
       case "run": return service.runNow(value);
-      default: throw new Error("Usage: schedule list|status | save <json-file> | preview <cron> [timezone] | runs|notifications [since-ms]|run|pause|resume|remove <id>");
+      default: throw new Error(SCHEDULE_USAGE);
     }
   }
   return { store, service: { ...service, save: saveInput }, command, setBotPorts(ports: BotRoutineExecutorPorts) { botPorts = ports; } };

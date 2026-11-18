@@ -38,9 +38,10 @@ export function createArtifactsExtension(agentDir: string): InlineExtension {
         return { content: [{ type: "text", text: `Created ${title}: ${path}` }], details: { path, title } };
       },
     });
-    // The terminal cannot draw Aiden's native components, so a render_ui visual
-    // compiles with the desktop's compiler and prints its plain-text rendering.
-    pi.registerTool({ name: "render_ui", label: "Visual", description: "Draw a visual with Aiden's native component catalog (Aiden UI Markup). In the terminal it is shown as its plain-text rendering.",
+    // Server chats store no visuals: the markup compiles with the desktop's
+    // compiler, paired apps show only a "Draw visual" step with its title, and
+    // the plain-text rendering goes back to the model.
+    pi.registerTool({ name: "render_ui", label: "Visual", description: "Draw a visual with Aiden's native component catalog (Aiden UI Markup). On this server the person does not see the visual itself, only a step with its title; you get its plain-text rendering back, so put anything they need to read in your reply.",
       parameters: Type.Object({ title: Type.String({ minLength: 1, maxLength: 120 }), layout: Type.Optional(Type.Union([Type.Literal("column"), Type.Literal("wide")])), markup: Type.String({ minLength: 1, maxLength: 400_000 }) }),
       async execute(_id, input) {
         const title = requireGenerativeUiTitle(input.title);

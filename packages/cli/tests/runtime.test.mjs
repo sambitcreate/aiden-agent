@@ -74,6 +74,14 @@ test("aiden help lists the Aiden commands", () => {
 	assert.match(result.stdout, /^ {2}workspace /m);
 });
 
+test("every command aiden help lists is accepted, and every accepted command is listed", async () => {
+	const result = runCli(["help"]);
+	assert.equal(result.status, 0, result.stderr);
+	const listed = new Set([...result.stdout.matchAll(/^ {2}([a-z][a-z-]*)/gm)].map((match) => match[1]));
+	const { CLI_COMMANDS } = await import(pathToFileURL(path.join(pkgDir, "dist", "parity-test-api.js")).href);
+	assert.deepEqual([...listed].sort(), [...CLI_COMMANDS].sort());
+});
+
 test("the SQLite experimental warning is filtered and other warnings are not", () => {
 	const filter = pathToFileURL(path.join(pkgDir, "src", "sqlite-warning.ts")).href;
 	const script = [
@@ -113,6 +121,58 @@ test("modes and flags of the removed interactive CLI exit non-zero with one line
 			assert.notEqual(result.status, 0, args.join(" "));
 			assert.equal(result.stdout, "", args.join(" "));
 			assert.equal(result.stderr, "aiden: the interactive CLI was removed; run `aiden serve` or `aiden help`.\n", args.join(" "));
+		}
+	} finally {
+		rmSync(agentDir, { recursive: true, force: true });
+	}
+});
+
+test("an unknown word gets an unknown-command line, with a suggestion for a near miss", () => {
+	const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-agent-"));
+	try {
+		const env = { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" };
+		const typo = runCli(["bot", "list"], { env, input: "" });
+		assert.equal(typo.status, 1);
+		assert.equal(typo.stdout, "");
+		assert.equal(typo.stderr, 'aiden: unknown command "bot". Did you mean `aiden bots`? Run `aiden help`.\n');
+		const unrelated = runCli(["frobnicate"], { env, input: "" });
+		assert.equal(unrelated.status, 1);
+		assert.equal(unrelated.stderr, 'aiden: unknown command "frobnicate". Run `aiden help`.\n');
+		for (const args of [["--frobnicate"], ["selfcheck"], ["chat"]]) {
+			const removed = runCli(args, { env, input: "" });
+			assert.equal(removed.status, 1, args.join(" "));
+			assert.equal(removed.stderr, "aiden: the interactive CLI was removed; run `aiden serve` or `aiden help`.\n", args.join(" "));
+		}
+	} finally {
+		rmSync(agentDir, { recursive: true, force: true });
+	}
+});
+
+test("an unknown command leaves a pending MCP migration alone; a real command runs it", () => {
+	const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-agent-"));
+	try {
+		const env = { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" };
+		const legacy = JSON.stringify([{ id: "old", name: "Existing server", enabled: false, transport: "stdio", command: "example" }]);
+		writeFileSync(path.join(agentDir, "mcp.json"), legacy);
+		assert.equal(runCli(["bot"], { env, input: "" }).status, 1);
+		assert.equal(readFileSync(path.join(agentDir, "mcp.json"), "utf8"), legacy);
+		assert.equal(existsSync(path.join(agentDir, "aiden-mcp.json")), false);
+		const list = runCli(["mcp", "list"], { env, input: "" });
+		assert.equal(list.status, 0, list.stderr);
+		assert.equal(existsSync(path.join(agentDir, "mcp.json")), false);
+		assert.equal(existsSync(path.join(agentDir, "aiden-mcp.json")), true);
+	} finally {
+		rmSync(agentDir, { recursive: true, force: true });
+	}
+});
+
+test("serve --help prints the serve usage and exits 0", () => {
+	const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-agent-"));
+	try {
+		for (const flag of ["--help", "-h"]) {
+			const result = runCli(["serve", flag], { env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" }, input: "" });
+			assert.equal(result.status, 0, result.stderr);
+			assert.match(result.stdout, /^Usage: aiden serve /);
 		}
 	} finally {
 		rmSync(agentDir, { recursive: true, force: true });
