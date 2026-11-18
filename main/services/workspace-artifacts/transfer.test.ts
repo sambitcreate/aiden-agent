@@ -6,7 +6,13 @@ import * as path from "node:path";
 import test from "node:test";
 import { compileAum } from "../../../renderer/shared/aiden-ui/compile.js";
 import { AIDEN_UI_CATALOG_VERSION } from "../../../renderer/shared/aiden-ui/types.js";
-import { WORKSPACE_ARTIFACT_LIMITS } from "../../../renderer/shared/workspace-artifacts.js";
+import {
+  resolveWorkspaceArtifactCommand,
+  WORKSPACE_ARTIFACT_LIMITS,
+  workspaceArtifactActionProblem,
+  workspaceArtifactCommandList,
+  type WorkspaceArtifactActionV1,
+} from "../../../renderer/shared/workspace-artifacts.js";
 import { writeFileAtomic } from "../durable-fs.js";
 import { WorkspaceArtifactStore } from "./store.js";
 import { createWorkspaceArtifactTool } from "./tool.js";
@@ -170,18 +176,56 @@ test("a file of another format, version or kind is refused with the reason", () 
   assert.throws(() => parseWorkspaceArtifactPageFile(pageFile({}, { catalogVersion: AIDEN_UI_CATALOG_VERSION + 1 })), /components this Aiden doesn’t have/u);
 });
 
-test("commands are held to the same rules as a page Aiden saves", () => {
-  // A value that would choose the program itself.
-  const asCommand = [{ name: "go", label: "Go", command: "{{tool}} --version", params: [{ name: "tool" }] }];
-  assert.throws(() => parseWorkspaceArtifactPageFile(pageFile({ actions: asCommand })), /can’t be imported: actions\[0\].*the command itself/u);
-  const quoted = [{ name: "say", label: "Say", command: "echo \"{{text}}\"", params: [{ name: "text" }] }];
-  assert.throws(() => parseWorkspaceArtifactPageFile(pageFile({ actions: quoted })), /inside double quotes/u);
+test("commands are held to the same rules as a page Aiden saves: a refused placeholder imports turned off", () => {
+  // A value that would choose the program itself, or sit inside quotes: the
+  // page imports, but the action never runs, as on a stored page.
+  const asCommand = { name: "go", label: "Go", command: "{{tool}} --version", params: [{ name: "tool" }] };
+  const quoted = { name: "say", label: "Say", command: "echo \"{{text}}\"", params: [{ name: "text" }] };
+  const content = parseWorkspaceArtifactPageFile(pageFile({ actions: [asCommand, quoted] }));
+  assert.deepEqual(content.actions.map((action) => action.name), ["go", "say"]);
+  assert.match(workspaceArtifactActionProblem(content.actions[0]!) ?? "", /the command itself/u);
+  assert.match(workspaceArtifactActionProblem(content.actions[1]!) ?? "", /inside double quotes/u);
+  assert.throws(() => resolveWorkspaceArtifactCommand(content.actions[0]!, ["rm"]), /Go is turned off/u);
+  assert.throws(() => resolveWorkspaceArtifactCommand(content.actions[1]!, ["hi"]), /Say is turned off/u);
+  // The import dialog says so beside the command.
+  assert.deepEqual(
+    workspaceArtifactCommandList(content.sources, content.actions).map((entry) => entry.label),
+    ["Source pulls", "Button “Go” (turned off: it won’t run)", "Button “Say” (turned off: it won’t run)"],
+  );
+  // Anything else wrong with an action still refuses the file.
+  const unknownParam = [{ name: "go", label: "Go", command: "gh pr view {{number}}", params: [] }];
+  assert.throws(() => parseWorkspaceArtifactPageFile(pageFile({ actions: unknownParam })), /can’t be imported: actions\[0\].*not one of its params/u);
   const hiddenLabel = [{ name: "merge", label: "Merge‮gnp.exe", command: "gh pr merge", params: [] }];
   assert.throws(() => parseWorkspaceArtifactPageFile(pageFile({ actions: hiddenLabel })), /label/u);
   const outside = [{ name: "keys", kind: "file", file: "../.ssh/id_ed25519", parse: "text" }];
   assert.throws(() => parseWorkspaceArtifactPageFile(pageFile({ sources: outside })), /may not leave the workspace folder/u);
   const secrets = [{ name: "env", kind: "file", file: ".env", parse: "text" }];
   assert.throws(() => parseWorkspaceArtifactPageFile(pageFile({ sources: secrets })), /can’t be imported: Credential files/u);
+});
+
+test("a stored page with a turned-off action exports, and imports back with that action still turned off", async (t) => {
+  const dir = await tempDir(t, "aiden-artifact-turned-off-");
+  const made = new WorkspaceArtifactStore({ root: () => dir, newId: () => "art1" });
+  const fetch: WorkspaceArtifactActionV1 = { name: "fetch", label: "Fetch", command: "git fetch origin {{ref}}", params: [{ name: "ref", type: "string" }] };
+  const content = parseWorkspaceArtifactPageFile(pageFile({ sources: [], actions: [fetch] }));
+  await made.create("ws1", content);
+  // Written by an earlier release, whose rules let a value reach --upload-pack.
+  const file = path.join(dir, "ws1.json");
+  const document = JSON.parse(await fs.readFile(file, "utf8")) as { artifacts: { actions: WorkspaceArtifactActionV1[] }[] };
+  document.artifacts[0]!.actions.push({ ...fetch, name: "probe", label: "Probe", command: "git ls-remote --upload-p {{ref}} ." });
+  await fs.writeFile(file, JSON.stringify(document));
+  const stored = (await new WorkspaceArtifactStore({ root: () => dir }).get("ws1", "art1"))!.artifact;
+  assert.deepEqual(stored.actions.map((action) => action.name), ["fetch", "probe"]);
+
+  const exported = `${JSON.stringify(workspaceArtifactPageFile(stored), null, 2)}\n`;
+  const imported = parseWorkspaceArtifactPageFileText(exported);
+  const into = new WorkspaceArtifactStore({ root: () => path.join(dir, "other"), newId: () => "art9" });
+  const saved = await into.create("ws2", imported, { uniqueTitle: true });
+  const [kept, probe] = saved.actions;
+  assert.deepEqual(saved.actions.map((action) => action.name), ["fetch", "probe"]);
+  assert.match(resolveWorkspaceArtifactCommand(kept!, ["main"]).command, /git fetch origin/u);
+  assert.throws(() => resolveWorkspaceArtifactCommand(probe!, ["./x.sh"]), /Probe is turned off/u);
+  assert.equal(saved.approvedDigest, undefined);
 });
 
 test("more sources or actions than a page may have are refused", () => {

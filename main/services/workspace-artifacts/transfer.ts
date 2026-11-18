@@ -128,8 +128,10 @@ function strictly<T>(parse: () => T): T {
 
 /**
  * Reads a page file strictly: an unknown format or version, or anything a
- * page Aiden saves could not hold, is refused with the reason. Keys the
- * format does not define (an approval, ids) are ignored, never kept.
+ * page Aiden saves could not hold, is refused with the reason, except an
+ * action whose placeholders the current rules refuse, which is kept turned
+ * off the way a stored page keeps one. Keys the format does not define (an
+ * approval, ids) are ignored, never kept.
  */
 export function parseWorkspaceArtifactPageFile(value: unknown): WorkspaceArtifactContent {
   if (!isRecord(value) || value.format !== WORKSPACE_ARTIFACT_FILE_FORMAT) {
@@ -151,7 +153,10 @@ export function parseWorkspaceArtifactPageFile(value: unknown): WorkspaceArtifac
   for (const source of sources) {
     if (source.kind === "file") strictly(() => assertArtifactFilePath(source.file));
   }
-  const actions = strictly(() => parseWorkspaceArtifactActions(value.actions));
+  // As a stored page loads: an action the placeholder rules now refuse (one
+  // exported before they tightened, or written by hand) stays on the page
+  // turned off, and never runs until the page's actions are rewritten.
+  const actions = strictly(() => parseWorkspaceArtifactActions(value.actions, { stored: true }));
   const refresh = strictly(() => parseWorkspaceArtifactRefresh(value.refresh));
   const raw = value.visual;
   if (!isRecord(raw)) cannotImport("it has no page.");

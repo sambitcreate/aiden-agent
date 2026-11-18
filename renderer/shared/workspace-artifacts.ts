@@ -1172,7 +1172,10 @@ export function workspaceArtifactCommandList(
 ): { label: string; command: string }[] {
   return [
     ...sources.flatMap((source) => (source.kind === "shell" ? [{ label: `Source ${source.name}`, command: source.command }] : [])),
-    ...actions.map((action) => ({ label: `Button “${action.label}”`, command: action.command })),
+    ...actions.map((action) => ({
+      label: workspaceArtifactActionProblem(action) ? `Button “${action.label}” (turned off: it won’t run)` : `Button “${action.label}”`,
+      command: action.command,
+    })),
   ];
 }
 
