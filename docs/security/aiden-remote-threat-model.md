@@ -194,6 +194,7 @@ Outside app (Claude Code, Codex, any MCP client) on this computer
   - The app that started a chat is recorded only locally (`aiden-mcp-chat-provenance.json`) and is never projected.
   - Logs follow section 7 and carry only content-free events.
   - No analytics events are sent.
+- **Headless server.** `aiden serve` runs the same host and tools inside its Remote runtime, on loopback ports 49500–49507 so it never takes a desktop's port. It is administered only through `aiden apps` over the owner-private control socket, and it has no MCP server under `--no-remote`. `packages/cli/tests/mcp-apps.test.mjs` drives it end to end: off by default, 401 for a missing, wrong or revoked token, Read apps without write tools, a phone's id refused by `aiden apps revoke`, and the port kept across `off`/`on` and a restart.
 
 Required evidence: `main/services/aiden-mcp-server.test.ts` covers:
 

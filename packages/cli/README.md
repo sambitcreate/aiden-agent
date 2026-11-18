@@ -117,6 +117,24 @@ Phones and Macs paired with the server see its workspaces, chats, Bots, schedule
 - **Missing workspace folders.** If a chat's workspace folder (or its managed worktree checkout) was moved, renamed or deleted on the server, a turn from a paired device is refused before the message is kept, with the same `409 workspace_unavailable` refusal the Mac sends and no path in the message. The same send runs once the folder is back. A scheduled run in that workspace records a clear missing-folder error instead of a raw file-system error.
 - **Scheduled-run notifications.** Run completions show up through `aiden schedule runs <id>`, `aiden schedule notifications` and, for tasks with `notify`, local notifications on paired phones via the Remote `scheduled-tasks/notifications` feed.
 
+## Outside apps (MCP server)
+
+`aiden serve` hosts the same loopback MCP server as the desktop, so Claude Code, Codex or any MCP client on the same computer can list the server's workspaces and chats, read them, and, with Supervised access, start and follow turns. Tools, access levels, limits and the threat model are in [`docs/aiden-mcp-server.md`](../../docs/aiden-mcp-server.md).
+
+```bash
+aiden apps connect "Claude Code" --access supervised   # turns the server on, shows the token once
+aiden apps list                                         # server status and connected apps
+aiden apps revoke <app-id>                              # disconnects one app at once
+aiden apps off                                          # closes the listener; `aiden apps on` reopens it
+```
+
+- **Off by default.** The listener opens only after the first `aiden apps connect` or an explicit `aiden apps on`, and the choice is saved in `remote.json`.
+- **Address.** `http://127.0.0.1:<port>/mcp`, on loopback only. The server tries port 49500 and the next seven, 100 above the desktop's 49400, so a desktop and a server on one computer never collide. If all eight are busy the first time it starts, the system picks a free loopback port instead. The first port that binds is saved, so the URL stays the same across restarts; if another program later holds it, `aiden apps list` reports `port_in_use` instead of moving.
+- **Connecting.** `connect <name>` defaults to Read access. On a terminal it prints the token once, with `claude mcp add` and `codex mcp add` commands that read it from the app's own variable, such as `AIDEN_MCP_TOKEN_CLAUDE_CODE_K3J9QX` (the same name the desktop's Settings sheet prints), instead of writing it into their config, so two apps in one shell profile keep separate tokens; piped, it prints JSON and warns on stderr that the output holds the token.
+- **Requires Remote.** Apps share the Remote runtime's chats and device records, so `aiden serve --no-remote` has no MCP server and `aiden apps` says to restart without the flag. The listener never joins Remote's LAN or Tailscale listener.
+- **Admin over the control socket.** `aiden apps` needs a running server and talks to it over the private control socket, like `aiden remote`. Admin commands send no analytics, and chats an app starts send no usage events.
+- **Containers.** Loopback inside a container is the container's own, so an app on the host can't reach `/mcp` in the Docker image. Run `aiden serve` on the host for outside apps.
+
 ## Workspace tools and generation limits
 
 Workspace chats hosted by `aiden serve` use the desktop's file and search tools: `read_file`, `list_dir`, `glob`, `grep`, `write_file` and `edit_file`, plus `run_command`. File-tool paths stay inside the workspace. CLI read and search tools apply the existing credential-path policy to supplied paths and canonical targets, refusing `.env` files and protected credential/private-key file paths. Public keys, credential-named source files and `.env.example` stay readable. Ask, Full and None workspace access still control tool admission, and file tools cannot change hook or agent configuration. Telegram and scheduled workspace chat turns still require Full access. Read-only scheduled inference receives only `read_file`, `list_dir`, `glob` and `grep`; Full scheduled inference also receives the file mutation and shell tools.
@@ -182,6 +200,7 @@ The desktop's per-workspace skill and connector switches (Workspace settings) ar
 | `remote status\|devices\|pair lan\|tailscale\|pair-status\|pair-cancel <id>\|revoke <id>\|roots\|approve-root <path>` | Pairing and paired-device administration (server must be running) |
 | `remote network local\|tailscale\|both` | Who can reach the server; Tailscale is set up for you (server must be running) |
 | `remote check` | Check each step a phone needs to reach the server, with fixes |
+| `apps list\|connect <name> [--access read\|supervised]\|revoke <id>\|on\|off` | Outside apps (Claude Code, Codex) on the local `/mcp` endpoint (server must be running) |
 | `auth list\|login\|logout` | Provider credentials (OAuth or API key) |
 | `workspace list\|add\|remove\|access\|scratch` | Workspace registry and tool access tiers |
 | `mcp list\|presets\|add\|preset\|login\|logout\|remove` | MCP connectors and their OAuth sign-ins |
@@ -215,7 +234,7 @@ Notes:
 
 | Path | Contents |
 | --- | --- |
-| `~/.aiden/agent/` | Server state: `settings.json`, `auth.json`, `aiden.json` (device-local feature settings), `aiden-mcp.json`, `web-search.json`, `remote.json` (Remote identity and paired devices), `chat-read-markers.json` and `chat-triage.json` (Inbox read state and Pin, Done and Snooze), `schedules.json`, `hooks/` (hooks, approvals and run log), `sessions/`, `bots/`, `bot-service/`, `artifacts/`, `credentials/`, `serve.log` and the private control socket |
+| `~/.aiden/agent/` | Server state: `settings.json`, `auth.json`, `aiden.json` (device-local feature settings), `aiden-mcp.json`, `web-search.json`, `remote.json` (Remote identity, paired devices, connected apps and the MCP server setting), `aiden-mcp-chat-provenance.json` (which app started a chat, local only), `chat-read-markers.json` and `chat-triage.json` (Inbox read state and Pin, Done and Snooze), `schedules.json`, `hooks/` (hooks, approvals and run log), `sessions/`, `bots/`, `bot-service/`, `artifacts/`, `credentials/`, `serve.log` and the private control socket |
 | `~/.aiden/` | Shared Aiden home (the desktop's portable `config.json`, `skills/`, `scripts/`; `memory/` is the shared desktop and server memory store, `ws-<folder-hash>` scopes) |
 | `AIDEN_CODING_AGENT_DIR` | Environment override for the agent directory (mirrors Pi's `PI_CODING_AGENT_DIR`; use it for tests and for running more than one server) |
 
@@ -227,6 +246,7 @@ New Memory databases support bounded incremental space reclamation on open and c
 - **Aiden usage data.** A server built from a clone or the Docker image has no project key and sends nothing. Only the `aiden serve` process of a distribution build (`npm run cli:dist`) can send the anonymous usage and crash data in [`docs/analytics.md`](../../docs/analytics.md); admin commands send nothing, apart from the one final event of `aiden telemetry off`. It sends only after its one-time notice, shown at `aiden service install` or the first `aiden serve` on a terminal; a server that never showed the notice stays silent. `aiden telemetry status|on|off` is the switch (`off` also stops a running server; a server picks up `on` at its next start). `DO_NOT_TRACK=1` and `AIDEN_ANALYTICS=0` turn it off for that process, and a service does not inherit them from your shell, so use `aiden telemetry off` there. With `CI` set nothing is ever sent. State lives in `<agentDir>/aiden-analytics.json`, not Pi's `settings.json`.
 - **Manual-only catalogs.** models.dev, Artificial Analysis and OpenRouter benchmark data are fetched only by the explicit `aiden catalog models-dev fetch` and `aiden insights aa|openrouter fetch` commands, never on startup or in the background, and the fetched data is display-only. Speech models download only with `aiden speech download`.
 - **Remote.** Paired devices authenticate to the server's own TLS identity. Tailscale is used only after you choose it for pairing.
+- **MCP server.** Off until you connect an app. It listens on loopback only and makes no outbound requests of its own.
 
 ## Linux container
 
