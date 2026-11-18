@@ -5,7 +5,13 @@ import * as path from "node:path";
 import test from "node:test";
 import { compileAum } from "../../../renderer/shared/aiden-ui/compile.js";
 import { AIDEN_UI_CATALOG_VERSION, type ChatUiVisualV1 } from "../../../renderer/shared/aiden-ui/types.js";
-import { WORKSPACE_ARTIFACT_LIMITS, type WorkspaceArtifactSourceV1 } from "../../../renderer/shared/workspace-artifacts.js";
+import {
+  resolveWorkspaceArtifactCommand,
+  WORKSPACE_ARTIFACT_LIMITS,
+  workspaceArtifactActionProblem,
+  type WorkspaceArtifactActionV1,
+  type WorkspaceArtifactSourceV1,
+} from "../../../renderer/shared/workspace-artifacts.js";
 import {
   freeWorkspaceArtifactTitle,
   WorkspaceArtifactStore,
@@ -168,6 +174,57 @@ test("an entry edited into an invalid shape is set aside, not repaired, and surv
   await reopened.create("ws1", content({ title: "Third" }));
   const written = JSON.parse(await fs.readFile(file, "utf8")) as { unreadable?: { sources: unknown }[] };
   assert.deepEqual(written.unreadable?.[0]?.sources, [{ name: "x", kind: "file", file: "../../etc/passwd" }]);
+});
+
+test("a page saved before a placeholder rule tightened stays listed, with that action turned off", async (t) => {
+  const { store, reopen, dir } = await openStore(t);
+  const fetch: WorkspaceArtifactActionV1 = { name: "fetch", label: "Fetch", command: "git fetch origin {{ref}}", params: [{ name: "ref", type: "string" }] };
+  const created = await store.create("ws1", content({ actions: [fetch] }));
+  // Written by an earlier release, whose rules let a value reach --upload-pack.
+  const file = path.join(dir, "ws1.json");
+  const document = JSON.parse(await fs.readFile(file, "utf8")) as { artifacts: { actions: WorkspaceArtifactActionV1[] }[] };
+  const stale = { ...fetch, name: "probe", label: "Probe", command: "git ls-remote --upload-p {{ref}} ." };
+  document.artifacts[0]!.actions.push(stale);
+  await fs.writeFile(file, JSON.stringify(document));
+
+  const reopened = reopen();
+  const kept = (await reopened.get("ws1", created.id))!.artifact;
+  assert.deepEqual(kept.actions.map((action) => action.name), ["fetch", "probe"]);
+  const probe = kept.actions.find((action) => action.name === "probe")!;
+  assert.match(workspaceArtifactActionProblem(probe) ?? "", /names/u);
+  assert.throws(() => resolveWorkspaceArtifactCommand(probe, ["./x.sh"]), /Probe is turned off/u);
+  assert.equal(workspaceArtifactActionProblem(kept.actions[0]!), undefined);
+  assert.match(resolveWorkspaceArtifactCommand(kept.actions[0]!, ["main"]).command, /git fetch origin/u);
+
+  // Later writes keep the page, and replacing it keeps the old version in its history.
+  await reopened.create("ws1", content({ title: "Second" }));
+  await reopened.replace("ws1", created.id, content({ actions: [fetch] }));
+  const written = JSON.parse(await fs.readFile(file, "utf8")) as { artifacts: unknown[]; unreadable?: unknown[] };
+  assert.equal(written.artifacts.length, 2);
+  assert.equal(written.unreadable, undefined);
+  const earlier = (await reopen().revision("ws1", created.id, created.revision))!;
+  assert.deepEqual(earlier.actions.map((action) => action.name), ["fetch", "probe"]);
+});
+
+test("a page set aside earlier comes back once it reads again, and a copy of a live page stays aside", async (t) => {
+  const { store, reopen, dir } = await openStore(t);
+  const first = await store.create("ws1", content());
+  const second = await store.create("ws1", content({ title: "Second" }));
+  const file = path.join(dir, "ws1.json");
+  const document = JSON.parse(await fs.readFile(file, "utf8")) as { artifacts: Record<string, unknown>[]; unreadable?: unknown[] };
+  // An earlier release set Second aside; a copy of the first page sits there too.
+  document.unreadable = [document.artifacts[1], { ...document.artifacts[0], description: "stale copy" }];
+  document.artifacts = [document.artifacts[0]!];
+  await fs.writeFile(file, JSON.stringify(document));
+
+  const reopened = reopen();
+  const listed = await reopened.list("ws1");
+  assert.deepEqual(listed.map((view) => view.artifact.id).sort(), [first.id, second.id].sort());
+  assert.equal((await reopened.get("ws1", first.id))!.artifact.description, undefined);
+  await reopened.rename("ws1", second.id, "Back");
+  const written = JSON.parse(await fs.readFile(file, "utf8")) as { artifacts: unknown[]; unreadable?: { description?: string }[] };
+  assert.equal(written.artifacts.length, 2);
+  assert.deepEqual(written.unreadable?.map((entry) => entry.description), ["stale copy"]);
 });
 
 test("page state is saved only while it stays small and wire-safe", async (t) => {

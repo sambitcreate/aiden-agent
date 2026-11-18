@@ -831,7 +831,33 @@ export function parseWorkspaceArtifactSources(value: unknown): WorkspaceArtifact
   });
 }
 
-export function parseWorkspaceArtifactActions(value: unknown): WorkspaceArtifactActionV1[] {
+/** Why an action's placeholders sit where a value could run as code, or undefined when they don't. */
+function actionPlacementProblem(template: string, params: readonly WorkspaceArtifactParamV1[]): string | undefined {
+  const placement = placeholderPlacement(template, (name) => params.some((param) => param.name === name && param.type === "string"));
+  if (placement.misplaced) {
+    return `each {{param}} must be its own unquoted word, not ${placement.misplaced}. Write gh pr comment {{number}} --body {{body}}; plain text may be joined on, as in git show HEAD:{{path}}.`;
+  }
+  if (placement.arithmetic) {
+    return `{{${placement.arithmetic}}} is text, and bash evaluates text inside [[ ]], (( )), let or declare as arithmetic. Give it type "number", or compare with [ … ].`;
+  }
+  return undefined;
+}
+
+/**
+ * Why a stored action is turned off: its command no longer passes the
+ * placeholder rules, which can tighten after a page was saved. A page keeps
+ * such an action so nothing is lost, but it never runs until rewritten.
+ */
+export function workspaceArtifactActionProblem(action: Pick<WorkspaceArtifactActionV1, "command" | "params">): string | undefined {
+  return actionPlacementProblem(action.command, action.params);
+}
+
+/**
+ * Reads a page's actions. `stored` keeps an action whose placeholders the
+ * current rules refuse (see `workspaceArtifactActionProblem`), for pages saved
+ * before a rule tightened; anything a person or the model writes is strict.
+ */
+export function parseWorkspaceArtifactActions(value: unknown, options: { stored?: boolean } = {}): WorkspaceArtifactActionV1[] {
   if (value === undefined) return [];
   if (!Array.isArray(value)) return invalid("actions must be a list.");
   if (value.length > WORKSPACE_ARTIFACT_LIMITS.actions) {
@@ -866,17 +892,8 @@ export function parseWorkspaceArtifactActions(value: unknown): WorkspaceArtifact
     for (const match of template.matchAll(PLACEHOLDER)) {
       if (!paramNames.has(match[1]!)) return invalid(`${where}: {{${match[1]}}} is not one of its params.`);
     }
-    const placement = placeholderPlacement(template, (name) => params.some((param) => param.name === name && param.type === "string"));
-    if (placement.misplaced) {
-      return invalid(
-        `${where}: each {{param}} must be its own unquoted word, not ${placement.misplaced}. Write gh pr comment {{number}} --body {{body}}; plain text may be joined on, as in git show HEAD:{{path}}.`,
-      );
-    }
-    if (placement.arithmetic) {
-      return invalid(
-        `${where}: {{${placement.arithmetic}}} is text, and bash evaluates text inside [[ ]], (( )), let or declare as arithmetic. Give it type "number", or compare with [ … ].`,
-      );
-    }
+    const problem = options.stored ? undefined : actionPlacementProblem(template, params);
+    if (problem) return invalid(`${where}: ${problem}`);
     return { name: entry.name, label, command: template, params };
   });
 }
@@ -923,14 +940,18 @@ function finiteTime(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
-/** Lenient for stored files: an entry that no longer validates is dropped, never repaired. */
+/**
+ * Lenient for stored files: an entry that no longer validates is dropped,
+ * never repaired, except an action the placeholder rules now refuse, which
+ * stays on the page turned off (`workspaceArtifactActionProblem`).
+ */
 export function parseWorkspaceArtifactV1(value: unknown): WorkspaceArtifactV1 | undefined {
   if (!isRecord(value) || value.version !== 1) return undefined;
   if (!isWorkspaceArtifactId(value.id) || !isWorkspaceArtifactWorkspaceId(value.workspaceId)) return undefined;
   const visual = parseChatUiVisualV1(value.visual);
   if (!visual || visual.id !== value.id || !isWorkspaceArtifactTitle(visual.title)) return undefined;
   const sources = tryParse(() => parseWorkspaceArtifactSources(value.sources));
-  const actions = tryParse(() => parseWorkspaceArtifactActions(value.actions));
+  const actions = tryParse(() => parseWorkspaceArtifactActions(value.actions, { stored: true }));
   const refresh = tryParse(() => parseWorkspaceArtifactRefresh(value.refresh));
   const description = tryParse(() => parseWorkspaceArtifactDescription(value.description));
   if (!sources || !actions || !refresh || (value.description !== undefined && description === undefined)) return undefined;
@@ -1078,6 +1099,9 @@ export function resolveWorkspaceArtifactCommand(
   action: WorkspaceArtifactActionV1,
   args: readonly unknown[],
 ): ResolvedWorkspaceArtifactCommand {
+  // Checked again here, so a stored action the rules now refuse never runs.
+  const problem = workspaceArtifactActionProblem(action);
+  if (problem) invalid(`${action.label} is turned off: its command no longer passes Aiden's checks (${problem}) Update the page's actions to rewrite it.`);
   if (args.length > action.params.length) invalid(`${action.label} takes ${action.params.length} value(s).`);
   const values = action.params.map((param, index) => {
     const raw = args[index];

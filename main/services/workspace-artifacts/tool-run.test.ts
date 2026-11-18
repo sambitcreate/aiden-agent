@@ -168,6 +168,27 @@ test("the digest a save card recorded does not authorize a run", async (t) => {
   assert.equal(await notes(), "first\n");
 });
 
+test("an action saved before a rule tightened is listed as turned off, and neither the tool nor a button runs it", async (t) => {
+  const { call, store, notes, pressButton } = await setup(t, "full");
+  // What an earlier release saved: a value placed where git reads a program to run.
+  const view = (await store.get("ws1", "art1"))!;
+  const stale: WorkspaceArtifactActionV1 = { ...NOTE, command: "git ls-remote --upload-p {{text}} . && printf x >> notes.txt" };
+  await store.replace("ws1", "art1", { ...view.artifact, title: view.artifact.visual.title, actions: [stale] });
+
+  const listed = JSON.parse(await call("l1", { operation: "list" })) as { actions: { name: string; disabled?: string }[] }[];
+  assert.equal(listed[0]!.actions[0]!.name, "note");
+  assert.match(listed[0]!.actions[0]!.disabled ?? "", /^Turned off; run refuses it until you update the page's actions: .*the program or code git --upload-p names/u);
+  await assert.rejects(call("c1", RUN), /Add a note is turned off: its command no longer passes Aiden's checks/u);
+  await assert.rejects(pressButton(["./x.sh"]), /turned off/u);
+  assert.equal(await notes(), "first\n");
+
+  // Rewriting the action turns it back on.
+  await call("u1", { operation: "update", id: "art1", actions: [NOTE] });
+  const relisted = JSON.parse(await call("l2", { operation: "list" })) as { actions: { disabled?: string }[] }[];
+  assert.equal(relisted[0]!.actions[0]!.disabled, undefined);
+  assert.match(await call("c2", RUN), /^Ran "Add a note"\./u);
+});
+
 test("a failed action fails the call with its output", async (t) => {
   const { call } = await setup(t, "full");
   const failing: WorkspaceArtifactActionV1 = { name: "fail", label: "Fail", command: "echo nope >&2; exit 3", params: [] };

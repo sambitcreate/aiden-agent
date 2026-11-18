@@ -177,11 +177,17 @@ export function normalizeWorkspaceArtifactsDocument(workspaceId: string) {
     if (!isRecord(value) || !Array.isArray(value.artifacts)) return emptyArtifacts();
     const seen = new Set<string>();
     const artifacts: WorkspaceArtifactV1[] = [];
-    const unreadable: unknown[] = Array.isArray(value.unreadable) ? value.unreadable.slice(0, UNREADABLE_LIMIT) : [];
-    for (const entry of value.artifacts) {
+    const unreadable: unknown[] = [];
+    // Entries set aside earlier are read again, so a page a looser reader
+    // (a newer release, or a rule that keeps rather than drops) can read comes back.
+    const earlier = Array.isArray(value.unreadable) ? value.unreadable.slice(0, UNREADABLE_LIMIT) : [];
+    const entries = [...value.artifacts, ...earlier];
+    for (const [index, entry] of entries.entries()) {
+      const setAside = index >= value.artifacts.length;
       const artifact = parseWorkspaceArtifactV1(entry);
-      if (artifact && seen.has(artifact.id)) continue;
-      if (!artifact || artifact.workspaceId !== workspaceId || artifacts.length >= WORKSPACE_ARTIFACT_LIMITS.perWorkspace) {
+      // A second copy of a live page is dropped, unless it was already set aside: that stays as it was.
+      if (artifact && seen.has(artifact.id) && !setAside) continue;
+      if (!artifact || seen.has(artifact.id) || artifact.workspaceId !== workspaceId || artifacts.length >= WORKSPACE_ARTIFACT_LIMITS.perWorkspace) {
         if (unreadable.length < UNREADABLE_LIMIT) unreadable.push(entry);
         continue;
       }

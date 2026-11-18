@@ -15,6 +15,7 @@ import {
   parseWorkspaceArtifactRefresh,
   parseWorkspaceArtifactSources,
   resolveWorkspaceArtifactCommand,
+  workspaceArtifactActionProblem,
   WORKSPACE_ARTIFACT_LIMITS,
   WORKSPACE_ARTIFACT_TOOL_NAME,
   workspaceArtifactCommandsNeedApproval,
@@ -390,7 +391,17 @@ function listing(views: readonly WorkspaceArtifactView[], earlier: Record<string
         parse: source.parse,
         ...(snapshot?.sources[source.name] ? { lastStatus: snapshot.sources[source.name]!.status } : {}),
       })),
-      actions: artifact.actions.map((action) => ({ name: action.name, label: action.label, command: action.command, params: action.params })),
+      actions: artifact.actions.map((action) => {
+        const problem = workspaceArtifactActionProblem(action);
+        return {
+          name: action.name,
+          label: action.label,
+          command: action.command,
+          params: action.params,
+          // Saved before a rule tightened: kept on the page, but it never runs until rewritten.
+          ...(problem ? { disabled: `Turned off; run refuses it until you update the page's actions: ${problem}` } : {}),
+        };
+      }),
       refresh: artifact.refresh,
     })),
     null,

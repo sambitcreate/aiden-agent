@@ -81,12 +81,14 @@ test("filled-in values reach the shell as single literal words", () => {
 test("a value never runs as code, even where a template quotes its placeholder", () => {
   const marker = path.join(os.tmpdir(), `aiden-artifact-injection-${process.pid}`);
   fs.rmSync(marker, { force: true });
-  // These shapes are rejected when the model saves an action; the runner is safe even so.
+  const values = [`$(touch ${marker})`, `'; touch ${marker}; '`, `\`touch ${marker}\``];
+  const action = (command: string): WorkspaceArtifactActionV1 => ({ name: "a", label: "A", command, params: [{ name: "body", type: "string" }] });
+  for (const value of values) {
+    execFileSync("/bin/sh", ["-c", resolveWorkspaceArtifactCommand(action("printf '%s' {{body}}"), [value]).command], { encoding: "utf8" });
+  }
+  // Saving refuses these shapes, and one stored before a rule existed is turned off at run time too.
   for (const template of [`printf '%s' "{{body}}"`, `printf '%s' '{{body}}'`, "printf '%s' `echo {{body}}`", `printf '%s' $(echo {{body}})`]) {
-    const action: WorkspaceArtifactActionV1 = { name: "a", label: "A", command: template, params: [{ name: "body", type: "string" }] };
-    for (const value of [`$(touch ${marker})`, `'; touch ${marker}; '`, `\`touch ${marker}\``]) {
-      execFileSync("/bin/sh", ["-c", resolveWorkspaceArtifactCommand(action, [value]).command], { encoding: "utf8" });
-    }
+    for (const value of values) assert.throws(() => resolveWorkspaceArtifactCommand(action(template), [value]), /A is turned off/u, template);
   }
   assert.equal(fs.existsSync(marker), false);
 });
@@ -101,9 +103,13 @@ test("a template cannot run with a different value from the one its confirmation
     "f() { local AIDEN_ARG_1=actual-target; printf '%s' {{target}}; }; f",
     "unset AIDEN_ARG_1; printf '%s' {{target}}",
   ]) {
-    // Saving refuses templates that name the reserved variables; the binding holds even so.
-    if (template.includes("AIDEN_ARG_")) assert.throws(() => parseWorkspaceArtifactActions([action(template)]), /reserved/u);
-    else parseWorkspaceArtifactActions([action(template)]);
+    // Templates that name the reserved variables are refused when saved and when run.
+    if (template.includes("AIDEN_ARG_")) {
+      assert.throws(() => parseWorkspaceArtifactActions([action(template)]), /reserved/u);
+      assert.throws(() => resolveWorkspaceArtifactCommand(action(template), ["shown-target"]), /turned off/u);
+      continue;
+    }
+    parseWorkspaceArtifactActions([action(template)]);
     const { command, preview } = resolveWorkspaceArtifactCommand(action(template), ["shown-target"]);
     assert.equal(spawnSync("/bin/sh", ["-c", preview], { encoding: "utf8" }).stdout, "shown-target", template);
     const ran = spawnSync("/bin/sh", ["-c", command], { encoding: "utf8" });
