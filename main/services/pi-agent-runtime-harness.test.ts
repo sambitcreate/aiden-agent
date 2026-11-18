@@ -4480,7 +4480,7 @@ test("a design turn's canvas note reaches its first request and the journal, so 
   assert.equal(result.kind, "completed");
   assert.equal(requests.length, 1);
   assert.match(requests[0]!, /Design canvas right now: The canvas has 2 frames, 0 open comments\./);
-  assert.deepEqual(warnings, []);
+  assert.equal(warnings.length, 0);
 
   // The next turn rebuilds its transcript from the journal: the same counts
   // add no note, so that request starts with the same transcript.
