@@ -318,38 +318,62 @@ export function browserLocalServers(output: string): Array<{ url: string; label:
   });
 }
 
+type BrowserActionSource = "user" | "agent";
+type BrowserQueuedAction = { source: BrowserActionSource; cancelled: boolean };
+
 export class BrowserActionQueue {
   private tail: Promise<unknown> = Promise.resolve();
-  private controller?: AbortController;
+  private readonly pending = new Set<BrowserQueuedAction>();
+  private active?: { action: BrowserQueuedAction; controller: AbortController };
   get signal(): AbortSignal | undefined {
-    return this.controller?.signal;
+    return this.active?.controller.signal;
   }
+  /** Control revision: advances whenever an interruption takes control from the running action, or arrives while idle. */
   epoch = 0;
+  /** Cancels every running and queued action, whoever started it. */
   interrupt(): void {
-    this.epoch += 1;
-    this.controller?.abort(new Error("Browser action interrupted by user input or a closed tab."));
+    this.cancel(() => true);
   }
-  async run<T>(operation: (check: () => void) => Promise<T>, signal?: AbortSignal): Promise<T> {
-    const epoch = this.epoch;
+  /**
+   * Physical input in the page cancels agent work only. A person's own command
+   * survives it, both while it runs and while it waits behind agent work.
+   */
+  interruptForHumanInput(): void {
+    this.cancel((action) => action.source === "agent");
+  }
+  private cancel(matches: (action: BrowserQueuedAction) => boolean): void {
+    for (const action of this.pending) if (matches(action)) action.cancelled = true;
+    if (this.active && !matches(this.active.action)) return;
+    this.epoch += 1;
+    this.active?.controller.abort(new Error("Browser action interrupted by user input or a closed tab."));
+  }
+  async run<T>(
+    operation: (check: () => void) => Promise<T>,
+    signal?: AbortSignal,
+    source: BrowserActionSource = "agent",
+  ): Promise<T> {
+    const action: BrowserQueuedAction = { source, cancelled: false };
+    this.pending.add(action);
     const check = () => {
       browserAbort(signal);
-      if (epoch !== this.epoch)
+      if (action.cancelled)
         throw new Error("Browser action interrupted by user input or a closed tab.");
     };
     const next = this.tail
       .catch(() => {})
       .then(async () => {
         check();
-        const controller = new AbortController();
-        this.controller = controller;
+        const active = { action, controller: new AbortController() };
+        this.active = active;
         try {
           const result = await operation(check);
           check();
           return result;
         } finally {
-          if (this.controller === controller) this.controller = undefined;
+          if (this.active === active) this.active = undefined;
         }
-      });
+      })
+      .finally(() => this.pending.delete(action));
     this.tail = next;
     return next;
   }
