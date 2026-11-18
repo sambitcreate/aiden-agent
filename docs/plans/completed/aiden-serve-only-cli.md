@@ -57,7 +57,7 @@ The owner asked how t3code and opencode handle Tailscale and what would make Aid
 - **D. Tidy uninstall.** `aiden service uninstall` stops and removes the service first, then takes down Aiden's Serve route; when the service can't be stopped, the route stays with the running server.
 - **Not done (E).** Reaching the server over the tailnet IP without HTTPS certificates needs phone app and protocol changes.
 
-## 2026-11-18 cleanup
+## 2026-11-18 cleanup ([PR #839](https://github.com/sambitcreate/aiden-agent/pull/839))
 
 An audit of `packages/cli` after the serve-only change removed what it left behind:
 
