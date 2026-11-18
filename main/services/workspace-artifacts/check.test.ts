@@ -98,6 +98,15 @@ test("list props whose items draw empty say what one item should look like", () 
   assert.match(findings[3]!, /<Table rows=\{\$data\.table\}> got an object, not a list.*its list fields are "items"/u);
 });
 
+test("a literal list written into the markup is named as the markup wrote it", () => {
+  const visual = page(
+    `<Visual title="Plan"><Table rows={$data.rows} columns={["a", "b"]} /><Data name="data">{"rows": [{"a": 1}]}</Data></Visual>`,
+  );
+  const { findings } = checkWorkspaceArtifactPage({ visual, sources: [], actions: [] }, undefined);
+  assert.equal(findings.length, 1);
+  assert.match(findings[0]!, /^<Table columns=\{\[…\]\}> holds text items.*\{key, label\?/u);
+});
+
 test("list items that have the fields a component draws from pass, including fields named by props", () => {
   const visual = page(
     `<Visual title="Plan" state={{pick: "a"}}><Checklist items={$data.steps} /><BarList items={$data.langs} label="name" value="count" /><Sparkline values={["1", 2]} /><Select bind="pick" label="Pick" options={["a", "b"]} /><Data name="data">{"steps": [{"label": "Write", "done": true}], "langs": [{"name": "TS", "count": 3}]}</Data></Visual>`,

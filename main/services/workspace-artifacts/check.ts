@@ -70,7 +70,13 @@ function describe(expr: AidenUiExprV1): string {
     return `${describe(expr.of)}[…]`;
   }
   if (expr.op === "call") return `${expr.fn}(…)`;
-  return "a value";
+  if (expr.op === "json") return Array.isArray(expr.v) ? "[…]" : "{…}";
+  if (expr.op === "lit") {
+    // A literal is the model's own markup, never data; long text is cut.
+    const text = JSON.stringify(expr.v);
+    return text.length > 40 ? "…" : text;
+  }
+  return "…";
 }
 
 /** What a value is, for "got … , not a list" messages. */
