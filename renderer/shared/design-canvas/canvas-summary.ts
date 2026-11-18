@@ -234,7 +234,7 @@ export const CANVAS_STATUS_SECTION = "design-canvas-status";
  * change from turn to turn; a turn where the counts are the same adds nothing.
  */
 export function withCanvasStatusNote<C extends { messages: readonly unknown[] }>(context: C, line: string, now: number): C {
-  const note = `Design canvas right now: ${line}`;
+  const note = `Design canvas when this was noted: ${line}`;
   let last: unknown;
   for (const message of context.messages) {
     const sections = (message as { role?: unknown; sections?: Record<string, unknown> }).sections;

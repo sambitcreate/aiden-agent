@@ -4479,13 +4479,13 @@ test("a design turn's canvas note reaches its first request and the journal, so 
   const result = await harness.runManaged({ kind: "append-and-run", message: { role: "user", content: "Tighten it", timestamp: 3 } });
   assert.equal(result.kind, "completed");
   assert.equal(requests.length, 1);
-  assert.match(requests[0]!, /Design canvas right now: The canvas has 2 frames, 0 open comments\./);
+  assert.match(requests[0]!, /Design canvas when this was noted: The canvas has 2 frames, 0 open comments\./);
   assert.equal(warnings.length, 0);
 
   // The next turn rebuilds its transcript from the journal: the same counts
   // add no note, so that request starts with the same transcript.
   const next = (await session.buildContext()).messages;
-  assert.deepEqual(canvasNotesIn(next), ["Design canvas right now: The canvas has 2 frames, 0 open comments."]);
+  assert.deepEqual(canvasNotesIn(next), ["Design canvas when this was noted: The canvas has 2 frames, 0 open comments."]);
   const unchanged = await withJournaledCanvasStatusNote(session, next, "The canvas has 2 frames, 0 open comments.", 4, (error) => warnings.push(error));
   assert.equal(unchanged.length, next.length);
   assert.equal(canvasNotesIn((await session.buildContext()).messages).length, 1);
@@ -4493,8 +4493,8 @@ test("a design turn's canvas note reaches its first request and the journal, so 
   const changed = await withJournaledCanvasStatusNote(session, next, "The canvas has 3 frames, 1 open comment.", 5, (error) => warnings.push(error));
   assert.equal(changed.length, next.length + 1);
   assert.deepEqual(canvasNotesIn((await session.buildContext()).messages), [
-    "Design canvas right now: The canvas has 2 frames, 0 open comments.",
-    "Design canvas right now: The canvas has 3 frames, 1 open comment.",
+    "Design canvas when this was noted: The canvas has 2 frames, 0 open comments.",
+    "Design canvas when this was noted: The canvas has 3 frames, 1 open comment.",
   ]);
 });
 
@@ -4525,11 +4525,11 @@ test("a section patch the host declares durable is journaled where it was added 
   const result = await harness.runManaged({ kind: "append-and-run", message: { role: "user", content: "Design it", timestamp: 1 } });
   assert.equal(result.kind, "completed");
   assert.equal(requests.length, 2);
-  assert.ok(!requests[0]!.includes("Design canvas right now"));
-  assert.match(requests[1]!, /Design canvas right now: The canvas has 1 frame\./);
+  assert.ok(!requests[0]!.includes("Design canvas when this was noted"));
+  assert.match(requests[1]!, /Design canvas when this was noted: The canvas has 1 frame\./);
   assert.match(requests[1]!, /PER_RUN_SECTION/);
   const journal = (await session.buildContext()).messages;
-  assert.deepEqual(canvasNotesIn(journal), ["Design canvas right now: The canvas has 1 frame."]);
+  assert.deepEqual(canvasNotesIn(journal), ["Design canvas when this was noted: The canvas has 1 frame."]);
   assert.ok(!JSON.stringify(journal).includes("PER_RUN_SECTION"));
   // The note sits after the tool result it followed and before the reply.
   const roles = journal.map((message) => message.role);

@@ -64,14 +64,14 @@ test("the canvas status goes to the conversation only on turns where it changed"
   const start: { messages: unknown[] } = { messages: [{ role: "user", content: "make a landing page" }] };
   const first = withCanvasStatusNote(start, canvasPromptLine(canvas([])), 1);
   assert.equal(first.messages.length, 2, "the first design turn tells Aiden what the canvas holds");
-  assert.deepEqual(first.messages[1], { role: "system", content: "", sections: { [CANVAS_STATUS_SECTION]: "Design canvas right now: The canvas is empty." }, timestamp: 1 });
+  assert.deepEqual(first.messages[1], { role: "system", content: "", sections: { [CANVAS_STATUS_SECTION]: "Design canvas when this was noted: The canvas is empty." }, timestamp: 1 });
 
   const sameCounts = { messages: [...first.messages, { role: "assistant", content: "done" }, { role: "user", content: "again" }] };
   assert.equal(withCanvasStatusNote(sameCounts, canvasPromptLine(canvas([])), 2), sameCounts, "unchanged counts add nothing");
 
   const changed = withCanvasStatusNote(sameCounts, canvasPromptLine(canvas([note("a", 0, 0)])), 3);
   assert.equal(changed.messages.length, sameCounts.messages.length + 1);
-  assert.deepEqual((changed.messages[changed.messages.length - 1] as { sections: unknown }).sections, { [CANVAS_STATUS_SECTION]: "Design canvas right now: The canvas has 1 frame, 0 open comments." });
+  assert.deepEqual((changed.messages[changed.messages.length - 1] as { sections: unknown }).sections, { [CANVAS_STATUS_SECTION]: "Design canvas when this was noted: The canvas has 1 frame, 0 open comments." });
   // The latest note is what counts: going back to an empty canvas is a change again.
   assert.equal(withCanvasStatusNote(changed, canvasPromptLine(canvas([])), 4).messages.length, changed.messages.length + 1);
 });
