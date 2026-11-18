@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { canvasPromptLine, canvasView, CANVAS_READ_FRAME_LIMIT, describeCanvas } from "./canvas-summary.js";
+import { CANVAS_STATUS_SECTION, canvasPromptLine, canvasView, CANVAS_READ_FRAME_LIMIT, describeCanvas, withCanvasStatusNote } from "./canvas-summary.js";
 import { emptyDesignCanvas, type DesignCanvas, type DesignFrame } from "./schema.js";
 
 function note(id: string, x: number, y: number, extra: Partial<DesignFrame> = {}): DesignFrame {
@@ -58,6 +58,22 @@ test("the prompt line names frames, pages and open comments in plain words", () 
     comments: [{ id: "c1", frameId: "p", x: 1, y: 1, note: "one", state: "open", pageId: "page-1", anchorState: "anchored", createdAt: "2026-11-05T00:00:00Z" }],
   });
   assert.equal(canvasPromptLine(doc), "The canvas has 2 frames, 1 HTML file, 1 open comment.");
+});
+
+test("the canvas status goes to the conversation only on turns where it changed", () => {
+  const start: { messages: unknown[] } = { messages: [{ role: "user", content: "make a landing page" }] };
+  const first = withCanvasStatusNote(start, canvasPromptLine(canvas([])), 1);
+  assert.equal(first.messages.length, 2, "the first design turn tells Aiden what the canvas holds");
+  assert.deepEqual(first.messages[1], { role: "system", content: "", sections: { [CANVAS_STATUS_SECTION]: "Design canvas right now: The canvas is empty." }, timestamp: 1 });
+
+  const sameCounts = { messages: [...first.messages, { role: "assistant", content: "done" }, { role: "user", content: "again" }] };
+  assert.equal(withCanvasStatusNote(sameCounts, canvasPromptLine(canvas([])), 2), sameCounts, "unchanged counts add nothing");
+
+  const changed = withCanvasStatusNote(sameCounts, canvasPromptLine(canvas([note("a", 0, 0)])), 3);
+  assert.equal(changed.messages.length, sameCounts.messages.length + 1);
+  assert.deepEqual((changed.messages[changed.messages.length - 1] as { sections: unknown }).sections, { [CANVAS_STATUS_SECTION]: "Design canvas right now: The canvas has 1 frame, 0 open comments." });
+  // The latest note is what counts: going back to an empty canvas is a change again.
+  assert.equal(withCanvasStatusNote(changed, canvasPromptLine(canvas([])), 4).messages.length, changed.messages.length + 1);
 });
 
 test("a canvas with pages describes one page at a time and lists them all", () => {

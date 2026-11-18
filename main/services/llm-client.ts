@@ -543,7 +543,7 @@ import {
 } from "./design-canvas/canvas-tools.js";
 import { createDesignModeTool, DESIGN_MODE_TOOL_NAME } from "./design-canvas/design-mode-tool.js";
 import { chatSurface } from "../../renderer/shared/chat-visibility.js";
-import { canvasPromptLine } from "../../renderer/shared/design-canvas/canvas-summary.js";
+import { canvasPromptLine, withCanvasStatusNote } from "../../renderer/shared/design-canvas/canvas-summary.js";
 import { placeArtifactsOnCanvas, type CanvasArtifact } from "./design-canvas/artifact-frames.js";
 import { placeWrittenPagesOnCanvas, writtenPagePath } from "./design-canvas/written-pages.js";
 import { DESIGN_CANVAS_UPDATED_CHANNEL } from "../handlers/design-canvas.js";
@@ -564,7 +564,10 @@ const DESIGN_MODE_SECTION = "design-mode";
 
 /** Canvas tools held back until the person enters design mode during the turn. */
 interface EnteredCanvasTools {
-  /** Adds the held canvas tools and the design-mode prompt section once design mode is on. */
+  /**
+   * Adds the held canvas tools and the design-mode prompt section once design
+   * mode is on, and the canvas status note on the turn's first design step.
+   */
   prepare(context: AgentContext): Promise<AgentContext>;
   /** The held canvas tools once entered, for codemode's late deferred tools. */
   deferred(): readonly AgentTool[];
@@ -2497,6 +2500,8 @@ async function prepareGeneration(
    * from Aiden's card or with the toggle themselves.
    */
   let heldCanvasTools: AgentTool[] = [];
+  /** Design mode was on when the turn started, so the canvas status note applies from the first step. */
+  let canvasStatusOffered = false;
   let enteredDesignModeThisTurn = false;
   // Held canvas tools exist whenever this turn could use the canvas, even when
   // Aiden may not offer the design_mode card, since the person can switch
@@ -2558,11 +2563,10 @@ async function prepareGeneration(
         ]
       : [];
     if (designCanvasOffered && canvasTools.length > 0) {
-      const canvas = await designCanvasStore.get(params.chatId);
+      canvasStatusOffered = true;
       generationExtensions.push({
         id: "aiden.design-canvas",
         systemPrompt: DESIGN_MODE_PROMPT_SECTION,
-        volatileSystemPrompt: canvasPromptLine(canvas),
         tools: [...canvasTools, ...designModeTool],
       });
     } else {
@@ -2625,9 +2629,26 @@ async function prepareGeneration(
     if (enteredDesignModeThisTurn || (await designModeOn())) canvasToolsEntered = true;
     return canvasToolsEntered;
   };
+  /**
+   * The canvas's counts go to the conversation once per turn, at the first
+   * step design mode is on, and only when they changed since the last note
+   * the transcript holds (see `withCanvasStatusNote`), so the system prompt
+   * and its cache stay the same from turn to turn.
+   */
+  let canvasStatusNoted = false;
+  const withCanvasStatus = async (context: AgentContext): Promise<AgentContext> => {
+    if (canvasStatusNoted || !(canvasStatusOffered || canvasToolsEntered)) return context;
+    canvasStatusNoted = true;
+    try {
+      return withCanvasStatusNote(context, canvasPromptLine(await designCanvasStore.get(params.chatId)), Date.now());
+    } catch (error) {
+      logger.warn("pi", "Could not read the design canvas for its status note.", error);
+      return context;
+    }
+  };
   const enteredCanvasTools: EnteredCanvasTools = {
     prepare: async (context) => {
-      if (!(await canvasToolsEnteredNow())) return context;
+      if (!(await canvasToolsEnteredNow())) return withCanvasStatus(context);
       const present = new Set(context.tools?.map((tool) => tool.name) ?? []);
       const additions = heldCanvasTools.filter((tool) => !present.has(tool.name));
       // The prompt is read-only here: the section is patched into the
@@ -2637,8 +2658,8 @@ async function prepareGeneration(
           message.role === "system" &&
           typeof (message as { sections?: Record<string, unknown> }).sections?.[DESIGN_MODE_SECTION] === "string",
       );
-      if (additions.length === 0 && sectionPresent) return context;
-      return {
+      if (additions.length === 0 && sectionPresent) return withCanvasStatus(context);
+      return withCanvasStatus({
         ...context,
         messages: sectionPresent
           ? context.messages
@@ -2652,7 +2673,7 @@ async function prepareGeneration(
               },
             ],
         tools: [...(context.tools ?? []), ...additions],
-      };
+      });
     },
     deferred: () => (canvasToolsEntered ? heldCanvasTools : []),
   };

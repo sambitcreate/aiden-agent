@@ -209,7 +209,7 @@ function commentsOn(doc: DesignCanvas, pageId: string): { comments?: Record<stri
   return { comments: waiting.map((comment) => ({ ...describeComment(doc, comment), state: comment.state })) };
 }
 
-/** The canvas in one line, for the design mode prompt section. */
+/** The canvas in one line, for the canvas status note (`withCanvasStatusNote`). */
 export function canvasPromptLine(doc: DesignCanvas): string {
   const frames = doc.frames.length;
   const open = doc.comments.filter((comment) => comment.state === "open").length;
@@ -222,4 +222,29 @@ export function canvasPromptLine(doc: DesignCanvas): string {
   if (files > 0) parts.push(`${files} HTML ${files === 1 ? "file" : "files"}`);
   parts.push(`${open} open ${open === 1 ? "comment" : "comments"}`);
   return `The canvas has ${parts.join(", ")}.${where}`;
+}
+
+/** The transcript section that carries the canvas status note. */
+export const CANVAS_STATUS_SECTION = "design-canvas-status";
+
+/**
+ * Adds the canvas status to the conversation as a section patch, only when it
+ * differs from the last status the transcript already holds. It stays out of
+ * the system prompt, so the prompt (and the provider's prompt cache) does not
+ * change from turn to turn; a turn where the counts are the same adds nothing.
+ */
+export function withCanvasStatusNote<C extends { messages: readonly unknown[] }>(context: C, line: string, now: number): C {
+  const note = `Design canvas right now: ${line}`;
+  let last: unknown;
+  for (const message of context.messages) {
+    const sections = (message as { role?: unknown; sections?: Record<string, unknown> }).sections;
+    if ((message as { role?: unknown }).role === "system" && sections && CANVAS_STATUS_SECTION in sections) {
+      last = sections[CANVAS_STATUS_SECTION];
+    }
+  }
+  if (last === note) return context;
+  return {
+    ...context,
+    messages: [...context.messages, { role: "system", content: "", sections: { [CANVAS_STATUS_SECTION]: note }, timestamp: now }],
+  };
 }

@@ -167,8 +167,8 @@ export function designModeToolAllowed(
 
 /**
  * The design mode part of the system prompt. Static, so it never breaks the
- * prompt cache; the canvas's current contents go in the volatile line
- * (`canvasPromptLine`) and in `canvas_read`.
+ * prompt cache; the canvas's current counts go to the conversation as a note
+ * when they change (`withCanvasStatusNote`), and its contents in `canvas_read`.
  */
 export const DESIGN_MODE_PROMPT_SECTION = [
   "## Design mode is on",
