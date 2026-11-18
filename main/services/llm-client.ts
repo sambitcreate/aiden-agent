@@ -545,7 +545,7 @@ import { createDesignModeTool, DESIGN_MODE_TOOL_NAME } from "./design-canvas/des
 import { chatSurface } from "../../renderer/shared/chat-visibility.js";
 import { canvasPromptLine, withCanvasStatusNote } from "../../renderer/shared/design-canvas/canvas-summary.js";
 import { placeArtifactsOnCanvas, type CanvasArtifact } from "./design-canvas/artifact-frames.js";
-import { placeWrittenPagesOnCanvas, writtenPagePath } from "./design-canvas/written-pages.js";
+import { createDesignPageScanner, placeWrittenPagesOnCanvas, writtenPagePath } from "./design-canvas/written-pages.js";
 import { DESIGN_CANVAS_UPDATED_CHANNEL } from "../handlers/design-canvas.js";
 
 subagentRuntimeRegistry.setHealthMetrics(subagentHealthMetrics);
@@ -558,6 +558,9 @@ subagentRuntimeRegistry.setRuntimeFaultReporter((source) => {
 });
 
 type GenerationPermission = WorkspacePermission | "read-only";
+
+/** Tools whose writes are not reported file by file, so design/ is looked at after each one ends. */
+const DESIGN_PAGE_COMMAND_TOOLS: ReadonlySet<string> = new Set(["run_command", "codemode"]);
 
 /** Transcript section carrying the design-mode prompt once design mode is entered mid-reply. */
 const DESIGN_MODE_SECTION = "design-mode";
@@ -2581,6 +2584,8 @@ async function prepareGeneration(
    * mid-reply works too. Writes are placed one after another.
    */
   let placeWrittenPage: ((relativePath: string) => void) | undefined;
+  /** Puts the design/ pages a terminal command made or changed on the canvas, as `placeWrittenPage` does for file tools. */
+  let commandPages: { started(): void; finished(): void } | undefined;
   if (
     folderPath &&
     !options.excludeToolNames?.has("canvas_place_frame") &&
@@ -2614,6 +2619,22 @@ async function prepareGeneration(
       }).catch((error) => {
         logger.warn("pi", "Could not put a written page on the design canvas.", error);
       });
+    };
+    // A design turn notes design/ before its first command; a turn that
+    // enters design mode later notes it when its next command starts.
+    let pageScanner = canvasStatusOffered ? createDesignPageScanner(pageRoot) : undefined;
+    commandPages = {
+      started: () => {
+        if (!pageScanner && canvasToolsEntered) pageScanner = createDesignPageScanner(pageRoot);
+      },
+      finished: () => {
+        pageScanner?.changedSinceLastLook().then(
+          (pages) => {
+            for (const page of pages) placeWrittenPage?.(page);
+          },
+          (error) => logger.warn("pi", "Could not look for pages a command wrote in design/.", error),
+        );
+      },
     };
   }
   /**
@@ -2720,6 +2741,7 @@ async function prepareGeneration(
     displayedHtmlArtifacts,
     placeCanvasArtifacts,
     placeWrittenPage,
+    commandPages,
     enteredCanvasTools,
     appPanels,
     htmlArtifactPlacements,
@@ -3118,6 +3140,7 @@ export const llmClient = {
       displayedHtmlArtifacts,
       placeCanvasArtifacts,
       placeWrittenPage,
+      commandPages,
       enteredCanvasTools,
       appPanels,
       htmlArtifactPlacements,
@@ -5307,6 +5330,7 @@ export const llmClient = {
           }
           case "tool_execution_start":
             timeline.toolStarted(event.toolCallId, event.toolName, event.args);
+            if (DESIGN_PAGE_COMMAND_TOOLS.has(event.toolName)) commandPages?.started();
             sendGeneration(streamId, "chat:tool", {
               streamId,
               phase: "call",
@@ -5367,6 +5391,8 @@ export const llmClient = {
               const page = writtenPagePath(event.toolName, event.result?.details);
               if (page) placeWrittenPage(page);
             }
+            // A command, even a failed one, may have written or copied pages into design/.
+            if (!denied && DESIGN_PAGE_COMMAND_TOOLS.has(event.toolName)) commandPages?.finished();
             break;
           }
           default:

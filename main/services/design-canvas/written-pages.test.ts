@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { emptyDesignCanvas, type DesignCanvas, type DesignFrame } from "../../../renderer/shared/design-canvas/schema.js";
 import {
+  createDesignPageScanner,
   DESIGN_WIDTH_HINT_BYTES,
   EARLIER_PAGES_LIMIT,
   inferDesignWidth,
@@ -41,6 +42,10 @@ test("only a first-party write or edit of a visible HTML page counts as a writte
   assert.equal(writtenPagePath("write_file", produced("design/parsely.css")), undefined, "a stylesheet is not a page");
   assert.equal(writtenPagePath("write_file", produced(".agent/preview.html")), undefined, "hidden folders stay off the canvas");
   assert.equal(writtenPagePath("write_file", produced("node_modules/pkg/index.html")), undefined);
+  assert.equal(writtenPagePath("write_file", produced("design/node_modules/pkg/index.html")), undefined);
+  assert.equal(writtenPagePath("write_file", produced("index.html")), undefined, "a page outside design/ is not a design page");
+  assert.equal(writtenPagePath("write_file", produced("site/design/home.html")), undefined, "design/ means the workspace's own design folder");
+  assert.equal(writtenPagePath("write_file", produced("design/flows/checkout.html")), "design/flows/checkout.html");
   assert.equal(writtenPagePath("run_command", produced("design/home.html")), undefined, "only file tools report what they wrote");
   assert.equal(
     writtenPagePath("edit_file", produced("design/home.html", "written")),
@@ -139,6 +144,43 @@ test("only pages that exist are placed, the canvas is saved once per change, and
   const doc = await store.get("chat-1");
   assert.deepEqual(doc.frames.map((frame) => frame.path), ["design/home.html", "design/library.html"]);
   assert.deepEqual(broadcasts, [1, 2]);
+});
+
+test("after each command, the design/ pages it made or changed are found, and nothing else", async (t) => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-command-pages-"));
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const workspaceRoot = path.join(base, "workspace");
+  const design = path.join(workspaceRoot, "design");
+  await fs.mkdir(design, { recursive: true });
+  await fs.writeFile(path.join(design, "home.html"), "<!doctype html><title>Home</title>");
+  await fs.writeFile(path.join(workspaceRoot, "index.html"), "<!doctype html>");
+  const scanner = createDesignPageScanner(workspaceRoot);
+
+  // As if `cp`, a build script or a heredoc wrote them.
+  await fs.mkdir(path.join(design, "flows"));
+  await fs.writeFile(path.join(design, "flows", "checkout.html"), "<!doctype html><title>Checkout</title>");
+  await fs.writeFile(path.join(design, "tokens.css"), ":root{}");
+  await fs.mkdir(path.join(design, ".cache"));
+  await fs.writeFile(path.join(design, ".cache", "draft.html"), "<!doctype html>");
+  await fs.writeFile(path.join(workspaceRoot, "about.html"), "<!doctype html>");
+  await fs.symlink(path.join(workspaceRoot, "about.html"), path.join(design, "linked.html"));
+  assert.deepEqual(await scanner.changedSinceLastLook(), ["design/flows/checkout.html"], "the page existing before the turn is not news");
+
+  assert.deepEqual(await scanner.changedSinceLastLook(), [], "a command that wrote nothing places nothing");
+
+  await fs.writeFile(path.join(design, "home.html"), "<!doctype html><title>Home, edited by sed</title>");
+  assert.deepEqual(await scanner.changedSinceLastLook(), ["design/home.html"]);
+});
+
+test("a workspace without a design folder has no command pages", async (t) => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-command-pages-"));
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const scanner = createDesignPageScanner(base);
+  await fs.writeFile(path.join(base, "index.html"), "<!doctype html>");
+  assert.deepEqual(await scanner.changedSinceLastLook(), []);
+  await fs.mkdir(path.join(base, "design"));
+  await fs.writeFile(path.join(base, "design", "first.html"), "<!doctype html>");
+  assert.deepEqual(await scanner.changedSinceLastLook(), ["design/first.html"], "a design folder a command creates counts");
 });
 
 test("pages a running reply wrote join the saved ones for design mode's entry, newest last and bounded", () => {

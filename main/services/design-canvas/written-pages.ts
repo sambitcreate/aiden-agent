@@ -1,13 +1,17 @@
-// HTML pages Aiden writes or edits while design mode is on land on the canvas
-// by themselves, so the person watches the design take shape without waiting
-// for the model to call `canvas_place_frame`. A page that is already on the
-// canvas is left where it is: the watcher reloads it after each edit. The
-// rule is pure (`placeWrittenPageFrames`) and llm-client runs it after each
-// completed `write_file` or `edit_file`, and the design-mode switch runs it
-// once over the pages this chat wrote before the canvas opened.
+// HTML pages Aiden writes or edits under design/ while design mode is on land
+// on the canvas by themselves, so the person watches the design take shape
+// without waiting for the model to call `canvas_place_frame`. A page that is
+// already on the canvas is left where it is: the watcher reloads it after each
+// edit. The rule is pure (`placeWrittenPageFrames`) and llm-client runs it
+// after each completed `write_file` or `edit_file`, and after each terminal
+// command for the design/ pages it made or changed (`createDesignPageScanner`).
+// The design-mode switch runs it once over the pages this chat wrote before
+// the canvas opened. Pages elsewhere in the workspace stay off the canvas
+// unless Aiden or the person places them.
 
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, type Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import { canvasView } from "../../../renderer/shared/design-canvas/canvas-summary.js";
 import { placeFrame } from "../../../renderer/shared/design-canvas/placement.js";
 import { parseProducedFile } from "../../../renderer/shared/produced-file.js";
@@ -34,7 +38,21 @@ export const EARLIER_PAGES_LIMIT = 12;
 /** Per-chat in-memory cap on recently written pages so deleted newest pages do not starve older ones. */
 export const RECENT_WRITTEN_PAGES_LIMIT = 50;
 
+/** The workspace folder whose pages land on the canvas by themselves. */
+export const DESIGN_PAGES_FOLDER = "design";
+
+/** A terminal command's design/ pages are looked for among at most this many entries, this deep. */
+export const DESIGN_PAGE_SCAN_LIMITS = { entries: 2_000, depth: 6 } as const;
+
 const PAGE_EXTENSION = /\.html?$/iu;
+
+/** A design/ HTML page outside hidden folders and `node_modules`, which may land on the canvas by itself. */
+export function isAutoPlacedPagePath(relativePath: string): boolean {
+  if (!PAGE_EXTENSION.test(relativePath) || !isDesignRelativePath(relativePath)) return false;
+  const segments = relativePath.split("/");
+  if (segments[0] !== DESIGN_PAGES_FOLDER || segments.length < 2) return false;
+  return !segments.some((segment) => segment.startsWith(".") || segment === "node_modules");
+}
 
 /** The design width a numeric viewport or shell width stands for, when it clearly names one. */
 function widthFromPixels(pixels: number): DesignWidth | undefined {
@@ -115,8 +133,8 @@ export async function readDesignWidthHint(absolutePath: string): Promise<DesignW
 
 /**
  * The workspace-relative page a completed file tool call wrote, or undefined
- * when the call was not a first-party write or edit of an HTML file outside
- * hidden folders and `node_modules`.
+ * when the call was not a first-party write or edit of an HTML file under
+ * design/, outside hidden folders and `node_modules`.
  */
 export function writtenPagePath(toolName: string, details: unknown): string | undefined {
   const produced = parseProducedFile(
@@ -124,11 +142,82 @@ export function writtenPagePath(toolName: string, details: unknown): string | un
     toolName,
   );
   if (!produced) return undefined;
-  const relativePath = produced.relativePath;
-  if (!PAGE_EXTENSION.test(relativePath) || !isDesignRelativePath(relativePath)) return undefined;
-  const segments = relativePath.split("/");
-  if (segments.some((segment) => segment.startsWith(".") || segment === "node_modules")) return undefined;
-  return relativePath;
+  return isAutoPlacedPagePath(produced.relativePath) ? produced.relativePath : undefined;
+}
+
+/** Each design/ page's modification stamp, by workspace-relative path. */
+export type DesignPageStamps = ReadonlyMap<string, { mtimeMs: number; size: number }>;
+
+/**
+ * The HTML pages under the workspace's design/ folder with their size and
+ * modification time. Symbolic links, hidden folders and `node_modules` are
+ * skipped, and the walk stops at `DESIGN_PAGE_SCAN_LIMITS`. A missing folder
+ * has no pages.
+ */
+export async function scanDesignPages(workspaceRoot: string): Promise<DesignPageStamps> {
+  const stamps = new Map<string, { mtimeMs: number; size: number }>();
+  let seen = 0;
+  const walk = async (relativeDir: string, depth: number): Promise<void> => {
+    let entries: Dirent[];
+    try {
+      entries = await fs.readdir(path.join(workspaceRoot, ...relativeDir.split("/")), { withFileTypes: true });
+    } catch {
+      return;
+    }
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    for (const entry of entries) {
+      if (seen >= DESIGN_PAGE_SCAN_LIMITS.entries) return;
+      seen += 1;
+      const relativePath = `${relativeDir}/${entry.name}`;
+      if (entry.isDirectory()) {
+        if (depth < DESIGN_PAGE_SCAN_LIMITS.depth && !entry.name.startsWith(".") && entry.name !== "node_modules") {
+          await walk(relativePath, depth + 1);
+        }
+      } else if (entry.isFile() && isAutoPlacedPagePath(relativePath)) {
+        try {
+          const stat = await fs.lstat(path.join(workspaceRoot, ...relativePath.split("/")));
+          if (stat.isFile()) stamps.set(relativePath, { mtimeMs: stat.mtimeMs, size: stat.size });
+        } catch {
+          // Gone between the listing and the stat: not a page any more.
+        }
+      }
+    }
+  };
+  await walk(DESIGN_PAGES_FOLDER, 1);
+  return stamps;
+}
+
+/** The pages that are new in `after` or whose size or modification time changed, oldest change first. */
+export function changedDesignPages(before: DesignPageStamps, after: DesignPageStamps): string[] {
+  return [...after]
+    .filter(([relativePath, stamp]) => {
+      const earlier = before.get(relativePath);
+      return !earlier || earlier.mtimeMs !== stamp.mtimeMs || earlier.size !== stamp.size;
+    })
+    .sort(([pathA, a], [pathB, b]) => a.mtimeMs - b.mtimeMs || (pathA < pathB ? -1 : pathA > pathB ? 1 : 0))
+    .map(([relativePath]) => relativePath);
+}
+
+/**
+ * Finds the design/ pages each terminal command made or changed: it notes the
+ * folder when created (before the turn's first command) and, after each
+ * command, answers the pages that changed since the last look. Looks run one
+ * after another, so commands that end together are each compared with the
+ * state before them.
+ */
+export function createDesignPageScanner(
+  workspaceRoot: string,
+  scan: (workspaceRoot: string) => Promise<DesignPageStamps> = scanDesignPages,
+): { changedSinceLastLook(): Promise<string[]> } {
+  const safeScan = (fallback: DesignPageStamps) => scan(workspaceRoot).catch(() => fallback);
+  let last: Promise<DesignPageStamps> = safeScan(new Map());
+  return {
+    changedSinceLastLook() {
+      const look = last.then(async (before) => ({ before, after: await safeScan(before) }));
+      last = look.then(({ after }) => after);
+      return look.then(({ before, after }) => changedDesignPages(before, after));
+    },
+  };
 }
 
 function basename(relativePath: string): string {

@@ -243,3 +243,9 @@ Deviations from the P1 plan:
 - `canvas_read` adds `outsideFrames` (every frame outside the view, within the shared `CANVAS_READ_FRAME_LIMIT` = 200, text cut to 120 chars) and `outsideOmitted`; summaries carry `locked`, `guide`, `radius`, `paper`, `printMode`.
 - `canvas_focus` takes `page` (shows an empty page with `status: "shown"`).
 - llm-client: held canvas tools exist whenever the turn could use the canvas, not only when `design_mode` is offered; `enteredCanvasTools.prepare` latches once design mode is on (card or the person's own switch mid-reply), adds the tools and a `design-mode` system section once, and codemode's `lateDeferredTools` gets them too. `createGenerativeUiExtensionRuntime({ designCanvas })` stops steering UI mockups/screens to `render_artifact` while canvas tools are offered.
+
+## 2026-11-18 smarter artifacts Phase A (design mode)
+
+- Canvas counts: no longer a volatile system prompt line. `withCanvasStatusNote` (canvas-summary.ts) appends a `design-canvas-status` section note on the turn's first design step (inside `enteredCanvasTools.prepare`), only when the line differs from the transcript's last note.
+- Only `design/` pages land by themselves: `isAutoPlacedPagePath` in written-pages.ts (first segment `design`, no hidden or `node_modules` segment). `writtenPagePath` and `pagesWrittenInChat` use it, so HTML elsewhere in the workspace stays off the canvas unless placed.
+- Command-made pages: `createDesignPageScanner(root)` stamps design/ pages (mtime + size, no symlinks, 2,000 entries, depth 6). llm-client creates it at setup when design mode is on at the start, or at the next `run_command`/`codemode` start once entered mid-turn; after each such call ends (not denied) the changed pages go through `placeWrittenPage`.

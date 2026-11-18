@@ -174,7 +174,7 @@ export const DESIGN_MODE_PROMPT_SECTION = [
   "## Design mode is on",
   "This chat sits beside an infinite design canvas. The person sees its frames while you talk. Load the aiden-design skill before you design on it.",
   "- Call canvas_read before changing the canvas, and again if the person says they moved things. It lists every frame on the page, in view and outside it, with ids and boxes.",
-  "- Pages, screens and UI mockups are workspace HTML files under design/ (a shared design/tokens.css plus one HTML file per screen), not render_artifact visuals. Each page you write or edit lands on the canvas by itself and reloads as you save it.",
+  "- Pages, screens and UI mockups are workspace HTML files under design/ (a shared design/tokens.css plus one HTML file per screen), not render_artifact visuals. Each design/ page you write, edit or make with a command lands on the canvas by itself and reloads as you save it; HTML elsewhere in the workspace does not.",
   "- Pick the design width that matches the screen: 390 phone, 768 tablet, 1280 or 1440 desktop. A page can declare it with <meta name=\"aiden-design-width\" content=\"390\">; canvas_place_frame or canvas_update_frame with designWidth resizes its frame to fit.",
   "- canvas_place_frame on a page already on the canvas moves that frame; pass duplicate: true to show the same file twice, for example a light and a dark (dark: true) variant or phone and desktop widths side by side.",
   "- You can move, resize, retitle, restyle, regroup, hide, lock or reorder any unlocked frame, the person's too, with canvas_update_frame. A locked frame stays as it is unless the person asks you to unlock it. Remove a frame the person added only when they ask, with force: true.",
