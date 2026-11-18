@@ -104,6 +104,19 @@ test("an item drawn or dropped in an artboard belongs to it; dragged out, it lea
   assert.equal(regroupFrames(regrouped, ["card", "far"]), regrouped, "nothing to change returns the same document");
 });
 
+test("a locked group or artboard takes no new drawn or dropped items, but its own members stay in it", () => {
+  const locked = item("locked", { kind: "group", shape: undefined, x: 0, y: 0, w: 800, h: 600, locked: true });
+  const under = item("under", { kind: "frame", shape: undefined, x: -100, y: -100, w: 1200, h: 1000 });
+  const doc = canvas(under, locked, item("member", { x: 100, y: 100, groupId: "locked" }), item("loose", { x: 200, y: 200 }));
+  // Drawn inside the locked group, an item lands in the open artboard beneath it instead.
+  assert.equal(containerAt(doc, "page-1", { x: 300, y: 300, w: 100, h: 60 })?.id, "under");
+  const regrouped = regroupFrames(doc, ["member", "loose"]);
+  assert.equal(regrouped.frames.find((frame) => frame.id === "member")!.groupId, "locked", "a member moved inside its locked group stays");
+  assert.equal(regrouped.frames.find((frame) => frame.id === "loose")!.groupId, "under", "a dropped item does not join the locked group");
+  const box = regrouped.frames.find((frame) => frame.id === "locked")!;
+  assert.deepEqual([box.x, box.y, box.w, box.h], [0, 0, 800, 600]);
+});
+
 test("an item dragged along with its artboard stays in it, and artboards never join one another", () => {
   const doc = canvas(
     item("board", { kind: "frame", shape: undefined, x: 0, y: 0, w: 800, h: 600 }),

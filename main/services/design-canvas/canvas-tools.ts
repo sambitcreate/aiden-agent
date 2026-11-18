@@ -644,7 +644,6 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
             const id = newId();
             return edit<Record<string, unknown>>((doc) => {
               const pageId = pageOf(doc, p.page);
-              const groupId = isDesignContainer(kind) ? undefined : groupOf(doc, p.groupId, pageId);
               const ends: [DesignConnectorEnd, DesignConnectorEnd] | undefined =
                 kind === "connector" ? [endOf(doc, p.from, "from", pageId), endOf(doc, p.to, "to", pageId)] : undefined;
               if (ends && ends[0].frameId !== undefined && ends[0].frameId === ends[1].frameId) {
@@ -669,6 +668,8 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 candidates.find((entry) => (entry.designWidth ?? DESIGN_DEFAULT_FILE_WIDTH) === width) ??
                 candidates.find((entry) => entry.createdBy === "aiden") ??
                 candidates[0];
+              // A reused frame may name the locked group it is already in.
+              const groupId = isDesignContainer(kind) ? undefined : groupOf(doc, p.groupId, pageId, adopted?.groupId);
               // Other frames that show the same file, for the result.
               const others = sameFile.filter((entry) => entry.id !== adopted?.id);
               const copies =

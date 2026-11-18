@@ -158,6 +158,10 @@ test("reusing a page's frame inside a locked group moves it as asked but leaves 
   assert.deepEqual(moved.frame.box, { x: 3000, y: 3000, w: 640, h: 436 });
   const wider = await call("canvas_place_frame", { kind: "file", title: "Home", path: "design/home.html", w: 1600, h: 1000 });
   assert.equal(wider.placed, "reused");
+  // Naming the locked group the frame is already in changes no membership, so it is not refused.
+  const sameGroup = await call("canvas_place_frame", { kind: "file", title: "Home", path: "design/home.html", groupId: "g", x: 100, y: 100 });
+  assert.equal(sameGroup.placed, "reused", sameGroup.message);
+  assert.equal(sameGroup.frame.groupId, "g");
   const doc = await store.get("chat-1");
   const group = doc.frames.find((frame) => frame.id === "g")!;
   assert.deepEqual({ x: group.x, y: group.y, w: group.w, h: group.h, locked: group.locked }, { x: 0, y: 0, w: 800, h: 600, locked: true });

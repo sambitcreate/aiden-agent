@@ -163,18 +163,21 @@ export function strokePath(frame: Pick<DesignFrame, "w" | "h" | "points" | "hand
 
 /**
  * The group or artboard on `pageId` that holds a box: the topmost one its
- * centre is inside. Groups and artboards themselves sit in nothing.
+ * centre is inside. Groups and artboards themselves sit in nothing. A locked
+ * one takes no new members, so it is passed over unless it is the item's own
+ * group (`currentGroupId`), which it stays in.
  */
 export function containerAt(
   doc: DesignCanvas,
   pageId: string,
   box: DesignBox,
-  exclude?: string,
+  currentGroupId?: string,
 ): DesignFrame | undefined {
   const x = box.x + box.w / 2;
   const y = box.y + box.h / 2;
   const containers = doc.frames.filter(
-    (frame) => frame.pageId === pageId && isDesignContainer(frame.kind) && frame.id !== exclude,
+    (frame) =>
+      frame.pageId === pageId && isDesignContainer(frame.kind) && (!frame.locked || frame.id === currentGroupId),
   );
   for (let index = containers.length - 1; index >= 0; index -= 1) {
     const frame = containers[index]!;
@@ -195,7 +198,7 @@ export function regroupFrames(doc: DesignCanvas, ids: Iterable<string>): DesignC
     if (!moved.has(frame.id) || isDesignContainer(frame.kind)) return frame;
     // An item moved together with its group stays in it.
     if (frame.groupId !== undefined && moved.has(frame.groupId)) return frame;
-    const container = containerAt(doc, frame.pageId, frame)?.id;
+    const container = containerAt(doc, frame.pageId, frame, frame.groupId)?.id;
     if (container === frame.groupId) return frame;
     changed = true;
     const { groupId: _groupId, ...rest } = frame;
