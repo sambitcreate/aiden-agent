@@ -47,6 +47,16 @@ Spec: `docs/superpowers/specs/2026-10-08-inline-generative-ui-design.md`. Plan: 
   - HTML guests inline only the host libraries their source names (`Chart`, `Plotly`, `katex`). `inlineGenerativeUiHostLibraries` is shared with export (and the CLI) and uses a function replacement so `$&` in library source stays literal.
   - Native channel: iOS `aidenVisual` handler, Android `AidenVisualBridge`; messages `ready`, `prompt`, `openUrl`. `AidenUiBlock` takes `onFollowUp` so the viewer hands prompts to the phone instead of drawing its own Send chip; the phone confirms and only fills the composer. Links use `ExternalLinkOpenerProvider`.
 
+## Smarter artifacts Phase A (2026-11-18)
+
+Plan `docs/plans/smarter-artifacts-design-mode-plan.md`, branch `feat/smarter-artifacts-design-mode`.
+- Routing (7c993c5d2): on-demand tools set their own `load_tools` line with `declareOnDemandSummary` (render_ui, render_artifact, visualize_guide, workspace_artifact, design_mode) instead of a 90-character cut of the description. design_mode leads with its trigger; while it is offered, the visuals instructions send whole pages, app screens and several directions to design mode.
+- Unsafe HTML (3b8c3bc62): refused only for real start tags (`<base`, `<object`, ...) and URLs in attribute values or CSS `url()`, for drafts and the final visual; the error quotes the match. Text like "JavaScript: 41%" or `i < object.length` passes.
+- Page check (f46298508): render_ui runs `checkWorkspaceArtifactPage` on the drawn visual via `describeVisualCheck` and lists empty reads and list-shape findings, asking for a redraw with the same title.
+- List shapes (0b687281b): the guide prints each list prop's item shape from `ListShape` in the catalog (Checklist item `{label, done}`), not `any`.
+- A same-title redraw replaces the visual in place and the result now says "Replaced the visual ... in place". Repairs text says to redraw with the same title now, not just to avoid them next time.
+- With Inline visuals off, `visualize_guide` still comes with `workspace_artifact` (markup catalog only).
+
 ## Tests
 
 - `npm run test:generative-ui`: units, the vendor-script test, and Chromium containment (bridge, draft, shrink, rem).

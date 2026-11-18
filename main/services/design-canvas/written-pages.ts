@@ -187,12 +187,25 @@ export async function scanDesignPages(workspaceRoot: string): Promise<DesignPage
   return stamps;
 }
 
-/** The pages that are new in `after` or whose size or modification time changed, oldest change first. */
-export function changedDesignPages(before: DesignPageStamps, after: DesignPageStamps): string[] {
+/**
+ * How long before the scanner's first look a page's modification time may be
+ * and still count as written after it, for file systems whose clock lags
+ * `Date.now()` by a tick.
+ */
+export const DESIGN_PAGE_CLOCK_SLACK_MS = 100;
+
+/**
+ * The pages that are new in `after` or whose size or modification time
+ * changed, oldest change first. With `changedSince`, a page `before` already
+ * had also counts when it was modified at or after that time: the first look
+ * runs while the first command may already be writing.
+ */
+export function changedDesignPages(before: DesignPageStamps, after: DesignPageStamps, changedSince?: number): string[] {
   return [...after]
     .filter(([relativePath, stamp]) => {
       const earlier = before.get(relativePath);
-      return !earlier || earlier.mtimeMs !== stamp.mtimeMs || earlier.size !== stamp.size;
+      if (!earlier || earlier.mtimeMs !== stamp.mtimeMs || earlier.size !== stamp.size) return true;
+      return changedSince !== undefined && stamp.mtimeMs >= changedSince;
     })
     .sort(([pathA, a], [pathB, b]) => a.mtimeMs - b.mtimeMs || (pathA < pathB ? -1 : pathA > pathB ? 1 : 0))
     .map(([relativePath]) => relativePath);
@@ -208,14 +221,20 @@ export function changedDesignPages(before: DesignPageStamps, after: DesignPageSt
 export function createDesignPageScanner(
   workspaceRoot: string,
   scan: (workspaceRoot: string) => Promise<DesignPageStamps> = scanDesignPages,
+  now: () => number = Date.now,
 ): { changedSinceLastLook(): Promise<string[]> } {
   const safeScan = (fallback: DesignPageStamps) => scan(workspaceRoot).catch(() => fallback);
+  // The first look is not awaited before a command starts, so it can see a
+  // page that command wrote; anything modified from now on is still news.
+  let changedSince: number | undefined = now() - DESIGN_PAGE_CLOCK_SLACK_MS;
   let last: Promise<DesignPageStamps> = safeScan(new Map());
   return {
     changedSinceLastLook() {
+      const since = changedSince;
+      changedSince = undefined;
       const look = last.then(async (before) => ({ before, after: await safeScan(before) }));
       last = look.then(({ after }) => after);
-      return look.then(({ before, after }) => changedDesignPages(before, after));
+      return look.then(({ before, after }) => changedDesignPages(before, after, since));
     },
   };
 }

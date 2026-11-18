@@ -153,6 +153,8 @@ test("after each command, the design/ pages it made or changed are found, and no
   const design = path.join(workspaceRoot, "design");
   await fs.mkdir(design, { recursive: true });
   await fs.writeFile(path.join(design, "home.html"), "<!doctype html><title>Home</title>");
+  const anHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+  await fs.utimes(path.join(design, "home.html"), anHourAgo, anHourAgo);
   await fs.writeFile(path.join(workspaceRoot, "index.html"), "<!doctype html>");
   const scanner = createDesignPageScanner(workspaceRoot);
 
@@ -170,6 +172,23 @@ test("after each command, the design/ pages it made or changed are found, and no
 
   await fs.writeFile(path.join(design, "home.html"), "<!doctype html><title>Home, edited by sed</title>");
   assert.deepEqual(await scanner.changedSinceLastLook(), ["design/home.html"]);
+});
+
+test("a page the first command writes while the scanner takes its first look is still found", async () => {
+  // The first look is not awaited before the command starts, so it can
+  // already see what the command wrote.
+  const start = 1_000_000;
+  const scans: Array<Map<string, { mtimeMs: number; size: number }>> = [
+    new Map([
+      ["design/old.html", { mtimeMs: start - 60_000, size: 10 }],
+      ["design/raced.html", { mtimeMs: start + 5, size: 20 }],
+    ]),
+  ];
+  scans.push(new Map(scans[0]));
+  scans.push(new Map(scans[0]));
+  const scanner = createDesignPageScanner("/workspace", async () => scans.shift() ?? new Map(), () => start);
+  assert.deepEqual(await scanner.changedSinceLastLook(), ["design/raced.html"], "the page edited before the turn is not news");
+  assert.deepEqual(await scanner.changedSinceLastLook(), [], "a page is found once");
 });
 
 test("a workspace without a design folder has no command pages", async (t) => {
