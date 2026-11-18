@@ -10,7 +10,12 @@ import {
   type DesignCanvas,
   type DesignFrame,
 } from "../shared/design-canvas/schema";
-import { showDesignTweakVersions } from "./tweak-versions";
+import {
+  DESIGN_TWEAK_V1,
+  designTweakVersionPicture,
+  showDesignTweakVersions,
+  takeDesignTweakVersionPicture,
+} from "./tweak-versions";
 
 function page(overrides: Partial<DesignFrame> = {}): DesignFrame {
   return {
@@ -136,4 +141,57 @@ test("Show all steps past whatever already sits to the page's right, so nothing 
     const copy = shown.doc.frames.find((frame) => frame.id === id)!;
     assert.ok(inside(group, copy));
   }
+});
+
+const settle = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+test("a version's picture checks the canvas's frame as it is when taken, whoever asked for it", async () => {
+  // The canvas's frame, read fresh each time; no editor is involved after the ask.
+  let current: DesignFrame | undefined = page({ id: "shot-a", tweaks: { "data-density": "compact" } });
+  const frameNow = () => current;
+  let resolveShot: (picture: string) => void = () => undefined;
+  let shots = 0;
+  const capture = () => {
+    shots += 1;
+    return new Promise<string | null>((resolve) => (resolveShot = resolve));
+  };
+
+  // The panel asked for V2's picture, then closed; the page moved on to another value before it was taken.
+  takeDesignTweakVersionPicture("shot-a", "v-2", 20, frameNow, capture);
+  current = { ...current, tweaks: { "data-density": "roomy" } };
+  await settle(40);
+  assert.equal(shots, 0, "no picture of a look that isn't V2");
+
+  // Back on V2: the picture is started, and while it is taken the page switches to Night.
+  current = { ...current, tweaks: { "data-density": "compact" } };
+  takeDesignTweakVersionPicture("shot-a", "v-2", 0, frameNow, capture);
+  await settle(10);
+  assert.equal(shots, 1);
+  current = { ...current, tweaks: undefined, dark: true };
+  resolveShot("data:image/png;base64,TkIHVA==");
+  await settle(10);
+  assert.equal(designTweakVersionPicture("shot-a", "v-2"), undefined, "Night's look isn't filed under V2");
+
+  // V2 deleted while its picture is taken: nothing is kept for it.
+  current = { ...current, dark: undefined, tweaks: { "data-density": "compact" } };
+  takeDesignTweakVersionPicture("shot-a", "v-2", 0, frameNow, capture);
+  await settle(10);
+  current = { ...current, tweakVersions: current.tweakVersions?.filter((version) => version.id !== "v-2") };
+  resolveShot("data:image/png;base64,VjI=");
+  await settle(10);
+  assert.equal(designTweakVersionPicture("shot-a", "v-2"), undefined);
+
+  // The frame left the canvas: nothing is taken.
+  current = undefined;
+  takeDesignTweakVersionPicture("shot-a", DESIGN_TWEAK_V1, 0, frameNow, capture);
+  await settle(10);
+  assert.equal(shots, 2, "no picture once the frame is gone");
+
+  // Left alone on V1, it gets its picture.
+  current = page({ id: "shot-a", tweaks: undefined });
+  takeDesignTweakVersionPicture("shot-a", DESIGN_TWEAK_V1, 0, frameNow, capture);
+  await settle(10);
+  resolveShot("data:image/png;base64,VjE=");
+  await settle(10);
+  assert.equal(designTweakVersionPicture("shot-a", DESIGN_TWEAK_V1), "data:image/png;base64,VjE=");
 });

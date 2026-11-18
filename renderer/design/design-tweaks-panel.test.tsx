@@ -8,6 +8,7 @@ import { DESIGN_FIRST_PAGE_ID, type DesignFrame } from "../shared/design-canvas/
 import { parseDesignTweakControls, type DesignTweakControl } from "../shared/design-canvas/tweaks";
 import { DesignTweaksEditor, DesignTweaksFloat, type DesignTweakOps } from "./design-tweaks-panel";
 import type { DesignFramePatch } from "./nodes/design-node-context";
+import { takeDesignTweakVersionPicture } from "./tweak-versions";
 
 const CONTROLS = parseDesignTweakControls({
   controls: [
@@ -57,6 +58,8 @@ function Harness({
   pressed?: boolean;
 }) {
   const [frame, setFrame] = React.useState(initial);
+  const latest = React.useRef(frame);
+  latest.current = frame;
   const ops: DesignTweakOps = {
     update: (_id, patch: DesignFramePatch) =>
       setFrame((current) => {
@@ -78,10 +81,11 @@ function Harness({
     makeDefault: () => {
       calls.makeDefault += 1;
     },
-    capture: async () => {
-      calls.captures += 1;
-      return "data:image/png;base64,AAAA";
-    },
+    pictureVersion: (frameId, versionId, delay) =>
+      takeDesignTweakVersionPicture(frameId, versionId, delay, () => latest.current, async () => {
+        calls.captures += 1;
+        return "data:image/png;base64,AAAA";
+      }),
     showAll: () => {
       calls.showAll += 1;
     },
@@ -241,7 +245,7 @@ test("the floating panel shows a page's controls, folds to its title and stays f
     })}</script>`,
     truncated: false,
   });
-  const ops = { update() {}, action: () => true, send: () => true, makeDefault() {}, capture: async () => null, showAll() {} };
+  const ops = { update() {}, action: () => true, send: () => true, makeDefault() {}, pictureVersion() {}, showAll() {} };
   const view = render(<DesignTweaksFloat frame={page()} readSource={readSource} versionOf={() => 0} ops={ops} />);
   const fold = await screen.findByRole("button", { name: /Tweaks/u });
   assert.ok(screen.getByRole("switch", { name: "Promo banner" }));
@@ -259,7 +263,7 @@ test("the floating panel stays away from a page without controls", async () => {
     asked += 1;
     return { text: "<html><body>No tweaks</body></html>", truncated: false };
   };
-  const ops = { update() {}, action: () => true, send: () => true, makeDefault() {}, capture: async () => null, showAll() {} };
+  const ops = { update() {}, action: () => true, send: () => true, makeDefault() {}, pictureVersion() {}, showAll() {} };
   const view = render(<DesignTweaksFloat frame={page()} readSource={readSource} versionOf={() => 0} ops={ops} />);
   await waitFor(() => assert.equal(asked, 1));
   await act(async () => undefined);

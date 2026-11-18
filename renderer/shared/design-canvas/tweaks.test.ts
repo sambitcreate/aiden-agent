@@ -14,6 +14,7 @@ import {
   showsDesignTweakVersion,
   tweaksAfterBake,
   tweaksAfterBakeUndo,
+  tweaksTakenBackDuringBake,
   extractDesignTweakControls,
   parseDesignTweakValues,
   readDesignTweak,
@@ -275,4 +276,16 @@ test("after Make default a frame keeps only what the file couldn't take and what
   // Undo brings the written values back to the frame, under anything changed since.
   assert.deepEqual(tweaksAfterBakeUndo(undefined, submitted), submitted);
   assert.deepEqual(tweaksAfterBakeUndo({ "--radius": "18px" }, submitted), { ...submitted, "--radius": "18px" });
+});
+
+test("a value taken back while Make default writes it calls that Make default off", () => {
+  const submitted = { "--radius": "14px", "data-cta": "Book" };
+  // Left alone, or changed to another value: the bake stands.
+  assert.equal(tweaksTakenBackDuringBake(submitted, submitted, []), false);
+  assert.equal(tweaksTakenBackDuringBake({ ...submitted, "--radius": "18px" }, submitted, []), false);
+  // Reset, or Corners moved back to its default: the file would bring 14px straight back.
+  assert.equal(tweaksTakenBackDuringBake(undefined, submitted, []), true);
+  assert.equal(tweaksTakenBackDuringBake({ "data-cta": "Book" }, submitted, []), true);
+  // Words the file couldn't take were never written, so letting them go changes nothing there.
+  assert.equal(tweaksTakenBackDuringBake({ "--radius": "14px" }, submitted, ["data-cta"]), false);
 });

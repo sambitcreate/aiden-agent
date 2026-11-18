@@ -659,6 +659,20 @@ export function tweaksAfterBake(
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
+/**
+ * Whether the person took back a value while Make default was writing it:
+ * a submitted value the file took is no longer on the frame (Reset, or a
+ * control moved back to its default). Writing it as the file's default would
+ * bring it straight back, so that Make default is undone instead.
+ */
+export function tweaksTakenBackDuringBake(
+  current: DesignTweakValues | undefined,
+  submitted: DesignTweakValues,
+  kept: readonly string[],
+): boolean {
+  return Object.keys(submitted).some((name) => !kept.includes(name) && current?.[name] === undefined);
+}
+
 /** A frame's values once that Make default is undone: what it showed then, under any change made since. */
 export function tweaksAfterBakeUndo(
   current: DesignTweakValues | undefined,

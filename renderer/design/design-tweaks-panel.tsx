@@ -29,7 +29,7 @@ import {
 } from "../shared/design-canvas/tweaks";
 import { useFrameSource, type DesignLoadedSource, type DesignReadSource } from "./frame-source";
 import type { DesignFramePatch } from "./nodes/design-node-context";
-import { keepDesignTweakVersionPicture, forgetDesignTweakVersionPicture, useDesignTweakVersionPicture } from "./tweak-versions";
+import { DESIGN_TWEAK_V1, forgetDesignTweakVersionPicture, useDesignTweakVersionPicture } from "./tweak-versions";
 
 /** What the Tweaks controls ask of the canvas. */
 export type DesignTweakOps = {
@@ -40,14 +40,16 @@ export type DesignTweakOps = {
   send(frameId: string, note: string): boolean;
   /** Writes the frame's values into its file as the page's defaults. */
   makeDefault(frameId: string): void;
-  /** A picture of the frame as it shows now, or null when it can't be taken. */
-  capture(frameId: string): Promise<string | null>;
+  /**
+   * Takes a version's picture after `delay`, kept only if the frame still has
+   * that version and shows it when the picture is taken and when it comes back.
+   */
+  pictureVersion(frameId: string, versionId: string, delay: number): void;
   /** Lays out a copy of the page for each version, side by side. */
   showAll(frameId: string): void;
 };
 
-/** V1 is the page as its file says; it is never stored. */
-const V1 = "v1";
+const V1 = DESIGN_TWEAK_V1;
 
 /** A page frame's declared controls, read again after each change of its file. */
 export function useDesignTweakControls(
@@ -273,24 +275,10 @@ function TweakVersions({ frame, ops }: { frame: DesignFrame; ops: DesignTweakOps
   const showingV1 = !frame.tweaks && frame.dark !== true;
   const saved = showingV1 || versions.some((version) => showsDesignTweakVersion(frame, version));
   const full = versions.length >= DESIGN_TWEAK_VERSION_LIMITS.versions;
-  // A picture is kept for a version only while the frame still shows that
-  // version, before the capture starts and when it comes back, so a quick
-  // switch or edit never files one look's picture under another.
-  const latest = React.useRef(frame);
-  latest.current = frame;
-  const pictureOf = (versionId: string, look: { tweaks?: DesignTweakVersion["tweaks"]; dark?: true }, delay: number) => {
-    const shows = () => showsDesignTweakVersion(latest.current, look);
-    window.setTimeout(() => {
-      if (!shows()) return;
-      void ops.capture(frame.id).then((picture) => {
-        if (picture && shows()) keepDesignTweakVersionPicture(frame.id, versionId, picture);
-      });
-    }, delay);
-  };
   const show = (version: { id: string; tweaks?: DesignTweakVersion["tweaks"]; dark?: true }) => {
     ops.update(frame.id, { tweaks: version.tweaks, dark: version.dark }, { record: true });
     // Once the page has its values.
-    pictureOf(version.id, version, 400);
+    ops.pictureVersion(frame.id, version.id, 400);
   };
   const save = () => {
     if (saved || full) return;
@@ -301,7 +289,7 @@ function TweakVersions({ frame, ops }: { frame: DesignFrame; ops: DesignTweakOps
       ...(frame.dark ? { dark: true as const } : {}),
     };
     ops.update(frame.id, { tweakVersions: [...versions, version] }, { record: true });
-    pictureOf(version.id, version, 0);
+    ops.pictureVersion(frame.id, version.id, 0);
   };
   const remove = (version: DesignTweakVersion) => {
     const rest = versions.filter((entry) => entry.id !== version.id);

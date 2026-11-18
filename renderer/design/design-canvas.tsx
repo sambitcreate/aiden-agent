@@ -47,8 +47,13 @@ import { frameIframe, useDesignComments } from "./design-comments";
 import { usePageTextEdits } from "./page-text-edits";
 import { designFrameSnapshots } from "./frame-snapshots";
 import { DesignTweaksFloat, type DesignTweakOps } from "./design-tweaks-panel";
-import { showDesignTweakVersions } from "./tweak-versions";
-import { tweaksAfterBake, tweaksAfterBakeUndo } from "../shared/design-canvas/tweaks";
+import {
+  DESIGN_TWEAK_V1,
+  forgetDesignTweakVersionPicture,
+  showDesignTweakVersions,
+  takeDesignTweakVersionPicture,
+} from "./tweak-versions";
+import { tweaksAfterBake, tweaksAfterBakeUndo, tweaksTakenBackDuringBake } from "../shared/design-canvas/tweaks";
 import { postToDesignPage } from "../shared/design-canvas/bridge-messages";
 import { useDesignDrawing, type DesignDrawTool } from "./design-drawing";
 import { DesignPresentBar, DesignPresentButton, presentationKey, type DesignPresentation } from "./design-present";
@@ -942,6 +947,7 @@ function LoadedDesignCanvas({
         const latest = latestDoc.current.frames.find((entry) => entry.id === frameId);
         update(frameId, { tweaks: tweaksAfterBakeUndo(latest?.tweaks, values) }, { record: true });
         reloadPaths([path]);
+        forgetDesignTweakVersionPicture(frameId, DESIGN_TWEAK_V1);
         toast("Put the page's file back as it was.");
       } else {
         toast.error(answer?.reason === "changed" ? "The file changed since, so it was left as it is." : "The file couldn't be put back.");
@@ -967,12 +973,25 @@ function LoadedDesignCanvas({
           toast.error(BAKE_ERRORS[result?.reason ?? "failed"] ?? BAKE_ERRORS.failed);
           return;
         }
+        const { undoId } = result;
+        const latest = latestDoc.current.frames.find((entry) => entry.id === frameId);
+        // Reset (or a control moved back to its default) while the file was
+        // being written: the file would bring that value straight back, so
+        // the write is undone and the frame keeps what it shows now.
+        if (latest && tweaksTakenBackDuringBake(latest.tweaks, values, result.kept)) {
+          const undone = await designCanvasApi.undoBakeDesignTweaks(chatId, frameId, undoId).catch(() => null);
+          if (undone?.ok) {
+            reloadPaths([path]);
+            toast("The values changed while they were being written, so the page's file was left as it was.");
+            return;
+          }
+        }
         // The frame lets go of what the file now says, keeping words the file
         // couldn't take and anything changed while the file was written.
-        const latest = latestDoc.current.frames.find((entry) => entry.id === frameId);
         update(frameId, { tweaks: tweaksAfterBake(latest?.tweaks, values, result.kept) }, { record: true });
         reloadPaths([path]);
-        const { undoId } = result;
+        // V1 is the page as its file says, and that just changed.
+        forgetDesignTweakVersionPicture(frameId, DESIGN_TWEAK_V1);
         toast.success(
           result.kept.length > 0
             ? "Made these the page's defaults. Some words couldn't be placed in the file, so this frame keeps them."
@@ -1022,7 +1041,14 @@ function LoadedDesignCanvas({
       },
       send: comments.queueOnFrame,
       makeDefault: makeTweaksDefault,
-      capture: captureFrame,
+      pictureVersion: (frameId, versionId, delay) =>
+        takeDesignTweakVersionPicture(
+          frameId,
+          versionId,
+          delay,
+          (id) => latestDoc.current.frames.find((entry) => entry.id === id),
+          captureFrame,
+        ),
       showAll: showTweakVersions,
     }),
     [update, pageWindow, comments.queueOnFrame, makeTweaksDefault, captureFrame, showTweakVersions],

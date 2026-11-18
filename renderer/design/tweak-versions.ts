@@ -4,6 +4,7 @@
 
 import * as React from "react";
 import { DESIGN_CANVAS_LIMITS, type DesignCanvas, type DesignFrame } from "../shared/design-canvas/schema";
+import { showsDesignTweakVersion } from "../shared/design-canvas/tweaks";
 
 const GAP = 48;
 const PAD = 40;
@@ -117,6 +118,46 @@ export function keepDesignTweakVersionPicture(frameId: string, versionId: string
   for (const listener of listeners) listener();
 }
 
+/** V1 is the page as its file says; it is never stored. */
+export const DESIGN_TWEAK_V1 = "v1";
+
+/** The look a frame shows for one of its versions, or null when it has no such version. */
+function versionLook(frame: DesignFrame | undefined, versionId: string): { tweaks?: DesignFrame["tweaks"]; dark?: true } | null {
+  if (frame?.kind !== "file") return null;
+  if (versionId === DESIGN_TWEAK_V1) return {};
+  return frame.tweakVersions?.find((version) => version.id === versionId) ?? null;
+}
+
+/**
+ * Takes a version's picture after `delay` and keeps it, but only while the
+ * canvas's frame (read fresh through `frameNow`, not from whichever editor
+ * asked) still has that version and shows it, both before the capture starts
+ * and when it comes back. So a quick switch, an edit, a closed panel or a
+ * deleted version never files one look's picture under another.
+ */
+export function takeDesignTweakVersionPicture(
+  frameId: string,
+  versionId: string,
+  delay: number,
+  frameNow: (frameId: string) => DesignFrame | undefined,
+  capture: (frameId: string) => Promise<string | null>,
+): void {
+  const shows = () => {
+    const frame = frameNow(frameId);
+    const look = versionLook(frame, versionId);
+    return frame !== undefined && look !== null && showsDesignTweakVersion(frame, look);
+  };
+  setTimeout(() => {
+    if (!shows()) return;
+    void capture(frameId).then(
+      (picture) => {
+        if (picture && shows()) keepDesignTweakVersionPicture(frameId, versionId, picture);
+      },
+      () => undefined,
+    );
+  }, delay);
+}
+
 export function forgetDesignTweakVersionPicture(frameId: string, versionId: string): void {
   if (!pictures.delete(pictureKey(frameId, versionId))) return;
   revision += 1;
@@ -129,7 +170,11 @@ function subscribe(listener: () => void): () => void {
 }
 
 /** A version's picture, if one was taken since the app started. */
+export function designTweakVersionPicture(frameId: string, versionId: string): string | undefined {
+  return pictures.get(pictureKey(frameId, versionId));
+}
+
 export function useDesignTweakVersionPicture(frameId: string, versionId: string): string | undefined {
   React.useSyncExternalStore(subscribe, () => revision, () => revision);
-  return pictures.get(pictureKey(frameId, versionId));
+  return designTweakVersionPicture(frameId, versionId);
 }
