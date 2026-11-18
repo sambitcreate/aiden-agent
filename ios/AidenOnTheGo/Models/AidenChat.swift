@@ -4277,7 +4277,7 @@ enum AidenTranscriptWindowing {
 }
 // Inert descriptors share the desktop vocabulary. No model-authored view tree,
 // URLs, credentials or action callbacks are interpreted by native clients.
-private let aidenControlIDs: Set<String> = ["appearance.mode", "appearance.chatWidth", "appearance.reduceMotion", "appearance.terminalTheme", "memory.enabled", "memory.workspace", "webSearch.enabled", "skills.enabled"]
+private let aidenControlIDs: Set<String> = ["appearance.mode", "appearance.chatWidth", "appearance.reduceMotion", "memory.enabled", "memory.workspace", "webSearch.enabled", "skills.enabled"]
 private func aidenControlToken(_ value: String) -> Bool {
     !value.isEmpty && value.utf8.count <= 128 && value.utf8.allSatisfy { (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 95 }
 }
