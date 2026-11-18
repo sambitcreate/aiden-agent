@@ -269,7 +269,7 @@ const RUNS_ARGUMENT = new Set([
 interface CodeArguments {
   code: RegExp;
   valued?: RegExp;
-  operand?: "first" | "after-first";
+  operand?: "first" | "after-first" | "every";
   /**
    * Code options count only before the subcommand, the first operand this
    * matches (as git's do). Before it, any option not in `flags` is taken to
@@ -317,6 +317,11 @@ const CODE_ARGUMENTS: Record<string, CodeArguments> = {
   sqlite: { code: /^-(?:cmd|init)$/u, valued: /^-(?:separator|nullvalue|newline|vfs|mmap|maxsize|lookaside|pagecache|heap)$/u, operand: "after-first" },
   psql: { code: /^(?:-c|--command|-f|--file)$/u },
   mysql: { code: /^(?:-e|--execute)$/u },
+  // make reads NAME=value arguments as variables (SHELL=… picks the program
+  // that runs every recipe) and a directory or file names the Makefile.
+  make: { code: /^(?:-f|--file|--makefile|--eval)$/u, valued: /^(?:-[jl]|--jobs|--load-average)$/u, operand: "every" },
+  gmake: { code: /^(?:-f|--file|--makefile|--eval)$/u, valued: /^(?:-[jl]|--jobs|--load-average)$/u, operand: "every" },
+  bmake: { code: /^(?:-f|--file|--makefile|--eval)$/u, valued: /^(?:-[jl]|--jobs|--load-average)$/u, operand: "every" },
   mariadb: { code: /^(?:-e|--execute)$/u },
   git: {
     code: /^(?:-c|--config-env|--exec-path)$/u,
@@ -325,6 +330,46 @@ const CODE_ARGUMENTS: Record<string, CodeArguments> = {
     flags: /^(?:-[pPv]|--(?:paginate|no-pager|bare|version|help|no-replace-objects|no-lazy-fetch|no-optional-locks|no-advice|(?:no-)?(?:literal|glob|noglob|icase)-pathspecs|(?:html|man|info)-path))$/u,
   },
 };
+/**
+ * Options whose next word names a program to start: git's transport helpers
+ * (`--upload-pack`), rsync's remote shell (`-e`), tar's compressor, zip's
+ * tester, scp's ssh and man's pager. Like `CODE_ARGUMENTS`, the common ones.
+ */
+const TAR_PROGRAM = /^(?:-[A-Za-z]*[IF]|--use-compress-program|--to-command|--info-script|--new-volume-script|--rsh-command|--rmt-command|--checkpoint-action)$/u;
+const SSH_COPY_PROGRAM = /^-[A-Za-z0-9]*[SoF]$/u;
+const PROGRAM_OPTIONS: Record<string, RegExp> = {
+  rsync: /^(?:-[A-Za-z]*e|--rsh|--rsync-path)$/u,
+  tar: TAR_PROGRAM,
+  gtar: TAR_PROGRAM,
+  bsdtar: TAR_PROGRAM,
+  zip: /^(?:-TT|--unzip-command)$/u,
+  scp: SSH_COPY_PROGRAM,
+  sftp: SSH_COPY_PROGRAM,
+  man: /^(?:-P|--pager|-H|--html)$/u,
+  wget: /^--use-askpass$/u,
+};
+/** git's, by subcommand; `*` applies to every subcommand. */
+const GIT_PROGRAM_OPTIONS: Record<string, RegExp> = {
+  "*": /^(?:--upload-pack|--receive-pack|--exec)$/u,
+  clone: /^-u$/u,
+  rebase: /^-x$/u,
+  difftool: /^(?:-x|--extcmd)$/u,
+  "filter-branch": /^--[a-z-]+-filter$/u,
+};
+/** git subcommands whose arguments after a word are a command (`git submodule foreach …`). */
+const GIT_RUNS_AFTER: Record<string, string> = { submodule: "foreach", bisect: "run" };
+
+/** The subcommand of `git …`, skipping global options and their values. */
+function gitSubcommand(args: readonly string[]): { name: string; index: number } | undefined {
+  const flags = CODE_ARGUMENTS.git!.flags!;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
+    if (!arg.startsWith("-")) return { name: arg, index };
+    if (!arg.includes("=") && !flags.test(arg)) index += 1;
+  }
+  return undefined;
+}
+
 /** Builtins that read a word as a variable name or arithmetic; bash evaluates a name's `[subscript]`. */
 const NAME_COMMANDS = new Set(["declare", "export", "getopts", "let", "local", "mapfile", "read", "readarray", "readonly", "typeset", "unset"]);
 /** Builtins whose `-v` (or `wait -p`) value is a variable name. */
@@ -363,6 +408,18 @@ function placeholderCommandProblem(words: readonly string[], inArithmetic: boole
   const args = words.slice(start + 1).map(unquotedWord);
   const last = args[args.length - 1] ?? "";
   if (base === "find" && args.some((arg) => /^-(?:exec|execdir|ok|okdir)$/u.test(arg))) return "an argument to find -exec, which runs it";
+  if (PROGRAM_OPTIONS[base]?.test(last)) return `the program ${base} ${last} starts`;
+  if (base === "git") {
+    const sub = gitSubcommand(args);
+    if (sub) {
+      const after = args.slice(sub.index + 1);
+      if (GIT_PROGRAM_OPTIONS["*"]!.test(last) || (after.length && GIT_PROGRAM_OPTIONS[sub.name]?.test(last))) {
+        return `the program git ${sub.name} ${last} starts`;
+      }
+      const runs = GIT_RUNS_AFTER[sub.name];
+      if (runs && after.includes(runs)) return `the command git ${sub.name} ${runs} runs`;
+    }
+  }
   const spec = CODE_ARGUMENTS[base] ?? CODE_ARGUMENTS[name];
   if (spec) {
     const scan = (words: readonly string[]) => {
@@ -391,17 +448,48 @@ function placeholderCommandProblem(words: readonly string[], inArithmetic: boole
     const { operands, codeGiven } = scan(args);
     if (spec.operand === "first" && !codeGiven && operands === 0) return `the program ${base} runs`;
     if (spec.operand === "after-first" && operands >= 1) return `the code ${base} runs`;
+    if (spec.operand === "every" && !spec.valued?.test(last)) return `an argument to ${base}, which can set the shell its recipes run in`;
   }
   if (inArithmetic || NAME_COMMANDS.has(base) || NAME_OPTION_COMMANDS[base]?.test(last)) return "name";
   return undefined;
 }
 
+/** Plain text a placeholder may be joined to, as in `HEAD:{{branch}}` or `{{name}}.json`. */
+const JOINED_TEXT = /^[A-Za-z0-9_.,:@%+/=-]*$/u;
+const JOINED_TAIL = /(?:[A-Za-z0-9_.,:@%+/=-]|\{\{\s*[A-Za-z_][A-Za-z0-9_]*\s*\}\})*/uy;
+const LONGER_WORD = "part of a longer word with quotes, $, globs or other shell syntax";
+
 /**
- * Each placeholder must stand alone as an unquoted argument (`gh pr merge
- * {{number}}`): never inside quotes, backticks, `$(…)`, `${…}`, a heredoc,
- * a comment or a longer word, never the command itself, and never an
- * argument a command runs as code (`eval`, `sh -c`, `python -c`, an awk
- * program). Returns where a placeholder sits wrongly, or undefined. The value
+ * Whether the word around the placeholder at `index`…`end` (which started at
+ * `wordStart`) is one the value may be part of: the placeholder alone, or
+ * joined only to plain text and other placeholders. A joined word may not
+ * start with `-` (`--upload-pack={{x}}` hands the value to the option) or be
+ * a variable assignment before the command (`GIT_SSH_COMMAND={{x}} git …`).
+ */
+function joinedWordProblem(template: string, wordStart: number, index: number, end: number, commandWords: readonly string[]): string | undefined {
+  JOINED_TAIL.lastIndex = end;
+  const tailEnd = end + JOINED_TAIL.exec(template)![0].length;
+  if (tailEnd < template.length && !WORD_BREAK_AFTER.test(template[tailEnd]!)) return LONGER_WORD;
+  const before = template.slice(wordStart, index).replace(PLACEHOLDER, "x");
+  const after = template.slice(end, tailEnd).replace(PLACEHOLDER, "x");
+  if (!before && !after) return undefined;
+  if (!JOINED_TEXT.test(before)) return LONGER_WORD;
+  const word = `${before}x${after}`;
+  if (word.startsWith("-")) return "joined to an option (write --body {{body}}, not --body={{body}})";
+  const commandPosition = commandWords.every((word) => COMMAND_PREFIX_WORDS.has(word) || ASSIGNMENT_WORD.test(word));
+  if (commandPosition && ASSIGNMENT_WORD.test(word)) return "a variable assignment, which a program may read as a command to run";
+  return undefined;
+}
+
+/**
+ * Each placeholder must be an unquoted argument (`gh pr merge {{number}}`),
+ * alone or joined only to plain text (`git show HEAD:{{path}}`): never
+ * inside quotes, backticks, `$(…)`, `${…}`, a heredoc or a comment, never
+ * joined to an option or a variable assignment, never the command itself,
+ * and never an argument a command runs as code (`eval`, `sh -c`, `python
+ * -c`, an awk program) or that names a program to start (`git
+ * --upload-pack`, `rsync -e`, `tar --use-compress-program`, make's
+ * `SHELL=`). Returns where a placeholder sits wrongly, or undefined. The value
  * itself never becomes shell code (see `resolveWorkspaceArtifactCommand`);
  * this keeps each value one plain argument, as the person's confirmation
  * shows it. The list of programs that run code is the common ones, not every
@@ -463,14 +551,14 @@ function placeholderPlacement(template: string, isText: (name: string) => boolea
         if (quote === "`") return misplaced("inside backticks");
         if (depth > 0) return misplaced("inside a $(…), ${…}, $[…] or <(…) expansion");
         const end = index + match[0].length;
-        const after = end >= template.length ? " " : template[end]!;
-        if (wordStart >= 0 || !WORD_BREAK_AFTER.test(after)) return misplaced("part of a longer word");
+        const joined = joinedWordProblem(template, wordStart >= 0 ? wordStart : index, index, end, words);
+        if (joined) return misplaced(joined);
         // A redirection's target is only ever a file name (`cat > {{x}}`).
         const problem = redirectTarget ? undefined : placeholderCommandProblem(words, arithmeticParens > 0 || testBrackets);
         if (problem === "name") {
           if (isText(match[1]!)) return { arithmetic: match[1]! };
         } else if (problem !== undefined) return misplaced(problem);
-        wordStart = index;
+        if (wordStart < 0) wordStart = index;
         index = end - 1;
         continue;
       }
@@ -673,7 +761,9 @@ export function parseWorkspaceArtifactActions(value: unknown): WorkspaceArtifact
     }
     const placement = placeholderPlacement(template, (name) => params.some((param) => param.name === name && param.type === "string"));
     if (placement.misplaced) {
-      return invalid(`${where}: each {{param}} must be its own unquoted word, not ${placement.misplaced}. Write gh pr comment {{number}} --body {{body}}.`);
+      return invalid(
+        `${where}: each {{param}} must be its own unquoted word, not ${placement.misplaced}. Write gh pr comment {{number}} --body {{body}}; plain text may be joined on, as in git show HEAD:{{path}}.`,
+      );
     }
     if (placement.arithmetic) {
       return invalid(

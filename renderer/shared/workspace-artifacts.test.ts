@@ -113,13 +113,52 @@ test("a template cannot run with a different value from the one its confirmation
   }
 });
 
-test("a placeholder must be its own unquoted word", () => {
-  const action = (command: string) => [{ name: "a", label: "A", command, params: [{ name: "x" }] }];
-  for (const command of [`echo "{{x}}"`, `echo '{{x}}'`, "echo `{{x}}`", "echo $(cat {{x}})", "echo ${{{x}}}", "echo pre{{x}}", "cat <<EOF\n{{x}}\nEOF"]) {
+test("a placeholder must be its own unquoted word, or joined only to plain text", () => {
+  const action = (command: string) => [{ name: "a", label: "A", command, params: [{ name: "x" }, { name: "y" }] }];
+  for (const command of [
+    `echo "{{x}}"`,
+    `echo '{{x}}'`,
+    "echo `{{x}}`",
+    "echo $(cat {{x}})",
+    "echo ${{{x}}}",
+    "cat <<EOF\n{{x}}\nEOF",
+    // Joined to shell syntax, an option or an assignment the command reads.
+    "echo $HOME{{x}}",
+    "echo {{x}}$HOME",
+    "echo *{{x}}",
+    "echo ~{{x}}",
+    "echo {{x}}'s'",
+    "echo {{x}}#tag",
+    "gh pr comment 1 --body={{x}}",
+    "git log -n{{x}}",
+    "PAGER={{x}} git log",
+    "if X={{x}} git log; then :; fi",
+  ]) {
     assert.throws(() => parseWorkspaceArtifactActions(action(command)), /own unquoted word/u, command);
   }
-  for (const command of ["gh pr merge {{x}} --squash", "echo {{x}}; echo done", "(cd sub && make {{x}})", `echo "fixed" {{x}}`]) {
+  for (const command of [
+    "gh pr merge {{x}} --squash",
+    "echo {{x}}; echo done",
+    "(cd sub && git switch {{x}})",
+    `echo "fixed" {{x}}`,
+    "git show HEAD:{{x}}",
+    "git push origin {{x}}:refs/heads/{{y}}",
+    "cat notes/{{x}}.md",
+    "gh api repos/acme/app/issues -f title={{x}}",
+    "printf '%s' {{x}} >notes/{{y}}.txt",
+  ]) {
     assert.equal(parseWorkspaceArtifactActions(action(command)).length, 1, command);
+  }
+});
+
+test("a joined value reaches the program as part of one literal argument", () => {
+  const action = parseWorkspaceArtifactActions([
+    { name: "a", label: "A", command: "printf '%s|' HEAD:{{x}} {{x}}.md", params: [{ name: "x", type: "string" }] },
+  ])[0]!;
+  for (const value of ["main", "a b", "$(id)", "*", "x;y"]) {
+    const { command, preview } = resolveWorkspaceArtifactCommand(action, [value]);
+    assert.equal(execFileSync("/bin/sh", ["-c", command], { encoding: "utf8" }), `HEAD:${value}|${value}.md|`, value);
+    assert.equal(execFileSync("/bin/sh", ["-c", preview], { encoding: "utf8" }), `HEAD:${value}|${value}.md|`, value);
   }
 });
 
@@ -185,6 +224,20 @@ test("a placeholder cannot be run as a command, hidden from the check, or read a
     "git --namespace review -c {{x}} probe",
     "git --shallow-file shallow -c {{x}} probe",
     "git --some-future-option value -c {{x}} probe",
+    // Options that name a program to start, and make's NAME=value arguments.
+    "git fetch --upload-pack {{x}} origin",
+    "git -C repo push --receive-pack {{x}} origin",
+    "git clone -u {{x}} repo copy",
+    "git rebase -x {{x}} main",
+    "git submodule foreach {{x}}",
+    "git bisect run {{x}}",
+    "rsync -avze {{x}} src host:dst",
+    "tar -I {{x}} -xf notes.tar",
+    "zip -T --unzip-command {{x}} notes.zip notes.txt",
+    "scp -o {{x}} notes.txt host:",
+    "man -P {{x}} ls",
+    "make {{x}}",
+    "make -C {{x}} test",
   ];
   for (const command of refused) assert.throws(() => parseWorkspaceArtifactActions(actions(command)), /own unquoted word/u, command);
   for (const command of [
@@ -236,6 +289,12 @@ test("a placeholder cannot be run as a command, hidden from the check, or read a
     "git log -c {{x}}",
     "git --no-pager -C repo log -c {{x}}",
     "git --no-literal-pathspecs log -c {{x}}",
+    // The same option names elsewhere, or in another subcommand, take plain values.
+    "git cherry-pick -x {{x}}",
+    "git push -u origin {{x}}",
+    "rsync -av {{x}} backup/",
+    "tar -xf {{x}}",
+    "make -j {{x}} test",
   ]) {
     assert.equal(parseWorkspaceArtifactActions(actions(command)).length, 1, command);
   }
@@ -247,9 +306,19 @@ test("no template the parser accepts lets a text value run code", () => {
   const script = path.join(dir, "run-me");
   fs.writeFileSync(script, `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
   // Each value runs code if something reads it as shell, a program to start,
-  // an awk program, a sed script, Python or a git alias.
-  const values = [`a[$(touch ${marker})0]`, script, `BEGIN { system("touch ${marker}") }`, `1e touch ${marker}`, `__import__("os").system("touch ${marker}")`, `alias.probe=!touch ${marker}`];
+  // an awk program, a sed script, Python, a git alias or make's shell.
+  const values = [
+    `a[$(touch ${marker})0]`,
+    script,
+    `BEGIN { system("touch ${marker}") }`,
+    `1e touch ${marker}`,
+    `__import__("os").system("touch ${marker}")`,
+    `alias.probe=!touch ${marker}`,
+    `SHELL=${script}`,
+  ];
   spawnSync("git", ["init", "-q"], { cwd: dir, stdio: "ignore" });
+  fs.writeFileSync(path.join(dir, "notes.txt"), "notes\n");
+  fs.writeFileSync(path.join(dir, "Makefile"), "all:\n\t@true\n");
   const candidates = [
     "[[ {{x}} -gt 0 ]]",
     "(( {{x}} > 0 ))",
@@ -291,6 +360,29 @@ test("no template the parser accepts lets a text value run code", () => {
     "awk '{ print }' {{x}}",
     "sed -n 1p {{x}}",
     "printf -v out %s {{x}}",
+    // Options whose value names a program to start: git's transport helpers,
+    // rsync's remote shell, tar's compressor, zip's tester, scp's ssh, man's pager.
+    "git ls-remote --upload-pack {{x}} .",
+    "git fetch --upload-pack {{x}} .",
+    "git clone -u {{x}} . copy",
+    "git -C . ls-remote --upload-pack {{x}} .",
+    "git archive --remote . --exec {{x}} HEAD",
+    "rsync -e {{x}} notes.txt localhost:copy",
+    "rsync --rsh {{x}} notes.txt localhost:copy",
+    "tar --use-compress-program {{x}} -cf notes.tar notes.txt",
+    "zip -T -TT {{x}} notes.zip notes.txt",
+    "scp -S {{x}} notes.txt localhost:copy",
+    "man -P {{x}} ls",
+    // make reads NAME=value arguments as variables, SHELL among them.
+    "make {{x}}",
+    "make all {{x}}",
+    // Joined to an option or a variable, the value still names the program.
+    "git ls-remote --upload-pack={{x}} .",
+    "tar --use-compress-program={{x}} -cf notes.tar notes.txt",
+    "GIT_SSH_COMMAND={{x}} git ls-remote localhost:repo",
+    // Joined after plain text, the value is only ever part of one argument.
+    "git log -1 HEAD:{{x}}",
+    "printf '%s' refs/heads/{{x}}.lock",
   ];
   let accepted = 0;
   try {
