@@ -38,6 +38,18 @@ function editDistance(a: string, b: string): number {
 	return previous[b.length]!;
 }
 
+/** Characters that could move the cursor, rewrite the screen or the clipboard, or reorder text when echoed to a terminal. */
+const UNSAFE_ECHO_CHARACTERS = /[\p{Cc}\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/gu;
+/** The most characters of an unknown word echoed back. */
+const MAX_ECHOED_WORD = 64;
+
+/** The word as it is safe to print: unsafe characters shown as visible escapes, and at most 64 characters. */
+function echoableWord(word: string): string {
+	const characters = [...word];
+	const shown = characters.slice(0, MAX_ECHOED_WORD).join("").replace(UNSAFE_ECHO_CHARACTERS, (character) => `\\u{${character.codePointAt(0)!.toString(16)}}`);
+	return characters.length > MAX_ECHOED_WORD ? `${shown}…` : shown;
+}
+
 /**
  * The line for a first word `dispatchCommand` does not handle. Flags, the
  * removed interactive commands and bare prompts (anything with whitespace,
@@ -50,7 +62,7 @@ export function unknownCommandMessage(word: string | undefined): string {
 	const best = Math.min(...distances.map(({ distance }) => distance));
 	const closest = distances.filter(({ distance }) => distance === best);
 	const suggestion = best <= (word.length <= 4 ? 1 : 2) && closest.length === 1 ? ` Did you mean \`aiden ${closest[0]!.command}\`?` : "";
-	return `aiden: unknown command "${word}".${suggestion} Run \`aiden help\`.`;
+	return `aiden: unknown command "${echoableWord(word)}".${suggestion} Run \`aiden help\`.`;
 }
 
 /** The current folder, or undefined when it was deleted after the shell entered it. */
