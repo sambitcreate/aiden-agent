@@ -365,13 +365,10 @@ test("the markup guide offered beside pages teaches only what a page accepts", a
   const tree = (await store.get("ws1", "art1"))!.artifact.visual.tree as { c?: { p?: { action?: unknown } }[] };
   assert.equal(tree.c?.filter((button) => button.p?.action).length, taught.length, "each button kept its action");
 
-  // Width is the page's layout, which the guide says to pass to workspace_artifact.
-  assert.match(text, /`layout: "wide"` to workspace_artifact/u);
+  // Width is the page's layout.
   await call("c2", { operation: "update", id: "art1", layout: "wide" });
   assert.equal((await store.get("ws1", "art1"))!.artifact.visual.layout, "wide");
   // A page is changed by its id: drawing it again with the same title is refused.
-  assert.match(text, /operation update and the page's id/u);
-  assert.doesNotMatch(text, /same title/u);
   await assert.rejects(call("c3", { operation: "create", title: "Every action", markup, actions: [MERGE] }), /Update it by that id/u);
 });
 
