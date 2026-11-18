@@ -1,7 +1,7 @@
 import "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, configure, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { AppCapabilitiesProvider, DISABLED_APP_CAPABILITIES } from "../lib/app-capabilities";
 import { emitBotTestNotification, installBotTestIpc, type BotTestIpcCall } from "../main/bots/test-dom";
@@ -11,6 +11,13 @@ import { OnboardingFlow } from "./onboarding-flow";
 import type { OnboardingSnapshot } from "../shared/onboarding";
 
 afterEach(cleanup);
+
+// Each test mounts the whole onboarding flow and resumes it through several IPC
+// round trips. Unloaded that takes about 200 ms, but the release job runs the
+// full suite on a busy macOS runner where it can pass testing-library's 1 s
+// default. Waits here are for content to appear, not a speed requirement, so
+// this file allows 5 s. Each test file runs in its own process.
+configure({ asyncUtilTimeout: 5_000 });
 
 /** Provider setup is already done, so onboarding resumes at the step after it. */
 const resumeAfterProvider: OnboardingSnapshot = {

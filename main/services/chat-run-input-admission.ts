@@ -38,11 +38,38 @@ export interface ChatRunInputGenerationRef {
    * or queued, the same as the prompt that started the run.
    */
   inputHooks?: ChatRunInputHooks;
+  /**
+   * The chat's owed next turn, for a run that offers one. Input this run's
+   * queue can no longer take, because Pi already ended it, is registered here
+   * and becomes the chat's next turn once the run settles.
+   */
+  owedTurn?: { hold(): ChatOwedInputHold | undefined };
   agent: {
     queueAdmissionBlocked(): "not-active" | "cancelled" | "capacity" | undefined;
     queueSteer(message: AgentMessage, options?: PiRuntimeQueueOptions): PiRuntimeQueueReceipt;
     queueFollowUp(message: AgentMessage, options?: PiRuntimeQueueOptions): PiRuntimeQueueReceipt;
   };
+}
+
+/**
+ * Keeps a settling run's owed turn open while one input is being saved, so
+ * the run cannot finish settling before that input is registered.
+ */
+export interface ChatOwedInputHold {
+  /**
+   * Registers saved input as the chat's next turn. False when main can no
+   * longer run it (the chat is being deleted, the app is quitting, the run was
+   * stopped, or its owed turn already started or closed).
+   */
+  register(input: OwedChatInput): boolean;
+  /** Idempotent; the owed turn starts once the run settled and every hold is released. */
+  release(): void;
+}
+
+/** One saved input an owed turn answers, with the hook context it was screened with. */
+export interface OwedChatInput {
+  messageId: string;
+  hookContext?: string;
 }
 
 /** What the person's UserPromptSubmit hooks made of one mid-flight input. */
@@ -55,8 +82,10 @@ export interface ChatRunInputHooks {
    * Hook context for this one queued input, never saved as the person's
    * words. Called only once the queue has accepted the input; the timestamp
    * is unique among this run's queued inputs and the text pins it further.
+   * The saved message id lets the run hand the context to an owed turn if
+   * it ends before Pi reads the input.
    */
-  attachContext(input: { timestamp: number; text: string }, context: string): void;
+  attachContext(input: { timestamp: number; text: string; messageId: string }, context: string): void;
 }
 
 export interface ChatRunInputAdmissionDeps {
@@ -113,9 +142,12 @@ function rejectionReason(
  *
  * Ordering: probe the runtime queue first so common rejections leave the
  * client draft unconsumed, then persist the user message, then admit. The
- * only residual race is the run closing between persistence and the
- * synchronous admission call; in that case the committed message stays as
- * conversation history and the client is told it was committed.
+ * residual race is the run closing between persistence and the synchronous
+ * admission call. A run that offers an owed turn is held open across the
+ * save, so input its queue no longer takes is registered as the chat's next
+ * turn in the same section that commits it, and only then reported as a
+ * `follow-up`. Input main cannot register stays as conversation history and
+ * the client is told it was committed, never that it was queued.
  *
  * In a chat that runs hooks, UserPromptSubmit screens the input after the
  * probe and before it is saved. A refused input is saved with its blocked
@@ -174,6 +206,34 @@ export function createChatRunInputAdmission(deps: ChatRunInputAdmissionDeps) {
     // (the same as a refused prompt that starts a run). It is held out of
     // every projection in this process, and saved already marked.
     if (hookBlocked) holdHookBlockedPrompt(messageId, hookBlocked);
+    // Refused input is never answered, so it never needs an owed turn.
+    const owedHold = hookBlocked ? undefined : generation.owedTurn?.hold();
+    try {
+      return await commitAndQueue(input, generation, messageId, screening, stopped, owedHold);
+    } finally {
+      owedHold?.release();
+    }
+  }
+
+  async function commitAndQueue(
+    input: ChatRunInputAdmissionRequest,
+    generation: ChatRunInputGenerationRef,
+    messageId: string,
+    screening: ChatRunInputScreening | undefined,
+    stopped: () => boolean,
+    owedHold: ChatOwedInputHold | undefined,
+  ): Promise<ChatRunInputAdmissionResult> {
+    const hookBlocked = screening && "blocked" in screening ? screening.blocked : undefined;
+    const hookContext =
+      screening && "context" in screening && screening.context ? screening.context : undefined;
+    // Pi already ended the run, so the saved input becomes the chat's next
+    // turn, if main can still run one. A stopped run owes nothing.
+    const owe = (): ChatRunInputAdmissionResult => {
+      if (owedHold && !stopped() && owedHold.register({ messageId, ...(hookContext ? { hookContext } : {}) })) {
+        return { admitted: true, queue: "follow-up", committed: true, messageId };
+      }
+      return { admitted: false, reason: "run_not_active", committed: true, messageId };
+    };
     try {
       await appendChatMessageWithReconciliation({
         messageId,
@@ -218,7 +278,7 @@ export function createChatRunInputAdmission(deps: ChatRunInputAdmissionDeps) {
       }
     }
     if (deps.active.get(input.streamId) !== generation) {
-      return { admitted: false, reason: "run_not_active", committed: true, messageId };
+      return owe();
     }
     if (stopped()) {
       return { admitted: false, reason: "cancelled", committed: true, messageId };
@@ -240,6 +300,9 @@ export function createChatRunInputAdmission(deps: ChatRunInputAdmissionDeps) {
       // idempotency entry in flight rather than recording a false-clean failure.
       throw new AidenOperationUnknownOutcomeError();
     }
+    if (!receipt.accepted && receipt.reason === "not-active") {
+      return owe();
+    }
     if (!receipt.accepted) {
       return {
         admitted: false,
@@ -251,8 +314,8 @@ export function createChatRunInputAdmission(deps: ChatRunInputAdmissionDeps) {
     lastQueuedAt.set(generation, timestamp);
     // Pi takes queued input at its next turn boundary, never synchronously,
     // so the context is in place before the model can see the message.
-    if (screening && "context" in screening && screening.context) {
-      generation.inputHooks?.attachContext({ timestamp, text: input.text }, screening.context);
+    if (hookContext) {
+      generation.inputHooks?.attachContext({ timestamp, text: input.text, messageId }, hookContext);
     }
     if (input.mode === "steer") {
       try {

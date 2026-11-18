@@ -29,7 +29,7 @@ import {
 import * as fs from "fs/promises";
 import * as path from "path";
 import { assertPathInside } from "../shared/path-containment.js";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { RE2 as RE2Matcher } from "re2-wasm";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
@@ -1796,6 +1796,8 @@ export interface RunCommandLeftovers {
   begin(): {
     signal?: AbortSignal;
     release?(): void;
+    /** After each command, however it ended (a cancelled push may still have landed); e.g. to notice a push. */
+    finished?(command: string): void;
     env: Record<string, string>;
     /**
      * Returns a line for the tool result, if any. `output` is what they still
@@ -1906,6 +1908,11 @@ function makeRunCommand(workspace: WorkspaceRootGuard, options: CodingToolOption
         }, result);
       } finally {
         leftovers?.release?.();
+        try {
+          leftovers?.finished?.(command);
+        } catch {
+          // Noticing what the command did never fails the command.
+        }
       }
     },
   };

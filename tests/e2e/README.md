@@ -20,6 +20,12 @@ cannot clear its previous checkout, the run stops before extracting or running a
 The Space reuses installed dependencies only when `package.json`, `package-lock.json`,
 the Node version, and the architecture match the previous install.
 
+After a run the script suspends the Space, which keeps those dependencies for the next
+run. A Space that run created under a custom `CUA_SPACE` name is deleted instead. Set
+`CUA_SPACE_KEEP=1` to leave the Space running, which `--watch` also does. A Space
+another run has taken is left running. On a Mac the script then trims cua's runtime
+disk so freed space returns to macOS. Delete a Space by hand with `cua sb rm <name>`.
+
 The Space is Linux, so specs take their non-darwin branches there. Changes to a spec's
 darwin branch or to macOS-only behavior still need `npm run test:e2e` on the host (or
 the macOS CI gate). On Linux, follow CI's Linux E2E step: its apt packages,
@@ -58,7 +64,12 @@ case starts with an empty portable provider list; that same preload routes only
 LM Studio's default loopback origin to the case's random-port server while the
 persisted product endpoint remains unchanged. Teardown reports
 server/process leaks and preserves an original test failure when cleanup also
-fails.
+fails. When Electron does not exit within 35 seconds of the quit, teardown
+prints to stderr the dev log's quit and shutdown records (main records "quit was
+not started" with a reason whenever it drops a quit) and the stuck main
+process's threads: the main thread's call graph from `sample` on macOS, or the
+thread states from `/proc` on Linux. The production journal keeps no such
+records, so a production-profile run prints only the threads.
 
 A spec that needs the real Bot store opts into `test.use({ isolatedKeychain: true })`
 (macOS only). Before launch, the fixture creates an unlocked, passwordless keychain

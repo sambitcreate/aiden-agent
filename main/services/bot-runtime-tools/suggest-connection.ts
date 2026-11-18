@@ -2,7 +2,7 @@
 // chat so the person can choose to connect an app; it never connects anything
 // itself. The durable Bot runtime registers it with per-Bot dependencies.
 
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import {
   CONNECT_CARD_REASON_MAX_CHARS,

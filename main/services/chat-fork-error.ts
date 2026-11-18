@@ -8,7 +8,9 @@ export type ChatForkErrorCode =
   | "message_not_found"
   | "ineligible"
   | "too_large"
-  | "unavailable";
+  | "unavailable"
+  /** Continue in a new chat: the destination workspace's own folder is gone too. */
+  | "folder_missing";
 
 export class ChatForkError extends Error {
   constructor(

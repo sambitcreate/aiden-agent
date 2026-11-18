@@ -55,6 +55,43 @@ async function blankGuestId(app: ElectronApplication): Promise<number> {
   return guestId;
 }
 
+/** Holds the first CDP down event until the test releases it, counting up events. */
+async function holdFirstInputDown(app: ElectronApplication, guestId: number, kind: "mouse" | "key"): Promise<void> {
+  await app.evaluate(
+    ({ webContents }, { guestId, kind }) => {
+      const guest = webContents.fromId(guestId)!;
+      guest.focus();
+      const original = guest.debugger.sendCommand.bind(guest.debugger);
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const state: HeldInput = {
+        downDelivered: false,
+        releases: 0,
+        release,
+        restore: () => {
+          guest.debugger.sendCommand = original;
+        },
+      };
+      (globalThis as BrowserTestGlobal).__browserHeldInput = state;
+      const method = kind === "mouse" ? "Input.dispatchMouseEvent" : "Input.dispatchKeyEvent";
+      const down = kind === "mouse" ? "mousePressed" : "keyDown";
+      const up = kind === "mouse" ? "mouseReleased" : "keyUp";
+      guest.debugger.sendCommand = async (name, params, sessionId) => {
+        const value = await original(name, params, sessionId);
+        if (name === method && params?.type === up) state.releases += 1;
+        if (name === method && params?.type === down && !state.downDelivered) {
+          state.downDelivered = true;
+          await held;
+        }
+        return value;
+      };
+    },
+    { guestId, kind },
+  );
+}
+
 test("semantic clicks cannot hit an overlay introduced by hover or just before dispatch", async ({ aiden }) => {
   const server = createServer((_request, response) => {
     response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -121,7 +158,7 @@ test("semantic clicks cannot hit an overlay introduced by hover or just before d
 });
 
 for (const kind of ["mouse", "key"] as const) for (const takeover of ["input", "access"] as const) {
-  test(`browser ${takeover === "input" ? "user takeover" : "access revocation"} releases ${kind} input when cancellation races the down response`, async ({
+  test(`browser ${takeover === "input" ? "physical input preserves the person's action and" : "access revocation"} releases ${kind} input when the down response is pending`, async ({
     aiden,
   }) => {
     const { page, app } = aiden;
@@ -129,39 +166,7 @@ for (const kind of ["mouse", "key"] as const) for (const takeover of ["input", "
     const opened = await command(page, { action: "create" });
     const tabId = opened.tabId!;
     const guestId = await blankGuestId(app);
-    await app.evaluate(
-      ({ webContents }, { guestId, kind }) => {
-        const guest = webContents.fromId(guestId)!;
-        guest.focus();
-        const original = guest.debugger.sendCommand.bind(guest.debugger);
-        let release!: () => void;
-        const held = new Promise<void>((resolve) => {
-          release = resolve;
-        });
-        const state: HeldInput = {
-          downDelivered: false,
-          releases: 0,
-          release,
-          restore: () => {
-            guest.debugger.sendCommand = original;
-          },
-        };
-        (globalThis as BrowserTestGlobal).__browserHeldInput = state;
-        const method = kind === "mouse" ? "Input.dispatchMouseEvent" : "Input.dispatchKeyEvent";
-        const down = kind === "mouse" ? "mousePressed" : "keyDown";
-        const up = kind === "mouse" ? "mouseReleased" : "keyUp";
-        guest.debugger.sendCommand = async (name, params, sessionId) => {
-          const value = await original(name, params, sessionId);
-          if (name === method && params?.type === up) state.releases += 1;
-          if (name === method && params?.type === down && !state.downDelivered) {
-            state.downDelivered = true;
-            await held;
-          }
-          return value;
-        };
-      },
-      { guestId, kind },
-    );
+    await holdFirstInputDown(app, guestId, kind);
     try {
       const pending = command(
         page,
@@ -181,10 +186,10 @@ for (const kind of ["mouse", "key"] as const) for (const takeover of ["input", "
         .toBe(true);
       if (takeover === "input") {
         await app.evaluate(({ webContents }, id) => {
-          // This event is unrelated to the protocol-generated down event and represents
-          // a person taking control while Chromium's dispatch response is still pending.
+          // The person's unrelated input must preserve the action they started.
           webContents.fromId(id)!.sendInputEvent({ type: "keyUp", keyCode: "Escape" });
         }, guestId);
+        await app.evaluate(() => (globalThis as BrowserTestGlobal).__browserHeldInput!.release());
       } else if (kind === "mouse") {
         await command(page, { action: "agent_access", access: "off" });
       } else {
@@ -192,7 +197,8 @@ for (const kind of ["mouse", "key"] as const) for (const takeover of ["input", "
           (window as unknown as BrowserTestWindow).aidenAPI.ipc.invoke<BrowserState>("browser:get-state", workspaceId), E2E_WORKSPACE_ID);
         await command(page, { action: "defaults", defaults: { ...state.defaults, agentAccess: "off" } });
       }
-      await expect(pending).resolves.toMatchObject({
+      if (takeover === "input") await expect(pending).resolves.toEqual({ error: "" });
+      else await expect(pending).resolves.toMatchObject({
         error: expect.stringMatching(/interrupted/i),
       });
       expect(
@@ -210,8 +216,54 @@ for (const kind of ["mouse", "key"] as const) for (const takeover of ["input", "
   });
 }
 
+test("physical input cancels the agent's browser action and releases its held key", async ({ aiden }) => {
+  const { page, app, lmStudio } = aiden;
+  await finishLmStudioOnboarding(page);
+  const tabId = (await command(page, { action: "create" })).tabId!;
+  const guestId = await blankGuestId(app);
+  await holdFirstInputDown(app, guestId, "key");
+  try {
+    const prompt = "Browser cancellation scenario: press a key in my page.";
+    const scenario = lmStudio.enqueueToolScenario!({
+      prompt,
+      calls: [
+        { name: "browser", arguments: {} },
+        { name: "browser_press", arguments: { key: "a" } },
+      ],
+      finalText: "Browser cancellation scenario finished.",
+    });
+    await page.locator("textarea").first().fill(prompt);
+    await page.getByRole("button", { name: "Send message" }).click();
+    await expect
+      .poll(() => app.evaluate(() => Boolean((globalThis as BrowserTestGlobal).__browserHeldInput?.downDelivered)), { timeout: 45_000 })
+      .toBe(true);
+    await app.evaluate(({ webContents }, id) => {
+      // The person presses a key in the page while the agent's key is down.
+      webContents.fromId(id)!.sendInputEvent({ type: "keyUp", keyCode: "Escape" });
+    }, guestId);
+    await app.evaluate(() => (globalThis as BrowserTestGlobal).__browserHeldInput!.release());
+    await expect(
+      page.getByText("Browser cancellation scenario finished.", { exact: true }).first(),
+    ).toBeVisible({ timeout: 45_000 });
+    expect(scenario.error).toBeUndefined();
+    expect(scenario.issuedToolNames).toEqual(["browser", "browser_press"]);
+    expect(JSON.stringify(scenario.results[1]?.content)).toMatch(/interrupted/i);
+    expect(
+      await app.evaluate(() => (globalThis as BrowserTestGlobal).__browserHeldInput?.releases),
+    ).toBe(1);
+  } finally {
+    await app.evaluate(() => {
+      const state = (globalThis as BrowserTestGlobal).__browserHeldInput;
+      state?.release();
+      state?.restore();
+      delete (globalThis as BrowserTestGlobal).__browserHeldInput;
+    });
+    await command(page, { action: "close", tabId });
+  }
+});
+
 for (const kind of ["mouse", "key"] as const) {
-  test(`matching human ${kind} input arriving before the CDP echo still interrupts the action`, async ({ aiden }) => {
+  test(`matching physical ${kind} input arriving before the CDP echo preserves the person's action`, async ({ aiden }) => {
     const { page, app } = aiden;
     await finishLmStudioOnboarding(page);
     const tabId = (await command(page, { action: "create" })).tabId!;
@@ -248,9 +300,9 @@ for (const kind of ["mouse", "key"] as const) {
       await expect.poll(() => app.evaluate(() => Boolean((globalThis as BrowserTestGlobal).__browserHeldInput?.downDelivered))).toBe(true);
       await app.evaluate(async ({ webContents }, { guestId, kind }) => {
         const guest = webContents.fromId(guestId)!;
-        // Physical keys are rejected immediately by their native source marker.
-        // Mouse events lack that marker: a matching first event can consume the
-        // expectation, but its subsequent CDP echo must interrupt continuation.
+        // Physical keys are distinguished by their native source marker.
+        // Mouse events lack that marker, so a matching first event can consume
+        // the expectation. Neither event cancels a user-sourced action.
         await new Promise<void>((resolve) => {
           if (kind === "mouse") {
             guest.once("before-mouse-event", () => resolve());
@@ -264,7 +316,7 @@ for (const kind of ["mouse", "key"] as const) {
       }, { guestId, kind });
       const outcome = await pending;
       const events = await app.evaluate(() => (globalThis as BrowserTestGlobal).__browserHeldInput?.events);
-      expect(outcome.error, JSON.stringify(events)).toMatch(/interrupted/i);
+      expect(outcome, JSON.stringify(events)).toEqual({ error: "" });
       if (kind === "key") {
         // Pin Electron's native contract: physical inputs are unmarked, while
         // the mandatory cleanup keyUp carries Blink's debugger source flag.

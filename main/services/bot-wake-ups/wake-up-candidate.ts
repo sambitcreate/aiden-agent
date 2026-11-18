@@ -1,7 +1,7 @@
 // The durable Bot binding of `wake_up`: the chat chip is an entry in the
 // Bot's own transcript. `unsafe`: a replayed call never sets a second wake-up.
 
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { BotToolCandidate } from "../bot-runtime/bot-tool-assembly.js";
 import { createWakeUpTool } from "./wake-up-tool.js";
 import type { BotWakeUps } from "./wake-ups.js";

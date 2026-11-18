@@ -109,17 +109,40 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         return false
     }
 
+    /// Says when a machine's connect deadline passes, rather than racing a
+    /// real one that a busy simulator can overrun before a reachable machine
+    /// has answered.
+    private func deadline(
+        _ instanceId: String,
+        in coordinator: AidenRemoteCoordinator,
+        passesWhen passed: @escaping @MainActor () -> Bool
+    ) throws {
+        try connection(instanceId, in: coordinator).waitForDeadline = { _ in
+            while !passed(), !Task.isCancelled { try? await Task.sleep(nanoseconds: 1_000_000) }
+        }
+    }
+
     // MARK: Connecting every machine
 
     func testAnUnreachableMachineDoesNotDelayTheOthers() async throws {
         let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
         let release = responder.hold(instanceId: "build", path: "/server")
         defer { release() }
+        let others = ["studio", "laptop", "mini"]
+        for instanceId in others {
+            try deadline(instanceId, in: coordinator) { false }
+        }
+        // The unreachable machine times out only once the others have connected
+        // alongside it, so they can't have waited on it.
+        let connections = try others.map { try connection($0, in: coordinator) }
+        try deadline("build", in: coordinator) {
+            connections.allSatisfy { $0.connectionState == .connected }
+        }
         let scheduler = scheduler(for: coordinator, timeout: 0.2)
 
         await scheduler.foregrounded()
 
-        for instanceId in ["studio", "laptop", "mini"] {
+        for instanceId in others {
             XCTAssertEqual(try connection(instanceId, in: coordinator).connectionState, .connected, instanceId)
         }
         let build = try connection("build", in: coordinator)
@@ -134,6 +157,12 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         defer {
             releaseStudio()
             releaseLaptop()
+        }
+        for instanceId in ["studio", "laptop"] {
+            try deadline(instanceId, in: coordinator) { true }
+        }
+        for instanceId in ["mini", "build"] {
+            try deadline(instanceId, in: coordinator) { false }
         }
         let scheduler = scheduler(for: coordinator, timeout: 0.2)
 
@@ -335,12 +364,15 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         let scheduler = scheduler(for: coordinator, pathChanges: pathChanges)
         await scheduler.foregrounded()
         scheduler.backgrounded()
-        let before = responder.requests(instanceId: "build").count
+        // Every connect asks for `/server` once. Other requests from the
+        // foreground pass can still arrive: a connect that fails cancels its
+        // `/workspaces`, and the request may reach the machine afterwards.
+        let before = serverRequests("build")
 
         pathChanged.yield()
         try await settle()
 
-        XCTAssertEqual(responder.requests(instanceId: "build").count, before)
+        XCTAssertEqual(serverRequests("build"), before)
     }
 
     func testAFailedProbeOnTheSelectedMachineRaisesNoAlert() async throws {
@@ -350,12 +382,12 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         let (pathChanges, pathChanged) = AsyncStream<Void>.makeStream()
         let scheduler = scheduler(for: coordinator, pathChanges: pathChanges)
         await scheduler.foregrounded()
-        let before = responder.requests(instanceId: "build").count
+        let before = serverRequests("build")
         coordinator.presentedError = "Shown to the person"
 
         pathChanged.yield()
         try await waitUntil("another attempt on build") {
-            responder.requests(instanceId: "build").count > before && !(coordinator.selectedConnection?.isConnectInFlight ?? true)
+            self.serverRequests("build") > before && !(coordinator.selectedConnection?.isConnectInFlight ?? true)
         }
 
         XCTAssertEqual(coordinator.presentedError, "Shown to the person")
@@ -863,12 +895,19 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         let release = responder.hold(instanceId: "laptop", path: "/server")
         defer { release() }
         let studio = try connection("studio", in: coordinator)
+        // A real 0.1 s deadline can pass before a busy machine has read the
+        // revocation, and then the attempt only times out. This one passes once
+        // the revocation has started the next machine's connect.
+        var deadlinePassed = false
+        studio.waitForDeadline = { _ in
+            while !deadlinePassed, !Task.isCancelled { try? await Task.sleep(nanoseconds: 1_000_000) }
+        }
 
         let attempt = Task { await studio.connect(over: .probe, timeout: 0.1) }
         try await waitUntil("the next machine's connect") { serverRequests("laptop") == 1 }
-        try await Task.sleep(nanoseconds: 300_000_000)
-        release()
+        deadlinePassed = true
         await attempt.value
+        release()
 
         XCTAssertEqual(coordinator.defaultInstanceId, "laptop")
         try await waitUntil("the next machine to connect") { coordinator.connectionState == .connected }

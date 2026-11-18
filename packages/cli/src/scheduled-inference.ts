@@ -4,11 +4,15 @@ import { createAgentSession, DefaultResourceLoader, SessionManager } from "@eare
 import type { AssistantMessage, AssistantMessageEvent } from "@earendil-works/pi-ai";
 import type { ScheduledTask } from "../../../main/services/types.js";
 import { assertScheduledMcpServerBindings } from "../../../main/services/schedule-mcp-binding.js";
+import { withoutMessageThreads } from "../../../main/services/pi-message-threads.js";
+import { daemonSettingsManager } from "./daemon-session-settings.ts";
 import { createCliModelRuntime } from "./providers.ts";
 import { createCliMcpPool } from "./mcp.ts";
 import { createCliWebSearch } from "./extensions/web-search.ts";
 import { recordUsage } from "./usage-ledger.ts";
 import { messageText } from "./sessions.ts";
+import { cliWorkspaceCodingTools } from "./workspace-coding-tools.ts";
+import { createGenerationWatchdog } from "./generation-watchdog.ts";
 
 /**
  * Counts a streamed reply's bytes once each: deltas as they arrive, plus whatever
@@ -59,7 +63,8 @@ export async function runScheduledInference(agentDir: string, cwd: string, task:
   const reply = createReplyMeter();
   const abort = () => { void session?.abort().catch(() => {}); };
   combined.addEventListener("abort", abort, { once: true });
-  const timer = setTimeout(() => controller.abort(new Error("Scheduled inference timed out.")), 300_000);
+  const watchdog = createGenerationWatchdog((reason) => controller.abort(new Error(reason === "inactive"
+    ? "Scheduled inference was inactive for five minutes." : "Scheduled inference reached its six-hour limit.")));
   const check = async () => {
     combined.throwIfAborted(); await assertAuthority();
     const servers = await pool.listServers();
@@ -73,10 +78,12 @@ export async function runScheduledInference(agentDir: string, cwd: string, task:
     combined.throwIfAborted(); return selected;
   };
   try {
-    const runtime = await createCliModelRuntime(agentDir), model = runtime.getModel(task.providerId!, task.model!);
-    if (!model) throw new Error("Scheduled provider/model is unavailable.");
+    const runtime = await createCliModelRuntime(agentDir), found = runtime.getModel(task.providerId!, task.model!);
+    if (!found) throw new Error("Scheduled provider/model is unavailable.");
+    const model = withoutMessageThreads(found);
     const selected = await check();
     const tools: AgentTool[] = (await Promise.all(selected.map((server) => pool.agentTools(server, combined)))).flat();
+    tools.push(...cliWorkspaceCodingTools(cwd, task.permission !== "full"));
     if (task.webSearchEnabled) { const tool = await createCliWebSearch(agentDir).toolForGeneration(); if (!tool) throw new Error("Scheduled Web Search is unavailable."); tools.push(tool); }
     const loader = new DefaultResourceLoader({ cwd, agentDir, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true,
       extensionFactories: [{ name: "aiden-schedule-authority", factory(pi) {
@@ -85,11 +92,12 @@ export async function runScheduledInference(agentDir: string, cwd: string, task:
       } }],
     });
     await loader.reload();
-    const created = await createAgentSession({ cwd, agentDir, modelRuntime: runtime, model, sessionManager: SessionManager.inMemory(cwd), resourceLoader: loader,
-      tools: [...(task.permission === "full" ? ["read", "bash", "edit", "write", "grep", "find", "ls"] : ["read", "grep", "find", "ls"]), ...tools.map(({ name }) => name)],
+    const created = await createAgentSession({ cwd, agentDir, settingsManager: daemonSettingsManager(cwd, agentDir), modelRuntime: runtime, model, sessionManager: SessionManager.inMemory(cwd), resourceLoader: loader,
+      tools: tools.map(({ name }) => name),
     });
     session = created.session;
     removeEvents = session.subscribe((event) => {
+      watchdog.activity(event);
       if (event.type === "turn_start" && ++turns > 24) controller.abort(new Error("Scheduled turn budget exhausted."));
       if (event.type === "message_start") reply.nextMessage();
       const replied = event.type === "message_update" ? reply.add(event.assistantMessageEvent)
@@ -101,7 +109,7 @@ export async function runScheduledInference(agentDir: string, cwd: string, task:
     if (!last || last.stopReason === "error" || last.stopReason === "aborted") throw new Error("Scheduled inference did not produce a final response.");
     return produced.map((message) => messageText(message.content)).join("\n").slice(0, 100_000);
   } finally {
-    clearTimeout(timer); combined.removeEventListener("abort", abort); removeEvents(); session?.dispose(); await pool.close();
+    watchdog.dispose(); combined.removeEventListener("abort", abort); removeEvents(); session?.dispose(); await pool.close();
     for (const message of produced) await recordUsage(agentDir, "scheduled", message).catch(() => {});
   }
 }

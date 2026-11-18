@@ -6,7 +6,7 @@ import {
 const MAX_CHAT_ID_CHARS = 160;
 const MAX_CHAT_ID_BYTES = 640;
 const MAX_DRAFT_TEXT_CHARS = 65_536;
-const COPY_KEYS = new Set(["chatId", "throughMessageId", "messageId", "position", "summary"]);
+const COPY_KEYS = new Set(["chatId", "throughMessageId", "messageId", "position", "summary", "continueInWorkspaceId"]);
 const FORK_SUMMARY_KEYS = new Set(["instructions"]);
 const CHAT_ONLY_KEYS = new Set(["chatId"]);
 const CONTEXT_PRESSURE_KEYS = new Set([
@@ -65,6 +65,8 @@ export interface ParsedChatCopyRequest {
   forkAt?: { messageId: string; position: ChatForkPosition };
   /** Summarize what the source did after the fork point. Forks only. */
   summary?: { instructions?: string };
+  /** Continue a chat whose folder is gone in this workspace. Takes no cut or summary. */
+  continueIn?: { workspaceId: string };
 }
 
 function parseForkSummaryRequest(value: unknown): { instructions?: string } {
@@ -81,11 +83,23 @@ function parseForkSummaryRequest(value: unknown): { instructions?: string } {
 /**
  * `{ chatId }` clones; `{ chatId, messageId, position }` forks. The older
  * `{ chatId, throughMessageId }` shape remains a fork after that reply. A
- * fork may add `summary: { instructions? }`.
+ * fork may add `summary: { instructions? }`. `{ chatId, continueInWorkspaceId }`
+ * continues a chat whose folder is gone in that workspace.
  */
 export function parseChatCopyRequest(value: unknown): ParsedChatCopyRequest {
   const record = exactRecord(value, COPY_KEYS, "chat copy request");
   const chatId = boundedId(record.chatId, "chat id");
+  if (record.continueInWorkspaceId !== undefined) {
+    if (
+      record.throughMessageId !== undefined ||
+      record.messageId !== undefined ||
+      record.position !== undefined ||
+      record.summary !== undefined
+    ) {
+      throw new Error("Continuing in a new chat takes the whole conversation.");
+    }
+    return { chatId, continueIn: { workspaceId: boundedId(record.continueInWorkspaceId, "workspace id") } };
+  }
   const summary =
     record.summary === undefined ? undefined : { summary: parseForkSummaryRequest(record.summary) };
   if (record.throughMessageId !== undefined) {

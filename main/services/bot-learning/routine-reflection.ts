@@ -3,7 +3,8 @@
 // lesson (or one "stop doing this"), or answer NO_ENTRY. A confounded or
 // no-effect verdict never becomes a card. Adapted from Harness² reflection.
 
-import { Type, type AssistantMessage, type Message, type Tool, type ToolCall } from "@earendil-works/pi-ai";
+import { type AssistantMessage, type Message, type Tool, type ToolCall } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import {
   BOT_LESSON_COMPONENTS,
   BOT_LESSON_PROPOSAL_ENTRY_KIND,

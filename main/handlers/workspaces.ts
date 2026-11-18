@@ -26,6 +26,7 @@ import {
   type GitPushInput,
 } from "../services/git.js";
 import { githubCurrentPullRequest } from "../services/github/github-runtime-main.js";
+import { pullRequestBranchPushed } from "../services/follow-through/follow-through-main.js";
 import { workspaceGitWatcher as gitRepoWatcher } from "../services/workspace-git-watcher-main.js";
 import { workspaceApplicationService } from "../services/workspace-application-service-main.js";
 import {
@@ -341,11 +342,14 @@ export function registerWorkspaceHandlers(): void {
     }),
   );
 
-  ipcMain.handle("git:push", async (event, workspaceId: unknown, input: unknown) =>
-    withWorkspaceOperation(event, workspaceId, (resolved, signal) =>
+  ipcMain.handle("git:push", async (event, workspaceId: unknown, input: unknown) => {
+    const result = await withWorkspaceOperation(event, workspaceId, (resolved, signal) =>
       gitPush(resolved.folderPath, asGitPushInput(input), signal),
-    ),
-  );
+    );
+    // A followed pull request on this repository may have news: read it soon.
+    pullRequestBranchPushed(result.pullRequestRepository);
+    return result;
+  });
 
   ipcMain.handle("git:compare", async (event, workspaceId: unknown, targetRef: unknown) =>
     withWorkspaceOperation(event, workspaceId, (resolved, signal) =>

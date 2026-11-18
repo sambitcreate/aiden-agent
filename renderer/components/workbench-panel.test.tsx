@@ -7,7 +7,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { CommandSystemProvider } from "../lib/command-system";
 import { COMMAND_IDS } from "../shared/keybindings";
 import { resolveEnvironmentPanelLayout } from "../lib/environment-panel-layout";
-import { WorkbenchPanel, WorkbenchTabStrip, useWorkbenchWidth, type WorkbenchTab, type WorkbenchView } from "./workbench-panel";
+import { WorkbenchPanel, WorkbenchTabStrip, focusStripTabNextFrame, useWorkbenchWidth, type WorkbenchTab, type WorkbenchView } from "./workbench-panel";
 
 const SHORTCUTS = {
   effective: Object.fromEntries(
@@ -42,10 +42,12 @@ const STRIP_TABS: { id: string; label: string; closable?: boolean; renameable?: 
 function StripHarness({
   busy = false,
   launcher = true,
+  restoreFocusOnClose = false,
   events,
 }: {
   busy?: boolean;
   launcher?: boolean;
+  restoreFocusOnClose?: boolean;
   events: string[];
 }) {
   const [openIds, setOpenIds] = React.useState(STRIP_TABS.map((tab) => tab.id));
@@ -84,7 +86,9 @@ function StripHarness({
       }}
       onCloseTab={(tab) => {
         events.push(`close:${tab.id}`);
+        if (restoreFocusOnClose) focusStripTabNextFrame(activeTabRef);
         setOpenIds((ids) => ids.filter((id) => id !== tab.id));
+        if (tab.selected) setSelectedId(STRIP_TABS.find((entry) => entry.id !== tab.id)!.id);
       }}
       newTab={launcher ? { label: "New test tab", onOpen: () => events.push("new-tab") } : undefined}
       closeLabel="Close test panel"
@@ -140,6 +144,36 @@ test("Delete closes a closable tab but never a fixed one", () => {
   fireEvent.click(screen.getByRole("button", { name: "Close Notes tab" }));
   assert.equal(screen.queryByRole("tab", { name: "Notes" }), null);
   assert.deepEqual(events, ["close:log", "close:notes"]);
+});
+
+const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+test("closing a tab puts focus back on the selected tab once the strip has rendered", async () => {
+  renderWithCommands(<StripHarness events={[]} restoreFocusOnClose />);
+  fireEvent.click(screen.getByRole("tab", { name: "Log" }));
+  const log = screen.getByRole("tab", { name: "Log" });
+  log.focus();
+  fireEvent.keyDown(log, { key: "Delete" });
+  assert.equal(screen.queryByRole("tab", { name: "Log" }), null);
+  await nextFrame();
+  assert.equal(document.activeElement, screen.getByRole("tab", { name: "Notes" }));
+});
+
+test("focus moved out of the strip before the restoring frame stays where it was put", async () => {
+  renderWithCommands(
+    <>
+      <StripHarness events={[]} restoreFocusOnClose />
+      <input aria-label="Address" />
+    </>,
+  );
+  const log = screen.getByRole("tab", { name: "Log" });
+  log.focus();
+  fireEvent.keyDown(log, { key: "Delete" });
+  assert.equal(screen.queryByRole("tab", { name: "Log" }), null);
+  const address = screen.getByRole("textbox", { name: "Address" });
+  address.focus();
+  await nextFrame();
+  assert.equal(document.activeElement, address);
 });
 
 test("F2 and double-click rename only tabs that support it, and the editor replaces the button", () => {
@@ -251,22 +285,24 @@ function NotesWorkbench({
   containerWidth = 1600,
   initiallyOpen = false,
   covered = false,
+  firstViewId = "notes",
 }: {
   containerWidth?: number;
   initiallyOpen?: boolean;
   covered?: boolean;
+  firstViewId?: string;
 }) {
   const [open, setOpen] = React.useState(initiallyOpen);
-  const [selectedId, setSelectedId] = React.useState("notes");
+  const [selectedId, setSelectedId] = React.useState(firstViewId);
   const panelWidth = useWorkbenchWidth(WIDTH_KEY);
   const { width, inline } = resolveEnvironmentPanelLayout(panelWidth.preferredWidth, containerWidth);
   const tabs: WorkbenchTab[] = [
-    { id: "notes", viewId: "notes", label: "Notes", selected: selectedId === "notes", closable: false },
+    { id: "notes", viewId: firstViewId, label: "Notes", selected: selectedId === firstViewId, closable: false },
     { id: "log", viewId: "log", label: "Log", selected: selectedId === "log", closable: false },
   ];
   const views: WorkbenchView[] = [
     {
-      id: "notes",
+      id: firstViewId,
       render: ({ selected, presented }) => (
         <p>Notes body {selected ? "selected" : "idle"} {presented ? "presented" : "hidden"}</p>
       ),
@@ -352,6 +388,39 @@ test("a covered shell keeps its open state but leaves the tab order and the acce
   assert.equal(surface.hasAttribute("inert"), true);
   assert.equal(surface.getAttribute("aria-hidden"), "true");
   assert.match(document.getElementById("notes-notes-panel")?.textContent ?? "", /Notes body selected hidden/u);
+});
+
+test("closing the surface dismisses its native Open tabs menu and drops the pending choice", async () => {
+  const dismissed: unknown[] = [];
+  const popups: { id: unknown; choose(index: number): void }[] = [];
+  installBotTestIpc({
+    "shortcut:get": () => SHORTCUTS,
+    "browser:popup-menu": (id) => new Promise((resolve) => {
+      popups.push({ id, choose: (index) => resolve({ index, shiftKey: false }) });
+    }),
+    "browser:dismiss-menu": (id) => { dismissed.push(id); },
+  });
+  renderWithCommands(<NotesWorkbench initiallyOpen firstViewId="browser" />);
+  const openMenu = async () => {
+    const before = popups.length;
+    fireEvent.click(screen.getByRole("button", { name: "Open tabs" }));
+    await waitFor(() => assert.equal(popups.length, before + 1));
+    return popups[before]!;
+  };
+  const logSelected = () => screen.getByRole("tab", { name: "Log" }).getAttribute("aria-selected");
+
+  const stale = await openMenu();
+  fireEvent.click(screen.getByRole("button", { name: "Toggle notes panel" }));
+  await waitFor(() => assert.deepEqual(dismissed, [stale.id]));
+  fireEvent.click(screen.getByRole("button", { name: "Toggle notes panel" }));
+  assert.equal(notesSurface().getAttribute("data-state"), "open");
+  stale.choose(1);
+  await new Promise((resolve) => setTimeout(resolve));
+  assert.equal(logSelected(), "false", "a choice from before the close never applies after reopening");
+
+  // The reopened surface's own menu still works, so the check above isn't vacuous.
+  (await openMenu()).choose(1);
+  await waitFor(() => assert.equal(logSelected(), "true"));
 });
 
 test("keyboard resizing clamps to the bounds the container allows and keeps the clamped width", () => {

@@ -7,13 +7,13 @@ const claim = { id: "claim-1", botId: "bot-1", requestId: "req-1", root: { botId
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 function setup(answers: BotExecutionRetryResult[] = [], pendingDispatch?: string) {
-  const raised: { dedupeKey: string; title: string }[] = [];
+  const raised: { dedupeKey: string; title: string; quiet?: true }[] = [];
   const resolved: [string, string][] = [];
   const tries: number[] = [];
   const timers: { fn: () => void; ms: number; cancelled: boolean }[] = [];
   const issues = createBotExecutionIssues(
     {
-      raise: async (input) => { raised.push({ dedupeKey: input.dedupeKey, title: input.title }); return input as never; },
+      raise: async (input) => { raised.push({ dedupeKey: input.dedupeKey, title: input.title, ...(input.quiet ? { quiet: true as const } : {}) }); return input as never; },
       resolve: async (_botId, key, resolution) => { resolved.push([key, resolution]); return true; },
     },
     { pendingDispatch: async () => (pendingDispatch ? { dispatchId: pendingDispatch } as never : undefined) },
@@ -60,7 +60,7 @@ test("a block that outlasts every quiet try asks the person once", async () => {
     await h.fire();
   }
   assert.deepEqual(h.tries, [1, 2, 3]);
-  assert.deepEqual(h.raised, [{ dedupeKey: "execution:claim-1", title: "Review this run before resuming" }]);
+  assert.deepEqual(h.raised, [{ dedupeKey: "execution:claim-1", title: "Review this run before resuming", quiet: true }]);
   assert.deepEqual(h.live(), [], "nothing more is tried after the card");
 });
 
@@ -112,4 +112,12 @@ test("an uncertain provider cost asks at once and is never retried", async () =>
   await h.issues.blocked("bot-1", claim, "The cost is unknown", "spending_unknown");
   assert.deepEqual(h.raised, [{ dedupeKey: "execution-cost:dispatch-9", title: "Review this run before resuming" }]);
   assert.deepEqual(h.timers, []);
+});
+
+test("a blocked routine run still alerts the person: nobody is in its chat to see it", async () => {
+  const h = setup();
+  const routine = { ...claim, id: "claim-2", routineId: "routine-1" } as BotExecutionClaim;
+  await h.issues.blocked("bot-1", routine, "Model not ready", "unavailable");
+  for (let attempt = 0; attempt < BOT_EXECUTION_RETRY_DELAYS_MS.length; attempt += 1) await h.fire();
+  assert.deepEqual(h.raised, [{ dedupeKey: "execution:claim-2", title: "Review this run before resuming" }], "an ask, not a quiet heads-up");
 });

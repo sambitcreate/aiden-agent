@@ -1,5 +1,5 @@
 import { BOT_PEER_MESSAGE_ENTRY_KIND } from "../../../renderer/shared/bot-peers.js";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { BotToolCandidate } from "../bot-runtime/bot-tool-assembly.js";
 import type { BotToolCall } from "../bot-runtime/tool-adapter.js";

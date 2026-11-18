@@ -77,6 +77,7 @@ struct AidenChatDetailView: View {
     @State private var spending = AidenSpendingNoticeModel()
     @State private var backgroundJobs = AidenBackgroundJobsModel()
     @State private var showsBackgroundJobs = false
+    @State private var isChoosingContinueWorkspace = false
     @State private var showsSessionSheet = false
     /// Runs once the sheet has closed, so what it opens has the screen to itself.
     @State private var pendingSessionAction: AidenSessionAction?
@@ -300,9 +301,27 @@ struct AidenChatDetailView: View {
             get: { model.presentedError != nil || model.readAloud.errorMessage != nil },
             set: { if !$0 { model.presentedError = nil; model.readAloud.errorMessage = nil } }
         )) {
+            if onOpenChat != nil, model.offersContinueInNewChat {
+                Button("Continue in a New Chat") {
+                    model.presentedError = nil
+                    model.continueInNewChatError = nil
+                    isChoosingContinueWorkspace = true
+                }
+            }
             Button("OK", role: .cancel) { model.presentedError = nil; model.readAloud.errorMessage = nil }
         } message: {
             Text(model.presentedError ?? model.readAloud.errorMessage ?? "The operation could not be completed.")
+        }
+        .sheet(isPresented: $isChoosingContinueWorkspace, onDismiss: {
+            model.continueInNewChatError = nil
+        }) {
+            AidenContinueInNewChatSheet(
+                workspaces: model.continueInNewChatWorkspaces,
+                isContinuing: model.isContinuingInNewChat,
+                errorMessage: model.continueInNewChatError,
+                onCancel: { isChoosingContinueWorkspace = false },
+                onChoose: performContinueInNewChat(workspaceID:)
+            )
         }
         .aidenBotDeleteConfirmation(
             isPresented: $isConfirmingBotDelete,
@@ -553,6 +572,16 @@ struct AidenChatDetailView: View {
             ) else { return }
             // The fork lives on this chat's machine, and goes on opening there.
             onOpenChat(forked)
+        }
+    }
+
+    private func performContinueInNewChat(workspaceID: String) {
+        guard let onOpenChat else { return }
+        Task { @MainActor in
+            guard let continued = await model.continueInNewChat(workspaceId: workspaceID) else { return }
+            isChoosingContinueWorkspace = false
+            // The new chat lives on this chat's machine, and opens there.
+            onOpenChat(continued)
         }
     }
 
@@ -1123,5 +1152,67 @@ private struct AidenChatJumpToLatestGlassModifier: ViewModifier {
         } else {
             content.glassEffect(.regular.interactive(), in: Circle())
         }
+    }
+}
+
+/// Revision 64: choose another workspace to continue a chat whose folder is
+/// gone. Rows name the workspace, its permission and branch, never a path.
+struct AidenContinueInNewChatSheet: View {
+    let workspaces: [AidenWorkspace]
+    let isContinuing: Bool
+    let errorMessage: String?
+    let onCancel: () -> Void
+    let onChoose: (String) -> Void
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    ForEach(workspaces) { workspace in
+                        Button {
+                            onChoose(workspace.id)
+                        } label: {
+                            AidenWorkspaceRow(workspace: workspace)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isContinuing)
+                    }
+                } header: {
+                    Text("Workspaces")
+                } footer: {
+                    Text("Aiden copies this whole chat into a new chat in the workspace you choose. This chat stays as it is.")
+                }
+                if let errorMessage {
+                    Section {
+                        Label {
+                            Text(errorMessage)
+                                .foregroundStyle(.primary)
+                        } icon: {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                        }
+                        .accessibilityElement(children: .combine)
+                    }
+                }
+            }
+            .navigationTitle("Continue in a New Chat")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                }
+                if isContinuing {
+                    ToolbarItem(placement: .confirmationAction) {
+                        ProgressView()
+                            .accessibilityLabel("Continuing in a new chat")
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        .interactiveDismissDisabled(isContinuing)
     }
 }

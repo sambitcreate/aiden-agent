@@ -9,6 +9,7 @@ import {
   browserDisplayUrl,
   browserRedactPreviewUrls,
   browserPageCaptureBounds,
+  browserMeasuredViewport,
   browserPartition,
   browserDeadline,
   browserResult,
@@ -155,6 +156,17 @@ test("local preview capabilities are omitted from exported URLs without changing
     "https://example.com/?__aiden_preview=site-value",
   );
 });
+test("viewport measurements reject unsafe dimensions and retain small fill slots", () => {
+  assert.deepEqual(browserMeasuredViewport({ width: 120, height: 90 }), { width: 120, height: 90 });
+  assert.deepEqual(browserMeasuredViewport({ width: 3840, height: 2160 }), { width: 3840, height: 2160 });
+  assert.deepEqual(browserMeasuredViewport({ width: 7680, height: 4320 }), { width: 7680, height: 4320 });
+  for (const dimension of [0, -1, NaN, Infinity, -Infinity, Number.MAX_SAFE_INTEGER + 1, 1e100, 1.5, "640", null, undefined]) {
+    assert.equal(browserMeasuredViewport({ width: dimension, height: 480 }), undefined);
+    assert.equal(browserMeasuredViewport({ width: 640, height: dimension }), undefined);
+  }
+  assert.equal(browserMeasuredViewport(null), undefined);
+});
+
 test("responsive captures exclude mismatched-aspect native slot letterboxing", () => {
   assert.deepEqual(
     browserPageCaptureBounds(
@@ -203,6 +215,64 @@ test("queued actions serialize and human intervention revokes active and already
   await assert.rejects(first, /interrupted/);
   await assert.rejects(second, /interrupted/);
   assert.equal(await queue.run(async () => 3), 3);
+});
+test("physical input preserves the person's navigation but cancels agent work", async () => {
+  const queue = new BrowserActionQueue();
+  for (const source of ["user", "agent"] as const) {
+    let release!: () => void;
+    let started!: () => void;
+    const ready = new Promise<void>((resolve) => { started = resolve; });
+    const pending = queue.run(async (check) => {
+      started();
+      await new Promise<void>((resolve) => { release = resolve; });
+      check();
+      return "loaded";
+    }, undefined, source);
+    await ready;
+    queue.interruptForHumanInput();
+    assert.equal(queue.signal?.aborted, source === "agent");
+    release();
+    if (source === "user") assert.equal(await pending, "loaded");
+    else await assert.rejects(pending, /interrupted/);
+  }
+});
+test("physical input while a person's command waits behind agent work cancels only agent work", async () => {
+  const queue = new BrowserActionQueue();
+  let releaseAgent!: () => void;
+  let agentStarted!: () => void;
+  const started = new Promise<void>((resolve) => { agentStarted = resolve; });
+  const agent = queue.run(async (check) => {
+    agentStarted();
+    await new Promise<void>((resolve) => { releaseAgent = resolve; });
+    check();
+    return "agent";
+  });
+  await started;
+  // The person's command revokes the running agent action and queues behind it.
+  queue.interrupt();
+  const person = queue.run(async (check) => { check(); return "loaded"; }, undefined, "user");
+  const laterAgent = queue.run(async () => "later agent");
+  // A click in the page before the agent action has unwound.
+  queue.interruptForHumanInput();
+  releaseAgent();
+  await assert.rejects(agent, /interrupted/);
+  assert.equal(await person, "loaded");
+  await assert.rejects(laterAgent, /interrupted/);
+  assert.equal(await queue.run(async () => "next"), "next");
+});
+test("closing a tab still cancels a user-sourced navigation", async () => {
+  const queue = new BrowserActionQueue();
+  let release!: () => void;
+  let started!: () => void;
+  const ready = new Promise<void>((resolve) => { started = resolve; });
+  const pending = queue.run(async () => {
+    started();
+    await new Promise<void>((resolve) => { release = resolve; });
+  }, undefined, "user");
+  await ready;
+  queue.interrupt();
+  release();
+  await assert.rejects(pending, /interrupted/);
 });
 test("action deadlines cancel pending operations and preserve rejection cleanup", async () => {
   const controller = new AbortController();

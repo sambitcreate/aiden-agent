@@ -397,6 +397,11 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
   }
 }
 
+export interface ToolFinishOptions {
+  /** True only when this step is cancelled because the person pressed Stop. */
+  stoppedByUser?: boolean;
+}
+
 export class GenerationTimelineProjector {
   private readonly timeline: GenerationTimeline;
   private readonly stepIndex = new Map<string, number>();
@@ -615,6 +620,7 @@ export class GenerationTimelineProjector {
       tokensBefore: number;
       estimatedTokensAfter: number;
     },
+    options?: ToolFinishOptions,
   ): void {
     const index = this.stepIndex.get(id);
     const step = index === undefined ? undefined : this.timeline.steps[index];
@@ -635,7 +641,7 @@ export class GenerationTimelineProjector {
     ) {
       step.detail = `${compactionEngineLabel(metrics.engine)} · ${(metrics.durationMs! / 1000).toFixed(1)}s · ~${metrics.tokensBefore} → ${metrics.estimatedTokensAfter} tokens`;
     }
-    this.toolFinished(id, status);
+    this.toolFinished(id, status, undefined, options);
   }
 
   /** Keep future activity anchored to the current visible assistant text. */
@@ -749,8 +755,9 @@ export class GenerationTimelineProjector {
     toolCallId: string,
     status: Extract<AgentStepStatus, "completed" | "failed" | "blocked" | "cancelled">,
     resultDetails?: unknown,
+    options?: ToolFinishOptions,
   ): void {
-    this.updateTool(toolCallId, status, true, resultDetails);
+    this.updateTool(toolCallId, status, true, resultDetails, options?.stoppedByUser === true);
   }
 
   finish(
@@ -765,6 +772,10 @@ export class GenerationTimelineProjector {
         this.timeline.cancellationOrigin = cancellationOrigin;
       }
       this.timeline.finishedAt = timestamp;
+      // Only the person's Stop marks the steps this sweep cancels; a step
+      // that already ended (for example an agent permission cancelled on
+      // detach) keeps its own outcome and no mark.
+      const stoppedByUser = status === "cancelled" && cancellationOrigin === "user_stop";
       for (const step of this.timeline.steps) {
         if (
           isToolStep(step) &&
@@ -775,6 +786,7 @@ export class GenerationTimelineProjector {
           step.status = status === "cancelled" ? "cancelled" : "failed";
           step.updatedAt = timestamp;
           step.finishedAt = timestamp;
+          if (stoppedByUser) step.stoppedByUser = true;
         }
       }
       this.emit();
@@ -815,6 +827,7 @@ export class GenerationTimelineProjector {
     status: AgentStepStatus,
     terminal = false,
     resultDetails?: unknown,
+    stoppedByUser = false,
   ): void {
     if (this.timeline.status !== "running") return;
     const index = this.stepIndex.get(toolCallId);
@@ -855,6 +868,7 @@ export class GenerationTimelineProjector {
       } else {
         const issue = safeToolIssue(resultDetails);
         if (issue) step.detail = issue;
+        if (status === "cancelled" && stoppedByUser) step.stoppedByUser = true;
       }
     }
     this.emit();

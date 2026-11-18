@@ -1,6 +1,7 @@
 import { CodemodeSandbox, DEFAULT_INPUT_SCHEMA_MAX_CHARS, renderDeclarations, schemaToType, toCodemodeIdentifier, type CodemodeOutputItem } from "@earendil-works/pi-codemode";
 import type { AgentTool, AgentToolCallOutcome } from "@earendil-works/pi-agent-core";
-import { Type, type Usage } from "@earendil-works/pi-ai";
+import { type Usage } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { isPiCodemodeCallable } from "./pi-runtime-tool.js";
 import { validateDisplayImageDimensions } from "./display-image-extension.js";
 import { createPiToolDiscovery } from "./pi-tool-discovery.js";

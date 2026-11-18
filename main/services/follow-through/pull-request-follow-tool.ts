@@ -3,7 +3,7 @@
 // end of each log), merge conflicts, and comments from people who can write
 // to the repository, until the pull request is merged or closed.
 
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import {
   MAX_PULL_REQUEST_FOLLOW_NOTICES,

@@ -1,0 +1,108 @@
+# Aiden MCP server for outside apps (W4a, 2026-11-11)
+
+A loopback MCP server that lets Claude Code, Codex or any MCP client use Aiden's chats. Ported in spirit from T3 Code PR #33196 (no code copied). Off by default. W4a is the core; W4b (2026-11-11, stacked on W4a) adds Settings → Connections → Apps using Aiden, its IPC, the "Started by" label and an onboarding tile; W4c adds `aiden serve` hosting and `aiden apps` (below). User docs: `docs/aiden-mcp-server.md`; threat model section 10 of `docs/security/aiden-remote-threat-model.md`; Settings layout in `docs/settings-design-system.md` (Apps using Aiden). README and PRODUCT.md describe it as macOS and Linux desktop, matching the `mcpServer` capability.
+
+## Layout
+
+- `main/services/aiden-mcp-server.ts`
+  - `AidenMcpServer`:
+    - a dedicated `http` listener on 127.0.0.1, `/mcp` only
+    - each POST builds a fresh SDK `Server` and a stateless `StreamableHTTPServerTransport` with `enableJsonResponse`
+    - a response close aborts the call's signal, which `aiden_chat_wait` uses
+  - `AidenMcpHost` owns the on/off reconcile, port selection and commit, and issue, list and revoke.
+- `main/services/aiden-mcp-tools.ts`
+  - `AidenMcpToolRunner` holds the 9 `aiden_*` tools, TypeBox schemas, per-app limits, the `clientRequestId` cache and the run ownership map.
+  - It calls the shared `AidenRemoteChatService` and `AidenRemoteStreamService`, the same ones phones use.
+- `main/services/aiden-mcp-provenance.ts`
+  - The local-only `startedBy {kind:"app", appId, name, startedAt}` log, in `aiden-mcp-chat-provenance.json` under userData, holding the newest 1,000 entries.
+  - A failed write is swallowed, so the turn still runs.
+- `aiden-remote-state.ts`
+  - Device type `agent`, with `AGENT_CAPABILITY_CEILING` (read: `server:read` and `chat:read`; supervised adds `chat:write`), re-applied on every parse.
+  - `MAX_AIDEN_REMOTE_AGENT_APPS = 16`.
+  - `issueAgentApp`, `listAgentApps`, `mcpServerSettings`, `setMcpServerEnabled` and `commitMcpServerPort`.
+  - The `mcpServer {enabled, port?}` setting lives in the Remote state document.
+- `aiden-remote-router.ts`: an `agent` token on `/api/aiden/v1` gets 401, like an unknown one.
+- `aiden-remote-streams.ts`: added `watch` for the wait tool.
+- `aiden-remote-service-main.ts`
+  - Builds the host inside the Remote runtime (`runtime.mcp`).
+  - `initializeAidenRemoteService` starts the host's reconcile; stop and settle also stop it.
+  - Exports `aidenMcpServerStatus`, `setAidenMcpServerEnabled`, `issueAidenMcpApp`, `listAidenMcpApps` and `revokeAidenMcpApp` for W4b's IPC.
+- `host-platform-capabilities.ts`: `mcpServer` is darwin or linux.
+
+## Verified behaviour
+
+- **Port:**
+  - Release builds use 49400 and the next 7 ports; development builds use 50400 and the next 7.
+  - The first port that binds is committed. After that only the saved port is tried, and if it is busy the status is `problem: "port_in_use"`.
+- **Requests:**
+  - Host must be `127.0.0.1:<port>` or `localhost:<port>`, and any Origin other than the same loopback origin gets 403. No CORS headers are sent, OPTIONS included.
+  - A missing or bad token gets 401 with `WWW-Authenticate: Bearer realm="aiden"`.
+- **Body limit:**
+  - Over 1 MiB, declared or streamed, gets 413.
+  - The server drains the rest for up to 5 s and then destroys the socket. Using `connection: close` instead raced the client's upload, and the client saw ECONNRESET in place of the 413.
+- **Write tools:**
+  - They need `chat:write`, and Read apps do not see them listed.
+  - Turns are limited to 10 a minute and 2 concurrent runs per app; an idempotent retry does not count, even after the 128-entry request cache forgets it or a restart (`AidenRemoteChatService.hasRecordedRequest` checks the durable ledger before admission).
+  - MCP app chats and turns send no `chat_created` / `chat_message_sent` (`deviceReportsAnalytics` is false for `agent` devices). W4d added `mcp_app_connected` / `mcp_chat_started` instead (see below).
+  - Waits are at most 55 s and default to 25 s.
+- **Reach:**
+  - `aiden_workspace_list` and `aiden_chat_start` exclude `noWorkspace` folders and `ASSISTANT_WORKSPACE_ID`.
+  - Chat list is regular chats only. `requireOrdinaryChat` refuses by id every chat the list hides (Bot, feature, assistant), via `AidenRemoteChatService.isListedChat`, with the unknown-id answer so existence is not leaked.
+  - Phones can still read and send to assistant and feature chats by id; MCP apps cannot.
+- **No approval tool.** `aiden_chat_wait` returns `waiting_for_approval` or `waiting_for_input` with `approveIn` / `answerIn` set to "Aiden on <computer name>".
+- **Revoke:**
+  - It runs `revokeAidenRemoteRuntimeDevice`, which denies approvals, cancels runs and closes watchers.
+  - It then runs `tools.revokeApp`, which aborts that app's waits with "This app was disconnected from Aiden."
+  - The MCP host passes `revokeDevice(appId, "when-available")`: if Bot storage is waiting for repair (`BotCapabilityUnavailableError`, for example no Secret Service on a Linux session), the Bot notice-audience cleanup is skipped with a warning instead of failing the revoke after the tombstone. Phone revocation still uses `"required"`. Found by `tests/e2e/aiden-mcp-settings.spec.ts` in a Cua Space (2026-11-11).
+  - A phone or Mac id returns false.
+- **Tests:** `main/services/aiden-mcp-server.test.ts` (13 tests, in `test:aiden-remote` and `scripts/ci-test-registry.json`) runs a real registry, streams and chat service over fakes.
+  - Its client is `@earendil-works/pi-mcp` `McpClient`. ESLint forbids importing `@modelcontextprotocol/sdk/client*`.
+  - A fake generation's finish must check `owner.isDestroyed()` first, because `owner.send` throws after revocation.
+
+## W4b: Settings, IPC and provenance
+
+- `main/handlers/aiden-mcp.ts`: `registerAidenMcpHandlers({handle, owner, service})`, injectable so the test registers it over a real `AidenRemoteStateRegistry`. `owner(event)` throws unless the sender is the active window. Channels `remote:mcpStatus`, `remote:mcpSetEnabled` (boolean only), `remote:mcpIssueApp` (the only channel carrying a credential; revokes the new app if the owner window was destroyed before the answer), `remote:mcpListApps`, `remote:mcpRevokeApp`, `remote:mcpChatProvenance` (`{name, startedAt}`, never the app id). `setEnabled(true)` doubles as retry for `port_in_use` / `start_failed`.
+- `renderer/shared/aiden-mcp.ts`: views, parsers, `aidenMcpClientSnippets(url, token, app)` (export line with single quotes escaped; each app has its own variable from `aidenMcpTokenEnvName(app)`, e.g. `AIDEN_MCP_TOKEN_CLAUDE_CODE_K3J9QX`, so two apps in one shell profile never share a token; Claude Code uses `--header 'Authorization: Bearer ${VAR}'`, Codex `--bearer-token-env-var VAR`; Add app is disabled until the server has a URL). `renderer/lib/aiden-mcp.ts`: query keys and `useAidenMcpChatProvenance` (used by `chat-pane.tsx` for the `data-chat-started-by` line).
+- `renderer/components/settings/aiden-mcp-settings.tsx`: section id `otherApps` (Connections tab, gated by `SettingsCapabilities.mcpServer`). The credential lives only in the issued sheet's component state, never React Query.
+- Onboarding: `otherApps` wide tile in the extend group (`apps-using-aiden-art.tsx`, coral tint), shown only when `visibleOnboardingFeatures(..., {mcpServer})` is true.
+- `lastSeenAt` is 0 until the first connect and is updated at most every 5 minutes; a revoked token still authenticates to a device record with `revoked: true`, so the handler test checks `revoked`, not absence.
+- Tests: `main/handlers/aiden-mcp.test.ts`, `renderer/components/settings/aiden-mcp-settings.test.tsx` (in `test:aiden-remote`), the onboarding gallery test, and `tests/e2e/aiden-mcp-settings.spec.ts`.
+- jsdom pitfall: inside `waitFor`, never `assert.equal(queryByX(...), null)`. A failing assert formats the whole jsdom node and can take minutes, which looks like a hang. Use `assert.ok(node === null)`.
+
+## Headless server (W4c, 2026-11-11)
+
+`aiden serve` hosts the same endpoint, and `aiden apps list|connect|revoke|on|off` manages it.
+
+- **Wiring:**
+  - `packages/cli/src/apps.ts` has `createCliMcpHost` and `cliAppsCommand`.
+  - `packages/cli/src/apps-display.ts` holds the connect rendering, the snippets and `CLI_MCP_DEFAULT_PORT`. It has type-only imports, so the admin client never loads the SDK.
+  - The SDK is pinned at `@modelcontextprotocol/sdk` 1.32.1 in `packages/cli/package.json`, the desktop pin.
+- **Inside the Remote runtime.** `createCliRemote` builds the host:
+  - The chat runtime is shared through a memoized `loadChatApi` (a failed load is retried).
+  - MCP gets its own cached `AidenRemoteWorkspaceService`, so it never rebuilds Remote's host feed.
+  - `revokeDevice` is the one shared path that drains feeds, runs and Bot sessions and calls `revokeAidenRemoteRuntimeDevice`; `remote revoke` uses it too.
+  - `start()` calls `mcp.initialize()` after Remote is up, and a failure only logs. `stop()` stops MCP first.
+  - `--no-remote` means no MCP server: `serve.ts` refuses `apps` with a restart hint.
+- **Port.** 49500–49507 (`CLI_MCP_DEFAULT_PORT`), a +100 shift from the desktop's 49400, mirroring Remote's 49220 → 49320. It is saved in `remote.json`. Tests pass `mcpPort: 0`.
+- **Off by default.** `connect` calls `setEnabled(true)` before `issueApp`, so a failure to enable never loses a just-issued token. An argument error refuses before either step. The default access is Read.
+- **Connect output.** On a TTY, `commands.ts` renders text with the token once and `claude mcp add --scope user --transport http aiden <url> --header 'Authorization: Bearer ${AIDEN_MCP_TOKEN_<NAME>_<ID>}'` / `codex mcp add aiden --url <url> --bearer-token-env-var AIDEN_MCP_TOKEN_<NAME>_<ID>`, the per-app name from core's `aidenMcpTokenEnvName` (renderer/shared/aiden-mcp-token-env.ts), the same one W4b's Settings sheet prints. Piped output is JSON plus a stderr warning, like pairing.
+- **Analytics.** `remote-chats.ts` passes `deviceReportsAnalytics` (false for `agent` devices), matching the desktop. `aiden apps` sends nothing; the daemon sends W4d's MCP events.
+- **Docker.** Container loopback is unreachable from the host, which is documented. MCP without Remote would be a possible follow-up.
+- **Tests.** `packages/cli/tests/mcp-apps.test.mjs` (in the CLI `test` script; the registry covers it through `test:cli`):
+  - spawned `aiden serve` end to end: off by default, connect, 401s, Read tools, a real chat through a fake provider, provenance, revoke, off/on, and the port across a restart
+  - in-process refusals and a phone id
+  - `--no-remote`
+  - the snippets never carrying the token
+
+## W4d: MCP usage events (2026-11-11, PR base `claude/aiden-mcp-server-settings`, also merges #802)
+
+- **Events** (`analytics-events.ts`): `mcp_app_connected {access: read|supervised}` and `mcp_chat_started {model_choice: default|chosen}`. `access` was left off chat_started because only supervised apps can start one. `model_choice` is `chosen` when the app passed `providerId` or `modelId`.
+- **Where they fire.** They go through `reportAnalyticsEvent`, so desktop and server consent gating both apply.
+  - `AidenMcpHost.issueApp` sends `mcp_app_connected` after `issueAgentApp` succeeds.
+  - `AidenMcpToolRunner.chatStart` sends `mcp_chat_started` after the first turn starts, only when the turn was not already in the durable ledger (`turnRecorded`). The in-memory cache replay never reaches it.
+  - Both classes are shared, so the desktop main process and `aiden serve` (through `createCliMcpHost`) send them. `aiden apps connect` only asks the daemon.
+- **No `mcp_app_revoked`.** A revoke is cleanup with little decision value, and connects plus chat starts already show adoption and use. The docs say disconnecting sends nothing.
+- **Edge.** If the Settings window was destroyed after the issue, `main/handlers/aiden-mcp.ts` revokes the app, but `mcp_app_connected` was already sent. This is rare and accepted.
+- **Tests.**
+  - `aiden-mcp-server.test.ts` uses `captureAnalyticsEvents`: properties, replays (concurrent, sequential, after cache eviction), send, read refusal and no secrets.
+  - `packages/cli/tests/mcp-apps.test.mjs` spawns `aiden serve` with `AIDEN_ANALYTICS_DEBUG=1` and prior consent, and parses the `[analytics debug]` lines. The agent dir must be created with mode 0700.
