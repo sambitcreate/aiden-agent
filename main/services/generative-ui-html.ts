@@ -25,166 +25,12 @@ import {
   MAX_GUEST_PROMPT_CHARS,
 } from "../../renderer/shared/generative-ui-bridge.js";
 import { generativeUiKitCss } from "./generative-ui-kit.js";
+import { HtmlScanner, scanHtmlString } from "./generative-ui-html-scan.js";
 
-// The admission check reads the HTML the way a browser would, roughly: start
-// tags with their attributes (a quoted value may hold "<" or ">"), and the
-// raw text of <script> and <style>, which holds no tags. It refuses only what
-// would load or run something: an embedding tag, a <script src>, a refresh
-// <meta>, a javascript: or data:text/html URL in a URL attribute, CSS url()
-// or a JavaScript navigation call, and a remote src. Labels ("JavaScript:
-// 41%"), comparisons in scripts ("i<base && i>0") and plain strings pass; the
+// The admission check (generative-ui-html-scan.ts) reads the HTML the way a
+// browser does and refuses only what would load or run something; the
 // sandbox's CSP is what actually blocks loads.
-const EMBEDDING_TAGS: ReadonlySet<string> = new Set(["iframe", "object", "embed", "applet", "frame", "frameset", "base", "link"]);
-const URL_ATTRIBUTES: ReadonlySet<string> = new Set(["href", "src", "action", "formaction", "xlink:href", "data"]);
-const RAW_TEXT_TAGS: ReadonlySet<string> = new Set(["script", "style"]);
-const UNSAFE_SCHEME = /^(?:javascript:|data:\s*text\/html)/u;
-const QUOTED_UNSAFE_SCHEME = String.raw`["'\x60]\s*(?:javascript\s*:|data\s*:\s*text\/html)`;
-const CSS_UNSAFE_URL = /\burl\(\s*["']?\s*(?:javascript\s*:|data\s*:\s*text\/html)/iu;
-const URL_KINDS = String.raw`(?:href|src|action|formaction|xlink:href|data)`;
-/** JavaScript that navigates to or loads a javascript: or data:text/html URL. */
-const JS_UNSAFE_SINKS = [
-  new RegExp(String.raw`\bopen\s*\(\s*${QUOTED_UNSAFE_SCHEME}`, "iu"),
-  new RegExp(String.raw`\blocation(?:\s*\.\s*href)?\s*=\s*${QUOTED_UNSAFE_SCHEME}`, "iu"),
-  new RegExp(String.raw`\b(?:assign|location\s*\.\s*replace)\s*\(\s*${QUOTED_UNSAFE_SCHEME}`, "iu"),
-  new RegExp(String.raw`\bsetAttribute(?:NS)?\s*\(\s*(?:[^,()]*,\s*)?["'\x60]${URL_KINDS}["'\x60]\s*,\s*${QUOTED_UNSAFE_SCHEME}`, "iu"),
-  new RegExp(String.raw`\.\s*(?:href|src|action|formAction)\s*=\s*${QUOTED_UNSAFE_SCHEME}`, "iu"),
-] as const;
 const MAX_QUOTED_MATCH_CHARS = 60;
-
-interface HtmlFindings {
-  /** The first embedding tag, external script or refresh meta. */
-  embed?: string;
-  /** The first unsafe URL or remote src. */
-  url?: string;
-}
-
-/** The entities a model might use to hide a scheme or a quote in an attribute value. */
-function decodeEntities(value: string): string {
-  const codePoint = (code: number) => String.fromCodePoint(Number.isFinite(code) && code <= 0x10ffff ? code : 0xfffd);
-  return value
-    .replace(/&#x([0-9a-f]+);?/giu, (_, hex: string) => codePoint(Number.parseInt(hex, 16)))
-    .replace(/&#(\d+);?/gu, (_, decimal: string) => codePoint(Number.parseInt(decimal, 10)))
-    .replace(/&colon;/giu, ":")
-    .replace(/&(?:quot|apos);/giu, (entity) => (entity.toLowerCase() === "&quot;" ? '"' : "'"))
-    .replace(/&(?:tab|newline);/giu, "\t");
-}
-
-/** An attribute value as the URL parser sees it: entities decoded, tabs and newlines dropped, lowercased. */
-function urlValue(value: string): string {
-  const decoded = decodeEntities(value).replace(/[\t\n\r]/gu, "");
-  // The URL parser drops leading C0 controls and spaces.
-  let start = 0;
-  while (start < decoded.length && decoded.charCodeAt(start) <= 0x20) start += 1;
-  return decoded.slice(start).toLowerCase();
-}
-
-function firstJsSink(code: string): string | undefined {
-  for (const pattern of JS_UNSAFE_SINKS) {
-    const match = pattern.exec(code);
-    if (match) return match[0];
-  }
-  return undefined;
-}
-
-const TAG_NAME = /[a-z][^\s/>]*/iuy;
-const ATTRIBUTE_NAME = /[^\s/>][^\s/>=]*/uy;
-const SPACE = /[\s/]*/uy;
-const WHITESPACE = /\s*/uy;
-const UNQUOTED_VALUE = /[^\s>]*/uy;
-
-function sticky(pattern: RegExp, text: string, at: number): string | undefined {
-  pattern.lastIndex = at;
-  return pattern.exec(text)?.[0];
-}
-
-/**
- * Scans `html`, or the start of a streaming draft, for markup that would load
- * or run something. Comments and end tags are read as markup, so a tag in a
- * comment still counts.
- */
-function scanHtml(html: string): HtmlFindings {
-  const findings: HtmlFindings = {};
-  const noteUrl = (text: string) => {
-    findings.url ??= text;
-  };
-  let index = 0;
-  while (index < html.length && (findings.embed === undefined || findings.url === undefined)) {
-    const open = html.indexOf("<", index);
-    if (open === -1) break;
-    const name = sticky(TAG_NAME, html, open + 1);
-    if (name === undefined) {
-      index = open + 1;
-      continue;
-    }
-    const tag = name.toLowerCase();
-    let at = open + 1 + name.length;
-    const attributes: string[] = [];
-    for (;;) {
-      at += sticky(SPACE, html, at)?.length ?? 0;
-      if (at >= html.length) break;
-      if (html[at] === ">") {
-        at += 1;
-        break;
-      }
-      const attributeName = sticky(ATTRIBUTE_NAME, html, at)!;
-      const attributeStart = at;
-      at += attributeName.length;
-      const afterName = at;
-      at += sticky(WHITESPACE, html, at)?.length ?? 0;
-      let value = "";
-      if (html[at] === "=") {
-        at += 1;
-        at += sticky(WHITESPACE, html, at)?.length ?? 0;
-        const quote = html[at];
-        if (quote === '"' || quote === "'") {
-          const close = html.indexOf(quote, at + 1);
-          value = html.slice(at + 1, close === -1 ? html.length : close);
-          at = close === -1 ? html.length : close + 1;
-        } else {
-          value = sticky(UNQUOTED_VALUE, html, at) ?? "";
-          at += value.length;
-        }
-      } else {
-        at = afterName;
-      }
-      const attribute = attributeName.toLowerCase();
-      attributes.push(attribute);
-      const raw = html.slice(attributeStart, at);
-      if (URL_ATTRIBUTES.has(attribute)) {
-        const url = urlValue(value);
-        if (UNSAFE_SCHEME.test(url) || (attribute === "src" && /^https?:\/\//u.test(url))) noteUrl(raw);
-      } else if (attribute === "style") {
-        if (CSS_UNSAFE_URL.test(value)) noteUrl(raw);
-      } else if (attribute.startsWith("on")) {
-        const sink = firstJsSink(decodeEntities(value));
-        if (sink !== undefined) noteUrl(raw);
-      }
-    }
-    const rawTag = html.slice(open, at);
-    if (
-      EMBEDDING_TAGS.has(tag) ||
-      (tag === "script" && attributes.includes("src")) ||
-      (tag === "meta" && attributes.includes("http-equiv"))
-    ) {
-      findings.embed ??= rawTag;
-    }
-    index = at;
-    if (RAW_TEXT_TAGS.has(tag)) {
-      const close = new RegExp(`</${tag}(?=[\\s/>]|$)`, "iug");
-      close.lastIndex = at;
-      const end = close.exec(html)?.index ?? html.length;
-      const text = html.slice(at, end);
-      if (tag === "script") {
-        const sink = firstJsSink(text);
-        if (sink !== undefined) noteUrl(sink);
-      } else if (CSS_UNSAFE_URL.test(text)) {
-        noteUrl(CSS_UNSAFE_URL.exec(text)![0]);
-      }
-      index = end;
-    }
-  }
-  return findings;
-}
 
 function quoteMatch(text: string): string {
   const flat = text.replace(/\s+/gu, " ").trim();
@@ -413,15 +259,41 @@ function themeVariableLines(vars: Readonly<Record<string, string>> | undefined):
     .join("\n");
 }
 
+export interface GenerativeUiDraftCheck {
+  /** Adds the next streamed chunk; false once the draft so far breaks the final artifact's rules. */
+  append(chunk: string): boolean;
+}
+
 /**
- * The final artifact's content rules, applied to a streaming prefix without
- * throwing. A partial tag is fine; anything the final check would refuse
- * stops the draft early (the draft CSP already blocks scripts and network).
+ * The final artifact's content rules, applied to a streaming draft chunk by
+ * chunk without throwing. Each chunk is read once, so a whole draft costs
+ * what one final check does. A partial tag is fine as far as it goes;
+ * anything the final check would refuse stops the draft early (the draft CSP
+ * already blocks scripts and network).
  */
+export function createGenerativeUiDraftCheck(): GenerativeUiDraftCheck {
+  const scanner = new HtmlScanner();
+  let bytes = 0;
+  let refused = false;
+  return {
+    append(chunk) {
+      if (refused) return false;
+      bytes += Buffer.byteLength(chunk, "utf8");
+      if (chunk.includes("\0") || bytes > MAX_HTML_ARTIFACT_BYTES) {
+        refused = true;
+        return false;
+      }
+      scanner.write(chunk);
+      const findings = scanner.findings();
+      refused = findings.embed !== undefined || findings.url !== undefined || findings.limit !== undefined;
+      return !refused;
+    },
+  };
+}
+
+/** Whether a streaming prefix still meets the final artifact's content rules. */
 export function isGenerativeUiDraftAcceptable(html: string): boolean {
-  if (html.includes("\0") || Buffer.byteLength(html, "utf8") > MAX_HTML_ARTIFACT_BYTES) return false;
-  const findings = scanHtml(html);
-  return findings.embed === undefined && findings.url === undefined;
+  return createGenerativeUiDraftCheck().append(html);
 }
 
 export function validateGenerativeUiHtml(html: string): Buffer {
@@ -440,7 +312,10 @@ export function validateGenerativeUiHtml(html: string): Buffer {
   if (bytes.toString("utf8") !== html) {
     throw new Error("Artifact HTML is not valid UTF-8.");
   }
-  const { embed, url } = scanHtml(html);
+  const { embed, url, limit } = scanHtmlString(html);
+  if (limit !== undefined) {
+    throw new Error(`Artifact HTML is too complex to check: ${limit}. Simplify the markup.`);
+  }
   if (embed !== undefined) {
     throw new Error(
       `Artifact HTML cannot include iframes, embedded documents, <base>, <link> or external scripts (found ${quoteMatch(embed)}). Use inline JavaScript and CSS; Chart.js, Plotly, and KaTeX are provided by Aiden.`,

@@ -1,0 +1,628 @@
+// Reads artifact HTML the way a browser does, to find markup that would load
+// or run something. parse5 (already a production dependency) tokenizes and
+// builds the tree, so comments, RCDATA (<textarea>, <title>), raw text
+// (<style>, <xmp>, <noscript>...), script data, and foreign <svg>/<math>
+// content (where <style> and <script> hold markup) are exactly what the
+// browser sees. Elements are checked as the parser creates them, so a tag
+// inside a <template>, or one the tree builder moves, still counts.
+//
+// One scanner reads a whole visual, or a streaming draft chunk by chunk:
+// each chunk is parsed once, so a draft costs no more than the finished
+// visual. A tag still being written at the end of a chunk is checked as far
+// as it goes, which is also how the finished check treats a tag left open at
+// the end (the wrapper's closing tags would otherwise finish it).
+//
+// The checks refuse an embedding tag, a <script src>, a refresh <meta>, a
+// javascript: or data:text/html URL in a URL attribute, CSS url() or an SVG
+// <set>/<animate> of href, a remote src, and JavaScript (in <script> or an
+// on* attribute) that sends such a URL to a navigation or URL sink or writes
+// such markup through an HTML sink. Labels ("JavaScript: 41%"), comparisons
+// in scripts ("i<base && i>0") and plain strings pass; the sandbox's CSP is
+// what actually blocks loads.
+
+import { Parser, Token, defaultTreeAdapter, type DefaultTreeAdapterMap, type DefaultTreeAdapterTypes, type TreeAdapter } from "parse5";
+
+type Element = DefaultTreeAdapterTypes.Element;
+
+export interface HtmlFindings {
+  /** The first embedding tag, external script or refresh meta. */
+  embed?: string;
+  /** The first unsafe URL, remote src, or unsafe script sink. */
+  url?: string;
+  /** Why the markup is too large in structure to read in bounded time. */
+  limit?: string;
+}
+
+/**
+ * Structure limits that keep a check linear in the visual's size. The parser
+ * walks the open elements and an element's attributes per tag, so nesting and
+ * attribute counts are capped; implied and reconstructed elements are capped
+ * in total. No real visual comes near them.
+ */
+export const MAX_HTML_NESTING_DEPTH = 512;
+export const MAX_HTML_ELEMENT_ATTRIBUTES = 512;
+export const MAX_HTML_ELEMENTS = 262_144;
+
+class StructureLimit extends Error {}
+
+const EMBEDDING_TAGS: ReadonlySet<string> = new Set(["iframe", "object", "embed", "applet", "frame", "frameset", "base", "link"]);
+const URL_ATTRIBUTES: ReadonlySet<string> = new Set(["href", "src", "action", "formaction", "xlink:href", "data"]);
+const SCRIPT_SOURCE_ATTRIBUTES: ReadonlySet<string> = new Set(["src", "href", "xlink:href"]);
+const SMIL_ELEMENTS: ReadonlySet<string> = new Set(["set", "animate"]);
+const SMIL_VALUE_ATTRIBUTES: ReadonlySet<string> = new Set(["to", "from", "by", "values"]);
+const UNSAFE_SCHEME = /^(?:javascript:|data:\s*text\/html)/u;
+/** HTML handed to a sink is parsed again, at most this many strings deep. */
+const MAX_NESTED_HTML_DEPTH = 3;
+
+function attributeName(attribute: Token.Attribute): string {
+  return (attribute.prefix ? `${attribute.prefix}:${attribute.name}` : attribute.name).toLowerCase();
+}
+
+/**
+ * A URL as the URL parser sees it: leading controls and spaces dropped, tabs
+ * and newlines dropped, lowercased. Only the first characters after the
+ * leading run are read, which is all a scheme needs.
+ */
+function urlStart(value: string, length = 64): string {
+  let at = 0;
+  while (at < value.length && value.charCodeAt(at) <= 0x20) at += 1;
+  let start = "";
+  for (; at < value.length && start.length < length; at += 1) {
+    const char = value[at]!;
+    if (char !== "\t" && char !== "\n" && char !== "\r") start += char;
+  }
+  return start.toLowerCase();
+}
+
+function isUnsafeUrl(value: string): boolean {
+  return UNSAFE_SCHEME.test(urlStart(value));
+}
+
+function isRemoteUrl(value: string): boolean {
+  return /^https?:\/\//u.test(urlStart(value));
+}
+
+function attributeText(attribute: Token.Attribute): string {
+  return `${attributeName(attribute)}="${attribute.value.replace(/"/gu, "&quot;")}"`;
+}
+
+function tagText(tagName: string, attributes: readonly Token.Attribute[]): string {
+  return `<${tagName}${attributes.map((attribute) => ` ${attributeText(attribute)}`).join("")}>`;
+}
+
+/** The first `url(` in CSS whose target is javascript: or data:text/html. */
+export function findCssUnsafeUrl(css: string): string | undefined {
+  const call = /(?<![\w-])url\(/giu;
+  for (let match = call.exec(css); match; match = call.exec(css)) {
+    let at = match.index + match[0].length;
+    while (at < css.length && /\s/u.test(css[at]!)) at += 1;
+    if (css[at] === '"' || css[at] === "'") at += 1;
+    const target = css.slice(at, at + 48).replace(/\s+/gu, "").toLowerCase();
+    if (/^(?:javascript:|data:text\/html)/u.test(target)) return css.slice(match.index, Math.min(css.length, at + 24));
+  }
+  return undefined;
+}
+
+// --- JavaScript ---------------------------------------------------------
+
+interface JsToken {
+  kind: "name" | "punct" | "string" | "template" | "other";
+  text: string;
+  start: number;
+  end: number;
+  /** A string's cooked value, or a template's text up to its first `${`. */
+  value?: string;
+  /** A template's text parts, joined. */
+  parts?: string;
+  /** A template with a `${...}` substitution. */
+  substituted?: boolean;
+}
+
+const PUNCTUATORS = [
+  ">>>=", "...", "===", "!==", "**=", "<<=", ">>=", ">>>", "&&=", "||=", "??=",
+  "=>", "==", "!=", "<=", ">=", "&&", "||", "??", "?.", "++", "--", "+=", "-=", "*=", "%=", "&=", "|=", "^=", "**", "<<", ">>",
+];
+const REGEX_AFTER_KEYWORDS: ReadonlySet<string> = new Set([
+  "return", "typeof", "case", "do", "else", "in", "instanceof", "new", "delete", "void", "throw", "yield", "await", "of",
+]);
+const SIMPLE_ESCAPES: Readonly<Record<string, string>> = { n: "\n", t: "\t", r: "\r", b: "\b", f: "\f", v: "\v", 0: "\0" };
+const IDENTIFIER_START = /[\p{ID_Start}$_]/u;
+const IDENTIFIER_PART = /[\p{ID_Continue}$_‌‍]/u;
+
+/** Reads one escape at `at` (just past the backslash); returns the cooked text and the index after it. */
+function readEscape(code: string, at: number): [string, number] {
+  const char = code[at];
+  if (char === undefined) return ["", at];
+  if (char === "\r") return ["", code[at + 1] === "\n" ? at + 2 : at + 1];
+  if (char === "\n" || char === " " || char === " ") return ["", at + 1];
+  if (char === "x") {
+    const hex = /^[0-9a-f]{2}/iu.exec(code.slice(at + 1, at + 3));
+    if (hex) return [String.fromCharCode(Number.parseInt(hex[0], 16)), at + 3];
+  }
+  if (char === "u") {
+    const braced = /^\{([0-9a-f]{1,6})\}/iu.exec(code.slice(at + 1, at + 9));
+    if (braced) {
+      const point = Number.parseInt(braced[1]!, 16);
+      return [point <= 0x10ffff ? String.fromCodePoint(point) : "", at + 1 + braced[0].length];
+    }
+    const hex = /^[0-9a-f]{4}/iu.exec(code.slice(at + 1, at + 5));
+    if (hex) return [String.fromCharCode(Number.parseInt(hex[0], 16)), at + 5];
+  }
+  return [SIMPLE_ESCAPES[char] ?? char, at + 1];
+}
+
+/**
+ * Splits JavaScript into tokens, linearly. Strings and regular expressions
+ * end at a line break, so a misread `/` costs at most the rest of its line.
+ */
+function lexJs(code: string): JsToken[] {
+  const tokens: JsToken[] = [];
+  /** For each open `{` or `${`: the template token a `}` resumes, or null. */
+  const braces: (JsToken | null)[] = [];
+  let lastSignificant: JsToken | undefined;
+  const push = (token: JsToken) => {
+    tokens.push(token);
+    lastSignificant = token;
+  };
+  /** Reads template text from `at` (after "`" or "}") into `token`; returns the index after it. */
+  const readTemplate = (token: JsToken, at: number): number => {
+    let text = "";
+    while (at < code.length) {
+      const char = code[at]!;
+      if (char === "`") {
+        token.parts = (token.parts ?? "") + text;
+        if (!token.substituted) token.value = (token.value ?? "") + text;
+        token.end = at + 1;
+        return at + 1;
+      }
+      if (char === "$" && code[at + 1] === "{") {
+        token.parts = (token.parts ?? "") + text;
+        if (!token.substituted) token.value = (token.value ?? "") + text;
+        token.substituted = true;
+        token.end = at + 2;
+        braces.push(token);
+        return at + 2;
+      }
+      if (char === "\\") {
+        const [cooked, next] = readEscape(code, at + 1);
+        text += cooked;
+        at = next;
+        continue;
+      }
+      text += char;
+      at += 1;
+    }
+    token.parts = (token.parts ?? "") + text;
+    if (!token.substituted) token.value = (token.value ?? "") + text;
+    token.end = code.length;
+    return code.length;
+  };
+
+  let at = 0;
+  while (at < code.length) {
+    const char = code[at]!;
+    if (/\s/u.test(char)) {
+      at += 1;
+      continue;
+    }
+    const start = at;
+    if (char === "/" && code[at + 1] === "/") {
+      while (at < code.length && code[at] !== "\n" && code[at] !== "\r") at += 1;
+      continue;
+    }
+    if (char === "/" && code[at + 1] === "*") {
+      const close = code.indexOf("*/", at + 2);
+      at = close === -1 ? code.length : close + 2;
+      continue;
+    }
+    if (char === "/") {
+      const previous = lastSignificant;
+      const regexAllowed =
+        previous === undefined ||
+        (previous.kind === "punct" && previous.text !== ")" && previous.text !== "]") ||
+        (previous.kind === "name" && REGEX_AFTER_KEYWORDS.has(previous.text));
+      if (regexAllowed) {
+        at += 1;
+        let inClass = false;
+        while (at < code.length && code[at] !== "\n" && code[at] !== "\r") {
+          const next = code[at]!;
+          if (next === "\\") at += 2;
+          else {
+            at += 1;
+            if (next === "[") inClass = true;
+            else if (next === "]") inClass = false;
+            else if (next === "/" && !inClass) break;
+          }
+        }
+        while (at < code.length && IDENTIFIER_PART.test(code[at]!)) at += 1;
+        push({ kind: "other", text: "regex", start, end: at });
+        continue;
+      }
+      const text = code[at + 1] === "=" ? "/=" : "/";
+      at += text.length;
+      push({ kind: "punct", text, start, end: at });
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      at += 1;
+      let value = "";
+      while (at < code.length && code[at] !== char && code[at] !== "\n" && code[at] !== "\r") {
+        if (code[at] === "\\") {
+          const [cooked, next] = readEscape(code, at + 1);
+          value += cooked;
+          at = next;
+        } else {
+          value += code[at];
+          at += 1;
+        }
+      }
+      if (code[at] === char) at += 1;
+      push({ kind: "string", text: code.slice(start, at), start, end: at, value });
+      continue;
+    }
+    if (char === "`") {
+      const token: JsToken = { kind: "template", text: "`", start, end: start + 1, value: "", parts: "" };
+      push(token);
+      at = readTemplate(token, at + 1);
+      if (token.substituted && braces[braces.length - 1] === token) push({ kind: "punct", text: "${", start: token.end - 2, end: token.end });
+      continue;
+    }
+    if (char === "}" && braces.length > 0 && braces[braces.length - 1] !== null) {
+      const template = braces.pop()!;
+      push({ kind: "punct", text: "}", start, end: start + 1 });
+      const depth = braces.length;
+      at = readTemplate(template, at + 1);
+      if (braces.length > depth) push({ kind: "punct", text: "${", start: template.end - 2, end: template.end });
+      continue;
+    }
+    if (IDENTIFIER_START.test(char) || char === "\\") {
+      at += 1;
+      while (at < code.length && (IDENTIFIER_PART.test(code[at]!) || code[at] === "\\")) at += 1;
+      push({ kind: "name", text: code.slice(start, at), start, end: at });
+      continue;
+    }
+    if (/[0-9]/u.test(char) || (char === "." && /[0-9]/u.test(code[at + 1] ?? ""))) {
+      at += 1;
+      while (at < code.length && /[0-9a-z_.]/iu.test(code[at]!)) at += 1;
+      push({ kind: "other", text: code.slice(start, at), start, end: at });
+      continue;
+    }
+    const punctuator = PUNCTUATORS.find((candidate) => code.startsWith(candidate, at)) ?? char;
+    at += punctuator.length;
+    if (punctuator === "{") braces.push(null);
+    else if (punctuator === "}") braces.pop();
+    push({ kind: "punct", text: punctuator, start, end: at });
+  }
+  return tokens;
+}
+
+const URL_PROPERTIES: ReadonlySet<string> = new Set(["href", "src", "action", "formAction"]);
+const HTML_PROPERTIES: ReadonlySet<string> = new Set(["innerHTML", "outerHTML", "srcdoc"]);
+const HTML_CALLS: Readonly<Record<string, number | "any">> = {
+  insertAdjacentHTML: 1,
+  write: "any",
+  writeln: "any",
+  setHTMLUnsafe: 0,
+  createContextualFragment: 0,
+  parseHTMLUnsafe: 0,
+};
+
+interface CallFrame {
+  call: boolean;
+  callee?: string;
+  receiver?: string;
+  start: number;
+  argument: number;
+  hasArgument: boolean;
+  /** The plain string value of each argument that is a single literal. */
+  literals: (string | undefined)[];
+  /** A `replace(...)` call's unsafe first argument, flagged only if it is the only argument. */
+  deferred?: string;
+}
+
+const isLiteral = (token: JsToken | undefined): token is JsToken => token?.kind === "string" || token?.kind === "template";
+const isDot = (token: JsToken | undefined) => token?.kind === "punct" && (token.text === "." || token.text === "?.");
+const isPunct = (token: JsToken | undefined, text: string) => token?.kind === "punct" && token.text === text;
+
+/**
+ * The first place `code` sends a javascript: or data:text/html URL to a
+ * navigation or URL sink, or unsafe markup to an HTML sink. Literals joined
+ * with `+` are read as one value; a template's URL ends at its first `${`.
+ */
+export function findJsSink(code: string, depth = 0): HtmlFindings {
+  const tokens = lexJs(code);
+  const stack: CallFrame[] = [];
+  let found: HtmlFindings = {};
+  const note = (findings: HtmlFindings) => {
+    found = { embed: found.embed ?? findings.embed, url: found.url ?? findings.url ?? findings.limit };
+  };
+  for (let index = 0; index < tokens.length && (found.embed === undefined || found.url === undefined); index += 1) {
+    const token = tokens[index]!;
+    if (token.kind === "punct") {
+      if (token.text === "(") {
+        const callee = tokens[index - 1];
+        stack.push({
+          call: callee?.kind === "name",
+          callee: callee?.kind === "name" ? callee.text : undefined,
+          receiver: isDot(tokens[index - 2]) && tokens[index - 3]?.kind === "name" ? tokens[index - 3]!.text : undefined,
+          start: callee?.start ?? token.start,
+          argument: 0,
+          hasArgument: false,
+          literals: [],
+        });
+      } else if (token.text === "[" || token.text === "{" || token.text === "${") {
+        stack.push({ call: false, start: token.start, argument: 0, hasArgument: false, literals: [] });
+      } else if (token.text === ",") {
+        const frame = stack[stack.length - 1];
+        if (frame) frame.argument += 1;
+      } else if (token.text === ")" || token.text === "]" || token.text === "}") {
+        const frame = stack.pop();
+        if (frame?.deferred !== undefined && frame.argument === 0) note({ url: code.slice(frame.start, token.end) });
+      }
+      const frame = stack[stack.length - 1];
+      if (frame && token.text !== "(" && token.text !== ",") frame.hasArgument = true;
+      continue;
+    }
+    const frame = stack[stack.length - 1];
+    if (frame && !isPunct(token, ",")) frame.hasArgument = true;
+    if (!isLiteral(token) || isPunct(tokens[index - 1], "+")) continue;
+
+    // A chain of literals joined by `+`, read as one value.
+    let chainEnd = index;
+    let url = token.value ?? "";
+    let urlOpen = !token.substituted;
+    let markup = token.kind === "template" ? (token.parts ?? "") : (token.value ?? "");
+    while (isPunct(tokens[chainEnd + 1], "+") && isLiteral(tokens[chainEnd + 2])) {
+      const next = tokens[chainEnd + 2]!;
+      if (urlOpen && url.length < 64) url += next.value ?? "";
+      urlOpen &&= !next.substituted;
+      markup += next.kind === "template" ? (next.parts ?? "") : (next.value ?? "");
+      chainEnd += 2;
+    }
+    const end = tokens[chainEnd]!.end;
+    const previous = tokens[index - 1];
+    let sink: "url" | "html" | undefined;
+    let sinkStart = token.start;
+
+    if (isPunct(previous, "=") || isPunct(previous, "+=")) {
+      const target = tokens[index - 2];
+      let property: string | undefined;
+      let viaDot = false;
+      if (target?.kind === "name") {
+        property = target.text;
+        viaDot = isDot(tokens[index - 3]);
+        sinkStart = (viaDot ? tokens[index - 4] : target)?.start ?? target.start;
+      } else if (isPunct(target, "]") && isLiteral(tokens[index - 3]) && isPunct(tokens[index - 4], "[")) {
+        property = tokens[index - 3]!.value;
+        viaDot = true;
+        sinkStart = tokens[index - 5]?.start ?? tokens[index - 4]!.start;
+      }
+      if (property !== undefined) {
+        if (property === "location" || (viaDot && URL_PROPERTIES.has(property))) sink = "url";
+        else if (viaDot && HTML_PROPERTIES.has(property)) sink = "html";
+      }
+    } else if (isPunct(previous, ":")) {
+      const key = tokens[index - 2];
+      const keyName = key?.kind === "name" ? key.text : isLiteral(key) ? key.value : undefined;
+      const before = tokens[index - 3];
+      if (keyName !== undefined && URL_PROPERTIES.has(keyName) && (isPunct(before, "{") || isPunct(before, ","))) {
+        sink = "url";
+        sinkStart = key!.start;
+      }
+    } else if (frame?.call && (isPunct(previous, "(") || isPunct(previous, ","))) {
+      const argument = frame.argument;
+      if (chainEnd === index && token.kind === "string") frame.literals[argument] = token.value;
+      const callee = frame.callee ?? "";
+      sinkStart = frame.start;
+      if ((callee === "open" || callee === "assign") && argument === 0) sink = "url";
+      else if (callee === "replace" && argument === 0) {
+        if (frame.receiver === "location") sink = "url";
+        else if (isUnsafeUrl(url)) frame.deferred = url;
+      } else if (callee === "setAttribute" && argument === 1) {
+        const name = frame.literals[0]?.toLowerCase();
+        if (name !== undefined && URL_ATTRIBUTES.has(name)) sink = "url";
+        else if (name === "srcdoc") sink = "html";
+      } else if (callee === "setAttributeNS" && argument === 2) {
+        const name = frame.literals[1]?.toLowerCase();
+        if (name !== undefined && URL_ATTRIBUTES.has(name)) sink = "url";
+      } else if (callee in HTML_CALLS) {
+        const at = HTML_CALLS[callee];
+        if (at === "any" || at === argument) sink = "html";
+      }
+    }
+
+    if (sink === "url" && isUnsafeUrl(url)) note({ url: code.slice(sinkStart, end) });
+    else if (sink === "html" && depth < MAX_NESTED_HTML_DEPTH && markup.includes("<")) {
+      note(scanHtmlString(markup, depth + 1));
+    }
+    index = chainEnd;
+  }
+  return found;
+}
+
+// --- HTML ---------------------------------------------------------------
+
+interface TokenizerInternals {
+  currentToken: Token.Token | null;
+  _leaveAttrName(): void;
+}
+
+/**
+ * A browser-faithful HTML scanner that can be fed a document in chunks.
+ * `findings()` reports what the HTML so far would do, counting a tag that is
+ * still being written.
+ */
+export class HtmlScanner {
+  private readonly parser: Parser<DefaultTreeAdapterMap>;
+  private readonly committed: HtmlFindings = {};
+  /** <script> and <style> elements whose text has not been checked yet. */
+  private readonly rawText = new Set<Element>();
+  private finished = false;
+  private elements = 0;
+
+  constructor(private readonly depth = 0) {
+    const adapter: TreeAdapter<DefaultTreeAdapterMap> = {
+      ...defaultTreeAdapter,
+      createElement: (tagName, namespaceURI, attrs) => {
+        this.elements += 1;
+        if (this.elements > MAX_HTML_ELEMENTS) {
+          throw new StructureLimit(`it builds more than ${MAX_HTML_ELEMENTS.toLocaleString("en-US")} elements`);
+        }
+        if (this.parser.openElements.stackTop + 1 >= MAX_HTML_NESTING_DEPTH) {
+          throw new StructureLimit(`elements nest more than ${MAX_HTML_NESTING_DEPTH} deep`);
+        }
+        const element = defaultTreeAdapter.createElement(tagName, namespaceURI, attrs);
+        this.checkTag(element.tagName, element.attrs, this.committed, true);
+        const name = element.tagName.toLowerCase();
+        if (name === "script" || name === "style") this.rawText.add(element);
+        return element;
+      },
+      adoptAttributes: (recipient, attrs) => {
+        if (recipient.attrs.length + attrs.length > MAX_HTML_ELEMENT_ATTRIBUTES) throw this.attributeLimit();
+        defaultTreeAdapter.adoptAttributes(recipient, attrs);
+        this.checkTag(recipient.tagName, recipient.attrs, this.committed, true);
+      },
+      onItemPop: (item) => {
+        if (this.rawText.delete(item)) this.checkRawText(item);
+      },
+    };
+    this.parser = new Parser({ treeAdapter: adapter, scriptingEnabled: true });
+    // The tokenizer checks each new attribute against the tag's earlier ones,
+    // so a tag's attribute count is capped as it is read.
+    const tokenizer = this.parser.tokenizer as unknown as TokenizerInternals;
+    const leaveAttributeName = tokenizer._leaveAttrName;
+    if (typeof leaveAttributeName !== "function") throw new Error("parse5 no longer exposes the attribute hook the HTML check needs.");
+    tokenizer._leaveAttrName = () => {
+      const token = tokenizer.currentToken;
+      if (token?.type === Token.TokenType.START_TAG && token.attrs.length >= MAX_HTML_ELEMENT_ATTRIBUTES) throw this.attributeLimit();
+      leaveAttributeName.call(tokenizer);
+    };
+  }
+
+  /** Parses the next chunk of the document. */
+  write(chunk: string): void {
+    if (this.finished || chunk.length === 0) return;
+    this.run(() => this.parser.tokenizer.write(chunk, false));
+  }
+
+  /** What the document written so far would load or run. */
+  findings(): HtmlFindings {
+    if (this.complete() || this.committed.limit !== undefined) return { ...this.committed };
+    const findings = { ...this.committed };
+    const pending = (this.parser.tokenizer as unknown as TokenizerInternals).currentToken;
+    if (pending?.type === Token.TokenType.START_TAG) {
+      this.checkTag(pending.tagName, pending.attrs, findings, false);
+    }
+    return findings;
+  }
+
+  /**
+   * Ends the document and reports everything it would load or run. A start
+   * tag left open at the end counts as written so far: the host's closing
+   * markup after the visual would otherwise finish it.
+   */
+  finish(): HtmlFindings {
+    if (!this.finished) {
+      const pending = this.findings();
+      this.run(() => this.parser.tokenizer.write("", true));
+      this.finished = true;
+      if (this.committed.limit === undefined) {
+        for (const element of this.rawText) this.checkRawText(element);
+      }
+      this.rawText.clear();
+      this.committed.embed ??= pending.embed;
+      this.committed.url ??= pending.url;
+    }
+    return { ...this.committed };
+  }
+
+  /** Runs the parser; a structure limit ends the scan, leaving the parser unused. */
+  private run(parse: () => void): void {
+    try {
+      parse();
+    } catch (error) {
+      if (!(error instanceof StructureLimit)) throw error;
+      this.committed.limit ??= error.message;
+      this.finished = true;
+    }
+  }
+
+  private attributeLimit(): StructureLimit {
+    return new StructureLimit(`an element has more than ${MAX_HTML_ELEMENT_ATTRIBUTES} attributes`);
+  }
+
+  private complete(): boolean {
+    return this.committed.embed !== undefined && this.committed.url !== undefined;
+  }
+
+  private checkTag(tagName: string, attributes: readonly Token.Attribute[], into: HtmlFindings, settled: boolean): void {
+    const tag = tagName.toLowerCase();
+    const names = attributes.map(attributeName);
+    if (
+      into.embed === undefined &&
+      (EMBEDDING_TAGS.has(tag) ||
+        (tag === "script" && names.some((name) => SCRIPT_SOURCE_ATTRIBUTES.has(name))) ||
+        (tag === "meta" && names.includes("http-equiv")))
+    ) {
+      into.embed = tagText(tagName, attributes);
+    }
+    if (into.url !== undefined) return;
+    const smilTarget =
+      SMIL_ELEMENTS.has(tag) &&
+      attributes.some((attribute, index) => {
+        const target = attribute.value.trim().toLowerCase();
+        return names[index] === "attributename" && (target === "href" || target === "xlink:href");
+      });
+    for (const [index, attribute] of attributes.entries()) {
+      const name = names[index]!;
+      if (URL_ATTRIBUTES.has(name)) {
+        if (isUnsafeUrl(attribute.value) || (name === "src" && isRemoteUrl(attribute.value))) {
+          into.url = attributeText(attribute);
+          return;
+        }
+      } else if (smilTarget && SMIL_VALUE_ATTRIBUTES.has(name)) {
+        if (attribute.value.split(";").some(isUnsafeUrl)) {
+          into.url = attributeText(attribute);
+          return;
+        }
+      } else if (!settled) {
+        // A style or handler still being written is read once it is finished.
+        continue;
+      } else if (name === "style") {
+        if (findCssUnsafeUrl(attribute.value) !== undefined) {
+          into.url = attributeText(attribute);
+          return;
+        }
+      } else if (name.startsWith("on")) {
+        const sink = findJsSink(attribute.value, this.depth);
+        if (sink.url !== undefined || sink.embed !== undefined) {
+          into.url = attributeText(attribute);
+          return;
+        }
+      }
+    }
+  }
+
+  private checkRawText(element: Element): void {
+    if (this.complete()) return;
+    let text = "";
+    for (const child of element.childNodes) {
+      if (child.nodeName === "#text") text += (child as DefaultTreeAdapterTypes.TextNode).value;
+    }
+    if (text.length === 0) return;
+    if (element.tagName.toLowerCase() === "script") {
+      const sink = findJsSink(text, this.depth);
+      this.committed.embed ??= sink.embed;
+      this.committed.url ??= sink.url;
+    } else {
+      this.committed.url ??= findCssUnsafeUrl(text);
+    }
+  }
+}
+
+/** Scans a whole document or a string handed to an HTML sink. */
+export function scanHtmlString(html: string, depth = 0): HtmlFindings {
+  const scanner = new HtmlScanner(depth);
+  scanner.write(html);
+  return scanner.finish();
+}

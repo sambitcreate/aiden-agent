@@ -165,6 +165,30 @@ test("an inadmissible prefix stops the draft without opening more streams", () =
   assert.equal(events.filter((e) => (e as { operation: string }).operation === "draft_end").length, 1);
 });
 
+test("a draft reads its chunks as one document, so a tag split across chunks or held in svg <style> still stops it", () => {
+  const { session, streams, flush } = fakeSession();
+  const send = (html: string) => {
+    session.delta("raw1", "render_artifact", { html });
+    flush();
+  };
+  send("<svg><style>.a{fill:red}");
+  send("<svg><style>.a{fill:red}<emb");
+  send('<svg><style>.a{fill:red}<embed src="https://evil.test/x">');
+  send('<svg><style>.a{fill:red}<embed src="https://evil.test/x"></style></svg>');
+  assert.deepEqual(streams[0]!.chunks, ["<svg><style>.a{fill:red}", "<emb"]);
+  assert.equal(streams[0]!.closed, true);
+
+  // A restarted draft is read from its own start, not inside the old one's comment.
+  const second = fakeSession();
+  second.session.delta("raw1", "render_artifact", { html: "<p>a</p><!-- note" });
+  second.flush();
+  second.session.delta("raw1", "render_artifact", { html: "<iframe src=x>" });
+  second.flush();
+  assert.equal(second.streams.length, 2);
+  assert.deepEqual(second.streams[1]!.chunks, []);
+  assert.equal(second.streams[1]!.closed, true);
+});
+
 test("draft admission stops at remote loads and forbidden elements but tolerates partial tags", () => {
   assert.equal(isDraftHtmlAcceptable("<div class=\"aiden-card\"><p>Revenue"), true);
   assert.equal(isDraftHtmlAcceptable("<div><scr"), true);

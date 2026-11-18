@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { parse, type DefaultTreeAdapterTypes } from "parse5";
 import {
   GENERATIVE_UI_GUEST_CSP,
   GENERATIVE_UI_IFRAME_SANDBOX,
@@ -87,6 +88,23 @@ const REFUSED_MARKUP: Record<string, string> = {
   "an onclick that navigates to javascript:": "<button onclick=\"location='javascript:alert(1)'\">Go</button>",
   "a stylesheet url() of javascript:": "<style>.x { background: url('javascript:alert(1)') }</style>",
   "an unquoted remote img src": "<img src=https://evil.test/x.png>",
+  "an <iframe> after a comment that opens a quoted value": '<!-- <p title=" --><iframe src="https://evil.test/"></iframe><!-- " -->',
+  "a javascript: link after a comment that opens a script": '<!--<script>--><a href="javascript:alert(1)">x</a><!--</script>-->',
+  "a <base> after a <textarea> that holds a script tag": '<textarea><script></textarea><base href="https://evil.test/"><textarea></script></textarea>',
+  "a refresh <meta> after a <title> that holds a style tag": '<title><style></title><meta http-equiv="refresh" content="0;url=https://evil.test/"><title></style></title>',
+  "an <embed> after a bogus comment that opens a quote": '<? <p title=" ><embed src="https://evil.test/x"><? " >',
+  "an <embed> inside an svg <style>": '<svg><style><embed src="https://evil.test/x"></style></svg>',
+  "a refresh <meta> inside an svg <style>": '<svg><style><meta http-equiv="refresh" content="0;url=https://evil.test/"></style></svg>',
+  "an <embed> inside an svg <script>": '<svg><script><embed src="https://evil.test/x"></script></svg>',
+  "an svg <script> that loads by href": '<svg><script href="https://evil.test/a.js"></script></svg>',
+  "an svg <set> of href to javascript:": '<svg><a><set attributeName="href" to="javascript:alert(1)"/><text>x</text></a></svg>',
+  "an svg <animate> through javascript: values": '<svg><a><animate attributeName="xlink:href" values="#a; javascript:alert(1)"/><text>x</text></a></svg>',
+  "a location built from joined strings": '<script>location.href = "java" + "script:alert(1)"</script>',
+  "a bracketed href set to a javascript: URL": '<script>a["href"] = "javascript:alert(1)"</script>',
+  "a javascript: URL in escaped string characters": '<script>link.href = "\\x6aavascript:alert(1)"</script>',
+  "innerHTML that writes an <iframe>": '<script>document.body.innerHTML = "<iframe src=https://evil.test/></iframe>"</script>',
+  "insertAdjacentHTML that writes a javascript: link": "<script>el.insertAdjacentHTML('beforeend', `<a href=\"javascript:alert(1)\">x</a>`)</script>",
+  "document.write of a <base>": '<script>document.write("<base href=https://evil.test/>")</script>',
 };
 
 const ADMITTED_MARKUP: Record<string, string> = {
@@ -100,6 +118,14 @@ const ADMITTED_MARKUP: Record<string, string> = {
   "a title attribute that quotes a tag": '<p title="<iframe src=https://evil.test>">Embeds are refused</p>',
   "a baseline element name": "<svg><text dominant-baseline=\"middle\">x</text></svg>",
   "a cited https link": '<a href="https://example.com/docs">cite</a>',
+  "a code sample that shows an <iframe> as text": '<pre><code>&lt;iframe src="https://x"&gt;</code></pre>',
+  "a script string that holds a tag": '<script>const s = "<iframe>"; el.textContent = s;</script>',
+  "a comment that holds a tag": "<!-- <iframe src=\"https://evil.test/\"> was here -->",
+  "a script loop bound named like a tag": "<script>for (let i=0;i<iframes;i++){}</script>",
+  "an svg <use> of a local id": '<svg><use href="#a"/></svg>',
+  "a data: PNG image": '<img src="data:image/png;base64,AAAA">',
+  "an svg <set> of a fill named javascript:": '<svg><rect><set attributeName="fill" to="javascript:"/></rect></svg>',
+  "innerHTML that writes a label naming JavaScript": '<script>legend.innerHTML = "<b>JavaScript: 41%</b>";</script>',
 };
 
 for (const [name, html] of Object.entries(REFUSED_MARKUP)) {
@@ -115,6 +141,108 @@ for (const [name, html] of Object.entries(ADMITTED_MARKUP)) {
     assert.equal(isGenerativeUiDraftAcceptable(html), true);
   });
 }
+
+// An independent reading of what a browser would load: parse5 builds the
+// document tree (as Chromium's parser does) and this walks every element,
+// including <template> contents, for an embedding tag, an external script, a
+// refresh <meta>, or an unsafe or remote URL attribute.
+const ORACLE_EMBEDDING_TAGS = new Set(["iframe", "object", "embed", "applet", "frame", "frameset", "base", "link"]);
+const ORACLE_URL_ATTRIBUTES = new Set(["href", "src", "action", "formaction", "xlink:href", "data"]);
+function browserLoadsSomething(html: string): boolean {
+  let found = false;
+  const walk = (node: DefaultTreeAdapterTypes.ParentNode) => {
+    for (const child of node.childNodes) {
+      if (!("tagName" in child)) continue;
+      const attributes = new Map(child.attrs.map((attribute) => [(attribute.prefix ? `${attribute.prefix}:` : "") + attribute.name, attribute.value]));
+      if (ORACLE_EMBEDDING_TAGS.has(child.tagName)) found = true;
+      if (child.tagName === "script" && (attributes.has("src") || attributes.has("href") || attributes.has("xlink:href"))) found = true;
+      if (child.tagName === "meta" && attributes.has("http-equiv")) found = true;
+      for (const [name, value] of attributes) {
+        const url = value.replace(/[\t\n\r]/gu, "").replace(/^[\0-\x20]+/u, "").toLowerCase();
+        if (ORACLE_URL_ATTRIBUTES.has(name) && /^(?:javascript:|data:\s*text\/html)/u.test(url)) found = true;
+        if (name === "src" && /^https?:\/\//u.test(url)) found = true;
+      }
+      walk(child);
+      if (child.tagName === "template") walk((child as DefaultTreeAdapterTypes.Template).content);
+    }
+  };
+  walk(parse(html));
+  return found;
+}
+
+const ORACLE_CONTAINERS: readonly (readonly [string, string])[] = [
+  ["", ""],
+  ["<!--", "-->"],
+  ["<!-- <p title=\"", "\" -->"],
+  ["<?", ">"],
+  ["<textarea>", "</textarea>"],
+  ["<title>", "</title>"],
+  ["<style>", "</style>"],
+  ["<xmp>", "</xmp>"],
+  ["<noscript>", "</noscript>"],
+  ["<noembed>", "</noembed>"],
+  ["<noframes>", "</noframes>"],
+  ["<template>", "</template>"],
+  ["<table><tr>", "</tr></table>"],
+  ["<select>", "</select>"],
+  ["<p title=\"", "\">"],
+  ["<svg><style>", "</style></svg>"],
+  ["<svg><script>", "</script></svg>"],
+  ["<svg><![CDATA[", "]]></svg>"],
+  ["<svg><desc>", "</desc></svg>"],
+  ["<math><mi>", "</mi></math>"],
+  ["<math><annotation-xml encoding=\"text/html\">", "</annotation-xml></math>"],
+  ["<plaintext>", ""],
+];
+const ORACLE_PAYLOADS: readonly string[] = [
+  '<iframe src="https://evil.test/"></iframe>',
+  '<base href="https://evil.test/">',
+  '<meta http-equiv="refresh" content="0;url=https://evil.test/">',
+  '<script src="https://evil.test/a.js"></script>',
+  '<a href="javascript:alert(1)">x</a>',
+  '<img src="https://evil.test/a.png">',
+  "<p>Revenue up 4%</p>",
+  '<svg><rect aria-label="JavaScript: 41%"></rect></svg>',
+];
+
+test("html admission refuses exactly what a browser's parse of the markup would load", () => {
+  let refused = 0;
+  for (const [open, close] of ORACLE_CONTAINERS) {
+    for (const payload of ORACLE_PAYLOADS) {
+      const html = `<p>Lead</p>${open}${payload}${close}<p>Tail</p>`;
+      const expected = browserLoadsSomething(html);
+      let admitted = true;
+      try {
+        validateGenerativeUiHtml(html);
+      } catch {
+        admitted = false;
+      }
+      assert.equal(admitted, !expected, `${expected ? "should refuse" : "should admit"} ${html}`);
+      assert.equal(isGenerativeUiDraftAcceptable(html), !expected, `draft verdict for ${html}`);
+      if (expected) refused += 1;
+    }
+  }
+  // The corpus exercises both verdicts.
+  assert.ok(refused > 20 && refused < ORACLE_CONTAINERS.length * ORACLE_PAYLOADS.length - 20);
+});
+
+test("html admission refuses markup nested or attributed past what a visual needs, finished or streaming", () => {
+  const attributes = (count: number) => Array.from({ length: count }, (_, index) => ` a${index}`).join("");
+  const refused = {
+    deep: "<div>".repeat(600),
+    attributes: `<p${attributes(600)}>x</p>`,
+    adopted: Array.from({ length: 600 }, (_, index) => `<html b${index}>`).join(""),
+  };
+  for (const html of Object.values(refused)) {
+    assert.throws(() => validateGenerativeUiHtml(html), /too complex to check/u);
+    assert.equal(isGenerativeUiDraftAcceptable(html), false);
+  }
+  const admitted = [`${"<div>".repeat(400)}x`, `<p${attributes(400)}>x</p>`];
+  for (const html of admitted) {
+    assert.ok(validateGenerativeUiHtml(html).byteLength > 0);
+    assert.equal(isGenerativeUiDraftAcceptable(html), true);
+  }
+});
 
 test("a streaming draft cut inside a script or a quoted attribute is read as script or value, not as tags", () => {
   assert.equal(isGenerativeUiDraftAcceptable("<script>for (let i = 0; i<base && i>0"), true);
