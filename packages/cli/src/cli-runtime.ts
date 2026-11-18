@@ -38,8 +38,8 @@ function editDistance(a: string, b: string): number {
 	return previous[b.length]!;
 }
 
-/** Characters that could move the cursor, rewrite the screen or the clipboard, or reorder text when echoed to a terminal. */
-const UNSAFE_ECHO_CHARACTERS = /[\p{Cc}\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/gu;
+/** Controls, invisible format characters (bidi marks, zero-width joiners and spaces) and line separators, which could move the cursor, rewrite the screen or the clipboard, or hide or reorder text when echoed to a terminal. */
+const UNSAFE_ECHO_CHARACTERS = /[\p{Cc}\p{Cf}\u2028\u2029]/gu;
 /** The most characters of an unknown word echoed back. */
 const MAX_ECHOED_WORD = 64;
 

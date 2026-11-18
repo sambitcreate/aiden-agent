@@ -138,10 +138,10 @@ test("an unknown word gets an unknown-command line, with a suggestion for a near
 		const unrelated = runCli(["frobnicate"], { env, input: "" });
 		assert.equal(unrelated.status, 1);
 		assert.equal(unrelated.stderr, 'aiden: unknown command "frobnicate". Run `aiden help`.\n');
-		// Escape sequences (screen clear, OSC 52 clipboard write) and bidi overrides come back as visible escapes, never raw.
-		const hostile = runCli(["bad\u001b[2J\u001b]52;c;aGk=\u0007\u202eevil"], { env, input: "" });
+		// Escape sequences (screen clear, OSC 52 clipboard write), bidi overrides and zero-width characters come back as visible escapes, never raw.
+		const hostile = runCli(["bad\u001b[2J\u001b]52;c;aGk=\u0007\u202eevil\u200bzw\u2060j"], { env, input: "" });
 		assert.equal(hostile.status, 1);
-		assert.equal(hostile.stderr, 'aiden: unknown command "bad\\u{1b}[2J\\u{1b}]52;c;aGk=\\u{7}\\u{202e}evil". Run `aiden help`.\n');
+		assert.equal(hostile.stderr, 'aiden: unknown command "bad\\u{1b}[2J\\u{1b}]52;c;aGk=\\u{7}\\u{202e}evil\\u{200b}zw\\u{2060}j". Run `aiden help`.\n');
 		// An OS-sized argument is echoed only in part.
 		const huge = runCli(["x".repeat(100_000)], { env, input: "" });
 		assert.equal(huge.status, 1);
