@@ -113,7 +113,11 @@ superseded. Runner capacity can still cause queueing.
 On pull requests only, unit lanes run the registry files whose import graph
 reaches a changed path. A quoted path to a source file (`new URL("./x.tsx",
 import.meta.url)`, `"main/services/x.ts"`) counts as an import, so a test that
-reads a file's source as text is still selected when that file changes. Electron shards run the specs listed for those paths
+reads a file's source as text is still selected when that file changes.
+`path.join("renderer", "preload.ts")` segments and `readdir` of a `main/` or
+`renderer/` tree count as well, so a registered inventory test such as
+`main/handlers/ipc-contract.test.ts` still runs when a handler it walks
+changes. Electron shards run the specs listed for those paths
 in `scripts/ci-e2e-spec-map.json`. Pushes to `main`, merge-group runs, releases,
 and `workflow_dispatch` keep the full suites. Selection also falls back to the
 full suite when a changed path is unmapped, or when shared config, fixtures,

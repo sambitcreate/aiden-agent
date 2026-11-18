@@ -1,6 +1,7 @@
 /* global structuredClone */
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { discoverSpecs } from "./ci-e2e-shards.mjs";
 import {
@@ -105,6 +106,63 @@ test("a test that reads a component's source as text is selected when that compo
     assert.equal(selected.mode, "related", changed);
     assert.deepEqual(selected.files, [expected], changed);
   }
+});
+
+test("a test that joins production path segments is selected when that file changes", () => {
+  const sources = {
+    "renderer/preload.ts": "export const preload = 1;\n",
+    "main/handlers/chats.ts": "export const chats = 1;\n",
+    "main/handlers/ipc-walk.test.ts": `
+      import * as fs from "node:fs/promises";
+      import * as path from "node:path";
+      import { fileURLToPath } from "node:url";
+      const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+      const MAIN_ROOT = path.join(REPO_ROOT, "main");
+      const PRELOAD_PATH = path.join(REPO_ROOT, "renderer", "preload.ts");
+      await fs.readdir(MAIN_ROOT, { withFileTypes: true });
+      await fs.readFile(PRELOAD_PATH, "utf8");
+    `,
+    "main/handlers/other.test.ts": 'import test from "node:test";\n',
+  };
+  const tests = ["main/handlers/ipc-walk.test.ts", "main/handlers/other.test.ts"];
+  const read = (file) => sources[file];
+  for (const [changed, expected] of [
+    ["main/handlers/chats.ts", "main/handlers/ipc-walk.test.ts"],
+    ["renderer/preload.ts", "main/handlers/ipc-walk.test.ts"],
+  ]) {
+    const selected = selectRelatedUnitFiles({
+      changedPaths: [changed],
+      testFiles: tests,
+      sourceFiles: Object.keys(sources),
+      readFile: read,
+    });
+    assert.equal(selected.mode, "related", changed);
+    assert.deepEqual(selected.files, [expected], changed);
+  }
+});
+
+test("a handler change selects the registered IPC contract inventory test", () => {
+  const contract = "main/handlers/ipc-contract.test.ts";
+  const sources = {
+    [contract]: readFileSync(new URL("../main/handlers/ipc-contract.test.ts", import.meta.url), "utf8"),
+    "main/handlers/chats.ts": "export const chats = 1;\n",
+    "main/handlers/index.ts": "export const handlers = 1;\n",
+    "main/handlers/attachments.ts": "export const attachments = 1;\n",
+    "renderer/preload.ts": "export const preload = 1;\n",
+    "renderer/lib/ipc.ts": "export const ipc = 1;\n",
+    "renderer/lib/bot-peers-api.ts": "export const peers = 1;\n",
+    "renderer/shared/attachment-contract.ts": "export const limits = 1;\n",
+    "main/services/attachments.ts": "export const bytes = 1;\n",
+    "main/handlers/other.test.ts": 'import test from "node:test";\n',
+  };
+  const selected = selectRelatedUnitFiles({
+    changedPaths: ["main/handlers/chats.ts"],
+    testFiles: [contract, "main/handlers/other.test.ts"],
+    sourceFiles: Object.keys(sources),
+    readFile: (file) => sources[file],
+  });
+  assert.equal(selected.mode, "related");
+  assert.deepEqual(selected.files, [contract]);
 });
 
 test("package locks, CI scripts, and unknown paths keep the full unit suite", () => {

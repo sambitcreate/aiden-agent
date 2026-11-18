@@ -164,6 +164,164 @@ export function sourcePathReferences(fromFile, source, present) {
   return [...references];
 }
 
+function skipSpace(text, index) {
+  while (index < text.length && /\s/u.test(text[index])) index += 1;
+  return index;
+}
+
+function parseQuoted(text, index) {
+  const quote = text[index];
+  if (quote !== '"' && quote !== "'" && quote !== "`") return null;
+  let value = "";
+  let cursor = index + 1;
+  while (cursor < text.length) {
+    const character = text[cursor];
+    if (character === "\\") {
+      value += text[cursor + 1] ?? "";
+      cursor += 2;
+      continue;
+    }
+    if (quote === "`" && character === "$" && text[cursor + 1] === "{") return null;
+    if (character === quote) return { value, next: cursor + 1 };
+    value += character;
+    cursor += 1;
+  }
+  return null;
+}
+
+function parseIdentifier(text, index) {
+  if (!/[\p{ID_Start}_$]/u.test(text[index] ?? "")) return null;
+  let cursor = index + 1;
+  while (cursor < text.length && /[\p{ID_Continue}$]/u.test(text[cursor])) cursor += 1;
+  return { value: text.slice(index, cursor), next: cursor };
+}
+
+function parseMember(text, index) {
+  const first = parseIdentifier(text, index);
+  if (!first) return null;
+  const parts = [first.value];
+  let cursor = first.next;
+  while (text[cursor] === ".") {
+    const next = parseIdentifier(text, cursor + 1);
+    if (!next) break;
+    parts.push(next.value);
+    cursor = next.next;
+  }
+  return { value: parts.join("."), next: cursor };
+}
+
+function parseArgList(text, index) {
+  if (text[index] !== "(") return null;
+  const args = [];
+  let cursor = skipSpace(text, index + 1);
+  if (text[cursor] === ")") return { args, next: cursor + 1 };
+  while (cursor < text.length) {
+    const argument = parseExpr(text, cursor);
+    if (!argument) return null;
+    args.push(argument.value);
+    cursor = skipSpace(text, argument.next);
+    if (text[cursor] === ")") return { args, next: cursor + 1 };
+    if (text[cursor] !== ",") return null;
+    cursor = skipSpace(text, cursor + 1);
+  }
+  return null;
+}
+
+function parseExpr(text, index) {
+  const start = skipSpace(text, index);
+  const quoted = parseQuoted(text, start);
+  if (quoted) return quoted;
+  const member = parseMember(text, start);
+  if (!member) return null;
+  const afterName = skipSpace(text, member.next);
+  if (text[afterName] !== "(") return { value: { kind: "id", name: member.value }, next: member.next };
+  const args = parseArgList(text, afterName);
+  if (!args) return null;
+  const callee = member.value.slice(member.value.lastIndexOf(".") + 1);
+  return { value: { kind: "call", callee, args: args.args }, next: args.next };
+}
+
+function repoRelative(fromFile, resolved) {
+  const normalized = posix(path.posix.normalize(resolved));
+  if (normalized === "." || normalized === "") return "";
+  if (normalized.startsWith("../")) return null;
+  return normalized.replace(/^\.\//u, "");
+}
+
+function evalExpr(node, fromFile, bindings) {
+  if (typeof node === "string") return node;
+  if (!node || typeof node !== "object") return null;
+  if (node.kind === "id") {
+    if (Object.hasOwn(bindings, node.name)) return bindings[node.name];
+    if (node.name === "import.meta.url") return fromFile;
+    return null;
+  }
+  if (node.kind !== "call") return null;
+  const args = node.args.map((argument) => evalExpr(argument, fromFile, bindings));
+  if (args.some((argument) => argument == null)) return null;
+  if (node.callee === "fileURLToPath") return args[0] ?? fromFile;
+  if (node.callee === "dirname") return posix(path.posix.dirname(String(args[0] ?? fromFile)));
+  if (node.callee === "join" || node.callee === "resolve") {
+    return repoRelative(fromFile, path.posix.join(...args.map(String)));
+  }
+  return null;
+}
+
+function collectBindings(fromFile, text) {
+  const bindings = Object.create(null);
+  const declaration = /(?:const|let|var)\s+(\w+)\s*(?::[^=;\n]+)?=\s*/gu;
+  for (const match of text.matchAll(declaration)) {
+    const parsed = parseExpr(text, match.index + match[0].length);
+    if (!parsed) continue;
+    const value = evalExpr(parsed.value, fromFile, bindings);
+    if (typeof value === "string") bindings[match[1]] = value;
+  }
+  return bindings;
+}
+
+function collectCallSites(text) {
+  const sites = [];
+  const call = /\b(?:path(?:\.posix)?|posix)\s*\.\s*(join|resolve)\s*\(/gu;
+  for (const match of text.matchAll(call)) {
+    const parsed = parseArgList(text, match.index + match[0].length - 1);
+    if (!parsed) continue;
+    sites.push({ callee: match[1], args: parsed.args });
+  }
+  return sites;
+}
+
+function filesUnderPrefix(prefix, present) {
+  const needle = posix(prefix);
+  if (!needle || needle === ".") return [];
+  return [...present].filter((file) => file !== needle && pathMatchesPrefix(file, needle));
+}
+
+// Contract tests walk production trees with readdir and build paths from
+// path.join("renderer", "preload.ts") segments. Quoted-file matching cannot
+// see those edges; extra edges only run more tests.
+export function sourceWalkReferences(fromFile, source, present) {
+  const text = stripComments(String(source ?? ""));
+  const bindings = collectBindings(fromFile, text);
+  const references = new Set();
+  const walksDirectories = /\breaddir(?:Sync)?\s*\(/u.test(text);
+  const consider = (resolved) => {
+    if (typeof resolved !== "string" || resolved.length === 0) return;
+    if (present.has(resolved)) {
+      references.add(resolved);
+      return;
+    }
+    if (!walksDirectories) return;
+    if (!SOURCE_ROOTS.some((root) => resolved === root || resolved.startsWith(`${root}/`))) return;
+    for (const file of filesUnderPrefix(resolved, present)) references.add(file);
+  };
+  for (const value of Object.values(bindings)) consider(value);
+  for (const site of collectCallSites(text)) {
+    consider(evalExpr({ kind: "call", callee: site.callee, args: site.args }, fromFile, bindings));
+  }
+  references.delete(fromFile);
+  return [...references];
+}
+
 function resolveAlias(specifier) {
   for (const [prefix, target] of ALIASES) {
     if (specifier.startsWith(prefix)) return `${target}${specifier.slice(prefix.length)}`;
@@ -262,7 +420,10 @@ export function buildReverseImportGraph(files, readFile) {
     } catch {
       continue;
     }
-    const dependencies = new Set(sourcePathReferences(file, source, present));
+    const dependencies = new Set([
+      ...sourcePathReferences(file, source, present),
+      ...sourceWalkReferences(file, source, present),
+    ]);
     for (const specifier of parseImportSpecifiers(source)) {
       const imported = resolveImportedPath(file, specifier, present);
       if (imported) dependencies.add(imported);
