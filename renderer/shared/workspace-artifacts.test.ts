@@ -18,6 +18,9 @@ import {
   type WorkspaceArtifactSourceV1,
 } from "./workspace-artifacts.js";
 
+// How the parser refuses a template that puts page data where it could do more than be one argument.
+const PLACEMENT_REFUSED = /own unquoted word|may not use|may not be passed|as arithmetic/u;
+
 test("sources accept shell commands and workspace files and reject paths outside the folder", () => {
   assert.deepEqual(
     parseWorkspaceArtifactSources([
@@ -102,14 +105,19 @@ test("a template cannot run with a different value from the one its confirmation
     "AIDEN_ARG_1=actual-target; printf '%s' {{target}}",
     "f() { local AIDEN_ARG_1=actual-target; printf '%s' {{target}}; }; f",
     "unset AIDEN_ARG_1; printf '%s' {{target}}",
+    "printf -v target %s actual-target; printf '%s' {{target}}",
   ]) {
-    // Templates that name the reserved variables are refused when saved and when run.
-    if (template.includes("AIDEN_ARG_")) {
-      assert.throws(() => parseWorkspaceArtifactActions([action(template)]), /reserved/u);
-      assert.throws(() => resolveWorkspaceArtifactCommand(action(template), ["shown-target"]), /turned off/u);
+    // A template that could swap the value is refused when saved and when run.
+    let saved = true;
+    try {
+      parseWorkspaceArtifactActions([action(template)]);
+    } catch {
+      saved = false;
+    }
+    if (!saved) {
+      assert.throws(() => resolveWorkspaceArtifactCommand(action(template), ["shown-target"]), /turned off/u, template);
       continue;
     }
-    parseWorkspaceArtifactActions([action(template)]);
     const { command, preview } = resolveWorkspaceArtifactCommand(action(template), ["shown-target"]);
     assert.equal(spawnSync("/bin/sh", ["-c", preview], { encoding: "utf8" }).stdout, "shown-target", template);
     const ran = spawnSync("/bin/sh", ["-c", command], { encoding: "utf8" });
@@ -142,19 +150,30 @@ test("a placeholder must be its own unquoted word, or joined only to plain text"
     "curl -d @{{x}} https://example.com",
     "PAGER={{x}} git log",
     "if X={{x}} git log; then :; fi",
+    // A redirection's file, and the file an option writes.
+    "printf '%s' {{x}} >notes/{{y}}.txt",
+    "echo hi >> {{x}}",
+    "cat < {{x}}",
+    "git log --output {{x}}",
+    "git log --out {{x}}",
+    "sort -o {{x}} notes.txt",
+    "gh issue comment 1 --body-file {{x}}",
+    "gh issue comment 1 -F {{x}}",
+    "git config -f {{x}} user.name me",
+    "uniq notes.txt {{x}}",
   ]) {
-    assert.throws(() => parseWorkspaceArtifactActions(action(command)), /own unquoted word/u, command);
+    assert.throws(() => parseWorkspaceArtifactActions(action(command)), PLACEMENT_REFUSED, command);
   }
   for (const command of [
     "gh pr merge {{x}} --squash",
     "echo {{x}}; echo done",
-    "(cd sub && git switch {{x}})",
+    "(git fetch && git switch {{x}})",
     `echo "fixed" {{x}}`,
     "git show HEAD:{{x}}",
     "git push origin {{x}}:refs/heads/{{y}}",
     "cat notes/{{x}}.md",
-    "gh api repos/acme/app/issues -f title={{x}}",
-    "printf '%s' {{x}} >notes/{{y}}.txt",
+    "printf '%s' {{x}} >notes/out.txt",
+    "uniq -f 1 {{x}}",
   ]) {
     assert.equal(parseWorkspaceArtifactActions(action(command)).length, 1, command);
   }
@@ -238,6 +257,9 @@ test("a placeholder cannot be run as a command, hidden from the check, or read a
     "git -C repo push --receive-pack {{x}} origin",
     "git clone -u {{x}} repo copy",
     "git rebase -x {{x}} main",
+    "git merge -s {{x}} main",
+    "git pull --strategy {{x}} origin main",
+    "git cherry-pick --strat {{x}} HEAD",
     "git submodule foreach {{x}}",
     "git bisect run {{x}}",
     "rsync -avze {{x}} src host:dst",
@@ -276,22 +298,15 @@ test("a placeholder cannot be run as a command, hidden from the check, or read a
     "less {{x}}",
     "ssh -o ProxyCommand={{x}} host true",
   ];
-  for (const command of refused) assert.throws(() => parseWorkspaceArtifactActions(actions(command)), /own unquoted word/u, command);
+  for (const command of refused) assert.throws(() => parseWorkspaceArtifactActions(actions(command)), PLACEMENT_REFUSED, command);
   for (const command of [
     "[[ {{x}} -gt 0 ]] && echo big",
     "(( {{x}} > 0 )) && echo big",
-    "let {{x}}",
-    "f() { local {{x}}; }; f",
-    "seed=1 let {{x}}",
-    "if true; then let {{x}}; fi",
     "(( 0 < {{x}} ))",
     "(( 0 >> {{x}} ))",
     "[[ 0 > {{x}} ]]",
-    // Builtins that take a variable name evaluate its [subscript].
-    "read {{x}} </dev/null",
-    "printf -v {{x}} %s ok",
+    // test -v takes a variable name and evaluates its [subscript].
     "[ -v {{x}} ]",
-    "unset {{x}}",
   ]) {
     assert.throws(() => parseWorkspaceArtifactActions(actions(command)), /arithmetic/u, command);
     assert.equal(parseWorkspaceArtifactActions(actions(command, "number")).length, 1, command);
@@ -304,45 +319,136 @@ test("a placeholder cannot be run as a command, hidden from the check, or read a
     "printf %s {{x}} # comparison uses [[ later",
     "if (( 1 )); then printf %s {{x}}; fi",
     "[[ -d .git ]] && git checkout {{x}}",
-    "f() { local result=ok; printf %s {{x}}; }; f",
     "echo '((' {{x}}",
     'echo "$(git rev-parse HEAD)" {{x}}',
-    "sh -c 'printf %s \"$1\"' sh {{x}}",
     // Words that merely spell a command name are data, not the command.
     "printf '%s\\n' command | grep -F command -- {{x}}",
     "printf '%s\\n' command is {{x}}",
     "grep -c {{x}} notes.txt",
-    "python3 scripts/report.py {{x}}",
-    "node -e 'console.log(process.argv[1])' {{x}}",
-    "awk '{ print $1 }' {{x}}",
-    "awk -F , -f report.awk {{x}}",
-    "sed -n '1,5p' {{x}}",
-    "sqlite3 {{x}} 'select 1'",
     "git log --format={x} 2>&1 {{x}}",
     "gh pr merge \\\n  {{x}} --squash",
-    "printf -v out %s {{x}}",
-    "read -r first < {{x}}; printf %s \"$first\"",
     "git grep -c {{x}}",
     "git log -c {{x}}",
-    "git --no-pager -C repo log -c {{x}}",
-    "git --no-literal-pathspecs log -c {{x}}",
     // The same option names elsewhere, or in another subcommand, take plain values.
     "git cherry-pick -x {{x}}",
+    "git cherry-pick -s {{x}}",
+    "git merge --no-ff {{x}}",
     "git push -u origin {{x}}",
-    "rsync -av {{x}} backup/",
-    "tar -xf {{x}}",
-    "make -j {{x}} test",
     "git config user.name {{x}}",
     "git config --global user.email {{x}}",
-    "git send-email --to {{x}} patch",
-    "gh issue create --title {{x}} --label bug",
-    "gh pr create --base main --head {{x}} --fill",
-    "npm run build -- {{x}}",
-    "go test -run {{x}} ./...",
     "sort -k 2 {{x}}",
+    "git --no-pager log -c {{x}}",
+    "git worktree add ../review {{x}}",
+    "git remote -v | grep -F -- {{x}}",
+    "gh browse {{x}}",
+    "gh run view {{x}} --log | tail -n 20",
+    "printf '%s\\n' $(git branch --show-current) {{x}}",
+    "jq -r .name {{x}} | sort | uniq -c",
   ]) {
     assert.equal(parseWorkspaceArtifactActions(actions(command)).length, 1, command);
   }
+  // Page data goes only to a short list of programs: every command in the
+  // template, piped, chained, grouped or substituted, must start with one, by
+  // a plain name, and git and gh with a listed subcommand. Programs off the
+  // list can run what they are given in ways an option check cannot see.
+  for (const command of [
+    // Shells and interpreters, fed the value on input, from a file or as a script.
+    "echo {{x}} | sh",
+    "printf '%s\\n' {{x}} | bash",
+    "echo {{x}} > a.sh; sh a.sh",
+    "sh <<< {{x}}",
+    "bash --rcfile notes.txt {{x}}",
+    "sh -c 'printf %s \"$1\"' sh {{x}}",
+    "python3 -X dev -W ignore {{x}}",
+    "python3 scripts/report.py {{x}}",
+    "node -C dev {{x}}",
+    "node --title t {{x}}",
+    "awk -f notes.txt {{x}}",
+    "awk '{ print $1 }' {{x}}",
+    "sed -n '1,5p' {{x}}",
+    "sqlite3 {{x}} 'select 1'",
+    "expect -c {{x}}",
+    "osascript -l JavaScript {{x}}",
+    "lldb --batch -o {{x}}",
+    // Programs that start another program, a session or a server.
+    "tmux new-session -d {{x}}",
+    "screen -dm {{x}}",
+    "ssh-agent {{x}}",
+    "sftp -D {{x}} x",
+    "open {{x}}",
+    "docker run --rm {{x}}",
+    "code --install-extension {{x}}",
+    "curl -o {{x}} file:///etc/hosts",
+    "rsync -av {{x}} backup/",
+    "tar -xf {{x}}",
+    "make -j {{x}} test",
+    // Package managers run install scripts and package scripts.
+    "npm install --offline --no-save {{x}}",
+    "npm run {{x}}",
+    "npm view {{x}} version",
+    "pip install {{x}}",
+    "brew install {{x}}",
+    "cargo install {{x}}",
+    "yarn add {{x}}",
+    "uv pip install {{x}}",
+    "go test -run {{x}} ./...",
+    // Shell builtins and keywords that run, store or redefine what comes next.
+    "set -- {{x}}; \"$@\"",
+    "for f in {{x}}; do $f; done",
+    "alias l={{x}}\nl",
+    "let {{x}}",
+    "read -r first < notes.txt; echo {{x}}",
+    "unset {{x}}",
+    "printf -v out %s {{x}}",
+    "f() { printf %s {{x}}; }; f",
+    "f () { local {{x}}; }; f",
+    "cd sub && git switch {{x}}",
+    "exec git log {{x}}",
+    "command git log {{x}}",
+    // git and gh subcommands off the list, or hidden behind an option or a variable.
+    "git filter-branch -f --tree-filter {{x}} HEAD",
+    "git instaweb --httpd {{x}}",
+    "git submodule add {{x}}",
+    "git difftool -t {{x}} HEAD",
+    "git send-email --to {{x}} patch",
+    "git -C repo log {{x}}",
+    "git --exec-path=bin log {{x}}",
+    "git $SUB {{x}}",
+    "git config core.editor {{x}}",
+    "GIT_PAGER=cat git log {{x}}",
+    "gh api repos/acme/app/issues -f title={{x}}",
+    "gh issue create --title {{x}}",
+    "gh extension install {{x}}",
+    "gh alias set x {{x}}",
+    "gh config set editor {{x}}",
+    // A command word that is quoted, a path or an expansion.
+    "/usr/bin/git log {{x}}",
+    "'git' log {{x}}",
+    "\\git log {{x}}",
+    "$GIT log {{x}}",
+    // Every stage and substitution is checked, not just the one with the value.
+    "echo {{x}} | xargs git log",
+    "git log {{x}} | tee out.txt",
+    "echo {{x}} $(npm run build)",
+    "diff <(sh notes.txt) <(echo {{x}})",
+    "echo `id` {{x}}",
+    "echo $(( $(cat n) )) {{x}}",
+    "echo ${!ref} {{x}}",
+    "echo ${PS1@P} {{x}}",
+    "echo {{x}}; echo $_",
+    "sort --compress-program=gzip {{x}}",
+    "rg --pre ./run-me {{x}}",
+  ]) {
+    for (const type of ["string", "number"] as const) {
+      assert.throws(() => parseWorkspaceArtifactActions(actions(command, type)), PLACEMENT_REFUSED, `${command} (${type})`);
+    }
+  }
+  // The refusal names the program and what page data may be passed to.
+  assert.throws(() => parseWorkspaceArtifactActions(actions("npm view {{x}} version")), (error: Error) => {
+    assert.match(error.message, /a command that uses npm\b/u);
+    assert.match(error.message, /\bgit status\b.*\bgh pr\b.*\bjq\b/u);
+    return true;
+  });
 });
 
 test("no template the parser accepts lets a text value run code", () => {
@@ -350,9 +456,17 @@ test("no template the parser accepts lets a text value run code", () => {
   const marker = path.join(dir, "ran");
   const script = path.join(dir, "run-me");
   fs.writeFileSync(script, `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
+  const scriptJs = path.join(dir, "e.js");
+  fs.writeFileSync(scriptJs, `require("fs").writeFileSync(${JSON.stringify(marker)}, "")`);
   // Each value runs code if something reads it as shell, a program to start,
-  // an awk program, a sed script, Python, a git alias or make's shell.
+  // an awk program, a sed script, Python, JavaScript, a git alias, make's
+  // shell, an expect or lldb command, or is the file a redirection writes.
   const values = [
+    `touch ${marker}`,
+    `exec touch ${marker}`,
+    `platform shell touch ${marker}`,
+    scriptJs,
+    marker,
     `a[$(touch ${marker})0]`,
     script,
     `BEGIN { system("touch ${marker}") }`,
@@ -365,6 +479,7 @@ test("no template the parser accepts lets a text value run code", () => {
     `!${script}`,
   ];
   spawnSync("git", ["init", "-q"], { cwd: dir, stdio: "ignore" });
+  spawnSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", "commit", "-q", "--allow-empty", "-m", "x"], { cwd: dir, stdio: "ignore" });
   fs.writeFileSync(path.join(dir, "notes.txt"), "notes\n");
   fs.writeFileSync(path.join(dir, "Makefile"), "all:\n\t@true\n");
   const candidates = [
@@ -441,6 +556,39 @@ test("no template the parser accepts lets a text value run code", () => {
     // Joined after plain text, the value is only ever part of one argument.
     "git log -1 HEAD:{{x}}",
     "printf '%s' refs/heads/{{x}}.lock",
+    // Programs that read the value as code from their input, a file, a list
+    // or a later command, and options no per-option list foresaw.
+    "echo {{x}} | sh",
+    "printf '%s\\n' {{x}} | bash",
+    'set -- {{x}}; "$@"',
+    "for f in {{x}}; do $f; done",
+    "echo {{x}} > a.sh; sh a.sh",
+    "sh <<< {{x}}",
+    "bash <<<{{x}}",
+    "echo hi >> {{x}}",
+    "alias l={{x}}\nl",
+    "git filter-branch -f --tree-filter {{x}} HEAD",
+    "git filter-branch -f --msg-filter {{x}} HEAD",
+    "git filter-branch -f --env-filter {{x}} HEAD",
+    "git rebase --exe {{x}} HEAD",
+    "sed -n {{x}} notes.txt",
+    "node -C dev {{x}}",
+    "node --title t {{x}}",
+    "bash --rcfile notes.txt {{x}}",
+    "bash -c -- {{x}}",
+    "sh -c -e {{x}}",
+    "bash -c +x {{x}}",
+    "sh -c -o errexit {{x}}",
+    "ssh-agent {{x}}",
+    "printf -v y %s {{x}}; echo $((y))",
+    "printf %s {{x}}; echo $_",
+    // The commands the allowlist keeps, so the oracle runs accepted templates too.
+    "git show HEAD:{{x}}",
+    "git checkout {{x}}",
+    "git log --oneline -n 5 -- {{x}}",
+    "git branch --list {{x}}",
+    "grep -F -- {{x}} notes.txt",
+    "echo {{x}} | sort | uniq -c",
   ];
   let accepted = 0;
   try {
@@ -455,7 +603,13 @@ test("no template the parser accepts lets a text value run code", () => {
       for (const value of values) {
         const { command } = resolveWorkspaceArtifactCommand(action, [value]);
         for (const [shell, args] of [["/bin/sh", ["-c"]], ["bash", ["--posix", "-c"]], ["bash", ["-c"]]] as const) {
-          spawnSync(shell, [...args, command], { cwd: dir, encoding: "utf8", stdio: "ignore", timeout: 5000 });
+          spawnSync(shell, [...args, command], {
+            cwd: dir,
+            encoding: "utf8",
+            stdio: "ignore",
+            timeout: 5000,
+            env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_EDITOR: "true", FILTER_BRANCH_SQUELCH_WARNING: "1" },
+          });
           assert.equal(fs.existsSync(marker), false, `${template} ran ${value} under ${shell} ${args.join(" ")}`);
         }
       }
@@ -464,6 +618,51 @@ test("no template the parser accepts lets a text value run code", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
   assert.ok(accepted >= 6, "the oracle should exercise accepted templates too");
+});
+
+test("everyday git and gh actions with page data still save and run with the confirmed values", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aiden-artifact-allowed-"));
+  const repo = path.join(dir, "repo");
+  const origin = path.join(dir, "origin.git");
+  const bin = path.join(dir, "bin");
+  const git = (args: string[], cwd = repo) => execFileSync("git", args, { cwd, encoding: "utf8" });
+  try {
+    fs.mkdirSync(repo);
+    fs.mkdirSync(bin);
+    // gh is a stand-in that prints the arguments it was given.
+    fs.writeFileSync(path.join(bin, "gh"), "#!/bin/sh\nprintf '[%s]' \"$@\"\n", { mode: 0o755 });
+    git(["init", "-q", "--bare", origin], dir);
+    git(["init", "-q"]);
+    fs.writeFileSync(path.join(repo, "notes.txt"), "notes\n");
+    git(["add", "notes.txt"]);
+    git(["-c", "user.email=a@example.com", "-c", "user.name=a", "commit", "-q", "-m", "add notes"]);
+    git(["branch", "feature"]);
+    git(["remote", "add", "origin", origin]);
+    const run = (command: string, params: WorkspaceArtifactActionV1["params"], values: unknown[]) => {
+      const action = parseWorkspaceArtifactActions([{ name: "a", label: "A", command, params }])[0]!;
+      const resolved = resolveWorkspaceArtifactCommand(action, values);
+      return execFileSync("/bin/sh", ["-c", resolved.command], {
+        cwd: repo,
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`, GIT_TERMINAL_PROMPT: "0" },
+      });
+    };
+    const text = (name: string) => ({ name, type: "string" as const });
+    const number = (name: string) => ({ name, type: "number" as const });
+    assert.equal(run("git show HEAD:{{file}}", [text("file")], ["notes.txt"]), "notes\n");
+    assert.match(run("git log --oneline -n 5 -- {{file}}", [text("file")], ["notes.txt"]), /add notes/u);
+    run("git checkout -q {{branch}}", [text("branch")], ["feature"]);
+    assert.equal(git(["branch", "--show-current"]).trim(), "feature");
+    run("git push -q origin HEAD:{{branch}}", [text("branch")], ["review"]);
+    assert.equal(git(["rev-parse", "refs/heads/review"], origin), git(["rev-parse", "HEAD"]));
+    assert.equal(run("gh pr merge {{n}} --squash", [number("n")], [7]), "[pr][merge][7][--squash]");
+    assert.equal(
+      run("gh issue comment {{n}} --body {{body}}", [number("n"), text("body")], [7, "Looks good; $(id)"]),
+      "[issue][comment][7][--body][Looks good; $(id)]",
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("filled-in values are checked against their declared types", () => {

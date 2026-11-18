@@ -541,7 +541,7 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
             Type.Object({
               name: Type.String({ description: "Identifier buttons call as run(\"name\", …)." }),
               label: Type.String({ description: "What the button does, shown when the person confirms it." }),
-              command: Type.String({ description: "Shell template; each {{param}}, an unquoted word alone or joined only to plain text (HEAD:{{path}}), becomes the value as one literal argument." }),
+              command: Type.String({ description: "Shell template; each {{param}}, an unquoted word alone or joined only to plain text (HEAD:{{file}}), becomes the value as one literal argument. With a {{param}}, every command must start with an allowed program (git, gh pr/issue/run/repo verbs, or text tools such as grep, jq, sort)." }),
               params: Type.Optional(
                 Type.Array(
                   Type.Object({
