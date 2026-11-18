@@ -76,6 +76,37 @@ test("a source change selects its test file and importers, not an unrelated test
   assert.deepEqual(selected.files, ["main/services/importer.test.ts", "main/services/x.test.ts"]);
 });
 
+test("a test that reads a component's source as text is selected when that component changes", () => {
+  const sourceReaders = {
+    "renderer/components/panel.tsx": "export const Panel = 1;\n",
+    "renderer/components/panel-contract.test.ts":
+      'import { readFileSync } from "node:fs";\nconst source = readFileSync(new URL("./panel.tsx", import.meta.url), "utf8");\n',
+    "main/services/store.ts": "export const store = 1;\n",
+    "main/services/store-contract.test.ts":
+      'import { readFileSync } from "node:fs";\nimport path from "node:path";\nreadFileSync(path.resolve("main/services/store.ts"), "utf8");\n',
+    "main/services/other.test.ts": 'import test from "node:test";\n',
+  };
+  const readerTests = [
+    "main/services/other.test.ts",
+    "main/services/store-contract.test.ts",
+    "renderer/components/panel-contract.test.ts",
+  ];
+  const read = (file) => sourceReaders[file];
+  for (const [changed, expected] of [
+    ["renderer/components/panel.tsx", "renderer/components/panel-contract.test.ts"],
+    ["main/services/store.ts", "main/services/store-contract.test.ts"],
+  ]) {
+    const selected = selectRelatedUnitFiles({
+      changedPaths: [changed],
+      testFiles: readerTests,
+      sourceFiles: Object.keys(sourceReaders),
+      readFile: read,
+    });
+    assert.equal(selected.mode, "related", changed);
+    assert.deepEqual(selected.files, [expected], changed);
+  }
+});
+
 test("package locks, CI scripts, and unknown paths keep the full unit suite", () => {
   for (const changedPaths of [
     ["package-lock.json"],

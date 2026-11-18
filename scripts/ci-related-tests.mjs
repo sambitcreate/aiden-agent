@@ -144,6 +144,26 @@ export function parseImportSpecifiers(source) {
   return specifiers;
 }
 
+// Older contract tests read production source as text instead of importing it, for
+// example `readFileSync(new URL("./panel.tsx", import.meta.url))` or
+// `resolve("main/services/x.ts")`. Treat any quoted path to a source file as a
+// dependency, so changing that file still selects the test. Extra edges only run
+// more tests; a missing edge would skip one.
+const SOURCE_PATH_LITERAL = /["'`]((?:\.{1,2}\/|(?:main|renderer|packages\/cli)\/)[^"'`\s$]+\.(?:cjs|mjs|js|ts|tsx|json))["'`]/gu;
+
+export function sourcePathReferences(fromFile, source, present) {
+  const references = new Set();
+  SOURCE_PATH_LITERAL.lastIndex = 0;
+  for (const match of stripComments(String(source ?? "")).matchAll(SOURCE_PATH_LITERAL)) {
+    const literal = match[1];
+    const resolved = literal.startsWith(".")
+      ? posix(path.posix.normalize(path.posix.join(path.posix.dirname(fromFile), literal)))
+      : posix(path.posix.normalize(literal));
+    if (present.has(resolved)) references.add(resolved);
+  }
+  return [...references];
+}
+
 function resolveAlias(specifier) {
   for (const [prefix, target] of ALIASES) {
     if (specifier.startsWith(prefix)) return `${target}${specifier.slice(prefix.length)}`;
@@ -242,9 +262,13 @@ export function buildReverseImportGraph(files, readFile) {
     } catch {
       continue;
     }
+    const dependencies = new Set(sourcePathReferences(file, source, present));
     for (const specifier of parseImportSpecifiers(source)) {
       const imported = resolveImportedPath(file, specifier, present);
-      if (!imported) continue;
+      if (imported) dependencies.add(imported);
+    }
+    for (const imported of dependencies) {
+      if (imported === file) continue;
       const list = importers.get(imported);
       if (list) list.push(file);
       else importers.set(imported, [file]);
