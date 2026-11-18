@@ -89,6 +89,33 @@ const subjectAlternativeName = /^\d{1,3}(?:\.\d{1,3}){3}$/.test(advertisedHost)
   ? `IP:${advertisedHost}`
   : `DNS:${advertisedHost}`;
 
+// OpenSSL 3.4 added -not_before/-not_after, and later releases refuse
+// `-days 0`. Older OpenSSL and LibreSSL only have `-days`, where 0 still
+// issues a certificate that is already expired.
+async function supportsExplicitValidity() {
+  const { stdout } = await execFileAsync("openssl", ["version"]);
+  const match = /^OpenSSL (\d+)\.(\d+)/.exec(stdout.trim());
+  if (!match) return false;
+  const [major, minor] = [Number(match[1]), Number(match[2])];
+  return major > 3 || (major === 3 && minor >= 4);
+}
+
+function opensslTime(date) {
+  return `${date.toISOString().replace(/[-:T]/g, "").slice(0, 14)}Z`;
+}
+
+async function validityArguments(days) {
+  if (days > 0) return ["-days", String(days)];
+  if (!(await supportsExplicitValidity())) return ["-days", "0"];
+  const dayMs = 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  return [
+    "-not_before", opensslTime(new Date(now - 2 * dayMs)),
+    "-not_after", opensslTime(new Date(now - dayMs)),
+  ];
+}
+
+/** `days` of 0 issues a certificate that has already expired. */
 async function issueCertificate(mode, keyPath, alternativeName, days) {
   const certificatePath = path.join(identityDirectory, `${mode}-certificate.pem`);
   const requestPath = path.join(identityDirectory, `${mode}-request.pem`);
@@ -104,7 +131,7 @@ async function issueCertificate(mode, keyPath, alternativeName, days) {
   await execFileAsync("openssl", [
     "x509", "-req", "-in", requestPath,
     "-CA", caCertificatePath, "-CAkey", caKeyPath, "-CAcreateserial",
-    "-days", String(days), "-sha256", "-copy_extensions", "copy",
+    ...(await validityArguments(days)), "-sha256", "-copy_extensions", "copy",
     "-out", certificatePath,
   ]);
 }

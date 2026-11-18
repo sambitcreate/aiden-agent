@@ -95,6 +95,23 @@ export interface WorkbenchTabStripProps<T extends WorkbenchTab> {
 /** How wide the strip's edge fades, and how far a revealed tab stays clear of them. */
 const TAB_FADE_PX = 16;
 
+/**
+ * Puts focus back on the strip's selected tab once the frame after a tab action
+ * has rendered. That frame can come late (an open native menu, a busy renderer),
+ * and by then the person may have moved on: focus that has gone somewhere outside
+ * the strip stays there. Nothing focused, or focus still in the strip, is restored.
+ */
+export function focusStripTabNextFrame(activeTabRef: React.RefObject<HTMLElement | null>): void {
+  requestAnimationFrame(() => {
+    const tab = activeTabRef.current;
+    if (!tab?.isConnected) return;
+    const active = document.activeElement;
+    const strip = tab.closest("[data-workbench-strip]");
+    if (active instanceof HTMLElement && active !== document.body && strip && !strip.contains(active)) return;
+    tab.focus();
+  });
+}
+
 export function WorkbenchTabStrip<T extends WorkbenchTab>({
   tabs,
   idPrefix,
@@ -154,6 +171,7 @@ export function WorkbenchTabStrip<T extends WorkbenchTab>({
   return (
     <header
       ref={headerRef}
+      data-workbench-strip
       className="drag-region flex h-13 shrink-0 items-center gap-1 border-b border-separator px-2"
       style={trailingClearance ? { paddingRight: trailingClearance + 4 } : undefined}
     >
@@ -179,8 +197,8 @@ export function WorkbenchTabStrip<T extends WorkbenchTab>({
       {tabMenu && selectedBrowser ? <BrowserMenuButton scope={JSON.stringify([selectedBrowser.id, presented])} iconOnly className="no-drag" aria-label="Open tabs"
         options={tabs.map(entry => ({ label: entry.label, checked: entry.selected, disabled: busy, select: () => {
           onSelectTab(entry);
-          requestAnimationFrame(() => activeTabRef.current?.focus());
-        } }))}><List /></BrowserMenuButton> : tabMenu ? <DropdownMenu><DropdownMenuTrigger asChild><Button variant="transparent" size="small" iconOnly className="no-drag" aria-label="Open tabs"><List /></Button></DropdownMenuTrigger><DropdownMenuContent align="end" onCloseAutoFocus={(event) => { if (tabMenuSelectionRef.current) { event.preventDefault(); tabMenuSelectionRef.current = false; requestAnimationFrame(() => activeTabRef.current?.focus()); } }}>{tabs.map((entry) => <DropdownMenuItem key={entry.id} {...entry.dataAttributes} disabled={busy} onSelect={() => { tabMenuSelectionRef.current = true; onSelectTab(entry); }}>{entry.label}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu> : null}
+          focusStripTabNextFrame(activeTabRef);
+        } }))}><List /></BrowserMenuButton> : tabMenu ? <DropdownMenu><DropdownMenuTrigger asChild><Button variant="transparent" size="small" iconOnly className="no-drag" aria-label="Open tabs"><List /></Button></DropdownMenuTrigger><DropdownMenuContent align="end" onCloseAutoFocus={(event) => { if (tabMenuSelectionRef.current) { event.preventDefault(); tabMenuSelectionRef.current = false; focusStripTabNextFrame(activeTabRef); } }}>{tabs.map((entry) => <DropdownMenuItem key={entry.id} {...entry.dataAttributes} disabled={busy} onSelect={() => { tabMenuSelectionRef.current = true; onSelectTab(entry); }}>{entry.label}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu> : null}
       <Button variant="transparent" size="small" iconOnly onClick={onClose} aria-label={closeLabel} aria-keyshortcuts={ariaKeyShortcut(toggleShortcutBinding)} title={`${closeTitle} (${toggleShortcut})`} className="no-drag"><PanelRightClose /></Button>
     </header>
   );

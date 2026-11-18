@@ -15,6 +15,7 @@ import { mcpOAuthSignInState, parseMcpOAuthSession, type McpOAuthSession } from 
 import {
   authorizeMcpServerWithRuntime,
   createBackgroundMcpOAuthProvider,
+  McpOAuthRefreshUnavailableError,
   type McpOAuthAuthorizationResult,
   type McpOAuthRuntime,
   type McpOAuthSessionStore,
@@ -36,7 +37,7 @@ import { tagMcpAgentTool } from "../../../main/services/mcp-agent-tool-descripto
 import { createComposioServiceAgentTool, isComposioServiceServer, projectComposioServiceInventory } from "../../../main/services/composio-service-tool.js";
 import { callMcpTool, createMcpToolCallGuard, createMcpToolInventoryCache, listMcpToolInventory, listMcpToolPage, readGuardedMcpInventory } from "../../../main/services/mcp-tool-inventory.js";
 import { JsonStore, readJson } from "./state.ts";
-import { insightCredentials } from "./credentials.ts";
+import { insightCredentials, withCredentialWriterLease } from "./credentials.ts";
 
 import { isRetiredMcpServerEntry, withoutRetiredMcpServers } from "../../../renderer/shared/mcp-retired-servers.js";
 import { migrateAidenMcpConfig } from "./mcp-config-migration.ts";
@@ -281,8 +282,24 @@ function cliOAuthRuntime(agentDir: string, server: McpServer, options: { openBro
     loopback: options.loopback ?? cliMcpOAuthLoopback(server),
     clientMetadataUrl: AIDEN_MCP_CLIENT_METADATA_URL,
     publish: (_serverId, operation) => operation(),
+    // One refresh of this grant at a time across `aiden` processes: a client
+    // that waited finds the rotated tokens the holder saved. The lease is per
+    // server and taken before the credential writer lease, never inside it.
+    withRefreshLock: async (_serverId, operation) => {
+      try {
+        return await withCredentialWriterLease(join(agentDir, "credentials", `${id}-refresh`), operation, REFRESH_LEASE_WAIT_MS);
+      } catch (error) {
+        if (error instanceof Error && error.message.startsWith("Another Aiden process owns")) {
+          throw new McpOAuthRefreshUnavailableError(new Error("another Aiden process is renewing this sign-in"));
+        }
+        throw error;
+      }
+    },
   };
 }
+
+/** How long a refresh waits for another process's refresh of the same sign-in. */
+const REFRESH_LEASE_WAIT_MS = 30_000;
 
 /**
  * `aiden mcp login <id>`: the desktop's attended sign-in (discovery, a
