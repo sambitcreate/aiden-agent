@@ -29,6 +29,7 @@ import {
   GENERATIVE_UI_GUIDE_MODULES,
   generativeUiGuide,
   isGenerativeUiGuideModule,
+  type GenerativeUiGuideModule,
 } from "./generative-ui-guide.js";
 import type { InlineVisualsMode } from "../../renderer/shared/appearance.js";
 import { createRenderUiTool, type RenderUiToolOptions } from "./aiden-ui-tool.js";
@@ -153,6 +154,49 @@ function resolveWorkspaceRoot(workspaceRoot: string) {
       inode: rootIdentity.ino.toString(10),
     }),
   };
+}
+
+/** Guide modules that apply to workspace artifact pages (Aiden UI Markup). */
+const ARTIFACT_GUIDE_MODULES = ["catalog"] as const satisfies readonly GenerativeUiGuideModule[];
+
+/**
+ * The `visualize_guide` tool. With inline visuals off it is still offered
+ * beside `workspace_artifact`, whose pages use the same markup; it then serves
+ * only the markup catalog and never mentions chat visual tools.
+ */
+export function createVisualizeGuideTool(options: { inlineVisuals?: boolean } = {}): AgentTool {
+  const inlineVisuals = options.inlineVisuals !== false;
+  const modules: readonly GenerativeUiGuideModule[] = inlineVisuals ? GENERATIVE_UI_GUIDE_MODULES : ARTIFACT_GUIDE_MODULES;
+  return declarePiRuntimeReplay(
+    {
+      name: VISUALIZE_GUIDE_TOOL_NAME,
+      label: "Visualize Guide",
+      description: inlineVisuals
+        ? "Read Aiden's design guidance for inline visuals before your first render_artifact call in a conversation. Request only the modules you need."
+        : 'Read the Aiden UI Markup guide (components, data, state and buttons) before your first workspace_artifact page in a conversation. Request the "catalog" module.',
+      parameters: Type.Object({
+        modules: Type.Array(
+          Type.Union(modules.map((module) => Type.Literal(module))),
+          { minItems: 1, maxItems: modules.length },
+        ),
+      }),
+      execute: async (_toolCallId, params): Promise<AgentToolResult<null>> => {
+        const requested = (params as { modules?: unknown }).modules;
+        if (
+          !Array.isArray(requested) ||
+          requested.length === 0 ||
+          !requested.every((module) => isGenerativeUiGuideModule(module) && modules.includes(module))
+        ) {
+          throw new Error(`visualize_guide modules must be one or more of: ${modules.join(", ")}.`);
+        }
+        return {
+          content: [{ type: "text", text: generativeUiGuide(requested as GenerativeUiGuideModule[], { inlineVisuals }) }],
+          details: null,
+        };
+      },
+    },
+    "never",
+  );
 }
 
 export function createGenerativeUiExtensionRuntime(
@@ -332,30 +376,7 @@ export function createGenerativeUiExtensionRuntime(
     "never",
   );
 
-  const guideTool: AgentTool = declarePiRuntimeReplay(
-    {
-      name: VISUALIZE_GUIDE_TOOL_NAME,
-      label: "Visualize Guide",
-      description:
-        "Read Aiden's design guidance for inline visuals before your first render_artifact call in a conversation. Request only the modules you need.",
-      parameters: Type.Object({
-        modules: Type.Array(
-          Type.Union(GENERATIVE_UI_GUIDE_MODULES.map((module) => Type.Literal(module))),
-          { minItems: 1, maxItems: GENERATIVE_UI_GUIDE_MODULES.length },
-        ),
-      }),
-      execute: async (_toolCallId, params): Promise<AgentToolResult<null>> => {
-        const modules = (params as { modules?: unknown }).modules;
-        if (!Array.isArray(modules) || modules.length === 0 || !modules.every(isGenerativeUiGuideModule)) {
-          throw new Error(
-            `visualize_guide modules must be one or more of: ${GENERATIVE_UI_GUIDE_MODULES.join(", ")}.`,
-          );
-        }
-        return { content: [{ type: "text", text: generativeUiGuide(modules) }], details: null };
-      },
-    },
-    "never",
-  );
+  const guideTool = createVisualizeGuideTool();
 
   return {
     extension: {

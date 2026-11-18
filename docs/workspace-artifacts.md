@@ -27,14 +27,14 @@ The tab is in the tools launcher next to the terminal, files and browser once th
 
 ## How pages get their data
 
-A page is written in Aiden UI Markup, the same component catalog that inline `render_ui` visuals use, and it declares named **sources**:
+A page is written in Aiden UI Markup, the same component catalog that inline `render_ui` visuals use. Aiden reads the markup through the `visualize_guide` tool's `catalog` module, which is offered with `workspace_artifact` even when Settings → Appearance → Inline visuals is Off or Only when I ask; it then covers pages only and does not mention chat visuals. A page declares named **sources**:
 
 | Source | What it reads | Limits |
 | --- | --- | --- |
 | `shell` | A command run in the workspace folder that should only read, such as `gh pr list --json number,title,url`. Aiden asks for read-only commands but cannot enforce it, which is why Ask shows every command first | 30 seconds, 256 KiB of output |
 | `file` | A workspace-relative text file; credential paths, hard links and links outside the folder are refused | 30 seconds, 256 KiB |
 
-Each source parses its output as `json`, `lines` or `text`, and the page reads it as `$name`. A source that has not loaded yet reads as `null`. A page has at most 8 sources, and a workspace has at most 20 pages.
+Each source parses its output as `json`, `lines` or `text`, and the page reads it as `$name`. A source that has not loaded yet reads as `null`. A source's parsed data holds up to 64 KiB, and so does the page's own `<Data>`; a larger result fails that source with a message to select fewer fields or rows. A page has at most 8 sources, and a workspace has at most 20 pages.
 
 Pages refresh when they are shown (unless the page turns that off), when the person presses **Refresh**, and, if the page asks for it, on an interval of at least 60 seconds while the tab is visible. The last data read is saved with the page, so it paints immediately and keeps showing the last good data when an ordinary refresh fails. A credential-policy denial erases that source’s cached data before it can be returned or displayed. After this security upgrade, older file-source caches are cleared once and need a refresh. The page header says which sources didn't load, and the page lists each failed source with its error, for example `gh: not logged in`.
 

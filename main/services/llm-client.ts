@@ -489,6 +489,7 @@ import {
   displayedAssistantHtmlUsage,
   GENERATIVE_UI_TOOL_NAME,
   shouldEnableGenerativeUiExtension,
+  createVisualizeGuideTool,
 } from "./generative-ui-extension.js";
 import { createGenerativeUiDraftSession } from "./generative-ui-draft.js";
 import { createUiDraftSession } from "./aiden-ui-draft.js";
@@ -1790,7 +1791,7 @@ async function prepareGeneration(
     !options.excludeToolNames?.has(DESIGN_MODE_TOOL_NAME) &&
     designModeToolAllowed({ ...designTurn, regularChat: chatSurface(chat) === "regular", inlineVisuals: params.inlineVisuals });
   // Even when the design_mode card is not offered (for example while Inline
-  // visuals is automatic), the person can switch design mode on mid-reply.
+  // visuals is not automatic), the person can switch design mode on mid-reply.
   const canvasHoldable =
     !designCanvasOffered &&
     !options.excludeToolNames?.has("canvas_place_frame") &&
@@ -2344,6 +2345,7 @@ async function prepareGeneration(
         .filter((tool) => !options.excludeToolNames?.has(tool.name)),
     });
   }
+  let visualizeGuideOffered = false;
   if (
     !botContext &&
     shouldEnableGenerativeUiExtension({
@@ -2437,12 +2439,16 @@ async function prepareGeneration(
       },
     });
     generationExtensions.push(generativeUiRuntime.extension);
+    visualizeGuideOffered = true;
   }
   if (offerWorkspaceArtifacts && workspace) {
-    // Gated by offerWorkspaceArtifacts above.
+    // Gated by offerWorkspaceArtifacts above. Pages use the same markup as
+    // render_ui, so the markup guide comes with them even while Inline
+    // visuals is off and the visuals extension (and its guide) is not here.
     generationExtensions.push({
       id: "aiden.workspace-artifacts",
       tools: [
+        ...(visualizeGuideOffered ? [] : [createVisualizeGuideTool({ inlineVisuals: false })]),
         createWorkspaceArtifactTool({
           workspaceId: workspace.id,
           chatId: params.chatId,

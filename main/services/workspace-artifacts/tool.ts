@@ -479,7 +479,7 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
       name: WORKSPACE_ARTIFACT_TOOL_NAME,
       label: "Artifact",
       description:
-        "Keep an interactive page in this workspace's Artifacts tab (beside the chat), for status the person will come back to: open pull requests, a release checklist, a TODO board. Unlike render_ui, the page persists for every chat in the workspace and re-reads live data from named sources (a shell command or a workspace file, bound in markup as $name) each time it refreshes. Always list first and update an existing artifact instead of creating a near-duplicate. Delete only when the person asks. run performs one of a page's actions exactly as its button would; use it only when the person asks for that action. restore brings back one of the page's earlierRevisions (from list) as a new revision, keeping its current title; use it when the person wants to undo or go back to an earlier version. Read the aiden-artifacts skill before the first call.",
+        "Keep an interactive page in this workspace's Artifacts tab (beside the chat), for status the person will come back to: open pull requests, a release checklist, a TODO board. Unlike a visual in the reply, the page persists for every chat in the workspace and re-reads live data from named sources (a shell command or a workspace file, bound in markup as $name) each time it refreshes. Always list first and update an existing artifact instead of creating a near-duplicate. Delete only when the person asks. run performs one of a page's actions exactly as its button would; use it only when the person asks for that action. restore brings back one of the page's earlierRevisions (from list) as a new revision, keeping its current title; use it when the person wants to undo or go back to an earlier version. Read the aiden-artifacts skill before the first call.",
       parameters: Type.Object({
         operation: Type.Union([
           Type.Literal("create"),
@@ -505,7 +505,7 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
         markup: Type.Optional(
           Type.String({
             description:
-              "Aiden UI Markup for the page (same catalog as render_ui), starting with <Visual title=\"…\">. Source data binds as $name; a source that has not loaded yet is null. Buttons may call run(\"actionName\", value…) and compose(\"text\") as well as sendPrompt, openUrl, copy and setState. Required for create; omit on update to keep the page.",
+              "Aiden UI Markup for the page (the catalog visualize_guide lists), starting with <Visual title=\"…\">. Source data binds as $name; a source that has not loaded yet is null. Buttons may call run(\"actionName\", value…) and compose(\"text\") as well as sendPrompt, openUrl, copy and setState. Required for create; omit on update to keep the page.",
           }),
         ),
         layout: Type.Optional(Type.Union([Type.Literal("column"), Type.Literal("wide")])),

@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   createGenerativeUiExtension,
+  createVisualizeGuideTool,
   GENERATIVE_UI_EXTENSION_ID,
   GENERATIVE_UI_TOOL_NAME,
   shouldEnableGenerativeUiExtension,
@@ -144,6 +145,21 @@ test("visualize_guide returns only the requested design modules", async () => {
   assert.match(html, /aiden-card/u);
   assert.match(html, /do not (re)?declare `aiden`/iu);
   await assert.rejects(guide.execute("g2", { modules: ["nope"] }), /module/iu);
+});
+
+test("with inline visuals off, the guide still teaches artifact markup and never mentions chat visual tools", async () => {
+  const guide = createVisualizeGuideTool({ inlineVisuals: false });
+  assert.equal(guide.name, "visualize_guide");
+  assert.equal(piRuntimeReplayPolicy(guide), "never");
+  assert.match(guide.description, /workspace_artifact/u);
+  const result = await guide.execute("g", { modules: ["catalog"] });
+  const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+  for (const name of Object.keys(AIDEN_UI_CATALOG)) assert.match(text, new RegExp(`\`${name}\``, "u"), name);
+  assert.match(text, /setState/u);
+  assert.match(text, /64 KiB/u);
+  assert.doesNotMatch(`${guide.description}\n${text}`, /render_ui|render_artifact|inline visual/iu);
+  // The HTML-only modules teach render_artifact, which is not offered then.
+  await assert.rejects(guide.execute("g2", { modules: ["html"] }), /must be one or more of: catalog\./u);
 });
 
 test("the system prompt points the model at the guide and keeps replies complete without visuals", () => {

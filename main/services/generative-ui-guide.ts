@@ -1,4 +1,5 @@
 import { AIDEN_UI_CATALOG, AIDEN_UI_ICONS, type PropKind } from "../../renderer/shared/aiden-ui/catalog.js";
+import { AIDEN_UI_LIMITS } from "../../renderer/shared/aiden-ui/types.js";
 
 /**
  * On-demand design guidance for inline visuals, returned by the
@@ -39,29 +40,45 @@ function catalogReference(): string {
     .join("\n");
 }
 
-const CATALOG = `## Aiden UI catalog (render_ui)
-- Prefer \`render_ui\`: it draws with Aiden's own components, looks native, follows the theme, and works without scripts. Use \`render_artifact\` only for custom drawing or scripting (canvas, simulations, 3D, Plotly).
-- Start with \`<Visual title="…">\`. Elements are JSX-like and must come from the catalog below. HTML elements, \`className\`, \`style\`, and \`on…\` handlers are dropped and reported back to you.
-- Prop values: \`"text"\`, \`{3}\`, \`{true}\`, a bare flag (\`stacked\`), \`{expression}\`, or a constant literal like \`{[{value:"a",label:"A"}]}\`.
-- Data: put JSON in \`<Data name="data">{…}</Data>\` and read it as \`$data\`. Keep numbers in data and let the components format them.
-- Expressions: \`$name\`, \`$a.b\`, \`$a[$key]\`, literals, \`+\` (adds numbers, joins text), \`== != < <= > >=\`, \`&& || !\`, \`test ? a : b\`, and \`fmt(value, "currency"|"percent"|"number"|"date")\`, \`len(x)\`, \`sum(list, "field")\`, \`max(list, "field")\`, \`min(…)\`, \`round(x, digits)\`, \`filter(list, "field", value)\`, \`sort(list, "field", "asc"|"desc")\`. There is no \`-\`, \`*\`, \`/\`, method call, or arrow function: precompute values into data.
-- Local state: declare keys in \`<Visual state={{tab: "a"}}>\`, bind inputs with \`bind="tab"\`, and change state with \`action={setState("tab", "b")}\`. Show parts conditionally with \`<If test={$tab == "a"}>\` and repeat with \`<Each in={$data.rows} as="row">…{$row.name}…</Each>\`.
-- Actions: \`sendPrompt("…")\` sends a visible follow-up message as the user (phrase it as their message), \`setState\`, \`openUrl("https://…")\` (Aiden asks before opening), \`copy("…")\`.
-- Width: \`layout\` defaults to the reading column (about 690px); pass \`layout: "wide"\` (before \`markup\`) to span the chat pane for dashboards and wide tables. Everything reflows with the window.
-- Keep it compact, sentence case, and keep the takeaway in your prose too. Repairs Aiden made come back in the tool result: fix them on your next call.
+/**
+ * The Aiden UI Markup reference. With `inlineVisuals` false it serves pages in
+ * the Artifacts tab only, so it never mentions chat visual tools the model
+ * does not have.
+ */
+function catalogGuide(inlineVisuals: boolean): string {
+  return [
+    inlineVisuals ? "## Aiden UI catalog (render_ui)" : "## Aiden UI Markup",
+    ...(inlineVisuals
+      ? [
+          "- Prefer `render_ui`: it draws with Aiden's own components, looks native, follows the theme, and works without scripts. Use `render_artifact` only for custom drawing or scripting (canvas, simulations, 3D, Plotly).",
+        ]
+      : []),
+    "- Start with `<Visual title=\"…\">`. Elements are JSX-like and must come from the catalog below. HTML elements, `className`, `style`, and `on…` handlers are dropped and reported back to you.",
+    "- Prop values: `\"text\"`, `{3}`, `{true}`, a bare flag (`stacked`), `{expression}`, or a constant literal like `{[{value:\"a\",label:\"A\"}]}`.",
+    `- Data: put JSON in \`<Data name="data">{…}</Data>\` and read it as \`$data\`. It holds up to ${AIDEN_UI_LIMITS.dataBytes / 1024} KiB. Keep numbers in data and let the components format them.`,
+    "- Expressions: `$name`, `$a.b`, `$a[$key]`, literals, `+` (adds numbers, joins text), `== != < <= > >=`, `&& || !`, `test ? a : b`, and `fmt(value, \"currency\"|\"percent\"|\"number\"|\"date\")`, `len(x)`, `sum(list, \"field\")`, `max(list, \"field\")`, `min(…)`, `round(x, digits)`, `filter(list, \"field\", value)`, `sort(list, \"field\", \"asc\"|\"desc\")`. There is no `-`, `*`, `/`, method call, or arrow function: precompute values into data.",
+    "- Local state: declare keys in `<Visual state={{tab: \"a\"}}>`, bind inputs with `bind=\"tab\"`, and change state with `action={setState(\"tab\", \"b\")}`. Show parts conditionally with `<If test={$tab == \"a\"}>` and repeat with `<Each in={$data.rows} as=\"row\">…{$row.name}…</Each>`.",
+    "- Actions: `sendPrompt(\"…\")` sends a visible follow-up message as the user (phrase it as their message), `setState`, `openUrl(\"https://…\")` (Aiden asks before opening), `copy(\"…\")`.",
+    ...(inlineVisuals
+      ? [
+          "- Width: `layout` defaults to the reading column (about 690px); pass `layout: \"wide\"` (before `markup`) to span the chat pane for dashboards and wide tables. Everything reflows with the window.",
+        ]
+      : ["- Width follows the pane the page is shown in, so everything reflows with the window."]),
+    "- Keep it compact, sentence case, and keep the takeaway in your prose too. Repairs Aiden made come back in the tool result: fix them on your next call.",
+    "",
+    "Components:",
+    catalogReference(),
+    "",
+    `Icons (\`icon="…"\` / \`<Icon name="…">\`): ${AIDEN_UI_ICONS.join(", ")}.`,
+    "",
+    "Example:",
+    "```",
+    AIDEN_UI_GUIDE_EXAMPLE,
+    "```",
+  ].join("\n");
+}
 
-Components:
-${catalogReference()}
-
-Icons (\`icon="…"\` / \`<Icon name="…">\`): ${AIDEN_UI_ICONS.join(", ")}.
-
-Example:
-\`\`\`
-${AIDEN_UI_GUIDE_EXAMPLE}
-\`\`\``;
-
-const MODULES: Record<GenerativeUiGuideModule, string> = {
-  catalog: CATALOG,
+const MODULES: Record<Exclude<GenerativeUiGuideModule, "catalog">, string> = {
   design: `## Design
 - Visuals render inside your reply in the Aiden Agent chat, on a transparent background, and their height follows their content (up to 1600px). Do not add an outer border, shadow, page background, or a heading that repeats the title (the title is shown under the visual).
 - Width: by default a visual fills the reading column (about 690px, narrower in small windows). Pass \`layout: "wide"\` (before \`html\`, so the draft streams at the right width) to span the chat pane instead (up to about 1280px) for dashboards, UI mockups, multi-panel layouts, and wide tables. Width follows the window in both, so lay out with flex/grid and percentages, never a fixed page width, and cap text line lengths yourself in wide visuals.
@@ -89,7 +106,16 @@ export function isGenerativeUiGuideModule(value: unknown): value is GenerativeUi
   return typeof value === "string" && (GENERATIVE_UI_GUIDE_MODULES as readonly string[]).includes(value);
 }
 
-export function generativeUiGuide(modules: readonly GenerativeUiGuideModule[]): string {
+export interface GenerativeUiGuideOptions {
+  /** Inline chat visuals are offered this turn; when false the guide serves artifact pages only. */
+  inlineVisuals?: boolean;
+}
+
+export function generativeUiGuide(
+  modules: readonly GenerativeUiGuideModule[],
+  options: GenerativeUiGuideOptions = {},
+): string {
+  const inlineVisuals = options.inlineVisuals !== false;
   const unique = GENERATIVE_UI_GUIDE_MODULES.filter((module) => modules.includes(module));
-  return unique.map((module) => MODULES[module]).join("\n\n");
+  return unique.map((module) => (module === "catalog" ? catalogGuide(inlineVisuals) : MODULES[module])).join("\n\n");
 }
