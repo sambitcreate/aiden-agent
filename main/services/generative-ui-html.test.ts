@@ -13,6 +13,7 @@ import {
 } from "../../renderer/shared/generative-ui.js";
 import { GENERATIVE_UI_DEFAULT_THEME_VARS } from "../../renderer/shared/generative-ui-theme.js";
 import {
+  createGenerativeUiDraftCheck,
   generativeUiDraftDocumentHead,
   generativeUiExportDocument,
   isGenerativeUiDraftAcceptable,
@@ -41,6 +42,56 @@ test("wrapper keeps inline head styles from a complete HTML document", () => {
   );
   assert.match(document, /h1\{color:red\}/u);
   assert.match(document, /<h1>Chart<\/h1>/u);
+});
+
+test("the wrapper keeps head styles and scripts without a src, in order, and drops the rest of the head", () => {
+  const document = wrapGenerativeUiHtml(
+    "<!doctype html><html><head><title>t</title><style data-src=x>b{}</style><script>var a=1</script><STYLE>i{}</STYLE></head><body><p>x</p></body></html>",
+    TITLE,
+  );
+  const body = document.slice(document.lastIndexOf("<body>"));
+  assert.equal(body.includes("b{}"), false);
+  assert.equal(body.includes("<title>"), false);
+  assert.ok(body.indexOf("<script>var a=1</script>") < body.indexOf("<STYLE>i{}</STYLE>"));
+  assert.ok(body.indexOf("<STYLE>i{}</STYLE>") < body.indexOf("<p>x</p>"));
+});
+
+test("checking, wrapping or streaming a visual at the size cap stays well under a second, whatever its shape", () => {
+  const cap = 512 * 1024 - 64;
+  const fill = (unit: string, before = "", after = "") =>
+    before + unit.repeat(Math.floor((cap - before.length - after.length) / unit.length)) + after;
+  const attributes = (count: number) => Array.from({ length: count }, (_, index) => ` a${index.toString(36)}`).join("");
+  const shapes: Record<string, string> = {
+    unclosedHeadScripts: fill("<script>", "<head>", "</head>"),
+    unclosedHeadStyles: fill("<style>", "<head>", "</head>"),
+    headScriptTagWithoutEnd: fill("<script ", "<head>", "</head>"),
+    headScriptsWithAttributes: fill("<script x>", "<head>", "</head>"),
+    openHeads: fill("<head>"),
+    openBodies: fill("<body>"),
+    htmlTagsWithoutEnd: fill("<html ", "<!doctype html>"),
+    bodyTagsWithoutEnd: fill("<body ", "<!doctype html>"),
+    htmlEndTagsWithoutEnd: fill("</html ", "<html>"),
+    deepNesting: fill("<div>".repeat(510) + "</div>".repeat(510)),
+    manyAttributes: fill(`<p${attributes(510)}>`),
+    formattingReconstruction: fill("<p>t</p>", `<p>${Array.from({ length: 500 }, (_, index) => `<b x${index}>`).join("")}</p>`),
+    scriptStrings: fill("x.innerHTML='<p>';", "<script>", "</script>"),
+    cssUrls: fill("url(a)", "<style>", "</style>"),
+  };
+  for (const [shape, html] of Object.entries(shapes)) {
+    const started = performance.now();
+    let admitted = true;
+    try {
+      wrapGenerativeUiHtml(html, TITLE);
+    } catch {
+      admitted = false;
+    }
+    const check = createGenerativeUiDraftCheck();
+    let draftAdmitted = true;
+    for (let at = 0; at < html.length && draftAdmitted; at += 997) draftAdmitted = check.append(html.slice(at, at + 997));
+    const elapsed = performance.now() - started;
+    assert.ok(elapsed < 1000, `${shape} took ${Math.round(elapsed)} ms`);
+    assert.equal(draftAdmitted, admitted, `${shape}: the draft and the finished visual disagree`);
+  }
 });
 
 test("html admission rejects remote scripts, frames, and javascript URLs", () => {

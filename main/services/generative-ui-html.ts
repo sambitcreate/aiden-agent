@@ -336,28 +336,108 @@ export function requireGenerativeUiTitle(value: unknown): string {
   return value;
 }
 
+// The fragment helpers below find tags with plain searches that never rescan
+// text: each one picks up where the last stopped, and once no `>` (or no
+// closing tag) is left, no later candidate can match either, so they stop.
+// The regexes they replaced retried at every `<` and took minutes on
+// 512 KiB of `<script ` or `<html `.
+
+/** Where `pattern` (a global regex) next matches at or after `from`, or -1. */
+function searchFrom(html: string, pattern: RegExp, from: number): number {
+  pattern.lastIndex = from;
+  return pattern.exec(html)?.index ?? -1;
+}
+
+const HEAD_OPEN = /<head\b/giu;
+const HEAD_CLOSE = /<\/head>/giu;
+const BODY_OPEN = /<body\b/giu;
+const BODY_CLOSE = /<\/body>/giu;
+
+/** The first `<name ...>...</name>` element: its span and its content. */
+function firstElement(
+  html: string,
+  open: RegExp,
+  close: RegExp,
+  nameLength: number,
+): { start: number; end: number; content: string } | undefined {
+  const start = searchFrom(html, open, 0);
+  if (start < 0) return undefined;
+  const contentStart = html.indexOf(">", start + 1 + nameLength) + 1;
+  if (contentStart === 0) return undefined;
+  const closeAt = searchFrom(html, close, contentStart);
+  if (closeAt < 0) return undefined;
+  return { start, end: closeAt + nameLength + 3, content: html.slice(contentStart, closeAt) };
+}
+
+/** Remove every `<name ...>` and `</name ...>` tag that has its closing `>`. */
+function stripTags(html: string, pattern: RegExp): string {
+  let out = "";
+  let from = 0;
+  for (let at = searchFrom(html, pattern, 0); at >= 0; at = searchFrom(html, pattern, from)) {
+    const gt = html.indexOf(">", at + 1);
+    if (gt < 0) break;
+    out += html.slice(from, at);
+    from = gt + 1;
+  }
+  return out + html.slice(from);
+}
+
+const INLINE_HEAD_TAG = /<(style|script)\b/giu;
+const SRC_ATTRIBUTE = /\bsrc\s*=/giu;
+const INLINE_CLOSE: Readonly<Record<string, RegExp>> = { style: /<\/style>/giu, script: /<\/script>/giu };
+
+/** The head's inline `<style>` and `<script>` elements (no `src`), in order. */
 function extractHeadInline(html: string): string {
-  const head = /<head\b[^>]*>([\s\S]*?)<\/head>/iu.exec(html);
-  if (!head?.[1]) return "";
-  const allowed = head[1].match(
-    /<(style|script)\b(?![^>]*\bsrc\s*=)[^>]*>[\s\S]*?<\/\1>/giu,
-  );
-  return allowed ? allowed.join("\n") : "";
+  const head = firstElement(html, HEAD_OPEN, HEAD_CLOSE, 4)?.content;
+  if (!head) return "";
+  const kept: string[] = [];
+  const unclosed = new Set<string>();
+  // Candidates before one `>` share it, so the last `src=` before it is
+  // found once for all of them.
+  let tagEnd = -1;
+  let lastSrc = -1;
+  let from = 0;
+  for (;;) {
+    INLINE_HEAD_TAG.lastIndex = from;
+    const tag = INLINE_HEAD_TAG.exec(head);
+    if (!tag) break;
+    const at = tag.index;
+    // By length: under `iu`, "ſcript" (long s) also matches.
+    const name = tag[1]!.length === 5 ? "style" : "script";
+    from = at + 1;
+    if (unclosed.has(name)) continue;
+    if (at >= tagEnd) {
+      tagEnd = head.indexOf(">", at + 1);
+      if (tagEnd < 0) break;
+      const tagText = head.slice(at, tagEnd);
+      lastSrc = -1;
+      SRC_ATTRIBUTE.lastIndex = 0;
+      for (let src = SRC_ATTRIBUTE.exec(tagText); src; src = SRC_ATTRIBUTE.exec(tagText)) lastSrc = at + src.index;
+    }
+    if (lastSrc > at + name.length) continue;
+    const closeAt = searchFrom(head, INLINE_CLOSE[name]!, tagEnd + 1);
+    if (closeAt < 0) {
+      unclosed.add(name);
+      continue;
+    }
+    from = closeAt + name.length + 3;
+    kept.push(head.slice(at, from));
+  }
+  return kept.join("\n");
 }
 
 function extractFragment(html: string): string {
   const trimmed = html.trim();
-  const body = /<body\b[^>]*>([\s\S]*?)<\/body>/iu.exec(trimmed);
+  const body = firstElement(trimmed, BODY_OPEN, BODY_CLOSE, 4);
   const headInline = extractHeadInline(trimmed);
-  if (body?.[1] !== undefined) {
-    return [headInline, body[1]].filter(Boolean).join("\n");
+  if (body !== undefined) {
+    return [headInline, body.content].filter(Boolean).join("\n");
   }
   if (/^\s*<(!doctype|html)\b/iu.test(trimmed)) {
-    const stripped = trimmed
-      .replace(/^\s*<!doctype[^>]*>/iu, "")
-      .replace(/<\/?html\b[^>]*>/giu, "")
-      .replace(/<head\b[^>]*>[\s\S]*?<\/head>/iu, "")
-      .replace(/<\/?body\b[^>]*>/giu, "");
+    let stripped = stripTags(trimmed.replace(/^\s*<!doctype[^>]*>/iu, ""), /<\/?html\b/giu);
+    const head = firstElement(stripped, HEAD_OPEN, HEAD_CLOSE, 4);
+    if (head) stripped = stripped.slice(0, head.start) + stripped.slice(head.end);
+    stripped = stripTags(stripped, /<\/?body\b/giu);
     return [headInline, stripped.trim() || trimmed].filter(Boolean).join("\n");
   }
   return html;
