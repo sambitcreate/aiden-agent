@@ -6,7 +6,9 @@ import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 
-const LIFECYCLE_SCOPES = new Set(["electron-lifecycle", "main"]);
+// "renderer-lifecycle" says when the main window's renderer exited or was
+// destroyed, which is how a quit can arrive with no main window.
+const LIFECYCLE_SCOPES = new Set(["electron-lifecycle", "main", "renderer-lifecycle"]);
 const MAX_MESSAGE = 240;
 
 /**
@@ -43,6 +45,69 @@ export function sampleMainThread(output, limit = 120) {
     thread.push(line);
   }
   return thread.slice(0, limit);
+}
+
+const SAMPLE_TREE_GLYPHS = /^[ +!:|]*/u;
+
+/** A call-graph line's frame, without its sample count, offset or address. */
+function sampleFrame(line) {
+  return line
+    .replace(SAMPLE_TREE_GLYPHS, "")
+    .replace(/^\d+\s+/u, "")
+    .replace(/\s+\+\s+\d+\s+\[0x[0-9a-f]+\]$/u, "")
+    .replace(/\s+\[0x[0-9a-f]+\]$/u, "")
+    .replace(/\s{2,}/gu, " ")
+    .trim();
+}
+
+/**
+ * Every thread other than the main one, one line each: its name, then the
+ * innermost `frames` frames of the stack whose leaf took the most samples,
+ * innermost first. A worker blocked in a file, keychain or network call shows
+ * that call here.
+ */
+export function sampleOtherThreads(output, frames = 4, limit = 80) {
+  const lines = output.split("\n");
+  const start = lines.findIndex((line) => line.trim() === "Call graph:");
+  if (start < 0) return [];
+  const threads = [];
+  let current = null;
+  const settleLeaf = () => {
+    // The last frame pushed is a leaf when the next line is not its child.
+    if (!current || current.stack.length === 0 || !current.lastWasPush) return;
+    const leaf = current.stack[current.stack.length - 1];
+    if (leaf.count > current.bestCount) {
+      current.bestCount = leaf.count;
+      current.best = current.stack.map((entry) => entry.frame);
+    }
+  };
+  for (const line of lines.slice(start + 1)) {
+    if (line.trim() === "") break;
+    if (/^ {4}\d+ Thread_/u.test(line)) {
+      if (current) settleLeaf();
+      current = {
+        header: line.trim().replace(/^\d+\s+/u, "").replace(/\s{2,}/gu, " "),
+        stack: [],
+        best: [],
+        bestCount: -1,
+        lastWasPush: false,
+      };
+      threads.push(current);
+      continue;
+    }
+    if (!current) continue;
+    const depth = (line.match(SAMPLE_TREE_GLYPHS)?.[0].length) ?? 0;
+    const count = Number(line.slice(depth).match(/^\d+/u)?.[0] ?? 0);
+    if (current.stack.length > 0 && depth <= current.stack[current.stack.length - 1].depth) settleLeaf();
+    while (current.stack.length > 0 && current.stack[current.stack.length - 1].depth >= depth) current.stack.pop();
+    current.stack.push({ depth, count, frame: sampleFrame(line) });
+    current.lastWasPush = true;
+  }
+  if (current) settleLeaf();
+  return threads
+    .filter((thread) => !/com\.apple\.main-thread/u.test(thread.header))
+    .slice(0, limit)
+    .map((thread) => `  ${thread.header}: ${thread.best.slice(-frames).reverse().join(" < ") || "?"}`);
 }
 
 /** One `/proc/<pid>/task/<tid>` thread as "name state wchan". */
@@ -86,7 +151,8 @@ async function linuxThreads(pid) {
 /**
  * Where a main process that would not quit had got to: its quit and shutdown
  * records, then its threads (macOS: the main thread's call graph from
- * `sample`; Linux: the main thread's state and any thread awake). Never throws.
+ * `sample` and every other thread's innermost frames; Linux: the main
+ * thread's state and any thread awake). Never throws.
  */
 export async function describeStuckShutdown({ pid, devLogPath, platform = process.platform }) {
   const sections = [];
@@ -102,6 +168,8 @@ export async function describeStuckShutdown({ pid, devLogPath, platform = proces
     const output = await run("/usr/bin/sample", [String(pid), "1", "-mayDie"], 20_000);
     const thread = output === null ? [] : sampleMainThread(output);
     sections.push(`Main thread (sample):\n${thread.length ? thread.join("\n") : "  (unavailable)"}`);
+    const others = output === null ? [] : sampleOtherThreads(output);
+    sections.push(`Other threads, innermost frame first (sample):\n${others.length ? others.join("\n") : "  (unavailable)"}`);
   } else if (platform === "linux") {
     const threads = await linuxThreads(pid);
     sections.push(`Threads (tid name state wchan):\n${threads.length ? threads.join("\n") : "  (unavailable)"}`);
