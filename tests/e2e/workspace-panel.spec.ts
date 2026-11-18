@@ -409,8 +409,10 @@ test("a hidden terminal keeps its output and shows it when revealed", async ({ a
 test("scrollback keys move through history without reaching the shell", async ({ aiden }) => {
   const { page } = aiden;
   const { output, run } = await openTerminal(page);
-  await run("seq 1 300");
-  await expect(output).toContainText(/\b300\b/u);
+  // The echoed command line already holds "300", so wait for a line only the command's output prints before paging:
+  // with no scrollback yet there is nothing to page through. The sleep keeps the prompt from printing afterwards.
+  await run(`M=lines; seq 1 300; echo "$M-done"; sleep 60`);
+  await expect(output).toContainText("lines-done");
   await page.keyboard.press("Shift+PageUp");
   await expect(output).not.toContainText(/\b300\b/u);
   await page.keyboard.press("Shift+PageDown");
