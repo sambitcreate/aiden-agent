@@ -63,9 +63,12 @@ test("artifacts persist per workspace and survive a restart", async (t) => {
 
 test("a workspace keeps titles unique and stops at its artifact limit", async (t) => {
   const { store } = await openStore(t);
-  await store.create("ws1", content());
-  await assert.rejects(store.create("ws1", content()), /already exists/u);
-  for (let index = 1; index < WORKSPACE_ARTIFACT_LIMITS.perWorkspace; index += 1) {
+  const first = await store.create("ws1", content());
+  // The refusal names the page to update, so the caller need not list again.
+  await assert.rejects(store.create("ws1", content()), new RegExp(`already exists here \\(id ${first.id}\\)`, "u"));
+  const second = await store.create("ws1", content({ title: "Second" }));
+  await assert.rejects(store.rename("ws1", second.id, "Open PRs"), new RegExp(`\\(id ${first.id}\\) is already named "Open PRs"`, "u"));
+  for (let index = 2; index < WORKSPACE_ARTIFACT_LIMITS.perWorkspace; index += 1) {
     await store.create("ws1", content({ title: `Page ${index}` }));
   }
   await assert.rejects(store.create("ws1", content({ title: "One more" })), /Update or delete one first/u);

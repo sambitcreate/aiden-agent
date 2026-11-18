@@ -23,7 +23,7 @@ export const AIDEN_ARTIFACTS_SKILL = Object.freeze({
     "Live data comes from named sources, re-read each time the page refreshes:",
     `- kind "shell": a read-only command run in the workspace folder, for example \`gh pr list --json number,title,author,url,isDraft\`. Prefer commands that print JSON and set parse "json". Each run has ${WORKSPACE_ARTIFACT_LIMITS.sourceTimeoutMs / 1000} seconds and ${WORKSPACE_ARTIFACT_LIMITS.sourceOutputBytes / 1024} KiB of output.`,
     '- kind "file": a workspace-relative path, read with parse "text", "lines" (non-empty lines as a list) or "json".',
-    `- Each source's data, after parsing, holds up to ${WORKSPACE_ARTIFACT_LIMITS.sourceDataBytes / 1024} KiB; a larger result fails that source. Ask only for the fields and rows the page shows (for example \`--json number,title\` and \`--limit 50\`).`,
+    `- Each source's data, after parsing, holds up to ${WORKSPACE_ARTIFACT_LIMITS.sourceDataBytes / 1024} KiB; a larger result fails that source. Data written into the page itself with <Data> holds up to the same ${WORKSPACE_ARTIFACT_LIMITS.sourceDataBytes / 1024} KiB, and more is dropped, so keep big lists in sources. Ask only for the fields and rows the page shows (for example \`--json number,title\` and \`--limit 50\`).`,
     `- Up to ${WORKSPACE_ARTIFACT_LIMITS.sources} sources. In markup, read a source as $name. It is null until it first loads, so guard with a fallback, for example {$pulls == null ? "Loading…" : len($pulls) + " open"}.`,
     "",
     "Buttons:",

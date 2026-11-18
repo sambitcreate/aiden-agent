@@ -144,7 +144,7 @@ function describeDiagnostics(diagnostics: readonly AidenUiDiagnostic[]): string 
   if (diagnostics.length === 0) return "";
   const lines = diagnostics.slice(0, MAX_REPORTED_DIAGNOSTICS).map((diagnostic) => `- ${diagnostic.code}: ${diagnostic.message}`);
   if (diagnostics.length > MAX_REPORTED_DIAGNOSTICS) lines.push(`- …and ${diagnostics.length - MAX_REPORTED_DIAGNOSTICS} more`);
-  return `\nRepairs Aiden made to the page (fix these next time):\n${lines.join("\n")}`;
+  return `\nRepairs Aiden made to the page (the page saved with them; if one changed what you meant, update the page now, and avoid them from now on):\n${lines.join("\n")}`;
 }
 
 function compilePage(markup: unknown, layout: unknown, title: string): { visual: ChatUiVisualV1; diagnostics: AidenUiDiagnostic[] } {

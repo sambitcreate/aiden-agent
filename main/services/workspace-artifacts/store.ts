@@ -595,8 +595,9 @@ export class WorkspaceArtifactStore {
       const title = options.uniqueTitle
         ? freeWorkspaceArtifactTitle(content.title, new Set(draft.artifacts.map((artifact) => artifact.visual.title)))
         : content.title;
-      if (draft.artifacts.some((artifact) => artifact.visual.title === title)) {
-        throw new Error(`An artifact named "${title}" already exists here. Update it instead.`);
+      const named = draft.artifacts.find((artifact) => artifact.visual.title === title);
+      if (named) {
+        throw new Error(`An artifact named "${title}" already exists here (id ${named.id}). Update it by that id instead.`);
       }
       const id = requireArtifactId(this.newId());
       const now = this.now();
@@ -655,8 +656,9 @@ export class WorkspaceArtifactStore {
       const content = contentFor(previous);
       if (!isWorkspaceArtifactTitle(content.title)) throw new Error(TITLE_RULE);
       assertNoCredentialFiles(content);
-      if (draft.artifacts.some((artifact) => artifact.id !== id && artifact.visual.title === content.title)) {
-        throw new Error(`Another artifact here is already named "${content.title}".`);
+      const named = draft.artifacts.find((artifact) => artifact.id !== id && artifact.visual.title === content.title);
+      if (named) {
+        throw new Error(`Another artifact here (id ${named.id}) is already named "${content.title}"; pick another title.`);
       }
       const digest = workspaceArtifactDigest(content.sources, content.actions);
       // Only a card that showed exactly these commands approves them;
@@ -702,8 +704,9 @@ export class WorkspaceArtifactStore {
     if (!isWorkspaceArtifactTitle(trimmed)) throw new Error(TITLE_RULE);
     return this.artifacts(workspaceId).update((draft) => {
       const artifact = draft.artifacts.find((entry) => entry.id === id) ?? notFound();
-      if (draft.artifacts.some((entry) => entry.id !== id && entry.visual.title === trimmed)) {
-        throw new Error(`Another artifact here is already named "${trimmed}".`);
+      const named = draft.artifacts.find((entry) => entry.id !== id && entry.visual.title === trimmed);
+      if (named) {
+        throw new Error(`Another artifact here (id ${named.id}) is already named "${trimmed}"; pick another title.`);
       }
       artifact.visual = { ...artifact.visual, title: trimmed };
       artifact.updatedAt = this.now();

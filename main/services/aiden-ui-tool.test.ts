@@ -74,9 +74,11 @@ test("markup that yields nothing, bad layouts, and bad titles are rejected", asy
 
 test("a revision with the same title keeps the first visual's id and position", async () => {
   const { instance, presented } = tool();
-  await instance.execute("first", { title: "Board", markup: "<Visual><Text>one</Text></Visual>" });
-  await instance.execute("second", { title: "Board", markup: "<Visual><Text>two</Text></Visual>" });
+  const first = await instance.execute("first", { title: "Board", markup: "<Visual><Text>one</Text></Visual>" });
+  const second = await instance.execute("second", { title: "Board", markup: "<Visual><Text>two</Text></Visual>" });
   await instance.execute("third", { title: "Other", markup: "<Visual><Text>three</Text></Visual>" });
+  assert.doesNotMatch(text(first), /Replaced/u);
+  assert.match(text(second), /Replaced the visual "Board" in place/u, "Aiden hears that the redraw replaced the first");
   assert.equal(presented[0]!.visual.id, presented[1]!.visual.id);
   assert.notEqual(presented[0]!.visual.id, presented[2]!.visual.id);
   assert.deepEqual(presented.map((entry) => entry.toolCallId), ["first", "first", "third"]);

@@ -65,7 +65,7 @@ function catalogGuide(inlineVisuals: boolean): string {
           "- Width: `layout` defaults to the reading column (about 690px); pass `layout: \"wide\"` (before `markup`) to span the chat pane for dashboards and wide tables. Everything reflows with the window.",
         ]
       : ["- Width follows the pane the page is shown in, so everything reflows with the window."]),
-    "- Keep it compact, sentence case, and keep the takeaway in your prose too. Repairs Aiden made come back in the tool result: fix them on your next call.",
+    "- Keep it compact, sentence case, and keep the takeaway in your prose too. Repairs Aiden made come back in the tool result: if one changed what you meant, redraw with the same title, which replaces the visual in place.",
     "",
     "Components:",
     catalogReference(),

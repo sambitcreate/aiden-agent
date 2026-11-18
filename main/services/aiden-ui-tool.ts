@@ -46,7 +46,7 @@ function describeDiagnostics(diagnostics: readonly AidenUiDiagnostic[]): string 
   if (diagnostics.length === 0) return "";
   const lines = diagnostics.slice(0, MAX_REPORTED_DIAGNOSTICS).map((diagnostic) => `- ${diagnostic.code}: ${diagnostic.message}`);
   if (diagnostics.length > MAX_REPORTED_DIAGNOSTICS) lines.push(`- …and ${diagnostics.length - MAX_REPORTED_DIAGNOSTICS} more`);
-  return `\nRepairs Aiden made (fix these next time):\n${lines.join("\n")}`;
+  return `\nRepairs Aiden made (the visual shows with them; if one changed what you meant, call render_ui again with the same title to replace it, and avoid them from now on):\n${lines.join("\n")}`;
 }
 
 /**
@@ -138,7 +138,7 @@ export function createRenderUiTool(options: RenderUiToolOptions): AgentTool {
             content: [
               {
                 type: "text",
-                text: `Rendered visual "${title}" (${nodes} components).${describeDiagnostics(compiled.diagnostics)}${describeVisualCheck(visual)}`,
+                text: `${replacing && presented ? `Replaced the visual "${title}" in place; the person now sees this version` : `Rendered visual "${title}"`} (${nodes} components).${describeDiagnostics(compiled.diagnostics)}${describeVisualCheck(visual)}`,
               },
             ],
             details: null,
