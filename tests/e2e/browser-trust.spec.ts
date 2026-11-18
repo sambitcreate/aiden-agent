@@ -153,6 +153,10 @@ test("navigation during isolated setup cannot fall back to the replacement page 
   let filling: Promise<{ error?: string; result?: BrowserCommandResult }> | undefined;
   try {
     await finishLmStudioOnboarding(aiden.page);
+    // A new fill-mode tab measures its first page in the background, outside the
+    // action queue; that setup can run into /start and leave a cached isolated
+    // context. Start responsive so the viewport command below is the only setup.
+    await command(aiden.page, { action: "defaults", defaults: { viewport: { mode: "responsive", width: 1280, height: 720 } } });
     const { tabId } = await command(aiden.page, { action: "create", show: false });
     let guestId = 0;
     await expect.poll(async () => {
@@ -171,7 +175,10 @@ test("navigation during isolated setup cannot fall back to the replacement page 
       (globalThis as SetupGlobal).__browserSetupGate = gate;
       guest.debugger.sendCommand = async (method, params, sessionId) => {
         const result = await original(method, params, sessionId);
-        if (!gate.held && method === "Runtime.evaluate" && params?.contextId && params.awaitPromise === undefined) {
+        // Hold the isolated world's script injection, not any other isolated call
+        // (each action's agent-cursor cleanup also evaluates there).
+        if (!gate.held && method === "Runtime.evaluate" && params?.contextId &&
+          String(params.expression).includes("globalThis.__aidenPlaywright = new")) {
           gate.held = true;
           await ready;
         }
@@ -183,7 +190,18 @@ test("navigation during isolated setup cannot fall back to the replacement page 
     await expect.poll(() => aiden.app.evaluate(() => (globalThis as SetupGlobal).__browserSetupGate?.held)).toBe(true);
     await aiden.app.evaluate(async ({ webContents }, urls) => {
       const guest = webContents.fromId(urls.guestId)!;
-      await guest.loadURL(urls.next);
+      // Release only once the replacement document has committed. loadURL's own
+      // promise can settle on the previous document's late load events.
+      const committed = new Promise<void>((resolve) => {
+        const onNavigate = (_event: unknown, committedUrl: string) => {
+          if (committedUrl !== urls.next) return;
+          guest.removeListener("did-navigate", onNavigate);
+          resolve();
+        };
+        guest.on("did-navigate", onNavigate);
+      });
+      void guest.loadURL(urls.next).catch(() => {});
+      await committed;
       (globalThis as SetupGlobal).__browserSetupGate!.release();
     }, {guestId,next:`${url}/next`});
     expect((await filling).error).toMatch(/browser page changed.*isolated evaluation/i);

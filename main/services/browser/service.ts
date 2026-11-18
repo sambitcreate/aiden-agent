@@ -100,6 +100,7 @@ import {
   type SensitiveFieldReach,
 } from "./credential-fields.js";
 import { configureBrowserPermissionHandlers } from "./permission-policy.js";
+import { loadBrowserUrl } from "./navigation-load.js";
 import { configStore } from "../config-store.js";
 import { browserRecordingBytesMatch, browserRecordingsFolder, findBrowserRecording } from "./recordings.js";
 import { browserRecordingExtension } from "../../../renderer/shared/browser-recording.js";
@@ -2811,7 +2812,8 @@ export class BrowserService {
                 const navigation = { url, epoch: tab.queue.epoch, sequence: undefined as number | undefined };
                 tab.navigationCommand = navigation;
                 try {
-                  const loading = wc.loadURL(url);
+                  // Settles on this page's own load, never on a still-loading page it replaced.
+                  const loading = loadBrowserUrl(wc, url);
                   if (input.readiness === "none") void loading.catch(() => {});
                   else if (input.readiness === "domContentLoaded") {
                     void loading.catch(() => {});
