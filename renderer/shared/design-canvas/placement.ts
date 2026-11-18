@@ -93,9 +93,10 @@ export function placeFrame(
     h,
   };
   // A group (not an artboard, which keeps the size the person drew) grows to
-  // hold a member placed past its right or bottom edge.
+  // hold a member placed past its right or bottom edge; a locked group keeps
+  // its box.
   const frames = [...doc.frames, placed].map((entry) =>
-    group && entry.id === group.id && group.kind === "group" ? growGroupToHold(entry, placed) : entry,
+    group && entry.id === group.id && group.kind === "group" && !group.locked ? growGroupToHold(entry, placed) : entry,
   );
   // A new arrow takes its place on the frames it joins.
   return { id, doc: syncConnectors({ ...doc, frames }) };

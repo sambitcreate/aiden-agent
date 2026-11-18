@@ -144,6 +144,25 @@ test("placing a page the person put on the canvas reuses their frame, and a lock
   assert.deepEqual(copy.otherFrames, [{ id: "theirs" }]);
 });
 
+test("reusing a page's frame inside a locked group moves it as asked but leaves the locked group's box as it is", async (t) => {
+  const { store, call } = await setup(t);
+  await store.update("chat-1", (doc) => ({
+    ...doc,
+    frames: [
+      { id: "g", kind: "group", title: "Locked", x: 0, y: 0, w: 800, h: 600, pageId: doc.activePageId, createdBy: "person", locked: true },
+      { id: "theirs", kind: "file", title: "Mine", path: "design/home.html", x: 20, y: 40, w: 640, h: 436, designWidth: 1280, pageId: doc.activePageId, createdBy: "person", groupId: "g" },
+    ],
+  }));
+  const moved = await call("canvas_place_frame", { kind: "file", title: "Home", path: "design/home.html", x: 3000, y: 3000 });
+  assert.equal(moved.placed, "reused");
+  assert.deepEqual(moved.frame.box, { x: 3000, y: 3000, w: 640, h: 436 });
+  const wider = await call("canvas_place_frame", { kind: "file", title: "Home", path: "design/home.html", w: 1600, h: 1000 });
+  assert.equal(wider.placed, "reused");
+  const doc = await store.get("chat-1");
+  const group = doc.frames.find((frame) => frame.id === "g")!;
+  assert.deepEqual({ x: group.x, y: group.y, w: group.w, h: group.h, locked: group.locked }, { x: 0, y: 0, w: 800, h: 600, locked: true });
+});
+
 test("a page shown on another canvas page gets a new frame here, and the result says where the other is", async (t) => {
   const { store, call } = await setup(t);
   const first = await call("canvas_place_frame", { kind: "file", title: "Home", path: "design/home.html" });
