@@ -35,7 +35,7 @@ export const AIDEN_ARTIFACTS_SKILL = Object.freeze({
     "",
     "Access follows the workspace, like chat: with No access nothing runs; under Ask, the person approves the page's commands when you save it, and any change to its commands needs approval again; with Full access everything runs. File sources run under Ask without approval.",
     "",
-    `Undo: Aiden keeps each page's last few versions. When the person asks to undo a change or go back to an earlier version, read the page's earlierRevisions from list and call ${WORKSPACE_ARTIFACT_TOOL_NAME} with operation "restore", the id and the revision, rather than rewriting the page by hand. A restore keeps the page's current title.`,
+    `Undo: Aiden keeps each page's last few versions. When the person asks to undo a change or go back to an earlier version, read the page's earlierRevisions from list and call ${WORKSPACE_ARTIFACT_TOOL_NAME} with operation "restore", the id and the revision, rather than rewriting the page by hand. A restore keeps the page's current title. All your saves to one page in a reply count as one version, so a restore goes back to the page as it was before that reply; a save that changes nothing makes no version.`,
     "",
     "Sharing: to share a page or bring one in, the person uses Export page… or Import page… in the page's menu in the Artifacts tab. You can't export or import pages.",
     "",

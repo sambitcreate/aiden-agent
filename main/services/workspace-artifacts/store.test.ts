@@ -96,6 +96,30 @@ test("an approval covers only the exact commands that were approved", async (t) 
   assert.equal(approved.approvedDigest, view.digest);
 });
 
+test("an unchanged save makes no version but still records an approval the person just gave", async (t) => {
+  const { store } = await openStore(t);
+  const created = await store.create("ws1", content());
+  // Key order in the saved value does not make an identical page look new.
+  const reordered = { refresh: { onOpen: true }, actions: [], sources: [pulls], visual: page(), title: "Open PRs" };
+  const same = await store.replace("ws1", created.id, reordered);
+  assert.equal(same.revision, 1);
+  assert.deepEqual(await store.history("ws1", created.id), []);
+  const approved = await store.replace("ws1", created.id, content(), allowed(content()));
+  assert.equal(approved.revision, 1);
+  assert.equal(approved.approvedDigest, workspaceArtifactDigest([pulls], []));
+  assert.equal((await store.get("ws1", created.id))!.artifact.approvedDigest, approved.approvedDigest);
+});
+
+test("replacing the revision a caller saved earlier keeps no version for it", async (t) => {
+  const { store } = await openStore(t);
+  const created = await store.create("ws1", content());
+  const first = await store.replace("ws1", created.id, content({ description: "one" }));
+  const second = await store.replace("ws1", created.id, content({ description: "two" }), { foldRevision: first.revision });
+  // A stale fold revision does not fold: the version it would drop is not the caller's.
+  await store.replace("ws1", created.id, content({ description: "three" }), { foldRevision: first.revision });
+  assert.deepEqual((await store.history("ws1", created.id)).map((entry) => entry.revision), [second.revision, created.revision]);
+});
+
 test("a failed refresh keeps the last good data and drops sources that were removed", async (t) => {
   const { store } = await openStore(t);
   const todo: WorkspaceArtifactSourceV1 = { name: "todo", kind: "file", file: "TODO.md", parse: "lines" };

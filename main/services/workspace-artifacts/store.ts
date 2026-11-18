@@ -236,6 +236,12 @@ export interface WorkspaceArtifactWriteOptions {
    * "Title (2)", "Title (3)"… instead of failing, as an import needs.
    */
   uniqueTitle?: boolean;
+  /**
+   * Update only: the revision this caller saved earlier in the same agent
+   * turn. Replacing that revision keeps no history entry for it, so one turn's
+   * saves are a single undo step back to the page before the turn.
+   */
+  foldRevision?: number;
 }
 
 /** `title`, or the first "Title (n)" no page in `taken` has, within the title limit. */
@@ -250,6 +256,46 @@ export function freeWorkspaceArtifactTitle(title: string, taken: ReadonlySet<str
   }
   // Unreachable: n titles always leave one of n + 1 candidates free.
   throw new Error(`An artifact named "${title}" already exists here.`);
+}
+
+/** JSON with object keys sorted, so equal values compare equal whatever their key order. */
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, entry: unknown) =>
+    entry && typeof entry === "object" && !Array.isArray(entry)
+      ? Object.fromEntries(Object.entries(entry as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : entry,
+  );
+}
+
+/**
+ * Whether saving `content` over `previous` would change nothing the page shows
+ * or runs. The live state the person changed since is not part of the page:
+ * an identical re-save keeps it rather than resetting it.
+ */
+function sameArtifactContent(previous: WorkspaceArtifactV1, content: WorkspaceArtifactContent): boolean {
+  const page = (visual: ChatUiVisualV1) => {
+    const { id: _id, title: _title, state: _state, ...rest } = visual;
+    return rest;
+  };
+  const shape = (value: {
+    title: string;
+    description?: string;
+    visual: ChatUiVisualV1;
+    initialState?: Record<string, unknown>;
+    sources: unknown;
+    actions: unknown;
+    refresh: unknown;
+  }) =>
+    canonicalJson({
+      title: value.title,
+      description: value.description ?? null,
+      visual: page(value.visual),
+      initialState: value.initialState ?? null,
+      sources: value.sources,
+      actions: value.actions,
+      refresh: value.refresh,
+    });
+  return shape({ ...previous, title: previous.visual.title }) === shape(content);
 }
 
 /** Thrown inside a history write whose workspace was removed, so nothing is written. */
@@ -617,6 +663,12 @@ export class WorkspaceArtifactStore {
       // otherwise an unchanged set keeps the approval it had.
       const approvedDigest =
         options.approvedDigest === digest || previous.approvedDigest === digest ? digest : undefined;
+      // A save that changes nothing makes no version; it can only add the
+      // approval the person just gave for these exact commands.
+      if (sameArtifactContent(previous, content)) {
+        if (approvedDigest) previous.approvedDigest = approvedDigest;
+        return { saved: structuredClone(previous), replaced: undefined };
+      }
       const next: WorkspaceArtifactV1 = {
         version: 1,
         id,
@@ -636,9 +688,11 @@ export class WorkspaceArtifactStore {
       const checked = parseWorkspaceArtifactV1(next);
       if (!checked) throw new Error("The artifact could not be saved because its page is too large or invalid.");
       draft.artifacts[index] = checked;
-      return { saved: checked, replaced: structuredClone(previous) };
+      // A version this turn already saved is not an undo step of its own.
+      const folded = options.foldRevision !== undefined && options.foldRevision === previous.revision;
+      return { saved: checked, replaced: folded ? undefined : structuredClone(previous) };
     });
-    await this.recordRevision(workspaceId, pages, replaced);
+    if (replaced) await this.recordRevision(workspaceId, pages, replaced);
     return saved;
   }
 

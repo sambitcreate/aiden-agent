@@ -410,6 +410,13 @@ function text(value: string): AgentToolResult<null> {
  */
 export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOptions): AgentTool {
   /**
+   * The revision each page was left at by this tool's own saves. One tool
+   * serves one agent turn, so a later save in the turn folds into the first:
+   * the page's history keeps the version from before the turn (for a page
+   * made this turn, its first draft), one undo step.
+   */
+  const savedThisTurn = new Map<string, number>();
+  /**
    * After a save: the first refresh, then the page checked against its data.
    * The page is already saved, so neither may make the save look failed.
    */
@@ -569,6 +576,9 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
           if (signal?.aborted) throw new Error("The restore was cancelled.");
           // The store approves only when the allowed card listed exactly the restored commands.
           const artifact = await store.restore(workspaceId, id, revision, { approvedDigest: shownDigest });
+          // A restore is the person going back on purpose: what it replaced is kept,
+          // and the next save starts a new undo step.
+          savedThisTurn.delete(id);
           options.onChanged({ workspaceId, artifactId: artifact.id, reason: "updated", chatId });
           return text(
             `Restored revision ${revision} of the artifact "${artifact.visual.title}" as revision ${artifact.revision}.${await afterSave(artifact, signal)}`,
@@ -590,8 +600,21 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
         // The store approves only when the allowed card listed exactly the saved
         // commands; otherwise an unchanged set keeps the approval it already had.
         const artifact = previous
-          ? await store.replace(workspaceId, previous.id, content, { approvedDigest: shownDigest })
+          ? await store.replace(workspaceId, previous.id, content, {
+              approvedDigest: shownDigest,
+              foldRevision: savedThisTurn.get(previous.id),
+            })
           : await store.create(workspaceId, content, { approvedDigest: shownDigest, chatId });
+        if (previous && artifact.revision === previous.revision) {
+          if (artifact.approvedDigest !== previous.approvedDigest) {
+            options.onChanged({ workspaceId, artifactId: artifact.id, reason: "updated", chatId });
+          }
+          return text(
+            `Nothing changed: the artifact "${artifact.visual.title}" (id ${artifact.id}) already has exactly this page, data and actions, so no new revision was made.${describeDiagnostics(diagnostics)}`,
+          );
+        }
+        // A page made in this turn keeps its first draft as the one undo step.
+        if (previous) savedThisTurn.set(artifact.id, artifact.revision);
         options.onChanged({ workspaceId, artifactId: artifact.id, reason: previous ? "updated" : "created", chatId });
         const verb = previous ? "Updated" : "Created";
         return text(

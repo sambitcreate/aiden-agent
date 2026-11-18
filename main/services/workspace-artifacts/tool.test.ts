@@ -42,7 +42,11 @@ async function harness(t: test.TestContext, overrides: Partial<WorkspaceArtifact
     onChanged: (event) => events.push(event),
     ...overrides,
   };
-  const tool = createWorkspaceArtifactTool(options);
+  let tool = createWorkspaceArtifactTool(options);
+  /** A new reply: the chat builds a fresh tool for each agent turn. */
+  const nextTurn = () => {
+    tool = createWorkspaceArtifactTool(options);
+  };
   /** What the chat does when the person allows the card for this call. */
   const allow = async (id: string, args: Record<string, unknown>) => {
     const card = await workspaceArtifactCallApproval(args, options);
@@ -53,7 +57,7 @@ async function harness(t: test.TestContext, overrides: Partial<WorkspaceArtifact
     const result = await tool.execute(id, args as never, undefined);
     return result.content.map((part) => (part.type === "text" ? part.text : "")).join("");
   };
-  return { store, tool, events, approvedCalls, options, call, allow };
+  return { store, get tool() { return tool; }, events, approvedCalls, options, call, allow, nextTurn };
 }
 
 test("create saves a page the Artifacts tab can show and tells that chat's window", async (t) => {
@@ -72,13 +76,14 @@ test("create saves a page the Artifacts tab can show and tells that chat's windo
 });
 
 test("update keeps what the call leaves out and bumps the revision", async (t) => {
-  const { store, call } = await harness(t, { permission: "full" });
+  const { store, call, nextTurn } = await harness(t, { permission: "full" });
   await call("c1", { operation: "create", title: "Open PRs", markup: PAGE, sources: [PULLS] });
   await store.saveState("ws1", "art1", 1, { filter: "mine" });
   await call("c2", { operation: "update", id: "art1", description: "PRs waiting on review", layout: "wide" });
   let artifact = (await store.get("ws1", "art1"))!.artifact;
   // Without new markup, the declared state stays what the markup declared.
   assert.deepEqual(artifact.initialState, { filter: "all" });
+  nextTurn();
   await call("c3", { operation: "update", id: "art1", markup: PAGE.replace('filter: "all"', 'filter: "open"') });
   assert.deepEqual((await store.get("ws1", "art1"))!.artifact.initialState, { filter: "open" });
   await store.restore("ws1", "art1", 2);
@@ -89,6 +94,57 @@ test("update keeps what the call leaves out and bumps the revision", async (t) =
   assert.equal(artifact.visual.layout, "wide");
   assert.deepEqual(artifact.sources.map((source) => source.name), ["pulls"]);
   assert.match(JSON.stringify(artifact.visual.tree), /"act":"run"/u);
+});
+
+test("all of one reply's saves to a page are one undo step back to the page before the reply", async (t) => {
+  const { store, call, nextTurn } = await harness(t, { permission: "full" });
+  await call("c1", { operation: "create", title: "Open PRs", markup: PAGE, sources: [PULLS] });
+  nextTurn();
+  for (const [index, description] of ["draft one", "draft two", "draft three", "draft four", "draft five", "final"].entries()) {
+    await call(`u${index}`, { operation: "update", id: "art1", description });
+  }
+  assert.equal((await store.get("ws1", "art1"))!.artifact.description, "final");
+  // Six saves in one reply leave one earlier version: the page as it was before the reply.
+  const history = await store.history("ws1", "art1");
+  assert.deepEqual(history.map((entry) => entry.revision), [1]);
+
+  nextTurn();
+  const restored = await call("r1", { operation: "restore", id: "art1", revision: 1 });
+  assert.match(restored, /^Restored revision 1/u);
+  assert.equal((await store.get("ws1", "art1"))!.artifact.description, undefined);
+  // A save after a restore in the same reply starts its own undo step, so the restore can be undone.
+  await call("u9", { operation: "update", id: "art1", description: "after restore" });
+  const kept = (await store.history("ws1", "art1")).map((entry) => entry.revision);
+  assert.equal(kept.length, 3);
+  const restoredVersion = (await store.get("ws1", "art1"))!.artifact.revision - 1;
+  assert.ok(kept.includes(restoredVersion), "the restored page is kept as its own version");
+});
+
+test("a page made in this reply keeps its first draft as the reply's undo step", async (t) => {
+  const { store, call } = await harness(t, { permission: "full" });
+  await call("c1", { operation: "create", title: "Open PRs", markup: PAGE, sources: [PULLS] });
+  await call("c2", { operation: "update", id: "art1", description: "second" });
+  await call("c3", { operation: "update", id: "art1", description: "third" });
+  assert.deepEqual((await store.history("ws1", "art1")).map((entry) => entry.revision), [1]);
+});
+
+test("a save that changes nothing makes no version and keeps the person's page state", async (t) => {
+  const { store, call, nextTurn, events } = await harness(t, { permission: "full" });
+  const create = { operation: "create", title: "Open PRs", markup: PAGE, sources: [PULLS], actions: [MERGE] };
+  await call("c1", create);
+  await store.saveState("ws1", "art1", 1, { filter: "mine" });
+  nextTurn();
+  const before = events.length;
+  const text = await call("c2", { ...create, operation: "update", id: "art1" });
+  assert.match(text, /^Nothing changed: the artifact "Open PRs" \(id art1\)/u);
+  const artifact = (await store.get("ws1", "art1"))!.artifact;
+  assert.equal(artifact.revision, 1);
+  assert.deepEqual(artifact.visual.state, { filter: "mine" });
+  assert.deepEqual(await store.history("ws1", "art1"), []);
+  assert.equal(events.length, before, "an unchanged page needs no refresh in the window");
+  // A real change still makes a version.
+  await call("c3", { operation: "update", id: "art1", description: "Changed" });
+  assert.equal((await store.get("ws1", "art1"))!.artifact.revision, 2);
 });
 
 test("list shows the model what exists so it can update instead of duplicating", async (t) => {
@@ -264,10 +320,11 @@ test("a revision with commands cannot be restored where the workspace has no fol
 });
 
 test("list shows each page's earlier revisions so the model can restore one", async (t) => {
-  const { call } = await harness(t, { permission: "full" });
+  const { call, nextTurn } = await harness(t, { permission: "full" });
   await call("c1", { operation: "create", title: "Open PRs", markup: PAGE, sources: [PULLS] });
   await call("c2", { operation: "create", title: "Notes", markup: PAGE });
   await call("c3", { operation: "update", id: "art1", description: "v2" });
+  nextTurn();
   await call("c4", { operation: "update", id: "art1", description: "v3" });
   const listed = JSON.parse(await call("c5", { operation: "list" })) as { id: string; earlierRevisions?: number[] }[];
   assert.deepEqual(
