@@ -425,9 +425,11 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
    * The revision each page was left at by this tool's own saves. One tool
    * serves one agent turn, so a later save in the turn folds into the first:
    * the page's history keeps the version from before the turn (for a page
-   * made this turn, its first draft), one undo step.
+   * made this turn, its first draft), one undo step. The title is the name
+   * that save left: a page renamed since (by the person, or in another chat)
+   * ends the fold, so the renamed version is kept as its own undo step.
    */
-  const savedThisTurn = new Map<string, number>();
+  const savedThisTurn = new Map<string, { revision: number; title: string }>();
   /**
    * After a save: the first refresh, then the page checked against its data.
    * The page is already saved, so neither may make the save look failed.
@@ -607,7 +609,13 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
         }
         const previous = operation === "update" ? (await store.get(workspaceId, idOf(input)))?.artifact : undefined;
         if (operation === "update" && !previous) throw new Error("No artifact with that id exists in this workspace.");
-        const { content, diagnostics } = contentFor(input, previous);
+        const earlier = previous ? savedThisTurn.get(previous.id) : undefined;
+        const renamedSince = earlier !== undefined && previous !== undefined && previous.visual.title !== earlier.title;
+        // Repeating the name this turn's save gave keeps a rename made since.
+        const { content, diagnostics } = contentFor(
+          renamedSince && input.title === earlier.title ? { ...input, title: undefined } : input,
+          previous,
+        );
         assertSourcesRunnable(content, options);
         if (signal?.aborted) throw new Error("The artifact change was cancelled.");
         // The store approves only when the allowed card listed exactly the saved
@@ -615,7 +623,7 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
         const artifact = previous
           ? await store.replace(workspaceId, previous.id, content, {
               approvedDigest: shownDigest,
-              foldRevision: savedThisTurn.get(previous.id),
+              ...(earlier && !renamedSince ? { foldRevision: earlier.revision } : {}),
             })
           : await store.create(workspaceId, content, { approvedDigest: shownDigest, chatId });
         if (previous && artifact.revision === previous.revision) {
@@ -627,7 +635,7 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
           );
         }
         // A page made in this turn keeps its first draft as the one undo step.
-        if (previous) savedThisTurn.set(artifact.id, artifact.revision);
+        if (previous) savedThisTurn.set(artifact.id, { revision: artifact.revision, title: artifact.visual.title });
         options.onChanged({ workspaceId, artifactId: artifact.id, reason: previous ? "updated" : "created", chatId });
         const verb = previous ? "Updated" : "Created";
         return text(

@@ -374,3 +374,28 @@ test("the markup guide offered beside pages teaches only what a page accepts", a
   assert.doesNotMatch(text, /same title/u);
   await assert.rejects(call("c3", { operation: "create", title: "Every action", markup, actions: [MERGE] }), /Update it by that id/u);
 });
+
+test("a rename made during a reply survives that reply's later saves and stays its own undo step", async (t) => {
+  const { store, call, nextTurn } = await harness(t, { permission: "full" });
+  await call("c1", { operation: "create", title: "Open PRs", markup: PAGE });
+  nextTurn();
+  await call("u1", { operation: "update", id: "art1", title: "Open PRs", description: "first pass" });
+  // The person renames the page in the Artifacts tab while the reply goes on.
+  await store.rename("ws1", "art1", "Pulls");
+  const saved = await call("u2", { operation: "update", id: "art1", title: "Open PRs", description: "second pass" });
+  assert.match(saved, /Updated the artifact "Pulls"/u);
+  const artifact = (await store.get("ws1", "art1"))!.artifact;
+  assert.equal(artifact.visual.title, "Pulls");
+  assert.equal(artifact.description, "second pass");
+  // History keeps the page before the reply and the renamed page.
+  assert.deepEqual(
+    (await store.history("ws1", "art1")).map((entry) => entry.title),
+    ["Pulls", "Open PRs"],
+  );
+  // A later save in the reply folds into the one after the rename again.
+  await call("u3", { operation: "update", id: "art1", description: "third pass" });
+  assert.equal((await store.history("ws1", "art1")).length, 2);
+  // The agent can still rename the page on purpose.
+  await call("u4", { operation: "update", id: "art1", title: "Review queue" });
+  assert.equal((await store.get("ws1", "art1"))!.artifact.visual.title, "Review queue");
+});
