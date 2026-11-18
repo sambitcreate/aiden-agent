@@ -63,6 +63,7 @@ import {
   AidenMcpProvenanceLog,
   emptyAidenMcpProvenanceDocument,
   parseAidenMcpProvenanceDocument,
+  type AidenMcpChatProvenance,
   type AidenMcpProvenanceDocument,
 } from "./aiden-mcp-provenance.js";
 import {
@@ -326,6 +327,8 @@ export interface AidenRemoteRuntime {
   approvedRoots: AidenRemoteApprovedRootService;
   /** The loopback MCP server for outside apps; off unless the person turns it on. */
   mcp: AidenMcpHost;
+  /** Which outside app started a chat; read only by Aiden on this computer. */
+  mcpProvenance: AidenMcpProvenanceLog;
   revokeDevice(deviceId: string): Promise<boolean>;
   pendingApprovalForChat(chatId: string): AidenRemotePendingApproval | null;
   pendingQuestionForChat(chatId: string): AidenRemotePendingQuestion | null;
@@ -1378,6 +1381,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     state,
     approvedRoots: new AidenRemoteApprovedRootService(state),
     mcp,
+    mcpProvenance,
     revokeDevice,
     // A phone turn's card first, then the card of an owed turn no window owns.
     pendingApprovalForChat: (chatId) =>
@@ -1427,7 +1431,7 @@ export async function stopAidenRemoteServiceAndSettle(): Promise<void> {
   await runtime?.service.stopAndSettle();
 }
 
-/** Main-process controls for Aiden's MCP server (W4b adds the Settings UI on top). */
+/** Main-process controls for Aiden's MCP server, behind Settings → Connections → Apps using Aiden. */
 export async function aidenMcpServerStatus(): Promise<AidenMcpServerStatus> {
   return (await getAidenRemoteRuntime()).mcp.status();
 }
@@ -1449,4 +1453,9 @@ export async function listAidenMcpApps(): Promise<AidenRemoteAgentAppProjection[
 
 export async function revokeAidenMcpApp(appId: string): Promise<boolean> {
   return (await getAidenRemoteRuntime()).mcp.revokeApp(appId);
+}
+
+/** The outside app that started `chatId` through the MCP server, for the chat's "Started by" label. */
+export async function aidenMcpChatProvenance(chatId: string): Promise<AidenMcpChatProvenance | undefined> {
+  return (await getAidenRemoteRuntime()).mcpProvenance.get(chatId);
 }

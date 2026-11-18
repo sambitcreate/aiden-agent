@@ -66,12 +66,14 @@ export function visibleOnboardingFeatures<
   T extends { id: string; description: string | ((computer: LocalComputerNoun) => string) },
 >(
   features: readonly T[],
-  capabilities: { computerUse: boolean; bots: boolean; botComputers: boolean; platform: string; designMode?: boolean },
+  capabilities: { computerUse: boolean; bots: boolean; botComputers: boolean; platform: string; designMode?: boolean; mcpServer?: boolean },
 ): (T & { description: string })[] {
   return features.filter((feature) =>
     (capabilities.computerUse || feature.id !== "computerUse") &&
     // Only AIDEN_DESIGN_MODE=0 turns design mode off.
     (capabilities.designMode !== false || feature.id !== "designMode") &&
+    // Apps using Aiden exists only where the desktop can host the MCP server.
+    (capabilities.mcpServer === true || feature.id !== "otherApps") &&
     (capabilities.bots || feature.id !== "bots") &&
     (capabilities.bots || feature.id !== "botOpenWork") &&
     (capabilities.bots || feature.id !== "botRoutineModels") &&

@@ -3846,6 +3846,7 @@ export const llmClient = {
                 devices: devicesEnabled(),
                 botComputers: hostPlatformCapabilities().botComputers,
                 hooks: hostPlatformCapabilities().hooks,
+                mcpServer: hostPlatformCapabilities().mcpServer,
               }),
               availableTools: toolsWithRuntimeContributions.map((tool) => tool.name),
               mcpToolNames: tools.filter((tool) => mcpAgentToolIdentity(tool) !== undefined).map((tool) => tool.name),
