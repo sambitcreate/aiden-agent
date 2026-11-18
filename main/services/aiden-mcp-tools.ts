@@ -18,6 +18,7 @@ import { Value } from "typebox/value";
 
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 import type { AidenMcpChatProvenance } from "./aiden-mcp-provenance.js";
+import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import type { AidenRemoteChatService, AidenRemoteMessageProjection } from "./aiden-remote-chats.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import type { AidenRemoteCapability } from "./aiden-remote-protocol.js";
@@ -48,12 +49,24 @@ export interface AidenMcpLimits {
   concurrentRuns: number;
   /** The longest a single `aiden_chat_wait` holds before answering `running`. */
   maxWaitSeconds: number;
+  /**
+   * Turn requests one app may have unanswered at once. Below the server's
+   * connection cap, so a live client hears the refusal.
+   */
+  pendingRequests: number;
+  /**
+   * Turn requests all apps together may have unanswered, counting those of
+   * disconnected apps whose work has not finished yet.
+   */
+  hostPendingRequests: number;
 }
 
 export const DEFAULT_AIDEN_MCP_LIMITS: AidenMcpLimits = {
   turnsPerMinute: 10,
   concurrentRuns: 2,
   maxWaitSeconds: 55,
+  pendingRequests: 8,
+  hostPendingRequests: 32,
 };
 
 export interface AidenMcpToolDependencies {
@@ -121,7 +134,8 @@ export class AidenMcpToolRunner {
   private readonly runs = new Map<string, Set<string>>();
   private readonly waits = new Map<string, Set<AbortController>>();
   /** In-flight and recent turn requests, so a retry replays instead of counting again. */
-  private readonly requests = new Map<string, Promise<CallToolResult>>();
+  /** Turn requests by app and clientRequestId; `settled` marks the ones a newer request may evict. */
+  private readonly requests = new Map<string, { promise: Promise<CallToolResult>; settled: boolean }>();
 
   constructor(private readonly dependencies: AidenMcpToolDependencies) {
     this.limits = { ...DEFAULT_AIDEN_MCP_LIMITS, ...dependencies.limits };
@@ -452,13 +466,18 @@ export class AidenMcpToolRunner {
     }).catch(() => undefined);
     // The first turn goes through the same mutation fence as any other turn.
     const classification = await requireOrdinaryChat(services, chat.id);
-    if (createRecorded && !services.chats.hasRecordedRequest(app.id, { kind: "turn", chatId: chat.id }, turnKey)) {
-      this.admitTurn(services, app);
-    }
+    const turnRecorded =
+      createRecorded && services.chats.hasRecordedRequest(app.id, { kind: "turn", chatId: chat.id }, turnKey);
+    if (createRecorded && !turnRecorded) this.admitTurn(services, app);
     const turn = await services.chats.runMutation(app.id, chat.id, classification, () =>
       services.chats.startTurn(app.id, chat.id, turnKey, { text: args.text }),
     );
     this.trackRun(app.id, turn.streamId);
+    // Counted once, when the chat's first turn starts; a replay of a recorded
+    // request was counted the first time. Never the prompt, chat or workspace.
+    if (!turnRecorded) {
+      reportAnalyticsEvent("mcp_chat_started", { model_choice: providerId || modelId ? "chosen" : "default" });
+    }
     return toolResult({ chatId: chat.id, turnId: turn.turnId, runId: turn.streamId, state: "running" });
   }
 
@@ -501,19 +520,50 @@ export class AidenMcpToolRunner {
   ): Promise<CallToolResult> {
     const key = `${app.id}\u0000${args.clientRequestId as string}`;
     const existing = this.requests.get(key);
-    if (existing) return existing;
-    const pending = run().catch((error: unknown) => {
-      // A refusal or failure is not cached: the app may retry once it clears.
-      this.requests.delete(key);
-      throw error;
-    });
-    this.requests.set(key, pending);
-    while (this.requests.size > REQUEST_CACHE_LIMIT) {
-      const oldest = this.requests.keys().next().value;
-      if (oldest === undefined) break;
-      this.requests.delete(oldest);
+    if (existing) return existing.promise;
+    // A request is cached before it reaches run admission and keeps running when
+    // its HTTP client goes away, so unanswered ones are capped here, per app and
+    // across every app (a revoked app's stalled work included): stalled work or
+    // disconnecting callers cannot make the cache grow without bound.
+    const prefix = `${app.id}\u0000`;
+    let pending = 0;
+    let hostPending = 0;
+    for (const [cached, { settled }] of this.requests) {
+      if (settled) continue;
+      hostPending += 1;
+      if (cached.startsWith(prefix)) pending += 1;
     }
-    return pending;
+    if (pending >= this.limits.pendingRequests) {
+      return Promise.reject(
+        new ToolRefusal(
+          `This app has ${this.limits.pendingRequests} requests Aiden is still answering. Wait for one to finish, then try again.`,
+        ),
+      );
+    }
+    if (hostPending >= this.limits.hostPendingRequests) {
+      return Promise.reject(new ToolRefusal("Aiden is still answering too many requests from apps. Try again in a moment."));
+    }
+    const entry = { promise: undefined as unknown as Promise<CallToolResult>, settled: false };
+    entry.promise = run().then(
+      (result) => {
+        entry.settled = true;
+        return result;
+      },
+      (error: unknown) => {
+        // A refusal or failure is not cached: the app may retry once it clears.
+        if (this.requests.get(key) === entry) this.requests.delete(key);
+        throw error;
+      },
+    );
+    this.requests.set(key, entry);
+    // Only answered requests are forgotten. One still running stays, so a retry
+    // joins it rather than starting (and counting) the same turn a second time;
+    // unanswered ones are bounded by the pending limits above.
+    for (const [cached, { settled }] of this.requests) {
+      if (this.requests.size <= REQUEST_CACHE_LIMIT) break;
+      if (settled) this.requests.delete(cached);
+    }
+    return entry.promise;
   }
 
   /** Refuses a turn over this app's rate or concurrency limit, then counts it. */
