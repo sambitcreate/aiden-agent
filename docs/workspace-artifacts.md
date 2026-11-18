@@ -28,7 +28,7 @@ The tab is in the tools launcher next to the terminal, files and browser once th
 
 ## How pages get their data
 
-A page is written in Aiden UI Markup, the same component catalog that inline `render_ui` visuals use. Aiden reads the markup through the `visualize_guide` tool's `catalog` module, which is offered with `workspace_artifact` even when Settings → Appearance → Inline visuals is Off or Only when I ask; it then covers pages only and does not mention chat visuals. A page declares named **sources**:
+A page is written in Aiden UI Markup, the same component catalog that inline `render_ui` visuals use. Aiden reads the markup through the `visualize_guide` tool's `catalog` module, which is offered with `workspace_artifact` even when Settings → Appearance → Inline visuals is Off or Only when I ask; it then covers pages only and does not mention chat visuals: it teaches the page buttons `run` and `compose`, the page's `layout`, and changing a page by its id. A page declares named **sources**:
 
 | Source | What it reads | Limits |
 | --- | --- | --- |

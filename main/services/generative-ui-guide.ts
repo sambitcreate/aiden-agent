@@ -59,13 +59,19 @@ function catalogGuide(inlineVisuals: boolean): string {
     `- Data: put JSON in \`<Data name="data">{…}</Data>\` and read it as \`$data\`. It holds up to ${AIDEN_UI_LIMITS.dataBytes / 1024} KiB. Keep numbers in data and let the components format them.`,
     "- Expressions: `$name`, `$a.b`, `$a[$key]`, literals, `+` (adds numbers, joins text), `== != < <= > >=`, `&& || !`, `test ? a : b`, and `fmt(value, \"currency\"|\"percent\"|\"number\"|\"date\")`, `len(x)`, `sum(list, \"field\")`, `max(list, \"field\")`, `min(…)`, `round(x, digits)`, `filter(list, \"field\", value)`, `sort(list, \"field\", \"asc\"|\"desc\")`. There is no `-`, `*`, `/`, method call, or arrow function: precompute values into data.",
     "- Local state: declare keys in `<Visual state={{tab: \"a\"}}>`, bind inputs with `bind=\"tab\"`, and change state with `action={setState(\"tab\", \"b\")}`. Show parts conditionally with `<If test={$tab == \"a\"}>` and repeat with `<Each in={$data.rows} as=\"row\">…{$row.name}…</Each>`.",
-    "- Actions: `sendPrompt(\"…\")` sends a visible follow-up message as the user (phrase it as their message), `setState`, `openUrl(\"https://…\")` (Aiden asks before opening), `copy(\"…\")`.",
+    inlineVisuals
+      ? "- Actions: `sendPrompt(\"…\")` sends a visible follow-up message as the user (phrase it as their message), `setState`, `openUrl(\"https://…\")` (Aiden asks before opening), `copy(\"…\")`."
+      : "- Actions: `sendPrompt(\"…\")` asks Aiden in the chat beside the page (phrase it as the person's message), `compose(\"…\")` puts text in the composer for the person to edit and send, `run(\"actionName\", value…)` runs one of the page's declared actions, `setState`, `openUrl(\"https://…\")` (Aiden asks before opening), `copy(\"…\")`.",
     ...(inlineVisuals
       ? [
           "- Width: `layout` defaults to the reading column (about 690px); pass `layout: \"wide\"` (before `markup`) to span the chat pane for dashboards and wide tables. Everything reflows with the window.",
         ]
-      : ["- Width follows the pane the page is shown in, so everything reflows with the window."]),
-    "- Keep it compact, sentence case, and keep the takeaway in your prose too. Repairs Aiden made come back in the tool result: if one changed what you meant, redraw with the same title, which replaces the visual in place.",
+      : [
+          "- Width: a page is a reading column by default; pass `layout: \"wide\"` to workspace_artifact for dashboards and wide tables. Everything reflows with the window.",
+        ]),
+    inlineVisuals
+      ? "- Keep it compact, sentence case, and keep the takeaway in your prose too. Repairs Aiden made come back in the tool result: if one changed what you meant, redraw with the same title, which replaces the visual in place."
+      : "- Keep it compact and sentence case. Repairs Aiden made come back in the tool result: if one changed what you meant, save the page again with workspace_artifact operation update and the page's id.",
     "",
     "Components:",
     catalogReference(),

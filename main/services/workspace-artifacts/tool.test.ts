@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import type { WorkspaceArtifactsChangedEvent } from "../../../renderer/shared/workspace-artifacts.js";
+import { createVisualizeGuideTool } from "../generative-ui-extension.js";
 import { WorkspaceArtifactStore } from "./store.js";
 import {
   createWorkspaceArtifactTool,
@@ -345,4 +346,31 @@ test("model artifact creation and updates reject credential paths while ordinary
   await call("allowed", { operation: "create", title: "Allowed", markup: PAGE, sources: [{ name: "data", kind: "file", file: ".env.example" }] });
   await assert.rejects(call("denied-update", { operation: "update", id: "art1", sources: [{ name: "data", kind: "file", file: ".env" }] }), /Credential files/u);
   assert.equal((await store.get("ws1", "art1"))!.artifact.sources[0]!.kind, "file");
+});
+
+test("the markup guide offered beside pages teaches only what a page accepts", async (t) => {
+  const guide = createVisualizeGuideTool({ inlineVisuals: false });
+  const served = await guide.execute("g", { modules: ["catalog"] } as never, undefined);
+  const text = served.content.map((part) => (part.type === "text" ? part.text : "")).join("");
+  const actionsLine = text.split("\n").find((line) => line.startsWith("- Actions:")) ?? "";
+  const taught = [...actionsLine.matchAll(/`([a-zA-Z]+)\(/gu)].map((match) => match[1]!);
+  assert.ok(taught.includes("run") && taught.includes("compose"), `the guide teaches run and compose: ${taught.join(", ")}`);
+  const argsFor: Record<string, string> = { run: '"merge", 12', setState: '"filter", "open"', openUrl: '"https://example.com"' };
+  const buttons = taught.map((name) => `  <Button action={${name}(${argsFor[name] ?? '"text"'})}>${name}</Button>`).join("\n");
+  const markup = `<Visual title="Every action" state={{filter: "all"}}>\n${buttons}\n</Visual>`;
+
+  const { store, call } = await harness(t, { permission: "full" });
+  const created = await call("c1", { operation: "create", title: "Every action", markup, actions: [MERGE] });
+  assert.doesNotMatch(created, /Repairs Aiden made/u, "every action the guide names compiles on a page");
+  const tree = (await store.get("ws1", "art1"))!.artifact.visual.tree as { c?: { p?: { action?: unknown } }[] };
+  assert.equal(tree.c?.filter((button) => button.p?.action).length, taught.length, "each button kept its action");
+
+  // Width is the page's layout, which the guide says to pass to workspace_artifact.
+  assert.match(text, /`layout: "wide"` to workspace_artifact/u);
+  await call("c2", { operation: "update", id: "art1", layout: "wide" });
+  assert.equal((await store.get("ws1", "art1"))!.artifact.visual.layout, "wide");
+  // A page is changed by its id: drawing it again with the same title is refused.
+  assert.match(text, /operation update and the page's id/u);
+  assert.doesNotMatch(text, /same title/u);
+  await assert.rejects(call("c3", { operation: "create", title: "Every action", markup, actions: [MERGE] }), /Update it by that id/u);
 });
