@@ -1,4 +1,4 @@
-/* global structuredClone */
+/* global structuredClone, URL */
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
