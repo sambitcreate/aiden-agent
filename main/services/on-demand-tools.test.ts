@@ -6,9 +6,13 @@ import { Type } from "typebox";
 import { createFauxCore, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import {
   LOAD_TOOLS_TOOL_NAME,
+  MAX_ON_DEMAND_ROUTING_CHARACTERS,
   createOnDemandTools,
+  declareOnDemandSummary,
   onDemandToolSummary,
 } from "./on-demand-tools.js";
+import { createRenderUiTool } from "./aiden-ui-tool.js";
+import { createDesignModeTool } from "./design-canvas/design-mode-tool.js";
 import { estimateStaticContextTokens } from "./generation-context.js";
 
 function fixtureTool(name: string, description: string, calls: string[] = []): AgentTool {
@@ -143,4 +147,34 @@ test("catalog summaries keep the first sentence and stay short", () => {
   const long = onDemandToolSummary(`${"word ".repeat(40)}end.`);
   assert.ok(long.length <= 90);
   assert.ok(long.endsWith("…"));
+});
+
+test("a tool's own routing line reaches the load_tools catalog whole, with when to use it", () => {
+  const routing =
+    "Keep a live page in this workspace; use when the person wants something to come back to, like a pull request board or a release checklist.";
+  assert.ok(routing.length > 90);
+  const declared = declareOnDemandSummary(fixtureTool("keep_page", `Pages persist. ${"Long guidance. ".repeat(20)}`), routing);
+  const loading = createOnDemandTools([fixtureTool("read_file", "Read."), declared], new Set(["keep_page"]))!;
+  assert.ok(loading.loader.description.includes(`- keep_page: ${routing}`));
+  assert.throws(() => declareOnDemandSummary(fixtureTool("a", "A."), "  "), /catalog line/iu);
+  assert.throws(
+    () => declareOnDemandSummary(fixtureTool("b", "B."), "x".repeat(MAX_ON_DEMAND_ROUTING_CHARACTERS + 1)),
+    /catalog line/iu,
+  );
+});
+
+test("visual and design tools tell the model when to load them, without a cut-off line", () => {
+  const tools = [
+    fixtureTool("read_file", "Read."),
+    createRenderUiTool({ namespace: "ui", existingChatUiCount: 0, onUiVisual: () => undefined }),
+    createDesignModeTool({ isOn: async () => false, requestEnter: async () => "declined", exit: async () => undefined }),
+  ];
+  const loading = createOnDemandTools(tools, new Set(["render_ui", "design_mode"]))!;
+  const lines = loading.loader.description.split("\n").filter((line) => /^- (render_ui|design_mode):/u.test(line));
+  assert.equal(lines.length, 2);
+  for (const line of lines) {
+    assert.match(line, /use when/u);
+    assert.doesNotMatch(line, /…$/u);
+  }
+  assert.match(lines.find((line) => line.startsWith("- design_mode"))!, /app screens|several directions/u);
 });

@@ -27,6 +27,7 @@ import {
 } from "../../../renderer/shared/workspace-artifacts.js";
 import type { ToolApprovalPreview } from "../../../renderer/shared/tool-approval-preview.js";
 import { declarePiRuntimeReplay } from "../pi-runtime-tool.js";
+import { declareOnDemandSummary } from "../on-demand-tools.js";
 import { checkWorkspaceArtifactPage, describeWorkspaceArtifactPageCheck } from "./check.js";
 import type { WorkspaceArtifactActionResult } from "./runner.js";
 import { workspaceArtifactDigest, type WorkspaceArtifactContent, type WorkspaceArtifactStore } from "./store.js";
@@ -474,7 +475,8 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
     return `Ran "${action.label}".${output}${refreshed}`;
   }
 
-  return declarePiRuntimeReplay(
+  return declareOnDemandSummary(
+    declarePiRuntimeReplay(
     {
       name: WORKSPACE_ARTIFACT_TOOL_NAME,
       label: "Artifact",
@@ -623,5 +625,7 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
       },
     },
     "never",
+    ),
+    "Keep a live page in this workspace's Artifacts tab; use when the person wants something to come back to, like a pull request board or checklist.",
   );
 }

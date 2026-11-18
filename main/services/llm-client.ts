@@ -2390,6 +2390,7 @@ async function prepareGeneration(
       preferArtifactThisTurn: visualize,
       ...(options.visualAudience ? { audience: options.visualAudience } : {}),
       ...(designCanvasOffered ? { designCanvas: true } : {}),
+      ...(designModeToolOffered && !designCanvasOffered ? { designModeOffered: true } : {}),
       existingChatUiCount: displayedAssistantUiCount(chat.messages),
       onUiVisual: (visual, context) => {
         uiVisualPlacements.record(visual.id, context.toolCallId, visual.layout ?? "column");

@@ -9,6 +9,8 @@ import { Type } from "typebox";
 import { reportAnalyticsEvent } from "../analytics/analytics-report.js";
 import type { ChatGenerationOwner } from "../chat-generation-owner.js";
 import { declarePiRuntimeReplay } from "../pi-runtime-tool.js";
+import { declareOnDemandSummary } from "../on-demand-tools.js";
+import { DESIGN_CANVAS_TOOL_NAMES } from "./canvas-tools.js";
 
 export const DESIGN_MODE_TOOL_NAME = "design_mode";
 /** The reason shown on the consent card. */
@@ -122,12 +124,13 @@ export type DesignModeToolDeps = {
 const result = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value) }], details: null });
 
 export function createDesignModeTool(deps: DesignModeToolDeps): AgentTool {
-  return declarePiRuntimeReplay(
+  return declareOnDemandSummary(
+    declarePiRuntimeReplay(
     {
       name: DESIGN_MODE_TOOL_NAME,
       label: "Design mode",
       description:
-        "Ask to open design mode, which puts an infinite design canvas beside this chat, or leave it. Ask to enter when the person wants pages or screens to look at or compare side by side; they choose on a card. Leave when the design work is done.",
+        "Ask to open design mode when the person wants whole pages, app screens or several design directions to see and compare side by side. It puts an infinite design canvas beside this chat; the person chooses on a card. Leave design mode when the design work is done.",
       parameters: Type.Object({
         action: Type.Union([Type.Literal("enter"), Type.Literal("exit")]),
         reason: Type.String({
@@ -153,7 +156,7 @@ export function createDesignModeTool(deps: DesignModeToolDeps): AgentTool {
         if (answer === "entered") {
           return result({
             status: "entered",
-            next: "The canvas is open beside the chat. canvas_read, canvas_place_frame, canvas_update_frame, canvas_remove_frame and canvas_focus work from your next step; load the aiden-design skill first.",
+            next: `The canvas is open beside the chat. ${DESIGN_CANVAS_TOOL_NAMES.join(", ")} work from your next step; load the aiden-design skill first.`,
           });
         }
         return result({
@@ -163,5 +166,7 @@ export function createDesignModeTool(deps: DesignModeToolDeps): AgentTool {
       },
     },
     "never",
+    ),
+    "Ask to open the design canvas; use when the person wants whole pages, app screens or several directions to compare side by side.",
   );
 }

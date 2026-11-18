@@ -59,7 +59,28 @@ export const ON_DEMAND_TOOL_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 const MAX_SUMMARY_CHARACTERS = 90;
+/** A tool's own routing line may be longer than a cut first sentence, since it says when to use the tool. */
+export const MAX_ON_DEMAND_ROUTING_CHARACTERS = 160;
 const MAX_NAMES_PER_CALL = 20;
+
+type RoutedTool = AgentTool & { readonly onDemandSummary?: string };
+
+/**
+ * Give an on-demand tool its own `load_tools` catalog line: what it does and
+ * when to use it, in place of its description's first sentence cut short.
+ */
+export function declareOnDemandSummary<T extends AgentTool>(tool: T, summary: string): T {
+  const line = summary.replace(/\s+/gu, " ").trim();
+  if (!line || line.length > MAX_ON_DEMAND_ROUTING_CHARACTERS) {
+    throw new Error(`${tool.name}'s catalog line must be 1 to ${MAX_ON_DEMAND_ROUTING_CHARACTERS} characters.`);
+  }
+  return Object.assign(tool, { onDemandSummary: line });
+}
+
+/** A tool's `load_tools` catalog line: its own routing line, or its description's first sentence. */
+export function onDemandCatalogLine(tool: AgentTool): string {
+  return (tool as RoutedTool).onDemandSummary ?? onDemandToolSummary(tool.description);
+}
 
 /** The first sentence of a tool description, cut to one short catalog line. */
 export function onDemandToolSummary(description: string): string {
@@ -115,7 +136,7 @@ export function createOnDemandTools(
   const everyday = tools.filter((tool) => !names.has(tool.name));
   const byName = new Map(onDemand.map((tool) => [tool.name, tool]));
   const available = new Set(byName.keys());
-  const catalog = onDemand.map((tool) => `- ${tool.name}: ${onDemandToolSummary(tool.description)}`).join("\n");
+  const catalog = onDemand.map((tool) => `- ${tool.name}: ${onDemandCatalogLine(tool)}`).join("\n");
 
   const loader: AgentTool = declarePiRuntimeReplay(
     {

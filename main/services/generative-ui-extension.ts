@@ -16,6 +16,7 @@ import {
 } from "../../renderer/shared/generative-ui.js";
 import type { PiAgentRuntimeExtension } from "./pi-agent-runtime-harness.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
+import { declareOnDemandSummary } from "./on-demand-tools.js";
 import {
   htmlArtifactByteLength,
   requireGenerativeUiTitle,
@@ -111,7 +112,16 @@ export interface GenerativeUiExtensionOptions {
    * charts and widgets.
    */
   designCanvas?: boolean;
+  /**
+   * design_mode is offered this turn (design mode is off): whole pages, app
+   * screens and several directions go to the canvas, so inline visuals point
+   * there instead of drawing them.
+   */
+  designModeOffered?: boolean;
 }
+
+const DESIGN_MODE_OFFERED_VISUALS_NOTE =
+  " When the person wants whole pages, app screens or several design directions to compare, call design_mode to ask to open the design canvas instead of drawing them in an inline visual.";
 
 const DESIGN_CANVAS_VISUALS_NOTE =
   " Design mode is on: pages, screens, dashboards laid out as pages, and UI mockups belong on the design canvas as design/*.html files, never in an inline visual. Use inline visuals only for small charts or widgets that support your reply.";
@@ -167,7 +177,8 @@ const ARTIFACT_GUIDE_MODULES = ["catalog"] as const satisfies readonly Generativ
 export function createVisualizeGuideTool(options: { inlineVisuals?: boolean } = {}): AgentTool {
   const inlineVisuals = options.inlineVisuals !== false;
   const modules: readonly GenerativeUiGuideModule[] = inlineVisuals ? GENERATIVE_UI_GUIDE_MODULES : ARTIFACT_GUIDE_MODULES;
-  return declarePiRuntimeReplay(
+  return declareOnDemandSummary(
+    declarePiRuntimeReplay(
     {
       name: VISUALIZE_GUIDE_TOOL_NAME,
       label: "Visualize Guide",
@@ -196,6 +207,10 @@ export function createVisualizeGuideTool(options: { inlineVisuals?: boolean } = 
       },
     },
     "never",
+    ),
+    inlineVisuals
+      ? "Read how to build inline visuals and artifact pages; call it before your first render_ui or render_artifact in a chat."
+      : "Read the markup guide for workspace_artifact pages; call it before your first page in a chat.",
   );
 }
 
@@ -219,8 +234,10 @@ export function createGenerativeUiExtensionRuntime(
   let serial = Promise.resolve();
   const titlesInGeneration = new Map<string, { mediaId: string; size: number; toolCallId: string }>();
   const designCanvas = options.designCanvas === true;
+  const designModeOffered = !designCanvas && options.designModeOffered === true;
 
-  const tool: AgentTool = declarePiRuntimeReplay(
+  const tool: AgentTool = declareOnDemandSummary(
+    declarePiRuntimeReplay(
     {
       name: GENERATIVE_UI_TOOL_NAME,
       label: "Render Artifact",
@@ -228,7 +245,9 @@ export function createGenerativeUiExtensionRuntime(
         "Render an interactive HTML/CSS/JS visualization inline in the current Aiden chat, inside the reply at the point you call it. " +
         (designCanvas
           ? "Use this only for small charts, diagrams, or widgets that support the reply; pages, screens, and UI mockups go on the design canvas as design/*.html files instead. "
-          : "Use this for charts, diagrams, dashboards, interactive explainers, or UI mockups instead of huge Markdown tables. ") +
+          : designModeOffered
+            ? "Use this for charts, diagrams, dashboards, interactive explainers, or a small UI sketch instead of huge Markdown tables; for whole pages, app screens or several design directions, ask to open design mode with design_mode instead. "
+            : "Use this for charts, diagrams, dashboards, interactive explainers, or UI mockups instead of huge Markdown tables. ") +
         "Provide either `html` (preferred) or a workspace-relative `.html` path. Vanilla HTML/CSS/JS only. Chart.js (`Chart`), Plotly (`Plotly`), and KaTeX (`katex`) are injected by Aiden—do not load CDN scripts or call network APIs. Do not use this for ordinary prose or raster images (use display_image).",
       parameters: Type.Object({
         title: Type.String({
@@ -374,6 +393,10 @@ export function createGenerativeUiExtensionRuntime(
       },
     },
     "never",
+    ),
+    options.onUiVisual
+      ? "Draw custom HTML/JS inside your reply; use only for what render_ui cannot draw, such as canvas drawing, simulations, 3D or Plotly."
+      : "Draw an HTML/JS chart, diagram or widget inside your reply; use when a visual answers better than prose.",
   );
 
   const guideTool = createVisualizeGuideTool();
@@ -388,7 +411,7 @@ export function createGenerativeUiExtensionRuntime(
         "Use one when a comparison, trend, structure, process, or interactive what-if is clearer as a visual than as prose — not for plain answers or raster images (use display_image), and usually at most one per reply. Each visual appears inside your reply in the Aiden Agent chat, at the point you call the tool, on the chat's own background (no frame or border), with its height following its content. It defaults to the reading column (about 690px wide); pass layout \"wide\" (before the markup or html) when it needs room, such as " +
         (designCanvas ? "a multi-panel chart or wide table" : "a dashboard, UI mockup, multi-panel layout, or wide table") +
         ", and it will span the chat pane and follow the window size. Either way its width changes with the window, so build it fluid. Before your first visual in a conversation, call visualize_guide with the modules you need (catalog for render_ui; design, html, charts, interactive for render_artifact). Keep the reply complete without the visual: state the key takeaway in a sentence. Never load remote scripts or call network APIs from a visual, and do not claim inline visuals are unavailable while these tools are present." +
-        (designCanvas ? DESIGN_CANVAS_VISUALS_NOTE : "") +
+        (designCanvas ? DESIGN_CANVAS_VISUALS_NOTE : designModeOffered ? DESIGN_MODE_OFFERED_VISUALS_NOTE : "") +
         (options.preferArtifactThisTurn
           ? designCanvas
             ? " The user invoked /visualize for this turn; prefer render_artifact when a chart or diagram would help."

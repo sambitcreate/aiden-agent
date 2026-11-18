@@ -148,7 +148,9 @@ test("design_mode asks only when design mode is off, and leaves without asking",
   assert.equal((await run(tool, { action: "enter", reason: "  " })).status, "error");
   const entered = await run(tool, { action: "enter", reason: "Compare the three directions side by side." });
   assert.equal(entered.status, "entered");
-  assert.match(String(entered.next), /canvas_place_frame/u);
+  for (const name of ["canvas_read", "canvas_place_frame", "canvas_arrange", "canvas_page", "canvas_focus"]) {
+    assert.match(String(entered.next), new RegExp(name, "u"));
+  }
   assert.equal((await run(tool, { action: "enter", reason: "again" })).status, "already");
   assert.deepEqual(asked, ["Compare the three directions side by side."]);
   assert.equal((await run(tool, { action: "exit", reason: "done" })).status, "exited");

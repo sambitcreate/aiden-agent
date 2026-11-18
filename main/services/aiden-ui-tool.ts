@@ -12,6 +12,7 @@ import { parseChatUiVisualV1 } from "../../renderer/shared/aiden-ui/visual.js";
 import { RENDER_UI_TOOL_NAME } from "../../renderer/shared/generative-ui.js";
 import { requireGenerativeUiTitle } from "./generative-ui-html.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
+import { declareOnDemandSummary } from "./on-demand-tools.js";
 
 export { RENDER_UI_TOOL_NAME };
 
@@ -44,7 +45,8 @@ export function createRenderUiTool(options: RenderUiToolOptions): AgentTool {
   let presentedCount = 0;
   let serial = Promise.resolve();
 
-  return declarePiRuntimeReplay(
+  return declareOnDemandSummary(
+    declarePiRuntimeReplay(
     {
       name: RENDER_UI_TOOL_NAME,
       label: "Render Visual",
@@ -132,6 +134,8 @@ export function createRenderUiTool(options: RenderUiToolOptions): AgentTool {
       },
     },
     "never",
+    ),
+    "Draw charts, stats, tables or checklists inside your reply with Aiden's own components; use when a visual answers better than prose.",
   );
 }
 

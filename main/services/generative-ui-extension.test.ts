@@ -203,6 +203,32 @@ test("with the design canvas offered, mockups and pages go to design files rathe
     assert.doesNotMatch(inlineUses, /mockup|dashboard|screen/iu);
     assert.doesNotMatch(canvas.description.replace(/[^;.]*design canvas[^;.]*/giu, ""), /mockup|dashboard|screen/iu);
   }
+  assert.doesNotMatch(chat.prompt + chat.description, /design_mode/u);
+});
+
+test("while design mode can be asked for, whole pages and several directions go to design_mode", () => {
+  const steering = (options: { designCanvas?: boolean }) => {
+    const extension = createGenerativeUiExtension({
+      workspaceRoot: undefined,
+      designModeOffered: true,
+      ...options,
+      onArtifact: () => undefined,
+    });
+    const renderArtifact = extension.tools?.find((tool) => tool.name === "render_artifact");
+    assert.ok(renderArtifact);
+    return { prompt: extension.systemPrompt ?? "", description: renderArtifact.description };
+  };
+  const offered = steering({});
+  for (const text of [offered.prompt, offered.description]) {
+    assert.match(text, /design_mode/u);
+    assert.match(text, /app screens/u);
+    assert.match(text, /several design directions/u);
+  }
+  assert.doesNotMatch(offered.description, /UI mockups/u);
+  // Once the canvas is open, the visuals point to design/ files, not to asking again.
+  const open = steering({ designCanvas: true });
+  assert.doesNotMatch(open.prompt + open.description, /design_mode/u);
+  assert.match(open.prompt, /design\/\*\.html/u);
 });
 
 test("render_artifact takes a column or wide layout and hands it to the host", async () => {

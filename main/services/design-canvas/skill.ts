@@ -10,7 +10,7 @@ export const AIDEN_DESIGN_SKILL = Object.freeze({
   description:
     "Design pages and screens on the design canvas beside a design-mode chat: write each design as a workspace HTML file, place it as a frame, and edit it from the person's comments.",
   instructions: [
-    "Use this when design mode is on in the chat and the person wants a page, screen or visual direction they can see and compare on the canvas. If canvas_place_frame is not among your tools, the canvas is not available here.",
+    "Use this when design mode is on in the chat and the person wants a page, screen or visual direction they can see and compare on the canvas. If canvas_place_frame is not among your tools yet, call design_mode with action enter to ask the person to open the canvas; if design_mode is not among your tools either, the canvas is not available here.",
     "",
     "Writing a design:",
     "- Pages, screens and UI mockups are HTML files under design/ in the workspace, not render_artifact visuals. Keep design/ tidy: one shared design/tokens.css (colours, type, spacing and radii as CSS variables, with the dark look) linked by every screen, and one HTML file per screen with a clear name (design/home.html, design/checkout-mobile.html). Put images and fonts beside them (design/assets/) and link everything with relative paths.",
