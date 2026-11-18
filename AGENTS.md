@@ -67,7 +67,7 @@ Anonymous usage analytics and crash reports go only to the fixed PostHog US host
 
 ## Aiden CLI (`packages/cli`)
 
-The headless Aiden server lives in `packages/cli` as a self-contained npm package with its own lockfile — it is deliberately not an npm workspace of the Electron root. It is serve-only: `aiden serve` runs the daemon that paired phones and Macs connect to, plus short admin subcommands. There is no interactive terminal UI, print mode or RPC mode; do not add one back. See `packages/cli/README.md`, `docs/plans/aiden-serve-only-cli.md` and, for history, `docs/plans/aiden-cli-plan.md`.
+The headless Aiden server lives in `packages/cli` as a self-contained npm package with its own lockfile — it is deliberately not an npm workspace of the Electron root. It is serve-only: `aiden serve` runs the daemon that paired phones and Macs connect to, plus short admin subcommands. There is no interactive terminal UI, print mode or RPC mode; do not add one back. See `packages/cli/README.md`, `docs/plans/completed/aiden-serve-only-cli.md` and, for history, `docs/plans/aiden-cli-plan.md`.
 
 - The rebrand depends on the bundle layout: `dist/app/cli.js` plus the generated `dist/app/package.json` (`piConfig`) must stay the nearest package.json to the bundled code. Restructure `dist/app/` only with that contract and `tests/bundle.test.mjs` in mind.
 - Pin pi packages exactly (matching the desktop pin line) and upgrade them through a replay evaluation rather than casually.

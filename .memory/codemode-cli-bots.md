@@ -2,6 +2,8 @@
 
 Branch `claude/project-thread-97a8nm`. After a Pi feature audit the owner chose: codemode on by default in the CLI, codemode for Bots too, and CLI MCP tools hidden behind codemode like the desktop. Cache warming stays a user setting; virtual models are not wanted.
 
+**2026-11-18 note:** the two CLI sections below are history. #675 (serve-only, merged 2026-10-31) deleted `packages/cli/src/codemode-default.ts` and the interactive extension list (`extensions/index.ts`), so the CLI no longer turns codemode on and nothing passes `deferToCodemode`. Server daemon chats declare MCP tools directly. `renderMcpServersSectionBody` is now used only inside `main/services/mcp-server-instructions.ts`, where the desktop's `renderMcpServersSection` wraps it. The Bots section still applies.
+
 ## CLI default (`packages/cli/src/codemode-default.ts`)
 - `cli-runtime.ts` appends `--tools +codemode` unless the command line has a tool flag (`--tools/-t`, `--no-tools/-nt`, `--no-builtin-tools/-nbt`, `--no-extensions/-ne`) or a settings file's `defaultTools` names codemode (`+codemode`, `-codemode`) or replaces the defaults with plain names. Turning it off: `"defaultTools": ["-codemode"]`.
 - Pure module so Node's strip-types harness can import the runtime (`tests/runtime.test.mjs` spawns it like the fullscreen default).

@@ -1,6 +1,6 @@
 # Aiden CLI — pi-based headless Aiden Agent
 
-**2026-10-30: interactive CLI retired.** The owner chose not to maintain an interactive terminal app. `packages/cli` is now a serve-only headless server for phones and paired Macs: `aiden serve` plus admin commands. Pi's TUI, print/JSON/RPC modes, `--list-models`, slash commands, terminal themes and the appearance playground were removed. See [the serve-only plan](aiden-serve-only-cli.md). Everything below is the historical record; its TUI, theme and print-mode parts no longer apply.
+**2026-10-30: interactive CLI retired.** The owner chose not to maintain an interactive terminal app. `packages/cli` is now a serve-only headless server for phones and paired Macs: `aiden serve` plus admin commands. Pi's TUI, print/JSON/RPC modes, `--list-models`, slash commands, terminal themes and the appearance playground were removed. See [the serve-only plan](completed/aiden-serve-only-cli.md). Everything below is the historical record; its TUI, theme and print-mode parts no longer apply.
 
 Current baseline clarification (2026-10-19): the 0.87.1 implementation record below is historical. Desktop and CLI active Pi packages are now exactly 1.5.2 (2026-11-17); only the frozen desktop legacy harness remains 0.87.1. Durable Bot-session parity is owned by H3 in [the harness upgrade plan](aiden-harness-quality-upgrade-plan.md). Physical acceptance remains separate.
 
