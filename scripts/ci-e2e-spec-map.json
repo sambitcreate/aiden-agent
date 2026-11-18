@@ -25,6 +25,13 @@
     "tests/e2e/design-mode-helpers.ts"
   ],
   "specs": {
+    "aiden-mcp-settings.spec.ts": [
+      "renderer/components/settings/aiden-mcp-settings",
+      "main/services/aiden-mcp",
+      "main/handlers/aiden-mcp",
+      "renderer/shared/aiden-mcp",
+      "renderer/components/settings/"
+    ],
     "app-controls.spec.ts": [
       "renderer/components/app-controls",
       "main/services/app-controls",
@@ -134,6 +141,10 @@
       "main/services/browser"
     ],
     "browser-throttling.spec.ts": [
+      "renderer/components/browser",
+      "main/services/browser"
+    ],
+    "browser-trust.spec.ts": [
       "renderer/components/browser",
       "main/services/browser"
     ],
