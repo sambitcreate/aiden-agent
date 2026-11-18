@@ -77,6 +77,8 @@ test("placing a page that already landed on the canvas by itself moves that fram
   }));
   const retitled = await call("canvas_place_frame", { kind: "file", title: "Home", path: "design/home.html" });
   assert.equal(retitled.frame.id, "auto");
+  assert.equal(retitled.placed, "reused");
+  assert.match(retitled.note, /"auto" was reused/);
   assert.deepEqual(retitled.frame.box, { x: 0, y: 0, w: 640, h: 436 });
 
   // User or earlier tool resized the adopted frame before Aiden groups it without naming w/h.
@@ -89,16 +91,71 @@ test("placing a page that already landed on the canvas by itself moves that fram
   assert.ok(grouped.frame.box.y >= 2000, "it moved into the group");
   assert.deepEqual({ w: grouped.frame.box.w, h: grouped.frame.box.h }, { w: 820, h: 560 }, "grouping without w/h preserves its size");
 
-  // Once grouped it is the person's layout: another placement at a new width is a second frame.
-  const phone = await call("canvas_place_frame", { kind: "file", title: "Home phone", path: "design/home.html", designWidth: 390 });
-  assert.notEqual(phone.frame.id, "auto");
+  // Grouped, it is still the page's frame: another placement at a new width
+  // reuses it in its group, and the group grows to hold the taller box.
+  const phone = await call("canvas_place_frame", { kind: "file", title: "Home phone", path: "design/home.html", designWidth: 390, h: 1400 });
+  assert.equal(phone.frame.id, "auto");
+  assert.equal(phone.placed, "reused");
+  assert.equal(phone.frame.groupId, group.frame.id, "it stays in its group");
 
   const doc = await store.get("chat-1");
   const pages = doc.frames.filter((frame) => frame.kind === "file");
-  assert.equal(pages.length, 2);
-  const adopted = pages.find((frame) => frame.id === "auto")!;
-  assert.equal(adopted.title, "Home");
+  assert.equal(pages.length, 1);
+  const adopted = pages[0]!;
+  assert.equal(adopted.title, "Home phone");
   assert.equal(adopted.dark, true, "what the person set on the frame stays");
+  const grown = doc.frames.find((frame) => frame.id === group.frame.id)!;
+  assert.ok(grown.y + grown.h >= adopted.y + adopted.h, "the group holds the resized frame");
+
+  // A copy is asked for: a second frame, and the result names the first.
+  const copy = await call("canvas_place_frame", { kind: "file", title: "Home dark", path: "design/home.html", duplicate: true });
+  assert.notEqual(copy.frame.id, "auto");
+  assert.equal(copy.placed, "copy");
+  assert.deepEqual(copy.otherFrames, [{ id: "auto" }]);
+});
+
+test("placing a page the person put on the canvas reuses their frame, and a locked one is refused by id", async (t) => {
+  const { store, call } = await setup(t);
+  await store.update("chat-1", (doc) => ({
+    ...doc,
+    frames: [
+      { id: "theirs", kind: "file", title: "Mine", path: "design/home.html", x: 50, y: 60, w: 640, h: 436, designWidth: 1280, pageId: doc.activePageId, createdBy: "person" },
+    ],
+  }));
+  const reused = await call("canvas_place_frame", { kind: "file", title: "Home", path: "design/home.html" });
+  assert.equal(reused.frame.id, "theirs");
+  assert.equal(reused.placed, "reused");
+  assert.deepEqual(reused.frame.box, { x: 50, y: 60, w: 640, h: 436 });
+  let doc = await store.get("chat-1");
+  assert.equal(doc.frames.length, 1);
+  assert.equal(doc.frames[0]!.createdBy, "person", "it is still the person's frame");
+
+  await call("canvas_update_frame", { id: "theirs", locked: true });
+  const refused = await call("canvas_place_frame", { kind: "file", title: "Home", path: "design/home.html", x: 900, y: 0 });
+  assert.equal(refused.status, "error");
+  assert.match(refused.message, /locked frame "theirs"/u);
+  assert.match(refused.message, /duplicate: true/u);
+  doc = await store.get("chat-1");
+  assert.equal(doc.frames.length, 1, "nothing was added");
+  assert.deepEqual({ x: doc.frames[0]!.x, title: doc.frames[0]!.title }, { x: 50, title: "Home" }, "the locked frame did not move");
+
+  const copy = await call("canvas_place_frame", { kind: "file", title: "Home again", path: "design/home.html", duplicate: true });
+  assert.equal(copy.placed, "copy");
+  assert.deepEqual(copy.otherFrames, [{ id: "theirs" }]);
+});
+
+test("a page shown on another canvas page gets a new frame here, and the result says where the other is", async (t) => {
+  const { store, call } = await setup(t);
+  const first = await call("canvas_place_frame", { kind: "file", title: "Home", path: "design/home.html" });
+  assert.equal(first.placed, "new");
+  const mobile = await call("canvas_page", { action: "add", name: "Mobile" });
+  assert.ok(mobile);
+  const here = await call("canvas_place_frame", { kind: "file", title: "Home phone", path: "design/home.html", designWidth: 390 });
+  assert.notEqual(here.frame.id, first.frame.id);
+  assert.equal(here.placed, "copy");
+  assert.deepEqual(here.otherFrames, [{ id: first.frame.id, page: "Page 1" }]);
+  const doc = await store.get("chat-1");
+  assert.equal(doc.frames.filter((frame) => frame.kind === "file").length, 2);
 });
 
 test("resizing a page that landed by itself keeps an arrow on it attached to its side", async (t) => {

@@ -176,7 +176,7 @@ export const DESIGN_MODE_PROMPT_SECTION = [
   "- Call canvas_read before changing the canvas, and again if the person says they moved things. It lists every frame on the page, in view and outside it, with ids and boxes.",
   "- Pages, screens and UI mockups are workspace HTML files under design/ (a shared design/tokens.css plus one HTML file per screen), not render_artifact visuals. Each design/ page you write, edit or make with a command lands on the canvas by itself and reloads as you save it; HTML elsewhere in the workspace does not.",
   "- Pick the design width that matches the screen: 390 phone, 768 tablet, 1280 or 1440 desktop. A page can declare it with <meta name=\"aiden-design-width\" content=\"390\">; canvas_place_frame or canvas_update_frame with designWidth resizes its frame to fit.",
-  "- canvas_place_frame on a page already on the canvas moves that frame; pass duplicate: true to show the same file twice, for example a light and a dark (dark: true) variant or phone and desktop widths side by side.",
+  "- canvas_place_frame on a page already on this canvas page reuses its frame, whoever placed it and whatever group it is in, and the result says placed: \"reused\"; a page shown only in locked frames is refused. Pass duplicate: true to show the same file twice (placed: \"copy\"), for example a light and a dark (dark: true) variant or phone and desktop widths side by side.",
   "- You can move, resize, retitle, restyle, regroup, hide, lock or reorder any unlocked frame, the person's too, with canvas_update_frame. A locked frame stays as it is unless the person asks you to unlock it. Remove a frame the person added only when they ask, with force: true.",
   "- Use canvas_arrange to lay frames out in a tidy row, column or grid, put them in a group (it fits itself around them) or take them out, in one call. Put each direction in its own group.",
   "- For a flow or diagram, place shapes (with their labels in text), text and frames (artboards), then connectors between them by frameId; a connector follows its frames when they move.",
@@ -587,7 +587,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         name: "canvas_place_frame",
         label: "Place on design canvas",
         description:
-          "Put a frame on the design canvas: a workspace HTML page (kind file), an image, a note, a group, or a drawn item for flows and diagrams: text, a shape (rect or oval, with an optional label in text), a frame (an empty artboard that holds shapes and text like a group) or a connector (an arrow or line from one frame or point to another; an end on a frame follows it). Notes and text items take a small Markdown subset: **bold**, *italic*, <u>underline</u>, [links](https://…), and lines starting \"- \" or \"1. \" for lists; size and color apply to the whole note or text, and fill gives a note, shape or artboard its colour. Write the file first with your file tools; path is workspace-relative. A page's frame is sized for its designWidth (390 phone, 768 tablet, 1280 or 1440 desktop) unless you pass w and h. Placing a page already on the canvas moves and resizes that frame; pass duplicate: true to add another frame of the same file (for example a dark: true variant or another width). It goes on the page the person is looking at unless you name another. Leave x and y out to place it right of the last frame in its group or in view; a group grows to hold what you place in it. Boxes are in canvas units.",
+          "Put a frame on the design canvas: a workspace HTML page (kind file), an image, a note, a group, or a drawn item for flows and diagrams: text, a shape (rect or oval, with an optional label in text), a frame (an empty artboard that holds shapes and text like a group) or a connector (an arrow or line from one frame or point to another; an end on a frame follows it). Notes and text items take a small Markdown subset: **bold**, *italic*, <u>underline</u>, [links](https://…), and lines starting \"- \" or \"1. \" for lists; size and color apply to the whole note or text, and fill gives a note, shape or artboard its colour. Write the file first with your file tools; path is workspace-relative. A page's frame is sized for its designWidth (390 phone, 768 tablet, 1280 or 1440 desktop) unless you pass w and h. Placing a page already on this canvas page reuses that frame (moved, resized and restyled as asked, kept in its group unless you name another; the result says placed: reused), and a page shown there only in locked frames is refused; pass duplicate: true to add another frame of the same file (placed: copy; for example a dark: true variant or another width). It goes on the page the person is looking at unless you name another. Leave x and y out to place it right of the last frame in its group or in view; a group grows to hold what you place in it. Boxes are in canvas units.",
         parameters: Type.Object({
           page: Type.Optional(Type.String({ maxLength: 128, description: "A page's name or id." })),
           kind: Type.Union(PLACED_KINDS.map((kind) => Type.Literal(kind))),
@@ -651,24 +651,35 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 throw new CanvasToolError("A connector joins two different frames, or a frame and a point.");
               }
               const arrow = kind === "connector" ? arrowOf(p.arrow) : undefined;
-              // A page Aiden wrote is already on the canvas by itself (see
-              // written-pages.ts). Placing it again adopts that frame, keeping
-              // its id, instead of adding a second copy beside it, whatever
-              // width it had; one at the same width is preferred.
-              const candidates =
-                kind === "file" && !duplicate
-                  ? doc.frames.filter(
-                      (entry) =>
-                        entry.kind === "file" &&
-                        entry.pageId === pageId &&
-                        entry.path === path &&
-                        entry.createdBy === "aiden" &&
-                        entry.groupId === undefined &&
-                        !entry.locked,
-                    )
-                  : [];
+              // A page already on this canvas page, whoever placed it and
+              // whatever group it is in (a page Aiden writes lands by itself,
+              // see written-pages.ts), is reused, keeping its id, instead of
+              // shown twice; one at the same width, then one Aiden placed, is
+              // preferred. duplicate: true adds a copy instead. A page shown
+              // only in locked frames is refused, since reusing would change one.
+              const sameFile = kind === "file" ? doc.frames.filter((entry) => entry.kind === "file" && entry.path === path) : [];
+              const onThisPage = sameFile.filter((entry) => entry.pageId === pageId);
+              const candidates = duplicate ? [] : onThisPage.filter((entry) => !entry.locked);
+              if (!duplicate && onThisPage.length > 0 && candidates.length === 0) {
+                throw new CanvasToolError(
+                  `${path} is already on this page in locked frame ${onThisPage.map((entry) => `"${entry.id}"`).join(", ")}, so it stays as it is. Pass duplicate: true to show it again in a new frame, or ask the person to unlock it.`,
+                );
+              }
               const adopted =
-                candidates.find((entry) => (entry.designWidth ?? DESIGN_DEFAULT_FILE_WIDTH) === width) ?? candidates[0];
+                candidates.find((entry) => (entry.designWidth ?? DESIGN_DEFAULT_FILE_WIDTH) === width) ??
+                candidates.find((entry) => entry.createdBy === "aiden") ??
+                candidates[0];
+              // Other frames that show the same file, for the result.
+              const others = sameFile.filter((entry) => entry.id !== adopted?.id);
+              const copies =
+                others.length > 0
+                  ? {
+                      otherFrames: others.slice(0, 10).map((entry) => ({
+                        id: entry.id,
+                        ...(entry.pageId !== pageId ? { page: doc.pages.find((page) => page.id === entry.pageId)?.name ?? entry.pageId } : {}),
+                      })),
+                    }
+                  : {};
               const style = stylePatch(kind, shape, p, adopted?.tweaks);
               const input: PlaceFrameInput = {
                 kind,
@@ -702,17 +713,38 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                   const { groupId: _oldGroup, ...kept } = adopted;
                   return applyStyle({ ...kept, title, designWidth: width!, ...box, ...(group ? { groupId: group } : {}) }, style);
                 };
+                const reused = {
+                  status: "placed",
+                  placed: "reused",
+                  note: `${path} was already on this page, so its frame "${adopted.id}" was reused instead of adding a copy. Pass duplicate: true for a second frame.`,
+                  units: "canvas",
+                  ...copies,
+                };
+                // Unless a group is named, the frame stays in the group it is in.
+                const keptGroup = groupId ?? adopted.groupId;
                 if (!groupId && (x === undefined || y === undefined)) {
-                  const frames = doc.frames.map((entry) =>
-                    entry.id === adopted.id ? merge({ x: entry.x, y: entry.y, w: nextW, h: nextH }) : entry,
+                  let frames = doc.frames.map((entry) =>
+                    entry.id === adopted.id ? merge({ x: entry.x, y: entry.y, w: nextW, h: nextH }, adopted.groupId) : entry,
                   );
+                  // A group grows to hold a member that got bigger.
+                  const resizedFrame = frames.find((entry) => entry.id === adopted.id)!;
+                  const group = keptGroup ? frames.find((entry) => entry.id === keptGroup) : undefined;
+                  if (group?.kind === "group" && !group.locked) {
+                    const grown = growGroupToHold(group, resizedFrame);
+                    if (grown !== group) frames = frames.map((entry) => (entry.id === group.id ? grown : entry));
+                  }
                   // A new size moves the ends of connectors on the page's sides.
                   const next = syncConnectors({ ...doc, frames });
                   const frame = next.frames.find((entry) => entry.id === adopted.id)!;
-                  return { doc: next, value: { status: "placed", adopted: true, units: "canvas", frame: summarizeFrame(frame) } };
+                  return { doc: next, value: { ...reused, frame: summarizeFrame(frame) } };
                 }
                 const base = { ...doc, frames: doc.frames.filter((entry) => entry.id !== adopted.id) };
-                const placed = placeFrame(base, { ...input, w: nextW, h: nextH }, canvasView(base, undefined, pageId), () => adopted.id);
+                const placed = placeFrame(
+                  base,
+                  { ...input, w: nextW, h: nextH, ...(keptGroup ? { groupId: keptGroup } : {}) },
+                  canvasView(base, undefined, pageId),
+                  () => adopted.id,
+                );
                 if ("error" in placed) {
                   throw new CanvasToolError(
                     `The canvas is full (${DESIGN_CANVAS_LIMITS.frames} frames, ${DESIGN_CANVAS_LIMITS.framesPerPage} on a page). Remove a frame first.`,
@@ -726,7 +758,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                   ),
                 });
                 const frame = placedDoc.frames.find((entry) => entry.id === adopted.id)!;
-                return { doc: placedDoc, value: { status: "placed", adopted: true, units: "canvas", frame: summarizeFrame(frame) } };
+                return { doc: placedDoc, value: { ...reused, frame: summarizeFrame(frame) } };
               }
               const placed = placeFrame(doc, input, canvasView(doc, undefined, pageId), () => id);
               if ("error" in placed) {
@@ -735,7 +767,23 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 );
               }
               const frame = placed.doc.frames.find((entry) => entry.id === id)!;
-              return { doc: placed.doc, value: { status: "placed", units: "canvas", frame: summarizeFrame(frame) } };
+              if (kind === "file" && others.length > 0) {
+                const elsewhere = onThisPage.length === 0;
+                return {
+                  doc: placed.doc,
+                  value: {
+                    status: "placed",
+                    placed: "copy",
+                    note: elsewhere
+                      ? `${path} is also on another canvas page; this is a new frame on this one.`
+                      : `This is a second frame for ${path}, beside the one already on this page.`,
+                    units: "canvas",
+                    frame: summarizeFrame(frame),
+                    ...copies,
+                  },
+                };
+              }
+              return { doc: placed.doc, value: { status: "placed", ...(kind === "file" ? { placed: "new" } : {}), units: "canvas", frame: summarizeFrame(frame) } };
             });
           }),
       },
