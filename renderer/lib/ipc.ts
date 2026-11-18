@@ -1282,6 +1282,9 @@ export interface TerminalSnapshot {
 }
 
 export const browserApi = {
+  popupMenu: (id: string, point: { x: number; y: number }, items: import("../shared/browser").BrowserMenuItem[]) =>
+    invoke<import("../shared/browser").BrowserMenuChoice | null>("browser:popup-menu", id, point, items),
+  dismissMenu: (id: string) => invoke<void>("browser:dismiss-menu", id),
   getState: (workspaceId: string) =>
     invoke<import("../shared/browser").BrowserState>("browser:get-state", workspaceId),
   command: (workspaceId: string, command: import("../shared/browser").BrowserCommand) =>
@@ -1489,6 +1492,9 @@ export const terminalApi = {
   resize: (sessionId: string, cols: number, rows: number) =>
     invoke<void>("terminal:resize", sessionId, cols, rows),
   close: (sessionId: string) => invoke<void>("terminal:close", sessionId),
+  /** The program running in the foreground, or null when the shell is at its prompt. */
+  foregroundCommand: (sessionId: string) =>
+    invoke<string | null>("terminal:foregroundCommand", sessionId),
 };
 
 // ── Git ───────────────────────────────────────────────────────────────
@@ -1736,6 +1742,9 @@ export const chatsApi = {
   followPullRequest: (chatId: string) => invoke<void>("chats:followThroughFollowPullRequest", { chatId }),
   stopFollowingPullRequest: (chatId: string, ref: { host: string; repository: string; number: number }) =>
     invoke<void>("chats:followThroughStopFollow", { chatId, ...ref }),
+  /** Read this chat's followed pull requests soon, or every chat's when `chatId` is omitted. */
+  nudgeFollowedPullRequests: (chatId?: string) =>
+    invoke<void>("chats:followThroughNudgePullRequests", chatId === undefined ? {} : { chatId }),
   setDoneWhenCheck: (chatId: string, command: string) =>
     invoke<void>("chats:followThroughSetCheck", { chatId, command }),
   clearDoneWhenCheck: (chatId: string) => invoke<void>("chats:followThroughClearCheck", { chatId }),
@@ -1806,6 +1815,12 @@ export const chatsApi = {
       ...(forkAt ? { messageId: forkAt.messageId, position: forkAt.position } : {}),
       ...(summary ? { summary } : {}),
     }),
+  /**
+   * Fork a chat whose workspace folder is gone, through its newest reply, into
+   * another workspace (or No workspace). The original chat is left as it is.
+   */
+  continueInNewChat: (chatId: string, workspaceId: string) =>
+    invokeChatMutation<Chat>("chats:copyVisibleHistory", { chatId, continueInWorkspaceId: workspaceId }),
   retryForkSummary: (chatId: string) => invoke<Chat>("chats:retryForkSummary", { chatId }),
   cancelForkSummary: (chatId: string) => invoke<boolean>("chats:cancelForkSummary", { chatId }),
   skipForkSummary: (chatId: string) => invoke<Chat>("chats:skipForkSummary", { chatId }),

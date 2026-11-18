@@ -248,6 +248,7 @@ final class AidenChatViewModel {
     /// The fork request whose outcome is still unknown, replayed with the
     /// same Idempotency-Key so a lost response never yields a second fork.
     @ObservationIgnored var forkAttempt: AidenChatForkAttempt?
+    @ObservationIgnored private var continueInNewChatAttempt: AidenContinueInNewChatAttempt?
     @ObservationIgnored private var draftSession: AidenChatDraftStore.Session?
     @ObservationIgnored private var draftPersistenceTask: Task<Void, Never>?
     @ObservationIgnored private var suppressesDraftPersistence = false
@@ -373,6 +374,12 @@ final class AidenChatViewModel {
     private(set) var isSubmittingRunInput = false
     var isForking = false
     var isSettlingForkSummary = false
+    /// Revision 64: set while the computer's last answer to a send was that
+    /// this chat's folder is gone and the chat can continue in a new chat.
+    private(set) var continueInNewChatRefusal: AidenContinueInNewChatRefusal?
+    private(set) var isContinuingInNewChat = false
+    /// The computer's answer when Continue in a new chat failed, for the picker.
+    var continueInNewChatError: String?
     /// The chat this fork came from, once resolved for the lineage row.
     var forkSource: AidenChatForkSource = .unresolved
     private(set) var runInputReceipt: String?
@@ -2001,6 +2008,7 @@ final class AidenChatViewModel {
             isPendingSendRefusedBecauseBusy = false
             turnAttempts.reset()
             rateLimitedSendRetries = 0
+            continueInNewChatRefusal = nil
             if chat.messages.contains(where: { $0.id == optimisticID }) {
                 messageRenderIDs[response.message.id] = optimisticID
             }
@@ -2045,6 +2053,7 @@ final class AidenChatViewModel {
                 turnAttempts.reset()
                 rateLimitedSendRetries = 0
             }
+            continueInNewChatRefusal = AidenContinueInNewChatRefusal(error: error)
             if pendingSend == nil { presentedError = error.localizedDescription }
             coordinator.haptics.play(.error, scope: hapticScope)
         }
@@ -3999,5 +4008,141 @@ final class AidenChatViewModel {
         reasoning = ""
         tools = []
         activityTimeline = nil
+    }
+}
+
+// MARK: - Continue in a new chat (contract revision 64)
+
+/// Revision 64: the computer refused a send because this chat's workspace
+/// folder is gone, and said the whole chat can continue in a new chat elsewhere.
+struct AidenContinueInNewChatRefusal: Equatable {
+    /// The computer's sentence, as the error alert shows it.
+    let message: String
+    let reason: AidenWorkspaceUnavailableReason?
+
+    /// Nil unless the error is a `workspace_unavailable` refusal whose
+    /// details offer to continue. Older hosts send no details, so they never
+    /// offer the action.
+    init?(error: Error) {
+        guard case AidenRemoteClientError.server(let status, let body) = error,
+              status == 409,
+              body.code == AidenRemoteErrorCode(rawValue: "workspace_unavailable"),
+              body.details?.canContinueInNewChat == true else { return nil }
+        message = error.localizedDescription
+        reason = body.details?.reason
+    }
+}
+
+/// One Continue in a new chat request and its `Idempotency-Key`, kept while
+/// the outcome is unknown so a lost response never makes a second chat.
+struct AidenContinueInNewChatAttempt: Equatable {
+    let context: AidenRemoteRequestContext
+    let chatId: String
+    let revision: String
+    let workspaceId: String
+    let idempotencyKey: UUID
+}
+
+extension AidenChatViewModel {
+    /// The chat's machine's other workspaces this chat can continue in: the
+    /// new-chat list without the chat's own workspace, archived ones or
+    /// hidden records.
+    var continueInNewChatWorkspaces: [AidenWorkspace] {
+        guard !isReadOnlyFixture else { return [] }
+        let archived = coordinator.workspaceArchiveStore.archivedWorkspaceIDs(for: owner.instanceId)
+        return AidenNoWorkspace.choices(AidenNoWorkspace.unarchived(ownerWorkspaces, archivedIDs: archived))
+            .filter { $0.id != chat.workspaceId }
+    }
+
+    /// Whether the error alert offers Continue in a new chat: the computer's
+    /// latest refusal offered it, both sides negotiated it, and there is
+    /// another workspace to continue in.
+    var offersContinueInNewChat: Bool {
+        guard let refusal = continueInNewChatRefusal, presentedError == refusal.message,
+              canContinueInNewChat else { return false }
+        return !continueInNewChatWorkspaces.isEmpty
+    }
+
+    private var canContinueInNewChat: Bool {
+        guard !isReadOnlyPresentation, !isRemoved, !chat.isBotChat, isConnected,
+              liveOwner != nil,
+              let server = ownerServer,
+              server.serverCapabilities?.contains(.chatContinueInNewChat) == true,
+              server.capabilities.contains(.chatContinueInNewChat),
+              server.capabilities.contains(.chatWrite) else { return false }
+        return true
+    }
+
+    /// Copies the whole chat into a new chat in `workspaceId` on the same
+    /// machine and returns it to open. This chat stays as it is. A failure
+    /// leaves the computer's message in `continueInNewChatError`.
+    func continueInNewChat(workspaceId: String) async -> AidenChat? {
+        guard continueInNewChatRefusal != nil, !isContinuingInNewChat, canContinueInNewChat,
+              continueInNewChatWorkspaces.contains(where: { $0.id == workspaceId }),
+              let context = liveOwner,
+              coordinator.isLive(context) else { return nil }
+        isContinuingInNewChat = true
+        defer { isContinuingInNewChat = false }
+        continueInNewChatError = nil
+        let source = chat
+        let attempt: AidenContinueInNewChatAttempt
+        if let existing = continueInNewChatAttempt, existing.context == context, existing.chatId == source.id,
+           existing.revision == source.revision, existing.workspaceId == workspaceId {
+            attempt = existing
+        } else {
+            attempt = AidenContinueInNewChatAttempt(
+                context: context,
+                chatId: source.id,
+                revision: source.revision,
+                workspaceId: workspaceId,
+                idempotencyKey: UUID()
+            )
+        }
+        continueInNewChatAttempt = attempt
+        do {
+            let result = try await coordinator.remoteClient(for: context).continueChatInNewChat(
+                chatId: attempt.chatId,
+                revision: attempt.revision,
+                workspaceId: attempt.workspaceId,
+                idempotencyKey: attempt.idempotencyKey
+            )
+            if continueInNewChatAttempt == attempt { continueInNewChatAttempt = nil }
+            guard !isRemoved, coordinator.isLive(context) else { return nil }
+            let continued = result.chat
+            guard !continued.isBotChat else {
+                continueInNewChatError = String(localized: "Aiden returned a conversation that is unavailable in Workspaces.")
+                coordinator.haptics.play(.error, scope: hapticScope)
+                return nil
+            }
+            let writeToken = cache.reserveChatWrite()
+            _ = try? await cache.saveChat(continued, instanceId: context.instanceId, writeToken: writeToken)
+            await cache.admitCreatedWorkspaceChat(
+                chatId: continued.id,
+                instanceId: context.instanceId,
+                workspaceId: continued.workspaceId,
+                writeToken: writeToken
+            )
+            guard coordinator.isLive(context) else { return nil }
+            continueInNewChatRefusal = nil
+            coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "chat-continue:\(continued.id)")
+            return continued
+        } catch let error where aidenIsCancellation(error) {
+            // A cancelled request may already have reached the computer; keep the key.
+            return nil
+        } catch {
+            if continueInNewChatAttempt == attempt, !AidenChatForkAttempt.outcomeIsUnknown(after: error) {
+                continueInNewChatAttempt = nil
+            }
+            if await coordinator.handleCredentialRevocation(error, context: context) { return nil }
+            guard !isRemoved, coordinator.isLive(context) else { return nil }
+            if case AidenRemoteClientError.server(_, let body) = error, body.code.rawValue == "revision_conflict" {
+                continueInNewChatError = String(localized: "This chat changed on your computer. Try again.")
+                _ = await refreshForkChat(context: context)
+            } else {
+                continueInNewChatError = error.localizedDescription
+            }
+            coordinator.haptics.play(.error, scope: hapticScope)
+            return nil
+        }
     }
 }

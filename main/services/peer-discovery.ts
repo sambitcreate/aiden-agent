@@ -97,16 +97,14 @@ function tailscaleStatusFailure(error: unknown): AidenTailscaleStatusReadFailure
  * Phones, tablets, Windows nodes and offline peers are skipped; nothing
  * else in the status is read.
  */
-export function parseTailscalePeerNames(serialized: string): string[] {
-  if (serialized.length > MAX_STATUS_CHARS) return [];
+function parseTailscalePeerNamesStrict(serialized: string): string[] {
+  if (serialized.length > MAX_STATUS_CHARS) throw new Error("tailscale_status_invalid_response");
   let root: Record<string, unknown>;
-  try {
-    root = peerRecord(JSON.parse(serialized));
-  } catch {
-    return [];
-  }
+  try { root = peerRecord(JSON.parse(serialized)); }
+  catch { throw new Error("tailscale_status_invalid_response"); }
   const peers = root.Peer;
-  if (!peers || typeof peers !== "object" || Array.isArray(peers)) return [];
+  if (peers == null) return [];
+  if (typeof peers !== "object" || Array.isArray(peers)) throw new Error("tailscale_status_invalid_response");
   const names: string[] = [];
   for (const value of Object.values(peers).slice(0, MAX_STATUS_PEERS)) {
     if (!value || typeof value !== "object") continue;
@@ -119,6 +117,12 @@ export function parseTailscalePeerNames(serialized: string): string[] {
     if (names.length === MAX_TAILSCALE_CANDIDATES) break;
   }
   return names;
+}
+
+/** An invalid status has no usable peers when parsed outside discovery. */
+export function parseTailscalePeerNames(serialized: string): string[] {
+  try { return parseTailscalePeerNamesStrict(serialized); }
+  catch { return []; }
 }
 
 function txtInstance(txt: unknown): string | undefined {
@@ -164,6 +168,7 @@ interface Session {
   active: number;
   lanServices: number;
   tailscaleScan: Promise<void> | undefined;
+  tailscaleUnavailableReason?: AidenTailscaleStatusReadFailureCategory;
   /** Until the settle window passes, Bonjour may still announce devices. */
   settle: ReturnType<typeof setTimeout> | undefined;
   self: Promise<string>;
@@ -230,6 +235,9 @@ export class PeerDiscovery {
         session.active > 0 ||
         session.queue.length > 0,
       devices,
+      ...(session.tailscaleUnavailableReason
+        ? { tailscale: { status: "unavailable" as const, reason: session.tailscaleUnavailableReason } }
+        : {}),
     };
   }
 
@@ -251,6 +259,7 @@ export class PeerDiscovery {
       active: 0,
       lanServices: 0,
       tailscaleScan: undefined,
+      tailscaleUnavailableReason: undefined,
       settle: undefined,
       self: this.options.localInstanceId().catch(() => ""),
     };
@@ -276,6 +285,11 @@ export class PeerDiscovery {
     try {
       runner = await this.options.tailscale();
     } catch {
+      if (this.session === session) {
+        session.tailscaleUnavailableReason = "command-failed";
+        try { this.options.tailscaleUnavailable?.("command-failed"); }
+        catch { /* Diagnostics cannot stop discovery. */ }
+      }
       return;
     }
     if (!runner || this.session !== session) return;
@@ -283,11 +297,12 @@ export class PeerDiscovery {
     try {
       const serialized = await runner.run(["status", "--json"]);
       if (serialized.length > MAX_STATUS_CHARS) throw new Error("tailscale_status_invalid_response");
-      names = parseTailscalePeerNames(serialized);
+      names = parseTailscalePeerNamesStrict(serialized);
     } catch (error) {
       if (this.session !== session) return;
+      session.tailscaleUnavailableReason = tailscaleStatusFailure(error);
       try {
-        this.options.tailscaleUnavailable?.(tailscaleStatusFailure(error));
+        this.options.tailscaleUnavailable?.(session.tailscaleUnavailableReason);
       } catch {
         // Diagnostics never change what discovery finds.
       }

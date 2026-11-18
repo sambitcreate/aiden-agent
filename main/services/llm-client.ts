@@ -22,8 +22,8 @@ import { usageLimits } from "./usage-limit-main.js";
 import { withUsageLimitWait } from "./usage-limit-stream.js";
 import { spending } from "./spending-main.js";
 import { createSpendingMeter, spendCounts } from "./spending-service.js";
-import { effectiveApprovalMode, parseApprovalModel, workspaceApprovalPolicy, type MacGrantClass } from "../../renderer/shared/approval-mode.js";
-import { currentWorkspaceApproval, legacyAccessOf } from "./approval-gate/run-approval.js";
+import { parseApprovalModel, type MacGrantClass } from "../../renderer/shared/approval-mode.js";
+import { currentWorkspaceApproval, generationApprovalPolicy, legacyAccessOf } from "./approval-gate/run-approval.js";
 import { RunTaint, runTaintHistoryOfBranch } from "./approval-gate/run-taint.js";
 import { declaredReadOnlyHint } from "./approval-gate/tool-classes.js";
 import { approvalJudgeAction, createApprovalJudge, type ApprovalJudge } from "./approval-judge/judge.js";
@@ -413,7 +413,11 @@ import {
   type ChatRunInputHooks,
   type ChatRunInputAdmissionRequest,
   type ChatRunInputAdmissionResult,
+  type ChatRunInputGenerationRef,
 } from "./chat-run-input-admission.js";
+import { createChatOwedTurns, type OwedTurnPlan } from "./chat-owed-turns.js";
+import { owedTurnStartRequest, type OwedTurnContext } from "./chat-owed-turn-start.js";
+import { createOwedTurnPrompts } from "./chat-owed-turn-prompts.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { btwOperationRegistry, btwService } from "./rpiv-btw/service.js";
 import { createPiCodemodeTool } from "./pi-codemode.js";
@@ -508,7 +512,7 @@ import {
   AskUserQuestionCoordinator,
   type AskUserQuestionRespondOutcome,
 } from "./ask-user-question-coordinator.js";
-import { ASK_USER_QUESTION_TOOL_NAME } from "../../renderer/shared/ask-user-question.js";
+import { ASK_USER_QUESTION_TOOL_NAME, ASK_USER_QUESTION_VERSION } from "../../renderer/shared/ask-user-question.js";
 import { createTodoExtension, shouldEnableTodoExtension } from "./rpiv-todo/extension.js";
 import {
   createWorkspaceArtifactTool,
@@ -633,6 +637,12 @@ export interface GenerationExecutionOptions {
    * and questions are unavailable for the whole turn.
    */
   unattended?: boolean;
+  /**
+   * Main-owned: this turn answers input UserPromptSubmit already accepted
+   * while the chat's previous run was going, so the hooks do not screen it
+   * again and what they said then is this turn's prompt context.
+   */
+  screenedPrompt?: { messageId: string; context?: string };
 }
 
 interface BotGenerationAuthorityContext {
@@ -669,6 +679,8 @@ interface ActiveGeneration {
   stopSubagentsForGuidance?: () => void;
   /** UserPromptSubmit for mid-flight input, in a chat that runs hooks. */
   inputHooks?: ChatRunInputHooks;
+  /** Saved input this run's queue no longer takes becomes the chat's next turn. */
+  owedTurn?: ChatRunInputGenerationRef["owedTurn"];
 }
 
 const active = new Map<string, ActiveGeneration>();
@@ -717,6 +729,60 @@ const runInputAdmission = createChatRunInputAdmission({
 });
 const chatCopyGate = new ChatWorkspaceMutationGate();
 const chatTurnAdmission = new ChatTurnAdmission();
+
+/**
+ * Saved input a run ended without answering: Pi closed its queue while the
+ * input was being saved, or the run ended on a turn that never read it.
+ * Either way the chat owes it a turn, which starts here once the run settles.
+ */
+const owedTurns = createChatOwedTurns<OwedTurnContext, GenerationCancellationOrigin>({
+  refuses: (chatId) => quitInProgress || chatDeletionGate.isDeleting(chatId),
+  start: startOwedTurn,
+  onStartError: (error) => logger.warn("pi", "Could not start the chat's owed turn.", error),
+});
+
+/**
+ * The chat's next turn, for saved input its previous run never answered.
+ * It is an ordinary chat turn started in main, like a phone's: subagents,
+ * connectors and every other tool the settled run had, with approvals and
+ * questions waiting for whoever answers first, a desktop window showing the
+ * chat or a paired phone. Computer Use and the hooks tool stay off, as for
+ * every turn no window owns, because their cards need the run's own window.
+ * The chat's latest message is the owed input, so the turn answers it. A
+ * Stop that reached the settled run after it recorded its outcome stops
+ * this turn at once, so the person sees one stopped turn.
+ */
+function startOwedTurn(plan: OwedTurnPlan<OwedTurnContext, GenerationCancellationOrigin>): void {
+  const streamId = `owed-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
+  const owner: ChatGenerationOwner = {
+    id: 0,
+    documentId: `owed:${streamId}`,
+    isDestroyed: () => false,
+    send: (channel, payload) => owedTurnPrompts.publish(plan.chatId, channel, payload),
+    onInvalidated: () => () => undefined,
+  };
+  const lease = llmClient.beginChatTurn(plan.chatId, streamId, owner.documentId);
+  if (!lease) {
+    // Another turn holds the chat; the saved input stays as history.
+    logger.warn("pi", `The chat's owed turn after stream ${plan.settledStreamId} could not begin.`);
+    return;
+  }
+  lease.settleAsyncWork();
+  const request = owedTurnStartRequest(plan, streamId, [HOOKS_TOOL_NAME]);
+  const started = llmClient.start(streamId, request.params, owner, request.options);
+  // The start registers the turn before its first await, so this Stop finds it.
+  if (plan.stopOrigin) llmClient.cancel(streamId, plan.stopOrigin);
+  started.then(
+    (ok) => {
+      if (!ok) lease.release();
+    },
+    (error: unknown) => {
+      lease.release();
+      lease.settleAsyncWork();
+      logger.warn("pi", `The chat's owed turn after stream ${plan.settledStreamId} failed to start.`, error);
+    },
+  );
+}
 const geminiContextCache = new GeminiContextCache({
   onWarning: (message, error) => logger.warn("pi", message, error),
 });
@@ -730,7 +796,9 @@ function chatHasGenerationOwnership(chatId: string): boolean {
   return (
     [...initializing.values()].some((entry) => entry.chatId === chatId) ||
     [...active.values()].some((entry) => entry.chatId === chatId) ||
-    subagentRuntimeRegistry.hasLiveChatChildren(chatId)
+    subagentRuntimeRegistry.hasLiveChatChildren(chatId) ||
+    // A settled run is still saving input it owes the chat a turn for.
+    owedTurns.isHolding(chatId)
   );
 }
 
@@ -769,6 +837,7 @@ function cancelChatGenerations(chatId: string, origin: GenerationCancellationOri
   for (const [streamId, entry] of [...active.entries()]) {
     if (entry.chatId === chatId) llmClient.cancel(streamId, origin);
   }
+  owedTurns.stopChat(chatId, origin);
   subagentRuntimeRegistry.abortChat(chatId);
 }
 
@@ -1009,6 +1078,7 @@ const approvals = new ToolApprovalCoordinator(
       forgetInterruptedWait(approvalId);
     }
     chatActivityRegistry.resolveAttention(approvalId);
+    owedTurnPrompts.settled(approvalId);
     recordRunAttentionResolved(hostRunRegistry, approvalId, {
       kind: "approval",
       decision: outcome === "allowed" ? "allow" : outcome === "denied" ? "deny" : "cancelled",
@@ -1043,6 +1113,7 @@ const questionnaires = new AskUserQuestionCoordinator(
       forgetInterruptedWait(promptId);
     }
     chatActivityRegistry.resolveAttention(promptId);
+    owedTurnPrompts.settled(promptId);
     recordRunAttentionResolved(hostRunRegistry, promptId, {
       kind: "question",
       outcome: response.timedOut ? "expired" : response.cancelled ? "cancelled" : "answered",
@@ -1055,6 +1126,34 @@ const questionnaires = new AskUserQuestionCoordinator(
       payload: { questions: prompt.questions },
     }),
 );
+/**
+ * Cards of owed turns, which no window owns. Desktop windows showing the chat
+ * read them like a phone turn's card, and phones answer them through their
+ * run controls; the coordinators' one-shot settlement lets the first answer
+ * win. A card nobody answers is denied, or its question closed, after five
+ * minutes, the same as a phone turn's.
+ */
+const owedTurnPrompts = createOwedTurnPrompts({
+  now: Date.now,
+  setTimer: (callback, ms) => {
+    const timer = setTimeout(callback, ms);
+    timer.unref?.();
+    return timer;
+  },
+  clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  notifyChanged: (chatId) => ipcMain.broadcast("remote:approval-changed", { chatId }),
+  expireApproval: (approvalId) => {
+    approvals.decideAsHost(approvalId, false);
+  },
+  expireQuestion: (promptId) => {
+    questionnaires.respondAsHost(promptId, {
+      version: ASK_USER_QUESTION_VERSION,
+      promptId,
+      cancelled: true,
+      answers: [],
+    });
+  },
+});
 // A parent can be waiting for a child that is still constructing its tools.
 // Give the child's own bounded cancellation drain time to report a cleanup
 // miss before the outer parent shutdown deadline can release a soak receipt.
@@ -1253,10 +1352,10 @@ async function prepareGeneration(
   // A person's workspace chat follows the global approval mode, or the
   // workspace's own when it is customized (plan §3.1). Internal policies
   // (scheduled runs), Bot-bound turns and the Assistant keep their access.
-  const approvalPolicy =
-    workspace && !botBound && !assistantMode && options.permission === undefined
-      ? workspaceApprovalPolicy(workspace, effectiveApprovalMode(await configStore.getSettings(), true))
-      : undefined;
+  const approvalPolicy = await generationApprovalPolicy(
+    { workspace, botBound, mode: params.mode, permission: options.permission },
+    () => configStore.getSettings(),
+  );
   const permission: GenerationPermission =
     options.permission ?? (approvalPolicy ? legacyAccessOf(approvalPolicy) : workspace?.permission ?? "ask");
   approvalModes.set(streamId, approvalPolicy ? approvalPolicy.mode : approvalAnalyticsMode(permission));
@@ -3296,6 +3395,11 @@ export const llmClient = {
     const noteModelBecameReady = () => endLoadMonitor(loadHost, streamId, true);
     const generationCancelRequested = () =>
       initialization.cancelRequested || active.get(streamId)?.cancelRequested === true;
+    // A step cancelled because the person pressed Stop is marked as stopped,
+    // not failed. Any other cancellation keeps the issue treatment.
+    const generationStoppedByUser = () =>
+      generationCancelRequested() &&
+      (active.get(streamId)?.cancellationOrigin ?? initialization.cancellationOrigin) === "user_stop";
     const persistAssistant = async (
       content: string,
       reasoning: string,
@@ -3861,6 +3965,7 @@ export const llmClient = {
             activeCompactionStepId,
             event.aborted ? "cancelled" : event.result ? "completed" : "failed",
             event.result,
+            { stoppedByUser: event.aborted && generationStoppedByUser() },
           );
           activeCompactionStepId = undefined;
         }
@@ -3932,6 +4037,7 @@ export const llmClient = {
         hasPriorMessages: priorVisibleMessages.length > 0,
         prompt: currentUser,
         store: chatStore,
+        ...(options.screenedPrompt ? { screenedPrompt: options.screenedPrompt } : {}),
         idempotencyKeys: { userPromptSubmit: `UserPromptSubmit:${params.chatId}:${streamId}` },
         signal: initialization.controller.signal,
         onStoreError: (message, error) => logger.error("hooks", message, error),
@@ -5226,6 +5332,7 @@ export const llmClient = {
               terminalStatus === "completed"
                 ? event.result?.details
                 : safeToolIssueDetails(event.toolName, terminalStatus, event.result),
+              { stoppedByUser: terminalStatus === "cancelled" && generationStoppedByUser() },
             );
             sendGeneration(streamId, "chat:tool", {
               streamId,
@@ -5484,6 +5591,49 @@ export const llmClient = {
     initialization.releaseBotAuthority = () => {};
     initialization.loadMonitor = undefined;
     loadHost = activeGeneration;
+    // Only an ordinary chat run owes its chat a turn for input it never read.
+    // Bots, Assistant modes, routines, Telegram and side runs deliver input
+    // their own way, and a chat another feature owns runs its own turns.
+    const owesItsChatTurns =
+      (options.usageSource === undefined || options.usageSource === "chat") &&
+      authoritativeMode === undefined &&
+      preparedBotContext === undefined &&
+      options.interactionSurface === undefined &&
+      !generationChat.botId &&
+      generationChat.owner === undefined;
+    // The outcome the run records (a Stop, or not), once it has one.
+    let owedRunRecordedStop: boolean | undefined;
+    // Ends the run's ownership, then settles its owed turn even when a
+    // settlement step throws, so saved input never stays unanswered.
+    const settleRun = (committedIds: readonly string[], recordedStop: boolean) => {
+      owedTurns.settleAfter(
+        streamId,
+        () => settleGeneration(streamId, params, activeGeneration, active),
+        {
+          committed: committedIds.map((messageId) => {
+            const hookContext = hookInputContexts.forMessage(messageId);
+            return { messageId, ...(hookContext ? { hookContext } : {}) };
+          }),
+          recordedStop,
+        },
+      );
+    };
+    if (owesItsChatTurns) {
+      owedTurns.open(streamId, {
+        chatId: params.chatId,
+        ownerDocumentId: owner.documentId,
+        context: {
+          ...(params.workspaceId !== undefined ? { workspaceId: params.workspaceId } : {}),
+          providerId: params.providerId,
+          model: params.model,
+          ...(params.thinkingLevel !== undefined ? { thinkingLevel: params.thinkingLevel } : {}),
+          ...(params.inlineVisuals !== undefined ? { inlineVisuals: params.inlineVisuals } : {}),
+          ...(options.visualAudience !== undefined ? { visualAudience: options.visualAudience } : {}),
+          ...(options.excludeToolNames !== undefined ? { excludeToolNames: options.excludeToolNames } : {}),
+        },
+      });
+      activeGeneration.owedTurn = { hold: () => owedTurns.hold(streamId) };
+    }
     // Publish the active owner before removing initialization so cancellation
     // cannot fall into a map-transition gap and leave a privileged run alive.
     active.set(streamId, activeGeneration);
@@ -5518,7 +5668,7 @@ export const llmClient = {
       try {
         await abandonPromotedRun(activeGeneration.cancelRequested ? "cancelled" : "failed");
       } finally {
-        settleGeneration(streamId, params, activeGeneration, active);
+        settleRun([], activeGeneration.cancelRequested);
       }
     };
     if (initialization.cancelRequested || activeGeneration.cancelRequested) {
@@ -5529,7 +5679,7 @@ export const llmClient = {
         cancelled: true,
         cancellationOrigin: activeGeneration.cancellationOrigin,
       });
-      settleGeneration(streamId, params, activeGeneration, active);
+      settleRun([], true);
       return false;
     }
 
@@ -5550,12 +5700,15 @@ export const llmClient = {
     // waiting for is returned later, only if its visible save did not land.
     let undeliveredGuidance: string[] = [];
     let undeliveredGuidanceCollected = false;
+    // Saved input Pi still held when the run ended; the chat owes it a turn.
+    let owedCommittedIds: readonly string[] = [];
     const collectUndeliveredGuidance = () => {
       if (undeliveredGuidanceCollected) return;
       undeliveredGuidanceCollected = true;
       try {
         const taken = agent.takeUndeliveredQueuedMessages();
         undeliveredGuidance = queuedGuidanceText(taken.messages);
+        owedCommittedIds = taken.committed ?? [];
         if (taken.late) {
           const owner = ownerForStream(streamId);
           void taken.late.then(
@@ -5601,6 +5754,7 @@ export const llmClient = {
               scratchDir: await acpScratch.directoryFor(params.chatId),
               permission: () => permission,
               timeline,
+              stoppedByUser: generationStoppedByUser,
               requestApproval: (prompt, approvalSignal) => approvals.request(prompt, approvalSignal, owner.documentId),
               takeApprovalScope: (approvalStreamId, toolCallId) =>
                 approvals.takeDecisionPayload(approvalStreamId, toolCallId)?.scope,
@@ -5706,6 +5860,8 @@ export const llmClient = {
         lastAssistantMessage = runtimeOutcome.finalMessage ?? lastAssistantMessage;
         const wasCancelled =
           runtimeOutcome.kind === "app_cancelled" || activeGeneration.cancelRequested;
+        // The outcome this run records; a Stop after this stops the owed turn instead.
+        owedRunRecordedStop = wasCancelled;
         if (wasCancelled && requestUsage.takeUnreportedCancellation()) {
           try {
             await usageStore.record(
@@ -5807,6 +5963,8 @@ export const llmClient = {
       } catch (error) {
         pendingPiDurabilitySettlement ??= agent.pendingDurabilitySettlement();
         collectUndeliveredGuidance();
+        // A failed run records a failure, never a Stop, so the input it owes still runs.
+        owedRunRecordedStop = false;
         logger.error("pi", `Generation failed for stream ${streamId}`, error);
         const finalTimeline = attachClaimCheck(timeline.finish("failed"), full, claimCheckOptions);
         const persisted = await persistAssistant(full, reasoning, finalTimeline);
@@ -5839,7 +5997,7 @@ export const llmClient = {
               () => invalidateChatContextJournal(params.chatId),
             ]);
           } finally {
-            settleGeneration(streamId, params, activeGeneration, active);
+            settleRun(owedCommittedIds, owedRunRecordedStop ?? activeGeneration.cancelRequested);
           }
         }
       }
@@ -5885,6 +6043,37 @@ export const llmClient = {
   /** Host-authority questionnaire answer; same one-shot rule as `approveAsHost`. */
   answerQuestionnaireAsHost(promptId: string, response: unknown): AskUserQuestionRespondOutcome {
     return questionnaires.respondAsHost(promptId, response);
+  },
+
+  /** The open approval of this chat's owed turn, for the desktop's host card. */
+  pendingOwedTurnApproval(chatId: string) {
+    return owedTurnPrompts.approvalForChat(chatId);
+  },
+
+  /** The open question of this chat's owed turn, for the desktop's host card. */
+  pendingOwedTurnQuestion(chatId: string) {
+    return owedTurnPrompts.questionForChat(chatId);
+  },
+
+  /**
+   * A desktop window answered an owed turn's approval. False when the card is
+   * not this chat's, cannot be allowed away from an owning window, or someone
+   * else already answered.
+   */
+  decideOwedTurnApproval(
+    chatId: string,
+    approvalId: string,
+    decision: ApprovalDecision,
+    scope?: ToolApprovalDecisionPayload["scope"],
+  ): boolean {
+    if (!owedTurnPrompts.canDecide(chatId, approvalId, decision)) return false;
+    return approvals.decideAsHost(approvalId, decision === "allow", scope ? { scope } : undefined);
+  },
+
+  /** A desktop window answered an owed turn's question. False when it is not this chat's or was already answered. */
+  answerOwedTurnQuestion(chatId: string, promptId: string, response: unknown): boolean {
+    if (!owedTurnPrompts.hasQuestion(chatId, promptId)) return false;
+    return questionnaires.respondAsHost(promptId, response) === "answered";
   },
 
   answerQuestionnaire(promptId: string, response: unknown, ownerDocumentId: string): boolean {
@@ -5939,9 +6128,16 @@ export const llmClient = {
     const initialization = initializing.get(streamId);
     const generation = active.get(streamId);
     const owner = initialization?.owner ?? generation?.owner;
-    if (!owner || (ownerDocumentId !== undefined && owner.documentId !== ownerDocumentId)) {
+    if (!owner) {
+      // The run may have settled while input it owes the chat a turn for is
+      // still being saved; that turn then stops as soon as it starts.
+      return owedTurns.stop(streamId, origin, ownerDocumentId);
+    }
+    if (ownerDocumentId !== undefined && owner.documentId !== ownerDocumentId) {
       return false;
     }
+    // Stop reaches the turn this run may owe its chat too.
+    owedTurns.stop(streamId, origin);
     if (initialization?.cancelRequested || generation?.cancelRequested) {
       // Quitting after Stop re-issues the abort for a turn that is still
       // unwinding (and any child it started meanwhile). The person's Stop
@@ -6181,6 +6377,8 @@ export const llmClient = {
 
   abortAll(): void {
     btwService.shutdown();
+    // No owed turn starts while the app quits; saved input stays as history.
+    owedTurns.shutDown();
     chatTurnAdmission.releaseAll();
     for (const [streamId] of initializing) this.cancel(streamId, "application_shutdown");
     for (const [streamId] of active) this.cancel(streamId, "application_shutdown");

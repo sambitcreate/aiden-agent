@@ -425,8 +425,8 @@ final class AidenToolStepGroupingTests: XCTestCase {
         let window = try show(groupHost())
         defer { close(window) }
 
+        let group = try groupElement(in: window)
         let elements = accessibleElements(in: window)
-        let group = try XCTUnwrap(elements.first { $0.accessibilityLabel?.hasPrefix("Explored 4 files") == true })
         XCTAssertEqual(group.accessibilityLabel, "Explored 4 files, ran 2 commands, collapsed")
         XCTAssertTrue(group.accessibilityTraits.contains(.button))
         XCTAssertGreaterThanOrEqual(group.accessibilityFrame.height, 44)
@@ -442,8 +442,8 @@ final class AidenToolStepGroupingTests: XCTestCase {
         let window = try show(groupHost(expansion: expansion))
         defer { close(window) }
 
+        let group = try groupElement(in: window)
         let elements = accessibleElements(in: window)
-        let group = try XCTUnwrap(elements.first { $0.accessibilityLabel?.hasPrefix("Explored 4 files") == true })
         XCTAssertEqual(group.accessibilityLabel, "Explored 4 files, ran 2 commands, expanded")
         XCTAssertTrue(group.accessibilityTraits.contains(.button))
         XCTAssertTrue(elements.contains { $0.accessibilityLabel?.contains("a0.swift") == true }, "The steps did not appear")
@@ -461,7 +461,7 @@ final class AidenToolStepGroupingTests: XCTestCase {
         let second = try show(groupHost(expansion: expansion))
         defer { close(second) }
 
-        XCTAssertTrue(accessibleElements(in: second).contains { $0.accessibilityLabel == "Explored 4 files, ran 2 commands, expanded" })
+        XCTAssertEqual(try groupElement(in: second).accessibilityLabel, "Explored 4 files, ran 2 commands, expanded")
     }
 
     func testActivatingAGroupOpensItAndTellsTheScreenFirst() throws {
@@ -471,7 +471,7 @@ final class AidenToolStepGroupingTests: XCTestCase {
         XCTAssertTrue(follow.isFollowing)
         let window = try show(rowStackHost(onGroupToggle: { follow.handle(.userScrollBegin) }))
         defer { close(window) }
-        let group = try XCTUnwrap(accessibleElements(in: window).first { $0.accessibilityLabel?.hasPrefix("Explored 4 files") == true })
+        let group = try groupElement(in: window)
         XCTAssertEqual(group.accessibilityLabel, "Explored 4 files, ran 2 commands, collapsed")
 
         XCTAssertTrue(group.accessibilityActivate(), "The group is not an activatable button")
@@ -490,7 +490,7 @@ final class AidenToolStepGroupingTests: XCTestCase {
         let window = try show(groupHost(textSize: .accessibility5))
         defer { close(window) }
 
-        let group = try XCTUnwrap(accessibleElements(in: window).first { $0.accessibilityLabel?.hasPrefix("Explored 4 files") == true })
+        let group = try groupElement(in: window)
         let frame = group.accessibilityFrame
         XCTAssertGreaterThanOrEqual(frame.height, 44)
         XCTAssertLessThanOrEqual(frame.width, 390 + 0.5, "The group outgrew the screen")
@@ -590,6 +590,18 @@ final class AidenToolStepGroupingTests: XCTestCase {
     private func close(_ window: UIWindow) {
         window.isHidden = true
         window.rootViewController = nil
+    }
+
+    /// SwiftUI builds a new window's accessibility tree some turns of the main
+    /// loop after it shows, and later on a busy machine, so this runs the loop
+    /// until the group is there.
+    private func groupElement(in window: UIWindow, file: StaticString = #filePath, line: UInt = #line) throws -> NSObject {
+        var group: NSObject?
+        _ = runMainLoop(until: {
+            group = accessibleElements(in: window).first { $0.accessibilityLabel?.hasPrefix("Explored 4 files") == true }
+            return group != nil
+        }, timeout: 10)
+        return try XCTUnwrap(group, "The group never appeared", file: file, line: line)
     }
 
     private func accessibleElements(in root: NSObject) -> [NSObject] {

@@ -4,7 +4,7 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import type { BotToolCall } from "../bot-runtime/tool-adapter.js";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import { createBotOpenWorkStore } from "./store.js";
 import { createBotOpenWorkService } from "./service.js";
 import { botOpenWorkCandidate } from "./tool.js";

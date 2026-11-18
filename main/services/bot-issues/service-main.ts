@@ -8,7 +8,7 @@
 // session imports this module for its "Needs you" wiring, so a static import
 // back would be a cycle.
 
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import { app, logger } from "../../platform.js";
 import { requestAppPath } from "../app-navigation.js";
 import { botDeliveryFunnel } from "../bot-delivery/funnel-main.js";

@@ -32,7 +32,18 @@ test("session command parsers accept only exact bounded chat selectors", () => {
     { chatId: "chat-1", forkAt: { messageId: "message-1", position: "after" }, summary: {} },
   );
   assert.deepEqual(parseChatOnlyRequest({ chatId: "chat-1" }), { chatId: "chat-1" });
+  assert.deepEqual(
+    parseChatCopyRequest({ chatId: "chat-1", continueInWorkspaceId: "workspace-2" }),
+    { chatId: "chat-1", continueIn: { workspaceId: "workspace-2" } },
+  );
   for (const invalid of [
+    // Continuing takes the whole conversation, never a cut or a summary.
+    { chatId: "chat", continueInWorkspaceId: "workspace-2", throughMessageId: "message-1" },
+    { chatId: "chat", continueInWorkspaceId: "workspace-2", messageId: "message-1", position: "after" },
+    { chatId: "chat", continueInWorkspaceId: "workspace-2", summary: {} },
+    { chatId: "chat", continueInWorkspaceId: "" },
+    { chatId: "chat", continueInWorkspaceId: 2 },
+    { chatId: "chat", continueInWorkspaceId: "x".repeat(10_000) },
     { chatId: "chat", summary: {} },
     { chatId: "chat", messageId: "m", position: "after", summary: true },
     { chatId: "chat", messageId: "m", position: "after", summary: { instructions: 1 } },

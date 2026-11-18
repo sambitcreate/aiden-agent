@@ -65,6 +65,8 @@ import {
   chatMessageQueue,
   committedRunInputNotice,
   steerQueuedMessage,
+  steerDraftOrQueue,
+  lateSteerQueuedNotice,
   steerRejectionMessage,
   withCommittedRunInput,
 } from "../lib/chat-message-queue";
@@ -183,6 +185,7 @@ import {
   type GenerationHandle,
 } from "../lib/ipc";
 import { isNoWorkspace, noWorkspaceHome } from "../lib/no-workspace";
+import { continueInWorkspaceChoices } from "../lib/new-chat-workspaces";
 import { noWorkspaceFolderForFirstSend } from "../lib/no-workspace-send";
 import {
   queryKeys,
@@ -1241,6 +1244,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       forkAt?: { messageId: string; position: ChatForkPosition },
       prefill?: { text: string; attachments: readonly Attachment[] },
       summary?: { instructions?: string },
+      continueInWorkspaceId?: string,
     ) => {
       if (getChatDraft(chatId)) throw new Error("Send the first message before copying this chat.");
       if (documentAppendReconciliationRequired) {
@@ -1260,7 +1264,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
         throw new Error("Finish the current response or approval before copying this chat.");
       }
       const sourceChatId = chatId;
-      const copied = await chatsApi.copyVisibleHistory(sourceChatId, forkAt, summary);
+      const copied = continueInWorkspaceId
+        ? await chatsApi.continueInNewChat(sourceChatId, continueInWorkspaceId)
+        : await chatsApi.copyVisibleHistory(sourceChatId, forkAt, summary);
       if (prefill) {
         saveComposerDraftText(copied.id, prefill.text);
         seedComposerAttachments(copied.id, prefill.attachments);
@@ -1307,6 +1313,46 @@ export function ChatPane({ chatId }: { chatId: string }) {
       qc,
       selectWorkspace,
     ],
+  );
+
+  // Continue in a new chat: fork the conversation into another workspace, or
+  // No workspace, and take the unsent message along. This chat stays as it is.
+  const [continuingInNewChat, setContinuingInNewChat] = React.useState(false);
+  const missingFolderWorkspaceId = missingWorkspaceFolder?.id;
+  const missingFolderMainWorkspaceId = missingWorkspaceFolder?.worktree?.mainWorkspaceId;
+  const continueChoices = React.useMemo(
+    () =>
+      missingFolderWorkspaceId
+        ? continueInWorkspaceChoices(workspaces, missingFolderWorkspaceId, missingFolderMainWorkspaceId)
+        : [],
+    [missingFolderMainWorkspaceId, missingFolderWorkspaceId, workspaces],
+  );
+  const continueInNewChat = React.useCallback(
+    async (workspaceId: string) => {
+      // The composer's draft goes along with its attachments. Otherwise a send
+      // refused by the folder check may be waiting in the paused queue with the
+      // composer already cleared, so that message goes instead.
+      const draft = cloneDraftRef.current;
+      const queued = chatMessageQueue(chatId).getSnapshot().messages[0];
+      const storedText = loadComposerDraft(chatId).text.trim();
+      const unsent =
+        draft.text.trim() || draft.attachments.length
+          ? { text: draft.text.trim(), attachments: draft.attachments }
+          : queued && (queued.text.trim() || queued.attachments.length)
+            ? { text: queued.text.trim(), attachments: queued.attachments }
+            : storedText
+              ? { text: storedText, attachments: [] }
+              : undefined;
+      setContinuingInNewChat(true);
+      try {
+        await copyChat(undefined, unsent, undefined, workspaceId);
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Couldn't continue in a new chat.");
+      } finally {
+        if (mountedRef.current) setContinuingInNewChat(false);
+      }
+    },
+    [chatId, copyChat],
   );
 
   const forkLineage = chat.data?.forkedFrom;
@@ -2458,30 +2504,34 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (text.length > MAX_RUN_INPUT_TEXT) {
         throw new Error("Guidance is too long to steer. Queue it as a follow-up instead.");
       }
-      const streamId = generationRef.current?.streamId ?? steerableDetachedProjection?.streamId;
-      if (!streamId || isStoppingGeneration || stopRequestedRef.current) {
-        throw new Error("The current response has ended. Send your message normally.");
-      }
       // The same main-owned admission as Remote and Telegram: the guidance is
-      // durable in the transcript before Pi reads it.
-      let receipt;
-      try {
-        receipt = await admitSteer(streamId, text);
-      } catch {
+      // durable in the transcript before Pi reads it. A run that already
+      // ended, or ends unsaved while admission waits, queues the draft as the
+      // next turn instead; a run the person is stopping keeps the draft.
+      const outcome = await steerDraftOrQueue({
+        queue: messageQueue,
+        message: { id: createChatTurnId(), text, attachments: [] },
+        streamId: generationRef.current?.streamId ?? steerableDetachedProjection?.streamId,
+        stopping: () => isStoppingGeneration || stopRequestedRef.current,
+        admit: (streamId, guidance) => admitSteer(streamId, guidance),
+      });
+      if (outcome.kind === "admitted") {
+        toast.info("Guidance sent. Aiden will read it at the next step.");
+      } else if (outcome.kind === "committed") {
+        // Main already saved it; resolving consumes the draft so it is not resent.
+        toast.info(committedRunInputNotice(outcome.reason));
+      } else if (outcome.kind === "queued") {
+        // Resolving consumes the draft: the queue now owns the only copy.
+        toast.info(lateSteerQueuedNotice(outcome.paused));
+      } else if (outcome.kind === "unknown") {
         throw new Error(
           "Aiden couldn't confirm the guidance. Check the conversation before sending it again.",
         );
-      }
-      if (receipt.admitted) {
-        toast.info("Guidance sent. Aiden will read it at the next step.");
-      } else if (receipt.committed) {
-        // Main already saved it; resolving consumes the draft so it is not resent.
-        toast.info(committedRunInputNotice(receipt.reason));
       } else {
-        throw new Error(steerRejectionMessage(receipt.reason));
+        throw new Error(steerRejectionMessage(outcome.reason));
       }
     },
-    [admitSteer, isStoppingGeneration, steerableDetachedProjection],
+    [admitSteer, isStoppingGeneration, messageQueue, steerableDetachedProjection],
   );
 
   const canSteerQueued =
@@ -2492,8 +2542,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const steerQueued = React.useCallback(
     async (id: string) => {
       const streamId = generationRef.current?.streamId ?? steerableDetachedProjection?.streamId;
-      if (!streamId || isStoppingGeneration || stopRequestedRef.current) {
-        toast.error("The current response has ended. The message stays queued.");
+      const stopping = () => isStoppingGeneration || stopRequestedRef.current;
+      if (stopping()) {
+        toast.error(`${steerRejectionMessage("cancelled")} The message stays queued.`);
+        return;
+      }
+      if (!streamId) {
+        // The row is already queued; it sends as the next turn once the run settles.
+        toast.info(lateSteerQueuedNotice(messageQueue.getSnapshot().paused));
         return;
       }
       const queuedSource = messageQueue
@@ -2503,11 +2559,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
         queue: messageQueue,
         id,
         admit: (text) => admitSteer(streamId, text, queuedSource),
+        stopping,
       });
       if (outcome.kind === "admitted") {
         toast.info("Guidance sent. Aiden will read it at the next step.");
       } else if (outcome.kind === "committed") {
         toast.info(committedRunInputNotice(outcome.reason));
+      } else if (outcome.kind === "rejected" && outcome.reason === "run_not_active") {
+        // Nothing was saved and the row stays queued, so the queue sends it
+        // as the next turn once the run settles.
+        toast.info(lateSteerQueuedNotice(messageQueue.getSnapshot().paused));
       } else if (outcome.kind === "rejected") {
         toast.error(`${steerRejectionMessage(outcome.reason)} The message stays queued.`);
       } else if (outcome.kind === "unknown") {
@@ -3927,6 +3988,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 {...(missingWorkspaceFolder.worktree ? { worktree: missingWorkspaceFolder.worktree } : {})}
                 checking={folderPresenceQuery.isFetching}
                 restoring={restoringWorktree}
+                continuing={continuingInNewChat}
+                continueChoices={continueChoices}
+                onContinueIn={(workspaceId) => void continueInNewChat(workspaceId)}
                 onCheckAgain={() => void folderPresenceQuery.refetch()}
                 onRestore={() => void restoreDeletedWorktree(missingWorkspaceFolder.id)}
                 onNewChatInMain={newChatActions ? () => {

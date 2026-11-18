@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import { MAX_STORED_TOOL_OUTPUT_CHARS, type ToolOutputStore } from "./tool-output-store.js";
 

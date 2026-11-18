@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import { createMessageBotTool } from "./tool.js";
 import { messageBotCandidate } from "./candidate.js";
 import type { BotMessagePost } from "./courier.js";

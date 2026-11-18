@@ -131,6 +131,8 @@ async function fixture(options: {
   backgroundJobs?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["backgroundJobs"];
   /** The host makes worktrees for phones' first messages (contract revision 53). */
   newWorktrees?: boolean;
+  /** With `forks`: the host can continue a chat whose folder is gone in a new chat (revision 64). */
+  continueInNewChat?: boolean;
 } = {}) {
   const logs: unknown[] = [];
   const calls: string[] = [];
@@ -301,7 +303,8 @@ async function fixture(options: {
               capability !== "approvals:settings" &&
               capability !== "bot:settings-changes" &&
               capability !== "bot:suggestions" &&
-              capability !== "bot:templates",
+              capability !== "bot:templates" &&
+              capability !== "chat:continue-in-new-chat",
           )
         ) {
           return null;
@@ -508,6 +511,7 @@ async function fixture(options: {
         ? {
             supportsForks: true,
             supportsForkSummaries: options.forks === "summary",
+            supportsContinueInNewChat: options.continueInNewChat === true,
             fork: async (deviceId: string, id: string, revision: string, key: string, body: unknown) => {
               calls.push(`chat-fork:${deviceId}:${id}:${revision}:${key}:${JSON.stringify(body)}`);
               return { chat: { ...chat, id: "fork-1" } } as never;
@@ -6042,6 +6046,7 @@ test("a bubble's submissionId reaches only a device holding bot:activity, on a f
           stop: async () => {},
           closed: new Promise<void>(() => {}),
         }),
+        context: async () => ({ entries: [placedMessage] }),
       }) as never,
       quietInputs: async () => new Map(),
       placedSubmissions: async () => new Map([["1", "17"]]),
@@ -7328,6 +7333,44 @@ test("D shared approval route forwards Always only with the separate wired Bot g
   assert.equal(seen.length, 1); assert.deepEqual(seen[0]!.slice(-2), ["always", { allowed: true }]);
 });
 
+test("chat:continue-in-new-chat is offered only while the host can continue a chat elsewhere, and its body reaches the fork route", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const negotiate = {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify({ accepts: ["chat:continue-in-new-chat"] }),
+  };
+  for (const [forks, continueInNewChat, offered] of [
+    [undefined, true, false],
+    ["plain", false, false],
+    ["plain", true, true],
+  ] as const) {
+    const app = await fixture({
+      capabilities: ["server:read", "chat:read", "chat:write"],
+      acceptsProgressCapabilities: true,
+      deviceType: "iphone",
+      ...(forks ? { forks } : {}),
+      continueInNewChat,
+    });
+    try {
+      const server = await (await fetch(`${app.base}/server`, { headers })).json();
+      assert.equal(server.serverCapabilities.includes("chat:continue-in-new-chat"), offered);
+      assert.equal((await fetch(`${app.base}/device/capabilities`, negotiate)).status, offered ? 200 : 404);
+      if (offered) {
+        const body = JSON.stringify({ continueIn: { workspaceId: "workspace-2" } });
+        const response = await fetch(`${app.base}/chats/chat-1/fork`, {
+          method: "POST",
+          headers: { ...headers, "content-type": "application/json", "if-match": "rev-1", "idempotency-key": "continue-key-00000001" },
+          body,
+        });
+        assert.equal(response.status, 201);
+        assert.ok(app.calls.includes(`chat-fork:device-authorized-12345678:chat-1:rev-1:continue-key-00000001:${body}`));
+      }
+    } finally {
+      await app.close();
+    }
+  }
+});
 
 const REV61_HEADERS = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1", "content-type": "application/json" };
 

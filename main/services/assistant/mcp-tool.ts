@@ -1,4 +1,4 @@
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { McpServer } from "../types.js";
 import { mcpServerOffersTools } from "../../../renderer/shared/mcp-exposure.js";

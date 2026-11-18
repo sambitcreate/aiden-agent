@@ -877,3 +877,83 @@ for (const navigation of ["direct", "redirect", "beforeunload"] as const) {
     }
   });
 }
+
+
+test("incognito cycles reuse the native session after clearing private site data", async ({ aiden }) => {
+  await finishLmStudioOnboarding(aiden.page);
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { "Content-Type": "text/html" });
+    response.end("<!doctype html><title>Private lifecycle fixture</title>");
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/private-lifecycle`;
+  try {
+    for (let cycle = 0; cycle < 3; cycle++) {
+      const opened = await command(aiden.page, { action: "create", url, profileId: "incognito" });
+      const tabId = opened.tabId!;
+      await expect.poll(async () => {
+        const state = await aiden.page.evaluate((id) =>
+          (window as unknown as BrowserTestWindow).aidenAPI.ipc.invoke<BrowserState>("browser:get-state", id),
+        E2E_WORKSPACE_ID);
+        return state.tabs.find((tab) => tab.id === tabId)?.title;
+      }).toBe("Private lifecycle fixture");
+      const sameSession = await aiden.app.evaluate(({ webContents }, url) => {
+        const current = webContents.getAllWebContents().find((contents) => contents.getURL() === url)!;
+        const state = globalThis as typeof globalThis & { privateLifecycleSession?: typeof current.session };
+        state.privateLifecycleSession ??= current.session;
+        return state.privateLifecycleSession === current.session;
+      }, url);
+      expect(sameSession).toBe(true);
+      expect((await command(aiden.page, { action: "evaluate", tabId,
+        expression: "({cookie:document.cookie, saved:localStorage.getItem('private')})",
+      })).value).toEqual({ cookie: "", saved: null });
+      await command(aiden.page, { action: "evaluate", tabId,
+        expression: "document.cookie='private=secret; path=/'; localStorage.setItem('private','secret')",
+      });
+      await command(aiden.page, { action: "close", tabId });
+    }
+  } finally {
+    await aiden.app.evaluate(() => {
+      delete (globalThis as typeof globalThis & { privateLifecycleSession?: unknown }).privateLifecycleSession;
+    });
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("a physical click during the person's pending navigation does not interrupt it", async ({ aiden }) => {
+  await finishLmStudioOnboarding(aiden.page);
+  let received!: () => void;
+  const requested = new Promise<void>((resolve) => { received = resolve; });
+  let finish: (() => void) | undefined;
+  const server = createServer((request, response) => {
+    const send = () => {
+      response.writeHead(200, { "Content-Type": "text/html" });
+      response.end(`<!doctype html><title>${request.url === "/held" ? "Navigation finished" : "Navigation start"}</title>`);
+    };
+    if (request.url === "/held") { finish = () => { finish = undefined; send(); }; received(); }
+    else send();
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  try {
+    const opened = await command(aiden.page, { action: "create", url: `${base}/start` });
+    const tabId = opened.tabId!;
+    await expect.poll(() => aiden.app.evaluate(({ webContents }, url) =>
+      webContents.getAllWebContents().some((contents) => contents.getURL() === url), `${base}/start`)).toBe(true);
+    const navigation = command(aiden.page, { action: "navigate", tabId, url: `${base}/held` })
+      .then(() => "finished", (error: unknown) => String(error));
+    await requested;
+    await aiden.app.evaluate(({ webContents }, url) => {
+      const contents = webContents.getAllWebContents().find((contents) => contents.getURL() === url)!;
+      // Deliver an unmatched physical mouse event through BrowserService's real listener.
+      contents.emit("before-mouse-event", {}, { type: "mouseDown", button: "left" });
+    }, `${base}/start`);
+    finish!();
+    expect(await navigation).toBe("finished");
+    expect((await command(aiden.page, { action: "evaluate", tabId, expression: "document.title" })).value)
+      .toBe("Navigation finished");
+  } finally {
+    finish?.();
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});

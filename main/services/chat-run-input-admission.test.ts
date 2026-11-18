@@ -23,8 +23,11 @@ function fixture(options: { onPersonWrote?: (chatId: string) => void } = {}) {
   const steered: unknown[] = [];
   const followedUp: unknown[] = [];
   let probeResult: "not-active" | "cancelled" | "capacity" | undefined;
-  let steerReceipt: { accepted: true; queue: "steer" | "follow-up" } | { accepted: false; reason: "not-active" | "cancelled" | "invalid-message" | "capacity" } = { accepted: true, queue: "steer" };
-  let followUpReceipt: typeof steerReceipt = { accepted: true, queue: "follow-up" };
+  type QueueReceipt =
+    | { accepted: true; queue: "steer" | "follow-up" }
+    | { accepted: false; reason: "not-active" | "cancelled" | "invalid-message" | "capacity" };
+  let steerReceipt: QueueReceipt = { accepted: true, queue: "steer" };
+  let followUpReceipt: QueueReceipt = { accepted: true, queue: "follow-up" };
   let appendError: unknown;
   let readChatResult: Chat | null = null;
   let duringAppend: (() => void) | undefined;
@@ -77,10 +80,10 @@ function fixture(options: { onPersonWrote?: (chatId: string) => void } = {}) {
     setProbe: (value: typeof probeResult) => {
       probeResult = value;
     },
-    setSteerReceipt: (value: typeof steerReceipt) => {
+    setSteerReceipt: (value: QueueReceipt) => {
       steerReceipt = value;
     },
-    setFollowUpReceipt: (value: typeof followUpReceipt) => {
+    setFollowUpReceipt: (value: QueueReceipt) => {
       followUpReceipt = value;
     },
     setAppendError: (value: unknown) => {
@@ -502,4 +505,120 @@ test("input whose run is stopped, ended or filled while its hooks run is not sav
     assert.equal(f.appended.length, 0, label);
     assert.equal(f.steered.length, 0, label);
   }
+});
+
+/**
+ * Stands in for the run's owed-turn registry: it records what admission
+ * registers and answers as the real one does for a run that is still
+ * settling (`accept`) or one whose lifecycle has closed (`refuse`).
+ */
+function owedTurnStub(answer: "accept" | "refuse") {
+  const registered: Array<{ messageId: string; hookContext?: string }> = [];
+  let holds = 0;
+  let released = 0;
+  return {
+    registered,
+    holdsTaken: () => holds,
+    holdsReleased: () => released,
+    owedTurn: {
+      hold: () => {
+        holds += 1;
+        let open = true;
+        return {
+          register: (input: { messageId: string; hookContext?: string }) => {
+            if (!open || answer === "refuse") return false;
+            registered.push(input);
+            return true;
+          },
+          release: () => {
+            if (!open) return;
+            open = false;
+            released += 1;
+          },
+        };
+      },
+    },
+  };
+}
+
+test("input saved after the run's queue closed becomes the chat's next turn, so the receipt is a true follow-up", async () => {
+  // agent_end closed Pi's queue while the input was being saved. The run is
+  // still settling, so the saved input is registered as the next turn.
+  const app = fixture();
+  const owed = owedTurnStub("accept");
+  app.generation.owedTurn = owed.owedTurn;
+  app.setDuringAppend(() => app.setFollowUpReceipt({ accepted: false, reason: "not-active" }));
+  const result = await app.admission.admit({ streamId: "stream-1", mode: "queue", text: "then this" });
+  assert.deepEqual(result, { admitted: true, queue: "follow-up", committed: true, messageId: "message_admitted_1" });
+  assert.deepEqual(owed.registered, [{ messageId: "message_admitted_1" }]);
+  assert.equal(owed.holdsReleased(), owed.holdsTaken());
+});
+
+test("a steer saved after the queue closed runs next as a follow-up, not mid-run", async () => {
+  const app = fixture();
+  const owed = owedTurnStub("accept");
+  app.generation.owedTurn = owed.owedTurn;
+  app.setDuringAppend(() => app.setSteerReceipt({ accepted: false, reason: "not-active" }));
+  const result = await app.admission.admit({ streamId: "stream-1", mode: "steer", text: "actually do this" });
+  assert.deepEqual(result, { admitted: true, queue: "follow-up", committed: true, messageId: "message_admitted_1" });
+  assert.deepEqual(owed.registered, [{ messageId: "message_admitted_1" }]);
+});
+
+test("input saved after the run left the active map is still owed while its lifecycle has not closed", async () => {
+  const app = fixture();
+  const owed = owedTurnStub("accept");
+  app.generation.owedTurn = owed.owedTurn;
+  app.setAfterAppend(() => app.active.delete("stream-1"));
+  const result = await app.admission.admit({ streamId: "stream-1", mode: "queue", text: "late" });
+  assert.deepEqual(result, { admitted: true, queue: "follow-up", committed: true, messageId: "message_admitted_1" });
+  assert.equal(app.followedUp.length, 0, "the closed run's queue is never touched");
+  assert.equal(owed.holdsReleased(), 1);
+});
+
+test("input main cannot register as the next turn is reported saved, never queued", async () => {
+  // Chat deleted, app quitting, or the run's lifecycle already closed.
+  const app = fixture();
+  const owed = owedTurnStub("refuse");
+  app.generation.owedTurn = owed.owedTurn;
+  app.setDuringAppend(() => app.setFollowUpReceipt({ accepted: false, reason: "not-active" }));
+  const result = await app.admission.admit({ streamId: "stream-1", mode: "queue", text: "nobody runs this" });
+  assert.deepEqual(result, { admitted: false, reason: "run_not_active", committed: true, messageId: "message_admitted_1" });
+  assert.equal(owed.holdsReleased(), 1);
+});
+
+test("the screened input's hook context travels with the owed turn instead of the closed run", async () => {
+  const app = fixture();
+  const owed = owedTurnStub("accept");
+  app.generation.owedTurn = owed.owedTurn;
+  app.generation.inputHooks = {
+    screen: async () => ({ context: "hook says hi" }),
+    attachContext: () => assert.fail("the closed run never takes this input"),
+  };
+  app.setDuringAppend(() => app.setFollowUpReceipt({ accepted: false, reason: "not-active" }));
+  const result = await app.admission.admit({ streamId: "stream-1", mode: "queue", text: "with context" });
+  assert.equal(result.admitted, true);
+  assert.deepEqual(owed.registered, [{ messageId: "message_admitted_1", hookContext: "hook says hi" }]);
+});
+
+test("a failed save releases the run's owed-turn hold and registers nothing", async () => {
+  const app = fixture();
+  const owed = owedTurnStub("accept");
+  app.generation.owedTurn = owed.owedTurn;
+  app.setAppendError(new Error("disk full"));
+  const result = await app.admission.admit({ streamId: "stream-1", mode: "queue", text: "lost" });
+  assert.equal(result.committed, false);
+  assert.deepEqual(owed.registered, []);
+  assert.equal(owed.holdsTaken(), 1, "the run is held open while the input saves");
+  assert.equal(owed.holdsReleased(), 1);
+});
+
+test("input a run still takes is queued normally and never registered as an owed turn", async () => {
+  const app = fixture();
+  const owed = owedTurnStub("accept");
+  app.generation.owedTurn = owed.owedTurn;
+  const result = await app.admission.admit({ streamId: "stream-1", mode: "queue", text: "in time" });
+  assert.equal(result.admitted, true);
+  assert.equal(app.followedUp.length, 1);
+  assert.deepEqual(owed.registered, []);
+  assert.equal(owed.holdsReleased(), 1);
 });

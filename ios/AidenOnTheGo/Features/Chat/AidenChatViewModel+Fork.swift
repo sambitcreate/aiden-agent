@@ -231,7 +231,7 @@ extension AidenChatViewModel {
     }
 
     /// A quiet reread: failures stay silent, unlike `reconcileChat`.
-    private func refreshForkChat(context: AidenRemoteRequestContext) async -> Bool {
+    func refreshForkChat(context: AidenRemoteRequestContext) async -> Bool {
         guard !isStarting else { return false }
         let generation = transcriptGeneration
         let writeToken = cache.reserveChatWrite()

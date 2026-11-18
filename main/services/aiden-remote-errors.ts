@@ -2,6 +2,7 @@ import type {
   AidenRemoteErrorCode,
   AidenRemoteResolvedApprovalDecision,
   AidenRemoteResolvedQuestionOutcome,
+  AidenRemoteWorkspaceUnavailableReason,
 } from "./aiden-remote-protocol.js";
 
 export class AidenRemoteServiceError extends Error {
@@ -20,6 +21,8 @@ export class AidenRemoteServiceError extends Error {
       decision?: AidenRemoteResolvedApprovalDecision;
       outcome?: AidenRemoteResolvedQuestionOutcome;
       resolvedAt?: string;
+      reason?: AidenRemoteWorkspaceUnavailableReason;
+      canContinueInNewChat?: boolean;
     },
   ) {
     super(message);
