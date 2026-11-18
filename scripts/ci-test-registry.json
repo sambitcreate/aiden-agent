@@ -348,6 +348,8 @@
         "scripts/ci-changes.test.mjs",
         "scripts/e2e-shutdown-diagnostics.test.mjs",
         "scripts/ci-e2e-shards.test.mjs",
+        "scripts/ci-e2e-timings.test.mjs",
+        "scripts/ci-related-tests.test.mjs",
         "scripts/cua-space-e2e.test.mjs",
         "scripts/ci-required.test.mjs",
         "scripts/safe-test-reporter.test.mjs",
