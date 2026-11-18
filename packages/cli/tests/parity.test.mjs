@@ -746,6 +746,8 @@ test("desktop v4 import reads through the repository port into an independent CL
   const dir = temporary(t), repository = api.createCurrentPiSessionRepository(join(dir, "desktop"));
   const session = await repository.create({ id: "desktop-chat", cwd: dir, metadata: { title: "Desktop chat" } });
   await session.appendMessage({ role: "user", content: "From desktop", timestamp: Date.now() });
+  // A design chat journals its canvas status note; it is private model context, not a conversation message.
+  await session.appendMessage({ role: "system", content: "", sections: { "design-canvas-status": "Design canvas right now: The canvas has 1 frame." }, timestamp: Date.now() });
   const metadata = await session.getMetadata(), before = readFileSync(metadata.path);
   const imported = await api.importSession(join(dir, "agent"), dir, metadata.path);
   assert.equal(imported.messages, 1); assert.equal(api.SessionManager.open(imported.path).getSessionName(), "Desktop chat");

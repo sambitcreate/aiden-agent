@@ -43,6 +43,8 @@ import {
   type PiRuntimeSessionBinding,
 } from "./pi-agent-runtime-harness.js";
 import { PiRuntimeEffectStore } from "./pi-runtime-effect-store.js";
+import { CANVAS_STATUS_SECTION, withCanvasStatusNote } from "../../renderer/shared/design-canvas/canvas-summary.js";
+import { withJournaledCanvasStatusNote } from "./design-canvas/status-note.js";
 import { markPiRuntimePrivateFailure } from "./pi-runtime-failure.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import { McpConfigurationLeaseRegistry } from "./mcp-config-lease.js";
@@ -113,6 +115,8 @@ async function managedTestHarness(
     onContextProjection?: PiAgentRuntimeHarnessOptions["onContextProjection"];
     contextPromptSections?: PiAgentRuntimeHarnessOptions["contextPromptSections"];
     onJournalError?: PiRuntimeSessionBinding["onJournalError"];
+    durableSections?: PiRuntimeSessionBinding["durableSections"];
+    session?: PiSessionPort;
   } = {},
 ) {
   const core = createFauxCore({
@@ -147,7 +151,7 @@ async function managedTestHarness(
     summaryProvider.setResponses(options.summaryResponses);
     compactionModels.setProvider(summaryProvider.provider);
   }
-  const session = createPiSessionPort(
+  const session = options.session ?? createPiSessionPort(
     await new InMemorySessionRepo().create({
       id: `managed-${Math.random().toString(36).slice(2)}`,
     }),
@@ -204,6 +208,7 @@ async function managedTestHarness(
       ...(options.signal ? { signal: options.signal } : {}),
       ...(options.effects ? { effects: options.effects } : {}),
       ...(options.onJournalError ? { onJournalError: options.onJournalError } : {}),
+      ...(options.durableSections ? { durableSections: options.durableSections } : {}),
     },
   });
   return { core, harness, session };
@@ -4446,6 +4451,89 @@ test("AGENTS edits enter only the next logical model request and preserve the to
   assert.match(prompts[0], /INITIAL_GUIDANCE/); assert.ok(!prompts[0].includes("NEXT_GUIDANCE"));
   assert.match(prompts[1], /NEXT_GUIDANCE/); assert.ok(!prompts[1].includes("INITIAL_GUIDANCE"));
   assert.deepEqual(toolSets, [[tool.name], [tool.name]]);
+});
+
+function canvasNotesIn(messages: readonly AgentMessage[]): string[] {
+  return messages.flatMap((message) => {
+    const sections = (message as { sections?: Record<string, string> }).sections;
+    return message.role === "system" && sections && CANVAS_STATUS_SECTION in sections ? [sections[CANVAS_STATUS_SECTION]!] : [];
+  });
+}
+
+test("a design turn's canvas note reaches its first request and the journal, so the next turn's unchanged counts add nothing", async () => {
+  const session = createPiSessionPort(await new InMemorySessionRepo().create({ id: "canvas-note-start" }));
+  await appendPiMessages(session, [{ role: "user", content: "Sketch a pricing page", timestamp: 1 }]);
+  const warnings: unknown[] = [];
+  const start = await withJournaledCanvasStatusNote(session, (await session.buildContext()).messages, "The canvas has 2 frames, 0 open comments.", 2, (error) => warnings.push(error));
+  const requests: string[] = [];
+  let providerCore!: ReturnType<typeof createFauxCore>;
+  const { core, harness } = await managedTestHarness([fauxAssistantMessage("Here is the layout.")], {
+    session,
+    initialMessages: start,
+    streamFn: (model, context, options) => {
+      requests.push(JSON.stringify(context.messages));
+      return providerCore.streamSimple(model, context, options);
+    },
+  });
+  providerCore = core;
+  const result = await harness.runManaged({ kind: "append-and-run", message: { role: "user", content: "Tighten it", timestamp: 3 } });
+  assert.equal(result.kind, "completed");
+  assert.equal(requests.length, 1);
+  assert.match(requests[0]!, /Design canvas right now: The canvas has 2 frames, 0 open comments\./);
+  assert.deepEqual(warnings, []);
+
+  // The next turn rebuilds its transcript from the journal: the same counts
+  // add no note, so that request starts with the same transcript.
+  const next = (await session.buildContext()).messages;
+  assert.deepEqual(canvasNotesIn(next), ["Design canvas right now: The canvas has 2 frames, 0 open comments."]);
+  const unchanged = await withJournaledCanvasStatusNote(session, next, "The canvas has 2 frames, 0 open comments.", 4, (error) => warnings.push(error));
+  assert.equal(unchanged.length, next.length);
+  assert.equal(canvasNotesIn((await session.buildContext()).messages).length, 1);
+  // A changed count adds one note after the turn it follows.
+  const changed = await withJournaledCanvasStatusNote(session, next, "The canvas has 3 frames, 1 open comment.", 5, (error) => warnings.push(error));
+  assert.equal(changed.length, next.length + 1);
+  assert.deepEqual(canvasNotesIn((await session.buildContext()).messages), [
+    "Design canvas right now: The canvas has 2 frames, 0 open comments.",
+    "Design canvas right now: The canvas has 3 frames, 1 open comment.",
+  ]);
+});
+
+test("a section patch the host declares durable is journaled where it was added mid-reply, and other patches stay per-run", async () => {
+  const tool = declarePiRuntimeReplay({ name: "enter_design", label: "Enter", description: "Enter design mode", parameters: Type.Object({}), execute: async () => ({ content: [{ type: "text" as const, text: "entered" }], details: null }) }, "safe");
+  const requests: string[] = [];
+  let providerCore!: ReturnType<typeof createFauxCore>;
+  let patched = false;
+  const { core, harness, session } = await managedTestHarness([
+    fauxAssistantMessage([fauxToolCall(tool.name, {})], { stopReason: "toolUse" }),
+    fauxAssistantMessage("The canvas is ready."),
+  ], {
+    tools: [tool],
+    durableSections: [CANVAS_STATUS_SECTION],
+    streamFn: (model, context, options) => {
+      requests.push(JSON.stringify(context.messages));
+      return providerCore.streamSimple(model, context, options);
+    },
+    prepareNextTurnWithContext: async ({ context }) => {
+      if (patched) return undefined;
+      patched = true;
+      // A host step may hand back copies, so earlier messages are not the same objects.
+      const copied = { ...context, messages: [...context.messages.map((message) => structuredClone(message)), { role: "system", content: "", sections: { "design-mode": "PER_RUN_SECTION" }, timestamp: 7 } as AgentMessage] };
+      return { context: withCanvasStatusNote(copied, "The canvas has 1 frame.", 8) };
+    },
+  });
+  providerCore = core;
+  const result = await harness.runManaged({ kind: "append-and-run", message: { role: "user", content: "Design it", timestamp: 1 } });
+  assert.equal(result.kind, "completed");
+  assert.equal(requests.length, 2);
+  assert.ok(!requests[0]!.includes("Design canvas right now"));
+  assert.match(requests[1]!, /Design canvas right now: The canvas has 1 frame\./);
+  assert.match(requests[1]!, /PER_RUN_SECTION/);
+  const journal = (await session.buildContext()).messages;
+  assert.deepEqual(canvasNotesIn(journal), ["Design canvas right now: The canvas has 1 frame."]);
+  assert.ok(!JSON.stringify(journal).includes("PER_RUN_SECTION"));
+  // The note sits after the tool result it followed and before the reply.
+  const roles = journal.map((message) => message.role);
+  assert.deepEqual(roles.slice(-3), ["toolResult", "system", "assistant"]);
 });
 
 

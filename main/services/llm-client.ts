@@ -544,7 +544,8 @@ import {
 } from "./design-canvas/canvas-tools.js";
 import { createDesignModeTool, DESIGN_MODE_TOOL_NAME } from "./design-canvas/design-mode-tool.js";
 import { chatSurface } from "../../renderer/shared/chat-visibility.js";
-import { canvasPromptLine, withCanvasStatusNote } from "../../renderer/shared/design-canvas/canvas-summary.js";
+import { CANVAS_STATUS_SECTION, canvasPromptLine, withCanvasStatusNote } from "../../renderer/shared/design-canvas/canvas-summary.js";
+import { withJournaledCanvasStatusNote } from "./design-canvas/status-note.js";
 import { placeArtifactsOnCanvas, type CanvasArtifact } from "./design-canvas/artifact-frames.js";
 import { createDesignPageScanner, placeWrittenPagesOnCanvas, writtenPagePath } from "./design-canvas/written-pages.js";
 import { DESIGN_CANVAS_UPDATED_CHANNEL } from "../handlers/design-canvas.js";
@@ -573,6 +574,11 @@ interface EnteredCanvasTools {
    * mode is on, and the canvas status note on the turn's first design step.
    */
   prepare(context: AgentContext): Promise<AgentContext>;
+  /**
+   * The canvas status line for the turn's first request, when design mode is
+   * on as the turn starts. Taking it counts as this turn's note.
+   */
+  initialStatusLine(): Promise<string | undefined>;
   /** The held canvas tools once entered, for codemode's late deferred tools. */
   deferred(): readonly AgentTool[];
 }
@@ -2659,9 +2665,11 @@ async function prepareGeneration(
   };
   /**
    * The canvas's counts go to the conversation once per turn, at the first
-   * step design mode is on, and only when they changed since the last note
+   * request design mode is on, and only when they changed since the last note
    * the transcript holds (see `withCanvasStatusNote`), so the system prompt
-   * and its cache stay the same from turn to turn.
+   * and its cache stay the same from turn to turn. The note is journaled (at
+   * turn start here, mid-reply through the harness's `durableSections`), so
+   * the next turn's transcript holds it and an unchanged count adds nothing.
    */
   let canvasStatusNoted = false;
   const withCanvasStatus = async (context: AgentContext): Promise<AgentContext> => {
@@ -2702,6 +2710,16 @@ async function prepareGeneration(
             ],
         tools: [...(context.tools ?? []), ...additions],
       });
+    },
+    initialStatusLine: async () => {
+      if (canvasStatusNoted || !canvasStatusOffered) return undefined;
+      canvasStatusNoted = true;
+      try {
+        return canvasPromptLine(await designCanvasStore.get(params.chatId));
+      } catch (error) {
+        logger.warn("pi", "Could not read the design canvas for its status note.", error);
+        return undefined;
+      }
     },
     deferred: () => (canvasToolsEntered ? heldCanvasTools : []),
   };
@@ -4196,6 +4214,18 @@ export const llmClient = {
         isConnectorTool: (name) => claimCheckOptions.isConnectorTool(name),
       });
       approvalRequestText = currentUser?.content ?? "";
+      // A design turn's first request carries the canvas counts, journaled
+      // after the history they follow (see `withJournaledCanvasStatusNote`).
+      const canvasStatusLine = await enteredCanvasTools.initialStatusLine();
+      if (canvasStatusLine !== undefined) {
+        initialMessages = await withJournaledCanvasStatusNote(
+          promptJournal,
+          initialMessages,
+          canvasStatusLine,
+          Date.now(),
+          (error) => logger.warn("pi", "Could not journal the design canvas status note.", error),
+        );
+      }
       const head = createInitialSystemMessage(systemPrompt, runtimeTools.map(toToolDeclaration));
       if (head) initialMessages = [head, ...initialMessages];
       if (agentsInstructions) {
@@ -4367,6 +4397,7 @@ export const llmClient = {
             }),
         durability: {
           session: promptJournal,
+          durableSections: [CANVAS_STATUS_SECTION],
           compaction: compactionOptions,
           compactionReserveTokens: compactionInputReserveTokens,
           signal: initialization.controller.signal,

@@ -8,10 +8,12 @@ import type { Message } from "@earendil-works/pi-ai";
 import { exportSession, IMPORTED_ASSISTANT_ATTACHMENTS, importedAssistantAttachments } from "./sessions.ts";
 
 function importContext(messages: readonly { role: string }[]): Message[] {
-  return messages.map((message) => {
-    if (["user", "assistant", "toolResult"].includes(message.role)) return message as Message;
+  return messages.flatMap((message): Message[] => {
+    if (["user", "assistant", "toolResult"].includes(message.role)) return [message as Message];
+    // Aiden's private system section notes (such as the design canvas counts) are model context for that chat, not conversation.
+    if (message.role === "system" && typeof (message as { sections?: unknown }).sections === "object") return [];
     const summary = (message as { summary?: unknown }).summary;
-    if (typeof summary === "string") return { role: "user", content: `Imported conversation summary:\n${summary}`, timestamp: Date.now() };
+    if (typeof summary === "string") return [{ role: "user", content: `Imported conversation summary:\n${summary}`, timestamp: Date.now() }];
     throw new Error(`Cannot import the journal message role ${message.role}. Use a portable Aiden chat export for this conversation.`);
   });
 }
