@@ -1,5 +1,5 @@
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { createHash } from "node:crypto";
 import { DEFAULT_CHAT_WORKSPACE_ID, persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { sharedWorkspaceScopeId } from "./memory-shared.js";

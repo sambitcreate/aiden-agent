@@ -562,9 +562,11 @@ test("child reads and mutations stop before spending authority on a withdrawn to
   });
 });
 
-test("child regular and raw calls validate success, preserve server errors and block required tasks", async () => {
+test("child regular and raw calls return schema mismatches as received, preserve server errors and block required tasks", async () => {
   for (const raw of [false, true]) {
     const h = harness(); let dispatches = 0;
+    const diagnostics: string[] = [];
+    h.dependencies.reportOutputSchemaDiagnostic = (diagnostic) => diagnostics.push(diagnostic);
     let response: unknown = { content: [], structuredContent: { value: "invalid" } };
     h.dependencies.createClient = () => ({
       connect: async () => {}, close: async () => {},
@@ -580,8 +582,12 @@ test("child regular and raw calls validate success, preserve server errors and b
       const call = async (name: string) => raw ? client.callToolRaw!(name, {}, signal, () => {}) : client.callTool(name, {}, signal, () => {});
       await assert.rejects(call("task"), /task-based/u);
       assert.equal(dispatches, 0);
-      await assert.rejects(call("typed"), /output schema/u);
+      // The tool already ran: an error here would invite the child to repeat it.
+      assert.deepEqual(await call("typed"), { content: [], structuredContent: { value: "invalid" } });
       assert.equal(dispatches, 1);
+      assert.equal(diagnostics.length, 1);
+      assert.match(diagnostics[0], /output schema/u);
+      assert.doesNotMatch(diagnostics[0], /invalid/u);
       response = {
         isError: true,
         content: [{ type: "text", text: "Permission denied for echo-secret" }],
@@ -628,7 +634,8 @@ test("real child calls preserve last-page diagnostics through the raw request ad
           isError: true, content: [{ type: "text", text: "Permission denied for [REDACTED]" }], structuredContent: { code: "DENIED" },
         });
         fail = false;
-        await assert.rejects(invoke(), /output schema/u);
+        // The call already ran; the child reads the mismatched reply as received.
+        assert.deepEqual(await invoke(), { content: [], structuredContent: { value: "invalid" } });
       } });
     } finally {
       await remote.close();

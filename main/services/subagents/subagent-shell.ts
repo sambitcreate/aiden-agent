@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { types as utilTypes } from "node:util";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type {
   AgentTool,
   AgentToolResult,

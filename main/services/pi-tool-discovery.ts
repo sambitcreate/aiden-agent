@@ -1,5 +1,6 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { Type, type JsonObject, type JsonValue } from "@earendil-works/pi-ai";
+import { type JsonObject, type JsonValue } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { validateMcpServerMetadata } from "../../renderer/shared/mcp-oauth-config.js";
 import { copyBoundedJson, utf8Size } from "./bounded-json.js";
 import { writeDiagnosticEvent } from "./diagnostic-journal.js";

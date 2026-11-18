@@ -496,7 +496,12 @@ final class AidenSearchModelTests: XCTestCase {
 
     func testSearchingRealMachinesAsksOnlyConnectedCapableOnesAndLeavesTheSelectionAlone() async throws {
         let (coordinator, responder) = try await demoMachines(capable: ["studio", "mini"], offline: ["mini"])
-        let before = (laptop: responder.requests(instanceId: "laptop").count, mini: responder.requests(instanceId: "mini").count)
+        // Mini's failed connect asks for the server and its workspaces at once.
+        // The workspaces request is dropped when the server request fails, and
+        // can reach the machine after the connect returns, so a retry is counted
+        // by the server request every connect awaits first.
+        let connects = { (id: String) in responder.requests(instanceId: id).filter { $0 == "GET /server" }.count }
+        let before = (laptop: responder.requests(instanceId: "laptop").count, mini: connects("mini"))
         let model = realModel(coordinator)
 
         // A slash and a space must travel as a query, never as part of the path.
@@ -512,7 +517,7 @@ final class AidenSearchModelTests: XCTestCase {
         XCTAssertEqual(asked("laptop"), [], "A machine without Bot access was asked")
         XCTAssertEqual(asked("mini"), [], "A machine that isn't connected was asked")
         XCTAssertEqual(responder.requests(instanceId: "laptop").count, before.laptop, "Searching reached a machine it had no reason to")
-        XCTAssertEqual(responder.requests(instanceId: "mini").count, before.mini, "Searching retried a machine that isn't connected")
+        XCTAssertEqual(connects("mini"), before.mini, "Searching retried a machine that isn't connected")
         XCTAssertEqual(model.bots.map(\.title), ["Scout on studio"])
         XCTAssertEqual(model.unsearchedMachines, ["Mini"])
         XCTAssertEqual(coordinator.defaultInstanceId, "studio")

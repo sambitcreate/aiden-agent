@@ -4,7 +4,7 @@ import test from "node:test";
 import { mkdtempSync, mkdirSync, existsSync, readFileSync, writeFileSync, chmodSync, rmSync, statSync, utimesSync, renameSync, readdirSync, openSync, closeSync, ftruncateSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { createServer as createNetServer, createConnection } from "node:net";
@@ -1064,6 +1064,48 @@ test("isolated subagent inference executes only parent-owned tools with immutabl
   }
 });
 
+test("an Anthropic subagent sends its whole conversation on every model round, never a message thread", async (t) => {
+  const dir = temporary(t), requests = [], headers = [], original = process.env.AIDEN_CLI_ENTRY;
+  process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
+  t.after(() => { if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
+  const event = (type, data) => `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`;
+  const server = createServer(async (request, response) => {
+    let body = ""; for await (const chunk of request) body += chunk;
+    requests.push(JSON.parse(body)); headers.push(request.headers);
+    const first = requests.length === 1;
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write(event("message_start", { message: { id: `msg_${requests.length}`, type: "message", role: "assistant", model: "test", content: [], stop_reason: null, usage: { input_tokens: 10, output_tokens: 0 } } }));
+    if (first) {
+      response.write(event("content_block_start", { index: 0, content_block: { type: "tool_use", id: "toolu_read", name: "read_file", input: {} } }));
+      response.write(event("content_block_delta", { index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify({ path: "note.txt" }) } }));
+    } else {
+      response.write(event("content_block_start", { index: 0, content_block: { type: "text", text: "" } }));
+      response.write(event("content_block_delta", { index: 0, delta: { type: "text_delta", text: "The note says apricot" } }));
+    }
+    response.write(event("content_block_stop", { index: 0 }));
+    response.write(event("message_delta", { delta: { stop_reason: first ? "tool_use" : "end_turn" }, usage: { output_tokens: 4 } }));
+    response.end(event("message_stop", {}));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  // The `anthropic` provider at a path naming api.anthropic.com gets every default Pi gives Anthropic's own endpoint, message threads included.
+  api.atomicJson(join(dir, "models.json"), { providers: { anthropic: { api: "anthropic-messages", baseUrl: `http://127.0.0.1:${server.address().port}/api.anthropic.com`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  const runtime = await api.createCliModelRuntime(dir), diagnostics = [];
+  const result = await api.runCliSubagent(dir, { runtime: { model: runtime.getModel("anthropic", "test") }, workspaceRoot: dir, permission: "ask", thinkingLevel: "off", context: { mode: "fresh", revisionHash: "threads", messages: [] }, request: { role: "scout", label: "Scout", task: "Read the note" }, policy: { deadlineMs: 15000 } }, [{
+    name: "read_file", description: "Read the note", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+    execute: async () => ({ content: [{ type: "text", text: "Apricot" }], details: {} }),
+  }], async () => {}, (error) => diagnostics.push(error.message));
+  assert.equal(result.status, "completed", JSON.stringify({ result, diagnostics }));
+  assert.equal(requests.length, 2);
+  for (const [index, request] of requests.entries()) {
+    assert.equal("thread" in request, false, `round ${index + 1} has no thread`);
+    assert.doesNotMatch(String(headers[index]["anthropic-beta"] ?? ""), /message-threads/u);
+  }
+  // The second round carries the task, the tool call and its result itself, not a pointer to them.
+  assert.deepEqual(requests[1].messages.map((message) => message.role), ["user", "assistant", "user"]);
+  assert.match(JSON.stringify(requests[1].messages), /toolu_read/u);
+});
+
 test("a subagent that hits its deadline during an unanswered approval settles and dismisses the gate", async (t) => {
   const dir = temporary(t), original = process.env.AIDEN_CLI_ENTRY;
   process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
@@ -1802,6 +1844,49 @@ test("aiden mcp login registers a fresh client on a random loopback port, and st
   assert.equal(oauth.seen.registrations.length, 1);
   const refresh = oauth.seen.tokenRequests.filter((request) => request.grant === "refresh_token");
   assert.deepEqual(refresh.map(({ status, presentedSecret }) => ({ status, presentedSecret })), [{ status: 200, presentedSecret: true }]);
+});
+
+/** `aiden serve` and an `aiden mcp` command as separate processes: each lists one server's tools over its own pool. */
+function mcpToolsInChildProcess(dir, server) {
+  const script = `import * as api from ${JSON.stringify(pathToFileURL(join(pkg, "dist/parity-test-api.js")).href)};
+const pool = api.createCliMcpPool(process.argv[1]);
+try { process.stdout.write(JSON.stringify((await pool.inspectTools(JSON.parse(process.argv[2]))).map((tool) => tool.name))); }
+finally { await pool.close(); }`;
+  const child = spawn(process.execPath, ["--input-type=module", "-e", script, dir, JSON.stringify(server)], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, AIDEN_ANALYTICS: "0" } });
+  let stdout = "", stderr = "";
+  child.stdout.on("data", (chunk) => { stdout += chunk; });
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  return new Promise((resolve, reject) => {
+    child.on("error", reject);
+    child.on("close", (code) => code === 0 ? resolve(JSON.parse(stdout)) : reject(new Error(`child exited ${code}: ${stderr}`)));
+  });
+}
+
+test("two aiden processes holding the same expired MCP token renew it once and both connect", async (t) => {
+  const dir = temporary(t), oauth = await api.startFakeOAuthServer();
+  t.after(() => oauth.close());
+  const server = { id: "remote", name: "Remote", transport: "http", url: oauth.serviceUrl, enabled: true, oauth: true };
+  api.atomicJson(join(dir, "aiden-mcp.json"), [server]);
+  const browser = fakeBrowser();
+  assert.deepEqual(await api.mcpLogin(dir, server, { openBrowser: browser.open }), { authorized: true });
+  await browser.pages[0];
+  oauth.expireAccessTokens();
+  const rejectedBefore = oauth.seen.unauthorized.length;
+  // Hold the first renewal (the refresh token is already rotated) until both processes were turned away.
+  oauth.control.beforeRefreshResponse = async () => {
+    oauth.control.beforeRefreshResponse = undefined;
+    const deadline = Date.now() + 20_000;
+    while (oauth.seen.unauthorized.length < rejectedBefore + 2 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+  };
+  const results = await Promise.all([mcpToolsInChildProcess(dir, server), mcpToolsInChildProcess(dir, server)]);
+  assert.equal(oauth.seen.unauthorized.length, rejectedBefore + 2, "both processes presented the expired token");
+  assert.deepEqual(results, [["echo"], ["echo"]]);
+  const refresh = oauth.seen.tokenRequests.filter((request) => request.grant === "refresh_token");
+  assert.deepEqual(refresh.map(({ status, error }) => [status, error ?? null]), [[200, null]], "one renewal; the waiting process used its tokens");
+  // The sign-in is intact: a third client connects on the stored tokens without renewing.
+  const pool = api.createCliMcpPool(dir); t.after(() => pool.close());
+  assert.deepEqual((await pool.inspectTools(server)).map((tool) => tool.name), ["echo"]);
+  assert.equal(oauth.seen.tokenRequests.filter((request) => request.grant === "refresh_token").length, 1);
 });
 
 test("a pre-registered OAuth client keeps its secret encrypted and signs in without registering", async (t) => {

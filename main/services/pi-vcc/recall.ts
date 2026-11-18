@@ -1,4 +1,4 @@
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { PiSessionPort } from "../pi-session-port.js";
 import { declarePiRuntimeReplay } from "../pi-runtime-tool.js";

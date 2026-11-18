@@ -1,7 +1,7 @@
 // The memory review's `note_follow_up` tool: record a dated promise the Bot
 // made in a person turn. Add-only; the person approves the follow-up later.
 
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { BotCommitmentStore } from "./store.js";
 

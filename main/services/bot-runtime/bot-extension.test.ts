@@ -1224,6 +1224,30 @@ test("(hk5) PreToolUse context joins PostToolUse's in the tool result; hook mess
   }
 });
 
+test("(hk5b) PostToolUse runs only for calls a tool ran, not for errors Pi Durable writes itself", async () => {
+  const tool = countingTool("lookup");
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall("no_such_tool", { text: "x" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("lookup", { text: "y" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("understood"),
+  ]);
+  const hooks = fakeHooks({
+    PostToolUse: () => ({ additionalContext: "<hook-data>POST-CONTEXT</hook-data>", ranHooks: ["after"] }),
+  });
+  const { harness, root } = await memoryHarness(withHooks(recordingDeps({ tools: [{ tool, replay: "unsafe" }] }), hooks), fauxModels);
+  try {
+    await (await root.submit({ type: "input", content: "go" }, ctx)).wait(ctx);
+    const [unavailable, ran] = await toolResults(root);
+    assert.equal(unavailable!.isError, true);
+    assert.doesNotMatch(unavailable!.content.map((part) => part.text ?? "").join("\n"), /POST-CONTEXT/u);
+    assert.match(ran!.content.map((part) => part.text ?? "").join("\n"), /POST-CONTEXT/u);
+    const posts = hooks.runs.filter((run) => run.event === "PostToolUse");
+    assert.deepEqual(posts.map((run) => run.payload.tool_use_id), [ran!.toolCallId]);
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
 test("(hk6) a PreCompact hook's messages reach the person through the Bot's reporter, never the summary", async () => {
   const fauxModels = createFauxModels([fauxAssistantMessage(`Noted. ${"Planning detail. ".repeat(60)}`), fauxAssistantMessage("ok")]);
   const hooks = fakeHooks({

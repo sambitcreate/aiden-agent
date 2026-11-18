@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { BOT_PLAN_LIMITS as L, BOT_PLAN_MAX_MS, BOT_PLAN_STEP_TOOL_NAME, BOT_PROPOSE_PLAN_TOOL_NAME } from "../../../renderer/shared/bot-plans.js";
 import { botMessageTurnOf } from "../../../renderer/shared/bot-messages.js";
 import { withoutBotHandoffControls } from "../../../renderer/shared/bot-handoffs.js";

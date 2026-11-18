@@ -222,21 +222,27 @@ function appendText(message: AgentMessage, text: string): AgentMessage {
  * One run's mid-flight UserPromptSubmit context. Each entry is keyed by its
  * queued input's timestamp (admission keeps those unique within a run) and
  * answers only a user message with that input's exact text, so another
- * message that shares the millisecond never picks it up.
+ * message that shares the millisecond never picks it up. `forMessage` finds
+ * the context by the input's saved message id, for input the run ended
+ * before Pi read, so the chat's owed next turn can carry it instead.
  */
 export function createRunInputContexts(): {
-  attach(input: { timestamp: number; text: string }, context: string): void;
+  attach(input: { timestamp: number; text: string; messageId?: string }, context: string): void;
   lookup(message: { timestamp: number; text: string }): string | undefined;
+  forMessage(messageId: string): string | undefined;
 } {
   const entries = new Map<number, { text: string; context: string }>();
+  const byMessage = new Map<string, string>();
   return {
-    attach: ({ timestamp, text }, context) => {
+    attach: ({ timestamp, text, messageId }, context) => {
       entries.set(timestamp, { text, context });
+      if (messageId) byMessage.set(messageId, context);
     },
     lookup: ({ timestamp, text }) => {
       const entry = entries.get(timestamp);
       return entry && entry.text === text ? entry.context : undefined;
     },
+    forMessage: (messageId) => byMessage.get(messageId),
   };
 }
 
@@ -522,6 +528,13 @@ export interface PromptIntakeInput {
   hasPriorMessages: boolean;
   /** The stored prompt this turn sends, when there is one. */
   prompt: PromptIntakeMessage | undefined;
+  /**
+   * The prompt UserPromptSubmit already accepted while an earlier run was
+   * going, which this turn answers because that run ended before reading it.
+   * When it is this turn's prompt, UserPromptSubmit does not run again and
+   * `context` (what the hooks said then) is this turn's prompt context.
+   */
+  screenedPrompt?: { messageId: string; context?: string };
   store: PromptHookBlockStore;
   idempotencyKeys: { sessionStart?: string; userPromptSubmit: string };
   signal?: AbortSignal;
@@ -540,6 +553,12 @@ export interface PromptIntakeInput {
  */
 export async function runPromptIntakeHooks(input: PromptIntakeInput): Promise<string | undefined> {
   const { dispatch, prompt } = input;
+  // Input the hooks already accepted while an earlier run was going is not
+  // screened twice; what they said then is this turn's prompt context.
+  const screened =
+    prompt?.id !== undefined && input.screenedPrompt?.messageId === prompt.id
+      ? input.screenedPrompt
+      : undefined;
   let context: string | undefined;
   if (dispatch) {
     const source = workspaceChatSessionStartSource(input.target.chatId, input.hasPriorMessages);
@@ -557,7 +576,7 @@ export async function runPromptIntakeHooks(input: PromptIntakeInput): Promise<st
     if (source) markWorkspaceChatSessionStarted(input.target);
     // A follow-up turn starts from Aiden's own notice, not the person's words,
     // so it isn't screened (as a notice queued mid-run isn't either).
-    const promptSubmit = prompt && prompt.notice === undefined
+    const promptSubmit = prompt && prompt.notice === undefined && !screened
       ? await dispatch(
           "UserPromptSubmit",
           { prompt: prompt.content },
@@ -580,6 +599,9 @@ export async function runPromptIntakeHooks(input: PromptIntakeInput): Promise<st
     }
     context = hookTurnContextText([sessionStart?.additionalContext, promptSubmit?.additionalContext]);
   }
+  // The screened context already says it came from the hooks for this message.
+  const screenedContext = screened?.context?.trim();
+  if (screenedContext) context = context ? `${context}\n\n${screenedContext}` : screenedContext;
   if (prompt?.id && isHookBlockedPrompt({ ...prompt, role: "user" })) {
     // Hooks don't run on this turn at all, so nothing has looked at it again.
     if (!dispatch) throw new Error(hookBlockedField({ ...prompt, role: "user" }).hookBlocked?.reason);
