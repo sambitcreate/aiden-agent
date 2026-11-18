@@ -14,6 +14,7 @@ import { GENERATIVE_UI_DEFAULT_THEME_VARS } from "../../renderer/shared/generati
 import {
   generativeUiDraftDocumentHead,
   generativeUiExportDocument,
+  isGenerativeUiDraftAcceptable,
   parseGenerativeUiTheme,
   validateGenerativeUiHtml,
   wrapGenerativeUiHtml,
@@ -69,6 +70,59 @@ test("html admission lets labels and script comparisons through that only look l
   assert.ok(validateGenerativeUiHtml(chart).byteLength > 0);
 });
 
+const REFUSED_MARKUP: Record<string, string> = {
+  "a <base> whose earlier attribute quotes a <": '<base data-x="<" href="https://evil.test/">',
+  "a <link> whose title holds a <": '<link title="a<b" rel=stylesheet href=https://evil.test/a.css>',
+  "an <object> whose title is a <": '<object title="<" data=https://evil.test/x.svg></object>',
+  "a refresh <meta> whose URL ends in <": '<meta content="0;url=https://evil.test/?<" http-equiv=refresh>',
+  "an <iframe> whose title is a <": '<iframe title="<" src="https://evil.test/"></iframe>',
+  "a <script src> after a quoted <": '<script data-x="<" src="https://evil.test/a.js"></script>',
+  "window.open of a javascript: URL": '<script>window.open("javascript:alert(1)")</script>',
+  "setAttribute href to a javascript: URL": "<script>a.setAttribute('href', 'javascript:alert(1)')</script>",
+  "location set to a javascript: URL": "<script>location.href = `javascript:alert(1)`</script>",
+  "an element src set to data:text/html": '<script>frame.src = "data:text/html,<b>x</b>"</script>',
+  "an entity-encoded javascript: href": '<a href="&#106;avascript&colon;alert(1)">x</a>',
+  "a javascript: href split by a tab": '<a href="java\tscript:alert(1)">x</a>',
+  "an svg xlink:href to javascript:": '<svg><a xlink:href="javascript:alert(1)"><text>x</text></a></svg>',
+  "an onclick that navigates to javascript:": "<button onclick=\"location='javascript:alert(1)'\">Go</button>",
+  "a stylesheet url() of javascript:": "<style>.x { background: url('javascript:alert(1)') }</style>",
+  "an unquoted remote img src": "<img src=https://evil.test/x.png>",
+};
+
+const ADMITTED_MARKUP: Record<string, string> = {
+  "an aria-label that names JavaScript": '<svg><rect aria-label="JavaScript: 41%"></rect></svg>',
+  "an option value that names JavaScript": '<select><option value="JavaScript: 41%">JS</option></select>',
+  "a script that writes JavaScript: into a label": '<script>el.textContent = "JavaScript: 41%";</script>',
+  "a script comparison against base": "<script>const ok = i<base && i>0;</script>",
+  "a script comparison against link": "<script>if (n<link || n>9) draw();</script>",
+  "a script string that holds a URL": '<script>const src = "https://example.com/data.csv"; label.textContent = src;</script>',
+  "a string replace of the word javascript:": '<script>label.textContent = name.replace("javascript:", "");</script>',
+  "a title attribute that quotes a tag": '<p title="<iframe src=https://evil.test>">Embeds are refused</p>',
+  "a baseline element name": "<svg><text dominant-baseline=\"middle\">x</text></svg>",
+  "a cited https link": '<a href="https://example.com/docs">cite</a>',
+};
+
+for (const [name, html] of Object.entries(REFUSED_MARKUP)) {
+  test(`html admission refuses ${name}, finished or streaming`, () => {
+    assert.throws(() => validateGenerativeUiHtml(html));
+    assert.equal(isGenerativeUiDraftAcceptable(html), false);
+  });
+}
+
+for (const [name, html] of Object.entries(ADMITTED_MARKUP)) {
+  test(`html admission admits ${name}`, () => {
+    assert.ok(validateGenerativeUiHtml(html).byteLength > 0);
+    assert.equal(isGenerativeUiDraftAcceptable(html), true);
+  });
+}
+
+test("a streaming draft cut inside a script or a quoted attribute is read as script or value, not as tags", () => {
+  assert.equal(isGenerativeUiDraftAcceptable("<script>for (let i = 0; i<base && i>0"), true);
+  assert.equal(isGenerativeUiDraftAcceptable('<p title="a <link> tag'), true);
+  assert.equal(isGenerativeUiDraftAcceptable("<p>Chart</p><iframe"), false);
+  assert.equal(isGenerativeUiDraftAcceptable('<a href="javascript:'), false);
+});
+
 test("a refused visual's error quotes the markup that was refused", () => {
   assert.throws(
     () => validateGenerativeUiHtml('<p>Chart</p><iframe src="https://evil.test/embed"></iframe>'),
@@ -76,7 +130,7 @@ test("a refused visual's error quotes the markup that was refused", () => {
   );
   assert.throws(
     () => validateGenerativeUiHtml('<p>JavaScript: 41%</p><a href="javascript:alert(1)">x</a>'),
-    (error: Error) => /found "=\\"javascript:"/u.test(error.message) && !/remote URLs/u.test(error.message),
+    (error: Error) => error.message.includes('found "href=\\"javascript:alert(1)\\""') && !/remote URLs/u.test(error.message),
   );
 });
 
