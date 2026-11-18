@@ -2525,7 +2525,7 @@ export const designCanvasApi = {
   /** Tweaks' Make default: writes the frame's values into the page's file. `kept` lists targets the frame keeps. */
   bakeDesignTweaks: (chatId: string, frameId: string, values: Record<string, string> | undefined) =>
     invoke<
-      | { ok: true; kept: string[]; undoId: string }
+      | { ok: true; written: Record<string, string>; kept: string[]; undoId: string }
       | { ok: false; reason: "unavailable" | "missing" | "not-found" | "ambiguous" | "unchanged" | "too-long" | "changed" }
     >("designCanvas:bakeTweaks", chatId, frameId, values ?? null),
   /** Puts back the file as it was before the frame's last Make default, while nothing else changed it. */

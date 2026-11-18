@@ -63,7 +63,7 @@ export const DESIGN_BRIDGE_SOURCE = `(() => {
   const root = doc.documentElement;
   const VAR_NAME = /^--[A-Za-z0-9_-]{1,60}$/;
   const ATTR_NAME = /^data-[a-z0-9-]{1,60}$/;
-  const UNSAFE = /[;{}<>\\\\"']|url\\(|expression\\(/i;
+  const UNSAFE = /[;{}<>\\\\"']|\\/\\*|\\*\\/|url\\(|expression\\(/i;
   const MAX_TWEAKS = 24;
   const MAX_TEXT_FILLS = 200;
   const originals = new Map();
@@ -93,7 +93,7 @@ export const DESIGN_BRIDGE_SOURCE = `(() => {
   const safe = (value) => typeof value === "string" && value.length <= 100 && !UNSAFE.test(value);
   // A text tweak's words also fill each [data-aiden-text="<name>"] element,
   // where name is its attribute without "data-"; its own words come back
-  // when the value goes.
+  // when the value goes, markup and all.
   let textAttrs = {};
   const textOriginals = new Map();
   const fillTexts = () => {
@@ -104,10 +104,10 @@ export const DESIGN_BRIDGE_SOURCE = `(() => {
       const key = "data-" + String(element.getAttribute("data-aiden-text") || "");
       const value = ATTR_NAME.test(key) && Object.prototype.hasOwnProperty.call(textAttrs, key) && safe(textAttrs[key]) ? textAttrs[key] : null;
       if (value !== null) {
-        if (!textOriginals.has(element)) textOriginals.set(element, element.textContent);
+        if (!textOriginals.has(element)) textOriginals.set(element, Array.from(element.childNodes));
         if (element.textContent !== value) element.textContent = value;
       } else if (textOriginals.has(element)) {
-        element.textContent = textOriginals.get(element);
+        element.replaceChildren(...textOriginals.get(element));
         textOriginals.delete(element);
       }
     }

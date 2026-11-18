@@ -21,13 +21,18 @@ const SOURCE_ERRORS = {
   unsaved: "The canvas couldn't be saved, so the code can't be shown yet.",
 } as const;
 
-/** A frame's source, read again after each change on disk; null while it loads. */
+/**
+ * A frame's source, read again after each change on disk; null while the
+ * first read loads. While a changed file is read again, the last read stays,
+ * so the panels don't blink away (and lose keyboard focus) on every save.
+ */
 export function useFrameSource(
   readSource: DesignReadSource,
   frame: DesignFrame | null,
   versionOf: (path: string | undefined) => number,
 ): DesignLoadedSource | null {
-  const key = frame ? `${frame.id}:${frame.mediaId ?? frame.path}:${versionOf(frame.path)}` : null;
+  const identity = frame ? `${frame.id}:${frame.mediaId ?? frame.path}` : null;
+  const key = frame ? `${identity}:${versionOf(frame.path)}` : null;
   const [loaded, setLoaded] = React.useState<DesignLoadedSource | null>(null);
   React.useEffect(() => {
     if (!frame || !key) return;
@@ -45,5 +50,5 @@ export function useFrameSource(
     };
     // The key changes with the frame, its file and each change on disk.
   }, [readSource, key]);
-  return loaded?.key === key ? loaded : null;
+  return loaded && identity !== null && loaded.key.slice(0, loaded.key.lastIndexOf(":")) === identity ? loaded : null;
 }

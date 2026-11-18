@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   bakeDesignTweakDefaults,
   cleanDesignTweakText,
+  isDesignTweakValue,
   designTweakState,
   designTweakSummary,
   nextDesignTweakVersionName,
@@ -226,6 +227,27 @@ test("the hand-off lists every value and marks the changed ones", () => {
   );
 });
 
+test("a hand-off too long for one note keeps the changed values and says how many are left out", () => {
+  const many: DesignTweakControl[] = Array.from({ length: 20 }, (_, index) => ({
+    id: `n${index}`,
+    label: `A rather long control label number ${index}`,
+    type: "number",
+    min: 0,
+    max: 99,
+    step: 1,
+    unit: "px",
+    default: 1,
+    target: { var: `--n${index}` },
+  }));
+  const values = withDesignTweak(undefined, many[17]!, 40);
+  const note = designTweakSummary(many, values, { maxChars: 400 });
+  assert.ok(note.length <= 400);
+  const lines = note.split("\n");
+  assert.equal(lines[1], "- A rather long control label number 17: 40px (changed)");
+  assert.match(lines[lines.length - 1]!, /^- …and \d+ more$/u);
+  assert.equal(lines.length - 2 + Number(/(\d+) more/u.exec(lines[lines.length - 1]!)![1]), 20, "every control is shown or counted");
+});
+
 test("make default writes the values into the declaration, the page's look and its words", () => {
   const controls = extractDesignTweakControls(RICH);
   let values = withDesignTweak(undefined, byId(controls, "radius"), 16);
@@ -236,17 +258,133 @@ test("make default writes the values into the declaration, the page's look and i
   const after = extractDesignTweakControls(baked.source);
   assert.equal(byId(after, "radius").type === "number" && byId(after, "radius").default, 16);
   assert.equal(readDesignTweak(byId(after, "density"), undefined), "compact");
-  assert.match(baked.source, /<style data-aiden-tweaks>\n:root \{ --radius: 16px; \}\n<\/style>\n<\/head>/u);
+  assert.equal(readDesignTweak(byId(after, "headline"), undefined), "Plan less");
+  assert.match(baked.source, /<style data-aiden-tweaks>\n:root:root:root \{ --radius: 16px; \}\n<\/style>\n<\/head>/u);
   assert.match(baked.source, /<html lang="en" data-density="compact" data-headline="Plan less">/u);
-  assert.deepEqual(baked.textChanges, [{ target: "data-headline", before: "Make room", after: "Plan less" }]);
-  assert.ok(baked.source.includes("<h1 data-aiden-text=\"headline\">Make room</h1>"), "words are placed by the text-edit rules, not here");
+  assert.ok(baked.source.includes('<h1 data-aiden-text="headline">Plan less</h1>'));
+  assert.deepEqual(baked.kept, []);
+  // Every declared value the file now starts with, so the frame can let go of them.
+  assert.equal(baked.written["--radius"], "16px");
+  assert.equal(baked.written["--accent"], "#2f6fed");
 
   const again = bakeDesignTweakDefaults(baked.source, withDesignTweak(undefined, byId(after, "accent"), "#ff0055"));
   assert.ok(again.ok);
   assert.equal((again.source.match(/data-aiden-tweaks>/gu) ?? []).length, 1, "one managed block, merged");
-  assert.match(again.source, /:root \{ --radius: 16px; --accent: #ff0055; \}/u);
+  assert.match(again.source, /:root:root:root \{ --radius: 16px; --accent: #ff0055; \}/u);
   assert.deepEqual(bakeDesignTweakDefaults(RICH, undefined), { ok: false, reason: "unchanged" });
   assert.deepEqual(bakeDesignTweakDefaults("<html><body></body></html>", values), { ok: false, reason: "not-found" });
+});
+
+test("make default writes typed words as they are, even next to look-alike attributes", () => {
+  const page = RICH.replace('<html lang="en">', '<html lang="en" data-headline="Old" data-density-mode="wide" class="data-density">');
+  const controls = extractDesignTweakControls(page);
+  for (const words of ["Save $& now", "Only $1 today", "$`$$"]) {
+    let values = withDesignTweak(undefined, byId(controls, "headline"), words);
+    values = withDesignTweak(values, byId(controls, "density"), "compact");
+    const baked = bakeDesignTweakDefaults(page, values);
+    assert.ok(baked.ok);
+    const html = /<html[^>]*>/u.exec(baked.source)![0];
+    assert.equal(
+      html,
+      `<html lang="en" data-headline="${words}" data-density-mode="wide" class="data-density" data-density="compact">`,
+      words,
+    );
+    assert.equal(readDesignTweak(byId(extractDesignTweakControls(baked.source), "headline"), undefined), words);
+  }
+});
+
+test("make default keeps the declaration a script, whatever its labels say", () => {
+  const page = RICH.replace('"label": "Accent"', '"label": "A <\\/script><img src=x onerror=alert(1)>  "');
+  assert.equal(byId(extractDesignTweakControls(page), "accent").label.startsWith("A </script>"), true);
+  const baked = bakeDesignTweakDefaults(page, withDesignTweak(undefined, byId(extractDesignTweakControls(page), "radius"), 12));
+  assert.ok(baked.ok);
+  assert.ok(!baked.source.includes("<img"), "the label stays data");
+  const after = extractDesignTweakControls(baked.source);
+  assert.equal(after.length, 6);
+  assert.equal(byId(after, "accent").label.startsWith("A </script><img"), true);
+});
+
+test("words that can't be placed leave that control as it was in the file", () => {
+  // Two places say "Make room" and neither is marked: which one is meant isn't clear.
+  const page = RICH.replace('<h1 data-aiden-text="headline">Make room</h1>', "<h1>Make room</h1><p>Make room</p>");
+  const controls = extractDesignTweakControls(page);
+  let values = withDesignTweak(undefined, byId(controls, "headline"), "Plan less");
+  values = withDesignTweak(values, byId(controls, "radius"), 12);
+  const baked = bakeDesignTweakDefaults(page, values);
+  assert.ok(baked.ok);
+  assert.deepEqual(baked.kept, ["data-headline"]);
+  assert.equal(baked.written["data-headline"], undefined, "the frame keeps the words");
+  assert.equal(readDesignTweak(byId(extractDesignTweakControls(baked.source), "headline"), undefined), "Make room");
+  assert.ok(!baked.source.includes('data-headline="Plan less"'));
+  // Only words, and none could be placed: nothing is written.
+  assert.deepEqual(bakeDesignTweakDefaults(page, withDesignTweak(undefined, byId(controls, "headline"), "Plan less")), {
+    ok: false,
+    reason: "words",
+  });
+});
+
+test("marked words are replaced wherever they stand, and a default with quotes is still found", () => {
+  const marked = RICH.replace(
+    '<h1 data-aiden-text="headline">Make room</h1>',
+    '<h1 data-aiden-text="headline">\n    Make room\n  </h1><p data-aiden-text="headline">Make room</p>',
+  );
+  const controls = extractDesignTweakControls(marked);
+  const baked = bakeDesignTweakDefaults(marked, withDesignTweak(undefined, byId(controls, "headline"), "Tom & Jerry"));
+  assert.ok(baked.ok);
+  assert.ok(baked.source.includes('<h1 data-aiden-text="headline">\n    Tom &amp; Jerry\n  </h1><p data-aiden-text="headline">Tom &amp; Jerry</p>'));
+  // The panel shows "Don’t wait"; the file says "Don't wait", and that is what is looked for.
+  const quoted = RICH.replace('"default": "Make room"', '"default": "Don\'t wait"').replace(
+    '<h1 data-aiden-text="headline">Make room</h1>',
+    "<h1>Don't wait</h1>",
+  );
+  const quotedControls = extractDesignTweakControls(quoted);
+  const words = bakeDesignTweakDefaults(quoted, withDesignTweak(undefined, byId(quotedControls, "headline"), "Go now"));
+  assert.ok(words.ok);
+  assert.deepEqual(words.kept, []);
+  assert.ok(words.source.includes("<h1>Go now</h1>"));
+});
+
+test("make default keeps a page without html or head tags in standards mode", () => {
+  const bare = `<!doctype html>
+<script type="application/aiden-tweaks">[{ "id": "d", "label": "D", "type": "choice", "options": ["x", "y"], "default": "x", "attr": "data-d" },
+ { "id": "n", "label": "N", "type": "number", "min": 0, "max": 9, "default": 1, "var": "--n" }]</script>
+<p>Hi</p>`;
+  const controls = extractDesignTweakControls(bare);
+  let values = withDesignTweak(undefined, byId(controls, "d"), "y");
+  values = withDesignTweak(values, byId(controls, "n"), 4);
+  const baked = bakeDesignTweakDefaults(bare, values);
+  assert.ok(baked.ok);
+  assert.ok(baked.source.startsWith("<!doctype html>\n"), baked.source.slice(0, 40));
+  assert.ok(baked.source.indexOf('<html data-d="y">') > 0);
+  assert.ok(baked.source.indexOf("<style data-aiden-tweaks>") > 0);
+});
+
+test("make default edits the control that was read, and only its own managed block", () => {
+  // The first "n" isn't a usable control, so the second is the one the panel shows.
+  const page = `<html><head><style data-aiden-tweaks-theme>body { color: red }</style>
+<script type="application/aiden-tweaks">[{ "id": "n", "type": "pad", "label": "Broken" },
+ { "id": "n", "label": "N", "type": "number", "min": 0, "max": 9, "default": 2, "var": "--n" }]</script></head></html>`;
+  const controls = extractDesignTweakControls(page);
+  const baked = bakeDesignTweakDefaults(page, withDesignTweak(undefined, byId(controls, "n"), 7));
+  assert.ok(baked.ok);
+  assert.equal(readDesignTweak(byId(extractDesignTweakControls(baked.source), "n"), undefined), 7);
+  assert.ok(baked.source.includes("<style data-aiden-tweaks-theme>body { color: red }</style>"), "a look-alike block is left alone");
+  assert.equal((baked.source.match(/<style data-aiden-tweaks>/gu) ?? []).length, 1);
+});
+
+test("a page full of unclosed tags is read quickly", () => {
+  const flood = `${RICH}${"<script ".repeat(16_000)}${"<style ".repeat(16_000)}${"<html ".repeat(16_000)}`;
+  const started = performance.now();
+  assert.equal(extractDesignTweakControls(flood).length, 6);
+  const baked = bakeDesignTweakDefaults(flood, withDesignTweak(undefined, byId(extractDesignTweakControls(RICH), "radius"), 12));
+  assert.ok(baked.ok);
+  assert.ok(performance.now() - started < 1000, `took ${Math.round(performance.now() - started)} ms`);
+});
+
+test("a value can't open a CSS comment", () => {
+  assert.equal(isDesignTweakValue("a /* b"), false);
+  assert.equal(isDesignTweakValue("b */ c"), false);
+  assert.equal(cleanDesignTweakText("Save /* now */"), "Save / * now * /");
 });
 
 test("versions are read back bounded and matched by their values and Dark switch", () => {
@@ -265,27 +403,30 @@ test("versions are read back bounded and matched by their values and Dark switch
   assert.equal(nextDesignTweakVersionName([{ id: "a", name: "V2" }, { id: "b", name: "V4" }]), "V3");
 });
 
-test("after Make default a frame keeps only what the file couldn't take and what changed while it was written", () => {
-  const submitted = { "--radius": "14px", "data-headline": "Pick a slot", "data-cta": "Book" };
-  // Nothing changed meanwhile: only the words the file couldn't place stay.
-  assert.deepEqual(tweaksAfterBake(submitted, submitted, ["data-cta"]), { "data-cta": "Book" });
-  assert.equal(tweaksAfterBake(submitted, submitted, []), undefined);
-  // Corners moved to 18px while the file was being written: that change survives.
-  const meanwhile = { ...submitted, "--radius": "18px", "--accent": "#ff0055" };
-  assert.deepEqual(tweaksAfterBake(meanwhile, submitted, []), { "--radius": "18px", "--accent": "#ff0055" });
-  // Undo brings the written values back to the frame, under anything changed since.
+test("after Make default a frame lets go of only what the file now says", () => {
+  const written = { "--radius": "14px", "data-headline": "Pick a slot", "--accent": "#2f6fed" };
+  // Nothing changed meanwhile, and Aiden's own variable no control declares stays.
+  assert.deepEqual(tweaksAfterBake({ "--radius": "14px", "data-headline": "Pick a slot", "--hero": "red" }, written), { "--hero": "red" });
+  // Words the file couldn't place aren't in what it wrote, so they stay.
+  assert.deepEqual(tweaksAfterBake({ "--radius": "14px", "data-cta": "Book" }, written), { "data-cta": "Book" });
+  // Corners moved to 18px while the file was being written, and a value past a control's range: both stay.
+  assert.deepEqual(tweaksAfterBake({ "--radius": "18px", "--accent": "#2f6fed" }, written), { "--radius": "18px" });
+  assert.equal(tweaksAfterBake({ "--radius": "14px" }, written), undefined);
+  // Undo brings the submitted values back to the frame, under anything changed since.
+  const submitted = { "--radius": "14px", "data-headline": "Pick a slot" };
   assert.deepEqual(tweaksAfterBakeUndo(undefined, submitted), submitted);
   assert.deepEqual(tweaksAfterBakeUndo({ "--radius": "18px" }, submitted), { ...submitted, "--radius": "18px" });
 });
 
 test("a value taken back while Make default writes it calls that Make default off", () => {
   const submitted = { "--radius": "14px", "data-cta": "Book" };
+  const written = { "--radius": "14px", "--accent": "#2f6fed" };
   // Left alone, or changed to another value: the bake stands.
-  assert.equal(tweaksTakenBackDuringBake(submitted, submitted, []), false);
-  assert.equal(tweaksTakenBackDuringBake({ ...submitted, "--radius": "18px" }, submitted, []), false);
+  assert.equal(tweaksTakenBackDuringBake(submitted, submitted, written), false);
+  assert.equal(tweaksTakenBackDuringBake({ ...submitted, "--radius": "18px" }, submitted, written), false);
   // Reset, or Corners moved back to its default: the file would bring 14px straight back.
-  assert.equal(tweaksTakenBackDuringBake(undefined, submitted, []), true);
-  assert.equal(tweaksTakenBackDuringBake({ "data-cta": "Book" }, submitted, []), true);
-  // Words the file couldn't take were never written, so letting them go changes nothing there.
-  assert.equal(tweaksTakenBackDuringBake({ "--radius": "14px" }, submitted, ["data-cta"]), false);
+  assert.equal(tweaksTakenBackDuringBake(undefined, submitted, written), true);
+  assert.equal(tweaksTakenBackDuringBake({ "data-cta": "Book" }, submitted, written), true);
+  // Words the file didn't write, and a default the person never set: letting them go changes nothing there.
+  assert.equal(tweaksTakenBackDuringBake({ "--radius": "14px" }, submitted, written), false);
 });

@@ -47,12 +47,7 @@ import { frameIframe, useDesignComments } from "./design-comments";
 import { usePageTextEdits } from "./page-text-edits";
 import { designFrameSnapshots } from "./frame-snapshots";
 import { DesignTweaksFloat, type DesignTweakOps } from "./design-tweaks-panel";
-import {
-  DESIGN_TWEAK_V1,
-  forgetDesignTweakVersionPicture,
-  showDesignTweakVersions,
-  takeDesignTweakVersionPicture,
-} from "./tweak-versions";
+import { showDesignTweakVersions, shrinkDesignPicture, takeDesignTweakVersionPicture } from "./tweak-versions";
 import { tweaksAfterBake, tweaksAfterBakeUndo, tweaksTakenBackDuringBake } from "../shared/design-canvas/tweaks";
 import { postToDesignPage } from "../shared/design-canvas/bridge-messages";
 import { useDesignDrawing, type DesignDrawTool } from "./design-drawing";
@@ -321,6 +316,9 @@ function LoadedDesignCanvas({
     },
     [versions],
   );
+  // Read when a delayed picture is taken, so it sees the file as it is then.
+  const latestFrameVersionOf = React.useRef(frameVersionOf);
+  latestFrameVersionOf.current = frameVersionOf;
 
   // Another page on screen (the picker, an undo, or Aiden's canvas_focus):
   // go to where that page was left, with nothing selected or entered.
@@ -917,10 +915,13 @@ function LoadedDesignCanvas({
   // Tweaks: a picture of a frame as it shows now, for its versions. The
   // floating Tweaks panel steps aside while it is taken, and only the part of
   // the frame on the canvas is kept.
+  const capturing = React.useRef(0);
   const captureFrame = React.useCallback(async (frameId: string): Promise<string | null> => {
     const region = wrapper.current;
     const iframe = frameIframe(region, frameId);
     if (!region || !iframe || document.visibilityState === "hidden") return null;
+    // Pictures may overlap; the floating panel comes back once the last is taken.
+    capturing.current += 1;
     region.setAttribute("data-capturing", "");
     try {
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
@@ -936,7 +937,8 @@ function LoadedDesignCanvas({
     } catch {
       return null;
     } finally {
-      region.removeAttribute("data-capturing");
+      capturing.current -= 1;
+      if (capturing.current === 0) region.removeAttribute("data-capturing");
     }
   }, []);
 
@@ -947,7 +949,6 @@ function LoadedDesignCanvas({
         const latest = latestDoc.current.frames.find((entry) => entry.id === frameId);
         update(frameId, { tweaks: tweaksAfterBakeUndo(latest?.tweaks, values) }, { record: true });
         reloadPaths([path]);
-        forgetDesignTweakVersionPicture(frameId, DESIGN_TWEAK_V1);
         toast("Put the page's file back as it was.");
       } else {
         toast.error(answer?.reason === "changed" ? "The file changed since, so it was left as it is." : "The file couldn't be put back.");
@@ -956,12 +957,16 @@ function LoadedDesignCanvas({
     [chatId, update, reloadPaths],
   );
 
+  // One Make default per frame at a time: a second press while the first is
+  // writing would only find the file already changed.
+  const baking = React.useRef(new Set<string>());
   const makeTweaksDefault = React.useCallback(
     (frameId: string) => {
+      const frame = latestDoc.current.frames.find((entry) => entry.id === frameId);
+      if (frame?.kind !== "file" || !frame.path || !frame.tweaks || baking.current.has(frameId)) return;
+      const { path, tweaks: values } = frame;
+      baking.current.add(frameId);
       void (async () => {
-        const frame = latestDoc.current.frames.find((entry) => entry.id === frameId);
-        if (frame?.kind !== "file" || !frame.path || !frame.tweaks) return;
-        const { path, tweaks: values } = frame;
         // Main reads the frame from the saved canvas.
         const saved = await flush().catch(() => false);
         if (!saved) {
@@ -978,7 +983,7 @@ function LoadedDesignCanvas({
         // Reset (or a control moved back to its default) while the file was
         // being written: the file would bring that value straight back, so
         // the write is undone and the frame keeps what it shows now.
-        if (latest && tweaksTakenBackDuringBake(latest.tweaks, values, result.kept)) {
+        if (latest && tweaksTakenBackDuringBake(latest.tweaks, values, result.written)) {
           const undone = await designCanvasApi.undoBakeDesignTweaks(chatId, frameId, undoId).catch(() => null);
           if (undone?.ok) {
             reloadPaths([path]);
@@ -988,17 +993,15 @@ function LoadedDesignCanvas({
         }
         // The frame lets go of what the file now says, keeping words the file
         // couldn't take and anything changed while the file was written.
-        update(frameId, { tweaks: tweaksAfterBake(latest?.tweaks, values, result.kept) }, { record: true });
+        update(frameId, { tweaks: tweaksAfterBake(latest?.tweaks, result.written) }, { record: true });
         reloadPaths([path]);
-        // V1 is the page as its file says, and that just changed.
-        forgetDesignTweakVersionPicture(frameId, DESIGN_TWEAK_V1);
         toast.success(
           result.kept.length > 0
             ? "Made these the page's defaults. Some words couldn't be placed in the file, so this frame keeps them."
             : "Made these the page's defaults.",
           { action: { label: "Undo", onClick: () => void undoTweakDefaults(frameId, path, values, undoId) } },
         );
-      })();
+      })().finally(() => baking.current.delete(frameId));
     },
     [chatId, flush, update, reloadPaths, undoTweakDefaults],
   );
@@ -1042,16 +1045,18 @@ function LoadedDesignCanvas({
       send: comments.queueOnFrame,
       makeDefault: makeTweaksDefault,
       pictureVersion: (frameId, versionId, delay) =>
-        takeDesignTweakVersionPicture(
-          frameId,
-          versionId,
-          delay,
-          (id) => latestDoc.current.frames.find((entry) => entry.id === id),
-          captureFrame,
-        ),
+        takeDesignTweakVersionPicture(frameId, versionId, delay, {
+          frameNow: (id) => latestDoc.current.frames.find((entry) => entry.id === id),
+          fileVersion: (frame) => latestFrameVersionOf.current(frame),
+          capture: async (id) => {
+            const picture = await captureFrame(id);
+            return picture ? shrinkDesignPicture(picture) : null;
+          },
+        }),
       showAll: showTweakVersions,
+      fileVersion: frameVersionOf,
     }),
-    [update, pageWindow, comments.queueOnFrame, makeTweaksDefault, captureFrame, showTweakVersions],
+    [update, pageWindow, comments.queueOnFrame, makeTweaksDefault, captureFrame, showTweakVersions, frameVersionOf],
   );
   const enteredPage = entered === null ? undefined : doc.frames.find((frame) => frame.id === entered && frame.kind === "file");
   // The side panel's Tweaks tab already shows this page's controls.
@@ -1258,6 +1263,7 @@ const BAKE_ERRORS: Record<string, string> = {
   "not-found": "The page no longer declares these tweaks.",
   unchanged: "These are already the page's defaults.",
   changed: "The file changed while it was being written. Try again.",
+  words: "The page's words couldn't be found in its file, so it wasn't changed. Send the values to Aiden instead.",
   failed: "The page's file couldn't be changed.",
 };
 

@@ -9,7 +9,7 @@ import * as React from "react";
 import { Button, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Switch, toast } from "../components/ui";
 import { Segmented } from "../components/ui-primitives";
 import { cn } from "../lib/ui-utils";
-import type { DesignFrame } from "../shared/design-canvas/schema";
+import { DESIGN_CANVAS_LIMITS, type DesignFrame } from "../shared/design-canvas/schema";
 import {
   cleanDesignTweakText,
   DESIGN_TWEAK_VERSION_LIMITS,
@@ -45,6 +45,8 @@ export type DesignTweakOps = {
    * that version and shows it when the picture is taken and when it comes back.
    */
   pictureVersion(frameId: string, versionId: string, delay: number): void;
+  /** The version of the frame's file as the canvas shows it; a picture from another one is out of date. */
+  fileVersion(frame: DesignFrame): number;
   /** Lays out a copy of the page for each version, side by side. */
   showAll(frameId: string): void;
 };
@@ -95,7 +97,13 @@ export function DesignTweaksEditor({
   };
   const { loose, folders } = React.useMemo(() => intoFolders(controls), [controls]);
   const showing = frame.tweakVersions?.find((version) => showsDesignTweakVersion(frame, version));
-  const summary = () => designTweakSummary(controls, frame.tweaks, { dark: frame.dark === true, ...(showing ? { version: showing.name } : {}) });
+  const summary = () =>
+    designTweakSummary(controls, frame.tweaks, {
+      dark: frame.dark === true,
+      // A comment's note holds this much; Copy gets the same text.
+      maxChars: DESIGN_CANVAS_LIMITS.noteChars,
+      ...(showing ? { version: showing.name } : {}),
+    });
   const canShuffle = controls.some((control) => control.type !== "text" && control.type !== "action");
   const renderControl = (control: DesignTweakControl) => (
     <TweakControl
@@ -275,6 +283,8 @@ function TweakVersions({ frame, ops }: { frame: DesignFrame; ops: DesignTweakOps
   const showingV1 = !frame.tweaks && frame.dark !== true;
   const saved = showingV1 || versions.some((version) => showsDesignTweakVersion(frame, version));
   const full = versions.length >= DESIGN_TWEAK_VERSION_LIMITS.versions;
+  // Pictures taken from an older version of the file no longer show what a version looks like.
+  const stamp = ops.fileVersion(frame);
   const show = (version: { id: string; tweaks?: DesignTweakVersion["tweaks"]; dark?: true }) => {
     ops.update(frame.id, { tweaks: version.tweaks, dark: version.dark }, { record: true });
     // Once the page has its values.
@@ -308,11 +318,12 @@ function TweakVersions({ frame, ops }: { frame: DesignFrame; ops: DesignTweakOps
         ) : null}
       </div>
       <div role="group" aria-label="Versions" className="flex flex-wrap gap-1.5">
-        <VersionChip frameId={frame.id} versionId={V1} name="V1" title="The page as its file says" active={showingV1} onShow={() => show({ id: V1 })} />
+        <VersionChip frameId={frame.id} stamp={stamp} versionId={V1} name="V1" title="The page as its file says" active={showingV1} onShow={() => show({ id: V1 })} />
         {versions.map((version) => (
           <VersionChip
             key={version.id}
             frameId={frame.id}
+            stamp={stamp}
             versionId={version.id}
             name={version.name}
             active={showsDesignTweakVersion(frame, version)}
@@ -338,6 +349,7 @@ function TweakVersions({ frame, ops }: { frame: DesignFrame; ops: DesignTweakOps
 
 function VersionChip({
   frameId,
+  stamp,
   versionId,
   name,
   title,
@@ -346,6 +358,7 @@ function VersionChip({
   onRemove,
 }: {
   frameId: string;
+  stamp: number;
   versionId: string;
   name: string;
   title?: string;
@@ -353,7 +366,7 @@ function VersionChip({
   onShow(): void;
   onRemove?(): void;
 }) {
-  const picture = useDesignTweakVersionPicture(frameId, versionId);
+  const picture = useDesignTweakVersionPicture(frameId, versionId, stamp);
   return (
     <div
       className={cn(
@@ -439,7 +452,8 @@ function TweakControl({
       ) : (
         <TweakRow label={control.label} id={id}>
           <Select value={String(value)} onValueChange={onChange}>
-            <SelectTrigger size="small" aria-labelledby={id} className="w-36">
+            {/* Named by its label and the option it shows. */}
+            <SelectTrigger size="small" id={`${id}-value`} aria-labelledby={`${id} ${id}-value`} className="w-36">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -762,12 +776,21 @@ function writeFloatOpen(open: boolean): void {
   }
 }
 
+function passesUndo(event: React.KeyboardEvent): boolean {
+  const key = event.key.toLowerCase();
+  return (event.metaKey || event.ctrlKey) && !event.altKey && (key === "z" || key === "y");
+}
+
+function isTextEntry(target: EventTarget): boolean {
+  return target instanceof HTMLElement && (target.isContentEditable || target.matches("input, textarea"));
+}
+
 /**
  * The page's controls over the canvas while the person is inside a page that
  * has some, so they can tweak it without opening the side panel. It folds to
  * its title, and stays folded next time.
  */
-export function DesignTweaksFloat({
+export const DesignTweaksFloat = React.memo(function DesignTweaksFloat({
   frame,
   readSource,
   versionOf,
@@ -786,9 +809,12 @@ export function DesignTweaksFloat({
     <section
       aria-label="Tweaks"
       className="design-tweaks-float absolute right-3 top-16 z-10 flex max-h-[calc(100%-8.5rem)] w-76 flex-col overflow-hidden rounded-menu bg-popover shadow-popover"
-      // Its keys are its own; Escape still leaves the page.
+      // Its keys are its own, so the canvas's single-key shortcuts don't fire
+      // from it; Escape still leaves the page, and Undo and Redo still reach
+      // the canvas from anything but a text box.
       onKeyDown={(event) => {
-        if (event.key !== "Escape") event.stopPropagation();
+        if (event.key === "Escape" || (passesUndo(event) && !isTextEntry(event.target))) return;
+        event.stopPropagation();
       }}
     >
       <button
@@ -816,4 +842,4 @@ export function DesignTweaksFloat({
       </div>
     </section>
   );
-}
+});

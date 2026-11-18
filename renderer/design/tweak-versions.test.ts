@@ -155,16 +155,18 @@ test("a version's picture checks the canvas's frame as it is when taken, whoever
     shots += 1;
     return new Promise<string | null>((resolve) => (resolveShot = resolve));
   };
+  let file = 1;
+  const canvasNow = { frameNow, fileVersion: () => file, capture };
 
   // The panel asked for V2's picture, then closed; the page moved on to another value before it was taken.
-  takeDesignTweakVersionPicture("shot-a", "v-2", 20, frameNow, capture);
+  takeDesignTweakVersionPicture("shot-a", "v-2", 20, canvasNow);
   current = { ...current, tweaks: { "data-density": "roomy" } };
   await settle(40);
   assert.equal(shots, 0, "no picture of a look that isn't V2");
 
   // Back on V2: the picture is started, and while it is taken the page switches to Night.
   current = { ...current, tweaks: { "data-density": "compact" } };
-  takeDesignTweakVersionPicture("shot-a", "v-2", 0, frameNow, capture);
+  takeDesignTweakVersionPicture("shot-a", "v-2", 0, canvasNow);
   await settle(10);
   assert.equal(shots, 1);
   current = { ...current, tweaks: undefined, dark: true };
@@ -174,7 +176,7 @@ test("a version's picture checks the canvas's frame as it is when taken, whoever
 
   // V2 deleted while its picture is taken: nothing is kept for it.
   current = { ...current, dark: undefined, tweaks: { "data-density": "compact" } };
-  takeDesignTweakVersionPicture("shot-a", "v-2", 0, frameNow, capture);
+  takeDesignTweakVersionPicture("shot-a", "v-2", 0, canvasNow);
   await settle(10);
   current = { ...current, tweakVersions: current.tweakVersions?.filter((version) => version.id !== "v-2") };
   resolveShot("data:image/png;base64,VjI=");
@@ -183,15 +185,32 @@ test("a version's picture checks the canvas's frame as it is when taken, whoever
 
   // The frame left the canvas: nothing is taken.
   current = undefined;
-  takeDesignTweakVersionPicture("shot-a", DESIGN_TWEAK_V1, 0, frameNow, capture);
+  takeDesignTweakVersionPicture("shot-a", DESIGN_TWEAK_V1, 0, canvasNow);
   await settle(10);
   assert.equal(shots, 2, "no picture once the frame is gone");
 
   // Left alone on V1, it gets its picture.
   current = page({ id: "shot-a", tweaks: undefined });
-  takeDesignTweakVersionPicture("shot-a", DESIGN_TWEAK_V1, 0, frameNow, capture);
+  takeDesignTweakVersionPicture("shot-a", DESIGN_TWEAK_V1, 0, canvasNow);
   await settle(10);
   resolveShot("data:image/png;base64,VjE=");
   await settle(10);
-  assert.equal(designTweakVersionPicture("shot-a", DESIGN_TWEAK_V1), "data:image/png;base64,VjE=");
+  assert.equal(designTweakVersionPicture("shot-a", DESIGN_TWEAK_V1, 1), "data:image/png;base64,VjE=");
+
+  // Shown again from the same file: the picture it has is kept, with no new one taken.
+  takeDesignTweakVersionPicture("shot-a", DESIGN_TWEAK_V1, 0, canvasNow);
+  await settle(10);
+  assert.equal(shots, 3);
+  // The file changed (Make default, or Aiden): the old picture no longer counts, and a new one is taken.
+  file = 2;
+  assert.equal(designTweakVersionPicture("shot-a", DESIGN_TWEAK_V1, 2), undefined);
+  takeDesignTweakVersionPicture("shot-a", DESIGN_TWEAK_V1, 0, canvasNow);
+  await settle(10);
+  assert.equal(shots, 4);
+  // The file changes again while it is taken: it isn't filed under either version of the file.
+  file = 3;
+  resolveShot("data:image/png;base64,VjFi");
+  await settle(10);
+  assert.equal(designTweakVersionPicture("shot-a", DESIGN_TWEAK_V1, 2), undefined);
+  assert.equal(designTweakVersionPicture("shot-a", DESIGN_TWEAK_V1, 3), undefined);
 });

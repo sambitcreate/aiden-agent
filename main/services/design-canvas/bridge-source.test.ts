@@ -195,11 +195,12 @@ test("set-tweaks takes only safe names and values, and only from the canvas", ()
   view.send({
     type: "aiden-design:set-tweaks",
     dark: false,
-    vars: { "--ok": "1", color: "red", "--bad": "red; background: url(x)" },
+    vars: { "--ok": "1", color: "red", "--bad": "red; background: url(x)", "--open": "a /* b" },
     attrs: { onclick: "alert(1)", "data-x": "<b>", "data-y": "yes" },
   });
   assert.equal(root.style.getPropertyValue("--ok"), "1");
   assert.equal(root.style.getPropertyValue("--bad"), "");
+  assert.equal(root.style.getPropertyValue("--open"), "", "a value can't open a CSS comment");
   assert.equal(root.hasAttribute("onclick"), false);
   assert.equal(root.hasAttribute("data-x"), false);
   assert.equal(root.getAttribute("data-y"), "yes");
@@ -221,7 +222,7 @@ test("the page's address carries the same state, applied before the page draws",
 });
 
 const WORDS = `<!doctype html><html><head></head><body>
-  <h1 data-aiden-text="headline">Make room to play</h1>
+  <h1 data-aiden-text="headline">Make <em>room</em> to play</h1>
   <button data-aiden-text="cta">Save</button><p data-aiden-text="cta">Save</p>
 </body></html>`;
 
@@ -235,7 +236,7 @@ test("a text tweak fills its marked elements and their own words come back when 
   view.send({ type: "aiden-design:set-tweaks", dark: false, vars: {}, attrs: { "data-headline": "Hi" } });
   assert.equal(doc.querySelector("button")?.textContent, "Save");
   view.send({ type: "aiden-design:set-tweaks", dark: false, vars: {}, attrs: {} });
-  assert.equal(doc.querySelector("h1")?.textContent, "Make room to play");
+  assert.equal(doc.querySelector("h1")?.innerHTML, "Make <em>room</em> to play", "its own markup comes back too");
   view.send({ type: "aiden-design:set-tweaks", dark: false, vars: {}, attrs: { "data-headline": "<b>x</b>" } });
   assert.equal(doc.querySelector("h1")?.textContent, "Make room to play", "an unsafe value never reaches the page");
 });

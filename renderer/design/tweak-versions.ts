@@ -99,23 +99,28 @@ export function showDesignTweakVersions(
 
 /** The most version pictures kept at once; the oldest goes first. */
 const PICTURE_LIMIT = 120;
+/** A version's picture is drawn as a small thumbnail, so it is kept at about this size. */
+export const DESIGN_TWEAK_PICTURE_SIDE = 160;
 
-const pictures = new Map<string, string>();
+/** Each picture, with the version of the page's file it was taken from. */
+const pictures = new Map<string, { picture: string; stamp: number }>();
 const listeners = new Set<() => void>();
-let revision = 0;
 
 function pictureKey(frameId: string, versionId: string): string {
   return `${frameId}\n${versionId}`;
 }
 
-/** Keeps a version's picture for this app run. */
-export function keepDesignTweakVersionPicture(frameId: string, versionId: string, dataUrl: string): void {
+function changed(): void {
+  for (const listener of listeners) listener();
+}
+
+/** Keeps a version's picture for this app run, taken from the file's version `stamp`. */
+export function keepDesignTweakVersionPicture(frameId: string, versionId: string, dataUrl: string, stamp = 0): void {
   const key = pictureKey(frameId, versionId);
   pictures.delete(key);
-  pictures.set(key, dataUrl);
+  pictures.set(key, { picture: dataUrl, stamp });
   while (pictures.size > PICTURE_LIMIT) pictures.delete(pictures.keys().next().value as string);
-  revision += 1;
-  for (const listener of listeners) listener();
+  changed();
 }
 
 /** V1 is the page as its file says; it is never stored. */
@@ -128,30 +133,40 @@ function versionLook(frame: DesignFrame | undefined, versionId: string): { tweak
   return frame.tweakVersions?.find((version) => version.id === versionId) ?? null;
 }
 
+/** What taking a version's picture reads from the canvas, fresh each time. */
+export type DesignTweakPictureCanvas = {
+  frameNow(frameId: string): DesignFrame | undefined;
+  /** The version of the frame's file as the canvas shows it now. */
+  fileVersion(frame: DesignFrame): number;
+  capture(frameId: string): Promise<string | null>;
+};
+
 /**
  * Takes a version's picture after `delay` and keeps it, but only while the
- * canvas's frame (read fresh through `frameNow`, not from whichever editor
- * asked) still has that version and shows it, both before the capture starts
- * and when it comes back. So a quick switch, an edit, a closed panel or a
- * deleted version never files one look's picture under another.
+ * canvas's frame (read fresh, not from whichever editor asked) still has that
+ * version and shows it, both before the capture starts and when it comes
+ * back, from the same version of its file. So a quick switch, an edit, a
+ * closed panel or a deleted version never files one look's picture under
+ * another. A version already pictured from this version of the file is left
+ * as it is.
  */
 export function takeDesignTweakVersionPicture(
   frameId: string,
   versionId: string,
   delay: number,
-  frameNow: (frameId: string) => DesignFrame | undefined,
-  capture: (frameId: string) => Promise<string | null>,
+  canvas: DesignTweakPictureCanvas,
 ): void {
-  const shows = () => {
-    const frame = frameNow(frameId);
+  const stampNow = (): number | null => {
+    const frame = canvas.frameNow(frameId);
     const look = versionLook(frame, versionId);
-    return frame !== undefined && look !== null && showsDesignTweakVersion(frame, look);
+    return frame && look && showsDesignTweakVersion(frame, look) ? canvas.fileVersion(frame) : null;
   };
   setTimeout(() => {
-    if (!shows()) return;
-    void capture(frameId).then(
+    const stamp = stampNow();
+    if (stamp === null || pictures.get(pictureKey(frameId, versionId))?.stamp === stamp) return;
+    void canvas.capture(frameId).then(
       (picture) => {
-        if (picture && shows()) keepDesignTweakVersionPicture(frameId, versionId, picture);
+        if (picture && stampNow() === stamp) keepDesignTweakVersionPicture(frameId, versionId, picture, stamp);
       },
       () => undefined,
     );
@@ -159,9 +174,7 @@ export function takeDesignTweakVersionPicture(
 }
 
 export function forgetDesignTweakVersionPicture(frameId: string, versionId: string): void {
-  if (!pictures.delete(pictureKey(frameId, versionId))) return;
-  revision += 1;
-  for (const listener of listeners) listener();
+  if (pictures.delete(pictureKey(frameId, versionId))) changed();
 }
 
 function subscribe(listener: () => void): () => void {
@@ -169,12 +182,38 @@ function subscribe(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
-/** A version's picture, if one was taken since the app started. */
-export function designTweakVersionPicture(frameId: string, versionId: string): string | undefined {
-  return pictures.get(pictureKey(frameId, versionId));
+/**
+ * A version's picture, if one was taken since the app started; with `stamp`,
+ * only one taken from that version of the page's file.
+ */
+export function designTweakVersionPicture(frameId: string, versionId: string, stamp?: number): string | undefined {
+  const entry = pictures.get(pictureKey(frameId, versionId));
+  return entry && (stamp === undefined || entry.stamp === stamp) ? entry.picture : undefined;
 }
 
-export function useDesignTweakVersionPicture(frameId: string, versionId: string): string | undefined {
-  React.useSyncExternalStore(subscribe, () => revision, () => revision);
-  return designTweakVersionPicture(frameId, versionId);
+/** A version's picture from this version of the file; only the chips whose picture changed render again. */
+export function useDesignTweakVersionPicture(frameId: string, versionId: string, stamp: number): string | undefined {
+  const read = () => designTweakVersionPicture(frameId, versionId, stamp);
+  return React.useSyncExternalStore(subscribe, read, read);
+}
+
+/** A picture scaled down so its longest side is at most `side`; the original when it can't be. */
+export async function shrinkDesignPicture(dataUrl: string, side = DESIGN_TWEAK_PICTURE_SIDE): Promise<string> {
+  try {
+    const image = new Image();
+    image.src = dataUrl;
+    await image.decode();
+    const longest = Math.max(image.naturalWidth, image.naturalHeight);
+    if (longest <= side) return dataUrl;
+    const ratio = side / longest;
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(image.naturalWidth * ratio));
+    canvas.height = Math.max(1, Math.round(image.naturalHeight * ratio));
+    const context = canvas.getContext("2d");
+    if (!context) return dataUrl;
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/png");
+  } catch {
+    return dataUrl;
+  }
 }

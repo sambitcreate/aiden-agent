@@ -82,10 +82,15 @@ function Harness({
       calls.makeDefault += 1;
     },
     pictureVersion: (frameId, versionId, delay) =>
-      takeDesignTweakVersionPicture(frameId, versionId, delay, () => latest.current, async () => {
-        calls.captures += 1;
-        return "data:image/png;base64,AAAA";
+      takeDesignTweakVersionPicture(frameId, versionId, delay, {
+        frameNow: () => latest.current,
+        fileVersion: () => 0,
+        capture: async () => {
+          calls.captures += 1;
+          return "data:image/png;base64,AAAA";
+        },
       }),
+    fileVersion: () => 0,
     showAll: () => {
       calls.showAll += 1;
     },
@@ -245,7 +250,7 @@ test("the floating panel shows a page's controls, folds to its title and stays f
     })}</script>`,
     truncated: false,
   });
-  const ops = { update() {}, action: () => true, send: () => true, makeDefault() {}, pictureVersion() {}, showAll() {} };
+  const ops = { update() {}, action: () => true, send: () => true, makeDefault() {}, pictureVersion() {}, fileVersion: () => 0, showAll() {} };
   const view = render(<DesignTweaksFloat frame={page()} readSource={readSource} versionOf={() => 0} ops={ops} />);
   const fold = await screen.findByRole("button", { name: /Tweaks/u });
   assert.ok(screen.getByRole("switch", { name: "Promo banner" }));
@@ -263,7 +268,7 @@ test("the floating panel stays away from a page without controls", async () => {
     asked += 1;
     return { text: "<html><body>No tweaks</body></html>", truncated: false };
   };
-  const ops = { update() {}, action: () => true, send: () => true, makeDefault() {}, pictureVersion() {}, showAll() {} };
+  const ops = { update() {}, action: () => true, send: () => true, makeDefault() {}, pictureVersion() {}, fileVersion: () => 0, showAll() {} };
   const view = render(<DesignTweaksFloat frame={page()} readSource={readSource} versionOf={() => 0} ops={ops} />);
   await waitFor(() => assert.equal(asked, 1));
   await act(async () => undefined);

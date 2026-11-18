@@ -26,8 +26,10 @@
 //
 // The frame keeps only the values the person changed, keyed by target
 // (`tweaks`), so the bridge can apply them without the declaration, and an
-// export draws the same page. Nothing is written to the page's file. Pure, so
-// it is tested without a DOM.
+// export draws the same page. Only Make default writes them into the page's
+// file (see below). Pure, so it is tested without a DOM.
+
+import { escapeDesignText, planDesignTextEdit } from "./text-edit";
 
 export type DesignTweakTarget = { var: string } | { attr: string };
 
@@ -80,7 +82,7 @@ const VAR = /^--[A-Za-z0-9_-]{1,60}$/u;
 const ATTR = /^data-[a-z0-9-]{1,60}$/u;
 const HEX = /^#[0-9a-f]{6}$/iu;
 /** What a value may never hold: it ends up in a style property or an attribute. */
-const UNSAFE = /[;{}<>\\"']|url\(|expression\(/iu;
+const UNSAFE = /[;{}<>\\"']|\/\*|\*\/|url\(|expression\(/iu;
 const UNIT = /^(px|rem|em|%|ms|s|deg|vw|vh|)$/u;
 
 export function isDesignTweakTarget(name: unknown): name is string {
@@ -108,6 +110,7 @@ export function cleanDesignTweakText(value: string): string {
     })
     .replace(/[;{}<>\\]/gu, "")
     .replace(/(url|expression)\(/giu, "$1 (")
+    .replace(/\/\*|\*\//gu, (mark) => `${mark[0]} ${mark[1]}`)
     .slice(0, DESIGN_TWEAK_LIMITS.valueChars);
 }
 
@@ -238,17 +241,27 @@ function control(raw: unknown): DesignTweakControl | null {
  * control past the eighth folder is kept outside any folder.
  */
 export function parseDesignTweakControls(value: unknown): DesignTweakControl[] {
-  const list = Array.isArray(value)
+  return readDesignTweakList(value).map((entry) => entry.control);
+}
+
+/** A declaration's list of raw entries, whichever of the two shapes it has. */
+function declarationList(value: unknown): unknown[] {
+  return Array.isArray(value)
     ? value
     : value && typeof value === "object" && Array.isArray((value as { controls?: unknown }).controls)
       ? (value as { controls: unknown[] }).controls
       : [];
+}
+
+/** The kept controls, each with the place of the raw entry it was read from. */
+function readDesignTweakList(value: unknown): { control: DesignTweakControl; index: number }[] {
+  const list = declarationList(value);
   const ids = new Set<string>();
   const targets = new Set<string>();
   const groups = new Set<string>();
-  const controls: DesignTweakControl[] = [];
+  const controls: { control: DesignTweakControl; index: number }[] = [];
   let actions = 0;
-  for (const raw of list) {
+  for (const [index, raw] of list.entries()) {
     const found = control(raw);
     if (!found || ids.has(found.id)) continue;
     const names = designTweakTargets(found).map(tweakTargetName);
@@ -263,19 +276,50 @@ export function parseDesignTweakControls(value: unknown): DesignTweakControl[] {
     }
     ids.add(found.id);
     for (const name of names) targets.add(name);
-    controls.push(found);
+    controls.push({ control: found, index });
   }
   return controls;
 }
 
-const DECLARATION = /<script\b[^>]*\btype\s*=\s*["']?application\/aiden-tweaks["']?[^>]*>([\s\S]*?)<\/script\s*>/iu;
+/** Where an element sits in a page's markup: its opening tag and, when it has one, its body. */
+type FoundElement = { start: number; tagEnd: number; tag: string; bodyEnd: number; end: number };
+
+/**
+ * The first `<name ...>` element whose opening tag passes `accept`, found
+ * in one pass with no backtracking (a page full of unclosed tags stays
+ * quick). `closed` elements also need their `</name>`.
+ */
+function findElement(html: string, name: string, accept: (tag: string) => boolean, closed: boolean): FoundElement | null {
+  const open = new RegExp(`<${name}(?=[\\s/>])`, "giu");
+  for (let match = open.exec(html); match; match = open.exec(html)) {
+    const tagEnd = html.indexOf(">", match.index);
+    if (tagEnd === -1) return null;
+    const tag = html.slice(match.index, tagEnd + 1);
+    open.lastIndex = tagEnd + 1;
+    if (!accept(tag)) continue;
+    if (!closed) return { start: match.index, tagEnd: tagEnd + 1, tag, bodyEnd: tagEnd + 1, end: tagEnd + 1 };
+    const close = new RegExp(`</${name}\\s*>`, "giu");
+    close.lastIndex = tagEnd + 1;
+    const ending = close.exec(html);
+    if (!ending) return null;
+    return { start: match.index, tagEnd: tagEnd + 1, tag, bodyEnd: ending.index, end: ending.index + ending[0].length };
+  }
+  return null;
+}
+
+const DECLARATION_TYPE = /\stype\s*=\s*["']?application\/aiden-tweaks(?=["'\s/>])/iu;
+
+function findDeclaration(html: string): FoundElement | null {
+  return findElement(html, "script", (tag) => DECLARATION_TYPE.test(tag), true);
+}
 
 /** Finds a page's declaration and reads it; a page without one, or with broken JSON, has no controls. */
 export function extractDesignTweakControls(html: string): DesignTweakControl[] {
-  const match = DECLARATION.exec(html.slice(0, DESIGN_TWEAK_LIMITS.scanChars));
-  if (!match) return [];
+  const scanned = html.slice(0, DESIGN_TWEAK_LIMITS.scanChars);
+  const found = findDeclaration(scanned);
+  if (!found) return [];
   try {
-    return parseDesignTweakControls(JSON.parse(match[1]!));
+    return parseDesignTweakControls(JSON.parse(scanned.slice(found.tagEnd, found.bodyEnd)));
   } catch {
     return [];
   }
@@ -436,81 +480,124 @@ export type DesignTweakBake =
   | {
       ok: true;
       source: string;
-      /** Targets whose value stays on the frame: words that weren't found exactly once. */
+      /** What the file now starts with for each declared target it took: these leave the frame. */
+      written: DesignTweakValues;
+      /** Text targets whose words couldn't be placed in the page; the file left them as they were. */
       kept: string[];
-      /** The text controls' words to change in the page, as plain text changes. */
-      textChanges: { target: string; before: string; after: string }[];
     }
-  | { ok: false; reason: "not-found" | "unchanged" };
+  | { ok: false; reason: "not-found" | "unchanged" | "words" };
 
-const TWEAK_STYLE = /<style\b[^>]*\bdata-aiden-tweaks\b[^>]*>([\s\S]*?)<\/style\s*>/iu;
-const HTML_TAG = /<html\b[^>]*>/iu;
+const TWEAK_STYLE_ATTR = /\sdata-aiden-tweaks(?=[\s=/>])/iu;
 
 /** Sets or adds one attribute on an opening tag. Values are already safe (no quotes). */
 function withAttribute(tag: string, name: string, value: string): string {
-  const existing = new RegExp(`(\\s${name})(\\s*=\\s*(?:"[^"]*"|'[^']*'|[^\\s>]+))?`, "iu");
-  if (existing.test(tag)) return tag.replace(existing, `$1="${value}"`);
+  // The name ends where an attribute name ends, so data-theme never matches data-theme-mode.
+  const existing = new RegExp(`(\\s${name})(?=[\\s=/>])(\\s*=\\s*(?:"[^"]*"|'[^']*'|[^\\s>]+))?`, "iu");
+  if (existing.test(tag)) return tag.replace(existing, (_match, attribute: string) => `${attribute}="${value}"`);
   return tag.replace(/\s*\/?>$/u, (end) => ` ${name}="${value}"${end.trim()}`);
 }
 
+/** Where a new element can go at the top of a page: after its doctype, so the page keeps standards mode. */
+function afterDoctype(source: string): number {
+  const doctype = /^\s*<!doctype[^>]*>/iu.exec(source.slice(0, 1024));
+  return doctype ? doctype[0].length : 0;
+}
+
 function withTweakStyle(source: string, vars: Record<string, string>): string {
-  const found = TWEAK_STYLE.exec(source);
+  const found = findElement(source, "style", (tag) => TWEAK_STYLE_ATTR.test(tag), true);
   const merged = new Map<string, string>();
   if (found) {
-    for (const match of found[1]!.matchAll(/(--[A-Za-z0-9_-]{1,60})\s*:\s*([^;}]*)/gu)) merged.set(match[1]!, match[2]!.trim());
+    const body = source.slice(found.tagEnd, found.bodyEnd);
+    for (const match of body.matchAll(/(--[A-Za-z0-9_-]{1,60})\s*:\s*([^;}]*)/gu)) merged.set(match[1]!, match[2]!.trim());
   }
   for (const [name, value] of Object.entries(vars)) merged.set(name, value);
-  const body = `:root { ${[...merged].map(([name, value]) => `${name}: ${value};`).join(" ")} }`;
+  // As strong as the live tweaks were (inline on the root): it wins over the
+  // page's own :root and [data-theme="dark"] rules, so Dark looks the same.
+  const body = `:root:root:root { ${[...merged].map(([name, value]) => `${name}: ${value};`).join(" ")} }`;
   const block = `<style data-aiden-tweaks>\n${body}\n</style>`;
-  if (found) return source.slice(0, found.index) + block + source.slice(found.index + found[0].length);
+  if (found) return source.slice(0, found.start) + block + source.slice(found.end);
   const head = /<\/head\s*>/iu.exec(source);
   if (head) return `${source.slice(0, head.index)}${block}\n${source.slice(head.index)}`;
-  const html = HTML_TAG.exec(source);
-  if (html) {
-    const at = html.index + html[0].length;
-    return `${source.slice(0, at)}\n${block}${source.slice(at)}`;
+  const html = findElement(source, "html", () => true, false);
+  const at = html ? html.tagEnd : afterDoctype(source);
+  return `${source.slice(0, at)}\n${block}\n${source.slice(at)}`;
+}
+
+/** JSON that is safe inside a script element: nothing in it can close the element or open a comment. */
+function scriptSafeJson(value: unknown): string {
+  return JSON.stringify(value, null, 2)
+    .replace(/</gu, "\\u003c")
+    .replace(/>/gu, "\\u003e")
+    .replace(/&/gu, "\\u0026")
+    .replace(/\u2028/gu, "\\u2028")
+    .replace(/\u2029/gu, "\\u2029");
+}
+
+/**
+ * A text control's new words in each `[data-aiden-text="<name>"]` element,
+ * keeping the whitespace around them. Null when there is no such element,
+ * or one holds markup: then the old words are looked for as plain text.
+ */
+function fillMarkedText(source: string, attr: string, after: string): string | null {
+  const name = attr.slice("data-".length);
+  const marker = new RegExp(`\\sdata-aiden-text\\s*=\\s*(["']?)${name}\\1(?=[\\s/>])`, "iu");
+  const opening = /<([a-z][a-z0-9-]*)(?=[\s/>])/giu;
+  let next = "";
+  let from = 0;
+  let filled = 0;
+  for (let match = opening.exec(source); match; match = opening.exec(source)) {
+    const tagEnd = source.indexOf(">", match.index);
+    if (tagEnd === -1) break;
+    opening.lastIndex = tagEnd + 1;
+    if (!marker.test(source.slice(match.index, tagEnd + 1))) continue;
+    const bodyEnd = source.indexOf("<", tagEnd + 1);
+    if (bodyEnd === -1 || !source.slice(bodyEnd, bodyEnd + match[1]!.length + 2).toLowerCase().startsWith(`</${match[1]!.toLowerCase()}`)) {
+      return null;
+    }
+    const words = source.slice(tagEnd + 1, bodyEnd);
+    const lead = /^\s*/u.exec(words)![0];
+    const trail = words.length > lead.length ? /\s*$/u.exec(words)![0] : "";
+    next += source.slice(from, tagEnd + 1) + lead + escapeDesignText(after) + trail;
+    from = bodyEnd;
+    filled += 1;
   }
-  return `${block}\n${source}`;
+  return filled > 0 ? next + source.slice(from) : null;
 }
 
 /**
  * The page's file with the frame's values made its defaults. Pure: main reads
- * and writes the file, and places the text changes with the text-edit rules.
+ * and writes the file. A text control's words change in the page too; when
+ * they can't be placed, that control is left as it was and listed in `kept`.
  */
 export function bakeDesignTweakDefaults(source: string, values: DesignTweakValues | undefined): DesignTweakBake {
-  const scanned = source.slice(0, DESIGN_TWEAK_LIMITS.scanChars);
-  const match = DECLARATION.exec(scanned);
-  if (!match) return { ok: false, reason: "not-found" };
+  const found = findDeclaration(source.slice(0, DESIGN_TWEAK_LIMITS.scanChars));
+  if (!found) return { ok: false, reason: "not-found" };
   let json: unknown;
   try {
-    json = JSON.parse(match[1]!);
+    json = JSON.parse(source.slice(found.tagEnd, found.bodyEnd));
   } catch {
     return { ok: false, reason: "not-found" };
   }
-  const list: unknown[] = Array.isArray(json)
-    ? json
-    : json && typeof json === "object" && Array.isArray((json as { controls?: unknown }).controls)
-      ? (json as { controls: unknown[] }).controls
-      : [];
-  const controls = parseDesignTweakControls(json);
+  const list = declarationList(json);
   const vars: Record<string, string> = {};
   const attrs: Record<string, string> = {};
-  const textChanges: { target: string; before: string; after: string }[] = [];
-  let changed = false;
-  for (const control of controls) {
+  const written: DesignTweakValues = {};
+  const kept: string[] = [];
+  const texts: { raw: Record<string, unknown>; before: string; after: string; attr: string }[] = [];
+  for (const { control, index } of readDesignTweakList(json)) {
     if (control.type === "action") continue;
     const value = readDesignTweak(control, values);
     const formatted = formatDesignTweakTargets(control, value);
+    Object.assign(written, formatted);
     const defaults = formatDesignTweakTargets(control, designTweakDefault(control));
     const differing = Object.keys(formatted).filter((name) => formatted[name] !== defaults[name]);
     if (differing.length === 0) continue;
-    changed = true;
-    const raw = list.find(
-      (entry): entry is Record<string, unknown> =>
-        Boolean(entry) && typeof entry === "object" && (entry as { id?: unknown }).id === control.id,
-    );
-    if (!raw) continue;
-    if (control.type === "pad") {
+    const raw = list[index] as Record<string, unknown>;
+    if (control.type === "text") {
+      // The words as the file has them, before the panel made its quotes curly.
+      const before = typeof raw.default === "string" ? raw.default : control.default;
+      texts.push({ raw, before, after: String(value), attr: tweakTargetName(control.target) });
+    } else if (control.type === "pad") {
       const at = value as DesignTweakPoint;
       (raw.x as Record<string, unknown>).default = at.x;
       (raw.y as Record<string, unknown>).default = at.y;
@@ -521,28 +608,50 @@ export function bakeDesignTweakDefaults(source: string, values: DesignTweakValue
       if (VAR.test(name)) vars[name] = formatted[name]!;
       else attrs[name] = formatted[name]!;
     }
-    if (control.type === "text") {
-      textChanges.push({ target: tweakTargetName(control.target), before: control.default, after: String(value) });
-    }
   }
-  if (!changed) return { ok: false, reason: "unchanged" };
-  const declaration = `\n${JSON.stringify(json, null, 2)}\n`;
-  const start = match.index + match[0].indexOf(match[1]!, match[0].indexOf(">"));
-  let next = source.slice(0, start) + declaration + source.slice(start + match[1]!.length);
+  if (Object.keys(vars).length === 0 && Object.keys(attrs).length === 0) return { ok: false, reason: "unchanged" };
+
+  // Words first: a control whose words can't be placed keeps its old default
+  // everywhere in the file, so the file never disagrees with itself.
+  let next = source;
+  for (const text of texts) {
+    let placed = fillMarkedText(next, text.attr, text.after);
+    if (placed === null) {
+      const plan = planDesignTextEdit(next, [{ before: text.before, after: text.after }]);
+      placed = plan.ok ? plan.source : null;
+    }
+    if (placed === null) {
+      kept.push(text.attr);
+      delete attrs[text.attr];
+      delete written[text.attr];
+      continue;
+    }
+    next = placed;
+    text.raw.default = text.after;
+  }
+  // Only words, and none of them could be placed.
+  if (Object.keys(vars).length === 0 && Object.keys(attrs).length === 0) return { ok: false, reason: "words" };
+
+  // Placed words never sit inside a script, so the declaration is where it was, give or take.
+  const declaration = findDeclaration(next.slice(0, DESIGN_TWEAK_LIMITS.scanChars + Math.max(0, next.length - source.length)));
+  if (!declaration) return { ok: false, reason: "not-found" };
+  next = `${next.slice(0, declaration.tagEnd)}\n${scriptSafeJson(json)}\n${next.slice(declaration.bodyEnd)}`;
   if (Object.keys(vars).length > 0) next = withTweakStyle(next, vars);
   if (Object.keys(attrs).length > 0) {
-    const html = HTML_TAG.exec(next);
+    const html = findElement(next, "html", () => true, false);
     if (html) {
-      let tag = html[0];
+      let tag = html.tag;
       for (const [name, value] of Object.entries(attrs)) tag = withAttribute(tag, name, value);
-      next = next.slice(0, html.index) + tag + next.slice(html.index + html[0].length);
+      next = next.slice(0, html.start) + tag + next.slice(html.tagEnd);
     } else {
-      next = `<html ${Object.entries(attrs)
+      const at = afterDoctype(next);
+      const tag = `<html ${Object.entries(attrs)
         .map(([name, value]) => `${name}="${value}"`)
-        .join(" ")}>\n${next}`;
+        .join(" ")}>`;
+      next = `${next.slice(0, at)}${at > 0 ? "\n" : ""}${tag}\n${next.slice(at)}`;
     }
   }
-  return { ok: true, source: next, kept: [], textChanges };
+  return { ok: true, source: next, written, kept };
 }
 
 // ---- Shuffle and hand-off --------------------------------------------------
@@ -628,49 +737,59 @@ export function describeDesignTweak(control: DesignTweakControl, value: DesignTw
 export function designTweakSummary(
   controls: readonly DesignTweakControl[],
   values: DesignTweakValues | undefined,
-  options: { dark?: boolean; version?: string } = {},
+  options: { dark?: boolean; version?: string; maxChars?: number } = {},
 ): string {
-  const lines: string[] = [];
+  const lines: { text: string; changed: boolean }[] = [];
   for (const control of controls) {
     if (control.type === "action") continue;
     const value = readDesignTweak(control, values);
     const changed = withDesignTweak(undefined, control, value) !== undefined;
-    lines.push(`- ${control.group ? `${control.group} / ` : ""}${control.label}: ${describeDesignTweak(control, value)}${changed ? " (changed)" : ""}`);
+    lines.push({
+      text: `- ${control.group ? `${control.group} / ` : ""}${control.label}: ${describeDesignTweak(control, value)}${changed ? " (changed)" : ""}`,
+      changed,
+    });
   }
-  if (options.dark) lines.push("- Dark: on");
+  if (options.dark) lines.push({ text: "- Dark: on", changed: true });
   const heading = options.version ? `Tweaks values (${options.version}):` : "Tweaks values:";
-  return [heading, ...lines].join("\n");
+  const note = (kept: typeof lines, left: number) =>
+    [heading, ...kept.map((line) => line.text), ...(left > 0 ? [`- …and ${left} more`] : [])].join("\n");
+  const max = options.maxChars ?? Infinity;
+  if (note(lines, 0).length <= max) return note(lines, 0);
+  // Too long for one note: the changed values come first, then as many of the rest as fit.
+  const ordered = [...lines.filter((line) => line.changed), ...lines.filter((line) => !line.changed)];
+  let kept = ordered;
+  while (kept.length > 0 && note(kept, ordered.length - kept.length).length > max) kept = kept.slice(0, -1);
+  return note(kept, ordered.length - kept.length).slice(0, max);
 }
 
 /**
- * A frame's values once Make default has written `submitted` into its file:
- * it keeps the words the file couldn't take (`kept`) and any value changed
- * since, and lets go of the rest, which the file now says.
+ * A frame's values once Make default has written `written` into its file as
+ * the page's defaults: those values leave the frame, since the file now says
+ * them. Anything else stays: words the file couldn't take, a value changed
+ * while the file was written, a value outside a control's range, and values
+ * no control declares (Aiden may set any variable on a frame).
  */
-export function tweaksAfterBake(
-  current: DesignTweakValues | undefined,
-  submitted: DesignTweakValues,
-  kept: readonly string[],
-): DesignTweakValues | undefined {
+export function tweaksAfterBake(current: DesignTweakValues | undefined, written: DesignTweakValues): DesignTweakValues | undefined {
   const next: DesignTweakValues = {};
   for (const [name, value] of Object.entries(current ?? {})) {
-    if (kept.includes(name) || submitted[name] !== value) next[name] = value;
+    if (written[name] !== value) next[name] = value;
   }
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
 /**
  * Whether the person took back a value while Make default was writing it:
- * a submitted value the file took is no longer on the frame (Reset, or a
- * control moved back to its default). Writing it as the file's default would
- * bring it straight back, so that Make default is undone instead.
+ * a value they had set, which the file took, is no longer on the frame
+ * (Reset, or a control moved back to its default). Writing it as the file's
+ * default would bring it straight back, so that Make default is undone
+ * instead.
  */
 export function tweaksTakenBackDuringBake(
   current: DesignTweakValues | undefined,
   submitted: DesignTweakValues,
-  kept: readonly string[],
+  written: DesignTweakValues,
 ): boolean {
-  return Object.keys(submitted).some((name) => !kept.includes(name) && current?.[name] === undefined);
+  return Object.keys(written).some((name) => submitted[name] !== undefined && current?.[name] === undefined);
 }
 
 /** A frame's values once that Make default is undone: what it showed then, under any change made since. */
