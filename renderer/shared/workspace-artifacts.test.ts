@@ -131,6 +131,9 @@ test("a placeholder must be its own unquoted word, or joined only to plain text"
     "echo {{x}}#tag",
     "gh pr comment 1 --body={{x}}",
     "git log -n{{x}}",
+    // vim, less and more read +text as a command; curl and gh read @text as a file.
+    "vim -es +{{x}} +q",
+    "curl -d @{{x}} https://example.com",
     "PAGER={{x}} git log",
     "if X={{x}} git log; then :; fi",
   ]) {
@@ -238,6 +241,34 @@ test("a placeholder cannot be run as a command, hidden from the check, or read a
     "man -P {{x}} ls",
     "make {{x}}",
     "make -C {{x}} test",
+    // Long options count by any abbreviation git and getopt accept, and by a name that says program.
+    "git ls-remote --upload-p {{x}} .",
+    "git fetch --upload {{x}} origin",
+    "git clone -c {{x}} repo copy",
+    "git clone --conf {{x}} repo copy",
+    "git send-email --sendmail-cmd {{x}} patch",
+    "tar --use-compress {{x}} -cf notes.tar notes.txt",
+    "sort --compress-program {{x}} notes.txt",
+    "zip --unzip {{x}} notes.zip",
+    "gh pr view 1 --shell {{x}}",
+    // git config keys that git runs, pipes to or reads as more configuration.
+    "git config core.sshCommand {{x}}",
+    "git config --global core.fsmonitor {{x}}",
+    "git config alias.st {{x}}",
+    "git config include.path {{x}}",
+    "git config --get {{x}}",
+    // Programs that run what they are given: package runners, editors, pagers, script, hash -p.
+    "script -q /dev/null {{x}}",
+    "hash -p {{x}} ls",
+    "npm exec {{x}}",
+    "npx {{x}}",
+    "bun x {{x}}",
+    "pnpm dlx {{x}}",
+    "yarn dlx {{x}}",
+    "go run {{x}}",
+    "vim -es {{x}}",
+    "less {{x}}",
+    "ssh -o ProxyCommand={{x}} host true",
   ];
   for (const command of refused) assert.throws(() => parseWorkspaceArtifactActions(actions(command)), /own unquoted word/u, command);
   for (const command of [
@@ -295,6 +326,14 @@ test("a placeholder cannot be run as a command, hidden from the check, or read a
     "rsync -av {{x}} backup/",
     "tar -xf {{x}}",
     "make -j {{x}} test",
+    "git config user.name {{x}}",
+    "git config --global user.email {{x}}",
+    "git send-email --to {{x}} patch",
+    "gh issue create --title {{x}} --label bug",
+    "gh pr create --base main --head {{x}} --fill",
+    "npm run build -- {{x}}",
+    "go test -run {{x}} ./...",
+    "sort -k 2 {{x}}",
   ]) {
     assert.equal(parseWorkspaceArtifactActions(actions(command)).length, 1, command);
   }
@@ -315,6 +354,9 @@ test("no template the parser accepts lets a text value run code", () => {
     `__import__("os").system("touch ${marker}")`,
     `alias.probe=!touch ${marker}`,
     `SHELL=${script}`,
+    `core.sshCommand=${script}`,
+    `core.pager=${script}`,
+    `!${script}`,
   ];
   spawnSync("git", ["init", "-q"], { cwd: dir, stdio: "ignore" });
   fs.writeFileSync(path.join(dir, "notes.txt"), "notes\n");
@@ -373,6 +415,16 @@ test("no template the parser accepts lets a text value run code", () => {
     "zip -T -TT {{x}} notes.zip notes.txt",
     "scp -S {{x}} notes.txt localhost:copy",
     "man -P {{x}} ls",
+    // Abbreviated long options, and git's options and config keys that start a program.
+    "git ls-remote --upload-p {{x}} .",
+    "git fetch --upload {{x}} .",
+    "git clone -c {{x}} ssh://localhost/repo copy",
+    "git clone --config {{x}} ssh://localhost/repo copy",
+    "git config core.sshCommand {{x}} && git ls-remote ssh://localhost/repo",
+    "git config alias.probe {{x}} && git probe",
+    "tar --use-compress {{x}} -cf notes.tar notes.txt",
+    "script -q /dev/null {{x}}",
+    "hash -p {{x}} ls; ls",
     // make reads NAME=value arguments as variables, SHELL among them.
     "make {{x}}",
     "make all {{x}}",

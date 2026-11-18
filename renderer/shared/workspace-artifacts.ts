@@ -228,18 +228,27 @@ const RUNS_ARGUMENT = new Set([
   "chroot",
   "command",
   "doas",
+  "ed",
+  "emacs",
   "env",
   "eval",
+  "ex",
   "exec",
   "flock",
+  "hash",
   "ionice",
+  "less",
+  "more",
+  "most",
   "nice",
   "nohup",
   "npx",
+  "nvim",
   "parallel",
   "pkexec",
   "pnpx",
   "runuser",
+  "script",
   "setsid",
   "sg",
   "source",
@@ -254,6 +263,10 @@ const RUNS_ARGUMENT = new Set([
   "trap",
   "unbuffer",
   "uvx",
+  "vi",
+  "view",
+  "vim",
+  "vimdiff",
   "watch",
   "xargs",
   "xcrun",
@@ -331,33 +344,106 @@ const CODE_ARGUMENTS: Record<string, CodeArguments> = {
   },
 };
 /**
- * Options whose next word names a program to start: git's transport helpers
- * (`--upload-pack`), rsync's remote shell (`-e`), tar's compressor, zip's
- * tester, scp's ssh and man's pager. Like `CODE_ARGUMENTS`, the common ones.
+ * Options whose next word names a program, code or configuration to start:
+ * git's transport helpers (`--upload-pack`), rsync's remote shell (`-e`),
+ * tar's and sort's compressor, zip's tester, scp's ssh and man's pager.
+ * `short` matches short options as written; a long option counts when it is
+ * any of `long` or an abbreviation of one, since getopt_long, git and
+ * Getopt::Long all accept a unique prefix (`--upload-p`). `exact` are long
+ * options of the program that a shorter dangerous name would otherwise claim
+ * (`git send-email --to` is not `--to-cmd`). Like `CODE_ARGUMENTS`, the common
+ * programs, not every one.
  */
-const TAR_PROGRAM = /^(?:-[A-Za-z]*[IF]|--use-compress-program|--to-command|--info-script|--new-volume-script|--rsh-command|--rmt-command|--checkpoint-action)$/u;
-const SSH_COPY_PROGRAM = /^-[A-Za-z0-9]*[SoF]$/u;
-const PROGRAM_OPTIONS: Record<string, RegExp> = {
-  rsync: /^(?:-[A-Za-z]*e|--rsh|--rsync-path)$/u,
+interface ProgramOptions {
+  short?: RegExp;
+  long?: readonly string[];
+  exact?: readonly string[];
+}
+const TAR_PROGRAM: ProgramOptions = {
+  short: /^-[A-Za-z]*[IF]$/u,
+  long: ["use-compress-program", "to-command", "info-script", "new-volume-script", "rsh-command", "rmt-command", "checkpoint-action"],
+};
+const SSH_COPY_PROGRAM: ProgramOptions = { short: /^-[A-Za-z0-9]*[SoF]$/u };
+const PROGRAM_OPTIONS: Record<string, ProgramOptions> = {
+  rsync: { short: /^-[A-Za-z]*e$/u, long: ["rsh", "rsync-path"] },
   tar: TAR_PROGRAM,
   gtar: TAR_PROGRAM,
   bsdtar: TAR_PROGRAM,
-  zip: /^(?:-TT|--unzip-command)$/u,
+  sort: { long: ["compress-program"] },
+  gsort: { long: ["compress-program"] },
+  zip: { short: /^-TT$/u, long: ["unzip-command"] },
   scp: SSH_COPY_PROGRAM,
   sftp: SSH_COPY_PROGRAM,
-  man: /^(?:-P|--pager|-H|--html)$/u,
-  wget: /^--use-askpass$/u,
+  man: { short: /^-[PH]$/u, long: ["pager", "html"] },
+  wget: { long: ["use-askpass"] },
 };
+/**
+ * Long options that name a program, code or a configuration file in any
+ * command, with their abbreviations, and the words that mark one by name
+ * (`--sendmail-cmd`, `--proxy-command`, `--use-compress-program`,
+ * `--config`): a value after one may be what the program starts.
+ */
+const ANY_PROGRAM_LONG: ProgramOptions = {
+  long: ["exec", "eval", "command", "config", "upload-pack", "receive-pack", "use-compress-program", "compress-program", "rsh", "rsync-path", "proxy-command"],
+};
+const PROGRAM_OPTION_WORD = /^(?:[a-z]*cmd|[a-z]*command|program|prog|exec|execdir|execute|shell|pager|editor|askpass|hooks?|eval|rsh|script|interpreter|wrapper|config|helper)$/u;
+const LONG_OPTION = /^--([A-Za-z0-9][A-Za-z0-9-]*)$/u;
+
+/** Whether `arg`, an option as written, is one of `options` or abbreviates one. */
+function isProgramOption(arg: string, options: ProgramOptions | undefined): boolean {
+  if (!options) return false;
+  if (options.short?.test(arg)) return true;
+  const name = LONG_OPTION.exec(arg)?.[1]?.toLowerCase();
+  if (!name || options.exact?.includes(name)) return false;
+  return options.long?.some((option) => option.startsWith(name)) === true;
+}
+
+/** Whether a long option's own name says it takes a program or code (`--sendmail-cmd`, `--shell`). */
+function namesAProgram(arg: string): boolean {
+  const name = LONG_OPTION.exec(arg)?.[1]?.toLowerCase();
+  return name !== undefined && name.split("-").some((word) => PROGRAM_OPTION_WORD.test(word));
+}
+
 /** git's, by subcommand; `*` applies to every subcommand. */
-const GIT_PROGRAM_OPTIONS: Record<string, RegExp> = {
-  "*": /^(?:--upload-pack|--receive-pack|--exec)$/u,
-  clone: /^-u$/u,
-  rebase: /^-x$/u,
-  difftool: /^(?:-x|--extcmd)$/u,
-  "filter-branch": /^--[a-z-]+-filter$/u,
+const GIT_PROGRAM_OPTIONS: Record<string, ProgramOptions> = {
+  "*": { long: ["upload-pack", "receive-pack", "exec", "config", "config-env", "exec-path"] },
+  clone: { short: /^-[uc]$/u, long: ["template", "upload-pack", "config"] },
+  init: { long: ["template"] },
+  rebase: { short: /^-x$/u, long: ["exec"] },
+  difftool: { short: /^-x$/u, long: ["extcmd", "tool"] },
+  mergetool: { long: ["tool"] },
+  "send-email": { long: ["sendmail-cmd", "smtp-server", "to-cmd", "cc-cmd", "header-cmd"], exact: ["to", "cc", "bcc", "from", "subject"] },
 };
 /** git subcommands whose arguments after a word are a command (`git submodule foreach …`). */
 const GIT_RUNS_AFTER: Record<string, string> = { submodule: "foreach", bisect: "run" };
+/**
+ * `git config` keys a text value may set: none of them names a program,
+ * a hook, a pager, an editor, an alias or other configuration to include.
+ */
+const SAFE_GIT_CONFIG_KEY = /^(?:user\.(?:name|email)|init\.defaultbranch|pull\.(?:rebase|ff)|push\.(?:default|autosetupremote)|fetch\.prune|color\.ui|branch\.[A-Za-z0-9._/-]+\.description)$/iu;
+/** `git config` subcommand words (git 2.46) that come before the key. */
+const GIT_CONFIG_VERBS = new Set(["get", "set", "unset", "list", "edit", "rename-section", "remove-section"]);
+/** `git config` options that take the next word. */
+const GIT_CONFIG_VALUED = /^(?:-f|--file|--blob|--type|--default|--comment|--value)$/u;
+/**
+ * Package runners and project tools whose subcommand runs a package, a
+ * script path or a command named by the next words (`npm exec`, `bun x`,
+ * `pnpm dlx`, `go run pkg@latest`, `poetry run`).
+ */
+const RUNS_SUBCOMMAND: Record<string, readonly string[]> = {
+  npm: ["exec", "x", "init", "create", "explore"],
+  pnpm: ["dlx", "exec", "create"],
+  yarn: ["dlx", "exec", "create"],
+  bun: ["x", "create"],
+  deno: ["run", "eval", "x"],
+  go: ["run", "generate"],
+  uv: ["run", "tool"],
+  pipx: ["run"],
+  poetry: ["run"],
+  pipenv: ["run"],
+  bundle: ["exec"],
+  gh: ["alias", "extension"],
+};
 
 /** The subcommand of `git …`, skipping global options and their values. */
 function gitSubcommand(args: readonly string[]): { name: string; index: number } | undefined {
@@ -408,16 +494,35 @@ function placeholderCommandProblem(words: readonly string[], inArithmetic: boole
   const args = words.slice(start + 1).map(unquotedWord);
   const last = args[args.length - 1] ?? "";
   if (base === "find" && args.some((arg) => /^-(?:exec|execdir|ok|okdir)$/u.test(arg))) return "an argument to find -exec, which runs it";
-  if (PROGRAM_OPTIONS[base]?.test(last)) return `the program ${base} ${last} starts`;
+  if (isProgramOption(last, PROGRAM_OPTIONS[base]) || isProgramOption(last, ANY_PROGRAM_LONG) || namesAProgram(last)) {
+    return `the program or code ${base} ${last} names`;
+  }
+  // tar's bundled first word (`tar cIf prog …`) hands later words to its options.
+  if ((base === "tar" || base === "gtar" || base === "bsdtar") && /^[A-Za-z]*[IF][A-Za-z]*$/u.test(args[0] ?? "")) {
+    return `an argument to tar ${args[0]}, whose options name a program`;
+  }
+  const runner = RUNS_SUBCOMMAND[base];
+  if (runner) {
+    const sub = args.find((arg) => !arg.startsWith("-"));
+    if (sub === undefined) return `the subcommand of ${base}, which can run a package`;
+    if (runner.includes(sub)) return `an argument to ${base} ${sub}, which runs it`;
+  }
   if (base === "git") {
     const sub = gitSubcommand(args);
-    if (sub) {
-      const after = args.slice(sub.index + 1);
-      if (GIT_PROGRAM_OPTIONS["*"]!.test(last) || (after.length && GIT_PROGRAM_OPTIONS[sub.name]?.test(last))) {
-        return `the program git ${sub.name} ${last} starts`;
+    if (!sub) return "the subcommand of git";
+    const after = args.slice(sub.index + 1);
+    if (after.length && isProgramOption(last, GIT_PROGRAM_OPTIONS[sub.name])) return `the program git ${sub.name} ${last} names`;
+    const runs = GIT_RUNS_AFTER[sub.name];
+    if (runs && after.includes(runs)) return `the command git ${sub.name} ${runs} runs`;
+    if (sub.name === "config") {
+      let key: string | undefined;
+      for (let index = 0; index < after.length && key === undefined; index += 1) {
+        const arg = after[index]!;
+        if (GIT_CONFIG_VALUED.test(arg)) index += 1;
+        else if (!arg.startsWith("-") && !GIT_CONFIG_VERBS.has(arg)) key = arg;
       }
-      const runs = GIT_RUNS_AFTER[sub.name];
-      if (runs && after.includes(runs)) return `the command git ${sub.name} ${runs} runs`;
+      if (key === undefined) return "a git config key or option";
+      if (!SAFE_GIT_CONFIG_KEY.test(key)) return `a value for git config ${key}, which git may run or read as configuration`;
     }
   }
   const spec = CODE_ARGUMENTS[base] ?? CODE_ARGUMENTS[name];
@@ -476,6 +581,8 @@ function joinedWordProblem(template: string, wordStart: number, index: number, e
   if (!JOINED_TEXT.test(before)) return LONGER_WORD;
   const word = `${before}x${after}`;
   if (word.startsWith("-")) return "joined to an option (write --body {{body}}, not --body={{body}})";
+  // `+cmd` is a command to vim, less and more, and `@file` a file to read for curl and gh.
+  if (/^[+@]/u.test(word)) return "joined after + or @, which programs read as a command or a file to load";
   const commandPosition = commandWords.every((word) => COMMAND_PREFIX_WORDS.has(word) || ASSIGNMENT_WORD.test(word));
   if (commandPosition && ASSIGNMENT_WORD.test(word)) return "a variable assignment, which a program may read as a command to run";
   return undefined;
