@@ -243,11 +243,18 @@ export interface WorkspaceArtifactWriteOptions {
    */
   uniqueTitle?: boolean;
   /**
-   * Update only: the revision this caller saved earlier in the same agent
-   * turn. Replacing that revision keeps no history entry for it, so one turn's
-   * saves are a single undo step back to the page before the turn.
+   * Update only: the version this caller saved earlier in the same agent
+   * turn. Replacing that version keeps no history entry for it, so one turn's
+   * saves are a single undo step back to the page before the turn. A version
+   * renamed since (same revision, other title) is the person's, and is kept.
    */
-  foldRevision?: number;
+  fold?: { revision: number; title: string };
+  /**
+   * Update only: the title of the page the caller built this content from.
+   * If the page was renamed after that read and the content keeps the old
+   * title, the page keeps its new name; a content title of its own still wins.
+   */
+  baseTitle?: string;
 }
 
 /** `title`, or the first "Title (n)" no page in `taken` has, within the title limit. */
@@ -659,7 +666,12 @@ export class WorkspaceArtifactStore {
       const index = draft.artifacts.findIndex((artifact) => artifact.id === id);
       if (index < 0) notFound();
       const previous = draft.artifacts[index]!;
-      const content = contentFor(previous);
+      const built = contentFor(previous);
+      // Decided here, under the store's lock, so a rename that landed while
+      // the caller prepared this save is never written over.
+      const renamedSinceRead = options.baseTitle !== undefined && previous.visual.title !== options.baseTitle;
+      const content =
+        renamedSinceRead && built.title === options.baseTitle ? { ...built, title: previous.visual.title } : built;
       if (!isWorkspaceArtifactTitle(content.title)) throw new Error(TITLE_RULE);
       assertNoCredentialFiles(content);
       const named = draft.artifacts.find((artifact) => artifact.id !== id && artifact.visual.title === content.title);
@@ -697,7 +709,10 @@ export class WorkspaceArtifactStore {
       if (!checked) throw new Error("The artifact could not be saved because its page is too large or invalid.");
       draft.artifacts[index] = checked;
       // A version this turn already saved is not an undo step of its own.
-      const folded = options.foldRevision !== undefined && options.foldRevision === previous.revision;
+      const folded =
+        options.fold !== undefined &&
+        options.fold.revision === previous.revision &&
+        options.fold.title === previous.visual.title;
       return { saved: checked, replaced: folded ? undefined : structuredClone(previous) };
     });
     if (replaced) await this.recordRevision(workspaceId, pages, replaced);

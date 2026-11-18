@@ -123,9 +123,9 @@ test("replacing the revision a caller saved earlier keeps no version for it", as
   const { store } = await openStore(t);
   const created = await store.create("ws1", content());
   const first = await store.replace("ws1", created.id, content({ description: "one" }));
-  const second = await store.replace("ws1", created.id, content({ description: "two" }), { foldRevision: first.revision });
+  const second = await store.replace("ws1", created.id, content({ description: "two" }), { fold: { revision: first.revision, title: first.visual.title } });
   // A stale fold revision does not fold: the version it would drop is not the caller's.
-  await store.replace("ws1", created.id, content({ description: "three" }), { foldRevision: first.revision });
+  await store.replace("ws1", created.id, content({ description: "three" }), { fold: { revision: first.revision, title: first.visual.title } });
   assert.deepEqual((await store.history("ws1", created.id)).map((entry) => entry.revision), [second.revision, created.revision]);
 });
 

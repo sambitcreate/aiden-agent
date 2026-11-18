@@ -396,3 +396,34 @@ test("a rename made during a reply survives that reply's later saves and stays i
   await call("u4", { operation: "update", id: "art1", title: "Review queue" });
   assert.equal((await store.get("ws1", "art1"))!.artifact.visual.title, "Review queue");
 });
+
+test("a rename that lands while a save is being prepared is kept, and stays its own undo step", async (t) => {
+  const { store, call, nextTurn } = await harness(t, { permission: "full" });
+  await call("c1", { operation: "create", title: "Open PRs", markup: PAGE });
+  nextTurn();
+  await call("u1", { operation: "update", id: "art1", description: "first pass" });
+  // The person's rename lands after the tool has read the page it updates,
+  // before that update is written.
+  const read = store.get.bind(store);
+  let landing: (() => Promise<unknown>) | undefined;
+  store.get = async (...args: Parameters<typeof store.get>) => {
+    const answer = await read(...args);
+    const work = landing;
+    landing = undefined;
+    await work?.();
+    return answer;
+  };
+  landing = () => store.rename("ws1", "art1", "Pulls");
+  const saved = await call("u2", { operation: "update", id: "art1", description: "second pass" });
+  assert.match(saved, /Updated the artifact "Pulls"/u);
+  const artifact = (await store.get("ws1", "art1"))!.artifact;
+  assert.deepEqual([artifact.visual.title, artifact.description], ["Pulls", "second pass"]);
+  assert.deepEqual(
+    (await store.history("ws1", "art1")).map((entry) => entry.title),
+    ["Pulls", "Open PRs"],
+  );
+  // The agent renaming on purpose in that window still wins.
+  landing = () => store.rename("ws1", "art1", "Queue");
+  await call("u3", { operation: "update", id: "art1", title: "Review queue" });
+  assert.equal((await store.get("ws1", "art1"))!.artifact.visual.title, "Review queue");
+});
