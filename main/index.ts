@@ -542,6 +542,9 @@ const shutdownAndQuit = joinInFlight((settingsPrepared: boolean = false) => runS
 async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
   if (shutdownStarted) return;
   shutdownStarted = true;
+  // The one record that says a quit got past its confirmations, so a quit that
+  // never finishes shows whether shutdown work or a prompt held it.
+  logger.info("electron-lifecycle", "Application shutdown started", { settingsPrepared });
   llmClient.setQuitInProgress(true);
   if (!settingsPrepared) {
     try {
@@ -2251,6 +2254,8 @@ if (!ownsSingleInstanceLock) {
       // No window (macOS keeps running after the last one closes): runs may still be on the wire,
       // and any beyond what the close confirmed are asked about now.
       void shutdownAndQuit();
+    } else {
+      quitNotStarted("image-requests-kept");
     }
   });
 
