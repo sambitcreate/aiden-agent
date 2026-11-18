@@ -54,7 +54,7 @@ test("the main thread's call graph is taken from sample output and the next thre
   assert.deepEqual(sampleMainThread("no graph here"), []);
 });
 
-test("every other thread reads as its innermost frames on its heaviest stack, innermost first", () => {
+test("every other thread reads as the innermost frames of its most-sampled leaf, innermost first", () => {
   const output = [
     "Call graph:",
     "    812 Thread_1234   DispatchQueue_1: com.apple.main-thread  (serial)",
@@ -78,6 +78,21 @@ test("every other thread reads as its innermost frames on its heaviest stack, in
     "  Thread_1241: Chrome_IOThread: ?",
     "  Thread_1242: ThreadPoolForegroundWorker: mach_msg2_trap (in libsystem_kernel.dylib) < thread_start (in libsystem_pthread.dylib)",
   ]);
+  // The heaviest branch can split into lighter leaves than a later sibling's single leaf.
+  const split = [
+    "Call graph:",
+    "    1000 Thread_1250",
+    "    + 1000 thread_start  (in libsystem_pthread.dylib) + 8  [0x1]",
+    "    +   700 uv_cond_wait  (in node) + 40  [0x2]",
+    "    +   ! 350 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x3]",
+    "    +   ! 350 __psynch_mutexwait  (in libsystem_kernel.dylib) + 8  [0x4]",
+    "    +   300 SecItemCopyMatching  (in Security) + 12  [0x5]",
+    "    +     300 mach_msg2_trap  (in libsystem_kernel.dylib) + 8  [0x6]",
+    "    +   600 uv__fs_work  (in node) + 40  [0x7]",
+    "    +     600 open  (in libsystem_kernel.dylib) + 8  [0x8]",
+    "",
+  ].join("\n");
+  assert.deepEqual(sampleOtherThreads(split, 2), ["  Thread_1250: open (in libsystem_kernel.dylib) < uv__fs_work (in node)"]);
   assert.deepEqual(sampleOtherThreads("no graph here"), []);
 });
 

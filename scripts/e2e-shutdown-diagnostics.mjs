@@ -62,8 +62,9 @@ function sampleFrame(line) {
 
 /**
  * Every thread other than the main one, one line each: its name, then the
- * innermost `frames` frames of its heaviest stack, innermost first. A worker
- * blocked in a file, keychain or network call shows that call here.
+ * innermost `frames` frames of the stack whose leaf took the most samples,
+ * innermost first. A worker blocked in a file, keychain or network call shows
+ * that call here.
  */
 export function sampleOtherThreads(output, frames = 4, limit = 80) {
   const lines = output.split("\n");
@@ -71,27 +72,42 @@ export function sampleOtherThreads(output, frames = 4, limit = 80) {
   if (start < 0) return [];
   const threads = [];
   let current = null;
+  const settleLeaf = () => {
+    // The last frame pushed is a leaf when the next line is not its child.
+    if (!current || current.stack.length === 0 || !current.lastWasPush) return;
+    const leaf = current.stack[current.stack.length - 1];
+    if (leaf.count > current.bestCount) {
+      current.bestCount = leaf.count;
+      current.best = current.stack.map((entry) => entry.frame);
+    }
+  };
   for (const line of lines.slice(start + 1)) {
     if (line.trim() === "") break;
     if (/^ {4}\d+ Thread_/u.test(line)) {
-      current = { header: line.trim().replace(/^\d+\s+/u, "").replace(/\s{2,}/gu, " "), path: [], depth: -1, done: false };
+      if (current) settleLeaf();
+      current = {
+        header: line.trim().replace(/^\d+\s+/u, "").replace(/\s{2,}/gu, " "),
+        stack: [],
+        best: [],
+        bestCount: -1,
+        lastWasPush: false,
+      };
       threads.push(current);
       continue;
     }
-    if (!current || current.done) continue;
-    // Children are sorted heaviest first, so the first descent is the heaviest stack.
+    if (!current) continue;
     const depth = (line.match(SAMPLE_TREE_GLYPHS)?.[0].length) ?? 0;
-    if (depth <= current.depth) {
-      current.done = true;
-      continue;
-    }
-    current.depth = depth;
-    current.path.push(sampleFrame(line));
+    const count = Number(line.slice(depth).match(/^\d+/u)?.[0] ?? 0);
+    if (current.stack.length > 0 && depth <= current.stack[current.stack.length - 1].depth) settleLeaf();
+    while (current.stack.length > 0 && current.stack[current.stack.length - 1].depth >= depth) current.stack.pop();
+    current.stack.push({ depth, count, frame: sampleFrame(line) });
+    current.lastWasPush = true;
   }
+  if (current) settleLeaf();
   return threads
     .filter((thread) => !/com\.apple\.main-thread/u.test(thread.header))
     .slice(0, limit)
-    .map((thread) => `  ${thread.header}: ${thread.path.slice(-frames).reverse().join(" < ") || "?"}`);
+    .map((thread) => `  ${thread.header}: ${thread.best.slice(-frames).reverse().join(" < ") || "?"}`);
 }
 
 /** One `/proc/<pid>/task/<tid>` thread as "name state wchan". */
