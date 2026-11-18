@@ -16,16 +16,32 @@ export type PropKind =
   | "stateKey"
   | { enum: readonly string[] };
 
+/** A field one list item needs, by name or named by another prop (with the name it defaults to). */
+export type ListField = string | { readonly prop: string; readonly fallback: string };
+
+/**
+ * What one item of a list prop looks like. The guide shows `item`; the page
+ * check warns when a list holds the wrong kind of item, or when no item has a
+ * field the component draws from, since those rows render empty.
+ */
+export interface ListShape {
+  item: string;
+  kind: "object" | "number" | "any";
+  needs?: readonly ListField[];
+}
+
 export interface CatalogEntry {
   props: Readonly<Record<string, PropKind>>;
   children: "none" | "text" | "nodes";
   required?: readonly string[];
+  lists?: Readonly<Record<string, ListShape>>;
 }
 
 const TONES = { enum: ["primary", "secondary", "tertiary"] } as const;
 const STATUS_COLORS = { enum: ["gray", "green", "red", "blue", "warning"] } as const;
 const ALIGN = { enum: ["start", "center", "end", "stretch"] } as const;
 const VALUE_FORMATS = { enum: ["number", "currency", "percent", "date", "text"] } as const;
+const OPTIONS: Readonly<Record<string, ListShape>> = { options: { item: "{value, label} or a plain value", kind: "any" } };
 
 export const AIDEN_UI_CATALOG: Readonly<Record<string, CatalogEntry>> = {
   // Layout
@@ -56,8 +72,21 @@ export const AIDEN_UI_CATALOG: Readonly<Record<string, CatalogEntry>> = {
     children: "none",
     required: ["label", "value"],
   },
-  Table: { props: { rows: "any", columns: "any", caption: "string" }, children: "none", required: ["rows"] },
-  KeyValue: { props: { items: "any" }, children: "none", required: ["items"] },
+  Table: {
+    props: { rows: "any", columns: "any", caption: "string" },
+    children: "none",
+    required: ["rows"],
+    lists: {
+      rows: { item: "{column: value}", kind: "object" },
+      columns: { item: "{key, label?, format?, align?}", kind: "object", needs: ["key"] },
+    },
+  },
+  KeyValue: {
+    props: { items: "any" },
+    children: "none",
+    required: ["items"],
+    lists: { items: { item: "{label, value}", kind: "object", needs: ["label"] } },
+  },
   List: { props: {}, children: "nodes" },
   ListRow: {
     props: { title: "string", description: "string", icon: "icon", meta: "string", action: "action" },
@@ -72,8 +101,18 @@ export const AIDEN_UI_CATALOG: Readonly<Record<string, CatalogEntry>> = {
     children: "none",
     required: ["value"],
   },
-  Checklist: { props: { items: "any" }, children: "none", required: ["items"] },
-  Timeline: { props: { items: "any" }, children: "none", required: ["items"] },
+  Checklist: {
+    props: { items: "any" },
+    children: "none",
+    required: ["items"],
+    lists: { items: { item: "{label, done}", kind: "object", needs: ["label"] } },
+  },
+  Timeline: {
+    props: { items: "any" },
+    children: "none",
+    required: ["items"],
+    lists: { items: { item: "{title, time?, description?}", kind: "object", needs: ["title"] } },
+  },
   Image: { props: { attachment: "string", alt: "string" }, children: "none", required: ["attachment", "alt"] },
   Icon: { props: { name: "icon", tone: TONES }, children: "none", required: ["name"] },
   LinkCard: { props: { url: "string", title: "string", description: "string" }, children: "none", required: ["url", "title"] },
@@ -92,21 +131,45 @@ export const AIDEN_UI_CATALOG: Readonly<Record<string, CatalogEntry>> = {
     },
     children: "none",
     required: ["kind", "data"],
+    lists: { data: { item: "{<x field>: label, <y field>: number}", kind: "object" } },
   },
   BarList: {
     props: { items: "any", label: "string", value: "string", format: VALUE_FORMATS },
     children: "none",
     required: ["items"],
+    lists: {
+      items: {
+        item: "{label, value} (other field names via label= and value=)",
+        kind: "object",
+        needs: [{ prop: "label", fallback: "label" }, { prop: "value", fallback: "value" }],
+      },
+    },
   },
-  Heatmap: { props: { rows: "any", x: "string", y: "string", value: "string", label: "string" }, children: "none", required: ["rows"] },
-  Sparkline: { props: { values: "any", height: "number", label: "string" }, children: "none", required: ["values"] },
+  Heatmap: {
+    props: { rows: "any", x: "string", y: "string", value: "string", label: "string" },
+    children: "none",
+    required: ["rows"],
+    lists: {
+      rows: {
+        item: "{x, y, value} (other field names via x=, y= and value=)",
+        kind: "object",
+        needs: [{ prop: "x", fallback: "x" }, { prop: "y", fallback: "y" }, { prop: "value", fallback: "value" }],
+      },
+    },
+  },
+  Sparkline: {
+    props: { values: "any", height: "number", label: "string" },
+    children: "none",
+    required: ["values"],
+    lists: { values: { item: "number", kind: "number" } },
+  },
   // Input and state
-  Segmented: { props: { bind: "stateKey", options: "any", label: "string" }, children: "none", required: ["bind", "options"] },
-  Tabs: { props: { bind: "stateKey", options: "any", label: "string" }, children: "none", required: ["bind", "options"] },
+  Segmented: { props: { bind: "stateKey", options: "any", label: "string" }, children: "none", required: ["bind", "options"], lists: OPTIONS },
+  Tabs: { props: { bind: "stateKey", options: "any", label: "string" }, children: "none", required: ["bind", "options"], lists: OPTIONS },
   Switch: { props: { bind: "stateKey", label: "string" }, children: "none", required: ["bind", "label"] },
   Checkbox: { props: { bind: "stateKey", label: "string" }, children: "none", required: ["bind", "label"] },
-  RadioGroup: { props: { bind: "stateKey", options: "any", label: "string" }, children: "none", required: ["bind", "options"] },
-  Select: { props: { bind: "stateKey", options: "any", label: "string" }, children: "none", required: ["bind", "options"] },
+  RadioGroup: { props: { bind: "stateKey", options: "any", label: "string" }, children: "none", required: ["bind", "options"], lists: OPTIONS },
+  Select: { props: { bind: "stateKey", options: "any", label: "string" }, children: "none", required: ["bind", "options"], lists: OPTIONS },
   Slider: {
     props: { bind: "stateKey", min: "number", max: "number", step: "number", label: "string", format: VALUE_FORMATS },
     children: "none",

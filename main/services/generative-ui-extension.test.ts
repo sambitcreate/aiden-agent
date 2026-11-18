@@ -56,6 +56,12 @@ test("the catalog guide documents every component and its example compiles clean
   const result = await guide!.execute("g", { modules: ["catalog"] });
   const text = result.content[0]?.type === "text" ? result.content[0].text : "";
   for (const name of Object.keys(AIDEN_UI_CATALOG)) assert.match(text, new RegExp(`\`${name}\``, "u"), name);
+  // List props say what one item looks like, not "any".
+  const line = (name: string) => text.split("\n").find((entry) => entry.startsWith(`- \`${name}\``)) ?? "";
+  assert.match(line("Checklist"), /items: list of \{label, done\}/u);
+  assert.match(line("Timeline"), /items: list of \{title, time\?, description\?\}/u);
+  assert.match(line("Sparkline"), /values: list of number/u);
+  assert.doesNotMatch(line("Table"), /rows: any|columns: any/u);
   const compiled = compileAum(AIDEN_UI_GUIDE_EXAMPLE);
   assert.deepEqual(compiled.diagnostics, []);
   assert.ok(text.includes(AIDEN_UI_GUIDE_EXAMPLE));

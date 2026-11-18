@@ -18,6 +18,7 @@ The Artifacts tab never builds a page itself. Aiden uses the built-in **aiden-ar
 Aiden builds a small working page first and checks it before adding more. Each save refreshes the page's sources once and draws the page with that data, the way the tab would. The result tells Aiden about:
 
 - reads that come back empty, such as a misspelled field, `.length` on a list (pages use `len()`), or `<Each>` over an object;
+- list props whose rows would draw empty, such as a `<Checklist>` given plain text instead of `{label, done}` items, or a `<Timeline>` whose items have no `title`;
 - `run()` calls that name no action or pass the wrong number of values;
 - sources the page never reads.
 

@@ -1,4 +1,4 @@
-import { AIDEN_UI_CATALOG, PRESERVE_WHITESPACE } from "../../../renderer/shared/aiden-ui/catalog.js";
+import { AIDEN_UI_CATALOG, PRESERVE_WHITESPACE, type ListShape } from "../../../renderer/shared/aiden-ui/catalog.js";
 import { evaluate, truthy, type AidenUiRead, type AidenUiScope } from "../../../renderer/shared/aiden-ui/evaluate.js";
 import { hasOwn, ownEntry } from "../../../renderer/shared/aiden-ui/own.js";
 import { asString, isAction, isExpr, parseAidenUiData } from "../../../renderer/shared/aiden-ui/props.js";
@@ -22,6 +22,8 @@ const MAX_OUTPUT_CHARS = 3_000;
 const DEADLINE_MS = 250;
 /** Names from the data are shown only when they look like plain identifiers. */
 const SHOWABLE_NAME = /^[\w$-]{1,40}$/u;
+/** How many items of a list prop the shape check looks at. */
+const LIST_SAMPLE = 50;
 
 type GetExpr = Extract<AidenUiExprV1, { op: "get" }>;
 
@@ -69,6 +71,77 @@ function describe(expr: AidenUiExprV1): string {
   }
   if (expr.op === "call") return `${expr.fn}(…)`;
   return "a value";
+}
+
+/** What a value is, for "got … , not a list" messages. */
+function kindOf(value: unknown): string {
+  if (Array.isArray(value)) return "a list";
+  if (value === null) return "null";
+  if (typeof value === "string") return "text";
+  if (typeof value === "number") return "a number";
+  if (typeof value === "boolean") return "true/false";
+  return "an object";
+}
+
+/** What one list item is, for "holds … items" messages. */
+function itemKindOf(value: unknown): string {
+  if (Array.isArray(value)) return "list";
+  if (value === null) return "null";
+  if (typeof value === "string") return "text";
+  if (typeof value === "number") return "number";
+  if (typeof value === "boolean") return "true/false";
+  return "object";
+}
+
+function isNumberLike(value: unknown): boolean {
+  if (typeof value === "number") return Number.isFinite(value);
+  return typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value));
+}
+
+/**
+ * Problems with the value of a list prop: not a list, items of the wrong kind,
+ * or items that lack every field the component draws from. Any of them renders
+ * rows with nothing in them.
+ */
+function listShapeFinding(
+  node: AidenUiNodeV1,
+  prop: string,
+  expr: AidenUiExprV1,
+  value: unknown,
+  shape: ListShape,
+  scope: AidenUiScope,
+): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  const where = expr.op === "lit" ? `<${node.t} ${prop}>` : `<${node.t} ${prop}={${describe(expr)}}>`;
+  const want = shape.kind === "number" ? "a list of numbers" : `a list of ${shape.item}`;
+  if (!Array.isArray(value)) {
+    const lists = isRecord(value) ? Object.keys(value).filter((key) => Array.isArray(value[key])) : [];
+    return `${where} got ${kindOf(value)}, not ${want}${lists.length ? `; its list fields are ${listNames(lists)}` : ""}.`;
+  }
+  const sample = value.slice(0, LIST_SAMPLE);
+  if (shape.kind === "number") {
+    const wrong = sample.find((item) => !isNumberLike(item));
+    return wrong === undefined ? undefined : `${where} holds ${itemKindOf(wrong)} items; give it ${want}.`;
+  }
+  if (shape.kind !== "object") return undefined;
+  const wrong = sample.find((item) => !isRecord(item));
+  if (wrong !== undefined) return `${where} holds ${itemKindOf(wrong)} items, so those rows draw empty; give each item as ${shape.item}.`;
+  const fields = (shape.needs ?? []).map((field) => {
+    if (typeof field === "string") return field;
+    const named = node.p?.[field.prop];
+    return (isExpr(named) ? asString(evaluate(named, scope)) : "") || field.fallback;
+  });
+  const missing = fields.filter((field) => !sample.some((item) => isRecord(item) && hasOwn(item, field)));
+  if (!missing.length || !sample.length) return undefined;
+  const has = new Set<string>();
+  for (const item of sample) {
+    for (const field of Object.keys(item as Record<string, unknown>)) {
+      if (has.size >= MAX_NAMES_SHOWN * 4) break;
+      has.add(field);
+    }
+  }
+  const names = missing.map((field) => (SHOWABLE_NAME.test(field) ? JSON.stringify(field) : "that"));
+  return `${where} items have no ${names.join(" or ")} field, so they draw empty${has.size ? ` (they have ${listNames(has)})` : ""}; give each item as ${shape.item}.`;
 }
 
 function rootName(expr: AidenUiExprV1): string | undefined {
@@ -295,10 +368,17 @@ export function checkWorkspaceArtifactPage(
         continue;
       }
       // The tab draws only catalog components; anything else draws nothing.
-      if (!ownEntry(AIDEN_UI_CATALOG, node.t)) continue;
-      for (const value of Object.values(node.p ?? {})) {
-        if (isAction(value)) for (const expr of actionExprs(value)) read(expr, scope);
-        else if (isExpr(value)) read(value, scope);
+      const entry = ownEntry(AIDEN_UI_CATALOG, node.t);
+      if (!entry) continue;
+      for (const [prop, value] of Object.entries(node.p ?? {})) {
+        if (isAction(value)) {
+          for (const expr of actionExprs(value)) read(expr, scope);
+        } else if (isExpr(value)) {
+          const result = read(value, scope);
+          const shape = entry.lists ? ownEntry(entry.lists, prop) : undefined;
+          const finding = shape ? listShapeFinding(node, prop, value, result, shape, scope) : undefined;
+          if (finding) add(findings, finding);
+        }
       }
       // Markdown, Code and Math show their text as written, without evaluating it.
       if (!PRESERVE_WHITESPACE.has(node.t)) walk(node.c, scope);

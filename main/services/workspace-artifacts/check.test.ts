@@ -86,6 +86,31 @@ test("looping over an object names its list fields", () => {
   assert.match(findings[0]!, /got an object, not a list; its list fields are "items"/u);
 });
 
+test("list props whose items draw empty say what one item should look like", () => {
+  const visual = page(
+    `<Visual title="Plan"><Checklist items={$data.steps} /><Timeline items={$data.events} /><Sparkline values={$data.points} /><Table rows={$data.table} /><Data name="data">{"steps": ["Write", "Ship"], "events": [{"name": "Kickoff", "at": "Mon"}], "points": [{"v": 1}], "table": {"total": 1, "items": [{"a": 1}]}}</Data></Visual>`,
+  );
+  const { findings } = checkWorkspaceArtifactPage({ visual, sources: [], actions: [] }, undefined);
+  assert.equal(findings.length, 4);
+  assert.match(findings[0]!, /<Checklist items=\{\$data\.steps\}> holds text items.*\{label, done\}/u);
+  assert.match(findings[1]!, /<Timeline items=\{\$data\.events\}> items have no "title" field.*they have "name", "at"/u);
+  assert.match(findings[2]!, /<Sparkline values=\{\$data\.points\}> holds object items; give it a list of numbers/u);
+  assert.match(findings[3]!, /<Table rows=\{\$data\.table\}> got an object, not a list.*its list fields are "items"/u);
+});
+
+test("list items that have the fields a component draws from pass, including fields named by props", () => {
+  const visual = page(
+    `<Visual title="Plan" state={{pick: "a"}}><Checklist items={$data.steps} /><BarList items={$data.langs} label="name" value="count" /><Sparkline values={["1", 2]} /><Select bind="pick" label="Pick" options={["a", "b"]} /><Data name="data">{"steps": [{"label": "Write", "done": true}], "langs": [{"name": "TS", "count": 3}]}</Data></Visual>`,
+  );
+  assert.deepEqual(checkWorkspaceArtifactPage({ visual, sources: [], actions: [] }, undefined).findings, []);
+  const unnamed = page(
+    `<Visual title="Plan"><BarList items={$data.langs} /><Data name="data">{"langs": [{"name": "TS", "count": 3}]}</Data></Visual>`,
+  );
+  const { findings } = checkWorkspaceArtifactPage({ visual: unnamed, sources: [], actions: [] }, undefined);
+  assert.equal(findings.length, 1);
+  assert.match(findings[0]!, /items have no "label" or "value" field/u);
+});
+
 test("an unknown $name is reported, but a declared state key is not", () => {
   const { findings } = check(
     `<Visual title="PRs" state={{tab: "all"}}><Text>{len($pulls)}</Text><Text>{$pull}</Text><Text>{$tab}</Text><Button action={setState("tab", "mine")}>Mine</Button></Visual>`,

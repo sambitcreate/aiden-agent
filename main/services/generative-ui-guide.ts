@@ -1,4 +1,4 @@
-import { AIDEN_UI_CATALOG, AIDEN_UI_ICONS, type PropKind } from "../../renderer/shared/aiden-ui/catalog.js";
+import { AIDEN_UI_CATALOG, AIDEN_UI_ICONS, type ListShape, type PropKind } from "../../renderer/shared/aiden-ui/catalog.js";
 import { AIDEN_UI_LIMITS } from "../../renderer/shared/aiden-ui/types.js";
 
 /**
@@ -24,7 +24,8 @@ export const AIDEN_UI_GUIDE_EXAMPLE = `<Visual title="Q3 revenue" state={{metric
   <Data name="data">{"totals": {"revenue": 6930, "margin": 0.31}, "rows": [{"region": "EMEA", "revenue": 2400, "margin": 0.28}, {"region": "AMER", "revenue": 3100, "margin": 0.35}]}</Data>
 </Visual>`;
 
-function describeKind(kind: PropKind): string {
+function describeKind(kind: PropKind, list: ListShape | undefined): string {
+  if (list) return `list of ${list.item}`;
   if (typeof kind === "object") return kind.enum.join("|");
   if (kind === "stateKey") return "state key";
   return kind;
@@ -33,7 +34,7 @@ function describeKind(kind: PropKind): string {
 function catalogReference(): string {
   return Object.entries(AIDEN_UI_CATALOG)
     .map(([name, entry]) => {
-      const props = Object.entries(entry.props).map(([prop, kind]) => `${prop}: ${describeKind(kind)}`);
+      const props = Object.entries(entry.props).map(([prop, kind]) => `${prop}: ${describeKind(kind, entry.lists?.[prop])}`);
       const children = entry.children === "nodes" ? "components" : entry.children === "text" ? "text" : "no children";
       return `- \`${name}\` — ${props.length ? props.join(", ") : "no props"}; ${children}`;
     })
