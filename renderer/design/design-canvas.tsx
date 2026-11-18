@@ -46,6 +46,9 @@ import { DesignCanvasEmpty } from "./design-canvas-empty";
 import { frameIframe, useDesignComments } from "./design-comments";
 import { usePageTextEdits } from "./page-text-edits";
 import { designFrameSnapshots } from "./frame-snapshots";
+import { DesignTweaksFloat, type DesignTweakOps } from "./design-tweaks-panel";
+import { showDesignTweakVersions } from "./tweak-versions";
+import { postToDesignPage } from "../shared/design-canvas/bridge-messages";
 import { useDesignDrawing, type DesignDrawTool } from "./design-drawing";
 import { DesignPresentBar, DesignPresentButton, presentationKey, type DesignPresentation } from "./design-present";
 import {
@@ -905,6 +908,126 @@ function LoadedDesignCanvas({
     [change],
   );
 
+  // Tweaks: a picture of a frame as it shows now, for its versions. The
+  // floating Tweaks panel steps aside while it is taken, and only the part of
+  // the frame on the canvas is kept.
+  const captureFrame = React.useCallback(async (frameId: string): Promise<string | null> => {
+    const region = wrapper.current;
+    const iframe = frameIframe(region, frameId);
+    if (!region || !iframe || document.visibilityState === "hidden") return null;
+    region.setAttribute("data-capturing", "");
+    try {
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const frameBox = iframe.getBoundingClientRect();
+      const view = region.getBoundingClientRect();
+      const x = Math.max(frameBox.left, view.left);
+      const y = Math.max(frameBox.top, view.top);
+      const width = Math.min(frameBox.right, view.right) - x;
+      const height = Math.min(frameBox.bottom, view.bottom) - y;
+      if (width < 8 || height < 8) return null;
+      const shot = await designCanvasApi.captureDesignFrame({ x, y, width, height });
+      return "dataUrl" in shot ? shot.dataUrl : null;
+    } catch {
+      return null;
+    } finally {
+      region.removeAttribute("data-capturing");
+    }
+  }, []);
+
+  const undoTweakDefaults = React.useCallback(
+    async (frameId: string, path: string, values: Record<string, string>) => {
+      const answer = await designCanvasApi.undoBakeDesignTweaks(chatId, frameId).catch(() => null);
+      if (answer?.ok) {
+        update(frameId, { tweaks: values }, { record: true });
+        reloadPaths([path]);
+        toast("Put the page's file back as it was.");
+      } else {
+        toast.error(answer?.reason === "changed" ? "The file changed since, so it was left as it is." : "The file couldn't be put back.");
+      }
+    },
+    [chatId, update, reloadPaths],
+  );
+
+  const makeTweaksDefault = React.useCallback(
+    (frameId: string) => {
+      void (async () => {
+        const frame = latestDoc.current.frames.find((entry) => entry.id === frameId);
+        if (frame?.kind !== "file" || !frame.path || !frame.tweaks) return;
+        const { path, tweaks: values } = frame;
+        // Main reads the frame from the saved canvas.
+        const saved = await flush().catch(() => false);
+        if (!saved) {
+          toast.error("The canvas couldn't be saved, so the page's file wasn't changed.");
+          return;
+        }
+        const result = await designCanvasApi.bakeDesignTweaks(chatId, frameId, values).catch(() => null);
+        if (!result?.ok) {
+          toast.error(BAKE_ERRORS[result?.reason ?? "failed"] ?? BAKE_ERRORS.failed);
+          return;
+        }
+        // Words that couldn't be placed in the page stay on the frame.
+        const kept: Record<string, string> = {};
+        for (const target of result.kept) if (values[target] !== undefined) kept[target] = values[target];
+        update(frameId, { tweaks: Object.keys(kept).length > 0 ? kept : undefined }, { record: true });
+        reloadPaths([path]);
+        toast.success(
+          result.kept.length > 0
+            ? "Made these the page's defaults. Some words couldn't be placed in the file, so this frame keeps them."
+            : "Made these the page's defaults.",
+          { action: { label: "Undo", onClick: () => void undoTweakDefaults(frameId, path, values) } },
+        );
+      })();
+    },
+    [chatId, flush, update, reloadPaths, undoTweakDefaults],
+  );
+
+  const showTweakVersions = React.useCallback(
+    (frameId: string) => {
+      const ids: string[] = [];
+      let groupId: string | null = null;
+      change((current) => {
+        let index = 0;
+        // The ids are fixed on the first run, so a replay after a save conflict adds the same frames.
+        const shown = showDesignTweakVersions(current, frameId, () => (ids[index++] ??= crypto.randomUUID()));
+        groupId = shown?.groupId ?? null;
+        return shown?.doc ?? current;
+      });
+      if (groupId === null) {
+        toast.error("There isn't room on this page for every version.");
+        return;
+      }
+      const id: string = groupId;
+      setEntered(null);
+      setSelection(new Set([id]));
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          void flow.current?.fitView({ nodes: [{ id }], padding: 0.15, duration: prefersReducedMotion() ? 0 : 350 });
+        }),
+      );
+    },
+    [change],
+  );
+
+  const tweakOps = React.useMemo<DesignTweakOps>(
+    () => ({
+      update,
+      action: (frameId, actionId) => {
+        const target = pageWindow(frameId);
+        if (!target) return false;
+        postToDesignPage(target, { type: "tweak-action", id: actionId });
+        return true;
+      },
+      send: comments.queueOnFrame,
+      makeDefault: makeTweaksDefault,
+      capture: captureFrame,
+      showAll: showTweakVersions,
+    }),
+    [update, pageWindow, comments.queueOnFrame, makeTweaksDefault, captureFrame, showTweakVersions],
+  );
+  const enteredPage = entered === null ? undefined : doc.frames.find((frame) => frame.id === entered && frame.kind === "file");
+  // The side panel's Tweaks tab already shows this page's controls.
+  const panelShowsTweaks = panel.open && panel.tab === "tweaks" && selection.size === 1 && entered !== null && selection.has(entered);
+
   const context = React.useMemo<DesignNodeContextValue>(
     () => ({
       chatId,
@@ -1048,6 +1171,8 @@ function LoadedDesignCanvas({
                   onStep={step}
                   onExit={stopPresenting}
                 />
+              ) : enteredPage && !panelShowsTweaks ? (
+                <DesignTweaksFloat key={enteredPage.id} frame={enteredPage} readSource={readSource} versionOf={versionOf} ops={tweakOps} />
               ) : null
             }
             emptyState={<DesignCanvasEmpty />}
@@ -1090,11 +1215,22 @@ function LoadedDesignCanvas({
           resizeTo={resizeTo}
           reorder={reorder}
           step={stepOrder}
+          tweaks={tweakOps}
         />
       ) : null}
     </div>
   );
 }
+
+/** What Make default says when the page's file couldn't take the values. */
+const BAKE_ERRORS: Record<string, string> = {
+  unavailable: "This page's file can't be changed here.",
+  missing: "This page's file is missing.",
+  "not-found": "The page no longer declares these tweaks.",
+  unchanged: "These are already the page's defaults.",
+  changed: "The file changed while it was being written. Try again.",
+  failed: "The page's file couldn't be changed.",
+};
 
 const PANEL_STORAGE_KEY = "aiden.design.sidePanel";
 

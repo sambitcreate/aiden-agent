@@ -25,6 +25,11 @@
 //   what the page had. The page's address can carry the same state
 //   (`aiden-dark=1`, `aiden-tweaks={vars, attrs}`), applied before the page
 //   draws, so an export or a first load never shows it untweaked;
+//   A `data-*` value also fills each `[data-aiden-text="<name>"]` element
+//   (name is the attribute without `data-`), for a page's text tweaks;
+// - `tweak-action` {id}: the person pressed one of the page's action
+//   controls; the page hears an `aiden-tweak-action` event on window with
+//   `detail.id`;
 // - `edit-enable` {on}: whether a double-click edits words (the canvas turns
 //   it on while the person is inside this page);
 // - `edit-command` {command, value}: bold, italic, underline, link, unlink,
@@ -60,6 +65,7 @@ export const DESIGN_BRIDGE_SOURCE = `(() => {
   const ATTR_NAME = /^data-[a-z0-9-]{1,60}$/;
   const UNSAFE = /[;{}<>\\\\"']|url\\(|expression\\(/i;
   const MAX_TWEAKS = 24;
+  const MAX_TEXT_FILLS = 200;
   const originals = new Map();
   let applied = new Set();
   const read = (key) => {
@@ -85,6 +91,28 @@ export const DESIGN_BRIDGE_SOURCE = `(() => {
     next.add(key);
   };
   const safe = (value) => typeof value === "string" && value.length <= 100 && !UNSAFE.test(value);
+  // A text tweak's words also fill each [data-aiden-text="<name>"] element,
+  // where name is its attribute without "data-"; its own words come back
+  // when the value goes.
+  let textAttrs = {};
+  const textOriginals = new Map();
+  const fillTexts = () => {
+    const marked = doc.querySelectorAll("[data-aiden-text]");
+    for (let index = 0; index < marked.length && index < MAX_TEXT_FILLS; index += 1) {
+      const element = marked[index];
+      if (element.closest("[data-aiden-bridge]")) continue;
+      const key = "data-" + String(element.getAttribute("data-aiden-text") || "");
+      const value = ATTR_NAME.test(key) && Object.prototype.hasOwnProperty.call(textAttrs, key) && safe(textAttrs[key]) ? textAttrs[key] : null;
+      if (value !== null) {
+        if (!textOriginals.has(element)) textOriginals.set(element, element.textContent);
+        if (element.textContent !== value) element.textContent = value;
+      } else if (textOriginals.has(element)) {
+        element.textContent = textOriginals.get(element);
+        textOriginals.delete(element);
+      }
+    }
+  };
+  const ACTION_ID = /^[A-Za-z0-9_-]{1,40}$/;
   const applyTweaks = (state) => {
     if (!root || !state || typeof state !== "object") return;
     const next = new Set();
@@ -106,6 +134,11 @@ export const DESIGN_BRIDGE_SOURCE = `(() => {
       originals.delete(key);
     }
     applied = next;
+    textAttrs = {};
+    for (const key of next) {
+      if (key.indexOf("a:") === 0) textAttrs[key.slice(2)] = read(key);
+    }
+    fillTexts();
   };
   try {
     const params = new URLSearchParams(window.location.search);
@@ -117,6 +150,8 @@ export const DESIGN_BRIDGE_SOURCE = `(() => {
     }
     applyTweaks(boot);
   } catch {}
+  // Words for elements the page hadn't parsed yet when the address's tweaks applied.
+  if (doc.readyState === "loading") doc.addEventListener("DOMContentLoaded", () => fillTexts(), { once: true });
   if (doc.readyState === "complete") post("ready");
   else window.addEventListener("load", () => post("ready"), { once: true });
   let scheduled = false;
@@ -497,6 +532,11 @@ export const DESIGN_BRIDGE_SOURCE = `(() => {
       outline("highlight", element || fallback, STRONG);
     } else if (type === "set-tweaks") {
       applyTweaks(data);
+    } else if (type === "tweak-action") {
+      if (typeof data.id !== "string" || !ACTION_ID.test(data.id)) return;
+      try {
+        window.dispatchEvent(new window.CustomEvent("aiden-tweak-action", { detail: { id: data.id } }));
+      } catch {}
     } else if (type === "edit-enable") {
       editAllowed = data.on === true;
       if (!editAllowed) finishEdit(false);

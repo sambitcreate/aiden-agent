@@ -35,6 +35,7 @@ export type DesignFramePatch = Partial<
     | "locked"
     | "dark"
     | "tweaks"
+    | "tweakVersions"
   >
 >;
 

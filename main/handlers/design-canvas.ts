@@ -18,7 +18,12 @@ import {
   type DesignExportFormat,
 } from "../../renderer/shared/design-canvas/frame-export.js";
 import { designUrl } from "../../renderer/shared/design-canvas/url.js";
-import { designTweakState, withDesignTweakQuery } from "../../renderer/shared/design-canvas/tweaks.js";
+import {
+  bakeDesignTweakDefaults,
+  designTweakState,
+  parseDesignTweakValues,
+  withDesignTweakQuery,
+} from "../../renderer/shared/design-canvas/tweaks.js";
 import {
   DESIGN_TEXT_EDIT_LIMITS,
   planDesignTextEdit,
@@ -122,9 +127,19 @@ function withFileLock<T>(file: string, task: () => Promise<T>): Promise<T> {
   return run;
 }
 
-export type DesignCanvasEditTextResult =
-  | { ok: true }
-  | { ok: false; reason: "unavailable" | "missing" | "not-found" | "ambiguous" | "unchanged" | "too-long" | "changed" };
+export type DesignCanvasFileRewriteFailure =
+  | "unavailable"
+  | "missing"
+  | "not-found"
+  | "ambiguous"
+  | "unchanged"
+  | "too-long"
+  | "changed";
+
+export type DesignCanvasEditTextResult = { ok: true } | { ok: false; reason: DesignCanvasFileRewriteFailure };
+
+/** `designCanvas:bakeTweaks` reply: `kept` names the targets whose words couldn't be placed in the page. */
+export type DesignCanvasBakeTweaksResult = { ok: true; kept: string[] } | { ok: false; reason: DesignCanvasFileRewriteFailure };
 
 /** What the hidden export window draws: a page at its width, as a picture or a PDF. */
 export type DesignFrameRenderRequest = {
@@ -182,6 +197,8 @@ export function registerDesignCanvasHandlers<Event>(deps: {
   // Only an attended desktop chat has a canvas: Bot and routine chats never
   // enter design mode, so they never get a canvas file either.
   const attended = (chat: DesignCanvasChat): boolean => !chat.botId && !chat.owner;
+  /** Each frame's last Make default, by chat and frame, for its Undo: the file before and after. */
+  const tweakDefaultsUndo = new Map<string, { before: string; after: string }>();
 
   // Reading and saving do not require design mode to still be on: turning it
   // off unmounts the canvas, and the edit that unmount flushes may land after
@@ -396,6 +413,62 @@ export function registerDesignCanvasHandlers<Event>(deps: {
   // file is written only while the chat may still frame its folder. The canvas
   // already shows the new words, or reloads the page itself, so the watcher
   // does not report this write back to it.
+  /**
+   * Rewrites a page frame's file with `plan`, one write per file at a time.
+   * Like export, the frame comes from the stored canvas and the file is
+   * written only while the chat may still frame its folder. The canvas
+   * already shows the change, or reloads the page itself, so the watcher does
+   * not report this write back to it.
+   */
+  async function rewriteFrameFile<T extends { ok: true }>(
+    chatId: string,
+    frameId: string,
+    plan: (source: string, framePath: string) => T | { ok: false; reason: DesignCanvasFileRewriteFailure },
+  ): Promise<T | { ok: false; reason: DesignCanvasFileRewriteFailure }> {
+    const chat = await deps.getChat(chatId);
+    if (!chat || !attended(chat)) return { ok: false, reason: "unavailable" };
+    const doc = await deps.store.get(chat.id);
+    const frame = doc.frames.find((entry) => entry.id === frameId);
+    if (frame?.kind !== "file" || !frame.path) return { ok: false, reason: "unavailable" };
+    const root = canFrame(chat) ? await deps.workspaceRoot(chat) : null;
+    if (!root) return { ok: false, reason: "unavailable" };
+    const resolved = await resolveDesignFile(root, frame.path.split("/").map(encodeURIComponent).join("/"));
+    if (!resolved.ok) return { ok: false, reason: "missing" };
+    if (!resolved.mimeType.startsWith("text/html")) return { ok: false, reason: "unavailable" };
+    const framePath = frame.path;
+    // One edit of a file at a time, so two quick edits each plan from what the other wrote.
+    return withFileLock(resolved.absolute, async () => {
+      let source: string;
+      try {
+        source = await fs.readFile(resolved.absolute, "utf8");
+      } catch {
+        return { ok: false as const, reason: "missing" as const };
+      }
+      const planned = plan(source, framePath);
+      if (!planned.ok) return planned;
+      const next = (planned as T & { source: string }).source;
+      // Another writer (an editor, Aiden) may have changed the file since it was read.
+      const current = await fs.readFile(resolved.absolute, "utf8").catch(() => null);
+      if (current === null) return { ok: false as const, reason: "missing" as const };
+      if (current !== source) return { ok: false as const, reason: "changed" as const };
+      const settle = deps.watcher.ownWrite(chat.id, framePath, next);
+      let written: Awaited<ReturnType<typeof replaceWorkspaceText>> = "failed";
+      try {
+        written = await replaceWorkspaceText(resolved.absolute, next, source);
+      } finally {
+        settle(written === "written");
+      }
+      if (written === "written") {
+        tweakDefaultsUndo.delete(`${chat.id}\n${frameId}`);
+        return planned;
+      }
+      return { ok: false as const, reason: written === "changed" ? ("changed" as const) : ("missing" as const) };
+    });
+  }
+
+  // Editing a page's words in place: a plain text change is written into the
+  // page's own file, only where its old words are found exactly once (see
+  // text-edit.ts).
   deps.handle(
     "designCanvas:editText",
     async (_event, chatId, frameId, changes, stamp): Promise<DesignCanvasEditTextResult> => {
@@ -407,43 +480,64 @@ export function registerDesignCanvasHandlers<Event>(deps: {
       const parsed = parseTextChanges(changes);
       if (!parsed) throw new Error("Invalid text change.");
       if (stamp !== undefined && (typeof stamp !== "string" || stamp.length > 1024)) throw new Error("Invalid stamp.");
-      const chat = await deps.getChat(chatId);
-      if (!chat || !attended(chat)) return { ok: false, reason: "unavailable" };
-      const doc = await deps.store.get(chat.id);
-      const frame = doc.frames.find((entry) => entry.id === frameId);
-      if (frame?.kind !== "file" || !frame.path) return { ok: false, reason: "unavailable" };
-      const root = canFrame(chat) ? await deps.workspaceRoot(chat) : null;
-      if (!root) return { ok: false, reason: "unavailable" };
-      const resolved = await resolveDesignFile(root, frame.path.split("/").map(encodeURIComponent).join("/"));
-      if (!resolved.ok) return { ok: false, reason: "missing" };
-      if (!resolved.mimeType.startsWith("text/html")) return { ok: false, reason: "unavailable" };
-      const framePath = frame.path;
-      // One edit of a file at a time, so two quick edits each plan from what the other wrote.
-      return withFileLock(resolved.absolute, async (): Promise<DesignCanvasEditTextResult> => {
-        let source: string;
-        try {
-          source = await fs.readFile(resolved.absolute, "utf8");
-        } catch {
-          return { ok: false, reason: "missing" };
-        }
+      const result = await rewriteFrameFile(chatId, frameId, (source, framePath) => {
         const plan = planDesignTextEdit(source, parsed, stampLine(stamp as string | undefined, framePath));
-        if (!plan.ok) return plan;
-        // Another writer (an editor, Aiden) may have changed the file since it was read.
-        const current = await fs.readFile(resolved.absolute, "utf8").catch(() => null);
-        if (current === null) return { ok: false, reason: "missing" };
-        if (current !== source) return { ok: false, reason: "changed" };
-        const settle = deps.watcher.ownWrite(chat.id, framePath, plan.source);
-        let written: Awaited<ReturnType<typeof replaceWorkspaceText>> = "failed";
-        try {
-          written = await replaceWorkspaceText(resolved.absolute, plan.source, source);
-        } finally {
-          settle(written === "written");
-        }
-        if (written === "written") return { ok: true };
-        return { ok: false, reason: written === "changed" ? "changed" : "missing" };
+        return plan.ok ? { ok: true as const, source: plan.source } : plan;
       });
+      return result.ok ? { ok: true } : (result as DesignCanvasEditTextResult);
     },
   );
+
+  // Tweaks' Make default: the frame's values become the page's defaults in
+  // its file (see bakeDesignTweakDefaults). A text control's words change
+  // only where they stand once in the page; any that can't be placed are
+  // listed in `kept`, for the frame to keep. Undo puts back the file as it
+  // was, while nothing else has changed it since.
+  deps.handle(
+    "designCanvas:bakeTweaks",
+    async (_event, chatId, frameId, values): Promise<DesignCanvasBakeTweaksResult> => {
+      if (!deps.enabled()) throw new Error(UNAVAILABLE);
+      assertDesignCanvasChatId(chatId);
+      if (typeof frameId !== "string" || frameId.length === 0 || frameId.length > 128) {
+        throw new Error("Invalid design frame.");
+      }
+      const tweaks = parseDesignTweakValues(values);
+      if (values !== undefined && values !== null && !tweaks) throw new Error("Invalid tweak values.");
+      let before = "";
+      const result = await rewriteFrameFile(chatId, frameId, (source) => {
+        const baked = bakeDesignTweakDefaults(source, tweaks);
+        if (!baked.ok) return baked;
+        let next = baked.source;
+        const kept: string[] = [];
+        for (const change of baked.textChanges) {
+          const plan = planDesignTextEdit(next, [{ before: change.before, after: change.after }]);
+          if (plan.ok) next = plan.source;
+          else kept.push(change.target);
+        }
+        before = source;
+        return { ok: true as const, source: next, kept };
+      });
+      if (!result.ok) return result as DesignCanvasBakeTweaksResult;
+      const done = result as unknown as { source: string; kept: string[] };
+      tweakDefaultsUndo.set(`${chatId}\n${frameId}`, { before, after: done.source });
+      return { ok: true, kept: done.kept };
+    },
+  );
+
+  deps.handle("designCanvas:undoBakeTweaks", async (_event, chatId, frameId): Promise<DesignCanvasEditTextResult> => {
+    if (!deps.enabled()) throw new Error(UNAVAILABLE);
+    assertDesignCanvasChatId(chatId);
+    if (typeof frameId !== "string" || frameId.length === 0 || frameId.length > 128) {
+      throw new Error("Invalid design frame.");
+    }
+    const key = `${chatId}\n${frameId}`;
+    const saved = tweakDefaultsUndo.get(key);
+    if (!saved) return { ok: false, reason: "unchanged" };
+    const result = await rewriteFrameFile(chatId, frameId, (source) =>
+      source === saved.after ? { ok: true as const, source: saved.before } : { ok: false as const, reason: "changed" as const },
+    );
+    return result.ok ? { ok: true } : (result as DesignCanvasEditTextResult);
+  });
 
   // Snapshots a frame's rectangle of the asking window's own page, so a frame
   // that leaves the live set keeps a picture instead of going blank. A window

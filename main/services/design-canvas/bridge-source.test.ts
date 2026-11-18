@@ -220,6 +220,43 @@ test("the page's address carries the same state, applied before the page draws",
   assert.equal(root.style.getPropertyValue("--accent"), "#111111");
 });
 
+const WORDS = `<!doctype html><html><head></head><body>
+  <h1 data-aiden-text="headline">Make room to play</h1>
+  <button data-aiden-text="cta">Save</button><p data-aiden-text="cta">Save</p>
+</body></html>`;
+
+test("a text tweak fills its marked elements and their own words come back when it goes", () => {
+  const view = page(WORDS);
+  const doc = view.window.document;
+  view.send({ type: "aiden-design:set-tweaks", dark: false, vars: {}, attrs: { "data-cta": "Book a call", "data-headline": "Hi" } });
+  assert.equal(doc.querySelector("h1")?.textContent, "Hi");
+  assert.deepEqual([...doc.querySelectorAll("[data-aiden-text=cta]")].map((element) => element.textContent), ["Book a call", "Book a call"]);
+  assert.equal(doc.documentElement.getAttribute("data-cta"), "Book a call", "the root carries the value too, for CSS");
+  view.send({ type: "aiden-design:set-tweaks", dark: false, vars: {}, attrs: { "data-headline": "Hi" } });
+  assert.equal(doc.querySelector("button")?.textContent, "Save");
+  view.send({ type: "aiden-design:set-tweaks", dark: false, vars: {}, attrs: {} });
+  assert.equal(doc.querySelector("h1")?.textContent, "Make room to play");
+  view.send({ type: "aiden-design:set-tweaks", dark: false, vars: {}, attrs: { "data-headline": "<b>x</b>" } });
+  assert.equal(doc.querySelector("h1")?.textContent, "Make room to play", "an unsafe value never reaches the page");
+});
+
+test("words in the address fill elements once the page has them", () => {
+  const state = encodeURIComponent(JSON.stringify({ vars: {}, attrs: { "data-headline": "From the link" } }));
+  const view = page(WORDS, `aiden-design://grant/design/page.html?aiden-tweaks=${state}`);
+  view.window.document.dispatchEvent(new view.window.Event("DOMContentLoaded"));
+  assert.equal(view.window.document.querySelector("h1")?.textContent, "From the link");
+});
+
+test("an action control reaches the page as an event, only with a plain id and only from the canvas", () => {
+  const view = page(WORDS);
+  const heard: unknown[] = [];
+  view.window.addEventListener("aiden-tweak-action", (event) => heard.push((event as unknown as { detail: unknown }).detail));
+  view.send({ type: "aiden-design:tweak-action", id: "replay" });
+  view.send({ type: "aiden-design:tweak-action", id: "re play" });
+  view.send({ type: "aiden-design:tweak-action", id: "replay" }, { postMessage() {} });
+  assert.deepEqual(heard, [{ id: "replay" }]);
+});
+
 const EDITABLE_PAGE = `<!doctype html><html><head></head><body>
   <main data-aiden-src="design/page.html:1">
     <h1>Ship   faster</h1>

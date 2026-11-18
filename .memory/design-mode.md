@@ -243,3 +243,12 @@ Deviations from the P1 plan:
 - `canvas_read` adds `outsideFrames` (every frame outside the view, within the shared `CANVAS_READ_FRAME_LIMIT` = 200, text cut to 120 chars) and `outsideOmitted`; summaries carry `locked`, `guide`, `radius`, `paper`, `printMode`.
 - `canvas_focus` takes `page` (shows an empty page with `status: "shown"`).
 - llm-client: held canvas tools exist whenever the turn could use the canvas, not only when `design_mode` is offered; `enteredCanvasTools.prepare` latches once design mode is on (card or the person's own switch mid-reply), adds the tools and a `design-mode` system section once, and codemode's `lateDeferredTools` gets them too. `createGenerativeUiExtensionRuntime({ designCanvas })` stops steering UI mockups/screens to `render_artifact` while canvas tools are offered.
+
+## DialKit-style Tweaks panel (2026-11-18)
+
+- Plan: `docs/plans/design-mode-tweaks-panel-plan.md`. Owner chose 1a (version pictures in memory only), 2a (Send to Aiden = a queued frame-level comment), 3a+b (side panel and a floating panel on an entered page).
+- New control types in `tweaks.ts`: `text` (attr only; the bridge also fills `[data-aiden-text=<attr minus data->]` and restores the original words when the value goes, capped at 200 elements), `pad` (`x`/`y` axes, two targets), `action` (no target; bridge dispatches `aiden-tweak-action` with `{detail: {id}}` on window). `group` makes folders. Limits: 24 targets (pad = 2), 8 actions, 8 groups.
+- `frame.tweakVersions` (max 12, names V2+; V1 = file as is, never stored). Pictures live in `renderer/design/tweak-versions.ts` (module Map, 120 max). Show all (`showDesignTweakVersions`) adds a group to the right with copies in rows of 4, within `maxSize`.
+- Make default can't reuse `designCanvas:editText` (it skips script/style blocks): `designCanvas:bakeTweaks` runs `bakeDesignTweakDefaults` then `planDesignTextEdit` per text change; `kept` lists targets left on the frame. Undo record is in main memory (`tweakDefaultsUndo`), cleared by any later write through `rewriteFrameFile`. The write is an own write, so the renderer reloads the path itself.
+- The floating panel is hidden while a version picture is taken (`[data-capturing]` on the canvas wrapper) and stops key events except Escape from reaching the canvas.
+- E2E: `tests/e2e/design-canvas.spec.ts` "the Tweaks panel folds a component's controls…" (screenshots `1440-tweaks-panel`, `-float`, `-float-folded`, `-show-all`). Version chip buttons need `exact: true` in Playwright (the Delete button's name contains the version's).
