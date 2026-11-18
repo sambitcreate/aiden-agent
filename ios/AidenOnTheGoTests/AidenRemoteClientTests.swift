@@ -16,6 +16,8 @@ final class AidenRemoteClientTests: XCTestCase {
     override func tearDown() {
         AidenRemoteMockURLProtocol.handler = nil
         AidenRemoteMockURLProtocol.hold = nil
+        // Ends this test's epoch, which fails any request it left held.
+        AidenRemoteMockURLProtocol.epoch = UUID().uuidString
         super.tearDown()
     }
 
@@ -7681,12 +7683,17 @@ private final class AidenRemoteMockURLProtocol: URLProtocol, @unchecked Sendable
         }
         if let gate = Self.hold?(request) {
             let request = request
+            let epoch = Self.epoch
             DispatchQueue.global().async {
-                // A gate never opened is a test that went wrong: fail the
-                // request rather than answer as if it had been let go.
-                guard gate.wait(timeout: .now() + 5) == .success else {
-                    self.client?.urlProtocol(self, didFailWithError: URLError(.timedOut))
-                    return
+                // The test opens the gate when its scenario is ready, however
+                // long a busy runner takes to get there. A gate its test never
+                // opened is a test that went wrong: the request fails once that
+                // test has ended, rather than answer as if it had been let go.
+                while gate.wait(timeout: .now() + 0.1) == .timedOut {
+                    guard Self.epoch == epoch else {
+                        self.client?.urlProtocol(self, didFailWithError: URLError(.cancelled))
+                        return
+                    }
                 }
                 self.answer(request, with: handler)
             }

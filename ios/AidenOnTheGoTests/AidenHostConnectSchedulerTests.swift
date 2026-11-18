@@ -335,12 +335,15 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         let scheduler = scheduler(for: coordinator, pathChanges: pathChanges)
         await scheduler.foregrounded()
         scheduler.backgrounded()
-        let before = responder.requests(instanceId: "build").count
+        // Every connect asks for `/server` once. Other requests from the
+        // foreground pass can still arrive: a connect that fails cancels its
+        // `/workspaces`, and the request may reach the machine afterwards.
+        let before = serverRequests("build")
 
         pathChanged.yield()
         try await settle()
 
-        XCTAssertEqual(responder.requests(instanceId: "build").count, before)
+        XCTAssertEqual(serverRequests("build"), before)
     }
 
     func testAFailedProbeOnTheSelectedMachineRaisesNoAlert() async throws {
@@ -350,12 +353,12 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         let (pathChanges, pathChanged) = AsyncStream<Void>.makeStream()
         let scheduler = scheduler(for: coordinator, pathChanges: pathChanges)
         await scheduler.foregrounded()
-        let before = responder.requests(instanceId: "build").count
+        let before = serverRequests("build")
         coordinator.presentedError = "Shown to the person"
 
         pathChanged.yield()
         try await waitUntil("another attempt on build") {
-            responder.requests(instanceId: "build").count > before && !(coordinator.selectedConnection?.isConnectInFlight ?? true)
+            self.serverRequests("build") > before && !(coordinator.selectedConnection?.isConnectInFlight ?? true)
         }
 
         XCTAssertEqual(coordinator.presentedError, "Shown to the person")
@@ -863,12 +866,19 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         let release = responder.hold(instanceId: "laptop", path: "/server")
         defer { release() }
         let studio = try connection("studio", in: coordinator)
+        // A real 0.1 s deadline can pass before a busy machine has read the
+        // revocation, and then the attempt only times out. This one passes once
+        // the revocation has started the next machine's connect.
+        var deadlinePassed = false
+        studio.waitForDeadline = { _ in
+            while !deadlinePassed, !Task.isCancelled { try? await Task.sleep(nanoseconds: 1_000_000) }
+        }
 
         let attempt = Task { await studio.connect(over: .probe, timeout: 0.1) }
         try await waitUntil("the next machine's connect") { serverRequests("laptop") == 1 }
-        try await Task.sleep(nanoseconds: 300_000_000)
-        release()
+        deadlinePassed = true
         await attempt.value
+        release()
 
         XCTAssertEqual(coordinator.defaultInstanceId, "laptop")
         try await waitUntil("the next machine to connect") { coordinator.connectionState == .connected }

@@ -2728,15 +2728,23 @@ export class PiAgentRuntimeHarness {
    * at once. A projection that cancellation stopped waiting for is reported
    * separately: `late` settles with that input only if its visible save did
    * not land, so a late save is never returned to the user as well.
+   *
+   * Host-committed input is already visible history, so it is never returned
+   * as a draft. Its visible ids are listed in `committed`, in queue order,
+   * when the run ended before Pi read it: the host decides whether that
+   * saved input is still owed an answer.
    */
   takeUndeliveredQueuedMessages(): {
     messages: AgentMessage[];
     late?: Promise<AgentMessage[]>;
+    committed?: string[];
   } {
     if (this.running || this.managedRunning) {
       throw new Error("Pi runtime harness is busy.");
     }
-    // Host-committed input is already visible history, never returned.
+    const committed = this.acceptedQueuedMessages.flatMap((item) =>
+      item.visibleChatMessageId ? [item.visibleChatMessageId] : [],
+    );
     const accepted = this.acceptedQueuedMessages.filter((item) => !item.visibleChatMessageId);
     const uncertain = this.uncertainQueuedProjections;
     this.acceptedQueuedMessages = [];
@@ -2749,7 +2757,8 @@ export class PiAgentRuntimeHarness {
       pending.push({ message: structuredClone(item.message), operation: projection.operation });
     }
     const messages = accepted.map(({ message }) => structuredClone(message));
-    if (pending.length === 0) return { messages };
+    const owed = committed.length > 0 ? { committed } : {};
+    if (pending.length === 0) return { messages, ...owed };
     const late = Promise.all(
       pending.map(({ message, operation }) =>
         operation.then(
@@ -2758,7 +2767,7 @@ export class PiAgentRuntimeHarness {
         ),
       ),
     ).then((results) => results.flat());
-    return { messages, late };
+    return { messages, late, ...owed };
   }
 
   /**

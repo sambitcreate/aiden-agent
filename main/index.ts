@@ -209,7 +209,13 @@ import { isAuxiliaryWindow } from "./windows/auxiliary-windows.js";
 import { destroyPill } from "./windows/pill-window.js";
 import { hostPlatformCapabilities } from "./services/host-platform-capabilities.js";
 import { installElectronConnectorWatchTransport } from "./services/bot-routine-events/connector-watch-startup.js";
-import { backgroundJobs, reapFollowThroughProcesses, shutdownFollowThrough, startFollowThrough } from "./services/follow-through/follow-through-main.js";
+import {
+  backgroundJobs,
+  pullRequestFollows,
+  reapFollowThroughProcesses,
+  shutdownFollowThrough,
+  startFollowThrough,
+} from "./services/follow-through/follow-through-main.js";
 import { reconcileChatScopedStores } from "./services/startup-chat-reconciliation.js";
 import { removeWorkspaceArtifacts } from "./services/workspace-artifacts/main.js";
 
@@ -1056,12 +1062,19 @@ async function requestWindowReload(
   }
 }
 
+/** A quit that ends without shutting down says why, so a quit that never finishes can be traced. */
+function quitNotStarted(reason: string): false {
+  logger.info("electron-lifecycle", "Application quit was not started", { reason });
+  return false;
+}
+
 async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
-  if (window.isDestroyed() || !lifecycleCheck.tryBegin()) return false;
+  if (window.isDestroyed()) return quitNotStarted("window-destroyed");
+  if (!lifecycleCheck.tryBegin()) return quitNotStarted("lifecycle-check-in-flight");
   try {
-    if (!confirmImageRequestsBeforeQuit(window)) return false;
+    if (!confirmImageRequestsBeforeQuit(window)) return quitNotStarted("image-requests-kept");
     const authorization = await authorizeProtectedActionOrForce(window, "close", "quit", RENDERER_UNLOAD_HOLD_MS.quit);
-    if (authorization === "declined") return false;
+    if (authorization === "declined") return quitNotStarted("renderer-declined");
     await persistMainWindowState(window);
     try {
       await prepareComputerUseForQuit();
@@ -1086,7 +1099,7 @@ async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
           noLink: true,
         });
       }
-      return false;
+      return quitNotStarted("computer-use-not-durable");
     }
     protectedAction = "quit";
     // Set before the window closes, so a question or approval it withdraws stays saved for the next launch.
@@ -1099,7 +1112,7 @@ async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
       clearRendererUnloadApproval(window);
       llmClient.setQuitInProgress(false);
       computerUseSettings.resumeAfterCancelledShutdown();
-      return false;
+      return quitNotStarted("renderer-close-cancelled");
     }
     await shutdownAndQuit(true);
     return shutdownStarted;
@@ -2772,6 +2785,13 @@ if (!ownsSingleInstanceLock) {
       await startFollowThrough().catch((error: unknown) => {
         logger.warn("follow-through", "Could not finish restoring checks and pull request follows.", error);
       });
+      // Back in front, awake or unlocked: followed pull requests may have
+      // moved while nobody looked. These nudges are debounced and read a
+      // follow at most every five minutes, so repeated focus costs nothing extra.
+      const nudgeFollows = () => void pullRequestFollows.nudgeAll("ambient");
+      app.on("browser-window-focus", nudgeFollows);
+      powerMonitor.on("resume", nudgeFollows);
+      powerMonitor.on("unlock-screen", nudgeFollows);
       try {
         if (!shutdownHasBegun()) await initializeAidenRemoteService();
       } catch (error) {

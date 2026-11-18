@@ -1,4 +1,5 @@
-import { createModels, fauxProvider, fauxAssistantMessage, Type } from "@earendil-works/pi-ai";
+import { createModels, fauxProvider, fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { Harness, createRegistry, defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";

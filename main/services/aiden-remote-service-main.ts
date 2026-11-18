@@ -145,7 +145,7 @@ import { usageStore } from "./usage-store.js";
 import { spending } from "./spending-main.js";
 import { AidenRemoteSpendingService } from "./aiden-remote-spending.js";
 import { AidenRemoteBackgroundJobService } from "./aiden-remote-background-jobs.js";
-import { backgroundJobs } from "./follow-through/follow-through-main.js";
+import { backgroundJobs, pullRequestBranchPushed } from "./follow-through/follow-through-main.js";
 import { AidenRemoteSpeechService } from "./aiden-remote-speech.js";
 import { scheduledTaskApplicationService } from "./scheduled-task-application-service-main.js";
 import { botStore } from "./bot-store.js";
@@ -1151,6 +1151,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             listWorkspaces: () => configStore.listWorkspaces(),
             idempotency,
             persistIdempotency: (snapshot) => operationStore.save(snapshot),
+            onPushed: (result) => pullRequestBranchPushed(result.pullRequestRepository),
           });
           const schedules = new AidenRemoteScheduleService({
             application: scheduledTaskApplicationService,
@@ -1375,12 +1376,17 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     mcp,
     mcpProvenance,
     revokeDevice,
-    pendingApprovalForChat: (chatId) => activeStreams?.pendingApprovalForChat(chatId) ?? null,
-    pendingQuestionForChat: (chatId) => activeStreams?.pendingQuestionForChat(chatId) ?? null,
+    // A phone turn's card first, then the card of an owed turn no window owns.
+    pendingApprovalForChat: (chatId) =>
+      activeStreams?.pendingApprovalForChat(chatId) ?? llmClient.pendingOwedTurnApproval(chatId),
+    pendingQuestionForChat: (chatId) =>
+      activeStreams?.pendingQuestionForChat(chatId) ?? llmClient.pendingOwedTurnQuestion(chatId),
     respondQuestionFromHost: (chatId, promptId, response) =>
-      activeStreams?.respondQuestionFromHost(chatId, promptId, response) ?? false,
+      activeStreams?.respondQuestionFromHost(chatId, promptId, response) ||
+      llmClient.answerOwedTurnQuestion(chatId, promptId, response),
     respondApprovalFromHost: (chatId, approvalId, decision, scope) =>
-      activeStreams?.respondApprovalFromHost(chatId, approvalId, decision, scope) ?? false,
+      activeStreams?.respondApprovalFromHost(chatId, approvalId, decision, scope) ||
+      llmClient.decideOwedTurnApproval(chatId, approvalId, decision, scope),
   };
   activeRuntime = runtime;
   return runtime;

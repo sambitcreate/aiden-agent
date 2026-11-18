@@ -149,8 +149,10 @@ test("the canvas's own write to a page is reported only to other chats, and the 
   settle(true);
   await eventually(() => updates.some((update) => update.chatId === "chat-2"));
   await sleep(DESIGN_WATCH_DEBOUNCE_MS + 200);
+  // Both writes are real changes to chat-2, which reloads once if they fall in
+  // one quiet period and twice if a busy machine spaces them past it.
   assert.deepEqual(
-    updates.map(({ chatId, paths }) => ({ chatId, paths })),
+    [...new Set(updates.map(({ chatId, paths }) => JSON.stringify({ chatId, paths })))].map((update) => JSON.parse(update)),
     [{ chatId: "chat-2", paths: ["design/hero.html"] }],
     "the chat that wrote already shows its words; another chat's frame does not",
   );
@@ -418,6 +420,27 @@ test("a write's note of the files beside its page is let go once its window has 
   settle(true);
   await instance.noted("chat-1", "design/hero.html");
   assert.equal(instance.heldNotes("chat-1"), 1, "the note is kept for an event inside the window");
+  await eventually(() => instance.heldNotes("chat-1") === 0);
+  assert.equal(instance.heldNotes("chat-1"), 0, "nothing can use the note past the window");
+});
+
+test("a note's deadline timer that runs as the window closes still lets go of the note", async (t) => {
+  const root = await workspace(t, { "design/hero.html": "<h1>Ship faster</h1>", "design/hero.css": "h1{}" });
+  let clock = 0;
+  // Readings the clock gives before it settles on `clock`.
+  const readings: number[] = [];
+  const { instance } = fakeWatcher(t, { now: () => readings.shift() ?? clock, ownWriteWindowMs: 30 });
+  await instance.set("chat-1", root, ["design/hero.html"]);
+  const written = "<h1>Ship sooner</h1>";
+  const settle = instance.ownWrite("chat-1", "design/hero.html", written);
+  await fsp.writeFile(path.join(root, "design/hero.html"), written);
+  settle(true);
+  await instance.noted("chat-1", "design/hero.html");
+  // The timer runs on the last moment of the window, and the window has
+  // passed by the time the clock is read again (a busy machine pauses the
+  // process between the two).
+  readings.push(30);
+  clock = 31;
   await eventually(() => instance.heldNotes("chat-1") === 0);
   assert.equal(instance.heldNotes("chat-1"), 0, "nothing can use the note past the window");
 });

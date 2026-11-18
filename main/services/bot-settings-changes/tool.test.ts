@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { BotToolCall } from "../bot-runtime/tool-adapter.js";
 import { botIngressAllowsTool, botToolVerdict, type BotToolFacts } from "../bot-runtime/bot-tool-policy.js";
 import { botHistoryToolTaints } from "../bot-runtime/bot-tool-assembly.js";

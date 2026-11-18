@@ -5,7 +5,8 @@ import type {
   ToolResultMessage,
   UserMessage,
 } from "@earendil-works/pi-ai";
-import { createInitialSystemMessage, getCurrentSystemPrompt, getCurrentTools, Type } from "@earendil-works/pi-ai";
+import { createInitialSystemMessage, getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import {
   assertGenerationContextCapacity,

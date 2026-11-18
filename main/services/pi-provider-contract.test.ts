@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { builtinModels, builtinProviders } from "@earendil-works/pi-ai/providers/all";
-import { createInitialSystemMessage, normalizeContext, Type } from "@earendil-works/pi-ai";
+import { createInitialSystemMessage, normalizeContext } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 
 test("the pinned Pi release exposes native OpenAI Codex OAuth", async () => {
@@ -27,7 +28,7 @@ test("the pinned Pi release exposes native OpenAI Codex OAuth", async () => {
     providerIds,
   );
   assert.equal(provider?.id, "openai-codex");
-  assert.equal(provider?.name, "OpenAI Codex (legacy)");
+  assert.equal(provider?.name, "OpenAI Codex");
   assert.equal(provider?.baseUrl, "https://chatgpt.com/backend-api");
   assert.equal(provider?.auth.oauth?.name, "OpenAI (ChatGPT Plus/Pro)");
   assert.equal(typeof provider?.auth.oauth?.login, "function");

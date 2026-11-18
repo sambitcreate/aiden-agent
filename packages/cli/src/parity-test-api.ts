@@ -16,10 +16,13 @@ export * from "./serve-lifetime.ts";
 export * from "./serve-ownership.ts";
 export * from "./telegram.ts";
 export * from "./daemon-chats.ts";
+export { daemonSettingsManager } from "./daemon-session-settings.ts";
 export * from "./daemon-turn-lifecycle.ts";
 export * from "./daemon-approvals.ts";
 export * from "./speech.ts";
 export * from "./remote.ts";
+export { cliAppsCommand, createCliMcpHost, CLI_MCP_DEFAULT_PORT } from "./apps.ts";
+export { aidenMcpClientSnippets, renderAppConnection } from "./apps-display.ts";
 export { daemonRemoteSummary, showStartupPairing } from "./serve-command.ts";
 export { resolveTailscaleBinary } from "../../../main/services/aiden-remote-tailscale.js";
 export { AidenRemoteSpeechServiceCore } from "../../../main/services/aiden-remote-speech-core.js";
@@ -75,3 +78,7 @@ export { AIDEN_REMOTE_LEGACY_CAPABILITIES, AIDEN_REMOTE_HOST_CAPABILITIES } from
 
 export { projectBotTranscript } from "../../../main/services/bot-runtime/live-projection.js";
 export { createCliBotSpending } from "./bot-spending.ts";
+
+export { createGenerationWatchdog } from "./generation-watchdog.ts";
+
+export { cliWorkspaceCodingTools } from "./workspace-coding-tools.ts";

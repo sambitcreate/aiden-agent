@@ -22,6 +22,7 @@ import {
   resolveRuntimeHeaders,
 } from "./generation-runtime.js";
 import { withOpenCodeSessionAttribution } from "./opencode-session-attribution.js";
+import { withoutMessageThreads } from "./pi-message-threads.js";
 import type { RuntimeModelLimits } from "./models-catalog-core.js";
 import type { StoredProvider } from "./types.js";
 import { customModelThinkingLevels } from "../../renderer/shared/custom-model-options.js";
@@ -221,7 +222,7 @@ export async function resolveModelRuntimeWith(
         `Model "${modelId}" is not available through Pi's ${nativeProvider.label} provider. Choose another model and try again.`,
       );
     }
-    const model = withOpenCodeSessionAttribution(resolvedModel, conversationId);
+    const model = withoutMessageThreads(withOpenCodeSessionAttribution(resolvedModel, conversationId));
     return {
       provider: nativeProvider,
       model,
@@ -247,10 +248,10 @@ export async function resolveModelRuntimeWith(
   }
 
   const limits = await dependencies.resolveRuntimeLimits(provider, modelId);
-  const model = withOpenCodeSessionAttribution(
+  const model = withoutMessageThreads(withOpenCodeSessionAttribution(
     buildModel(provider, modelId, limits),
     conversationId,
-  );
+  ));
   const headers = resolveRuntimeHeaders(provider);
   const models = createModels();
   models.setProvider(

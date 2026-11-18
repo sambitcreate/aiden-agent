@@ -12,7 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
 import { promisify } from "node:util";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { complete } from "@earendil-works/pi-ai/compat";
 import {
   ACCEPTANCE_FINAL_TEXT,

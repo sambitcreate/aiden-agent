@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Type, validateToolArguments, type JsonObject } from "@earendil-works/pi-ai";
+import { validateToolArguments, type JsonObject } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { validateMcpServerMetadata } from "../../renderer/shared/mcp-oauth-config.js";
 import { createPiToolDiscovery, type PiDiscoverableTool } from "./pi-tool-discovery.js";
 

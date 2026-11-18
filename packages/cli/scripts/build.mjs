@@ -52,7 +52,7 @@ await patchPiOAuthBranding(resolve(pkgDir, "../.."), piAiPkg);
 const banner = {
 	js: 'import { createRequire as __piCreateRequire } from "node:module"; const require = __piCreateRequire(import.meta.url);',
 };
-// Durable Bots explicitly pin chord and pi-durable to the desktop 1.4.0 line.
+// Durable Bots explicitly pin chord and pi-durable to the desktop 1.5.2 line.
 // Both are bundled; no Pi runtime package is allowed as an external.
 const allowedExternalPackages = new Set([
 	"@silvia-odwyer/photon-node",
@@ -582,7 +582,7 @@ function patchPiDoc(name, patches) {
 	writeFileSync(file, text);
 }
 patchPiDoc("cli.md", [
-	["pi mcp <list|login|logout> [options]\n", "aiden mcp <list|presets|add|preset|login|logout|remove>\n"],
+	["pi mcp <add|remove|list|login|logout> [options]\n", "aiden mcp <list|presets|add|preset|login|logout|remove>\n"],
 	["Loads an extension file or directory, or a built-in extension such as `builtin:mcp`, and is repeatable.", "Loads an extension file or directory, and is repeatable. Aiden turns Pi's built-in MCP extension off; see [MCP Servers](mcp.md)."],
 	["Disables discovered, configured, and built-in extensions. Explicit `-e` paths still load, so `pi -ne -e builtin:mcp` keeps only the built-in MCP support.", "Disables discovered, configured, and built-in extensions. Explicit `-e` paths still load."],
 	["Disables the built-in MCP support for this run: no servers connect, and there are no MCP tools or `/mcp`. It does not affect an extension that replaces the built-in MCP support.", "Pi's built-in MCP support is always off in Aiden. Aiden's own MCP servers (`aiden-mcp.json`) are not affected."],
