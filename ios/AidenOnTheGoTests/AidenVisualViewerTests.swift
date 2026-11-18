@@ -109,6 +109,20 @@ final class AidenVisualViewerTests: XCTestCase {
         XCTAssertFalse(policy.allows(url: nil, targetIsMainFrame: false))
     }
 
+    // MARK: Crash recovery
+
+    func testWebContentReloadsOnceThenFailsUntilANewDocumentLoads() {
+        var recovery = AidenWebContentRecovery()
+
+        XCTAssertEqual(recovery.processDidTerminate(), .reload, "The first crash redraws the page")
+        XCTAssertEqual(recovery.processDidTerminate(), .fail, "A page that crashes again stops retrying")
+        XCTAssertEqual(recovery.processDidTerminate(), .fail, "It keeps failing without a new document")
+
+        recovery.documentDidLoad()
+        XCTAssertEqual(recovery.processDidTerminate(), .reload, "A new document earns one reload again")
+        XCTAssertEqual(recovery.processDidTerminate(), .fail)
+    }
+
     // MARK: Offline copy
 
     func testCachedCopyIsKeptPerHostDeviceChatVisualSchemeAndTheme() async {

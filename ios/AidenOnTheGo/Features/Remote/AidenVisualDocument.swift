@@ -103,6 +103,29 @@ struct AidenVisualNavigationPolicy: Equatable, Sendable {
     }
 }
 
+/// Decides what to do when a web view's content process dies. The page is
+/// redrawn once; if it dies again before a new document loads, the caller
+/// stops and shows a failure instead of reloading forever.
+struct AidenWebContentRecovery: Equatable, Sendable {
+    enum Action: Equatable {
+        case reload
+        case fail
+    }
+
+    private var hasReloaded = false
+
+    mutating func processDidTerminate() -> Action {
+        guard !hasReloaded else { return .fail }
+        hasReloaded = true
+        return .reload
+    }
+
+    /// Call after a new document loads, not after a crash reload.
+    mutating func documentDidLoad() {
+        hasReloaded = false
+    }
+}
+
 /// How the viewer got its page.
 enum AidenVisualDocumentLoad: Sendable {
     /// Fresh from the Mac.
