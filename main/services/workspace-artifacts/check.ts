@@ -316,7 +316,7 @@ export function checkWorkspaceArtifactPage(
   }
 
   for (const name of missingVars) {
-    add(findings, `$${name} is not a source, a <Data> value or a state key, so it is always empty.`);
+    add(findings, `$${name} is not ${artifact.sources.length ? "a source, " : ""}a <Data> value or a state key, so it is always empty.`);
   }
   for (const tally of members.values()) {
     if (tally.found > 0 || guards.has(tally.expr)) continue;

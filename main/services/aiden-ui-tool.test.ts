@@ -48,6 +48,21 @@ test("repairs come back to the model as diagnostics it can act on", async () => 
   assert.match(text(result), /unknown_prop: Stat\.onClick/u);
 });
 
+test("a visual whose data reads come back empty says so in the result", async () => {
+  const { instance, presented } = tool();
+  const clean = await instance.execute("toolu_1", { title: "Q3 revenue", markup: markup("dashboard") });
+  assert.doesNotMatch(text(clean), /Visual check/u);
+
+  const typo = markup("dashboard").replace("$data.totals[$metric]", "$data.totls[$metric]").replace("len($data.byRegion)", "$byRegion");
+  const result = await instance.execute("toolu_2", { title: "Q3 revenue typo", markup: typo });
+  // The visual still shows; the model learns which reads draw nothing.
+  assert.equal(presented.length, 2);
+  assert.match(text(result), /Visual check/u);
+  assert.match(text(result), /\$data\.totls is always empty: the data has no "totls" field \(it has "totals", "byRegion"\)/u);
+  assert.match(text(result), /\$byRegion is not a <Data> value or a state key/u);
+  assert.match(text(result), /render_ui again with the same title/u);
+});
+
 test("markup that yields nothing, bad layouts, and bad titles are rejected", async () => {
   const { instance, presented } = tool();
   await assert.rejects(instance.execute("a", { title: "Empty", markup: "  " }), /no visual/u);

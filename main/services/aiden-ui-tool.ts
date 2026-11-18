@@ -13,6 +13,7 @@ import { RENDER_UI_TOOL_NAME } from "../../renderer/shared/generative-ui.js";
 import { requireGenerativeUiTitle } from "./generative-ui-html.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import { declareOnDemandSummary } from "./on-demand-tools.js";
+import { checkWorkspaceArtifactPage } from "./workspace-artifacts/check.js";
 
 export { RENDER_UI_TOOL_NAME };
 
@@ -25,6 +26,20 @@ export interface RenderUiToolOptions {
   namespace: string;
   existingChatUiCount: number;
   onUiVisual: (visual: ChatUiVisualV1, context: { toolCallId: string }) => boolean | void | Promise<boolean | void>;
+}
+
+/**
+ * Draws the visual against its own data the way the chat does, so a misspelt
+ * field or a list read as an object comes back as a finding instead of a
+ * blank chart the tool called a success.
+ */
+function describeVisualCheck(visual: ChatUiVisualV1): string {
+  const check = checkWorkspaceArtifactPage({ visual, sources: [], actions: [] }, undefined);
+  if (!check.findings.length) return "";
+  return [
+    "\nVisual check (these draw empty; fix them and call render_ui again with the same title to replace the visual):",
+    ...check.findings.map((finding) => `- ${finding}`),
+  ].join("\n");
 }
 
 function describeDiagnostics(diagnostics: readonly AidenUiDiagnostic[]): string {
@@ -123,7 +138,7 @@ export function createRenderUiTool(options: RenderUiToolOptions): AgentTool {
             content: [
               {
                 type: "text",
-                text: `Rendered visual "${title}" (${nodes} components).${describeDiagnostics(compiled.diagnostics)}`,
+                text: `Rendered visual "${title}" (${nodes} components).${describeDiagnostics(compiled.diagnostics)}${describeVisualCheck(visual)}`,
               },
             ],
             details: null,
