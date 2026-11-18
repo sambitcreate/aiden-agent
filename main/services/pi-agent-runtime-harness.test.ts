@@ -3224,12 +3224,16 @@ test("Stop before Pi emits accepted steering reports it as undelivered", async (
  * chat store whose `beforeQueuedUser` projection mirrors llm-client: every
  * emitted queued user that lacks a committed id is appended as a new message.
  */
-async function admittedInputFixture(responses: Parameters<typeof managedTestHarness>[0]) {
+async function admittedInputFixture(
+  responses: Parameters<typeof managedTestHarness>[0],
+  options: { finishTurn?: PiAgentRuntimeHarnessOptions["finishTurn"] } = {},
+) {
   const { tool, atTool, release } = steerWaitTool();
   const visibleChat: Array<{ id: string; role: string; content: string }> = [];
   let projectedIds = 0;
   const { core, harness, session } = await managedTestHarness(responses, {
     tools: [tool],
+    ...(options.finishTurn ? { finishTurn: options.finishTurn } : {}),
     beforeQueuedUser: async (message) => {
       const id = `projected-${++projectedIds}`;
       visibleChat.push({ id, role: "user", content: String(message.role === "user" ? message.content : "") });
@@ -3380,7 +3384,10 @@ test("Stop before Pi reads admitted steering keeps it as history, not undelivere
   await fixture.harness.cancelAndSettle();
   assert.equal((await running).kind, "app_cancelled");
   assert.deepEqual(fixture.visibleChat.map(({ id }) => id), ["committed-steer"]);
-  assert.deepEqual(fixture.harness.takeUndeliveredQueuedMessages(), { messages: [] });
+  assert.deepEqual(fixture.harness.takeUndeliveredQueuedMessages(), {
+    messages: [],
+    committed: ["committed-steer"],
+  });
 });
 
 test("Stop after a queued follow-up is admitted keeps it as history and never runs it", async () => {
@@ -3405,7 +3412,10 @@ test("Stop after a queued follow-up is admitted keeps it as history and never ru
   assert.deepEqual(fixture.visibleChat, [
     { id: "committed-steer", role: "user", content: "then do this" },
   ]);
-  assert.deepEqual(fixture.harness.takeUndeliveredQueuedMessages(), { messages: [] });
+  assert.deepEqual(fixture.harness.takeUndeliveredQueuedMessages(), {
+    messages: [],
+    committed: ["committed-steer"],
+  });
 
   // Production starts the next turn by syncing the persisted chat into Pi.
   // Pi never read the stopped follow-up, so it has no journal marker and
@@ -3442,6 +3452,37 @@ test("Stop after a queued follow-up is admitted keeps it as history and never ru
     ["answered the next turn"],
   );
   assert.deepEqual(fixture.visibleChat.map(({ id }) => id), ["committed-steer"]);
+});
+
+test("a committed follow-up a run ends without draining is reported as owed, not silently dropped", async () => {
+  // A turn-end vote of "end" (a spending limit, a report-only extension)
+  // ends the run without polling Pi's follow-up queue. The person's input
+  // is saved and was told it runs next, so the host must start it.
+  const fixture = await admittedInputFixture(
+    [
+      fauxAssistantMessage([fauxToolCall("wait_for_steer", {})], { stopReason: "toolUse" }),
+      fauxAssistantMessage("never reached"),
+    ],
+    { finishTurn: () => ({ action: "end" }) },
+  );
+  const running = fixture.harness.runManaged({
+    kind: "append-and-run",
+    message: { role: "user", content: "start", timestamp: 1 },
+  });
+  await fixture.atTool;
+  assert.deepEqual(
+    await fixture.admission.admit({ streamId: "stream-1", mode: "queue", text: "then do this" }),
+    { admitted: true, queue: "follow-up", committed: true, messageId: "committed-steer" },
+  );
+  fixture.release();
+  assert.equal((await running).kind, "completed");
+  assert.equal(fixture.core.state.callCount, 1, "the run ended without answering the follow-up");
+  assert.deepEqual(fixture.harness.takeUndeliveredQueuedMessages(), {
+    messages: [],
+    committed: ["committed-steer"],
+  });
+  // Taking is one-shot.
+  assert.deepEqual(fixture.harness.takeUndeliveredQueuedMessages(), { messages: [] });
 });
 
 test("a failed visible projection of queued input is a managed session failure with recovery", async () => {

@@ -28,6 +28,13 @@ export interface McpOAuthSession {
    * `sessionWithRefreshedMcpTokens`.
    */
   rejectedRefresh?: McpRejectedRefresh;
+  /**
+   * When `tokens.access_token` expires (ms since the epoch), from the
+   * `expires_in` of the response that issued it. Background connections
+   * refresh shortly before it. Sessions saved before Aiden recorded it, and
+   * tokens issued without a lifetime, have none: they refresh after a 401.
+   */
+  expiresAt?: number;
 }
 
 export interface McpRejectedRefresh {
@@ -86,6 +93,10 @@ export function parseMcpOAuthSession(value: unknown): McpOAuthSession {
     ) {
       delete session.rejectedRefresh;
     }
+  }
+  // Advisory too: a malformed expiry is dropped, and the token refreshes after a 401.
+  if (session.expiresAt !== undefined && !(typeof session.expiresAt === "number" && Number.isFinite(session.expiresAt) && session.expiresAt >= 0)) {
+    delete session.expiresAt;
   }
   if (session.clientInformation !== undefined) {
     if (
@@ -223,15 +234,36 @@ export function sessionWithSavedMcpTokens(
   binding: string,
   tokens: OAuthTokens,
   requestedScope?: string,
+  nowMs: number = Date.now(),
 ): McpOAuthSession {
   const grantedScope = tokens.scope || requestedScope || session.tokens?.scope || session.grantedScope;
-  const { rejectedRefresh: _supersededByNewTokens, ...rest } = session;
+  const { rejectedRefresh: _supersededByNewTokens, expiresAt: _previousTokensExpiry, ...rest } = session;
+  const lifetime = tokens.expires_in;
   return {
     ...rest,
     authorizationBinding: binding,
     tokens,
     ...(grantedScope ? { grantedScope } : {}),
+    ...(typeof lifetime === "number" && Number.isFinite(lifetime) && lifetime >= 0 ? { expiresAt: nowMs + lifetime * 1000 } : {}),
   };
+}
+
+/** Access tokens this close to expiry are refreshed before they are sent. */
+export const MCP_TOKEN_REFRESH_SKEW_MS = 30_000;
+
+/**
+ * When a background connection should refresh the stored access token
+ * instead of sending it (ms since the epoch): 30 s before it expires, or at
+ * half its lifetime for one that short, so every token is used for a while.
+ * Undefined when the expiry is unknown (an older record, or a token issued
+ * without `expires_in`) or nothing could refresh it; such tokens refresh
+ * after a 401.
+ */
+export function mcpTokenRefreshDueAt(session: McpOAuthSession): number | undefined {
+  const { tokens, expiresAt } = session;
+  if (!tokens?.refresh_token || expiresAt === undefined) return undefined;
+  const lifetimeMs = typeof tokens.expires_in === "number" ? tokens.expires_in * 1000 : Number.POSITIVE_INFINITY;
+  return expiresAt - Math.min(MCP_TOKEN_REFRESH_SKEW_MS, lifetimeMs / 2);
 }
 
 /**
@@ -276,7 +308,7 @@ export function sessionWithRefreshedMcpTokens(
       !mayRestoreRejectedRefresh(session, observed, nowMs)) {
     return undefined;
   }
-  return sessionWithSavedMcpTokens(session, binding, tokens, requestedScope);
+  return sessionWithSavedMcpTokens(session, binding, tokens, requestedScope, nowMs);
 }
 
 function normalizedScope(scope: string | undefined): string | null {
@@ -400,6 +432,7 @@ export function sessionAfterTokenInvalidation(
   const next = structuredClone(session);
   if (stored.scope) next.grantedScope = stored.scope;
   delete next.tokens;
+  delete next.expiresAt;
   // Remember which refresh token was given up on, so a concurrent client's
   // rotation of that same token can still land (sessionWithRefreshedMcpTokens).
   if (stored.refresh_token) {
