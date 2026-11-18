@@ -8,6 +8,8 @@
 import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { ChevronRight, Lock, MoreHorizontal } from "lucide-react";
+import { useAppCapabilities } from "../../lib/app-capabilities";
+import { localComputerNoun } from "../../shared/computer-noun";
 import {
   AlertDialog,
   Button,
@@ -192,6 +194,8 @@ export function ApprovalRulesSettingsView(props: ApprovalRulesSettingsViewProps)
     );
   };
   const macRows = rows?.filter((item) => item.group === "mac") ?? [];
+  const capabilities = useAppCapabilities();
+  const computer = localComputerNoun(capabilities.platform);
   return (
     <>
       {rows === null ? (
@@ -252,10 +256,10 @@ export function ApprovalRulesSettingsView(props: ApprovalRulesSettingsViewProps)
           })}
           {macRows.length > 0 ? (
             <FieldSet
-              title="Allowed on this Mac"
+              title={`Allowed on this ${computer}`}
               hint={
-                <InfoHint topic="Mac grants">
-                  Commands, file changes and Computer Use you allowed for a workspace, a Bot or a chat. Remove one to be asked again.
+                <InfoHint topic="what you allowed">
+                  {capabilities.computerUse ? "Commands, file changes and Computer Use" : "Commands and file changes"} you allowed for a workspace, a Bot or a chat. Remove one to be asked again.
                 </InfoHint>
               }
             >

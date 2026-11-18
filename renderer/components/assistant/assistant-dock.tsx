@@ -2,10 +2,10 @@
 // Helix glyph and label follow the session state.
 
 import * as React from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useRouter } from "@tanstack/react-router";
 import { useCommandHandler } from "../../lib/command-system";
 import { useSettings } from "../../lib/queries";
-import type { SettingsSection } from "../../lib/settings-section";
+import { settingsLocation, type SettingsSection } from "../../lib/settings-section";
 import { AidenActivityMark } from "../aiden-activity-mark";
 import { aidenLiveMark, type AidenLiveMarkState } from "./aiden-live-mark";
 import {
@@ -82,6 +82,7 @@ function storedSetupComplete(): boolean {
 
 export function AssistantDock({ rightInset = 0 }: { rightInset?: number }): React.ReactElement {
   const navigate = useNavigate();
+  const router = useRouter();
   const live = useAssistantLive(null);
   const settings = useSettings();
   useLiveChatVoiceApprovals(settings.data);
@@ -99,9 +100,9 @@ export function AssistantDock({ rightInset = 0 }: { rightInset?: number }): Reac
   const openSettings = React.useCallback(
     (section: SettingsSection) => {
       live.setSetupOpen(false);
-      void navigate({ to: "/settings", search: { section } });
+      void navigate(settingsLocation(section, router.state.location));
     },
-    [live, navigate],
+    [live, navigate, router],
   );
   return (
     <AssistantDockPresentation

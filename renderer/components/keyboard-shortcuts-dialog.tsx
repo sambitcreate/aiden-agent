@@ -2,13 +2,14 @@
 // Settings, plus the built-in ones.
 
 import * as React from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useRouter } from "@tanstack/react-router";
 import { Search } from "lucide-react";
 import { Dialog, Input, Text } from "./ui";
 import { cn } from "../lib/ui-utils";
 import { Kbd } from "./ui-primitives";
 import { useCommandHandler, useCommandSystem } from "../lib/command-system";
 import { useAppCapabilities } from "../lib/app-capabilities";
+import { settingsLocation } from "../lib/settings-section";
 import { shortcutSheet } from "../lib/shortcut-sheet";
 import {
   COMMAND_IDS,
@@ -60,6 +61,7 @@ export function KeyboardShortcutsDialog() {
   const [query, setQuery] = React.useState("");
   const headingId = React.useId();
   const navigate = useNavigate();
+  const router = useRouter();
   const { binding } = useCommandSystem();
   const capabilities = useAppCapabilities();
   // Esc gives focus back to where ⌘/ was pressed, such as the message box.
@@ -93,7 +95,8 @@ export function KeyboardShortcutsDialog() {
       confirmLabel="Change keys…"
       onConfirm={() => {
         setOpen(false);
-        void navigate({ to: "/settings", search: { section: "shortcut" } });
+        // From inside Settings this replaces the entry, so Back to app still leaves Settings.
+        void navigate(settingsLocation("shortcut", router.state.location));
       }}
     >
       <label className="mb-4 flex h-9 items-center gap-2 rounded-control border border-field bg-background px-3 focus-within:bg-input">

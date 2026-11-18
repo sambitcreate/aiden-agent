@@ -12,20 +12,26 @@ import {
 import { installBotTestIpc } from "../../main/bots/test-dom";
 import { createBotTestQueryClient } from "../../main/bots/test-providers";
 import { AppCapabilitiesProvider, DISABLED_APP_CAPABILITIES, type AppCapabilities } from "../../lib/app-capabilities";
+import { Toaster, toast } from "../ui";
 import { DictationShortcutSettings } from "./dictation-shortcut-settings";
 
-afterEach(cleanup);
+afterEach(() => {
+  toast.dismiss();
+  cleanup();
+});
 
 async function mount(
   capabilities: Partial<AppCapabilities>,
   settings: Record<string, unknown> = {},
   saveGate?: Promise<void>,
+  saveFails = false,
 ) {
   let stored = { ...settings };
   const calls = installBotTestIpc({
     "settings:get": () => stored,
     "settings:set": async (patch: unknown) => {
       await saveGate;
+      if (saveFails) throw new Error("Save cancelled");
       const next = patch as Record<string, unknown>;
       stored = { ...stored, ...next };
       // Main keeps the release-events flag in step with the chosen behavior.
@@ -38,6 +44,7 @@ async function mount(
     component: () => (
       <QueryClientProvider client={createBotTestQueryClient()}>
         <AppCapabilitiesProvider capabilities={{ ...DISABLED_APP_CAPABILITIES, ...capabilities }}>
+          <Toaster />
           <DictationShortcutSettings />
         </AppCapabilitiesProvider>
       </QueryClientProvider>
@@ -115,4 +122,34 @@ test("a desktop that assigns the hold shortcut keeps saying so while Press to to
     screen.queryByText(/let your desktop assign a hold shortcut for this session/u),
     null,
   );
+});
+
+test("each dictation switch is named by its row and saves its own setting", async () => {
+  const calls = await mount({});
+  const saves = () => calls.filter((call) => call.channel === "settings:set").map((call) => call.args[0]);
+  fireEvent.click(screen.getByRole("switch", { name: "Stop after silence" }));
+  fireEvent.click(screen.getByRole("switch", { name: "Clean up transcript" }));
+  fireEvent.click(screen.getByRole("switch", { name: "Play sounds" }));
+  await waitFor(() =>
+    assert.deepEqual(saves(), [
+      { dictationSilenceStop: true },
+      { dictationCleanup: true },
+      { dictationSounds: true },
+    ]),
+  );
+});
+
+test("a failed switch save says so without blaming hold shortcuts", async () => {
+  await mount({}, {}, undefined, true);
+  fireEvent.click(screen.getByRole("switch", { name: "Play sounds" }));
+  await screen.findByText("Couldn’t change dictation settings.");
+  assert.equal(screen.queryByText(/hold shortcuts/u), null);
+});
+
+test("a failed behavior change explains that hold shortcuts may be unsupported", async () => {
+  await mount({ dictationHoldToTalk: true }, {}, undefined, true);
+  const trigger = await screen.findByRole("combobox", { name: "Dictation shortcut behavior" });
+  fireEvent.keyDown(trigger, { key: "ArrowDown" });
+  fireEvent.click(await screen.findByRole("option", { name: "Tap or hold" }));
+  await screen.findByText(/Your desktop may not support hold shortcuts/u);
 });

@@ -73,6 +73,7 @@ import {
   type SettingsPageId,
   type SettingsSection,
   settingsLocation,
+  settingsTabFor,
 } from "../lib/settings-section";
 import { useAppCapabilities } from "../lib/app-capabilities";
 import { localComputerNoun, type LocalComputerNoun } from "../shared/computer-noun";
@@ -249,6 +250,19 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
   const open = (next: SettingsSection) =>
     void navigate({ ...settingsLocation(next), replace: true });
   const ActiveSection = CONTENT[section];
+  // Each tab is its own scrollport for the router's scroll restoration, so a page or tab
+  // opens at the top instead of inheriting the last one's offset. An anchor shares its
+  // page's first tab, so moving to one (Bot messaging on Approvals) keeps the page in place
+  // and lets the anchor scroll to its spot.
+  const scrollId = `settings-${settingsTabFor(activePage, section)}`;
+  const contentRef = React.useRef<HTMLDivElement>(null);
+  // The scrollport stays mounted across tabs (so focus stays on the tab you chose), so the
+  // new tab starts at the top here. This runs before the router's own restore, which then
+  // puts Back and Forward back on the entry's own offset.
+  React.useLayoutEffect(() => {
+    const viewport = contentRef.current?.closest<HTMLElement>("[data-scroll-restoration-id]");
+    if (viewport) viewport.scrollTop = 0;
+  }, [scrollId]);
 
   return (
     <SplitView
@@ -338,8 +352,8 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
         </Sidebar>
       }
     >
-      <ScrollArea className="h-full" title="Settings">
-        <div className="settings-responsive mx-auto w-full max-w-5xl px-5 py-6">
+      <ScrollArea className="h-full" title="Settings" scrollRestorationId={scrollId}>
+        <div ref={contentRef} className="settings-responsive mx-auto w-full max-w-5xl px-5 py-6">
           <SettingsPage
             heading={!OWN_HEADING.has(activePage.id)}
             title={activePage.title}
