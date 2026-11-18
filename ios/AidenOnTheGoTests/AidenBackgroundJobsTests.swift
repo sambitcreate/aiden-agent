@@ -57,7 +57,7 @@ final class AidenBackgroundJobsTests: XCTestCase {
     func testAJobStoppedAfterTheChatWentQuietSaysSo() throws {
         let fixtureURL = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
         let root = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL)) as? [String: Any])
-        XCTAssertEqual(root["contractRevision"] as? Int, 63)
+        XCTAssertEqual(root["contractRevision"] as? Int, 64)
         let section = try XCTUnwrap(root["backgroundJobsChatSettled"] as? [String: Any])
         let data = try JSONSerialization.data(withJSONObject: try XCTUnwrap(section["list"]))
         let list = try AidenRemoteJSONDecoder.decode(AidenBackgroundJobs.self, from: data)

@@ -156,7 +156,7 @@ class AidenBackgroundJobsTest {
      * person stopped, or a reason this version does not know, reads as plain Stopped. */
     @Test
     fun aJobStoppedAfterTheChatWentQuietSaysSo() {
-        assertEquals(63, contract.getValue("contractRevision").jsonPrimitive.int)
+        assertEquals(64, contract.getValue("contractRevision").jsonPrimitive.int)
         val list = contract.getValue("backgroundJobsChatSettled").jsonObject.getValue("list")
         val decoded = AidenBackgroundJobs.decode(list.toString())
         val labels = decoded.jobs.associate { it.id to AidenBackgroundJobCopy.status(it, start) }

@@ -107,14 +107,26 @@ export function workspaceFolderRemoteRefusalText(
   return workspace.managedWorktree ? MANAGED_WORKTREE_MISSING_REMOTE_REFUSAL : WORKSPACE_FOLDER_MISSING_REMOTE_REFUSAL;
 }
 
+/** Which folder is gone: the workspace's own, or an Aiden-managed worktree's checkout. */
+export type WorkspaceFolderMissingReason = "folder_missing" | "worktree_missing";
+
+/** A turn refused for a missing folder: the path-free sentence and which folder it was. */
+export interface WorkspaceFolderRemoteRefusal {
+  message: string;
+  reason: WorkspaceFolderMissingReason;
+}
+
 /** What a paired device hears when its turn is refused for a missing folder, or undefined. */
 export async function workspaceFolderRemoteRefusal(
   workspace: CheckedWorkspace,
   stat?: Stat,
   host: WorkspaceFolderRefusalHost = "mac",
-): Promise<string | undefined> {
+): Promise<WorkspaceFolderRemoteRefusal | undefined> {
   if (!(await workspaceFolderMissing(workspace, stat))) return undefined;
-  return workspaceFolderRemoteRefusalText(workspace, host);
+  return {
+    message: workspaceFolderRemoteRefusalText(workspace, host),
+    reason: workspace.managedWorktree ? "worktree_missing" : "folder_missing",
+  };
 }
 
 /** Refuse to start a turn in a workspace whose folder is gone. */

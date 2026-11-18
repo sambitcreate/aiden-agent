@@ -467,7 +467,7 @@ test("pairing request fixtures only carry a sealed envelope for an approved requ
   delete revision19.botHandoffs;
   delete revision19.botAccessRequests;
   delete revision19.botPlans;
-  delete revision19.botAllowed; delete revision19.voiceInput; delete revision19.stoppedSteps; delete revision19.backgroundJobsChatSettled;
+  delete revision19.botAllowed; delete revision19.voiceInput; delete revision19.stoppedSteps; delete revision19.backgroundJobsChatSettled; delete revision19.continueInNewChat;
   // Bot issues on phones are revision 42.
   delete revision19.botIssues;
   // Schedule approval cards are revision 39.
@@ -2647,7 +2647,7 @@ test("Bot attachment references arrive in revision 33 and only where the host an
   const older = structuredClone(raw);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled;
+  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled; delete older.continueInNewChat;
   older.contractRevision = 32;
   record(older.hostHealth, "hostHealth").contractRevision = 32;
   assert.throws(() => parseAidenRemoteContractFixture(older), /require contract revision 33/u);
@@ -2911,7 +2911,7 @@ test("Bot hand-off fixtures require their own revision, and an older fixture par
   const older = structuredClone(raw);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled;
+  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled; delete older.continueInNewChat;
   older.contractRevision = AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION - 1;
   record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION - 1;
   delete older.scheduleCards;
@@ -2953,7 +2953,7 @@ test("new worktree fixtures need their own revision, and a moved chat has no mes
   const older = structuredClone(raw);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled;
+  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled; delete older.continueInNewChat;
   older.contractRevision = AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION - 1;
   record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION - 1;
   assert.throws(
@@ -2988,7 +2988,7 @@ test("spending fixtures need their own revision, parse strictly, and refuse with
   const older = structuredClone(raw);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled;
+  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled; delete older.continueInNewChat;
   older.contractRevision = AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION - 1;
   record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION - 1;
   assert.throws(
@@ -3037,7 +3037,7 @@ test("raw upload fixtures need their own revision, and every client spells a pic
   const older = structuredClone(raw);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled;
+  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled; delete older.continueInNewChat;
   // Sections from later revisions leave with the downgrade, so only this one is refused.
   delete older.chatNewWorktree;
   older.contractRevision = AIDEN_REMOTE_RAW_UPLOADS_CONTRACT_REVISION - 1;
@@ -3073,7 +3073,7 @@ test("background job fixtures need their own revision, and the parser and schema
   const older = structuredClone(raw);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled;
+  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled; delete older.continueInNewChat;
   // Sections from later revisions leave with the downgrade, so only this one is refused.
   delete older.chatNewWorktree;
   older.contractRevision = AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION - 1;
@@ -3167,7 +3167,7 @@ test("Bot shared images need their own revision, and the schema and parser accep
   const older = structuredClone(raw);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled;
+  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled; delete older.continueInNewChat;
   older.contractRevision = AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION - 1;
   record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION - 1;
   delete older.browserRecordings;
@@ -3209,7 +3209,7 @@ test("browser recordings need their own revision, and a recording step carries o
   const older = structuredClone(raw);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled;
+  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled; delete older.continueInNewChat;
   older.contractRevision = AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION - 1;
   record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION - 1;
   assert.throws(
@@ -3583,11 +3583,11 @@ test("revision 55 access fixtures and strict public DTOs reject private fields a
   for (const change of [{ label: "x".repeat(121) }, { why: "x".repeat(401) }, { place: "x".repeat(513) }, { why: " " }, { label: "Bad\u0000" }, { place: "relative/path" }, { waitId: "bad_id" }, { choices: ["once", "always", "not_now"] }, { choices: ["not_now", "once", "once"] }]) assert.throws(() => card({ ...section.folder, ...change }));
   assert.throws(() => card({ ...section.wholeMac, choices: ["not_now", "always", "once"] }));
   assert.throws(() => card({ ...section.wholeMac, place: "~/Reports" }));
-  const older = structuredClone(raw); delete older.botPlans; delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled; older.contractRevision = 54; older.hostHealth.contractRevision = 54;
+  const older = structuredClone(raw); delete older.botPlans; delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled; delete older.continueInNewChat; older.contractRevision = 54; older.hostHealth.contractRevision = 54;
   assert.throws(() => parseAidenRemoteContractFixture(older), /require revision 55/u);
   delete older.botAccessRequests;
   delete older.botPlans;
-  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled;
+  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled; delete older.continueInNewChat;
   assert.equal(parseAidenRemoteContractFixture(older).botAccessRequests, undefined);
   const { default: Ajv2020 } = await import("ajv/dist/2020.js");
   const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
@@ -3618,7 +3618,7 @@ test("revision 56 plans decode strictly, preserve absent versus null, and exclud
   const section = protocol.parseAidenRemoteContractFixture(raw).botPlans!;
   assert.deepEqual(section, raw.botPlans);
   assert.equal(protocol.AIDEN_REMOTE_BOT_PLANS_CONTRACT_REVISION, 56);
-  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 63);
+  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 64);
   assert.equal(section.pending.status, "pending");
   assert.equal(section.active.steps[0].status, "done");
   const parse = protocol.parseAidenRemoteBotPlan;
@@ -3631,10 +3631,10 @@ test("revision 56 plans decode strictly, preserve absent versus null, and exclud
   assert.throws(() => protocol.parseAidenRemoteBotSessionEvent({ ...section.events[1], payload: {} }));
   const leaked = structuredClone(raw); leaked.botPlans.legacy.session.plan = null;
   assert.throws(() => protocol.parseAidenRemoteContractFixture(leaked));
-  const older = structuredClone(raw); delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled; older.contractRevision = 55; older.hostHealth.contractRevision = 55;
+  const older = structuredClone(raw); delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled; delete older.continueInNewChat; older.contractRevision = 55; older.hostHealth.contractRevision = 55;
   assert.throws(() => protocol.parseAidenRemoteContractFixture(older), /revision 56/u);
   delete older.botPlans;
-  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled;
+  delete older.botAllowed; delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled; delete older.continueInNewChat;
   assert.equal(protocol.parseAidenRemoteContractFixture(older).botPlans, undefined);
 });
 
@@ -3705,7 +3705,7 @@ test("revision 57 allowed fixture is strict and exposes only bounded public list
   const raw = await json("fixtures/contract.json") as Record<string, any>;
   const section = protocol.parseAidenRemoteContractFixture(raw).botAllowed!;
   assert.deepEqual(section, raw.botAllowed);
-  assert.equal(protocol.AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION, 57); assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 63);
+  assert.equal(protocol.AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION, 57); assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 64);
   const all = [...section.paginated.firstPage.entries, ...section.paginated.nextPage.entries];
   assert.equal(all.length, 53); assert.equal(all.filter(e => e.kind === "rule").length, 50); assert.equal(all.filter(e => e.kind === "folder").length, 3);
   assert.equal(new Set(all.map(e => e.id)).size, 53);
@@ -3719,7 +3719,7 @@ test("revision 57 allowed fixture is strict and exposes only bounded public list
     assert.throws(() => protocol.parseAidenRemoteBotAccessRequest({ ...section.legacyAccessRequest, approvalCount: count }));
   }
   assert.throws(() => protocol.parseAidenRemoteBotApproval({ ...section.approval, canAllow: false }));
-  const older = structuredClone(raw); delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled; older.contractRevision = 56; older.hostHealth.contractRevision = 56;
+  const older = structuredClone(raw); delete older.voiceInput; delete older.stoppedSteps; delete older.backgroundJobsChatSettled; delete older.continueInNewChat; older.contractRevision = 56; older.hostHealth.contractRevision = 56;
   assert.throws(() => protocol.parseAidenRemoteContractFixture(older), /revision 57/u); delete older.botAllowed;
   assert.equal(protocol.parseAidenRemoteContractFixture(older).botAllowed, undefined);
 });
@@ -3751,6 +3751,7 @@ test("revision 63 lets a stopped job say it stopped after the chat went quiet, a
   assert.equal(reasons.get("job_6a7b8c9d"), "person");
 
   const older = structuredClone(raw);
+  delete older.continueInNewChat;
   older.contractRevision = protocol.AIDEN_REMOTE_BACKGROUND_JOBS_CHAT_SETTLED_CONTRACT_REVISION - 1;
   older.hostHealth.contractRevision = older.contractRevision;
   assert.throws(
@@ -3794,6 +3795,7 @@ test("revision 60 marks only user messages Aiden Live sent by voice, and clients
   wrong.voiceInput.voiceMessageIds = ["message_fixture_voice_user", "message_fixture_voice_assistant"];
   assert.throws(() => protocol.parseAidenRemoteContractFixture(wrong), /marks different messages/u);
   const older = structuredClone(raw);
+  delete older.continueInNewChat;
   older.contractRevision = 59;
   older.hostHealth.contractRevision = 59;
   assert.throws(() => protocol.parseAidenRemoteContractFixture(older), /revision 60/u);
@@ -3812,7 +3814,7 @@ test("revision 62 reads only the steps Stop cancelled as stopped, and every othe
   const protocol = await import("./aiden-remote-protocol.js");
   const raw = await json("fixtures/contract.json") as Record<string, any>;
   assert.equal(protocol.AIDEN_REMOTE_STOPPED_BY_USER_CONTRACT_REVISION, 62);
-  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 63);
+  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 64);
   const fixture = protocol.parseAidenRemoteContractFixture(raw).stoppedSteps;
   assert.ok(fixture);
   assert.deepEqual(fixture.stoppedStepIds, ["tool-3"]);
@@ -3833,6 +3835,7 @@ test("revision 62 reads only the steps Stop cancelled as stopped, and every othe
   older.contractRevision = 61;
   older.hostHealth.contractRevision = 61;
   delete older.backgroundJobsChatSettled;
+  delete older.continueInNewChat;
   assert.throws(() => protocol.parseAidenRemoteContractFixture(older), /revision 62/u);
   delete older.stoppedSteps;
   assert.equal(protocol.parseAidenRemoteContractFixture(older).stoppedSteps, undefined);
@@ -3861,4 +3864,56 @@ test("revision 62 reads only the steps Stop cancelled as stopped, and every othe
     assert.equal(validateTimeline(timelineOf(version, olderPlain)), true, `schema: version ${version} without the mark ${JSON.stringify(validateTimeline.errors)}`);
     assert.ok(parseGenerationTimeline(timelineOf(version, olderPlain)), `runtime: version ${version} without the mark`);
   }
+});
+
+test("revision 64 tells a capable phone why a chat's folder is gone and lets it continue the whole chat elsewhere", async () => {
+  const protocol = await import("./aiden-remote-protocol.js");
+  const raw = await json("fixtures/contract.json") as Record<string, any>;
+  assert.equal(protocol.AIDEN_REMOTE_CONTINUE_IN_NEW_CHAT_CONTRACT_REVISION, 64);
+  const section = protocol.parseAidenRemoteContractFixture(raw).continueInNewChat;
+  assert.ok(section);
+  assert.deepEqual(section, raw.continueInNewChat);
+  assert.deepEqual(section.refused.error.details, { reason: "folder_missing", canContinueInNewChat: true });
+  assert.equal(section.plainRefusal.error.details, undefined, "an older phone hears only the sentence");
+  assert.deepEqual(protocol.parseAidenRemoteDeviceCapabilitiesUpdateRequest({ accepts: ["chat:continue-in-new-chat"] }).accepts, ["chat:continue-in-new-chat"], "a phone can negotiate it");
+
+  const refused = (change: (copy: Record<string, any>) => void, pattern: RegExp) => {
+    const copy = structuredClone(raw);
+    change(copy.continueInNewChat);
+    assert.throws(() => protocol.parseAidenRemoteContractFixture(copy), pattern);
+  };
+  refused((c) => { c.refused.error.message = "The folder /Users/me/project is missing."; }, /must not name a path/u);
+  refused((c) => { c.plainRefusal.error.details = { reason: "folder_missing" }; }, /plainRefusal must carry no details/u);
+  refused((c) => { c.refused.error.details.reason = "folder_renamed"; }, /reason/u);
+  refused((c) => { c.refused.error.details.canContinueInNewChat = "yes"; }, /canContinueInNewChat/u);
+  refused((c) => { c.refused.error.code = "operation_in_progress"; }, /workspace_unavailable/u);
+  refused((c) => { delete c.refused.error.details.canContinueInNewChat; }, /reason and canContinueInNewChat/u);
+  refused((c) => { c.response.chat.workspaceId = "workspace_fixture_03"; }, /chosen workspace/u);
+  refused((c) => { c.response.chat.forkedFrom.position = "before"; }, /newest reply/u);
+  refused((c) => { c.request.continueIn.workspaceId = "../workspace"; }, /workspaceId is invalid/u);
+  refused((c) => { c.request.continueIn.path = "/Users/me"; }, /continueIn/u);
+  // The new detail keys mean nothing on another error.
+  const otherCode = structuredClone(raw);
+  otherCode.continueInNewChat.refused.error.code = "invalid_request";
+  assert.throws(() => protocol.parseAidenRemoteContractFixture(otherCode));
+
+  const older = structuredClone(raw);
+  older.contractRevision = 63;
+  older.hostHealth.contractRevision = 63;
+  assert.throws(() => protocol.parseAidenRemoteContractFixture(older), /revision 64/u);
+  delete older.continueInNewChat;
+  assert.equal(protocol.parseAidenRemoteContractFixture(older).continueInNewChat, undefined);
+
+  const { default: Ajv2020 } = await import("ajv/dist/2020.js");
+  const spec = await json("openapi.json") as { components: object };
+  const schema = (name: string) => new Ajv2020({ strict: false, validateFormats: false }).compile({ $ref: `#/components/schemas/${name}`, components: spec.components });
+  const envelope = schema("ErrorEnvelope"), forkRequest = schema("ChatForkRequest"), forkResult = schema("ChatForkResult");
+  assert.equal(envelope(raw.continueInNewChat.refused), true, JSON.stringify(envelope.errors));
+  assert.equal(envelope(raw.continueInNewChat.plainRefusal), true, JSON.stringify(envelope.errors));
+  assert.equal(envelope({ error: { ...raw.continueInNewChat.refused.error, details: { reason: "moved" } } }), false);
+  assert.equal(forkRequest(raw.continueInNewChat.request), true, JSON.stringify(forkRequest.errors));
+  assert.equal(forkRequest({ messageId: "message_fixture_01", position: "after" }), true, "the message fork body still validates");
+  assert.equal(forkRequest({ ...raw.continueInNewChat.request, messageId: "message_fixture_01", position: "after" }), false);
+  assert.equal(forkRequest({ continueIn: {} }), false);
+  assert.equal(forkResult(raw.continueInNewChat.response), true, JSON.stringify(forkResult.errors));
 });
