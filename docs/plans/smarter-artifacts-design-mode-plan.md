@@ -1,0 +1,79 @@
+# Smarter artifacts, inline visuals and design mode
+
+Status: Active (2026-11-18). Branch `feat/smarter-artifacts-design-mode`, one PR.
+
+Source: the "Making artifacts and design mode smarter for Aiden" review (2026-11-17, five Opus 5.5 reviewers against `main` at that date). It found 33 numbered problems, a Tier 4 polish list and seven bigger ideas. The common thread: Aiden builds things it cannot see or read back, and some of its instructions point the wrong way.
+
+## Owner decisions (2026-11-18)
+
+- Scope: every batch (A, B, C, D, E), all of Tier 3 and all of Tier 4, in **one PR**.
+- Run it as the phased build loop: phases A → B → C → D → E on one branch; after each phase two Opus reviewers and a fix loop; a final four-reviewer integration pass; then the PR and one CI watcher.
+- Item 8 (canvas status line breaks prompt caching): move it out of the system prompt into a short conversation note sent only on turns where the counts changed.
+- Item 9 (artifact saves eat the 5-version history): skip saves that change nothing, and fold all of one agent turn's saves into a single undo step. Keep the cap at 5.
+- Item 10 (shell-made pages never reach the canvas): auto-place them. After each terminal command in design mode, look for new or changed `.html` pages in the design folder and place them.
+- Item 15 (co-editing): Aiden's canvas changes in one turn become one undo step on the person's stack, earlier history is kept, and Aiden is told when a frame it touches moved since it last looked.
+- Item 33 (artifact button arguments that run other programs): confirm first with a failing case in the existing real-shell test, then restrict what page data may fill and allow safe joined forms such as `HEAD:{{branch}}`.
+- Idea 2 / item 12 (find-and-replace edits): all-or-nothing. Each old text must match exactly once; any miss saves nothing and the error names the failing edit and why.
+- Idea 4 (keep a visual): "Keep in Artifacts" and "Send to canvas" go in the visual's existing actions menu, shared squircle treatment, no new always-visible chrome. Light and dark screenshots before merge.
+- Idea 5 (design system first): Aiden detects the project's colors and fonts and offers a tokens file plus a specimen page; it writes them only after the person agrees.
+- Item 32 (phones on `aiden serve` never see visuals): render visuals to images with an installed Chrome or Chromium found at fixed known paths only (no download, no new bundled dependency, Docker image unchanged). Without one, send a text or table fallback. Either way the tool result tells Aiden what the reader sees.
+
+## Phases
+
+Effort tags from the review: S = hours, M = 1–2 days, L = 3+ days.
+
+### A. Quick wins (items 1–10, 33)
+
+1. Offer the component guide whenever `workspace_artifact` is offered; mention inline visuals only when they exist.
+2. Design mode offering: lead `design_mode`'s description with a trigger sentence; one line in the visuals instructions sending whole pages, app screens and multiple directions to design mode; fix the skill's "not available here" dead end.
+3. Per-tool "use when" routing lines for on-demand tools instead of the 90-character cut.
+4. Unsafe-HTML check matches `javascript:` / `<base` only where they would load something, and quotes the match in the error.
+5. Run the artifact page check after every inline visual and add findings to the tool result.
+6. Show item shapes for list props in the component guide; warn when items do not match.
+7. Placing a file that already has a frame reuses it unless a copy is asked for; locked frames refuse with the id; the result says reused or copied.
+8. Canvas status line moves to a conversation note (see decisions).
+9. No-op artifact saves make no version; one turn's saves fold into one undo step.
+10. Auto-place shell-made design pages (see decisions).
+33. Artifact action argument safety (see decisions).
+
+### B. Aiden checks its own work (items 11, 26, 27; idea 1)
+
+- `canvas_inspect`: render one design page at its real width in the hidden offline export window; return the image plus errors, failed loads, overflow, page height and which tweak controls worked.
+- After a design write, the inspect report is added to the next step automatically. One shared "what's wrong" format across inline visuals, artifacts and the canvas.
+- Raw HTML visuals compile each script before showing it and return errors with their line.
+- Comments: link images to their comment, include the element's HTML and the frame's light or dark state, add resolve and reply.
+
+### C. Edits instead of rewrites (items 12, 21, 22, 29; idea 2)
+
+- Store page source with each artifact version; `get` returns source, each data source's status, last error and a short sample; `check` re-runs data without saving.
+- Find-and-replace edits for artifact pages and visuals (all-or-nothing).
+- Merge inside the store lock; optional base version, refused if it changed.
+- Better data-source errors (head and tail, bad-output snippet, separate file-problem messages).
+- Reuse fresh data results on saves and add a one-line data shape per source.
+
+### D. Canvas power tools (items 13, 15, 18, 19, 23, 24, 25; ideas 6, 7)
+
+- Batch build tool for boxes and arrows with local ids; a clear stop message at the per-turn cap.
+- Co-editing safety and one undo step per Aiden turn.
+- File path accepted wherever a frame id is.
+- Removed pages stay removed unless asked.
+- Artboard wrapping and group refit.
+- Inline visuals skip locked and other-page frames and never merge two visuals from one turn.
+- Place next to a frame; duplicate any frame or group; variants in one call.
+
+### E. Faster, clearer tool choice (items 14, 16, 17, 31, 32; ideas 3, 4, 5)
+
+- Preload visual tools on `/visualize` turns and in design mode; include the guide when a visual tool loads.
+- Selection and real view size sent with each design-mode message and in `canvas_read`.
+- One shared routing rule across visuals, artifacts, canvas and images.
+- Image generation can save to a workspace path and place on the canvas.
+- Server visuals for phones (see decisions).
+- Keep in Artifacts / Send to canvas; design-system-first offer.
+
+### Tier 3 leftovers and Tier 4 polish
+
+Folded into whichever phase touches the same file: items 20, 28, 30 and the Tier 4 list (canvas tool description trim, post-entry tool list, wrong guide section, 64 KB data limit note, same-title replacement notice, error message fixes, arrange ordering, screenshot answers, consent card timeout and "Not now" lifetime, canvas read paging and comment text as data, only design-folder pages land, tweak name checks, artifact lookup caching, stale docs).
+
+## Progress
+
+- 2026-11-18: plan written from the review and the owner's answers.
