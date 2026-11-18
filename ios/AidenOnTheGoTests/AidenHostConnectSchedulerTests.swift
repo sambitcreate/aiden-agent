@@ -109,17 +109,40 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         return false
     }
 
+    /// Says when a machine's connect deadline passes, rather than racing a
+    /// real one that a busy simulator can overrun before a reachable machine
+    /// has answered.
+    private func deadline(
+        _ instanceId: String,
+        in coordinator: AidenRemoteCoordinator,
+        passesWhen passed: @escaping @MainActor () -> Bool
+    ) throws {
+        try connection(instanceId, in: coordinator).waitForDeadline = { _ in
+            while !passed(), !Task.isCancelled { try? await Task.sleep(nanoseconds: 1_000_000) }
+        }
+    }
+
     // MARK: Connecting every machine
 
     func testAnUnreachableMachineDoesNotDelayTheOthers() async throws {
         let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
         let release = responder.hold(instanceId: "build", path: "/server")
         defer { release() }
+        let others = ["studio", "laptop", "mini"]
+        for instanceId in others {
+            try deadline(instanceId, in: coordinator) { false }
+        }
+        // The unreachable machine times out only once the others have connected
+        // alongside it, so they can't have waited on it.
+        let connections = try others.map { try connection($0, in: coordinator) }
+        try deadline("build", in: coordinator) {
+            connections.allSatisfy { $0.connectionState == .connected }
+        }
         let scheduler = scheduler(for: coordinator, timeout: 0.2)
 
         await scheduler.foregrounded()
 
-        for instanceId in ["studio", "laptop", "mini"] {
+        for instanceId in others {
             XCTAssertEqual(try connection(instanceId, in: coordinator).connectionState, .connected, instanceId)
         }
         let build = try connection("build", in: coordinator)
@@ -134,6 +157,12 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         defer {
             releaseStudio()
             releaseLaptop()
+        }
+        for instanceId in ["studio", "laptop"] {
+            try deadline(instanceId, in: coordinator) { true }
+        }
+        for instanceId in ["mini", "build"] {
+            try deadline(instanceId, in: coordinator) { false }
         }
         let scheduler = scheduler(for: coordinator, timeout: 0.2)
 
