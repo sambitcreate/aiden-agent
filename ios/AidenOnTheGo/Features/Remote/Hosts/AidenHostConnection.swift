@@ -148,6 +148,11 @@ final class AidenHostConnection {
     private var cachedProbeClient: CachedClient?
     private var connectInFlight: ConnectInFlight?
     private var settledState: SettledState?
+    /// Waits out a connect's `timeout`. A test replaces it to say when the
+    /// deadline passes, rather than racing a real one.
+    @ObservationIgnored var waitForDeadline: @MainActor (TimeInterval) async -> Void = { timeout in
+        try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+    }
 
     /// `probeClientFactory` defaults to `clientFactory`, so a test's one fake
     /// transport carries both.
@@ -186,9 +191,10 @@ final class AidenHostConnection {
         }
         let work = Task { await run(attempt: attempt, over: route) }
         connectInFlight = ConnectInFlight(attempt: attempt, route: route, work: work)
+        let waitForDeadline = waitForDeadline
         let deadline = timeout.map { timeout in
             Task {
-                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                await waitForDeadline(timeout)
                 // An attempt that ended can still be running, such as a revocation
                 // finishing its purge.
                 guard !Task.isCancelled, isCurrent(attempt: attempt) else { return }

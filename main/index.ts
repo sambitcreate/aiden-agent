@@ -1062,12 +1062,19 @@ async function requestWindowReload(
   }
 }
 
+/** A quit that ends without shutting down says why, so a quit that never finishes can be traced. */
+function quitNotStarted(reason: string): false {
+  logger.info("electron-lifecycle", "Application quit was not started", { reason });
+  return false;
+}
+
 async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
-  if (window.isDestroyed() || !lifecycleCheck.tryBegin()) return false;
+  if (window.isDestroyed()) return quitNotStarted("window-destroyed");
+  if (!lifecycleCheck.tryBegin()) return quitNotStarted("lifecycle-check-in-flight");
   try {
-    if (!confirmImageRequestsBeforeQuit(window)) return false;
+    if (!confirmImageRequestsBeforeQuit(window)) return quitNotStarted("image-requests-kept");
     const authorization = await authorizeProtectedActionOrForce(window, "close", "quit", RENDERER_UNLOAD_HOLD_MS.quit);
-    if (authorization === "declined") return false;
+    if (authorization === "declined") return quitNotStarted("renderer-declined");
     await persistMainWindowState(window);
     try {
       await prepareComputerUseForQuit();
@@ -1092,7 +1099,7 @@ async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
           noLink: true,
         });
       }
-      return false;
+      return quitNotStarted("computer-use-not-durable");
     }
     protectedAction = "quit";
     // Set before the window closes, so a question or approval it withdraws stays saved for the next launch.
@@ -1105,7 +1112,7 @@ async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
       clearRendererUnloadApproval(window);
       llmClient.setQuitInProgress(false);
       computerUseSettings.resumeAfterCancelledShutdown();
-      return false;
+      return quitNotStarted("renderer-close-cancelled");
     }
     await shutdownAndQuit(true);
     return shutdownStarted;

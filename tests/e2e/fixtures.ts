@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { describeStuckShutdown } from "../../scripts/e2e-shutdown-diagnostics.mjs";
 import { startFakeOpenRouter, type FakeOpenRouter } from "./fake-openrouter";
 
 export const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -869,8 +870,12 @@ async function terminateOwnedProcess(child: ChildProcess): Promise<void> {
   }
 }
 
-/** Close Electron and fail observably if its test-owned main process leaks. */
-export async function closeAiden(app: ElectronApplication | undefined): Promise<void> {
+/**
+ * Close Electron and fail observably if its test-owned main process leaks.
+ * `devLogPath` is the app's development dev log: a quit that never finishes
+ * prints its quit records from it, with the stuck process's threads.
+ */
+export async function closeAiden(app: ElectronApplication | undefined, devLogPath?: string): Promise<void> {
   if (!app) return;
   let child: ReturnType<ElectronApplication["process"]>;
   try {
@@ -888,6 +893,8 @@ export async function closeAiden(app: ElectronApplication | undefined): Promise<
         waitForProcessExit(pid, ELECTRON_EXIT_TIMEOUT_MS),
       ]);
       if (!closed) {
+        // Hosted runs keep only the job log, so say there where the quit stopped.
+        process.stderr.write(`Electron PID ${pid} did not quit:\n${await describeStuckShutdown({ pid, devLogPath })}\n`);
         throw new Error(`Electron shutdown timed out after ${ELECTRON_EXIT_TIMEOUT_MS} ms.`);
       }
     } else {
@@ -1005,6 +1012,15 @@ function formatFailure(error: unknown): string {
 }
 
 const MAX_PRINTED_DEV_LOG_PROBLEMS = 40;
+
+function devLogFile(rootDir: string): string {
+  return path.join(rootDir, "user-data", "logs", process.env.AIDEN_E2E_RUNTIME_PROFILE === "production" ? "aiden.log" : "aiden-dev.log");
+}
+
+/** Only the development journal keeps the quit records; production drops them by design. */
+function quitRecordsLog(rootDir: string): string | undefined {
+  return process.env.AIDEN_E2E_RUNTIME_PROFILE === "production" ? undefined : devLogFile(rootDir);
+}
 
 /** The dev log's warn and error records, one short line each (the log is already redacted). */
 function devLogProblems(devLog: string): string[] {
@@ -1161,7 +1177,7 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
           if (nextAppEnvironment) extraAppEnvironment = nextAppEnvironment;
           const previous = app;
           app = undefined;
-          await closeAiden(previous);
+          await closeAiden(previous, quitRecordsLog(testRootDir));
           await afterClose?.();
           return launch();
         },
@@ -1215,7 +1231,7 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
         // A closed or crashed window has nothing more to report.
       }
       try {
-        const devLog = await readFile(path.join(rootDir, "user-data", "logs", process.env.AIDEN_E2E_RUNTIME_PROFILE === "production" ? "aiden.log" : "aiden-dev.log"));
+        const devLog = await readFile(devLogFile(rootDir));
         await testInfo.attach("aiden-dev-log", {
           body: devLog,
           contentType: "text/plain",
@@ -1236,7 +1252,7 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
 
     const teardownFailures: unknown[] = [];
     try {
-      await closeAiden(app);
+      await closeAiden(app, rootDir ? quitRecordsLog(rootDir) : undefined);
     } catch (error) {
       teardownFailures.push(error);
     }

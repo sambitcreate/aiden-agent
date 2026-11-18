@@ -123,6 +123,7 @@ import {
 } from "./device-workspace-tabs";
 import {
   WorkbenchPanel,
+  focusStripTabNextFrame,
   useWorkbenchWidth,
   type WorkbenchTab,
   type WorkbenchView,
@@ -1423,7 +1424,7 @@ function EnvironmentPanelSurface({
   };
   const closeStripTab = (entry: StripTab) => {
     const intent = ++navigationIntentRef.current;
-    requestAnimationFrame(() => activeTabRef.current?.focus());
+    focusStripTabNextFrame(activeTabRef);
     if (entry.deviceKey !== undefined) {
       // Closing a device tab ends its viewer session; the simulator keeps running.
       if (devices.close(entry.deviceKey)) panel.closeTab("devices");
@@ -1435,7 +1436,7 @@ function EnvironmentPanelSurface({
       }).catch(() => toast.error("Could not close browser tab."));
     } else panel.closeTab(entry.kind);
   };
-  const finishRename = () => { setRenamingDevice(null); requestAnimationFrame(() => activeTabRef.current?.focus()); };
+  const finishRename = () => { setRenamingDevice(null); focusStripTabNextFrame(activeTabRef); };
   const decoratedTabs = stripTabs.map<StripTab>((entry) => {
     const deviceKey = entry.deviceKey;
     if (!deviceKey) return entry;

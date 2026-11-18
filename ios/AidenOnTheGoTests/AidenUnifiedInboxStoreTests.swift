@@ -1582,13 +1582,17 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
         await waitUntil("the poll") { polls("studio") == 2 }
 
         await studio.connect(over: .probe)
+        // Only the held poll fails: the release answers it then and there. The
+        // connect makes the machine due again, and when the poller wakes after
+        // the held poll is done, its poll is a new one, which the machine answers.
         responder.fail(instanceId: "studio", path: "/chat-summaries", code: .notConnectedToInternet)
         release()
+        serve([row("rows", age: 1)], on: "studio")
         await refresh.value
-        await untilAsleep(1)
 
         XCTAssertEqual(studio.connectionState, .connected)
-        serve([row("rows", age: 1)], on: "studio")
+        await untilAsleep(1)
+        XCTAssertEqual(studio.connectionState, .connected)
         let pollsBefore = polls("studio")
         clock.advance(by: .seconds(15))
         await waitUntil("the next poll, with no backoff") { polls("studio") == pollsBefore + 1 }
