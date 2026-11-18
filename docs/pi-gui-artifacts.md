@@ -27,7 +27,7 @@ Design and roadmap: [Inline Generative UI](superpowers/specs/2026-10-08-inline-g
 
    The mode travels as `GenerationParams.inlineVisuals`. Telegram, Assistant, Bots, scheduled runs, and child agents do not inherit the extension. Reading a workspace `.html` file (`path`) still requires a workspace with file access.
 2. **Tools.**
-   - `render_artifact({ title, html } | { title, path }, layout?)` validates UTF-8 HTML (512 KiB), rejects remote scripts, frames and `javascript:` URLs, stages the bytes in `generative-ui-artifacts.json` (`0600`), and emits a `kind: "html"` `ChatArtifactEventV1` with an opaque `mediaId`. Its tool result is text only.
+   - `render_artifact({ title, html } | { title, path }, layout?)` validates UTF-8 HTML (512 KiB), rejects remote scripts, frames, `<base>`, `<link>` and `javascript:` / `data:text/html` URLs where they would load (a start tag, an attribute value or a CSS `url()`, so a label such as "JavaScript: 41%" or `i < object.length` in a script passes) and quotes the refused markup in its error, stages the bytes in `generative-ui-artifacts.json` (`0600`), and emits a `kind: "html"` `ChatArtifactEventV1` with an opaque `mediaId`. Its tool result is text only.
    - `visualize_guide({ modules })` returns design, HTML, chart, and interactivity guidance on demand (`main/services/generative-ui-guide.ts`), which keeps the system prompt short.
 
    Replay is `"never"` for both tools.

@@ -50,6 +50,34 @@ test("html admission rejects remote scripts, frames, and javascript URLs", () =>
   assert.ok(validateGenerativeUiHtml('<a href="https://example.com/docs">cite</a>').byteLength > 0);
   const ok = validateGenerativeUiHtml("<button onclick=\"this.textContent='ok'\">Go</button>");
   assert.ok(ok.byteLength > 0);
+  assert.throws(() => validateGenerativeUiHtml('<div style="background:url(javascript:alert(1))"></div>'));
+  assert.throws(() => validateGenerativeUiHtml('<a href="data:text/html,<b>x</b>">x</a>'));
+  assert.throws(() => validateGenerativeUiHtml('<base href="https://evil.test/">'));
+  assert.throws(() => validateGenerativeUiHtml('<link rel="stylesheet" href="https://evil.test/a.css">'));
+});
+
+test("html admission lets labels and script comparisons through that only look like loads", () => {
+  const chart = [
+    "<h2>Languages</h2>",
+    "<ul><li>JavaScript: 41%</li><li>Python: 30%</li><li>The <code>javascript:</code> scheme is blocked</li></ul>",
+    "<p>Data as text/html or data: text/html is fine to mention.</p>",
+    "<script>",
+    "const rows = [1, 2, 3]; const object = rows; const base = 2; const link = 1, frame = 0;",
+    "for (let i = 0; i < object.length; i += 1) { if (i<base && frame<link) console.log(i); }",
+    "</script>",
+  ].join("");
+  assert.ok(validateGenerativeUiHtml(chart).byteLength > 0);
+});
+
+test("a refused visual's error quotes the markup that was refused", () => {
+  assert.throws(
+    () => validateGenerativeUiHtml('<p>Chart</p><iframe src="https://evil.test/embed"></iframe>'),
+    (error: Error) => error.message.includes('"<iframe src=\\"https://evil.test/embed\\">"'),
+  );
+  assert.throws(
+    () => validateGenerativeUiHtml('<p>JavaScript: 41%</p><a href="javascript:alert(1)">x</a>'),
+    (error: Error) => /found "=\\"javascript:"/u.test(error.message) && !/remote URLs/u.test(error.message),
+  );
 });
 
 test("parent CSP lists only self frames so arbitrary https frames stay denied", async () => {

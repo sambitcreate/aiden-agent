@@ -26,14 +26,37 @@ import {
 } from "../../renderer/shared/generative-ui-bridge.js";
 import { generativeUiKitCss } from "./generative-ui-kit.js";
 
-const FORBIDDEN_OPEN_TAG =
-  /<\s*(iframe|object|embed|applet|frame|frameset|base)\b/iu;
-const META_HTTP_EQUIV = /<\s*meta\b[^>]*\bhttp-equiv\s*=/iu;
-const SCRIPT_WITH_SRC = /<\s*script\b[^>]*\bsrc\s*=/iu;
-const JAVASCRIPT_URL = /javascript\s*:/iu;
-const HTML_DATA_URL = /data\s*:\s*text\/html/iu;
-const LINK_TAG = /<\s*link\b/iu;
+// These match only markup that would load something: a real start tag (the
+// name right after "<", then attributes up to ">" or the end of a draft), or a
+// URL in an attribute value or CSS url(). Words in labels and comparisons in
+// scripts ("JavaScript: 41%", "i < object.length") pass; the sandbox's CSP is
+// what actually blocks loads.
+const tagPattern = (names: string) => new RegExp(`<(?:${names})(?:[\\s/][^<>]*)?(?:>|$)`, "iu");
+const FORBIDDEN_OPEN_TAG = tagPattern("iframe|object|embed|applet|frame|frameset|base");
+const META_HTTP_EQUIV = /<meta\b[^<>]*\bhttp-equiv\s*=/iu;
+const SCRIPT_WITH_SRC = /<script\b[^<>]*\bsrc\s*=/iu;
+const LINK_TAG = tagPattern("link");
+const URL_VALUE = String.raw`(?:=\s*["'\x60]?|\burl\(\s*["']?)\s*`;
+const JAVASCRIPT_URL = new RegExp(`${URL_VALUE}javascript\\s*:`, "iu");
+const HTML_DATA_URL = new RegExp(`${URL_VALUE}data\\s*:\\s*text\\/html`, "iu");
 const HTTP_SRC = /\bsrc\s*=\s*["']?\s*https?:\/\//iu;
+
+const EMBED_PATTERNS = [FORBIDDEN_OPEN_TAG, SCRIPT_WITH_SRC, META_HTTP_EQUIV, LINK_TAG] as const;
+const URL_PATTERNS = [JAVASCRIPT_URL, HTML_DATA_URL, HTTP_SRC] as const;
+const MAX_QUOTED_MATCH_CHARS = 60;
+
+function firstMatch(html: string, patterns: readonly RegExp[]): string | undefined {
+  for (const pattern of patterns) {
+    const match = pattern.exec(html);
+    if (match) return match[0];
+  }
+  return undefined;
+}
+
+function quoteMatch(text: string): string {
+  const flat = text.replace(/\s+/gu, " ").trim();
+  return JSON.stringify(flat.length > MAX_QUOTED_MATCH_CHARS ? `${flat.slice(0, MAX_QUOTED_MATCH_CHARS - 1)}…` : flat);
+}
 
 export interface GenerativeUiThemeTokens {
   colorScheme: "light" | "dark";
@@ -264,15 +287,7 @@ function themeVariableLines(vars: Readonly<Record<string, string>> | undefined):
  */
 export function isGenerativeUiDraftAcceptable(html: string): boolean {
   if (html.includes("\0") || Buffer.byteLength(html, "utf8") > MAX_HTML_ARTIFACT_BYTES) return false;
-  return ![
-    FORBIDDEN_OPEN_TAG,
-    SCRIPT_WITH_SRC,
-    META_HTTP_EQUIV,
-    LINK_TAG,
-    JAVASCRIPT_URL,
-    HTML_DATA_URL,
-    HTTP_SRC,
-  ].some((pattern) => pattern.test(html));
+  return firstMatch(html, [...EMBED_PATTERNS, ...URL_PATTERNS]) === undefined;
 }
 
 export function validateGenerativeUiHtml(html: string): Buffer {
@@ -291,14 +306,16 @@ export function validateGenerativeUiHtml(html: string): Buffer {
   if (bytes.toString("utf8") !== html) {
     throw new Error("Artifact HTML is not valid UTF-8.");
   }
-  if (FORBIDDEN_OPEN_TAG.test(html) || SCRIPT_WITH_SRC.test(html) || META_HTTP_EQUIV.test(html) || LINK_TAG.test(html)) {
+  const embed = firstMatch(html, EMBED_PATTERNS);
+  if (embed !== undefined) {
     throw new Error(
-      "Artifact HTML cannot include iframes, remote documents, or external scripts. Use inline JavaScript; Chart.js, Plotly, and KaTeX are provided by Aiden.",
+      `Artifact HTML cannot include iframes, embedded documents, <base>, <link> or external scripts (found ${quoteMatch(embed)}). Use inline JavaScript and CSS; Chart.js, Plotly, and KaTeX are provided by Aiden.`,
     );
   }
-  if (JAVASCRIPT_URL.test(html) || HTML_DATA_URL.test(html) || HTTP_SRC.test(html)) {
+  const url = firstMatch(html, URL_PATTERNS);
+  if (url !== undefined) {
     throw new Error(
-      "Artifact HTML cannot load remote URLs or javascript: / data:text/html resources.",
+      `Artifact HTML cannot load remote images or scripts, or use javascript: or data:text/html URLs (found ${quoteMatch(url)}). Draw with inline SVG, CSS or a canvas instead.`,
     );
   }
   return bytes;

@@ -172,4 +172,6 @@ test("draft admission stops at remote loads and forbidden elements but tolerates
   assert.equal(isDraftHtmlAcceptable("<img src=\"https://tracker.example/x.png\">"), false);
   assert.equal(isDraftHtmlAcceptable("<a href=\"javascript:alert(1)\">"), false);
   assert.equal(isDraftHtmlAcceptable("x\u0000y"), false);
+  assert.equal(isDraftHtmlAcceptable("<li>JavaScript: 41%</li><script>for (let i = 0; i < object.length; i++) {"), true);
+  assert.equal(isDraftHtmlAcceptable("<p>Chart</p><iframe src=\"https://evil.test"), false);
 });
