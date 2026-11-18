@@ -12,6 +12,8 @@ import {
   parseDesignTweakVersions,
   shuffleDesignTweaks,
   showsDesignTweakVersion,
+  tweaksAfterBake,
+  tweaksAfterBakeUndo,
   extractDesignTweakControls,
   parseDesignTweakValues,
   readDesignTweak,
@@ -260,4 +262,17 @@ test("versions are read back bounded and matched by their values and Dark switch
   assert.equal(showsDesignTweakVersion({ tweaks: { "--a": "1" }, dark: true }, versions![0]!), true);
   assert.equal(showsDesignTweakVersion({ tweaks: { "--a": "1" } }, versions![0]!), false);
   assert.equal(nextDesignTweakVersionName([{ id: "a", name: "V2" }, { id: "b", name: "V4" }]), "V3");
+});
+
+test("after Make default a frame keeps only what the file couldn't take and what changed while it was written", () => {
+  const submitted = { "--radius": "14px", "data-headline": "Pick a slot", "data-cta": "Book" };
+  // Nothing changed meanwhile: only the words the file couldn't place stay.
+  assert.deepEqual(tweaksAfterBake(submitted, submitted, ["data-cta"]), { "data-cta": "Book" });
+  assert.equal(tweaksAfterBake(submitted, submitted, []), undefined);
+  // Corners moved to 18px while the file was being written: that change survives.
+  const meanwhile = { ...submitted, "--radius": "18px", "--accent": "#ff0055" };
+  assert.deepEqual(tweaksAfterBake(meanwhile, submitted, []), { "--radius": "18px", "--accent": "#ff0055" });
+  // Undo brings the written values back to the frame, under anything changed since.
+  assert.deepEqual(tweaksAfterBakeUndo(undefined, submitted), submitted);
+  assert.deepEqual(tweaksAfterBakeUndo({ "--radius": "18px" }, submitted), { ...submitted, "--radius": "18px" });
 });

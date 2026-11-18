@@ -38,9 +38,20 @@ export function showDesignTweakVersions(
   const w = columns * frame.w + (columns - 1) * GAP + 2 * PAD;
   const h = rows * frame.h + (rows - 1) * GAP + 2 * PAD;
   if (h > DESIGN_CANVAS_LIMITS.maxSize) return null;
-  const left = frame.x + frame.w + 2 * GAP;
+  // To the page's right, past anything already there, so nothing on the page is covered.
   const top = frame.y - PAD;
-  if (left + w > DESIGN_CANVAS_LIMITS.maxCoord || top + h > DESIGN_CANVAS_LIMITS.maxCoord) return null;
+  let left = frame.x + frame.w + 2 * GAP;
+  const others = doc.frames.filter((entry) => entry.pageId === frame.pageId && entry.id !== frame.id);
+  const blocking = (x: number) =>
+    others.find(
+      (entry) =>
+        entry.x < x + w + GAP && x - GAP < entry.x + entry.w && entry.y < top + h + GAP && top - GAP < entry.y + entry.h,
+    );
+  for (let blocker = blocking(left); blocker; blocker = blocking(left)) {
+    left = Math.max(left, blocker.x + blocker.w) + 2 * GAP;
+  }
+  if (left + w > DESIGN_CANVAS_LIMITS.maxCoord || top < -DESIGN_CANVAS_LIMITS.maxCoord) return null;
+  if (top + h > DESIGN_CANVAS_LIMITS.maxCoord) return null;
 
   const groupId = newId();
   const group: DesignFrame = {

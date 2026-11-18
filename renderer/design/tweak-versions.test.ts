@@ -113,3 +113,27 @@ test("Show all needs saved versions and room on the canvas", () => {
   }));
   assert.equal(showDesignTweakVersions(canvas(page(), ...crowd), "page", counter()), null);
 });
+
+test("Show all steps past whatever already sits to the page's right, so nothing on the page is covered", () => {
+  const original = page();
+  const neighbour: DesignFrame = { ...page({ tweakVersions: undefined }), id: "neighbour", title: "Pricing", x: original.x + original.w + 64 };
+  const note: DesignFrame = {
+    id: "note",
+    kind: "note",
+    title: "Note",
+    x: neighbour.x + neighbour.w + 40,
+    y: 300,
+    w: 240,
+    h: 160,
+    pageId: DESIGN_FIRST_PAGE_ID,
+    createdBy: "person",
+  };
+  const shown = showDesignTweakVersions(canvas(original, neighbour, note), "page", counter());
+  assert.ok(shown);
+  const group = shown.doc.frames.find((frame) => frame.id === shown.groupId)!;
+  for (const other of [original, neighbour, note]) assert.ok(!overlap(group, other), `the group covers ${other.title}`);
+  for (const id of shown.ids) {
+    const copy = shown.doc.frames.find((frame) => frame.id === id)!;
+    assert.ok(inside(group, copy));
+  }
+});

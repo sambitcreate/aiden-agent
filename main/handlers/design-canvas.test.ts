@@ -671,20 +671,35 @@ test("make default writes a frame's values into its page, keeps words it can't p
 ]</script></head><body><h1 data-aiden-text="title">Hi</h1><a data-aiden-text="cta">Go</a><b data-aiden-text="cta">Go</b></body></html>`;
   await fs.writeFile(file, page);
   const values = { "--radius": "16px", "data-title": "Hello", "data-cta": "Start" };
-  assert.deepEqual(await invoke("designCanvas:bakeTweaks", "chat-1", "page", values), { ok: true, kept: ["data-cta"] });
+  const bake = async (next: Record<string, string> | undefined) => {
+    const answer = (await invoke("designCanvas:bakeTweaks", "chat-1", "page", next)) as { ok: boolean; kept?: string[]; undoId?: string };
+    if (answer.ok) assert.equal(typeof answer.undoId, "string");
+    return answer;
+  };
+  const first = await bake(values);
+  assert.deepEqual(first.kept, ["data-cta"]);
   const baked = await fs.readFile(file, "utf8");
   assert.match(baked, /<style data-aiden-tweaks>\n:root \{ --radius: 16px; \}/u);
   assert.match(baked, /<h1 data-aiden-text="title">Hello<\/h1>/u);
   assert.match(baked, /<a data-aiden-text="cta">Go<\/a><b data-aiden-text="cta">Go<\/b>/u, "words found twice stay for the frame to keep");
   assert.match(baked, /"default": 16/u);
 
-  assert.deepEqual(await invoke("designCanvas:undoBakeTweaks", "chat-1", "page"), { ok: true });
+  assert.deepEqual(await invoke("designCanvas:undoBakeTweaks", "chat-1", "page", first.undoId), { ok: true });
   assert.equal(await fs.readFile(file, "utf8"), page);
-  assert.deepEqual(await invoke("designCanvas:undoBakeTweaks", "chat-1", "page"), { ok: false, reason: "unchanged" }, "one undo per make default");
+  assert.deepEqual(await invoke("designCanvas:undoBakeTweaks", "chat-1", "page", first.undoId), { ok: false, reason: "unchanged" }, "one undo per make default");
 
-  assert.deepEqual(await invoke("designCanvas:bakeTweaks", "chat-1", "page", values), { ok: true, kept: ["data-cta"] });
+  // An older Make default's Undo leaves a later one alone; the later one's Undo still works.
+  const older = await bake(values);
+  const newer = await bake({ "--radius": "20px" });
+  assert.match(await fs.readFile(file, "utf8"), /--radius: 20px;/u);
+  assert.deepEqual(await invoke("designCanvas:undoBakeTweaks", "chat-1", "page", older.undoId), { ok: false, reason: "changed" });
+  assert.match(await fs.readFile(file, "utf8"), /--radius: 20px;/u);
+  assert.deepEqual(await invoke("designCanvas:undoBakeTweaks", "chat-1", "page", newer.undoId), { ok: true });
+  assert.match(await fs.readFile(file, "utf8"), /--radius: 16px;/u);
+
+  const again = await bake({ "--radius": "12px" });
   await fs.writeFile(file, `${await fs.readFile(file, "utf8")}<!-- edited -->`);
-  assert.deepEqual(await invoke("designCanvas:undoBakeTweaks", "chat-1", "page"), { ok: false, reason: "changed" }, "a file changed since is left alone");
+  assert.deepEqual(await invoke("designCanvas:undoBakeTweaks", "chat-1", "page", again.undoId), { ok: false, reason: "changed" }, "a file changed since is left alone");
 
   assert.deepEqual(await invoke("designCanvas:bakeTweaks", "chat-1", "page", undefined), { ok: false, reason: "unchanged" });
   await fs.writeFile(file, "<p>No tweaks here</p>");

@@ -2,6 +2,7 @@
 // on (it is, unless AIDEN_DESIGN_MODE=0), and every handler re-checks it the
 // way `chats:setDesignMode` does.
 
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import * as fs from "node:fs/promises";
 import {
@@ -138,8 +139,13 @@ export type DesignCanvasFileRewriteFailure =
 
 export type DesignCanvasEditTextResult = { ok: true } | { ok: false; reason: DesignCanvasFileRewriteFailure };
 
-/** `designCanvas:bakeTweaks` reply: `kept` names the targets whose words couldn't be placed in the page. */
-export type DesignCanvasBakeTweaksResult = { ok: true; kept: string[] } | { ok: false; reason: DesignCanvasFileRewriteFailure };
+/**
+ * `designCanvas:bakeTweaks` reply: `kept` names the targets whose words couldn't be placed in the page,
+ * and `undoId` names this Make default, so its Undo can't undo a later one.
+ */
+export type DesignCanvasBakeTweaksResult =
+  | { ok: true; kept: string[]; undoId: string }
+  | { ok: false; reason: DesignCanvasFileRewriteFailure };
 
 /** What the hidden export window draws: a page at its width, as a picture or a PDF. */
 export type DesignFrameRenderRequest = {
@@ -198,7 +204,7 @@ export function registerDesignCanvasHandlers<Event>(deps: {
   // enter design mode, so they never get a canvas file either.
   const attended = (chat: DesignCanvasChat): boolean => !chat.botId && !chat.owner;
   /** Each frame's last Make default, by chat and frame, for its Undo: the file before and after. */
-  const tweakDefaultsUndo = new Map<string, { before: string; after: string }>();
+  const tweakDefaultsUndo = new Map<string, { id: string; before: string; after: string }>();
 
   // Reading and saving do not require design mode to still be on: turning it
   // off unmounts the canvas, and the edit that unmount flushes may land after
@@ -519,20 +525,24 @@ export function registerDesignCanvasHandlers<Event>(deps: {
       });
       if (!result.ok) return result as DesignCanvasBakeTweaksResult;
       const done = result as unknown as { source: string; kept: string[] };
-      tweakDefaultsUndo.set(`${chatId}\n${frameId}`, { before, after: done.source });
-      return { ok: true, kept: done.kept };
+      const undoId = randomUUID();
+      tweakDefaultsUndo.set(`${chatId}\n${frameId}`, { id: undoId, before, after: done.source });
+      return { ok: true, kept: done.kept, undoId };
     },
   );
 
-  deps.handle("designCanvas:undoBakeTweaks", async (_event, chatId, frameId): Promise<DesignCanvasEditTextResult> => {
+  deps.handle("designCanvas:undoBakeTweaks", async (_event, chatId, frameId, undoId): Promise<DesignCanvasEditTextResult> => {
     if (!deps.enabled()) throw new Error(UNAVAILABLE);
     assertDesignCanvasChatId(chatId);
     if (typeof frameId !== "string" || frameId.length === 0 || frameId.length > 128) {
       throw new Error("Invalid design frame.");
     }
+    if (typeof undoId !== "string" || undoId.length === 0 || undoId.length > 64) throw new Error("Invalid undo.");
     const key = `${chatId}\n${frameId}`;
     const saved = tweakDefaultsUndo.get(key);
     if (!saved) return { ok: false, reason: "unchanged" };
+    // An older Make default's Undo: a later one has changed the file since.
+    if (saved.id !== undoId) return { ok: false, reason: "changed" };
     const result = await rewriteFrameFile(chatId, frameId, (source) =>
       source === saved.after ? { ok: true as const, source: saved.before } : { ok: false as const, reason: "changed" as const },
     );

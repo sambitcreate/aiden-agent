@@ -642,6 +642,32 @@ export function designTweakSummary(
   return [heading, ...lines].join("\n");
 }
 
+/**
+ * A frame's values once Make default has written `submitted` into its file:
+ * it keeps the words the file couldn't take (`kept`) and any value changed
+ * since, and lets go of the rest, which the file now says.
+ */
+export function tweaksAfterBake(
+  current: DesignTweakValues | undefined,
+  submitted: DesignTweakValues,
+  kept: readonly string[],
+): DesignTweakValues | undefined {
+  const next: DesignTweakValues = {};
+  for (const [name, value] of Object.entries(current ?? {})) {
+    if (kept.includes(name) || submitted[name] !== value) next[name] = value;
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
+/** A frame's values once that Make default is undone: what it showed then, under any change made since. */
+export function tweaksAfterBakeUndo(
+  current: DesignTweakValues | undefined,
+  submitted: DesignTweakValues,
+): DesignTweakValues | undefined {
+  const next = { ...submitted, ...current };
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
 // ---- Versions --------------------------------------------------------------
 
 /** A saved set of a frame's values, with the Dark switch, that the person can come back to. */

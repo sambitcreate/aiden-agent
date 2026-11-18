@@ -265,3 +265,24 @@ test("the floating panel stays away from a page without controls", async () => {
   await act(async () => undefined);
   assert.equal(view.container.innerHTML, "");
 });
+
+test("a version's picture is kept only if the page still shows that version when it is taken", async () => {
+  const calls = newCalls();
+  // Its own frame id: pictures are kept for the app run, across these tests.
+  render(<Harness initial={page({ id: "pictured", tweaks: { "--accent": "#ff0055" } })} calls={calls} />);
+  fireEvent.click(screen.getByRole("button", { name: "Save version" }));
+  await waitFor(() => assert.equal(calls.captures, 1));
+  const v1 = () => screen.getByRole("button", { name: "V1" });
+  // V1, then straight away another value: by the time a picture could be taken the page shows neither.
+  fireEvent.click(v1());
+  const typed = screen.getByRole("textbox", { name: "Corners value" });
+  fireEvent.change(typed, { target: { value: "16" } });
+  fireEvent.keyDown(typed, { key: "Enter" });
+  await act(() => new Promise((resolve) => setTimeout(resolve, 600)));
+  assert.equal(calls.captures, 1);
+  assert.ok(!v1().querySelector("img"), "V1 has no picture of another look");
+  // Shown and left alone, V1 gets its own picture.
+  fireEvent.click(v1());
+  await waitFor(() => assert.equal(calls.captures, 2), { timeout: 2000 });
+  await waitFor(() => assert.ok(v1().querySelector("img")));
+});

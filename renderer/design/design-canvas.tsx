@@ -48,6 +48,7 @@ import { usePageTextEdits } from "./page-text-edits";
 import { designFrameSnapshots } from "./frame-snapshots";
 import { DesignTweaksFloat, type DesignTweakOps } from "./design-tweaks-panel";
 import { showDesignTweakVersions } from "./tweak-versions";
+import { tweaksAfterBake, tweaksAfterBakeUndo } from "../shared/design-canvas/tweaks";
 import { postToDesignPage } from "../shared/design-canvas/bridge-messages";
 import { useDesignDrawing, type DesignDrawTool } from "./design-drawing";
 import { DesignPresentBar, DesignPresentButton, presentationKey, type DesignPresentation } from "./design-present";
@@ -935,10 +936,11 @@ function LoadedDesignCanvas({
   }, []);
 
   const undoTweakDefaults = React.useCallback(
-    async (frameId: string, path: string, values: Record<string, string>) => {
-      const answer = await designCanvasApi.undoBakeDesignTweaks(chatId, frameId).catch(() => null);
+    async (frameId: string, path: string, values: Record<string, string>, undoId: string) => {
+      const answer = await designCanvasApi.undoBakeDesignTweaks(chatId, frameId, undoId).catch(() => null);
       if (answer?.ok) {
-        update(frameId, { tweaks: values }, { record: true });
+        const latest = latestDoc.current.frames.find((entry) => entry.id === frameId);
+        update(frameId, { tweaks: tweaksAfterBakeUndo(latest?.tweaks, values) }, { record: true });
         reloadPaths([path]);
         toast("Put the page's file back as it was.");
       } else {
@@ -965,16 +967,17 @@ function LoadedDesignCanvas({
           toast.error(BAKE_ERRORS[result?.reason ?? "failed"] ?? BAKE_ERRORS.failed);
           return;
         }
-        // Words that couldn't be placed in the page stay on the frame.
-        const kept: Record<string, string> = {};
-        for (const target of result.kept) if (values[target] !== undefined) kept[target] = values[target];
-        update(frameId, { tweaks: Object.keys(kept).length > 0 ? kept : undefined }, { record: true });
+        // The frame lets go of what the file now says, keeping words the file
+        // couldn't take and anything changed while the file was written.
+        const latest = latestDoc.current.frames.find((entry) => entry.id === frameId);
+        update(frameId, { tweaks: tweaksAfterBake(latest?.tweaks, values, result.kept) }, { record: true });
         reloadPaths([path]);
+        const { undoId } = result;
         toast.success(
           result.kept.length > 0
             ? "Made these the page's defaults. Some words couldn't be placed in the file, so this frame keeps them."
             : "Made these the page's defaults.",
-          { action: { label: "Undo", onClick: () => void undoTweakDefaults(frameId, path, values) } },
+          { action: { label: "Undo", onClick: () => void undoTweakDefaults(frameId, path, values, undoId) } },
         );
       })();
     },
