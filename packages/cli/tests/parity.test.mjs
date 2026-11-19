@@ -2262,12 +2262,16 @@ test("durable CLI Bots can message each other", async (t) => {
     let body = ""; for await (const chunk of request) body += chunk;
     const parsed = JSON.parse(body); requests.push(parsed);
     const last = parsed.messages.at(-1), content = JSON.stringify(last.content);
+    // A reply turn is past the Bot-message chain limit: it still declares
+    // message_bot (one tool list for every turn), and its relay is refused.
     const call = last.role === "user" && content.includes("Ask Beta for Ping")
-      ? { id: "message-beta", name: "message_bot", arguments: { bot: "Beta", message: "Ping" } } : undefined;
-    const text = content.includes("<bot_message") ? "Pong" : content.includes("<bot_reply") ? "Beta says Pong" : "Sent";
+      ? { id: "message-beta", name: "message_bot", arguments: { bot: "Beta", message: "Ping" } }
+      : last.role === "user" && content.includes("<bot_reply")
+        ? { id: "relay-gamma", name: "message_bot", arguments: { bot: "Gamma", message: "Relay" }, text: "Beta says Pong" } : undefined;
+    const text = content.includes("<bot_message") ? "Pong" : "Sent";
     if (content.includes("<bot_message")) preparingReply = true;
     response.writeHead(200, { "content-type": "text/event-stream" });
-    response.write(`data: ${JSON.stringify({ id: "messaging", object: "chat.completion.chunk", choices: [{ index: 0, delta: call ? { role: "assistant", tool_calls: [{ index: 0, id: call.id, type: "function", function: { name: call.name, arguments: JSON.stringify(call.arguments) } }] } : { role: "assistant", content: text }, finish_reason: null }] })}\n\n`);
+    response.write(`data: ${JSON.stringify({ id: "messaging", object: "chat.completion.chunk", choices: [{ index: 0, delta: call ? { role: "assistant", ...(call.text ? { content: call.text } : {}), tool_calls: [{ index: 0, id: call.id, type: "function", function: { name: call.name, arguments: JSON.stringify(call.arguments) } }] } : { role: "assistant", content: text }, finish_reason: null }] })}\n\n`);
     response.write(`data: ${JSON.stringify({ id: "messaging", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: call ? "tool_calls" : "stop" }] })}\n\n`);
     response.end("data: [DONE]\n\n");
   });
@@ -2307,7 +2311,18 @@ test("durable CLI Bots can message each other", async (t) => {
   const reply = (await entries(bots[0].id)).find((entry) => entry.type === "bot_message" && entry.kind === "reply");
   assert.equal(reply.text, "Pong");
   assert.ok(requests[0].tools.some((tool) => tool.function.name === "message_bot"));
-  assert.ok(requests.find((request) => JSON.stringify(request.messages.at(-1).content).includes("<bot_reply")).tools.every((tool) => tool.function.name !== "message_bot"));
+  const toolNames = (request) => request.tools.map((tool) => tool.function.name);
+  const replyRequest = requests.find((request) => JSON.stringify(request.messages.at(-1).content).includes("<bot_reply"));
+  assert.deepEqual(toolNames(replyRequest), toolNames(requests[0]), "the reply turn declares the same tools as the person's turn");
+  const relayDeadline = Date.now() + 10_000;
+  let relayResult;
+  while (!(relayResult = requests.map((request) => request.messages.at(-1)).find((message) => message.tool_call_id === "relay-gamma"))) {
+    if (Date.now() > relayDeadline) assert.fail("the refused relay's result never reached the model");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.match(JSON.stringify(relayResult.content), /not available on this turn/);
+  const ledgerRows = JSON.parse(readFileSync(join(dir, "bots/bot-messages.json"))).rows;
+  assert.equal(ledgerRows.some((row) => row.toBotId === bots[2].id), false, "the refused relay never reaches Gamma");
   const offeredNames = new Set(requests.flatMap((request) => request.tools.map((tool) => tool.function.name)));
   assert.equal(offeredNames.has("request_access"), false, "CLI has no temporary-access cards");
   assert.equal(offeredNames.has("propose_plan"), false, "CLI does not host plan approvals");
