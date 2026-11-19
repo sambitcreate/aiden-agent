@@ -314,6 +314,34 @@ export function designInspectPictureWindow(width: number, height: number, top: n
   return { top: start, height: visible, scale };
 }
 
+/** The tweak controls a resolved page declares, or null when its file cannot be read. */
+async function readDesignTweakControls(resolved: { absolute: string; size: number }): Promise<DesignTweakControl[] | null> {
+  try {
+    const handle = await fs.open(resolved.absolute, "r");
+    try {
+      const buffer = Buffer.alloc(Math.min(resolved.size, DESIGN_TWEAK_LIMITS.scanChars * 4));
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+      return extractDesignTweakControls(buffer.subarray(0, bytesRead).toString("utf8"));
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The tweak names (`--x` or `data-x`) a workspace page declares controls
+ * for, or null when the page cannot be read, so a caller can tell "no
+ * controls" from "no file".
+ */
+export async function designPageTweakNames(workspaceRoot: string, relativePath: string): Promise<string[] | null> {
+  const resolved = await resolveDesignFile(workspaceRoot, relativePath.split("/").map(encodeURIComponent).join("/"));
+  if (!resolved.ok) return null;
+  const controls = await readDesignTweakControls(resolved);
+  return controls ? [...new Set(controls.map((control) => tweakTargetName(control.target)))] : null;
+}
+
 export type InspectDesignPageInput = {
   workspaceRoot: string;
   frame: Pick<DesignFrame, "kind" | "path" | "designWidth" | "w" | "dark" | "tweaks">;
@@ -336,19 +364,7 @@ export async function inspectDesignPage(input: InspectDesignPageInput): Promise<
     const findings = [`${frame.path} is not in the workspace, so there is nothing to draw.`];
     return { text: formatCheckReport({ label: "Inspect", findings, fix: "Write the page, then call canvas_inspect again." }).trimStart(), findings };
   }
-  let controls: DesignTweakControl[] = [];
-  try {
-    const handle = await fs.open(resolved.absolute, "r");
-    try {
-      const buffer = Buffer.alloc(Math.min(resolved.size, DESIGN_TWEAK_LIMITS.scanChars * 4));
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-      controls = extractDesignTweakControls(buffer.subarray(0, bytesRead).toString("utf8"));
-    } finally {
-      await handle.close();
-    }
-  } catch {
-    controls = [];
-  }
+  const controls = (await readDesignTweakControls(resolved)) ?? [];
   const width = designExportWidth({ kind: "file", designWidth: frame.designWidth, w: frame.w });
   const state = designTweakState(frame);
   const frameTweaks = { ...state.vars, ...state.attrs };

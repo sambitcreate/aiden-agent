@@ -845,7 +845,17 @@ test("Aiden organises the person's unlocked frames, but a locked frame refuses e
 });
 
 test("canvas_update_frame and canvas_place_frame set every look the side panel can", async (t) => {
-  const { store, call } = await setup(t);
+  const { store, workspace, call } = await setup(t);
+  await fs.writeFile(
+    path.join(workspace, "design", "home.html"),
+    `<!doctype html><title>Home</title><script type="application/aiden-tweaks">${JSON.stringify({
+      controls: [
+        { id: "accent", label: "Accent", type: "color", default: "#2f6fed", var: "--accent" },
+        { id: "density", label: "Density", type: "choice", options: ["compact", "cozy"], default: "cozy", attr: "data-density" },
+        { id: "radius", label: "Corners", type: "number", min: 0, max: 24, step: 2, unit: "px", default: 8, var: "--radius" },
+      ],
+    })}</script>`,
+  );
   const board = await call("canvas_place_frame", { kind: "frame", title: "Board", x: 0, y: 0, fill: "yellow", radius: 24, guide: "columns-12" });
   assert.deepEqual([board.frame.fill, board.frame.radius, board.frame.guide], ["yellow", 24, "columns-12"]);
   const cleared = await call("canvas_update_frame", { id: board.frame.id, fill: "none", guide: "none", radius: 999 });
@@ -881,6 +891,19 @@ test("canvas_update_frame and canvas_place_frame set every look the side panel c
   }
   const saved = (await store.get("chat-1")).frames.find((frame) => frame.id === page.frame.id)!;
   assert.deepEqual(saved.tweaks, { "data-density": "compact", "--radius": "12px" }, "a refused call changes nothing");
+
+  // A name the page declares no control for is refused, with the page's real ones listed.
+  const typo = await call("canvas_update_frame", { id: page.frame.id, tweaks: { "--accnet": "#00ff00" } });
+  assert.equal(typo.status, "error");
+  for (const name of ["--accent", "data-density", "--radius"]) assert.ok(typo.message.includes(name), typo.message);
+  assert.deepEqual((await store.get("chat-1")).frames.find((frame) => frame.id === page.frame.id)!.tweaks, saved.tweaks);
+  // A page with no tweak controls takes none, but resetting one it already has still works.
+  await fs.writeFile(path.join(workspace, "design", "plain.html"), "<!doctype html><title>Plain</title>");
+  const plain = await call("canvas_place_frame", { kind: "file", title: "Plain", path: "design/plain.html", x: 4000, y: 0, tweaks: { "--accent": "red" } });
+  assert.equal(plain.status, "error");
+  assert.match(plain.message, /declares no tweak controls/u);
+  const reset = await call("canvas_update_frame", { id: page.frame.id, tweaks: { "--radius": null } });
+  assert.deepEqual(reset.frame.tweaks, { "data-density": "compact" });
 });
 
 test("canvas_update_frame hides, moves to another page and reorders layers", async (t) => {

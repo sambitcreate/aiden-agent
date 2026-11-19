@@ -76,6 +76,7 @@ import {
   isDesignTweakValue,
   type DesignTweakValues,
 } from "../../../renderer/shared/design-canvas/tweaks.js";
+import { designPageTweakNames } from "./inspect.js";
 import { resolveDesignFile } from "./resolve-core.js";
 import type { DesignCanvasStore } from "./store.js";
 
@@ -121,7 +122,7 @@ const GuideSchema = Type.Union([...DESIGN_GUIDES.map((guide) => Type.Literal(gui
 const PaperSchema = Type.Union([Type.Literal("letter"), Type.Literal("a4")]);
 const PrintModeSchema = Type.Union([Type.Literal("flow"), Type.Literal("fixed")]);
 const TweaksSchema = Type.Record(Type.String(), Type.Union([Type.String(), Type.Null()]), {
-  description: "A page's tweak values by CSS variable (--accent) or data attribute (data-density); null resets one.",
+  description: "A page's tweak values by the names its tweak controls declare (--accent, data-density); null resets one. Other names are refused.",
 });
 /** What a page, artifact, artboard or shape can look like, shared by place and update. */
 const STYLE_PARAMETERS = {
@@ -341,12 +342,16 @@ type StylePatch = { set: Partial<DesignFrame>; clear: (keyof DesignFrame)[] };
  * Reads the look fields shared by place and update (dark, tweaks, radius,
  * guide, paper, printMode) for a frame of `kind`, refusing ones it cannot
  * have. Tweaks merge into `tweaksBefore`; a null value drops that key.
+ * `declared` is the page's own tweak names (null when the page could not be
+ * read): a value for any other name is refused with the real ones listed,
+ * since nothing on the page would pick it up.
  */
 function stylePatch(
   kind: DesignFrameKind,
   shape: DesignShapeKind | undefined,
   p: Record<string, unknown>,
   tweaksBefore: DesignTweakValues | undefined,
+  declared?: { path: string; names: readonly string[] | null },
 ): StylePatch {
   const patch: StylePatch = { set: {}, clear: [] };
   const dark = optionalBoolean(p.dark, "dark");
@@ -368,6 +373,13 @@ function stylePatch(
       if (value === null) {
         delete next[name];
         continue;
+      }
+      if (declared?.names && !declared.names.includes(name)) {
+        throw new CanvasToolError(
+          declared.names.length === 0
+            ? `${declared.path} declares no tweak controls, so ${JSON.stringify(name)} would change nothing. Add a <script type="application/aiden-tweaks"> block to the page first.`
+            : `${declared.path} has no tweak ${JSON.stringify(name)}. Its tweaks are ${declared.names.join(", ")}.`,
+        );
       }
       if (!isDesignTweakValue(value)) {
         throw new CanvasToolError(
@@ -406,6 +418,11 @@ function stylePatch(
     patch.set.printMode = p.printMode;
   }
   return patch;
+}
+
+/** Whether a call's tweaks set any value (a null only resets one). */
+function hasTweakValues(tweaks: unknown): boolean {
+  return typeof tweaks === "object" && tweaks !== null && Object.values(tweaks).some((value) => value !== null);
 }
 
 function applyStyle(frame: DesignFrame, patch: StylePatch): DesignFrame {
@@ -688,6 +705,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 : undefined;
             const shape: DesignShapeKind | undefined = kind === "shape" ? (p.shape === "oval" ? "oval" : "rect") : undefined;
             const duplicate = optionalBoolean(p.duplicate, "duplicate") === true;
+            const declared = kind === "file" && path && hasTweakValues(p.tweaks) ? { path, names: await designPageTweakNames(deps.workspaceRoot, path) } : undefined;
             const id = newId();
             return edit<Record<string, unknown>>((doc) => {
               const pageId = pageOf(doc, p.page);
@@ -728,7 +746,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                       })),
                     }
                   : {};
-              const style = stylePatch(kind, shape, p, adopted?.tweaks);
+              const style = stylePatch(kind, shape, p, adopted?.tweaks, declared);
               const input: PlaceFrameInput = {
                 kind,
                 title,
@@ -890,6 +908,12 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
             }
             const layerOptions = [layer, p.aboveFrameId, p.belowFrameId].filter((value) => value !== undefined && value !== null && value !== "");
             if (layerOptions.length > 1) throw new CanvasToolError("Pass only one of layer, aboveFrameId and belowFrameId.");
+            // A page's own tweak names, read before the edit (a frame's file never changes).
+            let declared: { path: string; names: readonly string[] | null } | undefined;
+            if (hasTweakValues(p.tweaks)) {
+              const before = (await deps.store.get(deps.chatId)).frames.find((entry) => entry.id === p.id);
+              if (before?.kind === "file" && before.path) declared = { path: before.path, names: await designPageTweakNames(deps.workspaceRoot, before.path) };
+            }
             return edit((doc) => {
               const frame = frameIn(doc, p.id);
               if (frame.locked && locked !== false) throw new CanvasToolError(LOCKED_MESSAGE);
@@ -912,7 +936,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               if (connector && (w !== undefined || h !== undefined)) {
                 throw new CanvasToolError("A connector's size follows its ends; move them with from and to.");
               }
-              const style = stylePatch(frame.kind, frame.shape, p, frame.tweaks);
+              const style = stylePatch(frame.kind, frame.shape, p, frame.tweaks, declared);
               const targetPage =
                 p.page !== undefined && p.page !== null && p.page !== "" ? pageOf(doc, p.page) : frame.pageId;
               const movingPage = targetPage !== frame.pageId;
