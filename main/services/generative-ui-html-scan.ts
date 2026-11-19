@@ -626,12 +626,11 @@ const FORK_BUDGET_FLOOR = 65_536;
  * The first place `code` sends a javascript: or data:text/html URL to a
  * navigation or URL sink, or unsafe markup to an HTML sink. Literals joined
  * with `+` are read as one value; a template's URL ends at its first `${`.
- * A place that reads two ways (see `JsLexer`) is checked both ways. `source`
- * says whether `code` is a whole script, which may start with a hashbang, or
- * an event handler's body.
+ * A place that reads two ways (see `JsLexer`) is checked both ways. `code` is
+ * a whole script or an event handler's body; either may start with a hashbang.
  */
-export function findJsSink(code: string, depth = 0, source: "script" | "handler" = "handler"): HtmlFindings {
-  const lexer = new JsLexer(code, { at: source === "script" ? hashbangEnd(code) : 0, braces: undefined, parens: undefined, tail: [], lineBreak: false });
+export function findJsSink(code: string, depth = 0): HtmlFindings {
+  const lexer = new JsLexer(code, { at: hashbangEnd(code), braces: undefined, parens: undefined, tail: [], lineBreak: false });
   lexer.run();
   const tokens = lexer.tokens;
   let found: HtmlFindings = {};
@@ -699,11 +698,13 @@ export function findJsSink(code: string, depth = 0, source: "script" | "handler"
 }
 
 /**
- * Where a script's hashbang comment ends, or 0 without one. A `#!` at the very
- * start of a classic or module script reads as a line comment. Anywhere else,
- * and in an event handler (a function body), it is a syntax error, so that
- * code never runs and needs no such reading. A byte order mark before it is
- * skipped too: an engine that kept the mark would refuse the script instead.
+ * Where a hashbang comment ends, or 0 without one. A `#!` at the very start of
+ * a classic or module script reads as a line comment, and so does one at the
+ * start of an event handler: the browser compiles a handler's body as a
+ * function's source text (V8's CompileFunction), whose first two characters
+ * may be a hashbang too. Anywhere else it is a syntax error, so that code
+ * never runs and needs no such reading. A byte order mark before it is skipped
+ * too: an engine that kept the mark would refuse the code instead.
  */
 function hashbangEnd(code: string): number {
   const start = code.startsWith("\uFEFF") ? 1 : 0;
@@ -1084,7 +1085,7 @@ export class HtmlScanner {
     }
     if (text.length === 0) return;
     if (element.tagName.toLowerCase() === "script") {
-      const sink = findJsSink(text, this.depth, "script");
+      const sink = findJsSink(text, this.depth);
       this.committed.limit ??= sink.limit;
       this.committed.embed ??= sink.embed;
       this.committed.url ??= sink.url;

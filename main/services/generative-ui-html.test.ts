@@ -229,6 +229,13 @@ const HASHBANG_SINKS = {
   blockComment: `<script>#!/x/ /*\n${IFRAME_SINK}\n//*/</script>`,
   module: `<script type="module">#!/x/ \`\n${IFRAME_SINK}\n//\`</script>`,
   byteOrderMark: `<script>\uFEFF#!/x/ \`\n${IFRAME_SINK}\n//\`</script>`,
+  // A handler's body is compiled as a function's source text, which may start
+  // with a hashbang too.
+  svgOnload: `<p>x</p><svg onload='#!/x/ \`\n${IFRAME_SINK}\n//\`'></svg>`,
+  imgOnerrorEntity: `<p>x</p><img alt="" src="data:,x" onerror='&#35;!/x/ \`&#10;${IFRAME_SINK}&#10;//\`'>`,
+  handlerLineSeparator: `<p>x</p><svg onload='#!/x/ \`\u2028${IFRAME_SINK}\u2028//\`'></svg>`,
+  handlerBlockComment: `<p>x</p><svg onload='#!/x/ /*\n${IFRAME_SINK}\n//*/'></svg>`,
+  handlerInInnerHtml: `<p>x</p><script>document.body.innerHTML = "<img src=data:,x onerror='#!/x/ \`\\n${IFRAME_SINK.replaceAll('"', '\\"')}\\n//\`'>";</script>`,
 };
 
 const REFUSED_MARKUP: Record<string, string> = {
@@ -329,6 +336,11 @@ const REFUSED_MARKUP: Record<string, string> = {
   "an <iframe> after a hashbang that names a block comment": HASHBANG_SINKS.blockComment,
   "an <iframe> after a hashbang in a module": HASHBANG_SINKS.module,
   "an <iframe> after a hashbang that follows a byte order mark": HASHBANG_SINKS.byteOrderMark,
+  "an <iframe> after a hashbang that starts an svg onload": HASHBANG_SINKS.svgOnload,
+  "an <iframe> after a hashbang written as &#35;! that starts an img onerror": HASHBANG_SINKS.imgOnerrorEntity,
+  "an <iframe> after a handler hashbang ended by a line separator": HASHBANG_SINKS.handlerLineSeparator,
+  "an <iframe> after a handler hashbang that names a block comment": HASHBANG_SINKS.handlerBlockComment,
+  "an <iframe> after a hashbang that starts a handler written by innerHTML": HASHBANG_SINKS.handlerInInnerHtml,
   "an onclick that navigates from a template 2 KB past a division after an object literal": `<button onclick="${farTemplateSink(2100, "location='javascript:alert(1)'")}">Go</button>`,
   "an onclick that navigates from a template 4 KB past a division after an object literal": `<button onclick="${farTemplateSink(4000, "location='javascript:alert(1)'")}">Go</button>`,
 };
@@ -531,7 +543,7 @@ test("a streaming draft cut inside a script or a quoted attribute is read as scr
 
 test("a hashbang streamed in pieces, even split between # and !, is still read as a comment", () => {
   for (const html of Object.values(HASHBANG_SINKS)) {
-    const scriptStart = html.indexOf("#!");
+    const scriptStart = html.search(/#!|&#35;!/u);
     for (const chunk of [1, 3, scriptStart + 1]) {
       assert.equal(streamInChunks(html, chunk).admitted, false, `${chunk}-character pieces of ${html}`);
     }
