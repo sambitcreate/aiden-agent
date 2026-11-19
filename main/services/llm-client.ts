@@ -424,7 +424,8 @@ import { createPiCodemodeTool } from "./pi-codemode.js";
 import { createPiToolDiscovery } from "./pi-tool-discovery.js";
 import { NO_LATE_MCP_DISCOVERY, type McpLateDiscovery } from "./mcp-tool-discovery-core.js";
 import { isPiCodemodeCallable, partitionPiCodemodeTools } from "./pi-runtime-tool.js";
-import { createOnDemandTools } from "./on-demand-tools.js";
+import { createOnDemandTools, declareOnDemandLoadNotes } from "./on-demand-tools.js";
+import { visualizeGuideLoadNotes } from "./generative-ui-guide.js";
 import {
   PiAgentRuntimeHarness,
   isPiManagedCancellationError,
@@ -482,7 +483,7 @@ import {
   CHAT_ARTIFACT_VERSION,
   type ChatHtmlArtifactV1,
 } from "../../renderer/shared/chat-artifacts.js";
-import { MAX_HTML_ARTIFACTS_PER_RESPONSE } from "../../renderer/shared/generative-ui.js";
+import { MAX_HTML_ARTIFACTS_PER_RESPONSE, RENDER_UI_TOOL_NAME } from "../../renderer/shared/generative-ui.js";
 import { displayImageArtifactStore } from "./display-image-artifact-store.js";
 import {
   createGenerativeUiExtensionRuntime,
@@ -490,6 +491,7 @@ import {
   GENERATIVE_UI_TOOL_NAME,
   shouldEnableGenerativeUiExtension,
   createVisualizeGuideTool,
+  VISUALIZE_GUIDE_TOOL_NAME,
 } from "./generative-ui-extension.js";
 import { createGenerativeUiDraftSession } from "./generative-ui-draft.js";
 import { createUiDraftSession } from "./aiden-ui-draft.js";
@@ -570,6 +572,9 @@ subagentRuntimeRegistry.setRuntimeFaultReporter((source) => {
 });
 
 type GenerationPermission = WorkspacePermission | "read-only";
+
+/** The inline visual tools, declared from the start on /visualize turns and in design mode. */
+const VISUAL_TOOL_NAMES: readonly string[] = [RENDER_UI_TOOL_NAME, GENERATIVE_UI_TOOL_NAME, VISUALIZE_GUIDE_TOOL_NAME];
 
 /** Tools whose writes are not reported file by file, so design/ is looked at after each one ends. */
 const DESIGN_PAGE_COMMAND_TOOLS: ReadonlySet<string> = new Set(["run_command", "codemode"]);
@@ -2467,7 +2472,7 @@ async function prepareGeneration(
       id: "aiden.workspace-artifacts",
       tools: [
         ...(visualizeGuideOffered ? [] : [createVisualizeGuideTool({ inlineVisuals: false })]),
-        createWorkspaceArtifactTool({
+        declareOnDemandLoadNotes(createWorkspaceArtifactTool({
           workspaceId: workspace.id,
           chatId: params.chatId,
           permission,
@@ -2490,7 +2495,7 @@ async function prepareGeneration(
             ),
           workspaceExists: async () => Boolean(await configStore.getWorkspace(workspace.id)),
           onChanged: notifyWorkspaceArtifactsChanged,
-        }),
+        }), visualizeGuideLoadNotes(["catalog"], { inlineVisuals: visualizeGuideOffered })),
       ],
     });
   }
@@ -2839,6 +2844,10 @@ async function prepareGeneration(
     placeWrittenPage,
     commandPages,
     enteredCanvasTools,
+    // On a /visualize turn and in design mode the visual tools are declared
+    // from the start, so the first visual needs no load step. Design mode
+    // preloads them every turn, so its tool list stays one list.
+    preloadedOnDemandTools: params.visualize === true || designCanvasOffered ? VISUAL_TOOL_NAMES : [],
     appPanels,
     htmlArtifactPlacements,
     imagePlacements,
@@ -3238,6 +3247,7 @@ export const llmClient = {
       placeWrittenPage,
       commandPages,
       enteredCanvasTools,
+      preloadedOnDemandTools,
       appPanels,
       htmlArtifactPlacements,
       imagePlacements,
@@ -4060,7 +4070,7 @@ export const llmClient = {
       // Held-back tools a script can call join the callable inventory the way
       // late MCP tools do, so loading one later never collides with the frozen deferred set.
       const onDemandCallable = onDemandTools?.onDemand.filter((tool) => isPiCodemodeCallable(tool)) ?? [];
-      let runtimeTools: AgentTool[] = onDemandTools ? onDemandTools.initialTools([]) : declared;
+      let runtimeTools: AgentTool[] = onDemandTools ? onDemandTools.initialTools([], preloadedOnDemandTools) : declared;
       const runtimeContributions = {
         ...modelContributions,
         tools: runtimeTools,
@@ -4269,7 +4279,7 @@ export const llmClient = {
       let initialMessages = (await promptJournal.buildContext(journalBranch)).messages;
       if (onDemandTools) {
         // Tools this chat already loaded or called stay declared from the start.
-        runtimeTools = onDemandTools.initialTools(initialMessages);
+        runtimeTools = onDemandTools.initialTools(initialMessages, preloadedOnDemandTools);
         generationContextOptions.tools = runtimeTools;
       }
       const journalHistory = runTaintHistoryOfBranch(journalBranch);

@@ -16,7 +16,7 @@ import {
 } from "../../renderer/shared/generative-ui.js";
 import type { PiAgentRuntimeExtension } from "./pi-agent-runtime-harness.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
-import { declareOnDemandSummary } from "./on-demand-tools.js";
+import { declareOnDemandLoadNotes, declareOnDemandSummary } from "./on-demand-tools.js";
 import {
   htmlArtifactByteLength,
   requireGenerativeUiTitle,
@@ -30,6 +30,7 @@ import {
   GENERATIVE_UI_GUIDE_MODULES,
   generativeUiGuide,
   isGenerativeUiGuideModule,
+  visualizeGuideLoadNotes,
   type GenerativeUiGuideModule,
 } from "./generative-ui-guide.js";
 import type { InlineVisualsMode } from "../../renderer/shared/appearance.js";
@@ -166,6 +167,9 @@ function resolveWorkspaceRoot(workspaceRoot: string) {
     }),
   };
 }
+
+/** Guide modules render_artifact (raw HTML) needs; its load answer carries them. */
+const RENDER_ARTIFACT_GUIDE_MODULES = ["design", "html", "charts", "interactive"] as const satisfies readonly GenerativeUiGuideModule[];
 
 /** Guide modules that apply to workspace artifact pages (Aiden UI Markup). */
 const ARTIFACT_GUIDE_MODULES = ["catalog"] as const satisfies readonly GenerativeUiGuideModule[];
@@ -431,15 +435,18 @@ export function createGenerativeUiExtensionRuntime(
           : ""),
       tools: options.onUiVisual
         ? [
-            tool,
-            createRenderUiTool({
-              namespace: `${artifactNamespace}:ui`,
-              existingChatUiCount: options.existingChatUiCount ?? 0,
-              onUiVisual: options.onUiVisual,
-            }),
+            declareOnDemandLoadNotes(tool, visualizeGuideLoadNotes(RENDER_ARTIFACT_GUIDE_MODULES)),
+            declareOnDemandLoadNotes(
+              createRenderUiTool({
+                namespace: `${artifactNamespace}:ui`,
+                existingChatUiCount: options.existingChatUiCount ?? 0,
+                onUiVisual: options.onUiVisual,
+              }),
+              visualizeGuideLoadNotes(["catalog"]),
+            ),
             guideTool,
           ]
-        : [tool, guideTool],
+        : [declareOnDemandLoadNotes(tool, visualizeGuideLoadNotes(RENDER_ARTIFACT_GUIDE_MODULES)), guideTool],
     },
   };
 }

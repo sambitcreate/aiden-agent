@@ -66,7 +66,16 @@ const MAX_SUMMARY_CHARACTERS = 90;
 export const MAX_ON_DEMAND_ROUTING_CHARACTERS = 160;
 const MAX_NAMES_PER_CALL = 20;
 
-type RoutedTool = AgentTool & { readonly onDemandSummary?: string };
+/** Text a tool adds to the `load_tools` answer that loads it; one per `key` per answer. */
+export interface OnDemandLoadNote {
+  readonly key: string;
+  readonly text: () => string;
+}
+
+type RoutedTool = AgentTool & {
+  readonly onDemandSummary?: string;
+  readonly onDemandLoadNotes?: readonly OnDemandLoadNote[];
+};
 
 /**
  * Give an on-demand tool its own `load_tools` catalog line: what it does and
@@ -78,6 +87,32 @@ export function declareOnDemandSummary<T extends AgentTool>(tool: T, summary: st
     throw new Error(`${tool.name}'s catalog line must be 1 to ${MAX_ON_DEMAND_ROUTING_CHARACTERS} characters.`);
   }
   return Object.assign(tool, { onDemandSummary: line });
+}
+
+/**
+ * Give an on-demand tool notes that come back in the same `load_tools` answer
+ * that loads it, such as the guide it needs before its first call, so loading
+ * and reading take one step. Notes with the same key (another tool loaded in
+ * the same call needs the same guide) are sent once.
+ */
+export function declareOnDemandLoadNotes<T extends AgentTool>(tool: T, notes: readonly OnDemandLoadNote[]): T {
+  const existing = (tool as RoutedTool).onDemandLoadNotes ?? [];
+  return Object.assign(tool, { onDemandLoadNotes: [...existing, ...notes] });
+}
+
+/** The notes of `loaded` tools, in load order, each key once. */
+function onDemandLoadAnswerNotes(loaded: readonly AgentTool[]): string[] {
+  const seen = new Set<string>();
+  const texts: string[] = [];
+  for (const tool of loaded) {
+    for (const note of (tool as RoutedTool).onDemandLoadNotes ?? []) {
+      if (seen.has(note.key)) continue;
+      seen.add(note.key);
+      const text = note.text().trim();
+      if (text) texts.push(text);
+    }
+  }
+  return texts;
 }
 
 /** A tool's `load_tools` catalog line: its own routing line, or its description's first sentence. */
@@ -120,8 +155,14 @@ export interface OnDemandTools {
   readonly loader: AgentTool;
   /** Every tool held back from the start of a run. */
   readonly onDemand: readonly AgentTool[];
-  /** Tools to declare at the start of a run over `messages` (the chat so far). */
-  initialTools(messages: readonly AgentMessage[]): AgentTool[];
+  /**
+   * Tools to declare at the start of a run over `messages` (the chat so far).
+   * `preload` names on-demand tools this run declares from the start without
+   * a load (for example the visual tools on a /visualize turn or in design
+   * mode); they come right after the loader in a fixed order, so a chat mode
+   * that preloads every turn keeps one tool list.
+   */
+  initialTools(messages: readonly AgentMessage[], preload?: readonly string[]): AgentTool[];
   /** Declares the on-demand tools the transcript has loaded or called since. */
   prepare(context: AgentContext): Promise<AgentContext>;
 }
@@ -163,8 +204,12 @@ export function createOnDemandTools(
           );
         }
         const loaded = [...new Set(list)];
+        const notes = onDemandLoadAnswerNotes(loaded.map((name) => byName.get(name)!));
         return {
-          content: [{ type: "text", text: `Loaded ${loaded.join(", ")}. Call ${loaded.length === 1 ? "it" : "them"} from your next step.` }],
+          content: [{
+            type: "text",
+            text: [`Loaded ${loaded.join(", ")}. Call ${loaded.length === 1 ? "it" : "them"} from your next step.`, ...notes].join("\n\n"),
+          }],
           details: null,
         };
       },
@@ -175,10 +220,15 @@ export function createOnDemandTools(
   return {
     loader,
     onDemand,
-    initialTools(messages) {
-      // First-use order, the order `prepare` appended them in during earlier
-      // runs, so the declared list (and the provider's cached prefix) stays the same.
-      return [...everyday, loader, ...onDemandToolsUsed(messages, available).map((name) => byName.get(name)!)];
+    initialTools(messages, preload = []) {
+      // Preloaded tools in their catalog order, then the rest in first-use
+      // order, the order `prepare` appended them in during earlier runs, so
+      // the declared list (and the provider's cached prefix) stays the same.
+      const wanted = new Set(preload);
+      const preloaded = onDemand.filter((tool) => wanted.has(tool.name));
+      const preloadedNames = new Set(preloaded.map((tool) => tool.name));
+      const used = onDemandToolsUsed(messages, available).filter((name) => !preloadedNames.has(name));
+      return [...everyday, loader, ...preloaded, ...used.map((name) => byName.get(name)!)];
     },
     async prepare(context) {
       const present = new Set(context.tools?.map((tool) => tool.name) ?? []);

@@ -15,6 +15,7 @@ import { createRenderUiTool } from "./aiden-ui-tool.js";
 import { createDesignModeTool } from "./design-canvas/design-mode-tool.js";
 import { createDesignCanvasTools } from "./design-canvas/canvas-tools.js";
 import { estimateStaticContextTokens } from "./generation-context.js";
+import { createGenerativeUiExtensionRuntime } from "./generative-ui-extension.js";
 
 function fixtureTool(name: string, description: string, calls: string[] = []): AgentTool {
   return {
@@ -200,4 +201,52 @@ test("a design chat starts with the everyday canvas tools and loads the page and
   ];
   const later = loading.initialTools(loaded).map((tool) => tool.name);
   assert.ok(later.includes("canvas_duplicate") && !later.includes("canvas_page"));
+});
+
+test("a preloaded tool is declared from the start without a load, and a chat mode that preloads every turn keeps one tool list", () => {
+  const tools = [fixtureTool("read_file", "Read."), fixtureTool("render_chart", "Chart."), fixtureTool("make_schedule", "Schedule.")];
+  const loading = createOnDemandTools(tools, ON_DEMAND)!;
+  const names = (messages: AgentMessage[], preload?: string[]) => loading.initialTools(messages, preload).map(({ name }) => name);
+  assert.deepEqual(names([], ["render_chart"]), ["read_file", LOAD_TOOLS_TOOL_NAME, "render_chart"]);
+  // A name the chat was not given is never declared by preloading it.
+  assert.deepEqual(names([], ["run_anything"]), ["read_file", LOAD_TOOLS_TOOL_NAME]);
+
+  // The chat then loads make_schedule and calls the preloaded tool, in that
+  // order. The next preloading run still lists the preloaded tool first, so
+  // the declared list only grew at its end.
+  const history: AgentMessage[] = [
+    { role: "user", content: "plan", timestamp: 1 },
+    fauxAssistantMessage([fauxToolCall(LOAD_TOOLS_TOOL_NAME, { names: ["make_schedule"] })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("render_chart", {})], { stopReason: "toolUse" }),
+  ];
+  assert.deepEqual(names(history, ["render_chart"]), ["read_file", LOAD_TOOLS_TOOL_NAME, "render_chart", "make_schedule"]);
+  // Without the preload, the tools the chat used stay, in first-use order.
+  assert.deepEqual(names(history), ["read_file", LOAD_TOOLS_TOOL_NAME, "make_schedule", "render_chart"]);
+});
+
+test("loading a visual tool answers with its guide in the same step, and a guide part two loaded tools share comes once", async () => {
+  const { extension } = createGenerativeUiExtensionRuntime({ onArtifact: () => true, onUiVisual: () => true });
+  const loading = createOnDemandTools([fixtureTool("read_file", "Read."), ...extension.tools!])!;
+  const answer = async (names: string[]) => {
+    const result = await loading.loader.execute("load", { names });
+    return result.content.map((part) => (part.type === "text" ? part.text : "")).join("");
+  };
+  const ui = await answer(["render_ui"]);
+  assert.match(ui, /^Loaded render_ui\./u);
+  assert.match(ui, /Aiden UI catalog \(render_ui\)/u, "the component catalog comes with render_ui");
+  assert.match(ui, /do not call visualize_guide/u);
+  assert.doesNotMatch(ui, /## HTML structure/u, "raw HTML guidance is not render_ui's");
+
+  const html = await answer(["render_artifact"]);
+  assert.match(html, /## HTML structure/u);
+  assert.match(html, /## Charts/u);
+  assert.doesNotMatch(html, /Aiden UI catalog/u);
+
+  const both = await answer(["render_ui", "render_artifact"]);
+  assert.equal(both.split("do not call visualize_guide").length, 2, "the guide's lead-in appears once");
+  assert.match(both, /Aiden UI catalog[\s\S]*## HTML structure/u);
+
+  // Loading a tool without a guide answers as before.
+  const guide = await answer(["visualize_guide"]);
+  assert.equal(guide, "Loaded visualize_guide. Call it from your next step.");
 });
