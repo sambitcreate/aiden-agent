@@ -10,7 +10,6 @@ import { reportAnalyticsEvent } from "../analytics/analytics-report.js";
 import type { ChatGenerationOwner } from "../chat-generation-owner.js";
 import { declarePiRuntimeReplay } from "../pi-runtime-tool.js";
 import { declareOnDemandSummary } from "../on-demand-tools.js";
-import { DESIGN_CANVAS_TOOL_NAMES } from "./canvas-tools.js";
 
 export const DESIGN_MODE_TOOL_NAME = "design_mode";
 /** The reason shown on the consent card. */
@@ -119,6 +118,8 @@ export type DesignModeToolDeps = {
   isOn(): Promise<boolean>;
   requestEnter(reason: string, signal?: AbortSignal): Promise<ConsentResult>;
   exit(): Promise<void>;
+  /** The canvas tools this turn declares once design mode is on, so "entered" names only tools Aiden will have. */
+  canvasToolNames: readonly string[];
 };
 
 const result = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value) }], details: null });
@@ -156,7 +157,10 @@ export function createDesignModeTool(deps: DesignModeToolDeps): AgentTool {
         if (answer === "entered") {
           return result({
             status: "entered",
-            next: `The canvas is open beside the chat. ${DESIGN_CANVAS_TOOL_NAMES.join(", ")} work from your next step; load the aiden-design skill first.`,
+            next:
+              deps.canvasToolNames.length > 0
+                ? `The canvas is open beside the chat. ${deps.canvasToolNames.join(", ")} work from your next step; load the aiden-design skill first.`
+                : "The canvas is open beside the chat, but its tools are not available in this chat. Carry on in the chat.",
           });
         }
         return result({

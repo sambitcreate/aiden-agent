@@ -168,7 +168,7 @@ test("visual and design tools tell the model when to load them, without a cut-of
   const tools = [
     fixtureTool("read_file", "Read."),
     createRenderUiTool({ namespace: "ui", existingChatUiCount: 0, onUiVisual: () => undefined }),
-    createDesignModeTool({ isOn: async () => false, requestEnter: async () => "declined", exit: async () => undefined }),
+    createDesignModeTool({ isOn: async () => false, requestEnter: async () => "declined", exit: async () => undefined, canvasToolNames: [] }),
   ];
   const loading = createOnDemandTools(tools, new Set(["render_ui", "design_mode"]))!;
   const lines = loading.loader.description.split("\n").filter((line) => /^- (render_ui|design_mode):/u.test(line));

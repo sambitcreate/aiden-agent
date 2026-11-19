@@ -143,6 +143,7 @@ test("design_mode asks only when design mode is off, and leaves without asking",
     exit: async () => {
       on = false;
     },
+    canvasToolNames: ["canvas_read", "canvas_place_frame", "canvas_arrange", "canvas_page", "canvas_focus"],
   });
   assert.equal((await run(tool, { action: "exit", reason: "done" })).status, "already");
   assert.equal((await run(tool, { action: "enter", reason: "  " })).status, "error");
@@ -151,10 +152,28 @@ test("design_mode asks only when design mode is off, and leaves without asking",
   for (const name of ["canvas_read", "canvas_place_frame", "canvas_arrange", "canvas_page", "canvas_focus"]) {
     assert.match(String(entered.next), new RegExp(name, "u"));
   }
+  assert.doesNotMatch(String(entered.next), /canvas_build|canvas_duplicate/u, "a tool this turn does not have is not named");
   assert.equal((await run(tool, { action: "enter", reason: "again" })).status, "already");
   assert.deepEqual(asked, ["Compare the three directions side by side."]);
   assert.equal((await run(tool, { action: "exit", reason: "done" })).status, "exited");
   assert.equal(on, false);
+});
+
+test("design_mode says when the canvas opened without its tools, rather than naming tools Aiden will not have", async () => {
+  let on = false;
+  const tool = createDesignModeTool({
+    isOn: async () => on,
+    requestEnter: async () => {
+      on = true;
+      return "entered";
+    },
+    exit: async () => undefined,
+    canvasToolNames: [],
+  });
+  const entered = await run(tool, { action: "enter", reason: "Compare the directions." });
+  assert.equal(entered.status, "entered");
+  assert.doesNotMatch(String(entered.next), /canvas_/u);
+  assert.match(String(entered.next), /not available/u);
 });
 
 test("design_mode is offered only in a desktop project chat while inline visuals are automatic", () => {

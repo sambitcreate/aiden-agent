@@ -328,7 +328,7 @@ The command is available only in desktop chats with a workspace.
 Aiden uses a host-owned `design_mode` tool:
 
 - **Input:** `{ action: "enter" | "exit", reason: string }`. The reason is at most 200 characters and is shown on the card.
-- **enter:** shows a consent card with **Enter design mode** and **Not now**, then returns `{ status: "entered" | "declined" | "already" | "unavailable" }`.
+- **enter:** shows a consent card with **Enter design mode** and **Not now**, then returns `{ status: "entered" | "declined" | "already" | "unavailable" }`. Since Phase D of the smarter-artifacts plan, the `next` hint of `entered` names only the canvas tools this turn will declare (tools the turn excludes are left out), and says the canvas opened without them when there are none.
 - **exit:** needs no consent and returns `"exited"` or `"already"`.
 - **Pattern:** it follows `aiden_open`. Main sends the request, the renderer confirms, and main resolves the result.
 - **When it is offered:** only when Settings → Inline visuals is `automatic`. People can still enter design mode themselves in every mode.

@@ -89,20 +89,6 @@ import { designPageTweakNames } from "./inspect.js";
 import { resolveDesignFile } from "./resolve-core.js";
 import type { DesignCanvasStore } from "./store.js";
 
-export const DESIGN_CANVAS_TOOL_NAMES = [
-  "canvas_read",
-  "canvas_place_frame",
-  "canvas_update_frame",
-  "canvas_remove_frame",
-  "canvas_focus",
-  "canvas_arrange",
-  "canvas_page",
-  "canvas_inspect",
-  "canvas_comment",
-  "canvas_duplicate",
-  "canvas_build",
-] as const;
-
 /**
  * Canvas tool calls one turn may make; past it each call returns
  * `limit_reached`. A canvas_build counts as one call, whatever it draws.

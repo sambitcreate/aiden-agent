@@ -2592,6 +2592,7 @@ async function prepareGeneration(
       ? [
           createDesignModeTool({
             isOn: designModeOn,
+            canvasToolNames: canvasTools.map((tool) => tool.name),
             requestEnter: async (reason, toolSignal) => {
               const answer = await designModeConsent.request({
                 chatId: params.chatId,
