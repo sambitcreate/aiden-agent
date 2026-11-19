@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { designSystemFileRank, designSystemOfferLine, detectDesignSystem, parseDesignColor } from "./design-system.js";
+import {
+  DESIGN_SYSTEM_MAX_CONFIG_VALUES,
+  designSystemFileRank,
+  designSystemOfferLine,
+  detectDesignSystem,
+  parseDesignColor,
+} from "./design-system.js";
 
 const colorNamed = (detected: ReturnType<typeof detectDesignSystem>, name: string) => detected.colors.find((color) => color.name === name);
 
@@ -105,6 +111,44 @@ test("a tailwind config's colors and fontFamily are read without running it", ()
     ],
   );
   assert.deepEqual(detected.fonts, [{ name: "sans", family: "Geist", source: "tailwind.config.ts" }]);
+});
+
+test("a colors key inside a colors block is read once, as part of that block", () => {
+  const detected = detectDesignSystem([
+    { path: "tailwind.config.js", text: `module.exports = { theme: { colors: { night: { colors: { brand: "#123456" } } }, fontFamily: { sans: ["Geist"] } } };` },
+  ]);
+  assert.deepEqual(detected.colors.map((color) => [color.name, color.value]), [["night-colors-brand", "#123456"]]);
+  assert.deepEqual(detected.fonts.map((font) => font.family), ["Geist"]);
+});
+
+test("a tailwind config is read only up to its value limit, and a file at the size cap of nested blocks is read in one pass", () => {
+  const filler = (count: number) => `pad: [${Array.from({ length: count }, () => "0").join(",")}],`;
+  const config = (count: number) => `export default { theme: { colors: { ink: "#111827", ${filler(count)} }, fontFamily: { sans: ["Geist"] } } };`;
+  const within = detectDesignSystem([{ path: "tailwind.config.js", text: config(100) }]);
+  assert.deepEqual(within.colors.map((color) => color.name), ["ink"]);
+  assert.deepEqual(within.fonts.map((font) => font.family), ["Geist"]);
+  // Past the limit the rest of the file is not read: the colour before the filler stays, the fonts after it are not offered.
+  const past = detectDesignSystem([{ path: "tailwind.config.js", text: config(DESIGN_SYSTEM_MAX_CONFIG_VALUES) }]);
+  assert.deepEqual(past.colors.map((color) => color.name), ["ink"]);
+  assert.deepEqual(past.fonts, []);
+  // 256 KB of unclosed nested blocks. Reading each nested block again took about a minute here.
+  const nested = detectDesignSystem([{ path: "tailwind.config.js", text: "colors:{".repeat((256 * 1024) / 8) + 'brand:"#123456"' }]);
+  assert.deepEqual(nested, { colors: [], fonts: [], sources: [] });
+});
+
+test("long runs of spaces in a value are read in one pass by every parser", () => {
+  const spaces = " ".repeat(200_000);
+  const files = [
+    { path: "theme.css", text: `:root { --ink: #111827; --gap: a${spaces}b; font-family: Geist${spaces}x; }` },
+    { path: "tailwind.config.js", text: `colors: { wide: "a${spaces}b", ink2: "#222222 !important" }` },
+    { path: "tokens.json", text: JSON.stringify({ wide: `a${spaces}b`, ink3: "#333333" }) },
+  ];
+  const detected = detectDesignSystem(files);
+  assert.deepEqual(detected.colors.map((color) => [color.name, color.value]), [
+    ["--ink", "#111827"],
+    ["ink2", "#222222"],
+    ["ink3", "#333333"],
+  ]);
 });
 
 test("design-token JSON and a WordPress theme.json are read", () => {

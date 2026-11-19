@@ -68,9 +68,20 @@ const COLOR_FUNCTION = /^(rgba?|hsla?|oklch|oklab|lab|lch|hwb)\((?:[0-9.%+\-\s,/
 /** Space-separated HSL channels, as shadcn-style themes keep them in variables (`222.2 47.4% 11.2%`). */
 const HSL_CHANNELS = /^\d{1,3}(?:\.\d+)?\s+\d{1,3}(?:\.\d+)?%\s+\d{1,3}(?:\.\d+)?%$/u;
 
+/**
+ * `raw` trimmed and without a trailing `!important`. Checked from the end
+ * rather than with a regex, which would backtrack through every run of
+ * spaces in a long value.
+ */
+function withoutImportant(raw: string): string {
+  const value = raw.trim();
+  return value.slice(-10).toLowerCase() === "!important" ? value.slice(0, -10).trim() : value;
+}
+
 /** The colour `raw` names, in a strict form, or null when it is not a literal colour. */
 export function parseDesignColor(raw: string): string | null {
-  const value = raw.replace(/\s*!important\s*$/iu, "").trim();
+  if (raw.length > 256) return null;
+  const value = withoutImportant(raw);
   if (value.length > 64) return null;
   if (HEX.test(value)) return value.toLowerCase();
   if (COLOR_FUNCTION.test(value)) return value.replace(/\s+/gu, " ").toLowerCase();
@@ -135,7 +146,7 @@ function leadingFamily(entries: readonly string[]): string | null {
 }
 
 function fontStack(value: string): string[] {
-  return value.replace(/\s*!important\s*$/iu, "").split(",");
+  return withoutImportant(value).split(",");
 }
 
 type Found = {
@@ -165,6 +176,8 @@ function cssDeclarations(text: string): Array<{ property: string; value: string;
   const source = text.replace(/\/\*[\s\S]*?(?:\*\/|$)/gu, " ");
   const declarations: Array<{ property: string; value: string; dark: boolean }> = [];
   const blocks: boolean[] = [];
+  // How many of the open blocks are dark, kept as a count so a deeply nested sheet is not rescanned at every declaration.
+  let darkBlocks = 0;
   let buffer = "";
   let quote: string | null = null;
   let parens = 0;
@@ -175,7 +188,7 @@ function cssDeclarations(text: string): Array<{ property: string; value: string;
       const value = buffer.slice(colon + 1).trim();
       // Top-level declarations are SCSS and Less variables only.
       const allowed = blocks.length > 0 ? /^(?:--[\w-]+|[a-z-]+)$/iu.test(property) : /^[$@][\w-]+$/u.test(property);
-      if (allowed && value) declarations.push({ property, value, dark: blocks.some(Boolean) });
+      if (allowed && value) declarations.push({ property, value, dark: darkBlocks > 0 });
     }
     buffer = "";
   };
@@ -195,11 +208,13 @@ function cssDeclarations(text: string): Array<{ property: string; value: string;
     if (char === "(") parens += 1;
     else if (char === ")") parens = Math.max(0, parens - 1);
     if (parens === 0 && char === "{") {
-      blocks.push(DARK_CONTEXT.test(buffer));
+      const dark = DARK_CONTEXT.test(buffer);
+      blocks.push(dark);
+      if (dark) darkBlocks += 1;
       buffer = "";
     } else if (parens === 0 && char === "}") {
       flush();
-      blocks.pop();
+      if (blocks.pop()) darkBlocks -= 1;
     } else if (parens === 0 && char === ";") {
       flush();
     } else {
@@ -234,11 +249,24 @@ function readStyleSheet(found: Found, file: DesignSystemFile): void {
 type Literal = string | Literal[] | { [key: string]: Literal } | undefined;
 
 /**
+ * At most this many values are read from one tailwind config or token JSON
+ * file. A real file's colours and fonts are a few hundred; past this the
+ * rest of the file is not read.
+ */
+export const DESIGN_SYSTEM_MAX_CONFIG_VALUES = 5_000;
+
+type LiteralBudget = { values: number };
+
+/**
  * Reads the object, array or string literal at `start` of a JavaScript
  * source, skipping anything else (calls, spreads, identifiers) as undefined.
  * Enough for the `colors` and `fontFamily` blocks of a tailwind config.
+ * Each call reads on from where the last one ended, so a file is read once;
+ * once `budget` is spent it ends at the end of the text.
  */
-function readLiteral(text: string, start: number, depth = 0): { value: Literal; end: number } {
+function readLiteral(text: string, start: number, budget: LiteralBudget, depth = 0): { value: Literal; end: number } {
+  budget.values += 1;
+  if (budget.values > DESIGN_SYSTEM_MAX_CONFIG_VALUES) return { value: undefined, end: text.length };
   let index = skipSpace(text, start);
   const char = text[index];
   if (depth > 12) return { value: undefined, end: skipExpression(text, index) };
@@ -266,7 +294,7 @@ function readLiteral(text: string, start: number, depth = 0): { value: Literal; 
         if (text[index] !== ":") {
           index = skipExpression(text, index);
         } else {
-          const entry = readLiteral(text, index + 1, depth + 1);
+          const entry = readLiteral(text, index + 1, budget, depth + 1);
           if (entry.value !== undefined && !Object.prototype.hasOwnProperty.call(object, key.name)) object[key.name] = entry.value;
           index = entry.end;
         }
@@ -286,7 +314,7 @@ function readLiteral(text: string, start: number, depth = 0): { value: Literal; 
         index += 1;
         continue;
       }
-      const entry = readLiteral(text, index, depth + 1);
+      const entry = readLiteral(text, index, budget, depth + 1);
       if (entry.value !== undefined) array.push(entry.value);
       if (entry.end <= index) return { value: array, end: Math.min(text.length, index + 1) };
       index = entry.end;
@@ -359,8 +387,15 @@ function flattenColors(found: Found, value: Literal, prefix: string, source: str
 }
 
 function readTailwindConfig(found: Found, file: DesignSystemFile): void {
+  const budget: LiteralBudget = { values: 0 };
+  let readTo = 0;
   for (const match of file.text.matchAll(/\b(colors|fontFamily)\s*:\s*(?=\{)/gu)) {
-    const block = readLiteral(file.text, (match.index ?? 0) + match[0].length).value;
+    // A `colors` key inside a block already read is part of that block, not a block of its own.
+    if ((match.index ?? 0) < readTo) continue;
+    if (budget.values >= DESIGN_SYSTEM_MAX_CONFIG_VALUES) break;
+    const read = readLiteral(file.text, (match.index ?? 0) + match[0].length, budget);
+    readTo = read.end;
+    const block = read.value;
     if (!block || typeof block !== "object" || Array.isArray(block)) continue;
     if (match[1] === "colors") flattenColors(found, block, "", file.path);
     else for (const [role, stack] of Object.entries(block)) addFont(found, tokenName(role), stack, file.path);
@@ -379,7 +414,7 @@ function readTokenJson(found: Found, file: DesignSystemFile): void {
   let visited = 0;
   const walk = (node: unknown, trail: readonly string[]): void => {
     visited += 1;
-    if (visited > 5_000 || trail.length > 8 || node === null || typeof node !== "object") return;
+    if (visited > DESIGN_SYSTEM_MAX_CONFIG_VALUES || trail.length > 8 || node === null || typeof node !== "object") return;
     if (Array.isArray(node)) {
       for (const entry of node) walk(entry, trail);
       return;
