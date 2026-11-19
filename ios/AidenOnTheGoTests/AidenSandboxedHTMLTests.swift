@@ -146,7 +146,8 @@ final class AidenSandboxedHTMLTests: XCTestCase {
         await fulfillment(of: [connected], timeout: wait)
         XCTAssertEqual(listener.accepted, 0, "\(name) reached the network")
         listener.stop()
-        webView.stopLoading()
+        // One preview per vector: keeping all twelve alive starved the next tests' web views on CI.
+        release(webView)
     }
 
     func testPreviewPagesCannotOpenWebRTCConnections() async throws {
@@ -513,13 +514,23 @@ final class AidenSandboxedHTMLTests: XCTestCase {
         let coordinator = view.makeCoordinator()
         coordinator.onDidFinish = onFinish
         let webView = view.makeWebView(coordinator: coordinator)
-        try host(webView)
+        try host(webView, owner: coordinator)
         coordinator.start(html, in: webView)
-        addTeardownBlock { @MainActor in _ = coordinator }
         return (webView, coordinator)
     }
 
-    private func host(_ webView: WKWebView) throws {
+    /// What keeps a hosted web view on screen: its window, and for a preview its
+    /// coordinator, which the web view holds only weakly.
+    private struct Hosted {
+        let window: UIWindow
+        let webView: WKWebView
+        let owner: AnyObject?
+    }
+
+    private var hosted: [ObjectIdentifier: Hosted] = [:]
+
+    /// Shows a web view in its own window until `release` or the end of the test.
+    private func host(_ webView: WKWebView, owner: AnyObject? = nil) throws {
         let scene = try XCTUnwrap(
             UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
         )
@@ -530,11 +541,22 @@ final class AidenSandboxedHTMLTests: XCTestCase {
         webView.frame = controller.view.bounds
         controller.view.addSubview(webView)
         window.isHidden = false
-        addTeardownBlock { @MainActor in
-            webView.stopLoading()
-            webView.removeFromSuperview()
-            window.isHidden = true
-        }
+        let id = ObjectIdentifier(webView)
+        hosted[id] = Hosted(window: window, webView: webView, owner: owner)
+        addTeardownBlock { @MainActor [weak self] in self?.release(id) }
+    }
+
+    /// Takes a web view down now, so its page and WebKit process end before
+    /// the next one starts instead of piling up until the test finishes.
+    private func release(_ webView: WKWebView) {
+        release(ObjectIdentifier(webView))
+    }
+
+    private func release(_ id: ObjectIdentifier) {
+        guard let entry = hosted.removeValue(forKey: id) else { return }
+        entry.webView.stopLoading()
+        entry.webView.removeFromSuperview()
+        entry.window.isHidden = true
     }
 }
 
