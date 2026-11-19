@@ -15,7 +15,7 @@ import {
 import type { AppControlPanel } from "../../renderer/shared/app-controls.js";
 import { canUseProviderAuthenticatedMcp } from "./mcp-provider-auth-core.js";
 import { providerRegistry } from "./provider-registry.js";
-import { adoptChatCacheWarmer, canWarmForegroundChat, PiCacheWarmer, settleReplyCacheWarmer, withPiCacheWarming } from "./pi-cache-warming.js";
+import { adoptChatCacheWarmer, canWarmForegroundChat, PiCacheWarmer, settleReplyCacheWarmer, stopAllPiCacheWarmers, withPiCacheWarming } from "./pi-cache-warming.js";
 import { createModelPaceMeasurement } from "./model-pace-core.js";
 import { modelPaceRecorder } from "./model-pace-runtime.js";
 import { usageLimits } from "./usage-limit-main.js";
@@ -4380,6 +4380,9 @@ export const llmClient = {
           // The same gate as compaction precompute: a reply that took the
           // chat or Bot past its limit leaves nothing more to send.
           withinSpendingLimit: () => precomputeWithinSpendingLimit(spending, spendingOwner, () => spendingMeter.settled()),
+          // Forgetting a fact or turning memory off writes nothing to the
+          // chat, so each refresh confirms the facts its request states.
+          approvedMemoryFacts: approvedChatMemoryFacts,
           // A warming read restarts the provider's cache lifetime without a
           // new projection, so the countdown is re-sent from that request.
           onCacheRefreshed: (requestStartedAt) => {
@@ -6631,6 +6634,9 @@ export const llmClient = {
     chatTurnAdmission.releaseAll();
     for (const [streamId] of initializing) this.cancel(streamId, "application_shutdown");
     for (const [streamId] of active) this.cancel(streamId, "application_shutdown");
+    // A settled chat's idle warmer belongs to no generation, so cancelling
+    // them leaves it scheduled; no refresh is sent while the app quits.
+    stopAllPiCacheWarmers();
     approvals.shutdown();
     questionnaires.shutdown();
   },

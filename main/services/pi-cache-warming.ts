@@ -19,6 +19,7 @@ import {
   type ModelsSimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import { promptCacheTtlMs } from "./prompt-cache-lifetimes.js";
+import { memoryFactLinesIn, memoryFactsStillApproved, type ApprovedMemoryFacts } from "./side-call-prefix.js";
 import type { UsageRequestSource } from "./usage-store-core.js";
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
 import type { ChatStartParams } from "./types.js";
@@ -93,6 +94,8 @@ export interface SettledChatState {
  * keep that chat's prompt cache warm for a while; any other ending stops the
  * warmer. The idle warmer stops once the chat changes: every chat write (a new
  * message, a model switch, a rename, a compaction) moves its summary revision.
+ * Memory is not part of the chat, so a forgotten fact or memory turned off is
+ * caught by the warmer's own `approvedMemoryFacts` check before each refresh.
  */
 export async function settleReplyCacheWarmer(
   warmer: PiCacheWarmer | undefined,
@@ -167,6 +170,8 @@ interface WarmRun {
   identity?: string;
   /** Shallow message-list snapshot until warming is economical, then a frozen deep copy; dropped on stop. */
   context?: TranscriptContext;
+  /** The memory fact lines the frozen request states, confirmed before every refresh. */
+  memoryFacts?: readonly string[];
   options: Pick<SimpleStreamOptions, "sessionId" | "reasoning" | "thinkingBudgets" | "cacheRetention" | "temperature" | "transport" | "toolChoice">;
   cost: Model<Api>["cost"];
   startedAt: number;
@@ -205,6 +210,13 @@ export interface PiCacheWarmerDependencies {
   withinSpendingLimit?(): Promise<boolean>;
   /** A refresh read or wrote the cache, restarting its lifetime from dispatch. */
   onCacheRefreshed?(requestStartedAt: number): void;
+  /**
+   * The memory fact lines the chat may be told now; empty when memory is
+   * off. Read before every refresh: a request stating a fact the person has
+   * since removed or turned off is never replayed, and without this reader a
+   * request that states any fact is never warmed.
+   */
+  approvedMemoryFacts?: ApprovedMemoryFacts;
   clock?: CacheWarmingClock;
   /** The renderer document that owns the chat, so only that window can release it. */
   documentId?: string;
@@ -275,6 +287,7 @@ export class PiCacheWarmer {
       if (!economics || economics.expectedSavings < MIN_SAVINGS_USD || !run.context) { this.stop(); return; }
       // Freeze the replayed prefix and endpoint identity only for a request worth warming.
       run.context = structuredClone(run.context);
+      run.memoryFacts = memoryFactLinesIn(run.context);
       run.cost = structuredClone(run.cost);
       run.identity = modelIdentity(model);
       if (this.deps.idleOnly) { this.setDeadline(run, run.startedAt); return; }
@@ -288,6 +301,7 @@ export class PiCacheWarmer {
     if (!run) return;
     if (run.timer !== undefined) this.clock.clearTimeout(run.timer);
     run.context = undefined;
+    run.memoryFacts = undefined;
     run.removeAbort();
     run.controller.abort();
   }
@@ -398,6 +412,12 @@ export class PiCacheWarmer {
       // A settled chat that changed since (a new message, a model switch, a
       // compaction) no longer sends this prefix.
       if (run.idle?.stillCurrent && !(await run.idle.stillCurrent())) { this.stopIdle(run); return; }
+      if (!this.current(run)) { this.stopIdle(run); return; }
+      // A memory fact the request states that is no longer approved (forgotten,
+      // deleted, expired or memory turned off) must not be sent again; nor, when
+      // the facts cannot be read, may any. A removed fact never comes back, so
+      // the warmer ends for good.
+      if (!(await memoryFactsStillApproved(run.memoryFacts ?? [], this.deps.approvedMemoryFacts))) { this.dispose(); return; }
       if (!this.current(run)) { this.stopIdle(run); return; }
       // A refresh is spending like any other request: past the chat's or
       // Bot's limit none is sent, and none follows once the limit refuses.

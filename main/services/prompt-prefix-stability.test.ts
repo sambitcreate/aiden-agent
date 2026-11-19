@@ -1000,7 +1000,7 @@ describe("prompt prefix stability: causes fixed by later phases", () => {
       assert.equal(harness.networkCalls, 0);
     });
 
-    test(`a tool loaded on one turn leaves the next turn's tool list unchanged (${label})`, { todo: "phase 8: the turn-start head collapse folds the loaded tool into the head" }, async () => {
+    test(`a tool loaded on one turn leaves the next turn's tool list unchanged (${label})`, { todo: "accepted limit (see 8a): the turn-start head collapse folds the loaded tool into the head, one cache miss per tool load" }, async () => {
       const harness = createPromptPrefixHarness({ wire, midConversationSystem });
       const one = await loadClassify(harness);
       const [next] = await harness.turn({
@@ -1015,7 +1015,7 @@ describe("prompt prefix stability: causes fixed by later phases", () => {
 
   test(
     "loading a tool mid-turn leaves the next step's prefix unchanged (Anthropic Messages)",
-    { todo: "phase 8: deferred tool declarations keep a loaded tool out of the cached tool list on this wire" },
+    { todo: "accepted limit (see 8a): this wire folds a loaded tool into its one tool list, one cache miss per tool load" },
     async () => {
       // Without in-place system messages the loaded tool joins the one tool
       // list, so the step after the load re-reads the tools cache.

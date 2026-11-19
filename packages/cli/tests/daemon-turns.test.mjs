@@ -1153,6 +1153,29 @@ test("aiden serve keeps a settled attended chat warm within the desktop's idle l
     assert.deepEqual(await driver.passRefreshDelay(), [], "and never sent");
     driver.reset();
   });
+  // The memory prompt is not part of the chat, so turning memory off writes nothing the summary revision sees.
+  for (const [name, memoryEnabled, expected] of [["a told fact still approved keeps warming", true, 3], ["turning memory off ends warming with no refresh", false, 0]]) {
+    await t.test(name, async (t) => {
+      const f = await warmingFixture(t);
+      const driver = idleRefreshDriver(t, f, "told");
+      const fact = "Keeps bees on the roof";
+      f.steps.push(callTool("remember_fact", { fact, alwaysOn: true }), reply("Saved."));
+      await beginTurn(f, "told", { text: "Remember my bees.", streamId: "told-1" });
+      await f.daemon.llmClient.waitForChatIdle("told");
+      f.steps.push(largePromptReply("You keep bees."));
+      await beginTurn(f, "told", { text: "What do I keep?", streamId: "told-2", create: false });
+      await f.daemon.llmClient.waitForChatIdle("told");
+      const told = f.requests.at(-1);
+      assert.match(JSON.stringify(told.messages[0]), /bees on the roof/u, "the system prompt told the chat the fact");
+      assert.equal(await driver.armed(), 1);
+      api.atomicJson(join(f.dir, "aiden.json"), { cacheWarmingEnabled: true, memoryEnabled });
+      const refreshes = await driver.drain();
+      driver.reset();
+      assert.equal(refreshes.length, expected);
+      for (const refresh of refreshes) assert.deepEqual(refresh.messages, told.messages, "a refresh replays the told request");
+      assert.equal(f.daemon.isKeepingChatWarm("told"), false);
+    });
+  }
   await t.test("revoking the device whose turn it was ends warming", async (t) => {
     const f = await warmingFixture(t);
     f.steps.push(largePromptReply("First"));

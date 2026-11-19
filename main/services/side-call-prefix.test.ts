@@ -309,17 +309,30 @@ function assertExtends(parent: RecordedPromptRequest, side: RecordedPromptReques
 
 async function sideQuestion(service: BtwService, question: string): Promise<BtwEventV1[]> {
   const events: BtwEventV1[] = [];
+  let ended!: () => void;
+  const terminal = new Promise<void>((resolve) => { ended = resolve; });
   const owner: BtwOwner = {
     documentId: "document-a",
     isDestroyed: () => false,
-    send: (_channel, event) => events.push(event),
+    send: (_channel, event) => {
+      events.push(event);
+      if (event.type === "terminal") ended();
+    },
     onInvalidated: () => () => {},
   };
   await service.start(CHAT_ID, question, owner);
-  const deadline = Date.now() + 2_000;
-  while (!events.some((event) => event.type === "terminal")) {
-    if (Date.now() > deadline) throw new Error("Side question timed out.");
-    await new Promise((resolve) => setTimeout(resolve, 5));
+  // The service launches the run on an unreferenced timer, so this deadline
+  // also keeps the event loop alive until the terminal event arrives.
+  let deadline: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      terminal,
+      new Promise<never>((_resolve, reject) => {
+        deadline = setTimeout(() => reject(new Error("Side question timed out.")), 2_000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(deadline);
   }
   return events;
 }

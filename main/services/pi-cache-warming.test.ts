@@ -34,7 +34,7 @@ function usageMessage() {
   return { ...fauxAssistantMessage("ordinary response"), usage: { input: 100_000, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 100_010, cost: { input: 1, output: 0.0003, cacheRead: 0, cacheWrite: 0, total: 1.0003 } } };
 }
 type WarmOutcome = "stop" | "length" | "error" | "aborted";
-function fixture(t: test.TestContext, settings: { documentId?: string; withinSpendingLimit?: () => Promise<boolean>; idleOnly?: boolean } = {}) {
+function fixture(t: test.TestContext, settings: { documentId?: string; withinSpendingLimit?: () => Promise<boolean>; idleOnly?: boolean; approvedMemoryFacts?: () => Promise<readonly string[]> } = {}) {
   const clock = new Clock();
   const signal = new AbortController();
   const requests: Array<SimpleStreamOptions | undefined> = [];
@@ -71,10 +71,10 @@ function fixture(t: test.TestContext, settings: { documentId?: string; withinSpe
       return stream;
     } },
   });
-  const warmer = new PiCacheWarmer({ clock, signal: signal.signal, enabled: async () => enabled, isCurrent: () => current, resolveRuntime: async () => { resolutions++; await resolutionBarrier; return runtime(); }, recordUsage: async (message, freshRuntime) => { recorded.push(message); await usageStore.record(assistantUsageRecord({ message, provider: freshRuntime.provider, model: freshRuntime.model, source: "cache-warm" })); }, onCacheRefreshed: (at) => refreshedAt.push(at), ...(settings.documentId ? { documentId: settings.documentId } : {}), ...(settings.withinSpendingLimit ? { withinSpendingLimit: settings.withinSpendingLimit } : {}), ...(settings.idleOnly ? { idleOnly: true } : {}) });
+  const warmer = new PiCacheWarmer({ clock, signal: signal.signal, enabled: async () => enabled, isCurrent: () => current, resolveRuntime: async () => { resolutions++; await resolutionBarrier; return runtime(); }, recordUsage: async (message, freshRuntime) => { recorded.push(message); await usageStore.record(assistantUsageRecord({ message, provider: freshRuntime.provider, model: freshRuntime.model, source: "cache-warm" })); }, onCacheRefreshed: (at) => refreshedAt.push(at), ...(settings.documentId ? { documentId: settings.documentId } : {}), ...(settings.withinSpendingLimit ? { withinSpendingLimit: settings.withinSpendingLimit } : {}), ...(settings.idleOnly ? { idleOnly: true } : {}), ...(settings.approvedMemoryFacts ? { approvedMemoryFacts: settings.approvedMemoryFacts } : {}) });
   t.after(() => warmer.dispose());
-  const start = (options: SimpleStreamOptions = {}, selected = model) => {
-    const context = normalizeContext({ messages: [{ role: "user", content: "in-memory prompt", timestamp: 1 }] });
+  const start = (options: SimpleStreamOptions = {}, selected = model, system?: string) => {
+    const context = normalizeContext({ ...(system === undefined ? {} : { systemPrompt: system }), messages: [{ role: "user", content: "in-memory prompt", timestamp: 1 }] });
     const response = warmer.requestStarted(selected, context, options);
     response(usageMessage());
     return context;
@@ -658,4 +658,39 @@ test("a saved reply in an open window keeps warming until the chat is written ag
   unreadable.start();
   await settleReplyCacheWarmer(unreadable.warmer, { owner, delivered: true, chat: async () => { throw new Error("index locked"); } });
   assert.equal(unreadable.warmer.isDisposed, true);
+});
+
+test("a request stating a memory fact the person removed is never replayed, streaming or idle", async (t) => {
+  const told = "- [memory:fact-1] Keeps bees on the roof";
+  const system = `Base instructions.\n\n<volatile_memory scope="workspace:w">\n${told}\n</volatile_memory>`;
+  for (const phase of ["streaming", "idle"] as const) {
+    let approved: readonly string[] = [told];
+    const h = fixture(t, { approvedMemoryFacts: async () => approved });
+    h.start({}, model, system);
+    if (phase === "idle") assert.equal(h.warmer.settle({ isCurrent: () => true }), true);
+    await h.clock.advance(270_000);
+    assert.equal(h.requests.length, 1, `${phase}: an approved fact is warmed`);
+    assert.match(JSON.stringify(h.contexts[0]), /bees on the roof/u);
+    // Forgetting the fact (or turning memory off) writes nothing to the chat.
+    approved = [];
+    for (let i = 0; i < 4; i++) await h.clock.advance(270_000);
+    assert.equal(h.requests.length, 1, `${phase}: the forgotten fact is not sent again`);
+    assert.equal(h.resolutions(), 1, `${phase}: credentials are not read for it`);
+    assert.equal(h.warmer.isDisposed, true, `${phase}: the warmer ends for good`);
+    assert.equal(h.clock.timers.size, 0);
+  }
+  // Facts that cannot be confirmed are not sent: no reader, or one that fails.
+  for (const [label, reader] of [["no reader", undefined], ["unreadable store", async () => { throw new Error("store locked"); }]] as const) {
+    const h = fixture(t, reader ? { approvedMemoryFacts: reader } : {});
+    h.start({}, model, system);
+    await h.clock.advance(270_000);
+    assert.equal(h.requests.length, 0, label);
+    assert.equal(h.resolutions(), 0, label);
+    assert.equal(h.warmer.isDisposed, true, label);
+  }
+  // A request that states no fact needs no reader.
+  const plain = fixture(t);
+  plain.start({}, model, "Base instructions.");
+  await plain.clock.advance(270_000);
+  assert.equal(plain.requests.length, 1);
 });

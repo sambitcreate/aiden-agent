@@ -47,6 +47,7 @@ import { upgradeOldPiV4File } from "./pi-session-v4-upgrade.js";
 import { hookContextMessage } from "./workspace-chat-hooks.js";
 import { chatStateRecord, chatStateUpdateMessage, type ChatTurnState } from "./chat-frozen-state.js";
 import { compileVcc } from "./pi-vcc/compiler.js";
+import { rememberStableHead, withPromptCacheBreakpoints } from "./prompt-cache-breakpoints.js";
 
 const ZERO_COST = {
   input: 0,
@@ -1824,6 +1825,45 @@ for (const registered of [false, true]) for (const reason of ["stop", "error", "
   assert.equal(dispatched, 1);
   assert.equal(finished, 1);
 }
+});
+
+test("a compaction summary sends the same split system blocks as the chat's turn", async (t) => {
+  const chatId = "chat-split-head";
+  const head = "Stable instructions that every turn of this chat shares.";
+  const tail = "Frozen state for this chat.";
+  rememberStableHead(chatId, head);
+  t.after(() => rememberStableHead(chatId, undefined));
+  const model = { id: "offline-messages", provider: "offline", api: "anthropic-messages" } as ResolvedModelRuntime["model"];
+  for (const registered of [true, false]) {
+    const sent: unknown[] = [];
+    // The provider's transport: builds one cached system block, then lets the hook replace the payload.
+    const transport = (_model: Model<Api>, context: { systemPrompt?: string; messages: Array<{ role: string; content?: unknown }> }, options?: { onPayload?: (payload: unknown, model: Model<Api>) => unknown }) => {
+      const stream = createAssistantMessageEventStream();
+      void (async () => {
+        const [first] = context.messages;
+        const systemPrompt = context.systemPrompt ?? (first?.role === "system" && typeof first.content === "string" ? first.content : "");
+        const payload = { system: [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }], messages: [] };
+        sent.push((await options?.onPayload?.(payload, _model)) ?? payload);
+        const message = fauxAssistantMessage("summary");
+        stream.push({ type: "done", reason: "stop", message });
+        stream.end(message);
+      })();
+      return stream;
+    };
+    const runtime = {
+      model,
+      models: { getModel: () => (registered ? model : undefined), streamSimple: transport },
+      streams: { streamSimple: withPromptCacheBreakpoints(transport as never) },
+      apiKey: "offline-noncredential",
+    } as unknown as ResolvedModelRuntime;
+    const context = { systemPrompt: `${head}\n\n${tail}`, messages: [] };
+    await runtime.streams.streamSimple(model, normalizeContext(context), { sessionId: chatId }).result();
+    await createPiCompactionModels(runtime).completeSimple(model, context, { sessionId: chatId });
+    const [turn, summary] = sent as Array<{ system: Array<{ text: string; cache_control?: unknown }> }>;
+    assert.equal(turn.system.length, 2, "the turn caches its stable head on its own");
+    assert.equal(turn.system[0].text, `${head}\n\n`);
+    assert.deepEqual(summary.system, turn.system, registered ? "registered model" : "connection-bound model");
+  }
 });
 
 test("journal synchronization stores the exact enriched skill turn once", async () => {

@@ -20,6 +20,7 @@ import {
   normalizeContext,
 } from "@earendil-works/pi-ai";
 import type { ResolvedModelRuntime } from "./model-runtime-core.js";
+import { withPromptCacheBreakpoints } from "./prompt-cache-breakpoints.js";
 import {
   isModelCallTimeout,
   MODEL_CALL_RETRY_POLICY,
@@ -1461,9 +1462,13 @@ export function createPiCompactionModels(
   onAssistantMessage?: (message: AssistantMessage) => void | Promise<void>,
   beforeSummaryRefusal?: () => Promise<string | undefined>,
 ): Models {
+  // The registry's own transport carries no cache breakpoints, so a summary
+  // through it gets the same ones as the chat's turns: it then reads the
+  // turn's cached system blocks instead of writing one unsplit block.
+  const registeredStream = withPromptCacheBreakpoints(runtime.models.streamSimple.bind(runtime.models));
   const streamSimple: Models["streamSimple"] = (model, context, options) => {
     const stream = runtime.models.getModel(model.provider, model.id)
-      ? runtime.models.streamSimple(model, context, options)
+      ? registeredStream(model, context, options)
       : runtime.streams.streamSimple(model, normalizeContext(context), {
           ...options,
           apiKey: options?.apiKey ?? runtime.apiKey,

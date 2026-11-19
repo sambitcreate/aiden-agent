@@ -349,6 +349,9 @@ export function createDaemonChats(agentDir: string) {
               return { model: withoutMessageThreads(current), apiKey: undefined, headers: undefined, streams } as unknown as ResolvedModelRuntime;
             },
             async recordUsage(message) { promptCache.observeWarm(chat.id, message); await recordUsage(agentDir, "cache-warm", message); },
+            // Forgetting a fact or turning memory off writes nothing to the chat,
+            // so each refresh confirms the facts its request states.
+            approvedMemoryFacts: async () => memory && "approvedFactLines" in memory && memory.approvedFactLines ? memory.approvedFactLines() : [],
           });
           idleWarmer = warmer;
         }

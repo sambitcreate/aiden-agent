@@ -167,12 +167,21 @@ function declarationsOnly(context: TranscriptContext): TranscriptContext {
   } as TranscriptContext;
 }
 
-async function factsStillApproved(entry: PendingEntry): Promise<boolean> {
-  if (entry.memoryFacts.length === 0) return true;
-  if (!entry.approvedMemoryFacts) return false;
+/**
+ * Whether every memory fact line a recorded request states is still approved.
+ * A request that states none needs no reader; one that states any is refused
+ * without a reader, or when the reader fails. A removed or turned-off fact is
+ * then never sent again by a request replayed from the record.
+ */
+export async function memoryFactsStillApproved(
+  facts: readonly string[],
+  approvedMemoryFacts: ApprovedMemoryFacts | undefined,
+): Promise<boolean> {
+  if (facts.length === 0) return true;
+  if (!approvedMemoryFacts) return false;
   try {
-    const approved = new Set(await entry.approvedMemoryFacts());
-    return entry.memoryFacts.every((line) => approved.has(line));
+    const approved = new Set(await approvedMemoryFacts());
+    return facts.every((line) => approved.has(line));
   } catch {
     // A store that cannot be read confirms nothing.
     return false;
@@ -260,7 +269,7 @@ export function createSideCallPrefixLedger(
       sweep();
       const entry = entries.get(chatKey);
       if (!entry?.response) return undefined;
-      if (!(await factsStillApproved(entry))) {
+      if (!(await memoryFactsStillApproved(entry.memoryFacts, entry.approvedMemoryFacts))) {
         // A removed fact never comes back, so neither can this request.
         if (entries.get(chatKey) === entry) entries.delete(chatKey);
         return undefined;

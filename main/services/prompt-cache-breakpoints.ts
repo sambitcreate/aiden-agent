@@ -21,7 +21,7 @@
  * calls that replay the chat's request place the same breakpoints. Pi's
  * session-resource cleanup (chat delete) forgets a chat's head.
  */
-import { registerSessionResourceCleanup, type Api, type Model, type ProviderStreams } from "@earendil-works/pi-ai";
+import { registerSessionResourceCleanup, type Api, type AssistantMessageEventStream, type Model, type ProviderStreams, type SimpleStreamOptions } from "@earendil-works/pi-ai";
 
 type StreamSimple = ProviderStreams["streamSimple"];
 
@@ -158,9 +158,12 @@ export function withPromptCacheBreakpointsPayload(
 
 /**
  * Add the breakpoints on every request through `streamFn`. Runs before any
- * payload hook the caller passed, which then sees the final payload.
+ * payload hook the caller passed, which then sees the final payload. Takes a
+ * provider stream or a model registry's, which accepts an unnormalized context.
  */
-export function withPromptCacheBreakpoints(streamFn: StreamSimple): StreamSimple {
+export function withPromptCacheBreakpoints<TContext = Parameters<StreamSimple>[1], TOptions extends SimpleStreamOptions = SimpleStreamOptions>(
+  streamFn: (model: Model<Api>, context: TContext, options?: TOptions) => AssistantMessageEventStream,
+): (model: Model<Api>, context: TContext, options?: TOptions) => AssistantMessageEventStream {
   return (model, context, options) => {
     if (model.api !== "anthropic-messages" && model.api !== "bedrock-converse-stream") {
       return streamFn(model, context, options);
@@ -175,6 +178,6 @@ export function withPromptCacheBreakpoints(streamFn: StreamSimple): StreamSimple
         const hostReplacement = await hostOnPayload?.(current, payloadModel);
         return hostReplacement ?? rewritten;
       },
-    });
+    } as TOptions);
   };
 }
