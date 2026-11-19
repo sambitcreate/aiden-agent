@@ -386,6 +386,23 @@ test("a reply's change the canvas fetched before hearing whose it was still undo
   assert.deepEqual(ids(controller.doc).sort(), ["a", "b", "c"], "the second reply's frame undoes on its own");
 });
 
+test("undoing a reply leaves an edit the person made without a step of its own during it, such as a text frame growing", async () => {
+  await mount();
+  await aidenSaves(canvas(5, note("a"), note("b", 400)), "reply-1");
+  await act(async () => controller.change(moveTo("a", 30), { record: false }));
+  await tick(800);
+  assert.equal(stored.revision, 6);
+  await aidenSaves(canvas(7, note("a", 30), note("b", 400), note("c", 800)), "reply-1");
+
+  await act(async () => controller.undo());
+  assert.deepEqual(ids(controller.doc), ["a"], "the reply's frames go in one undo");
+  assert.equal(xOf(controller.doc, "a"), 30, "and the person's edit stays");
+  assert.equal(controller.canUndo, false);
+  await act(async () => controller.redo());
+  assert.deepEqual(ids(controller.doc), ["a", "b", "c"]);
+  assert.equal(xOf(controller.doc, "a"), 30);
+});
+
 test("the person's edit between two of a reply's changes, or another reply, starts a new undo step", async () => {
   await mount();
   await aidenSaves(canvas(5, note("a"), note("b", 400)), "reply-1");

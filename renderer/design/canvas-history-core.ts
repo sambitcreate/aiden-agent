@@ -72,6 +72,19 @@ export function takeIn(
 }
 
 /**
+ * An edit the person made without an undo step of its own (a text frame
+ * growing to fit, a comment marked resolved, another page shown). While the
+ * newest step is an Aiden reply's, the edit would otherwise join that step and
+ * undoing the reply would take it back too, so it is made in every kept step
+ * instead, and the reply's later changes still join the reply's step. After
+ * the person's own step it joins that step, the way the rest of a drag does.
+ */
+export function carryUnrecorded(history: CanvasHistory, edit: (doc: DesignCanvas) => DesignCanvas): CanvasHistory {
+  if (history.aidenTurn === undefined) return history;
+  return { past: history.past.map(edit), future: history.future.map(edit), aidenTurn: history.aidenTurn };
+}
+
+/**
  * `to` with each frame and comment that is the same as in `from` replaced by
  * `from`'s own, so `changesBetween` and the canvas see only what changed. A
  * canvas fetched from main is all new objects even where nothing changed.
