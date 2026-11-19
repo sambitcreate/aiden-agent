@@ -662,7 +662,7 @@ test("a page whose markup was dropped for room says so in get and edits, and who
   await call("c1", { operation: "create", title: "First", markup: big("one") });
   await call("c2", { operation: "create", title: "Second", markup: big("two") });
   await call("c3", { operation: "create", title: "Third", markup: big("six") });
-  const dropped = /Aiden dropped this version's markup to keep this workspace's saved pages within their storage limit[^\n]*send the whole markup in an update/u;
+  const dropped = /Aiden dropped this version's markup to keep this workspace's saved pages or their earlier versions within their storage limit[^\n]*send the whole markup in an update/u;
   assert.match(await call("g1", { operation: "get", id: "art1" }), dropped);
   assert.ok((await call("g3", { operation: "get", id: "art3" })).endsWith(big("six")));
   await assert.rejects(call("e1", { operation: "update", id: "art1", edits: [{ old: "Merge", new: "Land" }] }), dropped);
@@ -671,6 +671,28 @@ test("a page whose markup was dropped for room says so in get and edits, and who
   assert.match(await call("g1b", { operation: "get", id: "art1" }), dropped);
   await call("u2", { operation: "update", id: "art1", markup: PAGE });
   assert.ok((await call("g1c", { operation: "get", id: "art1" })).endsWith(PAGE));
+});
+
+test("a save or restore whose own markup is dropped for room says in its reply that the next change sends whole markup", async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifact-tool-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  let ids = 0;
+  const big = PAGE.replace("</Visual>", `<Text>${"word ".repeat(3_000)}</Text>\n</Visual>`);
+  // The pages file has room for the page but not for its markup as well.
+  const store = new WorkspaceArtifactStore({ root: () => dir, newId: () => `art${++ids}`, artifactsMaxBytes: 20_000 });
+  const { call, nextTurn } = await harness(t, { permission: "full", store });
+  const created = await call("c1", { operation: "create", title: "Big", markup: big });
+  assert.match(created, /^Created the artifact "Big"/u);
+  assert.match(created, /could not keep this save's markup[^\n]*next change must send the whole markup, not edits/u);
+  // A small page keeps its markup, and says nothing about it.
+  nextTurn();
+  assert.doesNotMatch(await call("u1", { operation: "update", id: "art1", markup: PAGE }), /markup/u);
+  // Going back to the version that lost its markup says so too.
+  nextTurn();
+  assert.match(
+    await call("r1", { operation: "restore", id: "art1", revision: 1 }),
+    /^Restored revision 1[^\n]*\nAiden does not keep this version's markup[^\n]*next change must send the whole markup, not edits/u,
+  );
 });
 
 test("check runs a page's sources once and draws the page against them without saving anything", async (t) => {

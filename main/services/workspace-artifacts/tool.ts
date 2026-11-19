@@ -53,7 +53,18 @@ type Operation = "create" | "update" | "list" | "get" | "check" | "delete" | "ru
 /** Why `get` has no markup to show, and what to do instead. */
 const MARKUP_NOT_KEPT = "Aiden did not keep this version's markup: it was saved before Aiden kept page markup, or imported from a file. To change the page, send the whole markup in an update.";
 /** The same, for a version whose markup was dropped to keep the workspace's files within their size. */
-const MARKUP_DROPPED = "Aiden dropped this version's markup to keep this workspace's saved pages within their storage limit (the least recently changed pages' markup goes first); the page itself is unchanged. To change the page, send the whole markup in an update.";
+const MARKUP_DROPPED = "Aiden dropped this version's markup to keep this workspace's saved pages or their earlier versions within their storage limit; the page itself is unchanged. To change the page, send the whole markup in an update.";
+
+/**
+ * Said after a save or restore whose page came back without markup because
+ * it was dropped for room, so Aiden's next change does not try edits first.
+ */
+function droppedOnSave(artifact: Pick<WorkspaceArtifactV1, "markupDropped">, sentMarkup: boolean): string {
+  if (!artifact.markupDropped) return "";
+  return sentMarkup
+    ? "\nAiden saved the page but could not keep this save's markup: this workspace's saved pages are at their storage limit. Its next change must send the whole markup, not edits."
+    : "\nAiden does not keep this version's markup: it was dropped to keep this workspace's saved pages or their earlier versions within their storage limit. Its next change must send the whole markup, not edits.";
+}
 
 function noMarkupReason(page: Pick<WorkspaceArtifactV1, "markupDropped">): string {
   return page.markupDropped ? MARKUP_DROPPED : MARKUP_NOT_KEPT;
@@ -1093,7 +1104,7 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
           ownRevisions.set(id, turnRevisionsAfter(ownRevisions.get(id), artifact.revision - 1, artifact.revision));
           options.onChanged({ workspaceId, artifactId: artifact.id, reason: "updated", chatId });
           return text(
-            `Restored revision ${revision} of the artifact "${artifact.visual.title}" as revision ${artifact.revision}.${await afterSave(artifact, signal, current.artifact)}`,
+            `Restored revision ${revision} of the artifact "${artifact.visual.title}" as revision ${artifact.revision}.${droppedOnSave(artifact, false)}${await afterSave(artifact, signal, current.artifact)}`,
           );
         }
         if (operation === "delete") {
@@ -1189,7 +1200,7 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
         options.onChanged({ workspaceId, artifactId: artifact.id, reason: previous ? "updated" : "created", chatId });
         const verb = previous ? "Updated" : "Created";
         return text(
-          `${verb} the artifact "${artifact.visual.title}" (id ${artifact.id}, revision ${artifact.revision}). It is shown in this workspace's Artifacts tab.${await afterSave(artifact, signal, replaced)}${describeDiagnostics(diagnostics)}`,
+          `${verb} the artifact "${artifact.visual.title}" (id ${artifact.id}, revision ${artifact.revision}). It is shown in this workspace's Artifacts tab.${droppedOnSave(artifact, effective.markup !== undefined)}${await afterSave(artifact, signal, replaced)}${describeDiagnostics(diagnostics)}`,
         );
       },
     },
