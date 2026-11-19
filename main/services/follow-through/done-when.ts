@@ -9,7 +9,6 @@ import {
   MAX_DONE_WHEN_CHECKS,
   MAX_DONE_WHEN_COMMAND_CHARS,
   type DoneWhenCheckState,
-  type DoneWhenCheckView,
 } from "../../../renderer/shared/follow-through.js";
 
 export const DONE_WHEN_TIMEOUT_MS = 10 * 60_000;
@@ -57,18 +56,6 @@ export interface DoneWhenDeps {
   persist(records: DoneWhenRecord[]): void;
   onChange?(chatId: string): void;
   now(): number;
-}
-
-export function doneWhenView(record: DoneWhenRecord): DoneWhenCheckView {
-  return {
-    command: record.command,
-    state: record.state,
-    checksRun: record.checksRun,
-    setAt: record.setAt,
-    ...(record.lastRunAt !== undefined ? { lastRunAt: record.lastRunAt } : {}),
-    ...(record.lastExitCode !== undefined ? { lastExitCode: record.lastExitCode } : {}),
-    ...(record.lastTimedOut ? { lastTimedOut: true } : {}),
-  };
 }
 
 export function validateDoneWhenCommand(command: string): string {

@@ -84,8 +84,18 @@ export function SkillsSettings() {
   };
 
   const toggle = async (skill: Skill, enabled: boolean) => {
-    await skillsApi.save({ ...skill, enabled });
-    await invalidate();
+    try {
+      await skillsApi.save({ ...skill, enabled });
+    } catch (error) {
+      const name = skill.name || "this skill";
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : `Couldn’t ${enabled ? "turn on" : "turn off"} ${name}.`,
+      );
+    } finally {
+      await invalidate();
+    }
   };
 
   const list = skills.data ?? [];
@@ -170,7 +180,7 @@ export function SkillsSettings() {
                   variant="transparent"
                   size="small"
                   iconOnly
-                  aria-label="Delete skill"
+                  aria-label={`Delete ${s.name || "untitled skill"}`}
                   onClick={() => setRemoving(s)}
                 >
                   <Trash2 className="size-4" />

@@ -132,10 +132,9 @@ import { createBotMemoryReview, type BotMemoryAdmission } from "../bot-memory/re
 import { BOT_MEMORY_TOOL_NAME, botMemoryToolEntry, withBotMemoryIngress } from "../bot-memory/tool.js";
 import { BOT_RECALL_TOOL_NAME, botRecallToolEntry } from "../bot-memory/recall.js";
 
-import { BOT_CONNECT_CARD_ENTRY_KIND, createBotLiveProjection, type BotLiveProjection } from "./live-projection.js";
+import { createBotLiveProjection, type BotLiveProjection } from "./live-projection.js";
 import { botIngressAllowsTool, botTurnAttended } from "./bot-tool-policy.js";
 
-export { BOT_CONNECT_CARD_ENTRY_KIND };
 const MODEL_CACHE_MS = 30_000;
 
 const profileDir = () => app.getPath("userData");
@@ -198,9 +197,6 @@ export async function probeBotAdmission(botId: string): Promise<{ providerId: st
     modelId: admission.authority.provider.sourceModelId,
   }));
 }
-
-/** Host-owned connector read admission; this does not run a turn or grant new access. */
-export function admitBotConnectorWork(botId: string): Promise<BotRuntimeAuthorityAdmission> { return admit(botId); }
 
 /**
  * Shell access for one host process started outside a turn (a watch script):

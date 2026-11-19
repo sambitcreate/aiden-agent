@@ -1436,6 +1436,39 @@ test("stop calls onStopped after aborting the running tool and before publishing
   } finally { await service.shutdown(); }
 });
 
+test("stop with expectedSubmissionId stops only the intended submission and spares a successor turn", async () => {
+  const stopped: string[] = [];
+  const hold = countingTool("hold", (_params, signal) => blockingUntilAborted(signal));
+  const service = await serviceFor(
+    tempProfile(),
+    createFauxModels([
+      fauxAssistantMessage([fauxToolCall("hold", { text: "first" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage([fauxToolCall("hold", { text: "second" })], { stopReason: "toolUse" }),
+    ]),
+    {
+      extension: recordingDeps({ tools: [{ tool: hold, replay: "unsafe" }] }),
+      onStopped: (botId) => stopped.push(botId),
+    },
+  );
+  try {
+    const first = await service.send("bot:a", { text: "First job", requestId: "tg:bot:a:1:0:10" });
+    await waitFor(() => hold.executions.length === 1, { what: "first turn running" });
+    assert.deepEqual(await service.stop("bot:a", { expectedSubmissionId: first.submissionId }), { kind: "idle" });
+    assert.deepEqual(stopped, ["bot:a"]);
+
+    const second = await service.send("bot:a", { text: "Second job", requestId: "tg:bot:a:1:0:11" });
+    await waitFor(() => hold.executions.length === 2, { what: "second turn running" });
+    const replayed = await service.stop("bot:a", { expectedSubmissionId: first.submissionId });
+    assert.deepEqual(replayed, { kind: "running", submissionId: second.submissionId }, "stale Stop replay leaves successor running");
+    assert.deepEqual(stopped, ["bot:a"]);
+
+    assert.deepEqual(await service.stop("bot:a", { expectedSubmissionId: second.submissionId }), { kind: "idle" });
+    assert.deepEqual(stopped, ["bot:a", "bot:a"]);
+  } finally {
+    await service.shutdown();
+  }
+});
+
 test("dismiss calls onStopped once after the interrupted turn settles, before publishing, and never on no-op or replay", async () => {
   const profile = tempProfile();
   const submissionId = await killMidStream(profile);

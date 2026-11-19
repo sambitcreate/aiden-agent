@@ -8,7 +8,7 @@ import { analyticsSettled, captureAnalyticsEvents } from "../services/analytics/
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { parseParams } from "./chat-params.js";
-import { parseAssistantChatCreate, parseChatCreate } from "./chat-create-params.js";
+import { parseChatCreate } from "./chat-create-params.js";
 import { parseChatCancelOrigin } from "../services/chat-cancel.js";
 import { ChatTurnAdmission } from "../services/chat-turn-admission.js";
 import { subagentsAllowedForGeneration } from "../services/subagents/eligibility.js";
@@ -188,11 +188,6 @@ test("chat creation and generation envelopes refuse renderer-supplied Bot identi
     assert.throws(
       () => parseChatCreate({ ...create, [field]: "forged" }),
       /Invalid chat creation fields/u,
-      field,
-    );
-    assert.throws(
-      () => parseAssistantChatCreate({ providerId: "p", model: "m", [field]: "forged" }),
-      /Invalid Assistant chat creation fields/u,
       field,
     );
   }

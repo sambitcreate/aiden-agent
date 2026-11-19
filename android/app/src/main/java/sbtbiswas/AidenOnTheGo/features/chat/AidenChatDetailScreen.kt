@@ -58,6 +58,7 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -1490,8 +1491,9 @@ private fun AssistantMessageRow(
 
     val displayText = projection?.finalText ?: message.text
     val visuals = message.visuals.orEmpty()
-    // Rows for the visuals that render; an html visual without a snapshot is left to its notice.
-    val rowVisuals = aidenVisualsWithRows(message)
+    // Rows for the visuals that render. Without the viewer, an html visual with no
+    // snapshot is left to its notice.
+    val rowVisuals = aidenVisualsWithRows(message, viewerAvailable = onOpenVisual != null)
     val progressText = projection?.progressText ?: ""
     // Visual snapshots render inside their visual rows, never as ordinary attachments.
     val attachments = aidenVisibleMessageAttachments(message.attachments.orEmpty(), visuals)
@@ -1681,8 +1683,9 @@ private fun AssistantMessageRow(
         message.appPanels.orEmpty().filter { it.isWireSafe }.forEach { panel ->
             key(panel.id) { appControlsCache?.let { NativeAppControlPanel(panel, appControlsAvailable, palette, it, loadAppControls, applyAppControl) } }
         }
-        // An html artifact whose visual has a snapshot is already shown; the rest stay "view on Mac".
-        aidenUnsupportedHtmlArtifacts(message).forEach { artifact ->
+        // An html artifact whose visual has a row (a snapshot, or the viewer to open it) is
+        // already shown; the rest stay "view on Mac".
+        aidenUnsupportedHtmlArtifacts(message, viewerAvailable = onOpenVisual != null).forEach { artifact ->
             Spacer(modifier = Modifier.height(8.dp))
             Surface(
                 color = palette.raised,
@@ -1734,29 +1737,37 @@ internal fun aidenVisualDisplay(visual: AidenChatVisual, attachments: List<Aiden
 
 /**
  * The html artifacts that still need the "view in Aiden Agent" notice: those
- * without an html visual whose snapshot the message carries.
+ * without an html visual this message can show, by its snapshot or, when the
+ * Mac offers the visual viewer ([viewerAvailable]), interactively.
  */
-internal fun aidenUnsupportedHtmlArtifacts(message: AidenChatMessage): List<AidenHtmlArtifact> {
+internal fun aidenUnsupportedHtmlArtifacts(message: AidenChatMessage, viewerAvailable: Boolean): List<AidenHtmlArtifact> {
     val attachments = message.attachments.orEmpty()
     val shown = message.visuals.orEmpty()
-        .filter { it.kind == AidenChatVisual.KIND_HTML && aidenVisualDisplay(it, attachments).snapshot != null }
+        .filter { it.kind == AidenChatVisual.KIND_HTML && aidenVisualHasRow(it, attachments, viewerAvailable) }
         .mapTo(HashSet()) { it.id }
     return message.htmlArtifacts.orEmpty().filterNot { it.id in shown }
 }
 
 /**
- * Whether [visual] gets its own row. An html visual without a usable snapshot
+ * Whether [visual] gets its own row. An html visual gets one when the message
+ * carries its usable snapshot, or when the Mac offers the visual viewer
+ * ([viewerAvailable]): its title row then carries Open interactive. Otherwise it
  * has nothing to show beyond its title, which the "view in Aiden Agent" notice
  * already carries, so only that notice represents it. ui visuals always get a
  * row (snapshot, else fallback text, else title).
  */
-internal fun aidenVisualHasRow(visual: AidenChatVisual, attachments: List<AidenMessageAttachment>): Boolean =
-    visual.kind != AidenChatVisual.KIND_HTML || aidenVisualDisplay(visual, attachments).snapshot != null
+internal fun aidenVisualHasRow(
+    visual: AidenChatVisual,
+    attachments: List<AidenMessageAttachment>,
+    viewerAvailable: Boolean
+): Boolean =
+    visual.kind != AidenChatVisual.KIND_HTML || viewerAvailable ||
+        aidenVisualDisplay(visual, attachments).snapshot != null
 
 /** The message's visuals that render as rows, in reply order. */
-internal fun aidenVisualsWithRows(message: AidenChatMessage): List<AidenChatVisual> {
+internal fun aidenVisualsWithRows(message: AidenChatMessage, viewerAvailable: Boolean): List<AidenChatVisual> {
     val attachments = message.attachments.orEmpty()
-    return message.visuals.orEmpty().filter { aidenVisualHasRow(it, attachments) }
+    return message.visuals.orEmpty().filter { aidenVisualHasRow(it, attachments, viewerAvailable) }
 }
 
 private const val VISUAL_FALLBACK_COLLAPSED_LINES = 6
@@ -1764,7 +1775,8 @@ private const val VISUAL_FALLBACK_COLLAPSED_LINES = 6
 /**
  * One inline visual of a committed reply. Phones show the Mac's snapshot,
  * described by the visual's title, with any fallback text beneath; without a
- * snapshot, the fallback text alone; with neither, the title.
+ * snapshot, the fallback text alone; with neither, the title. Without a
+ * snapshot, [onOpenInteractive] adds an Open interactive action beneath.
  */
 @Composable
 internal fun AidenVisualRow(
@@ -1793,16 +1805,46 @@ internal fun AidenVisualRow(
         }
         return
     }
-    Surface(color = palette.raised, shape = MaterialTheme.shapes.medium, modifier = modifier) {
-        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-            val fallback = display.text.takeUnless { visual.fallbackText.isNullOrBlank() }
-            if (fallback != null) {
-                AidenVisualFallbackText(text = fallback, visualId = visual.id, palette = palette)
-            } else {
-                Text(text = visual.title, style = MaterialTheme.typography.labelLarge, color = palette.foreground)
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Surface(color = palette.raised, shape = MaterialTheme.shapes.medium) {
+            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                val fallback = display.text.takeUnless { visual.fallbackText.isNullOrBlank() }
+                if (fallback != null) {
+                    AidenVisualFallbackText(text = fallback, visualId = visual.id, palette = palette)
+                } else {
+                    Text(text = visual.title, style = MaterialTheme.typography.labelLarge, color = palette.foreground)
+                }
             }
         }
+        if (onOpenInteractive != null) {
+            AidenVisualOpenInteractiveButton(
+                title = visual.title,
+                palette = palette,
+                onClick = { onOpenInteractive(AidenVisualViewerRequest(visual = visual, snapshot = null)) }
+            )
+        }
     }
+}
+
+/** The text action under a snapshot-less visual that opens it in the interactive viewer. */
+@Composable
+private fun AidenVisualOpenInteractiveButton(
+    title: String,
+    palette: sbtbiswas.AidenOnTheGo.config.AidenPalette,
+    onClick: () -> Unit
+) {
+    val label = stringResource(R.string.chat_visual_open_interactive)
+    val description = stringResource(R.string.chat_visual_open_interactive_described, title)
+    Text(
+        text = label,
+        style = MaterialTheme.typography.labelMedium,
+        color = palette.accent,
+        modifier = Modifier
+            .minimumInteractiveComponentSize()
+            .clickable(onClickLabel = label, role = Role.Button, onClick = onClick)
+            .semantics { contentDescription = description }
+            .padding(vertical = 4.dp)
+    )
 }
 
 @Composable
@@ -2478,6 +2520,56 @@ internal fun aidenMessageBodyStyle(palette: sbtbiswas.AidenOnTheGo.config.AidenP
 
 internal val CODE_BLOCK_REGEX = Regex("```([a-zA-Z0-9_-]*)\\n?([\\s\\S]*?)```")
 
+/** One piece of a reply: formatted prose, or a fenced code block. */
+private sealed interface RichMessageSegment {
+    data class Prose(val formatted: AnnotatedString) : RichMessageSegment
+    data class Code(val code: String, val language: String?) : RichMessageSegment
+}
+
+/** Splits [text] at fenced code blocks and formats the prose around them, dropping blank prose. */
+private fun richMessageSegments(
+    text: String,
+    palette: sbtbiswas.AidenOnTheGo.config.AidenPalette
+): List<RichMessageSegment> {
+    val segments = mutableListOf<RichMessageSegment>()
+    fun addProse(raw: String) {
+        val prose = raw.trim()
+        if (prose.isNotEmpty()) {
+            segments += RichMessageSegment.Prose(buildAidenFormattedMessage(text = prose, palette = palette, isUser = false))
+        }
+    }
+    var lastIndex = 0
+    for (match in CODE_BLOCK_REGEX.findAll(text)) {
+        val start = match.range.first
+        if (start > lastIndex) addProse(text.substring(lastIndex, start))
+        segments += RichMessageSegment.Code(
+            code = match.groupValues[2].trim(),
+            language = match.groupValues[1].trim().ifEmpty { null }
+        )
+        lastIndex = match.range.last + 1
+    }
+    if (lastIndex < text.length) addProse(text.substring(lastIndex))
+    return segments
+}
+
+@Composable
+private fun RichProseText(
+    formatted: AnnotatedString,
+    palette: sbtbiswas.AidenOnTheGo.config.AidenPalette,
+    onOpenUrl: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    ClickableText(
+        text = formatted,
+        style = aidenMessageBodyStyle(palette),
+        modifier = modifier,
+        onClick = { offset ->
+            formatted.getStringAnnotations(tag = AidenAnnotationTag.LINK.name, start = offset, end = offset)
+                .firstOrNull()?.let { onOpenUrl(it.item) }
+        }
+    )
+}
+
 @Composable
 internal fun RichFormattedMessage(
     text: String,
@@ -2486,65 +2578,25 @@ internal fun RichFormattedMessage(
     onOpenUrl: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val matches = remember(text) { CODE_BLOCK_REGEX.findAll(text).toList() }
-
-    if (matches.isEmpty()) {
-        val formatted = buildAidenFormattedMessage(text = text, palette = palette, isUser = false)
-        ClickableText(
-            text = formatted,
-            style = aidenMessageBodyStyle(palette),
-            modifier = modifier,
-            onClick = { offset ->
-                formatted.getStringAnnotations(tag = AidenAnnotationTag.LINK.name, start = offset, end = offset)
-                    .firstOrNull()?.let { onOpenUrl(it.item) }
-            }
-        )
+    // The formatted segments depend only on the text and the palette; the
+    // handlers are read at click time, and the body style is applied at draw.
+    val hasCodeBlock = remember(text) { CODE_BLOCK_REGEX.containsMatchIn(text) }
+    if (!hasCodeBlock) {
+        val formatted = remember(text, palette) {
+            buildAidenFormattedMessage(text = text, palette = palette, isUser = false)
+        }
+        RichProseText(formatted, palette, onOpenUrl, modifier)
     } else {
-        var lastIndex = 0
+        val segments = remember(text, palette) { richMessageSegments(text, palette) }
         Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            for (match in matches) {
-                val start = match.range.first
-                val end = match.range.last + 1
-
-                if (start > lastIndex) {
-                    val leading = text.substring(lastIndex, start).trim()
-                    if (leading.isNotEmpty()) {
-                        val formatted = buildAidenFormattedMessage(text = leading, palette = palette, isUser = false)
-                        ClickableText(
-                            text = formatted,
-                            style = aidenMessageBodyStyle(palette),
-                            onClick = { offset ->
-                                formatted.getStringAnnotations(tag = AidenAnnotationTag.LINK.name, start = offset, end = offset)
-                                    .firstOrNull()?.let { onOpenUrl(it.item) }
-                            }
-                        )
-                    }
-                }
-
-                val language = match.groupValues[1].trim()
-                val codeContent = match.groupValues[2].trim()
-
-                AidenCodeBlock(
-                    code = codeContent,
-                    language = language.ifEmpty { null },
-                    palette = palette,
-                    onCopy = onCopy
-                )
-
-                lastIndex = end
-            }
-
-            if (lastIndex < text.length) {
-                val trailing = text.substring(lastIndex).trim()
-                if (trailing.isNotEmpty()) {
-                    val formatted = buildAidenFormattedMessage(text = trailing, palette = palette, isUser = false)
-                    ClickableText(
-                        text = formatted,
-                        style = aidenMessageBodyStyle(palette),
-                        onClick = { offset ->
-                            formatted.getStringAnnotations(tag = AidenAnnotationTag.LINK.name, start = offset, end = offset)
-                                .firstOrNull()?.let { onOpenUrl(it.item) }
-                        }
+            for (segment in segments) {
+                when (segment) {
+                    is RichMessageSegment.Prose -> RichProseText(segment.formatted, palette, onOpenUrl)
+                    is RichMessageSegment.Code -> AidenCodeBlock(
+                        code = segment.code,
+                        language = segment.language,
+                        palette = palette,
+                        onCopy = onCopy
                     )
                 }
             }

@@ -1421,10 +1421,6 @@ export async function initializeAidenRemoteService(): Promise<void> {
   await runtime.service.initialize();
 }
 
-export function stopAidenRemoteService(): void {
-  void runtimePromise?.then((runtime) => Promise.all([runtime.mcp.stop(), runtime.service.stop()]));
-}
-
 export async function stopAidenRemoteServiceAndSettle(): Promise<void> {
   const runtime = await runtimePromise;
   await runtime?.mcp.stop();

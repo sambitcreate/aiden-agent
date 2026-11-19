@@ -33,7 +33,7 @@ export function BrowserSettings({ state, open, onOpenChange, run, error = null }
     setBusy(true);
     try { return await run(command); } finally { setBusy(false); }
   };
-  return <Dialog open={open} onOpenChange={onOpenChange} title="Browser settings" description="Browser preferences apply to new tabs opened by you or Aiden." onConfirm={() => onOpenChange(false)}>
+  return <Dialog open={open} onOpenChange={onOpenChange} title="Browser settings" description="Browser preferences apply to new tabs opened by you or Aiden." confirmHidden cancelLabel="Done">
     <div className="browser-settings">
       {error ? <p role="alert" className="text-small text-red">{error}</p> : null}
       <section aria-labelledby="browser-defaults-heading">

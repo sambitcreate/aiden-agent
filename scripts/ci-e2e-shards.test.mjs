@@ -91,3 +91,14 @@ test("invalid, duplicate, or empty shard selections fail instead of silently ski
   assert.throws(() => planShards(["a.spec.ts", "a.spec.ts"]));
   assert.throws(() => planShards(["../a.spec.ts"]));
 });
+
+test("related E2E selection may leave unused shards empty without dropping the selected spec", () => {
+  const specs = ["settings-unification.spec.ts"];
+  const first = shardArguments(specs, "1/4", { allowEmpty: true, recorded: { "settings-unification.spec.ts": 90 } });
+  const unused = shardArguments(specs, "4/4", { allowEmpty: true, recorded: { "settings-unification.spec.ts": 90 } });
+  assert.deepEqual(first.shard.files, specs);
+  assert.equal(first.empty, undefined);
+  assert.deepEqual(unused.shard.files, []);
+  assert.equal(unused.empty, true);
+  assert.deepEqual(unused.args, []);
+});

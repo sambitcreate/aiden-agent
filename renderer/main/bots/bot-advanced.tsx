@@ -110,6 +110,9 @@ import { BotPeerManagerDialog } from "./bot-peers";
 import { botRoutinesKey } from "./bot-routines";
 import { BotSpendingSection } from "./bot-spending-section";
 import { botMemoryCount, botMemoryCountLabel, useBotMemory } from "./use-bot-memory";
+import { useAppCapabilities } from "../../lib/app-capabilities";
+import { localComputerNoun } from "../../shared/computer-noun";
+import { isEscapeKey } from "../../lib/dismiss-key";
 
 /**
  * How much the Bot's model thinks. The choices are the levels the model picked
@@ -330,6 +333,7 @@ function AccessSection({
   const [picking, setPicking] = React.useState(false);
   const { on, off } = botToolsOf(catalog, draft);
   const full = draft.usesFullAccess;
+  const computer = localComputerNoun(useAppCapabilities().platform);
   return (
     <>
       <FieldSet
@@ -342,7 +346,7 @@ function AccessSection({
       >
         <Field
           description={full
-            ? "Everything Aiden can use on this Mac, including apps you connect later. Approvals and rules still apply."
+            ? `Everything Aiden can use on this ${computer}, including apps you connect later. Approvals and rules still apply.`
             : "Everything except the tools below. Apps you connect later start off for this Bot."}
         />
         {off.map((tool) => (
@@ -713,7 +717,7 @@ function IdentityHeader({
                 event.preventDefault();
                 finishEditing();
               }
-              if (event.key === "Escape") {
+              if (isEscapeKey(event)) {
                 event.preventDefault();
                 // Escape closes the edit only, never the panel.
                 event.stopPropagation();

@@ -314,26 +314,6 @@ export type TtsErrorCode =
   | "playback_unavailable"
   | "not_found";
 
-export const TTS_ERROR_CODES: readonly TtsErrorCode[] = [
-  "setup_required",
-  "secure_storage_unavailable",
-  "invalid_credential",
-  "model_unavailable",
-  "voice_unavailable",
-  "permission_denied",
-  "quota",
-  "provider_unavailable",
-  "network",
-  "invalid_response",
-  "source_changed",
-  "response_incomplete",
-  "response_too_large",
-  "owner_invalidated",
-  "audio_buffer_limit",
-  "playback_unavailable",
-  "not_found",
-];
-
 export interface TtsSafeError {
   code: TtsErrorCode;
   message: string;
@@ -343,16 +323,6 @@ export interface TtsSafeError {
    * Unknown outcomes must be reported as possibly billed, never as zero.
    */
   generationMayHaveBeenBilled: boolean;
-}
-
-/** Normalized-text preparation result shared with the renderer for notices. */
-export interface TtsPreparationSummary {
-  /** Version of the normalization policy; cached in audio identity keys. */
-  policyVersion: number;
-  /** Number of prepared segments. */
-  segments: number;
-  /** Human-readable omission notices, e.g. "Code blocks skipped". */
-  omissions: readonly string[];
 }
 
 /** Safe capability/readiness projection. Never contains secrets. */

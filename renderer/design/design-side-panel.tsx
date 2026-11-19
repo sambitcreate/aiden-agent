@@ -10,6 +10,7 @@ import {
   EyeOff,
   File,
   Frame,
+  GripVertical,
   Group,
   Image as ImageIcon,
   Lock,
@@ -26,7 +27,7 @@ import {
 } from "lucide-react";
 import * as React from "react";
 import { CopyButton } from "../components/copy-button";
-import { Button, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Switch } from "../components/ui";
+import { Button, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui";
 import { Segmented } from "../components/ui-primitives";
 import {
   highlightCode,
@@ -41,6 +42,7 @@ import {
   DESIGN_CANVAS_LIMITS,
   DESIGN_COLORS,
   DESIGN_WIDTHS,
+  isDesignContainer,
   isDesignLine,
   isDesignPrintable,
   type DesignCanvas,
@@ -49,15 +51,13 @@ import {
   type DesignGuide,
   type DesignWidth,
 } from "../shared/design-canvas/schema";
-import {
-  extractDesignTweakControls,
-  readDesignTweak,
-  withDesignTweak,
-  type DesignTweakControl,
-} from "../shared/design-canvas/tweaks";
+import { DesignTweakDark, DesignTweaksEditor, useDesignTweakControls, type DesignTweakOps } from "./design-tweaks-panel";
+import { useFrameSource, type DesignReadSource } from "./frame-source";
 import { designLayers, type DesignLayer, type DesignLayerPlace } from "./layers-core";
 import { designColorVar, designFillVar, DESIGN_COLOR_NAMES } from "./nodes/draw-style";
 import { DESIGN_DEFAULT_WIDTH, type DesignFramePatch } from "./nodes/design-node-context";
+import { isEscapeKey } from "../lib/dismiss-key";
+import { arrangeByDraft, ReorderAnnouncer, scrollParentOf, usePointerReorder, useReorderDraft } from "../lib/reorder-draft";
 
 export type DesignPanelTab = "properties" | "layers" | "code" | "tweaks";
 
@@ -141,15 +141,11 @@ export function designItemName(frame: DesignFrame): string {
   return title || designKindName(frame);
 }
 
-/** `designCanvas:source`'s answer. */
-export type DesignFrameSourceResult =
-  | { text: string; truncated: boolean }
-  /** `unsaved`: the canvas couldn't be saved, so main's copy of the frame is older than the screen. */
-  | { error: "unavailable" | "missing" | "unsaved" };
+export type { DesignFrameSourceResult } from "./frame-source";
 
 export type DesignSidePanelProps = {
   /** Reads a page's file or an artifact's HTML; the canvas saves first, since main reads the stored frame. */
-  readSource(frameId: string): Promise<DesignFrameSourceResult>;
+  readSource: DesignReadSource;
   doc: DesignCanvas;
   selection: ReadonlySet<string>;
   tab: DesignPanelTab;
@@ -163,6 +159,8 @@ export type DesignSidePanelProps = {
   resizeTo(id: string, w: number, h: number): void;
   reorder(id: string, targetId: string, place: DesignLayerPlace): void;
   step(id: string, direction: "forward" | "backward"): void;
+  /** What the Tweaks tab asks of the canvas. */
+  tweaks: DesignTweakOps;
 };
 
 export function DesignSidePanel(props: DesignSidePanelProps) {
@@ -430,7 +428,7 @@ function NumberField({
           if (event.key === "Enter") {
             event.preventDefault();
             commit();
-          } else if (event.key === "Escape") {
+          } else if (isEscapeKey(event)) {
             event.preventDefault();
             setDraft(shown);
           }
@@ -529,12 +527,54 @@ function GuideField({
 
 // ---- Layers ---------------------------------------------------------------
 
+/** Each layer's siblings, the rows it trades places with, in list order. */
+function layerGroups(layers: readonly DesignLayer[]): Map<string, string[]> {
+  const groups = new Map<string, string[]>();
+  const visit = (list: readonly DesignLayer[]) => {
+    for (const container of [false, true]) {
+      const ids = list.filter((layer) => isDesignContainer(layer.frame.kind) === container).map((layer) => layer.frame.id);
+      for (const id of ids) groups.set(id, ids);
+    }
+    for (const layer of list) visit(layer.children);
+  };
+  visit(layers);
+  return groups;
+}
+
 function LayersTab({ doc, selection, onSelect, update, reorder, step }: DesignSidePanelProps) {
   const layers = React.useMemo(() => designLayers(doc), [doc]);
+  const groups = React.useMemo(() => layerGroups(layers), [layers]);
   const [renaming, setRenaming] = React.useState<string | null>(null);
-  const [drop, setDrop] = React.useState<{ id: string; place: DesignLayerPlace } | null>(null);
-  const dragged = React.useRef<string | null>(null);
+  const listRef = React.useRef<HTMLUListElement>(null);
+  const rowsById = () =>
+    new Map([...(listRef.current?.querySelectorAll<HTMLElement>("[data-layer-id]") ?? [])].map((row) => [row.dataset.layerId, row]));
+  const keyboard = useReorderDraft({
+    groupOf: (id) => groups.get(id) ?? [],
+    label: (id) => {
+      const frame = doc.frames.find((entry) => entry.id === id);
+      return frame ? designItemName(frame) : id;
+    },
+    handle: (id) => rowsById().get(id)?.querySelector<HTMLElement>("[data-layer-grip]"),
+    // One drop is one reorder, so one undo step: behind the row now above it, or in front of the one below.
+    onCommit: (order, id) => {
+      const at = order.indexOf(id);
+      if (at > 0) reorder(id, order[at - 1]!, "below");
+      else if (order[1]) reorder(id, order[1], "above");
+    },
+  });
+  const pointer = usePointerReorder({
+    targets: (id) => {
+      const rows = rowsById();
+      return (groups.get(id) ?? []).flatMap((target) => {
+        const element = rows.get(target);
+        return element ? [{ id: target, element }] : [];
+      });
+    },
+    onDrop: (id, target) => reorder(id, target.id, target.place === "before" ? "above" : "below"),
+    scroller: () => scrollParentOf(listRef.current),
+  });
   if (layers.length === 0) return <PanelNote>Nothing on this page yet.</PanelNote>;
+  const drop = pointer.drag?.over ?? null;
 
   const row = (layer: DesignLayer, depth: number): React.ReactNode => {
     const { frame } = layer;
@@ -545,34 +585,13 @@ function LayersTab({ doc, selection, onSelect, update, reorder, step }: DesignSi
       <li key={frame.id}>
         <div
           data-layer-id={frame.id}
-          draggable={renaming !== frame.id}
-          onDragStart={(event) => {
-            dragged.current = frame.id;
-            event.dataTransfer.effectAllowed = "move";
-            event.dataTransfer.setData("text/plain", frame.id);
-          }}
-          onDragEnd={() => {
-            dragged.current = null;
-            setDrop(null);
-          }}
-          onDragOver={(event) => {
-            if (!dragged.current || dragged.current === frame.id) return;
-            event.preventDefault();
-            const rect = event.currentTarget.getBoundingClientRect();
-            const place: DesignLayerPlace = event.clientY < rect.top + rect.height / 2 ? "above" : "below";
-            setDrop((current) => (current?.id === frame.id && current.place === place ? current : { id: frame.id, place }));
-          }}
-          onDragLeave={() => setDrop((current) => (current?.id === frame.id ? null : current))}
-          onDrop={(event) => {
-            event.preventDefault();
-            const id = dragged.current;
-            const place = drop?.id === frame.id ? drop.place : "above";
-            dragged.current = null;
-            setDrop(null);
-            if (id && id !== frame.id) reorder(id, frame.id, place);
+          data-dragging={pointer.drag?.id === frame.id ? "" : undefined}
+          onPointerDown={(event) => {
+            if (renaming === frame.id || (event.target as Element).closest("input")) return;
+            pointer.onPointerDown(frame.id, event);
           }}
           className={cn(
-            "group/layer relative flex h-8 items-center gap-1 rounded-control pr-1 text-regular",
+            "group/layer relative flex h-8 items-center gap-1 rounded-control pr-1 text-regular data-dragging:opacity-50",
             active ? "bg-list-selection" : "hover:bg-list-hover",
             frame.hidden && "text-secondary",
           )}
@@ -581,7 +600,7 @@ function LayersTab({ doc, selection, onSelect, update, reorder, step }: DesignSi
           {drop?.id === frame.id ? (
             <span
               aria-hidden
-              className={cn("pointer-events-none absolute inset-x-1 h-0.5 rounded-full bg-fill-accent", drop.place === "above" ? "top-0" : "bottom-0")}
+              className={cn("pointer-events-none absolute inset-x-1 h-0.5 rounded-full bg-fill-accent", drop.place === "before" ? "top-0" : "bottom-0")}
             />
           ) : null}
           <Icon aria-hidden className="size-4 shrink-0 text-secondary" />
@@ -647,18 +666,38 @@ function LayersTab({ doc, selection, onSelect, update, reorder, step }: DesignSi
           >
             {frame.locked ? <Lock aria-hidden /> : <LockOpen aria-hidden />}
           </Button>
+          <Button
+            iconOnly
+            size="small"
+            variant="transparent"
+            data-layer-grip
+            aria-label={`Move ${name}`}
+            aria-keyshortcuts="Space ArrowUp ArrowDown Home End Escape"
+            title="Drag, or press Space and the arrow keys, to reorder"
+            className="cursor-grab opacity-0 group-hover/layer:opacity-100 focus-visible:opacity-100 data-reorder-held:bg-list-selection data-reorder-held:opacity-100"
+            {...keyboard.handleProps(frame.id)}
+          >
+            <GripVertical aria-hidden />
+          </Button>
         </div>
-        {layer.children.length > 0 ? <ul aria-label={`In ${name}`}>{layer.children.map((child) => row(child, depth + 1))}</ul> : null}
+        {layer.children.length > 0 ? (
+          <ul aria-label={`In ${name}`}>{arrangeByDraft(layer.children, byFrame, keyboard.draft).map((child) => row(child, depth + 1))}</ul>
+        ) : null}
       </li>
     );
   };
 
   return (
-    <ul aria-label="Layers" className="flex flex-col py-1">
-      {layers.map((layer) => row(layer, 0))}
-    </ul>
+    <>
+      <ul ref={listRef} aria-label="Layers" className="flex flex-col py-1 select-none">
+        {arrangeByDraft(layers, byFrame, keyboard.draft).map((layer) => row(layer, 0))}
+      </ul>
+      <ReorderAnnouncer message={keyboard.announcement} />
+    </>
   );
 }
+
+const byFrame = (layer: DesignLayer) => layer.frame.id;
 
 function LayerNameInput({ name, onDone }: { name: string; onDone(title: string | null): void }) {
   const [draft, setDraft] = React.useState(name);
@@ -681,7 +720,7 @@ function LayerNameInput({ name, onDone }: { name: string; onDone(title: string |
         if (event.key === "Enter") {
           event.preventDefault();
           finish(draft);
-        } else if (event.key === "Escape") {
+        } else if (isEscapeKey(event)) {
           event.preventDefault();
           finish(null);
         }
@@ -700,44 +739,10 @@ function codeLanguage(frame: DesignFrame): string {
   return "xml";
 }
 
-type Loaded = { key: string; text: string; truncated: boolean } | { key: string; error: string };
 
 /** The one selected page or artifact, the frames Code and Tweaks are about. */
 function selectedPage(selected: DesignFrame[]): DesignFrame | null {
   return selected.length === 1 && isDesignPrintable(selected[0]!.kind) ? selected[0]! : null;
-}
-
-/** A page's file or an artifact's HTML, read again after each change on disk; null while it loads. */
-const SOURCE_ERRORS = {
-  missing: "This file is missing.",
-  unavailable: "The code isn't available here.",
-  unsaved: "The canvas couldn't be saved, so the code can't be shown yet.",
-} as const;
-
-function useFrameSource(
-  readSource: DesignSidePanelProps["readSource"],
-  frame: DesignFrame | null,
-  versionOf: (path: string | undefined) => number,
-): Loaded | null {
-  const key = frame ? `${frame.id}:${frame.mediaId ?? frame.path}:${versionOf(frame.path)}` : null;
-  const [loaded, setLoaded] = React.useState<Loaded | null>(null);
-  React.useEffect(() => {
-    if (!frame || !key) return;
-    let cancelled = false;
-    void readSource(frame.id).then(
-      (answer) => {
-        if (cancelled) return;
-        if ("text" in answer) setLoaded({ key, text: answer.text, truncated: answer.truncated });
-        else setLoaded({ key, error: SOURCE_ERRORS[answer.error] });
-      },
-      () => !cancelled && setLoaded({ key, error: "The code couldn't be read." }),
-    );
-    return () => {
-      cancelled = true;
-    };
-    // The key changes with the frame, its file and each change on disk.
-  }, [readSource, key]);
-  return loaded?.key === key ? loaded : null;
 }
 
 function CodeTab({ readSource, selected, versionOf }: DesignSidePanelProps & { selected: DesignFrame[] }) {
@@ -784,27 +789,14 @@ function HighlightedCode({ code, language }: { code: string; language: string })
 
 // ---- Tweaks ---------------------------------------------------------------
 
-function TweaksTab({ readSource, selected, versionOf, update }: DesignSidePanelProps & { selected: DesignFrame[] }) {
+function TweaksTab({ readSource, selected, versionOf, tweaks }: DesignSidePanelProps & { selected: DesignFrame[] }) {
   const frame = selectedPage(selected);
-  // Only a page's file declares controls; an artifact has just the Dark switch.
-  const source = useFrameSource(readSource, frame?.kind === "file" ? frame : null, versionOf);
-  const controls = React.useMemo(
-    () => (source && "text" in source ? extractDesignTweakControls(source.text) : []),
-    [source],
-  );
+  const { source, controls } = useDesignTweakControls(readSource, frame, versionOf);
   if (!frame) return <PanelNote>Select a page or an artifact to change how it looks.</PanelNote>;
-  const set = (control: DesignTweakControl, value: boolean | string | number) =>
-    update(frame.id, { tweaks: withDesignTweak(frame.tweaks, control, value) }, { record: true });
   return (
     <div className="flex flex-col">
       <PanelSection title="Appearance">
-        <TweakRow label="Dark">
-          <Switch
-            aria-label="Dark"
-            checked={frame.dark === true}
-            onCheckedChange={(checked) => update(frame.id, { dark: checked ? true : undefined }, { record: true })}
-          />
-        </TweakRow>
+        <DesignTweakDark frame={frame} ops={tweaks} />
         <p className="text-small text-secondary">
           {frame.kind === "artifact"
             ? "Off, it follows Aiden's appearance."
@@ -820,160 +812,10 @@ function TweaksTab({ readSource, selected, versionOf, update }: DesignSidePanelP
           ) : controls.length === 0 ? (
             <p className="text-small text-secondary">This page has no tweaks. Ask Aiden to add some, like an accent colour or a density switch.</p>
           ) : (
-            <>
-              {controls.map((control) => (
-                <TweakControl key={control.id} control={control} value={readDesignTweak(control, frame.tweaks)} onChange={(value) => set(control, value)} />
-              ))}
-              <div>
-                <Button
-                  size="small"
-                  variant="muted"
-                  disabled={!frame.tweaks}
-                  onClick={() => update(frame.id, { tweaks: undefined }, { record: true })}
-                >
-                  Reset tweaks
-                </Button>
-              </div>
-            </>
+            <DesignTweaksEditor frame={frame} controls={controls} ops={tweaks} />
           )}
-          <p className="text-small text-secondary">Tweaks change only this frame. The page's file stays as it is.</p>
         </PanelSection>
       ) : null}
     </div>
-  );
-}
-
-function TweakRow({ label, id, children }: { label: string; id?: string; children: React.ReactNode }) {
-  return (
-    <div className="flex min-h-7 min-w-0 items-center gap-2">
-      <span id={id} className="min-w-0 flex-1 truncate text-small">
-        {label}
-      </span>
-      {children}
-    </div>
-  );
-}
-
-function TweakControl({
-  control,
-  value,
-  onChange,
-}: {
-  control: DesignTweakControl;
-  value: boolean | string | number;
-  onChange(value: boolean | string | number): void;
-}) {
-  const id = React.useId();
-  switch (control.type) {
-    case "switch":
-      return (
-        <TweakRow label={control.label}>
-          <Switch aria-label={control.label} checked={value === true} onCheckedChange={onChange} />
-        </TweakRow>
-      );
-    case "choice":
-      return control.options.length <= 3 && control.options.every((option) => option.length <= 10) ? (
-        <div className="flex flex-col gap-1">
-          <span id={id} className="text-small">
-            {control.label}
-          </span>
-          <Segmented
-            aria-labelledby={id}
-            value={String(value)}
-            onValueChange={onChange}
-            options={control.options.map((option) => ({ value: option, label: option }))}
-            className="[&>*]:flex-1"
-          />
-        </div>
-      ) : (
-        <TweakRow label={control.label} id={id}>
-          <Select value={String(value)} onValueChange={onChange}>
-            <SelectTrigger size="small" aria-labelledby={id} className="w-36">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {control.options.map((option) => (
-                <SelectItem key={option} value={option}>
-                  {option}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </TweakRow>
-      );
-    case "number":
-      return <TweakNumber control={control} value={Number(value)} onCommit={onChange} />;
-    case "color":
-      return <TweakColor label={control.label} value={String(value)} onCommit={onChange} />;
-  }
-}
-
-/** A slider that changes the page once it is let go, so one drag is one undo step. */
-function TweakNumber({
-  control,
-  value,
-  onCommit,
-}: {
-  control: Extract<DesignTweakControl, { type: "number" }>;
-  value: number;
-  onCommit(value: number): void;
-}) {
-  const [draft, setDraft] = React.useState(value);
-  React.useEffect(() => setDraft(value), [value]);
-  const commit = () => {
-    if (draft !== value) onCommit(draft);
-  };
-  return (
-    <label className="flex flex-col gap-1">
-      <span className="flex items-center text-small">
-        <span className="min-w-0 flex-1 truncate">{control.label}</span>
-        <span className="tabular-nums text-secondary">
-          {Number(draft.toFixed(4))}
-          {control.unit}
-        </span>
-      </span>
-      <input
-        type="range"
-        aria-label={control.label}
-        min={control.min}
-        max={control.max}
-        step={control.step}
-        value={draft}
-        className="w-full accent-fill-accent"
-        onChange={(event) => setDraft(Number(event.target.value))}
-        onPointerUp={commit}
-        onKeyUp={commit}
-        onBlur={commit}
-      />
-    </label>
-  );
-}
-
-/** A colour well; the page changes once the picker closes. */
-function TweakColor({ label, value, onCommit }: { label: string; value: string; onCommit(value: string): void }) {
-  const commitRef = React.useRef(onCommit);
-  React.useLayoutEffect(() => {
-    commitRef.current = onCommit;
-  });
-  // The well is drawn afresh for each new value (its key), so every one gets the listener.
-  const listen = React.useCallback((input: HTMLInputElement | null) => {
-    if (!input) return;
-    // "change" fires when the picker closes; React's onChange would fire for every step of a drag.
-    const changed = () => commitRef.current(input.value);
-    input.addEventListener("change", changed);
-    return () => input.removeEventListener("change", changed);
-  }, []);
-  return (
-    <TweakRow label={label}>
-      <span className="font-mono text-small text-secondary">{value}</span>
-      <input
-        ref={listen}
-        type="color"
-        aria-label={label}
-        defaultValue={value}
-        key={value}
-        className="h-7 w-9 cursor-pointer rounded-button bg-control p-0.5"
-      />
-    </TweakRow>
   );
 }

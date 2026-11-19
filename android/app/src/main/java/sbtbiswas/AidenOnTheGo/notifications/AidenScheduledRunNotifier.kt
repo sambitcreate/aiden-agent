@@ -4,7 +4,6 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import kotlinx.coroutines.CancellationException
@@ -151,10 +150,8 @@ class AidenScheduledRunNotifier(context: Context) {
     /** App-level enablement plus the scheduled-runs channel's own importance. */
     private fun notificationsEnabled(): Boolean {
         if (!NotificationManagerCompat.from(appContext).areNotificationsEnabled()) return false
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = notificationManager.getNotificationChannel(AidenOnTheGoApp.SCHEDULED_RUNS_CHANNEL_ID)
-            if (channel != null && channel.importance == NotificationManager.IMPORTANCE_NONE) return false
-        }
+        val channel = notificationManager.getNotificationChannel(AidenOnTheGoApp.SCHEDULED_RUNS_CHANNEL_ID)
+        if (channel != null && channel.importance == NotificationManager.IMPORTANCE_NONE) return false
         return true
     }
 

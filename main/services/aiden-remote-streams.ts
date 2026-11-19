@@ -582,6 +582,17 @@ function sseFrame(event: AidenRemoteStreamEvent): string {
   return `id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
 }
 
+function projectStreamEventForAudience(
+  event: AidenRemoteStreamEvent,
+  snapshotReasons: boolean,
+): AidenRemoteStreamEvent {
+  if (event.type !== "snapshot" || snapshotReasons || !("reason" in event.payload)) {
+    return event;
+  }
+  const { reason: _omitted, ...legacyPayload } = event.payload;
+  return { ...event, payload: legacyPayload };
+}
+
 export class AidenRemoteStreamService {
   private readonly streams = new Map<string, StreamRecord>();
   private readonly eventSizes = new WeakMap<AidenRemoteStreamEvent, number>();
@@ -1256,6 +1267,7 @@ export class AidenRemoteStreamService {
         payload: {
           chatId: candidate.chatId,
           turnId: candidate.turnId,
+          reason: "gap",
           nextSequence: retained.sequence + 1,
         },
       };
@@ -2012,26 +2024,21 @@ export class AidenRemoteStreamService {
     };
   }
 
-  openEvents(deviceId: string, streamId: string, after: number, response: ServerResponse): void {
+  openEvents(
+    deviceId: string,
+    streamId: string,
+    after: number,
+    response: ServerResponse,
+    options: { snapshotReasons?: boolean } = {},
+  ): void {
     const stream = this.requireStream(deviceId, streamId);
     const lastSequence = stream.events[stream.events.length - 1]?.sequence ?? 0;
     if (after > lastSequence) {
       throw new AidenRemoteServiceError("invalid_request", "The stream cursor is ahead of Aiden.", 400);
     }
-    const earliest = stream.events[0]?.sequence ?? 1;
-    if (after < earliest - 1) {
-      const snapshot = this.append(
-        stream,
-        "snapshot",
-        {
-          chatId: stream.chatId,
-          turnId: stream.turnId,
-          nextSequence: (stream.events[stream.events.length - 1]?.sequence ?? 0) + 2,
-        },
-        false,
-      );
-      after = snapshot.sequence - 1;
-    }
+    const snapshotReasons = options.snapshotReasons === true;
+    let cursor = after;
+    let needsGapSnapshot = cursor < (stream.events[0]?.sequence ?? 1) - 1;
     // The retained journal is also the pending-output queue: the shared pump
     // pulls one event at a time and stops while Node's writable buffer is
     // blocked, so a slow client holds at most one frame past the high-water
@@ -2045,15 +2052,35 @@ export class AidenRemoteStreamService {
     handle = openCursorSse(response, {
       pull: () => {
         const firstSequence = stream.events[0]?.sequence ?? 1;
-        // The client fell behind retention. Reconnect uses the existing
-        // snapshot recovery path instead of silently skipping events.
-        if (after < firstSequence - 1) return { abort: true };
-        const event = stream.events[Math.max(0, after - firstSequence + 1)];
+        if (needsGapSnapshot) {
+          needsGapSnapshot = false;
+          const sequence = firstSequence - 1;
+          cursor = sequence;
+          const gap: AidenRemoteStreamEvent = {
+            protocolVersion: AIDEN_REMOTE_PROTOCOL_VERSION,
+            streamId: stream.streamId,
+            sequence,
+            timestamp: new Date(stream.updatedAt).toISOString(),
+            type: "snapshot",
+            terminal: false,
+            payload: {
+              chatId: stream.chatId,
+              turnId: stream.turnId,
+              ...(snapshotReasons ? { reason: "gap" } : {}),
+              nextSequence: firstSequence,
+            },
+          };
+          return { frames: [sseFrame(gap)] };
+        }
+        // The client fell behind retention mid-pump. Reconnect uses the
+        // reader-local snapshot recovery path instead of silently skipping events.
+        if (cursor < firstSequence - 1) return { abort: true };
+        const event = stream.events[Math.max(0, cursor - firstSequence + 1)];
         if (!event) return { frames: [], end: terminal(stream.state) };
-        after = event.sequence;
+        cursor = event.sequence;
         // Once sent, an event is final; later deltas take a new sequence.
         if (stream.openDelta?.sequence === event.sequence) stream.openDelta = undefined;
-        return { frames: [sseFrame(event)] };
+        return { frames: [sseFrame(projectStreamEventForAudience(event, snapshotReasons))] };
       },
       onClose: (finished) => {
         stream.subscribers.delete(subscriber);

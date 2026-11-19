@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useRouter } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "../components/ui";
 import { chatsApi, settingsApi, workspacesApi } from "../lib/ipc";
@@ -35,6 +35,7 @@ export function LiveChatToolsHost({
   navigationBlockedReason: string | null;
 }): null {
   const navigate = useNavigate();
+  const router = useRouter();
   const queryClient = useQueryClient();
   const newChat = useNewChatActions();
   const settings = useSettings();
@@ -74,7 +75,8 @@ export function LiveChatToolsHost({
             duration: 10_000,
             action: {
               label: "Settings",
-              onClick: () => void latest.current.navigate(settingsLocation("geminiLive")),
+              onClick: () =>
+                void latest.current.navigate(settingsLocation("geminiLive", router.state.location)),
             },
           }),
         remember: () =>
@@ -82,7 +84,7 @@ export function LiveChatToolsHost({
             .set({ aidenLiveChatAccessNoticeShown: true })
             .then((saved) => queryClient.setQueryData<AppSettings>(queryKeys.settings, saved)),
       }),
-    [queryClient],
+    [queryClient, router],
   );
 
   React.useEffect(() => {

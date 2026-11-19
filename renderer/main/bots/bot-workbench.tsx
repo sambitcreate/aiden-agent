@@ -17,6 +17,7 @@ import { CalendarClock, Files, Globe, ListChecks, Monitor, SlidersHorizontal } f
 import { MemoryCardIcon } from "../../components/memory-card-icon";
 import { WorkbenchPanel, useWorkbenchWidth, type WorkbenchTab, type WorkbenchView } from "../../components/workbench-panel";
 import { BOT_PANEL_WIDTH_BOUNDS, resolveEnvironmentPanelLayout } from "../../lib/environment-panel-layout";
+import { useLayer } from "../../lib/layer-stack";
 import { useBot } from "../../lib/queries";
 import { cn } from "../../lib/ui-utils";
 import { useBotLive } from "../../lib/use-bot-live";
@@ -144,19 +145,14 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
   }, [tab]);
 
   // The workspace's Escape handler is not installed on Bots pages; this one closes the Bot panel.
-  React.useEffect(() => {
-    if (!open) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.key !== "Escape") return;
-      if (document.querySelector('[data-slot="dialog-content"][data-state="open"]')) return;
+  useLayer(open, "panel", {
+    onEscape: (event) => {
       const active = document.activeElement;
       if (!(active instanceof HTMLElement) || !active.closest(`#${BOT_PANEL_ID}`)) return;
       event.preventDefault();
       close();
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [open, close]);
+    },
+  });
 
   const tabs: WorkbenchTab[] = shownTabs.map((id) => ({
     id,

@@ -332,7 +332,7 @@ function isMobileSimulatorCapability(
 /**
  * Opt-ins negotiated after pairing (`bot:cards`, `bot:activity`,
  * `bot:handoffs`, `bot:plans`, `bot:allowed`, `schedule:cards`, `chat:jobs`, `chat:new-worktree`,
- * `chat:continue-in-new-chat`): any
+ * `chat:continue-in-new-chat`, `stream:snapshot-reasons`): any
  * device type, and never more authority than the device's own grants already
  * carry.
  */

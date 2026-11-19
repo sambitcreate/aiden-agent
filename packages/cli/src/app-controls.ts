@@ -79,7 +79,7 @@ export function createCliAppControls(agentDir: string) {
     snapshot: async (topic: CliAppTopic, isCurrent: () => boolean = () => true) => {
       const snapshot = await service.snapshot(topic, {
         actor: "cli",
-        target: "This CLI",
+        target: "This server",
         isCurrent,
         humanGesture: false,
         allowedControls: CLI_APP_CONTROLS,
@@ -87,7 +87,7 @@ export function createCliAppControls(agentDir: string) {
       for (const row of snapshot.rows)
         if (!CLI_APP_CONTROLS.has(row.id))
           row.disabledReason =
-            "This setting has no supported CLI execution gate. Change it in Aiden Agent.";
+            "The Aiden server does not apply this setting. Change it in the Aiden Agent desktop app.";
       return snapshot;
     },
     async apply(input: unknown, isCurrent: () => boolean = () => true) {
@@ -95,7 +95,7 @@ export function createCliAppControls(agentDir: string) {
       try {
         return await service.apply(input, {
           actor: "cli",
-          target: "This CLI",
+          target: "This server",
           isCurrent,
           humanGesture: true,
           allowedControls: CLI_APP_CONTROLS,

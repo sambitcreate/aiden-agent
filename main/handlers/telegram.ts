@@ -1,5 +1,4 @@
-// Telegram IPC handlers — enable/token/connect/disconnect/status flow.
-// Modeled on the exa:* block in phase2.ts.
+// Telegram IPC handlers: enable, token, pairing, profile and status flow.
 //
 // Design reference: pi-telegram (https://github.com/llblab/pi-telegram, MIT).
 
@@ -77,16 +76,6 @@ export function registerTelegramHandlers(): void {
     const value = enabled === true;
     await telegramService.setEnabled(value);
     return value;
-  });
-
-  ipcMain.handle("telegram:connect", async () => {
-    await telegramService.connect();
-    return { connected: true };
-  });
-
-  ipcMain.handle("telegram:disconnect", async () => {
-    await telegramService.disconnect();
-    return { connected: false };
   });
 
   ipcMain.handle("telegram:resetPairing", async () => {

@@ -319,7 +319,10 @@ private fun AidenPairingSteps() {
         stringResource(R.string.pairing_step_settings),
         stringResource(R.string.pairing_step_scan)
     )
-    AidenSettingsGroup(title = stringResource(R.string.pairing_steps_title)) {
+    AidenSettingsGroup(
+        title = stringResource(R.string.pairing_steps_title),
+        footer = stringResource(R.string.pairing_server_hint)
+    ) {
         steps.forEachIndexed { index, step ->
             row {
                 AidenSettingsListItem(

@@ -11,7 +11,8 @@ import type { HostChatCapability } from "../lib/hosts/host-chat-adapter";
 import type { HostModelCatalog } from "../lib/hosts/host-resources";
 import type { NewChatMachine } from "../lib/hosts/new-chat-targets";
 import type { RemoteNewChatSnapshot } from "../lib/hosts/remote-new-chat";
-import { RemoteFolderList, RemoteNewChatPane, type RemoteNewChatPaneProps } from "./remote-new-chat-view";
+import { RemoteFolderList } from "./remote-folder-list";
+import { RemoteNewChatPane, type RemoteNewChatPaneProps } from "./remote-new-chat-view";
 
 const noop = () => undefined;
 const asyncNoop = async () => undefined;

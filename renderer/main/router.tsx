@@ -12,9 +12,6 @@ import { ChatPane } from "./chat-pane";
 import type { QueryClient } from "@tanstack/react-query";
 import { createAppQueryClient } from "../lib/query-client";
 import { ErrorBoundaryView } from "../components/ui";
-import { RemoteChatView } from "./remote-chat-view";
-import { RemoteNewChatView } from "./remote-new-chat-view";
-import { RemoteBotChatView } from "./remote-bot-chat-view";
 import { parseRemoteNewChatSearch } from "../lib/hosts/remote-new-chat-search";
 import { parseSettingsSearch } from "../lib/settings-section";
 import { useAppCapabilities } from "../lib/app-capabilities";
@@ -37,6 +34,9 @@ const ScheduledTasksView = lazyRouteComponent(
 const BotsView = lazyRouteComponent(() => import("./bots-view"), "BotsView");
 const BotChatRouteView = lazyRouteComponent(() => import("./bot-chat-route"), "BotChatRoute");
 const ImagesView = lazyRouteComponent(() => import("../images/images-route"), "ImagesRoute");
+const RemoteChatView = lazyRouteComponent(() => import("./remote-chat-view"), "RemoteChatView");
+const RemoteNewChatView = lazyRouteComponent(() => import("./remote-new-chat-view"), "RemoteNewChatView");
+const RemoteBotChatView = lazyRouteComponent(() => import("./remote-bot-chat-view"), "RemoteBotChatView");
 
 /** Let the router preload the lazy view a wrapper route component renders. */
 function preloadsWith<P>(
@@ -155,10 +155,10 @@ const botChatRoute = createRoute({
 const hostChatRoute = createRoute({
   getParentRoute: () => chatLayoutRoute,
   path: "/host/$hostId/chat/$chatId",
-  component: function HostChatRoute() {
+  component: preloadsWith(function HostChatRoute() {
     const { hostId, chatId } = hostChatRoute.useParams();
     return <RemoteChatView key={`${hostId}/${chatId}`} hostId={hostId} chatId={chatId} />;
-  },
+  }, RemoteChatView),
   staticData: { title: "Remote chat" },
 });
 
@@ -166,10 +166,10 @@ const hostChatRoute = createRoute({
 const hostBotChatRoute = createRoute({
   getParentRoute: () => chatLayoutRoute,
   path: "/host/$hostId/bots/$botId/chat",
-  component: function HostBotChatRoute() {
+  component: preloadsWith(function HostBotChatRoute() {
     const { hostId, botId } = hostBotChatRoute.useParams();
     return <RemoteBotChatView key={`${hostId}/${botId}`} hostId={hostId} botId={botId} />;
-  },
+  }, RemoteBotChatView),
   staticData: { title: "Remote Bot conversation" },
 });
 
@@ -178,7 +178,7 @@ const hostNewChatRoute = createRoute({
   getParentRoute: () => chatLayoutRoute,
   path: "/host/$hostId/new",
   validateSearch: parseRemoteNewChatSearch,
-  component: function HostNewChatRoute() {
+  component: preloadsWith(function HostNewChatRoute() {
     const { hostId } = hostNewChatRoute.useParams();
     const { workspaceId } = hostNewChatRoute.useSearch();
     return (
@@ -188,7 +188,7 @@ const hostNewChatRoute = createRoute({
         {...(workspaceId ? { workspaceId } : {})}
       />
     );
-  },
+  }, RemoteNewChatView),
   staticData: { title: "New remote chat" },
 });
 

@@ -37,8 +37,6 @@ import {
 } from "../../shared/device-ssh-hosts";
 import { DEVICE_TOOL_LABELS, hostStatusText, toolVersionSummary } from "../device-host-diagnostics";
 
-export type SshHostAction = "connect" | "test" | "install-hub" | "install-agent" | "remove" | "save";
-
 export interface SimulatorSshHostsViewProps {
   state: DeviceServiceState;
   /** `<action>:<hostId>` while a host action runs. */

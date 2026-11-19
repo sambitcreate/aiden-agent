@@ -151,13 +151,6 @@ enum AidenBotEditorMode: Identifiable, Sendable {
     case create(defaultAccess: AidenBotEditorDefaultAccess)
     case edit(botID: String)
 
-    var catalogBotID: String? {
-        switch self {
-        case .create: nil
-        case let .edit(botID): botID
-        }
-    }
-
     var id: String {
         switch self {
         case let .create(defaultAccess): "create-\(String(describing: defaultAccess))"

@@ -77,7 +77,7 @@ test("a reset delta projects a reconciling snapshot that skips past its own sequ
   assert.deepEqual(result, {
     kind: "event",
     type: "snapshot",
-    payload: { chatId: "chat-9", turnId: "turn-9", nextSequence: 9 },
+    payload: { chatId: "chat-9", turnId: "turn-9", reason: "reset", nextSequence: 9 },
     terminal: false,
     state: "reconciling",
   });

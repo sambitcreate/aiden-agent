@@ -46,3 +46,5 @@ Port of pingdotgg/t3code#20996. Before this, a failed turn with no text never co
 - Remote: summary rows carry `lastRunFailed: true` (absent when false; the parser rejects `false`). Remote desktop rows (`sidebar-remote-groups.ts`) and iOS/Android rows show Failed only while `unread`.
 - Revision 36 is provisional: re-claim the next revision after `main`'s at merge (the Cua Bots PR #559 also planned 36).
 - iOS and Android: `AidenChatSummary.lastRunFailed` (absent reads false; caches store it as optional), `showsFailed = unread && lastRunFailed`. Rows draw a soft danger-fill Failed pill in place of the unread dot, and `aidenNeedsAttentionFirst` ranks an unseen failure between input and working (mirrors desktop). Opening a chat clears it with the dot.
+
+- 2026-11-19: the sidebar chat list became one keyboard collection with typeahead, multi-select, a bulk Delete bar and focus recovery; see [[sidebar-chat-collection]].

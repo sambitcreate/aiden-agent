@@ -1,7 +1,5 @@
 import type { BrowserAnnotation } from "../shared/browser";
-import { ComposerDeliveryRegistry, type ComposerRecipient } from "./composer-delivery";
-
-export type BrowserAnnotationRecipient = ComposerRecipient<BrowserAnnotation>;
+import { ComposerDeliveryRegistry } from "./composer-delivery";
 
 /** Main validates page context; this document acknowledges the actual draft write. */
 export class BrowserAnnotationDeliveryRegistry extends ComposerDeliveryRegistry<BrowserAnnotation> {}

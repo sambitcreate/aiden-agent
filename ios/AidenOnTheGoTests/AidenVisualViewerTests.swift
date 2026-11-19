@@ -109,6 +109,47 @@ final class AidenVisualViewerTests: XCTestCase {
         XCTAssertFalse(policy.allows(url: nil, targetIsMainFrame: false))
     }
 
+    // MARK: Crash recovery
+
+    func testWebContentFailsOnACrashLoopUntilANewDocumentLoads() {
+        var recovery = AidenWebContentRecovery()
+        let start = Date(timeIntervalSinceReferenceDate: 1_000)
+
+        XCTAssertEqual(recovery.processDidTerminate(at: start), .reload, "The first crash redraws the page")
+        XCTAssertEqual(
+            recovery.processDidTerminate(at: start.addingTimeInterval(2)), .fail,
+            "A page that crashes again right after its reload stops retrying"
+        )
+        XCTAssertEqual(
+            recovery.processDidTerminate(at: start.addingTimeInterval(4)), .fail,
+            "It keeps failing while the crashes stay close together"
+        )
+
+        recovery.newDocument()
+        XCTAssertEqual(
+            recovery.processDidTerminate(at: start.addingTimeInterval(5)), .reload,
+            "A new document is not judged by the old one's crashes"
+        )
+        XCTAssertEqual(recovery.processDidTerminate(at: start.addingTimeInterval(6)), .fail)
+    }
+
+    func testWebContentReloadsEveryReclaimThatIsFarApart() {
+        var recovery = AidenWebContentRecovery()
+        let start = Date(timeIntervalSinceReferenceDate: 1_000)
+
+        // iOS reclaims a backgrounded app's content process again and
+        // again over a session; each one must redraw silently.
+        XCTAssertEqual(recovery.processDidTerminate(at: start), .reload)
+        XCTAssertEqual(recovery.processDidTerminate(at: start.addingTimeInterval(5 * 60)), .reload)
+        XCTAssertEqual(recovery.processDidTerminate(at: start.addingTimeInterval(20 * 60)), .reload)
+
+        // Two terminations close together after a long quiet spell are a loop.
+        XCTAssertEqual(recovery.processDidTerminate(at: start.addingTimeInterval(20 * 60 + 3)), .fail)
+        // The window is measured from the last reload, so once it has
+        // passed the page gets another chance.
+        XCTAssertEqual(recovery.processDidTerminate(at: start.addingTimeInterval(20 * 60 + 16)), .reload)
+    }
+
     // MARK: Offline copy
 
     func testCachedCopyIsKeptPerHostDeviceChatVisualSchemeAndTheme() async {

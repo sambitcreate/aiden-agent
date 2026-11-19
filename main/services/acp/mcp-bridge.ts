@@ -47,10 +47,6 @@ export interface McpBridgeOptions {
   onCall(invocation: BridgeInvocation): Promise<CallToolResult>;
 }
 
-export function bridgeToolFingerprint(tools: readonly Tool[]): string {
-  return JSON.stringify(projectTools(tools, []).map((tool) => [tool.mcpName, tool.inputSchema]));
-}
-
 export class AcpMcpBridge {
   omissions: string[] = [];
   private readonly token = `${randomUUID()}${randomUUID()}`.replace(/-/gu, "");

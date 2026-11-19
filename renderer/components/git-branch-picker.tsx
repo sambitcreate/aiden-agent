@@ -69,6 +69,39 @@ function statusSummary(
   return parts.length > 0 ? parts.join(" · ") : undefined;
 }
 
+/**
+ * Puts focus back on the branch menu's origin once the frame after closing has
+ * rendered. Close animations or a busy renderer can delay unmount or the next
+ * animation frame; by then focus that has moved somewhere outside the closing
+ * menu (such as the composer) stays where it was put.
+ */
+function restoreBranchPickerFocusNextFrame(
+  returnTarget: HTMLElement | null | undefined,
+  closingMenu: HTMLElement | null,
+): void {
+  const focusMovedOutsideMenu = () => {
+    const active = document.activeElement;
+    return (
+      active instanceof HTMLElement &&
+      active.isConnected &&
+      active !== document.body &&
+      active !== document.documentElement &&
+      !active.hasAttribute("data-app-focus-root") &&
+      !closingMenu?.contains(active)
+    );
+  };
+  if (focusMovedOutsideMenu()) return;
+  requestAnimationFrame(() => {
+    if (focusMovedOutsideMenu()) return;
+    if (
+      returnTarget?.isConnected &&
+      !(returnTarget instanceof HTMLButtonElement && returnTarget.disabled)
+    ) {
+      returnTarget.focus();
+    }
+  });
+}
+
 export function GitBranchPicker({
   workspaceId,
   branch,
@@ -328,18 +361,14 @@ export function GitBranchPicker({
         className={cn("p-0", draft ? "w-80" : "w-72")}
         onCloseAutoFocus={(event) => {
           event.preventDefault();
-          requestAnimationFrame(() => {
-            const returnTarget = programmaticOriginRef.current
-              ? programmaticReturnFocusRef?.current
-              : triggerRef.current;
-            programmaticOriginRef.current = false;
-            if (
-              returnTarget?.isConnected &&
-              !(returnTarget instanceof HTMLButtonElement && returnTarget.disabled)
-            ) {
-              returnTarget.focus();
-            }
-          });
+          const returnTarget = programmaticOriginRef.current
+            ? programmaticReturnFocusRef?.current
+            : triggerRef.current;
+          programmaticOriginRef.current = false;
+          restoreBranchPickerFocusNextFrame(
+            returnTarget,
+            event.currentTarget instanceof HTMLElement ? event.currentTarget : null,
+          );
         }}
       >
         {draft && !createMode ? (

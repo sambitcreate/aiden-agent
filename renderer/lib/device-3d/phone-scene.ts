@@ -193,8 +193,6 @@ export function createPhoneScene(
   };
 }
 
-export type PhoneScene = ReturnType<typeof createPhoneScene>;
-
 /** Canonical portrait geometry maps to raw framebuffer coordinates in every OS orientation. */
 export function updateDisplayUv(geometry: BufferGeometry, width: number, height: number, layout: PhoneDisplayLayout) {
   const position = geometry.getAttribute("position");

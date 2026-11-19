@@ -4,6 +4,8 @@
 // workspace follows it too, unless the person chose Customize in Workspace
 // settings. Shared by the main process, the CLI daemon and the renderer.
 
+import type { LocalComputerNoun } from "./computer-noun.js";
+
 export const APPROVAL_MODES = ["auto", "ask", "never"] as const;
 export type ApprovalMode = (typeof APPROVAL_MODES)[number];
 
@@ -17,11 +19,20 @@ export const APPROVAL_MODE_LABELS: Readonly<Record<ApprovalMode, string>> = {
   never: "Never ask",
 };
 
-export const APPROVAL_MODE_HELP: Readonly<Record<ApprovalMode, string>> = {
-  auto: "A model approves routine actions and asks you about the rest.",
-  ask: "Asks before sending, spending or changing anything.",
-  never: "Asks only before purchases, sharing your data and the first use of your Mac. Only Block rules apply.",
-};
+/**
+ * One line on what a mode does. Never ask still asks before the first command, file change or Computer Use, and
+ * the first two exist on Linux too, so the computer is named by `localComputerNoun`.
+ */
+export function approvalModeHelp(mode: ApprovalMode, computer: LocalComputerNoun): string {
+  switch (mode) {
+    case "auto":
+      return "A model approves routine actions and asks you about the rest.";
+    case "ask":
+      return "Asks before sending, spending or changing anything.";
+    case "never":
+      return `Asks only before purchases, sharing your data and the first use of your ${computer}. Only Block rules apply.`;
+  }
+}
 
 /** The parts of the person's Mac whose first use asks in every mode (§3.3). */
 export const MAC_GRANT_CLASSES = ["shell", "files", "computer-use"] as const;

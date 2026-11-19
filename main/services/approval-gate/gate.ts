@@ -202,11 +202,6 @@ export type GateDecision =
 
 const UNWATCHED: ReadonlySet<GateAttendance> = new Set(["routine", "unattended", "peer"]);
 
-/** Whether a decision would show the person a card. */
-export function gateAsks(decision: GateDecision): decision is Extract<GateDecision, { outcome: "ask" }> {
-  return decision.outcome === "ask";
-}
-
 /**
  * The mode a context runs in: its own, or its access's legacy mode. Before
  * modes, only "ask" access asked; Full and the internal read-only policy (its

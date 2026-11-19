@@ -335,6 +335,27 @@ enum AidenWorkspaceSourcePreview {
     }
 }
 
+/// Whether a workspace file opens as a rendered page or as its source. A
+/// truncated file opens on Source, so half a page never passes for the whole.
+enum AidenWorkspaceHTMLPreview {
+    enum Mode: Equatable {
+        case preview, source
+    }
+
+    static func isHTML(_ displayPath: String) -> Bool {
+        let fileExtension = (displayPath as NSString).pathExtension.lowercased()
+        return fileExtension == "html" || fileExtension == "htm"
+    }
+
+    static func canPreview(_ document: AidenWorkspaceFileDocument) -> Bool {
+        isHTML(document.displayPath) && !document.truncated
+    }
+
+    static func initialMode(for document: AidenWorkspaceFileDocument) -> Mode {
+        canPreview(document) ? .preview : .source
+    }
+}
+
 /// Only explicit workspace-relative references are eligible. Absolute/home paths
 /// are never sent to the Mac or handed to another application.
 enum AidenWorkspaceFileLink {

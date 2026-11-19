@@ -253,7 +253,6 @@ final class AidenBotGeneratedAvatarModel {
         AidenBotGeneratedAvatarSessionIdentity(coordinator: coordinator, machine: machine)
     }
 
-    var displayedImage: UIImage? { candidateImage ?? currentImage }
     var hasCandidate: Bool { candidateBytes != nil }
     var hasGeneratedAvatar: Bool { authoritativeBot?.avatar.asset != nil }
     var isBusy: Bool {

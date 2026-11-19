@@ -98,12 +98,8 @@ export function renderMcpServersSection(
   return body ? `<mcp_servers>\n${body}\n</mcp_servers>` : "";
 }
 
-/**
- * The same section without its `<mcp_servers>` tags, for hosts that wrap
- * named prompt sections themselves (the Aiden CLI on Pi). Its byte budget
- * still counts the tags.
- */
-export function renderMcpServersSectionBody(
+/** The section without its `<mcp_servers>` tags. Its byte budget still counts the tags. */
+function renderMcpServersSectionBody(
   tools: readonly PiDiscoverableTool[],
   options: { declared: ReadonlySet<string> },
 ): string {

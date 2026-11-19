@@ -41,6 +41,7 @@ The integrated plan therefore used A's low-risk Phase 1 data path and C's iPad d
 - Workspace actions moved onto their owning row: new chat, open latest chat, reveal folder, and safe remove/delete-worktree flows. Empty workspaces never create a chat through an open action.
 - Sidebar organization and per-workspace ellipsis menus anchor outside the sidebar's right edge, preserving the navigation beneath them at every saved sidebar width; lower triggers align upward, tall menus scroll within available height, and open menus recompute on viewport changes.
 - Existing route-driven selection, title reveal, keyboard chat shortcuts, working indicators, rename, and delete behavior are reused across both organizations.
+- Both organizations are one keyboard collection (UI SDK lessons Unit 8, 2026-11-19): one Tab stop, arrow keys and typeahead, ⌘-click, Shift-click and ⇧↑/⇧↓ multi-select with a bulk Delete bar, and focus that moves to the next row when the focused one is deleted. See `docs/keyboard.md` and the Collections section of `docs/design-guide.md`.
 
 ### iOS and iPadOS
 

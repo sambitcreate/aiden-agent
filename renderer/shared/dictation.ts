@@ -49,5 +49,3 @@ export interface DictationStatePayload {
 export type DictationCopiedReason = "accessibility-required" | "paste-unavailable" | "secure-input";
 
 export type DictationProgress = "finalizing" | "fallback-consent" | "fallback";
-
-export const DICTATION_STATE_CHANNEL = "dictation:state";

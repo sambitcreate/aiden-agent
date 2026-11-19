@@ -15,6 +15,8 @@ import {
   typedRuleOptions,
   type ApprovalRulesSettingsViewProps,
 } from "./approval-rules-settings.js";
+import { AppCapabilitiesProvider, DISABLED_APP_CAPABILITIES, type AppCapabilities } from "../../lib/app-capabilities.js";
+import { TooltipProvider } from "../ui.js";
 
 afterEach(cleanup);
 
@@ -26,7 +28,9 @@ const ROWS: ApprovalRuleRow[] = [
   { ref: { source: "workspace-mac", workspaceId: "w1", grant: "shell" }, group: "mac", title: "Run commands", kind: "Mac", scope: { kind: "workspace", label: "Aiden" }, decisions: [] },
 ];
 
-function view(extra: Partial<ApprovalRulesSettingsViewProps> = {}) {
+const MAC: Partial<AppCapabilities> = { platform: "darwin", computerUse: true };
+
+function view(extra: Partial<ApprovalRulesSettingsViewProps> = {}, capabilities: Partial<AppCapabilities> = MAC) {
   const calls: string[] = [];
   const props: ApprovalRulesSettingsViewProps = {
     rows: ROWS,
@@ -41,7 +45,13 @@ function view(extra: Partial<ApprovalRulesSettingsViewProps> = {}) {
     onRetry: () => calls.push("retry"),
     ...extra,
   };
-  render(<ApprovalRulesSettingsView {...props} />);
+  render(
+    <AppCapabilitiesProvider capabilities={{ ...DISABLED_APP_CAPABILITIES, ...capabilities }}>
+      <TooltipProvider>
+        <ApprovalRulesSettingsView {...props} />
+      </TooltipProvider>
+    </AppCapabilitiesProvider>,
+  );
   return calls;
 }
 
@@ -56,6 +66,16 @@ test("rows land in their group with who they answer for, and the Mac's grants re
   const mac = group("Allowed on this Mac");
   assert.equal(within(mac).queryAllByRole("radiogroup").length, 0, "a Mac grant has no decision to change");
   assert.ok(within(mac).getByRole("button", { name: "Remove: Run commands" }));
+});
+
+test("on Linux the grants are allowed on this computer, and their hint leaves out Computer Use", async () => {
+  view({}, { platform: "linux" });
+  const grants = group("Allowed on this computer");
+  assert.ok(within(grants).getByRole("button", { name: "Remove: Run commands" }));
+  assert.equal(screen.queryByRole("heading", { name: "Allowed on this Mac" }), null);
+  fireEvent.click(screen.getByRole("button", { name: "About what you allowed" }));
+  const hint = await screen.findByRole("tooltip");
+  assert.match(hint.textContent ?? "", /^Commands and file changes you allowed/u);
 });
 
 test("the segmented control and Remove report the row they belong to", () => {

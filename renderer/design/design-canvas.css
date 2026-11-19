@@ -156,3 +156,8 @@ main:has(.design-presenting) {
 .design-presenting [data-design-guide] {
   display: none;
 }
+
+/* A version's picture is taken without the floating Tweaks panel over the page. */
+[data-capturing] .design-tweaks-float {
+  visibility: hidden;
+}

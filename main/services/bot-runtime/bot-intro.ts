@@ -24,10 +24,6 @@ export function botIntroRequestId(botId: string): string {
   return `${BOT_INTRO_REQUEST_PREFIX}${botId}`;
 }
 
-export function isBotIntroRequest(requestId: string | undefined): boolean {
-  return requestId?.startsWith(BOT_INTRO_REQUEST_PREFIX) ?? false;
-}
-
 /**
  * Ask a new Bot to introduce itself. Returns false, and sends nothing, unless
  * the Bot is idle with a usable model and its conversation has no messages

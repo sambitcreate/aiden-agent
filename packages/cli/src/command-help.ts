@@ -8,15 +8,17 @@ export const CLI_COMMAND_HELP = `Aiden commands:
   remote status|devices|pair lan|tailscale|pair-status|pair-cancel <id>|revoke <id>|roots|approve-root <path>
   remote network local|tailscale|both        Who can reach the server; Tailscale is set up for you
   remote check                               Check each step a phone needs to reach the server, with fixes
+  remote remove-root <id>|mode lan|tailscale|both|tailscale-connect|tailscale-disconnect|tailscale-review|tailscale-takeover <token>|tailscale-reconcile
+                                            Advanced Remote roots and Tailscale controls
   apps list|connect <name> [--access read|supervised]|revoke <id>|on|off
                                             Outside apps (Claude Code, Codex) on the local /mcp endpoint
   auth list|login|logout                     Provider credentials (OAuth or API key)
   provider list|import <models.json>         Custom OpenAI-compatible/Ollama/LM Studio providers
   workspace list|add|remove|access|scratch    Workspace registry and tool approval tiers
   mcp list|presets|add|preset|login|logout|remove  MCP servers and browser OAuth
-  hooks list|approve <id> [digest]|disable|enable|test <id>|pause|resume
+  hooks list|approve <id> <digest>|disable <id>|enable <id>|test <id> <digest>|pause|resume
                                             Commands Aiden runs on chat, Bot and routine events
-  schedule list|save <file>|preview <cron> [timezone]|runs|notifications [since-ms]|run|pause|resume|remove <id>
+  schedule list|status|save <file>|preview <cron> [timezone]|runs|notifications [since-ms]|run|pause|resume|remove <id>
   bots list|get|catalog|notice|acknowledge|create|update|access|chat|chat-access|pause|unpause <id>
   bots enable-durable                       Back up legacy Bot history; restart daemon to switch
   bots session|send|resume|dismiss|stop|delete|approvals|approve
@@ -27,7 +29,7 @@ export const CLI_COMMAND_HELP = `Aiden commands:
   insights aa|openrouter show|fetch|disconnect
   web-search show|import <settings.json>     Provider routing; keys from environment
   search <query>                            Search all session titles/previews
-  import <desktop-journal|aiden-chat.json>   Copy a conversation into a new CLI session
+  import <desktop-journal|aiden-chat.json>   Copy a conversation into a new local session (search, export)
   export <session.jsonl> [output.aiden-chat.json]
   files list|read <relative-path>           Inspect bounded workspace files
   git status|review|branches|worktrees

@@ -3,15 +3,9 @@ import test from "node:test";
 import { DOMParser } from "@xmldom/xmldom";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import {
-  connectionSuggestionFor,
-  rankConnections,
-  type BotConnectionSuggestion,
-  type ConnectCardEntry,
-} from "../../shared/bot-connections";
+import type { ConnectCardEntry } from "../../shared/bot-connections";
 import { LiveGuard } from "../live-guard";
 import { ConnectCard } from "./connect-card";
-import { ConnectionChips } from "./connection-chips";
 
 const FORWARD_REF = Symbol.for("react.forward_ref");
 
@@ -183,46 +177,4 @@ test("a card for an unknown plugin renders nothing", () => {
     ),
     "",
   );
-});
-
-const suggestions = ["gmail", "google-calendar", "notion"].map(
-  (id) => connectionSuggestionFor(id) as BotConnectionSuggestion,
-);
-
-test("chips offer to connect each app, and an app that is already connected offers nothing to press", () => {
-  const view = renderDocument(
-    <ConnectionChips suggestions={suggestions} connected={new Set(["notion"])} onConnect={noop} />,
-  );
-  assert.deepEqual(
-    view.buttons.map((button) => button.name),
-    ["Connect Gmail", "Connect Google Calendar"],
-  );
-  assert.match(view.text, /Notion/u);
-  assert.match(view.text, /connected/u);
-});
-
-test("the ranked defaults render, and Composio's chip says what it is", () => {
-  const view = renderDocument(
-    <ConnectionChips suggestions={rankConnections("")} connected={new Set()} onConnect={noop} />,
-  );
-  assert.ok(view.buttons.some((button) => button.name === "Connect Composio"));
-  assert.match(view.text, /More apps \(Composio\)/u);
-  assert.doesNotMatch(view.text, /500\+/u);
-});
-
-test("pressing a chip starts that app's setup and selects nothing else", () => {
-  const connects: string[] = [];
-  const element = (
-    <ConnectionChips suggestions={suggestions} connected={new Set()} onConnect={(pluginId) => connects.push(pluginId)} />
-  );
-  press(buttonNamed(element, "Connect Gmail"));
-  press(buttonNamed(element, "Connect Notion"));
-  assert.deepEqual(connects, ["gmail", "notion"]);
-});
-
-test("chips can't be pressed while the Bot is being created", () => {
-  const element = (
-    <ConnectionChips suggestions={suggestions} connected={new Set()} disabled onConnect={() => assert.fail("pressed")} />
-  );
-  assert.throws(() => press(buttonNamed(element, "Connect Gmail")), /disabled/u);
 });

@@ -19,8 +19,10 @@ RUN node scripts/build-subagent-file-mutator.mjs --test && node --test scripts/s
 
 RUN npm test --prefix packages/cli
 
-# Runtime dependencies only: the externals the bundle loads at run time
-# (chord, photon, the optional sherpa-onnx speech engine). No esbuild,
+# Runtime dependencies only: the packages the bundle loads from node_modules
+# at run time (photon, quickjs-wasi's wasm file, minimatch for the glob
+# worker, the optional sherpa-onnx speech engine). Everything else, the pi
+# packages included, is bundled and lives in devDependencies. No esbuild,
 # TypeScript, sources, or tests reach the final image.
 FROM mirror.gcr.io/library/node:22-bookworm AS runtime-deps
 WORKDIR /deps

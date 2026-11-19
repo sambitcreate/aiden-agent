@@ -16,7 +16,6 @@ import type { MemoryReviewExtras } from "../bot-memory/review.js";
 import { BOT_MEMORY_TIDY, needsMemoryTidy, proposeMemoryTidy } from "../bot-memory/tidy.js";
 import { createNoteHowToTool, NOTE_HOW_TO_INSTRUCTIONS } from "../bot-lessons/how-to-tool.js";
 import { createBotLessonStore } from "../bot-lessons/store.js";
-import { botSessionDirectory } from "../bot-routine-notes.js";
 import { scheduleStore } from "../schedule-store.js";
 import type { ScheduledRun, ScheduledTask } from "../types.js";
 import { createBotLearningBudget } from "./budget.js";
@@ -332,11 +331,6 @@ export async function botLearningOverview(botId: string): Promise<BotLearningOve
 export async function undoBotLearning(botId: string, changeId: string): Promise<{ ok: true } | { ok: false; code: "conflict" | "not_found" | "already_undone" }> {
   const result = await botLearningHistory.undo(botId, changeId);
   return result.ok ? { ok: true } : { ok: false, code: result.code };
-}
-
-/** For the Learning page's Bot folder (kept here so the page never needs a path). */
-export function botLearningDirectory(botId: string): string {
-  return botSessionDirectory(profileDir(), botId);
 }
 
 export type { BotLearningTarget };

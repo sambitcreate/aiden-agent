@@ -164,7 +164,7 @@ const FASTER_MODEL: Readonly<Record<string, string>> = { "parakeet-v3": "parakee
  * it and it is not downloaded. A chosen model follows the upgrade; Automatic
  * stays Automatic and picks the faster build up on its own.
  */
-function FasterModelOffer({ inUse, faster, chosen }: { inUse: LocalVoiceModel; faster: LocalVoiceModel; chosen: boolean }) {
+function FasterModelOffer({ inUse, faster, chosen, onBusyChange }: { inUse: LocalVoiceModel; faster: LocalVoiceModel; chosen: boolean; onBusyChange: (busy: boolean) => void }) {
   const qc = useQueryClient();
   const [percentage, setPercentage] = React.useState<number | null>(null);
 
@@ -178,11 +178,13 @@ function FasterModelOffer({ inUse, faster, chosen }: { inUse: LocalVoiceModel; f
 
   const upgrade = async () => {
     setPercentage(0);
+    onBusyChange(true);
     try {
       await localVoiceApi.downloadModel(faster.id);
+      // Read the new model list before choosing the download, so the page never sees a chosen model it doesn't list.
+      await qc.invalidateQueries({ queryKey: queryKeys.localModels });
       if (chosen) await settingsApi.set({ localVoiceModel: faster.id });
       await Promise.all([
-        qc.invalidateQueries({ queryKey: queryKeys.localModels }),
         qc.invalidateQueries({ queryKey: queryKeys.settings }),
         qc.invalidateQueries({ queryKey: queryKeys.voiceResolution }),
         qc.invalidateQueries({ queryKey: queryKeys.engineStatus }),
@@ -193,6 +195,7 @@ function FasterModelOffer({ inUse, faster, chosen }: { inUse: LocalVoiceModel; f
       if (!/cancel/i.test(message)) toast.error(message);
     } finally {
       setPercentage(null);
+      onBusyChange(false);
     }
   };
 
@@ -236,12 +239,16 @@ function ActiveModel({ onManage }: { onManage: () => void }) {
   const inUse = active ?? fallback;
   const fasterId = inUse ? FASTER_MODEL[inUse.id] : undefined;
   const faster = fasterId ? (models.data ?? []).find((m) => m.id === fasterId && !m.installed) : undefined;
+  // Set while a faster build downloads and becomes the choice: the model list can be a step behind settings then.
+  const [upgrading, setUpgrading] = React.useState(false);
 
   React.useEffect(() => {
+    // A choice is cleared only against a settled model list: one still loading may not list a model just downloaded.
+    if (upgrading || models.isFetching) return;
     if (activeId && models.data && !models.data.some((m) => m.id === activeId && m.installed)) {
       void settingsApi.set({ localVoiceModel: "" }).then(() => qc.invalidateQueries({ queryKey: queryKeys.settings }));
     }
-  }, [activeId, models.data, qc]);
+  }, [activeId, models.data, models.isFetching, upgrading, qc]);
 
   return (
     <>
@@ -256,7 +263,7 @@ function ActiveModel({ onManage }: { onManage: () => void }) {
           </Text>
         </Field>
       )}
-      {inUse && faster ? <FasterModelOffer inUse={inUse} faster={faster} chosen={active !== undefined} /> : null}
+      {inUse && faster ? <FasterModelOffer inUse={inUse} faster={faster} chosen={active !== undefined} onBusyChange={setUpgrading} /> : null}
       <Field label="Models" description="Download, remove, and choose your on-device transcription model.">
         <Button variant="filled" onClick={onManage}>
           <Settings2 />

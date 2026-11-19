@@ -136,3 +136,13 @@ The receiving clone checks each selected environment filename against repository
 ## Live history (Remote revision 58)
 
 Readers opt into active-run checkpoints on the two run SSE routes. The host captures only projected visible content, seals its coalescible delta at the snapshot cursor and applies the device's existing prompt projection. The paired desktop also folds content at the floor of its shared replay buffer. The renderer handles live events while serialized transcript reads are outstanding and only hands off a completed reply to a read started after settlement. Phones opt in explicitly so strict older decoders keep the original gap shape.
+
+## mDNS `.local` TLS collision recovery (#538)
+
+- `PeerTransportError` records main-process-only `identitySource?: "tls" | "instance"` and `retryableIdentity?: boolean` without changing public operation error codes:
+  - TLS handshake/certificate/hostname/SPKI rejections in `PeerTransport` and `PeerBootstrapTransport` set `identitySource: "tls"` and `failure: "tls"`.
+  - Authenticated `GET /server` `instanceId` mismatches in both `PeerHostRegistry.verify()` and `PeerHostRegistry.probe()` set `identitySource: "instance"` (`retryableIdentity: false`), replacing the separate `WeakSet` mismatch marker. Unclassified `identity_changed` errors remain conservative (`retryableIdentity: false`).
+- `PeerHostRegistry` marks only `"tls"`-sourced `identity_changed` failures on saved private-CA `.local` LAN routes (`isRetryablePeerLanTrust`) as `retryableIdentity: true`:
+  - `connect()` allows failover from a paired `.local` TLS collision to an already-trusted alternate route (such as a learned Tailscale route) without swallowing `"instance"` mismatches or `authentication_required` revocations, and preserves retryability when a learned fallback also fails TLS.
+  - Every retry keeps the exact saved `.local` hostname, private CA, and SPKI pin; no HTTP bytes or credentials reach a rejected responder, and private-CA LAN routes never auto-repin.
+- `PeerHostManager` treats retryable `.local` TLS identity failures as backoff-eligible (`PEER_BACKOFF_STEPS_MS` 3/4/8/16/30s ±20% jitter, `failure: "tls"`) across `connect()`, wake/discovery `probe()`, and stream supervision, so scheduled retries, plain `reconnect(hostId)` and `wake()` recover once mDNS resolves to the paired host again; genuine LAN key rotations stay rejected until explicit re-pairing. Pre-HTTP TLS rejections on unary mutations keep `code: "identity_changed"` rather than becoming `outcome_unknown`. Authenticated `/server` `instanceId` mismatches, revoked credentials, and non-eligible routes stay terminal blocks with zero retry traffic.

@@ -1435,6 +1435,27 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertTrue(grants.contains(.chatContinueInNewChat))
     }
 
+    /// Revision 65: `stream:snapshot-reasons` is negotiated solo so older phones
+    /// with closed snapshot decoders keep receiving the legacy 3-key payload.
+    func testStreamSnapshotReasonsIsAnOptInNegotiatedAlone() async throws {
+        let section = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: botFixtureData(at: ["streamRecovery"])) as? [String: Any]
+        )
+        let capability = try XCTUnwrap(section["capability"] as? String)
+        XCTAssertEqual(AidenRemoteCapability(rawValue: capability), .streamSnapshotReasons)
+        XCTAssertFalse(AidenRemoteCapability.v1Known.contains(.streamSnapshotReasons))
+        XCTAssertTrue(AidenRemoteCapability.phoneNegotiable.contains(.streamSnapshotReasons))
+        let askedForAlone = await MainActor.run { AidenRemoteCoordinator.capabilitiesAskedForAlone }
+        XCTAssertTrue(askedForAlone.contains([.streamSnapshotReasons]))
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/device/capabilities")
+            XCTAssertEqual(try Self.jsonBody(request)["accepts"] as? [String], [capability])
+            return Self.response(for: request, status: 200, json: #"{"capabilities":["server:read","chat:read","stream:snapshot-reasons"]}"#)
+        }
+        let grants = try await makeClient().updateDeviceCapabilities(accepts: [.streamSnapshotReasons])
+        XCTAssertTrue(grants.contains(.streamSnapshotReasons))
+    }
+
     /// Revision 64: Continue in a new chat posts only the destination workspace
     /// to the fork route, with the chat's revision and a key, and accepts only a
     /// new chat in that workspace that records this chat as its source.

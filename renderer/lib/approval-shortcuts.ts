@@ -54,7 +54,7 @@ export function approvalShortcutTargetIsFree(target: EventTarget | null, root: P
   for (const draft of root.querySelectorAll("[data-message-draft]")) {
     if (holdsDraft(draft)) return false;
   }
-  return !typingRedirectBlockedByOverlay(root, focused);
+  return !typingRedirectBlockedByOverlay(focused);
 }
 
 /** Listens for the approval keys while `enabled`. */

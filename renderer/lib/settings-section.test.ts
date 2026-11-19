@@ -104,6 +104,30 @@ test("Apps using Aiden appears only where the host offers the MCP server", () =>
   assert.equal(assistantSettingsPages(capabilities(true)).join().includes("Apps using Aiden"), true);
 });
 
+test("Aiden Live appears only where the host has it", () => {
+  const capabilities = (geminiLive: boolean) => ({ ...APPLE_SILICON, geminiLive });
+  const ids = (geminiLive: boolean) =>
+    availableSettingsDestinations(capabilities(geminiLive)).map((destination) => destination.id);
+  assert.equal(ids(false).includes("geminiLive"), false);
+  assert.equal(ids(true).includes("geminiLive"), true);
+  assert.deepEqual(ids(true).filter((id) => id !== "geminiLive"), ids(false), "only Aiden Live goes");
+
+  // Voice & Speech keeps its other tabs and its name.
+  const voiceSpeech = (geminiLive: boolean) =>
+    availableSettingsPages(capabilities(geminiLive)).find((page) => page.id === "voiceSpeech");
+  assert.deepEqual(voiceSpeech(false)?.tabs, ["voice", "tts"]);
+  assert.equal(voiceSpeech(false)?.title, "Voice & Speech");
+  assert.equal(voiceSpeech(true)?.tabs.includes("geminiLive"), true);
+
+  // A link to Aiden Live (such as Live's own toast) lands on the page's first tab instead.
+  assert.equal(resolveSettingsSection("geminiLive", capabilities(true)), "geminiLive");
+  assert.equal(resolveSettingsSection("geminiLive", capabilities(false)), "voice");
+  assert.equal(assistantSettingsPages(capabilities(false)).join().includes("Aiden Live"), false);
+  assert.equal(assistantSettingsPages(capabilities(true)).join().includes("Aiden Live"), true);
+  // A caller that doesn't know about Live keeps the tab.
+  assert.equal(availableSettingsDestinations(APPLE_SILICON).some((entry) => entry.id === "geminiLive"), true);
+});
+
 test("accepts known settings deep links and rejects arbitrary search values", () => {
   assert.equal(parseSettingsSection("modelData"), "modelData");
   assert.equal(parseSettingsSection("computerUse"), "computerUse");

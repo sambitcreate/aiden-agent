@@ -15,6 +15,8 @@ import {
   type SpendingLimitsSettings,
 } from "../../shared/spending";
 import { SpendingAmountSelect } from "../spending/spending-amount-select";
+import { useAppCapabilities } from "../../lib/app-capabilities";
+import { localComputerNoun } from "../../shared/computer-noun";
 import { AutomaticCompactionGroup, CompactionBudgetGroup, PromptCacheGroup } from "./context-settings";
 import {
   DEFAULT_USAGE_LIMIT_WAIT_HOURS,
@@ -38,6 +40,7 @@ export function LimitsSettings() {
   const queryClient = useQueryClient();
   const settings = useSettings();
   const providers = useProviders();
+  const { platform } = useAppCapabilities();
   const saves = React.useRef({
     queue: Promise.resolve(),
     pending: 0,
@@ -208,7 +211,7 @@ export function LimitsSettings() {
         <FieldSet title="Spending limits">
           <Field
             label="Nothing here costs money yet"
-            description="Sign-ins and models on this Mac are $0. Spending limits appear once you add a provider with an API key."
+            description={`Sign-ins and models on this ${localComputerNoun(platform)} are $0. Spending limits appear once you add a provider with an API key.`}
           />
         </FieldSet>
       ) : null}

@@ -1,4 +1,4 @@
-import { mintPeerIdempotencyKey } from "../../shared/peer-host";
+import { hostResourceKey, mintPeerIdempotencyKey } from "../../shared/peer-host";
 import { chatIntentLedger, type ChatIntent, type ChatIntentLedger, type ChatIntentRef } from "./chat-intent-ledger";
 import { chatControlRefusal, releaseAttachments, stageAttachments } from "./chat-session-control";
 import {
@@ -21,6 +21,11 @@ import type {
   HostNewChatInput,
   HostWorkspaceCreate,
 } from "./host-resources";
+
+/** The composer draft for a host's new chat, kept apart from every other host's. */
+export function remoteNewChatDraftKey(hostId: string): string {
+  return hostResourceKey({ hostId, resourceId: "draft:new-chat" });
+}
 
 /** What starting new work on a paired host needs from its adapter. */
 export interface RemoteNewChatHost

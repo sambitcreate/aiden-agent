@@ -19,6 +19,9 @@
   - Packages loaded through `createRequire` are invisible to the metafile, so list them in
     its `RUNTIME_LOADED` map: minimatch, node-pty, sherpa-onnx-node, ws.
   - katex and web-streams-polyfill stay in production only as transitive dependencies.
+  - Keep `main/tsconfig.json`. esbuild reads the nearest tsconfig, and without it main
+    files inherit the root `"*"` paths entry, which bundles node-pty and posthog-node
+    into main despite `packages: "external"` (found 2026-11-18).
 - **Package verifiers:** `verifyPackagedSlimness` (macOS and Linux) rejects maps,
   declarations, esbuild, and any packaged `name@version` that is not a production
   lockfile install.
@@ -28,6 +31,11 @@
   - Excluded: node_modules `.ts`, test/example/docs directories, and README/CHANGELOG-style
     `.md` files.
   - Not excluded: `doc`, because `yaml/dist/doc` is runtime code; `benchmark`; licence files.
+  - node-pty (2026-11-18): `prebuilds/win32-*` and its `deps`, `third_party` and `src`
+    directories are excluded; Aiden has no Windows target. That saved about 1.85 MB
+    unpacked, because the default filters already dropped the big Windows binaries.
+    `asarUnpack` keeps the whole `node-pty/**`: it only acts on files `files` keeps, and
+    narrowing it would move `lib/` into the asar and change the tested runtime layout.
 - **Onboarding art:** the 10.5 MB of quantized PNGs (and `npm run assets:onboarding`) are gone
   (2026-10-09). The feature tour now draws its art in code, a few tens of KB of TSX and CSS; see
   `.memory/onboarding-art.md`.

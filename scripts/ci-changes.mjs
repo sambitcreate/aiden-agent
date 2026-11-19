@@ -276,11 +276,12 @@ function forceFullEnabled(value) {
   return value === true || value === "true";
 }
 
+function forceFullEvent(eventName) {
+  return eventName === undefined || eventName === "push" || eventName === "merge_group";
+}
+
 function forceFullRequested(options) {
-  return (
-    forceFullEnabled(options.forceFull) &&
-    (options.eventName === undefined || options.eventName === "push")
-  );
+  return forceFullEnabled(options.forceFull) && forceFullEvent(options.eventName);
 }
 
 function validPathList(paths) {
@@ -368,7 +369,7 @@ function validGitRef(value) {
 }
 
 export function buildDiffArgs({ eventName, baseSha, headSha }) {
-  const separator = eventName === "pull_request" ? "..." : "..";
+  const separator = eventName === "pull_request" || eventName === "merge_group" ? "..." : "..";
   // Disable rename detection so a rename contributes both its deletion and
   // addition paths. This keeps cross-area moves fail-safe without parsing
   // human-readable status output.
@@ -407,8 +408,8 @@ function commitExists(spawn, ref, cwd) {
   return Boolean(result && !result.error && result.status === 0);
 }
 
-function fullDetection(reason, changedCount = 0) {
-  return decision(fullAreas(), changedCount, false, reason);
+function fullDetection(reason, changedCount = 0, changedPaths = []) {
+  return { ...decision(fullAreas(), changedCount, false, reason), changedPaths };
 }
 
 function readManifest(spawn, ref, cwd) {
@@ -490,12 +491,14 @@ export function detectChangedAreas(options = {}) {
       baseSha = resolved;
     }
   }
-  const forceFull = eventName === "push" && forceFullEnabled(envValue(environment, options.forceFull, "FORCE_FULL"));
+  const forceFull =
+    (eventName === "push" || eventName === "merge_group") &&
+    forceFullEnabled(envValue(environment, options.forceFull, "FORCE_FULL"));
 
   // Main pushes still read the diff so a catalog-only refresh commit can skip
   // the full fan-out. Any failure to read it keeps full validation.
   if (
-    (eventName !== "push" && eventName !== "pull_request") ||
+    (eventName !== "push" && eventName !== "pull_request" && eventName !== "merge_group") ||
     !validGitRef(baseSha) ||
     !validGitRef(headSha)
   ) {
@@ -514,7 +517,7 @@ export function detectChangedAreas(options = {}) {
     eventName === "pull_request" &&
     paths.includes(ROOT_MANIFEST_PATH) &&
     manifestChangeIsHostOnly(spawn, baseSha, headSha, cwd);
-  return analyzeChangedPaths(paths, { eventName, forceFull, hostOnlyManifest });
+  return { ...analyzeChangedPaths(paths, { eventName, forceFull, hostOnlyManifest }), changedPaths: paths };
 }
 
 export const runChangedAreaDetection = detectChangedAreas;

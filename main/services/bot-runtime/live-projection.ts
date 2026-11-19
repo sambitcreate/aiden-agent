@@ -1122,6 +1122,13 @@ interface Feed {
   resumedFrom: string | undefined;
   /** The newest frame, so approvals, questions and Stop can re-derive the activity. */
   frame: { entries: readonly EntryRecord[]; docs: Readonly<Record<string, unknown>> };
+  /**
+   * The frame entries `entries` was projected from, while re-projecting them
+   * would give the same result: no connect card waits on a live status and no
+   * refresh has replaced them since. A frame that hands back this same array
+   * (the watch returns it unchanged when nothing new arrived) skips projection.
+   */
+  projectedFrom: readonly EntryRecord[] | undefined;
   runActive: boolean;
   /** Identity of the current run; a follow-up turn replaces the run without a gap. */
   runKey: string | null;
@@ -1134,6 +1141,11 @@ interface Feed {
 
 function sameEntry(left: BotTranscriptEntry, right: BotTranscriptEntry): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
+}
+
+/** A pending connect card resolves against live status, so its projection can change without new entries. */
+function awaitsCardStatus(entries: readonly BotTranscriptEntry[]): boolean {
+  return entries.some((entry) => entry.type === "connect_card" && entry.card.status === "pending");
 }
 
 export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLiveProjection {
@@ -1289,6 +1301,13 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     feed.resumedFrom = feed.resuming ? JSON.stringify(feed.frame.docs["pi.live"]) : undefined;
   }
 
+  /** Project frame entries; `stable` when the same array always projects to the same transcript. */
+  async function projectFrame(botId: string, entries: readonly EntryRecord[]) {
+    const projected = projectBotTranscript(entries);
+    const stable = !deps.connectCardStatus || !awaitsCardStatus(projected);
+    return { entries: await resolveCards(botId, projected), stable };
+  }
+
   async function resolveCards(botId: string, entries: BotTranscriptEntry[]): Promise<BotTranscriptEntry[]> {
     if (!deps.connectCardStatus) return entries;
     const resolved: BotTranscriptEntry[] = [];
@@ -1345,7 +1364,11 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     feed.runKey = runKey;
     // Records the run's key as soon as it shows, so a replacing run is told apart from this one.
     if (feed.state.kind === "running") feed.startedAt = runStarts.startedAt(feed.botId, runKey, now);
-    applyEntries(feed, await resolveCards(feed.botId, projectBotTranscript(entries)));
+    if (entries !== feed.projectedFrom) {
+      const projected = await projectFrame(feed.botId, entries);
+      applyEntries(feed, projected.entries);
+      feed.projectedFrom = projected.stable ? entries : undefined;
+    }
     const partial = livePartialText(docs);
     if (partial !== feed.partial) {
       feed.partial = partial;
@@ -1405,6 +1428,9 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       const { context, cancel } = withCancel(BACKGROUND_CONTEXT);
       const watch = await watchActiveConversation(conversation, context);
       const initial = watch.value;
+      const epoch = newEpoch();
+      const seq = lastSeq.get(botId) ?? 0;
+      const projected = await projectFrame(botId, initial.entries);
       let opened: Feed | undefined;
       const classifier = createQueuedInputClassifier({
         classify: (ids) => deps.quietInputs(botId, ids),
@@ -1417,9 +1443,9 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       });
       const feed: Feed = {
         botId,
-        epoch: newEpoch(),
-        seq: lastSeq.get(botId) ?? 0,
-        entries: await resolveCards(botId, projectBotTranscript(initial.entries)),
+        epoch,
+        seq,
+        entries: projected.entries,
         partial: livePartialText(initial.docs),
         state: await deps.state(botId),
         question: deps.question?.(botId) ?? null,
@@ -1434,6 +1460,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
         resuming: false,
         resumedFrom: undefined,
         frame: { entries: initial.entries, docs: initial.docs },
+        projectedFrom: projected.stable ? initial.entries : undefined,
         runActive: liveRunActive(initial.docs),
         runKey: liveRunKey(initial.docs),
         watch,
@@ -1479,6 +1506,8 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       const conversation = await deps.conversation(feed.botId);
       const view = await conversation.context(BACKGROUND_CONTEXT);
       applyEntries(feed, await resolveCards(feed.botId, projectBotTranscript(view.entries)));
+      // These entries came from a fresh read, not the frame, so the next frame projects again.
+      feed.projectedFrom = undefined;
     });
   }
 

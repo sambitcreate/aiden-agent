@@ -92,10 +92,6 @@ export function storageCategory(id: StorageCategoryId): StorageCategoryDefinitio
   return STORAGE_CATEGORIES.find((category) => category.id === id)!;
 }
 
-export function storageCategoryLabel(id: StorageCategoryId): string {
-  return STORAGE_CATEGORIES.find((category) => category.id === id)?.label ?? id;
-}
-
 export interface StorageCategoryUsage {
   id: StorageCategoryId;
   /** Disk space the category's files occupy, each file counted once. */

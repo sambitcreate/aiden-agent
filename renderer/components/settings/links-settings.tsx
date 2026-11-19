@@ -2,6 +2,7 @@ import * as React from "react";
 import { browserApi } from "../../lib/ipc";
 import type { BrowserLinkOpening } from "../../shared/browser";
 import { prefersReducedMotion } from "../../lib/appearance-runtime";
+import { glideIntoView } from "../../lib/scroll-into-view";
 import { isMacPlatform } from "../../lib/ghostty-terminal/host-platform";
 import { Field, FieldSet, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, toast } from "../ui";
 import { SettingsAnchorContext } from "./settings-page";
@@ -21,11 +22,8 @@ export function LinksSettings({ embedded = false }: { embedded?: boolean }) {
   const row = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
-    if (scrollRequest === null) return;
-    row.current?.scrollIntoView({
-      block: "center",
-      behavior: prefersReducedMotion() ? "auto" : "smooth",
-    });
+    if (scrollRequest === null || !row.current) return;
+    return glideIntoView(row.current, { animate: !prefersReducedMotion() });
   }, [scrollRequest]);
 
   React.useEffect(() => {

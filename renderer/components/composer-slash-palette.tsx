@@ -30,16 +30,19 @@ import {
 import { AidenIcon } from "./aiden-icon";
 import { cn } from "../lib/ui-utils";
 import {
-  slashPalettePresenceState,
   type SlashResult,
   type SlashSession,
 } from "../lib/slash-command-core";
 import type { SlashCommandAvailabilityResult } from "../lib/slash-command-actions";
 import type { SlashCommandIcon } from "../shared/slash-commands";
+import { titleRanges } from "../lib/text-match";
+import { revealInList } from "../lib/reveal-in-list";
+import { useDebouncedAnnouncement } from "../lib/use-debounced-announcement";
+import { MatchText } from "./match-text";
+import { usePresence } from "../lib/use-presence";
 
 export const COMPOSER_SLASH_PALETTE_ID = "composer-slash-palette";
 export const COMPOSER_SLASH_RETRY_ID = "slash-option-skills-retry";
-const SLASH_PALETTE_EXIT_MS = 110;
 
 const ICONS: Record<SlashCommandIcon, React.ComponentType<{ className?: string }>> = {
   access: LockKeyhole,
@@ -73,6 +76,8 @@ const ICONS: Record<SlashCommandIcon, React.ComponentType<{ className?: string }
 
 interface ComposerSlashPaletteProps {
   mode: SlashSession["kind"];
+  /** What was typed after the trigger, to mark in each title. */
+  query: string;
   results: readonly SlashResult[];
   activeId?: string;
   skillsLoading: boolean;
@@ -86,6 +91,8 @@ interface ComposerSlashPaletteProps {
   onRetrySkills: () => void;
   skillSelectionEnabled?: boolean;
   presenceState?: "visible" | "exiting";
+  /** The palette root, so its presence can wait for the exit animation. */
+  presenceRef?: React.Ref<HTMLDivElement>;
 }
 
 export function ComposerSlashPalettePresence({
@@ -98,38 +105,18 @@ export function ComposerSlashPalettePresence({
   children: React.ReactElement<ComposerSlashPaletteProps> | null;
 }) {
   const lastContentRef = React.useRef(children);
-  const [retained, setRetained] = React.useState(present);
+  const ref = React.useRef<HTMLDivElement>(null);
+  const { rendered, exiting } = usePresence(present, ref);
   React.useLayoutEffect(() => {
     if (present && children) lastContentRef.current = children;
   }, [children, present]);
-  const reduceMotion =
-    typeof document !== "undefined" && document.documentElement.dataset.reduceMotion === "true";
-  const presenceState = slashPalettePresenceState({
-    present,
-    retained,
-    immediate,
-    reduceMotion,
-  });
 
-  React.useEffect(() => {
-    if (present) {
-      setRetained(true);
-      return;
-    }
-    if (!retained) return;
-    if (immediate || reduceMotion) {
-      setRetained(false);
-      return;
-    }
-    const timer = window.setTimeout(() => {
-      setRetained(false);
-    }, SLASH_PALETTE_EXIT_MS);
-    return () => window.clearTimeout(timer);
-  }, [immediate, present, reduceMotion, retained]);
-
-  if (presenceState === "hidden") return null;
+  // An immediate close (a command ran, the draft was sent) skips the exit.
+  if (!rendered || (!present && immediate)) return null;
   const content = present ? children : lastContentRef.current;
-  return content ? React.cloneElement(content, { presenceState }) : null;
+  return content
+    ? React.cloneElement(content, { presenceState: exiting ? "exiting" : "visible", presenceRef: ref })
+    : null;
 }
 
 function sourceLabel(source: Extract<SlashResult, { kind: "skill" }>["skill"]["source"]): string {
@@ -138,6 +125,7 @@ function sourceLabel(source: Extract<SlashResult, { kind: "skill" }>["skill"]["s
 
 export function ComposerSlashPalette({
   mode,
+  query,
   results,
   activeId,
   skillsLoading,
@@ -149,6 +137,7 @@ export function ComposerSlashPalette({
   onRetrySkills,
   skillSelectionEnabled = false,
   presenceState = "visible",
+  presenceRef,
 }: ComposerSlashPaletteProps) {
   const commands = results.filter(
     (result): result is Extract<SlashResult, { kind: "command" }> => result.kind === "command",
@@ -156,29 +145,25 @@ export function ComposerSlashPalette({
   const skills = results.filter(
     (result): result is Extract<SlashResult, { kind: "skill" }> => result.kind === "skill",
   );
-  const [announcement, setAnnouncement] = React.useState("");
+  const count = commands.length + skills.length;
+  const [announcement, setAnnouncement] = useDebouncedAnnouncement(
+    mode === "skill" && skillsError
+      ? "Skills could not be loaded. Navigate to Retry skills to try again."
+      : mode === "skill" && skillsLoading
+        ? "Loading skills."
+        : count === 0
+          ? mode === "command"
+            ? "No matching commands."
+            : "No matching skills."
+          : `${count} ${mode}${count === 1 ? "" : "s"}.`,
+    180,
+  );
+  const listRef = React.useRef<HTMLDivElement | null>(null);
 
   React.useEffect(() => {
-    const timer = window.setTimeout(() => {
-      const count = commands.length + skills.length;
-      setAnnouncement(
-        mode === "skill" && skillsError
-          ? "Skills could not be loaded. Navigate to Retry skills to try again."
-          : mode === "skill" && skillsLoading
-            ? "Loading skills."
-            : count === 0
-              ? mode === "command"
-                ? "No matching commands."
-                : "No matching skills."
-              : `${count} ${mode}${count === 1 ? "" : "s"}.`,
-      );
-    }, 180);
-    return () => window.clearTimeout(timer);
-  }, [commands.length, mode, skills.length, skillsError, skillsLoading]);
-
-  React.useEffect(() => {
-    if (!activeId) return;
-    document.getElementById(activeId)?.scrollIntoView({ block: "nearest" });
+    const row = activeId ? document.getElementById(activeId) : null;
+    // Scrolls only the list: the composer and the chat around it stay put.
+    if (row) revealInList(row, listRef.current);
   }, [activeId]);
 
   const row = (result: SlashResult, available: boolean, unavailableReason?: string) => {
@@ -221,7 +206,9 @@ export function ComposerSlashPalette({
           <Icon aria-hidden="true" className="size-[18px]" />
         </span>
         <span className="flex min-w-0 flex-1 items-baseline gap-2">
-          <span className="truncate text-regular-strong text-primary">{title}</span>
+          <span className="truncate text-regular-strong text-primary">
+            <MatchText text={title} ranges={titleRanges(title, query)} />
+          </span>
           {metadata ? (
             <span className="max-w-28 truncate text-small text-tertiary">{metadata}</span>
           ) : null}
@@ -243,6 +230,7 @@ export function ComposerSlashPalette({
 
   return (
     <div
+      ref={presenceRef}
       className="composer-slash-palette absolute inset-x-3 bottom-full z-40 mb-2 origin-bottom overflow-hidden rounded-dialog bg-popover/98 shadow-popover backdrop-blur-xl"
       data-composer-slash-palette
       data-browser-occluder
@@ -250,6 +238,7 @@ export function ComposerSlashPalette({
       aria-hidden={presenceState === "exiting" ? "true" : undefined}
     >
       <div
+        ref={listRef}
         id={COMPOSER_SLASH_PALETTE_ID}
         role="listbox"
         aria-label={mode === "command" ? "Slash commands" : "Skills"}

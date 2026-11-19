@@ -1,4 +1,5 @@
 import { isMacPlatform } from "./host-platform";
+import { APPEARANCE_CHANGE_EVENT, prefersReducedMotion } from "../appearance-runtime";
 import { collectWrappedTerminalLinkLine, extractTerminalLinks } from "./terminal-links";
 import {
   GHOSTTY_CELL_WIDE,
@@ -257,14 +258,6 @@ function terminalColumnOffset(row: GhosttySnapshot["rowData"][number], column: n
   return offset;
 }
 
-export function terminalLinkAtPosition(
-  rows: GhosttySnapshot["rowData"],
-  rowIndex: number,
-  column: number,
-): string | null {
-  return terminalLinkAtPositionWithRange(rows, rowIndex, column)?.text ?? null;
-}
-
 export interface TerminalLinkWithRange {
   readonly text: string;
   readonly range: GhosttyCellRange;
@@ -341,10 +334,6 @@ export function terminalLinkAtPositionWithRange(
     }
   }
   return null;
-}
-
-export function terminalLinkAtColumn(row: GhosttySnapshot["rowData"][number], column: number) {
-  return terminalLinkAtPosition([row], 0, column);
 }
 
 export function isTerminalCopyShortcut(
@@ -690,9 +679,6 @@ export class GhosttyTerminalSurface {
   private lastMouseMotionData = "";
   private mouseAnyEventTracking = false;
   private dprMedia: MediaQueryList | null = null;
-  // Read live on every blink decision, and watched so that dropping the
-  // preference restarts a blink cycle that has no timer left to notice it.
-  private readonly reducedMotionMedia = window.matchMedia?.("(prefers-reduced-motion: reduce)");
   private inputLeft = -1;
   private inputTop = -1;
 
@@ -728,7 +714,9 @@ export class GhosttyTerminalSurface {
     this.resizeObserver = new ResizeObserver(() => this.fit());
     this.installEvents();
     this.watchDevicePixelRatio();
-    this.reducedMotionMedia?.addEventListener("change", this.onReducedMotionChange);
+    // Reduce Motion is read live on every blink decision, and watched so that turning it
+    // off restarts a blink cycle that has no timer left to notice it.
+    window.addEventListener(APPEARANCE_CHANGE_EVENT, this.onReducedMotionChange);
     document.fonts.addEventListener("loadingdone", this.onFontsLoaded);
     this.resizeObserver.observe(mount);
   }
@@ -1124,7 +1112,7 @@ export class GhosttyTerminalSurface {
     document.fonts.removeEventListener("loadingdone", this.onFontsLoaded);
     this.dprMedia?.removeEventListener("change", this.onDevicePixelRatioChange);
     this.dprMedia = null;
-    this.reducedMotionMedia?.removeEventListener("change", this.onReducedMotionChange);
+    window.removeEventListener(APPEARANCE_CHANGE_EVENT, this.onReducedMotionChange);
     if (this.selectionScrollTimer !== null) window.clearInterval(this.selectionScrollTimer);
     if (this.resizeNotifyTimer !== null) {
       window.clearTimeout(this.resizeNotifyTimer);
@@ -2079,7 +2067,7 @@ export class GhosttyTerminalSurface {
       focused: this.focused,
       cursorBlinking: snapshot.cursorBlinking,
       cursorVisible: snapshot.cursorVisible,
-      reducedMotion: this.reducedMotionMedia?.matches ?? false,
+      reducedMotion: prefersReducedMotion(),
     });
   }
 

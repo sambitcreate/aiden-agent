@@ -41,6 +41,7 @@ import type { DesignNode } from "./canvas-adapter-core";
 import { commentNumbers, marksFromCanvas, marksOnCanvas, pinPlace, type FrameScroll } from "./comment-geometry";
 import { forgetCommentCrops, publishDesignCommentTray, rememberCommentCrop } from "./comment-tray-store";
 import { DESIGN_DEFAULT_WIDTH } from "./nodes/design-node-context";
+import { isEscapeKey } from "../lib/dismiss-key";
 
 /** How long a page has to answer a pick. */
 const PICK_TIMEOUT_MS = 1500;
@@ -358,6 +359,25 @@ export function useDesignComments({ chatId, doc, change, flush, flow, wrapper, l
     [change],
   );
 
+  /** Queues a note on a whole frame, pinned at its top right, for the next message (Tweaks' Send to Aiden). */
+  const queueOnFrame = React.useCallback(
+    (frameId: string, note: string): boolean => {
+      const frame = docRef.current.frames.find((entry) => entry.id === frameId);
+      if (!frame) return false;
+      const id = crypto.randomUUID();
+      const place: DesignCommentPlace = { frameId: frame.id, x: Math.max(0, frame.w - 8), y: 8 };
+      let added = false;
+      change((latest) => {
+        const next = addComment(latest, { id, place, note, createdAt: new Date().toISOString(), queued: true });
+        added = next !== null;
+        return next ?? latest;
+      });
+      if (added) void captureSpotRef.current(id, place);
+      return added;
+    },
+    [change],
+  );
+
   const hoverFrame = React.useRef<number | null>(null);
   const onNodeMouseMove = (event: React.MouseEvent, node: Node) => {
     if (!active || draft) return;
@@ -602,6 +622,7 @@ export function useDesignComments({ chatId, doc, change, flush, flow, wrapper, l
     commentOn,
     commentOnElement,
     queueOnElement,
+    queueOnFrame,
     layer,
   };
 }
@@ -872,7 +893,7 @@ function CommentBox({
       onClick={(event) => event.stopPropagation()}
       onDoubleClick={(event) => event.stopPropagation()}
       onKeyDown={(event) => {
-        if (event.key === "Escape") {
+        if (isEscapeKey(event)) {
           event.preventDefault();
           event.stopPropagation();
           onClose();

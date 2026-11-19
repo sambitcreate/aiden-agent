@@ -1,5 +1,7 @@
+import "../../main/bots/test-dom";
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { afterEach } from "node:test";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { defaultTtsSettings, TTS_LIMITS, type TtsSettingsV1 } from "../../shared/tts.js";
@@ -10,6 +12,8 @@ import {
 } from "./tts-settings.js";
 
 const noop = () => undefined;
+
+afterEach(cleanup);
 
 function props(extra: Partial<TtsSettingsViewProps> = {}): TtsSettingsViewProps {
   return {
@@ -184,4 +188,18 @@ test("clearing generated audio stops preview first and reports failure", async (
     notify: (message) => failures.push(message),
   });
   assert.deepEqual(failures, ["Could not clear generated audio."]);
+});
+
+test("each setup and reading switch is named by its row and saves its own setting", () => {
+  const patches: unknown[] = [];
+  render(<TtsSettingsView {...props({ onPatch: (patch) => void patches.push(patch) })} />);
+  fireEvent.click(screen.getByRole("switch", { name: "Read aloud" }));
+  fireEvent.click(screen.getByRole("switch", { name: "Read inline code" }));
+  fireEvent.click(screen.getByRole("switch", { name: "Read fenced code blocks" }));
+  const reading = defaultTtsSettings().reading;
+  assert.deepEqual(patches, [
+    { enabled: false },
+    { reading: { ...reading, inlineCode: !reading.inlineCode } },
+    { reading: { ...reading, fencedCode: !reading.fencedCode } },
+  ]);
 });

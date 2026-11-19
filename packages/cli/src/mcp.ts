@@ -223,17 +223,6 @@ export async function mcpCredentialSignature(agentDir: string, server: McpServer
   return createHash("sha256").update(JSON.stringify({ connection: mcpAuthorityConnectionSnapshot(server), oauth })).digest("hex");
 }
 
-/** Values a delegated MCP operation must never echo: header values, OAuth tokens, and client secrets. */
-export async function mcpCredentialSecrets(agentDir: string, server: McpServer): Promise<string[]> {
-  const values: unknown[] = [...Object.values(server.headers ?? {})];
-  if (server.oauth) {
-    const session = await readOAuthSession(agentDir, server).catch(() => ({}) as McpOAuthSession);
-    values.push(...Object.values(session.tokens ?? {}), ...Object.values(session.clientInformation ?? {}));
-    values.push(isMcpFieldSecretMarker(server.oauthClientSecret) ? (await withClientSecret(agentDir, server).catch(() => server)).oauthClientSecret : server.oauthClientSecret);
-  }
-  return values.filter((value): value is string => typeof value === "string" && value.length >= 4 && !isMcpFieldSecretMarker(value));
-}
-
 /** One gate per process: a sign-in supersedes background writers of the same server. */
 const oauthOperations = new McpOAuthOperationGate();
 const SIGN_IN_TIMEOUT_MS = 180_000;

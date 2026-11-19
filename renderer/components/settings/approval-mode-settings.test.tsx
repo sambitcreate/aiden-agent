@@ -17,6 +17,7 @@ import { WorkspaceApprovalFields } from "../workspace-settings-dialog";
 import * as React from "react";
 import { ApprovalModeSettings, ApprovalsContentSettledContext } from "./approval-mode-settings";
 import { SettingsAnchorContext } from "./settings-page";
+import { AppCapabilitiesProvider, DISABLED_APP_CAPABILITIES, type AppCapabilities } from "../../lib/app-capabilities";
 
 afterEach(cleanup);
 
@@ -33,7 +34,7 @@ const MODEL: Provider = {
 function mount(
   settings: Partial<AppSettings>,
   providers: Provider[] = [MODEL],
-  options: { failSave?: boolean; anchor?: "bots"; children?: React.ReactNode } = {},
+  options: { failSave?: boolean; anchor?: "bots"; children?: React.ReactNode; platform?: AppCapabilities["platform"] } = {},
 ) {
   let current: Partial<AppSettings> = { ...settings };
   const calls = installBotTestIpc({
@@ -46,13 +47,15 @@ function mount(
     "providers:list": () => providers,
   });
   render(
-    <TooltipProvider>
-      <QueryClientProvider client={createBotTestQueryClient()}>
-        <SettingsAnchorContext.Provider value={options.anchor ? { section: options.anchor, request: 1 } : null}>
-          <ApprovalModeSettings>{options.children}</ApprovalModeSettings>
-        </SettingsAnchorContext.Provider>
-      </QueryClientProvider>
-    </TooltipProvider>,
+    <AppCapabilitiesProvider capabilities={{ ...DISABLED_APP_CAPABILITIES, platform: options.platform ?? "darwin" }}>
+      <TooltipProvider>
+        <QueryClientProvider client={createBotTestQueryClient()}>
+          <SettingsAnchorContext.Provider value={options.anchor ? { section: options.anchor, request: 1 } : null}>
+            <ApprovalModeSettings>{options.children}</ApprovalModeSettings>
+          </SettingsAnchorContext.Provider>
+        </QueryClientProvider>
+      </TooltipProvider>
+    </AppCapabilitiesProvider>,
   );
   const saves = () => calls.filter((call) => call.channel === "settings:set").map((call) => call.args[0]);
   return { saves, current: () => current };
@@ -93,6 +96,15 @@ test("a failed save puts the mode back", async () => {
   await waitFor(() => assert.equal(checked(group), "Ask"));
   fireEvent.click(within(group).getByRole("radio", { name: "Never ask" }));
   await waitFor(() => assert.equal(checked(group), "Ask"));
+});
+
+test("on Linux the modes and What changed name the computer, not a Mac", async () => {
+  mount({ approvalMode: "ask", approvalModeOrigin: "upgrade" }, [MODEL], { platform: "linux" });
+  const group = await modeGroup();
+  within(group).getByText(/the first use of your computer\. Only Block rules apply/u);
+  const note = await screen.findByRole("note", { name: "What changed" });
+  within(note).getByText(/one mode for this computer/u);
+  assert.equal(screen.queryByText(/\bMac\b/u), null);
 });
 
 test("an upgraded install sees What changed once; Got it hides it for good", async () => {
@@ -195,15 +207,17 @@ test("a jump to Bot messaging waits for the rules list above it to load before s
   }
 });
 
-function mountWorkspace(workspace: Workspace, settings: Partial<AppSettings>) {
+function mountWorkspace(workspace: Workspace, settings: Partial<AppSettings>, platform: AppCapabilities["platform"] = "darwin") {
   const patches: unknown[] = [];
   installBotTestIpc({ "settings:get": () => settings, "providers:list": () => [MODEL] });
   render(
-    <TooltipProvider>
-      <QueryClientProvider client={createBotTestQueryClient()}>
-        <WorkspaceApprovalFields workspace={workspace} onPatch={(patch) => void patches.push(patch)} />
-      </QueryClientProvider>
-    </TooltipProvider>,
+    <AppCapabilitiesProvider capabilities={{ ...DISABLED_APP_CAPABILITIES, platform }}>
+      <TooltipProvider>
+        <QueryClientProvider client={createBotTestQueryClient()}>
+          <WorkspaceApprovalFields workspace={workspace} onPatch={(patch) => void patches.push(patch)} />
+        </QueryClientProvider>
+      </TooltipProvider>
+    </AppCapabilitiesProvider>,
   );
   return patches;
 }
@@ -222,6 +236,11 @@ test("a workspace follows the global mode until customized", async () => {
   mountWorkspace(workspace(), { approvalMode: "never" });
   await screen.findByText(/^Follows Settings → Approvals\. Asks only before purchases/u);
   assert.match(screen.getByRole("combobox", { name: "Approvals in this workspace" }).textContent ?? "", /Use Settings \(Never ask\)/u);
+});
+
+test("on Linux a workspace on Never ask names the computer whose first use still asks", async () => {
+  mountWorkspace(workspace(), { approvalMode: "never" }, "linux");
+  await screen.findByText(/^Follows Settings → Approvals\. .*the first use of your computer\./u);
 });
 
 test("a Full workspace reads as Never ask with commands and file changes allowed, each removable", async () => {

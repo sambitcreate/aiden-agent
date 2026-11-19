@@ -1,6 +1,6 @@
 import { hostQueryKeys } from "../lib/hosts/host-query-keys";
 import { PeerProjectCloneDialog } from "./peer-project-clone-dialog";
-import { remoteNewChatDraftKey } from "./remote-new-chat-view";
+import { remoteNewChatDraftKey } from "../lib/hosts/remote-new-chat";
 import {
   beginChatDraftSend,
   createChatDraft,
@@ -154,6 +154,7 @@ import {
   isReservedTypingSurface,
   typingRedirectBlockedByOverlay,
 } from "../lib/composer-type-focus";
+import { returnFocus } from "../lib/focus-return";
 import { ariaKeyShortcut } from "../shared/keybindings";
 import type { ToolApprovalScope } from "../shared/tool-approval-scope";
 import { isModelHidden } from "../shared/model-visibility";
@@ -3418,7 +3419,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     const takeFocus = approvalShouldTakeFocus({
       typing:
         isEditableTypingTarget(previousFocus) || isReservedTypingSurface(previousFocus),
-      overlayOpen: typingRedirectBlockedByOverlay(document, previousFocus),
+      overlayOpen: typingRedirectBlockedByOverlay(previousFocus),
     });
     if (!takeFocus) return;
     const frame = requestAnimationFrame(() => approvalDenyRef.current?.focus());
@@ -3426,8 +3427,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
       cancelAnimationFrame(frame);
       // A chat opened from the sidebar (an Inbox row, ⌘1–9) answers in the chat:
       // once the prompt resolves, focus stays with the composer.
-      if (previousFocus?.isConnected && !previousFocus.closest("[data-sidebar]")) {
-        requestAnimationFrame(() => previousFocus.focus());
+      if (previousFocus && !previousFocus.closest("[data-sidebar]")) {
+        requestAnimationFrame(() => returnFocus([previousFocus]));
       }
     };
   }, [pending?.approvalId]);

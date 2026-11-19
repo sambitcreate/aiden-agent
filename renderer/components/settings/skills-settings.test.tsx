@@ -34,11 +34,13 @@ function mount({
   skills = [],
   discovered = [],
   saveFails = false,
+  skillSaveFails = false,
 }: {
   settings?: Partial<AppSettings>;
   skills?: Skill[];
   discovered?: ReturnType<typeof discoveredSkill>[];
   saveFails?: boolean;
+  skillSaveFails?: boolean;
 } = {}) {
   let current: Partial<AppSettings> = { ...settings };
   const calls = installBotTestIpc({
@@ -49,6 +51,10 @@ function mount({
       return current;
     },
     "skills:list": () => skills,
+    "skills:save": (skill: unknown) => {
+      if (skillSaveFails) throw new Error("Couldn’t write the skill file.");
+      return skill;
+    },
     "skills:catalog": () => discovered,
     "workspaces:list": () => [WORKSPACE],
   });
@@ -95,6 +101,21 @@ test("a failed save leaves skills on", async () => {
   assert.equal(toggle.getAttribute("aria-checked"), "true");
   assert.equal(screen.queryByText(/Skills are off\./u) === null, true);
   await screen.findByText("Could not save");
+});
+
+test("a skill switch that fails to save says why and stays as it was", async () => {
+  mount({ skills: [ownSkill], skillSaveFails: true });
+  const row = await screen.findByRole("switch", { name: "Enable Reviewer" });
+  await waitFor(() => assert.equal(row.hasAttribute("disabled"), false));
+  fireEvent.click(row);
+  await screen.findByText("Couldn’t write the skill file.");
+  assert.equal(row.getAttribute("aria-checked"), "true");
+});
+
+test("each skill's delete button names its skill", async () => {
+  mount({ skills: [ownSkill, { ...ownSkill, id: "skill-two", name: "Writer" }] });
+  await screen.findByRole("button", { name: "Delete Reviewer" });
+  screen.getByRole("button", { name: "Delete Writer" });
 });
 
 test("eight discovered skills list without a search field", async () => {

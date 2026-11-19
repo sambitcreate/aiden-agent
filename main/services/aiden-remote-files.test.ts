@@ -341,9 +341,10 @@ test("lazy save reserves capacity before mutation and renews the returned handle
   assert.equal((await service.read("device", workspace.id, saved.id)).content, "new");
 });
 
-function lazyFixture(root: string) {
+function lazyFixture(root: string, options: { maxEntries?: number; maxEntriesPerDevice?: number; now?: () => number } = {}) {
   const workspace: Workspace = { id: "lazy", name: "Lazy", folderPath: root, permission: "ask", createdAt: 1, updatedAt: 2 };
-  const service = new AidenRemoteFileService({ instanceId: "instance", handles: new AidenOpaqueHandleStore(),
+  const handles = new AidenOpaqueHandleStore(options);
+  const service = new AidenRemoteFileService({ instanceId: "instance", handles, now: options.now,
     owners: new AidenRemoteWorkspaceOwnerRegistry(),
     application: createWorkspaceEnvironmentApplicationService({
       configStore: { getWorkspace: async () => workspace }, workspaceMutationGate: new WorkspaceMutationGate(),
@@ -351,7 +352,7 @@ function lazyFixture(root: string) {
       realpath: fs.realpath, stat: fs.stat,
     }),
   });
-  return { workspace, service };
+  return { workspace, service, handles };
 }
 
 const identityChanged = (error: unknown) =>
@@ -389,7 +390,7 @@ test("a lazy page fails closed when the root is replaced while the page is prepa
   const root = path.join(temporary, "workspace");
   await fs.mkdir(root);
   await fs.writeFile(path.join(root, "a.txt"), "a");
-  const { workspace, service } = lazyFixture(root);
+  const { workspace, service, handles } = lazyFixture(root);
   const original = fsPromises.lstat;
   let rootChecks = 0;
   fsPromises.lstat = (async (...args: Parameters<typeof fsPromises.lstat>) => {
@@ -404,6 +405,171 @@ test("a lazy page fails closed when the root is replaced while the page is prepa
   t.after(() => { fsPromises.lstat = original; syncBuiltinESMExports(); });
   await assert.rejects(service.children("device", workspace.id), identityChanged);
   assert.equal(rootChecks, 2);
+  assert.equal(handles.storedTokenMaterialForTesting().length, 0, "failed page assembly must roll back issued handles");
+});
+
+test("lazy folder browsing, continuation paging, and reopening past capacity keep opened and other-device handles working", { skip: process.platform !== "darwin" }, async (t) => {
+  const temporary = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-lazy-capacity-")));
+  t.after(() => fs.rm(temporary, { recursive: true, force: true }));
+  const root = path.join(temporary, "workspace");
+  await fs.mkdir(path.join(root, "Pinned"), { recursive: true });
+  await fs.writeFile(path.join(root, "Pinned", "Open.swift"), "let pinned = 1\n", "utf8");
+  for (let folder = 0; folder < 5; folder++) {
+    const dir = path.join(root, `Folder${folder}`);
+    await fs.mkdir(dir, { recursive: true });
+    for (let file = 0; file < 4; file++) {
+      await fs.writeFile(path.join(dir, `item${file}.txt`), `f${folder}-${file}`, "utf8");
+    }
+  }
+  const pagedDir = path.join(root, "Paged");
+  await fs.mkdir(pagedDir, { recursive: true });
+  await Promise.all(
+    Array.from({ length: 205 }, (_, index) => fs.writeFile(path.join(pagedDir, `p${index}.txt`), `page-${index}`, "utf8")),
+  );
+
+  // Frozen clock within a single TTL; device-1 gets 230 slots while paging/reopening issues >1,000 handles.
+  const now = 10_000;
+  const { workspace, service, handles } = lazyFixture(root, {
+    maxEntries: 250,
+    maxEntriesPerDevice: 230,
+    now: () => now,
+  });
+
+  // Device 2 lists root, expands Folder0, and opens a file: none of device-2's handles may be reclaimed by device-1.
+  const device2Root = await service.children("device-2", workspace.id);
+  const device2Folder0 = device2Root.entries.find((entry) => entry.name === "Folder0")!;
+  const device2Children = await service.children("device-2", workspace.id, device2Folder0.id);
+  const device2Opened = await service.read("device-2", workspace.id, device2Children.entries[0]!.id);
+  assert.equal(device2Opened.content, "f0-0");
+
+  // Device 1 opens Pinned/Open.swift before applying heavy lazy-browsing pressure.
+  let rootPage = await service.children("device-1", workspace.id);
+  const pinnedDir = rootPage.entries.find((entry) => entry.name === "Pinned")!;
+  const pinnedEntry = (await service.children("device-1", workspace.id, pinnedDir.id)).entries[0]!;
+  const openedPinned = await service.read("device-1", workspace.id, pinnedEntry.id);
+  assert.equal(openedPinned.content, "let pinned = 1\n");
+
+  // Browse all sibling folders, follow continuation pages in Paged, and reopen folders repeatedly (>1,200 handles issued).
+  for (let round = 0; round < 5; round++) {
+    rootPage = await service.children("device-1", workspace.id);
+    for (let folder = 0; folder < 5; folder++) {
+      const dir = rootPage.entries.find((entry) => entry.name === `Folder${folder}`)!;
+      const page = await service.children("device-1", workspace.id, dir.id);
+      assert.equal(page.entries.length, 4);
+    }
+    const paged = rootPage.entries.find((entry) => entry.name === "Paged")!;
+    const firstPage = await service.children("device-1", workspace.id, paged.id);
+    assert.equal(firstPage.entries.length, 200);
+    assert.ok(firstPage.nextCursor);
+    const secondPage = await service.children("device-1", workspace.id, paged.id, firstPage.nextCursor);
+    assert.equal(secondPage.entries.length, 5);
+    assert.equal(secondPage.nextCursor, undefined);
+    // Continuation stayed in the same generation: both the final page and recent entries from page 1 still resolve.
+    assert.match((await service.read("device-1", workspace.id, secondPage.entries[0]!.id)).content, /^page-/u);
+    assert.equal(handles.storedTokenMaterialForTesting().length <= 250, true);
+  }
+
+  // Previously opened file handle still reads and saves, and the rotated save handle survives further pressure.
+  assert.equal((await service.read("device-1", workspace.id, pinnedEntry.id)).content, "let pinned = 1\n");
+  const savedPinned = await service.write("device-1", workspace.id, pinnedEntry.id, {
+    content: "let pinned = 2\n",
+    expectedVersion: openedPinned.version,
+  });
+  rootPage = await service.children("device-1", workspace.id);
+  const pagedAgain = rootPage.entries.find((entry) => entry.name === "Paged")!;
+  await service.children("device-1", workspace.id, pagedAgain.id);
+  assert.equal((await service.read("device-1", workspace.id, savedPinned.id)).content, "let pinned = 2\n");
+
+  // Device 2's live unopened handles, directory handle, and opened file handle remain untouched.
+  assert.equal((await service.read("device-2", workspace.id, device2Opened.id)).content, "f0-0");
+  assert.equal((await service.read("device-2", workspace.id, device2Children.entries[1]!.id)).content, "f0-1");
+  assert.equal((await service.children("device-2", workspace.id, device2Folder0.id)).entries.length, 4);
+});
+
+test("in-flight file reads stay pinned under concurrent lazy browsing and genuine protected exhaustion returns 429 cleanly", { skip: process.platform !== "darwin" }, async (t) => {
+  const temporary = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-lazy-inflight-")));
+  t.after(() => fs.rm(temporary, { recursive: true, force: true }));
+  const root = path.join(temporary, "workspace");
+  await fs.mkdir(path.join(root, "A"), { recursive: true });
+  await fs.mkdir(path.join(root, "B"), { recursive: true });
+  await fs.writeFile(path.join(root, "root-note.txt"), "root-note", "utf8");
+  await fs.writeFile(path.join(root, "A", "target.txt"), "target", "utf8");
+  for (let i = 0; i < 5; i++) {
+    await fs.writeFile(path.join(root, "B", `b${i}.txt`), `b-${i}`, "utf8");
+  }
+
+  const now = 5_000;
+  let holdReadGate: Promise<void> | undefined;
+  let releaseReadGate!: () => void;
+  let notifyReadEntered!: () => void;
+  const readEntered = new Promise<void>((resolve) => { notifyReadEntered = resolve; });
+  const workspace: Workspace = { id: "lazy", name: "Lazy", folderPath: root, permission: "ask", createdAt: 1, updatedAt: 2 };
+  const handles = new AidenOpaqueHandleStore({ maxEntries: 6, maxEntriesPerDevice: 6, now: () => now });
+  const realApp = createWorkspaceEnvironmentApplicationService({
+    configStore: { getWorkspace: async () => workspace },
+    workspaceMutationGate: new WorkspaceMutationGate(),
+    workspaceOperationRegistry: new WorkspaceOperationRegistry(),
+    assertManagedWorktreeAdmission: async () => undefined,
+    realpath: fs.realpath,
+    stat: fs.stat,
+  });
+  let gatedCalls = 0;
+  const service = new AidenRemoteFileService({
+    instanceId: "instance",
+    handles,
+    now: () => now,
+    owners: new AidenRemoteWorkspaceOwnerRegistry(),
+    application: {
+      run: async (owner, workspaceId, action) => {
+        if (holdReadGate && ++gatedCalls === 1) {
+          notifyReadEntered();
+          await holdReadGate;
+        }
+        return realApp.run(owner, workspaceId, action);
+      },
+    },
+  });
+
+  const rootEntries = (await service.children("device-1", workspace.id)).entries;
+  const dirA = rootEntries.find((entry) => entry.name === "A")!;
+  const dirB = rootEntries.find((entry) => entry.name === "B")!;
+  const rootNote = rootEntries.find((entry) => entry.name === "root-note.txt")!;
+  await service.read("device-1", workspace.id, rootNote.id);
+  const targetEntry = (await service.children("device-1", workspace.id, dirA.id)).entries[0]!;
+
+  // Start read(targetEntry.id) and pause it BEFORE handle.resolve() marks it protectedDocument.
+  // Without in-flight pinning on targetEntry.id, dirB (1) + 4 more files would evict targetEntry.id;
+  // with pinning, rootNote (1 protected) + targetEntry (1 pinned) + dirB (1 pinned) + B (5 files) = 8 > 6 -> 429 and rollback!
+  holdReadGate = new Promise<void>((resolve) => { releaseReadGate = resolve; });
+  const pendingRead = service.read("device-1", workspace.id, targetEntry.id);
+  await readEntered;
+
+  await assert.rejects(
+    () => service.children("device-1", workspace.id, dirB.id),
+    (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "handle_capacity" && error.status === 429,
+  );
+  releaseReadGate();
+  assert.equal((await pendingRead).content, "target");
+
+  // Fill 5 of the 6 slots with protected opened documents (rootNote + targetEntry + 3 files in B).
+  holdReadGate = undefined;
+  await fs.rm(path.join(root, "B", "b3.txt"));
+  await fs.rm(path.join(root, "B", "b4.txt"));
+  const freshRoot = await service.children("device-1", workspace.id);
+  const freshDirB = freshRoot.entries.find((entry) => entry.name === "B")!;
+  const bFiles = (await service.children("device-1", workspace.id, freshDirB.id)).entries;
+  assert.equal(bFiles.length, 3);
+  for (const entry of bFiles) {
+    await service.read("device-1", workspace.id, entry.id);
+  }
+  // Root has 3 entries while only 1 slot remains free (5 protected): listing rejects with 429 and rolls back partial handles.
+  await assert.rejects(
+    () => service.children("device-1", workspace.id),
+    (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "handle_capacity" && error.status === 429,
+  );
+  assert.equal(handles.storedTokenMaterialForTesting().length, 5);
+  assert.equal((await service.read("device-1", workspace.id, rootNote.id)).content, "root-note");
+  assert.equal((await service.read("device-1", workspace.id, targetEntry.id)).content, "target");
 });
 
 async function legacyFixture(t: test.TestContext, count: number, capacity = 10_000) {

@@ -30,8 +30,6 @@ export function createRenderScheduler(
   };
 }
 
-export type RenderScheduler = ReturnType<typeof createRenderScheduler>;
-
 export type PhoneNavigation =
   | { readonly type: "orbit"; readonly x: number; readonly y: number }
   | { readonly type: "zoom"; readonly delta: number };

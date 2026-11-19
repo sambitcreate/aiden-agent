@@ -73,6 +73,12 @@ export interface TelegramControlStatus {
   thinkingLevel: GenerationThinkingLevel;
   queueCount: number;
   active: boolean;
+  /** Durable Bot session status label (for example "working", "idle", "paused"). */
+  statusLabel?: string;
+  /** True when this route is backed by a durable Bot session (`botIngress`). */
+  durableBot?: boolean;
+  /** Running durable submission ID, used to fence the menu's Stop button to that exact turn. */
+  activeSubmissionId?: string;
   workspaceLabel: string;
   lastError?: string;
   extensionRows?: readonly string[];
@@ -95,15 +101,25 @@ export function commandArgument(text: string): string {
 }
 
 export function buildStatusText(status: TelegramControlStatus): string {
+  const statusLabel = status.statusLabel ?? (status.active ? "working" : "idle");
+  const queueSummary = status.durableBot
+    ? status.queueCount > 0
+      ? `managed in Bot session (${status.queueCount} buffering album${status.queueCount === 1 ? "" : "s"})`
+      : "managed in Bot session"
+    : String(status.queueCount);
   return [
     "🤖 <b>Aiden Telegram Agent</b>",
     "",
     `<b>Bot:</b> @${escapeHtml(status.botUsername ?? "unknown")}`,
     `<b>Paired owner:</b> <code>${status.allowedUserId ?? "none"}</code>`,
-    `<b>Status:</b> ${status.active ? "working" : "idle"}`,
-    `<b>Model:</b> <code>${escapeHtml(status.providerLabel ?? status.providerId ?? "not configured")}/${escapeHtml(status.model ?? "—")}</code>`,
-    `<b>Thinking:</b> <code>${status.thinkingLevel}</code>`,
-    `<b>Queue:</b> ${status.queueCount}`,
+    `<b>Status:</b> ${escapeHtml(statusLabel)}`,
+    ...(status.durableBot
+      ? ["<b>Model:</b> managed in Bot settings"]
+      : [
+          `<b>Model:</b> <code>${escapeHtml(status.providerLabel ?? status.providerId ?? "not configured")}/${escapeHtml(status.model ?? "—")}</code>`,
+          `<b>Thinking:</b> <code>${status.thinkingLevel}</code>`,
+        ]),
+    `<b>Queue:</b> ${escapeHtml(queueSummary)}`,
     `<b>Workspace:</b> ${escapeHtml(status.workspaceLabel)}`,
     ...(status.lastError ? [`<b>Last error:</b> ${escapeHtml(status.lastError)}`] : []),
     ...(status.extensionRows ?? []).map((row) => escapeHtml(row)),
@@ -111,6 +127,44 @@ export function buildStatusText(status: TelegramControlStatus): string {
 }
 
 export function buildMainMenu(status: TelegramControlStatus): TelegramInlineKeyboardMarkup {
+  if (status.durableBot) {
+    const stopCallback = status.activeSubmissionId
+      ? `turn:stop:${status.activeSubmissionId}`
+      : "turn:stop";
+    return {
+      inline_keyboard: [
+        [
+          {
+            text: "⏳ Follow-ups",
+            callback_data: "menu:queue",
+          },
+        ],
+        [
+          {
+            text: `🗂 Workspace: ${truncate(status.workspaceLabel, 40)}`,
+            callback_data: "menu:workspace",
+          },
+        ],
+        [
+          { text: "🗜 Compact", callback_data: "compact:ask" },
+          { text: "⚙️ Settings", callback_data: "menu:settings" },
+        ],
+        ...(status.active
+          ? [
+              [
+                { text: "🛑 Stop (withdraws follow-ups)", callback_data: stopCallback },
+              ],
+            ]
+          : []),
+        ...(status.extensionSections ?? []).map((section) => [
+          {
+            text: section.label,
+            callback_data: section.callbackData,
+          },
+        ]),
+      ],
+    };
+  }
   const active = status.providerLabel ?? status.providerId ?? "not configured";
   return {
     inline_keyboard: [
@@ -215,6 +269,33 @@ export function buildThinkingMenu(
             callback_data: `thinking:set:${level}`,
           },
         ]),
+      ],
+    },
+  };
+}
+
+export function buildDurableBotQueueMenu(pendingAlbums = 0): {
+  text: string;
+  markup: TelegramInlineKeyboardMarkup;
+} {
+  return {
+    text: [
+      "<b>⏳ Bot follow-ups</b>",
+      "",
+      "Follow-ups sent with <code>/queue &lt;prompt&gt;</code> or <code>/continue</code> enter this Bot's durable session.",
+      ...(pendingAlbums > 0
+        ? [
+            "",
+            `${pendingAlbums} media album${pendingAlbums === 1 ? " is" : "s are"} currently buffering before admission.`,
+          ]
+        : []),
+      "",
+      "Per-item queue inspection, priority reordering, and clearing only queued items are unavailable from Telegram. Manage individual queued messages in Aiden, or use <code>/stop</code> to stop the active reply and withdraw queued follow-ups.",
+    ].join("\n"),
+    markup: {
+      inline_keyboard: [
+        [{ text: "⬆️ Main menu", callback_data: "menu:back" }],
+        [{ text: "🌀 Refresh", callback_data: "menu:queue" }],
       ],
     },
   };

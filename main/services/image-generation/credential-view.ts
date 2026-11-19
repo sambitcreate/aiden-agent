@@ -1,8 +1,5 @@
 import type { Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
-import {
-  IMAGE_GENERATION_PROVIDER_IDS,
-  isImageGenerationProviderId,
-} from "../../../renderer/shared/image-generation/types.js";
+import { isImageGenerationProviderId } from "../../../renderer/shared/image-generation/types.js";
 
 /**
  * Stored-id prefix for image-generation keys. It deliberately never equals an
@@ -54,8 +51,3 @@ export function createImageCredentialView(base: CredentialStore): CredentialStor
     },
   };
 }
-
-/** Every stored id the view can own, for resets. */
-export const IMAGE_CREDENTIAL_STORED_IDS: readonly string[] = IMAGE_GENERATION_PROVIDER_IDS.map(
-  imageCredentialStoredId,
-);

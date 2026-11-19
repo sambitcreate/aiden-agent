@@ -54,6 +54,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
@@ -282,25 +284,37 @@ fun AidenBotProfileScreen(
         saveHost.launch { ed.edit(patch) }
     }
 
+    // Counts photo picks so a slow read of an earlier pick cannot replace a later one.
+    val photoPicks = remember { java.util.concurrent.atomic.AtomicLong() }
+    val photoUploads = remember { Mutex() }
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        val current = bot ?: return@rememberLauncherForActivityResult
+        val currentBot = bot ?: return@rememberLauncherForActivityResult
         if (uri == null) return@rememberLauncherForActivityResult
+        val pick = photoPicks.incrementAndGet()
         scope.launch {
-            try {
-                avatarModel.setCandidate(aidenReadPickedPhoto(context, uri))
+            val current = try {
+                val bytes = aidenReadPickedPhoto(context, uri)
+                if (pick != photoPicks.get()) return@launch
+                avatarModel.setCandidate(bytes)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: AidenBotGeneratedAvatarError) {
-                actionError = e.messageText
+                if (pick == photoPicks.get()) actionError = e.messageText
                 return@launch
             } catch (_: Exception) {
-                actionError = AidenBotGeneratedAvatarError.InvalidImage.messageText
+                if (pick == photoPicks.get()) actionError = AidenBotGeneratedAvatarError.InvalidImage.messageText
                 return@launch
             }
-            if (avatarModel.hasCandidate) {
-                avatarModel.uploadAvatar(current.id, aidenBotAvatarExpectedRevision(current)) { updated ->
-                    scope.launch { accept(updated, confirmed = true) }
-                }
+            // A later pick superseded this one, or it failed; only the latest selection uploads.
+            if (!current) return@launch
+            // One upload at a time: a pick made during an upload waits for it, then uploads against
+            // the Bot that upload left, so the latest photo is the one the Mac keeps.
+            photoUploads.withLock {
+                if (pick != photoPicks.get() || !avatarModel.hasCandidate) return@withLock
+                val target = bot ?: currentBot
+                var updated: AidenBotDetail? = null
+                avatarModel.uploadAvatar(target.id, avatarModel.expectedAvatarRevision(target)) { updated = it }
+                updated?.let { accept(it, confirmed = true) }
             }
         }
     }
@@ -471,7 +485,7 @@ fun AidenBotProfileScreen(
                                 onClick = {
                                     showPhotoMenu = false
                                     scope.launch {
-                                        avatarModel.deleteAvatar(current.id, aidenBotAvatarExpectedRevision(current)) { updated ->
+                                        avatarModel.deleteAvatar(current.id, avatarModel.expectedAvatarRevision(current)) { updated ->
                                             scope.launch { accept(updated, confirmed = true) }
                                         }
                                     }

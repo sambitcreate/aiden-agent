@@ -41,17 +41,49 @@ export class AidenOpaqueHandleError extends Error {
   }
 }
 
+export interface AidenOpaqueHandleIssueOptions {
+  /** Scope of the listing that issued this handle, e.g. one device's view of one workspace or directory. */
+  listing?: string;
+  /** Generation identifier for a multi-page lazy directory listing (`snapshotId`). */
+  generation?: string;
+  /** Marks lazy `children()` file and continuation-cursor handles eligible for per-device LRU reclamation. */
+  lazyPage?: boolean;
+  /** Marks reserved/save-result document handles protected from pressure reclamation until expiry. */
+  protectedDocument?: boolean;
+}
+
+export interface AidenOpaqueHandleResolveOptions {
+  consume?: boolean;
+  now?: number;
+  /** Validates directory/cursor navigation without promoting the handle to an immortal opened document. */
+  navigation?: boolean;
+}
+
+export interface AidenOpaqueHandleBatch {
+  issue(kind: AidenOpaqueHandleKind, claims: AidenOpaqueHandleClaims, options?: AidenOpaqueHandleIssueOptions): string;
+  commit(): void;
+  dispose(): void;
+}
+
 interface StoredHandle {
   kind: AidenOpaqueHandleKind;
   claims: AidenOpaqueHandleClaims;
-  /** Scope of the listing that issued this handle, e.g. one device's view of one workspace. */
+  /** Scope of the listing that issued this handle, e.g. one device's view of one workspace or directory. */
   listing?: string;
+  /** Generation of a multi-page lazy directory listing (`snapshotId`). */
+  generation?: string;
+  /** True only for lazy `children()` file and continuation-cursor handles. */
+  lazyPage?: boolean;
   superseded?: boolean;
-  resolved?: boolean;
+  protectedDocument?: boolean;
 }
 
 function digest(token: string): string {
   return createHash("sha256").update(token).digest("base64url");
+}
+
+function isOpaqueTokenSyntax(token: string): boolean {
+  return /^(?:loc|cur|sel|file)_[A-Za-z0-9_-]{43}$/u.test(token);
 }
 
 const DEFAULT_MAX_ENTRIES = 10_000;
@@ -65,8 +97,14 @@ export class AidenOpaqueHandleStore {
   private readonly deviceCounts = new Map<string, number>();
   /** Handles issued by the newest listing of each scope, by digest. */
   private readonly listings = new Map<string, Set<string>>();
-  /** Superseded handles never resolved: the first reclaimed when full. */
-  private readonly reclaimable = new Set<string>();
+  /** Handles issued by each active lazy directory generation (`snapshotId`), by digest. */
+  private readonly generations = new Map<string, Set<string>>();
+  /** Per-device superseded eligible handles, ordered oldest-superseded first. */
+  private readonly deviceReclaimable = new Map<string, Set<string>>();
+  /** Per-device live eligible lazy-page handles, ordered least-recently-used first. */
+  private readonly deviceLazyLru = new Map<string, Set<string>>();
+  /** Active in-flight operation and page-assembly pin counts by handle digest. */
+  private readonly inFlightCounts = new Map<string, number>();
   private nextSweepAt = Number.NEGATIVE_INFINITY;
   private lastSweepAt = Number.NEGATIVE_INFINITY;
 
@@ -86,12 +124,24 @@ export class AidenOpaqueHandleStore {
     return this.options.now?.() ?? Date.now();
   }
 
+  private isProtected(key: string, stored: StoredHandle): boolean {
+    return Boolean(stored.protectedDocument) || (this.inFlightCounts.get(key) ?? 0) > 0;
+  }
+
+  private deleteFromDeviceSet(index: Map<string, Set<string>>, deviceId: string, key: string): void {
+    const set = index.get(deviceId);
+    if (!set) return;
+    set.delete(key);
+    if (set.size === 0) index.delete(deviceId);
+  }
+
   private remove(key: string): void {
     const stored = this.handles.get(key);
     if (!stored) return;
     this.handles.delete(key);
-    this.reclaimable.delete(key);
     const deviceId = stored.claims.deviceId;
+    this.deleteFromDeviceSet(this.deviceReclaimable, deviceId, key);
+    this.deleteFromDeviceSet(this.deviceLazyLru, deviceId, key);
     const count = (this.deviceCounts.get(deviceId) ?? 1) - 1;
     if (count > 0) this.deviceCounts.set(deviceId, count);
     else this.deviceCounts.delete(deviceId);
@@ -99,6 +149,11 @@ export class AidenOpaqueHandleStore {
       const issued = this.listings.get(stored.listing);
       issued?.delete(key);
       if (issued?.size === 0) this.listings.delete(stored.listing);
+    }
+    if (stored.generation) {
+      const gen = this.generations.get(stored.generation);
+      gen?.delete(key);
+      if (gen?.size === 0) this.generations.delete(stored.generation);
     }
   }
 
@@ -109,10 +164,19 @@ export class AidenOpaqueHandleStore {
    * outstanding handle per call.
    */
   private sweep(now: number): void {
-    this.lastSweepAt = now;
-    this.nextSweepAt = now + SWEEP_INTERVAL_MS;
+    let skippedInFlight = false;
     for (const [key, stored] of this.handles) {
-      if (stored.claims.expiresAt <= now) this.remove(key);
+      if (stored.claims.expiresAt <= now) {
+        if ((this.inFlightCounts.get(key) ?? 0) > 0) {
+          skippedInFlight = true;
+          continue;
+        }
+        this.remove(key);
+      }
+    }
+    if (!skippedInFlight) {
+      this.lastSweepAt = now;
+      this.nextSweepAt = now + SWEEP_INTERVAL_MS;
     }
   }
 
@@ -121,16 +185,97 @@ export class AidenOpaqueHandleStore {
       this.handles.size >= this.maxEntries ||
       (this.deviceCounts.get(deviceId) ?? 0) >= this.maxEntriesPerDevice;
     if (!full()) return;
-    // A device that reaches its own quota gives back only its own handles.
-    const deviceFull = (this.deviceCounts.get(deviceId) ?? 0) >= this.maxEntriesPerDevice;
-    for (const key of [...this.reclaimable]) {
-      if (!deviceFull || this.handles.get(key)?.claims.deviceId === deviceId) this.remove(key);
+    // 1. Prune expired entries first (consumed entries are removed immediately on use).
+    if (now > this.lastSweepAt) this.sweep(now);
+    if (!full()) return;
+    // 2. Reclaim superseded eligible entries belonging to the requesting device.
+    const superseded = this.deviceReclaimable.get(deviceId);
+    if (superseded) {
+      for (const key of [...superseded]) {
+        const stored = this.handles.get(key);
+        if (!stored) {
+          this.deleteFromDeviceSet(this.deviceReclaimable, deviceId, key);
+          continue;
+        }
+        if (this.isProtected(key, stored)) continue;
+        this.remove(key);
+        if (!full()) return;
+      }
     }
-    if (full() && now > this.lastSweepAt) this.sweep(now);
+    // 3. Reclaim least-recently-used eligible lazy-page handles belonging to the requesting device.
+    const lazyLru = this.deviceLazyLru.get(deviceId);
+    if (lazyLru) {
+      for (const key of [...lazyLru]) {
+        const stored = this.handles.get(key);
+        if (!stored) {
+          this.deleteFromDeviceSet(this.deviceLazyLru, deviceId, key);
+          continue;
+        }
+        if (this.isProtected(key, stored)) continue;
+        this.remove(key);
+        if (!full()) return;
+      }
+    }
     if (full()) throw new AidenOpaqueHandleError("handle_capacity");
   }
 
-  issue(kind: AidenOpaqueHandleKind, claims: AidenOpaqueHandleClaims, options: { listing?: string } = {}): string {
+  /**
+   * Protects an existing handle from pressure reclamation while an asynchronous
+   * file or directory operation is in flight.
+   */
+  pin(token: string | undefined): () => void {
+    if (!token || !isOpaqueTokenSyntax(token)) return () => undefined;
+    const key = digest(token);
+    this.inFlightCounts.set(key, (this.inFlightCounts.get(key) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const next = (this.inFlightCounts.get(key) ?? 1) - 1;
+      if (next > 0) this.inFlightCounts.set(key, next);
+      else this.inFlightCounts.delete(key);
+    };
+  }
+
+  /**
+   * Assembles a page of handles atomically with respect to pressure reclamation:
+   * incoming navigation tokens and every newly issued handle (including the
+   * outgoing cursor) stay pinned until `commit()`, and `dispose()` rolls back
+   * newly issued handles if assembly fails or cancels before `commit()`.
+   */
+  beginBatch(pinnedTokens: ReadonlyArray<string | undefined> = []): AidenOpaqueHandleBatch {
+    const pinnedReleases = pinnedTokens.map((token) => this.pin(token));
+    const issued: Array<{ token: string; release: () => void }> = [];
+    let committed = false;
+    let disposed = false;
+    const releaseAll = () => {
+      for (const release of pinnedReleases) release();
+      for (const entry of issued) entry.release();
+    };
+    return {
+      issue: (kind, claims, options = {}) => {
+        if (disposed || committed) throw new AidenOpaqueHandleError("handle_invalid");
+        const token = this.issue(kind, claims, options);
+        issued.push({ token, release: this.pin(token) });
+        return token;
+      },
+      commit: () => {
+        if (disposed) return;
+        committed = true;
+        releaseAll();
+      },
+      dispose: () => {
+        if (disposed) return;
+        disposed = true;
+        releaseAll();
+        if (!committed) {
+          for (const entry of issued) this.discard(entry.token);
+        }
+      },
+    };
+  }
+
+  issue(kind: AidenOpaqueHandleKind, claims: AidenOpaqueHandleClaims, options: AidenOpaqueHandleIssueOptions = {}): string {
     const now = this.now();
     if (claims.expiresAt <= now) throw new AidenOpaqueHandleError("handle_expired");
     if (kind === "file" && !claims.workspaceId) throw new AidenOpaqueHandleError("handle_invalid");
@@ -139,7 +284,12 @@ export class AidenOpaqueHandleStore {
     const token = `${kind}_${randomBytes(32).toString("base64url")}`;
     const key = digest(token);
     this.handles.set(key, {
-      kind, claims: { ...claims }, ...(options.listing ? { listing: options.listing } : {}),
+      kind,
+      claims: { ...claims },
+      ...(options.listing ? { listing: options.listing } : {}),
+      ...(options.generation ? { generation: options.generation } : {}),
+      ...(options.lazyPage ? { lazyPage: true } : {}),
+      ...(options.protectedDocument ? { protectedDocument: true } : {}),
     });
     this.deviceCounts.set(claims.deviceId, (this.deviceCounts.get(claims.deviceId) ?? 0) + 1);
     if (options.listing) {
@@ -147,15 +297,37 @@ export class AidenOpaqueHandleStore {
       if (!issued) this.listings.set(options.listing, (issued = new Set()));
       issued.add(key);
     }
+    if (options.generation) {
+      let gen = this.generations.get(options.generation);
+      if (!gen) this.generations.set(options.generation, (gen = new Set()));
+      gen.add(key);
+    }
+    if (options.lazyPage && !options.protectedDocument) {
+      let lru = this.deviceLazyLru.get(claims.deviceId);
+      if (!lru) this.deviceLazyLru.set(claims.deviceId, (lru = new Set()));
+      lru.add(key);
+    }
     return token;
+  }
+
+  private markSuperseded(key: string): void {
+    const stored = this.handles.get(key);
+    if (!stored) return;
+    stored.superseded = true;
+    const deviceId = stored.claims.deviceId;
+    this.deleteFromDeviceSet(this.deviceLazyLru, deviceId, key);
+    if (!stored.protectedDocument) {
+      let reclaimable = this.deviceReclaimable.get(deviceId);
+      if (!reclaimable) this.deviceReclaimable.set(deviceId, (reclaimable = new Set()));
+      reclaimable.add(key);
+    }
   }
 
   /**
    * A new listing for `listing` supersedes the handles earlier listings of it
    * issued. They keep working, but once the store (or the device's share of
-   * it) is full those never resolved are reclaimed first (a document the
-   * client opened has been resolved), so re-listing cannot lock the device out
-   * until the old handles expire.
+   * it) is full those never opened as documents are reclaimed first, so
+   * re-listing cannot lock the device out until the old handles expire.
    */
   supersedeListing(listing: string): void {
     const issued = this.listings.get(listing);
@@ -164,17 +336,46 @@ export class AidenOpaqueHandleStore {
     for (const key of issued) {
       const stored = this.handles.get(key);
       if (!stored) continue;
-      stored.superseded = true;
-      if (!stored.resolved) this.reclaimable.add(key);
+      if (stored.generation) {
+        const gen = this.generations.get(stored.generation);
+        gen?.delete(key);
+        if (gen?.size === 0) this.generations.delete(stored.generation);
+      }
+      this.markSuperseded(key);
+    }
+  }
+
+  /**
+   * Retires one lazy directory generation (for example when its unfinished
+   * server-cached inventory expires or is evicted) without disturbing newer
+   * generations of the same directory or opened-document handles.
+   */
+  retireGeneration(generation: string): void {
+    const gen = this.generations.get(generation);
+    if (!gen) return;
+    this.generations.delete(generation);
+    for (const key of gen) {
+      const stored = this.handles.get(key);
+      if (!stored) continue;
+      if (stored.listing) {
+        const issued = this.listings.get(stored.listing);
+        issued?.delete(key);
+        if (issued?.size === 0) this.listings.delete(stored.listing);
+      }
+      this.markSuperseded(key);
     }
   }
 
   /** Reserve before a save, then bind the same slot to its installed inode. */
   updateReservedFileIdentity(token: string, device: string, inode: string): void {
-    const stored = this.handles.get(digest(token));
+    const key = digest(token);
+    const stored = this.handles.get(key);
     if (!stored || stored.kind !== "file") throw new AidenOpaqueHandleError("handle_invalid");
     stored.claims.filesystemDevice = device;
     stored.claims.filesystemInode = inode;
+    stored.protectedDocument = true;
+    this.deleteFromDeviceSet(this.deviceReclaimable, stored.claims.deviceId, key);
+    this.deleteFromDeviceSet(this.deviceLazyLru, stored.claims.deviceId, key);
   }
 
   discard(token: string): void {
@@ -203,7 +404,7 @@ export class AidenOpaqueHandleStore {
     token: string,
     expectedKind: AidenOpaqueHandleKind,
     current: AidenOpaqueHandleClaims,
-    options: { consume?: boolean; now?: number } = {},
+    options: AidenOpaqueHandleResolveOptions = {},
   ): AidenOpaqueHandleClaims {
     if (!new RegExp(`^${expectedKind}_[A-Za-z0-9_-]{43}$`).test(token)) {
       throw new AidenOpaqueHandleError("handle_invalid");
@@ -247,10 +448,23 @@ export class AidenOpaqueHandleStore {
     ) {
       throw new AidenOpaqueHandleError("filesystem_identity_changed");
     }
-    stored.resolved = true;
-    this.reclaimable.delete(tokenDigest);
     // A consumed handle is gone: any later use is simply an unknown handle.
-    if (options.consume) this.remove(tokenDigest);
+    if (options.consume) {
+      this.remove(tokenDigest);
+      return { ...claims };
+    }
+    if (options.navigation) {
+      if (stored.lazyPage && !stored.protectedDocument && !stored.superseded) {
+        let lru = this.deviceLazyLru.get(claims.deviceId);
+        if (!lru) this.deviceLazyLru.set(claims.deviceId, (lru = new Set()));
+        lru.delete(tokenDigest);
+        lru.add(tokenDigest);
+      }
+    } else {
+      stored.protectedDocument = true;
+      this.deleteFromDeviceSet(this.deviceReclaimable, claims.deviceId, tokenDigest);
+      this.deleteFromDeviceSet(this.deviceLazyLru, claims.deviceId, tokenDigest);
+    }
     return { ...claims };
   }
 

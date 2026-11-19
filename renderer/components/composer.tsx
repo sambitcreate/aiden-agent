@@ -69,14 +69,30 @@ import { browserAnnotationDelivery } from "../lib/browser-annotation-delivery";
 import { composerImageAttach } from "../lib/composer-attach";
 import type { BrowserAnnotation } from "../shared/browser";
 import { applyDictationDictionary, parseDictationDictionary } from "../shared/dictation-dictionary";
-import { useDiscoveredSkills, useProviders, useSettings } from "../lib/queries";
+import { useDiscoveredSkills, useProviders, useSettings, useWorkspaceFileIndex } from "../lib/queries";
+import {
+  addMention,
+  findMentionTrigger,
+  messageWithMentions,
+  rankMentionCandidates,
+  removeMentionTrigger,
+  type ComposerMention,
+  type MentionCandidate,
+} from "../lib/composer-mentions";
+import { useLayer } from "../lib/layer-stack";
+import {
+  COMPOSER_MENTION_PICKER_ID,
+  ComposerMentionChips,
+  ComposerMentionPicker,
+  mentionOptionId,
+} from "./composer-mention-picker";
 import { isUsable } from "../lib/model-picker-data";
 import { openWorkspaceSettings } from "./workspace-settings-dialog";
 import { aidenLivePreferences } from "../shared/aiden-live-settings";
 import {
-  APPROVAL_MODE_HELP,
   APPROVAL_MODE_LABELS,
   APPROVAL_MODES,
+  approvalModeHelp,
   effectiveApprovalMode,
   workspaceApprovalPolicy,
   type ApprovalMode,
@@ -161,6 +177,8 @@ import { isNoWorkspace, NO_WORKSPACE_LABEL } from "../lib/no-workspace";
 
 import { useAppCapabilities } from "../lib/app-capabilities";
 import { localComputerNoun } from "../shared/computer-noun";
+import { isComposingKey, isEscapeKey } from "../lib/dismiss-key";
+
 const CLIPBOARD_IMAGE_MIME_TYPES = new Set([
   "image/png",
   "image/jpeg",
@@ -539,6 +557,8 @@ export function Composer({
     dispatchDraft({ type: "dismiss-slash" });
   }, []);
   const [attachments, setAttachments] = React.useState<Attachment[]>([]);
+  // `@` mentions picked into chips above the text; send writes them first, as `@path`.
+  const [mentions, setMentions] = React.useState<ComposerMention[]>([]);
   const attachmentsRef = React.useRef<Attachment[]>([]);
   const updateAttachments = React.useCallback((value: React.SetStateAction<Attachment[]>) => {
     const next = typeof value === "function" ? value(attachmentsRef.current) : value;
@@ -805,7 +825,7 @@ export function Composer({
   // While live words show, the draft on screen is not the draft that would be
   // sent, so sending waits for the final text.
   const canSend =
-    (text.trim().length > 0 || attachments.length > 0 || commentTray !== null) &&
+    (text.trim().length > 0 || attachments.length > 0 || mentions.length > 0 || commentTray !== null) &&
     submissionAllowed &&
     !composing &&
     !dictationPreviewing &&
@@ -1015,6 +1035,103 @@ export function Composer({
       ? activeSlashId
       : selectableSlashIds[0]
     : undefined;
+
+  // `@` lists this workspace's files; the folder must be readable, as it is for the Files panel.
+  const mentionWorkspaceId =
+    surfaces.localContext &&
+    workspace?.folderPath &&
+    !isNoWorkspace(workspace) &&
+    workspace.permission !== "none"
+      ? workspace.id
+      : undefined;
+  React.useEffect(() => {
+    setMentions((current) => (current.length ? [] : current));
+  }, [mentionWorkspaceId]);
+  // The `@` whose picker Escape or a blur closed; typing on in that token keeps it closed.
+  const [mentionDismissedAt, setMentionDismissedAt] = React.useState<number | null>(null);
+  const [activeMentionIndex, setActiveMentionIndex] = React.useState(0);
+  const [mentionAnnouncement, setMentionAnnouncement] = React.useState("");
+  const mentionTrigger = React.useMemo(() => {
+    if (
+      !mentionWorkspaceId ||
+      slashSession ||
+      slashPaletteBlocked ||
+      composing ||
+      composerInputLocked ||
+      dictationPreviewing ||
+      selection.start !== selection.end ||
+      // A slash command (/btw, /visualize, …) is sent without the chips, so `@` stays text there.
+      (surfaces.slashCommands && parseSubmittedSlashCommand(text, slashCommands))
+    )
+      return null;
+    const trigger = findMentionTrigger(text, selection.start);
+    return trigger && trigger.start !== mentionDismissedAt ? trigger : null;
+  }, [
+    composerInputLocked,
+    composing,
+    dictationPreviewing,
+    mentionDismissedAt,
+    mentionWorkspaceId,
+    selection.end,
+    selection.start,
+    slashCommands,
+    slashPaletteBlocked,
+    slashSession,
+    surfaces.slashCommands,
+    text,
+  ]);
+  // Deleting the `@` forgets its Escape, so a new one there opens the picker.
+  React.useEffect(() => {
+    if (mentionDismissedAt !== null && findMentionTrigger(text, mentionDismissedAt + 1)?.start !== mentionDismissedAt) {
+      setMentionDismissedAt(null);
+    }
+  }, [mentionDismissedAt, text]);
+  const mentionFiles = useWorkspaceFileIndex(mentionWorkspaceId, Boolean(mentionTrigger));
+  const mentionQuery = mentionTrigger?.query;
+  const mentionCandidates = React.useMemo(
+    () =>
+      mentionQuery !== undefined && mentionFiles.data
+        ? rankMentionCandidates(
+            mentionFiles.data.entries.filter(
+              (entry) => !mentions.some((mention) => mention.path === entry.path),
+            ),
+            mentionQuery,
+          )
+        : [],
+    [mentionFiles.data, mentionQuery, mentions],
+  );
+  React.useEffect(() => {
+    setActiveMentionIndex(0);
+  }, [mentionQuery, mentionTrigger?.start]);
+  const effectiveMentionIndex = Math.min(activeMentionIndex, mentionCandidates.length - 1);
+  const activeMention = effectiveMentionIndex >= 0 ? mentionCandidates[effectiveMentionIndex] : undefined;
+  useLayer(Boolean(mentionTrigger), "popover", {
+    name: "composer-mentions",
+    onEscape: (event) => {
+      if (!mentionTrigger) return;
+      event.preventDefault();
+      setMentionDismissedAt(mentionTrigger.start);
+    },
+  });
+  // A pick takes the typed `@query` out of the text and becomes one chip.
+  const pickMention = (candidate: MentionCandidate) => {
+    if (!mentionTrigger) return;
+    const next = removeMentionTrigger(text, mentionTrigger);
+    setText(next.text);
+    setSelection({ start: next.caret, end: next.caret });
+    setMentions((current) => addMention(current, { path: candidate.entry.path, kind: candidate.entry.kind }));
+    setMentionAnnouncement(`Mentioned ${candidate.entry.path}.`);
+    requestAnimationFrame(() => {
+      const textarea = inputRef?.current;
+      if (!textarea) return;
+      textarea.focus({ preventScroll: true });
+      textarea.setSelectionRange(next.caret, next.caret);
+    });
+  };
+  const removeMention = (path: string) => {
+    setMentions((current) => current.filter((mention) => mention.path !== path));
+    setMentionAnnouncement(`Removed ${path}.`);
+  };
 
   const requestRename = React.useCallback(
     (initialTitle?: string) => {
@@ -1232,6 +1349,8 @@ export function Composer({
       mode?: BusySendMode;
       afterCompaction?: boolean;
       afterForkSummary?: boolean;
+      /** Chips already written into `sendText`; they clear, and come back as chips if the send fails. */
+      mentions?: readonly ComposerMention[];
     }): Promise<boolean> => {
       // React state does not close the same-tick Enter + click window. Claim
       // the send synchronously before making any optimistic UI changes.
@@ -1240,7 +1359,8 @@ export function Composer({
       firstSendPendingRef.current = freezeWhileSending;
       setSending(true);
       try {
-        markComposerSubmission(chatId, payload.draftText);
+        // Reload recovery has only text, so it keeps the mentions as `@path`.
+        markComposerSubmission(chatId, messageWithMentions(payload.mentions ?? [], payload.draftText));
       } catch (error) {
         sendPendingRef.current = false;
         firstSendPendingRef.current = false;
@@ -1249,6 +1369,8 @@ export function Composer({
       }
 
       setText("");
+      const submittedMentions = payload.mentions ?? [];
+      if (submittedMentions.length) setMentions([]);
       const optimisticTextRevision = textRevisionRef.current;
       attachmentRevisionRef.current += 1;
       const optimisticAttachmentRevision = attachmentRevisionRef.current;
@@ -1315,6 +1437,10 @@ export function Composer({
         ) {
           attachmentRevisionRef.current += 1;
           updateAttachments(restoredAttachments);
+        }
+        // Chips, not `@path` text: as text the `@` would reopen the picker.
+        if (submittedMentions.length) {
+          setMentions((current) => current.reduce(addMention, [...submittedMentions]));
         }
         dispatchSkillSelection({
           type: "send-failed",
@@ -1989,7 +2115,7 @@ export function Composer({
       blockSend("Wait for the current Git operation to finish before sending.");
       return;
     }
-    const trimmed = text.trim();
+    const trimmed = messageWithMentions(mentions, text.trim());
     if (new TextEncoder().encode(trimmed).byteLength > MAX_CHAT_MESSAGE_CONTENT_BYTES) {
       blockSend("Message text exceeds the 1 MB limit.");
       return;
@@ -2080,6 +2206,7 @@ export function Composer({
         mode,
         afterCompaction: !isGenerating && queueDuringCompaction,
         afterForkSummary: !isGenerating && !queueDuringCompaction && queueForForkSummary,
+        mentions,
       });
       if (sent) commentSend?.done();
       else commentSend?.undo();
@@ -2092,7 +2219,42 @@ export function Composer({
   };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (slashSession && !event.nativeEvent.isComposing) {
+    const plainKey = !event.altKey && !event.metaKey && !event.ctrlKey && !event.shiftKey;
+    // Backspace at the very start of the text takes the last chip, whole.
+    if (
+      event.key === "Backspace" &&
+      plainKey &&
+      mentions.length > 0 &&
+      !isComposingKey(event) &&
+      !event.currentTarget.readOnly &&
+      event.currentTarget.selectionStart === 0 &&
+      event.currentTarget.selectionEnd === 0
+    ) {
+      event.preventDefault();
+      removeMention(mentions[mentions.length - 1]!.path);
+      return;
+    }
+    if (mentionTrigger && !isComposingKey(event)) {
+      if ((event.key === "ArrowDown" || event.key === "ArrowUp") && mentionCandidates.length > 0) {
+        event.preventDefault();
+        const step = event.key === "ArrowDown" ? 1 : -1;
+        const count = mentionCandidates.length;
+        setActiveMentionIndex((Math.max(effectiveMentionIndex, 0) + step + count) % count);
+        return;
+      }
+      if ((event.key === "Enter" || event.key === "Tab") && plainKey && activeMention) {
+        event.preventDefault();
+        event.stopPropagation();
+        pickMention(activeMention);
+        return;
+      }
+      // Until the files arrive, Enter waits rather than sending the half-typed `@query`.
+      if (event.key === "Enter" && plainKey && !activeMention && mentionFiles.isLoading) {
+        event.preventDefault();
+        return;
+      }
+    }
+    if (slashSession && !isComposingKey(event)) {
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
@@ -2166,6 +2328,7 @@ export function Composer({
       !event.nativeEvent.isComposing &&
       text === "" &&
       attachments.length === 0 &&
+      mentions.length === 0 &&
       !selectedSkill &&
       !isGenerating &&
       // Capture and its final decode own words that have not reached `text` yet.
@@ -2184,7 +2347,7 @@ export function Composer({
         isComposing: event.nativeEvent.isComposing,
         repeat: event.repeat,
         canStop: isGenerating && canStopGeneration,
-        draftEmpty: !text.trim() && attachments.length === 0 && !selectedSkill,
+        draftEmpty: !text.trim() && attachments.length === 0 && mentions.length === 0 && !selectedSkill,
       })
     ) {
       event.preventDefault();
@@ -2225,12 +2388,14 @@ export function Composer({
   const approvalsLabel = approvalChoiceLabel(chipChoice);
   const ApprovalsIcon = APPROVAL_CHOICE_ICONS[chipChoice].icon;
   const approvalsHelp =
-    chipChoice === "chat-only" ? "The agent can't read or change this folder." : APPROVAL_MODE_HELP[chipChoice];
+    chipChoice === "chat-only" ? "The agent can't read or change this folder." : approvalModeHelp(chipChoice, localComputerNoun(platform));
   const folderName = noWorkspace
     ? NO_WORKSPACE_LABEL
     : workspace?.folderPath
       ? workspace.folderPath.split("/").filter(Boolean).pop()
       : workspace?.name;
+  // The chip's name starts with the name it shows (WCAG 2.5.3, Label in Name).
+  const workspaceChipLabel = folderName ?? "Workspace";
   const WorkspaceChipIcon = noWorkspace ? MessageCircle : Folder;
   const hasUserMessages =
     sessionChat?.messages.some((message) => message.role === "user") ?? hasMessages;
@@ -2294,6 +2459,7 @@ export function Composer({
             {slashSession ? (
               <ComposerSlashPalette
                 mode={slashSession.kind}
+                query={slashSession.query}
                 results={rankedSlashResults.results}
                 activeId={effectiveActiveSlashId}
                 skillsLoading={skillCatalog.isLoading}
@@ -2313,6 +2479,16 @@ export function Composer({
               />
             ) : null}
           </ComposerSlashPalettePresence>
+          {mentionTrigger ? (
+            <ComposerMentionPicker
+              candidates={mentionCandidates}
+              activeIndex={effectiveMentionIndex}
+              loading={mentionFiles.isLoading}
+              error={mentionFiles.isError}
+              onActiveIndexChange={setActiveMentionIndex}
+              onPick={pickMention}
+            />
+          ) : null}
           {queuedMessages}
           {commentTray ? (
             <DesignCommentTray tray={commentTray} disabled={sending || !submissionAllowed} onSend={() => void submit()} />
@@ -2356,12 +2532,12 @@ export function Composer({
                     }
                     aria-label={
                       workspaceChangeBlockedReason
-                        ? `Workspace unavailable: ${workspaceChangeBlockedReason}`
-                        : "Choose a workspace"
+                        ? `${workspaceChipLabel}. Workspace unavailable: ${workspaceChangeBlockedReason}`
+                        : `${workspaceChipLabel}. Choose a workspace.`
                     }
                   >
                     <WorkspaceChipIcon className="size-4 shrink-0" />
-                    <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
+                    <span className="max-w-[16rem] truncate">{workspaceChipLabel}</span>
                   </Button>
                 }
               />
@@ -2372,10 +2548,14 @@ export function Composer({
                 className="composer-workspace-trigger h-7 min-w-0 max-w-[16rem] flex-1 shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
                 onClick={onOpenFolder}
                 disabled={!workspace?.folderPath}
-                aria-label={workspace?.folderPath ? "Open folder in file manager" : "Workspace"}
+                aria-label={
+                  workspace?.folderPath
+                    ? `${workspaceChipLabel}. Open folder in file manager.`
+                    : workspaceChipLabel
+                }
               >
                 <WorkspaceChipIcon className="size-4 shrink-0" />
-                <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
+                <span className="max-w-[16rem] truncate">{workspaceChipLabel}</span>
               </Button>
             )}
             {/* Execution location: shown only when a paired Mac could run this new chat. */}
@@ -2503,6 +2683,17 @@ export function Composer({
                 </span>
               </div>
             ) : null}
+            <ComposerMentionChips
+              mentions={mentions}
+              disabled={composerInputLocked}
+              onRemove={(path) => {
+                removeMention(path);
+                requestAnimationFrame(() => inputRef?.current?.focus({ preventScroll: true }));
+              }}
+            />
+            <span className="sr-only" role="status" aria-live="polite">
+              {mentionAnnouncement}
+            </span>
             {attachments.length > 0 ? (
               <div className="mb-1.5 flex flex-wrap gap-2 px-1.5">
                 {attachments.map((a) => (
@@ -2537,7 +2728,7 @@ export function Composer({
               ref={inputRef}
               // Approval keys stay off while this holds a draft, wherever focus is; the
               // value marks staged attachments or a skill that the text alone doesn't show.
-              data-message-draft={attachments.length > 0 || selectedSkill ? "attached" : ""}
+              data-message-draft={attachments.length > 0 || mentions.length > 0 || selectedSkill ? "attached" : ""}
               data-focus-region-entry
               value={composerValue}
               readOnly={composerInputLocked || firstSendPending || dictationPreviewing}
@@ -2581,16 +2772,28 @@ export function Composer({
               }}
               onBlur={() => {
                 if (slashSession && !sessionCommandBusyRef.current) dismissSlash();
+                if (mentionTrigger) setMentionDismissedAt(mentionTrigger.start);
               }}
-              onFocus={markSlashInteraction}
-              aria-autocomplete={slashSession ? "list" : undefined}
+              onFocus={() => {
+                markSlashInteraction();
+                setMentionDismissedAt(null);
+              }}
+              aria-autocomplete={slashSession || mentionTrigger ? "list" : undefined}
               aria-describedby={
                 [surfaces.attachments ? attachmentDescriptionId : null, sendBlockedReason ? sendBlockedId : null]
                   .filter(Boolean)
                   .join(" ") || undefined
               }
-              aria-controls={slashSession ? COMPOSER_SLASH_PALETTE_ID : undefined}
-              aria-activedescendant={slashSession ? effectiveActiveSlashId : undefined}
+              aria-controls={
+                slashSession ? COMPOSER_SLASH_PALETTE_ID : mentionTrigger ? COMPOSER_MENTION_PICKER_ID : undefined
+              }
+              aria-activedescendant={
+                slashSession
+                  ? effectiveActiveSlashId
+                  : mentionTrigger && activeMention
+                    ? mentionOptionId(effectiveMentionIndex)
+                    : undefined
+              }
               placeholder={
                 ready && placeholder
                   ? placeholder
@@ -2725,7 +2928,7 @@ export function Composer({
                     }
                   }}
                   onKeyDown={(event) => {
-                    if (event.key !== "Escape") return;
+                    if (!isEscapeKey(event)) return;
                     event.preventDefault();
                     setPermissionMenuOpen(false);
                     inputRef?.current?.focus();
@@ -2815,7 +3018,7 @@ export function Composer({
                                 ? `Approvals: ${label}. Finish or stop the current response to change approvals.`
                                 : `Approvals: ${label}`
                           }
-                          title={value === "settings" || value === "chat-only" ? undefined : APPROVAL_MODE_HELP[value]}
+                          title={value === "settings" || value === "chat-only" ? undefined : approvalModeHelp(value, localComputerNoun(platform))}
                           tabIndex={selected ? 0 : -1}
                           aria-disabled={disabled || undefined}
                           onClick={(event) => {

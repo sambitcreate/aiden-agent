@@ -71,8 +71,19 @@ class AidenWorkspaceEnvironmentCache(private val directory: File) {
     @Synchronized
     fun store(index: AidenWorkspaceFileIndex, instanceId: String, workspaceId: String) {
         val retained = load(instanceId, workspaceId)?.documents ?: emptyMap()
-        val validIds = index.entries.filter { it.kind == AidenWorkspaceFileKind.FILE }.map { it.id }.toSet()
-        val filteredDocs = if (index.directoryPath != null) retained else retained.filter { validIds.contains(it.key) }
+        val filteredDocs = if (index.directoryPath != null) {
+            retained
+        } else {
+            val idByPath = index.entries
+                .filter { it.kind == AidenWorkspaceFileKind.FILE }
+                .associate { it.displayPath to it.id }
+            buildMap {
+                for ((id, doc) in retained) {
+                    val currentId = idByPath[doc.displayPath] ?: continue
+                    put(currentId, if (currentId == id) doc else doc.copy(id = currentId))
+                }
+            }
+        }
         persist(
             Snapshot(
                 index = index,

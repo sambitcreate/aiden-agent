@@ -88,15 +88,19 @@ superseded. Runner capacity can still cause queueing.
   execution modes. Registry validation checks both files and these prerequisites.
 - Electron files run across four isolated macOS runners with one worker each and
   `--fail-on-flaky-tests`, retaining the 20-minute job limit. File-duration weights
-  preserve larger historical estimates and complete windows from hosted runs
-  41784199399 and 41789418295. Cancelled terminal windows are lower bounds, never
-  treated as completed timings. The completed run 41778188548 independently checks
-  the allocation. A measured budget check reserves two minutes for setup/cleanup
-  and at least three minutes of headroom; real runner variation can still differ.
-  Newly discovered specs get a default weight and always run. A real Playwright
-  collection check verifies that every deterministic case belongs to exactly one
-  shard. Live-provider specs remain opt-in; production diagnostics run separately
-  with the production profile.
+  prefer the median of recent hosted Playwright JSON timings (Actions cache plus
+  per-shard artifacts, merged on `main` only; CI never pushes timing files).
+  Missing or unreadable stores fall back to the conservative `FILE_SECONDS` table
+  from hosted runs 41784199399 and 41789418295, then to 30s for a brand-new spec.
+  Cancelled terminal windows are lower bounds, never treated as completed timings.
+  The completed run 41778188548 independently checks the allocation. A measured
+  budget check reserves two minutes for setup/cleanup and at least three minutes
+  of headroom; real runner variation can still differ. Newly discovered specs get
+  a default weight and always run. A real Playwright collection check verifies
+  that every deterministic case belongs to exactly one shard. Live-provider specs
+  remain opt-in; production diagnostics run separately with the production profile.
+  Pull requests may run a subset of specs (see below); unused shards still start
+  and exit successfully so required check names stay stable.
 - Linux runs the same Electron shards on three Ubuntu runners in `linux-e2e`,
   beside the packaging job rather than after it. The required `Linux x64` and
   `Linux arm64` checks fail if a selected shard does not pass. Each shard builds
@@ -105,6 +109,29 @@ superseded. Runner capacity can still cause queueing.
 - Android retains unit tests, lint, test compilation and emulator coverage, with
   Gradle's build cache enabled and APK publication only on main. Hosted iOS
   compilation is not physical-device XCTest acceptance.
+
+On pull requests only, unit lanes run the registry files whose import graph
+reaches a changed path. A quoted path to a source file (`new URL("./x.tsx",
+import.meta.url)`, `"main/services/x.ts"`) counts as an import, so a test that
+reads a file's source as text is still selected when that file changes.
+`path.join("renderer", "preload.ts")` segments and `readdir` of a `main/` or
+`renderer/` tree count as well, so a registered inventory test such as
+`main/handlers/ipc-contract.test.ts` still runs when a handler it walks
+changes. Electron shards run the specs listed for those paths
+in `scripts/ci-e2e-spec-map.json`. Pushes to `main`, merge-group runs, releases,
+and `workflow_dispatch` keep the full suites. Selection also falls back to the
+full suite when a changed path is unmapped, or when shared config, fixtures,
+`package.json`, lockfiles, CI files, or test infra change. Empty unit lanes skip
+their `tsx --test` invocation but still start. When you add a deterministic
+E2E spec, add it to `scripts/ci-e2e-spec-map.json` with the `renderer/` and
+`main/` prefixes it covers; CI policy fails if a runnable spec is missing, if
+an entry names a spec that no longer exists, or if a listed prefix matches no
+file on disk. Shared harness files belong in the map's `full` list so they keep
+every spec. Prefixes are exact paths, directories (`settings/`), or stems that
+continue with `/`, `.`, or `-` (`chat-fork` matches `chat-fork-service.ts`).
+Changing a spec file itself selects that spec. A failed-job rerun downloads the
+original `changes` job's selection artifact, not a name built from the rerun
+attempt.
 
 Use `node scripts/run-ci-tests.mjs --list` or `--dry-run` to inspect assignments.
 Use `--lane core-git`, `--lane runtime-subagents`, `--lane renderer-other`, or

@@ -282,7 +282,7 @@ test("Tailscale pairing warms the address before the window opens, and says so w
       assert.equal(pairedBeforeWait, false);
       // The address comes from the prepare step's own answer, so no second (possibly slow) status read can skip the warm-up.
       assert.deepEqual(daemon.asked.slice(0, 2), ["remote tailscale-prepare", "remote pair tailscale"]);
-      assert.match(out.text, /Checking that https:\/\/box\.tail1234\.ts\.net\/api\/aiden\/v1 answers[^]*Manual code: ABCD-1234/);
+      assert.match(out.text, /Checking that https:\/\/box\.tail1234\.ts\.net\/api\/aiden\/v1 answers[^]*Setup code:\nABCD-1234/);
       if (answers) assert.doesNotMatch(err.text, /did not answer/);
       else assert.match(err.text, /did not answer yet.*aiden remote check/);
     }
@@ -317,7 +317,7 @@ test("pairing through a server from an older build skips the prepare step and st
     await api.showStartupPairing(daemon.dir, "tailscale", new AbortController().signal, out, err, async () => assert.fail("no address wait without the prepare step"));
     assert.deepEqual(daemon.asked.slice(0, 2), ["remote tailscale-prepare", "remote pair tailscale"]);
     assert.ok(!daemon.asked.includes("remote status"));
-    assert.match(out.text, /Manual code: ABCD-1234/);
+    assert.match(out.text, /Setup code:\nABCD-1234/);
     assert.doesNotMatch(err.text, /Could not open/);
   } finally {
     daemon.close();

@@ -18,8 +18,6 @@ const ENVELOPE_KEYS = new Set([
   "terminal",
   "payload",
 ]);
-const FEED_CURSOR = /^([A-Za-z0-9_-]{1,64}):(0|[1-9]\d{0,14})$/u;
-const RUN_CURSOR = /^(0|[1-9]\d{0,14})$/u;
 
 function malformed(): never {
   throw new PeerTransportError("invalid_response");
@@ -98,19 +96,4 @@ export function parsePeerStreamEnvelope(
     terminal,
     payload: payload as Record<string, unknown>,
   };
-}
-
-/** `epoch:sequence` host-feed cursor. */
-export function parsePeerFeedCursor(
-  id: string,
-): { epoch: string; sequence: number } {
-  const match = FEED_CURSOR.exec(id);
-  if (!match) malformed();
-  return { epoch: match[1]!, sequence: Number(match[2]) };
-}
-
-/** Decimal run-stream cursor. */
-export function parsePeerRunCursor(id: string): number {
-  if (!RUN_CURSOR.test(id)) malformed();
-  return Number(id);
 }

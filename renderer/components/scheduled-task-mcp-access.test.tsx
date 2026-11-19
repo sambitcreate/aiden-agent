@@ -213,7 +213,6 @@ async function mountView(tasks: ScheduledTask[], mcpList: () => unknown) {
     "schedule:list": () => tasks,
     "schedule:settings": () => scheduledSettings,
     "schedule:preview": () => [NOW + 60_000],
-    "schedule:runs": () => [],
     "settings:get": () => ({}),
     "providers:list": () => [],
     "workspaces:list": () => [],

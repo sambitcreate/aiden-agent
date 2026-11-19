@@ -318,11 +318,6 @@ final class AidenAttachmentPickerState {
         mode = .camera
     }
 
-    func showPhotos() async {
-        beginShowingPhotos()
-        await loadLibrary()
-    }
-
     func backToMenu() {
         invalidateLibraryLoad()
         selectedAssetIDs = []

@@ -9,11 +9,9 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { createTodoExtensionRuntime } from "../../../../main/services/rpiv-todo/extension.js";
 import type { TodoState } from "../../../../main/services/rpiv-todo/contract.js";
 import { replayTodoState } from "../../../../main/services/rpiv-todo/replay.js";
-import { aidenExtensionToInlineFactory, type AidenExtensionShape, type CapturedContext } from "../pi-bridge/adapt-aiden-extension.ts";
+import { aidenExtensionToInlineFactory, type AidenExtensionShape } from "../pi-bridge/adapt-aiden-extension.ts";
 
-export function createTodoInlineExtension(_context: {
-	latestContext(): CapturedContext | undefined;
-}): { name: string; factory: ExtensionFactory; snapshot(): TodoState } {
+export function createTodoInlineExtension(): { name: string; factory: ExtensionFactory; snapshot(): TodoState } {
 	const template = createTodoExtensionRuntime({ tasks: [], nextId: 1 });
 	let runtime: ReturnType<typeof createTodoExtensionRuntime> | undefined;
 	let restoreEpoch = 0;
