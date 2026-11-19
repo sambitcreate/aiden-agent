@@ -829,6 +829,36 @@ function locateIn(spec: SlotSpec, args: Args, from: number, at: number): SlotLoo
   return typeof rule === "string" ? { problem: rule } : { slot: rule };
 }
 
+/**
+ * Where the checked plan adds `--` so git reads the `refOnly` word at
+ * `last` (the last one) and every `refOnly` operand before it only as a
+ * revision: before the first later word the table reads as an operand that
+ * is not `refOnly` (a file), or `args.length` when there is none. Options
+ * and their values after it stay options (`git checkout {{b}} -q` runs
+ * `checkout b -q --`, not `checkout b -- -q`). `optionAfter` is an option
+ * written after that file, which the `--` would turn into a file name.
+ */
+export function revisionsEnd(spec: SlotSpec, args: Args, from: number, last: number): { at: number; optionAfter?: string } {
+  if (spec.verbs) {
+    const verb = args[from];
+    if (verb !== undefined && Object.prototype.hasOwnProperty.call(spec.verbs, verb)) return revisionsEnd(spec.verbs[verb]!, args, from + 1, last);
+    if (spec.implicitVerb && (verb === undefined || verb.startsWith("-"))) return revisionsEnd(spec.verbs[spec.implicitVerb]!, args, from, last);
+    return { at: args.length };
+  }
+  const read = walk(spec, args, from);
+  if ("problem" in read || !spec.operand) return { at: args.length };
+  const has = (...names: string[]) => names.some((name) => read.has.has(name));
+  for (let index = last + 1; index < args.length; index += 1) {
+    const position = read.positions.get(index);
+    if (position?.kind !== "operand") continue;
+    const rule = spec.operand(position.index, position.afterDashes, has, (offset) => args[index + offset]);
+    if (typeof rule !== "string" && rule.refOnly) continue;
+    const option = args.find((_arg, later) => later > index && read.positions.get(later)?.kind === "option");
+    return option === undefined ? { at: index } : { at: index, optionAfter: option };
+  }
+  return { at: args.length };
+}
+
 const JQ_FLAGS = "nrjascCMSeRh";
 const JQ_LONG = [
   "null-input", "raw-output", "join-output", "ascii-output", "slurp", "compact-output", "color-output", "monochrome-output", "sort-keys", "exit-status",

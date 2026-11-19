@@ -249,6 +249,8 @@ test("a misplaced placeholder is refused with the fix for where it sits", () => 
   );
   assert.match(refusal("tail --bytes +{{count}} notes.txt", "count"), /use --bytes \{\{count\}\} \(last N bytes\); starting from byte N/u);
   assert.match(refusal("cat a{{x}}'b'"), /cannot be joined to quoted text/u);
+  // The -- Aiden adds after a branch goes before the files, so an option after them would become a file name.
+  assert.match(refusal("git checkout {{x}} notes.md -q"), /-q is written after the files of git checkout\..*Write -q before \{\{x\}\}\./u);
   for (const command of ["head -n{{count}} notes.txt", `echo "{{count}}"`, "{{count}} status"]) {
     assert.doesNotMatch(refusal(command, "count"), /own unquoted word/u, command);
   }

@@ -549,4 +549,14 @@ test("a branch value for git checkout never discards a file's uncommitted edits"
   assert.equal(switched.exitCode, 0, switched.stderr);
   assert.equal(git(["branch", "--show-current"]).trim(), "feature");
   assert.equal(fs.readFileSync(path.join(dir, "notes.md"), "utf8"), "UNSAVED WORK\n");
+  // Options written after the branch stay options: the -- goes after them, not before.
+  for (const option of ["-q", "--quiet", "-f"]) {
+    const quiet = parseWorkspaceArtifactActions([{ name: "a", label: "A", command: `git checkout {{branch}} ${option}`, params: [{ name: "branch" }] }])[0]!;
+    const target = option === "-f" ? "main" : git(["branch", "--show-current"]).trim() === "main" ? "feature" : "main";
+    const resolved = resolveWorkspaceArtifactCommand(quiet, [target]);
+    assert.equal(resolved.preview, `GIT_LITERAL_PATHSPECS=1 git checkout '${target}' ${option} --`);
+    const result = await runResolved(resolved, dir);
+    assert.equal(result.exitCode, 0, `${option}: ${result.stderr}`);
+    assert.equal(git(["branch", "--show-current"]).trim(), target);
+  }
 });

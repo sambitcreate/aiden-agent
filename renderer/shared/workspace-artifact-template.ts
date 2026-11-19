@@ -21,7 +21,7 @@
  * Pure and Electron-free, like `workspace-artifacts.ts`, which uses it.
  */
 
-import { ghSlotSpec, gitSlotSpec, jqSlot, locateSlot, programSlotSpec, type Slot, type SlotLookup } from "./workspace-artifact-slots.js";
+import { ghSlotSpec, gitSlotSpec, jqSlot, locateSlot, programSlotSpec, revisionsEnd, type Slot, type SlotLookup } from "./workspace-artifact-slots.js";
 
 export const WORKSPACE_ARTIFACT_PLACEHOLDER = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/gu;
 const PLACEHOLDER_AT = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/uy;
@@ -635,23 +635,37 @@ export function checkWorkspaceArtifactTemplate(template: string): { ok: true; st
         const blob = program === "git" ? readBlobPath(word, gitSubcommand(args).name!) : undefined;
         if (blob) return { ok: false, problem: { kind: "slot", reason: blob } };
       }
-      if (!args.includes("--")) endRefs(command);
+      const ended = args.includes("--") ? undefined : endRefs(command);
+      if (ended) return { ok: false, problem: { kind: "misplaced", reason: ended } };
     }
   }
   return parsed;
 }
 
 /**
- * Adds `--` after a `refOnly` operand (`git checkout {{branch}}`) when the
+ * Adds `--` after a `refOnly` value (`git checkout {{branch}}`) when the
  * template has none. Without it git falls back to reading a value that names
  * no branch as files, and `git checkout notes.md` discards that file's edits;
- * with it git reads the value only as a branch and says it is not one.
+ * with it git reads the value only as a branch and says it is not one. The
+ * `--` goes before the first file operand after the value, or at the end of
+ * the command, so options written after the value stay options.
  */
-function endRefs(command: TemplateCommand): void {
-  const index = command.words.findIndex((word) => word.parts.some((part) => "param" in part && part.slot?.refOnly));
-  if (index < 0) return;
-  const at = command.words[index]!.end;
-  command.words.splice(index + 1, 0, { parts: [{ text: "--", insertedAt: at }], quoted: false, start: at, end: at });
+function endRefs(command: TemplateCommand): string | undefined {
+  let last = -1;
+  command.words.forEach((word, index) => {
+    if (word.parts.some((part) => "param" in part && part.slot?.refOnly)) last = index;
+  });
+  if (last < 0 || literal(command.words[0]) !== "git") return undefined;
+  const args = command.words.slice(1).map(literal);
+  const git = gitSubcommand(args);
+  const end = revisionsEnd(gitSlotSpec(git.name!)!, args, git.index + 1, last - 1);
+  const name = placeholderIn(command.words[last]!);
+  if (end.optionAfter !== undefined) {
+    return `${end.optionAfter} is written after the files of git ${git.name!}. Aiden adds -- before the files so git reads ${name} only as a revision, and git would then read ${end.optionAfter} as a file. Write ${end.optionAfter} before ${name}.`;
+  }
+  const at = command.words[end.at]!.end;
+  command.words.splice(end.at + 1, 0, { parts: [{ text: "--", insertedAt: at }], quoted: false, start: at, end: at });
+  return undefined;
 }
 
 /**
