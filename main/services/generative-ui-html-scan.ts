@@ -47,7 +47,7 @@
 // Labels ("JavaScript: 41%"), comparisons in scripts ("i<base && i>0") and
 // plain strings pass.
 
-import { Parser, Token, defaultTreeAdapter, type DefaultTreeAdapterMap, type DefaultTreeAdapterTypes, type TreeAdapter } from "parse5";
+import { Parser, Token, defaultTreeAdapter, html as htmlSpec, type DefaultTreeAdapterMap, type DefaultTreeAdapterTypes, type TreeAdapter } from "parse5";
 
 type Element = DefaultTreeAdapterTypes.Element;
 
@@ -75,6 +75,8 @@ export const MAX_HTML_FOSTER_PARENTED = 16_384;
 
 class StructureLimit extends Error {}
 
+/** Start tags parse5 drops inside a <select> that change how Chromium reads what follows. */
+const SELECT_DROPPED_CONTENT: ReadonlySet<string> = new Set(["svg", "math", "style"]);
 const EMBEDDING_TAGS: ReadonlySet<string> = new Set(["iframe", "object", "embed", "applet", "frame", "frameset", "base", "link"]);
 const URL_ATTRIBUTES: ReadonlySet<string> = new Set(["href", "src", "action", "formaction", "xlink:href", "data"]);
 const SCRIPT_SOURCE_ATTRIBUTES: ReadonlySet<string> = new Set(["src", "href", "xlink:href"]);
@@ -676,6 +678,13 @@ const XML_ELEMENT_PREFIX = /<(\/?)[^\s/>:<]+:/gu;
  */
 const XML_PREFIXED_URL_ATTRIBUTE = /\s[^\s=/>:"'<]+:(?:href|src|action|formaction|data)\s*=\s*("[^"]*"|'[^']*')/giu;
 /** Refused: XML a script parses that declares a DOCTYPE internal subset, entities or attribute lists. */
+/**
+ * Refused: a <select> that holds an <svg>, <math> or <style>. parse5 drops
+ * them, so it reads what follows as HTML markup, where Chromium keeps them
+ * and reads it as SVG or MathML, which decodes character references in
+ * <script>, or as CSS.
+ */
+export const SELECT_CONTENT_LIMIT = "a <select> holds an <svg>, <math> or <style> element, which the browser reads differently from this check";
 export const XML_DECLARATIONS_LIMIT = "a script parses XML with a DOCTYPE internal subset, an <!ENTITY> or an <!ATTLIST> declaration";
 /** Refused: namespaced XML a script parses that HTML would read part of as text. */
 export const XML_HTML_TEXT_LIMIT =
@@ -1542,6 +1551,8 @@ export class HtmlScanner {
   private finished = false;
   private elements = 0;
   private fosterParented = 0;
+  /** The attributes of start tags already checked as the tokenizer emitted them. */
+  private readonly checkedAttributes = new WeakSet<readonly Token.Attribute[]>();
   /** The unfinished start tag last read by `findings`, its size then and what it would load. */
   private pending: { tag: unknown; size: number; found: HtmlFindings } | undefined;
 
@@ -1566,7 +1577,8 @@ export class HtmlScanner {
           throw new StructureLimit(`elements nest more than ${MAX_HTML_NESTING_DEPTH} deep`);
         }
         const element = defaultTreeAdapter.createElement(tagName, namespaceURI, attrs);
-        this.checkTag(element.tagName, element.attrs, this.committed, true);
+        // An element built from a start tag was checked when the tag was read.
+        if (!this.checkedAttributes.has(attrs)) this.checkTag(element.tagName, element.attrs, this.committed, true);
         const name = element.tagName.toLowerCase();
         if (name === "script" || name === "style") this.rawText.add(element);
         return element;
@@ -1601,6 +1613,22 @@ export class HtmlScanner {
       },
     };
     this.parser = new Parser({ treeAdapter: adapter, scriptingEnabled: scripting });
+    // Every start tag is checked as the tokenizer emits it, before the tree
+    // builder decides what to do with it. parse5 drops some tags a browser
+    // keeps: Chromium's customizable <select> builds the elements inside it,
+    // where parse5 ignores every start tag but <option>, <optgroup> and <hr>.
+    const onStartTag = this.parser.onStartTag;
+    if (typeof onStartTag !== "function") throw new Error("parse5 no longer exposes the start-tag hook the HTML check needs.");
+    this.parser.onStartTag = (token) => {
+      // parse5 finds a <select> in scope when no HTML element is open at all.
+      const open = this.parser.openElements;
+      if (SELECT_DROPPED_CONTENT.has(token.tagName) && open.stackTop >= 0 && open.hasInSelectScope(htmlSpec.TAG_ID.SELECT)) {
+        throw new StructureLimit(SELECT_CONTENT_LIMIT);
+      }
+      this.checkTag(token.tagName, token.attrs, this.committed, true);
+      this.checkedAttributes.add(token.attrs);
+      onStartTag.call(this.parser, token);
+    };
     // The tokenizer checks each new attribute against the tag's earlier ones,
     // so a tag's attribute count is capped as it is read.
     const tokenizer = this.parser.tokenizer as unknown as TokenizerInternals;

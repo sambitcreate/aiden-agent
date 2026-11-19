@@ -166,6 +166,8 @@ test("checking, wrapping or streaming a visual up to the size cap takes linear t
     xmlCdataSections: (size) => fill(size, "<![CDATA[a]]>", XML_SHAPE_START, XML_SHAPE_END),
     xmlPrefixedLinks: (size) => fill(size, '<a q:href="#a"/>', XML_SHAPE_START, XML_SHAPE_END),
     xmlUnclosedTextElements: (size) => fill(size, "<style ", XML_SHAPE_START, XML_SHAPE_END),
+    // Tags parse5 drops in a <select>, checked as they are read.
+    selectContent: (size) => fill(size, '<img src="#" onclick="f(1)"><b x>', "<select>", "</select>"),
     cssUrls: (size) => fill(size, "url(a)", "<style>", "</style>"),
     noscriptBlocks: (size) => fill(size, "<noscript><p>x</p></noscript>"),
     contentMovedOutOfTables: (size) => fill(size, "a<i></i>", "<table>"),
@@ -680,7 +682,9 @@ for (const [name, html] of Object.entries(ADMITTED_MARKUP)) {
 // including <template> contents, for an embedding tag, an external script, a
 // refresh <meta>, or an unsafe or remote URL attribute. A visual renders in a
 // frame that runs scripts, but a viewer or an exported page may have them
-// off, which turns <noscript> text into markup, so both parses count.
+// off, which turns <noscript> text into markup, so both parses count. A
+// <select> is left out: parse5 drops the tags in it that Chromium builds, and
+// its own test below lists what a <select> may hold.
 const ORACLE_EMBEDDING_TAGS = new Set(["iframe", "object", "embed", "applet", "frame", "frameset", "base", "link"]);
 const ORACLE_URL_ATTRIBUTES = new Set(["href", "src", "action", "formaction", "xlink:href", "data"]);
 function browserLoadsSomething(html: string): boolean {
@@ -722,7 +726,6 @@ const ORACLE_CONTAINERS: readonly (readonly [string, string])[] = [
   ["<noframes>", "</noframes>"],
   ["<template>", "</template>"],
   ["<table><tr>", "</tr></table>"],
-  ["<select>", "</select>"],
   ["<p title=\"", "\">"],
   ["<svg><style>", "</style></svg>"],
   ["<svg><script>", "</script></svg>"],
@@ -773,6 +776,40 @@ test("html admission names the XML a script parses that it cannot read as the br
   const cdata = literalSink(parsedXml(`<r xmlns="${XHTML_NS}"><![CDATA[ <x> ]]></r>`, "image/svg+xml"));
   assert.throws(() => validateGenerativeUiHtml(cdata), /names the XHTML, SVG or MathML namespace, so it is checked as HTML.*Give those elements text only/u);
   for (const html of [declared, cdata]) assert.equal(isGenerativeUiDraftAcceptable(html), false);
+});
+
+// parse5 still drops every tag in a <select> but its options, where
+// Chromium's customizable <select> builds them.
+test("html admission reads the elements a <select> holds as Chromium builds them, written or set by a script, finished or streaming", () => {
+  const errorImage = `<img src=x onerror="location='javascript:alert(1)'">`;
+  const refused: Record<string, [string, RegExp]> = {
+    "an image's handler": [`<select>${errorImage}</select>`, /found "onerror=/u],
+    "an image's handler set by a script": [
+      `<div id="d"></div><script>d.innerHTML = '<select>${errorImage.replace(/'/gu, "\\'")}</select>';</script>`,
+      /cannot load remote images or scripts/u,
+    ],
+    "a remote image": ['<select><option>a</option><img src="https://evil.test/a.png"></select>', /found "src=/u],
+    "a frame": ['<select><iframe src="about:blank"></iframe></select>', /cannot include iframes/u],
+    "an SVG script, which decodes character references": [
+      "<select><svg><script>location&#61;'javascript:alert(1)'</script></svg></select>",
+      /a <select> holds an <svg>, <math> or <style> element.*Move the SVG, MathML or <style> out of the <select>/u,
+    ],
+    "a style sheet": ['<select><style>p{background:url("https://evil.test/a.png")}</style></select>', /a <select> holds/u],
+  };
+  for (const [name, [html, message]] of Object.entries(refused)) {
+    assert.throws(() => validateGenerativeUiHtml(html), message, name);
+    assert.equal(isGenerativeUiDraftAcceptable(html), false, `draft verdict for ${name}`);
+    assert.equal(streamInChunks(html, 5).admitted, false, `streamed draft verdict for ${name}`);
+  }
+  const admitted = [
+    '<select><option>One</option><img src="data:image/png;base64,AA" alt=""><button onclick="this.textContent=\'x\'">b</button></select>',
+    "<select><template><svg><rect/></svg></template></select><svg><rect/></svg>",
+  ];
+  for (const html of admitted) {
+    assert.ok(validateGenerativeUiHtml(html).byteLength > 0, html);
+    assert.equal(isGenerativeUiDraftAcceptable(html), true, html);
+    assert.equal(streamInChunks(html, 5).admitted, true, html);
+  }
 });
 
 test("html admission refuses markup nested or attributed past what a visual needs, finished or streaming", () => {
