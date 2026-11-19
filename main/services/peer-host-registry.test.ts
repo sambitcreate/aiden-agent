@@ -897,3 +897,311 @@ test("route advertisements exclude loopback, virtual bridges, tunnels and public
     en1: [entry("203.0.113.4")],
   }), ["192.168.1.7", "10.1.0.2"]);
 });
+
+test("a paired private-CA .local host marks a real mDNS TLS collision retryable without leaking bytes, then recovers with unchanged trust", async (t) => {
+  const https = await import("node:https");
+  const net = await import("node:net");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { loadOrCreateAidenRemoteTlsIdentity } = await import("./aiden-remote-tls-identity.js");
+  const { PeerLanAddresses } = await import("./peer-lan-addresses.js");
+  const { startPeerTestHost } = await import("./peer-pairing-test-host.js");
+
+  const genuine = await startPeerTestHost({ lanHostname: "collision-studio.local" });
+  const intruderDir = await mkdtemp(path.join(os.tmpdir(), "aiden-mdns-collision-"));
+  const intruderIdentity = await loadOrCreateAidenRemoteTlsIdentity({
+    directory: intruderDir,
+    hostnames: ["collision-studio.local"],
+  });
+  let intruderHttpRequests = 0;
+  let intruderDecryptedBytes = 0;
+  const intruder = https.createServer(
+    { key: intruderIdentity.privateKey, cert: intruderIdentity.certificateChain },
+    (_req, res) => {
+      intruderHttpRequests += 1;
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end('{"protocolVersion":1}');
+    },
+  );
+  intruder.on("secureConnection", (socket) => {
+    socket.on("data", (chunk: Buffer) => {
+      intruderDecryptedBytes += chunk.length;
+    });
+  });
+  await new Promise<void>((resolve) => intruder.listen(0, "127.0.0.1", resolve));
+  const intruderAddress = intruder.address();
+  assert.ok(intruderAddress && typeof intruderAddress !== "string");
+  const genuinePort = Number(new URL(genuine.lanAddressEndpoint).port);
+
+  let colliding = false;
+  const sockets = new Set<import("node:net").Socket>();
+  const proxy = net.createServer((downstream) => {
+    sockets.add(downstream);
+    downstream.on("close", () => sockets.delete(downstream));
+    const upstream = net.connect(colliding ? intruderAddress.port : genuinePort, "127.0.0.1");
+    sockets.add(upstream);
+    upstream.on("close", () => sockets.delete(upstream));
+    downstream.on("error", () => upstream.destroy());
+    upstream.on("error", () => downstream.destroy());
+    downstream.pipe(upstream).pipe(downstream);
+  });
+  await new Promise<void>((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+  const proxyAddress = proxy.address();
+  assert.ok(proxyAddress && typeof proxyAddress !== "string");
+
+  const lanAddresses = new PeerLanAddresses((hostname, options, callback) => {
+    assert.equal(hostname, "collision-studio.local");
+    if (options.all) callback(null, [{ address: "127.0.0.1", family: 4 }]);
+    else callback(null, "127.0.0.1", 4);
+  });
+  let saved: StoredPeerHost[] = [];
+  const store = new PeerHostRegistry({
+    storage: {
+      load: async () => structuredClone(saved),
+      save: async (next) => {
+        saved = structuredClone(next);
+      },
+    },
+    localInstanceId: async () => "install_controller",
+    deviceName: "Travel MacBook",
+    clientVersion: "1",
+    platform: "mac",
+    lanAddresses,
+  });
+  t.after(async () => {
+    store.close();
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolve) => proxy.close(() => resolve()));
+    intruder.closeAllConnections();
+    await new Promise<void>((resolve) => intruder.close(() => resolve()));
+    await genuine.close();
+    await rm(intruderDir, { recursive: true, force: true });
+  });
+
+  // Pair cleanly against the genuine host, then point the saved canonical .local port at the switch with no learned addresses.
+  const code = genuine.openSetupCode("lan");
+  await store.pairWithSetupCode({
+    endpoint: genuine.lanAddressEndpoint,
+    code,
+    instanceId: genuine.instanceId,
+  });
+  lanAddresses.forget(genuine.instanceId);
+  const canonicalEndpoint = `https://collision-studio.local:${proxyAddress.port}/api/aiden/v1`;
+  const originalTrust = {
+    endpoint: canonicalEndpoint,
+    serverSpkiSha256: saved[0]!.serverSpkiSha256,
+    caCertificateDerBase64: saved[0]!.caCertificateDerBase64,
+  };
+  saved = [{ ...saved[0]!, endpoint: canonicalEndpoint, routes: undefined }];
+  const reloaded = new PeerHostRegistry({
+    storage: {
+      load: async () => structuredClone(saved),
+      save: async (next) => {
+        saved = structuredClone(next);
+      },
+    },
+    localInstanceId: async () => "install_controller",
+    deviceName: "Travel MacBook",
+    clientVersion: "1",
+    platform: "mac",
+    lanAddresses,
+  });
+  t.after(() => reloaded.close());
+
+  colliding = true;
+  await assert.rejects(reloaded.connect(genuine.instanceId), (error: unknown) => {
+    assert.ok(error instanceof PeerTransportError);
+    assert.equal(error.code, "identity_changed");
+    assert.equal(error.identitySource, "tls");
+    assert.equal(error.retryableIdentity, true);
+    assert.equal(error.failure, "tls");
+    return true;
+  });
+  assert.equal(intruderHttpRequests, 0, "the colliding responder receives no HTTP request");
+  assert.equal(intruderDecryptedBytes, 0, "the colliding responder receives no credential or body bytes");
+  assert.deepEqual(
+    {
+      endpoint: saved[0]!.endpoint,
+      serverSpkiSha256: saved[0]!.serverSpkiSha256,
+      caCertificateDerBase64: saved[0]!.caCertificateDerBase64,
+    },
+    originalTrust,
+    "stored trust stays strictly unchanged",
+  );
+
+  // Once mDNS resolves to the paired installation again, connecting succeeds with the unchanged trust.
+  colliding = false;
+  const view = await reloaded.connect(genuine.instanceId);
+  assert.equal(view.state, "connected");
+  const server = (await reloaded.request(genuine.instanceId, { path: "/server" })) as { instanceId: string };
+  assert.equal(server.instanceId, genuine.instanceId);
+});
+
+test("route-aware recovery fails over on paired .local TLS collisions but keeps instance mismatches, revocations and non-eligible routes terminal", async () => {
+  const { startPeerTestHost } = await import("./peer-pairing-test-host.js");
+  const fixture = await startPeerTestHost({ lanHostname: "paired-lan.local" });
+  const lan = {
+    endpoint: fixture.lanEndpoint,
+    serverSpkiSha256: fixture.serverSpkiSha256(),
+    caCertificateDerBase64: fixture.caDerBase64,
+  };
+  const tailnet = {
+    endpoint: "https://paired-lan.example.ts.net/api/aiden/v1",
+    serverSpkiSha256: trust.serverSpkiSha256,
+  };
+  let stored: StoredPeerHost[] = [
+    {
+      ...saved(),
+      ...lan,
+      routes: [{ ...tailnet, id: "route_tailscale_12345678", kind: "tailscale", origin: "learned" }],
+    },
+  ];
+  let lanBehavior: "ok" | "tls_collision" | "instance_mismatch" | "revoked" | "unclassified_identity" = "tls_collision";
+  let tailnetBehavior: "ok" | "tls_captive_portal" = "ok";
+  let serverInstanceId = "host_a";
+  const attempted: string[] = [];
+
+  const store = new PeerHostRegistry({
+    storage: {
+      load: async () => structuredClone(stored),
+      save: async (next) => {
+        stored = structuredClone(next);
+      },
+    },
+    localInstanceId: async () => "self",
+    deviceName: "Desktop",
+    clientVersion: "1",
+    platform: "mac",
+    bootstrap: () => ({
+      observedSpki: undefined,
+      json: async () => {
+        throw new PeerTransportError("identity_changed", undefined, undefined, "tls", { identitySource: "tls" });
+      },
+    }),
+    client: (routeTrust) => ({
+      json: async (request) => {
+        attempted.push(`${routeTrust.endpoint}${request.path}`);
+        if (routeTrust.endpoint === lan.endpoint) {
+          if (lanBehavior === "tls_collision") {
+            throw new PeerTransportError("identity_changed", undefined, undefined, "tls", { identitySource: "tls" });
+          }
+          if (lanBehavior === "revoked") {
+            throw new PeerTransportError("authentication_required", 401);
+          }
+          if (lanBehavior === "unclassified_identity") {
+            throw new PeerTransportError("identity_changed");
+          }
+          if (lanBehavior === "instance_mismatch") {
+            return { protocolVersion: 1, instanceId: "replacement_host", capabilities: ["chat:read"], features: [] };
+          }
+        }
+        if (routeTrust.endpoint === tailnet.endpoint && tailnetBehavior === "tls_captive_portal") {
+          throw new PeerTransportError("identity_changed", undefined, undefined, "tls", { identitySource: "tls" });
+        }
+        return {
+          protocolVersion: 1,
+          instanceId: serverInstanceId,
+          capabilities: ["chat:read"],
+          features: ["peer-routes-v1"],
+        };
+      },
+      events: async () => {},
+    }),
+  });
+  try {
+    // Paired .local route with no learned addresses fails TLS -> falls over to trusted Tailscale route.
+    assert.equal((await store.connect("host_a")).activeRouteKind, "tailscale");
+
+    // If a learned Tailscale fallback also hits a non-WebPKI TLS interception, the paired .local TLS error stays retryable.
+    tailnetBehavior = "tls_captive_portal";
+    await assert.rejects(store.connect("host_a"), (error: unknown) => {
+      assert.ok(error instanceof PeerTransportError);
+      assert.equal(error.code, "identity_changed");
+      assert.equal(error.identitySource, "tls");
+      assert.equal(error.retryableIdentity, true);
+      return true;
+    });
+    tailnetBehavior = "ok";
+
+    // An authenticated /server instanceId mismatch is terminal and never falls over to Tailscale.
+    attempted.length = 0;
+    lanBehavior = "instance_mismatch";
+    await assert.rejects(store.connect("host_a"), (error: unknown) => {
+      assert.ok(error instanceof PeerTransportError);
+      assert.equal(error.code, "identity_changed");
+      assert.equal(error.identitySource, "instance");
+      assert.equal(error.retryableIdentity, false);
+      return true;
+    });
+    assert.deepEqual(attempted, [`${lan.endpoint}/server`], "instance mismatch never tries alternate routes");
+
+    // Revocation stops route failover immediately too.
+    attempted.length = 0;
+    lanBehavior = "revoked";
+    await assert.rejects(store.connect("host_a"), (error: unknown) =>
+      error instanceof PeerTransportError && error.code === "authentication_required",
+    );
+    assert.deepEqual(attempted, [`${lan.endpoint}/server`]);
+
+    // Unclassified identity_changed errors stay conservative (non-retryable).
+    lanBehavior = "unclassified_identity";
+    await assert.rejects(store.connect("host_a"), (error: unknown) => {
+      assert.ok(error instanceof PeerTransportError);
+      assert.equal(error.code, "identity_changed");
+      assert.equal(error.retryableIdentity, false);
+      return true;
+    });
+
+    // probe() on an already-verified connection marks a /server instanceId mismatch as "instance" (terminal) and clears verification.
+    lanBehavior = "ok";
+    assert.equal((await store.connect("host_a")).activeRouteKind, "lan");
+    serverInstanceId = "replacement_after_connect";
+    await assert.rejects(store.probe("host_a"), (error: unknown) => {
+      assert.ok(error instanceof PeerTransportError);
+      assert.equal(error.code, "identity_changed");
+      assert.equal(error.identitySource, "instance");
+      assert.equal(error.retryableIdentity, false);
+      return true;
+    });
+    assert.equal((await store.list())[0]?.state, "unavailable");
+
+    // Non-eligible routes (IP literal with private CA, .local without CA, paired Tailscale) stay non-retryable.
+    for (const nonEligible of [
+      { ...saved("host_ip"), endpoint: "https://127.0.0.1:7319/api/aiden/v1", caCertificateDerBase64: fixture.caDerBase64 },
+      { ...saved("host_nocert"), endpoint: "https://nocert.local:7319/api/aiden/v1", caCertificateDerBase64: undefined },
+      { ...saved("host_ts"), endpoint: tailnet.endpoint, caCertificateDerBase64: undefined },
+    ]) {
+      const single = new PeerHostRegistry({
+        storage: { load: async () => [nonEligible], save: async () => {} },
+        localInstanceId: async () => "self",
+        deviceName: "Desktop",
+        clientVersion: "1",
+        platform: "mac",
+        bootstrap: () => ({
+          observedSpki: undefined,
+          json: async () => {
+            throw new PeerTransportError("identity_changed", undefined, undefined, "tls", { identitySource: "tls" });
+          },
+        }),
+        client: () => ({
+          json: async () => {
+            throw new PeerTransportError("identity_changed", undefined, undefined, "tls", { identitySource: "tls" });
+          },
+          events: async () => {},
+        }),
+      });
+      await assert.rejects(single.connect(nonEligible.id), (error: unknown) => {
+        assert.ok(error instanceof PeerTransportError);
+        assert.equal(error.code, "identity_changed");
+        assert.equal(error.identitySource, "tls");
+        assert.equal(error.retryableIdentity, false, nonEligible.id);
+        return true;
+      });
+      single.close();
+    }
+  } finally {
+    store.close();
+    await fixture.close();
+  }
+});
