@@ -225,6 +225,26 @@ test("a canvas too large to read back is refused and the previous one stays", as
   );
 });
 
+test("a save that fits only without the pages remembered as taken off is refused, and the stored canvas still reads back", async (t) => {
+  const root = await tempRoot(t);
+  await fs.mkdir(root, { recursive: true });
+  const removedPagePaths = Array.from({ length: 30 }, (_, index) => `pages/${"p".repeat(80)}-${index}.html`);
+  await fs.writeFile(path.join(root, "chat-1.json"), JSON.stringify({ ...emptyDesignCanvas(), revision: 1, removedPagePaths }));
+  const store = new DesignCanvasStore({ root: () => root, maxDocumentBytes: 4096 });
+  let doc = await store.get("chat-1");
+  assert.equal(doc.removedPagePaths?.length, 30);
+  for (let index = 0; index < 12; index += 1) doc = withNote(doc, `note-${index}`);
+  const { removedPagePaths: _remembered, ...saved } = doc;
+  assert.ok(Buffer.byteLength(JSON.stringify(saved)) < 4096, "the saved canvas alone fits");
+
+  const result = await store.save("chat-1", saved, 1);
+  assert.equal(result.ok, false);
+  if (result.ok || result.reason !== "invalid") return assert.fail("expected invalid");
+  const current = await store.get("chat-1");
+  assert.equal(current.revision, 1, "the stored canvas was not replaced by one too large to read");
+  assert.equal(current.removedPagePaths?.length, 30);
+});
+
 test("a canvas file over the read cap is set aside instead of being overwritten", async (t) => {
   const root = await tempRoot(t);
   await fs.mkdir(root, { recursive: true });

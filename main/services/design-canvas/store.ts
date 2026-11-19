@@ -67,15 +67,21 @@ export class DesignCanvasStore {
     }
     const parsed = parseDesignCanvas(isRecord(doc) ? { ...doc, revision: baseRevision } : doc);
     if (!parsed.ok) return { ok: false, reason: "invalid", issues: parsed.issues };
-    if (this.tooLarge(parsed.doc)) {
-      return { ok: false, reason: "invalid", issues: ["The canvas is too large to save."] };
-    }
+    const tooLarge = (): DesignCanvasSaveResult => ({
+      ok: false,
+      reason: "invalid",
+      issues: ["The canvas is too large to save."],
+    });
+    if (this.tooLarge(parsed.doc)) return tooLarge();
     return this.serialize(chatId, async () => {
       const current = await this.read(chatId);
       if (current.revision !== baseRevision) return { ok: false, reason: "conflict", doc: current };
       const revision = baseRevision + 1;
       // A save comes from the person's canvas: a page they took off is remembered.
-      await this.write(chatId, withRemovedPagePaths(current, { ...parsed.doc, revision }, true));
+      const doc = withRemovedPagePaths(current, { ...parsed.doc, revision }, true);
+      // The pages remembered as taken off count too: what is written must read back.
+      if (this.tooLarge(doc)) return tooLarge();
+      await this.write(chatId, doc);
       return { ok: true, revision };
     });
   }
