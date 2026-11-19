@@ -464,6 +464,15 @@ final class AidenSandboxedHTMLTests: XCTestCase {
         ("preconnect https", { port in "<link rel=\"preconnect\" href=\"https://localhost:\(port)\">" }),
         ("video", { port in "<video preload=\"auto\" src=\"http://localhost:\(port)/v.mp4\" muted playsinline></video>" }),
         ("audio", { port in "<audio preload=\"auto\" src=\"http://localhost:\(port)/a.mp3\"></audio>" }),
+        ("inline SVG image http", { port in
+            "<svg width=\"10\" height=\"10\"><image href=\"http://localhost:\(port)/i.svg\" width=\"10\" height=\"10\"/></svg>"
+        }),
+        ("inline SVG image https", { port in
+            "<svg width=\"10\" height=\"10\"><image href=\"https://localhost:\(port)/i.svg\" width=\"10\" height=\"10\"/></svg>"
+        }),
+        ("iframe", { port in "<iframe src=\"http://localhost:\(port)/\"></iframe>" }),
+        ("sendBeacon", { port in "<script>navigator.sendBeacon('http://localhost:\(port)/b', 'x')</script>" }),
+        ("EventSource", { port in "<script>new EventSource('http://localhost:\(port)/e')</script>" }),
     ]
 
     private static func page(_ body: String) -> String {
