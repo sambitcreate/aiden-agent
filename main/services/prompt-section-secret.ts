@@ -65,24 +65,36 @@ function keySlot(dir: string, index: number): string {
 
 /** How long a slot still being written by its creator is waited for. */
 const SLOT_WRITE_WAIT_MS = 1_000;
+/**
+ * An unfinished slot older than this was left by a creator that died between
+ * creating and writing it, and is skipped like a damaged one.
+ */
+const SLOT_ABANDONED_MS = 60_000;
+/** The start of a key, as a slot holds it while its creator is writing it. */
+const KEY_PREFIX = /^[0-9a-f]{0,64}$/u;
+
+type SlotState = Buffer | "damaged" | "being-written";
 
 /**
- * The key stored at `slot`. A slot whose creator is still writing it (only on
- * a volume without hard links, where it is created empty and then written in
- * one small write) is waited for; a slot damaged earlier is not.
+ * What `slot` holds. Only on a volume without hard links can a slot be seen
+ * unfinished: it is created empty and then written in one small write. Such a
+ * slot is waited for briefly and never skipped while its creator may still
+ * finish it; a slot that is not a key or the start of one is damaged.
  */
-function settledKey(slot: string): Buffer | undefined {
+function slotState(slot: string): SlotState {
   const deadline = Date.now() + SLOT_WRITE_WAIT_MS;
   for (;;) {
     const key = readKey(slot);
     if (key) return key;
+    let unfinished: boolean;
     try {
       const info = lstatSync(slot);
-      const beingWritten = info.isFile() && info.size < 65 && Date.now() - info.mtimeMs < SLOT_WRITE_WAIT_MS;
-      if (!beingWritten || Date.now() > deadline) return undefined;
+      unfinished = info.isFile() && Date.now() - info.mtimeMs < SLOT_ABANDONED_MS && KEY_PREFIX.test(readFileSync(slot, "utf8"));
     } catch {
-      return undefined;
+      return "damaged";
     }
+    if (!unfinished) return "damaged";
+    if (Date.now() > deadline) return "being-written";
     pause(20);
   }
 }
@@ -117,10 +129,16 @@ function createSlot(slot: string, key: Buffer): Buffer | undefined {
  * The device key in `dir`. Every slot is created exclusively and never
  * replaced, so processes racing to create one all read the winner's key, and
  * a damaged slot (or a symlink, which is never followed or written through)
- * is skipped, the same way by every process, for the next one. Nothing waits
- * on another process's lock, so a slow process cannot leave two keys. A
- * damaged key file is left in place rather than replaced: replacing it is
- * what let two processes each publish their own.
+ * is skipped, the same way by every process, for the next one. A damaged key
+ * file is left in place rather than replaced: replacing it is what let two
+ * processes each publish their own. Nothing waits on another process's lock.
+ *
+ * Undefined when the folder cannot store a key, or when a slot's creator has
+ * not finished writing it (a volume without hard links, and a creator paused
+ * between creating and writing it): this run then uses a key of its own and
+ * claims no spare, so the slot it finishes is still the key every later
+ * launch reads. Only a creator paused longer than SLOT_ABANDONED_MS loses its
+ * slot to a spare, and even then later launches read the lowest valid slot.
  */
 function storedOrCreatedKey(dir: string, fresh: Buffer): Buffer | undefined {
   for (let index = 0; index < KEY_SLOTS; index += 1) {
@@ -135,8 +153,9 @@ function storedOrCreatedKey(dir: string, fresh: Buffer): Buffer | undefined {
     }
     if (!exists && createSlot(slot, fresh)) return fresh;
     // Damaged, or another process created it first: read what it holds.
-    const settled = settledKey(slot);
-    if (settled) return settled;
+    const state = slotState(slot);
+    if (state === "being-written") return undefined;
+    if (state !== "damaged") return state;
   }
   return undefined;
 }
@@ -164,7 +183,7 @@ export function promptSectionDeviceKey(dir: string): Buffer {
       fallbackLogged = true;
       // This module stays Electron-free (the CLI and the harness use it), so it
       // reports through Node's warning channel rather than the app logger.
-      process.emitWarning("The app data folder could not store the prompt section key; using a key for this run only.", "PromptSectionKeyWarning");
+      process.emitWarning("The app data folder did not provide a stored prompt section key; using a key for this run only.", "PromptSectionKeyWarning");
     }
     key = fresh;
   }

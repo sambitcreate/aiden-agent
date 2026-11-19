@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -159,6 +159,35 @@ test("a process that finds the key still being written waits for it rather than 
 
   assert.equal(await waiting, published, "both processes derive chat secrets from one key");
   assert.deepEqual(await readdir(dir), [PROMPT_SECTION_KEY_FILE], "no second key is stored");
+});
+
+test("a key whose creator stays paused past the wait is still the one every later launch reads", async () => {
+  const dir = await dataDir();
+  const file = path.join(dir, PROMPT_SECTION_KEY_FILE);
+  // Created empty on a volume without hard links; its creator pauses well
+  // past the reader's wait before writing it.
+  await writeFile(file, "", { mode: 0o600 });
+  const reader = keyInAnotherProcess(dir);
+  await new Promise((resolve) => setTimeout(resolve, 1_600));
+  const published = "ef".repeat(32);
+  await writeFile(file, `${published}\n`);
+
+  assert.notEqual(await reader, "", "the reader went on with a key for its run");
+  assert.deepEqual(await readdir(dir), [PROMPT_SECTION_KEY_FILE], "the reader claimed no spare, so no second key was stored");
+  assert.equal(promptSectionDeviceKey(dir).toString("hex"), published, "a later launch reads the creator's key");
+});
+
+test("a key file left unfinished long ago by a creator that died is skipped", async () => {
+  const dir = await dataDir();
+  const file = path.join(dir, PROMPT_SECTION_KEY_FILE);
+  await writeFile(file, "0123abcd");
+  const longAgo = new Date(Date.now() - 10 * 60_000);
+  await utimes(file, longAgo, longAgo);
+
+  const key = promptSectionDeviceKey(dir);
+  assert.equal((await filesHolding(dir, key)).length, 1, "a new key is stored");
+  forgetPromptSectionDeviceKeys();
+  assert.deepEqual(promptSectionDeviceKey(dir), key);
 });
 
 test("processes starting together on a damaged key file all settle on one key", async () => {
