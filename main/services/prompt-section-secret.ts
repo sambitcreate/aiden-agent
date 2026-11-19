@@ -85,8 +85,8 @@ function publishKey(file: string, key: Buffer): Buffer | undefined {
 
 /**
  * This device's key, kept in `dir` (the app's data folder). The first caller
- * creates it and a concurrent creator's key wins and is read back, so the
- * desktop app and `aiden serve` agree. When the folder cannot be written the
+ * creates it and a concurrent creator's key wins and is read back, so two
+ * processes sharing the folder agree. When the folder cannot be written the
  * key is random for this process: markers stay stable within a run but change
  * after a restart (an ACP chat with AGENTS.md then replaces its native session
  * once per launch), and that is logged once.
