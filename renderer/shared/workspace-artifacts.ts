@@ -1,6 +1,16 @@
 import { isHtmlArtifactTitle } from "./generative-ui.js";
 import { AIDEN_UI_LIMITS, type ChatUiVisualV1 } from "./aiden-ui/types.js";
 import { isWireSafeKey, parseAidenUiState, parseChatUiVisualV1 } from "./aiden-ui/visual.js";
+import {
+  checkWorkspaceArtifactTemplate,
+  fillWorkspaceArtifactTemplate,
+  WORKSPACE_ARTIFACT_ARGUMENT_PROGRAMS,
+  WORKSPACE_ARTIFACT_PLACEHOLDER,
+  workspaceArtifactTemplateHasParams,
+  type WorkspaceArtifactArgvStep,
+} from "./workspace-artifact-template.js";
+
+export type { WorkspaceArtifactArgvCommand, WorkspaceArtifactArgvStep, WorkspaceArtifactRedirect } from "./workspace-artifact-template.js";
 
 /**
  * Workspace artifacts: persistent Aiden UI pages a workspace owns and the
@@ -172,9 +182,6 @@ export interface WorkspaceArtifactsChangedEvent {
 const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const ARTIFACT_ID = /^[A-Za-z0-9_-]{1,64}$/u;
 const WORKSPACE_ID = /^[A-Za-z0-9_-]{1,128}$/u;
-const PLACEHOLDER = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/gu;
-const PLACEHOLDER_AT = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/uy;
-const PLACEHOLDER_TEST = /\{\{\s*[A-Za-z_][A-Za-z0-9_]*\s*\}\}/u;
 const RESERVED_NAMES = new Set(["__proto__", "constructor", "prototype"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -208,706 +215,6 @@ function hasControlCharacter(value: string, allowLineBreaks: boolean): boolean {
     if ((code >= 0x80 && code <= 0x9f) || code === 0x2028 || code === 0x2029) return true;
   }
   return INVISIBLE.test(value.replace(EMOJI_PARTS, ""));
-}
-
-const WORD_BREAK_AFTER = /[\s;&|)]/u;
-/** Reserved words that come before a command's name without being it. */
-const COMMAND_PREFIX_WORDS = new Set(["!", "coproc", "do", "elif", "else", "if", "then", "until", "while"]);
-/** `NAME=value` (or `NAME[i]=`, `NAME+=`) before a command's name. */
-const ASSIGNMENT_WORD = /^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=/u;
-/** A redirection operator; one ending in `&2` or `&-` has no target word. */
-const REDIRECTION = /^(?:&>>?|<<<|<>|[<>]&(?:[0-9]+-?|-)|[<>]&|>>|>\||[<>])/u;
-/** Commands that run their arguments as code or as another program. */
-const RUNS_ARGUMENT = new Set([
-  ".",
-  "arch",
-  "builtin",
-  "bunx",
-  "busybox",
-  "caffeinate",
-  "chroot",
-  "command",
-  "doas",
-  "ed",
-  "emacs",
-  "env",
-  "eval",
-  "ex",
-  "exec",
-  "flock",
-  "hash",
-  "ionice",
-  "less",
-  "more",
-  "most",
-  "nice",
-  "nohup",
-  "npx",
-  "nvim",
-  "parallel",
-  "pkexec",
-  "pnpx",
-  "runuser",
-  "script",
-  "setsid",
-  "sg",
-  "source",
-  "ssh",
-  "stdbuf",
-  "strace",
-  "su",
-  "sudo",
-  "systemd-run",
-  "time",
-  "timeout",
-  "trap",
-  "unbuffer",
-  "uvx",
-  "vi",
-  "view",
-  "vim",
-  "vimdiff",
-  "watch",
-  "xargs",
-  "xcrun",
-]);
-
-/**
- * Programs that read some argument as code: `code` matches the options whose
- * value is code or names the code to run, `valued` the other options that take
- * the next word, and `operand` says which plain arguments are code (the first
- * for `awk '{…}' file` unless a code option gave it, or each after the first
- * for `sqlite3 db 'select …'`).
- */
-interface CodeArguments {
-  code: RegExp;
-  valued?: RegExp;
-  operand?: "first" | "after-first" | "every";
-  /**
-   * Code options count only before the subcommand, the first operand this
-   * matches (as git's do). Before it, any option not in `flags` is taken to
-   * consume the next word, so an option this list does not know cannot pass
-   * its value off as the subcommand.
-   */
-  subcommand?: RegExp;
-  flags?: RegExp;
-}
-const SHELL_CODE: CodeArguments = { code: /^-[A-Za-z]*c$/u, valued: /^[-+][oO]$/u, operand: "first" };
-const AWK_CODE: CodeArguments = { code: /^(?:-[feE]|--file|--source|--exec)$/u, valued: /^(?:-[Fv]|--field-separator|--assign)$/u, operand: "first" };
-const NODE_CODE: CodeArguments = { code: /^(?:-[epr]|--eval|--print|--require|--import|--loader|--experimental-loader)$/u, operand: "first" };
-const CODE_ARGUMENTS: Record<string, CodeArguments> = {
-  ash: SHELL_CODE,
-  bash: SHELL_CODE,
-  csh: SHELL_CODE,
-  dash: SHELL_CODE,
-  fish: SHELL_CODE,
-  ksh: SHELL_CODE,
-  mksh: SHELL_CODE,
-  sh: SHELL_CODE,
-  tcsh: SHELL_CODE,
-  zsh: SHELL_CODE,
-  awk: AWK_CODE,
-  gawk: AWK_CODE,
-  mawk: AWK_CODE,
-  nawk: AWK_CODE,
-  sed: { code: /^(?:-[A-Za-z]*[ef]|--expression|--file)$/u, valued: /^(?:-l|--line-length)$/u, operand: "first" },
-  gsed: { code: /^(?:-[A-Za-z]*[ef]|--expression|--file)$/u, valued: /^(?:-l|--line-length)$/u, operand: "first" },
-  python: { code: /^-[A-Za-z]*[cm]$/u, valued: /^-[WX]$/u, operand: "first" },
-  pypy: { code: /^-[A-Za-z]*[cm]$/u, valued: /^-[WX]$/u, operand: "first" },
-  node: NODE_CODE,
-  nodejs: NODE_CODE,
-  bun: NODE_CODE,
-  perl: { code: /^(?:-[A-Za-z]*[eE]|-[mM])$/u, valued: /^-[Ix]$/u, operand: "first" },
-  ruby: { code: /^(?:-[A-Za-z]*e|-r)$/u, valued: /^-[IC]$/u, operand: "first" },
-  php: { code: /^-[rBREf]$/u, operand: "first" },
-  lua: { code: /^-[el]$/u, operand: "first" },
-  luajit: { code: /^-[el]$/u, operand: "first" },
-  osascript: { code: /^-e$/u, operand: "first" },
-  R: { code: /^(?:-e|--file)$/u },
-  Rscript: { code: /^-e$/u, operand: "first" },
-  pwsh: { code: /^-(?:c|command|e|ec|encodedcommand|f|file)$/iu, operand: "first" },
-  powershell: { code: /^-(?:c|command|e|ec|encodedcommand|f|file)$/iu, operand: "first" },
-  sqlite: { code: /^-(?:cmd|init)$/u, valued: /^-(?:separator|nullvalue|newline|vfs|mmap|maxsize|lookaside|pagecache|heap)$/u, operand: "after-first" },
-  psql: { code: /^(?:-c|--command|-f|--file)$/u },
-  mysql: { code: /^(?:-e|--execute)$/u },
-  // make reads NAME=value arguments as variables (SHELL=… picks the program
-  // that runs every recipe) and a directory or file names the Makefile.
-  make: { code: /^(?:-f|--file|--makefile|--eval)$/u, valued: /^(?:-[jl]|--jobs|--load-average)$/u, operand: "every" },
-  gmake: { code: /^(?:-f|--file|--makefile|--eval)$/u, valued: /^(?:-[jl]|--jobs|--load-average)$/u, operand: "every" },
-  bmake: { code: /^(?:-f|--file|--makefile|--eval)$/u, valued: /^(?:-[jl]|--jobs|--load-average)$/u, operand: "every" },
-  mariadb: { code: /^(?:-e|--execute)$/u },
-  git: {
-    code: /^(?:-c|--config-env|--exec-path)$/u,
-    valued: /^-C$/u,
-    subcommand: /^[a-z][a-z0-9-]*$/u,
-    flags: /^(?:-[pPv]|--(?:paginate|no-pager|bare|version|help|no-replace-objects|no-lazy-fetch|no-optional-locks|no-advice|(?:no-)?(?:literal|glob|noglob|icase)-pathspecs|(?:html|man|info)-path))$/u,
-  },
-};
-/**
- * Options whose next word names a program, code or configuration to start:
- * git's transport helpers (`--upload-pack`), rsync's remote shell (`-e`),
- * tar's and sort's compressor, zip's tester, scp's ssh and man's pager.
- * `short` matches short options as written; a long option counts when it is
- * any of `long` or an abbreviation of one, since getopt_long, git and
- * Getopt::Long all accept a unique prefix (`--upload-p`). `exact` are long
- * options of the program that a shorter dangerous name would otherwise claim
- * (`git send-email --to` is not `--to-cmd`). Like `CODE_ARGUMENTS`, the common
- * programs, not every one.
- */
-interface ProgramOptions {
-  short?: RegExp;
-  long?: readonly string[];
-  exact?: readonly string[];
-}
-const TAR_PROGRAM: ProgramOptions = {
-  short: /^-[A-Za-z]*[IF]$/u,
-  long: ["use-compress-program", "to-command", "info-script", "new-volume-script", "rsh-command", "rmt-command", "checkpoint-action"],
-};
-const SSH_COPY_PROGRAM: ProgramOptions = { short: /^-[A-Za-z0-9]*[SoF]$/u };
-const PROGRAM_OPTIONS: Record<string, ProgramOptions> = {
-  rsync: { short: /^-[A-Za-z]*e$/u, long: ["rsh", "rsync-path"] },
-  tar: TAR_PROGRAM,
-  gtar: TAR_PROGRAM,
-  bsdtar: TAR_PROGRAM,
-  sort: { long: ["compress-program"] },
-  gsort: { long: ["compress-program"] },
-  zip: { short: /^-TT$/u, long: ["unzip-command"] },
-  scp: SSH_COPY_PROGRAM,
-  sftp: SSH_COPY_PROGRAM,
-  man: { short: /^-[PH]$/u, long: ["pager", "html"] },
-  wget: { long: ["use-askpass"] },
-};
-/**
- * Long options that name a program, code or a configuration file in any
- * command, with their abbreviations, and the words that mark one by name
- * (`--sendmail-cmd`, `--proxy-command`, `--use-compress-program`,
- * `--config`): a value after one may be what the program starts.
- */
-const ANY_PROGRAM_LONG: ProgramOptions = {
-  long: ["exec", "eval", "command", "config", "upload-pack", "receive-pack", "use-compress-program", "compress-program", "rsh", "rsync-path", "proxy-command"],
-};
-const PROGRAM_OPTION_WORD = /^(?:[a-z]*cmd|[a-z]*command|program|prog|exec|execdir|execute|shell|pager|editor|askpass|hooks?|eval|rsh|script|interpreter|wrapper|config|helper)$/u;
-const LONG_OPTION = /^--([A-Za-z0-9][A-Za-z0-9-]*)$/u;
-
-/** Whether `arg`, an option as written, is one of `options` or abbreviates one. */
-function isProgramOption(arg: string, options: ProgramOptions | undefined): boolean {
-  if (!options) return false;
-  if (options.short?.test(arg)) return true;
-  const name = LONG_OPTION.exec(arg)?.[1]?.toLowerCase();
-  if (!name || options.exact?.includes(name)) return false;
-  return options.long?.some((option) => option.startsWith(name)) === true;
-}
-
-/** Whether a long option's own name says it takes a program or code (`--sendmail-cmd`, `--shell`). */
-function namesAProgram(arg: string): boolean {
-  const name = LONG_OPTION.exec(arg)?.[1]?.toLowerCase();
-  return name !== undefined && name.split("-").some((word) => PROGRAM_OPTION_WORD.test(word));
-}
-
-/** git's, by subcommand; `*` applies to every subcommand. */
-const GIT_PROGRAM_OPTIONS: Record<string, ProgramOptions> = {
-  "*": { long: ["upload-pack", "receive-pack", "exec", "config", "config-env", "exec-path"] },
-  clone: { short: /^-[uc]$/u, long: ["template", "upload-pack", "config"] },
-  init: { long: ["template"] },
-  // A merge strategy runs the program git-merge-<strategy>.
-  merge: { short: /^-s$/u, long: ["strategy"] },
-  pull: { short: /^-s$/u, long: ["strategy"] },
-  rebase: { short: /^-[xs]$/u, long: ["exec", "strategy"] },
-  "cherry-pick": { long: ["strategy"] },
-  revert: { long: ["strategy"] },
-  difftool: { short: /^-x$/u, long: ["extcmd", "tool"] },
-  mergetool: { long: ["tool"] },
-  "send-email": { long: ["sendmail-cmd", "smtp-server", "to-cmd", "cc-cmd", "header-cmd"], exact: ["to", "cc", "bcc", "from", "subject"] },
-};
-/** git subcommands whose arguments after a word are a command (`git submodule foreach …`). */
-const GIT_RUNS_AFTER: Record<string, string> = { submodule: "foreach", bisect: "run" };
-/**
- * `git config` keys a text value may set: none of them names a program,
- * a hook, a pager, an editor, an alias or other configuration to include.
- */
-const SAFE_GIT_CONFIG_KEY = /^(?:user\.(?:name|email)|init\.defaultbranch|pull\.(?:rebase|ff)|push\.(?:default|autosetupremote)|fetch\.prune|color\.ui|branch\.[A-Za-z0-9._/-]+\.description)$/iu;
-/** `git config` subcommand words (git 2.46) that come before the key. */
-const GIT_CONFIG_VERBS = new Set(["get", "set", "unset", "list", "edit", "rename-section", "remove-section"]);
-/** `git config` options that take the next word. */
-const GIT_CONFIG_VALUED = /^(?:-f|--file|--blob|--type|--default|--comment|--value)$/u;
-/**
- * Package runners and project tools whose subcommand runs a package, a
- * script path or a command named by the next words (`npm exec`, `bun x`,
- * `pnpm dlx`, `go run pkg@latest`, `poetry run`).
- */
-const RUNS_SUBCOMMAND: Record<string, readonly string[]> = {
-  npm: ["exec", "x", "init", "create", "explore"],
-  pnpm: ["dlx", "exec", "create"],
-  yarn: ["dlx", "exec", "create"],
-  bun: ["x", "create"],
-  deno: ["run", "eval", "x"],
-  go: ["run", "generate"],
-  uv: ["run", "tool"],
-  pipx: ["run"],
-  poetry: ["run"],
-  pipenv: ["run"],
-  bundle: ["exec"],
-  gh: ["alias", "extension"],
-};
-
-/** The subcommand of `git …`, skipping global options and their values. */
-function gitSubcommand(args: readonly string[]): { name: string; index: number } | undefined {
-  const flags = CODE_ARGUMENTS.git!.flags!;
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index]!;
-    if (!arg.startsWith("-")) return { name: arg, index };
-    if (!arg.includes("=") && !flags.test(arg)) index += 1;
-  }
-  return undefined;
-}
-
-/** Builtins that read a word as a variable name or arithmetic; bash evaluates a name's `[subscript]`. */
-const NAME_COMMANDS = new Set(["declare", "export", "getopts", "let", "local", "mapfile", "read", "readarray", "readonly", "typeset", "unset"]);
-/** Builtins whose `-v` (or `wait -p`) value is a variable name. */
-const NAME_OPTION_COMMANDS: Record<string, RegExp> = { printf: /^-v$/u, test: /^-[vR]$/u, "[": /^-[vR]$/u, wait: /^-[A-Za-z]*p$/u };
-
-/**
- * The programs a command may run when its template takes page data. A
- * denylist of programs that run code can never be complete (`expect -c`,
- * `tmux new-session`, `git filter-branch --tree-filter`, `npm install` of a
- * local package all run their argument), so once a template has a
- * placeholder every command in it, piped, chained, in a subshell or in a
- * `$(…)`, must start with one of these, written as a plain word.
- */
-const ARGUMENT_TEXT_PROGRAMS = ["ls", "cat", "head", "tail", "wc", "grep", "rg", "jq", "echo", "printf", "date", "basename", "dirname", "sort", "uniq", "cut", "tr"];
-const ARGUMENT_TEST_PROGRAMS = ["test", "[", "true", "false"];
-const ARGUMENT_PROGRAMS = new Set(["git", "gh", ...ARGUMENT_TEXT_PROGRAMS, ...ARGUMENT_TEST_PROGRAMS]);
-/** git subcommands that take page data; `worktree` and `remote` only in the forms `GIT_SUBCOMMAND_VERBS` gives. */
-const ARGUMENT_GIT_SUBCOMMANDS = [
-  "status", "log", "show", "diff", "branch", "switch", "checkout", "fetch", "pull", "push", "add", "commit", "restore", "reset", "tag", "stash",
-  "merge", "rebase", "cherry-pick", "revert", "worktree", "remote", "rev-parse", "grep", "blame", "ls-files", "config",
-];
-const GIT_SUBCOMMAND_VERBS: Record<string, readonly string[]> = { worktree: ["list", "add", "remove"], remote: ["-v", "--verbose"] };
-/** git's options before the subcommand that a page may use; `-C`, `-c` and the rest change what runs or where. */
-const ARGUMENT_GIT_GLOBAL_OPTIONS = new Set(["--no-pager", "-P", "--no-optional-locks"]);
-/**
- * gh command groups and their verbs that take page data. `gh api` is left
- * out on purpose: `-X` sends any method and `-f`/`-F` turn a request into a
- * POST, so no set of option checks keeps it to reads; `alias`, `extension`
- * and `config` change what later gh commands run.
- */
-const ARGUMENT_GH_GROUPS = ["pr", "issue", "run", "repo"];
-const ARGUMENT_GH_VERBS = ["view", "list", "checkout", "merge", "comment", "close", "reopen", "review", "diff", "status", "browse"];
-const ARGUMENT_GH_COMMANDS = ["browse", "status"];
-/** A program written as a plain word: no quotes, expansions, globs or path. */
-const PLAIN_PROGRAM = /^[A-Za-z0-9_][A-Za-z0-9_.+-]*$/u;
-/** Reserved words that end a compound command and run nothing themselves. */
-const COMMAND_END_WORDS = new Set(["fi", "done"]);
-
-/** The commands a template with placeholders may run, for refusal messages. */
-const ARGUMENT_PROGRAMS_SUMMARY =
-  `git ${ARGUMENT_GIT_SUBCOMMANDS.filter((sub) => sub !== "worktree" && sub !== "remote").join(", ")}, worktree list/add/remove or remote -v ` +
-  `(with only --no-pager or --no-optional-locks before the subcommand); gh ${ARGUMENT_GH_GROUPS.join(", ")} followed by ${ARGUMENT_GH_VERBS.join(", ")}, ` +
-  `or gh ${ARGUMENT_GH_COMMANDS.join(" or ")}; ${[...ARGUMENT_TEXT_PROGRAMS, ...ARGUMENT_TEST_PROGRAMS].join(", ")}`;
-
-/**
- * Whether one simple command (its words as written, without redirections)
- * may appear in a template that takes page data: it must run a program from
- * the allowlist, named by a plain word, with a listed git subcommand or gh
- * group and verb. Returns what the command uses that is not allowed.
- */
-function argumentCommandProblem(words: readonly string[]): string | undefined {
-  let start = 0;
-  while (start < words.length && COMMAND_PREFIX_WORDS.has(words[start]!)) start += 1;
-  if (start >= words.length || words.slice(start).every((word) => COMMAND_END_WORDS.has(word))) return undefined;
-  const first = words[start]!;
-  if (ASSIGNMENT_WORD.test(first)) return "a variable assignment, which can change what a program runs (GIT_PAGER=…, PATH=…)";
-  if (first !== "[" && !PLAIN_PROGRAM.test(first)) return `${first}, a program name with quotes, $, a path or other shell syntax`;
-  if (!ARGUMENT_PROGRAMS.has(first)) return first;
-  const raw = words.slice(start + 1);
-  const args = raw.map(unquotedWord);
-  const plain = (index: number) => raw[index] !== undefined && PLAIN_PROGRAM.test(raw[index]!) && raw[index] === args[index];
-  if (first === "git") {
-    let index = 0;
-    while (index < raw.length && ARGUMENT_GIT_GLOBAL_OPTIONS.has(raw[index]!)) index += 1;
-    const sub = raw[index];
-    if (sub === undefined) return "git without a subcommand";
-    if (sub.startsWith("-")) return `git ${sub} before the subcommand`;
-    if (!plain(index) || !ARGUMENT_GIT_SUBCOMMANDS.includes(sub)) return `git ${sub}`;
-    const after = args.slice(index + 1);
-    const verbs = GIT_SUBCOMMAND_VERBS[sub];
-    if (sub === "remote" && !after.every((arg) => verbs!.includes(arg))) return "git remote other than git remote -v";
-    if (sub === "worktree" && !(plain(index + 1) && verbs!.includes(after[0]!))) return `git worktree ${after[0] ?? ""}`.trim();
-    if (sub === "config") {
-      if (after.some((arg) => arg === "edit" || arg === "-e" || arg === "--edit")) return "git config edit, which opens an editor";
-      let key: string | undefined;
-      for (let at = 0; at < after.length && key === undefined; at += 1) {
-        const arg = after[at]!;
-        if (GIT_CONFIG_VALUED.test(arg)) at += 1;
-        else if (!arg.startsWith("-") && !GIT_CONFIG_VERBS.has(arg)) key = raw[index + 1 + at];
-      }
-      if (key !== undefined && !SAFE_GIT_CONFIG_KEY.test(key)) return `git config ${key}`;
-    }
-    return undefined;
-  }
-  if (first === "gh") {
-    if (plain(0) && ARGUMENT_GH_COMMANDS.includes(raw[0]!)) return undefined;
-    if (!plain(0) || !ARGUMENT_GH_GROUPS.includes(raw[0]!)) return raw[0] === "api" ? "gh api, which can send any request" : `gh ${raw[0] ?? ""}`.trim();
-    if (!plain(1) || !ARGUMENT_GH_VERBS.includes(raw[1]!)) return `gh ${raw[0]} ${raw[1] ?? ""}`.trim();
-    return undefined;
-  }
-  if (first === "printf" && args.some((arg) => /^-[A-Za-z]*v/u.test(arg))) return "printf -v, which puts the value in a variable that bash may later evaluate";
-  if (first === "sort" && args.some((arg) => isProgramOption(arg.replace(/=.*$/su, ""), PROGRAM_OPTIONS.sort))) return "sort --compress-program";
-  if (first === "rg" && args.some((arg) => /^--(?:pre|hostname-bin)(?:=|$)/u.test(arg))) return "rg --pre or --hostname-bin, which run a program";
-  return undefined;
-}
-
-/** A long option that names the file a program writes (`--output`, `--out`). */
-function namesAnOutputFile(arg: string): boolean {
-  const name = LONG_OPTION.exec(arg)?.[1]?.toLowerCase();
-  return name !== undefined && (name.startsWith("output") || "output".startsWith(name));
-}
-
-interface PlaceholderPlacement {
-  /** Where a placeholder sits wrongly for any value. */
-  misplaced?: string;
-  /** A placeholder bash evaluates as arithmetic; only numbers are safe there. */
-  arithmetic?: string;
-  /** A command in a template with placeholders that runs something off the allowlist. */
-  program?: string;
-  /** Shell syntax a template with placeholders may not use. */
-  syntax?: string;
-}
-
-/** A word as the shell reads it once quotes, backslashes and line continuations go. */
-function unquotedWord(word: string): string {
-  return word.replace(/\\\n/gu, "").replace(/["'\\]/gu, "");
-}
-
-/**
- * Judges a placeholder by the words of its simple command before it (as
- * written, without redirections): whether it would be the command itself, an
- * argument that command runs as code, or a word bash reads as a variable name
- * or arithmetic. Returns a reason for any value, `"name"` when only text
- * values are unsafe, or undefined.
- */
-function placeholderCommandProblem(words: readonly string[], inArithmetic: boolean): string | "name" | undefined {
-  let start = 0;
-  while (start < words.length && (COMMAND_PREFIX_WORDS.has(words[start]!) || ASSIGNMENT_WORD.test(words[start]!))) start += 1;
-  if (start >= words.length) return inArithmetic ? "name" : "the command itself";
-  const command = unquotedWord(words[start]!);
-  // A name built by expansion, a glob or braces is only known when it runs.
-  if (/[$`*?{}]/u.test(command) || (command !== "[" && command.includes("["))) return "an argument to a command chosen when it runs";
-  const base = command.replace(/^.*\//u, "");
-  // python3.12 and lua5.4 follow python and lua's rules.
-  const name = base.replace(/[0-9][0-9.]*$/u, "") || base;
-  if (RUNS_ARGUMENT.has(base) || RUNS_ARGUMENT.has(name)) return `an argument to ${base}, which runs it`;
-  const args = words.slice(start + 1).map(unquotedWord);
-  const last = args[args.length - 1] ?? "";
-  // A value that names a file to write or post could overwrite a hook or send a local secret.
-  if (namesAnOutputFile(last) || (base === "sort" && /^-[A-Za-z]*o$/u.test(last))) return `the file ${base} ${last} writes`;
-  if (base === "gh" && (last === "-F" || last === "--body-file")) return `the file gh ${last} reads and posts`;
-  if (base === "git" && args.includes("config") && /^(?:-f|--file)$/u.test(last)) return "the file git config writes";
-  if (base === "uniq") {
-    let operands = 0;
-    for (let index = 0; index < args.length; index += 1) {
-      if (/^-[fsw]$/u.test(args[index]!)) index += 1;
-      else if (!args[index]!.startsWith("-") || args[index] === "-") operands += 1;
-    }
-    if (operands >= 1) return "the file uniq writes";
-  }
-  if (base === "find" && args.some((arg) => /^-(?:exec|execdir|ok|okdir)$/u.test(arg))) return "an argument to find -exec, which runs it";
-  if (isProgramOption(last, PROGRAM_OPTIONS[base]) || isProgramOption(last, ANY_PROGRAM_LONG) || namesAProgram(last)) {
-    return `the program or code ${base} ${last} names`;
-  }
-  // tar's bundled first word (`tar cIf prog …`) hands later words to its options.
-  if ((base === "tar" || base === "gtar" || base === "bsdtar") && /^[A-Za-z]*[IF][A-Za-z]*$/u.test(args[0] ?? "")) {
-    return `an argument to tar ${args[0]}, whose options name a program`;
-  }
-  const runner = RUNS_SUBCOMMAND[base];
-  if (runner) {
-    const sub = args.find((arg) => !arg.startsWith("-"));
-    if (sub === undefined) return `the subcommand of ${base}, which can run a package`;
-    if (runner.includes(sub)) return `an argument to ${base} ${sub}, which runs it`;
-  }
-  if (base === "git") {
-    const sub = gitSubcommand(args);
-    if (!sub) return "the subcommand of git";
-    const after = args.slice(sub.index + 1);
-    if (after.length && isProgramOption(last, GIT_PROGRAM_OPTIONS[sub.name])) return `the program git ${sub.name} ${last} names`;
-    const runs = GIT_RUNS_AFTER[sub.name];
-    if (runs && after.includes(runs)) return `the command git ${sub.name} ${runs} runs`;
-    if (sub.name === "config") {
-      let key: string | undefined;
-      for (let index = 0; index < after.length && key === undefined; index += 1) {
-        const arg = after[index]!;
-        if (GIT_CONFIG_VALUED.test(arg)) index += 1;
-        else if (!arg.startsWith("-") && !GIT_CONFIG_VERBS.has(arg)) key = arg;
-      }
-      if (key === undefined) return "a git config key or option";
-      if (!SAFE_GIT_CONFIG_KEY.test(key)) return `a value for git config ${key}, which git may run or read as configuration`;
-    }
-  }
-  const spec = CODE_ARGUMENTS[base] ?? CODE_ARGUMENTS[name];
-  if (spec) {
-    const scan = (words: readonly string[]) => {
-      let operands = 0;
-      let codeGiven = false;
-      let subcommand = false;
-      for (let index = 0; index < words.length; index += 1) {
-        const arg = words[index]!;
-        if (arg === "--") {
-          operands += words.length - index - 1;
-          break;
-        }
-        if (spec.code.test(arg)) {
-          codeGiven = true;
-          index += 1;
-        } else if (spec.valued?.test(arg)) index += 1;
-        else if (spec.subcommand && !subcommand && arg.startsWith("-") && !arg.includes("=") && !spec.flags?.test(arg)) index += 1;
-        else if (!arg.startsWith("-") || arg === "-") {
-          operands += 1;
-          subcommand ||= spec.subcommand?.test(arg) === true;
-        }
-      }
-      return { operands, codeGiven, subcommand };
-    };
-    if (spec.code.test(last) && !scan(args.slice(0, -1)).subcommand) return `the code given to ${base} ${last}`;
-    const { operands, codeGiven } = scan(args);
-    if (spec.operand === "first" && !codeGiven && operands === 0) return `the program ${base} runs`;
-    if (spec.operand === "after-first" && operands >= 1) return `the code ${base} runs`;
-    if (spec.operand === "every" && !spec.valued?.test(last)) return `an argument to ${base}, which can set the shell its recipes run in`;
-  }
-  if (inArithmetic || NAME_COMMANDS.has(base) || NAME_OPTION_COMMANDS[base]?.test(last)) return "name";
-  return undefined;
-}
-
-/** Plain text a placeholder may be joined to, as in `HEAD:{{branch}}` or `{{name}}.json`. */
-const JOINED_TEXT = /^[A-Za-z0-9_.,:@%+/=-]*$/u;
-const JOINED_TAIL = /(?:[A-Za-z0-9_.,:@%+/=-]|\{\{\s*[A-Za-z_][A-Za-z0-9_]*\s*\}\})*/uy;
-const LONGER_WORD = "part of a longer word with quotes, $, globs or other shell syntax";
-
-/**
- * Whether the word around the placeholder at `index`…`end` (which started at
- * `wordStart`) is one the value may be part of: the placeholder alone, or
- * joined only to plain text and other placeholders. A joined word may not
- * start with `-` (`--upload-pack={{x}}` hands the value to the option) or be
- * a variable assignment before the command (`GIT_SSH_COMMAND={{x}} git …`).
- */
-function joinedWordProblem(template: string, wordStart: number, index: number, end: number, commandWords: readonly string[]): string | undefined {
-  JOINED_TAIL.lastIndex = end;
-  const tailEnd = end + JOINED_TAIL.exec(template)![0].length;
-  if (tailEnd < template.length && !WORD_BREAK_AFTER.test(template[tailEnd]!)) return LONGER_WORD;
-  const before = template.slice(wordStart, index).replace(PLACEHOLDER, "x");
-  const after = template.slice(end, tailEnd).replace(PLACEHOLDER, "x");
-  if (!before && !after) return undefined;
-  if (!JOINED_TEXT.test(before)) return LONGER_WORD;
-  const word = `${before}x${after}`;
-  if (word.startsWith("-")) return "joined to an option (write --body {{body}}, not --body={{body}})";
-  // `+cmd` is a command to vim, less and more, and `@file` a file to read for curl and gh.
-  if (/^[+@]/u.test(word)) return "joined after + or @, which programs read as a command or a file to load";
-  const commandPosition = commandWords.every((word) => COMMAND_PREFIX_WORDS.has(word) || ASSIGNMENT_WORD.test(word));
-  if (commandPosition && ASSIGNMENT_WORD.test(word)) return "a variable assignment, which a program may read as a command to run";
-  return undefined;
-}
-
-/**
- * Each placeholder must be an unquoted argument (`gh pr merge {{number}}`),
- * alone or joined only to plain text (`git show HEAD:{{file}}`): never
- * inside quotes, backticks, `$(…)`, `${…}`, a heredoc or a comment, never
- * joined to an option or a variable assignment, never the command itself,
- * and never an argument a command runs as code (`eval`, `sh -c`, `python
- * -c`, an awk program) or that names a program to start (`git
- * --upload-pack`, `rsync -e`, `tar --use-compress-program`, make's
- * `SHELL=`). Returns where a placeholder sits wrongly, or undefined. The value
- * itself never becomes shell code (see `resolveWorkspaceArtifactCommand`);
- * this keeps each value one plain argument, as the person's confirmation
- * shows it. The list of programs that run code is the common ones, not every
- * program; under Ask each press still shows the exact command.
- */
-function placeholderPlacement(template: string, isText: (name: string) => boolean, nested = false): PlaceholderPlacement {
-  const misplaced = (reason: string): PlaceholderPlacement => ({ misplaced: reason });
-  const syntax = (reason: string): PlaceholderPlacement => ({ syntax: reason });
-  // A $(…) or <(…) inside a template with placeholders is held to the same rules.
-  if (!nested && !PLACEHOLDER_TEST.test(template)) return {};
-  if (template.includes("AIDEN_ARG_")) return misplaced("next to AIDEN_ARG_ variables, which are reserved");
-  if (template.includes("<<<")) return syntax("a here-string (<<<), which feeds text to a program's input");
-  if (/<<(?!<)/u.test(template)) return misplaced("inside a heredoc");
-  // Ways to reach a value other than its own word: the last argument ($_),
-  // indirect expansion (${!name}, which evaluates a [subscript]) and prompt
-  // expansion (${name@P}, which runs $(…) in the text).
-  if (/\$(?:\{[#!]?)?_(?![A-Za-z0-9_])/u.test(template)) return syntax("$_, the previous command's last argument");
-  if (template.includes("${!")) return syntax("${!…} indirect expansion");
-  if (/@P\}/u.test(template)) return syntax("${…@P} prompt expansion");
-  type Quote = "'" | '"' | "$'" | null;
-  let quote: Quote = null;
-  // Open $(…), ${…}, $[…], <(…) and >(…), each with the quoting it started
-  // in, whether it runs a command, and where its inside starts.
-  const expansions: { close: string; quote: Quote; command: boolean; start: number }[] = [];
-  // Unquoted [[ … ]] and (( … )), where bash reads words as arithmetic.
-  let testBrackets = false;
-  let arithmeticParens = 0;
-  // The words so far of the current top-level simple command, as written,
-  // without redirections; where the word being read started; and whether
-  // that word is a redirection's target rather than an argument.
-  let words: string[] = [];
-  let wordStart = -1;
-  let redirectTarget = false;
-  const endWord = (index: number) => {
-    if (wordStart < 0) return;
-    if (redirectTarget) redirectTarget = false;
-    else words.push(template.slice(wordStart, index));
-    wordStart = -1;
-  };
-  // Each finished top-level command must run a program a value may be passed to.
-  const commandEnded = (): PlaceholderPlacement | undefined => {
-    if (arithmeticParens > 0 || testBrackets) return undefined;
-    const problem = argumentCommandProblem(words);
-    return problem === undefined ? undefined : { program: problem };
-  };
-  // A $(…) or <(…) runs a command too; one inside ${…}, $((…)), (( )) or [[ ]] has its output read as arithmetic.
-  const openCommand = (index: number, close: string, startQuote: Quote): PlaceholderPlacement | undefined => {
-    if (testBrackets || arithmeticParens > 0 || expansions.some((expansion) => !expansion.command)) {
-      return syntax("$(…) or <(…) inside ${…}, $((…)), (( )) or [[ ]], where bash may evaluate its output");
-    }
-    expansions.push({ close, quote: startQuote, command: true, start: index });
-    return undefined;
-  };
-  const checked = new Set<number>();
-  for (let index = 0; index < template.length; index += 1) {
-    const char = template[index]!;
-    if (quote === "'" || quote === "$'") {
-      if (quote === "$'" && char === "\\") index += 1;
-      else if (char === "'") quote = null;
-      continue;
-    }
-    const depth = expansions.length;
-    const top = quote === null && depth === 0;
-    if (char === "\\") {
-      // A line continuation joins words; any other backslash starts or extends one.
-      if (top && wordStart < 0 && template[index + 1] !== "\n") wordStart = index;
-      index += 1;
-      continue;
-    }
-    if (top && wordStart < 0 && char === "#") {
-      // A comment runs to the end of its line, which then ends the command.
-      const newline = template.indexOf("\n", index);
-      if (newline < 0) break;
-      index = newline - 1;
-      continue;
-    }
-    if (template.startsWith("{{", index)) {
-      PLACEHOLDER_AT.lastIndex = index;
-      const match = PLACEHOLDER_AT.exec(template);
-      if (match) {
-        checked.add(index);
-        if (quote === '"') return misplaced("inside double quotes");
-        if (depth > 0) return misplaced("inside a $(…), ${…}, $[…] or <(…) expansion");
-        const end = index + match[0].length;
-        const joined = joinedWordProblem(template, wordStart >= 0 ? wordStart : index, index, end, words);
-        if (joined) return misplaced(joined);
-        // Page data never names the file a redirection writes or reads (`echo hi >> {{x}}`).
-        if (redirectTarget) return misplaced("the file a redirection (>, >> or <) writes or reads");
-        const problem = placeholderCommandProblem(words, arithmeticParens > 0 || testBrackets);
-        if (problem === "name") {
-          if (isText(match[1]!)) return { arithmetic: match[1]! };
-        } else if (problem !== undefined) return misplaced(problem);
-        if (wordStart < 0) wordStart = index;
-        index = end - 1;
-        continue;
-      }
-    }
-    if (top) {
-      // Inside (( )) and [[ ]], < and > compare rather than redirect.
-      const redirects = arithmeticParens === 0 && !testBrackets;
-      if (redirects && (char === "<" || char === ">" || (char === "&" && template[index + 1] === ">"))) {
-        if (char !== "&" && template[index + 1] === "(") {
-          // <(…) and >(…) are words whose inside is a command.
-          if (wordStart < 0) wordStart = index;
-          const problem = openCommand(index + 2, ")", null);
-          if (problem) return problem;
-          index += 1;
-          continue;
-        }
-        // An fd written against the operator (2>, {fd}>) belongs to it.
-        if (wordStart >= 0 && /^(?:[0-9]+|\{[A-Za-z_][A-Za-z0-9_]*\})$/u.test(template.slice(wordStart, index))) wordStart = -1;
-        endWord(index);
-        const operator = REDIRECTION.exec(template.slice(index))![0];
-        redirectTarget = !/&(?:[0-9]+-?|-)$/u.test(operator);
-        index += operator.length - 1;
-        continue;
-      }
-      const startsWord = wordStart < 0;
-      // `{` and `}` group commands only as words of their own.
-      const brace = (char === "{" && startsWord && /\s/u.test(template[index + 1] ?? " ")) || (char === "}" && startsWord);
-      if (testBrackets && (char === "<" || char === ">") && template[index + 1] === "(") {
-        return syntax("<(…) inside [[ ]]");
-      }
-      if (";&|()\n".includes(char) || brace) {
-        endWord(index);
-        const outside = arithmeticParens === 0 && !testBrackets;
-        if (outside && char === "(" && /^[ \t]*\)/u.test(template.slice(index + 1)) && words.some((word) => !COMMAND_PREFIX_WORDS.has(word))) {
-          return { program: "a function definition, which can stand in for an allowed program" };
-        }
-        const problem = commandEnded();
-        if (problem) return problem;
-        words = [];
-        redirectTarget = false;
-      } else if (/\s/u.test(char)) {
-        endWord(index);
-        continue;
-      } else if (startsWord) wordStart = index;
-      if (!testBrackets && startsWord && template.startsWith("[[", index)) {
-        testBrackets = true;
-        wordStart = -1;
-        index += 1;
-        continue;
-      }
-      if (testBrackets && template.startsWith("]]", index)) {
-        testBrackets = false;
-        // The test's own words are operands, not a command.
-        words = [];
-        wordStart = -1;
-        index += 1;
-        continue;
-      }
-      if (arithmeticParens === 0 && startsWord && template.startsWith("((", index)) {
-        arithmeticParens = 2;
-        index += 1;
-        continue;
-      }
-      if (arithmeticParens > 0 && (char === "(" || char === ")")) {
-        arithmeticParens += char === "(" ? 1 : -1;
-        continue;
-      }
-    }
-    // A backtick substitution, even inside double quotes, hides its command from these checks.
-    if (char === "`") return syntax("`…` (backticks) command substitution; write $(…) instead");
-    if (quote === null && char === "$" && template[index + 1] === "'") {
-      quote = "$'";
-      index += 1;
-    } else if (quote === null && (char === "'" || char === '"')) quote = char;
-    else if (quote !== null && char === quote) quote = null;
-    else if ((quote === null || quote === '"') && char === "$" && "({[".includes(template[index + 1] ?? " ")) {
-      const open = template[index + 1] as "(" | "{" | "[";
-      if (open === "(" && template[index + 2] !== "(") {
-        const problem = openCommand(index + 2, ")", quote);
-        if (problem) return problem;
-      } else expansions.push({ close: { "(": ")", "{": "}", "[": "]" }[open], quote, command: false, start: index + 2 });
-      quote = null;
-      index += 1;
-    } else if (quote === null && depth > 0 && char === "(") expansions.push({ close: ")", quote: null, command: false, start: index + 1 });
-    else if (quote === null && depth > 0 && char === expansions[depth - 1]!.close) {
-      const closed = expansions.pop()!;
-      quote = closed.quote;
-      if (closed.command && expansions.length === 0) {
-        const inner = placeholderPlacement(template.slice(closed.start, index), isText, true);
-        if (inner.misplaced || inner.program || inner.syntax) return inner;
-      }
-    }
-  }
-  if (quote !== null || expansions.length !== 0) return misplaced("after an unclosed quote or expansion");
-  endWord(template.length);
-  const last = commandEnded();
-  if (last) return last;
-  // A placeholder the scan stepped over (say, right after a backslash) was never checked.
-  for (const match of template.matchAll(PLACEHOLDER)) if (!checked.has(match.index)) return misplaced("after a backslash or other escape");
-  return {};
 }
 
 function byteLength(text: string): number {
@@ -1001,21 +308,20 @@ export function parseWorkspaceArtifactSources(value: unknown): WorkspaceArtifact
   });
 }
 
-/** Why an action's placeholders sit where a value could run as code, or undefined when they don't. */
-function actionPlacementProblem(template: string, params: readonly WorkspaceArtifactParamV1[]): string | undefined {
-  const placement = placeholderPlacement(template, (name) => params.some((param) => param.name === name && param.type === "string"));
-  if (placement.misplaced) {
-    return `each {{param}} must be its own unquoted word, not ${placement.misplaced}. Write gh pr comment {{number}} --body {{body}}; plain text may be joined on, as in git show HEAD:{{file}}.`;
+/** Why an action's command may not take page data as written, or undefined when it may. */
+function actionPlacementProblem(template: string): string | undefined {
+  if (!workspaceArtifactTemplateHasParams(template)) return undefined;
+  const checked = checkWorkspaceArtifactTemplate(template);
+  if (checked.ok) return undefined;
+  const { kind, reason } = checked.problem;
+  if (kind === "misplaced") {
+    return `each {{param}} must be its own unquoted word, not ${reason}. Write gh pr comment {{number}} --body {{body}}; plain text may be joined on, as in git show HEAD:{{file}}.`;
   }
-  if (placement.arithmetic) {
-    return `{{${placement.arithmetic}}} is text, and bash evaluates text inside [[ ]], (( )), let or declare as arithmetic. Give it type "number", or compare with [ … ].`;
-  }
-  if (placement.syntax) return `a command with {{params}} may not use ${placement.syntax}.`;
-  if (placement.program) {
-    return `page data may not be passed to a command that uses ${placement.program}. In a command with {{params}}, every command (piped, chained or inside $(…)) must start with one of: ${ARGUMENT_PROGRAMS_SUMMARY}, written as a plain word.`;
-  }
-  return undefined;
+  if (kind === "syntax") return `a command with {{params}} runs without a shell, so it may not use ${reason}. ${TEMPLATE_GRAMMAR}`;
+  return `page data may not be passed to a command that uses ${reason}. In a command with {{params}}, every command (piped or chained) must start with one of: ${WORKSPACE_ARTIFACT_ARGUMENT_PROGRAMS}, written as a plain word.`;
 }
+
+const TEMPLATE_GRAMMAR = "Put | && || ; or a line break between commands, quote text with ' or \", and use only 2>&1, >/dev/null or 2>/dev/null as redirections.";
 
 /**
  * Why a stored action is turned off: its command no longer passes the
@@ -1023,7 +329,7 @@ function actionPlacementProblem(template: string, params: readonly WorkspaceArti
  * such an action so nothing is lost, but it never runs until rewritten.
  */
 export function workspaceArtifactActionProblem(action: Pick<WorkspaceArtifactActionV1, "command" | "params">): string | undefined {
-  return actionPlacementProblem(action.command, action.params);
+  return actionPlacementProblem(action.command);
 }
 
 /**
@@ -1063,10 +369,10 @@ export function parseWorkspaceArtifactActions(value: unknown, options: { stored?
       return { name: param.name, type };
     });
     const template = command(entry.command, where);
-    for (const match of template.matchAll(PLACEHOLDER)) {
+    for (const match of template.matchAll(WORKSPACE_ARTIFACT_PLACEHOLDER)) {
       if (!paramNames.has(match[1]!)) return invalid(`${where}: {{${match[1]}}} is not one of its params.`);
     }
-    const problem = options.stored ? undefined : actionPlacementProblem(template, params);
+    const problem = options.stored ? undefined : actionPlacementProblem(template);
     if (problem) return invalid(`${where}: ${problem}`);
     return { name: entry.name, label, command: template, params };
   });
@@ -1254,20 +560,31 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/gu, `'\\''`)}'`;
 }
 
-export interface ResolvedWorkspaceArtifactCommand {
-  /** What runs: the values are bound to read-only variables and the template reads them as "${AIDEN_ARG_1}"… */
-  command: string;
-  /** The same command with each value quoted in place, for the confirmation dialog. */
-  preview: string;
-}
+/**
+ * What a button runs. A command without placeholders runs through the shell
+ * as written; one with placeholders never does: it runs as argument lists,
+ * each value exactly one argument, with the pipes and `&&`, `||`, `;` the
+ * template wrote (see `workspace-artifact-template.ts`).
+ */
+export type ResolvedWorkspaceArtifactCommand =
+  | {
+      kind: "shell";
+      command: string;
+      /** The command as written, for the confirmation dialog. */
+      preview: string;
+    }
+  | {
+      kind: "argv";
+      steps: WorkspaceArtifactArgvStep[];
+      /** The template with each value shell-quoted in place, for the confirmation dialog; a shell would run it the same way. */
+      preview: string;
+    };
 
 /**
  * Fills an action's template. Arguments line up with its params in order.
- * The values never become shell code: they are quoted into read-only
- * variables and the template refers to them only as "${AIDEN_ARG_N}", so even
- * a template that wraps a placeholder in quotes or `$(…)` cannot run what a
- * page passes in. Read-only, unlike "$1", means `set --`, `shift` or a shell
- * function cannot swap the value the confirmation showed for another.
+ * The values never become code: a template with placeholders is read by
+ * Aiden's own grammar and run without a shell, so each value is one
+ * argument to the program the template names and nothing else.
  */
 export function resolveWorkspaceArtifactCommand(
   action: WorkspaceArtifactActionV1,
@@ -1295,19 +612,18 @@ export function resolveWorkspaceArtifactCommand(
     if (text.startsWith("-")) invalid(`${action.label}: ${param.name} cannot start with "-".`);
     return text;
   });
+  if (!workspaceArtifactTemplateHasParams(action.command)) return { kind: "shell", command: action.command, preview: action.command };
   const position = new Map(action.params.map((param, index) => [param.name, index]));
-  const fill = (render: (index: number) => string) =>
-    action.command.replace(PLACEHOLDER, (_match, name: string) => {
-      const index = position.get(name);
-      if (index === undefined) return invalid(`${action.label} needs a value for ${name}.`);
-      return render(index);
-    });
-  const variable = (index: number) => `AIDEN_ARG_${index + 1}`;
-  const body = fill((index) => `"\${${variable(index)}}"`);
-  const bind = values.map((value, index) => `${variable(index)}=${shellQuote(value)}`).join(" ");
+  const value = (name: string): string => {
+    const index = position.get(name);
+    return index === undefined ? invalid(`${action.label} needs a value for ${name}.`) : values[index]!;
+  };
+  const checked = checkWorkspaceArtifactTemplate(action.command);
+  if (!checked.ok) return invalid(`${action.label} is turned off.`);
   return {
-    command: values.length ? `readonly ${bind}\n${body}` : body,
-    preview: fill((index) => shellQuote(values[index]!)),
+    kind: "argv",
+    steps: fillWorkspaceArtifactTemplate(checked.steps, value),
+    preview: action.command.replace(WORKSPACE_ARTIFACT_PLACEHOLDER, (_match, name: string) => shellQuote(value(name))),
   };
 }
 

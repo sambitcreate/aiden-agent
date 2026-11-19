@@ -12,6 +12,7 @@ import {
   type WorkspaceArtifactsChangedEvent,
 } from "../../../renderer/shared/workspace-artifacts.js";
 import type { BoundedShellCommandOptions, BoundedShellCommandResult } from "../bounded-shell-command.js";
+import type { ArgvPlanOptions } from "./argv-runner.js";
 import type { WorkspaceArtifactStore } from "./store.js";
 
 /**
@@ -29,6 +30,8 @@ export interface WorkspaceArtifactRunContext {
 
 export interface WorkspaceArtifactRunnerDependencies {
   runShell: (options: BoundedShellCommandOptions) => Promise<BoundedShellCommandResult>;
+  /** Runs a button whose command takes page data, as argument lists without a shell (`runArgvPlan`). */
+  runArgv: (options: ArgvPlanOptions) => Promise<BoundedShellCommandResult>;
   /** Reads a workspace-relative file inside the folder; rejects paths that leave it. */
   readFile: (root: string, file: string, signal: AbortSignal | undefined) => Promise<string>;
   /** Environment for shell commands (the agent's shell PATH and variables). */
@@ -309,16 +312,19 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
     const access = workspaceArtifactCommandAccess(context.permission, Boolean(context.folderPath), approved);
     if (access === "blocked") throw new Error("Workspace access is off, so this page’s buttons can’t run.");
     if (access === "needs-approval") throw new Error("Allow this page’s commands first.");
-    const { command } = resolveWorkspaceArtifactCommand(action, args);
+    const resolved = resolveWorkspaceArtifactCommand(action, args);
     const cwd = await verifiedFolder(context.folderPath!);
-    const result = await dependencies.runShell({
-      command,
+    const run = {
       cwd,
       env: dependencies.env(),
       timeoutMs: WORKSPACE_ARTIFACT_LIMITS.actionTimeoutMs,
       maxOutputBytes: WORKSPACE_ARTIFACT_LIMITS.sourceOutputBytes,
       signal,
-    });
+    };
+    // A command with page data never goes through a shell.
+    const result = resolved.kind === "argv"
+      ? await dependencies.runArgv({ ...run, steps: resolved.steps })
+      : await dependencies.runShell({ ...run, command: resolved.command });
     if (result.aborted) throw new Error("Cancelled.");
     const ok = result.exitCode === 0 && !result.timedOut && !result.outputLimitExceeded;
     const output = clip([result.stdout, result.stderr].filter(Boolean).join("\n"), WORKSPACE_ARTIFACT_LIMITS.actionOutputChars);

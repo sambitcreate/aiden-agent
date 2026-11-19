@@ -12,13 +12,14 @@ import type {
   WorkspaceArtifactSourceV1,
 } from "../../../renderer/shared/workspace-artifacts.js";
 import { runBoundedShellCommand, type BoundedShellCommandOptions } from "../bounded-shell-command.js";
+import { runArgvPlan, type ArgvPlanOptions } from "./argv-runner.js";
 import { readWorkspaceArtifactFile, artifactFileAllowed } from "./file-policy.js";
 import { createWorkspaceArtifactRunner } from "./runner.js";
 import { WorkspaceArtifactStore, workspaceArtifactDigest } from "./store.js";
 
 const SHELL: WorkspaceArtifactSourceV1 = { name: "pulls", kind: "shell", command: `printf '[{"number":12}]'`, parse: "json" };
 const FILE: WorkspaceArtifactSourceV1 = { name: "todo", kind: "file", file: "TODO.md", parse: "lines" };
-const ECHO: WorkspaceArtifactActionV1 = { name: "note", label: "Write note", command: "printf '%s' {{text}} > note.txt", params: [{ name: "text", type: "string" }] };
+const ECHO: WorkspaceArtifactActionV1 = { name: "note", label: "Write note", command: "printf '%s' {{text}}", params: [{ name: "text", type: "string" }] };
 
 async function setup(
   t: test.TestContext,
@@ -39,6 +40,7 @@ async function setup(
   let store = openStore();
   const events: WorkspaceArtifactsChangedEvent[] = [];
   const commands: string[] = [];
+  const buttonRuns: ArgvPlanOptions["steps"][] = [];
   const compiled = compileAum('<Visual title="PRs"><Text>{len($pulls)}</Text></Visual>');
   const sources = options.sources ?? [SHELL, FILE];
   await store.create(
@@ -62,6 +64,10 @@ async function setup(
       commands.push(shell.command);
       return runBoundedShellCommand(shell);
     },
+    runArgv: (plan: ArgvPlanOptions) => {
+      buttonRuns.push(plan.steps);
+      return runArgvPlan(plan);
+    },
     readFile: async (root, file, signal) => {
       if (options.readDelayMs) await new Promise((resolve) => setTimeout(resolve, options.readDelayMs));
       return readWorkspaceArtifactFile(root, file, signal);
@@ -73,7 +79,7 @@ async function setup(
   const context = (permission: WorkspaceArtifactPermission) => ({ folderPath: folder, permission });
   // What the tab sends with a button press: the page's digest as it was shown.
   const digest = async () => (await store.get("ws1", "art1"))!.digest;
-  return { folder, store, events, commands, runner, context, digest };
+  return { folder, store, events, commands, buttonRuns, runner, context, digest };
 }
 
 test("a refresh runs commands in the workspace folder, reads files, and saves what it found", async (t) => {
@@ -139,22 +145,23 @@ test("refreshes of the same page at once share one run", async (t) => {
   assert.equal(commands.length, 1);
 });
 
-test("a button runs its saved command with the page's value as one literal argument", async (t) => {
-  const { runner, folder, context, digest } = await setup(t);
+test("a button runs its saved command with the page's value as one literal argument, without a shell", async (t) => {
+  const { runner, folder, context, digest, buttonRuns, commands } = await setup(t);
   const value = "$(touch hacked); `id` 'quoted'";
   const result = await runner.runAction("ws1", "art1", "note", [value], context("full"), undefined, await digest());
-  assert.equal(result.ok, true);
-  assert.equal(await fs.readFile(path.join(folder, "note.txt"), "utf8"), value);
+  assert.deepEqual(result, { ok: true, output: value });
+  assert.deepEqual(buttonRuns, [[{ connector: ";", pipeline: [{ argv: ["printf", "%s", value], redirects: [] }] }]]);
+  assert.deepEqual(commands, [], "nothing went through a shell");
   await assert.rejects(fs.stat(path.join(folder, "hacked")));
 });
 
 test("a button cancelled before its command starts runs nothing", async (t) => {
-  const { runner, folder, context, digest } = await setup(t);
+  const { runner, context, digest } = await setup(t);
   // Access changed while the press was still being checked.
   const controller = new AbortController();
   controller.abort();
+  // That nothing starts is the executor's to keep; argv-runner.test.ts checks it.
   await assert.rejects(runner.runAction("ws1", "art1", "note", ["x"], context("full"), controller.signal, await digest()), /Cancelled/u);
-  await assert.rejects(fs.stat(path.join(folder, "note.txt")));
 });
 
 test("buttons follow the workspace's access and only exist if the page declared them", async (t) => {
@@ -167,17 +174,18 @@ test("buttons follow the workspace's access and only exist if the page declared 
 });
 
 test("a button pressed on an older version of the page does not run the newer command", async (t) => {
-  const { runner, store, commands, context } = await setup(t);
+  const { runner, store, commands, buttonRuns, context } = await setup(t);
   const before = (await store.get("ws1", "art1"))!;
   await store.replace("ws1", "art1", {
     title: "PRs",
     visual: before.artifact.visual,
     sources: before.artifact.sources,
-    actions: [{ ...ECHO, command: "printf '%s' {{text}} > other.txt" }],
+    actions: [{ ...ECHO, command: "printf '%s!' {{text}}" }],
     refresh: before.artifact.refresh,
   });
   await assert.rejects(runner.runAction("ws1", "art1", "note", ["x"], context("full"), undefined, before.digest), /changed/u);
   assert.deepEqual(commands, []);
+  assert.deepEqual(buttonRuns, []);
 });
 
 async function until(check: () => boolean) {

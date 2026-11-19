@@ -212,7 +212,7 @@ test("a stored page with a turned-off action exports, and imports back with that
   // Written by an earlier release, whose rules let a value reach --upload-pack.
   const file = path.join(dir, "ws1.json");
   const document = JSON.parse(await fs.readFile(file, "utf8")) as { artifacts: { actions: WorkspaceArtifactActionV1[] }[] };
-  document.artifacts[0]!.actions.push({ ...fetch, name: "probe", label: "Probe", command: "git ls-remote --upload-p {{ref}} ." });
+  document.artifacts[0]!.actions.push({ ...fetch, name: "probe", label: "Probe", command: "git fetch --upload-p {{ref}} ." });
   await fs.writeFile(file, JSON.stringify(document));
   const stored = (await new WorkspaceArtifactStore({ root: () => dir }).get("ws1", "art1"))!.artifact;
   assert.deepEqual(stored.actions.map((action) => action.name), ["fetch", "probe"]);
@@ -223,7 +223,7 @@ test("a stored page with a turned-off action exports, and imports back with that
   const saved = await into.create("ws2", imported, { uniqueTitle: true });
   const [kept, probe] = saved.actions;
   assert.deepEqual(saved.actions.map((action) => action.name), ["fetch", "probe"]);
-  assert.match(resolveWorkspaceArtifactCommand(kept!, ["main"]).command, /git fetch origin/u);
+  assert.equal(resolveWorkspaceArtifactCommand(kept!, ["main"]).preview, "git fetch origin 'main'");
   assert.throws(() => resolveWorkspaceArtifactCommand(probe!, ["./x.sh"]), /Probe is turned off/u);
   assert.equal(saved.approvedDigest, undefined);
 });

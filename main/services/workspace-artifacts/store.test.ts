@@ -183,7 +183,7 @@ test("a page saved before a placeholder rule tightened stays listed, with that a
   // Written by an earlier release, whose rules let a value reach --upload-pack.
   const file = path.join(dir, "ws1.json");
   const document = JSON.parse(await fs.readFile(file, "utf8")) as { artifacts: { actions: WorkspaceArtifactActionV1[] }[] };
-  const stale = { ...fetch, name: "probe", label: "Probe", command: "git ls-remote --upload-p {{ref}} ." };
+  const stale = { ...fetch, name: "probe", label: "Probe", command: "git fetch --upload-p {{ref}} ." };
   document.artifacts[0]!.actions.push(stale);
   await fs.writeFile(file, JSON.stringify(document));
 
@@ -194,7 +194,7 @@ test("a page saved before a placeholder rule tightened stays listed, with that a
   assert.match(workspaceArtifactActionProblem(probe) ?? "", /names/u);
   assert.throws(() => resolveWorkspaceArtifactCommand(probe, ["./x.sh"]), /Probe is turned off/u);
   assert.equal(workspaceArtifactActionProblem(kept.actions[0]!), undefined);
-  assert.match(resolveWorkspaceArtifactCommand(kept.actions[0]!, ["main"]).command, /git fetch origin/u);
+  assert.equal(resolveWorkspaceArtifactCommand(kept.actions[0]!, ["main"]).preview, "git fetch origin 'main'");
 
   // Later writes keep the page, and replacing it keeps the old version in its history.
   await reopened.create("ws1", content({ title: "Second" }));

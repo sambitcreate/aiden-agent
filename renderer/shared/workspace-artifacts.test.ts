@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -14,12 +14,24 @@ import {
   resolveWorkspaceArtifactCommand,
   workspaceArtifactDataJson,
   workspaceArtifactSourceAccess,
+  type ResolvedWorkspaceArtifactCommand,
   type WorkspaceArtifactActionV1,
   type WorkspaceArtifactSourceV1,
 } from "./workspace-artifacts.js";
 
 // How the parser refuses a template that puts page data where it could do more than be one argument.
-const PLACEMENT_REFUSED = /own unquoted word|may not use|may not be passed|as arithmetic/u;
+const PLACEMENT_REFUSED = /own unquoted word|runs without a shell, so it may not use|may not be passed/u;
+
+/** The argument lists an action with page data runs, one per command; it never goes through a shell. */
+function argvOf(resolved: ResolvedWorkspaceArtifactCommand): string[][] {
+  assert.equal(resolved.kind, "argv", "a template with {{params}} runs without a shell");
+  return resolved.kind === "argv" ? resolved.steps.flatMap((step) => step.pipeline.map((command) => command.argv)) : [];
+}
+
+/** Runs a one-command argument list the way the runner does: no shell. */
+function runArgv(argv: readonly string[]): string {
+  return execFileSync(argv[0]!, argv.slice(1), { encoding: "utf8" });
+}
 
 test("sources accept shell commands and workspace files and reject paths outside the folder", () => {
   assert.deepEqual(
@@ -71,14 +83,18 @@ const merge: WorkspaceArtifactActionV1 = {
   ],
 };
 
-test("filled-in values reach the shell as single literal words", () => {
-  // The shell itself is the oracle: whatever the page passes comes back verbatim.
+test("filled-in values reach the program as single literal arguments, and the preview reads the same to a shell", () => {
   const hostile = [`$(touch /tmp/aiden-pwned)`, `'; echo hi; '`, "a  b c", `"$HOME"`, "`id`", "plain", "x\"y"];
   for (const value of hostile) {
-    const { command } = resolveWorkspaceArtifactCommand(merge, [value, 3]);
-    const output = execFileSync("/bin/sh", ["-c", command], { encoding: "utf8" });
-    assert.equal(output, `${value}|3`, value);
+    const resolved = resolveWorkspaceArtifactCommand(merge, [value, 3]);
+    assert.deepEqual(argvOf(resolved), [["printf", "%s|%s", value, "3"]], value);
+    assert.equal(runArgv(argvOf(resolved)[0]!), `${value}|3`, value);
+    // The confirmation shows the preview; a shell reading it gets the same arguments.
+    assert.equal(execFileSync("/bin/sh", ["-c", resolved.preview], { encoding: "utf8" }), `${value}|3`, value);
   }
+  // A template without page data keeps the shell: it is shown and run as written.
+  const plain = resolveWorkspaceArtifactCommand({ name: "a", label: "A", command: "git status | head -n 1 && echo $HOME", params: [] }, []);
+  assert.deepEqual(plain, { kind: "shell", command: "git status | head -n 1 && echo $HOME", preview: "git status | head -n 1 && echo $HOME" });
 });
 
 test("a value never runs as code, even where a template quotes its placeholder", () => {
@@ -87,7 +103,7 @@ test("a value never runs as code, even where a template quotes its placeholder",
   const values = [`$(touch ${marker})`, `'; touch ${marker}; '`, `\`touch ${marker}\``];
   const action = (command: string): WorkspaceArtifactActionV1 => ({ name: "a", label: "A", command, params: [{ name: "body", type: "string" }] });
   for (const value of values) {
-    execFileSync("/bin/sh", ["-c", resolveWorkspaceArtifactCommand(action("printf '%s' {{body}}"), [value]).command], { encoding: "utf8" });
+    runArgv(argvOf(resolveWorkspaceArtifactCommand(action("printf '%s' {{body}}"), [value]))[0]!);
   }
   // Saving refuses these shapes, and one stored before a rule existed is turned off at run time too.
   for (const template of [`printf '%s' "{{body}}"`, `printf '%s' '{{body}}'`, "printf '%s' `echo {{body}}`", `printf '%s' $(echo {{body}})`]) {
@@ -98,32 +114,19 @@ test("a value never runs as code, even where a template quotes its placeholder",
 
 test("a template cannot run with a different value from the one its confirmation shows", () => {
   const action = (command: string): WorkspaceArtifactActionV1 => ({ name: "a", label: "A", command, params: [{ name: "target", type: "string" }] });
-  // Each template is accepted, yet tries to swap the value after it was bound.
+  // Each template tries to swap the value after it was bound; with no shell
+  // there are no variables, functions or positional parameters to swap, and
+  // the syntax that would make them is refused when saved and when run.
   for (const template of [
     "set -- actual-target; printf '%s' {{target}}",
     "f() { printf '%s' {{target}}; }; f actual-target",
     "AIDEN_ARG_1=actual-target; printf '%s' {{target}}",
     "f() { local AIDEN_ARG_1=actual-target; printf '%s' {{target}}; }; f",
     "unset AIDEN_ARG_1; printf '%s' {{target}}",
-    "printf -v target %s actual-target; printf '%s' {{target}}",
+    "printf '%s' \"$1\" {{target}}",
   ]) {
-    // A template that could swap the value is refused when saved and when run.
-    let saved = true;
-    try {
-      parseWorkspaceArtifactActions([action(template)]);
-    } catch {
-      saved = false;
-    }
-    if (!saved) {
-      assert.throws(() => resolveWorkspaceArtifactCommand(action(template), ["shown-target"]), /turned off/u, template);
-      continue;
-    }
-    const { command, preview } = resolveWorkspaceArtifactCommand(action(template), ["shown-target"]);
-    assert.equal(spawnSync("/bin/sh", ["-c", preview], { encoding: "utf8" }).stdout, "shown-target", template);
-    const ran = spawnSync("/bin/sh", ["-c", command], { encoding: "utf8" });
-    // Either it uses what the person confirmed, or the shell refuses; never the other target.
-    if (ran.status === 0) assert.equal(ran.stdout, "shown-target", template);
-    else assert.equal(ran.stdout.includes("actual-target"), false, template);
+    assert.throws(() => parseWorkspaceArtifactActions([action(template)]), PLACEMENT_REFUSED, template);
+    assert.throws(() => resolveWorkspaceArtifactCommand(action(template), ["shown-target"]), /turned off/u, template);
   }
 });
 
@@ -161,22 +164,83 @@ test("a placeholder must be its own unquoted word, or joined only to plain text"
     "gh issue comment 1 -F {{x}}",
     "git config -f {{x}} user.name me",
     "uniq notes.txt {{x}}",
+    // A subshell, and a redirection to a file: the grammar has neither.
+    "(git fetch && git switch {{x}})",
+    "printf '%s' {{x}} >notes/out.txt",
   ]) {
     assert.throws(() => parseWorkspaceArtifactActions(action(command)), PLACEMENT_REFUSED, command);
   }
   for (const command of [
     "gh pr merge {{x}} --squash",
     "echo {{x}}; echo done",
-    "(git fetch && git switch {{x}})",
+    "git fetch && git switch {{x}}",
     `echo "fixed" {{x}}`,
     "git show HEAD:{{x}}",
     "git push origin {{x}}:refs/heads/{{y}}",
     "cat notes/{{x}}.md",
-    "printf '%s' {{x}} >notes/out.txt",
+    "printf '%s' {{x}} >/dev/null",
     "uniq -f 1 {{x}}",
   ]) {
     assert.equal(parseWorkspaceArtifactActions(action(command)).length, 1, command);
   }
+});
+
+test("a template with page data runs without a shell, so shell syntax the checker cannot model is refused", () => {
+  const action = (command: string) => [{ name: "a", label: "A", command, params: [{ name: "x" }] }];
+  // Each of these once hid a command from a check that read shell text.
+  for (const command of [
+    "echo {{x}} | ((sh) )",
+    "echo {{x}} | ((sh -s) ) 2>&1",
+    "echo {{x}} | { ((sh) ); }",
+    "echo {{x}} | $((sh) )",
+    "( (sh -c 'touch PWNED') ); echo {{x}}",
+    "echo [[ {{x}}; sh -c 'touch PWNED'; ]]",
+    "echo {{x}} [[ | sh ]]",
+    "[[ a ]] ; echo {{x}}; [[ b ]]; sh -c 'touch PWNED'",
+    "echo {{x}} $((sh -c 'touch PWNED') )",
+    "echo {{x}} $[ $(touch PWNED) ]",
+    "echo {{x}} $(echo ')'); sh -c 'touch PWNED'",
+    "echo {{x}} ${a:-'}'}; sh -c 'touch PWNED'",
+    "echo {{x}} $'a\\'b'; sh -c 'touch PWNED'",
+    "echo {{x}} & sh -c 'touch PWNED'",
+    "echo {{x}} |& sh",
+    "echo {{x}} &>/dev/null; sh",
+    "echo {{x}} # ; sh",
+    "echo {{x}} \\; sh",
+    "echo {{x}} <(sh -c 'touch PWNED')",
+    "echo {{x}} > >(sh)",
+    "echo {{x}} <<-EOF\nEOF",
+    "case a in a) sh;; esac; echo {{x}}",
+    "echo {{x}} ;; sh",
+    "! echo {{x}}",
+    "e\\val {{x}}",
+    "ev\\\nal {{x}}",
+    "echo {{x}} | while read l; do $l; done",
+    "echo {{x}} | tee PWNED",
+    "echo {{x}} > a.sh; sh a.sh",
+  ]) {
+    assert.throws(() => parseWorkspaceArtifactActions(action(command)), PLACEMENT_REFUSED, command);
+  }
+  // The operators the grammar does have keep their meaning.
+  const [parsed] = parseWorkspaceArtifactActions([
+    { name: "a", label: "A", command: "git fetch -q 2>/dev/null || git status && git log -1 {{x}} 2>&1 | head -n 1; \\\n  git status >/dev/null", params: [{ name: "x" }] },
+  ]);
+  const resolved = resolveWorkspaceArtifactCommand(parsed!, ["main"]);
+  assert.ok(resolved.kind === "argv");
+  assert.deepEqual(resolved.steps, [
+    { connector: ";", pipeline: [{ argv: ["git", "fetch", "-q"], redirects: ["2>/dev/null"] }] },
+    { connector: "||", pipeline: [{ argv: ["git", "status"], redirects: [] }] },
+    {
+      connector: "&&",
+      pipeline: [
+        { argv: ["git", "log", "-1", "main"], redirects: ["2>&1"] },
+        { argv: ["head", "-n", "1"], redirects: [] },
+      ],
+    },
+    { connector: ";", pipeline: [{ argv: ["git", "status"], redirects: [">/dev/null"] }] },
+  ]);
+  // A template without page data is not parsed this way: it runs in a shell, as written.
+  assert.equal(parseWorkspaceArtifactActions([{ name: "a", label: "A", command: "echo hi | ((sh) )" }]).length, 1);
 });
 
 test("a joined value reaches the program as part of one literal argument", () => {
@@ -184,13 +248,14 @@ test("a joined value reaches the program as part of one literal argument", () =>
     { name: "a", label: "A", command: "printf '%s|' HEAD:{{x}} {{x}}.md", params: [{ name: "x", type: "string" }] },
   ])[0]!;
   for (const value of ["main", "a b", "$(id)", "*", "x;y"]) {
-    const { command, preview } = resolveWorkspaceArtifactCommand(action, [value]);
-    assert.equal(execFileSync("/bin/sh", ["-c", command], { encoding: "utf8" }), `HEAD:${value}|${value}.md|`, value);
-    assert.equal(execFileSync("/bin/sh", ["-c", preview], { encoding: "utf8" }), `HEAD:${value}|${value}.md|`, value);
+    const resolved = resolveWorkspaceArtifactCommand(action, [value]);
+    assert.deepEqual(argvOf(resolved), [["printf", "%s|", `HEAD:${value}`, `${value}.md`]], value);
+    assert.equal(runArgv(argvOf(resolved)[0]!), `HEAD:${value}|${value}.md|`, value);
+    assert.equal(execFileSync("/bin/sh", ["-c", resolved.preview], { encoding: "utf8" }), `HEAD:${value}|${value}.md|`, value);
   }
 });
 
-test("a placeholder cannot be run as a command, hidden from the check, or read as bash arithmetic", () => {
+test("a placeholder cannot be run as a command or hidden from the check", () => {
   const actions = (command: string, type: "string" | "number" = "string") => [{ name: "a", label: "A", command, params: [{ name: "x", type }] }];
   const refused = [
     "{{x}} --version",
@@ -299,33 +364,18 @@ test("a placeholder cannot be run as a command, hidden from the check, or read a
     "ssh -o ProxyCommand={{x}} host true",
   ];
   for (const command of refused) assert.throws(() => parseWorkspaceArtifactActions(actions(command)), PLACEMENT_REFUSED, command);
+  // Text is fine as a plain argument, between the operators the grammar has.
   for (const command of [
-    "[[ {{x}} -gt 0 ]] && echo big",
-    "(( {{x}} > 0 )) && echo big",
-    "(( 0 < {{x}} ))",
-    "(( 0 >> {{x}} ))",
-    "[[ 0 > {{x}} ]]",
-    // test -v takes a variable name and evaluates its [subscript].
-    "[ -v {{x}} ]",
-  ]) {
-    assert.throws(() => parseWorkspaceArtifactActions(actions(command)), /arithmetic/u, command);
-    assert.equal(parseWorkspaceArtifactActions(actions(command, "number")).length, 1, command);
-  }
-  // Text is fine outside those places, even when the same template uses them elsewhere.
-  for (const command of [
-    "[ {{x}} -gt 0 ] && echo big",
-    "gh pr view {{x}} # the number",
+    "test {{x}} -gt 0 && echo big",
     "printf '%s\\n' {{x}} | sort",
-    "printf %s {{x}} # comparison uses [[ later",
-    "if (( 1 )); then printf %s {{x}}; fi",
-    "[[ -d .git ]] && git checkout {{x}}",
-    "echo '((' {{x}}",
-    'echo "$(git rev-parse HEAD)" {{x}}',
+    "git fetch -q || git checkout {{x}}",
+    "printf '%s\\n' {{x}}\ngit status",
+    "echo '((' {{x}} '[[' '$(id)'",
     // Words that merely spell a command name are data, not the command.
     "printf '%s\\n' command | grep -F command -- {{x}}",
     "printf '%s\\n' command is {{x}}",
     "grep -c {{x}} notes.txt",
-    "git log --format={x} 2>&1 {{x}}",
+    "git log --format=%h 2>&1 {{x}}",
     "gh pr merge \\\n  {{x}} --squash",
     "git grep -c {{x}}",
     "git log -c {{x}}",
@@ -342,7 +392,6 @@ test("a placeholder cannot be run as a command, hidden from the check, or read a
     "git remote -v | grep -F -- {{x}}",
     "gh browse {{x}}",
     "gh run view {{x}} --log | tail -n 20",
-    "printf '%s\\n' $(git branch --show-current) {{x}}",
     "jq -r .name {{x}} | sort | uniq -c",
   ]) {
     assert.equal(parseWorkspaceArtifactActions(actions(command)).length, 1, command);
@@ -399,7 +448,6 @@ test("a placeholder cannot be run as a command, hidden from the check, or read a
     "let {{x}}",
     "read -r first < notes.txt; echo {{x}}",
     "unset {{x}}",
-    "printf -v out %s {{x}}",
     "f() { printf %s {{x}}; }; f",
     "f () { local {{x}}; }; f",
     "cd sub && git switch {{x}}",
@@ -449,220 +497,6 @@ test("a placeholder cannot be run as a command, hidden from the check, or read a
     assert.match(error.message, /\bgit status\b.*\bgh pr\b.*\bjq\b/u);
     return true;
   });
-});
-
-test("no template the parser accepts lets a text value run code", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aiden-artifact-oracle-"));
-  const marker = path.join(dir, "ran");
-  const script = path.join(dir, "run-me");
-  fs.writeFileSync(script, `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
-  const scriptJs = path.join(dir, "e.js");
-  fs.writeFileSync(scriptJs, `require("fs").writeFileSync(${JSON.stringify(marker)}, "")`);
-  // Each value runs code if something reads it as shell, a program to start,
-  // an awk program, a sed script, Python, JavaScript, a git alias, make's
-  // shell, an expect or lldb command, or is the file a redirection writes.
-  const values = [
-    `touch ${marker}`,
-    `exec touch ${marker}`,
-    `platform shell touch ${marker}`,
-    scriptJs,
-    marker,
-    `a[$(touch ${marker})0]`,
-    script,
-    `BEGIN { system("touch ${marker}") }`,
-    `1e touch ${marker}`,
-    `__import__("os").system("touch ${marker}")`,
-    `alias.probe=!touch ${marker}`,
-    `SHELL=${script}`,
-    `core.sshCommand=${script}`,
-    `core.pager=${script}`,
-    `!${script}`,
-  ];
-  spawnSync("git", ["init", "-q"], { cwd: dir, stdio: "ignore" });
-  spawnSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", "commit", "-q", "--allow-empty", "-m", "x"], { cwd: dir, stdio: "ignore" });
-  fs.writeFileSync(path.join(dir, "notes.txt"), "notes\n");
-  fs.writeFileSync(path.join(dir, "Makefile"), "all:\n\t@true\n");
-  const candidates = [
-    "[[ {{x}} -gt 0 ]]",
-    "(( {{x}} > 0 ))",
-    "(( 0 < {{x}} ))",
-    "(( 0 >> {{x}} ))",
-    "let {{x}}",
-    "seed=1 let {{x}}",
-    "if true; then let {{x}}; fi",
-    "f() { local {{x}}; }; f",
-    "declare -i n; n=1; declare {{x}}",
-    "read {{x}} </dev/null",
-    "printf -v {{x}} %s ok",
-    "[ -v {{x}} ]",
-    "eval echo {{x}}",
-    'eval "${HOME}" {{x}}',
-    "eval ';' {{x}}",
-    "FOO='two words' eval {{x}}",
-    ">/dev/null eval {{x}}",
-    "eval 2>&1 {{x}}",
-    "# a comment\neval {{x}}",
-    "# a comment\n{{x}}",
-    "ev\\\nal {{x}}",
-    "/usr/bin/env {{x}}",
-    "nohup {{x}} >/dev/null",
-    "find . -maxdepth 0 -exec {{x}} \\;",
-    "sh {{x}}",
-    "sh -c {{x}}",
-    "awk {{x}} </dev/null",
-    "sed {{x}} </dev/null",
-    "python3 -c {{x}}",
-    "git -c {{x}} probe",
-    "git --git-dir .git -c {{x}} probe",
-    "git --shallow-file shallow -c {{x}} probe",
-    "printf '%s' {{x}} # [[ later",
-    "[ {{x}} -gt 0 ]",
-    "test {{x}} -eq 1",
-    "printf '%s' {{x}}",
-    "sh -c 'printf %s \"$1\"' sh {{x}}",
-    "awk '{ print }' {{x}}",
-    "sed -n 1p {{x}}",
-    "printf -v out %s {{x}}",
-    // Options whose value names a program to start: git's transport helpers,
-    // rsync's remote shell, tar's compressor, zip's tester, scp's ssh, man's pager.
-    "git ls-remote --upload-pack {{x}} .",
-    "git fetch --upload-pack {{x}} .",
-    "git clone -u {{x}} . copy",
-    "git -C . ls-remote --upload-pack {{x}} .",
-    "git archive --remote . --exec {{x}} HEAD",
-    "rsync -e {{x}} notes.txt localhost:copy",
-    "rsync --rsh {{x}} notes.txt localhost:copy",
-    "tar --use-compress-program {{x}} -cf notes.tar notes.txt",
-    "zip -T -TT {{x}} notes.zip notes.txt",
-    "scp -S {{x}} notes.txt localhost:copy",
-    "man -P {{x}} ls",
-    // Abbreviated long options, and git's options and config keys that start a program.
-    "git ls-remote --upload-p {{x}} .",
-    "git fetch --upload {{x}} .",
-    "git clone -c {{x}} ssh://localhost/repo copy",
-    "git clone --config {{x}} ssh://localhost/repo copy",
-    "git config core.sshCommand {{x}} && git ls-remote ssh://localhost/repo",
-    "git config alias.probe {{x}} && git probe",
-    "tar --use-compress {{x}} -cf notes.tar notes.txt",
-    "script -q /dev/null {{x}}",
-    "hash -p {{x}} ls; ls",
-    // make reads NAME=value arguments as variables, SHELL among them.
-    "make {{x}}",
-    "make all {{x}}",
-    // Joined to an option or a variable, the value still names the program.
-    "git ls-remote --upload-pack={{x}} .",
-    "tar --use-compress-program={{x}} -cf notes.tar notes.txt",
-    "GIT_SSH_COMMAND={{x}} git ls-remote localhost:repo",
-    // Joined after plain text, the value is only ever part of one argument.
-    "git log -1 HEAD:{{x}}",
-    "printf '%s' refs/heads/{{x}}.lock",
-    // Programs that read the value as code from their input, a file, a list
-    // or a later command, and options no per-option list foresaw.
-    "echo {{x}} | sh",
-    "printf '%s\\n' {{x}} | bash",
-    'set -- {{x}}; "$@"',
-    "for f in {{x}}; do $f; done",
-    "echo {{x}} > a.sh; sh a.sh",
-    "sh <<< {{x}}",
-    "bash <<<{{x}}",
-    "echo hi >> {{x}}",
-    "alias l={{x}}\nl",
-    "git filter-branch -f --tree-filter {{x}} HEAD",
-    "git filter-branch -f --msg-filter {{x}} HEAD",
-    "git filter-branch -f --env-filter {{x}} HEAD",
-    "git rebase --exe {{x}} HEAD",
-    "sed -n {{x}} notes.txt",
-    "node -C dev {{x}}",
-    "node --title t {{x}}",
-    "bash --rcfile notes.txt {{x}}",
-    "bash -c -- {{x}}",
-    "sh -c -e {{x}}",
-    "bash -c +x {{x}}",
-    "sh -c -o errexit {{x}}",
-    "ssh-agent {{x}}",
-    "printf -v y %s {{x}}; echo $((y))",
-    "printf %s {{x}}; echo $_",
-    // The commands the allowlist keeps, so the oracle runs accepted templates too.
-    "git show HEAD:{{x}}",
-    "git checkout {{x}}",
-    "git log --oneline -n 5 -- {{x}}",
-    "git branch --list {{x}}",
-    "grep -F -- {{x}} notes.txt",
-    "echo {{x}} | sort | uniq -c",
-  ];
-  let accepted = 0;
-  try {
-    for (const template of candidates) {
-      let action: WorkspaceArtifactActionV1;
-      try {
-        action = parseWorkspaceArtifactActions([{ name: "a", label: "A", command: template, params: [{ name: "x", type: "string" }] }])[0]!;
-      } catch {
-        continue;
-      }
-      accepted += 1;
-      for (const value of values) {
-        const { command } = resolveWorkspaceArtifactCommand(action, [value]);
-        for (const [shell, args] of [["/bin/sh", ["-c"]], ["bash", ["--posix", "-c"]], ["bash", ["-c"]]] as const) {
-          spawnSync(shell, [...args, command], {
-            cwd: dir,
-            encoding: "utf8",
-            stdio: "ignore",
-            timeout: 5000,
-            env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_EDITOR: "true", FILTER_BRANCH_SQUELCH_WARNING: "1" },
-          });
-          assert.equal(fs.existsSync(marker), false, `${template} ran ${value} under ${shell} ${args.join(" ")}`);
-        }
-      }
-    }
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-  assert.ok(accepted >= 6, "the oracle should exercise accepted templates too");
-});
-
-test("everyday git and gh actions with page data still save and run with the confirmed values", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aiden-artifact-allowed-"));
-  const repo = path.join(dir, "repo");
-  const origin = path.join(dir, "origin.git");
-  const bin = path.join(dir, "bin");
-  const git = (args: string[], cwd = repo) => execFileSync("git", args, { cwd, encoding: "utf8" });
-  try {
-    fs.mkdirSync(repo);
-    fs.mkdirSync(bin);
-    // gh is a stand-in that prints the arguments it was given.
-    fs.writeFileSync(path.join(bin, "gh"), "#!/bin/sh\nprintf '[%s]' \"$@\"\n", { mode: 0o755 });
-    git(["init", "-q", "--bare", origin], dir);
-    git(["init", "-q"]);
-    fs.writeFileSync(path.join(repo, "notes.txt"), "notes\n");
-    git(["add", "notes.txt"]);
-    git(["-c", "user.email=a@example.com", "-c", "user.name=a", "commit", "-q", "-m", "add notes"]);
-    git(["branch", "feature"]);
-    git(["remote", "add", "origin", origin]);
-    const run = (command: string, params: WorkspaceArtifactActionV1["params"], values: unknown[]) => {
-      const action = parseWorkspaceArtifactActions([{ name: "a", label: "A", command, params }])[0]!;
-      const resolved = resolveWorkspaceArtifactCommand(action, values);
-      return execFileSync("/bin/sh", ["-c", resolved.command], {
-        cwd: repo,
-        encoding: "utf8",
-        env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`, GIT_TERMINAL_PROMPT: "0" },
-      });
-    };
-    const text = (name: string) => ({ name, type: "string" as const });
-    const number = (name: string) => ({ name, type: "number" as const });
-    assert.equal(run("git show HEAD:{{file}}", [text("file")], ["notes.txt"]), "notes\n");
-    assert.match(run("git log --oneline -n 5 -- {{file}}", [text("file")], ["notes.txt"]), /add notes/u);
-    run("git checkout -q {{branch}}", [text("branch")], ["feature"]);
-    assert.equal(git(["branch", "--show-current"]).trim(), "feature");
-    run("git push -q origin HEAD:{{branch}}", [text("branch")], ["review"]);
-    assert.equal(git(["rev-parse", "refs/heads/review"], origin), git(["rev-parse", "HEAD"]));
-    assert.equal(run("gh pr merge {{n}} --squash", [number("n")], [7]), "[pr][merge][7][--squash]");
-    assert.equal(
-      run("gh issue comment {{n}} --body {{body}}", [number("n"), text("body")], [7, "Looks good; $(id)"]),
-      "[issue][comment][7][--body][Looks good; $(id)]",
-    );
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
 });
 
 test("filled-in values are checked against their declared types", () => {
