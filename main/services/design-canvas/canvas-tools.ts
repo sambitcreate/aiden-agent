@@ -13,6 +13,7 @@
 import { randomUUID } from "node:crypto";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
+import { declareOnDemandSummary } from "../on-demand-tools.js";
 import { declarePiRuntimeReplay } from "../pi-runtime-tool.js";
 import { CANVAS_READ_FRAME_LIMIT, canvasReadCursorPage, canvasView, describeCanvas, parseCanvasReadCursor, summarizeFrame } from "../../../renderer/shared/design-canvas/canvas-summary.js";
 import {
@@ -127,31 +128,33 @@ const DEFAULT_BOX: Record<Exclude<PlacedKind, "connector" | "file">, { w: number
 const TEXT_LINE: Record<DesignTextSize, number> = { small: 19, medium: 24, large: 42 };
 const SIDES: readonly DesignSide[] = ["top", "right", "bottom", "left"];
 /** Where a tool takes a frame id, a page's workspace path names the frame showing it. */
-const FRAME_REF = "A frame id, or a page's workspace path (its frame on the page on screen, else the first).";
+const FRAME_REF = "Frame id or page path.";
 const BESIDE: readonly DesignBeside[] = ["right", "left", "below", "above"];
-const BesideSchema = Type.Union(BESIDE.map((side) => Type.Literal(side)));
+/** `{type, enum}` validates the same as a union of string literals in a fraction of the tokens. */
+const enumOf = <T extends string>(values: readonly T[]) => Type.Unsafe<T>({ type: "string", enum: [...values] });
+const BesideSchema = enumOf(BESIDE);
 /** Variants one canvas_duplicate call may make. */
 export const DESIGN_VARIANTS_PER_CALL = 6;
-const TextSizeSchema = Type.Union([Type.Literal("small"), Type.Literal("medium"), Type.Literal("large")]);
-const ColorSchema = Type.Union(DESIGN_COLORS.map((color) => Type.Literal(color)));
+const TextSizeSchema = enumOf(["small", "medium", "large"] as const);
+const ColorSchema = enumOf(DESIGN_COLORS);
 const EndSchema = Type.Object({
-  frameId: Type.Optional(Type.String({ description: `Join this end to a frame; it follows the frame when it moves. ${FRAME_REF}` })),
-  side: Type.Optional(Type.Union(SIDES.map((side) => Type.Literal(side)))),
+  frameId: Type.Optional(Type.String({ description: `${FRAME_REF} The end follows it.` })),
+  side: Type.Optional(enumOf(SIDES)),
   x: Type.Optional(Type.Number()),
   y: Type.Optional(Type.Number()),
 });
 const BuildEndSchema = Type.Object({
   ref: Type.Optional(Type.String({ maxLength: BUILD_REF_CHARS, description: "A box of this call, by its ref." })),
-  frameId: Type.Optional(Type.String({ description: `An existing frame. ${FRAME_REF}` })),
-  side: Type.Optional(Type.Union(SIDES.map((side) => Type.Literal(side)))),
+  frameId: Type.Optional(Type.String({ description: FRAME_REF })),
+  side: Type.Optional(enumOf(SIDES)),
   x: Type.Optional(Type.Number()),
   y: Type.Optional(Type.Number()),
 });
-const GuideSchema = Type.Union([...DESIGN_GUIDES.map((guide) => Type.Literal(guide)), Type.Literal("none")]);
-const PaperSchema = Type.Union([Type.Literal("letter"), Type.Literal("a4")]);
-const PrintModeSchema = Type.Union([Type.Literal("flow"), Type.Literal("fixed")]);
+const GuideSchema = enumOf([...DESIGN_GUIDES, "none"] as const);
+const PaperSchema = enumOf(["letter", "a4"] as const);
+const PrintModeSchema = enumOf(["flow", "fixed"] as const);
 const TweaksSchema = Type.Record(Type.String(), Type.Union([Type.String(), Type.Null()]), {
-  description: "A page's tweak values by the names its tweak controls declare (--accent, data-density); null resets one. Other names are refused.",
+  description: "Values for the tweaks the page declares (--accent, data-density); null resets one.",
 });
 /** What a page, artifact, artboard or shape can look like, shared by place and update. */
 const STYLE_PARAMETERS = {
@@ -212,7 +215,7 @@ export const DESIGN_MODE_PROMPT_SECTION = [
   "- Call canvas_read before changing the canvas, and again if the person says they moved things. It lists every frame on the page, in view and outside it, with ids and boxes.",
   "- Pages, screens and UI mockups are workspace HTML files under design/ (a shared design/tokens.css plus one HTML file per screen), not render_artifact visuals. Each design/ page you write, edit or make with a command lands on the canvas by itself and reloads as you save it; HTML elsewhere in the workspace does not.",
   "- Pick the design width that matches the screen: 390 phone, 768 tablet, 1280 or 1440 desktop. A page can declare it with <meta name=\"aiden-design-width\" content=\"390\">; canvas_place_frame or canvas_update_frame with designWidth resizes its frame to fit.",
-  "- canvas_place_frame on a page already on this canvas page reuses its frame, whoever placed it and whatever group it is in, and the result says placed: \"reused\"; a page shown only in locked frames is refused. Pass duplicate: true to show the same file twice (placed: \"copy\"), and nextTo: {frameId, side} to put a frame beside another. For light/dark, phone/desktop or density variants of a page, use canvas_duplicate with variants: one call lays them out side by side in one labelled group.",
+  "- canvas_place_frame on a page already on this canvas page reuses its frame, whoever placed it and whatever group it is in, and the result says placed: \"reused\"; a page shown only in locked frames is refused. Pass duplicate: true to show the same file twice (placed: \"copy\"), and nextTo: {frameId, side} to put a frame beside another. For light/dark, phone/desktop or density variants of a page, use canvas_duplicate with variants: one call lays them out side by side in one labelled group. canvas_duplicate and canvas_page load on demand: call load_tools for one that is not among your tools.",
   "- You can move, resize, retitle, restyle, regroup, hide, lock or reorder any unlocked frame, the person's too, with canvas_update_frame. A locked frame stays as it is unless the person asks you to unlock it. Remove a frame the person added only when they ask, with force: true.",
   "- Use canvas_arrange to lay frames out in a tidy row, column or grid, put them in a group (it fits itself around them) or take them out, in one call. Put each direction in its own group.",
   "- For a flow or diagram, draw it in one canvas_build call: boxes (shapes with their labels in text, text, notes) with refs of your own, and connectors between them by ref or frameId; a connector follows its frames when they move. A build counts as one of the turn's canvas calls.",
@@ -220,7 +223,7 @@ export const DESIGN_MODE_PROMPT_SECTION = [
   "- After placing or moving frames, call canvas_focus with their ids so the person sees them (canvas_arrange does this by itself). canvas_read with snapshot: true shows you the canvas as the person sees it.",
   "- canvas_inspect draws one page offline at its design width, with its frame's look, and reports script errors, files that did not load, sideways overflow and tweaks that do nothing, with a picture when you can see images. Each page you write is checked the same way without a picture, and the report follows in the conversation before your next step: fix what it lists once, call canvas_inspect for a picture after a big change, and say what you fixed.",
   "- The person's canvas comments come with their message or in canvas_read. After acting on one they sent you, canvas_comment can reply on it in a sentence (what you changed, or a question when it is unclear) and resolve it once it is done. An open comment in canvas_read is still their draft, or one they reopened after your reply, so it is left for them to send.",
-  "- Coordinates and sizes are canvas units. Say which file you changed.",
+  "- Coordinates and sizes are canvas units. Where a tool takes a frame id, a page's workspace path also works: its frame on the page on screen, else its first. Say which file you changed.",
 ].join("\n");
 
 export type DesignCanvasToolDeps = {
@@ -747,6 +750,16 @@ function withCoEditReport<T>(value: T, report: ReturnType<typeof keepPersonsMove
   } as T;
 }
 
+/**
+ * The `load_tools` lines of the canvas tools held back until Aiden loads them
+ * (see ON_DEMAND_TOOL_NAMES): the rarely used ones, so a design chat's every
+ * request carries fewer tool definitions.
+ */
+const CANVAS_CATALOG_LINES: Readonly<Record<string, string>> = {
+  canvas_page: "Add, rename, duplicate, reorder, show or delete design canvas pages, when the canvas needs another page.",
+  canvas_duplicate: "Copy a design canvas frame or group beside it, or lay out a page's light/dark, width or tweak variants in one labelled group.",
+};
+
 export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[] {
   const newId = deps.newId ?? randomUUID;
   let calls = 0;
@@ -841,10 +854,10 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         name: "canvas_read",
         label: "Read design canvas",
         description:
-          `Read the design canvas beside this chat: its pages, and on one page (the one the person is looking at unless you name another) the visible area, the frames in it (id, kind, title, path, box, group, look, open comments), every frame outside it (outsideFrames, with ids and boxes so you can move, group or focus them), counts by group, and the page's open and sent comments (each with its commentId, note, frame, file and the element it points at). Up to ${CANVAS_READ_FRAME_LIMIT} frames are listed per call; when a page has more, the answer says so and gives nextCursor, which you pass as cursor to read the next ones (the cursor carries its page, so page can be left out; if the page's frames change between calls, the cursor is refused and you read again without one). A later answer keeps the first answer's view, so every frame is listed once even if the view moves meanwhile; viewMoved says when it has. Boxes are in canvas units. Pass snapshot: true to also see a picture of the canvas as the person sees it.`,
+          `Read the design canvas: its pages, and on one page (the one on screen unless you name another) the view, the frames in it (id, kind, title, path, box, group, look, open comments), the frames outside it (outsideFrames, with ids and boxes), counts by group, and the page's open and sent comments with what each points at. Up to ${CANVAS_READ_FRAME_LIMIT} frames per call; for more, pass the answer's nextCursor as cursor. snapshot: true adds a picture of the canvas as the person sees it.`,
         parameters: Type.Object({
           page: Type.Optional(Type.String({ maxLength: 128, description: "A page's name or id." })),
-          cursor: Type.Optional(Type.String({ maxLength: 80, description: "The nextCursor an earlier answer gave, to read the frames after it on that answer's page." })),
+          cursor: Type.Optional(Type.String({ maxLength: 80, description: "An earlier answer's nextCursor." })),
           snapshot: Type.Optional(Type.Boolean()),
         }),
         execute: async (_id, raw, signal) =>
@@ -893,27 +906,27 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         name: "canvas_place_frame",
         label: "Place on design canvas",
         description:
-          "Put a frame on the design canvas: a workspace HTML page (kind file), an image, a note, a group, or a drawn item for flows and diagrams: text, a shape (rect or oval, with an optional label in text), a frame (an empty artboard that holds shapes and text like a group) or a connector (an arrow or line from one frame or point to another; an end on a frame follows it). Notes and text items take a small Markdown subset: **bold**, *italic*, <u>underline</u>, [links](https://…), and lines starting \"- \" or \"1. \" for lists; size and color apply to the whole note or text, and fill gives a note, shape or artboard its colour. Write the file first with your file tools; path is workspace-relative. A page's frame is sized for its designWidth (390 phone, 768 tablet, 1280 or 1440 desktop) unless you pass w and h. Placing a page already on this canvas page reuses that frame (moved, resized and restyled as asked, kept in its group unless you name another; the result says placed: reused), and a page shown there only in locked frames is refused; pass duplicate: true to add another frame of the same file (placed: copy; for example a dark: true variant or another width). It goes on the page the person is looking at unless you name another. nextTo puts it beside a frame (right unless side says), past any frame in the way, in that frame's group unless you name one; leave x, y and nextTo out to place it right of the last frame in its group or in view; in an artboard, one that would run past its right edge starts a new row. A group fits itself to its frames whenever you add, move, resize or remove one. Boxes are in canvas units.",
+          "Put a frame on the design canvas: a workspace HTML page (kind file, path workspace-relative; write the file first), an image, a note, a group, text, a shape (rect or oval, label in text), a frame (an empty artboard) or a connector (an arrow or line between frames or points; an end on a frame follows it). Notes and text take **bold**, *italic*, <u>underline</u>, [links](https://…) and \"- \" or \"1. \" lists; size and color apply to the whole item, fill colours a note, shape or artboard. A page's frame is sized for its designWidth (390, 768, 1280, 1440) unless you pass w and h. A page already on this canvas page reuses its frame (placed: reused; refused if shown only in locked frames); duplicate: true adds another (placed: copy). nextTo puts it beside a frame, in that frame's group; with no x, y or nextTo it goes right of the last frame in its group or in view, wrapping inside an artboard. Groups fit their frames.",
         parameters: Type.Object({
           page: Type.Optional(Type.String({ maxLength: 128, description: "A page's name or id." })),
-          kind: Type.Union(PLACED_KINDS.map((kind) => Type.Literal(kind))),
+          kind: enumOf(PLACED_KINDS),
           title: Type.String({ maxLength: DESIGN_CANVAS_LIMITS.titleChars }),
           path: Type.Optional(Type.String({ maxLength: 1024 })),
           text: Type.Optional(Type.String({ maxLength: DESIGN_CANVAS_LIMITS.noteChars })),
-          shape: Type.Optional(Type.Union([Type.Literal("rect"), Type.Literal("oval")])),
+          shape: Type.Optional(enumOf(["rect", "oval"] as const)),
           fill: Type.Optional(ColorSchema),
           color: Type.Optional(ColorSchema),
           size: Type.Optional(TextSizeSchema),
           from: Type.Optional(EndSchema),
           to: Type.Optional(EndSchema),
-          arrow: Type.Optional(Type.Union([Type.Literal("end"), Type.Literal("both"), Type.Literal("none")])),
+          arrow: Type.Optional(enumOf(["end", "both", "none"] as const)),
           x: Type.Optional(Type.Number()),
           y: Type.Optional(Type.Number()),
           w: Type.Optional(Type.Number()),
           h: Type.Optional(Type.Number()),
           groupId: Type.Optional(Type.String()),
           designWidth: Type.Optional(Type.Union(DESIGN_WIDTHS.map((width) => Type.Literal(width)))),
-          duplicate: Type.Optional(Type.Boolean({ description: "file: always add a new frame, even when this page is already on the canvas." })),
+          duplicate: Type.Optional(Type.Boolean({ description: "file: add a frame even when the page is on the canvas." })),
           nextTo: Type.Optional(Type.Object({ frameId: Type.String({ description: FRAME_REF }), side: Type.Optional(BesideSchema) })),
           ...STYLE_PARAMETERS,
         }),
@@ -1102,17 +1115,17 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         name: "canvas_update_frame",
         label: "Update design canvas frame",
         description:
-          "Change any unlocked frame on the design canvas, the person's too: move, resize, retitle or regroup it (groupId \"\" takes it out of its group), move it to another page (page), hide or lock it, change its layer order (layer front, back, forward or backward, or aboveFrameId / belowFrameId of a sibling), change the words of a note, text item or shape (notes and text keep the same Markdown subset as canvas_place_frame), colours (fill \"none\" clears a fill), size, a connector's ends, a page's designWidth (its frame resizes to match unless you pass w and h), dark look, tweaks, guide, corner radius, paper or print mode. A locked frame accepts only locked: false, and only unlock it when the person asked. Moving a group or artboard moves its frames; moving a connector moves its free ends. Boxes are in canvas units.",
+          "Change any unlocked frame, the person's too: move, resize, retitle, regroup (groupId \"\" ungroups), move to another page, hide, lock, reorder (layer, or aboveFrameId / belowFrameId of a sibling), or change its words (Markdown as in canvas_place_frame), colours (fill \"none\" clears), size, connector ends, designWidth (the frame resizes unless you pass w and h), dark, tweaks, guide, radius, paper or print mode. A locked frame accepts only locked: false, and only when the person asked. A group or artboard moves with its frames.",
         parameters: Type.Object({
           id: Type.String({ description: FRAME_REF }),
           title: Type.Optional(Type.String({ maxLength: DESIGN_CANVAS_LIMITS.titleChars })),
           text: Type.Optional(Type.String({ maxLength: DESIGN_CANVAS_LIMITS.noteChars })),
-          fill: Type.Optional(Type.Union([ColorSchema, Type.Literal("none")])),
+          fill: Type.Optional(enumOf([...DESIGN_COLORS, "none"] as const)),
           color: Type.Optional(ColorSchema),
           size: Type.Optional(TextSizeSchema),
           from: Type.Optional(EndSchema),
           to: Type.Optional(EndSchema),
-          arrow: Type.Optional(Type.Union([Type.Literal("end"), Type.Literal("both"), Type.Literal("none")])),
+          arrow: Type.Optional(enumOf(["end", "both", "none"] as const)),
           x: Type.Optional(Type.Number()),
           y: Type.Optional(Type.Number()),
           w: Type.Optional(Type.Number()),
@@ -1121,9 +1134,9 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
           designWidth: Type.Optional(Type.Union(DESIGN_WIDTHS.map((width) => Type.Literal(width)))),
           hidden: Type.Optional(Type.Boolean()),
           locked: Type.Optional(Type.Boolean()),
-          page: Type.Optional(Type.String({ maxLength: 128, description: "Move the frame (a group or artboard with its frames) to this page, by name or id." })),
+          page: Type.Optional(Type.String({ maxLength: 128, description: "Move it (with its members) to this page." })),
           layer: Type.Optional(
-            Type.Union([Type.Literal("front"), Type.Literal("back"), Type.Literal("forward"), Type.Literal("backward")]),
+            enumOf(["front", "back", "forward", "backward"] as const),
           ),
           aboveFrameId: Type.Optional(Type.String({ description: "Put it just in front of this sibling." })),
           belowFrameId: Type.Optional(Type.String({ description: "Put it just behind this sibling." })),
@@ -1297,7 +1310,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
           "Remove a frame from the design canvas. The file it shows is not deleted. A locked frame cannot be removed. A frame the person added needs force: true, and only after they asked you to delete it; say in your reply that you removed it. Removing a group or an artboard keeps what is in it; a connector on a removed frame keeps its place there.",
         parameters: Type.Object({
           id: Type.String({ description: FRAME_REF }),
-          force: Type.Optional(Type.Boolean({ description: "Only when the person asked you to delete their own items." })),
+          force: Type.Optional(Type.Boolean({ description: "Only when the person asked to delete their items." })),
           confirm: Type.Optional(Type.Boolean({ description: "The same as force." })),
         }),
         execute: async (_id, raw) =>
@@ -1374,15 +1387,15 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         name: "canvas_arrange",
         label: "Arrange design canvas",
         description:
-          "Lay out unlocked frames of one page in a tidy row, column or grid in one call, and optionally put them in a group or artboard (groupId) or take them out of one (groupId null). Name the frames with frameIds, in order; leave frameIds out to arrange a group's members (with groupId) or every top-level frame on the page, in the order they read now (rows top to bottom, each left to right; for a column, columns left to right). Groups fit themselves around their members afterwards; pass fitGroupIds to tighten or expand other groups or artboards around what they hold. A group or artboard moves with its frames. x and y set the top-left corner (by default the group's inside corner, or where the frames already start). The page comes on screen and the arranged frames are shown unless focus is false.",
+          "Lay out unlocked frames of one page in a row, column or grid, and put them in a group or artboard (groupId) or take them out (groupId null). frameIds sets the order; without it, a group's members (with groupId) or the page's top-level frames are arranged in reading order. Groups fit their members afterwards; fitGroupIds refits others. x and y set the top-left corner. The frames are shown unless focus is false.",
         parameters: Type.Object({
           page: Type.Optional(Type.String({ maxLength: 128, description: "A page's name or id, when frameIds are not given." })),
           frameIds: Type.Optional(Type.Array(Type.String({ description: FRAME_REF }), { maxItems: DESIGN_CANVAS_LIMITS.framesPerPage })),
-          layout: Type.Optional(Type.Union([Type.Literal("row"), Type.Literal("column"), Type.Literal("grid")])),
+          layout: Type.Optional(enumOf(["row", "column", "grid"] as const)),
           columns: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })),
           gap: Type.Optional(Type.Number({ minimum: 0, maximum: 2000, description: "Space between columns (default 64)." })),
           rowGap: Type.Optional(Type.Number({ minimum: 0, maximum: 2000, description: "Space between rows (default 80)." })),
-          align: Type.Optional(Type.Union([Type.Literal("start"), Type.Literal("center"), Type.Literal("end")])),
+          align: Type.Optional(enumOf(["start", "center", "end"] as const)),
           x: Type.Optional(Type.Number()),
           y: Type.Optional(Type.Number()),
           groupId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
@@ -1535,16 +1548,9 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         name: "canvas_page",
         label: "Change design canvas pages",
         description:
-          "Organise the design canvas's pages: add one (name; it comes on screen unless show is false), rename one, duplicate one with everything on it, delete one with its frames (never the last page; one holding the person's or locked frames needs force: true, only when they asked), move one earlier (step -1) or later (step 1) in the list, or show one. Pages are named by name or id.",
+          "Add, rename, duplicate (with everything on it), delete (with its frames; never the last; force: true for one holding the person's or locked frames, only when they asked), move (step -1 or 1) or show a design canvas page, named by name or id.",
         parameters: Type.Object({
-          action: Type.Union([
-            Type.Literal("add"),
-            Type.Literal("rename"),
-            Type.Literal("duplicate"),
-            Type.Literal("delete"),
-            Type.Literal("move"),
-            Type.Literal("show"),
-          ]),
+          action: enumOf(["add", "rename", "duplicate", "delete", "move", "show"] as const),
           page: Type.Optional(Type.String({ maxLength: 128 })),
           name: Type.Optional(Type.String({ maxLength: DESIGN_CANVAS_LIMITS.pageNameChars })),
           show: Type.Optional(Type.Boolean()),
@@ -1637,7 +1643,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         name: "canvas_inspect",
         label: "Inspect design page",
         description:
-          "Draw one design page offline at its design width, with its frame's dark look and tweaks, and report what went wrong: script errors with their file and line (and errors the page logged itself), files that did not load (anything from the network, missing workspace files), sideways overflow and what causes it, the page's height, which tweak controls the page reads, and tweak names the frame sets that nothing reads. Comes with a picture of the page when you can see images (pass top to see further down a tall page, picture: false for the report only). Name the page by frameId, or by path (its frame on the page the person is looking at, else its first frame on any page). Call it after a big change, fix what it finds once, and say what you fixed.",
+          "Draw one design page offline at its design width, with its frame's look and tweaks, and report script errors (file and line), files that did not load, sideways overflow and its cause, the page's height, the tweaks it reads and tweak names nothing reads. Comes with a picture when you can see images (top scrolls down a tall page). Name the page by frameId or path. Call it after a big change, fix what it finds once, and say what you fixed.",
         parameters: Type.Object({
           frameId: Type.Optional(Type.String({ maxLength: 128 })),
           path: Type.Optional(Type.String({ maxLength: 1024, description: "A workspace-relative page path, such as design/home.html." })),
@@ -1680,7 +1686,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         name: "canvas_comment",
         label: "Answer design comment",
         description:
-          "Reply on one of the person's canvas comments, resolve it, or both. A reply is a sentence or two shown under their note: what you changed, or a question when the comment is unclear; a newer reply replaces your last one. Resolve a comment once what it asks is done; the person can reopen it. Use the commentId from the comment block or canvas_read. Only a comment the person sent you (state sent, or one you already resolved) can be answered: an open one is still their draft, or one they reopened, until they send it.",
+          "Reply on a canvas comment the person sent you, resolve it, or both. A reply is a sentence or two under their note (what you changed, or a question); a newer reply replaces your last. Resolve it once what it asks is done. An open comment is still their draft and cannot be answered.",
         parameters: Type.Object({
           commentId: Type.String(),
           reply: Type.Optional(Type.String({ maxLength: DESIGN_CANVAS_LIMITS.replyChars })),
@@ -1723,7 +1729,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         name: "canvas_duplicate",
         label: "Duplicate on design canvas",
         description:
-          `Copy any frame and put the copy beside it (right unless side says), past any frame in the way. A group or artboard comes with its members and the arrows between them; a member copied alone joins its group. With variants, copy a page (or an artifact, for dark) once per variant in one call: the copies sit side by side in one new group named title, with the original first when it is unlocked and in no group. Each variant has a label, added to its title, and sets one or more of dark (true for the dark look), designWidth (390 phone, 768 tablet, 1280 or 1440 desktop) and tweaks (values for tweaks the page declares, such as data-density for densities or --accent); up to ${DESIGN_VARIANTS_PER_CALL} per call. Copies are unlocked. Boxes are in canvas units.`,
+          `Copy any frame beside it (right unless side says). A group or artboard comes with its members and the arrows between them. With variants, copy a page once per variant (up to ${DESIGN_VARIANTS_PER_CALL}) into one new group named title, beside the original: each variant has a label and sets dark, designWidth and/or tweaks.`,
         parameters: Type.Object({
           id: Type.String({ description: FRAME_REF }),
           side: Type.Optional(BesideSchema),
@@ -1895,7 +1901,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
       {
         name: "canvas_build",
         label: "Build on design canvas",
-        description: `Draw a flow or diagram in one call: up to ${DESIGN_BUILD_ITEMS} boxes (kind text, shape or note) and connectors, all or nothing. Give a box a ref (a short name of your own) and a connector's from and to can name it ({ref}), an existing frame ({frameId}) or a point ({x, y}). x and y of boxes and points are relative to the drawing's top-left; a box without them goes right of the box before it. The drawing goes at x, y, beside nextTo (right unless side says), in groupId, or right of the frames in view; groupTitle puts it in a new group. Looks are as in canvas_place_frame. The result maps each ref to its frame id. It counts as one canvas call.`,
+        description: `Draw a flow or diagram in one call: up to ${DESIGN_BUILD_ITEMS} boxes (text, shape or note) and connectors, all or nothing. A connector's from and to name a box by its ref, a frame ({frameId}) or a point ({x, y}). Positions are relative to the drawing; a box without x and y goes right of the one before. The drawing goes at x, y, beside nextTo, in groupId, or right of the frames in view; groupTitle makes a new group. The result maps each ref to its frame id. One canvas call.`,
         parameters: Type.Object({
           page: Type.Optional(Type.String({ maxLength: 128, description: "A page's name or id." })),
           x: Type.Optional(Type.Number()),
@@ -1906,10 +1912,10 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
           items: Type.Array(
             Type.Object({
               ref: Type.Optional(Type.String({ maxLength: BUILD_REF_CHARS })),
-              kind: Type.Union([Type.Literal("text"), Type.Literal("shape"), Type.Literal("note"), Type.Literal("connector")]),
+              kind: enumOf(["text", "shape", "note", "connector"] as const),
               title: Type.Optional(Type.String({ maxLength: DESIGN_CANVAS_LIMITS.titleChars })),
               text: Type.Optional(Type.String({ maxLength: DESIGN_CANVAS_LIMITS.noteChars })),
-              shape: Type.Optional(Type.Union([Type.Literal("rect"), Type.Literal("oval")])),
+              shape: Type.Optional(enumOf(["rect", "oval"] as const)),
               fill: Type.Optional(ColorSchema),
               color: Type.Optional(ColorSchema),
               size: Type.Optional(TextSizeSchema),
@@ -1919,7 +1925,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               h: Type.Optional(Type.Number()),
               from: Type.Optional(BuildEndSchema),
               to: Type.Optional(BuildEndSchema),
-              arrow: Type.Optional(Type.Union([Type.Literal("end"), Type.Literal("both"), Type.Literal("none")])),
+              arrow: Type.Optional(enumOf(["end", "both", "none"] as const)),
             }),
             { minItems: 1, maxItems: DESIGN_BUILD_ITEMS },
           ),
@@ -2154,5 +2160,5 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
       },
       "never",
     ),
-  ];
+  ].map((tool) => (CANVAS_CATALOG_LINES[tool.name] ? declareOnDemandSummary(tool, CANVAS_CATALOG_LINES[tool.name]!) : tool));
 }
