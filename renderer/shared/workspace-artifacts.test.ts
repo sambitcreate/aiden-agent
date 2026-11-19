@@ -557,12 +557,15 @@ test("a placeholder cannot be run as a command or hidden from the check", () => 
       assert.throws(() => parseWorkspaceArtifactActions(actions(command, type)), PLACEMENT_REFUSED, `${command} (${type})`);
     }
   }
-  // The refusal names the program and what page data may be passed to.
+  // The refusal names the program and what page data may be passed to, and
+  // that the same command without a {{param}} is not limited, which holds.
   assert.throws(() => parseWorkspaceArtifactActions(actions("npm view {{x}} version")), (error: Error) => {
     assert.match(error.message, /a command that uses npm\b/u);
     assert.match(error.message, /\bgit status\b.*\bgh pr\b.*\bjq\b/u);
+    assert.match(error.message, /without \{\{params\}\} is not limited/u);
     return true;
   });
+  assert.equal(parseWorkspaceArtifactActions([{ name: "a", label: "A", command: "npm view aiden version", params: [] }]).length, 1);
 });
 
 test("filled-in values are checked against their declared types", () => {
