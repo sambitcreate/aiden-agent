@@ -103,6 +103,42 @@ struct AidenVisualNavigationPolicy: Equatable, Sendable {
     }
 }
 
+/// Decides what to do when a web view's content process dies. iOS often
+/// reclaims a backgrounded app's content process, so a termination normally
+/// just redraws the page, however many times it happens. Only a crash loop,
+/// a second termination soon after the last reload, makes the caller stop and
+/// show a failure instead of reloading forever.
+struct AidenWebContentRecovery: Equatable, Sendable {
+    enum Action: Equatable {
+        case reload
+        case fail
+    }
+
+    /// A page that kills its content process does so while loading or right
+    /// after, within a second or two of the reload. A reclaim of a
+    /// backgrounded app comes minutes apart. 15 seconds sits well clear of
+    /// both, so slow devices still count a crash on load as a loop and a
+    /// quick background/foreground still earns a fresh reload.
+    static let crashLoopWindow: TimeInterval = 15
+
+    private var lastReloadAt: Date?
+
+    mutating func processDidTerminate(at now: Date = Date()) -> Action {
+        if let lastReloadAt, now.timeIntervalSince(lastReloadAt) < Self.crashLoopWindow {
+            return .fail
+        }
+        lastReloadAt = now
+        return .reload
+    }
+
+    /// Call when a different document starts loading, not for a crash
+    /// reload of the same one. It forgets the last reload, so the new page
+    /// is never judged by the old page's crashes.
+    mutating func newDocument() {
+        lastReloadAt = nil
+    }
+}
+
 /// How the viewer got its page.
 enum AidenVisualDocumentLoad: Sendable {
     /// Fresh from the Mac.

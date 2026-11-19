@@ -23,11 +23,6 @@ export function isCanonicalRasterImageMimeType(
   return typeof value === "string" && CANONICAL_RASTER_IMAGE_MIME_TYPE_SET.has(value);
 }
 
-export interface AttachmentPickResult<T> {
-  attachments: T[];
-  skipped: number;
-}
-
 export function attachmentSlotsRemaining(currentCount: number): number {
   const normalizedCurrent = Number.isSafeInteger(currentCount)
     ? Math.max(0, currentCount)

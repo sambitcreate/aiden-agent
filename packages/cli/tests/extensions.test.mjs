@@ -67,18 +67,9 @@ try {
 	// memory stays enabled, matching the desktop's strict-shape normalization.
 	writeFileSync(path.join(dir, "aiden.json"), JSON.stringify({ memoryEnabled: "false" }));
 	if (readAidenSettings(dir).memoryEnabled !== undefined) throw new Error("string memoryEnabled must be ignored");
-	// Unknown voice provider ("local" is desktop-only) normalizes away.
-	writeFileSync(path.join(dir, "aiden.json"), JSON.stringify({ voice: { provider: "local" } }));
-	if (readAidenSettings(dir).voice !== undefined) throw new Error("unknown voice provider must be ignored");
-	// Non-object voice is ignored.
-	writeFileSync(path.join(dir, "aiden.json"), JSON.stringify({ voice: "gemini" }));
-	if (readAidenSettings(dir).voice !== undefined) throw new Error("non-object voice must be ignored");
-	// Valid provider keeps optional model/language strings only.
-	writeFileSync(path.join(dir, "aiden.json"), JSON.stringify({ voice: { provider: "gemini", model: 42, language: "en-US" } }));
-	const voice = readAidenSettings(dir).voice;
-	if (voice?.provider !== "gemini" || voice?.model !== undefined || voice?.language !== "en-US") {
-		throw new Error("voice normalization wrong: " + JSON.stringify(voice));
-	}
+	// An unknown app-control policy fails closed.
+	writeFileSync(path.join(dir, "aiden.json"), JSON.stringify({ appControlPolicy: "always" }));
+	if (readAidenSettings(dir).appControlPolicy !== "disabled") throw new Error("unknown appControlPolicy must disable app control");
 	console.log("normalize-ok");
 } finally {
 	rmSync(dir, { recursive: true, force: true });
@@ -124,10 +115,9 @@ import path from "node:path";
 const dir = mkdtempSync(path.join(tmpdir(), "aiden-cli-set-"));
 try {
 	if (readAidenSettings(dir).memoryEnabled !== undefined) throw new Error("defaults must be absent");
-	if (readAidenSettings(dir).voice !== undefined) throw new Error("voice must default to absent");
-	writeAidenSettings(dir, { memoryEnabled: false, voice: { provider: "gemini" } });
+	writeAidenSettings(dir, { memoryEnabled: false, skillsEnabled: true });
 	const read = readAidenSettings(dir);
-	if (read.memoryEnabled !== false || read.voice?.provider !== "gemini") throw new Error("roundtrip failed");
+	if (read.memoryEnabled !== false || read.skillsEnabled !== true) throw new Error("roundtrip failed");
 	writeFileSync(path.join(dir, "aiden.json"), JSON.stringify({ scheduledTasksEnabled: false, memoryEnabled: true }));
 	writeAidenSettings(dir, { memoryEnabled: false });
 	if (JSON.parse(readFileSync(path.join(dir, "aiden.json"), "utf8")).scheduledTasksEnabled !== false) throw new Error("lost scheduler setting");

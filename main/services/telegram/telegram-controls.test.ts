@@ -106,3 +106,32 @@ test("Telegram choices honor explicit custom reasoning overrides", () => {
   assert.equal(telegramModelChoice(provider, "on").reasoning, true);
   assert.equal(telegramModelChoice(provider, "off").reasoning, false);
 });
+
+test("durable Bot menus show truthful session status, targeted Stop, and follow-up guidance", async () => {
+  const { buildDurableBotQueueMenu, buildStatusText } = await import("./telegram-controls.js");
+  const status = {
+    botUsername: "ada_bot",
+    allowedUserId: 42,
+    thinkingLevel: "medium" as const,
+    queueCount: 0,
+    active: true,
+    durableBot: true,
+    statusLabel: "working",
+    activeSubmissionId: "77",
+    workspaceLabel: "Ada Home",
+  };
+  const statusText = buildStatusText(status);
+  assert.match(statusText, /<b>Status:<\/b> working/u);
+  assert.match(statusText, /<b>Queue:<\/b> managed in Bot session/u);
+
+  const mainMenu = buildMainMenu(status);
+  const callbacks = mainMenu.inline_keyboard.flat().map((button) => button.callback_data);
+  assert.ok(callbacks.includes("turn:stop:77"), "active durable Bot menu fences Stop to the active submission");
+  assert.ok(!callbacks.includes("turn:next"), "durable Bot menu omits unsupported Next");
+  assert.ok(!callbacks.includes("turn:abort"), "durable Bot menu omits misleading separate Abort");
+
+  const queueMenu = buildDurableBotQueueMenu(1);
+  assert.match(queueMenu.text, /durable session/u);
+  assert.match(queueMenu.text, /1 media album is currently buffering/u);
+  assert.match(queueMenu.text, /unavailable from Telegram/u);
+});

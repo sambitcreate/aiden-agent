@@ -1134,6 +1134,19 @@ test("closing a new preset's setup while its sign-in save is pending never autho
   assert.equal(channelCalls(calls, "mcp:authorize").length, 0);
 });
 
+test("the custom connector form names each control by its row", async () => {
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: /Add custom connector/u }));
+  const dialog = await screen.findByRole("dialog");
+  within(dialog).getByRole("textbox", { name: "Name" });
+  within(dialog).getByRole("textbox", { name: "Command" });
+  fireEvent.click(within(dialog).getByRole("combobox", { name: "Connection" }));
+  fireEvent.click(await screen.findByRole("option", { name: "Remote URL (Streamable HTTP)" }));
+  const signIn = await within(dialog).findByRole("switch", { name: "OAuth sign-in" });
+  fireEvent.click(signIn);
+  assert.equal(signIn.getAttribute("aria-checked"), "true");
+});
+
 test("closing a new custom server while its sign-in save is pending never authorizes and removes it", async () => {
   let resolveSave: () => void = () => undefined;
   const calls = mount({

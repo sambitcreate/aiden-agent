@@ -1,7 +1,7 @@
 import "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, mock, test } from "node:test";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { installBotTestIpc } from "../main/bots/test-dom";
 import { MessageList } from "./message-list";
 import { withCommittedRunInput } from "../lib/chat-message-queue";
@@ -787,4 +787,55 @@ test("a next prompt admitted during handoff folds the old automatic preview once
   view.rerender(transcript({ messages: [prompt, saved, next], streamingText: null }));
   assert.equal(activity()?.hasAttribute("open"), false);
   localStorage.clear();
+});
+
+test("settled fork actions follow the chat's busy reason as a turn starts and ends", async () => {
+  document.documentElement.dataset.reduceMotion = "true";
+  installBotTestIpc({});
+  const forks: Array<[string, string]> = [];
+  const reply: ChatMessage = { id: "assistant-1", role: "assistant", content: "First answer.", createdAt: 2 };
+  const list = (forkDisabledReason: string | null) => (
+    <MessageList
+      chatId="chat-fork"
+      messages={[prompt, reply]}
+      streamingText={null}
+      streamingReasoning={null}
+      timeline={null}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error={null}
+      onFork={(messageId, position) => forks.push([messageId, position])}
+      forkDisabledReason={forkDisabledReason}
+    />
+  );
+  const view = render(list(null));
+  const forkButton = () => screen.getByRole("button", { name: "Fork from here" });
+  const editButton = () => screen.getByRole("button", { name: "Edit in fork" });
+  const answer = screen.getByText("First answer.");
+  assert.equal(forkButton().getAttribute("aria-disabled"), null);
+  assert.equal(editButton().getAttribute("aria-disabled"), null);
+
+  // A turn starts: the same settled rows now refuse to fork and say why.
+  view.rerender(list("Finish the current response"));
+  assert.equal(screen.getByText("First answer."), answer, "the settled reply keeps its elements");
+  for (const button of [forkButton(), editButton()]) {
+    assert.equal(button.getAttribute("aria-disabled"), "true");
+    assert.equal(button.getAttribute("title"), "Finish the current response");
+    fireEvent.click(button);
+  }
+  assert.deepEqual(forks, []);
+  fireEvent.contextMenu(answer);
+  const menu = await screen.findByRole("menu");
+  assert.equal(within(menu).getByRole("menuitem", { name: "Fork from here" }).getAttribute("aria-disabled"), "true");
+  fireEvent.keyDown(menu, { key: "Escape" });
+
+  // The turn ends: forking works again from the same rows.
+  view.rerender(list(null));
+  assert.equal(forkButton().getAttribute("aria-disabled"), null);
+  assert.equal(forkButton().getAttribute("title"), "Fork from here");
+  fireEvent.click(forkButton());
+  fireEvent.click(editButton());
+  assert.deepEqual(forks, [["assistant-1", "after"], ["user-1", "before"]]);
 });

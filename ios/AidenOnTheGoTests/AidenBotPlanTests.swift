@@ -7,7 +7,7 @@ final class AidenBotPlanTests: XCTestCase {
     func section() throws -> [String: Any] {
         let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
         let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
-        XCTAssertEqual(root["contractRevision"] as? Int, 64)
+        XCTAssertEqual(root["contractRevision"] as? Int, 65)
         return try XCTUnwrap(root["botPlans"] as? [String: Any])
     }
     func decode<T: Decodable>(_ type: T.Type, _ value: Any) throws -> T {
@@ -136,6 +136,8 @@ extension AidenBotPlanTests {
             XCTAssertEqual(plan.expiresAt, date)
             XCTAssertNotNil(plan.expiry)
         }
+        var offset = base; offset["expiresAt"] = "2026-11-04T13:00:00-23:59"
+        XCTAssertEqual(try decode(AidenRemoteBotPlan.self, offset).expiry, ISO8601DateFormatter().date(from: "2026-11-05T12:59:00Z"))
         for date in ["2026-02-30T12:00:00Z", "2026-11-04T24:00:00Z", "2026-11-04T13:00:60Z", "2026-11-04T13:00:00+24:00", "2026-11-04T13:00:00+00:60", "2026-11-04 13:00:00Z"] {
             var value = base; value["expiresAt"] = date
             XCTAssertThrowsError(try decode(AidenRemoteBotPlan.self, value))

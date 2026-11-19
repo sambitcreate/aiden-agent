@@ -598,11 +598,6 @@ export function approvalRuleKindLabel(kind: ApprovalRuleTargetKind): string {
   }
 }
 
-/** The group a stored decision lists under. */
-export function approvalRuleGroupOf(decision: ApprovalRuleDecision): Exclude<ApprovalRuleRowGroup, "mac"> {
-  return decision;
-}
-
 /**
  * Aiden's own tools that Add rule offers: the ones that change or send
  * something, or reach the web. Labels say what the tool does.

@@ -313,7 +313,7 @@ test("the design canvas keeps notes and workspace pages across a reload, follows
     "pricing.html",
     "swatch.png",
   ]);
-  await page.reload();
+  await reloadWhenSaved(page);
   page = aiden.page;
   await expect(frame(page, "hero.html")).toBeVisible();
   await expect.poll(() => framePositions(page)).toEqual(before);
@@ -546,6 +546,19 @@ test("a comment on a page's element goes to Aiden with the next send and resolve
   await capture(page, "1440-comment-pins");
 });
 
+/**
+ * Reloads once the app holds no unsaved canvas work. The file on disk can
+ * catch up a moment before the canvas clears its saving state, and a reload
+ * in that gap is stopped by the unsaved-changes prompt, as it would be for a
+ * person.
+ */
+async function reloadWhenSaved(page: Page): Promise<void> {
+  const root = page.locator("html");
+  await expect(root).toHaveAttribute("data-aiden-dirty", "0");
+  await expect(root).toHaveAttribute("data-aiden-saving", "0");
+  await page.reload();
+}
+
 type SavedFrame = {
   id: string;
   kind: string;
@@ -571,6 +584,7 @@ type SavedFrame = {
   locked?: boolean;
   dark?: boolean;
   tweaks?: Record<string, string>;
+  tweakVersions?: Array<{ id: string; name: string; tweaks?: Record<string, string>; dark?: boolean }>;
 };
 
 async function savedFrames(userDataDir: string): Promise<SavedFrame[]> {
@@ -825,7 +839,7 @@ test("notes and text take formatting from the bar above them: marks, a link, a l
   await clickEmptyCanvas(page);
 
   // After a reload the note reads back formatted, link and all.
-  await page.reload();
+  await reloadWhenSaved(page);
   const reloaded = frame(aiden.page, "Note").getByRole("textbox", { name: "Note text" });
   await expect(reloaded.locator("b")).toHaveText("Launch plan");
   await expect(reloaded.locator('a[href="https://example.com/brief"]')).toHaveText("brief");
@@ -1211,6 +1225,167 @@ test("the Tweaks tab shows a page dark and changes the page's own controls, kept
   await panel.getByRole("switch", { name: "Dark" }).click();
   await expect(root).not.toHaveAttribute("data-theme", "dark");
   await expect.poll(() => styleOf("body", "background-color")).toBe("rgb(251, 250, 247)");
+});
+
+function tunablePage(): string {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Picker</title>
+    <script type="application/aiden-tweaks">
+    { "controls": [
+      { "id": "accent", "label": "Accent", "type": "color", "default": "#3b6cf6", "var": "--accent", "group": "Colour" },
+      { "id": "radius", "label": "Corners", "type": "number", "min": 0, "max": 24, "step": 2, "unit": "px", "default": 8, "var": "--radius", "group": "Shape" },
+      { "id": "shadow", "label": "Shadow", "type": "pad", "group": "Shape",
+        "x": { "label": "Distance", "var": "--shadow-y", "min": 0, "max": 32, "step": 1, "unit": "px", "default": 8 },
+        "y": { "label": "Blur", "var": "--shadow-blur", "min": 0, "max": 64, "step": 2, "unit": "px", "default": 24 } },
+      { "id": "headline", "label": "Headline", "type": "text", "default": "Pick a time", "attr": "data-headline", "group": "Content" },
+      { "id": "replay", "label": "Replay animation", "type": "action" }
+    ] }
+    </script>
+    <style>
+      :root { --bg: #fbfaf7; --ink: #1d1d1f; --accent: #3b6cf6; --radius: 8px; --shadow-y: 8px; --shadow-blur: 24px; }
+      :root[data-theme="dark"] { --bg: #16171a; --ink: #f2f2f4; }
+      body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: var(--ink); background: var(--bg); }
+      main { padding: 64px 48px; }
+      .card { padding: 32px; border-radius: var(--radius); background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+        box-shadow: 0 var(--shadow-y) var(--shadow-blur) rgb(0 0 0 / 0.18); }
+      h1 { margin: 0 0 12px; font-size: 40px; }
+      .time { display: inline-block; padding: 10px 18px; border-radius: var(--radius); background: var(--accent); color: white; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="card">
+        <h1 data-aiden-text="headline">Pick a time</h1>
+        <span class="time">9:41</span>
+      </div>
+    </main>
+    <script>
+      let replays = 0;
+      window.addEventListener("aiden-tweak-action", (event) => {
+        if (event.detail.id === "replay") document.body.dataset.replays = String(++replays);
+      });
+    </script>
+  </body>
+</html>
+`;
+}
+
+test("the Tweaks panel folds a component's controls, saves versions, makes them the page's defaults and floats over an entered page", async ({
+  aiden,
+}) => {
+  const { app, page, workspaceDir, userDataDir } = aiden;
+  const designDir = path.join(workspaceDir, "design");
+  await mkdir(designDir, { recursive: true });
+  const file = path.join(designDir, "picker.html");
+  const original = tunablePage();
+  await writeFile(file, original);
+
+  await openDesignChat(app, page);
+  const canvas = designCanvas(page);
+  await answerNextPick(app, file);
+  await addFromMenu(page, "File…");
+  const live = pageInFrame(page, "picker.html");
+  await expect(live.getByRole("heading", { name: "Pick a time" })).toBeVisible();
+  const styleOf = (selector: string, property: string) =>
+    live.locator(selector).evaluate((element, name) => getComputedStyle(element).getPropertyValue(name).trim(), property);
+
+  await frame(page, "picker.html").click({ position: { x: 200, y: 12 } });
+  await canvas.focus();
+  await page.keyboard.press("i");
+  const panel = page.getByRole("complementary", { name: "Side panel" });
+  await panel.getByRole("radio", { name: "Tweaks" }).click();
+
+  // A typed value, between the slider's steps.
+  const corners = panel.getByRole("textbox", { name: "Corners value" });
+  await corners.fill("14");
+  await corners.press("Enter");
+  await expect.poll(() => styleOf(".card", "border-top-left-radius")).toBe("14px");
+  // The pad: two values at once, here from the keyboard.
+  const shadow = panel.getByRole("slider", { name: "Shadow" });
+  await shadow.focus();
+  await page.keyboard.press("Shift+ArrowRight");
+  await expect.poll(() => styleOf(".card", "--shadow-y")).toBe("18px");
+  // Words, into the page's marked element.
+  const headline = panel.getByRole("textbox", { name: "Headline" });
+  await headline.fill("Pick a slot");
+  await headline.press("Enter");
+  await expect(live.getByRole("heading", { name: "Pick a slot" })).toBeVisible();
+  // The page's own button.
+  await panel.getByRole("button", { name: "Replay animation" }).click();
+  await expect(live.locator("body")).toHaveAttribute("data-replays", "1");
+
+  // A folder folds away.
+  await panel.getByRole("button", { name: "Shape" }).click();
+  await expect(panel.getByRole("slider", { name: "Corners" })).toHaveCount(0);
+  await panel.getByRole("button", { name: "Shape" }).click();
+
+  // Save this look as V2; V1 is the file as it is.
+  await panel.getByRole("button", { name: "Save version" }).click();
+  await expect
+    .poll(async () => (await savedFrames(userDataDir))[0]?.tweakVersions?.map((version) => version.name))
+    .toEqual(["V2"]);
+  await expect(panel.getByRole("button", { name: "Save version" })).toBeDisabled();
+  await capture(page, "1440-tweaks-panel");
+  await panel.getByRole("button", { name: "V1", exact: true }).click();
+  await expect(live.getByRole("heading", { name: "Pick a time" })).toBeVisible();
+  await expect.poll(() => styleOf(".card", "border-top-left-radius")).toBe("8px");
+  await panel.getByRole("button", { name: "V2", exact: true }).click();
+  await expect(live.getByRole("heading", { name: "Pick a slot" })).toBeVisible();
+  await expect.poll(() => styleOf(".card", "border-top-left-radius")).toBe("14px");
+  expect(await readFile(file, "utf8")).toBe(original);
+
+  // Make default writes the values into the file, and the frame lets them go.
+  await panel.getByRole("button", { name: "Make default" }).click();
+  await expect(page.getByText("Made these the page's defaults.")).toBeVisible();
+  await expect.poll(async () => (await savedFrames(userDataDir))[0]?.tweaks).toBeUndefined();
+  const baked = await readFile(file, "utf8");
+  expect(baked).toContain("--radius: 14px;");
+  expect(baked).toContain('<h1 data-aiden-text="headline">Pick a slot</h1>');
+  await expect(live.getByRole("heading", { name: "Pick a slot" })).toBeVisible();
+  await expect.poll(() => styleOf(".card", "border-top-left-radius")).toBe("14px");
+  // Undo puts the file back, and the frame keeps the values again.
+  await page.locator("[data-sonner-toast]").getByRole("button", { name: "Undo" }).click();
+  await expect.poll(() => readFile(file, "utf8")).toBe(original);
+  await expect
+    .poll(async () => (await savedFrames(userDataDir))[0]?.tweaks)
+    .toEqual({ "--radius": "14px", "--shadow-y": "18px", "data-headline": "Pick a slot" });
+  await waitForToastsToClear(page);
+
+  // Inside the page, its controls float over the canvas when the side panel isn't showing them.
+  await panel.getByRole("button", { name: "Close side panel" }).click();
+  await frame(page, "picker.html").dblclick();
+  const float = canvas.getByRole("region", { name: "Tweaks" });
+  await expect(float.getByRole("switch", { name: "Dark" })).toBeVisible();
+  await float.getByRole("switch", { name: "Dark" }).click();
+  await expect(live.locator("html")).toHaveAttribute("data-theme", "dark");
+  await capture(page, "1440-tweaks-float");
+  await float.getByRole("button", { name: /^Tweaks/u }).click();
+  await expect(float.getByRole("switch", { name: "Dark" })).toBeHidden();
+  await capture(page, "1440-tweaks-float-folded");
+  await float.getByRole("button", { name: /^Tweaks/u }).click();
+  await page.keyboard.press("Escape");
+  await expect(float).toHaveCount(0);
+
+  // Show all lays out each version as its own page, in a new group.
+  await frame(page, "picker.html").click({ position: { x: 200, y: 12 } });
+  await canvas.focus();
+  await page.keyboard.press("i");
+  await panel.getByRole("button", { name: "Show all" }).click();
+  await expect.poll(async () => (await savedFrames(userDataDir)).filter((saved) => saved.kind === "group").length).toBe(1);
+  const frames = await savedFrames(userDataDir);
+  const group = frames.find((saved) => saved.kind === "group")!;
+  expect(frames.filter((saved) => saved.groupId === group.id).map((saved) => saved.title)).toEqual([
+    "picker.html · V1",
+    "picker.html · V2",
+  ]);
+  // Zoomed out to show them all, each copy shows its picture once its page has drawn.
+  for (const title of ["picker.html · V1", "picker.html · V2"]) {
+    await expect(frame(page, title).getByRole("img", { name: title })).toBeVisible();
+  }
+  await capture(page, "1440-tweaks-show-all");
 });
 
 /**

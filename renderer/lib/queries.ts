@@ -5,20 +5,17 @@ import {
   keepPreviousData,
   queryOptions,
   replaceEqualDeep,
-  useMutation,
   useQueries,
   useQuery,
   useQueryClient,
   type QueryClient,
 } from "@tanstack/react-query";
 import {
-  assistantApi,
   aidenRemoteApi,
   botsApi,
   chatsApi,
   computerUseApi,
   formFillApi,
-  exaApi,
   gitApi,
   localVoiceApi,
   mcpApi,
@@ -84,9 +81,7 @@ export const queryKeys = {
   workspaceFolderPresence: (workspaceId: string) => ["workspace-folder-presence", workspaceId] as const,
   settings: ["settings"] as const,
   shortcuts: ["shortcuts"] as const,
-  assistantConfig: ["assistantConfig"] as const,
   scheduledTasks: ["scheduledTasks"] as const,
-  scheduledRuns: (taskId: string | undefined) => ["scheduledRuns", taskId ?? "none"] as const,
   scheduledSettings: ["scheduledSettings"] as const,
   computerUseStatus: ["computerUseStatus"] as const,
   formFillStatus: ["formFillStatus"] as const,
@@ -105,7 +100,6 @@ export const queryKeys = {
   mcpLaunchApprovals: ["mcpLaunchApprovals"] as const,
   mcpMacAppStatus: (presetId: string) => ["mcpMacAppStatus", presetId] as const,
   mcpToolList: (serverId: string, toolsRevision: string | undefined) => ["mcpToolList", serverId, toolsRevision ?? null] as const,
-  exa: ["exa"] as const,
   webSearch: ["webSearch"] as const,
   webFetch: ["webFetch"] as const,
   telegram: ["telegram"] as const,
@@ -690,24 +684,8 @@ export function useShortcuts() {
   return useQuery({ queryKey: queryKeys.shortcuts, queryFn: shortcutApi.get });
 }
 
-export function useAssistantConfig() {
-  return useQuery({
-    queryKey: queryKeys.assistantConfig,
-    queryFn: assistantApi.config,
-    retry: false,
-  });
-}
-
 export function useScheduledTasks() {
   return useQuery({ queryKey: queryKeys.scheduledTasks, queryFn: scheduleApi.list });
-}
-
-export function useScheduledRuns(taskId: string | undefined) {
-  return useQuery({
-    queryKey: queryKeys.scheduledRuns(taskId),
-    queryFn: () => scheduleApi.runs(taskId as string),
-    enabled: Boolean(taskId),
-  });
 }
 
 export function useScheduledTaskSettings() {
@@ -926,17 +904,10 @@ export function useMcpDependents(serverId: string | undefined) {
   });
 }
 
-export function useExaConfig() {
-  return useQuery({ queryKey: queryKeys.exa, queryFn: exaApi.get });
-}
-
 /** Renderer-safe Web Search catalog/settings snapshot; main owns all secrets. */
 export function useWebSearch() {
   return useQuery({ queryKey: queryKeys.webSearch, queryFn: webSearchApi.get });
 }
-
-/** Compatibility name for Settings callers that prefer an explicit suffix. */
-export const useWebSearchSettings = useWebSearch;
 
 /** Reading web pages and extract mode; never holds a key. */
 export function useWebFetch() {
@@ -1006,28 +977,4 @@ export function useVoiceResolution(inputs: readonly unknown[]) {
 
 export function useLocalModels(enabled = true) {
   return useQuery({ queryKey: queryKeys.localModels, queryFn: localVoiceApi.listModels, enabled });
-}
-
-export function useSaveProvider() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (provider: Omit<Provider, "hasKey">) => providersApi.save(provider),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.providers }),
-  });
-}
-
-export function useRemoveProvider() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (id: string) => providersApi.remove(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.providers }),
-  });
-}
-
-export function useSetProviderKey() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ id, key }: { id: string; key: string }) => providersApi.setKey(id, key),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.providers }),
-  });
 }

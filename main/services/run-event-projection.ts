@@ -221,7 +221,7 @@ export function projectRunContentNotification(
       const nextSequence = context.lastSequence + 2;
       return event(
         "snapshot",
-        { chatId: context.chatId, turnId: context.turnId, nextSequence },
+        { chatId: context.chatId, turnId: context.turnId, reason: "reset", nextSequence },
         false,
         "reconciling",
       );

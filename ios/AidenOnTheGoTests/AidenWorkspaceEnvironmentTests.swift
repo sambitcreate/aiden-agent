@@ -421,6 +421,224 @@ final class AidenWorkspaceEnvironmentTests: XCTestCase {
         XCTAssertEqual(Set(keys).count, 1)
     }
 
+    @MainActor
+    func testStaleLazyHandlesRecoverOnceReplaceTreeIDsAndPreserveOpenDraftsAndCache() async throws {
+        for (status, code) in [(400, "handle_invalid"), (410, "handle_expired")] {
+            let directory = FileManager.default.temporaryDirectory
+                .appending(path: "AidenStaleFiles-\(UUID().uuidString)", directoryHint: .isDirectory)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let cache = AidenWorkspaceEnvironmentCache(directory: directory)
+            let responder = AidenDemoResponder()
+            let installation = AidenDemoHosts.installation(instanceId: "laptop", name: "Laptop")
+            let coordinator = AidenDemoHosts.coordinator(
+                installations: [installation],
+                responder: responder,
+                workspaceEnvironmentCache: cache,
+                machinePreferences: AidenMachinePreferencesStore(defaults: AidenDemoHosts.isolatedDefaults())
+            )
+            let scheduler = AidenHostConnectScheduler(
+                registry: coordinator.hosts,
+                pathChanges: AsyncStream { _ in },
+                maxConcurrentConnects: 2,
+                probeTimeout: 30
+            )
+            await coordinator.start()
+            await scheduler.foregrounded()
+            for _ in 0..<50 where coordinator.hosts.connection(for: "laptop")?.connectionState != .connected {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            XCTAssertEqual(coordinator.hosts.connection(for: "laptop")?.connectionState, .connected)
+
+            let staleDirID = "file_\(String(repeating: "a", count: 43))"
+            let freshDirID = "file_\(String(repeating: "b", count: 43))"
+            let staleFileID = "file_\(String(repeating: "c", count: 43))"
+            let freshFileID = "file_\(String(repeating: "d", count: 43))"
+            let openDocID = "file_\(String(repeating: "e", count: 43))"
+            let staleCursor = "cur_\(String(repeating: "f", count: 43))"
+            let staleErrorJSON = Data("""
+            {"error":{"code":"\(code)","message":"Stale handle.","requestId":"req_stale","retryable":false}}
+            """.utf8)
+
+            let putCalls = EnvironmentAttemptCounter()
+            responder.reply(instanceId: "laptop", path: "/workspaces/ws-1/files", query: "tree=1", status: 200, json: Data("""
+            {"snapshotId":"root-1","entries":[
+              {"id":"\(staleDirID)","displayPath":"src","name":"src","kind":"directory"},
+              {"id":"\(staleFileID)","displayPath":"README.md","name":"README.md","kind":"file"},
+              {"id":"\(openDocID)","displayPath":"Notes.md","name":"Notes.md","kind":"file"}
+            ],"truncated":false,"maxEntries":4000,"maxDepth":20,"directoryPath":""}
+            """.utf8))
+            responder.reply(instanceId: "laptop", path: "/workspaces/ws-1/files/\(openDocID)", status: 200, json: Data("""
+            {"id":"\(openDocID)","displayPath":"Notes.md","content":"original\\n","version":"\(String(repeating: "1", count: 64))","truncated":false}
+            """.utf8))
+            responder.reply(instanceId: "laptop", method: "PUT", path: "/workspaces/ws-1/files/\(openDocID)", status: status, json: { _ in
+                _ = putCalls.increment()
+                return staleErrorJSON
+            })
+
+            let workspace = AidenWorkspace(
+                id: "ws-1", name: "Workspace", permission: .ask, hasFolder: true,
+                isManagedWorktree: false, branchName: nil, repositoryName: nil, git: nil,
+                createdAt: .now, updatedAt: .now, revision: "r1"
+            )
+            let owner = try coordinator.ownerContext(for: "laptop")
+            let model = AidenWorkspaceFilesModel(workspace: workspace, owner: owner, cache: cache)
+
+            await model.load(coordinator: coordinator)
+            let notesEntry = try XCTUnwrap(model.index?.entries.first { $0.displayPath == "Notes.md" })
+            let openedNotes = await model.open(notesEntry, coordinator: coordinator)
+            XCTAssertTrue(openedNotes)
+            model.draft = "unsaved draft\n"
+
+            // 1. Stale folder expansion refreshes root once, replaces stale IDs, prompts reopen, and preserves open draft + cache.
+            let filesRequestsBefore = responder.requests(instanceId: "laptop").filter { $0 == "GET /workspaces/ws-1/files" }.count
+            responder.reply(instanceId: "laptop", path: "/workspaces/ws-1/files", query: "tree=1&directory=\(staleDirID)", status: status, json: staleErrorJSON)
+            responder.reply(instanceId: "laptop", path: "/workspaces/ws-1/files", query: "tree=1", status: 200, json: Data("""
+            {"snapshotId":"root-2","entries":[
+              {"id":"\(freshDirID)","displayPath":"src","name":"src","kind":"directory"},
+              {"id":"\(staleFileID)","displayPath":"README.md","name":"README.md","kind":"file"},
+              {"id":"\(openDocID)","displayPath":"Notes.md","name":"Notes.md","kind":"file"}
+            ],"truncated":false,"maxEntries":4000,"maxDepth":20,"directoryPath":""}
+            """.utf8))
+            let staleSrc = try XCTUnwrap(model.index?.entries.first { $0.displayPath == "src" })
+            await model.toggle(staleSrc, coordinator: coordinator)
+            // 1 failed directory page GET + 1 root refresh GET = +2 GET /workspaces/ws-1/files requests.
+            XCTAssertEqual(responder.requests(instanceId: "laptop").filter { $0 == "GET /workspaces/ws-1/files" }.count, filesRequestsBefore + 2)
+            XCTAssertFalse(model.expanded.contains("src"))
+            XCTAssertEqual(model.errorMessage, AidenWorkspaceFilesModel.staleFolderRecoveryMessage)
+            XCTAssertEqual(model.index?.entries.first(where: { $0.displayPath == "src" })?.id, freshDirID)
+            XCTAssertEqual(model.document?.id, openDocID)
+            XCTAssertEqual(model.draft, "unsaved draft\n")
+
+            // Reopening src with the refreshed handle succeeds and yields a continuation cursor.
+            let childStaleID = "file_\(String(repeating: "g", count: 43))"
+            responder.reply(instanceId: "laptop", path: "/workspaces/ws-1/files", query: "tree=1&directory=\(freshDirID)", status: 200, json: Data("""
+            {"snapshotId":"src-1","entries":[{"id":"\(childStaleID)","displayPath":"src/App.swift","name":"App.swift","kind":"file"}],
+             "truncated":false,"maxEntries":4000,"maxDepth":20,"directoryPath":"src","nextCursor":"\(staleCursor)"}
+            """.utf8))
+            let freshSrc = try XCTUnwrap(model.index?.entries.first { $0.displayPath == "src" })
+            await model.toggle(freshSrc, coordinator: coordinator)
+            XCTAssertTrue(model.expanded.contains("src"))
+            XCTAssertEqual(model.cursors["src"], staleCursor)
+
+            // 2. Stale continuation cursor drops stale src/App.swift ID instead of merging duplicate paths, refreshes root once.
+            let filesRequestsBeforeCursor = responder.requests(instanceId: "laptop").filter { $0 == "GET /workspaces/ws-1/files" }.count
+            responder.reply(instanceId: "laptop", path: "/workspaces/ws-1/files", query: "tree=1&directory=\(freshDirID)&cursor=\(staleCursor)", status: status, json: staleErrorJSON)
+            await model.loadPage(directory: freshSrc, coordinator: coordinator)
+            XCTAssertEqual(responder.requests(instanceId: "laptop").filter { $0 == "GET /workspaces/ws-1/files" }.count, filesRequestsBeforeCursor + 2)
+            XCTAssertTrue(model.cursors.isEmpty)
+            XCTAssertFalse(model.index?.entries.contains(where: { $0.id == childStaleID }) ?? true)
+            XCTAssertEqual(model.errorMessage, AidenWorkspaceFilesModel.staleFolderRecoveryMessage)
+
+            // 3. Stale unopened file open refreshes root once, returns false, preserves open document + draft + cached Notes.md.
+            let filesRequestsBeforeOpen = responder.requests(instanceId: "laptop").filter { $0 == "GET /workspaces/ws-1/files" }.count
+            responder.reply(instanceId: "laptop", path: "/workspaces/ws-1/files/\(staleFileID)", status: status, json: staleErrorJSON)
+            responder.reply(instanceId: "laptop", path: "/workspaces/ws-1/files", query: "tree=1", status: 200, json: Data("""
+            {"snapshotId":"root-3","entries":[
+              {"id":"\(freshDirID)","displayPath":"src","name":"src","kind":"directory"},
+              {"id":"\(freshFileID)","displayPath":"README.md","name":"README.md","kind":"file"},
+              {"id":"\(openDocID)","displayPath":"Notes.md","name":"Notes.md","kind":"file"}
+            ],"truncated":false,"maxEntries":4000,"maxDepth":20,"directoryPath":""}
+            """.utf8))
+            let staleReadme = try XCTUnwrap(model.index?.entries.first { $0.displayPath == "README.md" })
+            let openedStale = await model.open(staleReadme, coordinator: coordinator)
+            XCTAssertFalse(openedStale)
+            // 1 root refresh GET (the file GET was to /files/{staleFileID}).
+            XCTAssertEqual(responder.requests(instanceId: "laptop").filter { $0 == "GET /workspaces/ws-1/files" }.count, filesRequestsBeforeOpen + 1)
+            XCTAssertEqual(model.errorMessage, AidenWorkspaceFilesModel.staleFileRecoveryMessage)
+            XCTAssertEqual(model.index?.entries.first(where: { $0.displayPath == "README.md" })?.id, freshFileID)
+            XCTAssertEqual(model.document?.id, openDocID)
+            XCTAssertEqual(model.draft, "unsaved draft\n")
+            let cachedSnapshot = await cache.load(instanceId: "laptop", workspaceId: "ws-1")
+            XCTAssertEqual(cachedSnapshot?.documents[openDocID]?.content, "original\n")
+
+            // 4. Stale save never auto-replays PUT and keeps draft intact.
+            let savedStale = await model.save(coordinator: coordinator)
+            XCTAssertFalse(savedStale)
+            XCTAssertEqual(putCalls.count, 1)
+            XCTAssertEqual(model.draft, "unsaved draft\n")
+            XCTAssertEqual(model.errorMessage, "Stale handle.")
+        }
+    }
+
+    @MainActor
+    func testConcurrentStalePagesRefreshRootOnceAndRespectOwnershipFence() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "AidenStaleFence-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cache = AidenWorkspaceEnvironmentCache(directory: directory)
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(
+            installations: [AidenDemoHosts.installation(instanceId: "laptop", name: "Laptop")],
+            responder: responder,
+            workspaceEnvironmentCache: cache,
+            machinePreferences: AidenMachinePreferencesStore(defaults: AidenDemoHosts.isolatedDefaults())
+        )
+        let scheduler = AidenHostConnectScheduler(
+            registry: coordinator.hosts,
+            pathChanges: AsyncStream { _ in },
+            maxConcurrentConnects: 2,
+            probeTimeout: 30
+        )
+        await coordinator.start()
+        await scheduler.foregrounded()
+        for _ in 0..<50 where coordinator.hosts.connection(for: "laptop")?.connectionState != .connected {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        let dirAID = "file_\(String(repeating: "a", count: 43))"
+        let dirBID = "file_\(String(repeating: "b", count: 43))"
+        let freshDirAID = "file_\(String(repeating: "c", count: 43))"
+        let staleJSON = Data(#"{"error":{"code":"handle_invalid","message":"Stale.","requestId":"req_1","retryable":false}}"#.utf8)
+
+        responder.reply(instanceId: "laptop", path: "/workspaces/ws-1/files", query: "tree=1", status: 200, json: Data("""
+        {"snapshotId":"root-1","entries":[
+          {"id":"\(dirAID)","displayPath":"a","name":"a","kind":"directory"},
+          {"id":"\(dirBID)","displayPath":"b","name":"b","kind":"directory"}
+        ],"truncated":false,"maxEntries":4000,"maxDepth":20,"directoryPath":""}
+        """.utf8))
+        let workspace = AidenWorkspace(
+            id: "ws-1", name: "Workspace", permission: .ask, hasFolder: true,
+            isManagedWorktree: false, branchName: nil, repositoryName: nil, git: nil,
+            createdAt: .now, updatedAt: .now, revision: "r1"
+        )
+        let owner = try coordinator.ownerContext(for: "laptop")
+        let model = AidenWorkspaceFilesModel(workspace: workspace, owner: owner, cache: cache)
+        await model.load(coordinator: coordinator)
+
+        let dirA = try XCTUnwrap(model.index?.entries.first { $0.displayPath == "a" })
+        let dirB = try XCTUnwrap(model.index?.entries.first { $0.displayPath == "b" })
+        let filesBefore = responder.requests(instanceId: "laptop").filter { $0 == "GET /workspaces/ws-1/files" }.count
+        responder.reply(instanceId: "laptop", path: "/workspaces/ws-1/files", query: "tree=1&directory=\(dirAID)", status: 400, json: staleJSON)
+        responder.reply(instanceId: "laptop", path: "/workspaces/ws-1/files", query: "tree=1&directory=\(dirBID)", status: 400, json: staleJSON)
+        let releaseB = responder.hold(instanceId: "laptop", path: "/workspaces/ws-1/files", query: "tree=1&directory=\(dirBID)")
+        let releaseRoot = responder.hold(instanceId: "laptop", path: "/workspaces/ws-1/files", query: "tree=1")
+        responder.reply(instanceId: "laptop", path: "/workspaces/ws-1/files", query: "tree=1", status: 200, json: Data("""
+        {"snapshotId":"root-2","entries":[{"id":"\(freshDirAID)","displayPath":"a","name":"a","kind":"directory"}],
+         "truncated":false,"maxEntries":4000,"maxDepth":20,"directoryPath":""}
+        """.utf8))
+
+        async let expandA: Void = model.toggle(dirA, coordinator: coordinator)
+        async let expandB: Void = model.toggle(dirB, coordinator: coordinator)
+        try await Task.sleep(for: .milliseconds(20))
+        releaseB()
+        releaseRoot()
+        _ = await (expandA, expandB)
+        // dirA GET + dirB GET + exactly 1 root refresh GET = +3 GET /workspaces/ws-1/files requests.
+        XCTAssertEqual(responder.requests(instanceId: "laptop").filter { $0 == "GET /workspaces/ws-1/files" }.count, filesBefore + 3)
+        XCTAssertEqual(model.index?.entries.map(\.id), [freshDirAID])
+
+        // Removing the installation while a stale recovery is parked prevents late publication.
+        responder.reply(instanceId: "laptop", path: "/workspaces/ws-1/files", query: "tree=1&directory=\(freshDirAID)", status: 400, json: staleJSON)
+        let releaseRemovedRoot = responder.hold(instanceId: "laptop", path: "/workspaces/ws-1/files", query: "tree=1")
+        let freshA = try XCTUnwrap(model.index?.entries.first)
+        let task = Task { await model.toggle(freshA, coordinator: coordinator) }
+        try await Task.sleep(for: .milliseconds(20))
+        await coordinator.removeInstallation("laptop")
+        releaseRemovedRoot()
+        await task.value
+        XCTAssertNil(model.index)
+    }
+
     private static func response(_ request: URLRequest, _ status: Int, _ json: String) -> (HTTPURLResponse, Data) {
         (HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!, Data(json.utf8))
     }
@@ -471,6 +689,12 @@ private final class EnvironmentAttemptCounter: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         value += 1
+        return value
+    }
+
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
         return value
     }
 }

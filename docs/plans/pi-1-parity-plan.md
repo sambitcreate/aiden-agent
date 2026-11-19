@@ -4,6 +4,8 @@ Current execution target (2026-10-05): exact Pi **1.0.3**. Follow [the upgrade a
 
 Status: implementation and local validation complete; review follow-up and exact-head CI acceptance active (2026-10-02). The stable Pi 1.0 stack (#299–#307) merged and was integrated through PR #357 (0.54.0); documented client differences remain intentional.
 
+2026-11-18: the CLI rows below that describe the TUI, fullscreen, terminal palettes and keybindings are history. The interactive CLI was retired on 2026-10-30 ([serve-only plan](completed/aiden-serve-only-cli.md)); `packages/cli` is now `aiden serve` plus admin commands.
+
 ## Baseline and target
 
 Aiden origin/main: `d2197dfef` (0.51.0). Pi checkout `/Users/sambitbiswas/projects/opp/pi` was fast-forwarded to `581e7ba78`. Published target: exact **1.0.0**, release tag `v1.0.0` / `a13d35a742`. Changes in upstream `Unreleased` are tracked separately, not silently shipped as 1.0. Release: https://github.com/earendil-works/pi/releases/tag/v1.0.0.

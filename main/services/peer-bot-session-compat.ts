@@ -12,12 +12,10 @@ import {
   parseAidenRemoteBotApproval,
   parseAidenRemoteBotHandoff,
   parseAidenRemoteBotQuestion,
-  parseAidenRemoteBotSession,
   parseAidenRemoteBotSessionActivity,
   parseAidenRemoteBotSessionEntry,
   parseAidenRemoteBotSessionEvent,
   parseAidenRemoteBotQueuedList,
-  type AidenRemoteBotSession,
   type AidenRemoteBotSessionEvent,
 } from "./aiden-remote-protocol.js";
 
@@ -90,10 +88,6 @@ export function peerBotSessionCompat(value: unknown): unknown {
     delete session.activity;
   if (has(session, "queued") && !parses(parseAidenRemoteBotQueuedList, session.queued)) delete session.queued;
   return session;
-}
-
-export function parsePeerBotSession(value: unknown): AidenRemoteBotSession {
-  return parseAidenRemoteBotSession(peerBotSessionCompat(value));
 }
 
 /** An event this client cannot apply: the session must be read again. */

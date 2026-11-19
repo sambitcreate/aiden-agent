@@ -1,5 +1,5 @@
 {
-  "contractRevision": 64,
+  "contractRevision": 65,
   "peerRouteAdvertisement": {
     "feature": "peer-routes-v1",
     "routes": [
@@ -2299,7 +2299,7 @@
     "instanceId": "instance_fixture_01",
     "displayName": "Fixture Aiden",
     "platform": "mac",
-    "contractRevision": 64,
+    "contractRevision": 65,
     "pairingRequests": true
   },
   "hostFeedEvents": [
@@ -7211,5 +7211,108 @@
         }
       }
     }
+  },
+  "streamRecovery": {
+    "capability": "stream:snapshot-reasons",
+    "gapEvents": [
+      {
+        "protocolVersion": 1,
+        "streamId": "stream_fixture_gap_01",
+        "sequence": 4097,
+        "timestamp": "2026-11-18T12:00:00.000Z",
+        "type": "snapshot",
+        "terminal": false,
+        "payload": {
+          "chatId": "chat_fixture_01",
+          "turnId": "turn_fixture_gap_01",
+          "reason": "gap",
+          "nextSequence": 4098
+        }
+      },
+      {
+        "protocolVersion": 1,
+        "streamId": "stream_fixture_gap_01",
+        "sequence": 4098,
+        "timestamp": "2026-11-18T12:00:01.000Z",
+        "type": "text_delta",
+        "terminal": false,
+        "payload": {
+          "text": "Retained tail"
+        }
+      },
+      {
+        "protocolVersion": 1,
+        "streamId": "stream_fixture_gap_01",
+        "sequence": 4099,
+        "timestamp": "2026-11-18T12:00:02.000Z",
+        "type": "done",
+        "terminal": true,
+        "payload": {
+          "messageId": "message_fixture_02"
+        }
+      }
+    ],
+    "legacyGapSnapshot": {
+      "protocolVersion": 1,
+      "streamId": "stream_fixture_gap_01",
+      "sequence": 4097,
+      "timestamp": "2026-11-18T12:00:00.000Z",
+      "type": "snapshot",
+      "terminal": false,
+      "payload": {
+        "chatId": "chat_fixture_01",
+        "turnId": "turn_fixture_gap_01",
+        "nextSequence": 4098
+      }
+    },
+    "resetEvents": [
+      {
+        "protocolVersion": 1,
+        "streamId": "stream_fixture_reset_01",
+        "sequence": 1,
+        "timestamp": "2026-11-18T12:01:00.000Z",
+        "type": "text_delta",
+        "terminal": false,
+        "payload": {
+          "text": "Initial draft"
+        }
+      },
+      {
+        "protocolVersion": 1,
+        "streamId": "stream_fixture_reset_01",
+        "sequence": 2,
+        "timestamp": "2026-11-18T12:01:01.000Z",
+        "type": "snapshot",
+        "terminal": false,
+        "payload": {
+          "chatId": "chat_fixture_01",
+          "turnId": "turn_fixture_reset_01",
+          "reason": "reset",
+          "nextSequence": 3
+        }
+      },
+      {
+        "protocolVersion": 1,
+        "streamId": "stream_fixture_reset_01",
+        "sequence": 3,
+        "timestamp": "2026-11-18T12:01:02.000Z",
+        "type": "text_delta",
+        "terminal": false,
+        "payload": {
+          "text": "Replacement reply"
+        }
+      },
+      {
+        "protocolVersion": 1,
+        "streamId": "stream_fixture_reset_01",
+        "sequence": 4,
+        "timestamp": "2026-11-18T12:01:03.000Z",
+        "type": "done",
+        "terminal": true,
+        "payload": {
+          "messageId": "message_fixture_02"
+        }
+      }
+    ]
   }
 }

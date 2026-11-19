@@ -73,19 +73,6 @@ test("preload and renderer IPC expose only the generic Web Search contract", asy
   assert.doesNotMatch(rendererIpc, /getKey|secretId|keyPrefix|keySuffix/u);
 });
 
-test("legacy Exa aliases remain fenced and do not bypass v2 credential access", async () => {
-  const phase2 = await source("main/handlers/phase2.ts");
-  const exaStart = phase2.indexOf('ipcMain.handle("exa:get"');
-  const voiceStart = phase2.indexOf("// ── Voice transcription", exaStart);
-  assert.ok(exaStart >= 0);
-  assert.ok(voiceStart > exaStart);
-  const exa = phase2.slice(exaStart, voiceStart);
-  assert.match(exa, /webSearchMutationOwner\(event\)/gu);
-  assert.match(exa, /webSearchCredentials\.reference\("exa"/u);
-  assert.doesNotMatch(exa, /secrets\.(?:getKey|setKey|deleteKey)\(/u);
-  assert.doesNotMatch(exa, /return\s+key\b|return\s+value\b/u);
-});
-
 test("the main Web Search binding consumes the closed settings projection", async () => {
   const binding = await source("main/services/web-search-main.ts");
   assert.match(binding, /configStore\.getWebSearchSettings\(\)/u);

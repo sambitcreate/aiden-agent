@@ -478,12 +478,6 @@ export function SettingsDisclosure({
   );
 }
 
-export const FieldGroup = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
-  <div className={className} {...props} />
-);
-export const FieldContent = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
-  <div className={className} {...props} />
-);
 export const FieldLabel = Label;
 
 const SplitContext = React.createContext<{

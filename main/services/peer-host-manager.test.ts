@@ -1249,3 +1249,361 @@ test("a registry change during a preferred-route check keeps one 30-second check
     manager.close();
   }
 });
+
+test("a paired private-CA .local host retries TLS collisions via backoff, Reconnect and wake without concurrent loops, while /server instance mismatches stay terminal", async (t) => {
+  const { X509Certificate } = await import("node:crypto");
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { loadOrCreateAidenRemoteTlsIdentity } = await import("./aiden-remote-tls-identity.js");
+
+  const tlsDir = await mkdtemp(path.join(os.tmpdir(), "aiden-mgr-lan-ca-"));
+  t.after(() => rm(tlsDir, { recursive: true, force: true }));
+  const identity = await loadOrCreateAidenRemoteTlsIdentity({ directory: tlsDir, hostnames: ["studio.local"] });
+  const caCertificateDerBase64 = new X509Certificate(identity.caCertificate).raw.toString("base64");
+  const lanRecord = (id: string): StoredPeerHost => ({
+    ...stored(id),
+    endpoint: "https://studio.local:7319/api/aiden/v1",
+    serverSpkiSha256: identity.serverSpkiSha256,
+    caCertificateDerBase64,
+  });
+  const tlsIdentityCollision = () =>
+    new PeerTransportError("identity_changed", undefined, undefined, "tls", { identitySource: "tls" });
+
+  // 1. Fails TLS once, then recovers via scheduled backoff, explicit Reconnect, and wake() separately.
+  for (const recovery of ["backoff", "reconnect", "wake"] as const) {
+    const host = new FakeHost("host_lan", "Studio LAN");
+    let rejectTls = true;
+    const harness = setup([host], [lanRecord(host.id)], (server) => {
+      const inner = server.client();
+      return {
+        ...inner,
+        json: async (input) => {
+          if (rejectTls) throw tlsIdentityCollision();
+          return inner.json(input);
+        },
+      };
+    });
+    try {
+      await harness.manager.whenReady();
+      await settle();
+      assert.equal(harness.status("host_lan").state.kind, "backoff", recovery);
+      assert.equal(harness.status("host_lan").failure, "tls", recovery);
+      assert.equal(host.calls.length, 0, "TLS failure occurred before any HTTP request");
+
+      rejectTls = false;
+      if (recovery === "backoff") {
+        await harness.advance(PEER_BACKOFF_STEPS_MS[0] - 1);
+        assert.equal(harness.status("host_lan").state.kind, "backoff");
+        await harness.advance(1);
+      } else if (recovery === "reconnect") {
+        await harness.manager.reconnect("host_lan");
+        await settle();
+      } else {
+        harness.manager.wake();
+        await harness.advance(PEER_WAKE_COALESCE_MS);
+      }
+      assert.equal(harness.status("host_lan").state.kind, "connected", recovery);
+      assert.equal(harness.status("host_lan").feed, "live", recovery);
+      assert.equal(harness.status("host_lan").failure, undefined, recovery);
+    } finally {
+      harness.close();
+    }
+  }
+
+  // 2. Persistent TLS rejection backs off 3/4/8/16/30s without concurrent retry loops.
+  {
+    const host = new FakeHost("host_persistent", "Persistent collision");
+    let attempts = 0;
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const harness = setup([host], [lanRecord(host.id)], () => ({
+      json: async () => {
+        attempts += 1;
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        try {
+          await new Promise((resolve) => setImmediate(resolve));
+          throw tlsIdentityCollision();
+        } finally {
+          inFlight -= 1;
+        }
+      },
+      events: async () => {
+        throw tlsIdentityCollision();
+      },
+    }));
+    try {
+      await harness.manager.whenReady();
+      await settle();
+      const delays: number[] = [];
+      for (let step = 0; step < 6; step += 1) {
+        const current = harness.status("host_persistent");
+        assert.equal(current.state.kind, "backoff");
+        assert.equal(current.failure, "tls");
+        const delay = (current.state as { retryAt: number }).retryAt - harness.timers.now;
+        delays.push(delay);
+        await harness.advance(delay - 1);
+        assert.equal(attempts, step + 1, "no retry fires early or in a concurrent loop");
+        await harness.advance(1);
+      }
+      assert.deepEqual(delays, [...PEER_BACKOFF_STEPS_MS, 30_000]);
+      assert.equal(attempts, 7);
+      assert.equal(maxInFlight, 1, "never more than one connection attempt in flight");
+    } finally {
+      harness.close();
+    }
+  }
+
+  // 3. Pre-HTTP TLS rejection on a mutation is NOT outcome_unknown, makes no reconcile/replay, and wake/feed TLS failures recover.
+  {
+    const host = new FakeHost("host_ops", "Operations");
+    let rejectUnaryTls = false;
+    let rejectStreamTls = false;
+    const harness = setup([host], [lanRecord(host.id)], (server) => {
+      const inner = server.client();
+      return {
+        json: async (input) => {
+          if (rejectUnaryTls) throw tlsIdentityCollision();
+          return inner.json(input);
+        },
+        events: async (input, onFrame) => {
+          if (rejectStreamTls) throw tlsIdentityCollision();
+          return inner.events(input, onFrame);
+        },
+      };
+    });
+    try {
+      await harness.manager.whenReady();
+      await settle();
+      assert.equal(harness.status("host_ops").state.kind, "connected");
+      const callsBeforeSend = host.calls.length;
+
+      // A pre-HTTP TLS rejection on a mutation must report identity_changed, never outcome_unknown.
+      rejectUnaryTls = true;
+      const sendOutcome = await harness.manager.call("host_ops", {
+        operation: "send",
+        resourceId: "chat-1",
+        idempotencyKey: "key-send-00000000001",
+        body: { text: "Do not mark unknown" },
+      });
+      assert.deepEqual(sendOutcome, {
+        ok: false,
+        error: {
+          code: "identity_changed",
+          message: new PeerTransportError("identity_changed").message,
+        },
+      });
+      assert.equal(host.calls.length, callsBeforeSend, "no HTTP mutation, reconcile read or replay reached the host");
+      assert.equal(harness.status("host_ops").state.kind, "connected", "a single failed unary socket does not block the host");
+
+      // A wake probe hitting a .local TLS collision moves the host to backoff (not blocked), then recovers.
+      harness.manager.wake();
+      await harness.advance(PEER_WAKE_COALESCE_MS);
+      assert.equal(harness.status("host_ops").state.kind, "backoff");
+      assert.equal(harness.status("host_ops").failure, "tls");
+      rejectUnaryTls = false;
+      await harness.advance(PEER_BACKOFF_STEPS_MS[0]);
+      assert.equal(harness.status("host_ops").state.kind, "connected");
+      assert.equal(harness.status("host_ops").feed, "live");
+
+      // A dropped feed hitting a .local TLS collision on reopen also enters backoff and resumes from its cursor.
+      await harness.advance(PEER_STABLE_MS);
+      rejectStreamTls = true;
+      host.streams("/host/events")[0]!.drop();
+      await settle();
+      assert.equal(harness.status("host_ops").state.kind, "backoff");
+      await harness.advance(PEER_BACKOFF_STEPS_MS[0]);
+      assert.equal(harness.status("host_ops").state.kind, "backoff");
+      assert.equal(harness.status("host_ops").failure, "tls");
+      rejectStreamTls = false;
+      await harness.manager.reconnect("host_ops");
+      await settle();
+      assert.equal(harness.status("host_ops").state.kind, "connected");
+      assert.equal(harness.status("host_ops").feed, "live");
+    } finally {
+      harness.close();
+    }
+  }
+
+  // 4. Authenticated /server instance mismatches during connect() and wake probe() stay terminal with zero retry traffic.
+  {
+    const initialMismatch = new FakeHost("host_connect_mismatch", "Wrong install at connect");
+    initialMismatch.server = () => ({
+      protocolVersion: 1,
+      instanceId: "another_installation",
+      capabilities: CAPABILITIES,
+      features: FEATURES,
+    });
+    const probeMismatch = new FakeHost("host_probe_mismatch", "Wrong install on wake");
+    const harness = setup(
+      [initialMismatch, probeMismatch],
+      [lanRecord(initialMismatch.id), lanRecord(probeMismatch.id)],
+    );
+    try {
+      await harness.manager.whenReady();
+      await settle();
+      assert.deepEqual(harness.status(initialMismatch.id).state, { kind: "blocked", reason: "identity_changed" });
+      assert.equal(harness.status(probeMismatch.id).state.kind, "connected");
+
+      // Swap the second host's instanceId before a wake probe.
+      probeMismatch.server = () => ({
+        protocolVersion: 1,
+        instanceId: "replaced_on_wake",
+        capabilities: CAPABILITIES,
+        features: FEATURES,
+      });
+      harness.manager.wake();
+      await harness.advance(PEER_WAKE_COALESCE_MS);
+      assert.deepEqual(harness.status(probeMismatch.id).state, { kind: "blocked", reason: "identity_changed" });
+
+      const connectCalls = initialMismatch.calls.length;
+      const probeCalls = probeMismatch.calls.length;
+      await harness.manager.reconnect(initialMismatch.id);
+      await harness.manager.reconnect(probeMismatch.id);
+      harness.manager.wake();
+      await harness.advance(10 * 60_000);
+      assert.equal(initialMismatch.calls.length, connectCalls, "connect instance mismatch makes no retry traffic");
+      assert.equal(probeMismatch.calls.length, probeCalls, "probe instance mismatch makes no retry traffic");
+    } finally {
+      harness.close();
+    }
+  }
+
+  // 5. A standalone PeerManagerRegistry stub also distinguishes TLS-sourced LAN failures from instance mismatches.
+  {
+    const timers = new FakeTimers();
+    const lanView: PeerHostView = {
+      id: "host_stub_lan",
+      name: "Stub LAN",
+      enabled: true,
+      state: "disconnected",
+      features: [],
+      capabilities: [],
+      routes: [{ id: "route_lan", kind: "lan", origin: "paired", active: true }],
+    };
+    let connectMode: "tls" | "ok" | "instance" = "tls";
+    const stubRegistry: PeerManagerRegistry = {
+      list: async () => [lanView],
+      connect: async () => {
+        if (connectMode === "tls") throw tlsIdentityCollision();
+        if (connectMode === "instance") {
+          throw new PeerTransportError("identity_changed", undefined, undefined, undefined, { identitySource: "instance" });
+        }
+        return { ...lanView, state: "connected", activeRouteKind: "lan" };
+      },
+      request: async () => ({}),
+      setEnabled: async () => undefined,
+      remove: async () => undefined,
+      onChanged: () => () => undefined,
+      attachConnectionState: () => undefined,
+    };
+    const stubManager = new PeerHostManager({
+      registry: stubRegistry,
+      broadcast: () => undefined,
+      timers,
+      now: () => timers.now,
+      random: () => 0.5,
+    });
+    try {
+      await stubManager.whenReady();
+      await settle();
+      assert.equal(stubManager.statuses()[0]?.state.kind, "backoff");
+      assert.equal(stubManager.statuses()[0]?.failure, "tls");
+      connectMode = "ok";
+      await stubManager.reconnect("host_stub_lan");
+      await settle();
+      assert.equal(stubManager.statuses()[0]?.state.kind, "connected");
+
+      connectMode = "instance";
+      // Force a fresh connect via setEnabled cycle on stub.
+      await stubManager.setEnabled("host_stub_lan", false);
+      await stubManager.setEnabled("host_stub_lan", true);
+      await settle();
+      assert.deepEqual(stubManager.statuses()[0]?.state, { kind: "blocked", reason: "identity_changed" });
+    } finally {
+      stubManager.close();
+    }
+  }
+});
+
+test("real-TLS key rotation on a paired .local LAN host keeps rejecting while retrying until explicitly re-paired", async (t) => {
+  const { PeerLanAddresses } = await import("./peer-lan-addresses.js");
+  const { PeerBootstrapTransport } = await import("./peer-bootstrap-transport.js");
+  const { startPeerTestHost } = await import("./peer-pairing-test-host.js");
+
+  const host = await startPeerTestHost({ lanHostname: "studio-real.local" });
+  const timers = new FakeTimers();
+  const lanAddresses = new PeerLanAddresses((hostname, options, callback) => {
+    assert.equal(hostname, "studio-real.local");
+    if (options.all) callback(null, [{ address: "127.0.0.1", family: 4 }]);
+    else callback(null, "127.0.0.1", 4);
+  });
+  let saved: StoredPeerHost[] = [];
+  const registry = new PeerHostRegistry({
+    storage: {
+      load: async () => structuredClone(saved),
+      save: async (next) => {
+        saved = structuredClone(next);
+      },
+    },
+    localInstanceId: async () => "install_travel",
+    deviceName: "Travel MacBook",
+    clientVersion: "0.66.0",
+    platform: "mac",
+    lanAddresses,
+    bootstrap: (session) => new PeerBootstrapTransport({ ...session, ca: host.caPem }),
+  });
+  await registry.pairWithSetupCode({
+    endpoint: host.lanAddressEndpoint,
+    code: host.openSetupCode("lan"),
+    instanceId: host.instanceId,
+  });
+  lanAddresses.forget(host.instanceId);
+
+  const manager = new PeerHostManager({
+    registry,
+    broadcast: () => undefined,
+    now: () => timers.now,
+    random: () => 0.5,
+    timers,
+  });
+  t.after(async () => {
+    manager.close();
+    registry.close();
+    await host.close();
+  });
+
+  const waitState = async (predicate: () => boolean) => {
+    for (let i = 0; i < 200 && !predicate(); i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.ok(predicate());
+  };
+
+  await waitState(() => manager.statuses()[0]?.state.kind === "connected");
+  const originalPin = saved[0]!.serverSpkiSha256;
+
+  // Rotate the LAN host's leaf key: the .local supervisor backs off and keeps rejecting the new key without trusting it.
+  await host.rotateLeaf();
+  const receivedAfterRotate = host.received.length;
+  manager.wake();
+  timers.advance(PEER_WAKE_COALESCE_MS);
+  await waitState(() => manager.statuses()[0]?.state.kind === "backoff");
+  assert.equal(manager.statuses()[0]?.failure, "tls");
+
+  await manager.reconnect(host.instanceId);
+  await waitState(() => manager.statuses()[0]?.state.kind === "backoff");
+  assert.equal(saved[0]!.serverSpkiSha256, originalPin, "retrying never re-pins a private-CA LAN key");
+  assert.equal(host.received.length, receivedAfterRotate, "rejected TLS retries send no HTTP requests or credentials");
+
+  // Re-pairing replaces the pin and restores supervision.
+  await registry.pairWithSetupCode(
+    { endpoint: host.lanAddressEndpoint, code: host.openSetupCode("lan"), instanceId: host.instanceId },
+    undefined,
+    { replaceHostId: host.instanceId },
+  );
+  await manager.reconnect(host.instanceId, { repaired: true });
+  await waitState(() => manager.statuses()[0]?.state.kind === "connected");
+  assert.equal(saved[0]!.serverSpkiSha256, host.serverSpkiSha256());
+});

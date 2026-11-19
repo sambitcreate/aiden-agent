@@ -7,7 +7,6 @@ import type { Api, Provider } from "@earendil-works/pi-ai";
 import path from "node:path";
 
 import { app } from "../../platform.js";
-import { currentPlatformKey } from "../acp/harness.js";
 import { createAcpHarnessProvider } from "../acp/provider.js";
 import { createAntigravityDefinition } from "./definition.js";
 import { AntigravityService } from "./service.js";
@@ -53,8 +52,4 @@ export function antigravityProvider(): Provider<Api> {
     },
     discoverModels: (signal) => antigravityService().discoverModels(signal),
   });
-}
-
-export function antigravitySupportedHere(): boolean {
-  return currentPlatformKey() !== undefined;
 }

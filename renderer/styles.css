@@ -2362,10 +2362,6 @@ textarea {
   opacity: 1;
 }
 
-.agent-activity-transition {
-  display: grid;
-}
-
 .agent-activity-layer {
   grid-area: 1 / 1;
 }
@@ -2391,8 +2387,7 @@ textarea {
 
 :root[data-reduce-motion="false"]
   .agent-event-presence[data-presence="exiting"],
-:root[data-reduce-motion="false"] .activity-feed[data-presence="exiting"],
-:root[data-reduce-motion="false"] .agent-event-out {
+:root[data-reduce-motion="false"] .activity-feed[data-presence="exiting"] {
   animation: aiden-agent-event-out 180ms ease-in both;
   pointer-events: none;
 }
@@ -3053,23 +3048,6 @@ textarea {
   animation: aiden-pill-enter 200ms cubic-bezier(0.19, 1, 0.22, 1);
 }
 
-/* Bot editor wizard: one quiet page swap per Next/Back, mirroring the
-   specimen's small-distance enter motion. */
-.aiden-bot-wizard-page {
-  animation: aiden-bot-wizard-page-in 220ms cubic-bezier(0.19, 1, 0.22, 1);
-}
-
-@keyframes aiden-bot-wizard-page-in {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .model-pad-chip,
   .model-pad-knob,
@@ -3086,10 +3064,6 @@ textarea {
   }
 
   .aiden-pill {
-    animation: none;
-  }
-
-  .aiden-bot-wizard-page {
     animation: none;
   }
 }

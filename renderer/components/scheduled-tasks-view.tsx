@@ -357,17 +357,11 @@ export function ScheduledTasksView() {
     }
   }, [selectedTaskId, tasks.data]);
 
-  const refresh = async (taskId?: string) => {
-    const invalidations = [
+  const refresh = async () => {
+    await Promise.all([
       queryClient.invalidateQueries({ queryKey: queryKeys.scheduledTasks }),
       queryClient.invalidateQueries({ queryKey: queryKeys.chats }),
-    ];
-    if (taskId) {
-      invalidations.push(
-        queryClient.invalidateQueries({ queryKey: queryKeys.scheduledRuns(taskId) }),
-      );
-    }
-    await Promise.all(invalidations);
+    ]);
   };
 
   const toggle = async (task: ScheduledTask, enabled: boolean) => {
@@ -376,7 +370,7 @@ export function ScheduledTasksView() {
     try {
       if (enabled) await scheduleApi.resume(task.id, task.updatedAt);
       else await scheduleApi.pause(task.id, task.updatedAt);
-      await refresh(task.id);
+      await refresh();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Couldn't update this task.");
     } finally {
@@ -389,7 +383,7 @@ export function ScheduledTasksView() {
     setBusyTaskId(task.id);
     try {
       const run = await scheduleApi.runNow(task.id, task.updatedAt);
-      await refresh(task.id);
+      await refresh();
       if (run.result === "success") toast.success(`${task.name} finished.`);
       else if (run.result === "silent") toast.info(`${task.name} finished with no output.`);
       else toast.error(run.error ?? `${task.name} did not complete.`);
@@ -828,7 +822,7 @@ export function ScheduledTasksView() {
             setSaving(true);
             try {
               await scheduleApi.save(input, editingUpdatedAt);
-              await refresh(input.id);
+              await refresh();
               setEditing(null);
               setEditingUpdatedAt(undefined);
               toast.success(input.id ? "Scheduled task updated." : "Scheduled task created.");
@@ -855,11 +849,11 @@ export function ScheduledTasksView() {
           if (!removing) return;
           try {
             await scheduleApi.remove(removing.id, removing.updatedAt);
-            await refresh(removing.id);
+            await refresh();
             setSelectedTaskId((selected) => (selected === removing.id ? null : selected));
             setRemoving(null);
           } catch (error) {
-            await refresh(removing.id);
+            await refresh();
             toast.error(error instanceof Error ? error.message : "Couldn't delete this task.");
           }
         }}

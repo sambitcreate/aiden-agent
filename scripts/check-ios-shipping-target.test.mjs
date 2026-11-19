@@ -91,6 +91,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Chat/AidenReadAloud.swift",
   "AidenOnTheGo/Features/Chat/AidenChatImages.swift",
   "AidenOnTheGo/Features/Chat/AidenChatMarkdown.swift",
+  "AidenOnTheGo/Features/Chat/AidenSVGPreview.swift",
   "AidenOnTheGo/Features/Chat/AidenLiveResponseView.swift",
   "AidenOnTheGo/Features/Chat/AidenChatViewModel.swift",
   "AidenOnTheGo/Features/Chat/AidenChatViewModel+Fork.swift",
@@ -135,6 +136,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Remote/AidenBotChatToolsView.swift",
   "AidenOnTheGo/Features/Remote/Demo/AidenDemoHosts.swift",
   "AidenOnTheGo/Features/Remote/Demo/AidenDemoBotUX.swift",
+  "AidenOnTheGo/Features/Remote/Demo/AidenPreviewFixtureView.swift",
   "AidenOnTheGo/Features/Remote/Hosts/AidenHostConnectScheduler.swift",
   "AidenOnTheGo/Features/Shell/AidenAppNavigation.swift",
   "AidenOnTheGo/Features/Shell/AidenAppShellView.swift",
@@ -161,6 +163,8 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Remote/AidenNewWorktree.swift",
   "AidenOnTheGo/Features/Remote/AidenVisualDocument.swift",
   "AidenOnTheGo/Features/Remote/AidenVisualViewer.swift",
+  "AidenOnTheGo/Features/Remote/AidenSandboxedHTMLView.swift",
+  "AidenOnTheGo/Features/Remote/AidenHTMLPreviewTheme.swift",
   "AidenOnTheGo/Features/Remote/AidenWorkspaceEnvironmentView.swift",
   "AidenOnTheGo/Features/Shared/ActivityMarks/AidenActivityMarkEvaluator.swift",
   "AidenOnTheGo/Features/Shared/ActivityMarks/AidenActivityMarkMapping.swift",
@@ -334,6 +338,7 @@ const testSources = [
   "AidenChatMarkdownTests.swift",
   "AidenTranscriptPlaceTests.swift",
   "AidenVisualViewerTests.swift",
+  "AidenSandboxedHTMLTests.swift",
   "AidenWorkspaceEnvironmentTests.swift",
 ];
 
@@ -341,6 +346,8 @@ const testSources = [
 const uiTestSources = [
   "AidenShellUITests.swift",
   "AidenBotUXUITests.swift",
+  "AidenSandboxedHTMLUITests.swift",
+  "AidenWorkspaceHTMLUITests.swift",
   "AidenStateMatrix.swift",
 ];
 
@@ -701,7 +708,6 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
 
   assert.match(shell, /enum ChatListLoadState: Equatable/u);
   assert.match(shell, /var chatListLoadState: ChatListLoadState = \.unresolved/u);
-  assert.match(shell, /var chatLoadErrorMessage: String\?/u);
   assert.match(
     shell,
     /case \.failure\(let error\):[\s\S]{0,180}chatListLoadState = \.failed\(error\.localizedDescription\)/u,

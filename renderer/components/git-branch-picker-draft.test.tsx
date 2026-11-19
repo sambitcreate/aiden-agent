@@ -312,3 +312,116 @@ test("This checkout from an existing worktree moves the draft back to the reposi
   assert.equal(getChatDraft(draftId)?.chat.workspaceId, REPO.id);
   assert.equal(getChatDraft(draftId)?.gitMode, "checkout");
 });
+
+const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+test("Escape restores focus to the branch trigger, or to the programmatic origin for /worktree", async () => {
+  await mount(
+    <>
+      <DraftHarness workspaces={[REPO]} />
+      <textarea aria-label="Composer" />
+    </>,
+  );
+  const trigger = screen.getByRole("button", { name: "main" });
+  trigger.focus();
+  await openMenu(trigger);
+  assert.ok(screen.queryByRole("menu") !== null);
+
+  await act(async () => {
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+  });
+  await settle();
+  await nextFrame();
+  assert.equal(screen.queryByRole("menu"), null);
+  assert.equal(document.activeElement === trigger, true);
+  cleanup();
+
+  function ProgrammaticHarness() {
+    const composerRef = React.useRef<HTMLTextAreaElement>(null);
+    return (
+      <>
+        <GitBranchPicker
+          workspaceId={REPO.id}
+          branch="main"
+          worktreeDescription="Creates a worktree."
+          onCreateWorktree={async () => undefined}
+          openWorktreeOnMount
+          programmaticReturnFocusRef={composerRef}
+        />
+        <textarea ref={composerRef} aria-label="Composer" />
+      </>
+    );
+  }
+
+  await mount(<ProgrammaticHarness />);
+  const branchInput = screen.getByRole("textbox", { name: "New branch name" });
+  await act(async () => {
+    fireEvent.keyDown(branchInput, { key: "Escape" });
+  });
+  await settle();
+  await nextFrame();
+  assert.equal(screen.queryByRole("menu"), null);
+  assert.equal(
+    document.activeElement === screen.getByRole("textbox", { name: "Composer" }),
+    true,
+  );
+});
+
+test("focus moved to the composer after Escape is not stolen back when close auto-focus or its frame runs", async (t) => {
+  const keyTarget = () => (document.activeElement?.isConnected ? document.activeElement : document.body);
+
+  // 1. Focus moves to the composer immediately on Escape, before Radix's deferred unmount auto-focus runs.
+  await mount(
+    <>
+      <DraftHarness workspaces={[REPO]} />
+      <textarea aria-label="Composer" />
+    </>,
+  );
+  const composer = screen.getByRole("textbox", { name: "Composer" });
+  await openMenu(screen.getByRole("button", { name: "main" }));
+  await click(radio(/^New worktree/u)!);
+  await click(document.querySelector<HTMLElement>("[data-branch-name-row]")!);
+  const nameInput = screen.getByRole("textbox", { name: /Branch name/u });
+  await act(async () => {
+    fireEvent.change(nameInput, { target: { value: "aiden/taken" } });
+    fireEvent.keyDown(nameInput, { key: "Enter" });
+  });
+  await settle();
+
+  act(() => {
+    fireEvent.keyDown(keyTarget(), { key: "Escape" });
+  });
+  // Escape has committed, while FocusScope's deferred unmount auto-focus and
+  // GitBranchPicker's animation frame are still queued.
+  composer.focus();
+  await settle();
+  await nextFrame();
+  assert.equal(screen.queryByRole("menu"), null);
+  assert.equal(document.activeElement === composer, true);
+  cleanup();
+
+  // 2. Focus moves to the composer after onCloseAutoFocus queued its animation frame, before that frame runs.
+  await mount(
+    <>
+      <DraftHarness workspaces={[REPO]} />
+      <textarea aria-label="Composer" />
+    </>,
+  );
+  const secondComposer = screen.getByRole("textbox", { name: "Composer" });
+  await openMenu(screen.getByRole("button", { name: "Branch: new worktree from main" }));
+  const queuedFrames: FrameRequestCallback[] = [];
+  const rafMock = t.mock.method(globalThis, "requestAnimationFrame", (callback: FrameRequestCallback) => {
+    queuedFrames.push(callback);
+    return queuedFrames.length;
+  });
+  await act(async () => {
+    fireEvent.keyDown(keyTarget(), { key: "Escape" });
+  });
+  // Flush Radix FocusScope's setTimeout(0) so onCloseAutoFocus runs and queues its restoring frame.
+  await settle();
+  rafMock.mock.restore();
+  assert.equal(queuedFrames.length > 0, true, "onCloseAutoFocus queued a restoring animation frame");
+  secondComposer.focus();
+  for (const frame of queuedFrames) frame(0);
+  assert.equal(document.activeElement === secondComposer, true);
+});

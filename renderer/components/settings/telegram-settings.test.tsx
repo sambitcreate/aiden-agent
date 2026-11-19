@@ -7,9 +7,13 @@ import { installBotTestIpc } from "../../main/bots/test-dom";
 import { createBotTestQueryClient } from "../../main/bots/test-providers";
 import type { TelegramStatus } from "../../lib/ipc";
 import { telegramStatusPollInterval } from "../../lib/queries";
+import { Toaster, toast } from "../ui";
 import { TelegramSettings } from "./telegram-settings";
 
-afterEach(cleanup);
+afterEach(() => {
+  toast.dismiss();
+  cleanup();
+});
 
 const baseStatus: TelegramStatus = {
   enabled: false,
@@ -45,6 +49,7 @@ function mount(initial: Partial<TelegramStatus>, overrides: Record<string, (...a
   });
   render(
     <QueryClientProvider client={createBotTestQueryClient()}>
+      <Toaster />
       <TelegramSettings />
     </QueryClientProvider>,
   );
@@ -168,4 +173,60 @@ test("the unattended-authority notice shows without opening anything", async () 
 test("setup with no folder workspaces points at the sidebar", async () => {
   mount({ hasToken: false });
   await screen.findByText(/Add a folder workspace from the sidebar/u);
+});
+
+test("Reset pairing asks first, says who claims the bot next, and clears the owner only on confirm", async () => {
+  let owner: number | undefined = 7;
+  const { calls } = mount({}, {
+    "telegram:get": () => ({ ...baseStatus, enabled: true, polling: true, allowedUserId: owner }),
+    "telegram:resetPairing": () => {
+      owner = undefined;
+      return { reset: true };
+    },
+  });
+  const resets = () => calls.filter((call) => call.channel === "telegram:resetPairing").length;
+
+  fireEvent.click(await screen.findByRole("button", { name: "Reset pairing" }));
+  const dialog = await screen.findByRole("alertdialog", { name: "Reset Telegram pairing?" });
+  assert.match(dialog.textContent ?? "", /next person to message your bot becomes its owner/u);
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  await waitFor(() => assert.equal(screen.queryByRole("alertdialog"), null));
+  assert.equal(resets(), 0);
+  screen.getByText("User ID: 7");
+
+  fireEvent.click(screen.getByRole("button", { name: "Reset pairing" }));
+  await screen.findByRole("alertdialog", { name: "Reset Telegram pairing?" });
+  fireEvent.click(screen.getByRole("button", { name: "Reset pairing" }));
+  await screen.findByText("Pairing reset. The next person to message your bot becomes its owner.");
+  assert.equal(resets(), 1);
+  await waitFor(() => assert.equal(screen.queryByText("User ID: 7"), null));
+  // The Reset pairing button is gone, so focus lands on Disconnect rather than the page.
+  await waitFor(() => assert.equal(document.activeElement, screen.getByRole("button", { name: "Disconnect" })));
+});
+
+test("a Reset pairing that fails says why and keeps the owner", async () => {
+  mount({ enabled: true, polling: true, allowedUserId: 7 }, {
+    "telegram:resetPairing": () => {
+      throw new Error("Couldn’t save the Telegram owner.");
+    },
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Reset pairing" }));
+  await screen.findByRole("alertdialog", { name: "Reset Telegram pairing?" });
+  fireEvent.click(screen.getByRole("button", { name: "Reset pairing" }));
+  await screen.findByText("Couldn’t save the Telegram owner.");
+  screen.getByText("User ID: 7");
+});
+
+test("deleting a profile that fails to delete says why", async () => {
+  mount({ activeProfile: "work", profiles: ["default", "work"].map((name) => ({ name, hasToken: true, settings: {}, status: { status: "idle", queuedCount: 0 } })) }, {
+    "telegram:deleteProfile": () => {
+      throw new Error("The work profile is still connected.");
+    },
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Advanced Telegram settings" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+  await screen.findByRole("alertdialog");
+  fireEvent.click(screen.getByRole("button", { name: "Delete profile" }));
+  await screen.findByText("The work profile is still connected.");
+  assert.equal(screen.queryByText(/profile work deleted/u), null);
 });

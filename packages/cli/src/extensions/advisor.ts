@@ -29,7 +29,6 @@ import {
 	resolveRuntimeFromContext,
 	type ModelRuntimeContext,
 } from "../pi-bridge/model-runtime.ts";
-import type { CapturedContext } from "../pi-bridge/adapt-aiden-extension.ts";
 
 const DEFAULT_EFFORTS = GENERATION_THINKING_LEVELS.filter((level) => level !== "off");
 
@@ -59,15 +58,12 @@ interface VendorAdvisorRuntime {
 }
 
 export function createAdvisorInlineExtension(context: {
-	latestContext(): CapturedContext | undefined;
 	agentDir: string;
 }): { name: string; factory: ExtensionFactory } {
 	const attempts = new AdvisorAttemptStore({ root: () => join(context.agentDir, "advisor") });
 	let runtime: VendorAdvisorRuntime | undefined;
-	// Daemon sessions pass no captured context, so each turn's
-	// before_agent_start ctx is retained as the resolution source.
+	// Each turn's before_agent_start ctx is the resolution source.
 	let turnContext: ModelRuntimeContext | undefined;
-	const runtimeContext = () => context.latestContext() ?? turnContext;
 	const ensureRuntime = async (): Promise<VendorAdvisorRuntime> => {
 		if (runtime) return runtime;
 		// Loaded on first use so sessions that never consult the advisor skip
@@ -78,13 +74,11 @@ export function createAdvisorInlineExtension(context: {
 		runtime = new module.AdvisorRuntime({
 			attempts,
 			listCandidates: async () => {
-				const ctx = runtimeContext();
-				return ctx ? candidatesFromContext(asModelRuntimeContext(ctx)) : [];
+				return turnContext ? candidatesFromContext(turnContext) : [];
 			},
 			resolveRuntime: async (providerId: string, modelId: string) => {
-				const ctx = runtimeContext();
-				if (!ctx) throw new Error("The session context is unavailable.");
-				return resolveRuntimeFromContext(asModelRuntimeContext(ctx), providerId, modelId);
+				if (!turnContext) throw new Error("The session context is unavailable.");
+				return resolveRuntimeFromContext(turnContext, providerId, modelId);
 			},
 			recordUsage: async (message: AssistantMessage, _runtime: ResolvedModelRuntime, attemptId: string) => recordUsage(context.agentDir, "advisor", message, attemptId),
 			recordUnreportedUsage: async (runtime: ResolvedModelRuntime, status: "failed" | "cancelled", attemptId: string) => recordUsageRecord(context.agentDir, {
@@ -139,7 +133,7 @@ export function createAdvisorInlineExtension(context: {
 			name: "advisor",
 			label: "Advisor",
 			description:
-				"Request one tool-free second opinion from another model. Pass providerId and modelId only when the user explicitly named the reviewer; otherwise omit them and Aiden will ask the user to choose.",
+				"Request one tool-free second opinion from another model. Call it only when the user explicitly named the reviewer, and pass both providerId and modelId. This server cannot ask the user to choose: a call without both IDs returns without a consultation.",
 			parameters: Type.Object({
 				providerId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
 				modelId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),

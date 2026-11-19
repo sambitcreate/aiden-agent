@@ -10,6 +10,12 @@ import { cn } from "../lib/ui-utils";
 const useCommittedLayoutEffect =
   typeof window === "undefined" ? React.useEffect : React.useLayoutEffect;
 
+/** The small pill action shared by code-block header buttons (Copy, Preview). */
+export const inlineActionButtonClassName = cn(
+  "inline-flex items-center gap-1 rounded-pill px-1.5 py-1 text-tertiary outline-none",
+  "transition-[background-color,box-shadow,color] duration-150 ease-out hover:bg-list-hover hover:text-secondary active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none",
+);
+
 interface CopyButtonProps {
   /** Text placed on the clipboard when clicked. */
   text: string;
@@ -102,11 +108,7 @@ export function CopyButton({ text, label = "Copy", className }: CopyButtonProps)
         aria-label={label}
         title={title}
         data-copy-status={status}
-        className={cn(
-          "inline-flex items-center gap-1 rounded-pill px-1.5 py-1 text-tertiary outline-none",
-          "transition-[background-color,box-shadow,color] duration-150 ease-out hover:bg-list-hover hover:text-secondary active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none",
-          className,
-        )}
+        className={cn(inlineActionButtonClassName, className)}
       >
         {status === "copied" ? (
           <Check aria-hidden="true" className="size-3.5 text-green" />

@@ -132,11 +132,29 @@ export function peerBackoffDelay(failures: number, random: () => number): number
   return Math.round(step * (1 + (random() * 2 - 1) * PEER_BACKOFF_JITTER));
 }
 
+function isLanOnlyView(view: PeerHostView | undefined): boolean {
+  if (!view) return false;
+  if (view.activeRouteKind !== undefined) return view.activeRouteKind === "lan";
+  return Boolean(view.routes?.length) && view.routes!.every((route) => route.kind === "lan");
+}
+
+/**
+ * TLS handshake/certificate/pin failures on a saved private-CA `.local` LAN
+ * route are resolver-level mismatches (such as mDNS `.local` collisions)
+ * rather than proof the paired installation changed.
+ */
+function isRetryableIdentityFailure(error: PeerTransportError, view?: PeerHostView): boolean {
+  if (error.code !== "identity_changed" || error.identitySource !== "tls") return false;
+  if (error.retryableIdentity !== undefined) return error.retryableIdentity;
+  return isLanOnlyView(view);
+}
+
 /** Failures no retry can fix: only re-pairing, or disable and enable, clears them. */
-function blockedReason(error: unknown): PeerBlockedReason | undefined {
+function blockedReason(error: unknown, view?: PeerHostView): PeerBlockedReason | undefined {
   if (!(error instanceof PeerTransportError)) return undefined;
   if (error.code === "authentication_required") return "auth";
-  if (error.code === "identity_changed") return "identity_changed";
+  if (error.code === "identity_changed")
+    return isRetryableIdentityFailure(error, view) ? undefined : "identity_changed";
   if (error.code === "unsupported_protocol") return "protocol";
   return undefined;
 }
@@ -243,7 +261,7 @@ export class PeerHostManager {
           signal: sup.controller.signal,
           current: () => this.current(sup, generation),
           fail: (error) => {
-            if (!blockedReason(error)) return false;
+            if (!blockedReason(error, sup.view)) return false;
             this.fail(sup, generation, error);
             return true;
           },
@@ -387,7 +405,7 @@ export class PeerHostManager {
     } catch (error) {
       if (
         sup &&
-        blockedReason(error) &&
+        blockedReason(error, sup.view) &&
         this.supervisors.get(id) === sup &&
         sup.controller === admitted &&
         !admitted.signal.aborted
@@ -687,10 +705,12 @@ export class PeerHostManager {
     this.clearTimers(sup);
     sup.controller.abort();
     this.leaveConnected(sup);
-    const reason = blockedReason(error);
+    const reason = blockedReason(error, sup.view);
     sup.failure = error instanceof PeerTransportError && error.code === "invalid_response"
       ? "invalid_response"
-      : error instanceof PeerTransportError ? error.failure ?? "unreachable" : "unreachable";
+      : error instanceof PeerTransportError
+        ? error.failure ?? (error.code === "identity_changed" && error.identitySource === "tls" ? "tls" : "unreachable")
+        : "unreachable";
     if (reason) {
       this.transition(sup, { kind: "blocked", reason });
     } else {
@@ -1011,7 +1031,7 @@ export class PeerHostManager {
         const cause = failure ?? error;
         if (!alive()) return;
         if (!this.current(sup, generation)) continue;
-        if (blockedReason(cause)) {
+        if (blockedReason(cause, sup.view)) {
           this.fail(sup, generation, cause);
           continue;
         }

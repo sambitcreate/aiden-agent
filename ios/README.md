@@ -4,6 +4,8 @@ Aiden On The Go is the native SwiftUI companion for Aiden Agent on macOS and Lin
 
 Opening a chat already running on another device restores available reply text, reasoning and tool activity from a revision 58 host. The phone resumes live updates from the same point. Earlier hosts use their retained run events.
 
+An HTML visual whose snapshot is missing shows its title with **Open interactive** when the Mac offers the visual viewer (revision 35's `chat-visual-viewer-v1`), and the “Can't view on this device” card only when it doesn't.
+
 If the selected computer is unavailable, choose **Switch connection** in the recovery panel to select another paired computer or pair another Aiden Agent. This remains available when a secure-identity failure prevents retrying.
 
 Public new-chat links wait through connection readiness, then require confirmation of their installation and workspace and never start dictation. iOS App Intents use a one-shot foreground action inside the app process, so the intentional voice shortcut remains available. Existing-chat widget and notification links only navigate. Unsent composer drafts and unresolved-send records remain protected device-only storage and are excluded from backups, including stores from older versions during app startup without opening a chat; backup restore does not migrate them.
@@ -88,3 +90,38 @@ Use an installed Xcode and simulator destination appropriate to your machine. Si
 Bot notification polls retain the fetch's original negotiated visibility through system permission and notification posting. Losing Bot/chat read, messaging, issue, access-request or peer visibility keeps the cursor and delivered IDs unchanged until a fresh authorized poll; issue rows do not expose their private subtype. Host support alone never grants visibility. Older hosts without a separate support inventory retain the existing Bot/chat read baseline for routine notifications only. A system banner already accepted before access changed cannot be withdrawn by this notifier.
 
 Git review uses the host’s commit capability. Commit stays disabled when the host refuses the review, and the phone shows the host’s reason, including when a changed file could not be shown. A missing capability also keeps Commit disabled. A permitted review still needs visible changes and a snapshot; Android also waits for a fresh review before enabling Commit. When the host counts uncommitted changes but shares none of their files, the phone says the changes are hidden instead of calling the working tree clean, and says Commit is unavailable because of that.
+
+## Previews
+
+A finished `svg` code block in a reply has **View** beside **Copy**. It opens the drawing in a sheet, on a white card in light and dark mode, with pinch-zoom. The SVG is drawn as an image, with no scripts and no network access. View appears only once the block's closing fence has arrived. A very long reply (over 80,000 characters or 2,000 lines) is shown as plain text, so its code blocks have no View button. Source that isn't a well-formed SVG shows "Couldn't draw this SVG." and the code block stays as it was.
+
+### HTML previews
+
+An HTML preview starts from a style sheet built from your Appearance settings, so a page with no styles of its own looks like the rest of Aiden: the theme's canvas, text and accent colors, your interface and code fonts, and your text size. Every rule sits under `:where()`, which has zero specificity, so any style the page sets for itself wins. Changing the theme reloads the preview. The variables have the same names as on the desktop:
+
+| Variable | Value |
+| --- | --- |
+| `--surface-background` | The theme's canvas |
+| `--surface-popover` | The raised surface |
+| `--text-primary` | Primary text |
+| `--text-secondary` | Secondary text |
+| `--border-separator` | Primary text at 8.7% opacity |
+| `--accent` | The accent, for links and marks |
+| `--fill-accent` | The accent fill for labelled buttons |
+| `--fill-accent-foreground` | Text on `--fill-accent` |
+| `--font-ui-family` | The interface font (System, Rounded or Humanist) |
+| `--font-code-family` | The code font (SF Mono, Menlo or Monaco) |
+| `--ui-font-size` | The body text size, which follows Dynamic Type |
+
+To have an agent make pages that follow your theme, you can tell it:
+
+> When you make an HTML page for me, send it as one `.html` file. Style it with `--surface-background`, `--text-primary`, `--text-secondary`, `--border-separator`, `--accent`, `--font-ui-family` and `--font-code-family` instead of fixed colors and fonts. Inline images, styles and scripts; nothing loads from the network.
+
+#### Workspace files
+
+An `.html` or `.htm` file opened from a workspace's **Files** opens on **Preview**, with a **Preview** / **Source** switch at the top and the file's path under it. The preview runs the page's scripts, uses the theme style sheet above, and never reaches the network: a remote image, style sheet, `fetch` or WebSocket simply doesn't load. It shows the text you're editing, so unsaved changes appear. **Edit** switches to Source; choosing Preview while editing shows your draft as a page, and **Save** stays available. A tapped `https` link asks "Open link?" with the site's name before it opens. A file cached for offline use previews too, since nothing needs the computer.
+
+- A file over the workspace size limit arrives cut short, so it opens on Source with "This file is too large to preview." and the switch is off.
+- The page has no address of its own, so relative resources such as `style.css` or `img/a.png` don't load. Inline styles, scripts and images instead.
+- If the page can't be shown, the sheet says "Couldn't display this page." with a **Retry** button.
+- In a workspace chat with a folder, tapping an activity line's "File written" or "File edited" opens that file here, so a page the agent wrote opens on Preview. In a Bot chat, or for a name the file link can't carry (such as one with a colon), the line stays plain text.

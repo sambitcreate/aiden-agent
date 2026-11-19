@@ -7,19 +7,10 @@
 import { atomicJson, readJson, acquireLease } from "../state.ts";
 import { join } from "node:path";
 
-export interface AidenVoiceSettings {
-	provider: "gemini" | "openai" | "off";
-	/** Transcription model override (provider-specific). */
-	model?: string;
-	/** BCP-47 hint, e.g. "en-US". Undefined lets the provider auto-detect. */
-	language?: string;
-}
-
 export interface AidenCliSettings {
 	memoryEnabled?: boolean;
 	skillsEnabled?: boolean;
 	appControlPolicy?: "disabled" | "ask" | "safe";
-	voice?: AidenVoiceSettings;
 }
 
 export function aidenSettingsPath(agentDir: string): string {
@@ -37,19 +28,6 @@ function normalizeSettings(value: unknown): AidenCliSettings {
 	}
 	if (typeof source.skillsEnabled === "boolean") settings.skillsEnabled = source.skillsEnabled;
 	if (source.appControlPolicy !== undefined) settings.appControlPolicy = ["disabled", "ask", "safe"].includes(String(source.appControlPolicy)) ? source.appControlPolicy as AidenCliSettings["appControlPolicy"] : "disabled";
-	if (typeof source.voice === "object" && source.voice !== null) {
-		const voice = source.voice as Record<string, unknown>;
-		const provider = voice.provider;
-		if (provider === "gemini" || provider === "openai" || provider === "off") {
-			settings.voice = { provider };
-			if (typeof voice.model === "string" && voice.model.trim()) {
-				settings.voice.model = voice.model.trim();
-			}
-			if (typeof voice.language === "string" && voice.language.trim()) {
-				settings.voice.language = voice.language.trim();
-			}
-		}
-	}
 	return settings;
 }
 

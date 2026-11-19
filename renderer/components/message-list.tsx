@@ -13,7 +13,7 @@ import { EventPresence } from "./event-presence";
 import { SafeMessageBubble } from "./message-bubble";
 import { AgentNoticeCard } from "./agent-notice-card";
 import type { ReadAloudActionProps } from "./read-aloud-button";
-import { MessageForkContextMenu, type MessageForkAction } from "./fork-message-button";
+import { ForkDisabledReasonContext, MessageForkContextMenu, type MessageForkAction } from "./fork-message-button";
 import { MessageActions } from "./message-actions";
 import type { ChatForkPosition } from "../shared/chat-copy-contract";
 import { forkSummaryRows } from "../lib/chat-copy-view";
@@ -494,8 +494,6 @@ interface SettledMessageRowProps {
   onOpenSubagent: (runId: string, trigger: HTMLButtonElement) => void;
   /** Stable across renders so settled rows stay memoized. */
   onFork?: (messageId: string, position: ChatForkPosition) => void;
-  /** Settled user prompts with an earlier prompt can be edited in a fork. */
-  forkDisabledReason?: string | null;
   /** Stable like `onFork`; present when a fork from this row can summarize what followed. */
   onForkWithSummary?: (messageId: string, position: ChatForkPosition) => void;
   /** HTML visuals this row currently owns (live copies win during handoff). */
@@ -527,7 +525,6 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
   subagentsEnabled,
   onOpenSubagent,
   onFork,
-  forkDisabledReason,
   onForkWithSummary,
   visuals,
   renderVisual,
@@ -558,9 +555,8 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
       ...(onForkWithSummary
         ? { onForkWithSummary: () => onForkWithSummary(message.id, position) }
         : {}),
-      disabledReason: forkDisabledReason,
     };
-  }, [forkDisabledReason, message, onFork, onForkWithSummary]);
+  }, [message, onFork, onForkWithSummary]);
   const assistant = Boolean(live) || message?.role === "assistant";
   const imageActions = React.useMemo(
     () => (storedImageActions ? { chatId } : undefined),
@@ -1176,7 +1172,6 @@ export function MessageList({
         subagentsEnabled={subagentsEnabled}
         onOpenSubagent={onOpenSubagent}
         onFork={forkEnabled && message.id !== unforkablePromptId ? stableOnFork : undefined}
-        forkDisabledReason={forkDisabledReason}
         onForkWithSummary={summaryRows?.has(message.id) ? stableOnForkWithSummary : undefined}
         visuals={htmlArtifactsByAnchor.get(`message:${message.id}`)}
         renderVisual={renderVisual}
@@ -1201,30 +1196,32 @@ export function MessageList({
   return (
     <MessageAttachmentPreviewProvider>
       <VisualFollowUpBusyContext.Provider value={visualFollowUpBusy}>
-        <div
-          ref={transcriptRef}
-          className="aiden-dock-inset chat-content-column flex flex-col gap-5 py-6"
-          data-subagent-chip-focus-scope="true"
-          // Chat text is data, never instructions: Aiden Live sees only how many messages there are.
-          data-live-content="chat"
-        >
-          {transcriptRows}
+        <ForkDisabledReasonContext.Provider value={forkDisabledReason}>
+          <div
+            ref={transcriptRef}
+            className="aiden-dock-inset chat-content-column flex flex-col gap-5 py-6"
+            data-subagent-chip-focus-scope="true"
+            // Chat text is data, never instructions: Aiden Live sees only how many messages there are.
+            data-live-content="chat"
+          >
+            {transcriptRows}
 
-          <AgentActivityTransition activity={agentActivity} onRetryUsageLimit={onRetryUsageLimit} />
+            <AgentActivityTransition activity={agentActivity} onRetryUsageLimit={onRetryUsageLimit} />
 
-          <EventPresence present={Boolean(error)}>
-            {error ? (
-              <Callout color="red" role="alert" aria-atomic="true">
-                <Text variant="small-strong" color="red">
-                  Generation failed
-                </Text>
-                <Text variant="small" color="secondary" className="mt-0.5 block">
-                  {error}
-                </Text>
-              </Callout>
-            ) : null}
-          </EventPresence>
-        </div>
+            <EventPresence present={Boolean(error)}>
+              {error ? (
+                <Callout color="red" role="alert" aria-atomic="true">
+                  <Text variant="small-strong" color="red">
+                    Generation failed
+                  </Text>
+                  <Text variant="small" color="secondary" className="mt-0.5 block">
+                    {error}
+                  </Text>
+                </Callout>
+              ) : null}
+            </EventPresence>
+          </div>
+        </ForkDisabledReasonContext.Provider>
       </VisualFollowUpBusyContext.Provider>
     </MessageAttachmentPreviewProvider>
   );

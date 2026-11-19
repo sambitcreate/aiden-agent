@@ -7,7 +7,12 @@
 // as version 2, so the next save writes the new shape.
 
 import { syncConnectors } from "./connectors.js";
-import { parseDesignTweakValues, type DesignTweakValues } from "./tweaks.js";
+import {
+  parseDesignTweakValues,
+  parseDesignTweakVersions,
+  type DesignTweakValues,
+  type DesignTweakVersion,
+} from "./tweaks.js";
 
 export type DesignFrameKind =
   | "file"
@@ -102,6 +107,8 @@ export type DesignFrame = {
   dark?: true;
   /** file: the page's own tweak values the person changed, by target (see `tweaks.ts`). */
   tweaks?: DesignTweakValues;
+  /** file: saved sets of tweak values to switch between (V1, the file as it is, is never stored). */
+  tweakVersions?: DesignTweakVersion[];
   /** Not drawn on the canvas (it stays in the layer list). */
   hidden?: true;
   /** Cannot be moved, resized or removed until it is unlocked. */
@@ -499,6 +506,8 @@ function parseFrame(value: unknown, pageId: string): DesignFrame | null {
   if (frame.kind === "file") {
     const tweaks = parseDesignTweakValues(value.tweaks);
     if (tweaks) frame.tweaks = tweaks;
+    const versions = parseDesignTweakVersions(value.tweakVersions);
+    if (versions) frame.tweakVersions = versions;
   }
   if (frame.kind === "shape" || frame.kind === "text" || frame.kind === "note" || isDesignLine(frame.kind)) {
     if (isColor(value.color)) frame.color = value.color;

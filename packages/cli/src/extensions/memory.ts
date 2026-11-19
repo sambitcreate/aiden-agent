@@ -1,5 +1,5 @@
 /**
- * Durable memory in the terminal: reuses Aiden's SQLite memory core
+ * Durable memory for server chats: reuses Aiden's SQLite memory core
  * (main/services/memory-store.ts + memory-context.ts). The store lives in the
  * shared `~/.aiden/memory` root the desktop also uses, scoped to the
  * workspace's canonical folder hash — facts remembered here are recalled by

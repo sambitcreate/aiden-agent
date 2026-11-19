@@ -46,6 +46,8 @@ export type CanvasFrameSummary = {
   dark?: true;
   /** The page's tweak values the person changed, by CSS variable or data attribute. */
   tweaks?: Record<string, string>;
+  /** The page's saved tweak versions (V2 onward; V1 is the file as it is), each with its values. */
+  tweakVersions?: { name: string; tweaks?: Record<string, string>; dark?: true }[];
   /** Hidden from the canvas by the person (still on the page). */
   hidden?: true;
   /** Locked: it cannot be moved, resized or removed until someone unlocks it. */
@@ -130,6 +132,15 @@ export function summarizeFrame(frame: DesignFrame, openComments = 0): CanvasFram
       : {}),
     ...(frame.dark ? { dark: true as const } : {}),
     ...(frame.tweaks ? { tweaks: { ...frame.tweaks } } : {}),
+    ...(frame.tweakVersions
+      ? {
+          tweakVersions: frame.tweakVersions.map((version) => ({
+            name: version.name,
+            ...(version.tweaks ? { tweaks: { ...version.tweaks } } : {}),
+            ...(version.dark ? { dark: true as const } : {}),
+          })),
+        }
+      : {}),
     ...(frame.hidden ? { hidden: true as const } : {}),
     ...(frame.locked ? { locked: true as const } : {}),
     ...(frame.guide ? { guide: frame.guide } : {}),

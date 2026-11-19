@@ -3,7 +3,6 @@
 
 export const BOT_SKILL_PROPOSAL_ENTRY_KIND = "aiden.skill-proposal";
 export const BOT_SKILL_PROPOSAL_STATUS_ENTRY_KIND = "aiden.skill-proposal-status";
-export const BOT_SKILL_PROPOSAL_CHANNELS = { respond: "bots:skillProposals:respond" } as const;
 export const BOT_SKILL_PROPOSAL_LIMITS = { nameChars: 48, descriptionChars: 240, instructionsBytes: 16_384, reasonChars: 280, pendingPerBot: 1, previewChars: 64 * 1024 } as const;
 
 export type BotSkillProposalStatus = "pending" | "added" | "dismissed";

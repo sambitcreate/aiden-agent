@@ -115,15 +115,19 @@ interface OutboxFile {
   rows: BotReplyRow[];
 }
 
-export interface TelegramBotMessage {
+export type TelegramBotMessageIdentity =
+  | { messageId: number; callbackQueryId?: undefined }
+  | { callbackQueryId: string; messageId?: number };
+
+export type TelegramBotMessage = TelegramBotMessageIdentity & {
   botId: string;
   chatId: number;
   threadId?: number;
-  messageId: number;
   ownerUserId: number;
   text: string;
+  whenBusy?: "steer" | "followUp";
   attachments?: readonly BotInputAttachment[];
-}
+};
 
 export interface TelegramBotReply {
   /** Internal original owner identity, checked by the transport after its awaits. */
@@ -212,8 +216,16 @@ function sessionRefusal(cause: unknown): "paused_by_person" | "spending_limit" |
   return reason === "paused_by_person" || reason === "spending_limit" ? reason : undefined;
 }
 
-export function telegramBotRequestId(message: Pick<TelegramBotMessage, "botId" | "chatId" | "threadId" | "messageId">): string {
-  return `tg:${message.botId}:${message.chatId}:${message.threadId ?? 0}:${message.messageId}`;
+export function telegramBotRequestId(
+  message: Pick<TelegramBotMessage, "botId" | "chatId" | "threadId" | "messageId" | "callbackQueryId">,
+): string {
+  if (typeof message.callbackQueryId === "string" && message.callbackQueryId.trim().length > 0) {
+    return `tg:${message.botId}:${message.chatId}:${message.threadId ?? 0}:cbq:${message.callbackQueryId.trim()}`;
+  }
+  if (typeof message.messageId === "number" && Number.isSafeInteger(message.messageId) && message.messageId > 0) {
+    return `tg:${message.botId}:${message.chatId}:${message.threadId ?? 0}:${message.messageId}`;
+  }
+  throw new Error("Telegram Bot admission requires a positive messageId or callbackQueryId.");
 }
 
 function parseFile(raw: string): OutboxFile {
@@ -408,6 +420,7 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
         admitted = await deps.session.send(message.botId, {
           text: message.text,
           requestId,
+          ...(message.whenBusy !== undefined ? { whenBusy: message.whenBusy } : {}),
           ...(message.attachments && message.attachments.length > 0 ? { attachments: message.attachments } : {}),
         });
       } catch (cause) {

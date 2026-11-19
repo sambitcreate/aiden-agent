@@ -44,11 +44,31 @@ actor AidenWorkspaceEnvironmentCache {
         workspaceId: String
     ) throws {
         let retained = load(instanceId: instanceId, workspaceId: workspaceId)?.documents ?? [:]
-        let validIDs = Set(index.entries.lazy.filter { $0.kind == .file }.map(\.id))
+        let documents: [String: AidenWorkspaceFileDocument]
+        if index.directoryPath != nil {
+            documents = retained
+        } else {
+            let idByPath = Dictionary(
+                uniqueKeysWithValues: index.entries.lazy.filter { $0.kind == .file }.map { ($0.displayPath, $0.id) }
+            )
+            var remapped: [String: AidenWorkspaceFileDocument] = [:]
+            for (id, document) in retained {
+                guard let currentID = idByPath[document.displayPath] else { continue }
+                remapped[currentID] = currentID == id ? document : AidenWorkspaceFileDocument(
+                    id: currentID,
+                    displayPath: document.displayPath,
+                    content: document.content,
+                    version: document.version,
+                    truncated: document.truncated,
+                    warning: document.warning
+                )
+            }
+            documents = remapped
+        }
         try persist(
             Snapshot(
                 index: index,
-                documents: index.directoryPath != nil ? retained : retained.filter { validIDs.contains($0.key) },
+                documents: documents,
                 updatedAt: Date()
             ),
             instanceId: instanceId,
@@ -133,6 +153,14 @@ actor AidenWorkspaceEnvironmentCache {
 @MainActor
 @Observable
 final class AidenWorkspaceFilesModel {
+    static let staleFolderRecoveryMessage = "Files refreshed because that folder link is no longer current. Reopen the folder to continue."
+    static let staleFileRecoveryMessage = "Files refreshed because that file link is no longer current. Reopen the file to continue."
+
+    static func isStaleHandleError(_ error: Error) -> Bool {
+        guard case let AidenRemoteClientError.server(_, body) = error else { return false }
+        return body.code.rawValue == "handle_invalid" || body.code.rawValue == "handle_expired"
+    }
+
     var index: AidenWorkspaceFileIndex?
     var document: AidenWorkspaceFileDocument?
     var draft = ""
@@ -191,7 +219,7 @@ final class AidenWorkspaceFilesModel {
         revision = UUID()
         let requestRevision = revision
         errorMessage = nil
-        defer { isLoading = false }
+        defer { if revision == requestRevision { isLoading = false } }
         if isConnected(coordinator) {
             do {
                 let value: AidenWorkspaceFileIndex
@@ -200,8 +228,7 @@ final class AidenWorkspaceFilesModel {
                 } catch AidenRemoteClientError.server(let status, _) where status == 400 || status == 404 {
                     value = try await coordinator.remoteClient(for: context).workspaceFiles(workspaceId: workspace.id)
                 }
-                guard stillHolds(context, coordinator) else { return }
-                guard revision == requestRevision else { return }
+                guard stillHolds(context, coordinator), revision == requestRevision else { return }
                 index = value
                 expanded = []
                 cursors = value.nextCursor.map { ["": $0] } ?? [:]
@@ -210,17 +237,75 @@ final class AidenWorkspaceFilesModel {
                 isOfflineIndex = false
                 try? await cache.store(index: value, instanceId: instanceId, workspaceId: workspace.id)
                 return
+            } catch let error where aidenIsCancellation(error) {
+                return
             } catch {
-                guard stillHolds(context, coordinator) else { return }
+                guard stillHolds(context, coordinator), revision == requestRevision else { return }
                 errorMessage = error.localizedDescription
             }
         }
         if let cached = await cache.load(instanceId: instanceId, workspaceId: workspace.id) {
-            guard stillHolds(context, coordinator) else { return }
+            guard stillHolds(context, coordinator), revision == requestRevision else { return }
             index = cached.index
             isOfflineIndex = true
-        } else if stillHolds(context, coordinator), errorMessage == nil {
+        } else if stillHolds(context, coordinator), revision == requestRevision, errorMessage == nil {
             errorMessage = "Connect to Aiden Agent to load workspace files."
+        }
+    }
+
+    private func recoverFromStaleHandle(
+        message: String,
+        openFence: UUID? = nil,
+        coordinator: AidenRemoteCoordinator
+    ) async {
+        guard let context = context(on: coordinator), stillHolds(context, coordinator) else { return }
+        let instanceId = context.instanceId
+        index = nil
+        expanded = []
+        cursors = [:]
+        loadedFolders = []
+        loadingFolders = []
+        if openFence == nil || openFence == openRevision {
+            errorMessage = message
+        }
+        guard !isLoading else { return }
+        isLoading = true
+        revision = UUID()
+        let recoveryRevision = revision
+        defer { if revision == recoveryRevision { isLoading = false } }
+        if isConnected(coordinator) {
+            do {
+                let value: AidenWorkspaceFileIndex
+                do {
+                    value = try await coordinator.remoteClient(for: context).workspaceFilePage(workspaceId: workspace.id)
+                } catch AidenRemoteClientError.server(let status, _) where status == 400 || status == 404 {
+                    value = try await coordinator.remoteClient(for: context).workspaceFiles(workspaceId: workspace.id)
+                }
+                guard stillHolds(context, coordinator), revision == recoveryRevision else { return }
+                index = value
+                expanded = []
+                cursors = value.nextCursor.map { ["": $0] } ?? [:]
+                loadedFolders = [""]
+                loadingFolders = []
+                isOfflineIndex = false
+                if openFence == nil || openFence == openRevision {
+                    errorMessage = message
+                }
+                try? await cache.store(index: value, instanceId: instanceId, workspaceId: workspace.id)
+                return
+            } catch let error where aidenIsCancellation(error) {
+                return
+            } catch {
+                guard stillHolds(context, coordinator), revision == recoveryRevision else { return }
+                if openFence == nil || openFence == openRevision {
+                    errorMessage = error.localizedDescription
+                }
+            }
+        }
+        if let cached = await cache.load(instanceId: instanceId, workspaceId: workspace.id) {
+            guard stillHolds(context, coordinator), revision == recoveryRevision else { return }
+            index = cached.index
+            isOfflineIndex = true
         }
     }
 
@@ -259,6 +344,11 @@ final class AidenWorkspaceFilesModel {
         } catch {
             guard stillHolds(context, coordinator), revision == requestRevision, !aidenIsCancellation(error) else { return }
             expanded.remove(path)
+            if Self.isStaleHandleError(error) {
+                loadingFolders.remove(path)
+                await recoverFromStaleHandle(message: Self.staleFolderRecoveryMessage, coordinator: coordinator)
+                return
+            }
             errorMessage = error.localizedDescription
         }
     }
@@ -289,12 +379,12 @@ final class AidenWorkspaceFilesModel {
         }
     }
 
-    func open(_ entry: AidenWorkspaceFileEntry, coordinator: AidenRemoteCoordinator) async {
-        guard entry.kind == .file, let context = context(on: coordinator) else { return }
+    @discardableResult
+    func open(_ entry: AidenWorkspaceFileEntry, coordinator: AidenRemoteCoordinator) async -> Bool {
+        guard entry.kind == .file, let context = context(on: coordinator) else { return false }
         let instanceId = context.instanceId
         openRevision = UUID()
         let requestRevision = openRevision
-        document = nil
         errorMessage = nil
         if isConnected(coordinator) {
             do {
@@ -302,24 +392,36 @@ final class AidenWorkspaceFilesModel {
                     workspaceId: workspace.id,
                     fileId: entry.id
                 )
-                guard stillHolds(context, coordinator), openRevision == requestRevision else { return }
+                guard stillHolds(context, coordinator), openRevision == requestRevision else { return false }
                 document = value
                 draft = value.content
                 isOfflineDocument = false
                 try? await cache.store(document: value, instanceId: instanceId, workspaceId: workspace.id)
-                return
+                return true
+            } catch let error where aidenIsCancellation(error) {
+                return false
             } catch {
-                guard stillHolds(context, coordinator), openRevision == requestRevision else { return }
+                guard stillHolds(context, coordinator), openRevision == requestRevision else { return false }
+                if Self.isStaleHandleError(error) {
+                    await recoverFromStaleHandle(
+                        message: Self.staleFileRecoveryMessage,
+                        openFence: requestRevision,
+                        coordinator: coordinator
+                    )
+                    return false
+                }
                 errorMessage = error.localizedDescription
             }
         }
         if let cached = await cache.load(instanceId: instanceId, workspaceId: workspace.id),
-           let value = cached.documents[entry.id] {
-            guard stillHolds(context, coordinator), openRevision == requestRevision else { return }
+           let value = cached.documents[entry.id] ?? cached.documents.values.first(where: { $0.displayPath == entry.displayPath }) {
+            guard stillHolds(context, coordinator), openRevision == requestRevision else { return false }
             document = value
             draft = value.content
             isOfflineDocument = true
+            return true
         }
+        return false
     }
 
     func save(coordinator: AidenRemoteCoordinator) async -> Bool {
@@ -375,9 +477,16 @@ final class AidenWorkspaceFilesModel {
     }
 
     func reloadDocument(coordinator: AidenRemoteCoordinator) async {
-        guard let document,
-              let entry = index?.entries.first(where: { $0.id == document.id }) else { return }
-        await open(entry, coordinator: coordinator)
+        guard let document else { return }
+        let entry = index?.entries.first(where: { $0.id == document.id }) ?? AidenWorkspaceFileEntry(
+            id: document.id,
+            displayPath: document.displayPath,
+            name: (document.displayPath as NSString).lastPathComponent,
+            kind: .file,
+            size: nil,
+            language: nil
+        )
+        _ = await open(entry, coordinator: coordinator)
     }
 }
 
@@ -424,9 +533,8 @@ struct AidenWorkspaceFilesView: View {
                         Task {
                             if entry.kind == .directory {
                                 await model.toggle(entry, coordinator: coordinator)
-                            } else {
-                                await model.open(entry, coordinator: coordinator)
-                                isShowingDocument = model.document != nil
+                            } else if await model.open(entry, coordinator: coordinator) {
+                                isShowingDocument = true
                             }
                         }
                     } label: {
@@ -485,21 +593,39 @@ struct AidenWorkspaceFilesView: View {
     }
 }
 
+/// One workspace file. An `.html`/`.htm` file opens on Preview (a sandboxed,
+/// themed page of the draft, so unsaved edits show) with a Source toggle.
 private struct AidenWorkspaceFileEditorView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.aidenPalette) private var palette
     @Bindable var coordinator: AidenRemoteCoordinator
     @Bindable var model: AidenWorkspaceFilesModel
     @State private var isConfirmingDiscard = false
     @State private var isEditing = false
+    @State private var mode: AidenWorkspaceHTMLPreview.Mode
+
+    init(coordinator: AidenRemoteCoordinator, model: AidenWorkspaceFilesModel) {
+        self.coordinator = coordinator
+        self.model = model
+        _mode = State(initialValue: model.document.map(AidenWorkspaceHTMLPreview.initialMode(for:)) ?? .source)
+    }
 
     private var isDirty: Bool { model.document.map { $0.content != model.draft } ?? false }
+    private var isHTML: Bool { model.document.map { AidenWorkspaceHTMLPreview.isHTML($0.displayPath) } ?? false }
+    private var canPreview: Bool { model.document.map(AidenWorkspaceHTMLPreview.canPreview) ?? false }
+    private var showsPreview: Bool { canPreview && mode == .preview }
 
     var body: some View {
         NavigationStack {
             Group {
-                if isEditing {
+                if showsPreview {
+                    AidenWorkspaceHTMLPreviewPane(html: model.draft)
+                } else if isEditing {
                     TextEditor(text: $model.draft)
                         .disabled(!model.canEditDocument || !model.isConnected(coordinator))
+                        .scrollContentBackground(.hidden)
+                        .font(.system(.body, design: .monospaced))
+                        .padding(.horizontal, 8)
                 } else {
                     ScrollView([.vertical, .horizontal]) {
                         LazyVStack(alignment: .leading, spacing: 4) {
@@ -511,12 +637,29 @@ private struct AidenWorkspaceFileEditorView: View {
                             }
                         }.padding()
                     }
+                    // Short files start at the top, where the page did.
+                    .defaultScrollAnchor(.topLeading)
+                    .font(.system(.body, design: .monospaced))
+                    .padding(.horizontal, 8)
                 }
             }
-                .font(.system(.body, design: .monospaced))
-                .padding(.horizontal, 8)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(palette.canvas.ignoresSafeArea())
                 .navigationTitle(model.document?.displayPath ?? "File")
+                // The Preview/Source switch takes the title's place, and a
+                // workspace often has several `index.html` files.
+                .navigationSubtitle(isHTML ? (model.document?.displayPath ?? "") : "")
                 .navigationBarTitleDisplayMode(.inline)
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    if isHTML && !canPreview {
+                        Text("This file is too large to preview.")
+                            .font(.footnote)
+                            .foregroundStyle(palette.secondary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                    }
+                }
                 .safeAreaInset(edge: .bottom) {
                     if let message = model.errorMessage {
                         VStack(spacing: 8) {
@@ -542,9 +685,23 @@ private struct AidenWorkspaceFileEditorView: View {
                             }
                         }
                     }
+                    if isHTML {
+                        ToolbarItem(placement: .principal) {
+                            Picker("View", selection: modeSelection) {
+                                Text("Preview").tag(AidenWorkspaceHTMLPreview.Mode.preview)
+                                Text("Source").tag(AidenWorkspaceHTMLPreview.Mode.source)
+                            }
+                            .pickerStyle(.segmented)
+                            .fixedSize()
+                            .disabled(!canPreview)
+                        }
+                    }
                     ToolbarItem(placement: .confirmationAction) {
                         if !isEditing {
-                            Button("Edit") { isEditing = true }
+                            Button("Edit") {
+                                mode = .source
+                                isEditing = true
+                            }
                                 .disabled(!model.canEditDocument || !model.isConnected(coordinator))
                         } else {
                         Button("Save") { Task { _ = await model.save(coordinator: coordinator) } }
@@ -560,6 +717,121 @@ private struct AidenWorkspaceFileEditorView: View {
         .confirmationDialog("Discard unsaved changes?", isPresented: $isConfirmingDiscard) {
             Button("Discard Changes", role: .destructive) { dismiss() }
             Button("Keep Editing", role: .cancel) {}
+        }
+        .onChange(of: model.document?.id) {
+            isEditing = false
+            mode = model.document.map(AidenWorkspaceHTMLPreview.initialMode(for:)) ?? .source
+        }
+    }
+
+    /// Edit shows Source. Preview while editing shows the draft as a page and
+    /// keeps editing on, so Save stays one tap away.
+    private var modeSelection: Binding<AidenWorkspaceHTMLPreview.Mode> {
+        Binding(
+            get: { canPreview ? mode : .source },
+            set: { mode = $0 }
+        )
+    }
+}
+
+#if DEBUG
+/// The editor for the DEBUG workspace fixture; the editor itself stays private.
+struct AidenWorkspaceFileEditorFixtureHost: View {
+    let coordinator: AidenRemoteCoordinator
+    let model: AidenWorkspaceFilesModel
+
+    var body: some View {
+        AidenWorkspaceFileEditorView(coordinator: coordinator, model: model)
+    }
+}
+#endif
+
+/// A workspace page in the sandboxed preview: scripts on, no network, Aiden's
+/// theme underneath the page's own styles. It has no base URL, so relative
+/// resources (`style.css`, `img/a.png`) don't load.
+private struct AidenWorkspaceHTMLPreviewPane: View {
+    let html: String
+
+    @Environment(AidenAppearanceStore.self) private var appearance
+    @Environment(\.aidenPalette) private var palette
+    @Environment(\.aidenCodeTypography) private var codeTypography
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.openURL) private var openURL
+    @State private var pendingLink: URL?
+    @State private var failed = false
+    @State private var reloadKey = 0
+
+    /// The sandboxed view loads once, so a new theme, draft or Retry gets a
+    /// new view.
+    private struct LoadKey: Hashable {
+        let themeCSS: String
+        let htmlHash: Int
+        let reload: Int
+    }
+
+    private var themeCSS: String {
+        AidenHTMLPreviewTheme.css(
+            palette: palette,
+            colorScheme: colorScheme,
+            uiFont: appearance.uiFont(for: colorScheme),
+            codeFont: codeTypography.font,
+            bodySize: AidenMarkdownMetrics.bodySize(for: dynamicTypeSize)
+        )
+    }
+
+    var body: some View {
+        content
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(palette.canvas.ignoresSafeArea())
+            .alert(
+                "Open link?",
+                isPresented: Binding(
+                    get: { pendingLink != nil },
+                    set: { if !$0 { pendingLink = nil } }
+                ),
+                presenting: pendingLink
+            ) { link in
+                Button("Open") {
+                    pendingLink = nil
+                    openURL(link)
+                }
+                Button("Cancel", role: .cancel) { pendingLink = nil }
+            } message: { link in
+                Text(link.host() ?? link.absoluteString)
+            }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if failed {
+            VStack(spacing: 14) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.title2)
+                    .foregroundStyle(palette.warning)
+                    .accessibilityHidden(true)
+                Text("Couldn't display this page.")
+                    .font(.callout)
+                    .foregroundStyle(palette.foreground)
+                    .multilineTextAlignment(.center)
+                Button("Retry") {
+                    failed = false
+                    reloadKey += 1
+                }
+                .frame(minHeight: 44)
+            }
+            .padding(24)
+        } else {
+            let css = themeCSS
+            AidenSandboxedHTMLView(
+                html: html,
+                allowsScripts: true,
+                themeCSS: css,
+                scrolls: true,
+                onLinkOffer: { pendingLink = $0 },
+                onFailure: { failed = true }
+            )
+            .id(LoadKey(themeCSS: css, htmlHash: html.hashValue, reload: reloadKey))
         }
     }
 }

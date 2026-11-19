@@ -1,0 +1,597 @@
+<title>Settings Deslop Prototype</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<!--
+  Static design prototype for docs/plans/settings-deslop-plan.md.
+  "Before" columns copy today's strings from the settings components (one branch each).
+  "After" columns follow the plan's copy budget and row kit. Sample data only;
+  nothing here saves or connects. Where it disagrees with the plan, the plan wins.
+-->
+<style>
+  /* Layout: a prototype bar, then each page as Before | After settings panes that stack on narrow screens. */
+  :root {
+    --bg: #f4f4f3;
+    --pane: #fbfbfa;
+    --card: color-mix(in srgb, #ffffff 72%, transparent);
+    --card-solid: #ffffff;
+    --control: rgb(0 0 0 / 0.065);
+    --control-hover: rgb(0 0 0 / 0.105);
+    --list-hover: rgb(0 0 0 / 0.045);
+    --list-selection: rgb(0 0 0 / 0.08);
+    --separator: rgb(0 0 0 / 0.085);
+    --fg: #181817;
+    --fg-2: rgb(24 24 23 / 0.62);
+    --fg-3: rgb(24 24 23 / 0.48);
+    --accent: #0b7de5;
+    --on-accent: #ffffff;
+    --green: #087c58;
+    --green-surface: rgb(8 124 88 / 0.12);
+    --red: #c3322b;
+    --red-surface: rgb(195 50 43 / 0.11);
+    --warning: #8a5c00;
+    --warning-surface: rgb(154 103 0 / 0.13);
+    --blue: #0b6fcb;
+    --blue-surface: rgb(11 125 229 / 0.11);
+    --switch-off: rgb(0 0 0 / 0.16);
+    --shadow-card: 0 0 0 0.5px rgb(0 0 0 / 0.07), 0 1px 2px rgb(0 0 0 / 0.05);
+    --focus-ring: #181817;
+    --mark: rgb(195 50 43 / 0.14);
+    --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter, system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --r-card: 16px;
+    --r-control: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141413; --pane: #191918; --card: color-mix(in srgb, #262624 72%, transparent); --card-solid: #222220;
+      --control: rgb(255 255 255 / 0.085); --control-hover: rgb(255 255 255 / 0.13);
+      --list-hover: rgb(255 255 255 / 0.05); --list-selection: rgb(255 255 255 / 0.1);
+      --separator: rgb(255 255 255 / 0.085);
+      --fg: #f5f5f3; --fg-2: rgb(245 245 243 / 0.64); --fg-3: rgb(245 245 243 / 0.48);
+      --accent: #3b8ef3; --on-accent: #ffffff;
+      --green: #4cc395; --green-surface: rgb(76 195 149 / 0.15);
+      --red: #ef7a73; --red-surface: rgb(229 92 85 / 0.16);
+      --warning: #e5b54f; --warning-surface: rgb(229 181 79 / 0.15);
+      --blue: #6aa9f6; --blue-surface: rgb(59 142 243 / 0.16);
+      --switch-off: rgb(255 255 255 / 0.2);
+      --shadow-card: 0 0 0 0.5px rgb(255 255 255 / 0.07), 0 2px 6px rgb(0 0 0 / 0.28);
+      --focus-ring: #f5f5f3; --mark: rgb(239 122 115 / 0.2);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #141413; --pane: #191918; --card: color-mix(in srgb, #262624 72%, transparent); --card-solid: #222220;
+    --control: rgb(255 255 255 / 0.085); --control-hover: rgb(255 255 255 / 0.13);
+    --list-hover: rgb(255 255 255 / 0.05); --list-selection: rgb(255 255 255 / 0.1);
+    --separator: rgb(255 255 255 / 0.085);
+    --fg: #f5f5f3; --fg-2: rgb(245 245 243 / 0.64); --fg-3: rgb(245 245 243 / 0.48);
+    --accent: #3b8ef3; --on-accent: #ffffff;
+    --green: #4cc395; --green-surface: rgb(76 195 149 / 0.15);
+    --red: #ef7a73; --red-surface: rgb(229 92 85 / 0.16);
+    --warning: #e5b54f; --warning-surface: rgb(229 181 79 / 0.15);
+    --blue: #6aa9f6; --blue-surface: rgb(59 142 243 / 0.16);
+    --switch-off: rgb(255 255 255 / 0.2);
+    --shadow-card: 0 0 0 0.5px rgb(255 255 255 / 0.07), 0 2px 6px rgb(0 0 0 / 0.28);
+    --focus-ring: #f5f5f3; --mark: rgb(239 122 115 / 0.2);
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 14px/1.45 var(--font);
+    -webkit-font-smoothing: antialiased;
+  }
+  button { font: inherit; color: inherit; }
+  h1, h2, h3, p { margin: 0; }
+  :focus { outline: none; }
+  :focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+  .wrap {
+    max-width: 1320px;
+    margin: 0 auto;
+    padding-block: 20px 48px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+
+  /* Prototype bar */
+  .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; margin-bottom: 18px; }
+  .bar-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; margin-right: auto; }
+  .bar-title strong { font-size: 17px; letter-spacing: -0.01em; }
+  .bar-title span { color: var(--fg-2); font-size: 13px; }
+  .seg { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 3px; border-radius: 12px; background: var(--control); }
+  .seg button {
+    border: 0; background: transparent; padding: 6px 12px; border-radius: 9px; font-size: 13px; font-weight: 500; color: var(--fg-2);
+    transition: background-color 150ms ease, color 150ms ease;
+  }
+  .seg button:hover { color: var(--fg); }
+  .seg button[aria-pressed="true"], .seg button[aria-selected="true"] { background: var(--card-solid); color: var(--fg); box-shadow: var(--shadow-card); }
+
+  /* Compare grid */
+  .compare { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
+  .compare[data-view="before"] .col-after, .compare[data-view="after"] .col-before { display: none; }
+  .compare[data-view="before"], .compare[data-view="after"] { grid-template-columns: minmax(0, 860px); justify-content: center; }
+  @media (max-width: 900px) { .compare { grid-template-columns: minmax(0, 1fr); } }
+
+  .col { min-width: 0; border-radius: 18px; background: var(--pane); box-shadow: var(--shadow-card); overflow: hidden; }
+  .col-head {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px;
+    padding: 10px 16px; border-bottom: 1px solid var(--separator); font-size: 12px; color: var(--fg-2);
+  }
+  .col-head b { font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--fg); }
+  .count { font-variant-numeric: tabular-nums; }
+  .count strong { color: var(--fg); }
+  .col-body { padding: 22px 20px 8px; container: pane / inline-size; }
+
+  /* Settings page */
+  .page-h1 { font-size: 26px; line-height: 32px; font-weight: 600; letter-spacing: -0.025em; margin: 0 4px; }
+  .page-desc { margin: 6px 4px 0; color: var(--fg-2); font-size: 13px; }
+  .page-head { margin-bottom: 22px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .page-head > div { min-width: 0; margin-right: auto; }
+  .tabs { display: flex; gap: 2px; margin: 0 0 22px; padding: 3px; border-radius: 12px; background: var(--control); width: fit-content; max-width: 100%; flex-wrap: wrap; }
+  .tabs span { padding: 5px 11px; border-radius: 9px; font-size: 13px; color: var(--fg-2); }
+  .tabs span.on { background: var(--card-solid); color: var(--fg); box-shadow: var(--shadow-card); }
+
+  .group { margin-bottom: 26px; }
+  .group-head { display: flex; align-items: center; gap: 6px; margin: 0 4px 10px; }
+  .group-head h2 { font-size: 14px; font-weight: 600; }
+  .group-head .grow { margin-left: auto; }
+  .card { border-radius: var(--r-card); background: var(--card); box-shadow: var(--shadow-card); overflow: hidden; }
+
+  .row {
+    position: relative; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: center; gap: 18px;
+    min-height: 64px; padding: 12px 16px;
+  }
+  .row + .row::before, .row + .note::before, .note + .row::before {
+    content: ""; position: absolute; top: 0; left: 16px; right: 16px; height: 1px; background: var(--separator);
+  }
+  .row.has-switch { grid-template-columns: minmax(0, 1fr) auto; }
+  .row.vertical { grid-template-columns: minmax(0, 1fr); align-items: start; gap: 10px; }
+  .row .lbl { font-weight: 600; font-size: 14px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .row .desc { margin-top: 2px; max-width: 34rem; color: var(--fg-2); font-size: 13px; }
+  .row .ctl { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; min-width: 0; }
+  .row .ctl.start { justify-content: flex-start; }
+  .row .val { color: var(--fg-2); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .row .tert { color: var(--fg-3); font-size: 12.5px; margin-top: 6px; }
+
+  /* After: denser, label-first rows */
+  .kit .row { min-height: 52px; padding: 10px 16px; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); }
+  .kit .row.has-switch { grid-template-columns: minmax(0, 1fr) auto; }
+  .kit .row.vertical { grid-template-columns: minmax(0, 1fr); }
+  .kit .row .lbl { font-weight: 500; }
+  .kit .row.drill { cursor: default; transition: background-color 150ms ease; }
+  .kit .row.drill:hover { background: var(--list-hover); }
+
+  @container pane (max-width: 520px) {
+    .row, .kit .row { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+    .row.has-switch, .kit .row.has-switch { grid-template-columns: minmax(0, 1fr) auto; }
+    .row .ctl { justify-content: flex-start; }
+    .row.has-switch .ctl { justify-content: flex-end; }
+  }
+
+  /* Controls */
+  .sw { flex: none; width: 34px; height: 20px; border-radius: 999px; border: 0; padding: 0; background: var(--switch-off); position: relative; transition: background-color 150ms ease; }
+  .sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / 0.25); transition: transform 150ms ease; }
+  .sw[aria-checked="true"] { background: var(--accent); }
+  .sw[aria-checked="true"]::after { transform: translateX(14px); }
+  .sw[disabled] { opacity: 0.45; }
+  .sel {
+    display: inline-flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; max-width: 100%;
+    height: 30px; padding: 0 10px; border: 0; border-radius: var(--r-control); background: var(--control); font-size: 13px; white-space: nowrap;
+  }
+  .sel span { overflow: hidden; text-overflow: ellipsis; }
+  .sel::after { content: ""; flex: none; width: 6px; height: 6px; border-right: 1.5px solid var(--fg-3); border-bottom: 1.5px solid var(--fg-3); transform: translateY(-2px) rotate(45deg); }
+  .btn { height: 30px; padding: 0 12px; border: 0; border-radius: var(--r-control); background: var(--control); font-size: 13px; font-weight: 500; white-space: nowrap; transition: background-color 150ms ease; }
+  .btn:hover { background: var(--control-hover); }
+  .btn.accent { background: var(--accent); color: var(--on-accent); }
+  .btn.ghost { background: transparent; color: var(--fg-2); }
+  .btn.ghost:hover { background: var(--control); color: var(--fg); }
+  .btn.icon { width: 30px; padding: 0; display: inline-grid; place-items: center; }
+  .input { height: 34px; min-width: 0; flex: 1 1 12rem; border: 1px solid var(--separator); border-radius: var(--r-control); background: var(--control); padding: 0 10px; font-family: var(--mono); font-size: 12.5px; color: var(--fg-3); display: flex; align-items: center; }
+  .kbd { font-family: var(--font); font-size: 12.5px; font-weight: 600; padding: 3px 8px; border-radius: 7px; background: var(--control); }
+  .chev { color: var(--fg-3); font-size: 15px; line-height: 1; }
+  .info {
+    flex: none; display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%;
+    border: 0; padding: 0; background: transparent; color: var(--fg-3); font: 600 10.5px/1 var(--font);
+    box-shadow: inset 0 0 0 1.3px currentColor; position: relative;
+  }
+  .info:hover, .info:focus-visible { color: var(--fg); }
+  .info[data-tip]:hover::after, .info[data-tip]:focus-visible::after {
+    content: attr(data-tip); position: absolute; z-index: 5; top: calc(100% + 8px); left: -6px; width: max-content; max-width: 16rem;
+    padding: 8px 10px; border-radius: 10px; background: var(--card-solid); color: var(--fg); box-shadow: var(--shadow-card), 0 10px 24px -6px rgb(0 0 0 / 0.25);
+    font: 400 12.5px/1.4 var(--font); text-align: left; white-space: normal;
+  }
+  .link { color: var(--fg-2); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--fg) 25%, transparent); text-underline-offset: 2px; }
+
+  .badge { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: 999px; background: var(--control); font-size: 12px; font-weight: 600; white-space: nowrap; color: var(--fg-2); }
+  .badge.green { background: var(--green-surface); color: var(--green); }
+  .badge.red { background: var(--red-surface); color: var(--red); }
+  .badge.warning { background: var(--warning-surface); color: var(--warning); }
+  .badge.blue { background: var(--blue-surface); color: var(--blue); }
+  .badge .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+  .callout { margin: 0 0 14px; padding: 12px; border-radius: 12px; background: var(--blue-surface); color: var(--blue); font-size: 13px; }
+  .para { margin: 8px 4px 0; color: var(--fg-2); font-size: 13px; }
+
+  /* SettingsNote: the one visible disclosure line */
+  .note { position: relative; display: flex; align-items: flex-start; gap: 8px; padding: 10px 16px; color: var(--fg-2); font-size: 12.5px; }
+  .note svg { flex: none; width: 14px; height: 14px; margin-top: 2px; color: var(--fg-3); }
+
+  /* List rows (SettingsListRow) */
+  .item { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 56px; padding: 9px 12px 9px 14px; transition: background-color 150ms ease; }
+  .item + .item::before { content: ""; position: absolute; top: 0; left: 58px; right: 16px; height: 1px; background: var(--separator); }
+  .item:hover { background: var(--list-hover); }
+  .tile { width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; background: var(--control); color: var(--fg-2); font-weight: 700; font-size: 13px; }
+  .item .t { font-weight: 500; display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
+  .item .m { color: var(--fg-2); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .item .a { display: flex; align-items: center; gap: 6px; }
+
+  /* Before-only legacy shapes */
+  .legacy-card { border-radius: var(--r-card); background: var(--card-solid); box-shadow: var(--shadow-card); padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .legacy-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 210px), 1fr)); gap: 12px; }
+  .legacy-card .t { font-weight: 600; }
+  .legacy-card .d { color: var(--fg-2); font-size: 13px; }
+  .legacy-card dl { margin: 4px 0 0; padding-top: 10px; border-top: 1px solid var(--separator); display: grid; gap: 4px; font-size: 12.5px; }
+  .legacy-card dl div { display: flex; justify-content: space-between; gap: 10px; }
+  .legacy-card dt { color: var(--fg-3); }
+  .legacy-card dd { margin: 0; color: var(--fg-2); text-align: right; }
+
+  /* Highlight explanatory text in Before */
+  .show-marks .col-before .desc, .show-marks .col-before .page-desc, .show-marks .col-before .para, .show-marks .col-before .callout, .show-marks .col-before .tert, .show-marks .col-before .legacy-card .d {
+    background: var(--mark); border-radius: 4px; box-decoration-break: clone; -webkit-box-decoration-break: clone;
+  }
+
+  /* Kit page */
+  .kit-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+  @media (max-width: 900px) { .kit-grid { grid-template-columns: minmax(0, 1fr); } }
+  .spec { border-radius: 18px; background: var(--pane); box-shadow: var(--shadow-card); padding: 18px; min-width: 0; }
+  .spec h3 { font-size: 14px; font-weight: 600; margin-bottom: 4px; font-family: var(--mono); }
+  .spec > p { color: var(--fg-2); font-size: 13px; margin-bottom: 14px; max-width: 60ch; }
+  .spec ul { margin: 14px 0 0; padding-left: 18px; color: var(--fg-2); font-size: 13px; display: grid; gap: 4px; }
+  .vocab { display: flex; flex-wrap: wrap; gap: 8px; }
+  .vocab-row { display: grid; grid-template-columns: 9.5rem minmax(0, 1fr); gap: 10px; align-items: center; font-size: 13px; padding: 6px 0; border-bottom: 1px solid var(--separator); }
+  .vocab-row:last-child { border-bottom: 0; }
+  .vocab-row span:last-child { color: var(--fg-2); }
+
+  .legend { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; margin: 0 0 14px; color: var(--fg-2); font-size: 12.5px; }
+  .legend label { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { display: inline-block; width: 22px; height: 12px; border-radius: 3px; background: var(--mark); }
+
+  [hidden] { display: none !important; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <div class="bar">
+    <div class="bar-title">
+      <strong>Settings deslop prototype</strong>
+      <span>Today's copy on the left, the copy budget and row kit on the right. Sample data, macOS strings (on Linux, “Mac” reads “computer”).</span>
+    </div>
+    <div class="seg" role="tablist" aria-label="Prototype page">
+      <button role="tab" aria-selected="true" data-page="webpages">Web pages</button>
+      <button role="tab" aria-selected="false" data-page="voice">Voice</button>
+      <button role="tab" aria-selected="false" data-page="providers">Providers</button>
+      <button role="tab" aria-selected="false" data-page="kit">Row kit</button>
+    </div>
+    <div class="seg" aria-label="View">
+      <button aria-pressed="true" data-view="both">Side by side</button>
+      <button aria-pressed="false" data-view="before">Before</button>
+      <button aria-pressed="false" data-view="after">After</button>
+    </div>
+  </div>
+
+  <div class="legend" id="legend">
+    <label><input type="checkbox" id="marks" checked> Highlight explanatory text</label>
+    <span><i></i> description, paragraph, callout or caption</span>
+  </div>
+
+  <main id="stage" class="show-marks">
+    <!-- ============ WEB PAGES ============ -->
+    <section data-section="webpages">
+      <div class="compare" data-view="both">
+        <article class="col col-before">
+          <div class="col-head"><b>Before</b><span class="count" data-count></span></div>
+          <div class="col-body">
+            <div class="page-head"><div><h1 class="page-h1">Web Search</h1><p class="page-desc">Search current information in attended conversations. No startup or background search occurs.</p></div></div>
+            <div class="group">
+              <div class="group-head"><h2>Web pages</h2></div>
+              <div class="card">
+                <div class="row has-switch">
+                  <div><div class="lbl">Read web pages</div><div class="desc">Lets the agent open a public page and read its text in your chats. Pages on this Mac or your local network are never opened.</div></div>
+                  <div class="ctl"><button class="sw" role="switch" aria-checked="true" aria-label="Read web pages"></button></div>
+                </div>
+                <div class="row has-switch">
+                  <div><div class="lbl">Extract only the values asked for <span class="badge warning">Needs setup</span></div><div class="desc">Add your Cloudflare account ID and an API key below to turn this on.</div></div>
+                  <div class="ctl"><button class="sw" role="switch" aria-checked="false" disabled aria-label="Extract only the values asked for"></button></div>
+                </div>
+                <div class="row vertical">
+                  <div><div class="lbl">Cloudflare account ID</div><div class="desc">Extract mode runs Cloudflare Workers AI · Clairic on your own Cloudflare account. The account ID is the 32-character ID on your Cloudflare dashboard. <a class="link" href="#webpages">How to get an ID and a key ↗</a></div></div>
+                  <div class="ctl start"><span class="input">0123456789abcdef0123456789abcdef</span><button class="btn accent">Save</button><button class="btn">Cancel</button></div>
+                </div>
+                <div class="row vertical">
+                  <div><div class="lbl">API keys</div><div class="desc">Stored encrypted on this device and never shown again. When a key is rejected or hits its quota, Aiden cools it down and tries the next one.</div></div>
+                  <div class="ctl start"><span class="input">Paste a key</span><button class="btn">Add key</button></div>
+                </div>
+                <div class="row vertical">
+                  <div><div class="lbl">What leaves this device</div><div class="desc">In extract mode the page's text and the field names go to Cloudflare; your chat does not. Keys stay encrypted on this device and are never passed to the model.</div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article class="col col-after kit">
+          <div class="col-head"><b>After</b><span class="count" data-count></span></div>
+          <div class="col-body">
+            <div class="page-head"><div><h1 class="page-h1">Web Search</h1></div></div>
+            <div class="card" style="margin-bottom:14px"><div class="note"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M8 1.75 2.75 4v3.6c0 3 2.2 5.6 5.25 6.65 3.05-1.05 5.25-3.65 5.25-6.65V4L8 1.75Z"/></svg><span>No searches at startup or in the background.</span></div></div>
+            <div class="group">
+              <div class="group-head"><h2>Web pages</h2></div>
+              <div class="card">
+                <div class="row has-switch">
+                  <div><div class="lbl">Read web pages <button class="info" aria-label="About reading web pages" data-tip="Public pages only. Pages on this Mac or your local network are never opened.">i</button></div></div>
+                  <div class="ctl"><button class="sw" role="switch" aria-checked="true" aria-label="Read web pages"></button></div>
+                </div>
+                <div class="row has-switch">
+                  <div><div class="lbl">Extract values only <span class="badge warning">Needs setup</span></div><div class="desc">Gets only the values Aiden asks for, from your Cloudflare account.</div></div>
+                  <div class="ctl"><button class="sw" role="switch" aria-checked="false" disabled aria-label="Extract values only"></button></div>
+                </div>
+                <div class="row">
+                  <div><div class="lbl">Cloudflare account</div></div>
+                  <div class="ctl"><span class="val">Not set</span><button class="btn">Set up…</button></div>
+                </div>
+                <div class="note"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M8 1.75 2.75 4v3.6c0 3 2.2 5.6 5.25 6.65 3.05-1.05 5.25-3.65 5.25-6.65V4L8 1.75Z"/></svg><span>Extract sends page text and field names to Cloudflare, never your chat.</span></div>
+              </div>
+            </div>
+            <p class="para" style="background:none">The account ID, its link and the key list move into the <b>Set up…</b> sheet, a <code>SettingsSheet</code> that reuses the Web Search key pool editor. Once extract mode is set up, the row’s line becomes “Values not on the page come back as guesses.” With Web Search off, it reads “Turn on Web Search above.”</p>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- ============ VOICE ============ -->
+    <section data-section="voice" hidden>
+      <div class="compare" data-view="both">
+        <article class="col col-before">
+          <div class="col-head"><b>Before</b><span class="count" data-count></span></div>
+          <div class="col-body">
+            <div class="page-head"><div><h1 class="page-h1">Voice &amp; Speech</h1><p class="page-desc">Set up voice input, transcription, and dictation.</p></div></div>
+            <div class="tabs"><span class="on">Voice</span><span>Text to Speech</span><span>Aiden Live</span></div>
+            <div class="group">
+              <div class="group-head"><h2>Use your voice</h2></div>
+              <div class="card">
+                <div class="row"><div><div class="lbl">Where should your voice be processed?</div><div class="desc">Uses a downloaded on-device model when there is one, otherwise a cloud provider you have set up.</div></div><div class="ctl"><button class="sel"><span>Automatic</span></button></div></div>
+                <div class="row"><div><div class="lbl">Language</div><div class="desc">The language you speak. Automatic lets Parakeet decide.</div></div><div class="ctl"><button class="sel"><span>Automatic</span></button></div></div>
+                <div class="row has-switch"><div><div class="lbl">Translate to English</div><div class="desc">Choose a language other than English to translate.</div></div><div class="ctl"><button class="sw" role="switch" aria-checked="false" disabled aria-label="Translate to English"></button></div></div>
+              </div>
+            </div>
+            <div class="group">
+              <div class="group-head"><h2>Dictation Shortcut</h2></div>
+              <div class="card">
+                <div class="row"><div><div class="lbl">Dictation hotkey</div><div class="desc">Press it from anywhere to dictate into the focused text field. When nothing editable is focused, the transcript is copied to the clipboard.</div></div><div class="ctl"><span class="badge green">Active</span><span class="kbd">⌥ Space</span><button class="btn">Manage shortcuts</button></div></div>
+                <div class="row"><div><div class="lbl">Shortcut behavior</div><div class="desc">Press once to start; press again to stop and transcribe.</div></div><div class="ctl"><button class="sel"><span>Press to toggle</span></button></div></div>
+                <div class="row has-switch"><div><div class="lbl">Stop after silence</div><div class="desc">Applies to every shortcut behavior. Release or press the shortcut again to stop manually.</div></div><div class="ctl"><button class="sw" role="switch" aria-checked="true" aria-label="Stop after silence"></button></div></div>
+                <div class="row has-switch"><div><div class="lbl">Clean up transcript</div><div class="desc">Optionally polish punctuation and filler words with your current chat model before pasting. That sends the transcript to the model. The original words stay if cleanup fails.</div></div><div class="ctl"><button class="sw" role="switch" aria-checked="true" aria-label="Clean up transcript"></button></div></div>
+                <div class="row has-switch"><div><div class="lbl">Play sounds</div><div class="desc">Short start, stop, and done cues from the dictation pill. Off by default.</div></div><div class="ctl"><button class="sw" role="switch" aria-checked="false" aria-label="Play sounds"></button></div></div>
+                <div class="row has-switch"><div><div class="lbl">Accessibility access</div><div class="desc">Lets Aiden paste dictated text into the focused text field. This access is local and is not shared with the transcription provider.</div></div><div class="ctl"><span class="badge green">Granted</span><button class="btn ghost">Check again</button></div></div>
+              </div>
+            </div>
+            <div class="group">
+              <div class="group-head"><h2>On-Device Engine</h2></div>
+              <div class="card">
+                <div class="row"><div><div class="lbl">Engine</div><div class="desc">Transcription runs locally after you download a speech model.</div></div><div class="ctl"><span class="badge green">Ready</span></div></div>
+                <div class="row"><div><div class="lbl">Active model</div><div class="desc">Used when you dictate with the on-device provider.</div></div><div class="ctl"><span class="val" style="font-weight:600;color:var(--fg)">Parakeet v3</span></div></div>
+                <div class="row"><div><div class="lbl">Models</div><div class="desc">Download, remove, and choose your on-device transcription model.</div></div><div class="ctl"><button class="btn">Manage Models</button></div></div>
+                <div class="row"><div><div class="lbl">Free memory when idle</div><div class="desc">Unloads the model after this long without dictation. It is loaded again automatically when you press the shortcut or start the mic.</div></div><div class="ctl"><button class="sel"><span>After 5 minutes</span></button></div></div>
+                <div class="row has-switch"><div><div class="lbl">Load in advance</div><div class="desc">Loads the model when Aiden starts and when you choose one, so the first dictation starts instantly. Off loads it when you start dictating.</div></div><div class="ctl"><button class="sw" role="switch" aria-checked="false" aria-label="Load in advance"></button></div></div>
+                <div class="row has-switch"><div><div class="lbl">Trim silence</div><div class="desc">Skips silence and splits long recordings so every model can transcribe them.</div></div><div class="ctl"><button class="sw" role="switch" aria-checked="true" aria-label="Trim silence"></button></div></div>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article class="col col-after kit">
+          <div class="col-head"><b>After</b><span class="count" data-count></span></div>
+          <div class="col-body">
+            <div class="page-head"><div><h1 class="page-h1">Voice &amp; Speech</h1></div></div>
+            <div class="tabs"><span class="on">Voice</span><span>Text to Speech</span><span>Aiden Live</span></div>
+            <div class="group">
+              <div class="group-head"><h2>Voice input</h2></div>
+              <div class="card">
+                <div class="row"><div><div class="lbl">Processing</div></div><div class="ctl"><button class="sel"><span>Automatic · On-device (Parakeet v3)</span></button></div></div>
+                <div class="row"><div><div class="lbl">Language</div></div><div class="ctl"><button class="sel"><span>Automatic</span></button></div></div>
+                <div class="row has-switch"><div><div class="lbl">Translate to English</div></div><div class="ctl"><button class="sw" role="switch" aria-checked="false" disabled aria-label="Translate to English"></button></div></div>
+              </div>
+            </div>
+            <div class="group">
+              <div class="group-head"><h2>Dictation</h2></div>
+              <div class="card">
+                <div class="row"><div><div class="lbl">Shortcut <span class="badge green">Active</span></div></div><div class="ctl"><span class="kbd">⌥ Space</span><button class="btn">Manage shortcuts</button></div></div>
+                <div class="row"><div><div class="lbl">Behavior</div></div><div class="ctl"><button class="sel"><span>Press to toggle</span></button></div></div>
+                <div class="row has-switch"><div><div class="lbl">Stop after silence</div></div><div class="ctl"><button class="sw" role="switch" aria-checked="true" aria-label="Stop after silence"></button></div></div>
+                <div class="row has-switch"><div><div class="lbl">Clean up transcript</div><div class="desc">Sends the transcript to your chat model first.</div></div><div class="ctl"><button class="sw" role="switch" aria-checked="true" aria-label="Clean up transcript"></button></div></div>
+                <div class="row has-switch"><div><div class="lbl">Play sounds</div></div><div class="ctl"><button class="sw" role="switch" aria-checked="false" aria-label="Play sounds"></button></div></div>
+                <div class="row"><div><div class="lbl">Paste into other apps <button class="info" aria-label="About pasting into other apps" data-tip="Uses macOS Accessibility. Without it, the transcript goes to your clipboard.">i</button></div></div><div class="ctl"><span class="badge green">Allowed</span></div></div>
+              </div>
+            </div>
+            <div class="group">
+              <div class="group-head"><h2>On-device engine</h2></div>
+              <div class="card">
+                <div class="row drill"><div><div class="lbl">Model</div></div><div class="ctl"><span class="val">Parakeet v3 · 640 MB</span><span class="chev" aria-hidden="true">›</span></div></div>
+                <div class="row"><div><div class="lbl">Free memory when idle</div></div><div class="ctl"><button class="sel"><span>After 5 minutes</span></button></div></div>
+                <div class="row has-switch"><div><div class="lbl">Load at startup</div></div><div class="ctl"><button class="sw" role="switch" aria-checked="false" aria-label="Load at startup"></button></div></div>
+                <div class="row has-switch"><div><div class="lbl">Trim silence <button class="info" aria-label="About trimming silence" data-tip="Skips silence and splits long recordings so every model can read them.">i</button></div></div><div class="ctl"><button class="sw" role="switch" aria-checked="true" aria-label="Trim silence"></button></div></div>
+              </div>
+            </div>
+            <p class="para" style="background:none">The Engine row is hidden while it reads Ready. When Processing (or Automatic) uses OpenAI or Google, its row adds the note “Recordings go to OpenAI.” Where Aiden can’t paste into other apps (Linux), the Paste row is replaced by a note that the transcript goes to the clipboard.</p>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- ============ PROVIDERS ============ -->
+    <section data-section="providers" hidden>
+      <div class="compare" data-view="both">
+        <article class="col col-before">
+          <div class="col-head"><b>Before</b><span class="count" data-count></span></div>
+          <div class="col-body">
+            <div class="page-head"><div><h1 class="page-h1" style="display:flex;align-items:center;gap:6px">Providers <button class="info" aria-label="About provider connections" data-tip="Connect an account, an API key or a local model. Custom endpoints and catalog updates are in Advanced.">i</button></h1><p class="page-desc">Choose which AI services Aiden can use for chat.</p></div></div>
+            <p style="margin:0 4px 8px;font-size:13px;font-weight:600">Your connections</p>
+            <div class="legacy-card" style="margin-bottom:10px;background:var(--card)">
+              <div style="display:flex;gap:12px;align-items:flex-start">
+                <span class="tile">C</span>
+                <div style="min-width:0;flex:1">
+                  <div class="t" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">ChatGPT / Codex <span class="badge blue">Built in</span><span class="badge green">Configured</span></div>
+                  <div class="d" style="margin-top:4px">Use your ChatGPT account for Codex models. Your sign-in is saved securely on this device.</div>
+                  <div class="tert">A ChatGPT credential is stored. Aiden verifies and refreshes it when a Codex request starts.</div>
+                </div>
+                <button class="btn">Sign out</button>
+              </div>
+            </div>
+            <div class="card" style="margin-bottom:10px">
+              <div class="item" style="grid-template-columns:auto minmax(0,1fr) auto"><span class="tile">G</span><div style="min-width:0"><div class="t">Google <span class="badge">Configured</span></div><div class="m">gemini-3-pro</div></div><div class="a"><button class="btn">Manage</button></div></div>
+            </div>
+            <div class="card" style="margin-bottom:14px">
+              <div class="item"><span class="tile">L</span><div style="min-width:0"><div class="t">LM Studio <span class="badge blue">No key needed</span></div><div class="m">qwen3-coder-30b</div></div><div class="a"><button class="btn">Manage</button><button class="btn icon ghost" aria-label="Remove LM Studio">🗑</button></div></div>
+            </div>
+            <div style="margin-bottom:14px"><button class="btn">＋ Connect another AI</button></div>
+            <div class="card">
+              <div style="padding:12px 16px 4px;font-size:13px;font-weight:600">▾ Advanced</div>
+              <div class="row"><div><div class="lbl">Model catalog <button class="info" aria-label="About model catalogs" data-tip="Downloaded models.dev data changes display details only, never which models can run or their runtime limits.">i</button></div><div class="desc">Model details: device cache · updated 11/15/2026, 10:42:13 AM. Updating contacts built-in catalog services and models.dev. It sends no prompts, chats or device identifier. A provider's own catalog service may use your sign-in for that provider; models.dev gets no credentials.</div></div><div class="ctl"><button class="btn">↻ Update model catalogs</button></div></div>
+            </div>
+          </div>
+        </article>
+
+        <article class="col col-after kit">
+          <div class="col-head"><b>After</b><span class="count" data-count></span></div>
+          <div class="col-body">
+            <div class="page-head"><div><h1 class="page-h1">Providers</h1></div><button class="btn accent">＋ Connect another AI</button></div>
+            <div class="group">
+              <div class="group-head"><h2>Your connections</h2></div>
+              <div class="card">
+                <div class="item"><span class="tile">C</span><div style="min-width:0"><div class="t">ChatGPT / Codex <span class="badge"><span class="dot"></span>Signed in</span></div><div class="m">ChatGPT account · gpt-5.5-codex</div></div><div class="a"><span class="chev" aria-hidden="true">›</span></div></div>
+                <div class="item"><span class="tile">G</span><div style="min-width:0"><div class="t">Google <span class="badge"><span class="dot"></span>Key saved</span></div><div class="m">API key · gemini-3-pro</div></div><div class="a"><span class="chev" aria-hidden="true">›</span></div></div>
+                <div class="item"><span class="tile">L</span><div style="min-width:0"><div class="t">LM Studio</div><div class="m">No key needed · qwen3-coder-30b</div></div><div class="a"><span class="chev" aria-hidden="true">›</span></div></div>
+              </div>
+            </div>
+            <div class="group">
+              <div class="card">
+                <div class="row"><div><div class="lbl">▾ Advanced</div></div><div class="ctl"><span class="val">Custom endpoints · chat titles · catalog</span></div></div>
+                <div class="row"><div><div class="lbl">Model catalog <button class="info" aria-label="About model catalogs" data-tip="Only display details change, never which models run.">i</button></div></div><div class="ctl"><span class="val">Updated Nov 15</span><button class="btn">Update</button></div></div>
+                <div class="note"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M8 1.75 2.75 4v3.6c0 3 2.2 5.6 5.25 6.65 3.05-1.05 5.25-3.65 5.25-6.65V4L8 1.75Z"/></svg><span>Contacts models.dev (no credentials) and each provider’s catalog with your sign-in. No prompts or chats.</span></div>
+              </div>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- ============ KIT ============ -->
+    <section data-section="kit" hidden>
+      <div class="kit-grid kit">
+        <div class="spec">
+          <h3>SettingsRow</h3>
+          <p>A <code>Field</code> with three new slots: <code>status</code> (a Badge after the label), <code>value</code> (the current value as secondary text) and <code>onOpen</code> (the whole row drills into a sheet). The description stays optional and lint-capped at 12 words.</p>
+          <div class="card">
+            <div class="row has-switch"><div><div class="lbl">Load at startup</div></div><div class="ctl"><button class="sw" role="switch" aria-checked="true" aria-label="Load at startup"></button></div></div>
+            <div class="row"><div><div class="lbl">Free memory when idle</div></div><div class="ctl"><button class="sel"><span>After 5 minutes</span></button></div></div>
+            <div class="row"><div><div class="lbl">Shortcut <span class="badge green">Active</span></div></div><div class="ctl"><span class="kbd">⌥ Space</span><button class="btn">Change</button></div></div>
+            <div class="row drill"><div><div class="lbl">Model</div></div><div class="ctl"><span class="val">Parakeet v3 · 640 MB</span><span class="chev" aria-hidden="true">›</span></div></div>
+            <div class="row has-switch"><div><div class="lbl">Clean up transcript</div><div class="desc">Sends the transcript to your chat model first.</div></div><div class="ctl"><button class="sw" role="switch" aria-checked="true" aria-label="Clean up transcript"></button></div></div>
+          </div>
+          <ul><li>Switch, select, button and value + chevron are the only trailing shapes.</li><li>52px rows, label column 1.25fr, no description by default.</li></ul>
+        </div>
+
+        <div class="spec">
+          <h3>SettingsListRow</h3>
+          <p>One row for every list of things: providers, connectors, search providers, hooks, rules, devices, apps, worktrees, models. Leading tile, title with status, one meta line, a trailing slot for one control or a chevron, and an optional ⋯ menu. A row with a control opens its sheet from its name, so a switch never sits inside a clickable row.</p>
+          <div class="card">
+            <div class="item"><span class="tile">G</span><div style="min-width:0"><div class="t">GitHub <span class="badge green"><span class="dot"></span>Connected</span></div><div class="m">14 tools · used 2 hours ago</div></div><div class="a"><span class="chev" aria-hidden="true">›</span></div></div>
+            <div class="item"><span class="tile">F</span><div style="min-width:0"><div class="t">Figma <span class="badge red"><span class="dot"></span>Sign-in expired</span></div><div class="m">OAuth · last worked yesterday</div></div><div class="a"><button class="btn">Sign in</button><button class="btn icon ghost" aria-label="More">⋯</button></div></div>
+            <div class="item"><span class="tile">P</span><div style="min-width:0"><div class="t">Pixel 9 <span class="badge"><span class="dot"></span>Offline</span></div><div class="m">Paired Oct 12 · last seen 3 days ago</div></div><div class="a"><button class="btn icon ghost" aria-label="More">⋯</button></div></div>
+          </div>
+          <ul><li>Details, edit forms and destructive actions open in a <code>SettingsSheet</code>.</li><li>Inset separators start after the tile, as in the sidebar.</li></ul>
+        </div>
+
+        <div class="spec">
+          <h3>SecretField</h3>
+          <p>Every single API key, token and password field (the Web Search key pool keeps its own ordered editor). Replaces sixteen copies of "stored encrypted on this device" and the write-only explanations with one shape and one hint. Where no keyring is running (Linux), it shows that state instead of the input.</p>
+          <div class="card">
+            <div class="row"><div><div class="lbl">API key <button class="info" aria-label="About API keys" data-tip="Encrypted on this device. Aiden never shows a saved key again.">i</button></div></div><div class="ctl"><span class="badge">Saved</span><button class="btn">Replace…</button><button class="btn ghost">Remove</button></div></div>
+            <div class="row vertical"><div><div class="lbl">Bot token</div></div><div class="ctl start"><span class="input">Paste token</span><button class="btn accent">Save</button></div></div>
+          </div>
+        </div>
+
+        <div class="spec">
+          <h3>SettingsNote</h3>
+          <p>The visible line that the hard rules keep on the page: data leaving the device, charges, unattended authority. One icon, at most 15 words per note, under the control it qualifies or at the group’s foot. It is not for explanations.</p>
+          <div class="card">
+            <div class="row has-switch"><div><div class="lbl">Read aloud</div></div><div class="ctl"><button class="sw" role="switch" aria-checked="true" aria-label="Read aloud"></button></div></div>
+            <div class="note"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M8 1.75 2.75 4v3.6c0 3 2.2 5.6 5.25 6.65 3.05-1.05 5.25-3.65 5.25-6.65V4L8 1.75Z"/></svg><span>Sends the selected response to Google when you press the speaker. Google may bill you.</span></div>
+          </div>
+        </div>
+
+        <div class="spec" style="grid-column: 1 / -1">
+          <h3>settingsStatus()</h3>
+          <p>One vocabulary for state, so a row never needs a sentence to say what is going on. Each state maps to one label and one soft fill.</p>
+          <div class="vocab-row"><span class="badge green"><span class="dot"></span>Connected</span><span>Checked and working now. Also "Active", "Installed" where the noun needs it.</span></div>
+          <div class="vocab-row"><span class="badge"><span class="dot"></span>Key saved</span><span>Saved but not checked yet. Also "Signed in". Never green until Aiden has checked it.</span></div>
+          <div class="vocab-row"><span class="badge warning"><span class="dot"></span>Needs setup</span><span>Can't work until the person adds something. The row's action names what.</span></div>
+          <div class="vocab-row"><span class="badge red"><span class="dot"></span>Error</span><span>Was set up and is failing. The specific short reason replaces the word ("Sign-in expired", "Port in use").</span></div>
+          <div class="vocab-row"><span class="badge blue"><span class="dot"></span>Update available</span><span>Optional action waiting.</span></div>
+          <div class="vocab-row"><span class="badge"><span class="dot"></span>Off</span><span>Set up but switched off. Also "Offline", "Paused".</span></div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script>
+  (function () {
+    var stage = document.getElementById("stage");
+    var tabs = document.querySelectorAll("[data-page]");
+    var views = document.querySelectorAll("[data-view]:not(.compare)");
+    var legend = document.getElementById("legend");
+    var marks = document.getElementById("marks");
+    var EXPLAIN = ".desc, .page-desc, .para, .callout, .tert, .legacy-card .d, .note span";
+
+    function words(el) {
+      var n = 0;
+      el.querySelectorAll(EXPLAIN).forEach(function (node) {
+        var m = (node.textContent || "").match(/[A-Za-z0-9’'][A-Za-z0-9’'.-]*/g);
+        n += m ? m.length : 0;
+      });
+      return n;
+    }
+    document.querySelectorAll(".col").forEach(function (col) {
+      var out = col.querySelector("[data-count]");
+      if (!out) return;
+      var body = col.querySelector(".col-body").cloneNode(true);
+      // The After column's trailing caption is prototype commentary, not page copy.
+      body.querySelectorAll(".para[style]").forEach(function (n) { n.remove(); });
+      out.innerHTML = "Explanatory words on screen: <strong>" + words(body) + "</strong>";
+    });
+
+    function show(page) {
+      tabs.forEach(function (t) { t.setAttribute("aria-selected", String(t.dataset.page === page)); });
+      document.querySelectorAll("[data-section]").forEach(function (s) { s.hidden = s.dataset.section !== page; });
+      legend.hidden = page === "kit";
+      try { history.replaceState(null, "", "#" + page); } catch (e) {}
+    }
+    tabs.forEach(function (t) { t.addEventListener("click", function () { show(t.dataset.page); }); });
+    views.forEach(function (b) {
+      b.addEventListener("click", function () {
+        views.forEach(function (o) { o.setAttribute("aria-pressed", String(o === b)); });
+        document.querySelectorAll(".compare").forEach(function (c) { c.dataset.view = b.dataset.view; });
+      });
+    });
+    marks.addEventListener("change", function () { stage.classList.toggle("show-marks", marks.checked); });
+    document.querySelectorAll(".sw:not([disabled])").forEach(function (s) {
+      s.addEventListener("click", function () { s.setAttribute("aria-checked", String(s.getAttribute("aria-checked") !== "true")); });
+    });
+    var initial = (location.hash || "").slice(1);
+    show(["webpages", "voice", "providers", "kit"].indexOf(initial) >= 0 ? initial : "webpages");
+  })();
+</script>

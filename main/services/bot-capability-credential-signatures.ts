@@ -29,8 +29,6 @@ export function createBotProviderCredentialSignature(
   });
 }
 
-export const botProviderCredentialSignature = createBotProviderCredentialSignature();
-
 /** Covers stdio env/config, configured headers, preset API keys, and the durable OAuth grant. */
 // Unreadable credential storage reads as "no grant" for that one server (in the
 // core), so it cannot take every other server out of the Bot catalog with it.

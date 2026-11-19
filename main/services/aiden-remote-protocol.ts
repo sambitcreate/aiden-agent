@@ -355,7 +355,23 @@ export const AIDEN_REMOTE_BACKGROUND_JOBS_CHAT_SETTLED_CONTRACT_REVISION = 63 as
  * chat stays as it is. Older phones see the plain message, as before.
  */
 export const AIDEN_REMOTE_CONTINUE_IN_NEW_CHAT_CONTRACT_REVISION = 64 as const;
-export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_CONTINUE_IN_NEW_CHAT_CONTRACT_REVISION;
+/**
+ * Contract revision 65 (provisional; re-claim the next revision after
+ * `main`'s at merge by changing only this constant): reader-local lagging
+ * cursor recovery on `/streams/{streamId}/events` and explicit snapshot reasons
+ * (`stream:snapshot-reasons`, an opt-in capability rather than a feature token,
+ * because phones already hear the most feature tokens shipped clients accept).
+ * For `after < earliest - 1`, the server sends a connection-local nonterminal
+ * `snapshot` at `sequence = earliest - 1` with `nextSequence: earliest`, then
+ * replays every retained journal event from `earliest` onward (including the
+ * terminal event on finished streams), leaving the journal and other readers
+ * untouched. Devices holding `stream:snapshot-reasons` receive `reason: "gap"`
+ * on retention-gap and budget-replacement snapshots and `reason: "reset"` on
+ * provider resets; other devices keep the three-key `{ chatId, turnId, nextSequence }`
+ * payload so closed decoders on revision <= 64 stay valid.
+ */
+export const AIDEN_REMOTE_STREAM_SNAPSHOT_REASONS_CONTRACT_REVISION = 65 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_STREAM_SNAPSHOT_REASONS_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -677,6 +693,15 @@ export const AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES = ["chat:new-worktree"]
 export const AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES = ["chat:continue-in-new-chat"] as const;
 
 /**
+ * Contract revision 65: a device holding `stream:snapshot-reasons` receives
+ * `reason: "gap" | "reset"` on `/streams/{streamId}/events` `snapshot` payloads,
+ * distinguishing reader-local retention gaps (and aggregate-budget replacements)
+ * from provider resets. Offered while stream events are served; grants no extra
+ * authority, and devices without it keep the three-key snapshot payload.
+ */
+export const AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES = ["stream:snapshot-reasons"] as const;
+
+/**
  * Every opt-in a paired device may persist. Each changes what a device is
  * shown; `chat:jobs` also opens its two routes, which still need the chat
  * grant (`chat:read`, `chat:write`); `attachments:raw` opens a second body
@@ -695,6 +720,7 @@ export const AIDEN_REMOTE_OPT_IN_CAPABILITIES = [
   ...AIDEN_REMOTE_APPROVAL_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES,
+  ...AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES,
 ] as const;
 
 /** Vocabulary a paired device may add after pairing through `POST /device/capabilities`. */
@@ -726,6 +752,7 @@ export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
   ...AIDEN_REMOTE_APPROVAL_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES,
+  ...AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteNegotiableCapability =
@@ -761,6 +788,7 @@ export const AIDEN_REMOTE_CAPABILITIES = [
   ...AIDEN_REMOTE_APPROVAL_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES,
+  ...AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteCapability = (typeof AIDEN_REMOTE_CAPABILITIES)[number];
@@ -2399,6 +2427,8 @@ export interface AidenRemoteContractFixture {
   backgroundJobsChatSettled?: AidenRemoteBackgroundJobsChatSettledFixture;
   /** Revision 64 (`chat:continue-in-new-chat`): a missing-folder refusal with and without details, and the continue fork. */
   continueInNewChat?: AidenRemoteContinueInNewChatFixture;
+  /** Revision 65 (`stream:snapshot-reasons`): reader-local gap snapshot replay, legacy reason-less projection, and provider reset. */
+  streamRecovery?: AidenRemoteStreamRecoveryFixture;
   taskProgress: AidenRemoteChatTaskProgress;
   agentRoster: AidenRemoteChatAgentRoster;
   agentInterrupt: AidenRemoteChatAgentInterruptFixture;
@@ -3090,6 +3120,9 @@ function characterLength(value: string): number {
 export function assertNoForbiddenWireKeys(value: unknown, location = "fixture"): void {
   assertAidenRemoteJsonValue(value, location);
 }
+
+export const AIDEN_REMOTE_SNAPSHOT_REASONS = ["gap", "reset"] as const;
+export type AidenRemoteSnapshotReason = (typeof AIDEN_REMOTE_SNAPSHOT_REASONS)[number];
 
 const EVENT_PAYLOAD_KEYS: Record<AidenRemoteEventType, readonly string[]> = {
   snapshot: ["chatId", "turnId", "nextSequence"],
@@ -5825,7 +5858,8 @@ function validateEventPayload(type: AidenRemoteEventType, payload: Record<string
     return;
   }
   const keys = EVENT_PAYLOAD_KEYS[type];
-  assertExactKeys(payload, keys, `${type} payload`);
+  const allowedKeys = type === "snapshot" ? [...keys, "reason"] : keys;
+  assertExactKeys(payload, allowedKeys, `${type} payload`);
   for (const key of keys) {
     if (!(key in payload)) throw new Error(`${type} payload is missing required field ${key}.`);
   }
@@ -5835,6 +5869,13 @@ function validateEventPayload(type: AidenRemoteEventType, payload: Record<string
     assertBoundedString(payload, "chatId", 128);
     assertBoundedString(payload, "turnId", 128);
     if (!Number.isSafeInteger(payload.nextSequence) || (payload.nextSequence as number) < 1) throw new Error("snapshot nextSequence must be positive.");
+    if (
+      "reason" in payload &&
+      (typeof payload.reason !== "string" ||
+        !(AIDEN_REMOTE_SNAPSHOT_REASONS as readonly string[]).includes(payload.reason))
+    ) {
+      throw new Error("snapshot reason is invalid.");
+    }
   } else if (type === "status") {
     const state = requiredString(payload, "state");
     if (!["queued", "running", "waiting_for_approval", "reconciling"].includes(state)) throw new Error("status state is invalid.");
@@ -6053,7 +6094,19 @@ export function assertOrderedAidenRemoteEvents(events: readonly AidenRemoteStrea
       throw new Error(`Aiden Remote stream ${event.streamId} contains an event after terminal state.`);
     }
     const previous = lastByStream.get(event.streamId) ?? 0;
-    if (event.sequence !== previous + 1) {
+    if (event.type === "snapshot" && event.payload.nextSequence !== event.sequence + 1) {
+      throw new Error(
+        `Aiden Remote stream ${event.streamId} snapshot nextSequence must equal sequence + 1.`,
+      );
+    }
+    // A reader-local retention gap snapshot (or a legacy reason-less snapshot)
+    // sits at earliest - 1 with nextSequence = earliest, jumping ahead of the
+    // lagging cursor; provider resets and every other event must stay contiguous.
+    const canJumpToRecoveryBoundary =
+      event.type === "snapshot" &&
+      event.payload.reason !== "reset" &&
+      event.sequence >= previous + 1;
+    if (!canJumpToRecoveryBoundary && event.sequence !== previous + 1) {
       throw new Error(
         `Aiden Remote stream ${event.streamId} expected sequence ${previous + 1}, received ${event.sequence}.`,
       );
@@ -8501,6 +8554,13 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     }
     continueInNewChat = parseContinueInNewChatFixture(value.continueInNewChat);
   }
+  let streamRecovery: AidenRemoteStreamRecoveryFixture | undefined;
+  if (value.streamRecovery !== undefined) {
+    if (contractRevision < AIDEN_REMOTE_STREAM_SNAPSHOT_REASONS_CONTRACT_REVISION) {
+      throw new Error(`Stream recovery fixtures require contract revision ${AIDEN_REMOTE_STREAM_SNAPSHOT_REASONS_CONTRACT_REVISION}.`);
+    }
+    streamRecovery = parseStreamRecoveryFixture(value.streamRecovery);
+  }
   let voiceInput: AidenRemoteVoiceInputFixture | undefined;
   if (value.voiceInput !== undefined) {
     if (contractRevision < AIDEN_REMOTE_VOICE_INPUT_CONTRACT_REVISION) {
@@ -8652,6 +8712,74 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     ...(stoppedSteps ? { stoppedSteps } : {}),
     ...(backgroundJobsChatSettled ? { backgroundJobsChatSettled } : {}),
     ...(continueInNewChat ? { continueInNewChat } : {}),
+    ...(streamRecovery ? { streamRecovery } : {}),
+  };
+}
+
+export interface AidenRemoteStreamRecoveryFixture {
+  capability: (typeof AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES)[number];
+  gapEvents: AidenRemoteStreamEvent[];
+  legacyGapSnapshot: AidenRemoteStreamEvent;
+  resetEvents: AidenRemoteStreamEvent[];
+}
+
+function parseStreamRecoveryFixture(value: unknown): AidenRemoteStreamRecoveryFixture {
+  const section = requiredFixtureRecord(value, "Stream recovery fixture", [
+    "capability",
+    "gapEvents",
+    "legacyGapSnapshot",
+    "resetEvents",
+  ]);
+  if (section.capability !== AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES[0]) {
+    throw new Error("Stream recovery fixture must name stream:snapshot-reasons.");
+  }
+  const parseSequence = (rawList: unknown, label: string): AidenRemoteStreamEvent[] => {
+    if (!Array.isArray(rawList) || rawList.length < 2) {
+      throw new Error(`${label} must be a non-empty event sequence.`);
+    }
+    const parsed = rawList.map((entry) => {
+      const event = parseAidenRemoteStreamEvent(entry);
+      if (!event) throw new Error(`${label} must contain known stream events.`);
+      return event;
+    });
+    assertOrderedAidenRemoteEvents(parsed);
+    return parsed;
+  };
+  const gapEvents = parseSequence(section.gapEvents, "Stream recovery gapEvents");
+  if (
+    gapEvents[0]?.type !== "snapshot" ||
+    gapEvents[0].payload.reason !== "gap" ||
+    gapEvents[0].sequence <= 1 ||
+    !gapEvents[gapEvents.length - 1]?.terminal
+  ) {
+    throw new Error("Stream recovery gapEvents must start with a lagging gap snapshot and end terminally.");
+  }
+  const legacyGapSnapshot = parseAidenRemoteStreamEvent(section.legacyGapSnapshot);
+  if (
+    !legacyGapSnapshot ||
+    legacyGapSnapshot.type !== "snapshot" ||
+    "reason" in legacyGapSnapshot.payload ||
+    legacyGapSnapshot.streamId !== gapEvents[0].streamId ||
+    legacyGapSnapshot.sequence !== gapEvents[0].sequence ||
+    legacyGapSnapshot.payload.nextSequence !== gapEvents[0].payload.nextSequence
+  ) {
+    throw new Error("Stream recovery legacyGapSnapshot must omit reason for the same boundary.");
+  }
+  const resetEvents = parseSequence(section.resetEvents, "Stream recovery resetEvents");
+  const resetSnapshot = resetEvents.find((event) => event.type === "snapshot");
+  if (
+    !resetSnapshot ||
+    resetSnapshot.payload.reason !== "reset" ||
+    resetEvents[0]?.sequence !== 1 ||
+    !resetEvents[resetEvents.length - 1]?.terminal
+  ) {
+    throw new Error("Stream recovery resetEvents must contain a contiguous provider reset snapshot and end terminally.");
+  }
+  return {
+    capability: AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES[0],
+    gapEvents,
+    legacyGapSnapshot,
+    resetEvents,
   };
 }
 

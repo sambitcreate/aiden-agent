@@ -36,11 +36,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
-import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenGroupOrientation
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
@@ -85,256 +83,61 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
     val cache = coordinator.workspaceCache
     val activeInstanceId = coordinator.activeInstanceId
 
-    var expanded by remember { mutableStateOf(setOf<String>()) }
-    var loadedFolders by remember { mutableStateOf(setOf<String>()) }
-    var cursors by remember { mutableStateOf(mapOf<String, String>()) }
-    var loadingFolders by remember { mutableStateOf(setOf<String>()) }
-    var requestRevision by remember { mutableIntStateOf(0) }
-    var openRevision by remember { mutableIntStateOf(0) }
-    var isEditing by remember { mutableStateOf(false) }
-    var fileIndex by remember { mutableStateOf<AidenWorkspaceFileIndex?>(null) }
-    var selectedFile by remember { mutableStateOf<AidenWorkspaceFileDocument?>(null) }
-    var draftContent by remember { mutableStateOf("") }
-    var originalContent by remember { mutableStateOf("") }
-    var isDirty by remember { mutableStateOf(false) }
-    var isOfflineIndex by remember { mutableStateOf(false) }
-    var isOfflineDocument by remember { mutableStateOf(false) }
+    val remote = remember(client) { client?.let(::AidenRemoteClientWorkspaceFiles) }
+    val connected = connectionState == AidenConnectionState.CONNECTED
+    val strings = remember(resources) {
+        AidenWorkspaceFilesStrings(
+            treeLimit = resources.getString(R.string.files_tree_limit),
+            openFailed = resources.getString(R.string.files_open_failed),
+            staleFolderRecovery = resources.getString(R.string.files_stale_folder_recovery),
+            staleFileRecovery = resources.getString(R.string.files_stale_file_recovery)
+        )
+    }
+    val controller = remember(workspaceId, cache) {
+        AidenWorkspaceFilesController(scope, workspaceId, cache, strings)
+    }
+    SideEffect {
+        controller.bind(activeInstanceId, remote, connected, strings)
+    }
+    val state by controller.state.collectAsStateWithLifecycle()
+    val expanded = state.expanded
+    val loadingFolders = state.loadingFolders
+    val cursors = state.cursors
+    val isEditing = state.isEditing
+    val fileIndex = state.fileIndex
+    val selectedFile = state.selectedFile
+    val draftContent = state.draftContent
+    val isDirty = state.isDirty
+    val isOfflineIndex = state.isOfflineIndex
+    val isOfflineDocument = state.isOfflineDocument
+    val isLoading = state.isLoading
+    val isSaving = state.isSaving
     var searchQuery by remember { mutableStateOf("") }
-    var isLoading by remember { mutableStateOf(false) }
-    var isSaving by remember { mutableStateOf(false) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
 
     // Dialog States
     var showDiscardConfirmDialog by remember { mutableStateOf(false) }
     // System back mirrors the toolbar: leave an open file first, confirming unsaved edits.
     BackHandler(enabled = selectedFile != null) {
-        if (isDirty) showDiscardConfirmDialog = true else selectedFile = null
+        if (isDirty) showDiscardConfirmDialog = true else controller.closeSelectedFile()
     }
-    var showConflictDialog by remember { mutableStateOf(false) }
-    fun availability() = AidenWorkspaceFileAvailability(
-        isOfflineIndex, isOfflineDocument, connectionState == AidenConnectionState.CONNECTED
-    )
+    fun availability() = state.availability
 
-    fun refreshFiles() {
-        if (client != null) {
-            if (isLoading) return
-            // Show the saved tree at once while the desktop answers. It stays read-only
-            // (its folder cursors may be stale) until the fresh index replaces it.
-            if (fileIndex == null && activeInstanceId != null) {
-                cache.load(activeInstanceId, workspaceId)?.let { snapshot ->
-                    fileIndex = snapshot.index
-                    isOfflineIndex = true
-                }
-            }
-            requestRevision += 1
-            val revision = requestRevision
-            isLoading = true
-            scope.launch {
-                try {
-                    val index = try { client.workspaceFilePage(workspaceId) }
-                    catch (error: AidenRemoteClientException.Server) {
-                        if (error.statusCode != 400 && error.statusCode != 404) throw error
-                        client.workspaceFiles(workspaceId)
-                    }
-                    if (revision != requestRevision) return@launch
-                    expanded = emptySet()
-                    loadedFolders = setOf("")
-                    loadingFolders = emptySet()
-                    cursors = index.nextCursor?.let { mapOf("" to it) } ?: emptyMap()
-                    fileIndex = index
-                    isOfflineIndex = false
-                    if (activeInstanceId != null) {
-                        cache.store(index, activeInstanceId, workspaceId)
-                    }
-                } catch (error: Exception) {
-                    if (error is kotlinx.coroutines.CancellationException) throw error
-                    if (revision != requestRevision) return@launch
-                    errorMessage = error.localizedMessage
-                    // Try cache
-                    if (activeInstanceId != null) {
-                        val snapshot = cache.load(activeInstanceId, workspaceId)
-                        if (snapshot != null) {
-                            fileIndex = snapshot.index
-                            isOfflineIndex = true
-                        }
-                    }
-                } finally {
-                    if (revision == requestRevision) isLoading = false
-                }
-            }
-        } else if (activeInstanceId != null) {
-            val snapshot = cache.load(activeInstanceId, workspaceId)
-            if (snapshot != null) {
-                fileIndex = snapshot.index
-                isOfflineIndex = true
-            }
-            isLoading = false
+    LaunchedEffect(remote, connected, workspaceId, activeInstanceId) {
+        controller.bind(activeInstanceId, remote, connected, strings)
+        if (state.fileIndex == null || (connected && state.isOfflineIndex)) {
+            controller.refreshFiles()
         }
     }
 
-    fun loadPage(directory: AidenWorkspaceFileEntry?) {
-        val directoryPath = directory?.displayPath ?: ""
-        if (client == null || !availability().canLoadPage || isLoading || directoryPath in loadingFolders) return
-        val revision = requestRevision
-        loadingFolders = loadingFolders + directoryPath
-        scope.launch {
-            try {
-                val page = client.workspaceFilePage(workspaceId, directory?.id, cursors[directoryPath])
-                if (revision != requestRevision) return@launch
-                val previous = fileIndex ?: return@launch
-                val paths = previous.entries.map { it.displayPath }.toSet()
-                val entries = previous.entries + page.entries.filter { it.displayPath !in paths }
-                if (entries.size > 4_000) {
-                    errorMessage = resources.getString(R.string.files_tree_limit)
-                    return@launch
-                }
-                fileIndex = previous.copy(entries = entries, truncated = previous.truncated || page.truncated)
-                cursors = cursors - directoryPath + (page.nextCursor?.let { mapOf(directoryPath to it) } ?: emptyMap())
-                loadedFolders = loadedFolders + directoryPath
-                if (activeInstanceId != null) fileIndex?.let { cache.store(it, activeInstanceId, workspaceId) }
-            } catch (error: Exception) {
-                if (error is kotlinx.coroutines.CancellationException) throw error
-                if (revision == requestRevision) {
-                    expanded = expanded - directoryPath
-                    errorMessage = error.localizedMessage
-                }
-            } finally {
-                if (revision == requestRevision) loadingFolders = loadingFolders - directoryPath
-            }
-        }
-    }
-
-    LaunchedEffect(client, workspaceId) {
-        refreshFiles()
-    }
-
-    LaunchedEffect(initialReference, client) {
+    LaunchedEffect(initialReference, remote, connected) {
         if (initialReference != null) {
-            openRevision += 1
-            val revision = openRevision
-            var online = false
-            val document = try {
-                client?.workspaceLinkedFile(workspaceId, initialReference)?.also {
-                    if (revision == openRevision && activeInstanceId != null) cache.store(it, activeInstanceId, workspaceId)
-                    online = true
-                }
-            } catch (error: Exception) {
-                if (error is kotlinx.coroutines.CancellationException) throw error
-                null
-            } ?: activeInstanceId?.let { cache.document(initialReference, it, workspaceId) }
-            if (revision != openRevision) return@LaunchedEffect
-            if (document != null) {
-                selectedFile = document
-                originalContent = document.content
-                draftContent = document.content
-                isEditing = false
-                isOfflineDocument = !online
-            } else {
-                errorMessage = resources.getString(R.string.files_open_failed)
-            }
+            controller.bind(activeInstanceId, remote, connected, strings)
+            controller.openLinkedReference(initialReference)
         }
     }
 
     val filteredEntries = remember(fileIndex, searchQuery, expanded) {
         AidenWorkspaceFileTree.visible(fileIndex?.entries ?: emptyList(), expanded, searchQuery)
-    }
-
-    fun saveDocument(doc: AidenWorkspaceFileDocument) {
-        if (client == null || isSaving || !availability().canEditDocument) return
-        isSaving = true
-        scope.launch {
-            try {
-                val updated = client.writeWorkspaceFile(
-                    workspaceId = workspaceId,
-                    fileId = doc.id,
-                    displayPath = doc.displayPath,
-                    content = draftContent,
-                    expectedVersion = doc.version
-                )
-                selectedFile = updated
-                // Lazy saves rotate the file handle; keep the tree bound to it.
-                fileIndex?.let { current ->
-                    val rebound = AidenWorkspaceFileTree.rebind(current, doc.id, updated.id)
-                    if (rebound !== current) {
-                        fileIndex = rebound
-                        if (activeInstanceId != null) cache.store(rebound, activeInstanceId, workspaceId)
-                    }
-                }
-                originalContent = updated.content
-                draftContent = updated.content
-                isDirty = false
-                if (activeInstanceId != null) {
-                    cache.store(updated, activeInstanceId, workspaceId)
-                }
-            } catch (e: AidenRemoteClientException.Server) {
-                if (e.statusCode == 409) {
-                    showConflictDialog = true
-                } else {
-                    errorMessage = e.message
-                }
-            } catch (e: Exception) {
-                errorMessage = e.localizedMessage
-            } finally {
-                isSaving = false
-            }
-        }
-    }
-
-    fun openEntry(entry: AidenWorkspaceFileEntry) {
-        if (entry.kind == AidenWorkspaceFileKind.DIRECTORY) {
-            if (entry.displayPath in expanded) expanded = expanded - entry.displayPath
-            else {
-                expanded = expanded + entry.displayPath
-                if (entry.displayPath !in loadedFolders && fileIndex?.directoryPath != null) loadPage(entry)
-            }
-        }
-        if (entry.kind == AidenWorkspaceFileKind.FILE) {
-            openRevision += 1
-            val revision = openRevision
-            scope.launch {
-                if (client != null) {
-                    try {
-                        val fetchedDoc = client.workspaceFile(workspaceId, entry.id)
-                        if (revision != openRevision) return@launch
-                        isEditing = false
-                        isOfflineDocument = false
-                        selectedFile = fetchedDoc
-                        originalContent = fetchedDoc.content
-                        draftContent = fetchedDoc.content
-                        isDirty = false
-                        if (activeInstanceId != null) {
-                            cache.store(fetchedDoc, activeInstanceId, workspaceId)
-                        }
-                    } catch (error: Exception) {
-                        if (error is kotlinx.coroutines.CancellationException) throw error
-                        if (revision != openRevision) return@launch
-                        errorMessage = error.localizedMessage
-                        // Try load from cache
-                        if (activeInstanceId != null) {
-                            val cachedDoc = cache.load(activeInstanceId, workspaceId)?.documents?.get(entry.id)
-                            if (cachedDoc != null) {
-                                isOfflineDocument = true
-                                isEditing = false
-                                selectedFile = cachedDoc
-                                originalContent = cachedDoc.content
-                                draftContent = cachedDoc.content
-                                isDirty = false
-                            }
-                        }
-                    }
-                } else if (activeInstanceId != null) {
-                    isEditing = false
-                    val cachedDoc = cache.load(activeInstanceId, workspaceId)?.documents?.get(entry.id)
-                    if (cachedDoc != null) {
-                        isOfflineDocument = true
-                        selectedFile = cachedDoc
-                        originalContent = cachedDoc.content
-                        draftContent = cachedDoc.content
-                        isDirty = false
-                    }
-                }
-            }
-        }
     }
 
     Scaffold(
@@ -365,7 +168,7 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                                 if (isDirty) {
                                     showDiscardConfirmDialog = true
                                 } else {
-                                    selectedFile = null
+                                    controller.closeSelectedFile()
                                 }
                             } else {
                                 onNavigateBack()
@@ -381,7 +184,7 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                         if (!isEditing) {
                             AidenTonalButton(
                                 text = stringResource(R.string.action_edit),
-                                onClick = { isEditing = true },
+                                onClick = { controller.setEditing(true) },
                                 enabled = availability().canEditDocument && client != null,
                                 contentPadding = PaddingValues(horizontal = 16.dp),
                                 modifier = Modifier.padding(end = 8.dp)
@@ -392,12 +195,12 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                                 saving = isSaving,
                                 saveEnabled = !isSaving && availability().canEditDocument,
                                 onDiscard = { showDiscardConfirmDialog = true },
-                                onSave = { saveDocument(doc) },
+                                onSave = { controller.saveDocument() },
                                 modifier = Modifier.padding(end = 8.dp)
                             )
                         }
                     } else {
-                        IconButton(onClick = { refreshFiles() }) {
+                        IconButton(onClick = { controller.refreshFiles() }) {
                             Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.action_refresh), tint = palette.foreground)
                         }
                     }
@@ -506,10 +309,7 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                 ) {
                     BasicTextField(
                         value = draftContent,
-                        onValueChange = {
-                            draftContent = it
-                            isDirty = (it != originalContent)
-                        },
+                        onValueChange = { controller.updateDraft(it) },
                         textStyle = TextStyle(
                             fontFamily = FontFamily.Monospace,
                             fontSize = 13.sp,
@@ -575,7 +375,7 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                     cursors.forEach { (path, _) ->
                         if (path.isEmpty() || path in expanded) {
                             item(key = "page:$path") {
-                                TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { loadPage(fileIndex?.entries?.firstOrNull { it.displayPath == path }) },
+                                TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { controller.loadPage(fileIndex?.entries?.firstOrNull { it.displayPath == path }) },
                                     enabled = path !in loadingFolders && availability().canLoadPage && !isLoading) {
                                     Text(if (path.isEmpty()) stringResource(R.string.files_load_more) else stringResource(R.string.files_load_more_in, path))
                                 }
@@ -589,7 +389,7 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                             count = filteredEntries.size,
                             expanded = entry.displayPath in expanded,
                             enabled = entry.kind != AidenWorkspaceFileKind.SYMLINK && entry.displayPath !in loadingFolders,
-                            onClick = { openEntry(entry) }
+                            onClick = { controller.openEntry(entry) }
                         )
                     }
                 }
@@ -607,9 +407,7 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
             destructive = true,
             onConfirm = {
                 showDiscardConfirmDialog = false
-                draftContent = originalContent
-                isDirty = false
-                selectedFile = null
+                controller.closeSelectedFile(discardChanges = true)
             }
         ) {
             Text(stringResource(R.string.files_discard_body))
@@ -617,28 +415,29 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
     }
 
     // 409 Conflict Dialog
-    if (showConflictDialog && selectedFile != null) {
-        val doc = selectedFile!!
+    if (state.showConflictDialog && selectedFile != null) {
         AidenWorkspaceAlertDialog(
             title = stringResource(R.string.files_conflict_title),
-            onDismissRequest = { showConflictDialog = false },
+            onDismissRequest = { controller.dismissConflictDialog() },
             confirmText = stringResource(R.string.files_conflict_reload),
-            onConfirm = {
-                showConflictDialog = false
-                scope.launch {
-                    if (client != null) {
-                        try {
-                            val reloaded = client.workspaceFile(workspaceId, doc.id)
-                            selectedFile = reloaded
-                            originalContent = reloaded.content
-                            draftContent = reloaded.content
-                            isDirty = false
-                        } catch (_: Exception) {}
-                    }
-                }
-            }
+            onConfirm = { controller.reloadSelectedFile() }
         ) {
             Text(stringResource(R.string.files_conflict_body))
+        }
+    }
+
+    // Error / Stale-Handle Recovery Dialog
+    state.errorMessage?.let { message ->
+        if (!showDiscardConfirmDialog && !state.showConflictDialog) {
+            AidenWorkspaceAlertDialog(
+                title = stringResource(R.string.files_title),
+                onDismissRequest = { controller.dismissError() },
+                confirmText = null,
+                onConfirm = {},
+                dismissText = stringResource(R.string.action_ok)
+            ) {
+                Text(message)
+            }
         }
     }
 }

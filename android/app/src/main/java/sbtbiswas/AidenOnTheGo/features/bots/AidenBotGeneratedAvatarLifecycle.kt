@@ -21,6 +21,7 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -150,7 +151,8 @@ object AidenBotGeneratedAvatarNormalizer {
 class AidenBotGeneratedAvatarModel(
     private val coordinator: AidenRemoteCoordinator,
     private val botId: String? = null,
-    private val botCache: AidenBotCache? = null
+    private val botCache: AidenBotCache? = null,
+    private val normalize: (ByteArray) -> ByteArray = AidenBotGeneratedAvatarNormalizer::normalize
 ) {
     private val _phase = MutableStateFlow(AidenBotGeneratedAvatarPhase.IDLE)
     val phase: StateFlow<AidenBotGeneratedAvatarPhase> = _phase.asStateFlow()
@@ -163,49 +165,103 @@ class AidenBotGeneratedAvatarModel(
     val hasCandidate: Boolean
         get() = currentCandidateData != null
 
-    fun setCandidate(data: ByteArray) {
-        try {
-            _phase.value = AidenBotGeneratedAvatarPhase.NORMALIZING
-            val normalized = AidenBotGeneratedAvatarNormalizer.normalize(data)
-            currentCandidateData = normalized
-            _phase.value = AidenBotGeneratedAvatarPhase.READY
-            _errorMessage.value = null
-        } catch (e: AidenBotGeneratedAvatarError) {
-            _phase.value = AidenBotGeneratedAvatarPhase.FAILED
-            _errorMessage.value = e.messageText
-        } catch (e: Exception) {
-            _phase.value = AidenBotGeneratedAvatarPhase.FAILED
-            _errorMessage.value = "Failed to process image"
-        }
+    @Volatile private var selection = 0L
+
+    private data class CommittedAvatar(val botId: String, val replaced: String, val assetRevision: String)
+
+    /** The last photo the Mac took, kept until a refreshed Bot that carries it is seen. */
+    @Volatile private var committed: CommittedAvatar? = null
+
+    /**
+     * The If-Match for the next avatar change. A photo the Mac took whose Bot could not be re-read
+     * still moved the avatar revision on, so a page holding the older Bot sends the committed one.
+     */
+    fun expectedAvatarRevision(bot: AidenBotDetail): String {
+        val known = aidenBotAvatarExpectedRevision(bot)
+        val last = committed ?: return known
+        return if (last.botId == bot.id && last.replaced == known) last.assetRevision else known
     }
 
-    fun ingestCopiedCandidate(bytes: ByteArray) = setCandidate(bytes)
+    /**
+     * Decodes and re-encodes off the main thread; a large source can take hundreds of milliseconds.
+     * Call it from one thread (the main thread). A later call supersedes an earlier one that is
+     * still normalizing: the earlier call then changes nothing and returns false, so its caller
+     * must not upload. Returns true when this call's candidate is the current one. An upload that
+     * a later call overtakes still finishes on the Mac, but leaves the later candidate's state alone.
+     */
+    suspend fun setCandidate(data: ByteArray): Boolean {
+        val mine = ++selection
+        _phase.value = AidenBotGeneratedAvatarPhase.NORMALIZING
+        val result = try {
+            Result.success(withContext(Dispatchers.Default) { normalize(data) })
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+        if (mine != selection) return false
+        result.fold(
+            onSuccess = { normalized ->
+                currentCandidateData = normalized
+                _phase.value = AidenBotGeneratedAvatarPhase.READY
+                _errorMessage.value = null
+            },
+            onFailure = { e ->
+                _phase.value = AidenBotGeneratedAvatarPhase.FAILED
+                _errorMessage.value = (e as? AidenBotGeneratedAvatarError)?.messageText ?: "Failed to process image"
+            }
+        )
+        return result.isSuccess
+    }
+
+    suspend fun ingestCopiedCandidate(bytes: ByteArray) = setCandidate(bytes)
 
     suspend fun uploadAvatar(
         botId: String,
         revision: String,
         onSuccess: (AidenBotDetail) -> Unit
-    ) = withContext(Dispatchers.IO) {
-        val data = currentCandidateData ?: return@withContext
-        val client = coordinator.client.value ?: run {
-            _phase.value = AidenBotGeneratedAvatarPhase.FAILED
-            _errorMessage.value = AidenBotGeneratedAvatarError.Unavailable.messageText
-            return@withContext
-        }
+    ) {
+        val mine = selection
+        val data = currentCandidateData ?: return
+        withContext(Dispatchers.IO) {
+            val client = coordinator.client.value ?: run {
+                _phase.value = AidenBotGeneratedAvatarPhase.FAILED
+                _errorMessage.value = AidenBotGeneratedAvatarError.Unavailable.messageText
+                return@withContext
+            }
 
-        _phase.value = AidenBotGeneratedAvatarPhase.UPLOADING
-        try {
-            val base64Data = Base64.getEncoder().encodeToString(data)
-            val upload = AidenBotAvatarUpload(data = base64Data)
-            val asset = client.putBotAvatar(botId, revision, upload)
-            botCache?.putAvatar(botId, asset.assetRevision, data)
-            val updatedBot = client.bot(botId)
-            _phase.value = AidenBotGeneratedAvatarPhase.IDLE
-            currentCandidateData = null
-            onSuccess(updatedBot)
-        } catch (e: Exception) {
-            _phase.value = AidenBotGeneratedAvatarPhase.FAILED
-            _errorMessage.value = e.message ?: "Avatar upload failed"
+            _phase.value = AidenBotGeneratedAvatarPhase.UPLOADING
+            try {
+                val base64Data = Base64.getEncoder().encodeToString(data)
+                val upload = AidenBotAvatarUpload(data = base64Data)
+                val asset = client.putBotAvatar(botId, revision, upload)
+                committed = CommittedAvatar(botId, revision, asset.assetRevision)
+                botCache?.putAvatar(botId, asset.assetRevision, data)
+                // A pick made during the upload owns the phase and the candidate now.
+                if (mine == selection) {
+                    _phase.value = AidenBotGeneratedAvatarPhase.IDLE
+                    currentCandidateData = null
+                }
+                // The Mac took this photo even if re-reading the Bot fails; the next change then
+                // matches against the committed revision through expectedAvatarRevision.
+                val updatedBot = try {
+                    client.bot(botId)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    null
+                }
+                if (updatedBot != null) {
+                    onSuccess(updatedBot)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (mine == selection) {
+                    _phase.value = AidenBotGeneratedAvatarPhase.FAILED
+                    _errorMessage.value = e.message ?: "Avatar upload failed"
+                }
+            }
         }
     }
 

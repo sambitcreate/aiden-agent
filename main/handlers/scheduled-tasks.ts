@@ -62,9 +62,6 @@ export function registerScheduledTaskHandlers(): void {
       await revisionFor(requiredString(id, "id"), updatedAt),
     ),
   );
-  ipcMain.handle("schedule:runs", (_event, id: unknown) =>
-    scheduledTaskApplicationService.runs(requiredString(id, "id")),
-  );
   ipcMain.handle("schedule:preview", (_event, cron: unknown, timezone: unknown, count: unknown) =>
     scheduledTaskApplicationService.preview(
       requiredString(cron, "cron"),

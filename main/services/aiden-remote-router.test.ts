@@ -24,9 +24,11 @@ import {
   parseAidenRemoteBackgroundJobs,
   parseAidenRemoteChatNewWorktreeResponse,
   parseAidenRemoteBotCreateRequest,
+  parseAidenRemoteStreamEvent,
   type AidenRemoteCapability,
   type AidenRemoteStreamInputResult,
 } from "./aiden-remote-protocol.js";
+import { AidenRemoteStreamService } from "./aiden-remote-streams.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import { AidenOperationNotExecutedError } from "./aiden-remote-operation-contract.js";
 import type { BackgroundJobView } from "../../renderer/shared/background-jobs.js";
@@ -133,6 +135,7 @@ async function fixture(options: {
   newWorktrees?: boolean;
   /** With `forks`: the host can continue a chat whose folder is gone in a new chat (revision 64). */
   continueInNewChat?: boolean;
+  streamsOverride?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["streams"];
 } = {}) {
   const logs: unknown[] = [];
   const calls: string[] = [];
@@ -304,7 +307,8 @@ async function fixture(options: {
               capability !== "bot:settings-changes" &&
               capability !== "bot:suggestions" &&
               capability !== "bot:templates" &&
-              capability !== "chat:continue-in-new-chat",
+              capability !== "chat:continue-in-new-chat" &&
+              capability !== "stream:snapshot-reasons",
           )
         ) {
           return null;
@@ -747,7 +751,9 @@ async function fixture(options: {
     ...(options.botSessions ? { botSessions: options.botSessions } : {}),
     ...(options.botAllowed ? { botAllowed: options.botAllowed } : {}),
     ...(options.approvalSettings ? { approvalSettings: options.approvalSettings } : {}),
-    ...(options.streamsAvailable === false ? {} : { streams: {
+    ...(options.streamsOverride
+      ? { streams: options.streamsOverride }
+      : options.streamsAvailable === false ? {} : { streams: {
       streamChatId: () => "chat-1",
       status: (_deviceId, streamId) => ({
         streamId,
@@ -1994,6 +2000,7 @@ test("progress support is advertised and upgraded only when the Mac can serve it
       "schedule:cards",
       "approval:cards",
       "attachments:raw",
+      "stream:snapshot-reasons",
       "skills:invoke",
     ]);
     assert.equal(server.features.includes("chat-tasks-v1"), false);
@@ -7487,4 +7494,88 @@ test("revision 61 templates: holders read versions, name the version on create, 
   }
   assert.deepEqual(created.map((args) => args[3]), [{ templates: true }, { templates: false }]);
   assert.deepEqual(introduced, ["bot-1"], "only a holder's one-field Bot introduces itself, once");
+});
+
+test("revision 65 advertises stream:snapshot-reasons only when streams are wired and gates snapshot reason on the negotiated device capability", async () => {
+  const unwired = await fixture({
+    capabilities: ["server:read", "chat:read"],
+    acceptsProgressCapabilities: true,
+    streamsAvailable: false,
+  });
+  try {
+    const server = await (await fetch(`${unwired.base}/server`, { headers: REV61_HEADERS })).json();
+    assert.equal(server.serverCapabilities.includes("stream:snapshot-reasons"), false);
+    const upgrade = await fetch(`${unwired.base}/device/capabilities`, {
+      method: "POST",
+      headers: REV61_HEADERS,
+      body: JSON.stringify({ accepts: ["stream:snapshot-reasons"] }),
+    });
+    assert.equal(upgrade.status, 404);
+  } finally {
+    await unwired.close();
+  }
+
+  const streamService = new AidenRemoteStreamService({
+    now: () => 1_000,
+    cancel: () => true,
+    approve: () => true,
+  });
+  const owner = streamService.create("device-authorized-12345678", "stream-gap", "chat-1", "turn-gap");
+  for (let index = 0; index < 2_052; index++) {
+    owner.owner.send("chat:delta", { delta: `t${index}` });
+    owner.owner.send("chat:reasoning-delta", { delta: `r${index}` });
+  }
+  owner.owner.send("chat:delta", { reset: true, delta: "replacement" });
+  owner.owner.send("chat:done", { chat: { messages: [{ id: "assistant-1", role: "assistant" }] } });
+
+  const app = await fixture({
+    capabilities: ["server:read", "chat:read"],
+    acceptsProgressCapabilities: true,
+  });
+  try {
+    const server = await (await fetch(`${app.base}/server`, { headers: REV61_HEADERS })).json();
+    assert.equal(server.serverCapabilities.includes("stream:snapshot-reasons"), true);
+    const upgrade = await fetch(`${app.base}/device/capabilities`, {
+      method: "POST",
+      headers: REV61_HEADERS,
+      body: JSON.stringify({ accepts: ["stream:snapshot-reasons"] }),
+    });
+    assert.equal(upgrade.status, 200);
+    const upgradedBody = await upgrade.json();
+    assert.equal(upgradedBody.capabilities.includes("stream:snapshot-reasons"), true);
+  } finally {
+    await app.close();
+  }
+
+  // Verify end-to-end HTTP SSE framing with a real AidenRemoteStreamService for both legacy and upgraded devices.
+  for (const negotiated of [false, true] as const) {
+    const serverApp = await fixture({
+      capabilities: negotiated
+        ? ["server:read", "chat:read", "stream:snapshot-reasons"]
+        : ["server:read", "chat:read"],
+      streamsOverride: streamService,
+    });
+    try {
+      const response = await fetch(`${serverApp.base}/streams/stream-gap/events?after=1`, { headers: REV61_HEADERS });
+      assert.equal(response.status, 200);
+      const body = await response.text();
+      const events = body
+        .split("\n\n")
+        .filter((chunk) => chunk.startsWith("id: "))
+        .map((chunk) => parseAidenRemoteStreamEvent(JSON.parse(/^data: (.*)$/mu.exec(chunk)![1]!)))
+        .filter((event): event is NonNullable<typeof event> => event !== null);
+      const snapshots = events.filter((event) => event.type === "snapshot");
+      assert.equal(snapshots.length, 2, "synthetic gap snapshot + retained provider reset snapshot");
+      if (negotiated) {
+        assert.equal(snapshots[0]!.payload.reason, "gap");
+        assert.equal(snapshots[1]!.payload.reason, "reset");
+      } else {
+        assert.equal("reason" in snapshots[0]!.payload, false);
+        assert.equal("reason" in snapshots[1]!.payload, false);
+      }
+      assert.equal(events[events.length - 1]!.type, "done");
+    } finally {
+      await serverApp.close();
+    }
+  }
 });

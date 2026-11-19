@@ -1,6 +1,6 @@
 /**
- * Web Search in the terminal: reuses Aiden's WebSearchService core
- * (main/services/web-search.ts) with device-local CLI settings. Routing
+ * Web Search for server chats: reuses Aiden's WebSearchService core
+ * (main/services/web-search.ts) with the server's `web-search.json`. Routing
  * defaults to the desktop's fresh-install shape (anonymous Exa); additional
  * providers activate when their API key is present in the environment
  * (e.g. EXA_API_KEY, BRAVE_API_KEY).
@@ -13,7 +13,6 @@ import type { AppSettings } from "../../../../main/services/types.js";
 import { aidenExtensionToInlineFactory } from "../pi-bridge/adapt-aiden-extension.ts";
 import { readJson } from "../state.ts";
 import { join } from "node:path";
-import { readAidenSettings } from "./aiden-settings.ts";
 
 export async function createWebSearchInlineExtension(options: {
 	agentDir: string;
@@ -30,9 +29,7 @@ export async function createWebSearchInlineExtension(options: {
 export function createCliWebSearch(agentDir: string) {
 	return new WebSearchService({
 		getSettings: async (): Promise<AppSettings> => {
-			const settings = readAidenSettings(agentDir);
-			const override = (settings as { webSearch?: AppSettings["webSearch"] }).webSearch;
-			return { webSearch: normalizeWebSearchSettings(readJson(join(agentDir, "web-search.json"), override ?? defaultWebSearchSettings())) };
+			return { webSearch: normalizeWebSearchSettings(readJson(join(agentDir, "web-search.json"), defaultWebSearchSettings())) };
 		},
 		getCredential: async (providerId) => {
 			const envName = `${providerId.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_API_KEY`;

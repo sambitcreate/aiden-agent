@@ -41,14 +41,18 @@ test("bundle entry is executable and lazy loaders are emitted beside the shared 
 	}
 });
 
-test("pi's built-in dark and light themes ship where its session export looks for them", () => {
-	const piThemeDir = join(pkgDir, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "modes", "interactive", "theme");
-	for (const name of ["dark", "light"]) {
-		const bundled = JSON.parse(readFileSync(join(appDir, "src", "modes", "interactive", "theme", `${name}.json`), "utf-8"));
-		assert.equal(bundled.name, name);
-		assert.deepEqual(bundled, JSON.parse(readFileSync(join(piThemeDir, `${name}.json`), "utf-8")));
+test("the bundle ships no part of Pi's interactive, print or RPC CLI", () => {
+	// Aiden is serve-only. Pi's extension virtual-module map is stubbed at build
+	// time because its namespace imports retained these modes.
+	const js = readdirSync(appDir, { recursive: true })
+		.filter((name) => name.endsWith(".js"))
+		.map((name) => readFileSync(join(appDir, name), "utf-8"));
+	assert.ok(js.length > 0);
+	for (const marker of ["class _InteractiveMode", "function runPrintMode(", "function runRpcMode(", "var RpcClient"]) {
+		assert.equal(js.some((source) => source.includes(marker)), false, `bundle contains ${marker}`);
 	}
-	// Aiden has no terminal UI: no extra presets ship beside the bundle.
+	// Nor Pi's terminal themes or HTML export templates.
+	assert.equal(existsSync(join(appDir, "src")), false);
 	assert.equal(existsSync(join(appDir, "themes")), false);
 });
 

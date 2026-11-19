@@ -15,11 +15,6 @@ enum AppConfig {
         return ["1", "true", "yes"].contains(string.lowercased())
     }
 
-    static var appGroupIdentifier: String {
-        Bundle.main.object(forInfoDictionaryKey: "AidenAppGroupIdentifier") as? String
-            ?? "group.sbtbiswas.AidenOnTheGo"
-    }
-
     static let privacyPolicyURL = URL(staticString: "https://chatwithaiden.com/privacy")
     static let supportURL = URL(staticString: "https://chatwithaiden.com/")
 }

@@ -115,18 +115,6 @@ interface ThemePreset {
 const HEX_COLOR = /^#[0-9a-f]{6}$/i;
 const APPEARANCE_VERSION = 1 as const;
 
-export const UI_FONT_OPTIONS: ReadonlyArray<{ id: UiFontId; label: string; preview: string }> = [
-  { id: "system", label: "System", preview: "-apple-system, BlinkMacSystemFont, system-ui" },
-  { id: "rounded", label: "Rounded", preview: "SF Pro Rounded" },
-  { id: "humanist", label: "Humanist", preview: "Avenir Next" },
-];
-
-export const CODE_FONT_OPTIONS: ReadonlyArray<{ id: CodeFontId; label: string; preview: string }> = [
-  { id: "sf-mono", label: "SF Mono", preview: "ui-monospace, SFMono-Regular" },
-  { id: "menlo", label: "Menlo", preview: "Menlo, Monaco" },
-  { id: "monaco", label: "Monaco", preview: "Monaco, Menlo" },
-];
-
 /**
  * Chat column widths. `maxWidth` feeds `--chat-content-max-width`, which the
  * transcript, pending approvals, and composer all share so they stay aligned.
@@ -1250,8 +1238,4 @@ export function themeVariantSafetyIssues(
     issues.push(`${label} accent cannot provide readable control text.`);
   }
   return issues;
-}
-
-export function isHexColor(value: string): boolean {
-  return HEX_COLOR.test(value);
 }

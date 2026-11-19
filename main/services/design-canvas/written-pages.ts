@@ -22,9 +22,6 @@ import {
 import { resolveDesignFile } from "./resolve-core.js";
 import type { DesignCanvasStore } from "./store.js";
 
-/** A page frame's box and design width when it first lands with no width hint; the canvas's File… item uses the same. */
-export const WRITTEN_PAGE_BOX = defaultFileBox(DESIGN_DEFAULT_FILE_WIDTH);
-
 /** How much of a written page is read for a width hint. */
 export const DESIGN_WIDTH_HINT_BYTES = 16 * 1024;
 

@@ -8,8 +8,6 @@ import { BOT_ROUTINE_EVENT_LIMITS } from "../../../renderer/shared/bot-routine-t
 import { BOT_WEBHOOK_LIMITS, type BotEventRoutineStore } from "./store.js";
 import type { BotRoutineEventDispatcher } from "./dispatcher.js";
 
-export const BOT_WEBHOOK_PATH_PREFIX = "/hooks/bot-routines/";
-
 export interface BotWebhookRequest {
   token: string;
   contentType?: string;

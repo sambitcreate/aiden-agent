@@ -120,5 +120,3 @@ export function createModelPhoneScene(asset: Group, texture: Texture, initial: P
     },
   };
 }
-
-export type ModelPhoneScene = ReturnType<typeof createModelPhoneScene>;

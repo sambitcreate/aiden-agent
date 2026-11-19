@@ -264,6 +264,7 @@ export function TtsSettingsView({
           description="Only the selected response is sent to Google when you press the speaker."
         >
           <Switch
+            aria-label="Read aloud"
             checked={settings.enabled}
             disabled={saving}
             onCheckedChange={(checked) => onPatch({ enabled: checked })}
@@ -464,6 +465,7 @@ export function TtsSettingsView({
           description="Speak short inline names, commands, and flags literally."
         >
           <Switch
+            aria-label="Read inline code"
             checked={settings.reading.inlineCode}
             disabled={saving}
             onCheckedChange={(checked) =>
@@ -476,6 +478,7 @@ export function TtsSettingsView({
           description="Off by default; skipped blocks are announced next to the speaker action."
         >
           <Switch
+            aria-label="Read fenced code blocks"
             checked={settings.reading.fencedCode}
             disabled={saving}
             onCheckedChange={(checked) =>

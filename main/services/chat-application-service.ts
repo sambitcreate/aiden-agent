@@ -250,7 +250,7 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         throw new Error(appendReconciliationFailureMessage("blocked"));
       }
       if (input.workspaceId === ASSISTANT_WORKSPACE_ID) {
-        throw new Error("Aiden Assistant chats require the Assistant chat creation path.");
+        throw new Error("Ordinary chat creation cannot create Aiden Assistant chats.");
       }
       const mutationAdmission = deps.workspaceMutationGate.admit(input.workspaceId);
       let workspaceOperation:

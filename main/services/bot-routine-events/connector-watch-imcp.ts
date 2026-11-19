@@ -9,15 +9,6 @@ export type ImcpWatch =
 
 export type ImcpWatchTool = "mail_mailboxes_list" | "mail_messages_search" | "calendars_list" | "events_fetch";
 
-/** An adapter revision identifies understood contracts, not a claim about an installed server. */
-export const IMCP_WATCH_ADAPTER = Object.freeze({
-  revision: "imcp-watch-v1",
-  sourceRevision: "ec7bef349e032574aecc8660ca427ba9489e8cc1",
-  ontologyRevision: "7e3937c46057ec9afcfb347da2241033d311bd34",
-  platform: "darwin",
-  tools: Object.freeze(["mail_mailboxes_list", "mail_messages_search", "calendars_list", "events_fetch"] as const),
-});
-
 export interface ConnectorWatchItem {
   /** Mail ID, or the unambiguous tuple [event ID, absolute occurrence start]. */
   id: string;

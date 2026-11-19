@@ -65,6 +65,60 @@ test("the request id names the Bot, chat, thread and message", () => {
     "tg:bot:a:42:9:1001",
   );
   assert.equal(telegramBotRequestId({ botId: "bot:a", chatId: 42, messageId: 1001 }), "tg:bot:a:42:0:1001");
+  assert.equal(
+    telegramBotRequestId({ botId: "bot:a", chatId: 42, threadId: 9, callbackQueryId: "cbq-77" }),
+    "tg:bot:a:42:9:cbq:cbq-77",
+  );
+  assert.throws(() => telegramBotRequestId({ botId: "bot:a", chatId: 42, messageId: 0 }), /positive messageId or callbackQueryId/u);
+});
+
+test("busy follow-up mode and callback-query identities are forwarded and recovered across unrecorded outbox failures", async () => {
+  const dir = tempDir();
+  const file = path.join(dir, "outbox.json");
+  const receivedInputs: Array<{ text: string; requestId: string; whenBusy?: string }> = [];
+  const delivered: TelegramBotReply[] = [];
+  const ingress = createTelegramBotIngress({
+    file,
+    session: {
+      send: async (_botId, input) => {
+        receivedInputs.push({
+          text: input.text,
+          requestId: input.requestId,
+          ...(input.whenBusy !== undefined ? { whenBusy: input.whenBusy } : {}),
+        });
+        return { submissionId: "901", deduped: receivedInputs.length > 1 };
+      },
+      awaitReply: async () => ({ kind: "completed", text: "Callback reply." }),
+    },
+    deliver: async (reply) => void delivered.push(reply),
+  });
+  const callbackMessage = {
+    botId: "bot:a",
+    chatId: 7,
+    threadId: 3,
+    callbackQueryId: "query-abc",
+    messageId: 44,
+    ownerUserId: 7,
+    text: "Ship it",
+    whenBusy: "followUp" as const,
+  };
+  try {
+    assert.deepEqual(await ingress.rows(), []);
+    mkdirSync(file);
+    await assert.rejects(ingress.admit(callbackMessage), { name: "BotReplyAdmittedUnrecordedError" });
+    rmSync(file, { recursive: true, force: true });
+
+    const replayed = await ingress.admit(callbackMessage);
+    assert.deepEqual(replayed, { requestId: "tg:bot:a:7:3:cbq:query-abc", deduped: true });
+    await ingress.idle();
+    assert.deepEqual(receivedInputs, [
+      { text: "Ship it", requestId: "tg:bot:a:7:3:cbq:query-abc", whenBusy: "followUp" },
+      { text: "Ship it", requestId: "tg:bot:a:7:3:cbq:query-abc", whenBusy: "followUp" },
+    ]);
+    assert.deepEqual(delivered, [{ chatId: 7, threadId: 3, ownerUserId: 7, text: "Callback reply." }]);
+  } finally {
+    ingress.stop();
+  }
 });
 
 test("a redelivered Telegram update makes one submission and one reply", async () => {

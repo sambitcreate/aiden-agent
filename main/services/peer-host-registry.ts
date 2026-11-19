@@ -60,6 +60,27 @@ function isLocalEndpoint(endpoint: string): boolean {
   return /\.local\.?$/iu.test(new URL(endpoint).hostname);
 }
 
+/**
+ * Saved private-CA `.local` LAN routes resolve over multicast DNS, where a
+ * colliding responder or stale address can fail TLS without proving the
+ * paired installation changed.
+ */
+export function isRetryablePeerLanTrust(trust: PeerTrust): boolean {
+  return isLocalEndpoint(trust.endpoint) && Boolean(trust.caCertificateDerBase64);
+}
+
+function isRetryableLanTlsIdentityError(
+  error: unknown,
+  trust: PeerTrust,
+): error is PeerTransportError {
+  return (
+    error instanceof PeerTransportError &&
+    error.code === "identity_changed" &&
+    error.identitySource === "tls" &&
+    isRetryablePeerLanTrust(trust)
+  );
+}
+
 function routeHost(host: StoredPeerHost, route: PeerRoute): StoredPeerHost {
   return { ...host, endpoint: route.endpoint, serverSpkiSha256: route.serverSpkiSha256, caCertificateDerBase64: route.caCertificateDerBase64 };
 }
@@ -251,7 +272,6 @@ export class PeerHostRegistry {
   private verified = new Set<string>();
   private pairings = new Map<string, AbortController>();
   private repins = new Map<string, Promise<StoredPeerHost | null>>();
-  private instanceMismatches = new WeakSet<Error>();
   private closed = false;
   private queued = 0;
   constructor(
@@ -460,10 +480,11 @@ export class PeerHostRegistry {
     if (server.protocolVersion !== 1)
       throw new PeerTransportError("unsupported_protocol");
     if (server.instanceId !== host.id) {
-      // The pinned key answered as another installation: never re-pin this.
-      const mismatch = new PeerTransportError("identity_changed");
-      this.instanceMismatches.add(mismatch);
-      throw mismatch;
+      // The pinned key answered as another installation: never re-pin or retry this.
+      throw new PeerTransportError("identity_changed", undefined, undefined, undefined, {
+        identitySource: "instance",
+        retryableIdentity: false,
+      });
     }
     const capabilities = peerStrings(server.capabilities);
     const features = peerStrings(server.features ?? [], PEER_MAX_SERVER_FEATURES);
@@ -967,6 +988,7 @@ export class PeerHostRegistry {
     const stored = (await this.load()).find((entry) => entry.id === id);
     if (!stored?.enabled) throw new Error("This device is disabled or unavailable.");
     let lastError: unknown;
+    let pairedError: unknown;
     let connected = false;
     for (const route of this.routes(stored)) {
       if (signal?.aborted) throw new Error("Device operation was superseded.");
@@ -984,19 +1006,58 @@ export class PeerHostRegistry {
         break;
       } catch (error) {
         lastError = error;
-        if (error instanceof PeerTransportError && error.code === "identity_changed" && route.kind === "lan" && (route.origin === "learned" || route.addresses?.length)) {
+        if (route.origin === "paired") pairedError = error;
+        if (
+          error instanceof PeerTransportError &&
+          error.code === "identity_changed" &&
+          error.identitySource !== "instance" &&
+          route.kind === "lan" &&
+          (route.origin === "learned" || route.addresses?.length)
+        ) {
           this.lanAddresses.forget(id);
           await this.locked(async () => {
             const hosts = await this.load();
-            const next = hosts.map((host) => host.id === id && host.deviceId === admitted.host.deviceId ? { ...host, routes: host.routes?.map((candidate) => candidate.id === route.id ? { ...candidate, addresses: [] } : candidate) } : host);
+            const next = hosts.map((host) =>
+              host.id === id && host.deviceId === admitted.host.deviceId
+                ? {
+                    ...host,
+                    routes: host.routes?.map((candidate) =>
+                      candidate.id === route.id ? { ...candidate, addresses: [] } : candidate,
+                    ),
+                  }
+                : host,
+            );
             await this.options.storage.save(next);
             this.hosts = next;
           });
         }
-        if (error instanceof PeerTransportError && (error.code === "authentication_required" || error.code === "unsupported_protocol" || (error.code === "identity_changed" && route.origin === "paired" && !route.addresses?.length))) throw error;
+        const terminalIdentity =
+          error instanceof PeerTransportError &&
+          error.code === "identity_changed" &&
+          (error.identitySource === "instance" ||
+            (route.origin === "paired" &&
+              !route.addresses?.length &&
+              error.retryableIdentity !== true));
+        if (
+          error instanceof PeerTransportError &&
+          (error.code === "authentication_required" ||
+            error.code === "unsupported_protocol" ||
+            terminalIdentity)
+        )
+          throw error;
       }
     }
-    if (!connected) throw lastError ?? new PeerTransportError("unavailable");
+    if (!connected) {
+      // A non-retryable TLS failure on a learned fallback must not turn a
+      // retryable paired route failure into a permanent identity block.
+      const fallbackBlocked =
+        lastError instanceof PeerTransportError &&
+        lastError.code === "identity_changed" &&
+        lastError.retryableIdentity !== true &&
+        pairedError !== undefined &&
+        pairedError !== lastError;
+      throw (fallbackBlocked ? pairedError : lastError) ?? new PeerTransportError("unavailable");
+    }
     const host = this.hosts?.find((entry) => entry.id === id);
     if (!host?.enabled)
       throw new Error("This device is disabled or unavailable.");
@@ -1007,8 +1068,19 @@ export class PeerHostRegistry {
   async probe(id: string, signal?: AbortSignal): Promise<void> {
     const credentialIdentity = await this.credentialIdentity(id);
     const server = peerRecord(await this.request(id, { path: "/server", timeoutMs: 5_000, signal }));
-    if (server.protocolVersion !== 1) throw new PeerTransportError("unsupported_protocol");
-    if (server.instanceId !== id) throw new PeerTransportError("identity_changed");
+    if (server.protocolVersion !== 1) {
+      this.states.set(id, "unavailable");
+      this.clearVerification(id);
+      throw new PeerTransportError("unsupported_protocol");
+    }
+    if (server.instanceId !== id) {
+      this.states.set(id, "unavailable");
+      this.clearVerification(id);
+      throw new PeerTransportError("identity_changed", undefined, undefined, undefined, {
+        identitySource: "instance",
+        retryableIdentity: false,
+      });
+    }
     const current = () => !signal?.aborted && !this.closed && this.hosts?.some((host) => host.id === id && host.deviceId === credentialIdentity) === true;
     const features = peerStrings(server.features ?? [], PEER_MAX_SERVER_FEATURES);
     await this.refreshGrants(id, peerStrings(server.capabilities), features, current);
@@ -1035,7 +1107,11 @@ export class PeerHostRegistry {
     try {
       const server = peerRecord(await this.client(preferred, undefined, id).json({ path: "/server", credential: host.credential, timeoutMs: 3_000, signal }));
       return server.protocolVersion === 1 && server.instanceId === id;
-    } catch { return false; }
+    } catch (error) {
+      if (preferred.addresses?.length && error instanceof PeerTransportError && error.code === "identity_changed")
+        this.lanAddresses.forget(id);
+      return false;
+    }
   }
 
   private admit(id: string, partition: PeerRequestPartition, credentialIdentity?: string): Promise<Admitted> {
@@ -1086,8 +1162,8 @@ export class PeerHostRegistry {
       !this.closed &&
       !controller.signal.aborted &&
       (this.epochs.get(id) ?? 0) === epoch;
+    let attempt = host;
     try {
-      let attempt = host;
       for (let retried = false; ; retried = true) {
         try {
           if (!current()) throw new Error("Device operation was superseded.");
@@ -1106,7 +1182,7 @@ export class PeerHostRegistry {
             current() &&
             error instanceof PeerTransportError &&
             error.code === "identity_changed" &&
-            !this.instanceMismatches.has(error) &&
+            error.identitySource !== "instance" &&
             attempt.caCertificateDerBase64 === undefined;
           const repinned = repinnable ? await this.repin(attempt) : null;
           if (!repinned || !current()) throw error;
@@ -1114,21 +1190,25 @@ export class PeerHostRegistry {
         }
       }
     } catch (error) {
+      const finalError =
+        error instanceof PeerTransportError && error.code === "identity_changed"
+          ? error.withRetryableIdentity(isRetryableLanTlsIdentityError(error, attempt))
+          : error;
       // A 4xx is an answer from a reachable, verified peer, e.g. an older Aiden
       // without an optional route. 401/403 arrive as authentication_required.
       const answered =
-        error instanceof PeerTransportError &&
-        error.code === "request_failed" &&
-        error.status !== undefined &&
-        error.status >= 400 &&
-        error.status < 500;
+        finalError instanceof PeerTransportError &&
+        finalError.code === "request_failed" &&
+        finalError.status !== undefined &&
+        finalError.status >= 400 &&
+        finalError.status < 500;
       if (current() && answered) {
         this.states.set(id, "connected");
       } else if (current()) {
         this.states.set(id, "unavailable");
         this.clearVerification(id);
       }
-      throw error;
+      throw finalError;
     } finally {
       signal?.removeEventListener("abort", abort);
       pool.get(id)?.delete(controller);

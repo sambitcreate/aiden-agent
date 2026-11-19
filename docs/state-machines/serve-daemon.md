@@ -150,22 +150,9 @@ Recovery runs in `serve` for every server. A failure there is logged and closes 
 
 **Defect fixed:** recovery lived only in `createCliRemoteChats`, so `aiden serve --no-remote` neither finished a committed deletion nor closed the chat to new turns.
 
-## C15: schedule consent publication
+## C15: schedule consent publication (removed)
 
-Owner: `approvedMutation` in `createCliScheduler` (`schedules.ts`) over `assertScheduleApproval` (`schedule-tool-approval.ts`). Two booleans became one `phase`.
-
-| Event | Prior | Next | Effect |
-|---|---|---|---|
-| command with consent | none | `first_write` | snapshot, expiry and receipt verified at entry |
-| durable write verified | `first_write` | `follow_on` | receipt consumed just before the write publishes, task checked once; later writes check only expiry and the environment |
-| verification fails | `first_write` or `follow_on` | `closed` | abort, so the shared lifecycle rolls back |
-| command ends | any | `closed` | this context is finished, and its receipt is spent |
-
-A receipt is spent in memory as the command starts, removed at the first write, and removed when the command ends if no write happened. It works once even if the command fails, and neither another scheduler nor a restart after a crash can replay it. A crash between that removal and the write loses the consent, so the person reviews again. Revocation holds up to the first write. A `save` must also read back the input that was reviewed, because the file is read after consent.
-
-**Defects fixed:** a `save` trusted whatever the file held by then, and a new-task consent could be replayed until it expired, since only the retired producer ever removed the receipt.
-
-No producer of consent remains in `src` since the model-facing tool was retired; only this guard is live. It had no tests, so `tests/schedule-consent.test.mjs` covers valid, reused, expired, cancelled, mismatched, and environment or task changed after review, and revocation between the entry check and the write.
+Removed on 2026-11-18. The consent receipts (`approvedMutation` in `createCliScheduler` over `assertScheduleApproval` in `schedule-tool-approval.ts`) had no producer after the model-facing schedule tool was retired in #675, so the owner, its module and `tests/schedule-consent.test.mjs` were deleted. Admin `aiden schedule` mutations write directly through the shared schedule service, as they always did, and now reject extra arguments instead of reading a third one as an approval.
 
 ## Triage of the remaining `cli-native` entries
 
@@ -186,7 +173,7 @@ No producer of consent remains in `src` since the model-facing tool was retired;
 | C21 terminal provider auth | No | Skipped: interactive terminal only. |
 | C22 speech worker | Yes, through Remote | Retained: worker and client identity already fence late exits, and Remote stop awaits `speech.stop()`. |
 | C23 avatar decoder | Yes, through Remote Bots | Retained: bounded slots with `finally` cleanup, deferred after P6 by the plan. |
-| C24 lease and JSON publication | Yes | Retained: idempotent release and a failed publication that releases its guard. C03, C14 and C15 rely on it unchanged. |
+| C24 lease and JSON publication | Yes | Retained: idempotent release and a failed publication that releases its guard. C03 and C14 rely on it unchanged. |
 | C25, C30, C31 credentials | Reads only | Retained: per-file queue plus lease; migrations are explicit transactions outside the daemon's turn path. |
 | C26 todo restore | Yes, inside sessions | Retained: `restoreEpoch` fences late restores, covered by the todo cases in `tests/parity.test.mjs`. |
 | C27 advisor availability | Yes, inside sessions | Retained: the shared advisor runtime owns attempts, deferred after P6 by the plan. |

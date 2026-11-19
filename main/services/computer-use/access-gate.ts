@@ -49,10 +49,6 @@ export const COMPUTER_USE_ACCESS_CHANGED_REASON =
 /** Reads a decision may repeat when grants keep being revoked underneath it. */
 const MAX_DECIDE_ATTEMPTS = 3;
 
-export function computerUseGrantRevision(): number {
-  return grantRevision;
-}
-
 export function revokeComputerUseGrants(): void {
   grantRevision += 1;
 }

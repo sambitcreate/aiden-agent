@@ -24,7 +24,7 @@ The `Event` model emits `@id`, `name`, `calendar`, `startDate`, `endDate`, optio
 
 ## Host eligibility contract
 
-`IMCP_WATCH_ADAPTER` exports the reviewed contract revision and exact four-tool inventory. It is not an installed-server attestation. `ImcpWatchPort` is scoped to one host-owned binding and requires `assertEligible(tool, signal)` before every call, including mailbox/calendar listing and every Mail page. W1 must implement that gate using current authority; it must throw if any of these are absent or changed:
+The adapter targets reviewed contract revision `imcp-watch-v1` (iMCP source `ec7bef349e032574aecc8660ca427ba9489e8cc1`, ontology `7e3937c46057ec9afcfb347da2241033d311bd34`, macOS) and exactly four tools: `mail_mailboxes_list`, `mail_messages_search`, `calendars_list` and `events_fetch`. That revision is not an installed-server attestation. `ImcpWatchPort` is scoped to one host-owned binding and requires `assertEligible(tool, signal)` before every call, including mailbox/calendar listing and every Mail page. W1 must implement that gate using current authority; it must throw if any of these are absent or changed:
 
 1. The exact Bot grant, connection/account selection and explicit unattended watch approval.
 2. Trusted integration identity, including Aiden's existing signed iMCP launch path, and an installed version/schema combination compatible with this reviewed contract.

@@ -368,6 +368,12 @@
       "renderer/canvas/studio",
       "main/services/studio"
     ],
+    "svg-code-preview.spec.ts": [
+      "renderer/components/code-block",
+      "renderer/components/copy-button",
+      "renderer/components/markdown",
+      "renderer/lib/svg-fence-preview"
+    ],
     "terminal.spec.ts": [
       "renderer/components/terminal-drawer",
       "main/services/terminal"

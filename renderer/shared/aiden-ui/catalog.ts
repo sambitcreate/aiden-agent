@@ -151,6 +151,3 @@ export function isAidenUiIcon(value: unknown): value is AidenUiIconName {
 
 /** Components whose text children keep their line breaks (code, math, markdown, data). */
 export const PRESERVE_WHITESPACE = new Set(["Code", "Markdown", "Math", "Data"]);
-
-/** Components that only draw from data and state and do not render children. */
-export const CONTROL_FLOW = new Set(["Each", "If"]);

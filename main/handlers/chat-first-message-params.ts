@@ -46,7 +46,7 @@ export function parseChatFirstMessage(input: unknown): ParsedChatFirstMessage {
     model: record.model,
   });
   if (create.workspaceId === ASSISTANT_WORKSPACE_ID) {
-    throw new Error("Assistant chats require the Assistant chat creation path.");
+    throw new Error("Ordinary chat creation cannot create Aiden Assistant chats.");
   }
   const append = parseChatAppend(record.draftId, record.message, {
     turnId: record.turnId,

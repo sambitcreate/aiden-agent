@@ -116,6 +116,37 @@ test("Change keys… goes to Settings → Keyboard shortcuts", async () => {
   await waitFor(() => assert.equal(router.state.location.pathname, "/settings"));
   assert.deepEqual({ ...router.state.location.search }, { section: "shortcut" });
   assert.equal(screen.queryByRole("dialog", { name: "Keyboard shortcuts" }), null);
+  assert.equal(router.history.length, 2, "Settings opens as a new entry over the app");
+});
+
+test("Change keys… from inside Settings keeps Settings one history entry", async () => {
+  const { router } = await mountWithBotRouter(null, {
+    initialPath: "/",
+    sidebar: (
+      <TooltipProvider>
+        <Commands />
+        <KeyboardShortcutsDialog />
+      </TooltipProvider>
+    ),
+  });
+  await act(async () => {
+    await router.navigate({ to: "/settings", search: { section: "appearance" } });
+  });
+  assert.equal(router.history.length, 2);
+  await waitFor(() => assert.equal(run("shortcuts.show"), true));
+  const dialog = await screen.findByRole("dialog", { name: "Keyboard shortcuts" });
+  await act(async () => {
+    within(dialog).getByRole("button", { name: "Change keys…" }).click();
+  });
+  await waitFor(() =>
+    assert.deepEqual({ ...router.state.location.search }, { section: "shortcut" }),
+  );
+  assert.equal(router.history.length, 2, "the Settings entry was replaced, not stacked");
+  // So Back (as Back to app does) leaves Settings.
+  await act(async () => {
+    router.history.back();
+  });
+  await waitFor(() => assert.equal(router.state.location.pathname, "/"));
 });
 
 test("Settings lists the built-in keys below the ones you can change, and its search finds them", async () => {

@@ -44,8 +44,6 @@ export function botFullComputerLabel(platform: string | null | undefined = runti
   return `Full ${localComputerNoun(platform)}`;
 }
 
-export type BotAccessMode = "full" | "custom";
-export type BotChatAccessMode = "inherit" | "custom";
 export type BotNoticeDecision = "continue_full" | "customize_first";
 export type BotFileScopeKind = "full_mac" | "bot_home" | "approved_location";
 

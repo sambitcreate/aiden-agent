@@ -46,6 +46,15 @@ import { DesignCanvasEmpty } from "./design-canvas-empty";
 import { frameIframe, useDesignComments } from "./design-comments";
 import { usePageTextEdits } from "./page-text-edits";
 import { designFrameSnapshots } from "./frame-snapshots";
+import { DesignTweaksFloat, type DesignTweakOps } from "./design-tweaks-panel";
+import { showDesignTweakVersions, shrinkDesignPicture, takeDesignTweakVersionPicture } from "./tweak-versions";
+import {
+  tweaksAfterBake,
+  tweaksAfterBakeUndo,
+  tweaksAfterTakenBackBake,
+  tweaksTakenBackDuringBake,
+} from "../shared/design-canvas/tweaks";
+import { postToDesignPage } from "../shared/design-canvas/bridge-messages";
 import { useDesignDrawing, type DesignDrawTool } from "./design-drawing";
 import { DesignPresentBar, DesignPresentButton, presentationKey, type DesignPresentation } from "./design-present";
 import {
@@ -312,6 +321,9 @@ function LoadedDesignCanvas({
     },
     [versions],
   );
+  // Read when a delayed picture is taken, so it sees the file as it is then.
+  const latestFrameVersionOf = React.useRef(frameVersionOf);
+  latestFrameVersionOf.current = frameVersionOf;
 
   // Another page on screen (the picker, an undo, or Aiden's canvas_focus):
   // go to where that page was left, with nothing selected or entered.
@@ -905,6 +917,163 @@ function LoadedDesignCanvas({
     [change],
   );
 
+  // Tweaks: a picture of a frame as it shows now, for its versions. The
+  // floating Tweaks panel steps aside while it is taken, and only the part of
+  // the frame on the canvas is kept.
+  const capturing = React.useRef(0);
+  const captureFrame = React.useCallback(async (frameId: string): Promise<string | null> => {
+    const region = wrapper.current;
+    const iframe = frameIframe(region, frameId);
+    if (!region || !iframe || document.visibilityState === "hidden") return null;
+    // Pictures may overlap; the floating panel comes back once the last is taken.
+    capturing.current += 1;
+    region.setAttribute("data-capturing", "");
+    try {
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const frameBox = iframe.getBoundingClientRect();
+      const view = region.getBoundingClientRect();
+      const x = Math.max(frameBox.left, view.left);
+      const y = Math.max(frameBox.top, view.top);
+      const width = Math.min(frameBox.right, view.right) - x;
+      const height = Math.min(frameBox.bottom, view.bottom) - y;
+      if (width < 8 || height < 8) return null;
+      const shot = await designCanvasApi.captureDesignFrame({ x, y, width, height });
+      return "dataUrl" in shot ? shot.dataUrl : null;
+    } catch {
+      return null;
+    } finally {
+      capturing.current -= 1;
+      if (capturing.current === 0) region.removeAttribute("data-capturing");
+    }
+  }, []);
+
+  const undoTweakDefaults = React.useCallback(
+    async (frameId: string, path: string, values: Record<string, string>, undoId: string) => {
+      const answer = await designCanvasApi.undoBakeDesignTweaks(chatId, frameId, undoId).catch(() => null);
+      if (answer?.ok) {
+        const latest = latestDoc.current.frames.find((entry) => entry.id === frameId);
+        update(frameId, { tweaks: tweaksAfterBakeUndo(latest?.tweaks, values) }, { record: true });
+        reloadPaths([path]);
+        toast("Put the page's file back as it was.");
+      } else {
+        toast.error(answer?.reason === "changed" ? "The file changed since, so it was left as it is." : "The file couldn't be put back.");
+      }
+    },
+    [chatId, update, reloadPaths],
+  );
+
+  // One Make default per frame at a time: a second press while the first is
+  // writing would only find the file already changed.
+  const baking = React.useRef(new Set<string>());
+  const makeTweaksDefault = React.useCallback(
+    (frameId: string) => {
+      const frame = latestDoc.current.frames.find((entry) => entry.id === frameId);
+      if (frame?.kind !== "file" || !frame.path || !frame.tweaks || baking.current.has(frameId)) return;
+      const { path, tweaks: values } = frame;
+      baking.current.add(frameId);
+      void (async () => {
+        // Main reads the frame from the saved canvas.
+        const saved = await flush().catch(() => false);
+        if (!saved) {
+          toast.error("The canvas couldn't be saved, so the page's file wasn't changed.");
+          return;
+        }
+        const result = await designCanvasApi.bakeDesignTweaks(chatId, frameId, values).catch(() => null);
+        if (!result?.ok) {
+          toast.error(BAKE_ERRORS[result?.reason ?? "failed"] ?? BAKE_ERRORS.failed);
+          return;
+        }
+        const { undoId } = result;
+        const latest = latestDoc.current.frames.find((entry) => entry.id === frameId);
+        // Reset (or a control moved back to its default) while the file was
+        // being written: the file would bring that value straight back, so
+        // the write is undone and the frame keeps what it shows now.
+        if (latest && tweaksTakenBackDuringBake(latest.tweaks, values, result.written)) {
+          const undone = await designCanvasApi.undoBakeDesignTweaks(chatId, frameId, undoId).catch(() => null);
+          if (undone?.ok) {
+            reloadPaths([path]);
+            toast("The values changed while they were being written, so the page's file was left as it was.");
+            return;
+          }
+          // Another write landed first, so the file keeps the new defaults;
+          // the frame keeps what the person set by pinning the old ones.
+          const now = latestDoc.current.frames.find((entry) => entry.id === frameId);
+          update(frameId, { tweaks: tweaksAfterTakenBackBake(now?.tweaks, values, result.written, result.previous) }, { record: true });
+          reloadPaths([path]);
+          toast("The values changed while they were being written. The page's file has the new defaults, and this frame keeps what you set.");
+          return;
+        }
+        // The frame lets go of what the file now says, keeping words the file
+        // couldn't take and anything changed while the file was written.
+        update(frameId, { tweaks: tweaksAfterBake(latest?.tweaks, result.written) }, { record: true });
+        reloadPaths([path]);
+        toast.success(
+          result.kept.length > 0
+            ? "Made these the page's defaults. Some words couldn't be placed in the file, so this frame keeps them."
+            : "Made these the page's defaults.",
+          { action: { label: "Undo", onClick: () => void undoTweakDefaults(frameId, path, values, undoId) } },
+        );
+      })().finally(() => baking.current.delete(frameId));
+    },
+    [chatId, flush, update, reloadPaths, undoTweakDefaults],
+  );
+
+  const showTweakVersions = React.useCallback(
+    (frameId: string) => {
+      const ids: string[] = [];
+      let groupId: string | null = null;
+      change((current) => {
+        let index = 0;
+        // The ids are fixed on the first run, so a replay after a save conflict adds the same frames.
+        const shown = showDesignTweakVersions(current, frameId, () => (ids[index++] ??= crypto.randomUUID()));
+        groupId = shown?.groupId ?? null;
+        return shown?.doc ?? current;
+      });
+      if (groupId === null) {
+        toast.error("There isn't room on this page for every version.");
+        return;
+      }
+      const id: string = groupId;
+      setEntered(null);
+      setSelection(new Set([id]));
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          void flow.current?.fitView({ nodes: [{ id }], padding: 0.15, duration: prefersReducedMotion() ? 0 : 350 });
+        }),
+      );
+    },
+    [change],
+  );
+
+  const tweakOps = React.useMemo<DesignTweakOps>(
+    () => ({
+      update,
+      action: (frameId, actionId) => {
+        const target = pageWindow(frameId);
+        if (!target) return false;
+        postToDesignPage(target, { type: "tweak-action", id: actionId });
+        return true;
+      },
+      send: comments.queueOnFrame,
+      makeDefault: makeTweaksDefault,
+      pictureVersion: (frameId, versionId, delay) =>
+        takeDesignTweakVersionPicture(frameId, versionId, delay, {
+          frameNow: (id) => latestDoc.current.frames.find((entry) => entry.id === id),
+          fileVersion: (frame) => latestFrameVersionOf.current(frame),
+          capture: async (id) => {
+            const picture = await captureFrame(id);
+            return picture ? shrinkDesignPicture(picture) : null;
+          },
+        }),
+      showAll: showTweakVersions,
+      fileVersion: frameVersionOf,
+    }),
+    [update, pageWindow, comments.queueOnFrame, makeTweaksDefault, captureFrame, showTweakVersions, frameVersionOf],
+  );
+  const enteredPage = entered === null ? undefined : doc.frames.find((frame) => frame.id === entered && frame.kind === "file");
+  // The side panel's Tweaks tab already shows this page's controls.
+  const panelShowsTweaks = panel.open && panel.tab === "tweaks" && selection.size === 1 && entered !== null && selection.has(entered);
+
   const context = React.useMemo<DesignNodeContextValue>(
     () => ({
       chatId,
@@ -1048,6 +1217,8 @@ function LoadedDesignCanvas({
                   onStep={step}
                   onExit={stopPresenting}
                 />
+              ) : enteredPage && !panelShowsTweaks ? (
+                <DesignTweaksFloat key={enteredPage.id} frame={enteredPage} readSource={readSource} versionOf={versionOf} ops={tweakOps} />
               ) : null
             }
             emptyState={<DesignCanvasEmpty />}
@@ -1090,11 +1261,23 @@ function LoadedDesignCanvas({
           resizeTo={resizeTo}
           reorder={reorder}
           step={stepOrder}
+          tweaks={tweakOps}
         />
       ) : null}
     </div>
   );
 }
+
+/** What Make default says when the page's file couldn't take the values. */
+const BAKE_ERRORS: Record<string, string> = {
+  unavailable: "This page's file can't be changed here.",
+  missing: "This page's file is missing.",
+  "not-found": "The page no longer declares these tweaks.",
+  unchanged: "These are already the page's defaults.",
+  changed: "The file changed while it was being written. Try again.",
+  words: "The page's words couldn't be found in its file, so it wasn't changed. Send the values to Aiden instead.",
+  failed: "The page's file couldn't be changed.",
+};
 
 const PANEL_STORAGE_KEY = "aiden.design.sidePanel";
 

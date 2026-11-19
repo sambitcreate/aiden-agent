@@ -29,7 +29,7 @@ test("pill preload exposes only capture, transcription, settings read, and dicta
     [...PILL_NOTIFICATION_CHANNELS],
     ["dictation:state", "localVoice:state", "settings:appearance-changed", "voice:stream-text"],
   );
-  for (const forbidden of ["providers:setKey", "mcp:setPresetKey", "settings:set", "git:push"]) {
+  for (const forbidden of ["providers:save", "mcp:setPresetKey", "settings:set", "git:push"]) {
     assert.equal(PILL_INVOKE_CHANNELS.has(forbidden), false);
   }
 });

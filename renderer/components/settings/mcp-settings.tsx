@@ -978,14 +978,14 @@ function McpEditor({
       ) : null}
       <FieldSet>
         <Field label="Name">
-          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="My connector" autoFocus />
+          <Input aria-label="Name" value={name} onChange={(e) => setName(e.target.value)} placeholder="My connector" autoFocus />
         </Field>
         <Field label="Description" description="Optional context to help Aiden find this connector’s tools." orientation="vertical">
           <Input aria-label="Connector description" value={description} onChange={(event) => setDescription(event.target.value)} maxLength={1024} />
         </Field>
         <Field label="Connection">
           <Select value={transport} onValueChange={(v) => { setTransport(v as McpTransport); setAuthProvider(""); setApprovedProviderConnection(undefined); }}>
-            <SelectTrigger size="small">
+            <SelectTrigger size="small" aria-label="Connection">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -998,7 +998,7 @@ function McpEditor({
         {transport === "stdio" ? (
           <>
             <Field label="Command">
-              <Input value={command} onChange={(e) => setCommand(e.target.value)} placeholder="npx" />
+              <Input aria-label="Command" value={command} onChange={(e) => setCommand(e.target.value)} placeholder="npx" />
             </Field>
             <Field
               label="Arguments"
@@ -1031,6 +1031,7 @@ function McpEditor({
               description="For hosted servers that require browser authorization instead of (or with) a key."
             >
               <Switch
+                aria-label="OAuth sign-in"
                 checked={oauth}
                 disabled={Boolean(authProvider)}
                 onCheckedChange={(value) => {

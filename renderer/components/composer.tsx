@@ -69,9 +69,9 @@ import { isUsable } from "../lib/model-picker-data";
 import { openWorkspaceSettings } from "./workspace-settings-dialog";
 import { aidenLivePreferences } from "../shared/aiden-live-settings";
 import {
-  APPROVAL_MODE_HELP,
   APPROVAL_MODE_LABELS,
   APPROVAL_MODES,
+  approvalModeHelp,
   effectiveApprovalMode,
   workspaceApprovalPolicy,
   type ApprovalMode,
@@ -2206,7 +2206,7 @@ export function Composer({
   const approvalsLabel = approvalChoiceLabel(chipChoice);
   const ApprovalsIcon = APPROVAL_CHOICE_ICONS[chipChoice].icon;
   const approvalsHelp =
-    chipChoice === "chat-only" ? "The agent can't read or change this folder." : APPROVAL_MODE_HELP[chipChoice];
+    chipChoice === "chat-only" ? "The agent can't read or change this folder." : approvalModeHelp(chipChoice, localComputerNoun(platform));
   const folderName = noWorkspace
     ? NO_WORKSPACE_LABEL
     : workspace?.folderPath
@@ -2796,7 +2796,7 @@ export function Composer({
                                 ? `Approvals: ${label}. Finish or stop the current response to change approvals.`
                                 : `Approvals: ${label}`
                           }
-                          title={value === "settings" || value === "chat-only" ? undefined : APPROVAL_MODE_HELP[value]}
+                          title={value === "settings" || value === "chat-only" ? undefined : approvalModeHelp(value, localComputerNoun(platform))}
                           tabIndex={selected ? 0 : -1}
                           aria-disabled={disabled || undefined}
                           onClick={(event) => {

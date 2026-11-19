@@ -78,6 +78,7 @@ import {
   isDeviceToolName,
 } from "./devices/device-tools.js";
 import { devicesEnabled } from "./devices/feature-flag.js";
+import { geminiLiveEnabled } from "./gemini-live/feature-flag.js";
 import { webSearchService } from "./web-search-main.js";
 import { WEB_FETCH_TOOL_NAME } from "../../renderer/shared/web-extract.js";
 import { webFetchService } from "./web-fetch-main.js";
@@ -502,6 +503,7 @@ import { displayImageArtifactStore } from "./display-image-artifact-store.js";
 import {
   createGenerativeUiExtensionRuntime,
   displayedAssistantHtmlUsage,
+  GENERATIVE_UI_EXTENSION_ID,
   GENERATIVE_UI_TOOL_NAME,
   prepareGenerativeUiTurnStore,
   shouldEnableGenerativeUiExtension,
@@ -516,7 +518,6 @@ import { enqueueVisualSnapshots } from "./visual-snapshot-service.js";
 import type { ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
 import { wrapGenerativeUiHtml } from "./generative-ui-html.js";
 import { registerGenerativeUiPreviewDocument } from "./generative-ui-preview-store.js";
-import { GENERATIVE_UI_EXTENSION_ID } from "./generative-ui-extension.js";
 import { createArtifactPlacementLedger, imageAttachmentPlacements, presentPlacedImage } from "./generative-ui-placements.js";
 import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { generationHasVisibleOutput } from "./generation-visible-output.js";
@@ -3965,6 +3966,7 @@ export const llmClient = {
                 botComputers: hostPlatformCapabilities().botComputers,
                 hooks: hostPlatformCapabilities().hooks,
                 mcpServer: hostPlatformCapabilities().mcpServer,
+                geminiLive: geminiLiveEnabled(),
               }),
               availableTools: toolsWithRuntimeContributions.map((tool) => tool.name),
               mcpToolNames: tools.filter((tool) => mcpAgentToolIdentity(tool) !== undefined).map((tool) => tool.name),

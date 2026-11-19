@@ -11,6 +11,10 @@ the canonical command system on 2026-07-26; Markdown/automation access was added
 The automation boundary was hardened on 2026-08-04 with fingerprint-bound provider and MCP
 connections, exact model pins, monotonic revisions, cancellation compensation, and mutually
 exclusive project/MCP scopes for every scheduled task.
+On 2026-11-18 the audit cleanup removed the unused `assistant:get-config` / `assistant:set-config`
+channels, the `assistant:` invoke prefix, `parseAssistantConfigPatch`, and `providers:setKey`; no
+surface called them. `settings.assistant` still parses through `assistantConfigFrom`. Settings-tool
+or proactive work that needs the channels re-adds them with that work.
 Spec date 2026-07-23; implementation plan 2026-07-25; dock revision 2026-07-25;
 Settings/shortcut revision 2026-07-26.
 

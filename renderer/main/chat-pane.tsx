@@ -1,6 +1,6 @@
 import { hostQueryKeys } from "../lib/hosts/host-query-keys";
 import { PeerProjectCloneDialog } from "./peer-project-clone-dialog";
-import { remoteNewChatDraftKey } from "./remote-new-chat-view";
+import { remoteNewChatDraftKey } from "../lib/hosts/remote-new-chat";
 import {
   beginChatDraftSend,
   createChatDraft,

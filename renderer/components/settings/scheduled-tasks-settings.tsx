@@ -48,6 +48,8 @@ export function ScheduledTasksSettings() {
     try {
       const next = await scheduleApi.settings(patch);
       queryClient.setQueryData(queryKeys.scheduledSettings, next);
+      // The switch is stored in app settings too, where Aiden Live reads it.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.settings });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Couldn't update scheduled tasks.");
     } finally {

@@ -959,8 +959,7 @@ struct AidenRemoteBotPlan: Codable, Equatable, Sendable {
     let from: String?
     var completedSteps: Int { steps.filter { $0.status != .pending }.count }
     var expiry: Date? {
-        guard let expiresAt, let data = try? JSONEncoder().encode(expiresAt) else { return nil }
-        return (try? AidenRemoteJSONDecoder.decode(AidenRemoteTimestamp.self, from: data))?.date
+        expiresAt.flatMap(AidenRemoteTimestamp.init(rawValue:))?.date
     }
     func allows(_ decision: AidenBotPlanDecision) -> Bool {
         status == .pending ? decision != .stop : status == .active && decision == .stop

@@ -17,12 +17,17 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { createTelegramServiceCore, telegramCompactionCallback } from "./telegram-service-core.js";
+import { createTelegramServiceCore, telegramBotBindingKey, telegramCompactionCallback } from "./telegram-service-core.js";
 import { createTelegramBotBindingStore } from "./telegram-bot-binding-store.js";
+import { createTelegramButtonStore } from "./telegram-outbound.js";
 import { telegramChatId } from "./telegram-turn.js";
 import { TelegramApiError } from "./telegram-bot-api.js";
-import { BotSessionError } from "../bot-runtime/bot-session-service.js";
-import { createTelegramBotIngress, type TelegramBotReply } from "./bot-reply-outbox.js";
+import { BotSessionError, createBotSessionService } from "../bot-runtime/bot-session-service.js";
+import { createBotTurnIntents, stopWithIntents } from "../bot-runtime/bot-turn-intents.js";
+import { recordingDeps } from "../bot-runtime/test-support/fixtures.js";
+import { createFauxModels, FAUX_MODEL_REF } from "../bot-runtime/test-support/faux.js";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
+import { createTelegramBotIngress, telegramBotRequestId, type TelegramBotReply } from "./bot-reply-outbox.js";
 import { mkdirSync, rmSync } from "node:fs";
 import type {
   TelegramBotApi,
@@ -102,16 +107,21 @@ function createMockApi(opts: MockApiOptions) {
   const richMessages: Array<{ chatId: number; threadId?: number; markdown: string }> = [];
   const voiceMessages: Array<{ chatId: number; threadId?: number; bytes: Uint8Array }> = [];
   const editedMessages: Array<Parameters<TelegramBotApi["editMessageText"]>[0]> = [];
+  const editedReplyMarkups: Array<Parameters<TelegramBotApi["editMessageReplyMarkup"]>[0]> = [];
+  const callbackAnswers: Array<{ id: string; text?: string }> = [];
   const calls: string[] = [];
   const commandRegistrations: Array<readonly { command: string; description: string }[]> = [];
   let getMeCalls = 0;
   let getUpdatesCalls = 0;
   let sendChatActionCalls = 0;
   let answerCallbackQueryCalls = 0;
+  let downloadFileCalls = 0;
 
   const api = {
     sentMessages,
     editedMessages,
+    editedReplyMarkups,
+    callbackAnswers,
     commandRegistrations,
     async setMyCommands(commands: readonly { command: string; description: string }[]) { commandRegistrations.push(commands); },
     richMessages,
@@ -121,6 +131,7 @@ function createMockApi(opts: MockApiOptions) {
     getUpdatesCalls: () => getUpdatesCalls,
     sendChatActionCalls: () => sendChatActionCalls,
     answerCallbackQueryCalls: () => answerCallbackQueryCalls,
+    downloadFileCalls: () => downloadFileCalls,
     async getMe(_signal?: AbortSignal): Promise<TelegramUser> {
       getMeCalls += 1;
       calls.push("getMe");
@@ -194,16 +205,21 @@ function createMockApi(opts: MockApiOptions) {
       sendChatActionCalls += 1;
     },
     async downloadFile(fileId: string) {
+      downloadFileCalls += 1;
       return {
         file: { file_id: fileId, file_unique_id: `unique-${fileId}` },
-        bytes: new Uint8Array([1, 2, 3]),
+        bytes: new Uint8Array([1, 2, 3, fileId.charCodeAt(fileId.length - 1) ?? 0]),
       };
     },
     async editMessageText(params: Parameters<TelegramBotApi["editMessageText"]>[0]): Promise<void> {
       editedMessages.push(params);
     },
-    async answerCallbackQuery(): Promise<void> {
+    async editMessageReplyMarkup(params: Parameters<TelegramBotApi["editMessageReplyMarkup"]>[0]): Promise<void> {
+      editedReplyMarkups.push(params);
+    },
+    async answerCallbackQuery(id: string, text?: string): Promise<void> {
       answerCallbackQueryCalls += 1;
+      callbackAnswers.push({ id, ...(text !== undefined ? { text } : {}) });
     },
   };
   return api;
@@ -545,6 +561,10 @@ interface HarnessOptions {
   existingChats?: MockTurnOptions["existingChats"];
   storeInboundFile?: import("./telegram-service-core.js").TelegramServiceDeps["storeInboundFile"];
   botIngress?: import("./telegram-service-core.js").TelegramServiceDeps["botIngress"];
+  botSession?: import("./telegram-service-core.js").TelegramServiceDeps["botSession"];
+  buttonStore?: import("./telegram-service-core.js").TelegramServiceDeps["buttonStore"];
+  scheduleTimer?: import("./telegram-service-core.js").TelegramServiceDeps["scheduleTimer"];
+  sleep?: import("./telegram-service-core.js").TelegramServiceDeps["sleep"];
 }
 
 function harness(o: HarnessOptions = {}) {
@@ -615,9 +635,12 @@ function harness(o: HarnessOptions = {}) {
     synthesizeVoice: o.synthesizeVoice,
     storeInboundFile: o.storeInboundFile,
     botIngress: o.botIngress,
+    botSession: o.botSession,
+    buttonStore: o.buttonStore,
+    scheduleTimer: o.scheduleTimer,
     getToken: () => Promise.resolve("mock-token"),
     now: () => 0,
-    sleep: sleepMock.sleep,
+    sleep: o.sleep ?? sleepMock.sleep,
     info: logs.infoFn,
     warn: logs.warnFn,
     error: logs.errorFn,
@@ -2753,5 +2776,991 @@ test("Telegram never answers an approval: 'Allow' is a message and an approval b
     assert.equal(h.turnMock.startCalls(), 0);
   } finally {
     h.service.stop();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Issue #534: Durable Bot session routing for commands, callbacks & controls
+// ---------------------------------------------------------------------------
+
+test("Bot-bound /queue, /continue, expanded prompt templates, and tgbtn: callbacks admit through botIngress and never start a legacy turn", async () => {
+  const owner = person(42, "owner");
+  const buttonStore = createTelegramButtonStore(() => 0);
+  const scope = {
+    profile: "work",
+    chatId: durableBinding.chatId,
+    ownerUserId: owner.id,
+    bindingKey: telegramBotBindingKey(durableBinding),
+  };
+  const buttonA = buttonStore.register({ label: "Approve", prompt: "Approve the plan", selectedStyle: "success" }, scope);
+  const buttonB = buttonStore.register({ label: "Revise", prompt: "Revise the plan", selectedStyle: "primary" }, scope);
+  buttonStore.bindMessage([buttonA, buttonB], 50);
+
+  const admitted: import("./bot-reply-outbox.js").TelegramBotMessage[] = [];
+  let extensionDirectCalls = 0;
+  const replyMessage: TelegramMessage = {
+    ...makeMessage(50, BOT, "Choose next step:", durableBinding.chatId),
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "Approve", callback_data: buttonA }],
+        [{ text: "Revise", callback_data: buttonB }],
+      ],
+    },
+  };
+
+  const h = harness({
+    enabled: true,
+    allowedUserId: owner.id,
+    profile: "work",
+    buttonStore,
+    resolveBotBinding: async () => durableBinding,
+    existingChats: [{ id: durableBinding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" }],
+    listPromptCommands: async () => [
+      {
+        command: "summarize",
+        description: "Summarize topic",
+        expand: (arg) => `Summarize concisely: ${arg}`,
+      },
+      {
+        command: "pingext",
+        description: "Direct extension command",
+        handle: async (arg) => {
+          extensionDirectCalls += 1;
+          return `pong:${arg}`;
+        },
+      },
+    ],
+    batches: [[
+      makeUpdate(1, makeMessage(11, owner, "/queue remember Y")),
+      makeUpdate(2, makeMessage(12, owner, "/continue")),
+      makeUpdate(3, makeMessage(13, owner, "/continue check step 2")),
+      makeUpdate(4, makeMessage(14, owner, "/summarize Q4 notes")),
+      makeUpdate(5, makeMessage(15, owner, "/pingext ok")),
+      {
+        update_id: 6,
+        callback_query: { id: "cb-approve", from: owner, message: replyMessage, data: buttonA },
+      },
+      {
+        update_id: 7,
+        callback_query: { id: "cb-revise", from: owner, message: replyMessage, data: buttonB },
+      },
+    ]],
+    autoStop: true,
+    botIngress: {
+      admit: async (message) => {
+        admitted.push(message);
+        return { requestId: telegramBotRequestId(message), deduped: false };
+      },
+    },
+  });
+
+  await h.service.start();
+  await waitFor(() => h.config.persistOffsetCalls() === 7);
+
+  assert.equal(h.turnMock.startCalls(), 0, "legacy dispatchTurn never runs");
+  assert.equal(h.turnMock.appendCalls(), 0, "legacy transcript never receives messages");
+  assert.equal(h.service.queueSize, 0, "legacy queue stays empty");
+  assert.equal(extensionDirectCalls, 1, "direct extension handlers remain direct");
+  assert.ok(h.api.sentMessages.some(({ text }) => text === "pong:ok"));
+
+  assert.deepEqual(
+    admitted.map((item) => ({
+      botId: item.botId,
+      text: item.text,
+      whenBusy: item.whenBusy,
+      requestId: telegramBotRequestId(item),
+    })),
+    [
+      { botId: "bot-a", text: "remember Y", whenBusy: "followUp", requestId: "tg:bot-a:100:0:11" },
+      { botId: "bot-a", text: "Continue.", whenBusy: "followUp", requestId: "tg:bot-a:100:0:12" },
+      { botId: "bot-a", text: "check step 2", whenBusy: "followUp", requestId: "tg:bot-a:100:0:13" },
+      { botId: "bot-a", text: "Summarize concisely: Q4 notes", whenBusy: "followUp", requestId: "tg:bot-a:100:0:14" },
+      { botId: "bot-a", text: "Approve the plan", whenBusy: "followUp", requestId: "tg:bot-a:100:0:cbq:cb-approve" },
+      { botId: "bot-a", text: "Revise the plan", whenBusy: "followUp", requestId: "tg:bot-a:100:0:cbq:cb-revise" },
+    ],
+  );
+  assert.equal(h.api.editedReplyMarkups.length, 2, "tapped buttons mark selected styles");
+});
+
+test("Bot-bound command admission waits before offset persistence and ignores failed acknowledgments or command edits", async () => {
+  const owner = person(42, "owner");
+  const admitted: string[] = [];
+  let releaseGate!: () => void;
+  const gate = new Promise<void>((resolve) => { releaseGate = resolve; });
+  const queueUpdate = makeUpdate(1, makeMessage(21, owner, "/queue follow-up once"));
+
+  const h = harness({
+    enabled: true,
+    allowedUserId: owner.id,
+    profile: "work",
+    resolveBotBinding: async () => durableBinding,
+    listPromptCommands: async () => [
+      { command: "summarize", description: "Summarize", expand: (arg) => `Summary: ${arg}` },
+    ],
+    batches: [
+      [queueUpdate],
+      [
+        queueUpdate,
+        { update_id: 2, edited_message: makeMessage(21, owner, "/queue edited follow-up") },
+        { update_id: 3, edited_message: makeMessage(22, owner, "/summarize edited template") },
+      ],
+    ],
+    autoStop: false,
+    delayAfterFirstBatch: true,
+    botIngress: {
+      admit: async (message) => {
+        const deduped = admitted.length > 0;
+        admitted.push(telegramBotRequestId(message));
+        if (!deduped) await gate;
+        return { requestId: telegramBotRequestId(message), deduped };
+      },
+    },
+  });
+
+  const realSend = h.api.sendMessage;
+  h.api.sendMessage = async (params) => {
+    if (params.text === "Follow-up accepted.") {
+      throw new Error("acknowledgment transport dropped");
+    }
+    return realSend(params);
+  };
+
+  try {
+    await h.service.start();
+    await waitFor(() => admitted.length === 1);
+    assert.equal(h.config.persistOffsetCalls(), 0, "offset waits until /queue is durably admitted");
+    releaseGate();
+    await waitFor(() => h.config.persistOffsetCalls() === 3);
+
+    assert.deepEqual(admitted, ["tg:bot-a:100:0:21"], "failed acknowledgment and edited commands never re-admit");
+    assert.equal(
+      h.api.sentMessages.filter(({ text }) => text.startsWith("Edited commands are not sent to this Bot.")).length,
+      2,
+    );
+    assert.equal(h.turnMock.startCalls(), 0);
+  } finally {
+    releaseGate();
+    h.service.stop();
+  }
+});
+
+test("Bot-bound unsupported operations (/interrupt, /next, /steer, explicit skills, queue item edits) reply explicitly and never fall back to backingChatId", async () => {
+  const owner = person(42, "owner");
+  const admitted: unknown[] = [];
+  let legacyAborts = 0;
+  const h = harness({
+    enabled: true,
+    allowedUserId: owner.id,
+    profile: "work",
+    resolveBotBinding: async () => durableBinding,
+    existingChats: [{ id: durableBinding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" }],
+    abortChat: async () => { legacyAborts += 1; },
+    listPromptCommands: async () => [
+      {
+        command: "review",
+        description: "Review patch",
+        skillInvocation: { workspaceId: "bot-home-a", invocationId: "skill:review" },
+      },
+    ],
+    batches: [[
+      makeUpdate(1, makeMessage(31, owner, "/interrupt urgent replacement")),
+      makeUpdate(2, makeMessage(32, owner, "/next")),
+      makeUpdate(3, makeMessage(33, owner, "/steer shorter please")),
+      makeUpdate(4, makeMessage(34, owner, "/review src/index.ts")),
+      {
+        update_id: 5,
+        callback_query: { id: "cb-next", from: owner, message: makeMessage(35, BOT, "menu"), data: "turn:next" },
+      },
+      {
+        update_id: 6,
+        callback_query: { id: "cb-q-clear", from: owner, message: makeMessage(36, BOT, "queue"), data: "queue:clear:yes" },
+      },
+    ]],
+    autoStop: true,
+    botIngress: {
+      admit: async (message) => {
+        admitted.push(message);
+        return { requestId: telegramBotRequestId(message), deduped: false };
+      },
+    },
+  });
+
+  await h.service.start();
+  await waitFor(() => h.config.persistOffsetCalls() === 6);
+
+  assert.deepEqual(admitted, [], "unsupported commands are not misrouted as plain prompts");
+  assert.equal(h.turnMock.startCalls(), 0, "legacy turn never started");
+  assert.equal(h.turnMock.appendCalls(), 0, "legacy backingChatId never touched");
+  assert.equal(legacyAborts, 0, "legacy abortChat never called");
+
+  const texts = h.api.sentMessages.map(({ text }) => text);
+  assert.ok(texts.some((text) => text.includes("Interrupt is unavailable on Bot-bound Telegram chats")));
+  assert.ok(texts.some((text) => text.includes("/next is unavailable on Bot-bound Telegram chats")));
+  assert.ok(texts.some((text) => text.includes("Steering is unavailable on Bot-bound Telegram chats")));
+  assert.ok(texts.some((text) => text.includes("/review is unavailable on Bot-bound Telegram chats")));
+  assert.ok(texts.some((text) => text.includes("Next is unavailable on Bot-bound Telegram chats")));
+  assert.ok(h.api.callbackAnswers.some(({ id, text }) => id === "cb-q-clear" && text?.includes("unavailable")));
+});
+
+test("Bot-bound tgbtn: callback retries transient failures without losing the button, recovers across restart, and fails closed on stale or rebound routes", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "aiden-tg-btn-durable-"));
+  const buttonsFile = join(dir, "buttons.json");
+  const outboxFile = join(dir, "outbox.json");
+  const owner = person(42, "owner");
+
+  try {
+    // Part 1: Transient admission failure retries via poll loop without consuming the button,
+    // and post-acceptance UI errors do not fail or replay.
+    const transientStore = createTelegramButtonStore(() => 100);
+    const scope = {
+      profile: "work",
+      chatId: durableBinding.chatId,
+      ownerUserId: owner.id,
+      bindingKey: telegramBotBindingKey(durableBinding),
+    };
+    const transientBtn = transientStore.register({ label: "Deploy", prompt: "Deploy build" }, scope);
+    transientStore.bindMessage([transientBtn], 60);
+    const otherThreadBtn = transientStore.register({ label: "WrongThread", prompt: "Must not run" }, {
+      ...scope,
+      threadId: 99,
+    });
+    transientStore.bindMessage([otherThreadBtn], 60);
+
+    const callbackMsg: TelegramMessage = {
+      ...makeMessage(60, BOT, "Ready?", durableBinding.chatId),
+      reply_markup: { inline_keyboard: [[{ text: "Deploy", callback_data: transientBtn }]] },
+    };
+    const tapUpdate: TelegramUpdate = {
+      update_id: 10,
+      callback_query: { id: "cb-deploy-1", from: owner, message: callbackMsg, data: transientBtn },
+    };
+    const secondTapUpdate: TelegramUpdate = {
+      update_id: 11,
+      callback_query: { id: "cb-deploy-2", from: owner, message: callbackMsg, data: transientBtn },
+    };
+    const wrongScopeUpdate: TelegramUpdate = {
+      update_id: 12,
+      callback_query: { id: "cb-wrong-thread", from: owner, message: callbackMsg, data: otherThreadBtn },
+    };
+    const unknownBtnUpdate: TelegramUpdate = {
+      update_id: 13,
+      callback_query: { id: "cb-unknown", from: owner, message: callbackMsg, data: "tgbtn:unknown" },
+    };
+
+    let attempts = 0;
+    const h1 = harness({
+      enabled: true,
+      allowedUserId: owner.id,
+      profile: "work",
+      buttonStore: transientStore,
+      resolveBotBinding: async () => durableBinding,
+      batches: [[tapUpdate], [tapUpdate, secondTapUpdate, wrongScopeUpdate, unknownBtnUpdate]],
+      autoStop: true,
+      botIngress: {
+        admit: async (message) => {
+          attempts += 1;
+          if (attempts === 1) throw new Error("Bots are open in another Aiden window.");
+          return { requestId: telegramBotRequestId(message), deduped: false };
+        },
+      },
+    });
+    h1.api.editMessageReplyMarkup = async () => {
+      throw new Error("Telegram markup edit failed after acceptance");
+    };
+
+    await h1.service.start();
+    await waitFor(() => h1.config.persistOffsetCalls() === 4);
+
+    assert.equal(attempts, 2, "transient failure retried once and succeeded; consumed/invalid buttons never reached admit");
+    assert.deepEqual(h1.sleepMock.lastArgs(), [3_000]);
+    assert.equal(h1.turnMock.startCalls(), 0);
+    assert.deepEqual(
+      h1.api.callbackAnswers.filter(({ text }) => text === "This action has expired.").map(({ id }) => id),
+      ["cb-deploy-2", "cb-wrong-thread", "cb-unknown"],
+    );
+
+    // Part 2: Crash/restart after session.send accepted the callback prompt but before outbox row persisted.
+    let sessionSends = 0;
+    const deliveredReplies: TelegramBotReply[] = [];
+    const sessionStub = {
+      send: async () => {
+        sessionSends += 1;
+        if (sessionSends === 1) mkdirSync(outboxFile);
+        return { submissionId: "501", deduped: sessionSends > 1 };
+      },
+      awaitReply: async () => ({ kind: "completed" as const, text: "Deployed cleanly." }),
+    };
+
+    const storeBeforeCrash = createTelegramButtonStore(() => 200, { file: buttonsFile });
+    const durableToken = storeBeforeCrash.register({ label: "Ship", prompt: "Ship release" }, scope);
+    storeBeforeCrash.bindMessage([durableToken], 70);
+    await storeBeforeCrash.flush();
+
+    const crashMsg = makeMessage(70, BOT, "Ship?", durableBinding.chatId);
+    const crashTap: TelegramUpdate = {
+      update_id: 20,
+      callback_query: { id: "cb-crash-recover", from: owner, message: crashMsg, data: durableToken },
+    };
+
+    const ingress1 = createTelegramBotIngress({
+      file: outboxFile,
+      session: sessionStub,
+      deliver: async (reply) => void deliveredReplies.push(reply),
+    });
+    const run1 = harness({
+      enabled: true,
+      allowedUserId: owner.id,
+      profile: "work",
+      buttonStore: storeBeforeCrash,
+      resolveBotBinding: async () => durableBinding,
+      batches: [[crashTap]],
+      autoStop: false,
+      botIngress: ingress1,
+    });
+    await run1.service.start();
+    await waitFor(() => sessionSends === 1 && run1.logs.errors.length === 1);
+    assert.equal(run1.config.persistOffsetCalls(), 0, "unrecorded outbox failure holds offset before crash");
+    run1.service.stop();
+    ingress1.stop();
+
+    // Recover outbox storage and restart with a brand-new buttonStore reading buttons.json.
+    rmSync(outboxFile, { recursive: true, force: true });
+    const storeAfterRestart = createTelegramButtonStore(() => 205, { file: buttonsFile });
+    const ingress2 = createTelegramBotIngress({
+      file: outboxFile,
+      session: sessionStub,
+      deliver: async (reply) => void deliveredReplies.push(reply),
+    });
+    const run2 = harness({
+      enabled: true,
+      allowedUserId: owner.id,
+      profile: "work",
+      buttonStore: storeAfterRestart,
+      resolveBotBinding: async () => durableBinding,
+      batches: [[crashTap]],
+      autoStop: true,
+      botIngress: ingress2,
+    });
+    await run2.service.start();
+    await waitFor(() => deliveredReplies.length === 1 && run2.config.persistOffsetCalls() === 1);
+    await ingress2.idle();
+    ingress2.stop();
+
+    assert.equal(sessionSends, 2, "replayed callback deduplicated in session and wrote missing outbox row");
+    assert.deepEqual(deliveredReplies, [{ chatId: durableBinding.chatId, ownerUserId: owner.id, text: "Deployed cleanly." }]);
+
+    // Rebinding the route rejects any remaining button registered for the previous Bot.
+    const storeRebound = createTelegramButtonStore(() => 300, { file: buttonsFile });
+    const oldBotToken = storeRebound.register({ label: "OldBot", prompt: "Old prompt" }, scope);
+    storeRebound.bindMessage([oldBotToken], 80);
+    await storeRebound.flush();
+    let reboundAdmissions = 0;
+    const run3 = harness({
+      enabled: true,
+      allowedUserId: owner.id,
+      profile: "work",
+      buttonStore: storeRebound,
+      resolveBotBinding: async () => ({ ...durableBinding, botId: "bot-b", backingChatId: "telegram-work-bot-b" }),
+      batches: [[{
+        update_id: 30,
+        callback_query: { id: "cb-rebound", from: owner, message: makeMessage(80, BOT, "Old?", durableBinding.chatId), data: oldBotToken },
+      }]],
+      autoStop: true,
+      botIngress: {
+        admit: async () => {
+          reboundAdmissions += 1;
+          return { requestId: "never", deduped: false };
+        },
+      },
+    });
+    await run3.service.start();
+    await waitFor(() => run3.config.persistOffsetCalls() === 1);
+    assert.equal(reboundAdmissions, 0, "button scoped to bot-a never fires against rebound bot-b");
+    assert.ok(run3.api.callbackAnswers.some(({ id, text }) => id === "cb-rebound" && text === "This action has expired."));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Bot-bound /stop, /abort, /cancel, /status, /queue and /help reflect durable session state and fence Stop against successor turns", async () => {
+  const owner = person(42, "owner");
+  let currentState: import("../bot-runtime/bot-session-service.js").BotSessionState = {
+    kind: "running",
+    submissionId: "101",
+  };
+  const stopCalls: Array<{ botId: string; expectedSubmissionId?: string }> = [];
+  const intentLog: string[] = [];
+  const intents = createBotTurnIntents();
+  intents.onIntent((botId, intent) => intentLog.push(`${botId}:${intent}`));
+
+  let legacyAbortCalls = 0;
+  const stopUpdate = makeUpdate(2, makeMessage(202, owner, "/stop"));
+  const buttonStore = createTelegramButtonStore(() => 0);
+  let firstStop = true;
+
+  const hClean = harness({
+    enabled: true,
+    allowedUserId: owner.id,
+    profile: "work",
+    buttonStore,
+    resolveBotBinding: async () => durableBinding,
+    workspaces: [{ id: "work", name: "Work", folderPath: "/work" }],
+    abortChat: async () => { legacyAbortCalls += 1; },
+    botIngress: {
+      admit: async (message) => ({ requestId: telegramBotRequestId(message), deduped: false }),
+    },
+    botSession: {
+      state: async () => currentState,
+      stop: async (botId, options) =>
+        stopWithIntents(intents, botId, async () => {
+          stopCalls.push({ botId, ...(options?.expectedSubmissionId ? { expectedSubmissionId: options.expectedSubmissionId } : {}) });
+          if (firstStop) {
+            firstStop = false;
+            // Submission 101 finishes/stops, successor 102 starts, and this call throws transiently so Telegram redelivers stopUpdate!
+            currentState = { kind: "running", submissionId: "102" };
+            throw new Error("transient IPC timeout after 101 ended");
+          }
+          if (currentState.kind === "running" && (!options?.expectedSubmissionId || currentState.submissionId === options.expectedSubmissionId)) {
+            currentState = { kind: "idle" };
+          }
+          return currentState;
+        }),
+    },
+    batches: [
+      [makeUpdate(1, makeMessage(201, owner, "/status"))],
+      [stopUpdate],
+      [stopUpdate],
+      [
+        {
+          update_id: 3,
+          callback_query: { id: "cb-stale-stop", from: owner, message: makeMessage(203, BOT, "status"), data: "turn:stop:101" },
+        },
+        makeUpdate(4, makeMessage(204, owner, "/abort")),
+        makeUpdate(5, makeMessage(205, owner, "/queue")),
+        makeUpdate(6, makeMessage(206, owner, "/help")),
+      ],
+    ],
+    autoStop: true,
+    delayAfterFirstBatch: true,
+  });
+
+  await hClean.service.start();
+  await waitFor(() => hClean.config.persistOffsetCalls() === 6);
+
+  assert.equal(legacyAbortCalls, 0, "legacy abortChat(backingChatId) is never called");
+  assert.deepEqual(
+    stopCalls,
+    [
+      { botId: "bot-a", expectedSubmissionId: "101" },
+      { botId: "bot-a", expectedSubmissionId: "102" },
+    ],
+    "replayed /stop for 101 and stale turn:stop:101 button both spared successor 102; only fresh /abort stopped 102",
+  );
+  assert.deepEqual(intentLog, [
+    "bot-a:stopping",
+    "bot-a:stopCancelled",
+    "bot-a:stopping",
+  ]);
+  assert.equal(currentState.kind, "idle");
+
+  const statusMsg = hClean.api.sentMessages.find(({ text }) => text.includes("<b>Status:</b> working"));
+  assert.ok(statusMsg, "bound /status reflects live durable running state");
+  assert.match(statusMsg.text, /<b>Queue:<\/b> managed in Bot session/u);
+  const statusCallbacks = statusMsg.replyMarkup?.inline_keyboard.flat().map((b) => b.callback_data) ?? [];
+  assert.ok(statusCallbacks.includes("turn:stop:101"));
+
+  assert.ok(
+    hClean.api.sentMessages.some(({ text }) => text === "That Bot reply already finished."),
+    "replayed /stop and stale button report that the targeted reply already finished",
+  );
+  assert.ok(
+    hClean.api.sentMessages.some(({ text }) =>
+      text === "🛑 Stopped the Bot's active reply and withdrew any queued follow-ups."),
+    "/abort reports truthful durable Stop behavior (withdraws queued follow-ups)",
+  );
+  assert.ok(
+    hClean.api.sentMessages.some(({ text }) => text.includes("<b>⏳ Bot follow-ups</b>")),
+    "bound /queue explains durable follow-ups instead of showing an empty legacy queue",
+  );
+  assert.ok(
+    hClean.api.sentMessages.some(({ text }) => text.includes("Unavailable on durable Bot chats: /interrupt, /next")),
+    "bound /help documents durable Bot commands and unavailable commands accurately",
+  );
+});
+
+test("Bot-bound /queue and tgbtn: share the Bot's real durable conversation history with earlier plain messages", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "aiden-tg-real-history-"));
+  const owner = person(42, "owner");
+  const seenPrompts: string[][] = [];
+  const faux = createFauxModels([
+    (context) => {
+      seenPrompts.push(context.messages.filter((m) => m.role === "user").map((m) => JSON.stringify(m.content)));
+      return fauxAssistantMessage("Noted: marigold.");
+    },
+    (context) => {
+      seenPrompts.push(context.messages.filter((m) => m.role === "user").map((m) => JSON.stringify(m.content)));
+      return fauxAssistantMessage("The code word is marigold.");
+    },
+    (context) => {
+      seenPrompts.push(context.messages.filter((m) => m.role === "user").map((m) => JSON.stringify(m.content)));
+      return fauxAssistantMessage("Confirmed marigold from button.");
+    },
+  ]);
+
+  let ingress: ReturnType<typeof createTelegramBotIngress> | undefined;
+  const session = await createBotSessionService({
+    profileDir: dir,
+    models: faux.models,
+    extension: recordingDeps(),
+    resolveModel: async () => FAUX_MODEL_REF,
+    knownBotIds: async () => new Set(["bot-a"]),
+    onStateChange: (botId, state) => ingress?.botStateChanged(botId, state),
+  });
+  const outboxDelivered: string[] = [];
+  ingress = createTelegramBotIngress({
+    file: join(dir, "outbox.json"),
+    session,
+    deliver: async (reply) => void outboxDelivered.push(reply.text),
+  });
+  const buttonStore = createTelegramButtonStore(() => 10);
+  const confirmBtn = buttonStore.register(
+    { label: "Confirm", prompt: "Confirm the code word again" },
+    {
+      profile: "work",
+      chatId: durableBinding.chatId,
+      ownerUserId: owner.id,
+      bindingKey: telegramBotBindingKey(durableBinding),
+    },
+  );
+  buttonStore.bindMessage([confirmBtn], 99);
+
+  const h = harness({
+    enabled: true,
+    allowedUserId: owner.id,
+    profile: "work",
+    buttonStore,
+    resolveBotBinding: async () => durableBinding,
+    botIngress: ingress,
+    botSession: session,
+    batches: [
+      [makeUpdate(1, makeMessage(10, owner, "Remember the code word is marigold."))],
+      [makeUpdate(2, makeMessage(11, owner, "/queue What was the code word?"))],
+      [{
+        update_id: 3,
+        callback_query: { id: "cb-history-1", from: owner, message: makeMessage(99, BOT, "Confirm?", durableBinding.chatId), data: confirmBtn },
+      }],
+    ],
+    autoStop: true,
+    delayAfterFirstBatch: true,
+  });
+
+  try {
+    await h.service.start();
+    await waitFor(() => outboxDelivered.length === 3, 5_000);
+    await ingress.idle();
+
+    assert.equal(h.turnMock.startCalls(), 0, "zero legacy backing-chat turns");
+    assert.equal(h.turnMock.appendCalls(), 0, "zero legacy backing-chat messages");
+    assert.deepEqual(outboxDelivered, [
+      "Noted: marigold.",
+      "The code word is marigold.",
+      "Confirmed marigold from button.",
+    ]);
+    assert.equal(seenPrompts.length, 3);
+    assert.ok(seenPrompts[1]!.some((entry) => entry.includes("marigold")), "/queue turn sees earlier plain Bot message");
+    assert.ok(seenPrompts[2]!.some((entry) => entry.includes("What was the code word?")), "tgbtn: turn sees earlier /queue turn");
+  } finally {
+    h.service.stop();
+    ingress.stop();
+    await session.shutdown();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Issue #535: Bot-bound Telegram media-group / album retry & recovery
+// ---------------------------------------------------------------------------
+
+function makePhotoAlbumMessage(
+  messageId: number,
+  from: TelegramUser,
+  mediaGroupId: string,
+  fileId: string,
+  caption?: string,
+  chatId = 100,
+  threadId?: number,
+): TelegramMessage {
+  return {
+    message_id: messageId,
+    from,
+    chat: { id: chatId, type: "private" },
+    ...(threadId !== undefined ? { message_thread_id: threadId } : {}),
+    media_group_id: mediaGroupId,
+    photo: [{ file_id: fileId, file_unique_id: `u-${fileId}`, width: 640, height: 480, file_size: 4 }],
+    date: 0,
+    ...(caption !== undefined ? { caption } : {}),
+  };
+}
+
+function createManualTimers() {
+  const timers: Array<{ callback: () => void; ms: number; cancelled: boolean }> = [];
+  return {
+    scheduleTimer(callback: () => void, ms: number) {
+      const entry = { callback, ms, cancelled: false };
+      timers.push(entry);
+      return {
+        cancel() {
+          entry.cancelled = true;
+        },
+      };
+    },
+    pendingCount: () => timers.filter((t) => !t.cancelled).length,
+    flushNext() {
+      const next = timers.find((t) => !t.cancelled);
+      if (!next) return false;
+      next.cancelled = true;
+      next.callback();
+      return true;
+    },
+  };
+}
+
+test("Bot-bound two-photo album retries transient admission failure without re-downloading, preserving both images, caption and identity", async () => {
+  const owner = person(42, "owner");
+  const manualTimers = createManualTimers();
+  const threadBinding = { ...durableBinding, threadId: 7 };
+  const attempts: import("./bot-reply-outbox.js").TelegramBotMessage[] = [];
+
+  const h = harness({
+    enabled: true,
+    allowedUserId: owner.id,
+    profile: "work",
+    resolveBotBinding: async () => threadBinding,
+    scheduleTimer: manualTimers.scheduleTimer,
+    batches: [[
+      // Caption on the second item verifies no "Please review the attached file." prefix leaks in.
+      makeUpdate(1, makePhotoAlbumMessage(501, owner, "album-trip", "photo-a", undefined, 100, 7)),
+      makeUpdate(2, makePhotoAlbumMessage(502, owner, "album-trip", "photo-b", "Trip receipts", 100, 7)),
+    ]],
+    autoStop: false,
+    botIngress: {
+      admit: async (message) => {
+        attempts.push(message);
+        if (attempts.length === 1) {
+          throw new Error("Bot runtime is still starting.");
+        }
+        return { requestId: telegramBotRequestId(message), deduped: false };
+      },
+    },
+  });
+
+  try {
+    await h.service.start();
+    await waitFor(() => h.config.persistOffsetCalls() === 2);
+    assert.equal(manualTimers.pendingCount(), 1, "one debounced timer remains after coalescing two album photos");
+    assert.equal(h.api.downloadFileCalls(), 2, "each photo downloaded once while buffering");
+
+    assert.equal(manualTimers.flushNext(), true);
+    await waitFor(() => attempts.length === 2 && h.api.sendChatActionCalls() === 1);
+
+    assert.equal(h.api.downloadFileCalls(), 2, "retries reuse frozen attachments without re-downloading");
+    assert.deepEqual(h.sleepMock.lastArgs(), [3_000], "first retry backs off 3s");
+    assert.equal(h.turnMock.startCalls(), 0, "no legacy dispatch");
+    assert.equal(h.api.sentMessages.length, 0, "no user-facing error sent on recovered transient failure");
+
+    const finalMsg = attempts[1]!;
+    assert.equal(finalMsg.botId, "bot-a");
+    assert.equal(finalMsg.chatId, 100);
+    assert.equal(finalMsg.threadId, 7);
+    assert.equal(finalMsg.messageId, 501, "original first album message ID is retained for deduplication");
+    assert.equal(finalMsg.text, "Trip receipts");
+    assert.equal(finalMsg.attachments?.length, 2);
+    assert.notEqual(finalMsg.attachments?.[0]?.data, finalMsg.attachments?.[1]?.data);
+  } finally {
+    h.service.stop();
+  }
+});
+
+test("Bot-bound album retry exhaustion reports one error after five attempts, accounts for capacity while pending, and keeps polling", async () => {
+  const owner = person(42, "owner");
+  const manualTimers = createManualTimers();
+  let albumAttempts = 0;
+  const plainAdmitted: string[] = [];
+
+  const sleepGates: Array<() => void> = [];
+  const recordedSleeps: number[] = [];
+  let releaseSecondBatch!: () => void;
+  const secondBatchReady = new Promise<void>((resolve) => { releaseSecondBatch = resolve; });
+
+  const h = harness({
+    enabled: true,
+    allowedUserId: owner.id,
+    profile: "work",
+    resolveBotBinding: async () => durableBinding,
+    scheduleTimer: manualTimers.scheduleTimer,
+    sleep: async (ms, signal) => {
+      recordedSleeps.push(ms);
+      await new Promise<void>((resolve, reject) => {
+        sleepGates.push(resolve);
+        signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      });
+    },
+    batches: [
+      [
+        makeUpdate(1, makePhotoAlbumMessage(601, owner, "album-fail", "photo-1", "Failing album")),
+        makeUpdate(2, makePhotoAlbumMessage(602, owner, "album-fail", "photo-2")),
+      ],
+      Array.from({ length: 20 }, (_, i) =>
+        makeUpdate(10 + i, makePhotoAlbumMessage(700 + i, owner, `fill-${i}`, `p-${i}`)),
+      ),
+      [makeUpdate(40, makeMessage(800, owner, "After exhaustion"))],
+    ],
+    autoStop: false,
+    botIngress: {
+      admit: async (message) => {
+        if (message.messageId === 601) {
+          albumAttempts += 1;
+          throw new Error("Temporary disk failure.");
+        }
+        if (message.messageId === 800) {
+          plainAdmitted.push(message.text);
+        }
+        return { requestId: telegramBotRequestId(message), deduped: false };
+      },
+    },
+  });
+
+  const realGetUpdates = h.api.getUpdates;
+  let pollCall = 0;
+  h.api.getUpdates = async (offset, timeout, signal) => {
+    pollCall += 1;
+    if (pollCall === 2) await secondBatchReady;
+    return realGetUpdates(offset, timeout, signal);
+  };
+
+  try {
+    await h.service.start();
+    await waitFor(() => h.config.persistOffsetCalls() === 2);
+    // Flush album-fail out of mediaGroups and into retryingMediaGroups BEFORE batch 2 arrives!
+    assert.equal(manualTimers.flushNext(), true);
+    await waitFor(() => albumAttempts === 1 && sleepGates.length === 1);
+    assert.equal(manualTimers.pendingCount(), 0, "album-fail left mediaGroups and is now in retryingMediaGroups");
+
+    releaseSecondBatch();
+    await waitFor(() => h.config.persistOffsetCalls() >= 22);
+    assert.equal(
+      h.api.sentMessages.filter(({ text }) => text.includes("queue is full")).length,
+      1,
+      "retryingMediaGroups held slot 1 of 20 so the 20th new buffered album exceeded capacity",
+    );
+
+    // Advance remaining 4 attempts until exhaustion.
+    while (albumAttempts < 5) {
+      if (sleepGates.length > 0) sleepGates.shift()!();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    await waitFor(() =>
+      h.api.sentMessages.some(({ text }) => text === "⚠️ Error: Temporary disk failure.") &&
+      plainAdmitted.length === 1,
+    );
+
+    assert.equal(albumAttempts, 5, "five total attempts before giving up");
+    assert.deepEqual(recordedSleeps.slice(0, 4), [3_000, 6_000, 12_000, 24_000]);
+    assert.deepEqual(
+      h.api.sentMessages.filter(({ text }) => text.startsWith("⚠️ Error:")).map(({ text }) => text),
+      ["⚠️ Error: Temporary disk failure."],
+      "exactly one error message sent upon exhaustion",
+    );
+    assert.deepEqual(plainAdmitted, ["After exhaustion"], "polling continues normally after album exhaustion");
+  } finally {
+    releaseSecondBatch();
+    h.service.stop();
+  }
+});
+
+test("Bot-bound album terminal BotSessionError reports immediately without retries, and stop() during backoff cancels old tasks across restart", async () => {
+  const owner = person(42, "owner");
+  const terminalTimers = createManualTimers();
+  let terminalAttempts = 0;
+
+  const hTerminal = harness({
+    enabled: true,
+    allowedUserId: owner.id,
+    profile: "work",
+    resolveBotBinding: async () => durableBinding,
+    scheduleTimer: terminalTimers.scheduleTimer,
+    batches: [[
+      makeUpdate(1, makePhotoAlbumMessage(901, owner, "album-term", "p1", "Needs model")),
+      makeUpdate(2, makePhotoAlbumMessage(902, owner, "album-term", "p2")),
+    ]],
+    autoStop: false,
+    botIngress: {
+      admit: async () => {
+        terminalAttempts += 1;
+        throw new BotSessionError("needs_model");
+      },
+    },
+  });
+
+  try {
+    await hTerminal.service.start();
+    await waitFor(() => hTerminal.config.persistOffsetCalls() === 2);
+    terminalTimers.flushNext();
+    await waitFor(() => hTerminal.api.sentMessages.length === 1);
+    assert.equal(terminalAttempts, 1, "terminal BotSessionError does not retry");
+    assert.equal(hTerminal.sleepMock.calls(), 0);
+    assert.equal(hTerminal.api.sentMessages[0]?.text, "⚠️ Error: This Bot needs an AI model.");
+  } finally {
+    hTerminal.service.stop();
+  }
+
+  // Stop during backoff, then restart: old retry task must abort cleanly and never admit or send error after restart.
+  const cancelTimers = createManualTimers();
+  let stopAttempts = 0;
+  let abortedSignals = 0;
+  let releaseSleep!: () => void;
+
+  const hCancel = harness({
+    enabled: true,
+    allowedUserId: owner.id,
+    profile: "work",
+    resolveBotBinding: async () => durableBinding,
+    scheduleTimer: cancelTimers.scheduleTimer,
+    sleep: async (_ms, signal) => {
+      await new Promise<void>((resolve, reject) => {
+        releaseSleep = resolve;
+        signal?.addEventListener("abort", () => {
+          abortedSignals += 1;
+          reject(new Error("aborted"));
+        }, { once: true });
+      });
+    },
+    batches: [[makeUpdate(1, makePhotoAlbumMessage(910, owner, "album-stop", "p1", "Cancel me"))], []],
+    autoStop: false,
+    botIngress: {
+      admit: async () => {
+        stopAttempts += 1;
+        throw new Error("Transient lock");
+      },
+    },
+  });
+
+  try {
+    await hCancel.service.start();
+    await waitFor(() => hCancel.config.persistOffsetCalls() === 1);
+    cancelTimers.flushNext();
+    await waitFor(() => stopAttempts === 1);
+
+    hCancel.service.stop();
+    assert.equal(abortedSignals, 1, "stop() aborts in-flight album backoff immediately");
+    releaseSleep?.();
+
+    // Restart service; old task must not wake up or send another attempt/error.
+    await hCancel.service.start();
+    await waitFor(() => hCancel.api.getMeCalls() === 2);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(stopAttempts, 1, "cancelled album task never retries after restart");
+    assert.equal(hCancel.api.sentMessages.length, 0, "cancelled album task sends no error");
+  } finally {
+    hCancel.service.stop();
+  }
+});
+
+test("Bot-bound album with BotReplyAdmittedUnrecordedError keeps retrying past five attempts across generic outbox errors until durable, while unbound albums stay unchanged", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "aiden-tg-album-unrecorded-"));
+  const outboxFile = join(dir, "outbox.json");
+  const owner = person(42, "owner");
+  const manualTimers = createManualTimers();
+  const delivered: TelegramBotReply[] = [];
+  const sessionCalls: Array<{ requestId: string; imageCount: number }> = [];
+
+  const ingress = createTelegramBotIngress({
+    file: outboxFile,
+    session: {
+      send: async (_botId, input) => {
+        sessionCalls.push({ requestId: input.requestId, imageCount: input.attachments?.length ?? 0 });
+        if (sessionCalls.length === 1) mkdirSync(outboxFile);
+        return { submissionId: "88", deduped: sessionCalls.length > 1 };
+      },
+      awaitReply: async () => ({ kind: "completed", text: "Reviewed both receipts." }),
+    },
+    deliver: async (reply) => void delivered.push(reply),
+  });
+
+  let admitAttempts = 0;
+  let revalidations = 0;
+  const h = harness({
+    enabled: true,
+    allowedUserId: owner.id,
+    profile: "work",
+    resolveBotBinding: async () => durableBinding,
+    validateBotBinding: async (captured) => {
+      revalidations += 1;
+      assert.equal(captured.botId, "bot-a");
+      return true;
+    },
+    scheduleTimer: manualTimers.scheduleTimer,
+    batches: [[
+      makeUpdate(1, makePhotoAlbumMessage(950, owner, "album-sticky", "img-1", "Receipts")),
+      makeUpdate(2, makePhotoAlbumMessage(951, owner, "album-sticky", "img-2")),
+    ]],
+    autoStop: false,
+    botIngress: {
+      admit: async (message) => {
+        admitAttempts += 1;
+        // Attempts 2..7 fail with a generic read error (EISDIR on outbox read) past the 5-attempt cutoff;
+        // attempt 8 clears the broken directory so the reply row can finally persist!
+        if (admitAttempts === 8) rmSync(outboxFile, { recursive: true, force: true });
+        return ingress.admit(message);
+      },
+    },
+  });
+
+  try {
+    await h.service.start();
+    await waitFor(() => h.config.persistOffsetCalls() === 2);
+    manualTimers.flushNext();
+    await waitFor(() => delivered.length === 1, 5_000);
+    await ingress.idle();
+
+    assert.equal(admitAttempts, 8, "sticky admitted state retries past the 5-attempt cutoff until outbox row is written");
+    assert.equal(revalidations, 10, "2 inbound updates + 8 admission attempts each revalidate the captured binding");
+    assert.deepEqual(
+      h.sleepMock.lastArgs(),
+      [3_000, 6_000, 12_000, 24_000, 48_000, 60_000, 60_000],
+      "exponential backoff caps at 60s",
+    );
+    assert.equal(h.api.sentMessages.length, 0, "no error sent for an already-accepted album");
+    assert.equal(sessionCalls.length, 2, "attempt 1 admitted; attempts 2..7 failed reading outbox; attempt 8 deduplicated via tg:bot-a:100:0:950");
+    assert.deepEqual(sessionCalls[0], { requestId: "tg:bot-a:100:0:950", imageCount: 2 });
+    assert.deepEqual(sessionCalls[1], { requestId: "tg:bot-a:100:0:950", imageCount: 2 });
+    assert.deepEqual(delivered, [{ chatId: 100, ownerUserId: 42, text: "Reviewed both receipts." }]);
+  } finally {
+    h.service.stop();
+    ingress.stop();
+    await rm(dir, { recursive: true, force: true });
+  }
+
+  // Unbound album queueing remains unchanged.
+  const unboundTimers = createManualTimers();
+  const hUnbound = harness({
+    enabled: true,
+    allowedUserId: owner.id,
+    scheduleTimer: unboundTimers.scheduleTimer,
+    batches: [[
+      makeUpdate(1, makePhotoAlbumMessage(960, owner, "album-unbound", "u1", "Unbound album")),
+      makeUpdate(2, makePhotoAlbumMessage(961, owner, "album-unbound", "u2")),
+    ]],
+    autoStop: false,
+    reply: "Unbound album reply",
+  });
+  try {
+    await hUnbound.service.start();
+    await waitFor(() => hUnbound.config.persistOffsetCalls() === 2);
+    unboundTimers.flushNext();
+    await waitFor(() => hUnbound.turnMock.startCalls() === 1 && hUnbound.api.sentMessages.some(({ text }) => text.includes("Unbound album reply")));
+    assert.equal(hUnbound.turnMock.startedParams()[0]?.content, "Unbound album");
+  } finally {
+    hUnbound.service.stop();
   }
 });

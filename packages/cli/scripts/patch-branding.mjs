@@ -12,7 +12,9 @@
  *    intentionally unchanged — they point at the vendored engine docs that
  *    ship with the bundle.
  *  - telemetry: pi's install ping call sites and endpoint are stripped and
- *    its settings default turned off, wherever that code still ships.
+ *    its settings default turned off. The ping lives in interactive-mode.js,
+ *    which the bundle no longer includes (see the virtual-modules stub in
+ *    build.mjs); the patch stays as a cheap guard in case it ever returns.
  *
  * Aiden has no interactive terminal UI, so pi's startup header, logo and
  * theme defaults are not patched.
@@ -95,15 +97,13 @@ const patches = [
 let applied = 0;
 for (const patch of patches) {
 	let contents = readFileSync(patch.file, "utf-8");
-	for (const { from, to, appliedMarker } of patch.replacements) {
+	for (const { from, to } of patch.replacements) {
 		if (contents.includes(from)) {
 			contents = contents.replaceAll(from, to);
 			applied += 1;
-		} else if (contents.includes(appliedMarker ?? to)) {
+		} else if (contents.includes(to)) {
 			// Already applied on a previous build (npm operations restore the
 			// pristine dist, so this is the common re-run path, not an error).
-			// appliedMarker covers replacements whose `to` text itself changes
-			// between patch revisions (e.g. the banner rows).
 			applied += 1;
 		} else {
 			throw new Error(

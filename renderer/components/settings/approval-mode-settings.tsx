@@ -23,12 +23,15 @@ import { isUsable } from "../../lib/model-picker-data";
 import { queryKeys, useProviders, useSettings } from "../../lib/queries";
 import type { AppSettings } from "../../lib/types";
 import { prefersReducedMotion } from "../../lib/appearance-runtime";
+import { glideIntoView } from "../../lib/scroll-into-view";
 import { botMessagingEnabled } from "../../shared/bot-messages";
 import { botRoutinesGoAhead } from "../../shared/bot-rules";
+import { useAppCapabilities } from "../../lib/app-capabilities";
+import { localComputerNoun } from "../../shared/computer-noun";
 import {
-  APPROVAL_MODE_HELP,
   APPROVAL_MODE_LABELS,
   APPROVAL_MODES,
+  approvalModeHelp,
   effectiveApprovalMode,
   parseApprovalModel,
   type ApprovalMode,
@@ -82,6 +85,7 @@ export function ApprovalModeSettings({ children }: { /** The rules page, under t
   const usable = (providers.data ?? []).filter(isUsable);
   const usableModel = usable.length > 0;
   const mode = effectiveApprovalMode(settings.data, usableModel);
+  const computer = localComputerNoun(useAppCapabilities().platform);
   const modes = APPROVAL_MODES.filter((value) => value !== "auto" || usableModel);
   const showChanges = settings.data?.approvalModeOrigin === "upgrade" && settings.data.approvalChangesSeen !== true;
   const legacyRoutines = botRoutinesGoAhead(settings.data);
@@ -96,8 +100,8 @@ export function ApprovalModeSettings({ children }: { /** The rules page, under t
   // note (settings), Auto's row (providers) and the rules list.
   const settled = childrenSettled && !settings.isLoading && !providers.isLoading;
   React.useEffect(() => {
-    if (scrollRequest === null || !settled) return;
-    messagingRow.current?.scrollIntoView({ block: "center", behavior: prefersReducedMotion() ? "auto" : "smooth" });
+    if (scrollRequest === null || !settled || !messagingRow.current) return;
+    return glideIntoView(messagingRow.current, { animate: !prefersReducedMotion() });
   }, [scrollRequest, settled]);
 
   const choose = (next: ApprovalMode) => {
@@ -111,7 +115,7 @@ export function ApprovalModeSettings({ children }: { /** The rules page, under t
         <Callout role="note" aria-label="What changed" className="mb-7 gap-2 p-4">
           <Text variant="strong">What changed</Text>
           <ul className="flex list-disc flex-col gap-1 pl-5 text-small text-secondary">
-            <li>Approvals now follow one mode for this Mac. You're on {APPROVAL_MODE_LABELS[mode]}, so Aiden asks as before.</li>
+            <li>Approvals now follow one mode for this {computer}. You're on {APPROVAL_MODE_LABELS[mode]}, so Aiden asks as before.</li>
             <li>Auto lets a model approve routine actions and ask you about the rest. It's your choice and never turns on by itself.</li>
             <li>Workspaces with Full access now use Never ask, with commands and file changes still allowed there.</li>
             <li>A routine no longer waits for your OK. A step that needs it is skipped and the Bot tells you.</li>
@@ -153,7 +157,7 @@ export function ApprovalModeSettings({ children }: { /** The rules page, under t
               <span className="flex flex-col gap-1">
                 <Text>{APPROVAL_MODE_LABELS[value]}</Text>
                 <Text as="span" variant="small" color="secondary">
-                  {APPROVAL_MODE_HELP[value]}
+                  {approvalModeHelp(value, computer)}
                 </Text>
               </span>
             </label>

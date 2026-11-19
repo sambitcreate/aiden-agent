@@ -421,8 +421,6 @@ struct NewChatInWorkspaceIntent: AppIntent {
     }
 }
 
-enum AidenIntentError: Error { case invalidDestination }
-
 struct AidenShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(

@@ -7,7 +7,7 @@ import { hostQueryKeys } from "../lib/hosts/host-query-keys";
 import { RemoteHostAdapter } from "../lib/hosts/remote-host-adapter";
 import { hostResultValue } from "../lib/hosts/host-chat-adapter";
 import { type HostFolderPlace } from "../lib/hosts/remote-new-chat";
-import { RemoteFolderList } from "./remote-new-chat-view";
+import { RemoteFolderList } from "./remote-folder-list";
 import { PEER_PROJECT_CLONE_FEATURE, PEER_PROJECT_FILES_MAX_BYTES, type PeerProjectSource } from "../shared/peer-project-clone";
 import type { PeerHostStatus, PeerHostView } from "../shared/peer-host";
 import type { HostBrowserPage } from "../lib/hosts/host-resources";
