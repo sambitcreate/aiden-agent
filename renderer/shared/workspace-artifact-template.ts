@@ -811,9 +811,10 @@ export function workspaceArtifactValueProblem(steps: readonly TemplateStep[], va
             if (problem) return `${part.param} must be a git revision there: ${problem}.`;
           }
           // git runs with GIT_LITERAL_PATHSPECS=1, so `*`, `?` and `[` name themselves (`app/[id]/page.tsx`);
-          // a leading `:` is refused as well, the form pathspec magic (`:/`, `:(top)`) takes.
-          if (rule === "path" && git && text.startsWith(":")) {
-            return `${part.param} must name a file inside the workspace: no leading :, which git reads as pathspec magic that reaches the repository root.`;
+          // a `:` anywhere is refused: leading, it is pathspec magic (`:/`, `:(top)`); inside, git
+          // diff and grep read `HEAD:secret/s` as a file from the repository root.
+          if (rule === "path" && git && text.includes(":")) {
+            return `${part.param} must name a file inside the workspace: no :, which git reads as pathspec magic (:/) or a file at a revision (HEAD:path), both of which reach past the workspace.`;
           }
           if (rule === "target" && (/^[-+]/u.test(text) || /[:@]/u.test(text))) {
             return `${part.param} must be a number or a branch-like name there: no leading - or +, and no :, @ or ://, which gh reads as another repository or a URL.`;

@@ -496,6 +496,13 @@ test("in a workspace that is a folder of a larger repository, git reaches no fil
   for (const [command, value, problem] of refused) {
     assert.throws(() => resolve(command, [value]), problem, `${command} with ${value}`);
   }
+  // A : inside a file value names a file at a revision, which git diff and grep read from the repository root.
+  assert.throws(() => resolve("git diff {{a}} {{b}}", ["ws/f", "HEAD:secret/s"]), /b must name a file inside the workspace: no :/u);
+  assert.throws(() => resolve("git grep -e TOP {{f}}", ["HEAD:secret/s"]), /f must name a file inside the workspace: no :/u);
+  // The same files as plain paths inside the workspace still run.
+  const grep = await runResolved(resolve("git grep -e hello {{f}}", ["f"]), ws);
+  assert.equal(grep.exitCode, 0, grep.stderr);
+  assert.match(grep.stdout, /hello/u);
   // `:/` a template writes itself is a file named `:/`, not the repository root, so these touch nothing outside.
   for (const command of ["git checkout -- :/ {{file}}", "git add :/ {{file}}"]) {
     await runResolved(resolve(command, ["f"]), ws);
@@ -573,8 +580,8 @@ test("git reads * ? [ in a file value as part of the file's name, in every comma
     assert.notEqual(ran.exitCode, 0, value);
     assert.equal(staged(), "app/[id]/page.tsx\n", value);
   }
-  // A leading : (pathspec magic) is still refused.
-  assert.throws(() => add("git add {{file}}", ":(glob)app/*"), /file must name a file inside the workspace: no leading :/u);
+  // A : (pathspec magic) is still refused.
+  assert.throws(() => add("git add {{file}}", ":(glob)app/*"), /file must name a file inside the workspace: no :/u);
 });
 
 test("a branch value for git checkout never discards a file's uncommitted edits", async (t) => {
