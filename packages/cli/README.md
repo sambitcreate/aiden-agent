@@ -265,7 +265,7 @@ The build prefers architecture-verified prebuilt helpers from `prebuilt/native/<
 
 ## How the rebrand works
 
-Pi reads its identity (`APP_NAME`, config dir, env var names) from the `package.json` nearest its running code. The build bundles Pi's code into `dist/app/cli.js` and writes a generated `dist/app/package.json` with `piConfig: { name: "aiden", configDir: ".aiden" }`. That is the whole rebrand mechanism, and `tests/bundle.test.mjs` pins it. The bundle script is a port of Pi's own `build-coding-agent-bundle.mjs` (same externals and lazy-loader emission); runtime externals resolve from this package's `node_modules`.
+Pi reads its identity (`APP_NAME`, config dir, env var names) from the `package.json` nearest its running code. The build bundles Pi's code into `dist/app/cli.js` and writes a generated `dist/app/package.json` with `piConfig: { name: "aiden", configDir: ".aiden" }`. That is the whole rebrand mechanism, and `tests/bundle.test.mjs` pins it. The bundle script is a port of Pi's own `build-coding-agent-bundle.mjs` (same externals and lazy-loader emission); runtime externals resolve from this package's `node_modules`. `dependencies` lists only what the bundle still loads from `node_modules` at run time (photon-node, quickjs-wasi's wasm file, minimatch for the glob worker, and the optional sherpa-onnx-node). The pi packages and every other library esbuild inlines are `devDependencies`, so a production install (`npm ci --omit=dev`, as the Docker image does, or installing the `npm pack` tarball) pulls in only those.
 
 `scripts/patch-branding.mjs` (run inside every build) rewrites Pi's installed dist so server chats use a system prompt that says "running inside Aiden". The shipped bundle is asserted Pi-free by `tests/bundle.test.mjs`.
 

@@ -95,15 +95,13 @@ const patches = [
 let applied = 0;
 for (const patch of patches) {
 	let contents = readFileSync(patch.file, "utf-8");
-	for (const { from, to, appliedMarker } of patch.replacements) {
+	for (const { from, to } of patch.replacements) {
 		if (contents.includes(from)) {
 			contents = contents.replaceAll(from, to);
 			applied += 1;
-		} else if (contents.includes(appliedMarker ?? to)) {
+		} else if (contents.includes(to)) {
 			// Already applied on a previous build (npm operations restore the
 			// pristine dist, so this is the common re-run path, not an error).
-			// appliedMarker covers replacements whose `to` text itself changes
-			// between patch revisions (e.g. the banner rows).
 			applied += 1;
 		} else {
 			throw new Error(

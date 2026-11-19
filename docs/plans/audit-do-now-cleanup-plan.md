@@ -43,6 +43,9 @@ The work runs in two lanes so the phone work can proceed alongside the desktop w
 - B6: drop the duplicate `yaml` devDependency and keep the runtime entry.
 - B23: delete the unused `main/tsconfig.json`.
 - B25: stop the Linux jobs re-running type-check and lint, but only if the static job is guaranteed to run for every path that triggers them. If it isn't, leave the Linux jobs as they are.
+- B7: done, with changed scope. `dependencies` now hold `@silvia-odwyer/photon-node`, `quickjs-wasi` and `minimatch` (11.0.3, the version already locked), with `sherpa-onnx-node` still optional. The seven pi packages, `@modelcontextprotocol/sdk`, `posthog-node`, `proper-lockfile`, `qrcode` and `typebox` moved to `devDependencies` at unchanged versions; the lockfile only gains `dev` flags. `minimatch` is new because `main/services/coding-tool-matcher.ts` resolves it at run time for the glob worker and it previously arrived only through pi. `ws` is bundled (only its optional `bufferutil` and `utf-8-validate` stay external, and neither is installed). `jiti` was never resolvable from `dist/app` (it sits only under pi-coding-agent's own `node_modules`), and every CLI resource loader passes `noExtensions: true`, so it was left out rather than added. The `--omit=dev` install dropped from 247 packages and 245 MB to 8 packages and 38 MB. The `npm pack` tarball installed into an empty directory runs `--version`, `--help` and `serve --no-remote --no-pair`, and photon, quickjs-wasi's wasm file and minimatch resolve from `dist/app`.
+- B8: done. The Dockerfile comment names photon, quickjs-wasi, minimatch and the optional sherpa-onnx, not chord.
+- B10: done. `patch-branding.mjs` checks `to` directly; no test referenced `appliedMarker`.
 - Check: `npm run type-check`, `npm run lint`, `npm run build`, `npm run test:ci-policy`. Then make an unpacked package (`electron-builder --dir`) and check that node-pty loads from it.
 
 **Phase 2: CLI package**
