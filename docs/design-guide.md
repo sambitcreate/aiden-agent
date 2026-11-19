@@ -292,6 +292,43 @@ join it while open and keep handling their own Escape.
   that holds a text field must pass its `onEscapeKeyDown` through
   `keepOpenWhileComposing` too; their shared content components do not.
 
+## Enforced rules
+
+`npm run check:aiden-rules` (`scripts/check-aiden-rules.mjs`) checks the rules a
+script can check and prints `file:line rule message` for each hit:
+
+- `no-brain-icon`: no `Brain*` icon imports, components or `brain` icon names in
+  the renderer, and no renderer or `public/` file named for a brain.
+- `text-input-focus-ring`: `<input>`, `<textarea>`, `Input` and `Textarea` add no
+  `focus:`/`focus-visible:`/`focus-within:` ring, outline or border class.
+  Checkbox, radio and other non-text inputs keep their rings.
+- `no-dialog-dom-sniff`: no selector strings that look for an open dialog, menu
+  or popover in the DOM; ask the layer stack instead.
+- `network-allowlist`: the models.dev, PostHog ingestion, fal, Replicate,
+  OpenRouter models/benchmarks and Artificial Analysis endpoints appear only in
+  the modules that own them (AGENTS.md "Release model metadata" and "Product
+  analytics"). Tests, docs and `.memory` are not checked.
+- `no-source-grep-test`: a test may not read a production `.ts`, `.tsx` or `.css`
+  file and `match`, `doesNotMatch` or `includes` against it.
+- `literal-motion`: no literal `cubic-bezier(` in renderer CSS or code outside a
+  `--motion-*` or `--ease-*` token definition. Comments are skipped.
+
+Known gaps: the checker does not see focus styles on `focus-within` wrappers,
+CSS `:focus` outlines, a `className` passed in through a variable, or a
+focus shadow ring that does not name the accent (`focus:shadow-[…]` with a
+literal color). It also
+misses source-grep tests that use `indexOf` or `split` instead of `match` or
+`includes`, and an OpenRouter base URL that is joined with a catalog path in
+another file.
+
+An exception needs a reason. For one line, put
+`// check-aiden-rules: allow <rule> <why>` (or `/* … */` in CSS) on that line or
+the line above. For a file, add `{"rule", "file", "reason"}` to
+`scripts/aiden-rules-allowlist.json`, with `"max": N` when the file may keep at
+most N hits. The list only shrinks: an entry that no longer matches, or whose
+`max` is above the real count, fails until you remove it or lower `max`. There
+is no `--update`.
+
 ## Verification
 
 Check shared and custom actions in onboarding, the chat toolbar and composer,
