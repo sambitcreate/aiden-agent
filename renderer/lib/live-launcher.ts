@@ -27,7 +27,7 @@ export class LiveLauncherStore {
   private state: LiveLaunchState = LIVE_LAUNCH_IDLE;
   private launcher: (() => void) | null = null;
   private readonly listeners = new Set<Listener>();
-  private readonly beforeStart = new Set<() => void>();
+  private readonly beforeStart = new Set<() => void | Promise<void>>();
 
   get(): LiveLaunchState {
     return this.state;
@@ -64,20 +64,22 @@ export class LiveLauncherStore {
    * Runs before Live takes the microphone, from any entry point. Composer
    * dictation registers here so the two never record at once.
    */
-  onBeforeStart(callback: () => void): () => void {
+  onBeforeStart(callback: () => void | Promise<void>): () => void {
     this.beforeStart.add(callback);
     return () => this.beforeStart.delete(callback);
   }
 
-  /** Called by the dock right before it opens setup or starts a session. */
-  prepareStart(): void {
-    for (const callback of [...this.beforeStart]) {
-      try {
-        callback();
-      } catch {
+  /**
+   * Called by the dock right before it opens setup or starts a session.
+   * Resolves once every registered capture has let go of the microphone.
+   */
+  async prepareStart(): Promise<void> {
+    await Promise.allSettled(
+      [...this.beforeStart].map(async (callback) => {
         // One composer's failure to stop dictation must not block Live.
-      }
-    }
+        await callback();
+      }),
+    );
   }
 }
 

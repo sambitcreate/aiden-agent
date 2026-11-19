@@ -28,8 +28,10 @@ export function useSettledPrimaryAction(wanted: "live" | "send"): {
   action: "live" | "send";
   shownAt: number;
 } {
+  // A composer that mounts with Live already offered still starts on Send and
+  // reaches Live through the same delay, so the press guard always applies.
   const [settled, setSettled] = React.useState<{ action: "live" | "send"; shownAt: number }>(() => ({
-    action: wanted,
+    action: "send",
     shownAt: 0,
   }));
   React.useEffect(() => {

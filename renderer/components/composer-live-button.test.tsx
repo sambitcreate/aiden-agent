@@ -140,8 +140,14 @@ test("an empty draft offers Live in Send's place; typing turns it back into Send
   offerLive();
   render(<Harness />);
   const textbox = (await screen.findByRole("textbox")) as HTMLTextAreaElement;
+  // Even a composer that mounts with Live already offered starts on Send.
+  assert.ok(!liveButton(), "a fresh composer never opens on Live under the pointer");
+  assert.ok(sendButton());
   await waitFor(() => assert.ok(liveButton()), { timeout: LIVE_SWAP_DELAY_MS * 4 });
   assert.equal(sendButton(), null, "Live takes Send's place rather than sitting beside it");
+  // The press guard covers the swap on mount too.
+  fireEvent.click(liveButton()!);
+  assert.equal(launches, 0);
 
   // Enter on an empty box never starts a voice session.
   await wait(LIVE_PRESS_GUARD_MS + 50);
@@ -210,13 +216,46 @@ test("dictation and Live never listen at once", async () => {
   assert.equal(liveButton(), null, "a recording keeps Send in place");
 
   // Starting Live from any entry point finishes the recording and keeps its words.
-  await act(async () => liveLauncher.prepareStart());
+  await act(() => liveLauncher.prepareStart());
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "voice:transcribeLocal")));
   await waitFor(() => assert.equal((screen.getByRole("textbox") as HTMLTextAreaElement).value, "kept words"));
 
   // While Live has the microphone, dictation can't start.
   offerLive({ ...READY, sessionActive: true });
   assert.equal((screen.getByRole("button", { name: "Start voice input" }) as HTMLButtonElement).disabled, true);
+});
+
+test("a dictation still opening the microphone is cancelled before Live starts", async () => {
+  let grantMicrophone: () => void = () => {};
+  let stoppedTracks = 0;
+  Object.defineProperty(navigator, "mediaDevices", {
+    configurable: true,
+    value: {
+      getUserMedia: () =>
+        new Promise((resolve) => {
+          grantMicrophone = () => resolve({ getTracks: () => [{ stop() { stoppedTracks += 1; } }] });
+        }),
+    },
+  });
+  offerLive();
+  render(<Harness />);
+  await screen.findByRole("textbox");
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Start voice input" }));
+  });
+  // Live asks for the microphone while dictation is still waiting for it.
+  let released = false;
+  await act(async () => {
+    void liveLauncher.prepareStart().then(() => { released = true; });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  assert.equal(released, true, "nothing was captured yet, so Live may go ahead");
+  await act(async () => {
+    grantMicrophone();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+  assert.equal(stoppedTracks, 1, "the late microphone grant is closed at once");
+  assert.ok(!screen.queryByRole("button", { name: "Stop recording" }), "dictation never starts recording");
 });
 
 function DockHarness({
@@ -267,4 +306,27 @@ test("the dock offers Live to the composer only where it can start, and a press 
   assert.equal(setupOpened, 1, "the first press opens setup rather than starting");
   assert.equal(started, 0);
   assert.equal(dictationStopped, 1, "dictation lets go of the microphone first");
+});
+
+test("once set up, a press starts Live only after dictation has let go of the microphone", async () => {
+  localStorage.setItem("aiden.live.setup-complete", "true");
+  let started = 0;
+  const live: AssistantLiveController = {
+    ...idleLiveController,
+    setupComplete: true,
+    start: async () => { started += 1; },
+  };
+  render(<DockHarness live={live} />);
+  assert.equal(liveLauncher.get().needsSetup, false);
+  let release: () => void = () => {};
+  const unregister = liveLauncher.onBeforeStart(() => new Promise<void>((resolve) => { release = resolve; }));
+  act(() => { liveLauncher.launch(); });
+  await act(() => new Promise((resolve) => setTimeout(resolve, 10)));
+  assert.equal(started, 0, "Live waits while the microphone is still held");
+  await act(async () => {
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  unregister();
+  assert.equal(started, 1);
 });

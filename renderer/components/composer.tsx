@@ -826,22 +826,21 @@ export function Composer({
       liveOffered: offerLive && liveLaunch.offered,
       liveSessionActive: liveLaunch.sessionActive,
       draftHasContent:
-        text.trim().length > 0 || attachments.length > 0 || commentTray !== null || Boolean(selectedSkill) || dictationPreviewing,
+        text.trim().length > 0 ||
+        attachments.length > 0 ||
+        attaching ||
+        commentTray !== null ||
+        Boolean(selectedSkill) ||
+        dictationPreviewing,
       running: isGenerating || sending || firstSendPending,
       dictating: voice.recording || voice.transcribing,
     }),
   );
   // Live and dictation never listen at once: starting Live (from here, the
-  // shortcut or /assistant) finishes a recording first, keeping its words.
-  const voiceRef = React.useRef(voice);
-  voiceRef.current = voice;
-  React.useEffect(
-    () =>
-      liveLauncher.onBeforeStart(() => {
-        if (voiceRef.current.recording) voiceRef.current.stop();
-      }),
-    [],
-  );
+  // shortcut or /assistant) finishes a recording first, keeping its words,
+  // cancels one still opening the microphone, and waits for the release.
+  const { releaseMicrophone } = voice;
+  React.useEffect(() => liveLauncher.onBeforeStart(() => releaseMicrophone()), [releaseMicrophone]);
 
   React.useLayoutEffect(() => {
     slashPaletteBlockedRef.current = slashPaletteBlocked;

@@ -240,13 +240,13 @@ export function AssistantDockPresentation({
     }
     if (action === "setup") {
       // Composer dictation lets go of the microphone before Live asks for it.
-      liveLauncher.prepareStart();
+      // Setup captures nothing until its own Start Live.
+      void liveLauncher.prepareStart();
       live.setSetupOpen(true);
       return;
     }
     if (action === "start") {
-      liveLauncher.prepareStart();
-      void live.start();
+      void liveLauncher.prepareStart().then(() => live.start());
       return;
     }
     onOpenSettings(live.available ? "computerUse" : "providers");
