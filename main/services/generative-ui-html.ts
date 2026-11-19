@@ -25,7 +25,7 @@ import {
   MAX_GUEST_PROMPT_CHARS,
 } from "../../renderer/shared/generative-ui-bridge.js";
 import { generativeUiKitCss } from "./generative-ui-kit.js";
-import { HtmlScanner, SELECT_CONTENT_LIMIT, readExcerpt, XML_DECLARATIONS_LIMIT, XML_HTML_TEXT_LIMIT, type HtmlFindings } from "./generative-ui-html-scan.js";
+import { HtmlScanner, readExcerpt, XML_DECLARATIONS_LIMIT, XML_HTML_TEXT_LIMIT, type HtmlFindings } from "./generative-ui-html-scan.js";
 
 // The admission check (generative-ui-html-scan.ts) reads the HTML the way a
 // browser does and refuses only what would load or run something; the
@@ -41,7 +41,6 @@ function quoteMatch(excerpt: string): string {
 
 /** What to change for a visual refused as too complex to check. */
 function limitAdvice(limit: string): string {
-  if (limit === SELECT_CONTENT_LIMIT) return "Move the SVG, MathML or <style> out of the <select>.";
   if (limit === XML_DECLARATIONS_LIMIT) return "Remove the DOCTYPE internal subset and the <!ENTITY> and <!ATTLIST> declarations from the XML the script parses.";
   if (limit === XML_HTML_TEXT_LIMIT) {
     return "Give those elements text only (no child elements, comments or CDATA sections holding < or &), build them with document.createElement, or parse the markup as text/html.";

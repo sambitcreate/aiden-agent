@@ -168,6 +168,8 @@ test("checking, wrapping or streaming a visual up to the size cap takes linear t
     xmlUnclosedTextElements: (size) => fill(size, "<style ", XML_SHAPE_START, XML_SHAPE_END),
     // Tags parse5 drops in a <select>, checked as they are read.
     selectContent: (size) => fill(size, '<img src="#" onclick="f(1)"><b x>', "<select>", "</select>"),
+    // An <svg> in a <select> is built and read as SVG.
+    selectIcons: (size) => fill(size, '<option><svg><path d="M0 0"/></svg>a</option>', "<select>", "</select>"),
     cssUrls: (size) => fill(size, "url(a)", "<style>", "</style>"),
     noscriptBlocks: (size) => fill(size, "<noscript><p>x</p></noscript>"),
     contentMovedOutOfTables: (size) => fill(size, "a<i></i>", "<table>"),
@@ -779,36 +781,57 @@ test("html admission names the XML a script parses that it cannot read as the br
 });
 
 // parse5 still drops every tag in a <select> but its options, where
-// Chromium's customizable <select> builds them.
+// Chromium's customizable <select> builds them, and an <svg>, <math> or
+// <style> there is read as SVG, MathML or CSS, as Chromium reads it.
 test("html admission reads the elements a <select> holds as Chromium builds them, written or set by a script, finished or streaming", () => {
   const errorImage = `<img src=x onerror="location='javascript:alert(1)'">`;
+  const setBySelect = (html: string) => `<div id="d"></div><script>d.innerHTML = '${html.replace(/'/gu, "\\'")}';</script>`;
   const refused: Record<string, [string, RegExp]> = {
     "an image's handler": [`<select>${errorImage}</select>`, /found "onerror=/u],
-    "an image's handler set by a script": [
-      `<div id="d"></div><script>d.innerHTML = '<select>${errorImage.replace(/'/gu, "\\'")}</select>';</script>`,
-      /cannot load remote images or scripts/u,
-    ],
+    "an image's handler set by a script": [setBySelect(`<select>${errorImage}</select>`), /cannot load remote images or scripts/u],
     "a remote image": ['<select><option>a</option><img src="https://evil.test/a.png"></select>', /found "src=/u],
     "a frame": ['<select><iframe src="about:blank"></iframe></select>', /cannot include iframes/u],
     "an SVG script, which decodes character references": [
       "<select><svg><script>location&#61;'javascript:alert(1)'</script></svg></select>",
-      /a <select> holds an <svg>, <math> or <style> element.*Move the SVG, MathML or <style> out of the <select>/u,
+      /found "location=/u,
     ],
-    "a style sheet": ['<select><style>p{background:url("https://evil.test/a.png")}</style></select>', /a <select> holds/u],
+    "an SVG link in an option": ['<select><option><svg><a href="javascript:alert(1)"><text>t</text></a></svg>Red</option></select>', /found "href=/u],
+    "an SVG link set by a script": [
+      setBySelect('<select><option><svg><a href="javascript:alert(1)"><text>t</text></a></svg>Red</option></select>'),
+      /cannot load remote images or scripts/u,
+    ],
+    "an SVG <set> of href": ['<select><option><svg><a><set attributeName="href" to="javascript:alert(1)"/></a></svg></option></select>', /found "to=/u],
+    "an image in an SVG <foreignObject>": [`<select><option><svg><foreignObject>${errorImage}</foreignObject></svg></option></select>`, /found "onerror=/u],
+    "an image in MathML text": [`<select><option><math><mi>${errorImage}</mi></math></option></select>`, /found "onerror=/u],
+    "a style sheet": ['<select><style>p{background:url("javascript:alert(1)")}</style></select>', /found "url\(/u],
+    "a style sheet in an SVG <foreignObject>": [
+      '<select><option><svg><foreignObject><style>p{background:url(javascript:alert(1))}</style></foreignObject></svg></option></select>',
+      /found "url\(/u,
+    ],
   };
   for (const [name, [html, message]] of Object.entries(refused)) {
     assert.throws(() => validateGenerativeUiHtml(html), message, name);
     assert.equal(isGenerativeUiDraftAcceptable(html), false, `draft verdict for ${name}`);
-    assert.equal(streamInChunks(html, 5).admitted, false, `streamed draft verdict for ${name}`);
+    for (const chunk of [1, 7, 64]) assert.equal(streamInChunks(html, chunk).admitted, false, `draft verdict for ${name} streamed by ${chunk}`);
   }
+  const icon = '<svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5"/><path d="M1 1L5 5"/></svg>';
   const admitted = [
     '<select><option>One</option><img src="data:image/png;base64,AA" alt=""><button onclick="this.textContent=\'x\'">b</button></select>',
     "<select><template><svg><rect/></svg></template></select><svg><rect/></svg>",
+    `<style>select,::picker(select){appearance:base-select}</style><select><button><selectedcontent></selectedcontent></button><option>${icon} Red</option><option>Blue</option></select>`,
+    `<select><option>${icon}Red</option></select>`,
+    `<select><button>${icon}</button><option>A</option></select>`,
+    "<select><option>Red</option><style>option{color:red}</style></select>",
+    '<select><option><svg><style>.c{fill:red}</style><rect class="c" width="4" height="4"/></svg>Red</option></select>',
+    "<select><option><math><mi>x</mi><mo>=</mo><mn>2</mn></math></option></select>",
+    "<template><select><svg><circle r=1></circle></svg></select></template>",
+    "<table><tr><td><select><svg><text>t</text></svg><option>a</option></select></td></tr></table>",
+    setBySelect(`<select><option>${icon}Red</option></select>`),
   ];
   for (const html of admitted) {
     assert.ok(validateGenerativeUiHtml(html).byteLength > 0, html);
     assert.equal(isGenerativeUiDraftAcceptable(html), true, html);
-    assert.equal(streamInChunks(html, 5).admitted, true, html);
+    for (const chunk of [1, 7, 64]) assert.deepEqual(streamInChunks(html, chunk), { admitted: true, shown: html }, `${html} streamed by ${chunk}`);
   }
 });
 

@@ -6,8 +6,9 @@
 // what the browser sees. Each start tag is checked as the tokenizer reads it
 // and each element as the parser creates it, so a tag inside a <template>,
 // one the tree builder moves, or one parse5 drops inside a <select> (which
-// Chromium builds) still counts. An <svg>, <math> or <style> in a <select>,
-// which Chromium reads differently from parse5, is refused.
+// Chromium builds) still counts. An <svg>, <math> or <style> in a <select>
+// is built by parse5's in-body rules, as Chromium builds it, so what it holds
+// is read as SVG, MathML or CSS.
 //
 // One scanner reads a whole visual, or a streaming draft chunk by chunk:
 // each chunk is parsed once, so a draft costs no more than the finished
@@ -54,7 +55,7 @@
 // Labels ("JavaScript: 41%"), comparisons in scripts ("i<base && i>0") and
 // plain strings pass.
 
-import { Parser, Token, defaultTreeAdapter, html as htmlSpec, type DefaultTreeAdapterMap, type DefaultTreeAdapterTypes, type TreeAdapter } from "parse5";
+import { Parser, Token, defaultTreeAdapter, type DefaultTreeAdapterMap, type DefaultTreeAdapterTypes, type TreeAdapter } from "parse5";
 
 type Element = DefaultTreeAdapterTypes.Element;
 
@@ -83,7 +84,7 @@ export const MAX_HTML_FOSTER_PARENTED = 16_384;
 class StructureLimit extends Error {}
 
 /** Start tags parse5 drops inside a <select> that change how Chromium reads what follows. */
-const SELECT_DROPPED_CONTENT: ReadonlySet<string> = new Set(["svg", "math", "style"]);
+const SELECT_BODY_CONTENT: ReadonlySet<string> = new Set(["svg", "math", "style"]);
 const EMBEDDING_TAGS: ReadonlySet<string> = new Set(["iframe", "object", "embed", "applet", "frame", "frameset", "base", "link"]);
 const URL_ATTRIBUTES: ReadonlySet<string> = new Set(["href", "src", "action", "formaction", "xlink:href", "data"]);
 const SCRIPT_SOURCE_ATTRIBUTES: ReadonlySet<string> = new Set(["src", "href", "xlink:href"]);
@@ -684,13 +685,6 @@ const XML_ELEMENT_PREFIX = /<(\/?)[^\s/>:<]+:/gu;
  * to the XLink namespace is an SVG link, as `xlink:href` is).
  */
 const XML_PREFIXED_URL_ATTRIBUTE = /\s[^\s=/>:"'<]+:(?:href|src|action|formaction|data)\s*=\s*("[^"]*"|'[^']*')/giu;
-/**
- * Refused: a <select> that holds an <svg>, <math> or <style>. parse5 drops
- * them, so it reads what follows as HTML markup, where Chromium keeps them
- * and reads it as SVG or MathML, which decodes character references in
- * <script>, or as CSS.
- */
-export const SELECT_CONTENT_LIMIT = "a <select> holds an <svg>, <math> or <style> element, which the browser reads differently from this check";
 /** Refused: XML a script parses that declares a DOCTYPE internal subset, entities or attribute lists. */
 export const XML_DECLARATIONS_LIMIT = "a script parses XML with a DOCTYPE internal subset, an <!ENTITY> or an <!ATTLIST> declaration";
 /** Refused: namespaced XML a script parses that HTML would read part of as text. */
@@ -1571,6 +1565,29 @@ interface TokenizerInternals {
   _leaveAttrName(): void;
 }
 
+/** The parser's insertion mode, which parse5 keeps on the parser without exporting its values. */
+interface ParserModes {
+  insertionMode: number;
+  originalInsertionMode: number;
+  shouldProcessStartTagTokenInForeignContent(token: Token.TagToken): boolean;
+}
+
+/** parse5's in-body, text and in-select insertion modes, read from the modes small documents leave it in. */
+const modes = (() => {
+  const after = (html: string) => {
+    const parser = new Parser();
+    parser.tokenizer.write(html, false);
+    return (parser as unknown as ParserModes).insertionMode;
+  };
+  const body = after("<p>");
+  const text = after("<style>");
+  const select: ReadonlySet<number> = new Set([after("<select>"), after("<table><td><select>")]);
+  if (typeof body !== "number" || select.size !== 2 || select.has(body) || select.has(text) || text === body) {
+    throw new Error("parse5 no longer keeps the insertion modes the HTML check needs.");
+  }
+  return { body, text, select };
+})();
+
 /**
  * A browser-faithful HTML scanner that can be fed a document in chunks.
  * `findings()` reports what the HTML so far would do, counting a tag that is
@@ -1652,14 +1669,22 @@ export class HtmlScanner {
     // where parse5 ignores every start tag but <option>, <optgroup> and <hr>.
     const onStartTag = this.parser.onStartTag;
     if (typeof onStartTag !== "function") throw new Error("parse5 no longer exposes the start-tag hook the HTML check needs.");
+    const parser = this.parser as unknown as ParserModes;
     this.parser.onStartTag = (token) => {
-      // parse5 finds a <select> in scope when no HTML element is open at all.
-      const open = this.parser.openElements;
-      if (SELECT_DROPPED_CONTENT.has(token.tagName) && open.stackTop >= 0 && open.hasInSelectScope(htmlSpec.TAG_ID.SELECT)) {
-        throw new StructureLimit(SELECT_CONTENT_LIMIT);
-      }
       this.checkTag(token.tagName, token.attrs, this.committed, true);
       this.checkedAttributes.add(token.attrs);
+      // In a <select> Chromium builds an <svg>, <math> or <style> as it would
+      // in the body, so what follows is read as SVG, MathML or CSS. parse5
+      // drops them there, so they are built by its in-body rules instead.
+      const select = parser.insertionMode;
+      if (SELECT_BODY_CONTENT.has(token.tagName) && modes.select.has(select) && !parser.shouldProcessStartTagTokenInForeignContent(token)) {
+        parser.insertionMode = modes.body;
+        onStartTag.call(this.parser, token);
+        // A <style> switches to text parsing, which returns to the mode it left.
+        if (parser.insertionMode === modes.text) parser.originalInsertionMode = select;
+        else parser.insertionMode = select;
+        return;
+      }
       onStartTag.call(this.parser, token);
     };
     // The tokenizer checks each new attribute against the tag's earlier ones,
