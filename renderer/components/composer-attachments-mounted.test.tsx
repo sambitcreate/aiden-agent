@@ -1021,7 +1021,9 @@ test("queued design comments go with the next send as a text block and their pic
       { id: "c1", label: "Hero › h1", note: "Bigger" },
       { id: "c2", label: "Canvas", note: "Add a footer" },
     ],
-    block: "<attached-design-comments>\n[]\n</attached-design-comments>",
+    // The block lists the pictures it was told are attached, so the test sees which ones the send named.
+    block: (pictures: Record<string, string> = {}) =>
+      `<attached-design-comments>\n${JSON.stringify(pictures)}\n</attached-design-comments>`,
     crops: { c1: { mimeType: "image/png", data: "iVBORw0KGgoAAAA=" } },
     remove() {},
     open() {},
@@ -1063,12 +1065,17 @@ test("queued design comments go with the next send as a text block and their pic
       sends[0]!.attachments.map((attachment) => [attachment.name, attachment.kind]),
       [["Design comments.txt", "text"], ["Design comment 1.png", "image"]],
     );
-    assert.equal(sends[0]!.attachments[0]!.text, tray.block);
+    assert.equal(
+      sends[0]!.attachments[0]!.text,
+      tray.block({ c1: "Design comment 1.png" }),
+      "the block names the picture of the one comment that has one",
+    );
     assert.deepEqual(
       sends[1]!.attachments.map((attachment) => attachment.name),
       ["Design comments.txt"],
       "a model without images gets the words only",
     );
+    assert.equal(sends[1]!.attachments[0]!.text, tray.block({}), "and a block that names no picture");
     assert.deepEqual(sentIds, [["c1", "c2"], ["c1", "c2"]], "each send marks its comments sent");
   } finally {
     await React.act(async () => root.unmount());
@@ -1095,7 +1102,7 @@ test("a failed send leaves design comments in the tray", async () => {
     __composerCommentTray: {
       chatId: "design-chat",
       comments: [{ id: "c1", label: "Canvas", note: "Bigger" }],
-      block: "<attached-design-comments>\n[]\n</attached-design-comments>",
+      block: () => "<attached-design-comments>\n[]\n</attached-design-comments>",
       remove() {},
       open() {},
       markSent(ids: string[]) {

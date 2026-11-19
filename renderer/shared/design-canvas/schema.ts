@@ -153,6 +153,8 @@ export type DesignCommentAnchor = {
   rect?: DesignRect;
   /** Where the pin sits, in the page's CSS pixels; it moves with the element. */
   point?: [number, number];
+  /** The element's outer HTML as the page drew it, whitespace collapsed and cut to `anchorHtmlChars`. Page data. */
+  html?: string;
 };
 
 export type DesignComment = {
@@ -172,6 +174,8 @@ export type DesignComment = {
   queued?: true;
   sentAt?: string;
   resolvedAt?: string;
+  /** Aiden's latest reply on the comment, cut to `replyChars`. */
+  reply?: { text: string; at: string };
 };
 
 export type DesignViewport = { x: number; y: number; zoom: number };
@@ -201,6 +205,8 @@ export const DESIGN_CANVAS_LIMITS = {
   maxCoord: 1_000_000,
   titleChars: 120,
   noteChars: 2000,
+  anchorHtmlChars: 1500,
+  replyChars: 1000,
   minZoom: 0.1,
   maxZoom: 4,
   strokePoints: 2000,
@@ -596,6 +602,10 @@ function parseComment(value: unknown, pageId: string): DesignComment | null {
   if (sentAt && comment.state !== "open") comment.sentAt = sentAt;
   const resolvedAt = timestamp(value.resolvedAt);
   if (resolvedAt && comment.state === "resolved") comment.resolvedAt = resolvedAt;
+  if (isRecord(value.reply) && typeof value.reply.text === "string" && value.reply.text.trim()) {
+    const at = timestamp(value.reply.at);
+    if (at) comment.reply = { text: value.reply.text.slice(0, DESIGN_CANVAS_LIMITS.replyChars), at };
+  }
   return comment;
 }
 
@@ -625,6 +635,7 @@ function parseAnchor(value: unknown): DesignCommentAnchor | undefined {
     const py = finite(value.point[1]);
     if (px !== undefined && py !== undefined) anchor.point = [clampCoord(px), clampCoord(py)];
   }
+  if (typeof value.html === "string" && value.html) anchor.html = value.html.slice(0, DESIGN_CANVAS_LIMITS.anchorHtmlChars);
   return anchor;
 }
 

@@ -4,7 +4,7 @@
 // the other side.
 
 import type { DesignLocateResult, DesignPageElement } from "./comments.js";
-import { isSourceStamp, type DesignRect } from "./schema.js";
+import { DESIGN_CANVAS_LIMITS, isSourceStamp, type DesignRect } from "./schema.js";
 import type { DesignTweakState } from "./tweaks.js";
 import { DESIGN_TEXT_EDIT_LIMITS, type DesignTextChange } from "./text-edit.js";
 
@@ -72,6 +72,7 @@ function element(value: unknown): DesignPageElement | null {
   if (typeof raw.sourcePath === "string" && isSourceStamp(raw.sourcePath)) found.sourcePath = raw.sourcePath;
   const commentId = id(raw.commentId);
   if (commentId) found.commentId = commentId;
+  if (typeof raw.html === "string" && raw.html) found.html = raw.html.slice(0, DESIGN_CANVAS_LIMITS.anchorHtmlChars);
   return found;
 }
 

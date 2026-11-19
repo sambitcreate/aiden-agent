@@ -42,6 +42,7 @@ export const DESIGN_BRIDGE_SOURCE = `(() => {
   const TEXT_CHARS = 200;
   const MAX_SCAN = 5000;
   const MAX_CANDIDATES = 150;
+  const HTML_CHARS = 1500;
   const MAX_DEPTH = 12;
   const send = (type, payload) => {
     try {
@@ -211,13 +212,41 @@ export const DESIGN_BRIDGE_SOURCE = `(() => {
     const sy = window.scrollY || 0;
     return { x: Math.round(r.left + sx), y: Math.round(r.top + sy), w: Math.round(r.width), h: Math.round(r.height) };
   };
-  const describe = (element) => {
+  // The element's markup as the page drew it, for a comment: Aiden's own
+  // stamps and the bridge's overlays are left out, whitespace is collapsed and
+  // the result is cut short, so a big section costs a bounded amount.
+  const htmlOf = (element) => {
+    try {
+      const copy = element.cloneNode(true);
+      const strip = (node) => {
+        if (node.removeAttribute) {
+          node.removeAttribute("data-aiden-src");
+          node.removeAttribute("data-aiden-comment");
+        }
+      };
+      strip(copy);
+      const inner = copy.querySelectorAll ? copy.querySelectorAll("*") : [];
+      for (let index = 0; index < inner.length; index += 1) {
+        if (inner[index].hasAttribute && inner[index].hasAttribute("data-aiden-bridge")) inner[index].remove();
+        else strip(inner[index]);
+      }
+      const html = String(copy.outerHTML || "").replace(/\\s+/g, " ").trim();
+      return html.length > HTML_CHARS ? html.slice(0, HTML_CHARS - 1) + "\\u2026" : html;
+    } catch {
+      return "";
+    }
+  };
+  const describe = (element, withHtml) => {
     const found = {
       selector: selectorOf(element),
       text: textOf(element),
       tag: tagOf(element),
       rect: rectOf(element),
     };
+    if (withHtml) {
+      const html = htmlOf(element);
+      if (html) found.html = html;
+    }
     const stamp = element.closest("[data-aiden-src]");
     if (stamp) found.sourcePath = String(stamp.getAttribute("data-aiden-src")).slice(0, 1024);
     const marked = element.closest("[data-aiden-comment]");
@@ -246,7 +275,7 @@ export const DESIGN_BRIDGE_SOURCE = `(() => {
   const locate = (item) => {
     if (!item || typeof item.commentId !== "string") return null;
     const marked = byComment(item.commentId);
-    if (marked) return { byId: describe(marked), candidates: [] };
+    if (marked) return { byId: describe(marked, true), candidates: [] };
     let bySelector = null;
     if (typeof item.selector === "string" && item.selector) {
       try {
@@ -257,7 +286,7 @@ export const DESIGN_BRIDGE_SOURCE = `(() => {
     const tag = typeof item.tag === "string" ? item.tag.toLowerCase() : "";
     const text = typeof item.text === "string" ? squash(item.text).slice(0, TEXT_CHARS) : "";
     const candidates = [];
-    if (bySelector) candidates.push(Object.assign(describe(bySelector), { selectorMatch: true }));
+    if (bySelector) candidates.push(Object.assign(describe(bySelector, true), { selectorMatch: true }));
     const all = (doc.body || doc.documentElement).getElementsByTagName("*");
     for (let index = 0; index < all.length && index < MAX_SCAN && candidates.length < MAX_CANDIDATES; index += 1) {
       const element = all[index];
@@ -476,7 +505,7 @@ export const DESIGN_BRIDGE_SOURCE = `(() => {
       const sy = window.scrollY || 0;
       send("picked", {
         requestId: data.requestId,
-        element: element ? describe(element) : null,
+        element: element ? describe(element, true) : null,
         point: [Math.round(data.x + sx), Math.round(data.y + sy)],
       });
     } else if (type === "locate") {

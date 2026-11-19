@@ -16,8 +16,11 @@ export type DesignTrayComment = { id: string; label: string; note: string };
 
 export type DesignCommentTray = {
   comments: readonly DesignTrayComment[];
-  /** The `<attached-design-comments>` block for these comments. */
-  block: string;
+  /**
+   * The `<attached-design-comments>` block for these comments, naming the
+   * attached picture of each comment that has one, by comment id.
+   */
+  block(pictures?: Readonly<Record<string, string>>): string;
   remove(id: string): void;
   markSent(ids: readonly string[]): void;
   /** Brings a comment on screen and opens it. */
@@ -72,42 +75,63 @@ function base64Bytes(data: string): number {
   return Math.floor((data.length * 3) / 4) - (data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0);
 }
 
+const byteLength = (text: string) => new TextEncoder().encode(text).byteLength;
+
 /**
  * What a message carries for the tray: the comments block as a text file and,
  * when the model takes images and room is left, a picture of each spot. The
- * block always goes first; pictures that do not fit are left out.
+ * block always goes first and names the picture each comment has, so Aiden
+ * knows which image shows which comment; pictures that do not fit are left
+ * out, and so is their name.
  */
 export function designCommentAttachments(input: {
-  block: string;
-  pictures: readonly (DesignCommentCrop | undefined)[];
+  block: (pictures: Readonly<Record<string, string>>) => string;
+  /** The tray's comments in order, each with the picture of its spot when one was taken. */
+  comments: readonly { id: string; picture?: DesignCommentCrop | undefined }[];
   existing: readonly Attachment[];
   supportsImages: boolean;
   id: string;
 }): Attachment[] | null {
-  let slots = attachmentSlotsRemaining(input.existing.length);
-  let remaining = attachmentInlineBytesRemaining(input.existing);
-  const size = new TextEncoder().encode(input.block).byteLength;
+  const slots = attachmentSlotsRemaining(input.existing.length);
+  const remaining = attachmentInlineBytesRemaining(input.existing);
+  const offered = input.supportsImages
+    ? input.comments.flatMap((comment, index) =>
+        comment.picture
+          ? [{
+              commentId: comment.id,
+              index,
+              crop: comment.picture,
+              name: `Design comment ${index + 1}.${comment.picture.mimeType === "image/png" ? "png" : "jpg"}`,
+            }]
+          : [],
+      )
+    : [];
+  // Naming a picture only lengthens the block, so the block naming every
+  // offered picture bounds the one that goes: pictures are fitted in the room
+  // that leaves, then the block names the ones that fit.
+  const widest = byteLength(input.block(Object.fromEntries(offered.map((picture) => [picture.commentId, picture.name]))));
+  let pictureSlots = slots - 1;
+  let pictureBytes = remaining - widest;
+  const chosen: typeof offered = [];
+  for (const picture of offered) {
+    const bytes = base64Bytes(picture.crop.data);
+    if (pictureSlots < 1 || bytes > pictureBytes || bytes > MAX_INLINE_IMAGE_BYTES) continue;
+    chosen.push(picture);
+    pictureSlots -= 1;
+    pictureBytes -= bytes;
+  }
+  const block = input.block(Object.fromEntries(chosen.map((picture) => [picture.commentId, picture.name])));
+  const size = byteLength(block);
   if (slots < 1 || size > remaining) return null;
-  const attachments: Attachment[] = [
-    { id: `${input.id}-comments`, name: "Design comments.txt", kind: "text", mimeType: "text/plain", text: input.block, size },
-  ];
-  slots -= 1;
-  remaining -= size;
-  if (!input.supportsImages) return attachments;
-  input.pictures.forEach((picture, index) => {
-    if (!picture || slots < 1) return;
-    const bytes = base64Bytes(picture.data);
-    if (bytes > remaining || bytes > MAX_INLINE_IMAGE_BYTES) return;
-    attachments.push({
-      id: `${input.id}-picture-${index + 1}`,
-      name: `Design comment ${index + 1}.${picture.mimeType === "image/png" ? "png" : "jpg"}`,
+  return [
+    { id: `${input.id}-comments`, name: "Design comments.txt", kind: "text", mimeType: "text/plain", text: block, size },
+    ...chosen.map((picture): Attachment => ({
+      id: `${input.id}-picture-${picture.index + 1}`,
+      name: picture.name,
       kind: "image",
-      mimeType: picture.mimeType,
-      data: picture.data,
-      size: bytes,
-    });
-    slots -= 1;
-    remaining -= bytes;
-  });
-  return attachments;
+      mimeType: picture.crop.mimeType,
+      data: picture.crop.data,
+      size: base64Bytes(picture.crop.data),
+    })),
+  ];
 }

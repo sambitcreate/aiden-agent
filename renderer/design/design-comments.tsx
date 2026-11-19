@@ -279,14 +279,14 @@ export function useDesignComments({ chatId, doc, change, flow, wrapper, live, ve
     if (frame.kind === "file" && live.has(frame.id)) {
       void pickAt(frame, clientX, clientY, altKey).then((picked) => {
         if (picked?.element) {
-          const { selector, text, tag, rect, sourcePath } = picked.element;
+          const { selector, text, tag, rect, sourcePath, html } = picked.element;
           startDraft({
             id: crypto.randomUUID(),
             place: {
               frameId: frame.id,
               x,
               y,
-              anchor: { selector, text, tag, rect, point: picked.point, ...(sourcePath ? { sourcePath } : {}) },
+              anchor: { selector, text, tag, rect, point: picked.point, ...(sourcePath ? { sourcePath } : {}), ...(html ? { html } : {}) },
             },
             label: `${frame.title} › ${elementLabel(picked.element)}`,
           });
@@ -319,12 +319,12 @@ export function useDesignComments({ chatId, doc, change, flow, wrapper, live, ve
   const elementPlace = (frame: DesignFrame, element: DesignPageElement): DesignCommentPlace => {
     const scale = frame.w / (frame.designWidth ?? DESIGN_DEFAULT_WIDTH);
     const point: [number, number] = [Math.round(element.rect.x + element.rect.w / 2), Math.round(element.rect.y)];
-    const { selector, text, tag, rect, sourcePath } = element;
+    const { selector, text, tag, rect, sourcePath, html } = element;
     return {
       frameId: frame.id,
       x: Math.min(frame.w, Math.max(0, point[0] * scale)),
       y: Math.min(frame.h, Math.max(0, point[1] * scale)),
-      anchor: { selector, text, tag, rect, point, ...(sourcePath ? { sourcePath } : {}) },
+      anchor: { selector, text, tag, rect, point, ...(sourcePath ? { sourcePath } : {}), ...(html ? { html } : {}) },
     };
   };
   const commentOnElement = React.useCallback((frameId: string, element: DesignPageElement) => {
@@ -527,7 +527,7 @@ export function useDesignComments({ chatId, doc, change, flow, wrapper, live, ve
         ? null
         : {
             comments: queued.map((comment) => ({ id: comment.id, label: commentLabel(doc, comment), note: comment.note })),
-            block: designCommentsBlock(doc, queued),
+            block: (pictures) => designCommentsBlock(doc, queued, pictures),
             remove: (id) => change((latest) => setCommentQueued(latest, id, false)),
             markSent: (ids) => {
               for (const id of ids) {
@@ -900,6 +900,12 @@ function CommentBox({
       ) : (
         <p className="whitespace-pre-wrap break-words px-1 text-regular">{comment?.note}</p>
       )}
+      {comment?.reply ? (
+        <section aria-label="Aiden's reply" className="mt-2 rounded-button bg-control px-2 py-1.5">
+          <p className="text-small text-secondary">Aiden</p>
+          <p className="whitespace-pre-wrap break-words text-regular text-primary">{comment.reply.text}</p>
+        </section>
+      ) : null}
       <div className="mt-2 flex items-center gap-1">
         {editable ? (
           <CommentMic

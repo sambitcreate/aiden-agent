@@ -2034,7 +2034,7 @@ export function Composer({
     if (trayComments) {
       const extra = designCommentAttachments({
         block: trayComments.block,
-        pictures: trayComments.comments.map((comment) => commentCrop(chatId, comment.id)),
+        comments: trayComments.comments.map((comment) => ({ id: comment.id, picture: commentCrop(chatId, comment.id) })),
         existing: attachments,
         supportsImages: visionSupported !== false,
         id: crypto.randomUUID(),

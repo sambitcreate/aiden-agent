@@ -75,11 +75,25 @@ test("a pick describes the element under the point: selector, text, tag, nearest
   assert.equal(button.element?.selector, "#pricing > button");
   assert.equal(button.element?.text, "Buy now", "an element without text is named by its label");
   assert.equal(button.element?.commentId, "c-old");
+  assert.equal(button.element?.html, '<button aria-label="Buy now"></button>');
 
   view.send({ type: "aiden-design:pick-at", requestId: "r3", x: 1, y: 1, wide: true });
   const wide = last(view.sent);
   assert.ok(wide?.type === "picked");
   assert.equal(wide.element?.selector, "#pricing", "Alt picks the parent");
+  assert.equal(
+    wide.element?.html,
+    '<section id="pricing"><h2>Pricing</h2><button aria-label="Buy now"></button></section>',
+    "the picked element's markup, without Aiden's own stamps",
+  );
+
+  const long = page(`<!doctype html><html><body><ul>${"<li>  An item   with words </li>".repeat(200)}</ul></body></html>`);
+  long.pointAt("ul");
+  long.send({ type: "aiden-design:pick-at", requestId: "r5", x: 1, y: 1 });
+  const list = last(long.sent);
+  assert.ok(list?.type === "picked");
+  assert.ok(list.element?.html?.startsWith("<ul><li> An item with words </li>"), "whitespace is collapsed");
+  assert.equal(list.element?.html?.length, 1500, "a big element's markup is cut short");
 
   view.pointAt(null);
   view.send({ type: "aiden-design:pick-at", requestId: "r4", x: 1, y: 1 });
@@ -106,12 +120,15 @@ test("locate finds an element by its comment id first, else lists candidates wit
   const heading = anchors.results["c-new"]!;
   assert.equal(heading.byId, undefined);
   assert.deepEqual(heading.candidates.map((candidate) => [candidate.tag, candidate.selectorMatch]), [["h1", true]]);
+  assert.equal(heading.candidates[0]!.html, "<h1>Ship faster</h1>", "the selector's match carries its markup");
+  assert.equal(anchors.results["c-9"]?.byId?.html?.startsWith('<section id="pricing">'), true);
   const bad = anchors.results["c-bad"]!;
   assert.ok(
     bad.candidates.some((candidate) => candidate.tag === "h2" && candidate.text === "Pricing" && !candidate.selectorMatch),
     "an element with the same text is a candidate",
   );
   assert.ok(bad.candidates.every((candidate) => candidate.text === "Pricing"));
+  assert.ok(bad.candidates.every((candidate) => candidate.html === undefined), "fuzzy candidates carry no markup");
 });
 
 test("the hover outline and highlight are drawn inside the page and never picked", () => {

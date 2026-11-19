@@ -535,7 +535,7 @@ test("the comment tool drops a pin on the canvas, and a saved comment waits in t
 
   const tray = designCommentTray("chat-1");
   assert.deepEqual(tray?.comments.map((entry) => [entry.label, entry.note]), [["Canvas", "Add a footer here"]]);
-  assert.match(tray!.block, /"note": "Add a footer here"/u);
+  assert.match(tray!.block(), /"note": "Add a footer here"/u);
 
   act(() => tray!.markSent([comment.id]));
   await waitFor(() => assert.equal(saved()?.comments[0]?.state, "sent"), SAVE_WAIT);
@@ -590,7 +590,7 @@ test("All comments lists comments by state, and choosing one shows its page and 
   const at = "2026-11-05T10:00:00.000Z";
   doc.comments = [
     { id: "c1", pageId: "page-1", x: 10, y: 10, note: "Warmer colours", state: "open", anchorState: "anchored", createdAt: at },
-    { id: "c2", pageId: "p2", x: 40, y: 40, note: "Show yearly prices", state: "open", anchorState: "anchored", createdAt: "2026-11-05T11:00:00.000Z" },
+    { id: "c2", pageId: "p2", x: 40, y: 40, note: "Show yearly prices", state: "open", anchorState: "anchored", createdAt: "2026-11-05T11:00:00.000Z", reply: { text: "Should yearly be the default?", at } },
     { id: "c3", pageId: "page-1", x: 0, y: 0, note: "Done already", state: "resolved", anchorState: "anchored", createdAt: at, resolvedAt: at },
   ];
   const { saved } = setup(doc);
@@ -608,7 +608,7 @@ test("All comments lists comments by state, and choosing one shows its page and 
   await waitFor(() => assert.equal(saved()?.activePageId, "p2"), SAVE_WAIT);
   const box = await screen.findByRole("dialog", { name: "Comment" });
   assert.equal((screen.getByRole("textbox", { name: "Comment" }) as HTMLTextAreaElement).value, "Show yearly prices");
-  assert.ok(box);
+  assert.ok(within(box).getByRole("region", { name: "Aiden's reply" }).textContent?.includes("Should yearly be the default?"), "Aiden's reply shows under the note");
 });
 
 test("the pen in the comment box draws marks over a frame, saved as fractions of it", async () => {

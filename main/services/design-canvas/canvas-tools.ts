@@ -15,7 +15,11 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import { declarePiRuntimeReplay } from "../pi-runtime-tool.js";
 import { CANVAS_READ_FRAME_LIMIT, canvasView, describeCanvas, summarizeFrame } from "../../../renderer/shared/design-canvas/canvas-summary.js";
-import { commentsWithoutFrames } from "../../../renderer/shared/design-canvas/comments.js";
+import {
+  commentsWithoutFrames,
+  replyToComment,
+  resolveComment,
+} from "../../../renderer/shared/design-canvas/comments.js";
 import { canAttachTo, syncConnectors, translateConnector } from "../../../renderer/shared/design-canvas/connectors.js";
 import {
   bringLayerToFront,
@@ -84,6 +88,7 @@ export const DESIGN_CANVAS_TOOL_NAMES = [
   "canvas_arrange",
   "canvas_page",
   "canvas_inspect",
+  "canvas_comment",
 ] as const;
 
 /** Canvas tool calls one turn may make; past it each call returns `limit_reached`. */
@@ -184,6 +189,7 @@ export const DESIGN_MODE_PROMPT_SECTION = [
   "- The canvas can have several pages. Work on the page the person is looking at unless they name another; canvas_page adds, renames, duplicates, reorders, shows or deletes pages, and canvas_update_frame with page moves a frame to another.",
   "- After placing or moving frames, call canvas_focus with their ids so the person sees them (canvas_arrange does this by itself). canvas_read with snapshot: true shows you the canvas as the person sees it.",
   "- canvas_inspect draws one page offline at its design width, with its frame's look, and reports script errors, files that did not load, sideways overflow and tweaks that do nothing, with a picture when you can see images. Each page you write is checked the same way without a picture, and the report follows in the conversation before your next step: fix what it lists once, call canvas_inspect for a picture after a big change, and say what you fixed.",
+  "- The person's canvas comments come with their message or in canvas_read. After acting on one, canvas_comment can reply on it in a sentence (what you changed, or a question when it is unclear) and resolve it once it is done.",
   "- Coordinates and sizes are canvas units. Say which file you changed.",
 ].join("\n");
 
@@ -211,6 +217,8 @@ export type DesignCanvasToolDeps = {
     options: { top: number; picture: boolean },
     signal?: AbortSignal,
   ): Promise<{ text: string; image?: { data: string; mimeType: string } }>;
+  /** The time a reply or a resolve is stamped with. */
+  now?(): Date;
 };
 
 type ToolContent = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
@@ -1392,6 +1400,41 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
           }),
       },
       "safe",
+    ),
+    declarePiRuntimeReplay(
+      {
+        name: "canvas_comment",
+        label: "Answer design comment",
+        description:
+          "Reply on one of the person's canvas comments, resolve it, or both. A reply is a sentence or two shown under their note: what you changed, or a question when the comment is unclear; a newer reply replaces your last one. Resolve a comment once what it asks is done; the person can reopen it. Use the commentId from the comment block or canvas_read.",
+        parameters: Type.Object({
+          commentId: Type.String(),
+          reply: Type.Optional(Type.String({ maxLength: DESIGN_CANVAS_LIMITS.replyChars })),
+          resolve: Type.Optional(Type.Boolean({ description: "true marks the comment resolved." })),
+        }),
+        execute: async (_id, raw) =>
+          run(async () => {
+            const p = raw as Record<string, unknown>;
+            const reply = p.reply === undefined || p.reply === null ? undefined : text(p.reply, "reply", DESIGN_CANVAS_LIMITS.replyChars);
+            const resolve = optionalBoolean(p.resolve, "resolve") === true;
+            if (reply === undefined && !resolve) throw new CanvasToolError("Pass a reply, resolve: true, or both.");
+            const at = (deps.now?.() ?? new Date()).toISOString();
+            return edit((doc) => {
+              const comment = typeof p.commentId === "string" ? doc.comments.find((entry) => entry.id === p.commentId) : undefined;
+              if (!comment) {
+                throw new CanvasToolError("No comment on this canvas has that id. Call canvas_read for the page's open comments.");
+              }
+              let next = reply === undefined ? doc : replyToComment(doc, comment.id, reply, at);
+              if (resolve) next = resolveComment(next, comment.id, at);
+              const state = next.comments.find((entry) => entry.id === comment.id)!.state;
+              return {
+                doc: next,
+                value: { status: "ok", commentId: comment.id, state, ...(reply !== undefined ? { replied: true } : {}) },
+              };
+            });
+          }),
+      },
+      "never",
     ),
   ];
 }

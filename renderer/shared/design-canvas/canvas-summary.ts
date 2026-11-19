@@ -2,7 +2,7 @@
 // and the one-line summary in the design mode prompt section. Pure, so main
 // and tests share it.
 
-import { describeComment } from "./comments.js";
+import { DESIGN_COMMENT_DATA_NOTE, describeComment } from "./comments.js";
 import { activeDesignPage, isDesignContainer, type DesignCanvas, type DesignFrame } from "./schema.js";
 
 /**
@@ -221,13 +221,16 @@ export function describeCanvas(
   };
 }
 
-function commentsOn(doc: DesignCanvas, pageId: string): { comments?: Record<string, unknown>[] } {
+function commentsOn(doc: DesignCanvas, pageId: string): { comments?: Record<string, unknown>[]; aboutComments?: string } {
   const waiting = doc.comments
     .filter((comment) => comment.pageId === pageId && comment.state !== "resolved")
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
     .slice(0, CANVAS_READ_COMMENT_LIMIT);
   if (waiting.length === 0) return {};
-  return { comments: waiting.map((comment) => ({ ...describeComment(doc, comment), state: comment.state })) };
+  return {
+    comments: waiting.map((comment) => ({ ...describeComment(doc, comment), state: comment.state })),
+    aboutComments: DESIGN_COMMENT_DATA_NOTE,
+  };
 }
 
 /** The canvas in one line, for the canvas status note (`withCanvasStatusNote`). */
