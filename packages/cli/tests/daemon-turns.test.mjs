@@ -1024,11 +1024,13 @@ test("aiden serve asks for the hour-long cache only on an attended chat whose pr
 /**
  * Drives a settled chat's idle refreshes: each time a refresh timer of the
  * model's warming delay is pending, the mocked clock passes it, and the next
- * refresh's request (if any) must arrive before the clock moves again.
+ * refresh's request (if any) must arrive before the clock moves again. `Date`
+ * is mocked with the timers, so however long the real turn takes, the warmer
+ * arms its refresh at exactly the warming delay.
  */
 function idleRefreshDriver(t, f, chatId) {
   const refreshDelay = getCacheWarmingDelayMs(300_000);
-  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: Date.now() });
   const pending = new Set(), mockedSetTimeout = globalThis.setTimeout, mockedClearTimeout = globalThis.clearTimeout;
   globalThis.setTimeout = function (callback, delay, ...rest) {
     const watched = delay > refreshDelay - 1_000 && delay <= refreshDelay;
@@ -1037,10 +1039,11 @@ function idleRefreshDriver(t, f, chatId) {
     return timer;
   };
   globalThis.clearTimeout = function (timer) { pending.delete(timer); return mockedClearTimeout.call(this, timer); };
+  // The mocked `Date` stands still between ticks, so the wait is bounded on the real clock.
   const settled = async (condition) => {
-    const deadline = Date.now() + 10_000;
+    const deadline = performance.now() + 10_000;
     while (!condition()) {
-      if (Date.now() > deadline) throw new Error("Timed out waiting for the idle warmer.");
+      if (performance.now() > deadline) throw new Error("Timed out waiting for the idle warmer.");
       await new Promise((resolve) => setImmediate(resolve));
     }
   };
@@ -1055,6 +1058,17 @@ function idleRefreshDriver(t, f, chatId) {
         t.mock.timers.tick(refreshDelay);
         await settled(() => f.requests.length > before || !f.daemon.isKeepingChatWarm(chatId));
       }
+      return f.requests.slice(start);
+    },
+    /** Waits until the chat's refresh is armed, and returns how many refresh timers are pending. */
+    async armed() { await settled(() => pending.size > 0 || !f.daemon.isKeepingChatWarm(chatId)); return pending.size; },
+    /** How many refresh timers are pending now. */
+    pendingRefreshes: () => pending.size,
+    /** Passes one warming delay on the mocked clock, and returns the requests sent meanwhile. */
+    async passRefreshDelay() {
+      const start = f.requests.length;
+      t.mock.timers.tick(refreshDelay);
+      for (let turns = 0; turns < 20; turns += 1) await new Promise((resolve) => setImmediate(resolve));
       return f.requests.slice(start);
     },
     reset() { t.mock.timers.reset(); },
@@ -1098,15 +1112,46 @@ test("aiden serve keeps a settled attended chat warm within the desktop's idle l
   });
   await t.test("a new turn ends the last reply's warming", async (t) => {
     const f = await warmingFixture(t);
+    const driver = idleRefreshDriver(t, f, "again");
     f.steps.push(largePromptReply("First"), reply("Second"));
     await beginTurn(f, "again", { streamId: "again-1" });
     await f.daemon.llmClient.waitForChatIdle("again");
-    assert.equal(f.daemon.isKeepingChatWarm("again"), true);
+    assert.equal(await driver.armed(), 1, "the first reply armed its refresh");
     await beginTurn(f, "again", { streamId: "again-2", create: false });
     await f.daemon.llmClient.waitForChatIdle("again");
+    assert.equal(driver.pendingRefreshes(), 0, "the first reply's refresh is cleared");
+    assert.deepEqual(await driver.passRefreshDelay(), [], "and never sent");
+    driver.reset();
     // The second reply's prompt is too small to be worth keeping warm.
     assert.equal(f.daemon.isKeepingChatWarm("again"), false);
     assert.equal(f.requests.length, 2);
+  });
+  await t.test("changing the chat's model ends warming with no refresh", async (t) => {
+    const f = await warmingFixture(t);
+    const driver = idleRefreshDriver(t, f, "switched");
+    f.steps.push(largePromptReply("First"));
+    await beginTurn(f, "switched");
+    await f.daemon.llmClient.waitForChatIdle("switched");
+    assert.equal(await driver.armed(), 1);
+    // A model change is a chat write, so the settled reply is no longer the chat's latest.
+    await f.daemon.chatStore.setChatModelSelection("switched", "cli-test", "another-model");
+    assert.deepEqual(await driver.drain(), []);
+    driver.reset();
+    assert.equal(f.daemon.isKeepingChatWarm("switched"), false);
+  });
+  await t.test("deleting the chat ends warming with no refresh", async (t) => {
+    const f = await warmingFixture(t);
+    const driver = idleRefreshDriver(t, f, "deleted");
+    f.steps.push(largePromptReply("First"));
+    await beginTurn(f, "deleted");
+    await f.daemon.llmClient.waitForChatIdle("deleted");
+    assert.equal(await driver.armed(), 1);
+    // The hook a chat deletion runs once the chat's journal is gone (remote-chats.ts).
+    f.daemon.forgetMemoryFactsTold("deleted");
+    assert.equal(f.daemon.isKeepingChatWarm("deleted"), false);
+    assert.equal(driver.pendingRefreshes(), 0, "the refresh is cleared");
+    assert.deepEqual(await driver.passRefreshDelay(), [], "and never sent");
+    driver.reset();
   });
   await t.test("revoking the device whose turn it was ends warming", async (t) => {
     const f = await warmingFixture(t);

@@ -327,6 +327,9 @@ export function createDaemonChats(agentDir: string) {
           if (warmer && finished) void stream.result().then(finished, () => warmer.stop());
           return stream;
         };
+        // Deliberately no `ownerKind`: on the desktop a paired device's turn keeps the
+        // default lifetime, but every attended serve turn is a paired device's, so the
+        // server's own aiden.json switch is what asks for the hour here.
         const turnCache = chatTurnPromptCache({ longPromptCacheRetention: attended && profileKeepsLongPromptCache(agentDir), agentHarness: false, bot: !!botAdmission, usageSource: options.usageSource }, observed, model);
         if (attended && owner.kind === "remote" && turnCache.retention !== "long" && profileWarmsCaches(agentDir)) {
           const warmer: PiCacheWarmer = new PiCacheWarmer({
