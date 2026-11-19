@@ -257,6 +257,8 @@ export function placeWrittenPageFrames(
   paths: readonly string[],
   newId: () => string,
   widths: ReadonlyMap<string, DesignWidth> = new Map(),
+  /** The canvas region's size on the person's screen, when their message said it. */
+  viewSize?: { w: number; h: number },
 ): { doc: DesignCanvas; changed: boolean; placedIds: string[]; removed: string[] } {
   let next = doc;
   const placedIds: string[] = [];
@@ -279,7 +281,7 @@ export function placeWrittenPageFrames(
         createdBy: "aiden",
         ...defaultFileBox(designWidth),
       },
-      canvasView(next),
+      canvasView(next, viewSize),
       newId,
     );
     // A full canvas takes no more frames; the file is still in the workspace.
@@ -365,6 +367,8 @@ export async function placeWrittenPagesOnCanvas(input: {
   shouldSave?: () => Promise<boolean> | boolean;
   /** Told the pages left off because the person took them off the canvas. */
   onRemoved?: (paths: readonly string[]) => void;
+  /** The canvas region's size on the person's screen, when their message said it. */
+  viewSize?: { w: number; h: number };
 }): Promise<string[]> {
   if (input.limit !== undefined && input.limit <= 0) return [];
   const newestFirst: string[] = [];
@@ -399,7 +403,7 @@ export async function placeWrittenPagesOnCanvas(input: {
       input.chatId,
       (doc) => {
         if (input.onlyIfEmpty && doc.frames.length > 0) throw UNCHANGED;
-        const placed = placeWrittenPageFrames(doc, showable, input.newId, widths);
+        const placed = placeWrittenPageFrames(doc, showable, input.newId, widths, input.viewSize);
         removed = placed.removed;
         if (!placed.changed) throw UNCHANGED;
         placedIds = placed.placedIds;

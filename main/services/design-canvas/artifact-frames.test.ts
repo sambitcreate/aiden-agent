@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { emptyDesignCanvas, type DesignCanvas, type DesignFrame } from "../../../renderer/shared/design-canvas/schema.js";
-import { placeArtifactFrames, placeArtifactsOnCanvas } from "./artifact-frames.js";
+import { placeArtifactFrames, placeArtifactsOnCanvas, placeImageFrames, placeImagesOnCanvas } from "./artifact-frames.js";
 import { DesignCanvasStore } from "./store.js";
 
 const ids = () => {
@@ -114,4 +114,59 @@ test("the stored canvas is saved and announced only when a visual actually chang
   const doc = await store.get("chat-1");
   assert.deepEqual(doc.frames.map((frame) => frame.mediaId), ["m2"]);
   assert.deepEqual(broadcasts, [1, 2]);
+});
+
+test("a saved image lands in its own image frame with the image's shape, and the same file keeps its frame", () => {
+  const page: DesignFrame = { id: "p", kind: "file", title: "Home", path: "design/home.html", x: 0, y: 0, w: 640, h: 436, designWidth: 1280, pageId: "page-1", createdBy: "person" };
+  const wide = placeImageFrames(
+    canvas([page]),
+    [
+      { path: "design/assets/hero.png", width: 1536, height: 1024 },
+      { path: "design/assets/hero-2.png", width: 1024, height: 1536 },
+    ],
+    ids(),
+  );
+  assert.equal(wide.changed, true);
+  assert.deepEqual(wide.frameIds, ["frame-1", "frame-2"]);
+  const [landscape, portrait] = [wide.doc.frames[1]!, wide.doc.frames[2]!];
+  assert.equal(landscape.kind, "image");
+  assert.equal(landscape.path, "design/assets/hero.png");
+  assert.equal(landscape.title, "hero.png");
+  assert.equal(landscape.createdBy, "aiden");
+  assert.ok(landscape.w > landscape.h && portrait.h > portrait.w, "each frame keeps its image's orientation");
+  assert.ok(Math.abs(landscape.w / landscape.h - 1.5) < 0.02);
+  assert.ok(landscape.x >= page.x + page.w || landscape.y >= page.y + page.h, "it does not cover the person's page");
+
+  // Generating hero.png again replaces the file; its frame stays where the person put it.
+  const moved: DesignCanvas = { ...wide.doc, frames: wide.doc.frames.map((frame) => (frame.id === "frame-1" ? { ...frame, x: 3000 } : frame)) };
+  const again = placeImageFrames(moved, [{ path: "design/assets/hero.png", width: 1536, height: 1024 }], ids());
+  assert.equal(again.changed, false);
+  assert.deepEqual(again.frameIds, ["frame-1"]);
+  assert.equal(again.doc.frames.find((frame) => frame.id === "frame-1")!.x, 3000);
+});
+
+test("saved images are placed on the stored canvas only while the late check still allows it", async (t) => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-image-frames-"));
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const store = new DesignCanvasStore({ root: () => base });
+  const broadcasts: number[] = [];
+  let designModeOn = false;
+  const place = () =>
+    placeImagesOnCanvas({
+      chatId: "chat-1",
+      images: [{ path: "design/assets/logo.webp", width: 512, height: 512 }],
+      store,
+      broadcast: (update) => broadcasts.push(update.revision),
+      newId: ids(),
+      shouldSave: async () => designModeOn,
+    });
+
+  assert.equal(await place(), null);
+  assert.deepEqual((await store.get("chat-1")).frames, []);
+  designModeOn = true;
+  assert.deepEqual(await place(), ["frame-1"]);
+  assert.deepEqual(await place(), ["frame-1"], "the same file is not placed twice");
+  assert.deepEqual(broadcasts, [1]);
+  const [frame] = (await store.get("chat-1")).frames;
+  assert.equal(frame!.w, frame!.h);
 });

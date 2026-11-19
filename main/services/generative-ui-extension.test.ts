@@ -225,16 +225,38 @@ test("while design mode can be asked for, whole pages and several directions go 
     return { prompt: extension.systemPrompt ?? "", description: renderArtifact.description };
   };
   const offered = steering({});
-  for (const text of [offered.prompt, offered.description]) {
-    assert.match(text, /design_mode/u);
-    assert.match(text, /app screens/u);
-    assert.match(text, /several design directions/u);
-  }
+  for (const text of [offered.prompt, offered.description]) assert.match(text, /design_mode/u);
+  assert.match(offered.description, /app screens/u);
+  assert.match(offered.description, /several design directions/u);
+  assert.match(offered.prompt, /screens, pages and directions[^.;]*design_mode/u);
   assert.doesNotMatch(offered.description, /UI mockups/u);
   // Once the canvas is open, the visuals point to design/ files, not to asking again.
   const open = steering({ designCanvas: true });
   assert.doesNotMatch(open.prompt + open.description, /design_mode/u);
   assert.match(open.prompt, /design\/\*\.html/u);
+});
+
+test("one rule says where a visual goes, naming only the destinations this turn has tools for", () => {
+  const prompt = (options: Partial<Parameters<typeof createGenerativeUiExtension>[0]>) =>
+    createGenerativeUiExtension({ workspaceRoot: undefined, onArtifact: () => undefined, ...options }).systemPrompt ?? "";
+  const rule = (text: string) => /Where a visual goes:[^\n]*/u.exec(text)?.[0] ?? "";
+
+  // Inline visuals alone leave nothing to choose between.
+  assert.equal(rule(prompt({})), "");
+
+  // In design mode, a dashboard the person will check daily still goes to Artifacts, screens go on the canvas and
+  // pictures come from the image tools.
+  const designMode = rule(prompt({ designCanvas: true, workspaceArtifacts: true, images: true }));
+  assert.match(designMode, /dashboard they check daily[^;]*workspace_artifact[^;]*even in design mode/u);
+  assert.match(designMode, /screens[^;]*design canvas as design\/\*\.html/u);
+  assert.match(designMode, /generate_image/u);
+  assert.doesNotMatch(designMode, /design_mode/u);
+
+  // A destination without its tool is never named.
+  const chatWithArtifacts = rule(prompt({ workspaceArtifacts: true }));
+  assert.match(chatWithArtifacts, /workspace_artifact/u);
+  assert.doesNotMatch(chatWithArtifacts, /design canvas|design_mode|generate_image/u);
+  assert.equal(rule(prompt({ workspaceArtifacts: true, audience: "remote" })), "");
 });
 
 test("render_artifact takes a column or wide layout and hands it to the host", async () => {

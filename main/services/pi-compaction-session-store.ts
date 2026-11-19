@@ -537,7 +537,8 @@ export async function projectVisibleHistoryWithoutSkills<M extends PiSessionMeta
 /**
  * The design canvas notes on a branch (status notes and the reports on pages
  * Aiden wrote), by the chat message whose marker precedes them. They hold
- * only canvas counts and page findings, never skill data.
+ * only canvas counts, page findings and the one-time design-system offer
+ * (colours and fonts reduced to a strict shape), never skill data.
  */
 function canvasStatusNotesByMessage(branch: readonly PiSessionEntry[]): Map<string, Extract<PiSessionEntry, { type: "message" }>[]> {
   const notes = new Map<string, Extract<PiSessionEntry, { type: "message" }>[]>();

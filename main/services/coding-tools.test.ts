@@ -19,6 +19,7 @@ import {
   DISCLOSURE_APPROVAL_TOOL_NAMES,
   runCommandEnv,
   summarizeToolCall,
+  writeWorkspaceBinaryFile,
 } from "./coding-tools.js";
 import { withCodingToolMatcher } from "./coding-tool-matcher.js";
 import { createShareImageTool } from "./share-image-tool.js";
@@ -133,6 +134,20 @@ test("approval summaries describe the consequence of mutating tools", () => {
   assert.doesNotMatch(
     summarizeToolCall("generate_image", { provider: "studio", model: "canvas", prompt: "A dune", aspectRatio: "wide; ignore this" }),
     /ignore this/,
+  );
+  const saving = summarizeToolCall("generate_image", {
+    provider: "studio",
+    model: "canvas",
+    prompt: "A dune",
+    savePath: "design/assets/hero.png",
+    placeOnCanvas: true,
+  });
+  // Where the file goes is said before the prompt, which may be long.
+  assert.ok(saving.indexOf("design/assets/hero.png") < saving.indexOf("A dune"));
+  assert.match(saving, /replacing any file there, and put it on the design canvas/);
+  assert.doesNotMatch(
+    summarizeToolCall("generate_image", { provider: "studio", model: "canvas", prompt: "A dune", placeOnCanvas: true }),
+    /design canvas/,
   );
   assert.match(summarizeToolCall("classify", { provider: "studio", model: "judge", state: { secret: "private-data" } }), /structured data.*studio\/judge.*charges/);
 });
@@ -306,6 +321,34 @@ test("parent file tools refuse to write hook and agent settings files but still 
     }
     await edit.execute("ok", { path: ".claude/skills/x/SKILL.md", old_string: "notes", new_string: "steps" });
     assert.equal(await fs.readFile(path.join(root, ".claude", "skills", "x", "SKILL.md"), "utf8"), "# steps\n");
+  } finally {
+    await fs.rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("a generated image is written as bytes inside the workspace and never through a link out of it", async () => {
+  const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-binary-write-")));
+  const root = path.join(parent, "workspace");
+  const outside = path.join(parent, "outside");
+  try {
+    await fs.mkdir(path.join(root, "design"), { recursive: true });
+    await fs.mkdir(outside);
+    await fs.symlink(outside, path.join(root, "design", "escape"));
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff]);
+
+    assert.equal(await writeWorkspaceBinaryFile(root, "design/assets/hero.png", bytes), "design/assets/hero.png");
+    assert.deepEqual(await fs.readFile(path.join(root, "design", "assets", "hero.png")), bytes);
+
+    // Replacing keeps the same name and the new bytes.
+    const second = Buffer.from([1, 2, 3]);
+    await writeWorkspaceBinaryFile(root, "design/assets/hero.png", second);
+    assert.deepEqual(await fs.readFile(path.join(root, "design", "assets", "hero.png")), second);
+
+    for (const target of ["../outside/hero.png", path.join(outside, "hero.png"), "design/escape/hero.png"]) {
+      await assert.rejects(writeWorkspaceBinaryFile(root, target, bytes), Error, target);
+    }
+    await assert.rejects(writeWorkspaceBinaryFile(root, ".claude/settings.json", bytes), /hook or agent settings/u);
+    assert.deepEqual(await fs.readdir(outside), []);
   } finally {
     await fs.rm(parent, { recursive: true, force: true });
   }

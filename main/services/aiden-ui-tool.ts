@@ -112,7 +112,7 @@ export function createRenderUiTool(options: RenderUiToolOptions): AgentTool {
         try {
           if (signal?.aborted) throw new Error("Rendering the visual was cancelled.");
           const input = params as { title?: unknown; layout?: unknown; markup?: unknown; edits?: unknown };
-          const title = requireGenerativeUiTitle(input.title);
+          const title = requireGenerativeUiTitle(input.title, "render_ui");
           if (input.layout !== undefined && input.layout !== "column" && input.layout !== "wide") {
             throw new Error('render_ui layout must be "column" or "wide".');
           }

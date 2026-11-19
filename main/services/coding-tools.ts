@@ -667,7 +667,11 @@ export function summarizeToolCall(toolName: string, args: unknown): string {
     case "background_job":
       return `Run in the background: ${String(a.command ?? "?")}`;
     case "generate_image":
-      return `Send an image prompt to ${String(a.provider ?? "?")}/${String(a.model ?? "?")}${isImageAspectRatio(a.aspectRatio) ? ` at ${a.aspectRatio}` : ""} (may incur charges). Complete prompt (JSON-quoted): ${JSON.stringify(String(a.prompt ?? "?"))}`;
+      return `Send an image prompt to ${String(a.provider ?? "?")}/${String(a.model ?? "?")}${isImageAspectRatio(a.aspectRatio) ? ` at ${a.aspectRatio}` : ""} (may incur charges).${
+        typeof a.savePath === "string"
+          ? ` Save the image in the workspace as ${JSON.stringify(a.savePath)}, replacing any file there${a.placeOnCanvas === true ? ", and put it on the design canvas" : ""}.`
+          : ""
+      } Complete prompt (JSON-quoted): ${JSON.stringify(String(a.prompt ?? "?"))}`;
     case "classify":
       return `Send structured data and questions to ${String(a.provider ?? "?")}/${String(a.model ?? "?")} for classification (may incur charges)`;
     case "share_image":
@@ -896,6 +900,80 @@ async function commitPinnedWrite(input: {
   });
 }
 
+/**
+ * The file a write would replace, read without following a final symlink:
+ * its preimage for the native writer's conflict check, or undefined when
+ * nothing is there yet. Refuses hard-linked, non-regular or oversized files.
+ */
+async function readReplacedFile(
+  full: string,
+  suppliedPath: string,
+  signal: AbortSignal | undefined,
+): Promise<{
+  source: { sha256: string; lines: number; text?: string };
+  preimage: { identity: PinnedWorkspaceRootIdentity; sha256: string };
+} | undefined> {
+  let handle: fs.FileHandle;
+  try {
+    handle = await fs.open(full, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+  try {
+    const stat = await handle.stat({ bigint: true });
+    if (!stat.isFile() || stat.nlink !== 1n) {
+      throw new Error(`Path "${suppliedPath}" is not an exclusively linked regular file.`);
+    }
+    // The native writer refuses to replace anything larger; say why up front.
+    if (stat.size > BigInt(MAX_PARENT_EDIT_BYTES)) {
+      throw new Error(
+        `${suppliedPath} is larger than write_file's ${MAX_PARENT_EDIT_BYTES / 1024 / 1024} MiB limit for replacing a file; remove or truncate it with run_command first.`,
+      );
+    }
+    const source = await readWritePreimage(handle, signal);
+    return {
+      source,
+      preimage: { identity: { device: stat.dev.toString(), inode: stat.ino.toString() }, sha256: source.sha256 },
+    };
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * Writes bytes (a generated image) to a path in the workspace with
+ * write_file's protections: the path stays inside the folder, symlinks out of
+ * it and dangling links are refused, Aiden's protected config paths are never
+ * written, and an existing file is replaced only if it is an exclusively
+ * linked regular file nobody changed meanwhile. Returns the path relative to
+ * the folder, with forward slashes.
+ */
+export async function writeWorkspaceBinaryFile(
+  root: string,
+  suppliedPath: string,
+  bytes: Buffer,
+  options: { signal?: AbortSignal; fileMutatorBinary?: string } = {},
+): Promise<string> {
+  const { signal } = options;
+  const workspace = pinWorkspaceRoot(root);
+  const full = await resolveWritableInRoot(workspace, suppliedPath, signal);
+  assertAgentMayWriteConfigPath(suppliedPath, full);
+  const existing = await readReplacedFile(full, suppliedPath, signal);
+  throwIfAborted(signal, "File write cancelled.");
+  const realRoot = await verifyWorkspaceRoot(workspace, signal);
+  const relativePath = path.relative(realRoot, full).split(path.sep).join("/");
+  await commitPinnedWrite({
+    ...(options.fileMutatorBinary ? { binary: options.fileMutatorBinary } : {}),
+    root: realRoot,
+    rootIdentity: workspace.exactIdentity!,
+    relativePath,
+    ...(existing ? { before: existing.preimage } : {}),
+    updated: bytes,
+  });
+  return relativePath;
+}
+
 function makeWriteFile(workspace: WorkspaceRootGuard, binary?: string): AgentTool {
   return {
     name: "write_file",
@@ -913,34 +991,9 @@ function makeWriteFile(workspace: WorkspaceRootGuard, binary?: string): AgentToo
       const { path: p, content } = params as { path: string; content: string };
       const full = await resolveWritableInRoot(activeWorkspace, p, signal);
       assertAgentMayWriteConfigPath(p, full);
-      let before: { text?: string; lines: number } = { text: "", lines: 0 };
-      let preimage: { identity: PinnedWorkspaceRootIdentity; sha256: string } | undefined;
-      try {
-        const handle = await fs.open(full, fsConstants.O_RDONLY |
-          (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0));
-        try {
-          const stat = await handle.stat({ bigint: true });
-          if (!stat.isFile() || stat.nlink !== 1n) {
-            throw new Error(`Path "${p}" is not an exclusively linked regular file.`);
-          }
-          // The native writer refuses to replace anything larger; say why up front.
-          if (stat.size > BigInt(MAX_PARENT_EDIT_BYTES)) {
-            throw new Error(
-              `${p} is larger than write_file's ${MAX_PARENT_EDIT_BYTES / 1024 / 1024} MiB limit for replacing a file; remove or truncate it with run_command first.`,
-            );
-          }
-          const source = await readWritePreimage(handle, signal);
-          before = source;
-          preimage = {
-            identity: { device: stat.dev.toString(), inode: stat.ino.toString() },
-            sha256: source.sha256,
-          };
-        } finally {
-          await handle.close();
-        }
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
+      const existing = await readReplacedFile(full, p, signal);
+      const before: { text?: string; lines: number } = existing?.source ?? { text: "", lines: 0 };
+      const preimage = existing?.preimage;
       throwIfAborted(signal, "File write cancelled.");
       const details: FileMutationDetailsV1 = before.text === undefined
         // Too large to diff: count the replacement as whole-file.

@@ -9,12 +9,15 @@ import type {
   Usage,
 } from "@earendil-works/pi-ai";
 import {
+  checkImageSavePath,
   createPiModelTools,
   classifierApprovalFor,
+  imageSavePaths,
   piModelOperationProviderLabel,
   piModelOperationsSystemPrompt,
   piModelOperationUsage,
   resolvePiModelImageInputs,
+  type PiModelSavedImage,
   type PiModelToolsHost,
 } from "./pi-model-tools.js";
 
@@ -955,4 +958,88 @@ test("an image model without a key, or no image model at all, points to Settings
   });
   const classifiersOnly = await get("list_operation_models").execute("list", { type: "classifier" });
   assert.deepEqual(classifiersOnly.structuredContent, { models: [], truncated: false });
+});
+
+function savingTools(options: { save?: (path: string) => Promise<string>; placed?: { frameIds: string[] } | null } = {}) {
+  const { controls, models } = fixture();
+  const saves: { path: string; data: string }[] = [];
+  const placements: PiModelSavedImage[][] = [];
+  const tools = createPiModelTools({
+    ...registries(models),
+    onImage: async () => {},
+    saveImage: async (path, item) => {
+      saves.push({ path, data: item.data });
+      return options.save ? options.save(path) : path;
+    },
+    placeImages: async (images) => {
+      placements.push([...images]);
+      return options.placed === undefined ? { frameIds: images.map((_, index) => `frame-${index + 1}`) } : options.placed;
+    },
+  });
+  const generate = tools.find((tool) => tool.name === "generate_image")!;
+  return { controls, saves, placements, generate };
+}
+
+const resultText = (result: { content: readonly { type: string; text?: string }[] }) =>
+  result.content.flatMap((part) => (part.type === "text" && part.text ? [part.text] : [])).join("\n");
+
+test("a generated image saved in the workspace and put on the canvas reports its path and frame", async () => {
+  const { saves, placements, generate } = savingTools();
+  const result = await generate.execute("save", { ...imageRequest, savePath: "./design/assets/hero.png", placeOnCanvas: true });
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(saves, [{ path: "design/assets/hero.png", data: PNG }]);
+  assert.deepEqual(placements, [[{ path: "design/assets/hero.png", width: 1, height: 1 }]]);
+  const text = resultText(result);
+  assert.match(text, /Saved in the workspace as design\/assets\/hero\.png\./);
+  assert.match(text, /On the design canvas as frame frame-1\./);
+  assert.equal(result.content.filter((part) => part.type === "image").length, 1, "the image is still shown in the chat");
+});
+
+test("with design mode off the image is saved and the canvas left alone, and a failed save keeps what was paid for", async () => {
+  const off = savingTools({ placed: null });
+  const kept = await off.generate.execute("off", { ...imageRequest, savePath: "logo", placeOnCanvas: true });
+  assert.match(resultText(kept), /Saved in the workspace as logo\.png\.[\s\S]*Design mode is off/);
+
+  const failing = savingTools({ save: async () => { throw new Error("Path is outside the workspace."); } });
+  const failed = await failing.generate.execute("fail", { ...imageRequest, savePath: "hero.png", placeOnCanvas: true });
+  assert.equal(failed.isError, undefined);
+  assert.deepEqual(failed.usage, usage);
+  assert.match(resultText(failed), /Could not save hero\.png: Path is outside the workspace\./);
+  assert.deepEqual(failing.placements, [], "nothing unsaved goes on the canvas");
+});
+
+test("a save path that could never be written, or a canvas request without one, is refused before the paid request", async () => {
+  const { controls, generate } = savingTools();
+  for (const savePath of ["../outside.png", "/Users/person/hero.png", "C:\\art\\hero.png", "design/../../hero.png", "notes.txt", ".png", "", "a\u0000.png"]) {
+    await assert.rejects(generate.execute("bad", { ...imageRequest, savePath }), Error, JSON.stringify(savePath));
+  }
+  await assert.rejects(generate.execute("canvas", { ...imageRequest, placeOnCanvas: true }), /placeOnCanvas needs savePath/);
+  assert.equal(controls.imageCalls, 0);
+});
+
+test("savePath and placeOnCanvas exist only for a chat whose host can save and place", async () => {
+  const { get, controls } = fixture();
+  const parameters = get("generate_image").parameters as { properties: Record<string, unknown> };
+  assert.equal("savePath" in parameters.properties, false);
+  assert.equal("placeOnCanvas" in parameters.properties, false);
+  await assert.rejects(get("generate_image").execute("save", { ...imageRequest, savePath: "hero.png" }));
+  assert.equal(controls.imageCalls, 0);
+
+  const { models } = fixture();
+  const saveOnly = createPiModelTools({ ...registries(models), onImage: async () => {}, saveImage: async (path) => path })
+    .find((tool) => tool.name === "generate_image")!;
+  const saveOnlyParameters = saveOnly.parameters as { properties: Record<string, unknown> };
+  assert.equal("savePath" in saveOnlyParameters.properties, true);
+  assert.equal("placeOnCanvas" in saveOnlyParameters.properties, false);
+});
+
+test("saved file names follow each image's real type and number the extra images", () => {
+  assert.deepEqual(imageSavePaths("design/hero.png", ["image/png", "image/jpeg", "image/webp"]), [
+    "design/hero.png",
+    "design/hero-2.jpg",
+    "design/hero-3.webp",
+  ]);
+  assert.deepEqual(imageSavePaths("photo.jpeg", ["image/jpeg"]), ["photo.jpeg"]);
+  assert.deepEqual(imageSavePaths("icons/star", ["image/gif"]), ["icons/star.gif"]);
+  assert.equal(checkImageSavePath("design\\assets\\hero.webp"), "design/assets/hero.webp");
 });

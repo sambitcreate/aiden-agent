@@ -1,4 +1,5 @@
 import { WORKSPACE_ARTIFACT_LIMITS, WORKSPACE_ARTIFACT_TOOL_NAME } from "../../../renderer/shared/workspace-artifacts.js";
+import { VISUAL_ROUTING_SKILL_LINE } from "../visual-routing.js";
 
 /**
  * Built-in skill that teaches the model how to build workspace artifacts.
@@ -11,6 +12,7 @@ export const AIDEN_ARTIFACTS_SKILL = Object.freeze({
     "Build and update interactive pages in the workspace's Artifacts tab: live status boards such as open pull requests, release checklists or TODO lists.",
   instructions: [
     `Use ${WORKSPACE_ARTIFACT_TOOL_NAME} when the person wants a page they will come back to in this workspace, such as open pull requests, CI status, a release checklist or a TODO board. For a one-off answer, chart or form, answer in the chat instead (with render_ui when it is among your tools). If ${WORKSPACE_ARTIFACT_TOOL_NAME} is not among your tools, artifacts are not available here (they live in Aiden Agent), so answer in the chat.`,
+    VISUAL_ROUTING_SKILL_LINE,
     "",
     "Build and check, in this order:",
     `1. Call ${WORKSPACE_ARTIFACT_TOOL_NAME} with operation "list". If a page already covers the request, update it by id instead of creating a near-duplicate. A workspace holds at most ${WORKSPACE_ARTIFACT_LIMITS.perWorkspace} pages. Before changing a page, call operation "get" with its id: it returns the saved markup (read long markup in slices with offset and length), each source's last read with its error and data shape, and the revision. Change the page from that markup, not from memory: for a small change send edits, a list of { old, new } replacements where each old is exact text copied from that markup that matches one place, instead of the whole markup. Edits apply in order and are all or nothing; if one misses, nothing is saved and the error names it, so read the markup again and retry. Pass the revision get showed as baseVersion on the update: if the page changed since (in another chat or by the person), nothing is saved and the error says what changed and the revision now, so get it again and redo the change on that. To try sources or markup before saving them, use operation "check": it runs the sources once and checks the page against their data, and saves nothing.`,
