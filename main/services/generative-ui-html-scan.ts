@@ -877,6 +877,8 @@ function parseFromStringType(tokens: readonly JsToken[], open: number, skip = 0)
   for (let index = open + 1; index < last; index += 1) {
     const token = tokens[index]!;
     if (token.kind !== "punct") continue;
+    // A spread argument can supply the type from any position, so its type is unknown.
+    if (token.text === "..." && depth === 0) return "html";
     if (token.text === "(" || token.text === "[" || token.text === "{" || token.text === "${") depth += 1;
     else if (token.text === ")" || token.text === "]" || token.text === "}") {
       if (depth === 0) return "none";
