@@ -6,11 +6,11 @@
 // once in the file's markup, outside tags, scripts, styles, comments and the
 // title. When the edited element's `data-aiden-src` stamp names a line, that
 // line and the few after it are searched first; a line gone stale (the file
-// changed under it) falls back to the elements whose own attribute is that
-// stamp, never to the rest of the file, so the words of another element are
-// not changed. A stamp with no line means the whole file, which has to hold
-// the text exactly once. Anything else is the person's to hand to Aiden
-// instead. Pure, so it is tested without a file.
+// changed under it) falls back to the text whose nearest stamped element
+// carries exactly that stamp, never to the rest of the file, so the words of
+// another element are not changed. A stamp with no line means the whole file,
+// which has to hold the text exactly once. Anything else is the person's to
+// hand to Aiden instead. Pure, so it is tested without a file.
 
 export type DesignTextChange = { before: string; after: string };
 
@@ -90,36 +90,59 @@ export function stampLine(stamp: string | undefined, path: string): number | und
 
 const VOID_TAGS = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
 
+/** Elements whose content is raw text, never more elements; their tags are skipped with them. */
+const RAW_TEXT_TAGS = new Set(["script", "style", "title", "textarea", "template"]);
+
 /**
- * The inside of each element whose own `data-aiden-src` is exactly `stamp`,
- * from the end of its start tag to its end tag (or the end of the file when
- * it is never closed). Tags in comments, scripts and styles do not count.
+ * The parts of the file whose nearest stamped element has `data-aiden-src`
+ * exactly `stamp` (the value compared case for case): the inside of each
+ * element stamped that way, from the end of its start tag to its end tag (or
+ * the end of the file when it is never closed), less any element inside it
+ * stamped another way, whose words the page reports under that other stamp.
+ * Tags in comments, scripts and styles do not count. One pass over the tags,
+ * so a page that stamps every element costs no more than one that stamps few.
  */
 function stampedRanges(source: string, stamp: string, excluded: ReadonlyArray<[number, number]>): Array<[number, number]> {
-  // A tag of its own starts its range; one inside a comment or script starts after it.
-  const inExcluded = (index: number) => excluded.some(([from, to]) => index > from && index < to);
-  const value = escapeRegExp(stamp);
-  const opening = new RegExp(`<([a-z][a-z0-9-]*)\\b[^>]*?\\sdata-aiden-src\\s*=\\s*(?:"${value}"|'${value}')[^>]*>`, "giu");
+  // A tag of its own starts an excluded range; one inside a comment or script starts after it.
+  let skip = 0;
+  const inExcluded = (index: number) => {
+    while (skip < excluded.length && excluded[skip]![1] <= index) skip += 1;
+    return skip < excluded.length && excluded[skip]![0] < index;
+  };
+  const tags = /<(\/?)([a-z][a-z0-9-]*)\b([^>]*)>/giu;
+  const attribute = /\sdata-aiden-src\s*=\s*(?:"([^"]*)"|'([^']*)')/iu;
+  /** Open elements, outermost first, each with the stamp in force inside it. */
+  const open: Array<{ name: string; stamp: string | undefined }> = [];
+  const current = () => open[open.length - 1]?.stamp;
   const ranges: Array<[number, number]> = [];
-  for (let match = opening.exec(source); match; match = opening.exec(source)) {
-    if (inExcluded(match.index)) continue;
-    const name = match[1]!.toLowerCase();
-    const from = match.index + match[0].length;
-    if (VOID_TAGS.has(name) || match[0].endsWith("/>")) continue;
-    const tags = new RegExp(`<(/?)${escapeRegExp(name)}(?=[\\s>/])[^>]*>`, "giu");
-    tags.lastIndex = from;
-    let depth = 1;
-    let to = source.length;
-    for (let tag = tags.exec(source); tag; tag = tags.exec(source)) {
-      if (inExcluded(tag.index)) continue;
-      depth += tag[1] === "/" ? -1 : 1;
-      if (depth === 0) {
-        to = tag.index;
-        break;
-      }
+  let from: number | undefined;
+  /** Starts or ends a range at `at` when the stamp in force changes there. */
+  const track = (at: number) => {
+    const inside = current() === stamp;
+    if (inside && from === undefined) from = at;
+    if (!inside && from !== undefined) {
+      if (at > from) ranges.push([from, at]);
+      from = undefined;
     }
-    ranges.push([from, to]);
+  };
+  for (let tag = tags.exec(source); tag; tag = tags.exec(source)) {
+    if (inExcluded(tag.index)) continue;
+    const name = tag[2]!.toLowerCase();
+    if (RAW_TEXT_TAGS.has(name)) continue;
+    if (tag[1] === "/") {
+      // An end tag closes its element and any left open inside it; one with nothing to close is ignored.
+      const index = open.map((entry) => entry.name).lastIndexOf(name);
+      if (index === -1) continue;
+      open.length = index;
+      track(tag.index);
+      continue;
+    }
+    if (VOID_TAGS.has(name) || tag[3]!.endsWith("/")) continue;
+    const own = attribute.exec(tag[3]!);
+    open.push({ name, stamp: own ? (own[1] ?? own[2]) : current() });
+    track(tag.index + tag[0].length);
   }
+  if (from !== undefined && source.length > from) ranges.push([from, source.length]);
   return ranges;
 }
 

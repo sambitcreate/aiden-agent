@@ -196,7 +196,7 @@ As built in P4e, the canvas never hands the page the pointer: it keeps the click
   - It uses the element under the pointer.
   - Alt widens the pick to the parent.
   - A lasso selection with Shift is not built.
-- **Source stamps:** when Aiden writes HTML it adds `data-aiden-src="<file>"` to meaningful elements, and the bridge reports the nearest stamp. Aiden no longer writes line numbers, which go stale as the page changes; an older `file:line` stamp still narrows an in-place text edit to that line and the 30 after it first, and when the text is not there (the line went stale) only the elements whose own `data-aiden-src` is that stamp are searched, where it must appear exactly once, so a stale stamp never changes another element's words. A stamp with no line lets the edit find the text anywhere in the file, once. Files without stamps still work, with a selector and text only.
+- **Source stamps:** when Aiden writes HTML it adds `data-aiden-src="<file>"` to meaningful elements, and the bridge reports the nearest stamp. Aiden no longer writes line numbers, which go stale as the page changes; an older `file:line` stamp still narrows an in-place text edit to that line and the 30 after it first, and when the text is not there (the line went stale) only the text whose nearest stamped element has exactly that `data-aiden-src` (letter case included, and not inside an element stamped another way) is searched, where it must appear exactly once, so a stale stamp never changes another element's words. A stamp with no line lets the edit find the text anywhere in the file, once. Files without stamps still work, with a selector and text only.
 
 ### 5.6 Comments, pointing and annotating
 

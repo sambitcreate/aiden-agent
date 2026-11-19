@@ -92,6 +92,34 @@ ${"<br>\n".repeat(40)}<p>Outside</p>
   });
 });
 
+test("with a stale line, words count only where their nearest stamp is exactly the edited element's", () => {
+  const page = `<body>
+${"\n".repeat(40)}<section data-aiden-src="design/hero.html:2">
+  <h2>Plans</h2>
+  <div data-aiden-src="design/hero.html:3"><h2>Plans</h2><p>Monthly</p></div>
+  <p>Yearly</p>
+</section>
+<p data-aiden-src="design/HERO.html:2">Hello</p>
+</body>`;
+  // The section's own heading, not the one in the card inside it, which the page reports under the card's stamp.
+  const section = planDesignTextEdit(page, [{ before: "Plans", after: "Pricing" }], at("design/hero.html:2"));
+  assert.ok(section.ok);
+  assert.match(section.source, /<section[^>]*>\s*<h2>Pricing<\/h2>\s*<div[^>]*><h2>Plans<\/h2>/u);
+  const card = planDesignTextEdit(page, [{ before: "Plans", after: "Tiers" }], at("design/hero.html:3"));
+  assert.ok(card.ok);
+  assert.match(card.source, /<div[^>]*><h2>Tiers<\/h2>/u);
+  assert.deepEqual(planDesignTextEdit(page, [{ before: "Monthly", after: "x" }], at("design/hero.html:2")), {
+    ok: false,
+    reason: "not-found",
+  });
+  assert.ok(planDesignTextEdit(page, [{ before: "Yearly", after: "Annual" }], at("design/hero.html:2")).ok, "text after the card is the section's again");
+  // A stamp naming the same path in other letters is another file's.
+  assert.deepEqual(planDesignTextEdit(page, [{ before: "Hello", after: "Hi" }], at("design/hero.html:2")), {
+    ok: false,
+    reason: "not-found",
+  });
+});
+
 test("a part of a longer text is not a text node, and missing or blank text is not found", () => {
   assert.deepEqual(planDesignTextEdit(PAGE, [{ before: "Ship", after: "Sail" }]), { ok: false, reason: "not-found" });
   assert.deepEqual(planDesignTextEdit(PAGE, [{ before: "Nowhere", after: "x" }]), { ok: false, reason: "not-found" });
