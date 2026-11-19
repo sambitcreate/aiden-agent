@@ -10,6 +10,7 @@ import { BotsView } from "../bots-view";
 import { forgetUnsavedBotSettings } from "./bot-advanced";
 import { mountWithBotRouter } from "./test-providers";
 import { botFixture, catalogFixture } from "./test-fixtures";
+import { DISABLED_APP_CAPABILITIES, type AppCapabilities } from "../../lib/app-capabilities";
 
 beforeEach(() => {
   localStorage.clear();
@@ -79,13 +80,22 @@ function BotsPagesOnly() {
 }
 
 /** The Bot's chat with its settings open in the side panel, the way an old Profile link opens them now. */
-async function openSettings(path = "/bots/bot-1") {
-  const mounted = await mountWithBotRouter(<BotsPagesOnly />, { initialPath: path });
+async function openSettings(path = "/bots/bot-1", capabilities?: AppCapabilities) {
+  const mounted = await mountWithBotRouter(<BotsPagesOnly />, { initialPath: path, capabilities });
   await screen.findByRole("button", { name: /^Rename /u });
   return mounted;
 }
 
 const panel = () => document.getElementById("bot-panel")!;
+
+test("a Bot that uses everything names the computer it runs on: a Mac on macOS, a computer on Linux", async () => {
+  for (const [platform, noun] of [["darwin", "Mac"], ["linux", "computer"]] as const) {
+    settingsIpc();
+    await openSettings("/bots/bot-1", { ...DISABLED_APP_CAPABILITIES, platform, bots: true });
+    await within(panel()).findByText(`Everything Aiden can use on this ${noun}, including apps you connect later. Approvals and rules still apply.`);
+    cleanup();
+  }
+});
 const saveBar = () => screen.queryByRole("region", { name: "Unsaved changes" });
 
 test("the settings read top to bottom in one order, and nothing waits to be saved", async () => {

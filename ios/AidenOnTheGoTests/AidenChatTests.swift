@@ -5699,7 +5699,7 @@ final class AidenChatTests: XCTestCase {
         let held = expectation(description: "snapshot transcript read held")
         AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/chats/" + model.chat.id) { held.fulfill() }
         AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(
-            4, "snapshot", #"{"chatId":"chat-progress-lifecycle","turnId":"turn-reveal","nextSequence":5}"#
+            4, "snapshot", #"{"chatId":"chat-progress-lifecycle","turnId":"turn-reveal","reason":"reset","nextSequence":5}"#
         ))
         await fulfillment(of: [held], timeout: 5)
         XCTAssertEqual(model.liveText, "")
@@ -5714,6 +5714,86 @@ final class AidenChatTests: XCTestCase {
         AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(5, "text_delta", #"{"text":"Fresh copy "}"#))
         try await releaseRevealTicks(ticks) { model.liveText.count >= "Fresh copy ".count }
         XCTAssertEqual(model.liveText, "Fresh copy ")
+    }
+
+    @MainActor
+    func testWorkspaceSnapshotResetDropsBufferedTextAndGapSnapshotSuppressesDuplicateReplay() async throws {
+        // 1. Workspace chat: live provider reset (`reason: "reset"`) clears revealed, buffered, and reasoning text,
+        // reconciles once, and streams the replacement reply normally.
+        do {
+            defer { AidenChatProgressLifecycleURLProtocol.reset() }
+            let ticks = AidenManualRevealTicks()
+            defer { ticks.releaseAll() }
+            let (model, fixture) = try await makeRevealModel(ticks: ticks)
+            XCTAssertFalse(model.chat.isBotChat)
+
+            AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(1, "text_delta", #"{"text":"Draft shown "}"#))
+            try await releaseRevealTicks(ticks) { model.liveText == "Draft shown " }
+            AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(2, "reasoning_delta", #"{"text":"Draft thought"}"#))
+            AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(3, "text_delta", #"{"text":"draft buffered "}"#))
+            try await waitUntil { ticks.pending == 1 && model.reasoning == "Draft thought" }
+
+            let readsBeforeReset = fixture.chatReads
+            AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(
+                4, "snapshot", #"{"chatId":"chat-progress-lifecycle","turnId":"turn-reveal","reason":"reset","nextSequence":5}"#
+            ))
+            try await waitUntil { fixture.chatReads == readsBeforeReset + 1 }
+            ticks.releaseAll()
+            try await Task.sleep(for: .milliseconds(30))
+            XCTAssertEqual(model.liveText, "")
+            XCTAssertEqual(model.reasoning, "")
+
+            AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(5, "text_delta", #"{"text":"Replacement reply"}"#))
+            try await releaseRevealTicks(ticks) { model.liveText == "Replacement reply" }
+            XCTAssertEqual(model.liveText, "Replacement reply")
+        }
+
+        // 2. Gap recovery (`reason: "gap"` and legacy reason-less `snapshot` across a sequence jump):
+        // triggers only 1 authoritative chat GET on the snapshot boundary, suppresses replayed deltas and
+        // historical reset snapshots so the settled answer is never shown twice, and settles cleanly on `done`.
+        for snapshotPayload in [
+            #"{"chatId":"chat-progress-lifecycle","turnId":"turn-reveal","reason":"gap","nextSequence":4098}"#,
+            #"{"chatId":"chat-progress-lifecycle","turnId":"turn-reveal","nextSequence":4098}"#,
+        ] {
+            defer { AidenChatProgressLifecycleURLProtocol.reset() }
+            let ticks = AidenManualRevealTicks()
+            defer { ticks.releaseAll() }
+            let (model, fixture) = try await makeRevealModel(ticks: ticks)
+
+            AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(1, "text_delta", #"{"text":"Stale partial "}"#))
+            try await releaseRevealTicks(ticks) { model.liveText == "Stale partial " }
+            AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(2, "reasoning_delta", #"{"text":"Stale reasoning"}"#))
+            try await waitUntil { model.reasoning == "Stale reasoning" }
+
+            fixture.commit(AidenChatMessage(id: "reply-gap", role: .assistant, text: "Authoritative final answer", createdAt: Date()))
+            let readsBeforeGap = fixture.chatReads
+
+            // Jump from sequence 2 -> 4097 snapshot: must trigger 1 chat read, not 2!
+            AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(4097, "snapshot", snapshotPayload))
+            try await waitUntil { model.chat.messages.contains(where: { $0.id == "reply-gap" }) }
+            XCTAssertEqual(fixture.chatReads, readsBeforeGap + 1, "sequence jump onto snapshot reconciles once, not twice")
+            XCTAssertEqual(model.liveText, "")
+            XCTAssertEqual(model.reasoning, "")
+
+            // Retained tail replays historical reasoning, deltas, and even an earlier provider reset.
+            AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(4098, "reasoning_delta", #"{"text":"Replayed reasoning"}"#))
+            AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(4099, "text_delta", #"{"text":"Authoritative "}"#))
+            AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(
+                4100, "snapshot", #"{"chatId":"chat-progress-lifecycle","turnId":"turn-reveal","reason":"reset","nextSequence":4101}"#
+            ))
+            AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(4101, "text_delta", #"{"text":"Authoritative final answer"}"#))
+            ticks.releaseAll()
+            try await Task.sleep(for: .milliseconds(40))
+            XCTAssertEqual(model.liveText, "", "replayed deltas during gap recovery never duplicate the settled message")
+            XCTAssertEqual(model.reasoning, "")
+
+            AidenChatProgressLifecycleURLProtocol.pushEvent(
+                AidenRevealStreamFixture.frame(4102, "done", #"{"messageId":"reply-gap"}"#, terminal: true)
+            )
+            try await waitUntil { !model.isStreaming && !model.showsLiveResponse }
+            XCTAssertEqual(model.liveText, "")
+            XCTAssertEqual(model.chat.messages.map(\.id), ["reply-gap"])
+        }
     }
 
     @MainActor

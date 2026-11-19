@@ -55,6 +55,10 @@ export function TelegramSettings() {
   const [keyDraft, setKeyDraft] = React.useState("");
   const [profileDraft, setProfileDraft] = React.useState("");
   const [deleteProfileOpen, setDeleteProfileOpen] = React.useState(false);
+  const [resetPairingOpen, setResetPairingOpen] = React.useState(false);
+  const [resettingPairing, setResettingPairing] = React.useState(false);
+  const disconnectRef = React.useRef<HTMLButtonElement>(null);
+  const pairingResetRef = React.useRef(false);
 
   const invalidate = () => qc.invalidateQueries({ queryKey: queryKeys.telegram });
   const enabled = telegram.data?.enabled ?? false;
@@ -124,15 +128,32 @@ export function TelegramSettings() {
   };
 
   const resetPairing = async () => {
-    await telegramApi.resetPairing();
-    await invalidate();
-    toast.success("Pairing reset. The next /start will claim a new owner.");
+    if (resettingPairing) return;
+    setResettingPairing(true);
+    try {
+      await telegramApi.resetPairing();
+      pairingResetRef.current = true;
+      setResetPairingOpen(false);
+      toast.success("Pairing reset. The next person to message your bot becomes its owner.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Couldn’t reset Telegram pairing.");
+    } finally {
+      setResettingPairing(false);
+      await invalidate();
+    }
   };
 
   const selectProfile = async (profile: string) => {
-    await telegramApi.selectProfile(profile);
-    setKeyDraft("");
-    await invalidate();
+    try {
+      await telegramApi.selectProfile(profile);
+      setKeyDraft("");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : `Couldn’t switch to Telegram profile ${profile}.`,
+      );
+    } finally {
+      await invalidate();
+    }
   };
 
   const createProfile = async () => {
@@ -150,15 +171,29 @@ export function TelegramSettings() {
 
   const deleteProfile = async () => {
     if (activeProfile === "default") return;
-    await telegramApi.deleteProfile(activeProfile);
-    await invalidate();
-    toast.success(`Telegram profile ${activeProfile} deleted.`);
+    try {
+      await telegramApi.deleteProfile(activeProfile);
+      toast.success(`Telegram profile ${activeProfile} deleted.`);
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : `Couldn’t delete Telegram profile ${activeProfile}.`,
+      );
+    } finally {
+      await invalidate();
+    }
   };
 
   const saveProvider = async (providerId: string, model: string) => {
-    await telegramApi.setProvider(providerId, model);
-    await invalidate();
-    toast.success("Telegram provider saved.");
+    try {
+      await telegramApi.setProvider(providerId, model);
+      toast.success("Telegram provider saved.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Couldn’t save the Telegram provider.");
+    } finally {
+      await invalidate();
+    }
   };
 
   const saveWorkspace = async (workspaceId: string) => {
@@ -400,7 +435,7 @@ export function TelegramSettings() {
             <Button size="medium" variant="filled" onClick={() => { setConnectionError(null); setConnectionReview(true); }} disabled={polling || connecting || disconnecting}>
               Connect
             </Button>
-            <Button size="medium" variant="muted" onClick={disconnect} disabled={!enabled || disconnecting}>
+            <Button ref={disconnectRef} size="medium" variant="muted" onClick={disconnect} disabled={!enabled || disconnecting}>
               Disconnect
             </Button>
             <span className="min-w-0 break-words text-secondary text-regular">
@@ -420,7 +455,7 @@ export function TelegramSettings() {
         >
           <div className="flex items-center gap-3">
             <span className="text-secondary text-regular">User ID: {allowedUserId}</span>
-            <Button size="small" variant="muted" onClick={resetPairing}>
+            <Button size="small" variant="muted" onClick={() => { pairingResetRef.current = false; setResetPairingOpen(true); }}>
               Reset pairing
             </Button>
           </div>
@@ -633,6 +668,21 @@ export function TelegramSettings() {
         confirmLabel="Delete profile"
         confirmVariant="destructive"
         onConfirm={() => void deleteProfile()}
+      />
+      <AlertDialog
+        open={resetPairingOpen}
+        onOpenChange={setResetPairingOpen}
+        title="Reset Telegram pairing?"
+        description="The next person to message your bot becomes its owner and can run tasks without approval. Turn Telegram off first if others can reach your bot."
+        confirmLabel="Reset pairing"
+        confirmVariant="destructive"
+        busy={resettingPairing}
+        keepOpenOnConfirm
+        // After a reset the Reset pairing button leaves with the owner, so land on Disconnect.
+        returnFocus={() =>
+          pairingResetRef.current && !disconnectRef.current?.disabled ? disconnectRef.current : null
+        }
+        onConfirm={() => void resetPairing()}
       />
     </>
   );

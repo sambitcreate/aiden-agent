@@ -1,11 +1,22 @@
 package sbtbiswas.AidenOnTheGo
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import sbtbiswas.AidenOnTheGo.features.workspaces.AidenWorkspaceFilesController
+import sbtbiswas.AidenOnTheGo.features.workspaces.AidenWorkspaceFilesRemote
+import sbtbiswas.AidenOnTheGo.features.workspaces.AidenWorkspaceFilesStrings
 import sbtbiswas.AidenOnTheGo.models.*
+import sbtbiswas.AidenOnTheGo.persistence.AidenWorkspaceEnvironmentCache
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorEnvelope
 import java.io.File
 
 class AidenWorkspaceEnvironmentTest {
@@ -288,5 +299,255 @@ class AidenWorkspaceEnvironmentTest {
         assertNotEquals(key1, key2)
         assertNotEquals(key1, key3)
         assertNotEquals(key2, key3)
+    }
+
+    private class FakeWorkspaceFilesRemote : AidenWorkspaceFilesRemote {
+        var pageHandler: suspend (String, String?, String?) -> AidenWorkspaceFileIndex = { _, _, _ ->
+            throw AssertionError("Unexpected page call")
+        }
+        var snapshotHandler: suspend (String) -> AidenWorkspaceFileIndex = {
+            throw AssertionError("Unexpected snapshot call")
+        }
+        var readHandler: suspend (String, String) -> AidenWorkspaceFileDocument = { _, _ ->
+            throw AssertionError("Unexpected read call")
+        }
+        var writeHandler: suspend (String, String, String, String, String) -> AidenWorkspaceFileDocument = { _, _, _, _, _ ->
+            throw AssertionError("Unexpected write call")
+        }
+        var rootPageCalls = 0
+        var writeCalls = 0
+
+        override suspend fun workspaceFilePage(
+            workspaceId: String,
+            directoryId: String?,
+            cursor: String?
+        ): AidenWorkspaceFileIndex {
+            if (directoryId == null && cursor == null) rootPageCalls += 1
+            return pageHandler(workspaceId, directoryId, cursor)
+        }
+
+        override suspend fun workspaceFiles(workspaceId: String) = snapshotHandler(workspaceId)
+        override suspend fun workspaceFile(workspaceId: String, fileId: String) = readHandler(workspaceId, fileId)
+        override suspend fun workspaceLinkedFile(workspaceId: String, reference: String): AidenWorkspaceFileDocument =
+            throw AssertionError("Unexpected linked file call")
+
+        override suspend fun writeWorkspaceFile(
+            workspaceId: String,
+            fileId: String,
+            displayPath: String,
+            content: String,
+            expectedVersion: String
+        ): AidenWorkspaceFileDocument {
+            writeCalls += 1
+            return writeHandler(workspaceId, fileId, displayPath, content, expectedVersion)
+        }
+    }
+
+    private fun staleException(code: AidenRemoteErrorCode): AidenRemoteClientException.Server =
+        AidenRemoteClientException.Server(
+            if (code == AidenRemoteErrorCode.HANDLE_EXPIRED) 410 else 400,
+            AidenRemoteErrorEnvelope.Body(code, "Stale handle.", "req_stale", false)
+        )
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun staleLazyHandlesRecoverOnceReplaceTreeIdsPreserveDraftAndCacheAndNeverReplaySaves() = runTest {
+        for (code in listOf(AidenRemoteErrorCode.HANDLE_INVALID, AidenRemoteErrorCode.HANDLE_EXPIRED)) {
+            val cache = AidenWorkspaceEnvironmentCache(tempFolder.newFolder())
+            val remote = FakeWorkspaceFilesRemote()
+            val strings = AidenWorkspaceFilesStrings()
+            val staleDirId = "file_" + "a".repeat(43)
+            val freshDirId = "file_" + "b".repeat(43)
+            val staleFileId = "file_" + "c".repeat(43)
+            val freshFileId = "file_" + "d".repeat(43)
+            val openDocId = "file_" + "e".repeat(43)
+            val childStaleId = "file_" + "g".repeat(43)
+            val staleCursor = "cur_" + "h".repeat(43)
+
+            var currentDirId = staleDirId
+            var currentFileId = staleFileId
+            remote.pageHandler = { _, directoryId, cursor ->
+                when {
+                    directoryId == null && cursor == null -> AidenWorkspaceFileIndex(
+                        snapshotId = "root",
+                        entries = listOf(
+                            AidenWorkspaceFileEntry(currentDirId, "src", "src", AidenWorkspaceFileKind.DIRECTORY),
+                            AidenWorkspaceFileEntry(currentFileId, "README.md", "README.md", AidenWorkspaceFileKind.FILE),
+                            AidenWorkspaceFileEntry(openDocId, "Notes.md", "Notes.md", AidenWorkspaceFileKind.FILE)
+                        ),
+                        truncated = false, maxEntries = 4_000, maxDepth = 20, directoryPath = ""
+                    )
+                    directoryId == staleDirId -> throw staleException(code)
+                    directoryId == freshDirId && cursor == null -> AidenWorkspaceFileIndex(
+                        snapshotId = "src-1",
+                        entries = listOf(
+                            AidenWorkspaceFileEntry(childStaleId, "src/App.kt", "App.kt", AidenWorkspaceFileKind.FILE)
+                        ),
+                        truncated = false, maxEntries = 4_000, maxDepth = 20, directoryPath = "src", nextCursor = staleCursor
+                    )
+                    directoryId == freshDirId && cursor == staleCursor -> throw staleException(code)
+                    else -> throw AssertionError("Unexpected page($directoryId, $cursor)")
+                }
+            }
+            remote.readHandler = { _, fileId ->
+                when (fileId) {
+                    openDocId -> AidenWorkspaceFileDocument(openDocId, "Notes.md", "original\n", "1".repeat(64), false)
+                    staleFileId -> throw staleException(code)
+                    else -> throw AssertionError("Unexpected read($fileId)")
+                }
+            }
+            remote.writeHandler = { _, _, _, _, _ -> throw staleException(code) }
+
+            val controller = AidenWorkspaceFilesController(this, "ws-1", cache, strings)
+            controller.bind("laptop", remote, connected = true, strings = strings)
+            controller.refreshFiles()
+            advanceUntilIdle()
+            assertEquals(1, remote.rootPageCalls)
+
+            // Open Notes.md and modify draft so we have an open document with unsaved edits and a cached download.
+            val notesEntry = controller.state.value.fileIndex!!.entries.first { it.displayPath == "Notes.md" }
+            controller.openEntry(notesEntry)
+            advanceUntilIdle()
+            controller.setEditing(true)
+            controller.updateDraft("unsaved draft\n")
+            assertTrue(controller.state.value.isDirty)
+
+            // 1. Stale folder expansion refreshes root once, replaces stale directory handle, surfaces recovery prompt, preserves draft.
+            currentDirId = freshDirId
+            val staleSrc = controller.state.value.fileIndex!!.entries.first { it.displayPath == "src" }
+            controller.openEntry(staleSrc)
+            advanceUntilIdle()
+            assertEquals(2, remote.rootPageCalls)
+            assertFalse("src" in controller.state.value.expanded)
+            assertEquals(strings.staleFolderRecovery, controller.state.value.errorMessage)
+            assertEquals(freshDirId, controller.state.value.fileIndex!!.entries.first { it.displayPath == "src" }.id)
+            assertEquals(openDocId, controller.state.value.selectedFile?.id)
+            assertEquals("unsaved draft\n", controller.state.value.draftContent)
+            assertTrue(controller.state.value.isDirty)
+
+            // Reopening src with the refreshed handle succeeds and stores continuation cursor.
+            val freshSrc = controller.state.value.fileIndex!!.entries.first { it.displayPath == "src" }
+            controller.openEntry(freshSrc)
+            advanceUntilIdle()
+            assertTrue("src" in controller.state.value.expanded)
+            assertEquals(staleCursor, controller.state.value.cursors["src"])
+
+            // 2. Stale continuation cursor invalidates stale src/App.kt instead of retaining obsolete IDs, refreshes root once.
+            controller.loadPage(freshSrc)
+            advanceUntilIdle()
+            assertEquals(3, remote.rootPageCalls)
+            assertTrue(controller.state.value.cursors.isEmpty())
+            assertFalse(controller.state.value.fileIndex!!.entries.any { it.id == childStaleId })
+            assertEquals(strings.staleFolderRecovery, controller.state.value.errorMessage)
+
+            // 3. Stale unopened file open refreshes root once, surfaces file recovery prompt, preserves open draft + cache.
+            currentFileId = freshFileId
+            val staleReadme = controller.state.value.fileIndex!!.entries.first { it.displayPath == "README.md" }
+            controller.openEntry(staleReadme)
+            advanceUntilIdle()
+            assertEquals(4, remote.rootPageCalls)
+            assertEquals(strings.staleFileRecovery, controller.state.value.errorMessage)
+            assertEquals(freshFileId, controller.state.value.fileIndex!!.entries.first { it.displayPath == "README.md" }.id)
+            assertEquals(openDocId, controller.state.value.selectedFile?.id)
+            assertEquals("unsaved draft\n", controller.state.value.draftContent)
+            assertEquals("original\n", cache.load("laptop", "ws-1")?.documents?.get(openDocId)?.content)
+
+            // 4. Stale save never auto-replays PUT and surfaces error while keeping draft dirty.
+            controller.saveDocument()
+            advanceUntilIdle()
+            assertEquals(1, remote.writeCalls)
+            assertEquals("Stale handle.", controller.state.value.errorMessage)
+            assertEquals("unsaved draft\n", controller.state.value.draftContent)
+            assertTrue(controller.state.value.isDirty)
+
+            // 5. Going offline preserves read-only cached document access.
+            controller.closeSelectedFile(discardChanges = true)
+            controller.bind("laptop", remote, connected = false, strings = strings)
+            controller.openEntry(notesEntry)
+            advanceUntilIdle()
+            assertEquals("original\n", controller.state.value.selectedFile?.content)
+            assertTrue(controller.state.value.isOfflineDocument)
+            assertFalse(controller.state.value.availability.canEditDocument)
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun concurrentStalePagesRefreshRootOnceAndFenceOwnerSwitches() = runTest {
+        val cache = AidenWorkspaceEnvironmentCache(tempFolder.newFolder())
+        val remote = FakeWorkspaceFilesRemote()
+        val dirAId = "file_" + "a".repeat(43)
+        val dirBId = "file_" + "b".repeat(43)
+        val freshDirAId = "file_" + "c".repeat(43)
+        val holdDirB = CompletableDeferred<Unit>()
+        val holdRecoveryRoot = CompletableDeferred<Unit>()
+        var recoveryPhase = false
+
+        remote.pageHandler = { _, directoryId, _ ->
+            when (directoryId) {
+                null -> {
+                    if (recoveryPhase) holdRecoveryRoot.await()
+                    AidenWorkspaceFileIndex(
+                        snapshotId = if (recoveryPhase) "root-2" else "root-1",
+                        entries = if (recoveryPhase) {
+                            listOf(AidenWorkspaceFileEntry(freshDirAId, "a", "a", AidenWorkspaceFileKind.DIRECTORY))
+                        } else {
+                            listOf(
+                                AidenWorkspaceFileEntry(dirAId, "a", "a", AidenWorkspaceFileKind.DIRECTORY),
+                                AidenWorkspaceFileEntry(dirBId, "b", "b", AidenWorkspaceFileKind.DIRECTORY)
+                            )
+                        },
+                        truncated = false, maxEntries = 4_000, maxDepth = 20, directoryPath = ""
+                    )
+                }
+                dirAId -> throw staleException(AidenRemoteErrorCode.HANDLE_INVALID)
+                dirBId -> {
+                    holdDirB.await()
+                    throw staleException(AidenRemoteErrorCode.HANDLE_INVALID)
+                }
+                freshDirAId -> throw staleException(AidenRemoteErrorCode.HANDLE_EXPIRED)
+                else -> throw AssertionError("Unexpected $directoryId")
+            }
+        }
+
+        val controller = AidenWorkspaceFilesController(this, "ws-1", cache)
+        controller.bind("laptop", remote, connected = true)
+        controller.refreshFiles()
+        advanceUntilIdle()
+        assertEquals(1, remote.rootPageCalls)
+
+        recoveryPhase = true
+        val dirA = controller.state.value.fileIndex!!.entries.first { it.displayPath == "a" }
+        val dirB = controller.state.value.fileIndex!!.entries.first { it.displayPath == "b" }
+        controller.openEntry(dirB)
+        runCurrent()
+        controller.openEntry(dirA)
+        runCurrent()
+        // dirA failed and started the single recovery root refresh; dirB's late failure is fenced by the bumped revision.
+        holdDirB.complete(Unit)
+        runCurrent()
+        holdRecoveryRoot.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(2, remote.rootPageCalls)
+        assertEquals(listOf(freshDirAId), controller.state.value.fileIndex!!.entries.map { it.id })
+
+        // Switching to a different host while stale recovery is parked fences the old owner's response.
+        val holdSecondRecovery = CompletableDeferred<Unit>()
+        remote.pageHandler = { _, directoryId, _ ->
+            if (directoryId == null) {
+                holdSecondRecovery.await()
+                AidenWorkspaceFileIndex("late-laptop", emptyList(), false, 4_000, 20, directoryPath = "")
+            } else {
+                throw staleException(AidenRemoteErrorCode.HANDLE_EXPIRED)
+            }
+        }
+        controller.openEntry(controller.state.value.fileIndex!!.entries.first())
+        runCurrent()
+        val studioRemote = FakeWorkspaceFilesRemote()
+        controller.bind("studio", studioRemote, connected = false)
+        holdSecondRecovery.complete(Unit)
+        advanceUntilIdle()
+        assertNull(controller.state.value.fileIndex)
+        assertNull(controller.state.value.errorMessage)
     }
 }

@@ -1607,7 +1607,7 @@ final class AidenRemoteClient: @unchecked Sendable {
             .botWatches, .botOpenWork, .botRoutineModels, .botPeers,
             .botMessaging, .botAccessRequests, .botPlans, .botAllowed,
             .appControlsRead, .appControlsRespond, .scheduleCards, .chatJobs, .attachmentsRaw, .chatNewWorktree,
-            .chatContinueInNewChat,
+            .chatContinueInNewChat, .streamSnapshotReasons,
         ]).union(AidenRemoteCapability.botUX)
         guard !accepts.isEmpty,
               Set(accepts).count == accepts.count,

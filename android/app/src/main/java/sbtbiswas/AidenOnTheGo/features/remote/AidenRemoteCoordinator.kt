@@ -205,6 +205,13 @@ internal fun aidenShouldRequestChatNewWorktree(server: AidenServer, installation
 internal fun aidenShouldRequestChatContinueInNewChat(server: AidenServer, installation: AidenInstallation): Boolean =
     aidenShouldRequestSoloCapability(AidenRemoteCapability.CHAT_CONTINUE_IN_NEW_CHAT, server, installation)
 
+/**
+ * Revision 65: a Mac that offers `stream:snapshot-reasons` in `serverCapabilities` is asked for it
+ * alone after `chat:continue-in-new-chat`, unless [installation] already holds it.
+ */
+internal fun aidenShouldRequestStreamSnapshotReasons(server: AidenServer, installation: AidenInstallation): Boolean =
+    aidenShouldRequestSoloCapability(AidenRemoteCapability.STREAM_SNAPSHOT_REASONS, server, installation)
+
 private fun aidenShouldRequestSoloCapability(
     capability: AidenRemoteCapability,
     server: AidenServer,
@@ -374,6 +381,24 @@ internal suspend fun aidenRequestChatContinueInNewChat(
     aidenRequestCapabilitiesAlone(
         if (aidenShouldRequestChatContinueInNewChat(server, installation)) {
             listOf(AidenRemoteCapability.CHAT_CONTINUE_IN_NEW_CHAT)
+        } else emptyList(),
+        client,
+        stillCurrent
+    )
+
+/**
+ * Revision 65: asks [server] for `stream:snapshot-reasons` alone. A Mac that refuses it (400 or
+ * 404) leaves the pairing as it was; snapshots then carry the legacy three-key payload.
+ */
+internal suspend fun aidenRequestStreamSnapshotReasons(
+    client: AidenRemoteClient,
+    server: AidenServer,
+    installation: AidenInstallation,
+    stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? =
+    aidenRequestCapabilitiesAlone(
+        if (aidenShouldRequestStreamSnapshotReasons(server, installation)) {
+            listOf(AidenRemoteCapability.STREAM_SNAPSHOT_REASONS)
         } else emptyList(),
         client,
         stillCurrent
@@ -795,10 +820,18 @@ class AidenRemoteCoordinator(
                     server = worktreeServer,
                     request = ::aidenRequestChatContinueInNewChat
                 )
+                // Revision 65: `stream:snapshot-reasons` goes alone too.
+                val snapshotReasonsServer = negotiateSoloCapability(
+                    generation = generation,
+                    installation = installation,
+                    client = newClient,
+                    server = continueServer,
+                    request = ::aidenRequestStreamSnapshotReasons
+                )
                 // Revision 59: `bot:watches` goes alone, without another feature token.
                 val watchesServer = negotiateSoloCapability(
                     generation = generation, installation = installation, client = newClient,
-                    server = continueServer, request = ::aidenRequestBotWatches
+                    server = snapshotReasonsServer, request = ::aidenRequestBotWatches
                 )
                 val openWorkServer = negotiateSoloCapability(generation = generation, installation = installation,
                     client = newClient, server = watchesServer, request = ::aidenRequestBotOpenWork)

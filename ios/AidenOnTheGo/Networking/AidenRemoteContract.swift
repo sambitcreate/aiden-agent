@@ -697,6 +697,7 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
         Self(rawValue: "attachments:raw"),
         Self(rawValue: "chat:new-worktree"),
         Self(rawValue: "chat:continue-in-new-chat"),
+        Self(rawValue: "stream:snapshot-reasons"),
         Self(rawValue: "bot:watches"),
         Self(rawValue: "bot:open-work"),
         Self(rawValue: "bot:routine-models"),
@@ -774,6 +775,11 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// The Mac sends those details only to a device that holds this, because
     /// older phones refuse detail keys they don't know, so it is asked for alone.
     static let chatContinueInNewChat = Self(rawValue: "chat:continue-in-new-chat")
+
+    /// Revision 65: `/streams/{streamId}/events` `snapshot` payloads carry
+    /// `reason` (`gap` | `reset`), distinguishing retention gaps from provider
+    /// resets. Asked for alone so older hosts do not reject the progress batch.
+    static let streamSnapshotReasons = Self(rawValue: "stream:snapshot-reasons")
 
     /// Revision 42: the device receives the Bot session `issues` list and
     /// `issues` frames, a summary `issueCount`, and issue items in the routine
@@ -1373,9 +1379,15 @@ struct AidenQuestionRespondResponse: Codable, Equatable, Sendable {
     let resolvedAt: Date
 }
 
+enum AidenSnapshotReason: String, Codable, Equatable, Sendable {
+    case gap
+    case reset
+}
+
 struct AidenRemoteEventPayload: Codable, Equatable, Sendable {
     let chatId: String?
     let turnId: String?
+    let reason: AidenSnapshotReason?
     let nextSequence: Int?
     let state: String?
     let text: String?
@@ -1417,6 +1429,14 @@ struct AidenRemoteEventPayload: Codable, Equatable, Sendable {
             maxLength: AidenRemoteProtocol.maxIdentifierLength,
             field: "turnId"
         )
+        if let rawReason = try boundedString(values, forKey: .reason, maxLength: 16, field: "reason") {
+            guard let parsed = AidenSnapshotReason(rawValue: rawReason) else {
+                throw AidenRemoteContractError.unsafePayloadField("reason")
+            }
+            reason = parsed
+        } else {
+            reason = nil
+        }
         nextSequence = try decodeOptionalNonNull(values, Int.self, forKey: .nextSequence)
         state = try boundedString(values, forKey: .state, maxLength: 64, field: "state")
         text = try boundedString(
@@ -1478,7 +1498,7 @@ struct AidenRemoteEventPayload: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case chatId, turnId, nextSequence, state, text, toolId, name, status, label, timeline
+        case chatId, turnId, reason, nextSequence, state, text, toolId, name, status, label, timeline
         case approvalId, summary, expiresAt, messageId, code, message, source
     }
 }
@@ -1637,25 +1657,26 @@ struct AidenRemoteStreamEvent: Decodable, Equatable, Sendable {
             return
         }
         let decodedPayload = try values.decode(AidenRemoteEventPayload.self, forKey: .payload)
-        let allowedKeys: Set<String>
+        let requiredKeys: Set<String>
         switch type {
-        case .snapshot: allowedKeys = ["chatId", "turnId", "nextSequence"]
-        case .status: allowedKeys = ["state"]
-        case .textDelta, .reasoningDelta: allowedKeys = ["text"]
-        case .toolStarted: allowedKeys = ["toolId", "name"]
-        case .toolFinished: allowedKeys = ["toolId", "status"]
-        case .timeline: allowedKeys = ["timeline"]
-        case .approvalRequired: allowedKeys = ["approvalId", "summary", "expiresAt"]
-        case .done: allowedKeys = ["messageId"]
-        case .error: allowedKeys = ["code", "message"]
-        case .cancelled: allowedKeys = ["source"]
-        case .heartbeat: allowedKeys = []
-        default: allowedKeys = []
+        case .snapshot: requiredKeys = ["chatId", "turnId", "nextSequence"]
+        case .status: requiredKeys = ["state"]
+        case .textDelta, .reasoningDelta: requiredKeys = ["text"]
+        case .toolStarted: requiredKeys = ["toolId", "name"]
+        case .toolFinished: requiredKeys = ["toolId", "status"]
+        case .timeline: requiredKeys = ["timeline"]
+        case .approvalRequired: requiredKeys = ["approvalId", "summary", "expiresAt"]
+        case .done: requiredKeys = ["messageId"]
+        case .error: requiredKeys = ["code", "message"]
+        case .cancelled: requiredKeys = ["source"]
+        case .heartbeat: requiredKeys = []
+        default: requiredKeys = []
         }
+        let allowedKeys = type == .snapshot ? requiredKeys.union(["reason"]) : requiredKeys
         if let unsupported = decodedPayload.presentKeys.subtracting(allowedKeys).first {
             throw AidenRemoteContractError.unsafePayloadField(unsupported)
         }
-        guard decodedPayload.presentKeys == allowedKeys else {
+        guard requiredKeys.isSubset(of: decodedPayload.presentKeys) else {
             throw AidenRemoteContractError.unsafePayloadField("missing-required-field")
         }
         if type == .status,

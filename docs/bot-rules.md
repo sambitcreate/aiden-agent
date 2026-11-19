@@ -197,7 +197,7 @@ or words ("When a Bot wants to …", Ask or Block only, never Allow).
   reaches the person's Mac (shell, file changes, Computer Use).
 - **Locked.** Passwords, 2FA codes, account security, purchases and money
   always come to the person; the page says so and no rule changes it.
-- **Allowed on this Mac.** Mac grants ("Allowed in this workspace" from a Mac
+- **Allowed on this Mac** ("this computer" on Linux). Grants ("Allowed in this workspace" from a
   card) and the folders a Bot may change are listed to read and remove.
 - **Also decides what runs.** Link rows open hook approvals, approved folders
   and paired devices, which keep their own pages.
@@ -232,7 +232,7 @@ it is stored and answers only for its old owner:
 | A Bot's own rule in words | Always ask, that Bot only |
 | A Bot's built-in rule set to Hand off to me | Always ask, with **Do it myself** checked in the row's menu |
 | A workspace's remembered command or file | Always allow, that workspace |
-| A folder a Bot may change | Allowed on this Mac, that Bot |
+| A folder a Bot may change | Allowed on this Mac (or computer), that Bot |
 
 Remove goes through the row's own store, so a Bot's allow list keeps its
 receipts, tombstones and counts: a removed entry is never brought back by a

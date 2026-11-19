@@ -347,7 +347,7 @@ export function VoiceInputSettings() {
                 void savePreference({ voiceModel: v }, "Aiden couldn’t change the transcription model.")
               }
             >
-              <SelectTrigger size="small">
+              <SelectTrigger size="small" aria-label="Model">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

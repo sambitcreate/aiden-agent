@@ -300,10 +300,39 @@ test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and par
         ...trust,
         serverSpkiSha256: `sha256/${Buffer.alloc(32).toString("base64")}`,
       }).json({ path: "/server", credential: "a".repeat(43) }),
-      (error: unknown) =>
-        error instanceof PeerTransportError && error.code === "identity_changed",
+      (error: unknown) => {
+        assert.ok(error instanceof PeerTransportError);
+        assert.equal(error.code, "identity_changed");
+        assert.equal(error.identitySource, "tls");
+        assert.equal(error.failure, "tls");
+        assert.equal(error.retryableIdentity, undefined);
+        return true;
+      },
     );
     assert.equal(receivedRequests, beforeRejectedPin, "a wrong pin must fail before sending any HTTP request or credential");
+    // A `.local` hostname mismatch in TLS also carries `"tls"` provenance without sending HTTP bytes.
+    await assert.rejects(
+      new PeerTransport(
+        {
+          ...trust,
+          endpoint: `https://unexpected-host.local:${address.port}/api/aiden/v1`,
+        },
+        {
+          lookup: (_hostname, options, callback) => {
+            if (options.all) callback(null, [{ address: "127.0.0.1", family: 4 }]);
+            else callback(null, "127.0.0.1", 4);
+          },
+        },
+      ).json({ method: "POST", path: "/upload", credential: "a".repeat(43), body: { secret: "never-sent" } }),
+      (error: unknown) => {
+        assert.ok(error instanceof PeerTransportError);
+        assert.equal(error.code, "identity_changed");
+        assert.equal(error.identitySource, "tls");
+        assert.equal(error.failure, "tls");
+        return true;
+      },
+    );
+    assert.equal(receivedRequests, beforeRejectedPin, "a wrong hostname must fail before sending any HTTP request or credential");
     // Envelope codes separate an answered per-operation refusal from a revoked credential.
     await assert.rejects(
       client.json({ path: "/denied", credential: "a".repeat(43) }),
@@ -685,7 +714,18 @@ test("a host's own explanation reaches this Mac, so a refused request says what 
 
 
 test("transport diagnoses fixed OS codes without forwarding error text", () => {
-  for (const [code, expected] of [["ECONNREFUSED", "refused"], ["EAI_AGAIN", "dns"], ["ETIMEDOUT", "timeout"], ["EHOSTUNREACH", "network"], ["CERT_HAS_EXPIRED", "tls"], ["ECONNRESET", "unreachable"]]) {
+  for (const [code, expected] of [
+    ["ECONNREFUSED", "refused"],
+    ["EAI_AGAIN", "dns"],
+    ["ETIMEDOUT", "timeout"],
+    ["EHOSTUNREACH", "network"],
+    ["CERT_HAS_EXPIRED", "tls"],
+    ["ERR_AIDEN_PEER_IDENTITY", "tls"],
+    ["UNABLE_TO_VERIFY_LEAF_SIGNATURE", "tls"],
+    ["SELF_SIGNED_CERT_IN_CHAIN", "tls"],
+    ["ERR_TLS_CERT_ALTNAME_INVALID", "tls"],
+    ["ECONNRESET", "unreachable"],
+  ]) {
     assert.equal(peerConnectionFailure({ code, message: "credential=private" }), expected);
   }
   assert.equal(peerConnectionFailure(new Error("ECONNREFUSED private")), "unreachable");
