@@ -272,6 +272,17 @@ const RENAME_SCORES = "MCB";
 const SCORE = String.raw`\d*(?:\.\d*)?%?`;
 const SIMILARITY_SCORE = new RegExp(`^${SCORE}$`, "u");
 const BREAK_SCORE = new RegExp(`^${SCORE}(?:/${SCORE})?$`, "u");
+/**
+ * The score each long form takes after `=`, by the same grammar as its short
+ * form's (`--find-renames=50%`, `--break-rewrites=50%/60%`); an empty one is
+ * git's default. --find-copies-harder takes no value at all (null).
+ */
+const LONG_SCORES: Readonly<Record<string, RegExp | null>> = {
+  "--find-renames": SIMILARITY_SCORE,
+  "--find-copies": SIMILARITY_SCORE,
+  "--break-rewrites": BREAK_SCORE,
+  "--find-copies-harder": null,
+};
 const LOG_LONG = [
   "oneline", "graph", "all", "decorate", "no-decorate", "stat", "shortstat", "numstat", "name-only", "name-status", "patch", "no-patch", "no-merges",
   "merges", "first-parent", "reverse", "follow", "abbrev-commit", "date-order", "topo-order", "author-date-order", "no-color", "raw", "full-history",
@@ -848,6 +859,10 @@ function walk(spec: SlotSpec, args: Args, from: number): { positions: Map<number
         continue;
       }
       if (spec.long?.includes(name.slice(2))) {
+        // A rename option's score is read as git reads it, so a word git
+        // refuses (`--find-renames=--output=…`) is refused here too.
+        const score = Object.prototype.hasOwnProperty.call(LONG_SCORES, name) ? LONG_SCORES[name] : undefined;
+        if (equals >= 0 && score !== undefined && (score === null || !score.test(arg.slice(equals + 1)))) return unknown(arg);
         has.add(name);
         continue;
       }

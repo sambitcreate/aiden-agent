@@ -347,10 +347,14 @@ test("an option that takes its value only joined is refused with advice that sav
     assert.doesNotMatch(strict.stdout, renamed);
     assert.throws(() => save("git diff -Mx {{rev}}"), /git diff with -Mx, an option Aiden does not check/u);
     // A joined score saves exactly when git itself takes it: digits with one
-    // dot and a closing %, and a second score after a slash only for -B.
+    // dot and a closing %, and a second score after a slash only for -B and
+    // --break-rewrites, after `=` in the long forms as well.
     const scoreForms = [
       "-M50%", "-M5.5", "-M.", "-M%", "-C5.", "-B50%/60%", "-B/60%", "-B50%/", "-B%/%",
+      "--find-renames=", "--find-renames=5.5", "--find-copies=.", "--break-rewrites=50%/60%", "--break-rewrites=/60%",
       "-M50%%", "-M5.5.5", "-M5%5", "-M50%/60%", "-C5/5", "-B50%%", "-B50%/60%/", "-B50%x", "-M+5", "-M1e3",
+      "--find-renames=--output=/tmp/aiden-score-probe", "--find-renames=50%/60%", "--find-copies=5/5", "--break-rewrites=50%x",
+      "--find-copies-harder=", "--find-copies-harder=5",
     ];
     let refusedScores = 0;
     for (const option of scoreForms) {
@@ -365,7 +369,7 @@ test("an option that takes its value only joined is refused with advice that sav
       assert.equal(saved, taken, `${option}: git ${taken ? "takes" : "refuses"} it`);
       if (!saved) refusedScores += 1;
     }
-    assert.equal(refusedScores, 10);
+    assert.equal(refusedScores, 16);
     // git log and show take the same detection options and scores, on the commit they print.
     for (const command of ["git log -1 --format= --name-status", "git show --format= --name-status"]) {
       for (const option of ["-M50%", "-C50%", "-B50%/60% -M50%", "--find-renames=50%", "--find-copies-harder"]) {
