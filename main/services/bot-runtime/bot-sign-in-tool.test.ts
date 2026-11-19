@@ -500,7 +500,7 @@ test("a Bot with its own computer and no browser signs in on the computer: Open 
 /* Who is offered it                                                          */
 /* ------------------------------------------------------------------------- */
 
-test("sign-in is offered only with the Browser in the Bot's access, and never on routine or Telegram turns", async () => {
+test("sign-in is offered only with the Browser in the Bot's access, and refused at call time on routine or Telegram turns", async () => {
   const admission: BotAdmission = {
     authority: {} as BotAdmission["authority"],
     signal: new AbortController().signal,
@@ -526,8 +526,9 @@ test("sign-in is offered only with the Browser in the Bot's access, and never on
 
   assert.deepEqual(await names("desk-1"), [SIGN_IN_TOOL_NAME]);
   assert.deepEqual(await names("remote:device:key"), [SIGN_IN_TOOL_NAME], "a phone's turn can ask: the card shows Finish on your Mac");
-  assert.deepEqual(await names("routine:task-1:2026-10-07T09:00:00.000Z"), []);
-  assert.deepEqual(await names("tg:1:2:0:3"), []);
+  // Declared on every turn (a fixed tool list), refused below where nobody can sign in.
+  assert.deepEqual(await names("routine:task-1:2026-10-07T09:00:00.000Z"), [SIGN_IN_TOOL_NAME]);
+  assert.deepEqual(await names("tg:1:2:0:3"), [SIGN_IN_TOOL_NAME]);
   assert.deepEqual((await assemblyFor([]).currentTools("bot-gate", { requestId: "desk-1" })).map((entry) => entry.tool.name), []);
 
   const call = { callId: "c1", args: { site: "github.com" }, signal: new AbortController().signal };

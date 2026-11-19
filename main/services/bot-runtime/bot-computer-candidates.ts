@@ -8,11 +8,13 @@
 //   they don't exist, and an unreadable state counts as no computer.
 // - `computer` needs a model that takes images (the screen is vision only);
 //   `computer_shell` doesn't. Both are `unsafe` to replay.
-// - Routine and Telegram runs are unattended: nobody answers a card there,
-//   so the guidance has no `hand_off`, and the run's two tools share one
-//   bounded wait for Give back. Preparation may precede the calling turn,
-//   so each call asks which run it serves (`BotToolCall.runRequestIds`) and
-//   runs as that run's tool.
+// - One declaration for every turn (a fixed tool list keeps the provider
+//   prompt cache warm): `sources-main` builds them as for an attended turn.
+//   Routine, Telegram, Bot-message and peer runs are unattended: nobody
+//   answers a card there, so `hand_off` is refused by ingress policy and the
+//   run's two tools share one bounded wait for Give back. Preparation may
+//   precede the calling turn, so each call asks which run it serves
+//   (`BotToolCall.runRequestIds`) and runs as that run's tool.
 // - The guest driver lane only for a computer whose base passed its probe.
 //
 // Policy (`bot-tool-policy.ts`) still decides afterwards what is offered.
@@ -66,8 +68,8 @@ export async function botComputerCandidates(botId: string, input: BotComputerCan
   const state = input.state(control);
   // The guest driver lane, only for a computer whose base passed its probe.
   const elementControl = input.supportsImages && (await host.guestDriver(botId).catch(() => undefined)) !== undefined;
-  // No one answers a card on routine and Telegram runs, so there is no hand_off there, and
-  // such a run waits for Give back only so long, in all, across both tools.
+  // No one answers a card on routine and Telegram runs, so such a run waits
+  // for Give back only so long, in all, across both tools.
   const giveBackBudget = { remainingMs: input.unattendedWaitMs ?? BOT_COMPUTER_UNATTENDED_WAIT_MS };
   const turnOf = (routine: boolean, telegram: boolean) => ({
     routine,
@@ -82,9 +84,12 @@ export async function botComputerCandidates(botId: string, input: BotComputerCan
     return (call) => ({
       ...offered,
       async execute(toolCallId, params, signal, onUpdate) {
-        const turns = ((await call.runRequestIds?.()) ?? []).map(botTurnOf);
-        const routine = input.routine || turns.some((turn) => turn.routine);
-        const telegram = input.telegram || turns.some((turn) => turn.telegram || turn.botMessage);
+        const requestIds = await call.runRequestIds?.();
+        const turns = (requestIds ?? []).map(botTurnOf);
+        // A peer run counts as a routine run, as it always did; a call whose
+        // run can't be read waits as an unattended one (fails closed).
+        const routine = input.routine || turns.some((turn) => turn.routine || turn.peer);
+        const telegram = input.telegram || requestIds === undefined || turns.some((turn) => turn.telegram || turn.botMessage);
         const key = `${routine}:${telegram}`;
         let tool = variants.get(key);
         if (tool === undefined) {

@@ -201,15 +201,23 @@ test("Full Access offers every ported group; Custom Access without those grants 
   assert.ok(underFull.includes(READ_INBOX_TOOL));
 });
 
-test("a scheduled Bot turn cannot offer its own routine proposal tool", async () => {
+test("a scheduled Bot turn declares the same tools but cannot call its own routine proposal tool", async () => {
   const state = assemblyState(full(botHome()), false);
   const deps = assemblyDeps(state, { candidates: (current) => allCandidates(current, state) });
   const bot = await deps.loadBot("bot-1");
   const names = async (requestId: string) =>
     (await deps.currentTools(bot, { requestId })).map(({ tool }) => tool.name);
-  assert.ok((await names("person:one")).includes("routines"));
-  assert.ok(!(await names("routine:task-1:fire-1")).includes("routines"));
-  assert.ok(!(await names("tg:one")).includes("routines"));
+  const person = await names("person:one");
+  assert.ok(person.includes("routines"));
+  assert.deepEqual(await names("routine:task-1:fire-1"), person, "a routine run declares the same tool list");
+  assert.deepEqual(await names("tg:one"), person, "a Telegram run declares the same tool list");
+  const call = { callId: "call", args: {}, signal: undefined };
+  assert.equal((await deps.checkPolicy("bot-1", "routines", { ...call, requestIds: ["person:one"] })).allowed, true);
+  for (const requestId of ["routine:task-1:fire-1", "tg:one"]) {
+    const decision = await deps.checkPolicy("bot-1", "routines", { ...call, requestIds: [requestId] });
+    assert.equal(decision.allowed, false, `refused on ${requestId}`);
+    assert.match(decision.allowed ? "" : decision.reason, /routines is not available on this turn/u);
+  }
 });
 
 for (const group of GROUPS) {
@@ -1359,8 +1367,16 @@ test('message_bot is offered only for a person or an eligible hop-1 turn',async(
  const state=assemblyState(full(botHome()));
  const deps=assemblyDeps(state,{candidates:()=>[{tool:countingTool('message_bot')}]});
  const d='00112233-4455-4677-8899-aabbccddeeff';
- for(const id of [undefined,`bot:J:1:${d}`]) assert.ok((await deps.currentTools({id:'bot-1'} as never,{requestId:id})).some(e=>e.tool.name==='message_bot'));
- for(const id of [`bot:J:2:${d}`,`botreply:${d}`,'routine:x:1','tg:x']) assert.ok(!(await deps.currentTools({id:'bot-1'} as never,{requestId:id})).some(e=>e.tool.name==='message_bot'));
+ const call={callId:'call',args:{bot:'B',message:'hi'},signal:undefined};
+ for(const id of [undefined,`bot:J:1:${d}`]) {
+  assert.ok((await deps.currentTools({id:'bot-1'} as never,{requestId:id})).some(e=>e.tool.name==='message_bot'));
+  assert.equal((await deps.checkPolicy('bot-1','message_bot',{...call,requestIds:[id]})).allowed,true,`${id} may send`);
+ }
+ // Declared on every turn so the tool list holds; the call is refused where the turn can't send.
+ for(const id of [`bot:J:2:${d}`,`botreply:${d}`,'routine:x:1','tg:x']) {
+  assert.ok((await deps.currentTools({id:'bot-1'} as never,{requestId:id})).some(e=>e.tool.name==='message_bot'));
+  assert.equal((await deps.checkPolicy('bot-1','message_bot',{...call,requestIds:[id]})).allowed,false,`${id} is refused`);
+ }
 });
 for(const baseline of [false,true])test(`Bot-message approvals ask the person, baseline=${baseline}`,async()=>{
  const turn=ruledTurn({rules:()=>rulesWith('ask'),baseline,routinesGoAhead:()=>true});
@@ -2376,12 +2392,18 @@ test("shipping messages and approved-peer exchanges offer distinct schemas and c
   const state = assemblyState(full(botHome()));
   const deps = assemblyDeps(state, { candidates: () => [peer, { tool: message }] });
   const namesFor = async (requestId: string) => (await deps.currentTools({ id: "bot-1" } as never, { requestId })).map(entry => entry.tool.name);
-  assert.deepEqual(await namesFor("desktop:person"), ["message_peer", "message_bot"]);
-  assert.deepEqual(await namesFor("peer:host-issued"), ["message_peer"]);
-  assert.deepEqual(await namesFor("bot:sender:1:00112233-4455-4677-8899-aabbccddeeff"), ["message_bot"]);
-  assert.deepEqual(await namesFor("bot:sender:2:00112233-4455-4677-8899-aabbccddeeff"), []);
+  // Both stay declared on every turn; each call is checked against the run's ingress.
+  for (const requestId of ["desktop:person", "peer:host-issued", "bot:sender:1:00112233-4455-4677-8899-aabbccddeeff", "bot:sender:2:00112233-4455-4677-8899-aabbccddeeff"]) {
+    assert.deepEqual(await namesFor(requestId), ["message_peer", "message_bot"], requestId);
+  }
+  const allowed = async (name: string, requestId: string) =>
+    (await deps.checkPolicy("bot-1", name, { callId: "call", args: {}, signal: undefined, requestIds: [requestId] })).allowed;
+  assert.equal(await allowed("message_bot", "peer:host-issued"), false, "a peer turn cannot reach a Bot-message");
+  assert.equal(await allowed("message_peer", "bot:sender:1:00112233-4455-4677-8899-aabbccddeeff"), false, "a Bot-message turn cannot reach a peer");
+  assert.equal(await allowed("message_bot", "bot:sender:2:00112233-4455-4677-8899-aabbccddeeff"), false, "the chain limit holds");
+  assert.equal(await allowed("message_peer", "bot:sender:2:00112233-4455-4677-8899-aabbccddeeff"), false);
   assert.deepEqual(Object.keys((peer.tool.parameters as unknown as { properties: Record<string, unknown> }).properties), ["action", "peerId", "kind", "title", "text", "exchangeId"]);
-  assert.deepEqual(Object.keys((message.parameters as unknown as { properties: Record<string, unknown> }).properties), ["bot", "message"]);
+  assert.deepEqual(Object.keys((message.parameters as unknown as { properties: Record<string, unknown> }).properties), ["action", "bot", "message"]);
 });
 
 // --- Settings → Approvals' rules (plan §3.5) ---------------------------------

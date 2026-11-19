@@ -278,7 +278,7 @@ test("deleting a Bot while its question waits withdraws the card", async () => {
   }
 });
 
-test("the question tool is not offered on routine or Telegram turns", async () => {
+test("the question tool stays declared on routine or Telegram turns, and a call there is refused", async () => {
   const candidate = botQuestionCandidate("bot-gate", createBotQuestions());
   const admission: BotAdmission = {
     authority: {} as BotAdmission["authority"],
@@ -289,7 +289,7 @@ test("the question tool is not offered on routine or Telegram turns", async () =
   const assembly = createBotToolAssembly({
     admit: async () => admission,
     sources: {
-      facts: async () => ({}) as BotToolFacts,
+      facts: async () => ({ mcpTools: async () => new Map(), skillToolNames: async () => new Set() }) as unknown as BotToolFacts,
       candidates: async () => ({ tools: [candidate] }),
     },
   });
@@ -299,6 +299,13 @@ test("the question tool is not offered on routine or Telegram turns", async () =
   assert.deepEqual(await names(), [QUESTION_TOOL_NAME]);
   assert.deepEqual(await names("desk-1"), [QUESTION_TOOL_NAME]);
   assert.deepEqual(await names("remote:device:key"), [QUESTION_TOOL_NAME]);
-  assert.deepEqual(await names("routine:task-1:2026-10-07T09:00:00.000Z"), []);
-  assert.deepEqual(await names("tg:1:2:0:3"), []);
+  assert.deepEqual(await names("routine:task-1:2026-10-07T09:00:00.000Z"), [QUESTION_TOOL_NAME]);
+  assert.deepEqual(await names("tg:1:2:0:3"), [QUESTION_TOOL_NAME]);
+
+  const call = { callId: "c1", args: {}, signal: new AbortController().signal };
+  assert.deepEqual(await assembly.checkPolicy("bot-gate", QUESTION_TOOL_NAME, { ...call, requestIds: ["desk-1"] }), { allowed: true });
+  for (const requestIds of [["routine:task-1:2026-10-07T09:00:00.000Z"], ["tg:1:2:0:3"]]) {
+    const decision = await assembly.checkPolicy("bot-gate", QUESTION_TOOL_NAME, { ...call, requestIds });
+    assert.equal(decision.allowed, false, `refused for ${requestIds.join(", ")}`);
+  }
 });

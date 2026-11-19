@@ -376,7 +376,7 @@ test("deleting a Bot while its card waits withdraws the card", async () => {
   }
 });
 
-test("hand-offs and questions are offered on attended turns only, never on routine or Telegram turns", async () => {
+test("hand-offs and questions are declared on every turn but refused at call time on routine or Telegram turns", async () => {
   const admission: BotAdmission = {
     authority: {} as BotAdmission["authority"],
     signal: new AbortController().signal,
@@ -398,15 +398,19 @@ test("hand-offs and questions are offered on attended turns only, never on routi
   assert.deepEqual(await names(), ["ask_user_question", HANDOFF_TOOL_NAME]);
   assert.deepEqual(await names("desk-1"), ["ask_user_question", HANDOFF_TOOL_NAME]);
   assert.deepEqual(await names("remote:device:key"), ["ask_user_question", HANDOFF_TOOL_NAME]);
-  assert.deepEqual(await names("routine:task-1:2026-10-07T09:00:00.000Z"), []);
-  assert.deepEqual(await names("tg:1:2:0:3"), []);
+  // The same tool list on every turn, so the provider's cached prefix holds.
+  assert.deepEqual(await names("routine:task-1:2026-10-07T09:00:00.000Z"), ["ask_user_question", HANDOFF_TOOL_NAME]);
+  assert.deepEqual(await names("tg:1:2:0:3"), ["ask_user_question", HANDOFF_TOOL_NAME]);
 
   const call = { callId: "c1", args: { action: ACTION }, signal: new AbortController().signal };
   assert.deepEqual(await assembly.checkPolicy("bot-gate", HANDOFF_TOOL_NAME, { ...call, requestIds: ["desk-1"] }), {
     allowed: true,
   });
   for (const requestIds of [["routine:task-1:2026-10-07T09:00:00.000Z"], ["tg:1:2:0:3"], ["desk-1", "tg:1:2:0:3"]]) {
-    const decision = await assembly.checkPolicy("bot-gate", HANDOFF_TOOL_NAME, { ...call, requestIds });
-    assert.equal(decision.allowed, false, `refused at call time for ${requestIds.join(", ")}`);
+    for (const name of [HANDOFF_TOOL_NAME, "ask_user_question"]) {
+      const decision = await assembly.checkPolicy("bot-gate", name, { ...call, requestIds });
+      assert.equal(decision.allowed, false, `${name} refused at call time for ${requestIds.join(", ")}`);
+      assert.match(decision.allowed ? "" : decision.reason, /not available on this turn: nobody is here/u, "the refusal names its condition");
+    }
   }
 });

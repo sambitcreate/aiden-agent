@@ -1,7 +1,6 @@
-import { botMessageChainOf, botMessagingEnabled } from "../../../renderer/shared/bot-messages.js";
+import { botMessagingEnabled } from "../../../renderer/shared/bot-messages.js";
 import { botMessages, botMessageRoster } from "../bot-messages/messages-main.js";
 import { messageBotCandidate } from "../bot-messages/candidate.js";
-import { isBotMessageRequestId } from "../../../renderer/shared/bot-messages.js";
 import { botFullComputerLabel } from "../../../renderer/shared/bot-capabilities.js";
 // Production candidate tools for durable Bot turns, built by the same legacy
 // factories and gates `llm-client.ts` used for Bot generations:
@@ -361,19 +360,18 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
     async candidates(botId, admission, facts, turn: BotTurnContext): Promise<BotCandidateSet> {
       const authority = admission.authority;
       const production = facts as ProductionFacts;
+      // The candidates are one fixed set per chat, whatever this turn's
+      // ingress: a routine, Telegram, Bot-message or peer turn declares the
+      // same tools as a person's turn, so the provider's cached tool list
+      // survives a change of ingress. Each call is checked against the run it
+      // serves (`botIngressAllowsTool`, `botToolVerdict`) before it runs.
       const routineRun = turn.requestId?.startsWith("routine:") ?? false;
       const peerRun = botExecutionScope(botId)?.claim.peer !== undefined;
-      const messageTurn = isBotMessageRequestId(turn.requestId);
-      const telegram = turn.requestId?.startsWith("tg:") ?? false;
       const has = (kind: string) => authority.otherCapabilities.some((grant) => grant.kind === kind);
       const workspace = { id: authority.managedHome.workspaceId, folderPath: authority.workingDirectory };
       const skillSnapshot = await production.skillSnapshot();
       const subagentsAllowed =
         has("subagents") &&
-        !messageTurn &&
-        !routineRun &&
-        !peerRun &&
-        !telegram &&
         subagentsAllowedForGeneration({
           assistantMode: false,
           providerId: authority.provider.sourceProviderId,
@@ -422,16 +420,18 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
           granted: has("computer"),
           hasComputer: facts.hasComputer,
           supportsImages: facts.supportsImages,
-          routine: routineRun || peerRun,
-          telegram: telegram || messageTurn,
+          // Declared as for an attended turn; each call runs as the tool of the run it serves.
+          routine: false,
+          telegram: false,
           computers: async () => (await botComputerServices()).botComputers(),
           state: (control) => (botComputerToolState ??= createBotComputerToolState(control)),
           botName: async (id) => (await deps.botName?.(id).catch(() => undefined)) ?? "The Bot",
         })),
       );
-      // The Bot's own browser. Never on routine or Telegram turns: nobody is
-      // there to approve a click or use a held tab (blueprint G12).
-      if (has("browser") && !messageTurn && !routineRun && !peerRun && !telegram) {
+      // The Bot's own browser. Declared on every turn, but refused on routine
+      // and Telegram turns: nobody is there to approve a click or use a held
+      // tab (blueprint G12, `UNATTENDED_WITHHELD`).
+      if (has("browser")) {
         tools.push(
           ...(await botBrowser.candidates(botId, {
             workspaceId: workspace.id,
@@ -530,15 +530,16 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
           },
         }),
       );
-      // Routine and Telegram turns are filtered out by the offer-time verdict (bot-tool-policy.ts).
+      // A routine or Telegram turn's question call is refused (bot-tool-policy.ts).
       tools.push(botQuestionCandidate(botId, botQuestions));
-      // Only in turns a person started (ingress also withholds it on routine,
-      // catch-up, wake-up and intro runs), and only while the person's per-Bot
-      // switch is on.
-      if (!messageTurn && !routineRun && !peerRun && (await (await wakeUpServices()).botSelfWakeUpsEnabled(botId))) {
+      // While the person's per-Bot switch is on. Only a turn a person started
+      // may set one; the call is refused on routine, catch-up, wake-up and
+      // intro runs.
+      if (await (await wakeUpServices()).botSelfWakeUpsEnabled(botId)) {
         tools.push(wakeUpCandidate(botId, lazyWakeUps));
       }
-      if (!peerRun && botMessageChainOf([turn.requestId]).canSend && botMessagingEnabled(await configStore.getSettings())) {
+      // The Bot-message chain limit and peer turns are checked per call.
+      if (botMessagingEnabled(await configStore.getSettings())) {
         const roster = await botMessageRoster();
         if (roster.find(b => b.id === botId)?.sendsMessages && roster.some(b => b.id !== botId && b.acceptsMessages)) {
           tools.push(await messageBotCandidate(botId, {post: input => botMessages().post(input), roster: botMessageRoster}));

@@ -99,9 +99,10 @@ export function botStepDescriptor(toolName: string, args: unknown): BotStepDescr
   const app = toolName === "message_bot" ? bounded(stringOf(record(args).bot))?.slice(0, BOT_APP_LABEL_CHARS) : botToolApp(toolName);
   const kind = botToolPhase(toolName, app);
   const detail = bounded(rawDetail(toolName, kind, record(args)));
+  const listedBots = toolName === "message_bot" && record(args).action === "list";
   return {
     kind,
-    label: botToolStepLabel(toolName, kind, app),
+    label: listedBots ? "Checked which Bots to message" : botToolStepLabel(toolName, kind, app),
     ...(detail ? { detail } : {}),
     ...(app ? { app } : {}),
   };

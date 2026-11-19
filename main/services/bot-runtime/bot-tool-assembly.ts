@@ -828,11 +828,15 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
       try {
         const facts = await ports.sources.facts(botId, admission);
         const set = await ports.sources.candidates(botId, admission, facts, turn);
-        const { telegram, routine, botMessage, peer } = botTurnOf(turn.requestId);
         const entries: BotToolEntry[] = [];
         for (const candidate of set.tools) {
-          if (!botIngressAllowsTool(candidate.tool.name, [turn.requestId])) continue;
-          if (!(await botToolVerdict(candidate.tool.name, facts, { telegram, routine, botMessage, peer })).allowed) continue;
+          // The offer depends on the Bot's access alone, never on this turn's
+          // ingress, so every turn of a chat declares the same tools and the
+          // provider's cached prefix survives a routine or Telegram turn.
+          // The calling run's ingress is checked on every call instead
+          // (`checkPolicy`, and `turnAllows` in the Bot extension), and a
+          // refused call never runs.
+          if (!(await botToolVerdict(candidate.tool.name, facts, {})).allowed) continue;
           const bind = candidate.bind;
           const guard = (tool: AgentTool, call?: BotToolCall) => (candidate.interactive ? tool : fenced(botId, tool, candidate.mcp === true, call));
           entries.push({
