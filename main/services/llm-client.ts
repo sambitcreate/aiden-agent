@@ -3,7 +3,7 @@ import { aidenAppNavigation } from "./aiden-app-navigation.js";
 import type { AgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
 import { botFullComputerLabel } from "../../renderer/shared/bot-capabilities.js";
 import { thisComputerLabel } from "../../renderer/shared/computer-noun.js";
-import { createAidenAppTools } from "./aiden-app-tools.js";
+import { aidenAppToolUnavailableReason, createAidenAppTools } from "./aiden-app-tools.js";
 import { appControlsService } from "./app-controls-main.js";
 import {
   decideGenerationTerminal,
@@ -2483,7 +2483,14 @@ async function prepareGeneration(
       };
     }
   }
+  /**
+   * Tools declared in every turn of the chat whose call this turn cannot run:
+   * the reason names the condition, and the call is refused before it runs.
+   */
+  const turnToolRefusals: Array<(name: string, args: unknown) => string | undefined> = [];
   if (!botContext && (!assistantMode || attendedAssistant) && options.interactionSurface !== "telegram" && schedulingAllowed && (rendererOwner || browserOwner?.kind === "remote")) {
+    const appToolTurn = { liveState: browserOwner?.kind !== "remote", canOpen: browserOwner?.kind !== "remote" };
+    turnToolRefusals.push((name, args) => aidenAppToolUnavailableReason(name, args, appToolTurn));
     tools.push(...createAidenAppTools({
       service: appControlsService, liveState: browserOwner?.kind !== "remote",
       runtime: { interaction: "attended-workspace", workspacePermission: permission, providerId: params.providerId, modelId: params.model, availableTools: tools.map((tool) => tool.name) },
@@ -2730,6 +2737,13 @@ async function prepareGeneration(
     botApprovedRoots,
     botMutatingToolNames,
     offerHooksTool,
+    turnToolRefusal: (name: string, args: unknown): string | undefined => {
+      for (const refusal of turnToolRefusals) {
+        const reason = refusal(name, args);
+        if (reason) return reason;
+      }
+      return undefined;
+    },
   };
 }
 
@@ -3128,6 +3142,7 @@ export const llmClient = {
       botMutatingToolNames,
       offerHooksTool,
       usesApprovalModes,
+      turnToolRefusal,
     } = setup;
     // Claim checks tell connector failures by the tools' real MCP identity.
     const claimCheckOptions = {
@@ -4508,6 +4523,16 @@ export const llmClient = {
               `Aiden needs your permission to use ${context.toolCall.name}`,
               "permission_prompt",
             );
+          // A tool the chat declares in every turn but this turn cannot run is
+          // refused before hooks, approvals or the call itself.
+          const turnRefusal = turnToolRefusal(context.toolCall.name, context.args);
+          if (turnRefusal) {
+            if (!signal?.aborted) {
+              deniedToolCalls.add(context.toolCall.id);
+              timeline.toolFinished(context.toolCall.id, "blocked");
+            }
+            return { block: true, reason: turnRefusal };
+          }
           // Computer Use and Form Fill check the chat's access first.
           if (
             context.toolCall.name !== COMPUTER_USE_TOOL_NAME &&

@@ -14,6 +14,8 @@ import {
   parseAppControlOperation,
 } from "../../renderer/shared/app-controls.js";
 import { aidenAppGuidance, readAidenHelp } from "./aiden-app-knowledge.js";
+import { aidenAppToolUnavailableReason, createAidenAppTools } from "./aiden-app-tools.js";
+import type { AppControlPanel } from "../../renderer/shared/app-controls.js";
 
 function fixture(options: { admit?: (control: string) => void } = {}) {
   const state: AppControlState = {
@@ -382,4 +384,67 @@ test("theme and new-chat model controls: custom colors need a click, unknown mod
   const phone = await service.snapshot("appearance", { ...agent, remote: true });
   assert.deepEqual(phone.rows.map((row) => row.id), ["appearance.mode", "appearance.chatWidth", "appearance.reduceMotion"]);
   assert.deepEqual((await service.snapshot("models", { ...agent, remote: true })).rows, []);
+});
+
+function appTools(f: ReturnType<typeof fixture>, turn: { remote: boolean }) {
+  const panels: AppControlPanel[] = [];
+  const opened: unknown[] = [];
+  const tools = createAidenAppTools({
+    service: f.service,
+    context: { ...f.context, actor: "agent", humanGesture: false },
+    liveState: !turn.remote,
+    ...(turn.remote ? {} : { open: async (destination: unknown) => { opened.push(destination); return { opened: true }; } }),
+    present: (panel) => { panels.push(panel); },
+  });
+  const tool = (name: string) => tools.find((candidate) => candidate.name === name)!;
+  return { tools, tool, panels, opened };
+}
+
+test("a chat declares the same app tools on this computer and from a paired device", () => {
+  const declared = (remote: boolean) =>
+    JSON.stringify(appTools(fixture(), { remote }).tools.map(({ name, description, parameters }) => ({ name, description, parameters })));
+  assert.equal(declared(true), declared(false));
+  assert.deepEqual(
+    appTools(fixture(), { remote: true }).tools.map((tool) => tool.name),
+    ["aiden_help", "aiden_get_state", "aiden_show_controls", "aiden_open", "aiden_set_preference"],
+  );
+});
+
+test("from a paired device, settings reads, changes and other panels are refused before they run", async () => {
+  const f = fixture();
+  const remote = appTools(f, { remote: true });
+  await assert.rejects(
+    remote.tool("aiden_set_preference").execute("c1", f.operation(), undefined, undefined),
+    /not available in this turn: the request came from a paired device/u,
+  );
+  await assert.rejects(remote.tool("aiden_get_state").execute("c2", { topic: "memory" }, undefined, undefined), /paired device/u);
+  await assert.rejects(remote.tool("aiden_open").execute("c3", { destination: "memory" }, undefined, undefined), /paired device/u);
+  await assert.rejects(remote.tool("aiden_show_controls").execute("c4", { topic: "models" }, undefined, undefined), /panels phones show|only these panels/u);
+  assert.equal(f.commits(), 0);
+  assert.equal(f.state.settings.memoryEnabled, true);
+  assert.deepEqual(remote.panels, []);
+  // A panel phones show still works.
+  await remote.tool("aiden_show_controls").execute("c5", { topic: "memory" }, undefined, undefined);
+  assert.deepEqual(remote.panels.map((panel) => panel.topic), ["memory"]);
+  // The host refuses the same calls with the same reason before they reach a tool.
+  const turn = { liveState: false, canOpen: false };
+  assert.match(aidenAppToolUnavailableReason("aiden_set_preference", {}, turn)!, /paired device/u);
+  assert.match(aidenAppToolUnavailableReason("aiden_show_controls", { topic: "models" }, turn)!, /memory/u);
+  assert.equal(aidenAppToolUnavailableReason("aiden_show_controls", { topic: "memory" }, turn), undefined);
+  assert.equal(aidenAppToolUnavailableReason("aiden_help", { query: "x" }, turn), undefined);
+  assert.equal(aidenAppToolUnavailableReason("read_file", {}, turn), undefined);
+});
+
+test("on this computer every app tool runs, and aiden_open needs a window that asked", async () => {
+  const f = fixture();
+  const local = appTools(f, { remote: false });
+  const result = await local.tool("aiden_set_preference").execute("c1", f.operation(), undefined, undefined);
+  assert.match(JSON.stringify(result.content), /memory\.enabled|applied|ok/u);
+  assert.equal(f.commits(), 1);
+  await local.tool("aiden_open").execute("c2", { destination: "settings" }, undefined, undefined);
+  assert.deepEqual(local.opened, ["settings"]);
+  for (const name of ["aiden_get_state", "aiden_set_preference", "aiden_show_controls"]) {
+    assert.equal(aidenAppToolUnavailableReason(name, { topic: "models" }, { liveState: true, canOpen: true }), undefined);
+  }
+  assert.match(aidenAppToolUnavailableReason("aiden_open", {}, { liveState: true, canOpen: false })!, /no Aiden window asked/u);
 });
