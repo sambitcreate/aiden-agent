@@ -146,7 +146,7 @@ test("an update hands root's helper the download, the feed digest and the versio
   try {
     const installer = path.join(f.root, "download.deb");
     const pm = fakeHelperRun(f.tools);
-    const outcome = await installLinuxPackageUpdate({ kind: "deb", helper: f.helper, installer, sha512: SHA512, version: "0.67.0", uid: 1000, run: pm.run, tools: f.tools });
+    const outcome = await installLinuxPackageUpdate({ kind: "deb", runtime: f.runtime, installer, sha512: SHA512, version: "0.67.0", uid: 1000, run: pm.run, tools: f.tools });
     assert.equal(outcome, "installed");
     assert.deepEqual(pm.calls[0], { file: f.tools.pkexec, args: [f.helper, "deb", installer, SHA512_HEX, "0.67.0"] });
     assert.deepEqual(pm.calls[1], { file: f.tools.dpkgQuery, args: ["--showformat=${Version}", "--show", "aiden-agent"] });
@@ -160,9 +160,34 @@ test("root runs the helper directly, and RPM reads its version back with rpm", a
   try {
     const pm = fakeHelperRun(f.tools);
     const installer = path.join(f.root, "download.rpm");
-    assert.equal(await installLinuxPackageUpdate({ kind: "rpm", helper: f.helper, installer, sha512: SHA512, version: "0.67.0", uid: 0, run: pm.run, tools: f.tools }), "installed");
+    assert.equal(await installLinuxPackageUpdate({ kind: "rpm", runtime: f.runtime, installer, sha512: SHA512, version: "0.67.0", uid: 0, run: pm.run, tools: f.tools }), "installed");
     assert.deepEqual(pm.calls[0], { file: f.helper, args: ["rpm", installer, SHA512_HEX, "0.67.0"] });
     assert.equal(pm.calls[1]?.file, f.tools.rpm);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("a writable folder on the way to the install, even one added after startup, keeps the helper away from pkexec", async () => {
+  const f = installFixture("deb");
+  try {
+    const opt = path.dirname(f.installDir);
+    assert.equal(canUpdateLinuxPackage(f.runtime), "deb");
+    // A sticky folder (like /tmp) still protects an entry the person doesn't own.
+    chmodSync(opt, 0o1777);
+    assert.equal(canUpdateLinuxPackage(f.runtime), "deb");
+    // Without the sticky bit the person could rename "Aiden Agent" and plant their own helper.
+    chmodSync(opt, 0o777);
+    assert.equal(canUpdateLinuxPackage(f.runtime), null);
+    const pm = fakeHelperRun(f.tools);
+    const outcome = await installLinuxPackageUpdate({ kind: "deb", runtime: f.runtime, installer: path.join(f.root, "download.deb"), sha512: SHA512, version: "0.67.0", uid: 1000, run: pm.run, tools: f.tools });
+    assert.equal(outcome, "failed");
+    assert.equal(pm.calls.length, 0);
+    // The kind checked at install time must match the downloaded package.
+    chmodSync(opt, 0o755);
+    const rpm = await installLinuxPackageUpdate({ kind: "rpm", runtime: f.runtime, installer: path.join(f.root, "download.rpm"), sha512: SHA512, version: "0.67.0", uid: 1000, run: pm.run, tools: f.tools });
+    assert.equal(rpm, "failed");
+    assert.equal(pm.calls.length, 0);
   } finally {
     f.cleanup();
   }
@@ -174,7 +199,7 @@ test("a closed password prompt is a cancel; a refused package, a failed install 
     const installer = path.join(f.root, "download.deb");
     const attempt = async (system: FakeSystem, overrides: { sha512?: string; version?: string; installer?: string } = {}) => {
       const pm = fakeHelperRun(f.tools, system);
-      const outcome = await installLinuxPackageUpdate({ kind: "deb", helper: f.helper, installer: overrides.installer ?? installer, sha512: overrides.sha512 ?? SHA512, version: overrides.version ?? "0.67.0", uid: 1000, run: pm.run, tools: f.tools });
+      const outcome = await installLinuxPackageUpdate({ kind: "deb", runtime: f.runtime, installer: overrides.installer ?? installer, sha512: overrides.sha512 ?? SHA512, version: overrides.version ?? "0.67.0", uid: 1000, run: pm.run, tools: f.tools });
       return { outcome, ran: pm.calls.length };
     };
     assert.deepEqual(await attempt({ helperExit: 126 }), { outcome: "cancelled", ran: 1 });

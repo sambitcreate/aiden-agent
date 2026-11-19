@@ -2,11 +2,10 @@ import { appImageIdentity, canUpdateLinuxAppImage, replaceAppImageAtomically, ty
 import {
   canUpdateLinuxPackage,
   installLinuxPackageUpdate,
-  LINUX_PACKAGE_HELPER,
   type LinuxPackageInstallOutcome,
   type LinuxPackageKind,
 } from "./app-updater-linux-package.js";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import type {
@@ -107,16 +106,20 @@ function defineGuardedPackageUpdater({ DebUpdater, RpmUpdater }: ElectronUpdater
   };
 }
 
-let linuxPackageEligibility: LinuxPackageKind | null | undefined;
-/** The DEB or RPM install that may update itself; fixed for the life of the process. */
-export function linuxPackageUpdateKind(): LinuxPackageKind | null {
-  if (process.platform !== "linux") return null;
-  linuxPackageEligibility ??= canUpdateLinuxPackage({
+function linuxPackageRuntime() {
+  return {
     resourcesPath: process.resourcesPath,
     executablePath: process.execPath,
     appImage: process.env.APPIMAGE,
     uid: process.getuid?.(),
-  });
+  };
+}
+
+let linuxPackageEligibility: LinuxPackageKind | null | undefined;
+/** The DEB or RPM install that may update itself; fixed for the life of the process. */
+export function linuxPackageUpdateKind(): LinuxPackageKind | null {
+  if (process.platform !== "linux") return null;
+  linuxPackageEligibility ??= canUpdateLinuxPackage(linuxPackageRuntime());
   return linuxPackageEligibility;
 }
 
@@ -261,15 +264,9 @@ export class AppUpdateService {
     const downloaded = guardedPackageUpdater.downloadedPackage();
     if (!downloaded) return "failed";
     const packageUpdater = guardedPackageUpdater;
-    let helper: string;
-    try {
-      helper = path.join(path.dirname(realpathSync(process.execPath)), LINUX_PACKAGE_HELPER);
-    } catch {
-      return "failed";
-    }
     this.packageInstall ??= installLinuxPackageUpdate({
       kind: packageUpdater.packageKind,
-      helper,
+      runtime: linuxPackageRuntime(),
       installer: downloaded.installer,
       sha512: downloaded.sha512,
       version: snapshot.version,

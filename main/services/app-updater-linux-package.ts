@@ -67,11 +67,40 @@ export function linuxPackageKind(resourcesPath: string): LinuxPackageKind | null
 }
 
 /**
- * A DEB or RPM install updates itself only when the system package manager
- * really owns the running copy and the tools to install a newer package exist.
- * Returns the package format, or null when updates belong to the person.
+ * No folder on the way to the install may let the person rename or replace
+ * entries: each must belong to root (or the package's owner) and be closed to
+ * group/other writes, or be a sticky folder (like /tmp) whose next entry
+ * belongs to root, which sticky folders protect from other users' renames.
  */
-export function canUpdateLinuxPackage(runtime: LinuxPackageUpdateRuntime): LinuxPackageKind | null {
+function ancestorsProtected(installDir: string, systemUid: number): boolean {
+  let child = installDir;
+  let current = path.dirname(installDir);
+  while (true) {
+    const info = lstatSync(current);
+    if (!info.isDirectory() || (info.uid !== 0 && info.uid !== systemUid)) return false;
+    if ((info.mode & 0o022) !== 0) {
+      const sticky = (info.mode & 0o1000) !== 0;
+      if (!sticky || lstatSync(child).uid !== systemUid) return false;
+    }
+    if (current === path.dirname(current)) return true;
+    child = current;
+    current = path.dirname(current);
+  }
+}
+
+export interface LinuxPackageInstall {
+  kind: LinuxPackageKind;
+  /** The root-owned helper root runs to install the update. */
+  helper: string;
+}
+
+/**
+ * A DEB or RPM install updates itself only when the system package manager
+ * really owns the running copy, nothing on its path can be replaced by the
+ * person, and the tools to install a newer package exist. Returns the package
+ * format and its helper, or null when updates belong to the person.
+ */
+export function inspectLinuxPackage(runtime: LinuxPackageUpdateRuntime): LinuxPackageInstall | null {
   try {
     // An AppImage that happens to carry a package-type file is never a distro install.
     if (runtime.appImage) return null;
@@ -91,6 +120,7 @@ export function canUpdateLinuxPackage(runtime: LinuxPackageUpdateRuntime): Linux
       if (info.uid !== systemUid || (info.mode & 0o022) !== 0) return null;
     }
     if (!isExecutableFile(helper)) return null;
+    if (!ancestorsProtected(installDir, systemUid)) return null;
     const config = lstatSync(path.join(resources, "app-update.yml"));
     if (!config.isFile() || config.size === 0 || config.size > 65_536) return null;
     const needed = kind === "deb"
@@ -103,10 +133,15 @@ export function canUpdateLinuxPackage(runtime: LinuxPackageUpdateRuntime): Linux
       const owned = readFileSync(path.join(runtime.dpkgInfoDir ?? "/var/lib/dpkg/info", `${LINUX_PACKAGE_NAME}.list`), "utf8");
       if (!owned.split("\n").includes(executable)) return null;
     }
-    return kind;
+    return { kind, helper };
   } catch {
     return null;
   }
+}
+
+/** The package format of an install that can update itself, or null. */
+export function canUpdateLinuxPackage(runtime: LinuxPackageUpdateRuntime): LinuxPackageKind | null {
+  return inspectLinuxPackage(runtime)?.kind ?? null;
 }
 
 export interface CommandResult {
@@ -131,8 +166,11 @@ export type LinuxPackageInstallOutcome = "installed" | "cancelled" | "failed";
 
 export interface LinuxPackageInstallOptions {
   kind: LinuxPackageKind;
-  /** The root-owned installer helper shipped in the package. */
-  helper: string;
+  /**
+   * The running install, checked again right before pkexec so the helper root
+   * runs is the protected one even if something changed since startup.
+   */
+  runtime: LinuxPackageUpdateRuntime;
   /** The package electron-updater downloaded and checked against the feed. */
   installer: string;
   /** Base64 SHA-512 from the release feed. */
@@ -172,8 +210,13 @@ export async function installLinuxPackageUpdate(options: LinuxPackageInstallOpti
   if (!/^[A-Za-z0-9+/]{86}==$/u.test(options.sha512) || !/^\d+\.\d+\.\d+$/u.test(options.version) || !path.isAbsolute(options.installer)) {
     return "failed";
   }
+  const install = inspectLinuxPackage(options.runtime);
+  if (!install || install.kind !== options.kind) {
+    log("The installed package or its update helper is no longer protected; update it with your package manager.");
+    return "failed";
+  }
   const sha512Hex = Buffer.from(options.sha512, "base64").toString("hex");
-  const command = [options.helper, options.kind, options.installer, sha512Hex, options.version];
+  const command = [install.helper, options.kind, options.installer, sha512Hex, options.version];
   const elevated = options.uid === 0;
   const result = elevated ? await run(command[0]!, command.slice(1)) : await run(tools.pkexec, command);
   // pkexec exits 126 when the person closes the password prompt.
