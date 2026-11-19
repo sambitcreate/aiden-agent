@@ -13,7 +13,7 @@ import type {
 } from "../../../renderer/shared/workspace-artifacts.js";
 import { runBoundedShellCommand, type BoundedShellCommandOptions } from "../bounded-shell-command.js";
 import { runArgvPlan, type ArgvPlanOptions } from "./argv-runner.js";
-import { readWorkspaceArtifactFile, artifactFileAllowed, WorkspaceArtifactFileChangedError } from "./file-policy.js";
+import { readWorkspaceArtifactFile, artifactFileAllowed, WorkspaceArtifactFileUnsafeError } from "./file-policy.js";
 import { createWorkspaceArtifactRunner } from "./runner.js";
 import { WorkspaceArtifactStore, workspaceArtifactDigest } from "./store.js";
 
@@ -420,7 +420,21 @@ test("artifact reads deny canonical credential aliases and inode/path replacemen
       await fs.rename(path.join(folder, "safe"), path.join(folder, "held"));
       await fs.symlink(".private", path.join(folder, "safe"));
     },
-  }), WorkspaceArtifactFileChangedError);
+  }), WorkspaceArtifactFileUnsafeError);
+});
+
+test("a file read whose workspace folder is not a folder fails with that lasting reason, not as a change the next refresh fixes", async (t) => {
+  const { folder } = await setup(t, { sources: [FILE] });
+  // The refresh checks the folder first, so this is a folder replaced by a file after that check.
+  const notAFolder = path.join(folder, "TODO.md");
+  await assert.rejects(readWorkspaceArtifactFile(notAFolder, "TODO.md"), (error: Error) => {
+    assert.ok(error instanceof WorkspaceArtifactFileUnsafeError);
+    assert.match(error.message, /^Aiden could not safely read TODO\.md: the workspace folder, or a folder on the way to the file, is a link or not a folder/u);
+    assert.doesNotMatch(error.message, /changed while|next refresh|unsafe_source/u);
+    return true;
+  });
+  // Not a policy refusal, so a listing keeps the page's cached data and asks again next time.
+  await assert.rejects(artifactFileAllowed(notAFolder, "TODO.md"), WorkspaceArtifactFileUnsafeError);
 });
 
 test("denied file refreshes erase cached good data instead of preserving it as a transient failure", async (t) => {

@@ -19,6 +19,19 @@ export class WorkspaceArtifactFileDeniedError extends Error {
 export class WorkspaceArtifactFileChangedError extends Error {
   constructor(file: string) { super(`${file} changed while Aiden was reading it, so the page keeps the data it read before. The next refresh reads it again.`); }
 }
+/**
+ * The workspace folder, or a folder on the way to the file, is not a plain
+ * folder Aiden can open (a link, a file, or one it may not enter). Nothing
+ * was read, and this lasts until the folder is fixed, so unlike a change
+ * mid-read it does not promise that the next refresh reads the file.
+ */
+export class WorkspaceArtifactFileUnsafeError extends Error {
+  constructor(file: string) {
+    super(`Aiden could not safely read ${file}: the workspace folder, or a folder on the way to the file, is a link or not a folder, or Aiden may not open it. Nothing was read.`);
+  }
+}
+const isUnsafeSource = (error: unknown) => error instanceof ManagedWorktreeFileIoError && error.code === "unsafe_source";
+
 export function assertArtifactFilePath(file: string): void {
   if (isProtectedCredentialPath(file, "file")) throw new WorkspaceArtifactFileDeniedError();
 }
@@ -26,7 +39,9 @@ export function assertArtifactFilePath(file: string): void {
 async function admittedFile(root: string, file: string) {
   assertArtifactFilePath(file);
   if (!file || path.isAbsolute(file) || file.split(/[\\/]/u).includes("..")) throw new WorkspaceArtifactFileDeniedError(`${file || "The file"} is not a path inside the workspace folder.`);
-  const identity = await captureManagedWorktreeRootIdentity(root);
+  const identity = await captureManagedWorktreeRootIdentity(root).catch((error: unknown) => {
+    throw isUnsafeSource(error) ? new WorkspaceArtifactFileUnsafeError(file) : error;
+  });
   const canonical = await fs.realpath(path.resolve(identity.path, file));
   const relative = path.relative(identity.path, canonical);
   if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new WorkspaceArtifactFileDeniedError(`${file} leads outside the workspace folder.`);
@@ -52,9 +67,10 @@ export async function readWorkspaceArtifactFile(root: string, file: string, sign
     ? readLinuxArtifactFile(identity, admitted.relative, signal)
     : readConfinedWorkspaceFile(identity, admitted.relative, signal);
   const bytes = await reading.catch((error: unknown) => {
-    if (error instanceof LinuxArtifactFileChangedError || (error instanceof ManagedWorktreeFileIoError && ["unsafe_source", "source_changed"].includes(error.code))) {
+    if (error instanceof LinuxArtifactFileChangedError || (error instanceof ManagedWorktreeFileIoError && error.code === "source_changed")) {
       throw new WorkspaceArtifactFileChangedError(file);
     }
+    if (isUnsafeSource(error)) throw new WorkspaceArtifactFileUnsafeError(file);
     throw error;
   });
   signal?.throwIfAborted();
