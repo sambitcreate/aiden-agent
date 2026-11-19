@@ -39,6 +39,9 @@ one starts unassigned.
 | `F6` / `⇧F6` | Move to the next / previous area: sidebar, conversation, message box, side panel |
 | `↑` `↓` | Move between chats or Bots in the sidebar |
 | `Home` / `End` | First / last row in the sidebar |
+| `←` `→` / `↑` `↓` | On a focused divider (the sidebar's, the Environment or Bot panel's, the design chat's, the terminal drawer's), move it 16 px; with `⇧`, 40 px (left and right swap in a right-to-left layout) |
+| `Home` / `End` | On a focused divider, make the panel as small / as large as it goes |
+| `↩` | On a focused divider, hide the sidebar or close the Environment panel, Bot panel or terminal |
 | `←` / `→` | In the sidebar, close / open a project folder; `←` on a chat goes to its folder |
 
 `F6` lands on the sidebar's open chat, on the conversation itself (scroll it

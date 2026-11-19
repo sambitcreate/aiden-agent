@@ -36,6 +36,7 @@ import { APPEARANCE_CHANGE_EVENT } from "../lib/appearance-runtime";
 import { useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { ariaKeyShortcut } from "../shared/keybindings";
 import { returnFocus } from "../lib/focus-return";
+import { useResizeHandle } from "../lib/use-resize-handle";
 import { TERMINAL_CONTEXT_UNAVAILABLE, terminalContextDelivery } from "../lib/terminal-context";
 
 export const TERMINAL_PANEL_EVENT = "aiden:terminal-panel";
@@ -693,9 +694,6 @@ export function TerminalDrawer() {
   // store, a grid reflow and a full render, about 18 times per toggle.
   const [moving, setMoving] = React.useState(false);
   const settledOpenRef = React.useRef(open);
-  const resizeRef = React.useRef<{ startY: number; startHeight: number } | null>(null);
-  const heightRef = React.useRef(height);
-  heightRef.current = height;
   const visibleIds = layout.ids.filter((id) => sessions.some((session) => session.id === id));
   const visibleSessions =
     visibleIds.length > 0
@@ -733,37 +731,22 @@ export function TerminalDrawer() {
     return () => window.clearTimeout(timeout);
   }, [open]);
 
-  const beginResize = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0) return;
-    event.currentTarget.setPointerCapture(event.pointerId);
-    resizeRef.current = { startY: event.clientY, startHeight: height };
-  };
-  const resize = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (!resizeRef.current) return;
-    setHeight(
-      clampHeight(resizeRef.current.startHeight + resizeRef.current.startY - event.clientY),
-    );
-  };
-  const endResize = () => {
-    resizeRef.current = null;
-    localStorage.setItem(HEIGHT_STORAGE_KEY, String(heightRef.current));
-  };
-  const resizeWithKeyboard = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    const increment = event.shiftKey ? 40 : 16;
-    if (event.key === "ArrowUp") {
-      event.preventDefault();
-      setHeight((current) => clampHeight(current + increment));
-    } else if (event.key === "ArrowDown") {
-      event.preventDefault();
-      setHeight((current) => clampHeight(current - increment));
-    } else if (event.key === "Home") {
-      event.preventDefault();
-      setHeight(MIN_DRAWER_HEIGHT);
-    } else if (event.key === "End") {
-      event.preventDefault();
-      setHeight(maxDrawerHeight());
-    }
-  };
+  // The drawer is below the divider, so moving the divider up makes it taller.
+  const resizeHandle = useResizeHandle({
+    orientation: "horizontal",
+    panel: "end",
+    value: height,
+    min: MIN_DRAWER_HEIGHT,
+    max: maxDrawerHeight(),
+    disabled: !open,
+    onResize: (next) => setHeight(clampHeight(next)),
+    onCommit: (next) => {
+      const settled = clampHeight(next);
+      setHeight(settled);
+      localStorage.setItem(HEIGHT_STORAGE_KEY, String(settled));
+    },
+    onToggleCollapse: toggle,
+  });
 
   // Keep the renderer attached to one portal host across docking and hiding.
   // The hidden container releases layout without resetting the terminal screen.
@@ -778,19 +761,9 @@ export function TerminalDrawer() {
     >
       <div
         hidden={placement === "side"}
-        role="separator"
+        {...resizeHandle}
         aria-label="Resize terminal drawer"
-        aria-orientation="horizontal"
-        aria-valuemin={MIN_DRAWER_HEIGHT}
-        aria-valuemax={maxDrawerHeight()}
-        aria-valuenow={height}
-        tabIndex={open ? 0 : -1}
-        onPointerDown={beginResize}
-        onPointerMove={resize}
-        onPointerUp={endResize}
-        onPointerCancel={endResize}
-        onKeyDown={resizeWithKeyboard}
-        className="absolute inset-x-0 top-0 z-20 h-2 cursor-row-resize outline-none before:absolute before:inset-x-0 before:top-0 before:h-px before:bg-separator hover:before:bg-accent focus-visible:before:h-0.5 focus-visible:before:bg-accent"
+        className="absolute inset-x-0 top-0 z-20 h-2 cursor-row-resize outline-none before:absolute before:inset-x-0 before:top-0 before:h-px before:bg-separator hover:before:bg-accent focus-visible:before:h-0.5 focus-visible:before:bg-focus-ring"
       />
       {/* The settled body height is the drawer's less its 1px top border. */}
       <div className={cn("flex min-h-0 flex-col", moving ? "h-(--terminal-drawer-body-height)" : "h-full")}>

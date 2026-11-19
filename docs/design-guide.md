@@ -382,6 +382,37 @@ cards, the design side panel's Layers).
 - A documented shortcut that already moves an item at once (Layers' `⌥↑` and
   `⌥↓`) stays as an alias.
 
+## Resize handles
+
+A divider that resizes one panel along one axis uses `useResizeHandle` from
+`renderer/lib/use-resize-handle.ts` and spreads its props on the
+`role="separator"` element, adding only `aria-label` and the line's classes.
+The sidebar, the workbench panels (Environment and Bot), the design chat
+column and the terminal drawer use it. The panel keeps its own size state,
+bounds and saving: `onResize` gets the size while a pointer drags and
+`onCommit` the settled one, both clamped to `min` and `max`.
+
+- `orientation` is the divider's own: `vertical` between columns (a width),
+  `horizontal` between rows (a height). `panel` says whether the sized panel
+  is before the divider (`start`) or after it (`end`); arrows and drags then
+  move the divider the way they point, and right-to-left text flips the
+  horizontal direction.
+- A press resizes only after it moves 3px along the divider's axis, so a click
+  never does. A press with Shift, Alt, Control or Meta, a button other than the
+  primary one, or a second pointer is ignored. The pointer is captured, and the
+  page keeps the resize cursor while the drag lasts. A mouse press never
+  focuses the divider, so Enter after a drag still reaches the message box
+  instead of collapsing the panel; `Tab` still focuses it.
+- Arrows step 16px, Shift with an arrow 40px, Home and End jump to `min` and
+  `max`. Alt, Control and Meta with a key are left to the system. Enter calls
+  `onToggleCollapse` when the panel can collapse; that callback puts focus
+  somewhere visible, since the divider hides with the panel.
+- Draw the focused line with `focus-visible:before:bg-focus-ring`, the neutral
+  focus token; the global separator outline stays.
+- Two-dimensional handles (the floating browser's edges and corners, the
+  browser viewport's) and the device mini player's edges are not dividers and
+  keep their own code.
+
 ## Enforced rules
 
 `npm run check:aiden-rules` (`scripts/check-aiden-rules.mjs`) checks the rules a

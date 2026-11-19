@@ -1275,6 +1275,7 @@
         "renderer/lib/use-inbox-triage.test.tsx",
         "renderer/lib/use-mark-chat-read.test.ts",
         "renderer/lib/use-sidebar-view.test.tsx",
+        "renderer/lib/use-resize-handle.test.tsx",
         "renderer/lib/voice-recorder-core.test.ts",
         "renderer/lib/wav-audio.test.ts",
         "renderer/lib/workspace-file-open-error.test.ts",

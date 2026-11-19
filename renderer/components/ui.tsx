@@ -39,6 +39,7 @@ import { useCommandHandler, useShortcutBinding, useShortcutLabel } from "../lib/
 import { isComposingKey, isEscapeKey } from "../lib/dismiss-key";
 import { hasOpenLayer, isOverlayLayer, useLayer, type LayerKind } from "../lib/layer-stack";
 import { returnFocus as restoreFocus } from "../lib/focus-return";
+import { useResizeHandle } from "../lib/use-resize-handle";
 import {
   compactSidebarAutoFocusIntent,
   type CompactSidebarAutoFocusIntent,
@@ -613,54 +614,29 @@ function SplitViewRoot({
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  const beginResize = React.useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      if (collapsed) return;
-      event.preventDefault();
-      const startX = event.clientX;
-      const startWidth = width;
-      document.body.style.cursor = "col-resize";
-      document.body.style.userSelect = "none";
-      const move = (moveEvent: PointerEvent) => {
-        setWidth(
-          Math.min(limits.max, Math.max(limits.min, startWidth + moveEvent.clientX - startX)),
-        );
-      };
-      const finish = (upEvent: PointerEvent) => {
-        const next = Math.min(
-          limits.max,
-          Math.max(limits.min, startWidth + upEvent.clientX - startX),
-        );
-        setWidth(next);
-        localStorage.setItem(widthKey, String(Math.round(next)));
-        document.body.style.removeProperty("cursor");
-        document.body.style.removeProperty("user-select");
-        window.removeEventListener("pointermove", move);
-        window.removeEventListener("pointerup", finish);
-      };
-      window.addEventListener("pointermove", move);
-      window.addEventListener("pointerup", finish);
+  const commitWidth = (next: number) => {
+    setWidth(next);
+    localStorage.setItem(widthKey, String(Math.round(next)));
+  };
+  // The sidebar is before the divider, so moving it toward the end widens the sidebar.
+  const resizeHandle = useResizeHandle({
+    orientation: "vertical",
+    panel: "start",
+    value: width,
+    min: limits.min,
+    max: limits.max,
+    disabled: collapsed || compact || contentModalOpen,
+    onResize: setWidth,
+    onCommit: commitWidth,
+    onToggleCollapse: () => {
+      // The divider hides with the sidebar, so focus moves to the toggle that brings it back.
+      const divider = document.activeElement;
+      toggle();
+      requestAnimationFrame(() =>
+        restoreFocus([() => leadingAnchor?.querySelector<HTMLElement>("[data-sidebar-toggle]")], { closing: divider }),
+      );
     },
-    [collapsed, limits.max, limits.min, width, widthKey],
-  );
-
-  const resizeWithKeyboard = React.useCallback(
-    (event: React.KeyboardEvent<HTMLDivElement>) => {
-      const increment = event.shiftKey ? 40 : 16;
-      let next = width;
-      if (event.key === "ArrowLeft") next = width - increment;
-      else if (event.key === "ArrowRight") next = width + increment;
-      else if (event.key === "Home") next = limits.min;
-      else if (event.key === "End") next = limits.max;
-      else return;
-
-      event.preventDefault();
-      next = Math.min(limits.max, Math.max(limits.min, next));
-      setWidth(next);
-      localStorage.setItem(widthKey, String(Math.round(next)));
-    },
-    [limits.max, limits.min, width, widthKey],
-  );
+  });
 
   const compactOpen = compact && !collapsed && !contentModalOpen;
   const renderedSidebarWidth = collapsed
@@ -777,17 +753,10 @@ function SplitViewRoot({
           style={{ width: reservedSidebarWidth }}
         />
         <div
-          role="separator"
-          aria-orientation="vertical"
+          {...resizeHandle}
           aria-label="Resize sidebar"
-          aria-valuemin={limits.min}
-          aria-valuemax={limits.max}
-          aria-valuenow={Math.round(width)}
-          tabIndex={collapsed || compact || contentModalOpen ? -1 : 0}
-          onPointerDown={beginResize}
-          onKeyDown={resizeWithKeyboard}
           className={cn(
-            "relative z-20 -mx-[3px] w-[7px] shrink-0 cursor-col-resize outline-none before:absolute before:inset-y-0 before:left-[3px] before:w-px before:bg-separator hover:before:bg-primary/20 focus-visible:before:w-0.5 focus-visible:before:bg-accent",
+            "relative z-20 -mx-[3px] w-[7px] shrink-0 cursor-col-resize outline-none before:absolute before:inset-y-0 before:left-[3px] before:w-px before:bg-separator hover:before:bg-primary/20 focus-visible:before:w-0.5 focus-visible:before:bg-focus-ring",
             (collapsed || compact || contentModalOpen) && "pointer-events-none opacity-0",
           )}
         />
@@ -862,6 +831,7 @@ function SidebarToggle({ children }: { children?: React.ReactNode }) {
         size="small"
         variant="bar"
         onClick={context.toggle}
+        data-sidebar-toggle
         aria-label={context.collapsed ? "Show sidebar" : "Hide sidebar"}
         aria-keyshortcuts={ariaKeyShortcut(shortcutBinding)}
         aria-pressed={!context.collapsed}
