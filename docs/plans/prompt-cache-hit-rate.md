@@ -1,6 +1,6 @@
 # Prompt cache hit rate: keep the cached prefix byte-stable
 
-Status: In progress (2026-11-18): phases 0, 1 and 2 implemented. Delivered as one PR with one stacked commit series per phase, branch `feat/prompt-cache-stability`, cut from `main` at f2fd27640.
+Status: In progress (2026-11-19): phases 0, 1, 2 and 3 implemented. Delivered as one PR with one stacked commit series per phase, branch `feat/prompt-cache-stability`, cut from `main` at f2fd27640.
 
 ## Goal
 
@@ -277,6 +277,28 @@ At the end, four Opus high reviewers review the whole PR, and a CI watcher owns 
   - "a person's Bot memory edit does not change system" (the Bot's memory change goes out as a turn update, like the workspace memory)
 - Behavioral test: after a permission-mode change, the next request carries the new mode in the tail, and the approval gate uses the new mode. The model-visible text and the enforced mode cannot disagree.
 - Hook context test: the desktop and the CLI produce the same message shape for the same hook output.
+
+**As built (2026-11-19).** Per-turn host text is journaled as hidden custom messages right after the prompt it belongs to (`turnFollowingMessages` in llm-client, passed as `following` to `runManaged`), in this order: hook context (`aiden-hook-context`), a state update (`aiden-state-update`, `<state_update>`), then one turn note (`aiden-turn-note`, `<turn_note>`). They are `display: false` and live only in the Pi journal. The chat store never saves them, so the desktop transcript, Remote API and the iOS and Android clients never show them as user text. The code differed from the plan in these ways:
+
+- **Hook context** (`hookContextMessage` / `hookContextCustomMessage` in `workspace-chat-hooks.ts`, used by llm-client and the CLI daemon). It is request-only, as before, when the turn has no prompt (owed or continue), carries `inputContext`, runs on the skills-free projection, or retries a prompt the journal already holds. Those turns cost one miss on the next turn.
+- **Frozen state** (`main/services/chat-frozen-state.ts`).
+  - Head: branch, permission, always-on memory and canvas, journaled as `aiden.chat-head-state.v1` before the prompt. Updates are planned against the last announced state, so each change is sent once.
+  - Moving between Ask first and Full access keeps the head. Read-only and None change the declared tools, so they re-head, with a corrective update when the context still holds an earlier announcement. The approval gate keeps enforcing the current mode, which the update names.
+  - A memory edit goes out as added and removed facts, marked as untrusted data.
+  - Re-heads also happen after a compaction, on a turn with no prompt, on the skills-free projection and without a journal.
+  - Visualize mode and the paired-device audience are turn notes, not head state: they describe the turn, not the chat.
+  - Deviation: the design-mode toggle still changes system. Owner: phase 8, with the head-collapse work.
+  - Deviation: the CLI's workspace chats do not freeze branch or permission state. Their system prompt is Pi's own and states neither the branch nor the permission mode, so there is nothing to freeze. Owner: phase 6, with `aiden serve` parity.
+- **Bot memory.** A person's edit no longer marks the snapshot stale. The service keeps one coalesced diff per Bot since the snapshot, and the next input's tail carries it once as `<bot_memory_update>`, on the desktop and in the CLI. A new session or a compaction re-reads memory and drops the pending diff. Reviewers: removed entries stay in the cached snapshot until then, and the update quotes them as removed.
+- **Audience notes.** /visualize, a paired-device audience and a turn without the Advisor model chooser are turn notes. The Advisor's system guidance covers both cases, and a call missing both IDs on a turn with no chooser is refused with that reason. The chooser choice per turn is desktop-only; the CLI keeps its fixed no-chooser text. There is no full-Advisor stability case, only the unit tests in `advisor-runtime.test.ts`.
+- **Turn notes need a prompt.** No turn note is sent on owed or continue turns; their audience is fixed by the surface that owes them.
+- **`form_fill`.** Its description is fixed and the current message's attachment IDs ride in the turn note. Deviation: the tool's presence still follows whether the message has attachments, so the tool list changes then. It is compiled off. Owner: whoever turns on `FORM_FILL_MUTATION_AVAILABLE` must make it a per-chat declaration refused per call.
+- **Follow-up connectors.** Each connected generation journals the `mcp_servers` section it showed (`aiden.mcp-servers-section.v1`, only when it changed). An unattended follow-up shows that section unchanged without reading any inventory, and its turn note says the servers are not connected and their tools cannot be called. Deviations, owner phase 8 (deferred tool declarations):
+  - Nothing is declared or refused by name. The connector tools stay absent, so nothing listed is callable and no server is reached.
+  - This keeps system and tools stable only in the codemode lane, where connectors are reached through codemode and tool_search. A chat whose connector tools are declared directly still loses them on the follow-up.
+  - A connector removed since the last connected turn is still listed on the follow-up, under the note.
+- **Window-dependent offers: not done.** The owed turn, and a desktop continuation of a scheduled or Telegram chat (`allowComputerUse: false`), still change the tool list. Making Computer Use, hooks, questions, browser, scheduling, provider-auth connectors and the design canvas per-chat declarations means separating every `rendererOwner` gate in llm-client from its renderer dependency, which is a larger change than this phase. Owner: a phase 3 follow-up, to land before this PR's final review. The todo case "the turn a settled run owes its chat declares the chat's tools" stays on.
+- **Tests.** `chat-frozen-state.test.ts`, `chat-prompt-sections.test.ts` (both in `test:compaction` and the CI registry), and in `prompt-prefix-stability.test.ts`: the branch, permission, memory, Bot memory, hook context, audience note and follow-up connector cases, all switched on. The hook-context shape is shared by both surfaces through one helper; `daemon-turns.test.mjs` covers the CLI side.
 
 ## Phase 4: side calls share the parent prefix
 

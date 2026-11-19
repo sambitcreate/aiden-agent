@@ -16,7 +16,7 @@ News reaches the chat as a follow-up message. The transcript shows it as a small
 - If the chat is idle and the news needs work (a failure, a conflict, a comment), Aiden starts a follow-up answer on its own. A chat can start at most six such answers an hour; after that the message is only saved, and the agent reads it with the person's next message.
 - News that needs nothing (checks passed, a merge) is only saved.
 
-A follow-up answer runs with nobody watching. It cannot ask questions or wait for approvals: in an **Ask first** workspace, anything that would need approval is refused for that answer. It also does not use subagents, Computer Use or Connectors.
+A follow-up answer runs with nobody watching. It cannot ask questions or wait for approvals: in an **Ask first** workspace, anything that would need approval is refused for that answer. It also does not use subagents, Computer Use or Connectors. The agent still sees which connectors the chat uses, with a note that they are not connected for that answer, so it can say what it would check with them.
 
 Command output, CI logs and comment text are untrusted. Aiden fences them as data in the message, and the agent is told to weigh comments as requests rather than instructions.
 

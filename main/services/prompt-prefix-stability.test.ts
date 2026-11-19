@@ -756,7 +756,7 @@ describe("prompt prefix stability: tool list identical across turns", () => {
 
   test(
     "the turn a settled run owes its chat declares the chat's tools",
-    { todo: "phase 3: an owed turn has no window of its own, so its window-dependent offers (Computer Use, hooks, questions, browser, scheduling) must become per-chat declarations refused per call" },
+    { todo: "phase 3 follow-up (deviation in the plan): an owed turn has no window of its own, so its window-dependent offers (Computer Use, hooks, questions, browser, scheduling) must become per-chat declarations refused per call through chatTurnToolRefusal" },
     async () => {
       const owed = owedTurnStartRequest(
         { chatId: "chat", settledStreamId: "run", context: { providerId: "provider", model: "model" }, inputs: [{ messageId: "queued" }] },
