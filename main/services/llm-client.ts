@@ -274,7 +274,6 @@ import {
   piCompactionSessionStore,
   recordPiEffectRecoveryBoundary,
   syncChatMessagesToPiSession,
-  piBranchHoldsChatMessage,
   projectVisibleHistoryWithoutSkills,
   ensurePiForkSummary,
   type PiVisibleTurnLease,
@@ -429,12 +428,15 @@ import { createPiToolDiscovery } from "./pi-tool-discovery.js";
 import { NO_LATE_MCP_DISCOVERY, type McpLateDiscovery } from "./mcp-tool-discovery-core.js";
 import { isPiCodemodeCallable } from "./pi-runtime-tool.js";
 import {
+  chatHeadJournaling,
+  chatStateRequestMessages,
   extensionChatState,
   journaledChatState,
   planChatTurnState,
-  recordChatHead,
   turnNoteMessage,
   withHeadChatState,
+  withoutForgottenFactsSession,
+  type ChatTurnState,
 } from "./chat-frozen-state.js";
 import { assembleChatPrompt, buildWorkspaceChatBasePrompt } from "./chat-prompt-assembly.js";
 import {
@@ -3947,15 +3949,20 @@ export const llmClient = {
       // prefix. A skills-free turn reads a projection, not the journal, so it
       // states the current values and records no head. The approval gate
       // keeps enforcing the current mode, which the update names.
+      const currentChatState: ChatTurnState = {
+        branch: git.branch ?? null,
+        permission,
+        ...extensionChatState(runtimeExtensions),
+      };
       const chatStatePlan = planChatTurnState({
         journaled: skillsEnabledForTurn ? journaledChatState(await piSession.getBranch()) : undefined,
-        current: {
-          branch: git.branch ?? null,
-          permission,
-          ...extensionChatState(runtimeExtensions),
-        },
+        current: currentChatState,
         prompt: generationChat.messages.some((message) => message.role === "user"),
       });
+      // From here on the turn reads the journal without the memory facts the
+      // person removed or turned off: its model context, an in-turn
+      // compaction's summary input, and history recall.
+      piSession = withoutForgottenFactsSession(piSession, currentChatState);
       const headBranch = chatStatePlan.head.branch ?? undefined;
       const headPermission = chatStatePlan.head.permission;
       let hostPromptSkills: string | undefined;
@@ -4058,6 +4065,9 @@ export const llmClient = {
         retainsSystemUpdates: modelRetainsSystemUpdates(model),
         promptSections: contextPromptSections,
         deferredTools,
+        // Every request drops removed memory facts and, after a compaction
+        // inside the turn, states the current state again.
+        prepareMessages: chatStateRequestMessages(chatStatePlan.head, currentChatState),
       };
       assertGenerationContextCapacity(generationContextOptions);
       const onCompactionEvent = (event: PiCompactionEvent) => {
@@ -4247,17 +4257,15 @@ export const llmClient = {
       // transcript taints the run from the start, including what a compaction
       // folded away.
       const journalBranch = await promptJournal.getBranch();
-      // A rebuilt head is journaled before this turn's prompt, and only with
-      // its update: a retried prompt the journal already holds keeps this
-      // turn's update in memory, so its head is left unrecorded and rebuilt
-      // again next turn rather than contradicting what the journal says.
-      if (
-        chatStatePlan.reheaded &&
-        skillsEnabledForTurn &&
-        !(chatStatePlan.update && currentUser && piBranchHoldsChatMessage(journalBranch, currentUser.id))
-      ) {
-        await recordChatHead(promptJournal, chatStatePlan.head);
-      }
+      // A rebuilt head is journaled in the same append as this turn's prompt
+      // and its update, so a retried prompt the journal already holds skips
+      // all three and the head is rebuilt next turn rather than recorded
+      // without its update. A turn with no prompt journals it on its own.
+      const headJournaling = chatHeadJournaling(chatStatePlan, {
+        journaled: skillsEnabledForTurn,
+        prompt: currentPromptMessage !== undefined,
+      });
+      for (const entry of headJournaling.alone) await promptJournal.appendCustomEntry(entry.customType, entry.data);
       let initialMessages = (await promptJournal.buildContext(journalBranch)).messages;
       if (onDemandTools) {
         // Tools this chat already loaded or called stay declared from the start.
@@ -4520,6 +4528,7 @@ export const llmClient = {
                     supportsImages,
                     contentOverrides,
                     new Map([[currentUser.id, following]]),
+                    new Map([[currentUser.id, headJournaling.withPrompt]]),
                   );
                 },
               }

@@ -1521,6 +1521,33 @@ test("host messages that follow a chat message are journaled right after it, onc
   assert.match(sent[1]![1]!, /OPS-12/u);
 });
 
+test("entries that precede a chat message share its append: before it, once, and never alone", async () => {
+  const { model } = compactionFixture();
+  const session = await memorySession();
+  const prompt: ChatMessage = { id: "user-1", role: "user", content: "Hello", createdAt: 10 };
+  const preceding = new Map([["user-1", [{ customType: "test.head", data: { n: 1 } }]]]);
+  const heads = async () => (await session.getBranch()).filter((entry) => entry.type === "custom" && entry.customType === "test.head");
+
+  // The marker append fails: the head entry rolls back with the prompt.
+  const appendCustom = session.appendCustomEntry.bind(session);
+  session.appendCustomEntry = async (customType, data) => {
+    if (customType === AIDEN_CHAT_MESSAGE_MARKER) throw new Error("injected marker failure");
+    return appendCustom(customType, data);
+  };
+  await assert.rejects(syncChatMessagesToPiSession(session, [prompt], model, false, new Map(), new Map(), preceding), /marker failure/u);
+  assert.equal((await heads()).length, 0, "no head is left without its prompt");
+  session.appendCustomEntry = appendCustom;
+
+  await syncChatMessagesToPiSession(session, [prompt], model, false, new Map(), new Map(), preceding);
+  // A retry of the held prompt with a different head records neither.
+  await syncChatMessagesToPiSession(session, [prompt], model, false, new Map(), new Map(), new Map([["user-1", [{ customType: "test.head", data: { n: 2 } }]]]));
+  const branch = await session.getBranch();
+  const head = branch.findIndex((entry) => entry.type === "custom" && entry.customType === "test.head");
+  const message = branch.findIndex((entry) => entry.type === "message");
+  assert.deepEqual((await heads()).map((entry) => (entry as { data: unknown }).data), [{ n: 1 }]);
+  assert.ok(head >= 0 && head < message, "the head precedes its prompt");
+});
+
 test("chat synchronization keeps historical images model-neutral", async () => {
   const { model } = compactionFixture();
   const session = await memorySession();

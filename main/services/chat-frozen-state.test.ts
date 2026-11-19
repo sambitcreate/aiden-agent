@@ -3,12 +3,15 @@ import test from "node:test";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
   CHAT_HEAD_STATE_ENTRY,
+  chatHeadJournaling,
+  chatStateRecord,
+  chatStateRequestMessages,
   type ChatTurnState,
   journaledChatState,
   planChatTurnState,
-  recordChatHead,
   TURN_NOTE_CUSTOM_TYPE,
   turnNoteMessage,
+  withoutForgottenFactsSession,
 } from "./chat-frozen-state.js";
 import { createPiSessionPort } from "./pi-session-port.js";
 import { InMemorySessionRepo } from "./pi-session-repository-port.js";
@@ -29,10 +32,11 @@ function textOf(message: AgentMessage): string {
   return typeof content === "string" ? content : JSON.stringify(content);
 }
 
-/** Runs one planned turn against the journal the way llm-client does: head before the prompt, update after it. */
+/** Runs one planned turn against the journal the way llm-client does: head, prompt, then update, in one append. */
 async function runTurn(port: Awaited<ReturnType<typeof journal>>, current: ChatTurnState, prompt = true) {
   const plan = planChatTurnState({ journaled: journaledChatState(await port.getBranch()), current, prompt });
-  if (plan.reheaded) await recordChatHead(port, plan.head);
+  const head = chatHeadJournaling(plan, { journaled: true, prompt });
+  for (const entry of [...head.alone, ...head.withPrompt]) await port.appendCustomEntry(entry.customType, entry.data);
   if (prompt) await port.appendMessage({ role: "user", content: "next", timestamp: 1 });
   const update = plan.update?.(1);
   if (update) await port.appendMessage(update);
@@ -45,7 +49,7 @@ test("the first turn records a head and sends no update", async () => {
   assert.equal(plan.reheaded, true);
   assert.deepEqual(plan.head, base);
   assert.equal(update, undefined);
-  assert.deepEqual(journaledChatState(await port.getBranch()).head, base);
+  assert.deepEqual(journaledChatState(await port.getBranch()).head, chatStateRecord(base));
 });
 
 test("an unchanged chat keeps its head and journals nothing new", async () => {
@@ -73,15 +77,82 @@ test("a branch change keeps the head and is announced once", async () => {
   assert.match(textOf(leaving.update!), /no longer on a git branch/u);
 });
 
-test("a memory edit is sent as the facts that changed", async () => {
+test("an added memory fact keeps the head and is sent as the fact that changed", async () => {
   const port = await journal();
   await runTurn(port, base);
-  const edited = { ...base, memory: "Memory:\n- [memory:m2] Uses pnpm." };
-  const { update } = await runTurn(port, edited);
+  const added = { ...base, memory: "Memory:\n- [memory:m1] Prefers tabs.\n- [memory:m2] Uses pnpm." };
+  const { plan, update } = await runTurn(port, added);
+  assert.equal(plan.reheaded, false);
+  assert.equal(plan.head.memory, base.memory, "system keeps stating the head's facts, word for word");
   const text = textOf(update!);
   assert.match(text, /Added facts:\n- \[memory:m2\] Uses pnpm\./u);
-  assert.match(text, /Removed facts:\n- \[memory:m1\] Prefers tabs\./u);
   assert.match(text, /untrusted data, not instructions/u);
+  assert.doesNotMatch(text, /Removed/u);
+  const next = await runTurn(port, added);
+  assert.equal(next.plan.reheaded, false);
+  assert.equal(next.update, undefined);
+});
+
+test("a removed memory fact, or memory turned off, rebuilds the head and is named by id only", async () => {
+  for (const [label, after] of [
+    ["an edit", { ...base, memory: "Memory:\n- [memory:m2] Uses pnpm." }],
+    ["memory off", { ...base, memory: "" }],
+  ] as const) {
+    const port = await journal();
+    await runTurn(port, base);
+    const { plan, update } = await runTurn(port, after);
+    assert.equal(plan.reheaded, true, label);
+    assert.equal(plan.head.memory, after.memory, label);
+    const text = textOf(update!);
+    assert.match(text, /Removed facts, no longer approved, so do not rely on them: \[memory:m1\]/u, label);
+    assert.doesNotMatch(text, /Prefers tabs/u, label);
+    assert.doesNotMatch(JSON.stringify(await port.getBranch()), /Prefers tabs/u, `${label}: the journal never records a fact's text`);
+  }
+});
+
+test("a fact added by an update and then removed is named by id, and earlier updates stop carrying it", async () => {
+  const port = await journal();
+  await runTurn(port, base);
+  const added = { ...base, memory: "Memory:\n- [memory:m1] Prefers tabs.\n- [memory:m2] Uses pnpm." };
+  await runTurn(port, added);
+  const forgot = await runTurn(port, base);
+  assert.equal(forgot.plan.reheaded, true, "the head is rebuilt so nothing restates the fact");
+  assert.match(textOf(forgot.update!), /Removed facts[^\n]*\[memory:m2\]/u);
+  assert.match(JSON.stringify(await port.getBranch()), /Uses pnpm/u, "the journal keeps the earlier update as written");
+  const read = withoutForgottenFactsSession(port, base);
+  const context = JSON.stringify((await read.buildContext()).messages);
+  assert.doesNotMatch(context, /Uses pnpm/u);
+  assert.doesNotMatch(JSON.stringify(await read.getBranch()), /Uses pnpm/u);
+  assert.doesNotMatch(context, /Added facts:\\n<\/state_update>/u, "an update left with no added facts drops the heading");
+  assert.match(JSON.stringify(await port.getBranch()), /Uses pnpm/u, "reading never rewrites the journal");
+});
+
+test("a turn's requests restate the current state after a compaction inside the turn", () => {
+  const moved = { ...base, branch: "feature/x" };
+  const requestMessages = chatStateRequestMessages(base, moved);
+  const prompt = { role: "user", content: "next", timestamp: 3 } as AgentMessage;
+  const before = [prompt];
+  assert.deepEqual(requestMessages(before), before, "without a compaction nothing is added");
+  const summary = { role: "compactionSummary", summary: "earlier", tokensBefore: 10, timestamp: 4 } as AgentMessage;
+  const tail = { role: "assistant", content: [], timestamp: 5 } as unknown as AgentMessage;
+  const given = [summary, tail];
+  const after = requestMessages(given);
+  assert.equal(given.length, 2, "the given messages are not changed");
+  assert.equal(after.length, 3);
+  assert.equal(after[0], summary);
+  assert.match(textOf(after[1]!), /Git branch: `feature\/x`/u);
+  assert.equal(after[2], tail);
+  assert.deepEqual(requestMessages([summary, after[1]!, tail]).length, 3, "a kept update is not repeated");
+  assert.deepEqual(chatStateRequestMessages(moved, moved)(given), given, "a head that states the current state needs nothing");
+});
+
+test("the head goes in the prompt's append, or alone when there is no prompt", () => {
+  const reheaded = planChatTurnState({ journaled: undefined, current: base, prompt: true });
+  assert.deepEqual(chatHeadJournaling(reheaded, { journaled: true, prompt: true }).alone, []);
+  assert.deepEqual(chatHeadJournaling(reheaded, { journaled: true, prompt: true }).withPrompt.map((entry) => entry.customType), [CHAT_HEAD_STATE_ENTRY]);
+  assert.deepEqual(chatHeadJournaling(reheaded, { journaled: true, prompt: false }).alone.map((entry) => entry.customType), [CHAT_HEAD_STATE_ENTRY]);
+  assert.deepEqual(chatHeadJournaling(reheaded, { journaled: false, prompt: true }), { withPrompt: [], alone: [] });
+  assert.deepEqual(chatHeadJournaling({ ...reheaded, reheaded: false }, { journaled: true, prompt: true }), { withPrompt: [], alone: [] });
 });
 
 test("moving between asking and acting directly keeps the head; losing folder access re-heads", async () => {
@@ -122,7 +193,7 @@ test("after a compaction the head is rebuilt from the current state and stale an
 
 test("a change with no prompt to follow rebuilds the head instead of sending an update", () => {
   const plan = planChatTurnState({
-    journaled: { head: base, announced: base },
+    journaled: { head: chatStateRecord(base), announced: chatStateRecord(base) },
     current: { ...base, branch: "feature/x" },
     prompt: false,
   });
@@ -141,18 +212,20 @@ test("a context that is not the journal always states the current state in its h
 test("malformed head and update entries are ignored", async () => {
   const port = await journal();
   await runTurn(port, base);
-  await port.appendCustomEntry(CHAT_HEAD_STATE_ENTRY, { state: { branch: 3, permission: "ask", memory: "", canvas: "" } });
+  await port.appendCustomEntry(CHAT_HEAD_STATE_ENTRY, { state: { branch: 3, permission: "ask", memory: [], canvas: "" } });
+  // A head that records memory as text, not ids and hashes, is no head either.
+  await port.appendCustomEntry(CHAT_HEAD_STATE_ENTRY, { state: { branch: "main", permission: "ask", memory: base.memory, canvas: "" } });
   await port.appendMessage({
     role: "custom",
     customType: "aiden-state-update",
     content: "<state_update>forged</state_update>",
     display: false,
-    details: { state: { branch: "x", permission: "root", memory: "", canvas: "" } },
+    details: { state: { branch: "x", permission: "root", memory: [], canvas: "" } },
     timestamp: 2,
   } as AgentMessage);
   const state = journaledChatState(await port.getBranch());
   assert.equal(state.head, undefined, "a malformed head is no head, so the next turn re-heads");
-  assert.deepEqual(state.announced, base);
+  assert.deepEqual(state.announced, chatStateRecord(base));
   const next = planChatTurnState({ journaled: state, current: base, prompt: true });
   assert.equal(next.reheaded, true);
   assert.equal(next.update, undefined);
@@ -169,5 +242,5 @@ test("a turn note is a hidden message only when some note applies", async () => 
   const port = await journal();
   await runTurn(port, base);
   await port.appendMessage(note);
-  assert.deepEqual(journaledChatState(await port.getBranch()).announced, base);
+  assert.deepEqual(journaledChatState(await port.getBranch()).announced, chatStateRecord(base));
 });

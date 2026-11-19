@@ -28,13 +28,16 @@ import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.l
 import { createFauxCore, type FauxResponseStep } from "@earendil-works/pi-ai/providers/faux";
 import type { AgentsInstructionOptions } from "./agents-instructions.js";
 import {
+  chatHeadJournaling,
+  chatStateRequestMessages,
   extensionChatState,
   journaledChatState,
   planChatTurnState,
-  recordChatHead,
   turnNoteMessage,
   withHeadChatState,
+  withoutForgottenFactsSession,
   type ChatTurnState,
+  type JournaledChatState,
 } from "./chat-frozen-state.js";
 import type { ChatPromptAssembly } from "./chat-prompt-assembly.js";
 import type { PiAgentRuntimeExtension } from "./pi-agent-runtime-harness.js";
@@ -44,6 +47,8 @@ import { createMcpServersSectionRefresher } from "./mcp-server-instructions.js";
 import { diffPromptPrefix, fingerprintPromptPrefix, type PromptPrefixDifference, type PromptPrefixFingerprint } from "./pi-cache-telemetry.js";
 import { PiAgentRuntimeHarness } from "./pi-agent-runtime-harness.js";
 import { convertToLlm } from "./pi-legacy-harness.js";
+import { chatMessageToPiMessage } from "./generation-messages.js";
+import { AIDEN_CHAT_MESSAGE_MARKER, syncChatMessagesToPiSession } from "./pi-compaction-session-store.js";
 import { createPiSessionPort, type PiSessionPort } from "./pi-session-port.js";
 import { InMemorySessionRepo } from "./pi-session-repository-port.js";
 import { createPiTurnContextPreparation } from "./pi-turn-context.js";
@@ -95,6 +100,12 @@ export type PromptPrefixTurnInput = {
    * turn note saying so follows the prompt, as llm-client does.
    */
   connectorsWithheld?: boolean;
+  /**
+   * Regenerate the previous turn's reply: the journal returns to the held
+   * prompt and llm-client runs it again as the same chat message, so the
+   * sync skips it and everything journaled with it; `prompt` is ignored.
+   */
+  retry?: boolean;
 } & (
   | {
       /** The generation head as llm-client assembles it; tools follow the journaled history. */
@@ -153,6 +164,8 @@ export interface PromptPrefixHarness {
   callableTools(): readonly AgentTool[];
   /** Runs a nested call in the running turn, for a codemode tool a test builds. */
   executeNestedToolCall: PiAgentRuntimeHarness["executeNestedToolCall"];
+  /** The chat state the journal records (`journaledChatState` of its branch). */
+  journaledChatState(): Promise<JournaledChatState>;
 }
 
 function hash(value: unknown): string {
@@ -294,6 +307,7 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
   const requests: RecordedPromptRequest[] = [];
   let turnNumber = 0;
   let runtime: PiAgentRuntimeHarness | undefined;
+  let lastPrompt: { id: string; content: string; createdAt: number } | undefined;
 
   async function turn(input: PromptPrefixTurnInput): Promise<RecordedPromptRequest[]> {
     turnNumber += 1;
@@ -302,17 +316,38 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
     const recorded: RecordedPromptRequest[] = [];
     core.setResponses(input.responses);
     journal ??= new InMemorySessionRepo().create({ id: "prompt-prefix-harness" }).then((native) => createPiSessionPort(native));
-    const session = await journal;
+    let session = await journal;
+    if (input.retry && !lastPrompt) throw new Error("Prompt prefix harness has no earlier prompt to retry.");
+    const prompt = input.retry && lastPrompt
+      ? lastPrompt
+      : { id: `prompt-${thisTurn}`, content: input.prompt, createdAt: Date.now() };
+    lastPrompt = prompt;
+    if (input.retry) {
+      // A regenerate: the journal returns to the held prompt, dropping the reply it got.
+      const marker = (await session.getBranch()).find((entry) =>
+        entry.type === "custom" &&
+        entry.customType === AIDEN_CHAT_MESSAGE_MARKER &&
+        (entry.data as { chatMessageId?: unknown } | undefined)?.chatMessageId === prompt.id);
+      if (!marker) throw new Error("Prompt prefix harness journal does not hold the prompt to retry.");
+      await session.moveTo(marker.id);
+    }
     let following = input.following;
+    let precedingEntries: Array<{ customType: string; data: unknown }> = [];
+    let prepareMessages: GenerationContextOptions["prepareMessages"];
     let resolved: { assembly: ChatPromptAssembly } | { systemPrompt: string; tools: AgentTool[] };
     if ("chatState" in input) {
       const { chatState } = input;
+      const current: ChatTurnState = { branch: chatState.branch, permission: chatState.permission, ...extensionChatState(chatState.extensions) };
       const plan = planChatTurnState({
         journaled: journaledChatState(await session.getBranch()),
-        current: { branch: chatState.branch, permission: chatState.permission, ...extensionChatState(chatState.extensions) },
+        current,
         prompt: true,
       });
-      if (plan.reheaded) await recordChatHead(session, plan.head);
+      // As llm-client: the head goes in the prompt's append, and the turn
+      // reads the journal and sends requests without removed memory facts.
+      precedingEntries = chatHeadJournaling(plan, { journaled: true, prompt: true }).withPrompt;
+      session = withoutForgottenFactsSession(session, current);
+      prepareMessages = chatStateRequestMessages(plan.head, current);
       resolved = {
         assembly: await chatState.assembly({
           branch: plan.head.branch,
@@ -358,6 +393,7 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
       providerId: model.provider,
       modelId: model.id,
       retainsSystemUpdates: midConversationSystem,
+      ...(prepareMessages ? { prepareMessages } : {}),
     };
     let initialMessages: AgentMessage[] = [...history];
     // llm-client: the head declares the chat's fixed tools, the journal the loaded ones.
@@ -403,6 +439,19 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
       durability: {
         session,
         compaction: { models: createModels(), model, thinkingLevel: "off" },
+        // llm-client's sync: the prompt, its following messages and the head
+        // entry in one append, skipped together when the journal holds it.
+        appendInput: async (journalSession, _message, followingMessages) => {
+          await syncChatMessagesToPiSession(
+            journalSession,
+            [{ id: prompt.id, role: "user", content: prompt.content, createdAt: prompt.createdAt }],
+            model,
+            true,
+            new Map(),
+            new Map([[prompt.id, followingMessages]]),
+            new Map([[prompt.id, precedingEntries]]),
+          );
+        },
       },
       streamFn: async (requestModel, context, streamOptions) => {
         step += 1;
@@ -412,11 +461,11 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
         return core.streamSimple(requestModel, context, streamOptions);
       },
     });
-    const timestamp = Date.now();
+    const message = chatMessageToPiMessage({ id: prompt.id, role: "user", content: prompt.content, createdAt: prompt.createdAt }, model, true);
     const outcome = await runtime.runManaged({
       kind: "append-and-run",
-      message: { role: "user", content: input.prompt, timestamp },
-      ...(following ? { following: following(timestamp) } : {}),
+      message,
+      ...(following ? { following: following(prompt.createdAt) } : {}),
     });
     if (outcome.kind !== "completed") throw new Error(`Prompt prefix harness turn ${thisTurn} ended ${outcome.kind}.`);
     return recorded;
@@ -427,6 +476,7 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
     get requests() { return requests; },
     get networkCalls() { return recorder.networkCalls; },
     callableTools: () => runtime?.getCallableTools() ?? [],
+    journaledChatState: async () => journaledChatState(journal ? await (await journal).getBranch() : []),
     executeNestedToolCall: (...args) => {
       if (!runtime) throw new Error("No prompt prefix harness turn is running.");
       return runtime.executeNestedToolCall(...args);

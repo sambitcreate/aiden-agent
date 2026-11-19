@@ -56,6 +56,12 @@ export interface GenerationContextOptions {
   promptSections?: Partial<Record<ContextPromptSectionId, string>>;
   /** Tools held back behind tool search: reported in the breakdown, never priced. */
   deferredTools?: readonly AgentTool[];
+  /**
+   * Applied to the messages of every request before they are fitted to the
+   * window (the chat state's `chatStateRequestMessages`). Must not change the
+   * messages it is given.
+   */
+  prepareMessages?: (messages: readonly AgentMessage[]) => AgentMessage[];
 }
 
 /** Breakdown categories recorded as prompt text where the prompt is assembled. */
@@ -1229,8 +1235,10 @@ export function createGenerationContextTransform(
   onCompacted?: CompactionListener,
 ): GenerationContextTransform {
   let lastEmergencyProjection: GenerationEmergencyProjection = { kind: "none" };
-  const transform = async (messages: AgentMessage[]) => {
+  const transform = async (given: AgentMessage[]) => {
+    let messages = given;
     try {
+      if (options.prepareMessages) messages = options.prepareMessages(given);
       const result = compactGenerationContext(messages, options);
       lastEmergencyProjection = result.emergencyProjection;
       if (result.compacted && onCompacted) {

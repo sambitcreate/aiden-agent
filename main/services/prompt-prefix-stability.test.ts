@@ -54,8 +54,9 @@ import { createGenerativeUiExtensionRuntime, shouldEnableGenerativeUiExtension }
 import { createAskUserQuestionExtension, shouldEnableAskUserQuestionExtension } from "./ask-user-question-extension.js";
 import { ROUTINE_NOTES_TOOL } from "./bot-runtime/bot-tool-policy.js";
 import type { PiAgentRuntimeExtension } from "./pi-agent-runtime-harness.js";
-import { workspaceApprovalPolicy, type ApprovalWorkspaceFields } from "../../renderer/shared/approval-mode.js";
-import { legacyAccessOf } from "./approval-gate/run-approval.js";
+import type { ApprovalWorkspaceFields } from "../../renderer/shared/approval-mode.js";
+import type { Workspace } from "./types.js";
+import { currentWorkspaceApproval, generationApprovalPolicy, legacyAccessOf } from "./approval-gate/run-approval.js";
 import { workspaceToolApproval } from "./approval-gate/workspace-tool-approval.js";
 import {
   comparePromptRequests,
@@ -259,7 +260,7 @@ const openWork = (items: BotOpenWorkItem[]): BotOpenWorkSnapshot => ({ botId: bo
  * The faux model clones each provider context it is given; a turn renders
  * them through the wire adapter afterwards.
  */
-async function botChat(options: { userMemory: string; openWork?: BotOpenWorkItem[]; extraTools?: AgentTool[] }) {
+async function botChat(options: { userMemory: string; openWork?: BotOpenWorkItem[]; extraTools?: AgentTool[]; midConversationSystem?: boolean }) {
   const profileDir = await mkdtemp(path.join(tmpdir(), "aiden-prefix-bot-"));
   tempRoots.push(profileDir);
   const memoryDir = path.join(profileDir, "bots", bot.id, "memory");
@@ -300,7 +301,7 @@ async function botChat(options: { userMemory: string; openWork?: BotOpenWorkItem
     memorySection: async (botId, offer) => renderBotMemorySection(await memory.snapshot(botId), offer),
   };
   const fauxModels = createFauxModels();
-  const recorder = createPromptRequestRecorder({ model: fauxModels.faux.getModel() });
+  const recorder = createPromptRequestRecorder({ model: fauxModels.faux.getModel(), midConversationSystem: options.midConversationSystem ?? false });
   const registry = createBotRegistry(bot.id, deps);
   await registry.refresh();
   const ctx = BACKGROUND_CONTEXT;
@@ -964,16 +965,38 @@ describe("prompt prefix stability: causes fixed by later phases", () => {
     assert.deepEqual(comparePromptRequests(previous, current), {});
   });
 
-  test("a person's Bot memory edit does not change system", async () => {
-    const chat = await botChat({ userMemory: "Prefers short answers." });
-    const { previous, current } = await twoBotTurns(chat, async () => {
-      const entry = (await chat.memory.view(bot.id)).user.entries.find(({ text }) => text === "Prefers short answers.")!;
-      const edited = await chat.memory.edit({ botId: bot.id, edit: { kind: "replace", target: "user", entryId: entry.id, text: "Prefers detailed answers." } });
-      assert.equal(edited.ok, true);
+  // Privacy over cache: a person's edit always removes approved text (a
+  // replace removes the old one), so it rewrites system once rather than
+  // leave the old text in the cached snapshot. Pi Durable journals the
+  // re-read as a section patch; a wire that keeps system messages in place
+  // must not send the first snapshot either.
+  for (const midConversationSystem of [false, true]) {
+    const label = midConversationSystem ? "system messages kept in place" : "one system prompt";
+    test(`a person's Bot memory edit rewrites system once and never re-sends the text it replaced (${label})`, async () => {
+      const chat = await botChat({ userMemory: "Prefers terse replies.", midConversationSystem });
+      const { previous, current } = await twoBotTurns(chat, async () => {
+        const entry = (await chat.memory.view(bot.id)).user.entries.find(({ text }) => text === "Prefers terse replies.")!;
+        const edited = await chat.memory.edit({ botId: bot.id, edit: { kind: "replace", target: "user", entryId: entry.id, text: "Prefers detailed answers." } });
+        assert.equal(edited.ok, true);
+      });
+      assert.ok(previous.carries("Prefers terse replies."));
+      assert.ok(current.carries("Prefers detailed answers."), "the edit reaches turn 2");
+      assert.ok(current.carries("Removed 1 entry."), "and is named after the person's input");
+      assert.ok(!current.carries("Prefers terse replies."), "the replaced text is gone from every part of the request");
+      assert.equal(comparePromptRequests(previous, current).wire?.kind, "system");
     });
-    assert.ok(current.carries("Prefers detailed answers."), "the edit still reaches turn 2");
-    assert.deepEqual(comparePromptRequests(previous, current), {});
-  });
+
+    test(`a Bot memory re-read that only adds keeps every earlier system message (${label})`, async () => {
+      const chat = await botChat({ userMemory: "Prefers terse replies.", midConversationSystem });
+      const { previous, current } = await twoBotTurns(chat, async () => {
+        await chat.memory.apply(bot.id, "user", [{ action: "add", content: "Has a dog named Miso." }]);
+        chat.memory.markStale(bot.id);
+      });
+      assert.ok(current.carries("Has a dog named Miso."), "the re-read reaches turn 2");
+      assert.ok(current.carries("Prefers terse replies."));
+      if (midConversationSystem) assert.deepEqual(comparePromptRequests(previous, current), {}, "the re-read is appended as a patch");
+    });
+  }
 
   /** The newest user message's text: the prompt, then what llm-client journals after it. */
   const tailOf = (request: RecordedPromptRequest) => {
@@ -1001,41 +1024,100 @@ describe("prompt prefix stability: causes fixed by later phases", () => {
     assert.deepEqual(comparePromptRequests(previous, current), {});
   });
 
-  test("memory edit does not change system", async () => {
-    const memory = async (facts: MemoryFact[]) => statefulChat({
-      extensions: [await createMemoryExtension({ store: memoryStore(facts), scope: memoryScope })],
-    });
+  const memoryChat = async (facts: MemoryFact[]) => statefulChat({
+    extensions: [await createMemoryExtension({ store: memoryStore(facts), scope: memoryScope })],
+  });
+
+  test("an added memory fact does not change system", async () => {
     const { previous, current } = await twoTurns(
       {},
-      await memory([memoryFact("m1", "Prefers short answers."), memoryFact("m3", "Deploys on Fridays.")]),
-      await memory([memoryFact("m1", "Prefers short answers."), memoryFact("m2", "Uses pnpm.")]),
+      await memoryChat([memoryFact("m1", "Prefers short answers.")]),
+      await memoryChat([memoryFact("m1", "Prefers short answers."), memoryFact("m2", "Uses pnpm.")]),
     );
-    // Only the difference goes out: the added fact and the removed one.
+    // Only the difference goes out after the prompt.
     const tail = tailOf(current);
     assert.match(tail, /Added facts:\n- \[memory:m2\] Uses pnpm\./u);
-    assert.match(tail, /Removed facts:\n- \[memory:m3\] Deploys on Fridays\./u);
     assert.doesNotMatch(tail, /memory:m1/u, "an unchanged fact is not repeated");
     assert.deepEqual(comparePromptRequests(previous, current), {});
   });
 
+  test("a forgotten memory fact never reaches a later request", async () => {
+    // A removal is named by id and rebuilds system, so no request after the
+    // forget carries the fact's text: not system, not an earlier update.
+    const facts = {
+      m1: memoryFact("m1", "Prefers short answers."),
+      m2: memoryFact("m2", "Uses pnpm."),
+      m3: memoryFact("m3", "Deploys on Fridays."),
+    };
+    for (const [label, before, after, forgotten] of [
+      ["a head fact", [facts.m1, facts.m3], [facts.m1], "Deploys on Fridays."],
+      ["a fact an update added", [facts.m1, facts.m2], [facts.m1], "Uses pnpm."],
+      ["memory turned off", [facts.m1, facts.m3], [], "Deploys on Fridays."],
+    ] as const) {
+      const harness = createPromptPrefixHarness();
+      const turn = async (prompt: string, memory: readonly MemoryFact[]) =>
+        harness.turn({ prompt, responses: reply("Done."), ...(await memoryChat([...memory])) });
+      // The update case learns m2 from an update on turn 2, not from system.
+      if (label === "a fact an update added") await turn("Start.", [facts.m1]);
+      const [learned] = await turn("Remember this.", before);
+      assert.ok(learned!.carries(forgotten), `${label}: the fact reaches the request before the forget`);
+      const [forgot] = await turn("Forget it.", after);
+      const [later] = await turn("And now?", after);
+      for (const [name, request] of [["the forget turn", forgot!], ["the next turn", later!]] as const) {
+        assert.equal(request.carries(forgotten), false, `${label}: ${name} carries the forgotten fact`);
+      }
+      assert.match(tailOf(forgot!), /Removed facts, no longer approved, so do not rely on them: [^\n]*\[memory:m[23]\]/u, label);
+      assert.deepEqual(comparePromptRequests(forgot!, later!), {}, `${label}: the rebuilt head holds on the next turn`);
+    }
+  });
+
+  test("a retried prompt the journal holds records no head without its state update", async () => {
+    const harness = createPromptPrefixHarness();
+    const both = [memoryFact("m1", "Prefers short answers."), memoryFact("m3", "Deploys on Fridays.")];
+    const turn = async (input: { prompt?: string; retry?: boolean }, memory: MemoryFact[]) =>
+      harness.turn({ prompt: input.prompt ?? "", ...(input.retry ? { retry: true } : {}), responses: reply("Done."), ...(await memoryChat(memory)) });
+    await turn({ prompt: "Start." }, both);
+    await turn({ prompt: "Deploy today?" }, both);
+    const held = await harness.journaledChatState();
+    // The fact is forgotten before the retry: the retry's request says so, but
+    // the journal already holds the prompt, so it records neither the new head
+    // nor the update that announces it.
+    const [retried] = await turn({ retry: true }, [both[0]!]);
+    assert.equal(retried!.carries("Deploys on Fridays."), false);
+    assert.deepEqual(await harness.journaledChatState(), held);
+    const [next] = await turn({ prompt: "And now?" }, [both[0]!]);
+    assert.equal(next!.carries("Deploys on Fridays."), false);
+    assert.match(tailOf(next!), /Removed facts[^\n]*\[memory:m3\]/u, "the next turn states the removal the retry could not record");
+    assert.notDeepEqual((await harness.journaledChatState()).head, held.head);
+  });
+
   test("after a permission mode change the next request states the mode the approval gate enforces", async () => {
-    // llm-client states `legacyAccessOf` of the workspace's policy and gates
-    // each call on that same policy, read when the turn starts.
-    const turnUnder = (workspace: ApprovalWorkspaceFields) => {
-      const policy = workspaceApprovalPolicy(workspace, "ask");
+    // llm-client states `legacyAccessOf(generationApprovalPolicy(...))` when the
+    // turn starts and gates each call on `currentWorkspaceApproval`, read again
+    // before the call. Both come from the same workspace and settings here.
+    const turnUnder = async (fields: ApprovalWorkspaceFields) => {
+      const workspace = { id: "w1", ...fields } as Workspace;
+      const getSettings = async () => ({ approvalMode: "ask" as const });
+      const policy = await generationApprovalPolicy(
+        { workspace, botBound: false, mode: undefined, permission: undefined },
+        getSettings,
+      );
+      assert.ok(policy, "a person's workspace chat runs under an approval policy");
       const permission = legacyAccessOf(policy);
+      const runApproval = await currentWorkspaceApproval({ getSettings, getWorkspace: async () => workspace }, "w1");
+      assert.ok(runApproval);
       const gate = workspaceToolApproval({
         toolName: "background_job",
         args: { action: "start", command: "npm test" },
         permission,
         workspaceId: "w1",
-        approval: { mode: policy.mode, macGrants: policy.macGrants },
+        approval: { mode: runApproval.mode, macGrants: runApproval.macGrants },
         judgeAvailable: true,
       }).decision.outcome;
       return { permission, gate };
     };
-    const asking = turnUnder({ permission: "ask" });
-    const direct = turnUnder({ permission: "ask", approvalMode: "never", macGrants: { shell: true, files: true } });
+    const asking = await turnUnder({ permission: "ask" });
+    const direct = await turnUnder({ permission: "ask", approvalMode: "never", macGrants: { shell: true, files: true } });
     assert.equal(asking.gate, "ask");
     assert.equal(direct.gate, "allow");
 
