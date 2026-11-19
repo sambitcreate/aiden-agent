@@ -543,11 +543,3 @@ export async function createManagedWorktreeRestoreJournal(
     await fs.unlink(temporary).catch(() => undefined);
   }
 }
-
-/** Remove a completed restore journal; absent journals are already clean. */
-export async function clearManagedWorktreeRestoreJournal(
-  root: string,
-  snapshotId: string,
-): Promise<void> {
-  await fs.unlink(restoreJournalPath(snapshotDir(root, snapshotId))).catch(() => undefined);
-}

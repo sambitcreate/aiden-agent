@@ -14,7 +14,6 @@ import type { FormFillEntity } from "./extract-core.js";
 // ---- Model tensor bounds (must match native/cua-s1-forms Encoding.swift) ----
 export const FORM_FILL_CONTEXT_BYTES = 224;
 export const FORM_FILL_OPTION_BYTES = 96;
-export const FORM_FILL_MAX_OPTIONS = 32;
 export const FORM_FILL_FIXED_ACTIONS = ["check", "click", "skip"] as const;
 
 export type FormFillAction = "fill" | "check" | "click" | "skip";

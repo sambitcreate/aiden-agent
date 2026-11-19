@@ -25,8 +25,6 @@ import type { AidenRemoteCapability } from "./aiden-remote-protocol.js";
 import type { AidenRemoteStreamService, AidenRemoteStreamState } from "./aiden-remote-streams.js";
 import type { AidenRemoteWorkspaceService } from "./aiden-remote-workspaces.js";
 
-export const AIDEN_MCP_TOOL_PREFIX = "aiden_";
-
 export type AidenMcpToolLevel = "read" | "write";
 
 /** The app a request authenticated as. */

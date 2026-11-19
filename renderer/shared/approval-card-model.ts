@@ -269,9 +269,6 @@ export const APPROVAL_CARD_LIMITS = {
   note: 400,
 } as const;
 
-/** "No longer active": what a card that went away unanswered reads. */
-export const APPROVAL_CARD_STALE_LABEL = approvalStatusLabel({ decision: "stale" });
-
 /** Rakazo's order: short values first (stable for equal lengths), so a recipient never hides behind a long body. */
 export function orderApprovalArguments(entries: readonly ApprovalCardArgument[]): ApprovalCardArgument[] {
   return entries

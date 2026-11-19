@@ -344,7 +344,6 @@ enum AidenSimulatorHelperMessage {
     static let orientationTag: UInt8 = 0x07
     static let hardwareKeyboardTag: UInt8 = 0x0D
     static let screenConfigTag: UInt8 = 0x82
-    static let controlReplyTag: UInt8 = 0x90
 
     static func hardwareKeyboard(enabled: Bool) -> Data {
         tagged(hardwareKeyboardTag, ["enabled": enabled])

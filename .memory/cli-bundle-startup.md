@@ -30,6 +30,13 @@ Audit findings EXT-1..8 and EXT-45, applied to `packages/cli`.
 - Dockerfile: multi-stage. A `runtime-deps` stage runs `npm ci --omit=dev`, and
   the runtime image gets only `dist/app`, `themes`, `package.json` and the
   production `node_modules`.
+- 2026-11-18 (audit B7): `dependencies` hold only photon-node, quickjs-wasi,
+  minimatch (resolved by `coding-tool-matcher.ts` for the glob worker) and the
+  optional sherpa-onnx-node. Everything esbuild inlines, the pi packages
+  included, moved to `devDependencies`. The `--omit=dev` install fell from
+  247 packages / 245 MB to 8 packages / 38 MB. A new bare `require`,
+  `import()` or `createRequire().resolve()` that survives bundling needs a
+  `dependencies` entry, or production installs break.
 - Measured on Node 22.22.3 (M-series):
 
   | Measure | Before | After |

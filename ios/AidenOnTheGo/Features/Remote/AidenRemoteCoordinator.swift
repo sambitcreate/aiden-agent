@@ -691,11 +691,6 @@ final class AidenRemoteCoordinator {
         }
     }
 
-    func removeManagedWorktree(_ workspace: AidenWorkspace) async -> Bool {
-        if case .success = await removeManagedWorktreeOutcome(workspace) { return true }
-        return false
-    }
-
     func removeManagedWorktreeOutcome(_ workspace: AidenWorkspace) async -> AidenRemoteMutationOutcome<Void> {
         guard workspace.isManagedWorktree else { return .failure }
         guard !isMutating else { return .busy }

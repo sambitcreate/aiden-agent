@@ -2,9 +2,6 @@ import { type HiddenModelsByProvider, withProviderPolicyHidden } from "./model-v
 
 export type GeminiUsageScope = "transcription_only" | "models_and_transcription";
 
-/** Legacy persisted sentinel migrated by model-visibility normalization. */
-export const ALL_PROVIDER_MODELS = "*";
-
 export function isGeminiUsageScope(value: unknown): value is GeminiUsageScope {
   return value === "transcription_only" || value === "models_and_transcription";
 }

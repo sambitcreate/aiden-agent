@@ -490,9 +490,8 @@ struct AidenBotSessionChatView: View {
                             rowView(row, model: model)
                                 .id(row.id)
                         }
-                        if let partial = model.revealedPartial, !partial.isEmpty {
+                        AidenBotSessionPartialRow(model: model) { partial in
                             assistantBubble(partial, interrupted: false, isStreaming: true)
-                                .id("partial")
                         }
                         ForEach(model.queued, id: \.submissionId) { message in
                             queuedBubble(message)
@@ -543,7 +542,9 @@ struct AidenBotSessionChatView: View {
                     followIfAtEnd(proxy)
                 }
                 .onChange(of: model.entries.count) { _, _ in followIfAtEnd(proxy) }
-                .onChange(of: model.revealedPartial) { _, _ in followIfAtEnd(proxy) }
+                .background {
+                    AidenBotSessionPartialFollow(model: model) { followIfAtEnd(proxy) }
+                }
                 .onChange(of: model.queued.count) { _, _ in followIfAtEnd(proxy) }
                 .onChange(of: model.outgoing.count) { _, _ in followIfAtEnd(proxy) }
                 .onChange(of: ownSendScroll) { _, _ in followIfAtEnd(proxy, userInitiated: true) }
@@ -1511,6 +1512,32 @@ func aidenBotConnectionHint(for model: AidenBotSessionModel, nowMs: Int) -> Aide
     if model.statusLine(nowMs: nowMs)?.display.phase == "reconnecting" { return nil }
     if !model.hasLoaded, let message = model.errorMessage { return .unreachable(message) }
     return .connecting
+}
+
+/// The streamed answer so far. Only this row and `AidenBotSessionPartialFollow`
+/// read `revealedPartial`, so Observation redraws just them on each revealed
+/// token instead of the whole transcript.
+private struct AidenBotSessionPartialRow<Bubble: View>: View {
+    let model: AidenBotSessionModel
+    @ViewBuilder let bubble: (String) -> Bubble
+
+    var body: some View {
+        if let partial = model.revealedPartial, !partial.isEmpty {
+            bubble(partial)
+                .id("partial")
+        }
+    }
+}
+
+/// Keeps the transcript following the streamed answer as it grows.
+private struct AidenBotSessionPartialFollow: View {
+    let model: AidenBotSessionModel
+    let onChange: () -> Void
+
+    var body: some View {
+        Color.clear
+            .onChange(of: model.revealedPartial) { _, _ in onChange() }
+    }
 }
 
 /// Skeleton bubbles while a chat opens with nothing cached (R14), shaped like

@@ -166,7 +166,6 @@ function item(value: unknown): BotOpenWorkItem {
     ...(data.waitingReason !== undefined ? { waitingReason: text(data.waitingReason, 160, 640) } : {}), ...(completion ? { completion } : {}),
     execution: execution as unknown as BotOpenWorkExecution, ...(data.lastStop !== undefined ? { lastStop: stop(data.lastStop) } : {}) };
 }
-export function parseBotOpenWorkItem(value: unknown): BotOpenWorkItem { return item(json(value, BOT_OPEN_WORK_LIMITS.publicBytes)); }
 export function parseBotOpenWorkSnapshot(value: unknown): BotOpenWorkSnapshot {
   const data = fields(json(value, BOT_OPEN_WORK_LIMITS.publicBytes), ["botId", "revision", "items", "undo"]);
   if (!Array.isArray(data.items) || data.items.length > 192 || !Array.isArray(data.undo) || data.undo.length > 192) return invalid();

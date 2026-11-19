@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 import { emptyDesignCanvas } from "../../renderer/shared/design-canvas/schema.js";
 import { DesignGrantRegistry } from "./design-canvas/grants.js";
 import { DesignCanvasStore } from "./design-canvas/store.js";
@@ -136,6 +137,23 @@ test("shared chat creation preserves workspace and renderer-owner commit gates",
     ),
     /selected workspace is no longer available/u,
   );
+});
+
+test("public chat creation cannot mint a chat in the reserved Assistant workspace", async () => {
+  let creates = 0;
+  const application = fixture({
+    chatStore: {
+      create: async () => {
+        creates += 1;
+        return chat("created", ASSISTANT_WORKSPACE_ID);
+      },
+    },
+  } as never);
+  await assert.rejects(
+    application.service.create({ workspaceId: ASSISTANT_WORKSPACE_ID, title: "Chat" }, owner()),
+    /cannot create Aiden Assistant chats/u,
+  );
+  assert.equal(creates, 0);
 });
 
 test("public chat creation in flight across a workspace mutation is refused and drained first", async () => {

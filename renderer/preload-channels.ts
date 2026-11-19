@@ -7,7 +7,6 @@
 export const INVOKE_PREFIXES = [
   "analytics:",
   "app:",
-  "assistant:",
   "assistant-live:",
   "attachments:",
   "bots:",
@@ -20,7 +19,6 @@ export const INVOKE_PREFIXES = [
   "designCanvas:",
   "dictation:",
   "diagnostics:",
-  "exa:",
   "formFill:",
   "git:",
   "hooks:",

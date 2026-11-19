@@ -60,15 +60,6 @@ export function workspaceCapabilityFields(
   };
 }
 
-export function sameWorkspaceOffList(
-  left: readonly string[] | undefined,
-  right: readonly string[] | undefined,
-): boolean {
-  const a = left ?? [];
-  const b = right ?? [];
-  return a.length === b.length && a.every((entry, index) => entry === b[index]);
-}
-
 /** True when the workspace switched this skill (by name) off for its chats. */
 export function workspaceSkillOff(
   workspace: Pick<Workspace, "disabledSkills"> | undefined,

@@ -53,7 +53,6 @@ import { registerAnalyticsHandlers } from "./analytics.js";
 import { analyticsService } from "../services/analytics/analytics-main.js";
 import { registerDictationHandlers } from "./dictation.js";
 import { registerScheduledTaskHandlers } from "./scheduled-tasks.js";
-import { registerAssistantHandlers } from "./assistant.js";
 import { registerShortcutHandlers } from "./shortcuts.js";
 import { registerTelegramHandlers } from "./telegram.js";
 import { registerSubagentHandlers } from "./subagents.js";
@@ -199,7 +198,6 @@ export function registerHandlers(isMainWindow: (event: IpcMainInvokeEvent) => bo
   if (hostPlatformCapabilities().bots) registerBotRoutineHandlers();
   // Bot computers are macOS VMs; only Apple silicon offers them, so Linux registers nothing.
   if (hostPlatformCapabilities().botComputers) registerBotComputerHandlers(botComputerHandlerDependencies());
-  registerAssistantHandlers();
   registerShortcutHandlers();
   registerTelegramHandlers();
   registerSubagentHandlers();

@@ -14,11 +14,6 @@ const countFormatter = new Intl.NumberFormat();
  */
 const drafts = new Map<string, string>();
 
-/** The draft kept for a Bot, if any (for tests and the editor). */
-export function botInstructionsDraft(botId: string): string | undefined {
-  return drafts.get(botId);
-}
-
 /**
  * The editor for a Bot's instructions, in a dialog over the chat. Save keeps
  * the text; Cancel or Escape with edits keeps them as a draft for next time

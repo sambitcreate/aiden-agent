@@ -23,8 +23,6 @@ export interface AgentNoticeV1 {
 
 export const MAX_AGENT_NOTICE_TITLE_CHARS = 80;
 export const MAX_AGENT_NOTICE_SUMMARY_CHARS = 240;
-/** Model-facing text, including fenced output, stays well under the message cap. */
-export const MAX_AGENT_NOTICE_CONTENT_CHARS = 12_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

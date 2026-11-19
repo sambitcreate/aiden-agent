@@ -31,7 +31,6 @@ import { appearancePreview, applySettingsEffects } from "../services/settings-ap
 import {
   removeProviderWithCredentialCleanup,
   saveProviderWithCredentialRotation,
-  setProviderKeyWithCredentialRotation,
 } from "../services/provider-credential-rotation.js";
 import {
   normalizeProviderCredentialInput,
@@ -217,24 +216,6 @@ export function registerProviderHandlers(): void {
     }
     assertMutableProviderId(providerId);
     await removeProviderWithCredentialCleanup(providerId, () => !owner.isDestroyed());
-  });
-
-  ipcMain.handle("providers:setKey", async (event, id: unknown, key: unknown) => {
-    const providerId = asProviderId(id);
-    if (providerRegistry.isBuiltinProvider(providerId)) {
-      // Retired UI clients must use the Pi-owned auth flow. Also bind this
-      // rejected state-changing request to a live document for parity with
-      // logout/auth, rather than accepting queued stale renderer work.
-      providerAuthOwner(event);
-      throw new Error("Providers built into Aiden must use their managed sign-in flow.");
-    }
-    if (!isCustomProviderId(providerId)) {
-      throw new Error("Only Aiden custom connections can store an endpoint key.");
-    }
-    assertMutableProviderId(providerId);
-    const owner = providerAuthOwner(event);
-    const value = normalizeProviderCredentialInput(key);
-    return setProviderKeyWithCredentialRotation(providerId, value, () => !owner.isDestroyed());
   });
 
   // Optional keyOverride lets the user test a freshly typed key before saving it.
