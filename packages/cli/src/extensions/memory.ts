@@ -21,8 +21,10 @@ import { join } from "node:path";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { MemoryStore } from "../../../../main/services/memory-store.js";
 import {
+	approvedMemoryFactLines,
 	createMemoryExtension,
 	formatAlwaysOnMemory,
+	formatMemoryFactLine,
 } from "../../../../main/services/memory-context.js";
 import { aidenExtensionToInlineFactory, type AidenExtensionShape } from "../pi-bridge/adapt-aiden-extension.ts";
 import { sharedMemoryRoot } from "../../../../main/services/memory-shared.js";
@@ -33,7 +35,19 @@ export async function createMemoryInlineExtension(options: {
 	workspaceRoot: string;
 	/** Recall-only: no remember/forget tools (unattended generations). */
 	readOnly?: boolean;
-}): Promise<{ name: string; factory: ExtensionFactory; close?: () => Promise<void> }> {
+	/**
+	 * Gains every fact line the always-on prompt tells the chat. The prompt
+	 * is not part of the session, so a compaction learns from this which
+	 * facts its summary must not keep, removed ones included.
+	 */
+	toldFacts?: Set<string>;
+}): Promise<{
+	name: string;
+	factory: ExtensionFactory;
+	close?: () => Promise<void>;
+	/** The fact lines the chat may be told now. */
+	approvedFactLines?: () => Promise<string[]>;
+}> {
 	// Memory disabled → never open the store (no migration writes either).
 	if (!memoryEnabledFor(options.agentDir, options.workspaceRoot)) {
 		return { name: "aiden-memory", factory: () => undefined };
@@ -74,7 +88,9 @@ export async function createMemoryInlineExtension(options: {
 		pi.on("before_agent_start", async (event) => {
 			if (!(await enabled())) return;
 			try {
-				const prompt = formatAlwaysOnMemory(scope, await store.alwaysOn(scope));
+				const facts = await store.alwaysOn(scope);
+				for (const fact of facts) options.toldFacts?.add(formatMemoryFactLine(fact));
+				const prompt = formatAlwaysOnMemory(scope, facts);
 				if (prompt.trim()) {
 					return { systemPrompt: `${event.systemPrompt}\n\n${prompt}` };
 				}
@@ -86,5 +102,10 @@ export async function createMemoryInlineExtension(options: {
 	};
 	// A daemon turn that fails before its session exists never emits
 	// session_shutdown, so it closes the store through this instead.
-	return { name: "aiden-memory", factory: wrapped, close: () => store.close() };
+	return {
+		name: "aiden-memory",
+		factory: wrapped,
+		close: () => store.close(),
+		approvedFactLines: () => approvedMemoryFactLines([extension]),
+	};
 }

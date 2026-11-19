@@ -155,6 +155,25 @@ export function memoryLines(block: string): string[] {
   return block.split("\n").filter((line) => MEMORY_LINE.test(line));
 }
 
+/**
+ * Every memory fact line anywhere in a session branch: messages, state
+ * updates, tool results, custom entries and earlier summaries. A compaction
+ * summary may restate none of them.
+ */
+export function memoryFactLinesInBranch(branch: readonly unknown[]): string[] {
+  const lines = new Set<string>();
+  const visit = (value: unknown, depth: number): void => {
+    if (typeof value === "string") {
+      for (const line of memoryLines(value)) lines.add(line);
+      return;
+    }
+    if (depth > 8 || !value || typeof value !== "object") return;
+    for (const item of Array.isArray(value) ? value : Object.values(value)) visit(item, depth + 1);
+  };
+  for (const entry of branch) visit(entry, 0);
+  return [...lines];
+}
+
 const MEMORY_MARKER = /\[memory:/iu;
 
 const XML_ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'" };

@@ -25,7 +25,7 @@ import {
   modelCallRetryDelayMs,
 } from "./model-call-retry.js";
 import { modelRetainsSystemUpdates, retainedTailSystemTokens } from "./generation-context.js";
-import { memoryLines, withoutMemoryFacts, withoutMemoryFactsBranch, withoutStatedMemoryFacts } from "./chat-frozen-state.js";
+import { memoryFactLinesInBranch, withoutMemoryFacts, withoutMemoryFactsBranch, withoutStatedMemoryFacts } from "./chat-frozen-state.js";
 import {
   memoryFactLinesIn,
   sideCallContinuation,
@@ -215,24 +215,6 @@ function memoryKeyOf(lines: readonly string[]): string {
 /** Hash of the messages a request built from the journal would send. */
 function contextKeyOf(messages: readonly AgentMessage[]): string {
   return createHash("sha256").update(JSON.stringify(messages)).digest("hex");
-}
-
-/**
- * Every memory fact line anywhere in the branch: messages, state updates,
- * tool results and earlier summaries.
- */
-function memoryFactLinesInBranch(branch: readonly PiSessionEntry[]): string[] {
-  const lines = new Set<string>();
-  const visit = (value: unknown, depth: number): void => {
-    if (typeof value === "string") {
-      for (const line of memoryLines(value)) lines.add(line);
-      return;
-    }
-    if (depth > 8 || !value || typeof value !== "object") return;
-    for (const item of Array.isArray(value) ? value : Object.values(value)) visit(item, depth + 1);
-  };
-  for (const entry of branch) visit(entry, 0);
-  return [...lines];
 }
 
 class MemoryFactInSummaryError extends Error {

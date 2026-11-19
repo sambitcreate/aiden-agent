@@ -8,6 +8,7 @@ import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 import { visionAttachmentAlias } from "../../../main/services/vision-attachment-reference.js";
 import { withoutMessageThreads } from "../../../main/services/pi-message-threads.js";
 import { daemonSettingsManager } from "./daemon-session-settings.ts";
+import { compactWithoutMemoryFacts } from "./daemon-compaction-memory.ts";
 import type { CliBotGenerationRuntime } from "./bots.ts";
 import type { BotRuntimeAuthorityAdmission } from "../../../main/services/bot-runtime-authority.js";
 import { assertBotRuntimeProviderSelection } from "../../../main/services/bot-runtime-authority.js";
@@ -124,6 +125,9 @@ export function createDaemonChats(agentDir: string) {
   const runs = new HostRunRegistry({ now: Date.now });
   // Prompt-cache miss attribution, shared with the desktop: section hashes per chat, never content.
   const promptCache = createPromptCacheTelemetry();
+  // The memory fact lines each workspace chat's always-on prompt has told it, kept in
+  // memory only: the prompt is not in the session, and a compaction summary may state none.
+  const memoryFactsTold = new Map<string, Set<string>>();
   const recorders = createHostRunRecorders((_scope, message) => process.stderr.write(`aiden: ${message}\n`));
   const admission = new ChatTurnAdmission();
   const deletion = new ChatDeletionGate();
@@ -281,7 +285,9 @@ export function createDaemonChats(agentDir: string) {
         // A corrupt settings file or wedged shared DB must degrade to
         // no-memory, never brick the generation (desktop parity: llm-client
         // warns and continues without memory).
-        const memory = botAdmission || !workspace.folderPath ? undefined : await createMemoryInlineExtension({ agentDir, workspaceRoot: cwd, readOnly: unattended })
+        const toldFacts = memoryFactsTold.get(chat.id) ?? new Set<string>();
+        if (!botAdmission) memoryFactsTold.set(chat.id, toldFacts);
+        const memory = botAdmission || !workspace.folderPath ? undefined : await createMemoryInlineExtension({ agentDir, workspaceRoot: cwd, readOnly: unattended, toldFacts })
           .catch((error: unknown) => {
             process.stderr.write(`[daemon-chats] memory unavailable: ${error instanceof Error ? error.message : error}\n`);
             return { name: "aiden-memory", factory: () => undefined };
@@ -311,6 +317,7 @@ export function createDaemonChats(agentDir: string) {
             return Reflect.get(target, key, receiver);
           } })),
         }));
+        const sessionSettings = daemonSettingsManager(cwd, agentDir, { attended: !botAdmission && !unattended });
         const loader = new DefaultResourceLoader({ cwd, agentDir, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true,
           extensionFactories: [...additionalExtensions, { name: "aiden-daemon-authority", factory(pi) {
             pi.on("before_agent_start", async (event) => {
@@ -363,9 +370,14 @@ export function createDaemonChats(agentDir: string) {
               const addition = [preContext, hookPostToolAdditions(outcome)].filter(Boolean).join("\n\n");
               return addition ? { content: [...event.content, { type: "text" as const, text: addition }] } : undefined;
             });
-            pi.on("session_before_compact", (event) => {
+            pi.on("session_before_compact", async (event, ctx) => {
               hooks.observe("PreCompact", { trigger: event.reason === "manual" ? "manual" : "auto", aiden_reason: event.reason },
                 { idempotencyKey: `PreCompact:${chat.id}:${streamId}:${event.reason}`, report: reportHookLines });
+              // A workspace chat's summary keeps no memory fact; a Bot's memory is its own.
+              if (botAdmission) return undefined;
+              if (!entry.session) return { cancel: true };
+              return compactWithoutMemoryFacts(event, { session: entry.session, settings: sessionSettings, model: ctx.model, toldFacts,
+                approvedFactLines: memory && "approvedFactLines" in memory ? memory.approvedFactLines : undefined });
             });
             pi.on("session_compact", () => { promptCache.reset(chat.id); if (!botAdmission) markWorkspaceChatCompacted(chat.id); });
             // The last context handler sees each request's final transcript; it only observes, so the messages stay as they are.
@@ -383,7 +395,7 @@ export function createDaemonChats(agentDir: string) {
         });
         await loader.reload(); await assertAuthority();
         const manager = SessionManager.open(sessionPath(params.chatId), join(root, "journals"), cwd);
-        const { session } = await createAgentSession({ cwd, agentDir, settingsManager: daemonSettingsManager(cwd, agentDir, { attended: !botAdmission && !unattended }), modelRuntime: runtime, model,
+        const { session } = await createAgentSession({ cwd, agentDir, settingsManager: sessionSettings, modelRuntime: runtime, model,
           thinkingLevel: params.thinkingLevel, resourceLoader: loader, sessionManager: manager,
           tools: botAdmission ? botTools.map((tool) => tool.name) : workspace.folderPath ? [...codingTools.map((tool) => tool.name), ...additionalNames] : [],
         });
@@ -489,6 +501,8 @@ export function createDaemonChats(agentDir: string) {
       }
   }
   return { chatStore, llmClient, activity, runs, admission, deletion, sessionPath,
+    /** A deleted chat's journal is gone, and so is what its memory prompt told it. */
+    forgetMemoryFactsTold(chatId: string) { memoryFactsTold.delete(chatId); },
     /** Unlike a deletion that fails to finish, a lost record cannot be scoped to its chats. */
     assertChatDeletionsReadable() { if (deletionRecordFailure) throw deletionRecordFailure; },
     /** Finishes deletions a crash interrupted. Repeatable: a failure leaves its tombstone and its chat closed. */
@@ -499,7 +513,7 @@ export function createDaemonChats(agentDir: string) {
         await rm(sessionPath(id), { force: true });
         if (await chatStore.get(id)) await chatStore.remove(id);
         await tombstones.update((values) => { for (let index = values.indexOf(id); index >= 0; index = values.indexOf(id)) values.splice(index, 1); });
-        interrupted.delete(id); reopen();
+        interrupted.delete(id); memoryFactsTold.delete(id); reopen();
       }
     },
     /** Every activity change (a run began or ended, an approval was raised or settled). */

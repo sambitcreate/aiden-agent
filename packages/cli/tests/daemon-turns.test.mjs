@@ -939,3 +939,57 @@ test("a server session warms only for an attended turn on a profile that opts in
     assert.equal(api.daemonSettingsManager(dir, dir, { attended: true }).getCacheWarmingMode(), "off");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+/** A reply whose usage reports `promptTokens`, so the turn ends past the compaction threshold. */
+const replyAtContext = (text, promptTokens) => (response) => {
+  response.write(chunk({ role: "assistant", content: text }));
+  response.write(chunk({}, "stop"));
+  response.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [], usage: { prompt_tokens: promptTokens, completion_tokens: 4, total_tokens: promptTokens + 4 } })}\n\n`);
+  response.end("data: [DONE]\n\n");
+};
+
+const compactionSummaries = (daemon, chatId) => readFileSync(daemon.sessionPath(chatId), "utf8").split("\n").filter(Boolean)
+  .map((line) => JSON.parse(line)).filter((entry) => entry.type === "compaction").map((entry) => entry.summary);
+
+test("a fact the chat was told and then forgot does not survive a serve compaction", async (t) => {
+  const f = await fixture(t);
+  // Every turn's history but the last exchange is summarized.
+  api.atomicJson(join(f.dir, "settings.json"), { compaction: { keepRecentTokens: 1 } });
+  const fact = "Plays the theremin on Tuesdays";
+  const run = async (text, steps, create = false) => {
+    f.steps.push(...steps);
+    await beginTurn(f, "forgets", { text, create, streamId: `stream-${f.requests.length}` });
+    await f.daemon.llmClient.waitForChatIdle("forgets");
+  };
+  await run("Remember my hobby.", [callTool("remember_fact", { fact, alwaysOn: true }), reply("Saved.")], true);
+  const factId = /\[memory:([^\]]+)\]/u.exec(toolResultSeen(f.requests[1]))?.[1];
+  assert.ok(factId, "the fact was saved");
+  // The always-on prompt tells the next turn, and the reply restates it.
+  await run("What do I do on Tuesdays?", [reply("You play the theremin on Tuesdays.")]);
+  assert.match(JSON.stringify(f.requests[2].messages[0]), /theremin/u, "the system prompt told the chat");
+  // The fact is forgotten, the turn ends past the threshold, and the summarizer restates it anyway.
+  await run("Forget my hobby.", [
+    callTool("forget_fact", { factId }),
+    replyAtContext("Forgotten.", 30_000),
+    reply(`## Goal\nThe user plays the theremin on Tuesdays.\nThe user asked to forget a hobby.`),
+  ]);
+  const [summary] = compactionSummaries(f.daemon, "forgets");
+  assert.ok(summary, "the compaction was stored");
+  assert.doesNotMatch(summary, /theremin/iu, "the forgotten fact is not in the stored summary");
+  assert.match(summary, /asked to forget a hobby/u, "the summarizer's other lines are kept");
+});
+
+test("a serve compaction whose summary still states a fact across lines is not stored", async (t) => {
+  const f = await fixture(t);
+  api.atomicJson(join(f.dir, "settings.json"), { compaction: { keepRecentTokens: 1 } });
+  f.steps.push(callTool("remember_fact", { fact: "Owns a red canoe", alwaysOn: true }), reply("Saved."));
+  await beginTurn(f, "split", { text: "Remember my boat." });
+  await f.daemon.llmClient.waitForChatIdle("split");
+  f.steps.push(replyAtContext("You own a red canoe.", 30_000), reply("## Goal\nThe user owns a red\ncanoe and paddles."));
+  const before = f.requests.length;
+  await beginTurn(f, "split", { text: "What boat do I own?", create: false, streamId: "stream-split-2" });
+  await f.daemon.llmClient.waitForChatIdle("split");
+  assert.ok(f.requests.length >= before + 2, "the summarizer was asked");
+  assert.deepEqual(compactionSummaries(f.daemon, "split"), [], "no summary stating the fact was written");
+  assert.deepEqual((await assistantMessages(f.daemon, "split")).map((message) => message.content).at(-1), "You own a red canoe.", "the turn's answer stands");
+});
