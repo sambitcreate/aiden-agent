@@ -64,6 +64,14 @@ export function placeFrame(
     position = last
       ? { x: last.x + last.w + DESIGN_FRAME_GAP, y: last.y }
       : { x: group.x + GROUP_INSET.x, y: group.y + GROUP_INSET.y };
+    // An artboard keeps the width the person drew, so what would run past its
+    // right edge starts a new row inside it, below everything already there.
+    if (last && group.kind === "frame" && position.x + w > group.x + group.w - GROUP_PADDING.right) {
+      position = {
+        x: group.x + GROUP_INSET.x,
+        y: Math.max(...members.map((entry) => entry.y + entry.h)) + DESIGN_FRAME_GAP,
+      };
+    }
   } else {
     const ungrouped = onPage.filter((entry) => entry.groupId === undefined);
     const overlaps = (entry: DesignFrame, box: { x: number; y: number; w: number; h: number }) =>
@@ -92,12 +100,15 @@ export function placeFrame(
     w,
     h,
   };
-  // A group (not an artboard, which keeps the size the person drew) grows to
-  // hold a member placed past its right or bottom edge; a locked group keeps
-  // its box.
-  const frames = [...doc.frames, placed].map((entry) =>
-    group && entry.id === group.id && group.kind === "group" && !group.locked ? growGroupToHold(entry, placed) : entry,
-  );
+  // A group grows to hold a member placed past its right or bottom edge; an
+  // artboard keeps the width the person drew and grows only down, to hold a
+  // new row. A locked one keeps its box.
+  const frames = [...doc.frames, placed].map((entry) => {
+    if (!group || entry.id !== group.id || group.locked) return entry;
+    if (group.kind === "group") return growGroupToHold(entry, placed);
+    const grown = growGroupToHold(entry, placed);
+    return grown.h === entry.h ? entry : { ...entry, h: grown.h };
+  });
   // A new arrow takes its place on the frames it joins.
   return { id, doc: syncConnectors({ ...doc, frames }) };
 }
@@ -112,6 +123,21 @@ export function growGroupToHold(group: DesignFrame, member: DesignFrame): Design
   const w = right > group.x + group.w ? clampSize(right - group.x, group.kind) : group.w;
   const h = bottom > group.y + group.h ? clampSize(bottom - group.y, group.kind) : group.h;
   return w === group.w && h === group.h ? group : { ...group, w, h };
+}
+
+/**
+ * Fits each unlocked group named in `ids` (not an artboard, which keeps the
+ * size the person drew) to its members again, after one was added, moved,
+ * resized or removed. Missing ids, artboards and empty groups are left alone.
+ */
+export function refitGroups(doc: DesignCanvas, ids: Iterable<string | undefined>): DesignCanvas {
+  let next = doc;
+  for (const id of new Set(ids)) {
+    if (id === undefined) continue;
+    const group = next.frames.find((entry) => entry.id === id);
+    if (group?.kind === "group" && !group.locked) next = fitGroupToMembers(next, id);
+  }
+  return next;
 }
 
 /**

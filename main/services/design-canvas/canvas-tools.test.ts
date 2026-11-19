@@ -99,7 +99,7 @@ test("placing a page that already landed on the canvas by itself moves that fram
   assert.deepEqual({ w: grouped.frame.box.w, h: grouped.frame.box.h }, { w: 820, h: 560 }, "grouping without w/h preserves its size");
 
   // Grouped, it is still the page's frame: another placement at a new width
-  // reuses it in its group, and the group grows to hold the taller box.
+  // reuses it in its group, and the group fits itself to the taller box.
   const phone = await call("canvas_place_frame", { kind: "file", title: "Home phone", path: "design/home.html", designWidth: 390, h: 1400 });
   assert.equal(phone.frame.id, "auto");
   assert.equal(phone.placed, "reused");
@@ -934,16 +934,48 @@ test("canvas_update_frame hides, moves to another page and reorders layers", asy
   assert.equal(doc.activePageId, "page-1", "moving a frame does not change the page on screen");
 });
 
-test("a frame placed into a group past its edge grows the group to hold it", async (t) => {
-  const { call } = await setup(t);
+test("a group fits itself to its members as Aiden adds, moves, resizes and removes them", async (t) => {
+  const { store, call } = await setup(t);
+  const boxOf = async (id: string) => {
+    const frame = (await store.get("chat-1")).frames.find((entry) => entry.id === id)!;
+    return { x: frame.x, y: frame.y, w: frame.w, h: frame.h };
+  };
   const group = await call("canvas_place_frame", { kind: "group", title: "Direction A", x: 0, y: 0, w: 400, h: 300 });
   const first = await call("canvas_place_frame", { kind: "note", title: "One", groupId: group.frame.id });
   const second = await call("canvas_place_frame", { kind: "note", title: "Two", groupId: group.frame.id });
-  const answer = await call("canvas_read");
-  const grown = answer.inView.find((frame: { id: string }) => frame.id === group.frame.id);
   assert.ok(second.frame.box.x > first.frame.box.x);
-  assert.equal(grown.box.x + grown.box.w, second.frame.box.x + second.frame.box.w + 32);
-  assert.ok(grown.box.y + grown.box.h >= second.frame.box.y + second.frame.box.h + 32);
+  // Two 240 x 160 notes in a row from the group's inset corner, 64 apart.
+  assert.deepEqual(await boxOf(group.frame.id), { x: 0, y: 0, w: 32 + 240 + 64 + 240 + 32, h: 48 + 160 + 32 });
+
+  // A member moved down and made taller: the group follows it.
+  await call("canvas_update_frame", { id: second.frame.id, y: 400, h: 300 });
+  assert.deepEqual(await boxOf(group.frame.id), { x: 0, y: 0, w: 32 + 240 + 64 + 240 + 32, h: 400 + 300 + 32 });
+
+  // A member taken out of the group, then one removed: the group shrinks to what is left.
+  await call("canvas_update_frame", { id: second.frame.id, groupId: "" });
+  assert.deepEqual(await boxOf(group.frame.id), { x: 0, y: 0, w: 32 + 240 + 32, h: 48 + 160 + 32 });
+  const third = await call("canvas_place_frame", { kind: "note", title: "Three", groupId: group.frame.id, x: 600, y: 48 });
+  assert.equal((await boxOf(group.frame.id)).w, 600 + 240 + 32);
+  assert.equal((await call("canvas_remove_frame", { id: third.frame.id })).status, "removed");
+  assert.deepEqual(await boxOf(group.frame.id), { x: 0, y: 0, w: 32 + 240 + 32, h: 48 + 160 + 32 });
+});
+
+test("what Aiden adds to an artboard wraps to a new row inside it, keeping the width the person drew", async (t) => {
+  const { store, call } = await setup(t);
+  const board = await call("canvas_place_frame", { kind: "frame", title: "Board", x: 0, y: 0, w: 600, h: 300 });
+  const placed = [];
+  for (const title of ["A", "B", "C"]) placed.push(await call("canvas_place_frame", { kind: "shape", title, groupId: board.frame.id }));
+  const boxes = placed.map((entry) => entry.frame.box);
+  // 160-wide shapes: A and B fit in a row of a 600 artboard, C starts the next row at the left inset.
+  assert.equal(boxes[1].y, boxes[0].y);
+  assert.equal(boxes[1].x, boxes[0].x + 160 + 64);
+  assert.deepEqual([boxes[2].x, boxes[2].y], [boxes[0].x, boxes[0].y + 100 + 64]);
+  const after = (await store.get("chat-1")).frames.find((entry) => entry.id === board.frame.id)!;
+  assert.equal(after.w, 600, "the artboard keeps its width");
+  for (const box of boxes) {
+    assert.ok(box.x >= after.x && box.x + box.w <= after.x + after.w, "each item sits inside the artboard's width");
+    assert.ok(box.y + box.h <= after.y + after.h, "the artboard grew down to hold the new row");
+  }
 });
 
 test("canvas_arrange lays frames out in a group that fits itself around them, and shows them", async (t) => {
@@ -1071,7 +1103,7 @@ test("adversarial edge cases: partial size with designWidth, cross-page regroupi
   const tallPhone = await call("canvas_update_frame", { id: screen.frame.id, designWidth: 390, h: 960 });
   assert.deepEqual([tallPhone.frame.box.w, tallPhone.frame.box.h, tallPhone.frame.designWidth], [390, 960, 390]);
 
-  // 2. Moving a frame to another page and into a group on that page in one call works and grows that group.
+  // 2. Moving a frame to another page and into a group on that page in one call works and fits that group around it.
   const archive = await call("canvas_page", { action: "add", name: "Archive", show: false });
   const archiveGroup = await call("canvas_place_frame", {
     kind: "group",
@@ -1094,7 +1126,11 @@ test("adversarial edge cases: partial size with designWidth, cross-page regroupi
   const afterMove = await store.get("chat-1");
   assert.equal(afterMove.frames.find((frame) => frame.id === screen.frame.id)!.pageId, archive.page.id);
   const grownArchiveGroup = afterMove.frames.find((frame) => frame.id === archiveGroup.frame.id)!;
-  assert.ok(grownArchiveGroup.h >= 160 + 960 - 100 + 32, "target page group grows around moved frame");
+  assert.deepEqual(
+    { x: grownArchiveGroup.x, y: grownArchiveGroup.y, w: grownArchiveGroup.w, h: grownArchiveGroup.h },
+    { x: 140 - 32, y: 160 - 48, w: 32 + 390 + 32, h: 48 + 960 + 32 },
+    "target page group fits around moved frame",
+  );
 
   // 3. canvas_arrange with fitGroupIds on another page switches to and fits that page's group, and empty string ungroups.
   const fittedOtherPage = await call("canvas_arrange", { fitGroupIds: [archiveGroup.frame.id] });

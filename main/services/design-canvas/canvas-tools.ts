@@ -33,8 +33,8 @@ import {
   DESIGN_FRAME_GAP,
   fitGroupToMembers,
   GROUP_PADDING,
-  growGroupToHold,
   placeFrame,
+  refitGroups,
   type PlaceFrameInput,
 } from "../../../renderer/shared/design-canvas/placement.js";
 import {
@@ -675,7 +675,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         name: "canvas_place_frame",
         label: "Place on design canvas",
         description:
-          "Put a frame on the design canvas: a workspace HTML page (kind file), an image, a note, a group, or a drawn item for flows and diagrams: text, a shape (rect or oval, with an optional label in text), a frame (an empty artboard that holds shapes and text like a group) or a connector (an arrow or line from one frame or point to another; an end on a frame follows it). Notes and text items take a small Markdown subset: **bold**, *italic*, <u>underline</u>, [links](https://…), and lines starting \"- \" or \"1. \" for lists; size and color apply to the whole note or text, and fill gives a note, shape or artboard its colour. Write the file first with your file tools; path is workspace-relative. A page's frame is sized for its designWidth (390 phone, 768 tablet, 1280 or 1440 desktop) unless you pass w and h. Placing a page already on this canvas page reuses that frame (moved, resized and restyled as asked, kept in its group unless you name another; the result says placed: reused), and a page shown there only in locked frames is refused; pass duplicate: true to add another frame of the same file (placed: copy; for example a dark: true variant or another width). It goes on the page the person is looking at unless you name another. Leave x and y out to place it right of the last frame in its group or in view; a group grows to hold what you place in it. Boxes are in canvas units.",
+          "Put a frame on the design canvas: a workspace HTML page (kind file), an image, a note, a group, or a drawn item for flows and diagrams: text, a shape (rect or oval, with an optional label in text), a frame (an empty artboard that holds shapes and text like a group) or a connector (an arrow or line from one frame or point to another; an end on a frame follows it). Notes and text items take a small Markdown subset: **bold**, *italic*, <u>underline</u>, [links](https://…), and lines starting \"- \" or \"1. \" for lists; size and color apply to the whole note or text, and fill gives a note, shape or artboard its colour. Write the file first with your file tools; path is workspace-relative. A page's frame is sized for its designWidth (390 phone, 768 tablet, 1280 or 1440 desktop) unless you pass w and h. Placing a page already on this canvas page reuses that frame (moved, resized and restyled as asked, kept in its group unless you name another; the result says placed: reused), and a page shown there only in locked frames is refused; pass duplicate: true to add another frame of the same file (placed: copy; for example a dark: true variant or another width). It goes on the page the person is looking at unless you name another. Leave x and y out to place it right of the last frame in its group or in view; in an artboard, one that would run past its right edge starts a new row. A group fits itself to its frames whenever you add, move, resize or remove one. Boxes are in canvas units.",
         parameters: Type.Object({
           page: Type.Optional(Type.String({ maxLength: 128, description: "A page's name or id." })),
           kind: Type.Union(PLACED_KINDS.map((kind) => Type.Literal(kind))),
@@ -813,18 +813,12 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 // Unless a group is named, the frame stays in the group it is in.
                 const keptGroup = groupId ?? adopted.groupId;
                 if (!groupId && (x === undefined || y === undefined)) {
-                  let frames = doc.frames.map((entry) =>
+                  const frames = doc.frames.map((entry) =>
                     entry.id === adopted.id ? merge({ x: entry.x, y: entry.y, w: nextW, h: nextH }, adopted.groupId) : entry,
                   );
-                  // A group grows to hold a member that got bigger.
-                  const resizedFrame = frames.find((entry) => entry.id === adopted.id)!;
-                  const group = keptGroup ? frames.find((entry) => entry.id === keptGroup) : undefined;
-                  if (group?.kind === "group" && !group.locked) {
-                    const grown = growGroupToHold(group, resizedFrame);
-                    if (grown !== group) frames = frames.map((entry) => (entry.id === group.id ? grown : entry));
-                  }
-                  // A new size moves the ends of connectors on the page's sides.
-                  const next = syncConnectors({ ...doc, frames });
+                  // Its group fits itself to a member that changed size, and a
+                  // new size moves the ends of connectors on the page's sides.
+                  const next = refitGroups(syncConnectors({ ...doc, frames }), [keptGroup]);
                   const frame = next.frames.find((entry) => entry.id === adopted.id)!;
                   return { doc: next, value: { ...reused, frame: summarizeFrame(frame) } };
                 }
@@ -840,13 +834,17 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                     `The canvas is full (${DESIGN_CANVAS_LIMITS.frames} frames, ${DESIGN_CANVAS_LIMITS.framesPerPage} on a page). Remove a frame first.`,
                   );
                 }
-                // placeFrame synced connectors to the new box and grew its group; the merge keeps both.
-                const placedDoc = syncConnectors({
-                  ...placed.doc,
-                  frames: placed.doc.frames.map((entry) =>
-                    entry.id === adopted.id ? merge({ x: entry.x, y: entry.y, w: entry.w, h: entry.h }, entry.groupId) : entry,
-                  ),
-                });
+                // placeFrame synced connectors to the new box; the merge keeps
+                // them, and the group it left and the one it is in fit their members.
+                const placedDoc = refitGroups(
+                  syncConnectors({
+                    ...placed.doc,
+                    frames: placed.doc.frames.map((entry) =>
+                      entry.id === adopted.id ? merge({ x: entry.x, y: entry.y, w: entry.w, h: entry.h }, entry.groupId) : entry,
+                    ),
+                  }),
+                  [adopted.groupId, keptGroup],
+                );
                 const frame = placedDoc.frames.find((entry) => entry.id === adopted.id)!;
                 return { doc: placedDoc, value: { ...reused, frame: summarizeFrame(frame) } };
               }
@@ -856,11 +854,13 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                   `The canvas is full (${DESIGN_CANVAS_LIMITS.frames} frames, ${DESIGN_CANVAS_LIMITS.framesPerPage} on a page). Remove a frame first.`,
                 );
               }
-              const frame = placed.doc.frames.find((entry) => entry.id === id)!;
+              // The group it joined fits itself around its members, this one too.
+              const placedDoc = refitGroups(placed.doc, [groupId]);
+              const frame = placedDoc.frames.find((entry) => entry.id === id)!;
               if (kind === "file" && others.length > 0) {
                 const elsewhere = onThisPage.length === 0;
                 return {
-                  doc: placed.doc,
+                  doc: placedDoc,
                   value: {
                     status: "placed",
                     placed: "copy",
@@ -873,7 +873,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                   },
                 };
               }
-              return { doc: placed.doc, value: { status: "placed", ...(kind === "file" ? { placed: "new" } : {}), units: "canvas", frame: summarizeFrame(frame) } };
+              return { doc: placedDoc, value: { status: "placed", ...(kind === "file" ? { placed: "new" } : {}), units: "canvas", frame: summarizeFrame(frame) } };
             });
           }),
       },
@@ -1041,14 +1041,9 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               let frames = baseDoc.frames.map((entry) => (entry.id === current.id ? { ...next, x: current.x, y: current.y } : entry));
               frames = translateFrames(frames, current.id, dx, dy, new Set());
               frames = frames.map((entry) => (entry.id === current.id ? next : entry));
-              // A group grows to hold a frame moved into it or past its edge.
-              const group = next.groupId ? frames.find((entry) => entry.id === next.groupId) : undefined;
-              if (group?.kind === "group" && !group.locked) {
-                const grown = growGroupToHold(group, next);
-                if (grown !== group) frames = frames.map((entry) => (entry.id === group.id ? grown : entry));
-              }
-              // Connectors on a moved frame follow it.
-              let updatedDoc = syncConnectors({ ...baseDoc, frames });
+              // Connectors on a moved frame follow it, and the group it left and
+              // the group it is in fit themselves to their members again.
+              let updatedDoc = refitGroups(syncConnectors({ ...baseDoc, frames }), [frame.groupId, next.groupId]);
               if (layerOptions.length === 1) {
                 const sibling = p.aboveFrameId ?? p.belowFrameId;
                 if (typeof sibling === "string" && sibling) {
@@ -1110,7 +1105,8 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               // Its comments go with it, as when the person removes a frame.
               const comments = commentsWithoutFrames(doc.comments, new Set([frame.id]));
               return {
-                doc: syncConnectors({ ...doc, frames, comments }),
+                // The group it was in fits itself to the members left.
+                doc: refitGroups(syncConnectors({ ...doc, frames, comments }), [frame.groupId]),
                 value: { status: "removed", id: frame.id, ...(frame.createdBy === "person" ? { personFrame: true } : {}) },
               };
             });
