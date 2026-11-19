@@ -27,8 +27,8 @@ export interface HostPlatformCapabilities {
    */
   mcpServer: boolean;
   /**
-   * Aiden Live's optional screen share. It relies on the macOS system screen
-   * picker; Linux has no picker wired in yet, so Live runs voice-only there.
+   * Aiden Live's optional screen share: the macOS system picker, Aiden's own
+   * picker on Linux under X11, or the desktop's portal under Wayland.
    */
   liveScreenShare: boolean;
 }
@@ -57,6 +57,6 @@ export function hostPlatformCapabilities(
     backgroundJobs: darwin || platform === "linux",
     hooks: darwin || platform === "linux",
     mcpServer: darwin || platform === "linux",
-    liveScreenShare: darwin,
+    liveScreenShare: darwin || platform === "linux",
   };
 }

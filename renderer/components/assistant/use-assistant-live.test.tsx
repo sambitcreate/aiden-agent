@@ -2379,3 +2379,108 @@ test("Live without a chosen source starts audio-only and the picker stays re-arm
   await fixture.controller().stop();
   await fixture.unmount();
 });
+
+test("on Linux under X11 the person picks a screen in Aiden before capture, and cancelling binds nothing", async () => {
+  const { dependencies, state } = screenDependencies();
+  const boundSources: Array<string | undefined> = [];
+  const sources = [
+    { id: "screen:0:0", name: "Entire screen", kind: "screen" as const, thumbnail: "" },
+    { id: "window:9:0", name: "Editor", kind: "window" as const, thumbnail: "" },
+  ];
+  const api = {
+    ...dependencies.api!,
+    displaySources: async () => ({ mode: "list" as const, sources }),
+    bindDisplay: async (sourceId?: string) => {
+      boundSources.push(sourceId);
+      state.binds.push(1);
+      return `binding-${state.binds.length}`;
+    },
+  };
+  const fixture = await mountHook({ ...dependencies, api, platform: "linux" });
+  try {
+    const choosing = fixture.controller().chooseScreenSource();
+    await settle();
+    assert.deepEqual(fixture.controller().screenSourceChoices, sources);
+    assert.equal(fixture.controller().screenBusy, true);
+    assert.equal(state.binds.length, 0, "nothing is bound before the person picks");
+    fixture.controller().pickScreenSource(null);
+    await choosing;
+    await settle();
+    assert.equal(fixture.controller().screenSourceChoices, null);
+    assert.equal(state.binds.length, 0);
+    assert.equal(fixture.controller().screenError, null, "cancelling is not an error");
+    assert.equal(fixture.controller().screenBusy, false);
+
+    const choosingAgain = fixture.controller().chooseScreenSource();
+    await settle();
+    fixture.controller().pickScreenSource("window:9:0");
+    await choosingAgain;
+    await settle();
+    assert.deepEqual(boundSources, ["window:9:0"]);
+    assert.equal(fixture.controller().screenSourceLabel, "Aiden window");
+  } finally {
+    await fixture.unmount();
+  }
+});
+
+test("on Wayland the desktop portal picks, so Aiden binds without a source of its own", async () => {
+  const { dependencies } = screenDependencies();
+  const boundSources: Array<string | undefined> = [];
+  const api = {
+    ...dependencies.api!,
+    displaySources: async () => ({ mode: "portal" as const }),
+    bindDisplay: async (sourceId?: string) => {
+      boundSources.push(sourceId);
+      return "binding-portal";
+    },
+  };
+  const fixture = await mountHook({ ...dependencies, api, platform: "linux" });
+  try {
+    await fixture.controller().chooseScreenSource();
+    await settle();
+    assert.equal(fixture.controller().screenSourceChoices, null, "Aiden shows no picker of its own");
+    assert.deepEqual(boundSources, [undefined]);
+    assert.equal(fixture.controller().screenSourceLabel, "Aiden window");
+  } finally {
+    await fixture.unmount();
+  }
+});
+
+test("closing setup while Aiden's screen picker is open cancels it", async () => {
+  const { dependencies, state } = screenDependencies();
+  const api = {
+    ...dependencies.api!,
+    displaySources: async () => ({
+      mode: "list" as const,
+      sources: [{ id: "screen:0:0", name: "Entire screen", kind: "screen" as const, thumbnail: "" }],
+    }),
+  };
+  const fixture = await mountHook({ ...dependencies, api, platform: "linux" });
+  try {
+    fixture.controller().setSetupOpen(true);
+    const choosing = fixture.controller().chooseScreenSource();
+    await settle();
+    assert.notEqual(fixture.controller().screenSourceChoices, null);
+    fixture.controller().setSetupOpen(false);
+    await choosing;
+    await settle();
+    assert.equal(fixture.controller().screenSourceChoices, null);
+    assert.equal(state.binds.length, 0);
+  } finally {
+    await fixture.unmount();
+  }
+});
+
+test("a Linux desktop with nothing to share says so", async () => {
+  const { dependencies, state } = screenDependencies();
+  const api = { ...dependencies.api!, displaySources: async () => ({ mode: "list" as const, sources: [] }) };
+  const fixture = await mountHook({ ...dependencies, api, platform: "linux" });
+  try {
+    await fixture.controller().chooseScreenSource();
+    await settle();
+    assert.equal(state.binds.length, 0);
+    assert.match(fixture.controller().screenError ?? "", /couldn’t find a screen or window/u);
+  } finally {
+    await fixture.unmount();
+  }
+});
