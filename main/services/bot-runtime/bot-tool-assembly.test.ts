@@ -2406,6 +2406,33 @@ test("shipping messages and approved-peer exchanges offer distinct schemas and c
   assert.deepEqual(Object.keys((message.parameters as unknown as { properties: Record<string, unknown> }).properties), ["action", "bot", "message"]);
 });
 
+test("a peer run declares the chat's tool list and refuses peer-withheld calls before they run", async () => {
+  const state = assemblyState(full(botHome()));
+  const tools = ["message_bot", "propose_plan", "wake_up", "routine_notes"].map((name) => countingTool(name));
+  const deps = assemblyDeps(state, { candidates: () => tools.map((tool) => ({ tool })) });
+  const names = async (requestId: string) => (await deps.currentTools({ id: "bot-1" } as never, { requestId })).map((entry) => entry.tool.name);
+  const personList = await names("desktop:person");
+  assert.deepEqual(personList, ["message_bot", "propose_plan", "wake_up", "routine_notes"]);
+
+  const claim = { id: "claim", botId: "bot-1", requestId: "peer:host-issued", peer: { kind: "request" } } as unknown as BotExecutionClaim;
+  const faux = createFauxModels([]);
+  const port: BotExecutionPort = {
+    claim: async () => claim, getClaim: async () => claim, selectFallback: async () => { throw new Error("No fallback"); },
+    resolve: async () => ({ model: faux.models.getModel(FAUX_MODEL_REF.provider, FAUX_MODEL_REF.modelId)!, models: faux.models, imageInput: false, revalidate: async () => {}, release() {} }),
+  };
+  await withBotExecutionAdmission("bot-1", claim, port, async () => {
+    assert.deepEqual(await names(claim.requestId), personList, "a peer run declares the same tools as the person's turns");
+    for (const name of personList) {
+      // An unnamed call inside the peer run still carries its peer ingress.
+      for (const requestIds of [[claim.requestId], []]) {
+        const decision = await deps.checkPolicy("bot-1", name, { callId: "call", args: { text: "x" }, signal: undefined, requestIds });
+        assert.equal(decision.allowed, false, `${name} ${requestIds.length}`);
+      }
+    }
+  });
+  assert.deepEqual(tools.map((tool) => tool.executions.length), [0, 0, 0, 0], "a refused call never runs");
+});
+
 // --- Settings → Approvals' rules (plan §3.5) ---------------------------------
 
 function pageRule(id: string, target: ApprovalRule["target"], decision: ApprovalRule["decision"], owner: ApprovalRule["owner"] = { kind: "mac" }, handOff?: true): ApprovalRule {

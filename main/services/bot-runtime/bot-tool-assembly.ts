@@ -836,7 +836,7 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
           // The calling run's ingress is checked on every call instead
           // (`checkPolicy`, and `turnAllows` in the Bot extension), and a
           // refused call never runs.
-          if (!(await botToolVerdict(candidate.tool.name, facts, {})).allowed) continue;
+          if (!(await botToolVerdict(candidate.tool.name, facts, { offer: true })).allowed) continue;
           const bind = candidate.bind;
           const guard = (tool: AgentTool, call?: BotToolCall) => (candidate.interactive ? tool : fenced(botId, tool, candidate.mcp === true, call));
           entries.push({

@@ -82,12 +82,18 @@ export interface BotToolTurn {
   routine?: boolean;
   /** Host-owned peer request/return provenance, also restrictive in mixed contexts. */
   peer?: boolean;
+  /**
+   * Deciding what the chat declares, not whether a call runs: the ambient
+   * peer run is ignored so a peer turn declares the chat's fixed tool list.
+   * Every call is still checked with its run's ingress, peer included.
+   */
+  offer?: boolean;
 }
 
 export type BotToolVerdict = { allowed: true } | { allowed: false; reason: string };
 
 /** The ingress rules of one input, from its request id. */
-export function botTurnOf(requestId: string | undefined): Required<BotToolTurn> & { intro: boolean } {
+export function botTurnOf(requestId: string | undefined): Required<Omit<BotToolTurn, "offer">> & { intro: boolean } {
   return {
     botMessage: isBotMessageRequestId(requestId),
     telegram: requestId?.startsWith("tg:") ?? false,
@@ -212,7 +218,7 @@ export async function botToolVerdict(
 ): Promise<BotToolVerdict> {
   const { authority } = facts;
   if (name === BOT_PEER_TOOL) return verdict(!turn.botMessage, "Approved-peer messaging is off for a Bot-message turn."); // The dedicated host service rechecks the exact named pair/source at every call.
-  if ((turn.peer || botPeerIngress()) && (UNATTENDED_WITHHELD.has(name) || [BOT_MESSAGE_TOOL_NAME, BOT_REQUEST_ACCESS_TOOL_NAME, BOT_PROPOSE_PLAN_TOOL_NAME, BOT_PLAN_STEP_TOOL_NAME, WAKE_UP_TOOL, ROUTINE_NOTES_TOOL, "bot_memory", SUGGEST_CONNECTION_TOOL_NAME].includes(name))) return { allowed: false, reason: "Peer work cannot request person approval, change routines or person memory, sign in, create wake-ups or spawn subagents." };
+  if ((turn.peer || (!turn.offer && botPeerIngress())) && (UNATTENDED_WITHHELD.has(name) || [BOT_MESSAGE_TOOL_NAME, BOT_REQUEST_ACCESS_TOOL_NAME, BOT_PROPOSE_PLAN_TOOL_NAME, BOT_PLAN_STEP_TOOL_NAME, WAKE_UP_TOOL, ROUTINE_NOTES_TOOL, "bot_memory", SUGGEST_CONNECTION_TOOL_NAME].includes(name))) return { allowed: false, reason: "Peer work cannot request person approval, change routines or person memory, sign in, create wake-ups or spawn subagents." };
   if (name === BOT_PROPOSE_PLAN_TOOL_NAME || name === BOT_PLAN_STEP_TOOL_NAME) return verdict(turn.telegram !== true && turn.routine !== true, "Plans are off for this Bot turn.");
   if (name === BOT_REQUEST_ACCESS_TOOL_NAME) {
     if (authority.accessMode !== "custom" || authority.files.mode === "full_mac") return { allowed: false, reason: `This Bot can already use ${botWholeComputerLabel(process.platform)}.` };
