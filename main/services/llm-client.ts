@@ -489,7 +489,7 @@ import {
   prepareGenerativeUiTurnStore,
   shouldEnableGenerativeUiExtension,
 } from "./generative-ui-extension.js";
-import { chatToolOffers, chatTurnToolRefusal, type ChatToolSurface, type ChatTurnAudience } from "./chat-turn-tool-policy.js";
+import { chatToolOffers, chatTurnAudienceFor, chatTurnToolRefusal, firstTurnToolRefusal, type ChatToolSurface, type TurnToolRefusal } from "./chat-turn-tool-policy.js";
 import { createGenerativeUiDraftSession } from "./generative-ui-draft.js";
 import { createUiDraftSession } from "./aiden-ui-draft.js";
 import { withoutVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
@@ -1825,13 +1825,7 @@ async function prepareGeneration(
     harnessProvider: isAcpHarnessProvider(runtime.provider.id),
     excludedToolNames: options.excludeToolNames,
   };
-  const turnAudience: ChatTurnAudience = {
-    unattended: options.unattended === true,
-    remoteAudience: options.visualAudience === "remote",
-    questionPromptsUnavailable: options.questionPromptsUnavailable === true,
-    ...(params.inlineVisuals ? { inlineVisuals: params.inlineVisuals } : {}),
-    visualize: params.visualize === true,
-  };
+  const turnAudience = chatTurnAudienceFor(options, params);
   // Offered by the chat's surface alone; a turn nobody watches, or one a paired
   // device sent, keeps the declaration and refuses the call.
   const offerHooksTool = hostPlatformCapabilities().hooks && chatToolOffers(chatToolSurface).hooks;
@@ -2379,13 +2373,18 @@ async function prepareGeneration(
     // without /visualize refuses the drawing tools, so its plain reply runs.
     const visualize = params.visualize === true;
     const existingHtmlUsage = displayedAssistantHtmlUsage(chat.messages);
-    const { pending: pendingHtmlAfterReconcile, unavailableReason: htmlStoreProblem } = await prepareGenerativeUiTurnStore(
+    const { pending: pendingHtmlAfterReconcile, unavailableReason: htmlStoreProblem, reconcileError: htmlReconcileError } = await prepareGenerativeUiTurnStore(
       generativeUiArtifactStore,
       { id: params.chatId, messages: chat.messages },
       { onRequest: params.inlineVisuals === "on_request", visualize },
     );
     if (htmlStoreProblem) {
-      logger.warn("pi", `Inline visual staging needs repair; stream ${streamId} answers without drawing. ${htmlStoreProblem}`);
+      // The reconcile error is the one a drawing turn fails with and logs.
+      logger.warn(
+        "pi",
+        `Inline visual staging needs repair; stream ${streamId} answers without drawing. ${htmlStoreProblem}`,
+        ...(htmlReconcileError === undefined ? [] : [htmlReconcileError]),
+      );
     }
     const generativeUiRuntime = createGenerativeUiExtensionRuntime({
       // Inline HTML works in every chat; reading a workspace .html file
@@ -2497,7 +2496,7 @@ async function prepareGeneration(
    * Tools declared in every turn of the chat whose call this turn cannot run:
    * the reason names the condition, and the call is refused before it runs.
    */
-  const turnToolRefusals: Array<(name: string, args: unknown) => string | undefined> = [];
+  const turnToolRefusals: TurnToolRefusal[] = [];
   turnToolRefusals.push(chatTurnToolRefusal(chatToolSurface, turnAudience));
   if (!botContext && (!assistantMode || attendedAssistant) && options.interactionSurface !== "telegram" && schedulingAllowed && (rendererOwner || browserOwner?.kind === "remote")) {
     const appToolTurn = { liveState: browserOwner?.kind !== "remote", canOpen: browserOwner?.kind !== "remote" };
@@ -2748,13 +2747,7 @@ async function prepareGeneration(
     botApprovedRoots,
     botMutatingToolNames,
     offerHooksTool,
-    turnToolRefusal: (name: string, args: unknown): string | undefined => {
-      for (const refusal of turnToolRefusals) {
-        const reason = refusal(name, args);
-        if (reason) return reason;
-      }
-      return undefined;
-    },
+    turnToolRefusal: firstTurnToolRefusal(turnToolRefusals),
   };
 }
 

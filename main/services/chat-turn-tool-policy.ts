@@ -34,6 +34,47 @@ export interface ChatTurnAudience {
   visualize: boolean;
 }
 
+/** What a generation's execution options say about who the turn serves. */
+export interface ChatTurnAudienceOptions {
+  unattended?: boolean;
+  visualAudience?: "remote";
+  questionPromptsUnavailable?: boolean;
+}
+
+/** What the turn's own parameters say about inline visuals. */
+export interface ChatTurnAudienceParams {
+  inlineVisuals?: InlineVisualsMode;
+  visualize?: boolean;
+}
+
+/** The turn's audience, from the generation's options and parameters. */
+export function chatTurnAudienceFor(options: ChatTurnAudienceOptions, params: ChatTurnAudienceParams): ChatTurnAudience {
+  return {
+    unattended: options.unattended === true,
+    remoteAudience: options.visualAudience === "remote",
+    questionPromptsUnavailable: options.questionPromptsUnavailable === true,
+    ...(params.inlineVisuals ? { inlineVisuals: params.inlineVisuals } : {}),
+    visualize: params.visualize === true,
+  };
+}
+
+/** A per-turn refusal: the reason a call cannot run in this turn, or undefined. */
+export type TurnToolRefusal = (name: string, args: unknown) => string | undefined;
+
+/**
+ * One refusal from several: the first that refuses the call gives its reason.
+ * The list is read on each call, so refusals added after this is built count.
+ */
+export function firstTurnToolRefusal(refusals: readonly TurnToolRefusal[]): TurnToolRefusal {
+  return (name, args) => {
+    for (const refusal of refusals) {
+      const reason = refusal(name, args);
+      if (reason) return reason;
+    }
+    return undefined;
+  };
+}
+
 /** Declarations that depend on the chat alone, never on the turn's audience. */
 export function chatToolOffers(surface: ChatToolSurface): { hooks: boolean } {
   return { hooks: offersHooksTool({ ...surface, unattended: false, remoteAudience: false }) };

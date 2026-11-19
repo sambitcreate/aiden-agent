@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { chatToolOffers, chatTurnToolRefusal, type ChatToolSurface, type ChatTurnAudience } from "./chat-turn-tool-policy.js";
+import {
+  chatToolOffers, chatTurnAudienceFor, chatTurnToolRefusal, firstTurnToolRefusal,
+  type ChatToolSurface, type ChatTurnAudience, type ChatTurnAudienceOptions, type ChatTurnAudienceParams,
+} from "./chat-turn-tool-policy.js";
 import { UNATTENDED_FOLLOW_UP_GENERATION } from "./follow-through/notice-delivery.js";
 
 const workspace: ChatToolSurface = { usageSource: "chat", bot: false, assistant: false, harnessProvider: false };
@@ -57,4 +60,39 @@ test("inline visuals On request draw only in a /visualize turn", () => {
   const visualize = chatTurnToolRefusal(workspace, { ...attended, inlineVisuals: "on_request", visualize: true });
   assert.equal(visualize("render_ui"), undefined);
   assert.equal(visualize("render_artifact"), undefined);
+});
+
+test("a generation's options and parameters decide which calls the turn refuses", () => {
+  const names = ["hooks", "computer_use", "form_fill", "subagent", "ask_user_question", "workspace_artifact", "render_ui", "render_artifact", "read_file"];
+  const cases: Array<{ label: string; options: ChatTurnAudienceOptions; params: ChatTurnAudienceParams; refused: string[] }> = [
+    { label: "an attended turn on this computer", options: {}, params: {}, refused: [] },
+    { label: "an unattended follow-up", options: { unattended: true }, params: {}, refused: ["hooks", "computer_use", "form_fill", "subagent"] },
+    { label: "a paired device", options: { visualAudience: "remote" }, params: {}, refused: ["hooks", "computer_use", "form_fill", "workspace_artifact"] },
+    {
+      label: "a paired device that cannot show question prompts",
+      options: { visualAudience: "remote", questionPromptsUnavailable: true }, params: {},
+      refused: ["hooks", "computer_use", "form_fill", "ask_user_question", "workspace_artifact"],
+    },
+    { label: "inline visuals On request without /visualize", options: {}, params: { inlineVisuals: "on_request" }, refused: ["render_ui", "render_artifact"] },
+    { label: "inline visuals On request with /visualize", options: {}, params: { inlineVisuals: "on_request", visualize: true }, refused: [] },
+    { label: "automatic inline visuals", options: {}, params: { inlineVisuals: "automatic" }, refused: [] },
+    {
+      label: "a paired device with inline visuals On request",
+      options: { visualAudience: "remote" }, params: { inlineVisuals: "on_request" },
+      refused: ["hooks", "computer_use", "form_fill", "workspace_artifact", "render_ui", "render_artifact"],
+    },
+  ];
+  for (const { label, options, params, refused } of cases) {
+    const refuse = chatTurnToolRefusal(workspace, chatTurnAudienceFor(options, params));
+    assert.deepEqual(names.filter((name) => refuse(name) !== undefined), refused, label);
+  }
+});
+
+test("several turn refusals give the first reason that applies", () => {
+  const late: Array<(name: string, args: unknown) => string | undefined> = [(name) => name === "a" ? "first" : undefined];
+  const refuse = firstTurnToolRefusal(late);
+  late.push((name) => name === "a" || name === "b" ? "second" : undefined);
+  assert.equal(refuse("a", {}), "first");
+  assert.equal(refuse("b", {}), "second", "a refusal added after the combination still applies");
+  assert.equal(refuse("c", {}), undefined);
 });

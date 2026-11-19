@@ -41,7 +41,7 @@ import { forgetPromptSectionDeviceKeys } from "./prompt-section-secret.js";
 import { LOAD_TOOLS_TOOL_NAME } from "./on-demand-tools.js";
 import { createAidenAppTools } from "./aiden-app-tools.js";
 import type { AppControlContext, AppControlsService } from "./app-controls-core.js";
-import { chatToolOffers, chatTurnToolRefusal, type ChatToolSurface, type ChatTurnAudience } from "./chat-turn-tool-policy.js";
+import { chatToolOffers, chatTurnAudienceFor, chatTurnToolRefusal, type ChatToolSurface, type ChatTurnAudience } from "./chat-turn-tool-policy.js";
 import { remoteGenerationSurface } from "./conversation-surface-generation.js";
 import { UNATTENDED_FOLLOW_UP_GENERATION } from "./follow-through/notice-delivery.js";
 import { owedTurnStartRequest } from "./chat-owed-turn-start.js";
@@ -557,7 +557,7 @@ describe("prompt prefix stability: already stable", () => {
 describe("prompt prefix stability: tool list identical across turns", () => {
   // The rendered tool declarations, the first thing a request caches.
   const toolsOf = (request: RecordedPromptRequest) => request.wire.filter((segment) => segment.kind === "tools").map((segment) => segment.hash);
-  const attended: ChatTurnAudience = { unattended: false, remoteAudience: false, visualize: false };
+  const attended: ChatTurnAudience = chatTurnAudienceFor({}, {});
   const workspaceSurface: ChatToolSurface = { usageSource: "chat", bot: false, assistant: false, harnessProvider: false };
   // A chat's own tools that only an attended turn on this computer may run.
   const hooksTool = textTool("hooks", "List, propose and test this chat's hooks.");
@@ -582,9 +582,9 @@ describe("prompt prefix stability: tool list identical across turns", () => {
     );
     assert.deepEqual(toolsOf(current), toolsOf(previous));
     assert.ok(current.carries("render_artifact"), "the drawing tools stay declared");
-    const plain = chatTurnToolRefusal(workspaceSurface, { ...attended, inlineVisuals: "on_request" });
+    const plain = chatTurnToolRefusal(workspaceSurface, chatTurnAudienceFor({}, { inlineVisuals: "on_request" }));
     assert.match(plain("render_artifact") ?? "", /not available in this turn.*\/visualize/su);
-    assert.equal(chatTurnToolRefusal(workspaceSurface, { ...attended, inlineVisuals: "on_request", visualize: true })("render_artifact"), undefined);
+    assert.equal(chatTurnToolRefusal(workspaceSurface, chatTurnAudienceFor({}, { inlineVisuals: "on_request", visualize: true }))("render_artifact"), undefined);
   });
 
   test("a Bot chat: a routine turn, a person's turn and a Telegram turn", async () => {
@@ -636,7 +636,7 @@ describe("prompt prefix stability: tool list identical across turns", () => {
     });
     return [...chatTools(workspaceSurface), ...assembled];
   };
-  const followUpAudience: ChatTurnAudience = { ...attended, unattended: UNATTENDED_FOLLOW_UP_GENERATION.unattended };
+  const followUpAudience: ChatTurnAudience = chatTurnAudienceFor(UNATTENDED_FOLLOW_UP_GENERATION, {});
   const followUpSurface: ChatToolSurface = { ...workspaceSurface, usageSource: UNATTENDED_FOLLOW_UP_GENERATION.usageSource };
 
   test("an unattended follow-up declares the chat's tools and refuses what nobody can approve", async () => {
@@ -726,7 +726,7 @@ describe("prompt prefix stability: tool list identical across turns", () => {
       });
       const { previous, current } = await twoTurns({ wire, midConversationSystem }, { assembly: await head(false) }, { assembly: await head(true) });
       assert.deepEqual(toolsOf(current), toolsOf(previous));
-      const fromPhone = chatTurnToolRefusal(workspaceSurface, { ...attended, remoteAudience: remote.options.visualAudience === "remote" });
+      const fromPhone = chatTurnToolRefusal(workspaceSurface, chatTurnAudienceFor(remote.options, {}));
       assert.match(fromPhone("workspace_artifact") ?? "", /not available in this turn.*paired device/su);
       assert.match(fromPhone("hooks") ?? "", /paired device/u);
       assert.ok(current.carries("computer_use"), "Computer Use stays declared");
@@ -756,9 +756,7 @@ describe("prompt prefix stability: tool list identical across turns", () => {
     );
     assert.ok(current.carries("ask_user_question"), "the question tool stays declared");
     assert.deepEqual(toolsOf(current), toolsOf(previous));
-    const fromPhone = chatTurnToolRefusal(workspaceSurface, {
-      ...attended, remoteAudience: true, questionPromptsUnavailable: outdatedPhone.options.questionPromptsUnavailable === true,
-    });
+    const fromPhone = chatTurnToolRefusal(workspaceSurface, chatTurnAudienceFor(outdatedPhone.options, {}));
     assert.match(fromPhone("ask_user_question") ?? "", /not available in this turn.*question prompts/su);
     assert.equal(chatTurnToolRefusal(workspaceSurface, attended)("ask_user_question"), undefined);
   });

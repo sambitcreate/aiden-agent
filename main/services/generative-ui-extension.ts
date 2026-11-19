@@ -114,13 +114,15 @@ export type GenerativeUiTurnStore = Pick<GenerativeUiArtifactStore, "availabilit
  * when staging is unreadable or a staged visual could not be recovered, so it
  * never draws over a broken store. With inline visuals On request, a turn
  * without /visualize refuses the drawing tools anyway, so it reports the
- * problem instead of failing and the plain reply still runs.
+ * problem instead of failing and the plain reply still runs. A reconcile
+ * failure on such a turn comes back as `reconcileError`, the error a drawing
+ * turn would have thrown, so the caller can log it.
  */
 export async function prepareGenerativeUiTurnStore(
   store: GenerativeUiTurnStore,
   chat: GenerativeUiArtifactRecoveryChat,
   turn: { onRequest: boolean; visualize: boolean },
-): Promise<{ pending: { bytes: number; count: number }; unavailableReason?: string }> {
+): Promise<{ pending: { bytes: number; count: number }; unavailableReason?: string; reconcileError?: unknown }> {
   const mayDraw = !turn.onRequest || turn.visualize;
   const availability = store.availability();
   if (!availability.available) {
@@ -128,18 +130,20 @@ export async function prepareGenerativeUiTurnStore(
     if (mayDraw) throw new Error(reason);
     return { pending: { bytes: 0, count: 0 }, unavailableReason: reason };
   }
+  let reconcileError: { error: unknown } | undefined;
   if ((await store.usageByChat(chat.id)).count > 0) {
     try {
       await store.reconcilePersisted(chat);
     } catch (error) {
       if (mayDraw) throw error;
+      reconcileError = { error };
     }
   }
   const pending = await store.usageByChat(chat.id);
   if (pending.count > 0) {
     const reason = "A previous visual artifact could not be recovered. Delete this chat to discard it before continuing.";
     if (mayDraw) throw new Error(reason);
-    return { pending, unavailableReason: reason };
+    return { pending, unavailableReason: reason, ...(reconcileError ? { reconcileError: reconcileError.error } : {}) };
   }
   return { pending };
 }

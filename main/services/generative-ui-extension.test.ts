@@ -176,6 +176,28 @@ test("an On request chat with an unrecovered visual still answers a plain turn",
   assert.deepEqual(visualize, { pending: { bytes: 0, count: 0 } });
 });
 
+test("a reconcile failure on a plain On request turn comes back for the log, and fails a turn that may draw", async () => {
+  const root = await workspace();
+  const real = new GenerativeUiArtifactStore({ root: () => root });
+  await real.initialize();
+  const staged: ChatHtmlArtifactV1 = {
+    version: 1, kind: "html", id: "media-1", title: "Chart", mimeType: "text/html", size: 12, mediaId: "media-1",
+  };
+  await real.stage({ chatId: "chat-1", generationId: "gen-1", artifact: staged, html: "<p>hello</p>" });
+  const failure = new Error("Generative UI artifact staging is at capacity.");
+  const store = {
+    availability: () => real.availability(),
+    usageByChat: (chatId: string) => real.usageByChat(chatId),
+    reconcilePersisted: async () => { throw failure; },
+  };
+  const persisted = { id: "chat-1", messages: [{ role: "assistant", htmlArtifacts: [staged] }] };
+
+  const plain = await prepareGenerativeUiTurnStore(store, persisted, { onRequest: true, visualize: false });
+  assert.match(plain.unavailableReason ?? "", /could not be recovered/u);
+  assert.equal(plain.reconcileError, failure);
+  await assert.rejects(prepareGenerativeUiTurnStore(store, persisted, { onRequest: true, visualize: true }), failure);
+});
+
 test("the turn refusal names the On request condition only for the drawing tools", () => {
   const off = { onRequest: true, visualize: false };
   assert.match(generativeUiUnavailableReason(GENERATIVE_UI_TOOL_NAME, off) ?? "", /On request/u);

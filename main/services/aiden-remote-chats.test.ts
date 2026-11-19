@@ -36,7 +36,7 @@ import { createChatStore } from "./chat-store-core.js";
 import type { RegisteredSkill } from "./skill-registry.js";
 import type { VisualViewerAppearance, VisualViewerSource } from "./visual-viewer-document.js";
 import { HostRunRegistry } from "./host-run-registry.js";
-import { chatTurnToolRefusal } from "./chat-turn-tool-policy.js";
+import { chatTurnAudienceFor, chatTurnToolRefusal, type ChatTurnAudienceOptions } from "./chat-turn-tool-policy.js";
 import { ChatTriageStore } from "./chat-triage.js";
 import { workspaceFolderMissing, workspaceFolderRemoteRefusal } from "./workspace-folder-presence.js";
 
@@ -2459,12 +2459,7 @@ test("a device without question prompts keeps the question tool declared and has
   const questionRefusal = (options: Record<string, unknown> | null) =>
     chatTurnToolRefusal(
       { usageSource: "chat", bot: false, assistant: false, harnessProvider: false },
-      {
-        unattended: false,
-        remoteAudience: options?.visualAudience === "remote",
-        questionPromptsUnavailable: options?.questionPromptsUnavailable === true,
-        visualize: false,
-      },
+      chatTurnAudienceFor((options ?? {}) as ChatTurnAudienceOptions, {}),
     )("ask_user_question");
 
   const supported = fixture(chat(), {
