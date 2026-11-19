@@ -188,9 +188,10 @@ export function createDesignModeTool(deps: DesignModeToolDeps): AgentTool {
         }
         return result({
           status: answer,
-          ...(answer === "declined" ? {
-                next: "The person chose Not now for this chat. Carry on in the chat without the canvas and do not ask again; they can open design mode themselves with the Design button.",
-              } : {}),
+          next:
+            answer === "declined"
+              ? "The person chose Not now for this chat. Carry on in the chat without the canvas and do not ask again; they can open design mode themselves with the Design button."
+              : "The card closed without an answer, or no window could show it. Carry on in the chat without the canvas; the person can open design mode themselves with the Design button.",
         });
       },
     },

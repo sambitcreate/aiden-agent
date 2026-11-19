@@ -204,6 +204,24 @@ test("design_mode says when the canvas opened without its tools, rather than nam
   assert.match(String(entered.next), /not available/u);
 });
 
+test("design_mode tells Aiden what to do next when the card closes unanswered, as it does after Not now", async () => {
+  let answer: "declined" | "unavailable" = "unavailable";
+  const tool = createDesignModeTool({
+    isOn: async () => false,
+    requestEnter: async () => answer,
+    exit: async () => undefined,
+    canvasToolNames: ["canvas_read"],
+  });
+  const closed = await run(tool, { action: "enter", reason: "Compare the directions." });
+  assert.equal(closed.status, "unavailable");
+  assert.match(String(closed.next), /Carry on in the chat/u);
+  assert.doesNotMatch(String(closed.next), /Not now/u, "nobody said no");
+  answer = "declined";
+  const declined = await run(tool, { action: "enter", reason: "Compare the directions." });
+  assert.equal(declined.status, "declined");
+  assert.match(String(declined.next), /do not ask again/u);
+});
+
 test("design_mode is offered only in a desktop project chat while inline visuals are automatic", () => {
   const turn = {
     flagEnabled: true,
