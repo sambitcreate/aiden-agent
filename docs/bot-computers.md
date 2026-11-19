@@ -321,8 +321,8 @@ marked assumed until they are recorded on an Apple-silicon Mac:
   quality 70, and coordinates are pixels of the newest screenshot. Requests to
   the model trim screenshots in batches, shared with workspace chats and the
   browser: every screenshot is carried until more than eight are kept or they
-  pass 25 MiB, and then the oldest are cut in one go to the newest three within
-  15 MiB. Each cut one becomes a fixed short note there, and the transcript
+  pass 15 MiB, and then the oldest are cut in one go to the newest three within
+  8 MiB. Each cut one becomes a fixed short note there, and the transcript
   keeps them all. A Bot whose model has no
   image input gets only `computer_shell`.
 - **A stated intent on every change.** Each `click`, `double_click`,

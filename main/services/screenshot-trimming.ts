@@ -36,11 +36,17 @@ export interface ScreenshotTrimLimits {
 
 const MIB = 1024 * 1024;
 
+/**
+ * The byte marks stay below the smallest whole-request inline image limit of
+ * the providers that take screenshots (Gemini's is about 20 MB), so a cut
+ * comes before a provider refuses the request. One fixed rule for every
+ * provider keeps the cut a function of the transcript alone.
+ */
 export const SCREENSHOT_TRIM_LIMITS: ScreenshotTrimLimits = Object.freeze({
   maxImages: 8,
-  maxBytes: 25 * MIB,
+  maxBytes: 15 * MIB,
   keepImages: 3,
-  keepBytes: 15 * MIB,
+  keepBytes: 8 * MIB,
 });
 
 /** What a cut browser screenshot leaves in a request, so the model knows to look again. */

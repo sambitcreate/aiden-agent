@@ -530,7 +530,7 @@ Tests:
 
 **Changes**
 
-- **Screenshots.** Trim in batches: when the kept images pass 25 MiB or 8 screenshots, cut down to 15 MiB or 3. Between cuts, earlier messages stay byte-identical. The thresholds are shared by the desktop and Bots.
+- **Screenshots.** Trim in batches: when the kept images pass 25 MiB or 8 screenshots, cut down to 15 MiB or 3 (as built, the byte marks are 15 MiB and 8 MiB; see Phase 7 As built). Between cuts, earlier messages stay byte-identical. The thresholds are shared by the desktop and Bots.
 - **Gemini.**
   - Retire the per-turn explicit cache and rely on implicit caching over the now-stable prefix.
   - Remove the dead code and its settings, if any.
@@ -543,12 +543,13 @@ Tests:
 
 **As built (2026-11-19)**
 
-- **Screenshots.** `main/services/screenshot-trimming.ts` holds the thresholds (`SCREENSHOT_TRIM_LIMITS`: a cut once more than 8 screenshots are kept or they pass 25 MiB, down to the newest 3 within 15 MiB, the newest always kept) and the screenshot tools with each one's note. `generation-context.ts` (workspace chats) and `bot-runtime/bot-extension.ts` (Bots, on the desktop and under `aiden serve`) both trim through `trimScreenshots`; `bot-images.ts` keeps only `withImageReferences`, and its per-tool fixed windows are gone. The cut is simulated over the whole transcript in order, so the same history always cuts at the same screenshot, and a cut image becomes its tool's fixed note, so a replayed or retried request renders the same bytes. Only the request is trimmed; the stored transcript keeps every image.
+- **Screenshots.** `main/services/screenshot-trimming.ts` holds the thresholds (`SCREENSHOT_TRIM_LIMITS`: a cut once more than 8 screenshots are kept or they pass 15 MiB, down to the newest 3 within 8 MiB, the newest always kept) and the screenshot tools with each one's note. `generation-context.ts` (workspace chats) and `bot-runtime/bot-extension.ts` (Bots, on the desktop and under `aiden serve`) both trim through `trimScreenshots`; `bot-images.ts` keeps only `withImageReferences`, and its per-tool fixed windows are gone. The cut is simulated over the whole transcript in order, so the same history always cuts at the same screenshot, and a cut image becomes its tool's fixed note, so a replayed or retried request renders the same bytes. Only the request is trimmed; the stored transcript keeps every image.
 - **Gemini.** The explicit cache is retired. `gemini-context-cache.ts`, its test and the research probe `context-google-static-cache.ts` are deleted, and llm-client no longer builds a workspace snapshot or wraps the Google request in an `onPayload` hook. There was no setting, IPC channel or renderer surface for it. Requests carry the system instruction and tools inline, and Gemini's implicit cache reads the prefix; `usage-accounting.ts` still meters its `cachedContentTokenCount` as cache-read tokens. Caches created by earlier builds expire on their own one-hour TTL.
 - **Why implicit, not a journaled-head explicit cache.** The prefix harness gained the Google Generative AI wire and every per-wire stability case passes on it: the AGENTS.md and MCP cases, tool loops and turn boundaries all extend the previous request byte for byte. Implicit caching therefore covers tools, system and the whole message history, while an explicit cache keyed on the journaled head would cover only tools and system, and would add a create call, storage cost and cleanup. No live replay was run (that needs a paid Google key and the network); the decision rests on the harness and on the old key, which took per-file sizes and mtimes and git `uncommitted`, `ahead` and `behind` counts, so it was rebuilt nearly every turn.
 
 The code differed from the plan in these ways:
 
+- **Lower byte marks.** The plan's 25 MiB high-water mark and 15 MiB cut are above Gemini's whole-request inline limit (about 20 MB), so the marks are 15 MiB and 8 MiB. One fixed rule for every provider keeps the cut a function of the transcript alone. A single screenshot larger than the limit still stays, as the newest always does.
 - **The screenshot tools share one count.** Computer Use, a Bot's own computer and `browser_snapshot` are counted together against one request limit, since they share one request. Images from any other tool, and images the person attached, are neither counted nor cut.
 - **A cut leaves a note, not nothing.** Each cut screenshot becomes a fixed text part ("An older screenshot was left out of this request…", worded per tool), so the model knows to look again and the bytes never vary.
 - **Bots now trim host Computer Use screenshots too.** Before, Bots trimmed only their browser and Bot-computer images.
@@ -557,7 +558,7 @@ The code differed from the plan in these ways:
 - **No CLI change.** The server never used the explicit cache; it runs the same Pi Google adapter, and Bot trimming reaches it through the shared `bot-extension.ts`.
 
 Tests:
-- `screenshot-trimming.test.ts`: over 24 screenshots, earlier messages change only at steps 9, 15 and 21 and each cut keeps the newest three; the byte limit cuts at its own steps to what fits in 15 MiB; the newest screenshot stays even when it alone passes both limits; the three screenshot tools share one count while file-tool and attached images are untouched.
+- `screenshot-trimming.test.ts`: over 24 screenshots, earlier messages change only at steps 9, 15 and 21 and each cut keeps the newest three; the byte limit cuts at its own steps to what fits in 8 MiB; the newest screenshot stays even when it alone passes both limits; the three screenshot tools share one count while file-tool and attached images are untouched.
 - `generation-context.test.ts`, `bot-browser-tools.test.ts`, `bot-computer-tools.test.ts`: the workspace and Bot projections cut at the batch thresholds with their tools' notes.
 - `prompt-prefix-stability.test.ts`: every per-wire case runs on Google Generative AI too, and a Gemini chat's tool loop and next turn send the system instruction and tools inline, carry no `cachedContent`, extend the previous request byte for byte and make no network call.
 

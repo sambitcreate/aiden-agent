@@ -86,25 +86,25 @@ test("screenshots are cut only at the count limit, and each cut keeps the newest
 });
 
 test("screenshots are cut at the byte limit too, down to what fits in the smaller budget", () => {
-  // Six MiB each: the fifth passes 25 MiB and the cut keeps the newest two
-  // (three would pass 15 MiB). Two more fit, and the eighth passes 25 MiB again.
-  const datas = Array.from({ length: 9 }, (_, index) => String(index).repeat(6 * MIB));
+  // Three MiB each: the sixth passes 15 MiB and the cut keeps the newest two
+  // (three would pass 8 MiB). Three more fit, and the tenth passes 15 MiB again.
+  const datas = Array.from({ length: 10 }, (_, index) => String(index).repeat(3 * MIB));
   const { requests, edited } = run(datas, "browser_snapshot");
-  assert.deepEqual(edited, [5, 8]);
+  assert.deepEqual(edited, [6, 10]);
   for (const step of edited) {
     const kept = carried(requests[step - 1]!);
     assert.deepEqual(kept, datas.slice(step - 2, step), `step ${step} keeps the newest two`);
     assert.ok(kept.join("").length <= SCREENSHOT_TRIM_LIMITS.keepBytes);
     assert.ok(kept.length <= SCREENSHOT_TRIM_LIMITS.keepImages);
   }
-  const notes = requests[8]!.flatMap((message) =>
+  const notes = requests[9]!.flatMap((message) =>
     message.role === "toolResult" ? message.content.filter((part) => part.type === "text" && part.text === OLDER_BROWSER_SCREENSHOT_NOTE) : [],
   );
-  assert.equal(notes.length, 6, "each cut browser screenshot leaves the browser note");
+  assert.equal(notes.length, 8, "each cut browser screenshot leaves the browser note");
 });
 
 test("the newest screenshot stays even when it alone passes both limits", () => {
-  const huge = "x".repeat(30 * MIB);
+  const huge = "x".repeat(20 * MIB);
   const { requests, edited } = run(["small-1", "small-2", huge]);
   assert.deepEqual(edited, [3]);
   assert.deepEqual(carried(requests[2]!), [huge]);
