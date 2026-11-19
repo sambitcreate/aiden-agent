@@ -1030,6 +1030,7 @@
         "renderer/components/settings/dictation-shortcut-settings.test.tsx",
         "renderer/components/settings/telegram-settings.test.tsx",
         "renderer/components/settings/settings-page.test.tsx",
+        "renderer/component-sink/component-sink.test.tsx",
         "renderer/components/settings/appearance-settings.test.tsx",
         "renderer/components/settings/shortcut-settings.test.tsx",
         "renderer/components/settings/provider-editor.test.tsx",

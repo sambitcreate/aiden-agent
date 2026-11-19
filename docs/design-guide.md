@@ -337,6 +337,27 @@ Pickers and palettes match with `renderer/lib/text-match.ts`, not cmdk's filter
 
 `tests/e2e/accessibility.spec.ts` opens Aiden's core surfaces (the chat window and composer, the model picker, the command palette, a confirm dialog, Settings) and runs axe with the WCAG 2.x A and AA tags through `auditAccessibility` in `tests/e2e/axe-gate.ts`. Each surface also gets one small `toMatchAriaSnapshot`. To add a surface, open it in a new `test.step`, call `auditAccessibility(page, { surface, include })` with its root selector, and snapshot only its stable structure: roles, names and states, with no model lists, dates or platform shortcut text. Fix violations in the component. When a fix is out of scope, add an `AXE_EXCLUSIONS` entry keyed by surface, rule id and target selector, with a reason. An entry that stops matching fails the gate until it is deleted, so the list only shrinks.
 
+## Component sink
+
+`npm run dev:sink` starts the renderer dev server on port 4144 and opens
+`component-sink.html`. While `npm run dev` is running, the same page is at
+`http://127.0.0.1:4143/component-sink.html`. It is a plain browser page with no
+preload, so only the shared primitives work there, not anything that calls IPC.
+It shows every shared primitive from `ui.tsx`, `ui-primitives.tsx`,
+`ui-info-hint.tsx` and `settings/settings-page.tsx` in its states: button
+variants at rest, disabled and loading; inputs empty, filled, disabled and
+invalid; switches, checkboxes, radios and sliders; badges and status fills;
+tooltips, menus, popovers and dialogs behind trigger buttons; and Settings
+groups, rows and folds. The toolbar picks a theme preset and Light or Dark and
+applies them with `applyAppearanceConfig`, as the app does, then puts the
+app's cached appearance back.
+
+The page exists only in development. `vite.config.ts` does not list it as a
+build input, and nothing in the app links to it, so the packaged renderer
+contains none of it. `renderer/component-sink/component-sink.test.tsx` fails
+when one of those four modules exports a component that no case's `data-sink`
+names. Add a case for a new primitive, or a reason in the test's `NOT_IN_SINK`.
+
 ## Enforced rules
 
 `npm run check:aiden-rules` (`scripts/check-aiden-rules.mjs`) checks the rules a

@@ -140,6 +140,8 @@ npm install
 npm run dev
 ```
 
+`npm run dev:sink` opens the development-only component sink, a page of every shared UI primitive in its states with a theme preset and Light/Dark toolbar. See [Component sink](docs/design-guide.md#component-sink).
+
 The native Aiden On The Go iPhone and iPad client lives in [`ios/`](ios/README.md). It is not part of the Electron development command; open `ios/AidenOnTheGo.xcodeproj` or use the documented physical-device `xcodebuild` commands separately.
 
 ### Mobile distribution
