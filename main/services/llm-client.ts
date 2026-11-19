@@ -2547,6 +2547,7 @@ async function prepareGeneration(
         supportsImages
           ? designCanvasSnapshots.request({ chatId: params.chatId, owner: browserOwner, signal: toolSignal ?? signal })
           : null,
+      seesImages: supportsImages,
       // Drawn offline in a hidden window, through the same scheme and grant the canvas uses.
       inspect: (frame, inspectOptions, toolSignal) =>
         inspectDesignPage({

@@ -428,17 +428,34 @@ test("Aiden reads and places on a page it names, and focusing a frame on another
   assert.equal((await call("canvas_focus", {})).status, "error", "an empty page has nothing to show");
 });
 
-test("canvas_read with snapshot shows Aiden the canvas picture, or says it is not on screen", async (t) => {
+test("canvas_read with snapshot shows Aiden the canvas picture, or says why there is none", async (t) => {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-canvas-snapshot-"));
   t.after(() => fs.rm(base, { recursive: true, force: true }));
   let picture: { data: string; mimeType: string } | null = { data: "iVBORw0KGgo=", mimeType: "image/png" };
-  const read = createDesignCanvasTools({
-    chatId: "chat-1",
-    workspaceRoot: base,
-    store: new DesignCanvasStore({ root: () => base }),
-    broadcast: () => undefined,
-    snapshot: async () => picture,
-  }).find((tool) => tool.name === "canvas_read")!;
+  let asked = 0;
+  const store = new DesignCanvasStore({ root: () => base });
+  const toolsFor = (seesImages?: boolean) =>
+    createDesignCanvasTools({
+      chatId: "chat-1",
+      workspaceRoot: base,
+      store,
+      broadcast: () => undefined,
+      snapshot: async () => {
+        asked += 1;
+        return picture;
+      },
+      ...(seesImages === undefined ? {} : { seesImages }),
+    }).find((tool) => tool.name === "canvas_read")!;
+  const read = toolsFor();
+  const reason = async (tool: typeof read, args: Record<string, unknown>) => {
+    const output = await tool.execute("c", args as never);
+    assert.deepEqual(output.content.map((part) => part.type), ["text"], "no picture");
+    const first = output.content[0];
+    assert.ok(first && first.type === "text");
+    const answer = JSON.parse(first.text);
+    assert.equal(answer.snapshot, "unavailable");
+    return answer.snapshotReason as string;
+  };
 
   const plain = await read.execute("c", {} as never);
   assert.deepEqual(plain.content.map((part) => part.type), ["text"], "no picture unless asked");
@@ -446,12 +463,22 @@ test("canvas_read with snapshot shows Aiden the canvas picture, or says it is no
   assert.deepEqual(withPicture.content.map((part) => part.type), ["text", "image"]);
   assert.deepEqual(withPicture.content[1], { type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" });
 
+
+  await store.update("chat-1", (doc) => addPage(doc, "p2", "Pricing"));
+  await store.update("chat-1", (doc) => showPage(doc, doc.pages[0]!.id));
+  const before = asked;
+  const otherPage = await reason(read, { snapshot: true, page: "Pricing" });
+  assert.match(otherPage, /"Page 1"/u, "names the page on screen");
+  assert.match(otherPage, /canvas_focus with page "Pricing"/u, "says how to bring the asked page on screen");
+  assert.equal(asked, before, "no picture of the wrong page is taken");
+
+  const blind = await reason(toolsFor(false), { snapshot: true });
+  assert.match(blind, /can't see pictures/u);
+  assert.doesNotMatch(blind, /not on screen/u, "a model that can't see is not told the canvas is hidden");
+  assert.equal(asked, before, "no snapshot is taken for a model that can't see it");
+
   picture = null;
-  const offScreen = await read.execute("c", { snapshot: true } as never);
-  assert.deepEqual(offScreen.content.map((part) => part.type), ["text"]);
-  const first = offScreen.content[0];
-  assert.ok(first && first.type === "text");
-  assert.equal(JSON.parse(first.text).snapshot, "unavailable");
+  assert.match(await reason(read, { snapshot: true }), /not on screen/u);
 });
 
 test("canvas_inspect draws the page a frame shows and hands Aiden the report, with the picture when there is one", async (t) => {

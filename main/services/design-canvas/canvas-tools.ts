@@ -200,6 +200,8 @@ export type DesignCanvasToolDeps = {
   focus?(frameIds: string[]): void;
   /** A downscaled PNG of the canvas as the person sees it, or null when it is not on screen. */
   snapshot?(signal?: AbortSignal): Promise<{ data: string; mimeType: string } | null>;
+  /** False when the turn's model can't see pictures: canvas_read then takes no snapshot and says why. Defaults to true. */
+  seesImages?: boolean;
   /**
    * Draws one page frame offline at its design width and reports what went
    * wrong (inspect.ts), with a picture starting `top` px down when `picture`.
@@ -589,12 +591,22 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               throw new CanvasToolError("offset must be a whole number of frames, 0 or more: the nextOffset an earlier answer gave.");
             }
             const answer = describeCanvas(doc, { pageId: pageOf(doc, p.page), ...(offset !== undefined ? { offset } : {}) });
-            // The snapshot shows the screen, so it only describes the page on screen.
-            if (p.snapshot !== true || answer.page.id !== doc.activePageId) return answer;
+            if (p.snapshot !== true) return answer;
+            const unavailable = (snapshotReason: string) => ({ ...answer, snapshot: "unavailable", snapshotReason });
+            if (deps.seesImages === false) {
+              return unavailable(
+                "This model can't see pictures, so no snapshot was taken. The frames listed here describe the page; canvas_inspect reports in words what a page frame draws.",
+              );
+            }
+            // The snapshot shows the screen, so it only pictures the page on screen.
+            if (answer.page.id !== doc.activePageId) {
+              const onScreen = doc.pages.find((entry) => entry.id === doc.activePageId)?.name ?? "another page";
+              return unavailable(
+                `A snapshot shows only the page on screen, which is "${onScreen}", not "${answer.page.name}". Call canvas_focus with page "${answer.page.name}" to bring it on screen first, or canvas_inspect for a picture of one of its page frames.`,
+              );
+            }
             const image = deps.snapshot ? await deps.snapshot(signal) : null;
-            return image
-              ? new WithImage({ ...answer, snapshot: "attached" }, image)
-              : { ...answer, snapshot: "unavailable", snapshotReason: "The canvas is not on screen right now." };
+            return image ? new WithImage({ ...answer, snapshot: "attached" }, image) : unavailable("The canvas is not on screen right now.");
           }),
       },
       "safe",
