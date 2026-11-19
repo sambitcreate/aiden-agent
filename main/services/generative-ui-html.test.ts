@@ -255,6 +255,40 @@ const REFUSED_MARKUP: Record<string, string> = {
     "<button onclick=\"[1,2].with(0,3) /1; location='javascript:alert(1)'; 2/ 1\">Go</button>",
   "an onclick that navigates after a division that follows a for method call":
     "<button onclick=\"o.for() /1; location='javascript:alert(1)'; 2/ 1\">Go</button>",
+  // A / that could start a regex or divide: each is a division in real
+  // JavaScript, so the sink between the two slashes runs.
+  "an <iframe> written after a division that follows an object literal":
+    '<script>var a={}/1; document.body.innerHTML="<iframe src=https://e.test></iframe>"; var b=2/ 1;</script>',
+  "an <iframe> written after a division that follows a postfix increment":
+    '<script>var i=0; var a=i++ /1; document.body.innerHTML="<iframe src=https://e.test></iframe>"; var b=2/ 1;</script>',
+  "an <iframe> written after a division that follows a property named of":
+    '<script>var o={of:4}; var a=o.of /1; document.body.innerHTML="<iframe src=https://e.test></iframe>"; var b=2/ 1;</script>',
+  "an <iframe> written after a division that follows a variable named of":
+    '<script>var of=4; var a=of /1; document.body.innerHTML="<iframe src=https://e.test></iframe>"; var b=2/ 1;</script>',
+  "an <iframe> written after a division that follows a variable named yield":
+    '<script>var yield=4; var a=yield /1; document.body.innerHTML="<iframe src=https://e.test></iframe>"; var b=2/ 1;</script>',
+  "an <iframe> written after a division that follows a variable named await":
+    '<script>var await=4; var a=await /1; document.body.innerHTML="<iframe src=https://e.test></iframe>"; var b=2/ 1;</script>',
+  "an <iframe> written after a division that follows a property named in":
+    '<script>var o={in:4}; var a=o.in /1; document.body.innerHTML="<iframe src=https://e.test></iframe>"; var b=2/ 1;</script>',
+  "an <iframe> written after a division that follows a property named return":
+    '<script>var o={return:4}; var a=o.return /1; document.body.innerHTML="<iframe src=https://e.test></iframe>"; var b=2/ 1;</script>',
+  "a javascript: URL after a division that follows a template literal":
+    "<script>var t=`a${1}b` /1; location='javascript:alert(1)'; var b=2/ 1;</script>",
+  "an onclick that navigates after a division that follows an object literal":
+    "<button onclick=\"var a={}/1; location='javascript:alert(1)'; var b=2/ 1\">Go</button>",
+  "an onclick that navigates after a division that follows a postfix increment":
+    "<button onclick=\"var i=0; var a=i++ /1; location='javascript:alert(1)'; var b=2/ 1\">Go</button>",
+  "an onclick that navigates after a division that follows a variable named of":
+    "<button onclick=\"var of=4; var a=of /1; location='javascript:alert(1)'; var b=2/ 1\">Go</button>",
+  // <!-- anywhere and --> at the start of a line begin a line comment in a
+  // classic script or handler, so the /* after them opens nothing.
+  "an <iframe> written after an HTML-like comment opener":
+    '<script><!-- /*\ndocument.body.innerHTML="<iframe src=https://e.test></iframe>";\n// */</script>',
+  "an <iframe> written after an HTML-like comment closer at a line start":
+    '<script>var z=1;\n--> /*\ndocument.body.innerHTML="<iframe src=https://e.test></iframe>";\n// */</script>',
+  "an onclick that navigates after an HTML-like comment opener":
+    "<button onclick=\"<!-- /*\nlocation='javascript:alert(1)'\n// */\">Go</button>",
 };
 
 const ADMITTED_MARKUP: Record<string, string> = {
@@ -278,6 +312,8 @@ const ADMITTED_MARKUP: Record<string, string> = {
   "innerHTML that writes a label naming JavaScript": '<script>legend.innerHTML = "<b>JavaScript: 41%</b>";</script>',
   "a division after a parenthesized value": "<script>var r = (a) / 2; var s = \"/\"; location='https://x';</script>",
   "a division inside an if body": '<script>if (x) { y = (a + b) / "2"; }</script>',
+  "a regex after a block": '<script>if (ok) { draw(); } /^#/.test(location.hash) && open(); var w = n++ / 2;</script>',
+  "a division after a template literal": "<script>var h = `${rows}` / 2; label.textContent = h + ' rows';</script>",
 };
 
 for (const [name, html] of Object.entries(REFUSED_MARKUP)) {

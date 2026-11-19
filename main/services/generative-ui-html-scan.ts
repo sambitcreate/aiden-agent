@@ -124,20 +124,28 @@ interface JsToken {
   substituted?: boolean;
   /** A `)` that ends an `if`, `while`, `for` or `with` head, after which a statement starts. */
   closesHead?: boolean;
+  /** A `}` that ends a template's last substitution and the template with it. */
+  closesTemplate?: boolean;
+  /** A `++` or `--` that follows its operand on the same line. */
+  postfix?: boolean;
 }
 
 const PUNCTUATORS = [
   ">>>=", "...", "===", "!==", "**=", "<<=", ">>=", ">>>", "&&=", "||=", "??=",
   "=>", "==", "!=", "<=", ">=", "&&", "||", "??", "?.", "++", "--", "+=", "-=", "*=", "%=", "&=", "|=", "^=", "**", "<<", ">>",
 ];
+/** Reserved words after which an expression, so a regex, starts. */
 const REGEX_AFTER_KEYWORDS: ReadonlySet<string> = new Set([
-  "return", "typeof", "case", "do", "else", "in", "instanceof", "new", "delete", "void", "throw", "yield", "await", "of",
+  "return", "typeof", "case", "do", "else", "in", "instanceof", "new", "delete", "void", "throw",
 ]);
+/** Words that are keywords in some code (generators, async functions, for-of heads) and plain names in other code. */
+const CONTEXTUAL_KEYWORDS: ReadonlySet<string> = new Set(["yield", "await", "of"]);
 /** Keywords whose parenthesized head is followed by a statement, where `/` starts a regex. */
 const HEAD_KEYWORDS: ReadonlySet<string> = new Set(["if", "while", "for", "with"]);
 const SIMPLE_ESCAPES: Readonly<Record<string, string>> = { n: "\n", t: "\t", r: "\r", b: "\b", f: "\f", v: "\v", 0: "\0" };
 const IDENTIFIER_START = /[\p{ID_Start}$_]/u;
 const IDENTIFIER_PART = /[\p{ID_Continue}$_‌‍]/u;
+const LINE_BREAK = /[\n\r\u2028\u2029]/u;
 
 /** Reads one escape at `at` (just past the backslash); returns the cooked text and the index after it. */
 function readEscape(code: string, at: number): [string, number] {
@@ -161,23 +169,168 @@ function readEscape(code: string, at: number): [string, number] {
   return [SIMPLE_ESCAPES[char] ?? char, at + 1];
 }
 
+/** An immutable stack, so a second reading can start from the first one's state and be compared with it cheaply. */
+interface Stack<T> {
+  readonly top: T;
+  readonly below: Stack<T> | undefined;
+}
+
+interface LexState {
+  at: number;
+  /** For each open `{` or `${`: the template token a `}` resumes, or null. */
+  braces: Stack<JsToken | null> | undefined;
+  /** For each open `(`: whether it starts an `if`/`while`/`for`/`with` head. */
+  parens: Stack<boolean> | undefined;
+  /** The last three tokens, oldest first. */
+  tail: JsToken[];
+  /** A line break since the last token. */
+  lineBreak: boolean;
+}
+
+/** A place the code reads two ways: the state there and the number of tokens before it. */
+interface LexFork {
+  state: LexState;
+  tokenIndex: number;
+}
+
+const isOperandEnd = (token: JsToken | undefined): boolean => {
+  if (token === undefined) return false;
+  if (token.kind === "name") return !REGEX_AFTER_KEYWORDS.has(token.text);
+  if (token.kind === "punct") return token.text === ")" || token.text === "]" || token.closesTemplate === true;
+  return true;
+};
+
 /**
  * Splits JavaScript into tokens, linearly. Strings and regular expressions
  * end at a line break, so a misread `/` costs at most the rest of its line.
+ *
+ * Some places read two ways without parsing the whole program: a `/` after
+ * `}` (a block or an object), after `)`, after `++`/`--`, or after yield,
+ * await or of (keywords or plain names), and an HTML-like comment (`<!--`,
+ * or `-->` starting a line), which classic scripts skip and modules read as
+ * operators. The first reading takes the likelier one and records each such
+ * place as a fork; `readOtherWay` then lexes the other reading from there
+ * until the two meet again.
  */
-function lexJs(code: string): JsToken[] {
-  const tokens: JsToken[] = [];
-  /** For each open `{` or `${`: the template token a `}` resumes, or null. */
-  const braces: (JsToken | null)[] = [];
-  /** For each open `(`: whether it starts an `if`/`while`/`for`/`with` head. */
-  const parens: boolean[] = [];
-  let lastSignificant: JsToken | undefined;
-  const push = (token: JsToken) => {
-    tokens.push(token);
-    lastSignificant = token;
-  };
+class JsLexer {
+  readonly tokens: JsToken[] = [];
+  readonly forks: LexFork[] = [];
+  /** For the first reading: the state before each token that starts a step, indexed like `tokens`. */
+  readonly bracesAt: (Stack<JsToken | null> | undefined)[] = [];
+  readonly parensAt: (Stack<boolean> | undefined)[] = [];
+  readonly lineBreakAt: boolean[] = [];
+  readonly stepAt: boolean[] = [];
+  at: number;
+  braces: Stack<JsToken | null> | undefined;
+  parens: Stack<boolean> | undefined;
+  tail: JsToken[];
+  lineBreak: boolean;
+
+  constructor(
+    private readonly code: string,
+    state: LexState,
+    /** The fork this lexer reads the other way, or undefined for the first reading. */
+    private readonly flipAt?: number,
+  ) {
+    this.at = state.at;
+    this.braces = state.braces;
+    this.parens = state.parens;
+    this.tail = [...state.tail];
+    this.lineBreak = state.lineBreak;
+  }
+
+  private get first(): boolean {
+    return this.flipAt === undefined;
+  }
+
+  private state(): LexState {
+    return { at: this.at, braces: this.braces, parens: this.parens, tail: [...this.tail], lineBreak: this.lineBreak };
+  }
+
+  /** Takes the likelier reading of an ambiguous place, or the other one at the fork being reread. */
+  private choose(likelier: boolean): boolean {
+    if (this.at === this.flipAt) return !likelier;
+    if (this.first) this.forks.push({ state: this.state(), tokenIndex: this.tokens.length });
+    return likelier;
+  }
+
+  private push(token: JsToken): void {
+    this.tokens.push(token);
+    this.tail.push(token);
+    if (this.tail.length > 3) this.tail.shift();
+    this.lineBreak = false;
+  }
+
+  /** Lexes the whole code (the first reading). */
+  run(): void {
+    while (this.skipTrivia()) {
+      this.bracesAt[this.tokens.length] = this.braces;
+      this.parensAt[this.tokens.length] = this.parens;
+      this.lineBreakAt[this.tokens.length] = this.lineBreak;
+      this.stepAt[this.tokens.length] = true;
+      this.step();
+    }
+  }
+
+  /** Skips white space and comments; returns whether a token follows. */
+  skipTrivia(): boolean {
+    const code = this.code;
+    while (this.at < code.length) {
+      const char = code[this.at]!;
+      if (/\s/u.test(char)) {
+        if (LINE_BREAK.test(char)) this.lineBreak = true;
+        this.at += 1;
+        continue;
+      }
+      const lineComment =
+        (char === "/" && code[this.at + 1] === "/") ||
+        (char === "<" && code.startsWith("<!--", this.at) && this.choose(true)) ||
+        (char === "-" && code.startsWith("-->", this.at) && (this.lineBreak || this.tail.length === 0) && this.choose(true));
+      if (lineComment) {
+        while (this.at < code.length && !LINE_BREAK.test(code[this.at]!)) this.at += 1;
+        continue;
+      }
+      if (char === "/" && code[this.at + 1] === "*") {
+        const close = code.indexOf("*/", this.at + 2);
+        const end = close === -1 ? code.length : close + 2;
+        if (LINE_BREAK.test(code.slice(this.at, end))) this.lineBreak = true;
+        this.at = end;
+        continue;
+      }
+      return true;
+    }
+    return false;
+  }
+
+  /** Whether a `/` here starts a regex. */
+  private regexAllowed(): boolean {
+    const previous = this.tail[this.tail.length - 1];
+    if (previous === undefined) return true;
+    const before = this.tail[this.tail.length - 2];
+    if (previous.kind === "name") {
+      if (before?.kind === "punct" && (before.text === "." || before.text === "?.")) return false;
+      if (REGEX_AFTER_KEYWORDS.has(previous.text)) return true;
+      return CONTEXTUAL_KEYWORDS.has(previous.text) ? this.choose(true) : false;
+    }
+    if (previous.kind !== "punct") return false;
+    switch (previous.text) {
+      case ")":
+        return previous.closesHead === true || this.choose(false);
+      case "]":
+        return false;
+      case "}":
+        return previous.closesTemplate === true ? false : this.choose(true);
+      case "++":
+      case "--":
+        return this.choose(previous.postfix !== true);
+      default:
+        return true;
+    }
+  }
+
   /** Reads template text from `at` (after "`" or "}") into `token`; returns the index after it. */
-  const readTemplate = (token: JsToken, at: number): number => {
+  private readTemplate(token: JsToken, at: number): number {
+    const code = this.code;
     let text = "";
     while (at < code.length) {
       const char = code[at]!;
@@ -192,7 +345,7 @@ function lexJs(code: string): JsToken[] {
         if (!token.substituted) token.value = (token.value ?? "") + text;
         token.substituted = true;
         token.end = at + 2;
-        braces.push(token);
+        this.braces = { top: token, below: this.braces };
         return at + 2;
       }
       if (char === "\\") {
@@ -208,36 +361,18 @@ function lexJs(code: string): JsToken[] {
     if (!token.substituted) token.value = (token.value ?? "") + text;
     token.end = code.length;
     return code.length;
-  };
+  }
 
-  let at = 0;
-  while (at < code.length) {
-    const char = code[at]!;
-    if (/\s/u.test(char)) {
-      at += 1;
-      continue;
-    }
-    const start = at;
-    if (char === "/" && code[at + 1] === "/") {
-      while (at < code.length && code[at] !== "\n" && code[at] !== "\r") at += 1;
-      continue;
-    }
-    if (char === "/" && code[at + 1] === "*") {
-      const close = code.indexOf("*/", at + 2);
-      at = close === -1 ? code.length : close + 2;
-      continue;
-    }
+  /** Lexes the token at `at`, after `skipTrivia` returned true. */
+  step(): void {
+    const code = this.code;
+    const char = code[this.at]!;
+    const start = this.at;
     if (char === "/") {
-      const previous = lastSignificant;
-      const regexAllowed =
-        previous === undefined ||
-        (previous.kind === "punct" && previous.text !== ")" && previous.text !== "]") ||
-        previous.closesHead === true ||
-        (previous.kind === "name" && REGEX_AFTER_KEYWORDS.has(previous.text));
-      if (regexAllowed) {
-        at += 1;
+      if (this.regexAllowed()) {
+        let at = this.at + 1;
         let inClass = false;
-        while (at < code.length && code[at] !== "\n" && code[at] !== "\r") {
+        while (at < code.length && !LINE_BREAK.test(code[at]!)) {
           const next = code[at]!;
           if (next === "\\") at += 2;
           else {
@@ -248,16 +383,17 @@ function lexJs(code: string): JsToken[] {
           }
         }
         while (at < code.length && IDENTIFIER_PART.test(code[at]!)) at += 1;
-        push({ kind: "other", text: "regex", start, end: at });
-        continue;
+        this.at = at;
+        this.push({ kind: "other", text: "regex", start, end: at });
+        return;
       }
-      const text = code[at + 1] === "=" ? "/=" : "/";
-      at += text.length;
-      push({ kind: "punct", text, start, end: at });
-      continue;
+      const text = code[this.at + 1] === "=" ? "/=" : "/";
+      this.at += text.length;
+      this.push({ kind: "punct", text, start, end: this.at });
+      return;
     }
     if (char === '"' || char === "'") {
-      at += 1;
+      let at = this.at + 1;
       let value = "";
       while (at < code.length && code[at] !== char && code[at] !== "\n" && code[at] !== "\r") {
         if (code[at] === "\\") {
@@ -270,60 +406,127 @@ function lexJs(code: string): JsToken[] {
         }
       }
       if (code[at] === char) at += 1;
-      push({ kind: "string", text: code.slice(start, at), start, end: at, value });
-      continue;
+      this.at = at;
+      this.push({ kind: "string", text: code.slice(start, at), start, end: at, value });
+      return;
     }
     if (char === "`") {
       const token: JsToken = { kind: "template", text: "`", start, end: start + 1, value: "", parts: "" };
-      push(token);
-      at = readTemplate(token, at + 1);
-      if (token.substituted && braces[braces.length - 1] === token) push({ kind: "punct", text: "${", start: token.end - 2, end: token.end });
-      continue;
+      this.push(token);
+      this.at = this.readTemplate(token, this.at + 1);
+      if (token.substituted && this.braces?.top === token) this.push({ kind: "punct", text: "${", start: token.end - 2, end: token.end });
+      return;
     }
-    if (char === "}" && braces.length > 0 && braces[braces.length - 1] !== null) {
-      const template = braces.pop()!;
-      push({ kind: "punct", text: "}", start, end: start + 1 });
-      const depth = braces.length;
-      at = readTemplate(template, at + 1);
-      if (braces.length > depth) push({ kind: "punct", text: "${", start: template.end - 2, end: template.end });
-      continue;
+    if (char === "}" && this.braces !== undefined && this.braces.top !== null) {
+      // The other reading copies a template it resumes, so the first reading's tokens stay as they are.
+      const template = this.first ? this.braces.top : { ...this.braces.top };
+      this.braces = this.braces.below;
+      const close: JsToken = { kind: "punct", text: "}", start, end: start + 1 };
+      this.push(close);
+      const below = this.braces;
+      this.at = this.readTemplate(template, this.at + 1);
+      if (this.braces !== below) this.push({ kind: "punct", text: "${", start: template.end - 2, end: template.end });
+      else close.closesTemplate = true;
+      return;
     }
     if (IDENTIFIER_START.test(char) || char === "\\") {
-      at += 1;
+      let at = this.at + 1;
       while (at < code.length && (IDENTIFIER_PART.test(code[at]!) || code[at] === "\\")) at += 1;
-      push({ kind: "name", text: code.slice(start, at), start, end: at });
-      continue;
+      this.at = at;
+      this.push({ kind: "name", text: code.slice(start, at), start, end: at });
+      return;
     }
-    if (/[0-9]/u.test(char) || (char === "." && /[0-9]/u.test(code[at + 1] ?? ""))) {
-      at += 1;
+    if (/[0-9]/u.test(char) || (char === "." && /[0-9]/u.test(code[this.at + 1] ?? ""))) {
+      let at = this.at + 1;
       while (at < code.length && /[0-9a-z_.]/iu.test(code[at]!)) at += 1;
-      push({ kind: "other", text: code.slice(start, at), start, end: at });
-      continue;
+      this.at = at;
+      this.push({ kind: "other", text: code.slice(start, at), start, end: at });
+      return;
     }
-    const punctuator = PUNCTUATORS.find((candidate) => code.startsWith(candidate, at)) ?? char;
-    at += punctuator.length;
-    if (punctuator === "{") braces.push(null);
-    else if (punctuator === "}") braces.pop();
-    const token: JsToken = { kind: "punct", text: punctuator, start, end: at };
-    if (punctuator === "(") {
+    const punctuator = PUNCTUATORS.find((candidate) => code.startsWith(candidate, this.at)) ?? char;
+    this.at += punctuator.length;
+    const token: JsToken = { kind: "punct", text: punctuator, start, end: this.at };
+    if (punctuator === "{") this.braces = { top: null, below: this.braces };
+    else if (punctuator === "}") this.braces = this.braces?.below;
+    else if (punctuator === "++" || punctuator === "--") {
+      // A line break before ++ or -- ends the statement, so it applies to what follows.
+      token.postfix = !this.lineBreak && isOperandEnd(this.tail[this.tail.length - 1]);
+    } else if (punctuator === "(") {
       // A keyword read as a property (`o.if(`, `[].with(`) is a method call,
       // not a statement head, so the `/` after its `)` divides.
+      const tail = this.tail;
       const followsDot = (offset: number) => {
-        const previous = tokens[tokens.length - offset];
+        const previous = tail[tail.length - offset];
         return previous?.kind === "punct" && (previous.text === "." || previous.text === "?.");
       };
-      const before = tokens[tokens.length - 2];
-      parens.push(
-        lastSignificant?.kind === "name" &&
-          ((HEAD_KEYWORDS.has(lastSignificant.text) && !followsDot(2)) ||
-            (lastSignificant.text === "await" && before?.kind === "name" && before.text === "for" && !followsDot(3))),
-      );
-    } else if (punctuator === ")" && parens.pop() === true) {
-      token.closesHead = true;
+      const last = tail[tail.length - 1];
+      const before = tail[tail.length - 2];
+      const head =
+        last?.kind === "name" &&
+        ((HEAD_KEYWORDS.has(last.text) && !followsDot(2)) ||
+          (last.text === "await" && before?.kind === "name" && before.text === "for" && !followsDot(3)));
+      this.parens = { top: head, below: this.parens };
+    } else if (punctuator === ")") {
+      if (this.parens?.top === true) token.closesHead = true;
+      this.parens = this.parens?.below;
     }
-    push(token);
+    this.push(token);
   }
-  return tokens;
+}
+
+/** The first token of `tokens` that starts at or after `at`. */
+function tokenIndexAt(tokens: readonly JsToken[], at: number): number {
+  let low = 0;
+  let high = tokens.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (tokens[middle]!.start < at) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
+/** The other reading stops this far past its fork if the two have not met. */
+const OTHER_READING_SPAN = 2048;
+
+/**
+ * Lexes `fork` the other way until it meets the first reading: the same
+ * place, open brackets and last tokens. Returns its tokens, the first
+ * reading's token index to continue from, and how far it read.
+ */
+function readOtherWay(code: string, first: JsLexer, fork: LexFork): { tokens: JsToken[]; resume: number; cost: number } {
+  const from = fork.state.at;
+  const other = new JsLexer(code, fork.state, from);
+  while (other.skipTrivia()) {
+    if (other.at > from) {
+      const index = tokenIndexAt(first.tokens, other.at);
+      const token = first.tokens[index];
+      if (
+        token?.start === other.at &&
+        first.stepAt[index] === true &&
+        first.bracesAt[index] === other.braces &&
+        first.parensAt[index] === other.parens &&
+        first.lineBreakAt[index] === other.lineBreak &&
+        sameTail(first.tokens, index, other.tail)
+      ) {
+        return { tokens: other.tokens, resume: index, cost: other.at - from };
+      }
+      if (other.at - from > OTHER_READING_SPAN) return { tokens: other.tokens, resume: index, cost: other.at - from };
+    }
+    other.step();
+  }
+  return { tokens: other.tokens, resume: first.tokens.length, cost: other.at - from };
+}
+
+function sameTail(tokens: readonly JsToken[], index: number, tail: readonly JsToken[]): boolean {
+  const count = Math.min(3, index);
+  if (tail.length !== count) return false;
+  for (let offset = 1; offset <= count; offset += 1) {
+    const a = tokens[index - offset]!;
+    const b = tail[tail.length - offset]!;
+    if (a.start !== b.start || a.end !== b.end || a.text !== b.text) return false;
+  }
+  return true;
 }
 
 const URL_PROPERTIES: ReadonlySet<string> = new Set(["href", "src", "action", "formAction"]);
@@ -354,19 +557,129 @@ const isLiteral = (token: JsToken | undefined): token is JsToken => token?.kind 
 const isDot = (token: JsToken | undefined) => token?.kind === "punct" && (token.text === "." || token.text === "?.");
 const isPunct = (token: JsToken | undefined, text: string) => token?.kind === "punct" && token.text === text;
 
+const copyFrames = (stack: readonly CallFrame[]): CallFrame[] => stack.map((frame) => ({ ...frame, literals: [...frame.literals] }));
+
+function sameFrame(a: CallFrame, b: CallFrame): boolean {
+  return (
+    a.call === b.call &&
+    a.callee === b.callee &&
+    a.receiver === b.receiver &&
+    a.start === b.start &&
+    a.argument === b.argument &&
+    a.deferred === b.deferred &&
+    a.literals.length === b.literals.length &&
+    a.literals.every((literal, index) => literal === b.literals[index])
+  );
+}
+
+/** How many frames from the bottom two stacks share, or -1 when they are the same. */
+function sharedFrames(a: readonly CallFrame[], b: readonly CallFrame[]): number {
+  const count = Math.min(a.length, b.length);
+  for (let index = 0; index < count; index += 1) {
+    if (!sameFrame(a[index]!, b[index]!)) return index;
+  }
+  return a.length === b.length ? -1 : count;
+}
+
+/** Tokens of the first reading kept before and after the other reading of a fork, for the sink rules' look-behind and look-ahead. */
+const FORK_LEAD_TOKENS = 8;
+const FORK_TRAIL_TOKENS = 8;
+/**
+ * Reading each fork the other way, copying the call frames for it and
+ * checking the first reading after it until the two agree may cost this many
+ * units per character of code in all: a character read or a token or frame
+ * handled is one unit. Ordinary scripts use well under one per character.
+ */
+const FORK_BUDGET_PER_CHARACTER = 8;
+const FORK_BUDGET_FLOOR = 65_536;
+
 /**
  * The first place `code` sends a javascript: or data:text/html URL to a
  * navigation or URL sink, or unsafe markup to an HTML sink. Literals joined
  * with `+` are read as one value; a template's URL ends at its first `${`.
+ * A place that reads two ways (see `JsLexer`) is checked both ways.
  */
 export function findJsSink(code: string, depth = 0): HtmlFindings {
-  const tokens = lexJs(code);
-  const stack: CallFrame[] = [];
+  const lexer = new JsLexer(code, { at: 0, braces: undefined, parens: undefined, tail: [], lineBreak: false });
+  lexer.run();
+  const tokens = lexer.tokens;
   let found: HtmlFindings = {};
   const note = (findings: HtmlFindings) => {
-    found = { embed: found.embed ?? findings.embed, url: found.url ?? findings.url ?? findings.limit };
+    found = { ...found, embed: found.embed ?? findings.embed, url: found.url ?? findings.url ?? findings.limit };
   };
-  for (let index = 0; index < tokens.length && (found.embed === undefined || found.url === undefined); index += 1) {
+  const done = () => found.limit !== undefined || (found.embed !== undefined && found.url !== undefined);
+  let budget = FORK_BUDGET_PER_CHARACTER * code.length + FORK_BUDGET_FLOOR;
+  const spend = (units: number) => {
+    budget -= units;
+    if (budget < 0) found.limit ??= "a script reads two ways in too many places";
+  };
+
+  // Read every fork the other way first, so the first reading's scan can keep
+  // its call frames both where each fork starts and where the readings meet.
+  const others: { tokens: JsToken[]; resume: number; meet: number }[] = [];
+  for (const fork of lexer.forks) {
+    const other = readOtherWay(code, lexer, fork);
+    spend(other.cost + other.tokens.length);
+    if (found.limit !== undefined) return found;
+    // Past the meeting point, keep a chain of literals joined with `+` whole.
+    let meet = Math.min(other.resume + FORK_TRAIL_TOKENS, tokens.length);
+    while (meet < tokens.length && (isPunct(tokens[meet], "+") ? isLiteral(tokens[meet - 1]) : isLiteral(tokens[meet]) && isPunct(tokens[meet - 1], "+"))) {
+      meet += 1;
+    }
+    others.push({ ...other, meet });
+  }
+  const snapshots: { index: number; fork: number; meet: boolean }[] = [];
+  lexer.forks.forEach((fork, index) => {
+    snapshots.push({ index: fork.tokenIndex, fork: index, meet: false }, { index: others[index]!.meet, fork: index, meet: true });
+  });
+  snapshots.sort((a, b) => a.index - b.index);
+  const atFork: CallFrame[][] = [];
+  const atMeet: CallFrame[][] = [];
+  const stack: CallFrame[] = [];
+  let next = 0;
+  const copyUpTo = (index: number) => {
+    while (next < snapshots.length && snapshots[next]!.index <= index && found.limit === undefined) {
+      const snapshot = snapshots[next]!;
+      spend(stack.length + 1);
+      (snapshot.meet ? atMeet : atFork)[snapshot.fork] = copyFrames(stack);
+      next += 1;
+    }
+  };
+  scanJsTokens(code, tokens, 0, stack, depth, note, done, copyUpTo);
+  copyUpTo(Number.POSITIVE_INFINITY);
+
+  lexer.forks.forEach((fork, index) => {
+    if (done()) return;
+    const other = others[index]!;
+    const frames = atFork[index]!;
+    const lead = Math.max(0, fork.tokenIndex - FORK_LEAD_TOKENS);
+    const joined = [...tokens.slice(lead, fork.tokenIndex), ...other.tokens, ...tokens.slice(other.resume, other.meet)];
+    spend(joined.length);
+    scanJsTokens(code, joined, fork.tokenIndex - lead, frames, depth, note, done);
+    // Past this point both readings see the same tokens, but the call frames
+    // they open may differ (an argument counted in one reading only). Keep
+    // reading with this reading's frames until those frames close.
+    const shared = sharedFrames(frames, atMeet[index]!);
+    if (shared === -1 || done()) return;
+    const level = frames.length === atMeet[index]!.length ? shared : -1;
+    scanJsTokens(code, tokens, other.meet, frames, depth, note, () => done() || frames.length <= level, () => spend(1));
+  });
+  return found;
+}
+
+/** Runs the sink rules over `tokens` from `from`, with the call frames open there. */
+function scanJsTokens(
+  code: string,
+  tokens: readonly JsToken[],
+  from: number,
+  stack: CallFrame[],
+  depth: number,
+  note: (findings: HtmlFindings) => void,
+  done: () => boolean,
+  visit?: (index: number) => void,
+): void {
+  for (let index = from; index < tokens.length && !done(); index += 1) {
+    visit?.(index);
     const token = tokens[index]!;
     if (token.kind === "punct") {
       if (token.text === "(") {
@@ -467,7 +780,6 @@ export function findJsSink(code: string, depth = 0): HtmlFindings {
     }
     index = chainEnd;
   }
-  return found;
 }
 
 // --- HTML ---------------------------------------------------------------
@@ -706,6 +1018,10 @@ export class HtmlScanner {
         }
       } else if (name.startsWith("on")) {
         const sink = findJsSink(attribute.value, this.depth);
+        if (sink.limit !== undefined) {
+          into.limit ??= sink.limit;
+          return;
+        }
         if (sink.url !== undefined || sink.embed !== undefined) {
           into.url = attributeText(attribute);
           return;
@@ -723,6 +1039,7 @@ export class HtmlScanner {
     if (text.length === 0) return;
     if (element.tagName.toLowerCase() === "script") {
       const sink = findJsSink(text, this.depth);
+      this.committed.limit ??= sink.limit;
       this.committed.embed ??= sink.embed;
       this.committed.url ??= sink.url;
     } else {
