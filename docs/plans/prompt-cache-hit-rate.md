@@ -539,7 +539,7 @@ Tests:
 **Tests**
 
 - Trimming test: a sequence of screenshots changes earlier messages only at the batch thresholds, and at the cut the kept images are the newest.
-- Gemini test: no explicit cache is created, and the request carries no `cachedContent`.
+- Gemini test: no explicit cache is created, and the request carries no `cachedContent`. (As built, the test covers Pi's Google adapter only; see below.)
 
 **As built (2026-11-19)**
 
