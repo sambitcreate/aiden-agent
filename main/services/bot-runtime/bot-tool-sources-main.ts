@@ -1,6 +1,4 @@
-import { botMessagingEnabled } from "../../../renderer/shared/bot-messages.js";
-import { botMessages, botMessageRoster } from "../bot-messages/messages-main.js";
-import { messageBotCandidate } from "../bot-messages/candidate.js";
+import { botMessageOffer } from "../bot-messages/messages-main.js";
 import { botFullComputerLabel } from "../../../renderer/shared/bot-capabilities.js";
 // Production candidate tools for durable Bot turns, built by the same legacy
 // factories and gates `llm-client.ts` used for Bot generations:
@@ -538,13 +536,10 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       if (await (await wakeUpServices()).botSelfWakeUpsEnabled(botId)) {
         tools.push(wakeUpCandidate(botId, lazyWakeUps));
       }
-      // The Bot-message chain limit and peer turns are checked per call.
-      if (botMessagingEnabled(await configStore.getSettings())) {
-        const roster = await botMessageRoster();
-        if (roster.find(b => b.id === botId)?.sendsMessages && roster.some(b => b.id !== botId && b.acceptsMessages)) {
-          tools.push(await messageBotCandidate(botId, {post: input => botMessages().post(input), roster: botMessageRoster}));
-        }
-      }
+      // From the messaging switch and this Bot's own send setting; the other
+      // Bots are read by `list` and when sending (candidate.ts).
+      const messageBot = await botMessageOffer(botId);
+      if (messageBot) tools.push(messageBot);
       const signInOnComputer = has("computer") && facts.hasComputer;
       // A step in the Bot's own browser or on its computer: Open brings that forward, and phones finish it on the Mac.
       tools.push(botHandoffCandidate(botId, botHandoffs, { targets: { browser: has("browser"), computer: signInOnComputer } }));

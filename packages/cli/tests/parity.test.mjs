@@ -2410,7 +2410,11 @@ test("durable CLI Bots can message each other", async (t) => {
   assert.equal((await post("10000000-0000-4000-8000-000000000006")).code, "unavailable");
   assert.equal(readFileSync(join(dir, "spending.json"), "utf8"), "broken");
   rmSync(join(dir, "spending.json"));
-  assert.equal(requests.length, beforeChecks, "switches, availability and spending checks never invoke a provider");
+  // A reply turn is past the chain limit: posting from it is refused outright.
+  const replyHop = await host.durable.messages.post({ fromBotId: bots[0].id, target: bots[1].id, message: "Ping",
+    deliveryId: "10000000-0000-4000-8000-000000000007", runRequestIds: [`botreply:${absentId}`] });
+  assert.equal(replyHop.code, "chain_too_deep", "a reply turn cannot start another Bot message");
+  assert.equal(requests.length, beforeChecks, "switches, availability, spending and chain checks never invoke a provider");
 
   // Public CLI approval output must omit the host's private run and input provenance.
   const pending = host.durable.approvals.requestOutcome({ botId: bots[0].id, waitId: "private-approval", toolCallId: "private-tool", toolName: "test", summary: "Allow test?", signal: undefined,

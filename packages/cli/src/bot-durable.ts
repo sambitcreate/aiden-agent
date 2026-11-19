@@ -2,7 +2,7 @@ import { createBotMessageLedger } from "../../../main/services/bot-messages/ledg
 import { createBotMessageCourier } from "../../../main/services/bot-messages/courier.js";
 import { createBotMessageLifecycle } from "../../../main/services/bot-messages/lifecycle.js";
 import { projectBotMessageRoster } from "../../../main/services/bot-messages/roster.js";
-import { messageBotCandidate } from "../../../main/services/bot-messages/candidate.js";
+import { messageBotOffer } from "../../../main/services/bot-messages/candidate.js";
 import { createCliBotSpending } from "./bot-spending.ts";
 import { cliSubagentIdentity } from "./subagent-identity.ts";
 import { imageAttachmentsFromEntries } from "../../../main/services/bot-runtime/bot-images.js";
@@ -175,12 +175,11 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
       imageInput: async (botId) => imageInputs.get(botId) ?? false,
       memorySection: async (botId, offer) => renderBotMemorySection(await memory.snapshot(botId), offer),
       currentTools: async (bot) => {
-        // Declared from the messaging switch and this Bot's own setting (the
-        // Bot was just loaded for this turn), so every ingress sees one list
-        // without reading the other Bots. Which peers accept messages is read
-        // when the Bot calls `list` or sends; the Bot-message chain limit and
-        // peer turns are refused per call.
-        const offer = bot.messagesOtherBots !== false && await (ports.messagingEnabled?.() ?? Promise.resolve(true));
+        // The desktop's rule (candidate.ts), with the Bot just loaded for this turn.
+        const messageBot = await messageBotOffer(bot.id, {
+          messagingEnabled: () => ports.messagingEnabled?.() ?? Promise.resolve(true),
+          bot: async () => bot, roster, post: (input) => messages.post(input),
+        });
         return [
           ...(await currentTools(bot.id)).map((tool) => ({
             tool: { ...tool, execute: async () => { throw new Error("A durable Bot tool requires its calling conversation."); } },
@@ -188,7 +187,7 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
             replay: "unsafe" as const, ...(mcpAgentToolDescriptor(tool) ? { mcp: true } : {}),
           })),
           botMemoryToolEntry(bot.id, memory), botRecallToolEntry(),
-          ...(offer ? [{ ...await messageBotCandidate(bot.id, { roster, post: (input) => messages.post(input) }), replay: "safe" as const }] : []),
+          ...(messageBot ? [{ ...messageBot, replay: "safe" as const }] : []),
         ];
       },
       checkPolicy: async (botId, name, call) => admitted(botId, async (lease) => {

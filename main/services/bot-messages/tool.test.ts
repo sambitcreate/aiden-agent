@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { JsonValue } from "@earendil-works/chord/json";
 import { createMessageBotTool } from "./tool.js";
-import { messageBotCandidate } from "./candidate.js";
+import { messageBotCandidate, messageBotOffer } from "./candidate.js";
 import type { BotMessagePost } from "./courier.js";
 test("delivery memo and actual run request ids survive replay", async () => {
   const posted: BotMessagePost[] = [];
@@ -101,4 +101,39 @@ test("building the declaration reads no availability and posting stays authorita
   const result = await candidate.bind!(call).execute("call", { bot: "B", message: "Review" });
   assert.equal(result.isError, true);
   assert.equal((result.details as { code: string }).code, "bot_paused");
+});
+
+test("a Bot declares message_bot from the messaging switch and its own send setting, whatever the other Bots", async () => {
+  let messaging = true;
+  const bots = new Map<string, { messagesOtherBots?: boolean; acceptsBotMessages?: boolean }>([["A", {}], ["B", {}]]);
+  let rosterReads = 0;
+  const offerFor = async (botId: string) => {
+    const candidate = await messageBotOffer(botId, {
+      messagingEnabled: async () => messaging,
+      bot: async (id) => bots.get(id),
+      roster: async () => { rosterReads++; return []; },
+      post: async () => { throw new Error("Declaring must not send"); },
+    });
+    return candidate ? JSON.stringify({ name: candidate.tool.name, description: candidate.tool.description, parameters: candidate.tool.parameters }) : undefined;
+  };
+
+  const declared = await offerFor("A");
+  assert.ok(declared, "a Bot that may send declares the tool");
+  bots.set("C", {});
+  assert.equal(await offerFor("A"), declared, "another Bot being added");
+  bots.set("B", { acceptsBotMessages: false });
+  bots.set("C", { acceptsBotMessages: false });
+  assert.equal(await offerFor("A"), declared, "no other Bot accepting messages");
+  bots.delete("B");
+  bots.delete("C");
+  assert.equal(await offerFor("A"), declared, "no other Bot at all");
+  assert.equal(rosterReads, 0, "the declaration never reads the other Bots");
+
+  bots.set("A", { messagesOtherBots: false });
+  assert.equal(await offerFor("A"), undefined, "a Bot whose own setting stops it sending");
+  bots.set("A", {});
+  messaging = false;
+  assert.equal(await offerFor("A"), undefined, "Bot messaging switched off");
+  messaging = true;
+  assert.equal(await offerFor("missing"), undefined, "a Bot that no longer exists");
 });
