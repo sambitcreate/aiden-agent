@@ -9,6 +9,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
+import { getCacheWarmingDelayMs } from "@earendil-works/pi-ai";
 import * as api from "../dist/parity-test-api.js";
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
@@ -62,10 +63,17 @@ async function startHooks(dir, hooks) {
 
 async function fixture(t, { access = "full", hooks, anthropic = false, model = {} } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "aiden-daemon-turns-"));
-  const steps = [], requests = [], headers = [];
+  const steps = [], requests = [], headers = [], requestWaiters = [];
+  /** Resolves once the server has received `count` requests. */
+  const requestCount = (count) => new Promise((resolve) => {
+    if (requests.length >= count) resolve(); else requestWaiters.push({ count, resolve });
+  });
   const server = createServer(async (request, response) => {
     let body = ""; for await (const part of request) body += part;
     requests.push(JSON.parse(body)); headers.push(request.headers);
+    for (const waiter of requestWaiters.filter((entry) => requests.length >= entry.count)) {
+      requestWaiters.splice(requestWaiters.indexOf(waiter), 1); waiter.resolve();
+    }
     const step = steps.shift() ?? (anthropic ? anthropicReply("Done") : reply("Done"));
     if (step !== reject) response.writeHead(200, { "content-type": "text/event-stream" });
     step(response);
@@ -89,15 +97,23 @@ async function fixture(t, { access = "full", hooks, anthropic = false, model = {
     server.closeAllConnections(); server.close();
     rmSync(dir, { recursive: true, force: true });
   });
-  return { dir, daemon, workspace, steps, requests, headers, providerId };
+  return { dir, daemon, workspace, steps, requests, headers, requestCount, providerId };
 }
 
 function ownerFor(documentId = "owner") {
-  const events = [], listeners = new Set();
+  const events = [], listeners = new Set(), waiters = [];
   let destroyed = false;
   return { events, id: 0, kind: "remote", documentId, isDestroyed: () => destroyed,
     onInvalidated(listener) { listeners.add(listener); return () => listeners.delete(listener); },
-    send(channel, value) { events.push({ channel, value }); },
+    send(channel, value) {
+      events.push({ channel, value });
+      for (const waiter of waiters.filter((entry) => entry.channel === channel)) { waiters.splice(waiters.indexOf(waiter), 1); waiter.resolve(value); }
+    },
+    /** The first event on `channel`: one already sent, or the next one. */
+    next(channel) {
+      const sent = events.find((event) => event.channel === channel);
+      return sent ? Promise.resolve(sent.value) : new Promise((resolve) => waiters.push({ channel, resolve }));
+    },
     invalidate() { destroyed = true; for (const listener of listeners) listener(); },
     of(channel) { return events.filter((event) => event.channel === channel).map((event) => event.value); } };
 }
@@ -912,16 +928,13 @@ const largePromptReply = (text) => (response) => {
   response.end("data: [DONE]\n\n");
 };
 
-/** Polls without timers, so it still runs while setTimeout is mocked. */
-async function settle(condition, label) {
-  for (let turn = 0; turn < 2_000 && !condition(); turn++) await new Promise((resolve) => setImmediate(resolve));
-  assert.ok(condition(), label);
-}
-
 /**
  * Runs a second turn that streams for longer than the 5-minute cache would
  * last, on a model whose cache Pi keeps warm, and reports how many requests
  * the provider saw: two turns, plus one when Pi refreshed the cache mid-reply.
+ * Pi arms its refresh timer before the request goes out, so once the reply
+ * streams, a warmer that decided not to warm has armed no timer within the
+ * cache's lifetime and nothing can be sent on the tick.
  */
 async function requestsAcrossLongReply(t, { profile, usageSource = "chat" }) {
   const f = await fixture(t, { model: { promptCache: { short: 300 }, cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 } } });
@@ -930,31 +943,41 @@ async function requestsAcrossLongReply(t, { profile, usageSource = "chat" }) {
   await beginTurn(f, "warming", { usageSource });
   await f.daemon.llmClient.waitForChatIdle("warming");
   t.mock.timers.enable({ apis: ["setTimeout"] });
+  // Pi's refresh timers for a 5-minute cache, armed while the second turn runs.
+  // Date is real, so a timer armed a few milliseconds after Pi's clock read is a little shorter.
+  const refreshDelay = getCacheWarmingDelayMs(300_000);
+  const refreshTimers = [], mockedSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = function (callback, delay, ...rest) {
+    if (delay > refreshDelay - 1_000 && delay <= refreshDelay) refreshTimers.push(delay);
+    return mockedSetTimeout.call(this, callback, delay, ...rest);
+  };
   f.steps.push(hangAfter("Still"));
-  const { owner } = await beginTurn(f, "warming", { streamId: "warming-2", create: false, usageSource });
-  await settle(() => owner.of("chat:delta").length > 0, "the second reply is streaming");
-  // Pi refreshes a 5-minute cache after 4.5 minutes.
-  t.mock.timers.tick(270_000);
-  for (let turn = 0; turn < 200; turn++) await new Promise((resolve) => setImmediate(resolve));
+  const owner = ownerFor();
+  const second = beginTurn(f, "warming", { streamId: "warming-2", create: false, usageSource, owner });
+  await owner.next("chat:delta");
+  await second;
+  t.mock.timers.tick(refreshDelay);
+  if (refreshTimers.length > 0) await f.requestCount(3);
   const seen = f.requests.length;
   t.mock.timers.reset();
   await f.daemon.llmClient.cancelChat("warming", "user_stop");
   await f.daemon.llmClient.waitForChatIdle("warming");
-  return { seen, refresh: f.requests[2] };
+  return { seen, refresh: f.requests[2], refreshTimers: refreshTimers.length };
 }
 
 test("aiden serve keeps a chat's cache warm mid-reply only when the profile turns warming on", async (t) => {
   await t.test("on", async (t) => {
-    const { seen, refresh } = await requestsAcrossLongReply(t, { profile: { cacheWarmingEnabled: true } });
+    const { seen, refresh, refreshTimers } = await requestsAcrossLongReply(t, { profile: { cacheWarmingEnabled: true } });
+    assert.equal(refreshTimers, 1, "Pi armed one refresh");
     assert.equal(seen, 3, "one refresh request");
     assert.equal(refresh.max_completion_tokens ?? refresh.max_tokens, 1, "the refresh asks for a single token");
   });
   // Pi's own default warms after every turn; the server sends nothing extra unless asked.
   for (const [name, profile] of [["no setting", undefined], ["off", { cacheWarmingEnabled: false }], ["not a boolean", { cacheWarmingEnabled: "true" }]]) {
-    await t.test(name, async (t) => assert.equal((await requestsAcrossLongReply(t, { profile })).seen, 2));
+    await t.test(name, async (t) => assert.deepEqual(await requestsAcrossLongReply(t, { profile }), { seen: 2, refresh: undefined, refreshTimers: 0 }));
   }
   await t.test("a scheduled run, with warming on", async (t) => {
-    assert.equal((await requestsAcrossLongReply(t, { profile: { cacheWarmingEnabled: true }, usageSource: "scheduled" })).seen, 2);
+    assert.deepEqual(await requestsAcrossLongReply(t, { profile: { cacheWarmingEnabled: true }, usageSource: "scheduled" }), { seen: 2, refresh: undefined, refreshTimers: 0 });
   });
 });
 
