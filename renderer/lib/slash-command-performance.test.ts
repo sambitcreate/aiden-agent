@@ -191,6 +191,7 @@ test("opening and rendering the maximum slash catalog stays within the release l
       flushSync(() => {
         const palette = React.createElement(ComposerSlashPalette, {
           mode: session.kind,
+          query: session.query,
           results: ranked.results,
           activeId: ranked.results[0]?.id,
           skillsLoading: false,

@@ -156,7 +156,7 @@ import { isNoWorkspace, NO_WORKSPACE_LABEL } from "../lib/no-workspace";
 
 import { useAppCapabilities } from "../lib/app-capabilities";
 import { localComputerNoun } from "../shared/computer-noun";
-import { isEscapeKey } from "../lib/dismiss-key";
+import { isComposingKey, isEscapeKey } from "../lib/dismiss-key";
 
 const CLIPBOARD_IMAGE_MIME_TYPES = new Set([
   "image/png",
@@ -2075,7 +2075,7 @@ export function Composer({
   };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (slashSession && !event.nativeEvent.isComposing) {
+    if (slashSession && !isComposingKey(event)) {
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
@@ -2277,6 +2277,7 @@ export function Composer({
             {slashSession ? (
               <ComposerSlashPalette
                 mode={slashSession.kind}
+                query={slashSession.query}
                 results={rankedSlashResults.results}
                 activeId={effectiveActiveSlashId}
                 skillsLoading={skillCatalog.isLoading}

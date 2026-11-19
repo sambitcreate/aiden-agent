@@ -1,72 +1,54 @@
-import { defaultFilter } from "cmdk";
+import { rankMatches, type MatchRange } from "./text-match";
 
+/** One palette row: its stable cmdk value, the title it shows and what else it answers to. */
 export interface PaletteResult {
   identity: string;
-  value: string;
+  title: string;
   keywords: string[];
   disabled?: boolean;
+  /** Shown whatever was typed, and chosen only when no ordinary row matches. */
   forceMount?: boolean;
 }
 
-// cmdk 1.1.1 only refreshes its alias cache when value changes. Selection is
-// reconciled through identity so metadata changes can safely produce new values.
-export function paletteResult(identity: string, keywords: string[]): PaletteResult {
-  return { identity, value: JSON.stringify([identity, keywords]), keywords };
-}
-
-export function staticPaletteResult(
-  value: string,
+export function paletteResult(
+  identity: string,
+  title: string,
+  keywords: string[] = [],
   state: Pick<PaletteResult, "disabled" | "forceMount"> = {},
 ): PaletteResult {
-  return { identity: value, value, keywords: [value], ...state };
+  return { identity, title, keywords, ...state };
 }
 
-export function filterPaletteResult(value: string, search: string, keywords?: string[]): number {
-  return defaultFilter(keywords?.length ? keywords.join(" ") : value, search);
+/**
+ * The rows that match the query, best first with ties in input order, each with
+ * its title's matched ranges. Force-mounted rows always stay, unhighlighted.
+ */
+export function rankPaletteResults<T extends { result: PaletteResult }>(
+  items: readonly T[],
+  query: string,
+): Array<T & { ranges: MatchRange[] }> {
+  const forced = items.filter((item) => item.result.forceMount);
+  const ranked = rankMatches(
+    items.filter((item) => !item.result.forceMount),
+    query,
+    (item) => item.result,
+  );
+  return [
+    ...forced.map((item) => ({ ...item, ranges: [] })),
+    ...ranked.map(({ item, ranges }) => ({ ...item, ranges })),
+  ];
 }
 
-/** Reconcile cmdk's metadata-sensitive values through the stable record identity. */
-export function reconcilePaletteResult(
-  selectedValue: string,
-  results: readonly PaletteResult[],
-  search: string,
-): string {
-  let identity = selectedValue;
-  try {
-    const selected: unknown = JSON.parse(selectedValue);
-    if (Array.isArray(selected) && typeof selected[0] === "string" && Array.isArray(selected[1])) {
-      identity = selected[0];
-    }
-  } catch {
-    // Static commands use their literal value as identity, but still must exist
-    // in this mode's visible, enabled result inventory.
-  }
-  // cmdk excludes forceMount items from its filter inventory. Their visibility
-  // is not evidence of a query match: use them only when no enabled ordinary
-  // result matches, including when an ordinary action becomes enabled again.
-  const matches = results
-    .filter((result) => !result.disabled && !result.forceMount)
-    .map((result) => ({
-      result,
-      score: search ? filterPaletteResult(result.value, search, result.keywords) : 1,
-    }))
-    .filter(({ score }) => score > 0);
-  const candidates = matches.length > 0 ? matches : results
-    .filter((result) => !result.disabled && result.forceMount)
-    .map((result) => ({ result, score: 1 }));
-  const current = candidates.find(({ result }) => result.identity === identity);
-  if (current) {
-    return current.result.value;
-  }
-  // If a rename/removal excludes the selected record, keep a visible destination
-  // selected using cmdk scoring with stable input-order tie breaking.
-  let bestValue = "";
-  let bestScore = 0;
-  for (const { result, score } of candidates) {
-    if (score > bestScore) {
-      bestScore = score;
-      bestValue = result.value;
-    }
-  }
-  return bestValue;
+/**
+ * The row to keep selected among the visible rows, in the order they render:
+ * the current one while it is still there and enabled, else the first enabled
+ * ordinary row, else the first enabled force-mounted one (a Retry).
+ */
+export function reconcilePaletteResult(selected: string, visible: readonly PaletteResult[]): string {
+  const ordinary = visible.filter((result) => !result.disabled && !result.forceMount);
+  const candidates = ordinary.length > 0
+    ? ordinary
+    : visible.filter((result) => !result.disabled && result.forceMount);
+  if (candidates.some((result) => result.identity === selected)) return selected;
+  return candidates[0]?.identity ?? "";
 }

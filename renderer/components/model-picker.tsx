@@ -57,6 +57,9 @@ import { ModelPadLattice } from "./model-pad-lattice";
 import { ProviderIcon } from "./provider-icon";
 import type { HiddenModelsByProvider } from "../shared/model-visibility";
 import { providerDeploymentLabel } from "../shared/provider-deployment";
+import { rankMatches, type MatchRange } from "../lib/text-match";
+import { resultCountMessage, useDebouncedAnnouncement } from "../lib/use-debounced-announcement";
+import { MatchText } from "./match-text";
 
 interface ModelPickerProps {
   providers: Provider[];
@@ -250,9 +253,12 @@ function ModelRowAction({
   );
 }
 
+const NO_RANGES: MatchRange[] = [];
+
 /** One model row in the List, with its Pin and Pad toggles. */
 function ModelListRow({
   entry,
+  ranges,
   isActive,
   isPinned,
   isOnPad,
@@ -262,6 +268,8 @@ function ModelListRow({
   onTogglePad,
 }: {
   entry: ModelEntry;
+  /** What the filter matched in the label. */
+  ranges: readonly MatchRange[];
   isActive: boolean;
   isPinned: boolean;
   isOnPad: boolean;
@@ -274,7 +282,6 @@ function ModelListRow({
   return (
     <CommandItem
       value={entry.value}
-      keywords={[entry.label, entry.providerLabel, entry.model, entry.format ?? ""]}
       aria-describedby={descriptionId}
       onSelect={() => onChoose(entry)}
       onMouseEnter={() => onPreview(entry.value)}
@@ -288,7 +295,9 @@ function ModelListRow({
         className="size-4 text-tertiary"
       />
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-small-strong">{entry.label}</span>
+        <span className="block truncate text-small-strong">
+          <MatchText text={entry.label} ranges={ranges} />
+        </span>
         <span className="block truncate text-small text-tertiary">
           {entry.providerLabel}
           {deploymentSuffix(entry)}
@@ -526,13 +535,28 @@ export function ModelPicker({
   );
   const selectedValue = providerId && model ? encodeSelection(providerId, model) : "";
   // With an empty filter the List groups pinned models, then recent ones, then the
-  // rest; a filter shows one flat, ranked list. Each model is listed once.
+  // rest; a filter shows one flat, ranked list with the matched label part
+  // marked. The provider (name or ID), model ID and format match without a mark. Each model
+  // is listed once.
   const listSections = React.useMemo(() => {
+    if (search.trim()) {
+      const ranked = rankMatches(orderedEntries, search, (entry) => ({
+        title: entry.label,
+        keywords: [entry.providerLabel, entry.providerId, entry.model, entry.format ?? ""],
+      }));
+      return {
+        leading: ranked.map(({ item }) => item),
+        recent: [],
+        rest: [],
+        ranges: new Map(ranked.map(({ item, ranges }) => [item.value, ranges])),
+      };
+    }
+    const ranges = new Map<string, MatchRange[]>();
     const recent =
       open && search === ""
         ? recentModelsForList(entries, recentModels, { selectedValue, pinned })
         : [];
-    if (!recent.length) return { leading: orderedEntries, recent, rest: [] };
+    if (!recent.length) return { leading: orderedEntries, recent, rest: [], ranges };
     const pinnedSet = new Set(pinned);
     const recentSet = new Set(recent.map((entry) => entry.value));
     return {
@@ -541,6 +565,7 @@ export function ModelPicker({
       rest: orderedEntries.filter(
         (entry) => !pinnedSet.has(entry.value) && !recentSet.has(entry.value),
       ),
+      ranges,
     };
   }, [open, search, entries, recentModels, selectedValue, pinned, orderedEntries]);
   const hasPadModels = positioned.length > 0;
@@ -730,10 +755,15 @@ export function ModelPicker({
     );
   };
 
+  const [listAnnouncement] = useDebouncedAnnouncement(
+    resultCountMessage(listSections.leading.length, search),
+    500,
+  );
   const renderListRow = (entry: ModelEntry) => (
     <ModelListRow
       key={entry.value}
       entry={entry}
+      ranges={listSections.ranges.get(entry.value) ?? NO_RANGES}
       isActive={entry.value === selectedValue}
       isPinned={pinned.includes(entry.value)}
       isOnPad={Boolean(modelPadPlacements[entry.value])}
@@ -985,6 +1015,8 @@ export function ModelPicker({
           >
             <Command
               label="Chat model"
+              // Models are filtered and ranked in listSections, in render order.
+              shouldFilter={false}
               value={previewValue}
               onValueChange={setPreviewValue}
               onKeyDown={(event) => {
@@ -1008,6 +1040,9 @@ export function ModelPicker({
                 ) : null}
                 {listSections.rest.map(renderListRow)}
               </CommandList>
+              <div className="sr-only" aria-live="polite" aria-atomic="true">
+                {listAnnouncement}
+              </div>
             </Command>
           </section>
         )}

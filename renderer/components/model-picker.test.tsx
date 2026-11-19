@@ -610,6 +610,31 @@ test("filtering the List shows a flat list without the Recent group", async () =
   assert.deepEqual(optionNames(screen.getByRole("listbox")).sort(), ["Placed One", "Placed Two"]);
 });
 
+test("filtering marks the matched part of each label and matches the provider unmarked", async () => {
+  const server = settingsServer(placedSettings);
+  const filter = await openList(server);
+  const list = screen.getByRole("listbox");
+  const marks = () => [...list.querySelectorAll("mark")].map((mark) => mark.textContent);
+
+  fireEvent.change(filter, { target: { value: "two" } });
+  await waitFor(() => assert.deepEqual(optionNames(list), ["Placed Two"]));
+  assert.deepEqual(marks(), ["Two"]);
+
+  // Initials: "pt" is Placed Two's word starts.
+  fireEvent.change(filter, { target: { value: "pt" } });
+  await waitFor(() => assert.deepEqual(optionNames(list), ["Placed Two"]));
+  assert.deepEqual(marks(), ["P", "T"]);
+
+  // The provider name matches every row without marking anything.
+  fireEvent.change(filter, { target: { value: "acme" } });
+  await waitFor(() => assert.equal(optionNames(list).length, 3));
+  assert.deepEqual(marks(), []);
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 550));
+  });
+  assert.equal(list.parentElement?.querySelector("[aria-live='polite']")?.textContent, "3 results");
+});
+
 test("choosing a model in the List records it as the most recent", async () => {
   const server = settingsServer({ ...placedSettings, recentModels: ["acme::placed-one"] });
   const changes: string[] = [];

@@ -98,12 +98,13 @@ import {
   recordRecentCommand,
 } from "../lib/command-palette-recent";
 import {
-  filterPaletteResult,
   paletteResult,
+  rankPaletteResults,
   reconcilePaletteResult,
-  staticPaletteResult,
   type PaletteResult,
 } from "../lib/command-palette-results";
+import { resultCountMessage, useDebouncedAnnouncement } from "../lib/use-debounced-announcement";
+import { MatchText } from "./match-text";
 
 const NO_PROVIDERS: Provider[] = [];
 
@@ -146,15 +147,7 @@ function PaletteResultItem({
 }: Omit<React.ComponentProps<typeof CommandItem>, "value" | "keywords" | "disabled" | "forceMount"> & {
   result: PaletteResult;
 }) {
-  return (
-    <CommandItem
-      {...props}
-      value={result.value}
-      keywords={result.keywords}
-      disabled={result.disabled}
-      forceMount={result.forceMount}
-    />
-  );
+  return <CommandItem {...props} value={result.identity} disabled={result.disabled} />;
 }
 
 export function AppCommandPalette({
@@ -231,77 +224,93 @@ export function AppCommandPalette({
   const botResults = React.useMemo(
     () => (bots.data ?? []).map((bot) => ({
       bot,
-      result: paletteResult(`bot:${bot.id}`, [bot.name, bot.description ?? ""]),
+      result: paletteResult(`bot:${bot.id}`, bot.name, [bot.description ?? ""]),
     })),
     [bots.data],
   );
+  // Chats match on their titles only: a date in the keywords would let "11"
+  // match every chat from November.
   const chatResults = React.useMemo(
     () => [...(chats.data ?? [])]
       .sort((left, right) => right.updatedAt - left.updatedAt)
-      .map((chat) => ({
-        chat,
-        result: paletteResult(`chat:${chat.id}`, [
-          chat.title,
-          new Date(chat.updatedAt).toLocaleString(),
-        ]),
-      })),
+      .map((chat) => ({ chat, result: paletteResult(`chat:${chat.id}`, chat.title) })),
     [chats.data],
   );
-  const modelResults = React.useMemo(
-    () => models.map((entry) => ({
-      entry,
-      result: {
-        ...paletteResult(`model:${entry.value}`, [entry.label, entry.model, entry.providerLabel]),
-        disabled: busy,
-      },
-    })),
-    [models, busy],
-  );
-  const unavailableResults = React.useMemo(
-    () => unavailableModelProviders.map((provider) => ({
-      provider,
-      result: paletteResult(`unavailable-provider:${provider.id}`, [
-        provider.label, ...provider.models, "unavailable setup provider",
-      ]),
-    })),
-    [unavailableModelProviders],
+  const modelRows = React.useMemo(
+    () => [
+      ...models.map((entry) => ({
+        kind: "model" as const,
+        entry,
+        result: paletteResult(`model:${entry.value}`, entry.label, [entry.model, entry.providerLabel], {
+          disabled: busy,
+        }),
+      })),
+      ...unavailableModelProviders.map((provider) => ({
+        kind: "unavailable" as const,
+        provider,
+        result: paletteResult(`unavailable-provider:${provider.id}`, `${provider.label} models`, [
+          ...provider.models, "unavailable setup provider",
+        ]),
+      })),
+    ],
+    [models, unavailableModelProviders, busy],
   );
   const providerResults = React.useMemo(
     () => (providers.data ?? []).map((provider) => ({
       provider,
-      result: paletteResult(`provider:${provider.id}`, [
-        provider.label, provider.id, "manage connection models",
+      result: paletteResult(`provider:${provider.id}`, provider.label, [
+        provider.id, "manage connection models",
       ]),
     })),
     [providers.data],
   );
-  const rootResults = rootCommands.map((definition) => ({
-    definition,
-    result: staticPaletteResult(
-      `${definition.title} ${definition.description} ${definition.keywords.join(" ")}`,
-      { disabled: !canExecute(definition.id) },
-    ),
+  const appearanceResults = [
+    { mode: "system" as const, title: "Follow system appearance", icon: Palette },
+    { mode: "light" as const, title: "Use light appearance", icon: Sun },
+    { mode: "dark" as const, title: "Use dark appearance", icon: Moon },
+  ].map((item) => ({
+    kind: "appearance" as const,
+    ...item,
+    result: paletteResult(`appearance:${item.mode}`, item.title, ["theme"], { disabled: busy }),
   }));
-  const newChatResult = staticPaletteResult("New chat conversation", {
+  const rootRows = [
+    ...rootCommands.map((definition) => ({
+      kind: "command" as const,
+      definition,
+      result: paletteResult(
+        `command:${definition.id}`,
+        definition.title,
+        [definition.description, ...definition.keywords],
+        { disabled: !canExecute(definition.id) },
+      ),
+    })),
+    // Appearance rows also answer a typed search at the top level ("dark").
+    ...(query.trim() ? appearanceResults : []),
+  ];
+  const newChatResult = paletteResult("new-chat", "New chat", ["conversation"], {
     disabled: !canExecute("chat.new"),
   });
   const workspaceResults = React.useMemo(
     () =>
-      newChatWorkspaceChoices(workspaces, allChats.data ?? [], activeId).map((choice) => ({
-        ...choice,
-        name: workspaceDisplayName(choice.workspace, workspaces),
-        result: paletteResult(`new-chat-in:${choice.workspace.id}`, [
-          choice.workspace.name,
-          choice.workspace.folderPath ?? "",
-        ]),
-      })),
+      newChatWorkspaceChoices(workspaces, allChats.data ?? [], activeId).map((choice) => {
+        const name = workspaceDisplayName(choice.workspace, workspaces);
+        return {
+          ...choice,
+          name,
+          // The folder path matches without being highlighted.
+          result: paletteResult(`new-chat-in:${choice.workspace.id}`, name, [
+            choice.workspace.name,
+            choice.workspace.folderPath ?? "",
+          ]),
+        };
+      }),
     [activeId, allChats.data, workspaces],
   );
   const noWorkspaceHomeId = noWorkspaceHome(workspaces)?.id;
   const noWorkspaceCurrent = isNoWorkspace(workspaces.find((workspace) => workspace.id === activeId));
-  const noWorkspaceResult = staticPaletteResult("No workspace just chat global settings");
-  const openFolderResult = staticPaletteResult("Open folder… add workspace directory");
-  const cloneResult = staticPaletteResult("Clone repository… git url github");
+  const noWorkspaceResult = paletteResult("no-workspace", NO_WORKSPACE_LABEL, ["just chat global settings"]);
+  const openFolderResult = paletteResult("open-folder", "Open folder…", ["add workspace directory"]);
+  const cloneResult = paletteResult("clone", "Clone repository…", ["git url github"]);
   // A typed path (`/`, `~`, `.`) is answered by one row: select, open or create.
   const pathIntake = useWorkspacePathIntake(query, {
     enabled: choosingWorkspace,
@@ -312,63 +321,82 @@ export function AppCommandPalette({
   const pathRow = pathIntake.row;
   const pathRowResult =
     pathRow && pathRow.action !== "invalid"
-      ? paletteResult(`path:${pathRow.action}:${pathRow.input}`, [query])
+      ? paletteResult(`path:${pathRow.action}:${pathRow.input}`, pathRow.label)
       : null;
-  const chatRetryResult = staticPaletteResult("Retry loading chats", { forceMount: true });
-  const modelRetryResult = staticPaletteResult("Retry loading models", { forceMount: true });
-  const providerRetryResult = staticPaletteResult("Retry loading providers", { forceMount: true });
-  const refreshResult = staticPaletteResult("Refresh provider model catalogs update", {
+  const chatRetryResult = paletteResult("retry-chats", "Chats could not be loaded", [], { forceMount: true });
+  const modelRetryResult = paletteResult("retry-models", "Models could not be loaded", [], { forceMount: true });
+  const providerRetryResult = paletteResult("retry-providers", "Providers could not be loaded", [], {
+    forceMount: true,
+  });
+  const refreshResult = paletteResult("refresh-providers", "Refresh provider catalogs", ["model update"], {
     disabled: busy,
   });
-  const appearanceResults = [
-    { mode: "system" as const, title: "Follow system appearance", icon: Palette },
-    { mode: "light" as const, title: "Use light appearance", icon: Sun },
-    { mode: "dark" as const, title: "Use dark appearance", icon: Moon },
-  ].map((item) => ({
-    ...item,
-    result: staticPaletteResult(`${item.title} theme appearance`, { disabled: busy }),
-  }));
   const settingsPages = availableSettingsPages(capabilities);
-  const settingsResults = availableSettingsDestinations(capabilities).map((destination) => {
-    const pageId = pageFor(destination.id).id;
-    const pageTitle = settingsPages.find((page) => page.id === pageId)?.title ?? "";
-    return {
-      destination,
-      pageTitle,
-      result: staticPaletteResult(`${settingsTabLabel(destination.id)} ${destination.title} ${destination.keywords.join(" ")} ${pageTitle}`),
-    };
-  });
-  // One inventory owns both rendering and selection, including static actions,
-  // disabled states and force-mounted retry rows in every palette mode.
-  // Appearance rows also answer a typed search at the top level ("dark").
-  const rootAppearance = query.trim() ? appearanceResults : [];
+  const settingsRows = [
+    ...appearanceResults,
+    ...availableSettingsDestinations(capabilities).map((destination) => {
+      const pageId = pageFor(destination.id).id;
+      const pageTitle = settingsPages.find((page) => page.id === pageId)?.title ?? "";
+      return {
+        kind: "destination" as const,
+        destination,
+        pageTitle,
+        result: paletteResult(`settings:${destination.id}`, settingsTabLabel(destination.id), [
+          destination.title, ...destination.keywords, pageTitle,
+        ]),
+      };
+    }),
+  ];
+  // What the open mode shows, filtered and ranked by what was typed. One
+  // inventory owns both rendering and selection, in render order.
+  const visible = (result: PaletteResult) => rankPaletteResults([{ result }], query)[0] ?? null;
+  const shownRoot = palette.mode === "root" ? rankPaletteResults(rootRows, query) : [];
+  const shownBots = React.useMemo(() => rankPaletteResults(botResults, query), [botResults, query]);
+  const shownChats = React.useMemo(() => rankPaletteResults(chatResults, query), [chatResults, query]);
+  const shownModels = React.useMemo(() => rankPaletteResults(modelRows, query), [modelRows, query]);
+  const shownProviders = React.useMemo(
+    () => rankPaletteResults(providerResults, query),
+    [providerResults, query],
+  );
+  const shownWorkspaces = React.useMemo(
+    () => rankPaletteResults(workspaceResults, query),
+    [workspaceResults, query],
+  );
+  const shownSettings = palette.mode === "settings" ? rankPaletteResults(settingsRows, query) : [];
+  const shownNewChat = visible(newChatResult);
+  const shownNoWorkspace = noWorkspaceHomeId ? visible(noWorkspaceResult) : null;
+  const shownOpenFolder = visible(openFolderResult);
+  const shownClone = visible(cloneResult);
+  const shownRefresh = visible(refreshResult);
+  const results = (rows: ReadonlyArray<{ result: PaletteResult } | null>) =>
+    rows.flatMap((row) => (row ? [row.result] : []));
   const resultsByMode: Record<CommandPaletteMode, PaletteResult[]> = {
-    root: [...rootResults.map(({ result }) => result), ...rootAppearance.map(({ result }) => result)],
-    bots: botResults.map(({ result }) => result),
+    root: results(shownRoot),
+    bots: results(shownBots),
     chats: [
-      newChatResult,
+      ...results([shownNewChat]),
       ...(chats.isError ? [chatRetryResult] : []),
-      ...chatResults.map(({ result }) => result),
+      ...results(shownChats),
     ],
     newChatIn: pathIntake.pathQuery
       ? pathRowResult ? [pathRowResult] : []
-      : [
-          ...workspaceResults.map(({ result }) => result),
-          ...(noWorkspaceHomeId ? [noWorkspaceResult] : []),
-          openFolderResult,
-          cloneResult,
-        ],
-    models: providers.isLoading ? [] : providers.isError ? [modelRetryResult]
-      : [...modelResults, ...unavailableResults].map(({ result }) => result),
+      : results([...shownWorkspaces, shownNoWorkspace, shownOpenFolder, shownClone]),
+    models: providers.isLoading ? [] : providers.isError ? [modelRetryResult] : results(shownModels),
     providers: [
-      refreshResult,
+      ...results([shownRefresh]),
       ...(providers.isError ? [providerRetryResult] : []),
-      ...providerResults.map(({ result }) => result),
+      ...results(shownProviders),
     ],
-    settings: [...appearanceResults, ...settingsResults].map(({ result }) => result),
+    settings: results(shownSettings),
   };
   const currentResults = resultsByMode[palette.mode];
-  const selectedResultValue = reconcilePaletteResult(activeResult, currentResults, query);
+  const selectedResultValue = reconcilePaletteResult(activeResult, currentResults);
+  const [announcement] = useDebouncedAnnouncement(
+    palette.mode === "newChatIn" && pathIntake.pathQuery
+      ? ""
+      : resultCountMessage(currentResults.filter((result) => !result.forceMount).length, query),
+    500,
+  );
   React.useLayoutEffect(() => {
     // Persist a fallback too, so a removed result cannot reclaim selection if it
     // later reappears. Do not overwrite a newer keyboard/pointer selection.
@@ -662,8 +690,8 @@ export function AppCommandPalette({
             value={selectedResultValue}
             onValueChange={setActiveResult}
             className="min-h-[420px] [&_[cmdk-item][data-selected=true]]:bg-control"
-            // Dynamic values identify rows; search only their human-readable metadata.
-            filter={filterPaletteResult}
+            // Rows are filtered and ranked here (rankPaletteResults), in render order.
+            shouldFilter={false}
           >
             <div className="flex h-10 items-center px-3">
               {palette.mode === "root" ? (
@@ -732,39 +760,10 @@ export function AppCommandPalette({
                 match “{query.trim()}”.
               </CommandEmpty>}
 
-              {palette.mode === "root"
-                ? rootResults.map(({ definition, result }) => {
-                    const Icon = CATEGORY_ICON[definition.category];
-                    const opensMode = [
-                      "bots.search",
-                      "chat.search",
-                      "chat.newIn",
-                      "model.change",
-                      "provider.manage",
-                      "settings.search",
-                    ].includes(definition.id);
-                    return (
-                      <PaletteResultItem
-                        key={definition.id}
-                        result={result}
-                        onSelect={() => runCommand(definition.id)}
-                        aria-keyshortcuts={ariaKeyShortcut(binding(definition.id))}
-                        className="min-h-11 px-3"
-                      >
-                        <Icon className="size-4 shrink-0 text-secondary" />
-                        <span className="min-w-0 flex-1 truncate">{definition.title}</span>
-                        {opensMode ? (
-                          <ChevronRight className="size-4 shrink-0 text-tertiary" />
-                        ) : (
-                          <Shortcut commandId={definition.id} />
-                        )}
-                      </PaletteResultItem>
-                    );
-                  })
-                : null}
-
-              {palette.mode === "root"
-                ? rootAppearance.map((item) => (
+              {shownRoot.map((row) => {
+                if (row.kind === "appearance") {
+                  const item = row;
+                  return (
                     <PaletteResultItem
                       key={item.mode}
                       result={item.result}
@@ -773,7 +772,9 @@ export function AppCommandPalette({
                       className="min-h-11 px-3"
                     >
                       <item.icon className="size-4 shrink-0 text-secondary" />
-                      <span className="min-w-0 flex-1 truncate">{item.title}</span>
+                      <span className="min-w-0 flex-1 truncate">
+                        <MatchText text={item.title} ranges={item.ranges} />
+                      </span>
                       {appearanceMode === item.mode ? (
                         <>
                           <span className="sr-only">Current</span>
@@ -781,18 +782,48 @@ export function AppCommandPalette({
                         </>
                       ) : null}
                     </PaletteResultItem>
-                  ))
-                : null}
+                  );
+                }
+                const { definition } = row;
+                const Icon = CATEGORY_ICON[definition.category];
+                const opensMode = [
+                  "bots.search",
+                  "chat.search",
+                  "chat.newIn",
+                  "model.change",
+                  "provider.manage",
+                  "settings.search",
+                ].includes(definition.id);
+                return (
+                  <PaletteResultItem
+                    key={definition.id}
+                    result={row.result}
+                    onSelect={() => runCommand(definition.id)}
+                    aria-keyshortcuts={ariaKeyShortcut(binding(definition.id))}
+                    className="min-h-11 px-3"
+                  >
+                    <Icon className="size-4 shrink-0 text-secondary" />
+                    <span className="min-w-0 flex-1 truncate">
+                      <MatchText text={definition.title} ranges={row.ranges} />
+                    </span>
+                    {opensMode ? (
+                      <ChevronRight className="size-4 shrink-0 text-tertiary" />
+                    ) : (
+                      <Shortcut commandId={definition.id} />
+                    )}
+                  </PaletteResultItem>
+                );
+              })}
 
               {palette.mode === "bots" ? (
                 <>
                   {bots.isLoading ? (
-                    <CommandItem forceMount disabled value="Loading Bots" className="min-h-11 px-3">
+                    <CommandItem disabled value="Loading Bots" className="min-h-11 px-3">
                       <RefreshCw className="size-4 animate-spin text-secondary" />
                       <span>Loading Bots…</span>
                     </CommandItem>
                   ) : null}
-                  {botResults.map(({ bot, result }) => (
+                  {shownBots.map(({ bot, result, ranges }) => (
                     <PaletteResultItem
                       key={bot.id}
                       result={result}
@@ -805,7 +836,9 @@ export function AppCommandPalette({
                       className="min-h-11 px-3"
                     >
                       <Bot className="size-4 shrink-0 text-secondary" />
-                      <span className="min-w-0 flex-1 truncate">{bot.name}</span>
+                      <span className="min-w-0 flex-1 truncate">
+                        <MatchText text={bot.name} ranges={ranges} />
+                      </span>
                       {bot.description ? <ItemDetail>{bot.description}</ItemDetail> : null}
                     </PaletteResultItem>
                   ))}
@@ -814,27 +847,26 @@ export function AppCommandPalette({
 
               {palette.mode === "chats" ? (
                 <>
-                  <PaletteResultItem
-                    result={newChatResult}
-                    onSelect={() => runCommand("chat.new")}
-                    aria-keyshortcuts={ariaKeyShortcut(binding("chat.new"))}
-                    className="mb-1 min-h-11 px-3"
-                  >
-                    <MessageSquare className="size-4 text-secondary" />
-                    <span>New chat</span>
-                    {canExecute("chat.new") ? (
-                      <Shortcut commandId="chat.new" />
-                    ) : (
-                      <ItemDetail>Open a workspace first</ItemDetail>
-                    )}
-                  </PaletteResultItem>
-                  {chats.isLoading ? (
-                    <CommandItem
-                      forceMount
-                      disabled
-                      value="Loading chats"
-                      className="min-h-11 px-3"
+                  {shownNewChat ? (
+                    <PaletteResultItem
+                      result={newChatResult}
+                      onSelect={() => runCommand("chat.new")}
+                      aria-keyshortcuts={ariaKeyShortcut(binding("chat.new"))}
+                      className="mb-1 min-h-11 px-3"
                     >
+                      <MessageSquare className="size-4 text-secondary" />
+                      <span>
+                        <MatchText text={newChatResult.title} ranges={shownNewChat.ranges} />
+                      </span>
+                      {canExecute("chat.new") ? (
+                        <Shortcut commandId="chat.new" />
+                      ) : (
+                        <ItemDetail>Open a workspace first</ItemDetail>
+                      )}
+                    </PaletteResultItem>
+                  ) : null}
+                  {chats.isLoading ? (
+                    <CommandItem disabled value="Loading chats" className="min-h-11 px-3">
                       <RefreshCw className="size-4 animate-spin text-secondary" />
                       <span>Loading chats…</span>
                     </CommandItem>
@@ -846,22 +878,24 @@ export function AppCommandPalette({
                       className="min-h-11 px-3"
                     >
                       <RefreshCw className="size-4 text-secondary" />
-                      <span>Chats could not be loaded</span>
+                      <span>{chatRetryResult.title}</span>
                       <ItemDetail>Retry</ItemDetail>
                     </PaletteResultItem>
                   ) : null}
-                  {chatResults.map(({ chat, result }) => (
-                      <PaletteResultItem
-                        key={chat.id}
-                        result={result}
-                        onSelect={() => void openChat(chat.id)}
-                        className="min-h-11 px-3"
-                      >
-                        <Clock3 className="size-4 shrink-0 text-secondary" />
-                        <span className="min-w-0 flex-1 truncate">{chat.title}</span>
-                        <ItemDetail>{new Date(chat.updatedAt).toLocaleDateString()}</ItemDetail>
-                      </PaletteResultItem>
-                    ))}
+                  {shownChats.map(({ chat, result, ranges }) => (
+                    <PaletteResultItem
+                      key={chat.id}
+                      result={result}
+                      onSelect={() => void openChat(chat.id)}
+                      className="min-h-11 px-3"
+                    >
+                      <Clock3 className="size-4 shrink-0 text-secondary" />
+                      <span className="min-w-0 flex-1 truncate">
+                        <MatchText text={chat.title} ranges={ranges} />
+                      </span>
+                      <ItemDetail>{new Date(chat.updatedAt).toLocaleDateString()}</ItemDetail>
+                    </PaletteResultItem>
+                  ))}
                 </>
               ) : null}
 
@@ -898,7 +932,7 @@ export function AppCommandPalette({
                 )
               ) : palette.mode === "newChatIn" ? (
                 <>
-                  {workspaceResults.map(({ workspace, name, current, result }) => (
+                  {shownWorkspaces.map(({ workspace, name, current, result, ranges }) => (
                     <PaletteResultItem
                       key={workspace.id}
                       result={result}
@@ -908,7 +942,9 @@ export function AppCommandPalette({
                     >
                       <Folder className="size-4 shrink-0 text-secondary" />
                       <span className="flex min-w-0 flex-1 items-baseline gap-2">
-                        <span className="min-w-0 shrink truncate">{name}</span>
+                        <span className="min-w-0 shrink truncate">
+                          <MatchText text={name} ranges={ranges} />
+                        </span>
                         {workspace.folderPath ? (
                           <span
                             className="min-w-0 flex-1 truncate text-small text-tertiary"
@@ -927,7 +963,7 @@ export function AppCommandPalette({
                       ) : null}
                     </PaletteResultItem>
                   ))}
-                  {noWorkspaceHomeId ? (
+                  {noWorkspaceHomeId && shownNoWorkspace ? (
                     <PaletteResultItem
                       result={noWorkspaceResult}
                       onSelect={() => startChatIn(noWorkspaceHomeId)}
@@ -936,7 +972,9 @@ export function AppCommandPalette({
                     >
                       <MessageCircle className="size-4 shrink-0 text-secondary" />
                       <span className="flex min-w-0 flex-1 items-baseline gap-2">
-                        <span className="min-w-0 shrink truncate">{NO_WORKSPACE_LABEL}</span>
+                        <span className="min-w-0 shrink truncate">
+                          <MatchText text={NO_WORKSPACE_LABEL} ranges={shownNoWorkspace.ranges} />
+                        </span>
                         <span className="min-w-0 flex-1 truncate text-small text-tertiary">
                           Just chat, with your global settings
                         </span>
@@ -946,29 +984,37 @@ export function AppCommandPalette({
                       ) : null}
                     </PaletteResultItem>
                   ) : null}
-                  <PaletteResultItem
-                    result={openFolderResult}
-                    onSelect={openFolderForChat}
-                    className={noWorkspaceHomeId ? "min-h-11 px-3" : "mt-1 min-h-11 px-3"}
-                  >
-                    <FolderPlus className="size-4 shrink-0 text-secondary" />
-                    <span className="min-w-0 flex-1 truncate">Open folder…</span>
-                    <Shortcut commandId="workspace.openFolder" />
-                  </PaletteResultItem>
-                  <PaletteResultItem
-                    result={cloneResult}
-                    onSelect={cloneForChat}
-                    className="min-h-11 px-3"
-                  >
-                    <FolderDown className="size-4 shrink-0 text-secondary" />
-                    <span className="min-w-0 flex-1 truncate">Clone repository…</span>
-                  </PaletteResultItem>
+                  {shownOpenFolder ? (
+                    <PaletteResultItem
+                      result={openFolderResult}
+                      onSelect={openFolderForChat}
+                      className={shownNoWorkspace ? "min-h-11 px-3" : "mt-1 min-h-11 px-3"}
+                    >
+                      <FolderPlus className="size-4 shrink-0 text-secondary" />
+                      <span className="min-w-0 flex-1 truncate">
+                        <MatchText text={openFolderResult.title} ranges={shownOpenFolder.ranges} />
+                      </span>
+                      <Shortcut commandId="workspace.openFolder" />
+                    </PaletteResultItem>
+                  ) : null}
+                  {shownClone ? (
+                    <PaletteResultItem
+                      result={cloneResult}
+                      onSelect={cloneForChat}
+                      className="min-h-11 px-3"
+                    >
+                      <FolderDown className="size-4 shrink-0 text-secondary" />
+                      <span className="min-w-0 flex-1 truncate">
+                        <MatchText text={cloneResult.title} ranges={shownClone.ranges} />
+                      </span>
+                    </PaletteResultItem>
+                  ) : null}
                 </>
               ) : null}
 
               {palette.mode === "models" ? (
                 providers.isLoading ? (
-                  <CommandItem forceMount disabled value="Loading models" className="min-h-11 px-3">
+                  <CommandItem disabled value="Loading models" className="min-h-11 px-3">
                     <RefreshCw className="size-4 animate-spin text-secondary" />
                     <span>Loading models…</span>
                   </CommandItem>
@@ -979,46 +1025,17 @@ export function AppCommandPalette({
                     className="min-h-11 px-3"
                   >
                     <RefreshCw className="size-4 text-secondary" />
-                    <span>Models could not be loaded</span>
+                    <span>{modelRetryResult.title}</span>
                     <ItemDetail>Retry</ItemDetail>
                   </PaletteResultItem>
                 ) : (
-                  modelResults
-                    .map(({ entry, result }) => {
-                      const selected =
-                        currentModel.providerId === entry.providerId &&
-                        currentModel.model === entry.model;
+                  shownModels.map((row) => {
+                    if (row.kind === "unavailable") {
+                      const { provider } = row;
                       return (
                         <PaletteResultItem
-                          key={entry.value}
-                          result={result}
-                          onSelect={() => void selectModel(entry.providerId, entry.model)}
-                          aria-current={selected ? "true" : undefined}
-                          className="min-h-11 px-3"
-                        >
-                          <ProviderIcon
-                            providerId={entry.providerId}
-                            providerLabel={entry.providerLabel}
-                            modelId={entry.model}
-                            artwork={entry.providerArtwork}
-                            className="size-4 text-secondary"
-                          />
-                          <span className="min-w-0 flex-1 truncate">{entry.label}</span>
-                          <ItemDetail>{entry.providerLabel}</ItemDetail>
-                          {selected ? (
-                            <>
-                              <span className="sr-only">Current</span>
-                              <Check aria-hidden="true" className="size-4 shrink-0 text-accent-text" />
-                            </>
-                          ) : null}
-                        </PaletteResultItem>
-                      );
-                    })
-                    .concat(
-                      unavailableResults.map(({ provider, result }) => (
-                        <PaletteResultItem
                           key={`unavailable-${provider.id}`}
-                          result={result}
+                          result={row.result}
                           onSelect={() => {
                             if (!allowNavigation()) return;
                             rememberCommand("model.change");
@@ -1033,30 +1050,71 @@ export function AppCommandPalette({
                             artwork={provider.artwork}
                             className="size-4 text-secondary"
                           />
-                          <span className="min-w-0 flex-1 truncate">{provider.label} models</span>
+                          <span className="min-w-0 flex-1 truncate">
+                            <MatchText text={row.result.title} ranges={row.ranges} />
+                          </span>
                           <ItemDetail>
                             {provider.models.length > 0 ? "Setup needed" : "No models available"}
                           </ItemDetail>
                           <ChevronRight className="size-4 shrink-0 text-tertiary" />
                         </PaletteResultItem>
-                      )),
-                    )
+                      );
+                    }
+                    const { entry } = row;
+                    const selected =
+                      currentModel.providerId === entry.providerId &&
+                      currentModel.model === entry.model;
+                    return (
+                      <PaletteResultItem
+                        key={entry.value}
+                        result={row.result}
+                        onSelect={() => void selectModel(entry.providerId, entry.model)}
+                        aria-current={selected ? "true" : undefined}
+                        className="min-h-11 px-3"
+                      >
+                        <ProviderIcon
+                          providerId={entry.providerId}
+                          providerLabel={entry.providerLabel}
+                          modelId={entry.model}
+                          artwork={entry.providerArtwork}
+                          className="size-4 text-secondary"
+                        />
+                        <span className="min-w-0 flex-1 truncate">
+                          <MatchText text={entry.label} ranges={row.ranges} />
+                        </span>
+                        <ItemDetail>{entry.providerLabel}</ItemDetail>
+                        {selected ? (
+                          <>
+                            <span className="sr-only">Current</span>
+                            <Check aria-hidden="true" className="size-4 shrink-0 text-accent-text" />
+                          </>
+                        ) : null}
+                      </PaletteResultItem>
+                    );
+                  })
                 )
               ) : null}
 
               {palette.mode === "providers" ? (
                 <>
-                  <PaletteResultItem
-                    result={refreshResult}
-                    onSelect={() => void refreshProviders()}
-                    className="mb-1 min-h-11 px-3"
-                  >
-                    <RefreshCw className={cn("size-4 text-secondary", busy && "animate-spin")} />
-                    <span>{busy ? "Refreshing providers…" : "Refresh provider catalogs"}</span>
-                  </PaletteResultItem>
+                  {shownRefresh ? (
+                    <PaletteResultItem
+                      result={refreshResult}
+                      onSelect={() => void refreshProviders()}
+                      className="mb-1 min-h-11 px-3"
+                    >
+                      <RefreshCw className={cn("size-4 text-secondary", busy && "animate-spin")} />
+                      <span>
+                        {busy ? (
+                          "Refreshing providers…"
+                        ) : (
+                          <MatchText text={refreshResult.title} ranges={shownRefresh.ranges} />
+                        )}
+                      </span>
+                    </PaletteResultItem>
+                  ) : null}
                   {providers.isLoading ? (
                     <CommandItem
-                      forceMount
                       disabled
                       value="Loading providers"
                       className="min-h-11 px-3"
@@ -1072,11 +1130,11 @@ export function AppCommandPalette({
                       className="min-h-11 px-3"
                     >
                       <RefreshCw className="size-4 text-secondary" />
-                      <span>Providers could not be loaded</span>
+                      <span>{providerRetryResult.title}</span>
                       <ItemDetail>Retry</ItemDetail>
                     </PaletteResultItem>
                   ) : null}
-                  {providerResults.map(({ provider, result }) => (
+                  {shownProviders.map(({ provider, result, ranges }) => (
                     <PaletteResultItem
                       key={provider.id}
                       result={result}
@@ -1093,7 +1151,9 @@ export function AppCommandPalette({
                         artwork={provider.artwork}
                         className="size-4 text-secondary"
                       />
-                      <span className="min-w-0 flex-1 truncate">{provider.label}</span>
+                      <span className="min-w-0 flex-1 truncate">
+                        <MatchText text={provider.label} ranges={ranges} />
+                      </span>
                       <ItemDetail>
                         {provider.hasKey || !provider.needsKey ? "Connected" : "Setup needed"}
                       </ItemDetail>
@@ -1103,18 +1163,21 @@ export function AppCommandPalette({
                 </>
               ) : null}
 
-              {palette.mode === "settings" ? (
-                <>
-                  {appearanceResults.map((item, index) => (
+              {shownSettings.map((row, index) => {
+                if (row.kind === "appearance") {
+                  const item = row;
+                  return (
                     <PaletteResultItem
                       key={item.mode}
                       result={item.result}
                       onSelect={() => void setAppearance(item.mode)}
                       aria-current={appearanceMode === item.mode ? "true" : undefined}
-                      className={cn("min-h-11 px-3", index === 2 && "mb-1")}
+                      className={cn("min-h-11 px-3", !query.trim() && index === 2 && "mb-1")}
                     >
                       <item.icon className="size-4 text-secondary" />
-                      <span>{item.title}</span>
+                      <span>
+                        <MatchText text={item.title} ranges={item.ranges} />
+                      </span>
                       {appearanceMode === item.mode ? (
                         <>
                           <span className="sr-only">Current</span>
@@ -1122,27 +1185,33 @@ export function AppCommandPalette({
                         </>
                       ) : null}
                     </PaletteResultItem>
-                  ))}
-                  {settingsResults.map(({ destination, pageTitle, result }) => (
-                    <PaletteResultItem
-                      key={destination.id}
-                      result={result}
-                      onSelect={() => {
-                        if (!allowNavigation()) return;
-                        close();
-                        void navigate(settingsLocation(destination.id, router.state.location));
-                      }}
-                      className="min-h-11 px-3"
-                    >
-                      <Settings className="size-4 shrink-0 text-secondary" />
-                      <span className="min-w-0 flex-1 truncate">{settingsTabLabel(destination.id)}</span>
-                      <ItemDetail>{pageTitle}</ItemDetail>
-                      <ChevronRight className="size-4 shrink-0 text-tertiary" />
-                    </PaletteResultItem>
-                  ))}
-                </>
-              ) : null}
+                  );
+                }
+                const { destination, pageTitle } = row;
+                return (
+                  <PaletteResultItem
+                    key={destination.id}
+                    result={row.result}
+                    onSelect={() => {
+                      if (!allowNavigation()) return;
+                      close();
+                      void navigate(settingsLocation(destination.id, router.state.location));
+                    }}
+                    className="min-h-11 px-3"
+                  >
+                    <Settings className="size-4 shrink-0 text-secondary" />
+                    <span className="min-w-0 flex-1 truncate">
+                      <MatchText text={row.result.title} ranges={row.ranges} />
+                    </span>
+                    <ItemDetail>{pageTitle}</ItemDetail>
+                    <ChevronRight className="size-4 shrink-0 text-tertiary" />
+                  </PaletteResultItem>
+                );
+              })}
             </CommandList>
+            <div className="sr-only" aria-live="polite" aria-atomic="true">
+              {announcement}
+            </div>
             {palette.mode === "newChatIn" ? (
               <p className="px-5 pb-3 pt-1 text-mini text-tertiary" data-new-chat-in-footer>
                 ⌥↵ in a new worktree

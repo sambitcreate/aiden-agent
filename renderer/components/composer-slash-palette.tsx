@@ -36,6 +36,10 @@ import {
 } from "../lib/slash-command-core";
 import type { SlashCommandAvailabilityResult } from "../lib/slash-command-actions";
 import type { SlashCommandIcon } from "../shared/slash-commands";
+import { titleRanges } from "../lib/text-match";
+import { revealInList } from "../lib/reveal-in-list";
+import { useDebouncedAnnouncement } from "../lib/use-debounced-announcement";
+import { MatchText } from "./match-text";
 
 export const COMPOSER_SLASH_PALETTE_ID = "composer-slash-palette";
 export const COMPOSER_SLASH_RETRY_ID = "slash-option-skills-retry";
@@ -73,6 +77,8 @@ const ICONS: Record<SlashCommandIcon, React.ComponentType<{ className?: string }
 
 interface ComposerSlashPaletteProps {
   mode: SlashSession["kind"];
+  /** What was typed after the trigger, to mark in each title. */
+  query: string;
   results: readonly SlashResult[];
   activeId?: string;
   skillsLoading: boolean;
@@ -138,6 +144,7 @@ function sourceLabel(source: Extract<SlashResult, { kind: "skill" }>["skill"]["s
 
 export function ComposerSlashPalette({
   mode,
+  query,
   results,
   activeId,
   skillsLoading,
@@ -156,29 +163,25 @@ export function ComposerSlashPalette({
   const skills = results.filter(
     (result): result is Extract<SlashResult, { kind: "skill" }> => result.kind === "skill",
   );
-  const [announcement, setAnnouncement] = React.useState("");
+  const count = commands.length + skills.length;
+  const [announcement, setAnnouncement] = useDebouncedAnnouncement(
+    mode === "skill" && skillsError
+      ? "Skills could not be loaded. Navigate to Retry skills to try again."
+      : mode === "skill" && skillsLoading
+        ? "Loading skills."
+        : count === 0
+          ? mode === "command"
+            ? "No matching commands."
+            : "No matching skills."
+          : `${count} ${mode}${count === 1 ? "" : "s"}.`,
+    180,
+  );
+  const listRef = React.useRef<HTMLDivElement | null>(null);
 
   React.useEffect(() => {
-    const timer = window.setTimeout(() => {
-      const count = commands.length + skills.length;
-      setAnnouncement(
-        mode === "skill" && skillsError
-          ? "Skills could not be loaded. Navigate to Retry skills to try again."
-          : mode === "skill" && skillsLoading
-            ? "Loading skills."
-            : count === 0
-              ? mode === "command"
-                ? "No matching commands."
-                : "No matching skills."
-              : `${count} ${mode}${count === 1 ? "" : "s"}.`,
-      );
-    }, 180);
-    return () => window.clearTimeout(timer);
-  }, [commands.length, mode, skills.length, skillsError, skillsLoading]);
-
-  React.useEffect(() => {
-    if (!activeId) return;
-    document.getElementById(activeId)?.scrollIntoView({ block: "nearest" });
+    const row = activeId ? document.getElementById(activeId) : null;
+    // Scrolls only the list: the composer and the chat around it stay put.
+    if (row) revealInList(row, listRef.current);
   }, [activeId]);
 
   const row = (result: SlashResult, available: boolean, unavailableReason?: string) => {
@@ -221,7 +224,9 @@ export function ComposerSlashPalette({
           <Icon aria-hidden="true" className="size-[18px]" />
         </span>
         <span className="flex min-w-0 flex-1 items-baseline gap-2">
-          <span className="truncate text-regular-strong text-primary">{title}</span>
+          <span className="truncate text-regular-strong text-primary">
+            <MatchText text={title} ranges={titleRanges(title, query)} />
+          </span>
           {metadata ? (
             <span className="max-w-28 truncate text-small text-tertiary">{metadata}</span>
           ) : null}
@@ -250,6 +255,7 @@ export function ComposerSlashPalette({
       aria-hidden={presenceState === "exiting" ? "true" : undefined}
     >
       <div
+        ref={listRef}
         id={COMPOSER_SLASH_PALETTE_ID}
         role="listbox"
         aria-label={mode === "command" ? "Slash commands" : "Skills"}

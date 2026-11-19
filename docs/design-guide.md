@@ -312,6 +312,27 @@ elsewhere stays there. Candidates under `aria-hidden="true"` are skipped too.
 - A tooltip does not open when `returnFocus` puts focus back on its trigger;
   Radix Tooltip would otherwise open on any focus, programmatic or not.
 
+## Search and highlight
+
+Pickers and palettes match with `renderer/lib/text-match.ts`, not cmdk's filter
+(pass `shouldFilter={false}` and render the ranked rows in order).
+
+- `matchItem(title, keywords, query)` ignores case and accents and ranks a
+  match at the start above one at a word start, above one anywhere, then word
+  initials ("gp" finds Git push), then letters in order. `rankMatches` keeps
+  input order for equal scores, and an empty query shows everything in order.
+- Only the title a row shows is highlighted. Put other searchable text, like a
+  provider name or a folder path, in `keywords`: it matches but is never
+  marked. Never put dates or timestamps in keywords; a day number would match
+  everything from that month.
+- Render the title with `<MatchText text ranges />`: the matched part is a
+  `<mark>` in the `text-match` color (`--text-match`), with no fill or border.
+- Announce the count in a polite live region about 500 ms after typing pauses,
+  silent for an empty query (`useDebouncedAnnouncement`, `resultCountMessage`).
+- Keep the active row visible with `revealInList` from
+  `renderer/lib/reveal-in-list.ts`, never `scrollIntoView`, which can scroll
+  the page or the dialog around the list.
+
 ## Enforced rules
 
 `npm run check:aiden-rules` (`scripts/check-aiden-rules.mjs`) checks the rules a

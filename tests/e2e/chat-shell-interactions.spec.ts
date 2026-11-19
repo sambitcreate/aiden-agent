@@ -1247,12 +1247,9 @@ test("command palette selects each chat with identical labels independently", as
   await expect(rows).toHaveCount(1);
   await expect(rows.first()).toHaveText(/Zebra orchard renamed/u);
   await expect(rows.first()).toHaveAttribute("aria-selected", "true");
+  // Chats match on title only: a date string finds nothing.
   await search.fill(await page.evaluate((time) => new Date(time).toLocaleString(), updatedAt));
-  await expect(rows).toHaveCount(1);
-  await expect(rows.first()).toHaveText(/Zebra orchard renamed/u);
-  await search.fill(await page.evaluate(() => new Date(1_800_000_000_000).toLocaleString()));
-  await expect(rows).toHaveCount(1);
-  await expect(rows.first()).toHaveText(/Repeated palette title/u);
+  await expect(rows).toHaveCount(0);
   await search.fill("palette-chat");
   await expect(rows).toHaveCount(0);
   await search.fill("Zebra orchard renamed");

@@ -236,6 +236,7 @@
   --color-status-warning-surface: var(--status-warning-surface);
   --color-accent: var(--accent);
   --color-accent-text: var(--accent-text);
+  --color-match: var(--text-match);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent-hover: var(--accent-hover);
   --color-accent-active: var(--accent-active);
@@ -307,6 +308,8 @@
   --default-transition-timing-function: var(--motion-easing);
 }
 :root {
+  /* The matched part of a label in a search result (pickers, the palette). */
+  --text-match: var(--accent-text);
   color-scheme: light;
   font-family: var(--font-ui-family);
   --font-ui-family:

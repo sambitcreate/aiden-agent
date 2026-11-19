@@ -191,6 +191,35 @@ test("Enter on a command that takes text inserts it and closes the palette witho
   assert.deepEqual(sends, []);
 });
 
+test("each title marks the part the query matched", async () => {
+  const { textbox } = await mountComposer();
+  await type(textbox, "/renam");
+  const marked = screen
+    .getAllByRole("option")
+    .flatMap((option) => [...option.querySelectorAll("mark")].map((mark) => mark.textContent));
+  assert.ok(marked.includes("Renam"), `marked ${JSON.stringify(marked)}`);
+
+  // The bare trigger matches everything and marks nothing.
+  await type(textbox, "/");
+  assert.ok(document.querySelectorAll("[role=option] mark").length === 0);
+});
+
+test("keys an input method is composing with leave the palette alone", async () => {
+  const { textbox } = await mountComposer();
+  await type(textbox, "/");
+  const selectable = selectableOptionIds();
+
+  // Chromium marks a composing key with keyCode 229 even when isComposing is unset.
+  await act(async () => {
+    fireEvent.keyDown(textbox, { key: "ArrowDown", keyCode: 229 });
+  });
+  assertActiveOption(textbox, selectable[0]!);
+  await act(async () => {
+    fireEvent.keyDown(textbox, { key: "Escape", keyCode: 229 });
+  });
+  assert.ok(palette() !== null, "the composition's Escape keeps the palette open");
+});
+
 test("Escape closes the palette and keeps the typed draft", async () => {
   const { textbox } = await mountComposer();
   await type(textbox, "/");
