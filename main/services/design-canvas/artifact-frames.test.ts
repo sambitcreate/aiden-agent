@@ -51,6 +51,33 @@ test("a person's frame with the same title is never swapped, and a visual alread
   assert.equal(again.doc, doc);
 });
 
+test("a locked frame or one on another page keeps its visual, and two visuals of one reply never share a frame", () => {
+  const aiden = (id: string, extra: Partial<DesignFrame> = {}): DesignFrame => ({
+    id, kind: "artifact", title: "Chart", mediaId: `old-${id}`, x: 0, y: 0, w: 640, h: 480, pageId: "page-1", createdBy: "aiden", ...extra,
+  });
+  const withPages = (frames: DesignFrame[]): DesignCanvas => ({
+    ...canvas(frames),
+    pages: [...emptyDesignCanvas().pages, { id: "page-2", name: "Archive", viewport: { x: 0, y: 0, zoom: 1 } }],
+  });
+
+  const locked = placeArtifactFrames(withPages([aiden("pinned", { locked: true })]), [{ mediaId: "m1", title: "Chart" }], ids()).doc;
+  assert.equal(locked.frames.find((frame) => frame.id === "pinned")!.mediaId, "old-pinned");
+  assert.equal(locked.frames.filter((frame) => frame.mediaId === "m1").length, 1, "the new visual gets its own frame");
+
+  const elsewhere = placeArtifactFrames(withPages([aiden("archived", { pageId: "page-2" })]), [{ mediaId: "m1", title: "Chart" }], ids()).doc;
+  assert.equal(elsewhere.frames.find((frame) => frame.id === "archived")!.mediaId, "old-archived");
+  assert.equal(elsewhere.frames.find((frame) => frame.mediaId === "m1")!.pageId, "page-1", "it lands on the page on screen");
+
+  // One earlier frame titled Chart, then two new visuals titled Chart in one reply: the first swaps in, the second is new.
+  const twice = placeArtifactFrames(withPages([aiden("earlier")]), [{ mediaId: "a", title: "Chart" }, { mediaId: "b", title: "Chart" }], ids()).doc;
+  assert.deepEqual(twice.frames.map((frame) => frame.mediaId).sort(), ["a", "b"]);
+  assert.equal(twice.frames.find((frame) => frame.id === "earlier")!.mediaId, "a");
+
+  // On a fresh canvas, two same-titled visuals of one reply land in two frames.
+  const fresh = placeArtifactFrames(canvas([]), [{ mediaId: "a", title: "Chart" }, { mediaId: "b", title: "Chart" }], ids()).doc;
+  assert.equal(fresh.frames.length, 2);
+});
+
 test("several visuals in one reply land in a row without stacking", () => {
   const { doc } = placeArtifactFrames(
     canvas([]),
