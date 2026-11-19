@@ -1086,7 +1086,48 @@ test("applies resolved Codex auth and caller transforms once to the native provi
     "X-Transformed": "yes",
   });
   assert.deepEqual(captured?.env, { REGION: "two" });
-  assert.equal(captured?.transport, "sse");
+});
+
+test("in-process Codex requests use a WebSocket where the runtime has one, and HTTP otherwise", async (t) => {
+  const credentials = new InMemoryCredentialStore();
+  await credentials.modify("openai-codex", async () => oauthCredential("resolved-access"));
+  const builtin = builtinModels({ credentials });
+  const transports: Array<string | undefined> = [];
+  const models = {
+    getProvider: codexProviderWith(builtin, {
+      streamSimple: (model, _context, options) => {
+        transports.push(options?.transport);
+        return terminalStream(model, "stop");
+      },
+      toAuth: async () => ({ apiKey: "resolved-access" }),
+    }),
+    getModels: builtin.getModels.bind(builtin),
+    getModel: builtin.getModel.bind(builtin),
+    checkAuth: async () => ({ type: "oauth" as const, source: "OAuth" }),
+  } as unknown as Models;
+  const service = new CodexProviderService(models, credentials);
+  const model = await service.prepareRuntimeModel("gpt-5.6-sol");
+  const originalWebSocket = Object.getOwnPropertyDescriptor(globalThis, "WebSocket");
+  t.after(() => {
+    if (originalWebSocket) Object.defineProperty(globalThis, "WebSocket", originalWebSocket);
+    else Reflect.deleteProperty(globalThis, "WebSocket");
+  });
+
+  Object.defineProperty(globalThis, "WebSocket", { configurable: true, writable: true, value: class {} });
+  // Pi Agent asks for "auto" by default; Aiden sends full requests over the
+  // socket rather than Pi's previous-response delta continuation.
+  await service.streamSimple(model, { messages: [] }, { transport: "auto" }).result();
+  await service.streamSimple(model, { messages: [] }, { transport: "websocket-cached" }).result();
+  await service.streamSimple(model, { messages: [] }).result();
+  await service.streamSimple(model, { messages: [] }, { transport: "sse" }).result();
+  // A killable worker cannot keep a socket between requests.
+  const isolated = await service.prepareIsolatedStream(model, { transport: "auto" });
+
+  Reflect.deleteProperty(globalThis, "WebSocket");
+  await service.streamSimple(model, { messages: [] }, { transport: "auto" }).result();
+
+  assert.deepEqual(transports, ["websocket", "websocket", "websocket", "sse", "sse"]);
+  assert.equal(isolated.options.transport, "sse");
 });
 
 test("ignores a stale request rejection after Pi automatically rotates OAuth", async (t) => {

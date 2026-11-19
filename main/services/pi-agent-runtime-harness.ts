@@ -552,6 +552,17 @@ export function extensionSkillsPrompt(extensions: readonly PiAgentRuntimeExtensi
   return formatSkillsForSystemPrompt(extensions.flatMap((extension) => extension.resources?.skills ?? []));
 }
 
+/**
+ * The frozen-state tail extensions append to the composed system prompt, after
+ * every cache-stable part. Empty when no extension has one.
+ */
+export function extensionVolatileSystemPrompt(extensions: readonly PiAgentRuntimeExtension[]): string {
+  return extensions
+    .map((extension) => extension.volatileSystemPrompt?.trim())
+    .filter((value): value is string => Boolean(value))
+    .join("\n\n");
+}
+
 function composeSystemPrompt(
   basePrompt: string,
   extensions: readonly PiAgentRuntimeExtension[],
@@ -560,10 +571,7 @@ function composeSystemPrompt(
     .map((extension) => extension.systemPrompt?.trim())
     .filter((value): value is string => Boolean(value));
   const skillsPrompt = extensionSkillsPrompt(extensions);
-  const volatileContributions = extensions
-    .map((extension) => extension.volatileSystemPrompt?.trim())
-    .filter((value): value is string => Boolean(value));
-  return [basePrompt, ...contributions, skillsPrompt, ...volatileContributions]
+  return [basePrompt, ...contributions, skillsPrompt, extensionVolatileSystemPrompt(extensions)]
     .filter(Boolean)
     .join("\n\n");
 }

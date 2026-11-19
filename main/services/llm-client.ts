@@ -441,8 +441,10 @@ import {
   type ChatTurnState,
 } from "./chat-frozen-state.js";
 import { assembleChatPrompt, buildWorkspaceChatBasePrompt } from "./chat-prompt-assembly.js";
+import { rememberStableHead, stableHeadOf } from "./prompt-cache-breakpoints.js";
 import {
   PiAgentRuntimeHarness,
+  extensionVolatileSystemPrompt,
   isPiManagedCancellationError,
   piAgentRuntimeExtensions,
   resolvePiAgentRuntimeStaticContributions,
@@ -4023,6 +4025,9 @@ export const llmClient = {
         tools: runtimeTools,
       };
       const { systemPrompt } = assembly;
+      // The prompt before its frozen-state tail gets its own cache breakpoint,
+      // so a memory or canvas change leaves the tools and stable prompt cached.
+      rememberStableHead(params.chatId, stableHeadOf(systemPrompt, extensionVolatileSystemPrompt(assembly.contributions.extensions)));
       // The MCP servers this turn may use, as a bounded section patched into the
       // transcript (never the base prompt), rendered once from the servers
       // admitted when the turn starts. A server that finishes discovery later is

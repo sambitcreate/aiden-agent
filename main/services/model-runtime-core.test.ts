@@ -203,7 +203,8 @@ test("routes every Pi built-in through its native model and transport", async ()
   assert.strictEqual(runtime.provider, provider);
   assert.strictEqual(runtime.model, googleModel);
   assert.strictEqual(runtime.models, deps.native.models);
-  assert.strictEqual(runtime.streams.streamSimple, googleStream);
+  // The runtime stream hands the request to Pi's native transport.
+  assert.throws(() => runtime.streams.streamSimple(runtime.model, normalizeContext({ messages: [] })), /not called/u);
   assert.equal(runtime.apiKey, undefined);
   assert.equal(runtime.model.api, "google-generative-ai");
   assert.equal(runtime.model.provider, "google");
@@ -251,7 +252,8 @@ test("routes non-special Pi providers without reading legacy endpoint configurat
   assert.equal(legacyReads, 0);
   assert.strictEqual(runtime.provider, provider);
   assert.strictEqual(runtime.model, model);
-  assert.strictEqual(runtime.streams.streamSimple, googleStream);
+  // The runtime stream hands the request to Pi's native transport.
+  assert.throws(() => runtime.streams.streamSimple(runtime.model, normalizeContext({ messages: [] })), /not called/u);
   assert.equal(runtime.apiKey, undefined);
   assert.equal(runtime.headers, undefined);
 });
@@ -494,4 +496,52 @@ test("custom effort settings do not enable reasoning or alter other API formats 
   assert.equal(anthropic.api, "anthropic-messages");
   assert.equal(anthropic.compat, undefined);
   assert.equal(anthropic.thinkingLevelMap, undefined);
+});
+
+test("a listed custom endpoint routes by the chat id and an unlisted one sends no cache key", async () => {
+  const { openAICompletionsApi } = await import("@earendil-works/pi-ai/api/openai-completions.lazy");
+  const sent = async (baseUrl: string, cacheRetention?: "none") => {
+    const provider: StoredProvider = {
+      id: "custom:affinity", kind: "openai", label: "Private", baseUrl, models: ["private-model"], needsKey: false,
+    };
+    const model = buildModel(provider, "private-model", resolveProviderRuntimeLimits({}, provider, "private-model"));
+    let payload: Record<string, unknown> | undefined;
+    let headers: Headers | undefined;
+    let networkCalls = 0;
+    await openAICompletionsApi().streamSimple(model, normalizeContext({ messages: [
+      { role: "user", content: "Synthetic affinity check", timestamp: 1 },
+    ] }), {
+      apiKey: "offline-fixture",
+      sessionId: "chat-affinity-1",
+      ...(cacheRetention ? { cacheRetention } : {}),
+      onPayload: (request) => { payload = request as Record<string, unknown>; return undefined; },
+      fetch: async (_url: unknown, init?: RequestInit) => {
+        networkCalls++;
+        headers = new Headers(init?.headers);
+        throw new Error("captured before network");
+      },
+    }).result();
+    assert.ok(payload, `${baseUrl} must construct a request`);
+    return { payload, headers: headers ?? new Headers(), networkCalls };
+  };
+
+  const azure = await sent("https://contoso-east.openai.azure.com/openai/v1");
+  assert.equal(azure.payload.prompt_cache_key, "chat-affinity-1");
+
+  const fireworks = await sent("https://api.fireworks.ai/inference/v1");
+  assert.equal(fireworks.payload.prompt_cache_key, undefined);
+  assert.equal(fireworks.headers.get("x-session-affinity"), "chat-affinity-1");
+
+  for (const unlisted of [
+    "https://private.example.test/v1",
+    "https://openai.azure.com.example.test/v1",
+    "http://contoso-east.openai.azure.com/openai/v1",
+  ]) {
+    const request = await sent(unlisted);
+    assert.equal(request.payload.prompt_cache_key, undefined, unlisted);
+    assert.equal(request.headers.get("x-session-affinity"), null, unlisted);
+  }
+
+  const off = await sent("https://contoso-east.openai.azure.com/openai/v1", "none");
+  assert.equal(off.payload.prompt_cache_key, undefined, "caching off sends no key");
 });

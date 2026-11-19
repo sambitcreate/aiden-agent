@@ -16,6 +16,7 @@ import {
   OPENAI_CODEX_PROVIDER_LABEL,
 } from "./codex-provider.js";
 import type { PreparedCodexIsolatedStream } from "./codex-provider.js";
+import { customEndpointCacheAffinity } from "./custom-endpoint-cache-affinity.js";
 import {
   resolveRuntimeApiKey,
   resolveRuntimeBaseUrl,
@@ -23,6 +24,7 @@ import {
 } from "./generation-runtime.js";
 import { withOpenCodeSessionAttribution } from "./opencode-session-attribution.js";
 import { withoutMessageThreads } from "./pi-message-threads.js";
+import { withPromptCacheBreakpoints } from "./prompt-cache-breakpoints.js";
 import type { RuntimeModelLimits } from "./models-catalog-core.js";
 import type { StoredProvider } from "./types.js";
 import { customModelThinkingLevels } from "../../renderer/shared/custom-model-options.js";
@@ -67,6 +69,26 @@ export function buildModel(
     xhigh: effortLevels.includes("xhigh") ? "xhigh" : null,
     max: effortLevels.includes("max") ? "max" : null,
   } : undefined;
+  const thinkingCompat =
+    provider.kind === "anthropic" && limits.forceAdaptiveThinking
+      ? { forceAdaptiveThinking: true }
+      : effortLevels
+        ? options?.effortControl === "glm"
+          ? {
+              thinkingFormat: "chat-template" as const,
+              supportsReasoningEffort: false,
+              chatTemplateKwargs: {
+                enable_thinking: { $var: "thinking.enabled" },
+                reasoning_effort: { $var: "thinking.effort", omitWhenOff: true },
+              },
+            }
+          : { thinkingFormat: "openai" as const, supportsReasoningEffort: true }
+        : undefined;
+  // A listed custom endpoint routes the chat's requests by the chat id, as
+  // api.openai.com does by default.
+  const cacheAffinity = provider.kind === "openai"
+    ? customEndpointCacheAffinity(resolveRuntimeBaseUrl(provider))
+    : undefined;
   return {
     id: modelId,
     name: modelId,
@@ -80,21 +102,7 @@ export function buildModel(
     maxTokens: limits.maxTokens,
     thinkingLevelMap: customThinkingMap ?? limits.thinkingLevelMap,
     samplingParamsByThinkingLevel: limits.samplingParamsByThinkingLevel,
-    compat:
-      provider.kind === "anthropic" && limits.forceAdaptiveThinking
-        ? { forceAdaptiveThinking: true }
-        : effortLevels
-          ? options?.effortControl === "glm"
-            ? {
-                thinkingFormat: "chat-template",
-                supportsReasoningEffort: false,
-                chatTemplateKwargs: {
-                  enable_thinking: { $var: "thinking.enabled" },
-                  reasoning_effort: { $var: "thinking.effort", omitWhenOff: true },
-                },
-              }
-            : { thinkingFormat: "openai", supportsReasoningEffort: true }
-          : undefined,
+    compat: cacheAffinity ? { ...thinkingCompat, ...cacheAffinity } : thinkingCompat,
   };
 }
 
@@ -229,7 +237,8 @@ export async function resolveModelRuntimeWith(
       models: dependencies.native.models,
       apiKey: undefined,
       headers: undefined,
-      streams: { streamSimple: dependencies.native.streamSimple },
+      // The breakpoints Pi leaves unused, on every request this runtime sends.
+      streams: { streamSimple: withPromptCacheBreakpoints(dependencies.native.streamSimple) },
     };
   }
 
@@ -281,6 +290,6 @@ export async function resolveModelRuntimeWith(
     headers,
     // Custom endpoints now use the same Pi provider/auth/model composition as
     // built-ins; the compat adapter is only the provider's API implementation.
-    streams: { streamSimple: models.streamSimple.bind(models) },
+    streams: { streamSimple: withPromptCacheBreakpoints(models.streamSimple.bind(models)) },
   };
 }
