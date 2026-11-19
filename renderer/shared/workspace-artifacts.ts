@@ -68,7 +68,12 @@ export interface WorkspaceArtifactParamV1 {
 export interface WorkspaceArtifactActionV1 {
   name: string;
   label: string;
-  /** Shell template; `{{param}}` placeholders are filled with shell-quoted values. */
+  /**
+   * Command template. With `{{param}}` placeholders it never reaches a shell:
+   * it is parsed into argv commands, each placeholder fills exactly one
+   * argument, and it may sit only in a slot its program's table lists
+   * (`workspace-artifact-slots.ts`). A template without params runs in a shell.
+   */
   command: string;
   params: WorkspaceArtifactParamV1[];
 }

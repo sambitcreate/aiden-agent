@@ -184,8 +184,10 @@ export function applyNodeChanges(
 
 /**
  * Copies frames 32 px down and right. A copied group brings copies of its
- * members; a member copied alone stays in its group. All or nothing: a copy
- * that would pass the frame limit returns `doc` unchanged.
+ * members and keeps its lock; a member copied alone joins its group, unless
+ * that group is locked, when the copy stands outside any group. Other copies
+ * are unlocked. All or nothing: a copy that would pass the frame limit
+ * returns `doc` unchanged.
  */
 export function duplicateFrames(
   doc: DesignCanvas,
