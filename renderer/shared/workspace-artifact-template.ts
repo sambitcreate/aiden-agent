@@ -297,13 +297,23 @@ const GIT_SUBCOMMAND_VERBS: Record<string, readonly string[]> = { worktree: ["li
 /** git's options before the subcommand that a page may use; `-C`, `-c` and the rest change what runs or where. */
 const ARGUMENT_GIT_GLOBAL_OPTIONS = new Set(["--no-pager", "-P", "--no-optional-locks"]);
 /**
- * gh command groups and their verbs that take page data. `gh api` is left
- * out on purpose: `-X` sends any method and `-f`/`-F` turn a request into a
- * POST, so no set of option checks keeps it to reads; `alias`, `extension`
- * and `config` change what later gh commands run.
+ * gh command groups and, for each, the verbs that take page data. `gh api` is
+ * left out on purpose: `-X` sends any method and `-f`/`-F` turn a request
+ * into a POST, so no set of option checks keeps it to reads; `alias`,
+ * `extension` and `config` change what later gh commands run, `auth` and
+ * `secret` handle credentials, and `workflow run` starts a workflow with
+ * inputs of the page's choosing. A body file (`--body-file`, `-F`) is still
+ * refused on every verb that has one.
  */
-const ARGUMENT_GH_GROUPS = ["pr", "issue", "run", "repo"];
-const ARGUMENT_GH_VERBS = ["view", "list", "checkout", "merge", "comment", "close", "reopen", "review", "diff", "status", "browse"];
+const ARGUMENT_GH_VERBS: Record<string, readonly string[]> = {
+  pr: ["view", "list", "status", "diff", "checks", "checkout", "create", "edit", "ready", "merge", "comment", "review", "close", "reopen"],
+  issue: ["view", "list", "status", "create", "edit", "comment", "close", "reopen"],
+  run: ["view", "list", "watch", "rerun", "cancel"],
+  repo: ["view", "list"],
+  release: ["view", "list"],
+  label: ["list"],
+  workflow: ["view", "list"],
+};
 const ARGUMENT_GH_COMMANDS = ["browse", "status"];
 /** A program written as a plain word: no quotes, expansions, globs or path. */
 const PLAIN_PROGRAM = /^[A-Za-z0-9_][A-Za-z0-9_.+-]*$/u;
@@ -315,7 +325,8 @@ const ASSIGNMENT_WORD = /^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=/u;
 /** The commands a template with placeholders may run, for refusal messages. */
 export const WORKSPACE_ARTIFACT_ARGUMENT_PROGRAMS =
   `git ${ARGUMENT_GIT_SUBCOMMANDS.filter((sub) => sub !== "worktree" && sub !== "remote").join(", ")}, worktree list/add/remove or remote -v ` +
-  `(with only --no-pager or --no-optional-locks before the subcommand); gh ${ARGUMENT_GH_GROUPS.join(", ")} followed by ${ARGUMENT_GH_VERBS.join(", ")}, ` +
+  `(with only --no-pager or --no-optional-locks before the subcommand); ` +
+  `${Object.entries(ARGUMENT_GH_VERBS).map(([group, verbs]) => `gh ${group} ${verbs.join("/")}`).join(", ")}, ` +
   `or gh ${ARGUMENT_GH_COMMANDS.join(" or ")}; ${[...ARGUMENT_TEXT_PROGRAMS, ...ARGUMENT_TEST_PROGRAMS].join(", ")}`;
 
 // ---------------------------------------------------------------------------
@@ -451,7 +462,7 @@ const GIT_PROGRAM_OPTIONS: Record<string, OptionSet> = {
 /** Options whose value names a file the program writes, or reads and posts. */
 const FILE_OPTIONS: Record<string, OptionSet> = {
   sort: { short: "oT", long: ["output", "temporary-directory"] },
-  gh: { short: "F", long: ["body-file"], exact: true },
+  gh: { short: "F", long: ["body-file", "recover"], exact: true },
 };
 const GIT_FILE_OPTIONS: Record<string, OptionSet> = {
   config: { short: "f", long: ["file", "blob"] },
@@ -595,9 +606,10 @@ function commandProblem(command: TemplateCommand): WorkspaceArtifactTemplateProb
     const [group, verb] = args;
     if (group === undefined && rest.length) return { kind: "misplaced", reason: "the gh command" };
     if (group !== undefined && ARGUMENT_GH_COMMANDS.includes(group)) return undefined;
-    if (group === undefined || !ARGUMENT_GH_GROUPS.includes(group)) return program_(group === "api" ? "gh api, which can send any request" : `gh ${group ?? ""}`.trim());
+    const verbs = group !== undefined && Object.prototype.hasOwnProperty.call(ARGUMENT_GH_VERBS, group) ? ARGUMENT_GH_VERBS[group] : undefined;
+    if (group === undefined || verbs === undefined) return program_(group === "api" ? "gh api, which can send any request" : `gh ${group ?? ""}`.trim());
     if (verb === undefined && rest.length > 1) return { kind: "misplaced", reason: `the gh ${group} verb` };
-    if (verb === undefined || !ARGUMENT_GH_VERBS.includes(verb)) return program_(`gh ${group} ${verb ?? ""}`.trim());
+    if (verb === undefined || !verbs.includes(verb)) return program_(`gh ${group} ${verb ?? ""}`.trim());
     return undefined;
   }
   // These run a program for every file they read, so a template that uses them takes no page data.
