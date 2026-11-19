@@ -1,6 +1,6 @@
 # Prompt cache hit rate: keep the cached prefix byte-stable
 
-Status: In progress (2026-11-18): phases 0 and 1 implemented. Delivered as one PR with one stacked commit series per phase, branch `feat/prompt-cache-stability`, cut from `main` at f2fd27640.
+Status: In progress (2026-11-18): phases 0, 1 and 2 implemented. Delivered as one PR with one stacked commit series per phase, branch `feat/prompt-cache-stability`, cut from `main` at f2fd27640.
 
 ## Goal
 
@@ -196,6 +196,42 @@ At the end, four Opus high reviewers review the whole PR, and a CI watcher owns 
 - Browser discovery test: discovery on turn 1 still holds on turn 2 after a restart that reloads the journal.
 - MCP schema test: two servers that send the same schema with different key orders produce identical tool bytes.
 - `subagent-tool` and `bot-messages/tool` tests: the description is identical whatever the inventory, and the list action returns the inventory.
+
+**As built (2026-11-18).** No tool set is journaled. Each declaration is now a pure function of the chat and its settings, and each turn's conditions are enforced per call, so the same inputs give the same bytes on every turn. The code differed from the plan in these ways:
+
+- **One refusal point per surface.**
+  - Workspace chats: `main/services/chat-turn-tool-policy.ts`. `chatToolOffers(surface)` decides declarations from the chat alone. `chatTurnToolRefusal(surface, turn)` names what this turn refuses: unattended, paired device, or inline visuals On request without /visualize.
+  - llm-client collects the turn's refusals (`turnToolRefusals`) and checks them first in `beforeToolCall`, before the Computer Use access check, the approval gate and execution. A refused call is recorded as denied, its timeline row ends as blocked, and it returns `{ block: true, reason }`.
+  - Nested codemode calls pass through the same `beforeToolCall`. The approval gate is unchanged and is still the only place approvals are decided.
+- **Bots.**
+  - Candidates no longer depend on ingress. `turnAllows` (`botIngressAllowsTool` with `withBotMemoryIngress`) is enforced on every call in `authorizeTool`, `admitEffect` and the assembly policy. The refusal text comes from `botIngressRefusal`, for example "only a routine run has a notepad".
+  - The `aiden-memory` guidance now follows the `bot_memory` declaration rather than the ingress, so routine and person turns share the system text. A routine's save is refused before it runs. Memory flush before compaction still follows the ingress.
+  - Open work is rendered once per person input and appended after it as a request-only tail, memoized in-process. It never rewrites `messages[0]` or the system sections.
+- **Inventories.**
+  - `message_bot` has a fixed description and an `action: "list"` that returns the peers.
+  - The subagent tool's description and parameters depend only on settings flags. The MCP and model inventories come from `action: "list"`, and the host still enforces exact server/tool pairs, lanes, models and efforts before anything launches.
+  - A supervisor with no model policy now refuses model and effort requests instead of silently inheriting them. Nested child tools keep a per-run inventory.
+  - In the CLI, the `message_bot` offer no longer depends on the ingress chain; the chain limit is refused per call. Its declaration still depends on config.
+- **On-demand and browser tools.**
+  - The transcript head declares only the chat's fixed tools: the everyday set plus `load_tools`. A tool loaded mid-turn is declared by the system message the agent loop appends, which the journal keeps.
+  - On wires that append tools, the next step's prefix is unchanged. Other wires take one miss when a tool loads. The cross-turn case stays a phase 8 todo, because the turn-start head collapse folds the addition into the head.
+  - Browser discovery reads "already requested" from the transcript (`browserDiscoveredIn`), so a journal reload keeps the tools from the first step of the next response. The guidance is appended once.
+  - Access is checked when the browser tools are offered and again on every call, so a remembered discovery grants nothing new. A compaction that folds the discovery result away after a restart can cost one rediscovery.
+- **Gated tools.**
+  - Every chat declares all five app tools with the full topic list. A paired-device turn refuses settings reads, changes, `aiden_open` and panels the phone does not show. Each tool refuses again in `execute`.
+  - Inline visuals On request keeps `render_artifact` and `render_ui` declared and refuses them without /visualize. Drafts are off in those turns. On request users now run the HTML-store check on every turn.
+  - The /visualize and paired-device notes still vary the generative UI section of system. The tools cache holds. Moving the notes is phase 3, because `contentOverrides` drops text attachments and section patches fold into the head.
+  - `hooks` (paired device and unattended) and `workspace_artifact` (paired device) stay declared and are refused, and their skills are no longer filtered.
+  - `form_fill` is unchanged. It is compiled off (`FORM_FILL_MUTATION_AVAILABLE` is false), and its description embeds the turn's attachment IDs. Moving those IDs out of the description is a precondition for turning it on.
+- **Unattended follow-ups** (`UNATTENDED_FOLLOW_UP_GENERATION`) now declare the chat's Computer Use tool and refuse `computer_use` and `form_fill` per call. The controller is created lazily and never reached.
+  - Subagents and MCP stay withheld, because declaring them would start MCP connections that nobody is watching.
+- **Paired-device turns** (`remoteGenerationSurface`) also keep the chat's Computer Use declaration and refuse `computer_use` and `form_fill`, since Computer Use is granted only on the Mac. One per-device difference remains: a device that cannot answer question prompts still has those tools excluded (`QUESTION_PROMPT_EXCLUDED_TOOLS`), so an outdated phone's turns miss the tools cache. Fixing that needs the prompt itself to be refused per call, which is left for later.
+- Scheduled, Telegram and owed-turn generations still pass `allowComputerUse: false`. A scheduled run and a Telegram chat each have their own chat, so the tool list is still fixed within that chat. An owed turn (the one turn a settled background run owes its chat) still withholds Computer Use and the hooks tool (`windowOnlyToolNames` in `chat-owed-turn-start.ts`), so that turn costs one tools miss. Declaring it there needs an audience the turn can name; that is left for later.
+- **Sorted schemas.** MCP input schemas are serialized with sorted object keys.
+- **Tests.**
+  - `prompt-prefix-stability.test.ts` now covers "tool list identical across turns" for: a workspace /visualize turn against a plain turn; Bot routine, person and Telegram turns; an unattended follow-up; and a paired-device turn on all three wires.
+  - It also covers a tool loading mid-turn on every wire, with the in-place-system wires left as phase 8 todos.
+  - `chat-turn-tool-policy.test.ts` covers the refusals and their reasons, and `bot-extension.test.ts` covers a refused routine memory save. The subagent, `message_bot`, browser-discovery and MCP schema suites carry the rest.
 
 ## Phase 3: hook context and frozen per-chat state
 

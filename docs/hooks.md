@@ -218,7 +218,7 @@ Each hook's detail sheet shows its last ten runs. **Test** runs it once against 
 
 ## The agent's `hooks` tool
 
-Desktop chats that run hooks can load a `hooks` tool ([tool loading](tool-loading.md)), with a built-in `aiden-hooks` skill that explains it. Subagents, unattended turns, turns a phone or paired Mac sends (whose cards reach that device, which can only deny a proposal) and chats that don't run hooks never get it, and the skill is withheld wherever the tool is.
+Desktop chats that run hooks can load a `hooks` tool ([tool loading](tool-loading.md)), with a built-in `aiden-hooks` skill that explains it. Subagents and chats that don't run hooks never get it, and the skill is withheld wherever the tool is. A chat that runs hooks declares the tool on every turn, but an unattended follow-up or a turn a phone or paired Mac sends (whose cards reach that device, which can only deny a proposal) refuses its calls before anything runs, so only a turn sent from this computer can propose or disable a hook. The owed turn a settled run starts doesn't get the tool.
 
 - `list`: hooks and pending proposals.
 - `propose`: create, change or delete a workspace or chat hook (a chat without a folder can have chat hooks only). Never a global hook, and never a hook in `.aiden/hooks.json`. Timeouts are capped at 30 seconds, `async` ones included. A hook whose event never fires in the chosen scope is refused before any card shows. Command or matcher text with control or bidirectional characters is refused. The approval card shows the whole command, the script files the approval covers, and whether the hook runs in the background.
