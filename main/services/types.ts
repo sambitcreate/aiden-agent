@@ -1114,6 +1114,11 @@ export interface ChatStartParams {
   visualize?: boolean;
   /** Settings → Appearance → Inline visuals; automatic when absent. */
   inlineVisuals?: import("../../renderer/shared/appearance.js").InlineVisualsMode;
+  /**
+   * A desktop design-mode message: the frames the person had selected and the
+   * canvas region's size on their screen. Absent from phones and other turns.
+   */
+  designView?: import("../../renderer/shared/design-canvas/canvas-summary.js").DesignViewState;
   messages: Array<{
     role: ChatRole;
     content: string;

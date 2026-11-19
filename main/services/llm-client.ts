@@ -2563,6 +2563,7 @@ async function prepareGeneration(
           ? designCanvasSnapshots.request({ chatId: params.chatId, owner: browserOwner, signal: toolSignal ?? signal })
           : null,
       seesImages: supportsImages,
+      ...(params.designView ? { viewState: params.designView } : {}),
       // Drawn offline in a hidden window, through the same scheme and grant the canvas uses.
       inspect: (frame, inspectOptions, toolSignal) =>
         inspectDesignPage({
@@ -2587,6 +2588,7 @@ async function prepareGeneration(
         await placeArtifactsOnCanvas({
           chatId: params.chatId,
           artifacts,
+          ...(params.designView?.viewSize ? { viewSize: params.designView.viewSize } : {}),
           store: designCanvasStore,
           broadcast: announceCanvasChange,
           newId: randomUUID,
@@ -2686,6 +2688,7 @@ async function prepareGeneration(
           chatId: params.chatId,
           workspaceRoot: pageRoot,
           paths: [relativePath],
+          ...(params.designView?.viewSize ? { viewSize: params.designView.viewSize } : {}),
           shouldSave: canSaveWrittenPage,
           store: designCanvasStore,
           broadcast: announceCanvasChange,
@@ -2746,7 +2749,7 @@ async function prepareGeneration(
     if (canvasStatusNoted || !(canvasStatusOffered || canvasToolsEntered)) return context;
     canvasStatusNoted = true;
     try {
-      return withCanvasStatusNote(context, canvasPromptLine(await designCanvasStore.get(params.chatId)), Date.now());
+      return withCanvasStatusNote(context, canvasPromptLine(await designCanvasStore.get(params.chatId), params.designView?.selection), Date.now());
     } catch (error) {
       logger.warn("pi", "Could not read the design canvas for its status note.", error);
       return context;
@@ -2791,7 +2794,7 @@ async function prepareGeneration(
       if (canvasStatusNoted || !canvasStatusOffered) return undefined;
       canvasStatusNoted = true;
       try {
-        return canvasPromptLine(await designCanvasStore.get(params.chatId));
+        return canvasPromptLine(await designCanvasStore.get(params.chatId), params.designView?.selection);
       } catch (error) {
         logger.warn("pi", "Could not read the design canvas for its status note.", error);
         return undefined;

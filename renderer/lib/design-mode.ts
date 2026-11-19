@@ -3,6 +3,7 @@ import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { toast } from "../components/ui";
 import { ASSISTANT_WORKSPACE_ID } from "../shared/assistant";
 import { persistedChatWorkspaceId } from "../shared/chat-workspace";
+import type { DesignViewState } from "../shared/design-canvas/canvas-summary";
 import { useAppCapabilities } from "./app-capabilities";
 import { chatsApi, onNotification } from "./ipc";
 import { queryKeys, useChat, useWorkspaces } from "./queries";
@@ -98,6 +99,23 @@ export function consumePendingDesignEntry(chatId: string): DesignModeSource | nu
   const source = pendingEntries.get(chatId) ?? null;
   pendingEntries.delete(chatId);
   return source;
+}
+
+// What each chat's canvas shows on this screen: the frames selected and the
+// canvas region's size. The canvas notes it as it changes; a design-mode
+// message carries it, so Aiden knows what "this" means and what is in view.
+const canvasViews = new Map<string, DesignViewState>();
+
+/** Notes what this chat's canvas shows now, or forgets it once the canvas is gone (null). */
+export function noteDesignCanvasView(chatId: string, view: DesignViewState | null): void {
+  if (view) canvasViews.set(chatId, view);
+  else canvasViews.delete(chatId);
+}
+
+/** What this chat's canvas shows on this screen, for the next message; undefined with no canvas. */
+export function designCanvasViewFor(chatId: string): DesignViewState | undefined {
+  const view = canvasViews.get(chatId);
+  return view ? { selection: [...view.selection], ...(view.viewSize ? { viewSize: { ...view.viewSize } } : {}) } : undefined;
 }
 
 /** Apply another window's (or main's echo of our own) design mode change. */

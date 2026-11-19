@@ -25,6 +25,8 @@ export function placeArtifactFrames(
   doc: DesignCanvas,
   artifacts: readonly CanvasArtifact[],
   newId: () => string,
+  /** The canvas region's size on the person's screen, when their message said it. */
+  viewSize?: { w: number; h: number },
 ): { doc: DesignCanvas; changed: boolean } {
   let next = doc;
   let changed = false;
@@ -57,7 +59,7 @@ export function placeArtifactFrames(
     const placed = placeFrame(
       next,
       { kind: "artifact", title, mediaId: artifact.mediaId, createdBy: "aiden", ...ARTIFACT_FRAME_BOX },
-      canvasView(next),
+      canvasView(next, viewSize),
       newId,
     );
     // A full canvas takes no more frames; the visual is still in the chat.
@@ -81,11 +83,13 @@ export async function placeArtifactsOnCanvas(input: {
   store: Pick<DesignCanvasStore, "update">;
   broadcast(update: { chatId: string; revision: number }): void;
   newId(): string;
+  /** The canvas region's size on the person's screen, when their message said it. */
+  viewSize?: { w: number; h: number };
 }): Promise<boolean> {
   if (input.artifacts.length === 0) return false;
   try {
     const saved = await input.store.update(input.chatId, (doc) => {
-      const placed = placeArtifactFrames(doc, input.artifacts, input.newId);
+      const placed = placeArtifactFrames(doc, input.artifacts, input.newId, input.viewSize);
       if (!placed.changed) throw UNCHANGED;
       return placed.doc;
     });

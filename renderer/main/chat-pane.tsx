@@ -116,6 +116,7 @@ import { Composer, type ComposerApprovalsPatch } from "../components/composer";
 import { AskUserQuestionComposer } from "../components/ask-user-question-composer";
 import { DesignModeConsentCard, useDesignModeConsent } from "../design/design-mode-consent";
 import { useCanvasFocusRequests } from "../design/canvas-focus-requests";
+import { designCanvasViewFor } from "../lib/design-mode";
 import {
   AskUserQuestionCountdown,
   AskUserQuestionExpiryNotice,
@@ -1645,6 +1646,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
       };
       const visualize = visualizeTurnRef.current === true;
       visualizeTurnRef.current = false;
+      // A chat whose canvas is open says what it shows: the selection and its size on screen.
+      const designView = designCanvasViewFor(chatId);
       const handle = startGeneration(
         {
           chatId,
@@ -1654,6 +1657,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           providerId,
           model,
           ...(visualize ? { visualize: true as const } : {}),
+          ...(designView ? { designView } : {}),
           inlineVisuals: readCachedAppearance()?.inlineVisuals ?? "automatic",
           thinkingLevel: googleThinkingSupported
             ? googleThinkingLevel

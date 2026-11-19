@@ -4,6 +4,7 @@
 import type { ChatStartParams } from "../services/types.js";
 import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import { isInlineVisualsMode } from "../../renderer/shared/appearance.js";
+import { parseDesignViewState } from "../../renderer/shared/design-canvas/canvas-summary.js";
 import {
   MAX_CHAT_ID_BYTES,
   MAX_CHAT_ID_CHARS,
@@ -24,6 +25,7 @@ const ALLOWED_CHAT_START_KEYS = new Set([
   "workspaceId",
   "visualize",
   "inlineVisuals",
+  "designView",
 ]);
 
 function boundedString(
@@ -110,6 +112,8 @@ export function parseParams(value: unknown): ChatStartParams {
   if (p.inlineVisuals !== undefined && !isInlineVisualsMode(p.inlineVisuals)) {
     throw new Error("Invalid generation fields.");
   }
+  const designView = p.designView === undefined ? undefined : parseDesignViewState(p.designView);
+  if (designView === null) throw new Error("Invalid generation fields.");
 
   return {
     chatId,
@@ -120,6 +124,7 @@ export function parseParams(value: unknown): ChatStartParams {
     ...(p.mode === "assistant" ? { mode: "assistant" as const } : {}),
     ...(p.visualize === true ? { visualize: true as const } : {}),
     ...(isInlineVisualsMode(p.inlineVisuals) ? { inlineVisuals: p.inlineVisuals } : {}),
+    ...(designView ? { designView } : {}),
     messages: [],
   };
 }

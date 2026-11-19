@@ -15,7 +15,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import { declareOnDemandSummary } from "../on-demand-tools.js";
 import { declarePiRuntimeReplay } from "../pi-runtime-tool.js";
-import { CANVAS_READ_FRAME_LIMIT, canvasReadCursorPage, canvasView, describeCanvas, parseCanvasReadCursor, summarizeFrame } from "../../../renderer/shared/design-canvas/canvas-summary.js";
+import { CANVAS_READ_FRAME_LIMIT, canvasReadCursorPage, canvasView, describeCanvas, parseCanvasReadCursor, summarizeFrame, type DesignViewState } from "../../../renderer/shared/design-canvas/canvas-summary.js";
 import {
   commentsWithoutFrames,
   replyToComment,
@@ -238,6 +238,14 @@ export type DesignCanvasToolDeps = {
   ): Promise<{ text: string; image?: { data: string; mimeType: string } }>;
   /** The time a reply or a resolve is stamped with. */
   now?(): Date;
+  /**
+   * What the person's canvas showed when they sent this turn's message: the
+   * frames selected, which canvas_read lists, and the canvas region's size,
+   * which sets the view canvas_read and new frames go by. Absent for a
+   * message from a phone: the view is then the stored viewport over a
+   * typical canvas region.
+   */
+  viewState?: DesignViewState;
 };
 
 type ToolContent = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
@@ -880,7 +888,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         name: "canvas_read",
         label: "Read design canvas",
         description:
-          `Read the design canvas: its pages, and on one page (the one on screen unless you name another) the view, the frames in it (id, kind, title, path, box, group, look, open comments), the frames outside it (outsideFrames, with ids and boxes), counts by group, and the page's open and sent comments with what each points at. Up to ${CANVAS_READ_FRAME_LIMIT} frames per call; for more, pass the answer's nextCursor as cursor. snapshot: true adds a picture of the canvas as the person sees it.`,
+          `Read the design canvas: its pages, and on one page (the one on screen unless you name another) the view, the frames in it (id, kind, title, path, box, group, look, open comments), the frames outside it (outsideFrames, with ids and boxes), counts by group, the frames the person had selected when they sent their message (selected), and the page's open and sent comments with what each points at. Up to ${CANVAS_READ_FRAME_LIMIT} frames per call; for more, pass the answer's nextCursor as cursor. snapshot: true adds a picture of the canvas as the person sees it.`,
         parameters: Type.Object({
           page: Type.Optional(Type.String({ maxLength: 128, description: "A page's name or id." })),
           cursor: Type.Optional(Type.String({ maxLength: 80, description: "An earlier answer's nextCursor." })),
@@ -904,7 +912,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               if ("error" in read) throw new CanvasToolError(read.error);
               pageId = read.pageId;
             }
-            const answer = describeCanvas(doc, { pageId, ...(cursor ? { cursor } : {}) });
+            const answer = describeCanvas(doc, { pageId, ...(cursor ? { cursor } : {}), ...(deps.viewState ? { viewState: deps.viewState } : {}) });
             const listed = new Set([...answer.inView, ...answer.outsideFrames].map((frame) => frame.id));
             remember(doc.frames.filter((frame) => listed.has(frame.id)));
             if (p.snapshot !== true) return answer;
@@ -1088,7 +1096,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 const placed = placeFrame(
                   base,
                   { ...input, w: nextW, h: nextH, ...(keptGroup ? { groupId: keptGroup } : {}) },
-                  canvasView(base, undefined, pageId),
+                  canvasView(base, deps.viewState?.viewSize, pageId),
                   () => adopted.id,
                 );
                 if ("error" in placed) {
@@ -1110,7 +1118,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 const frame = placedDoc.frames.find((entry) => entry.id === adopted.id)!;
                 return { doc: placedDoc, value: { ...reused, frame: summarizeFrame(frame) } };
               }
-              const placed = placeFrame(doc, input, canvasView(doc, undefined, pageId), () => id);
+              const placed = placeFrame(doc, input, canvasView(doc, deps.viewState?.viewSize, pageId), () => id);
               if ("error" in placed) {
                 throw new CanvasToolError(
                   `The canvas is full (${DESIGN_CANVAS_LIMITS.frames} frames, ${DESIGN_CANVAS_LIMITS.framesPerPage} on a page). Remove a frame first.`,
@@ -2109,7 +2117,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                   const probe = placeFrame(
                     doc,
                     { kind: "shape", title: "", pageId, w: padded.w, h: padded.h, createdBy: "aiden", ...(groupId ? { groupId } : {}) },
-                    canvasView(doc, undefined, pageId),
+                    canvasView(doc, deps.viewState?.viewSize, pageId),
                     () => "probe",
                   );
                   if ("error" in probe) throw new CanvasToolError("The canvas is full. Remove a frame first.");
@@ -2141,7 +2149,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               const made: string[] = [];
               const place = (input: PlaceFrameInput, ref: string | undefined) => {
                 const id = newId();
-                const placed = placeFrame(next, input, canvasView(next, undefined, pageId), () => id);
+                const placed = placeFrame(next, input, canvasView(next, deps.viewState?.viewSize, pageId), () => id);
                 if ("error" in placed) throw new CanvasToolError("The canvas is full. Remove a frame first.");
                 next = placed.doc;
                 made.push(id);
