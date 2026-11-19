@@ -342,6 +342,12 @@ export interface WorkspaceArtifactWriteOptions {
    * of the content's own still wins.
    */
   base?: { title: string; description?: string };
+  /**
+   * Update and restore: told, under the store's lock, the revision the write
+   * found the page at, so a caller can tell a write that made a new revision
+   * from one that found the page already matching and made none.
+   */
+  onFound?: (revision: number) => void;
 }
 
 /** `title`, or the first "Title (n)" no page in `taken` has, within the title limit. */
@@ -779,6 +785,7 @@ export class WorkspaceArtifactStore {
       if (index < 0) notFound();
       const previous = draft.artifacts[index]!;
       const built = contentFor(previous);
+      options.onFound?.(previous.revision);
       // Decided here, under the store's lock, so a rename or another chat's
       // description that landed while the caller prepared this save is never
       // written over by the value the caller read.

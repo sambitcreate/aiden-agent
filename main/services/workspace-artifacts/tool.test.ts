@@ -991,6 +991,24 @@ test("a reply's own restore does not count against the revision it read, while a
   );
 });
 
+test("a restore the page already matches makes no revision, says so with the page's revision, and does not count as the reply's own move", async (t) => {
+  const { store, call, nextTurn } = await harness(t, { permission: "full" });
+  await call("c1", { operation: "create", title: "Open PRs", markup: PAGE });
+  nextTurn();
+  // Another chat changes the page (revision 2) and then goes back to revision 1 (revision 3).
+  await store.replace("ws1", "art1", { ...(await store.get("ws1", "art1"))!.artifact, title: "Open PRs", description: "theirs" } as never);
+  await store.restore("ws1", "art1", 1);
+  const reply = await call("r1", { operation: "restore", id: "art1", revision: 1 });
+  assert.match(reply, /already matches revision 1, so no new revision was made\. It is at revision 3\./u);
+  assert.doesNotMatch(reply, /^Restored/u);
+  assert.equal((await store.get("ws1", "art1"))!.artifact.revision, 3);
+  // This reply moved the page nowhere, so the other chat's revision 2 is still a change it never saw.
+  await assert.rejects(
+    call("u1", { operation: "update", id: "art1", baseVersion: 2, description: "late" }),
+    /changed since revision 2, in another chat or by the person: it is now revision 3/u,
+  );
+});
+
 test("baseVersion is checked again under the store's lock, so a save landing while this one is prepared refuses it", async (t) => {
   const { store, call, nextTurn } = await harness(t, { permission: "full" });
   await call("c1", { operation: "create", title: "Open PRs", markup: PAGE });

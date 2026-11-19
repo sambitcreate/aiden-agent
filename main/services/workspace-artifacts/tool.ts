@@ -1105,12 +1105,28 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
           assertSourcesRunnable(entry, options);
           if (signal?.aborted) throw new Error("The restore was cancelled.");
           // The store approves only when the allowed card listed exactly the restored commands.
-          const artifact = await store.restore(workspaceId, id, revision, { approvedDigest: shownDigest });
+          let found: number | undefined;
+          const artifact = await store.restore(workspaceId, id, revision, {
+            approvedDigest: shownDigest,
+            onFound: (at) => {
+              found = at;
+            },
+          });
+          if (artifact.revision === found) {
+            // The page already matched that version, so no revision was made and
+            // this reply moved the page nowhere: its undo step and the revisions
+            // it went through stay as they were.
+            if (artifact.approvedDigest !== current.artifact.approvedDigest) {
+              options.onChanged({ workspaceId, artifactId: artifact.id, reason: "updated", chatId });
+            }
+            return text(
+              `Nothing to restore: the artifact "${artifact.visual.title}" (id ${artifact.id}) already matches revision ${revision}, so no new revision was made. It is at revision ${artifact.revision}.`,
+            );
+          }
           // A restore is the person going back on purpose: what it replaced is kept,
           // and the next save starts a new undo step.
           savedThisTurn.delete(id);
-          // Revisions only go up by one, so the restore replaced the one before its own.
-          ownRevisions.set(id, turnRevisionsAfter(ownRevisions.get(id), artifact.revision - 1, artifact.revision));
+          ownRevisions.set(id, turnRevisionsAfter(ownRevisions.get(id), found ?? artifact.revision - 1, artifact.revision));
           options.onChanged({ workspaceId, artifactId: artifact.id, reason: "updated", chatId });
           return text(
             `Restored revision ${revision} of the artifact "${artifact.visual.title}" as revision ${artifact.revision}.${droppedOnSave(artifact, false)}${await afterSave(artifact, signal, current.artifact)}`,
