@@ -156,6 +156,8 @@ test("checking, wrapping or streaming a visual up to the size cap takes linear t
     formattingReconstruction: (size) =>
       fill(size, "<p>t</p>", `<p>${Array.from({ length: 500 }, (_, index) => `<b x${index}>`).join("")}</p>`),
     scriptStrings: (size) => fill(size, "x.innerHTML='<p>';", "<script>", "</script>"),
+    // Arrays spread into a call after many literal arguments.
+    spreadsAfterLiterals: (size) => fill(size, "...[", `<script>f(${"'a',".repeat(Math.floor(size / 8))}`, "</script>"),
     cssUrls: (size) => fill(size, "url(a)", "<style>", "</style>"),
     noscriptBlocks: (size) => fill(size, "<noscript><p>x</p></noscript>"),
     contentMovedOutOfTables: (size) => fill(size, "a<i></i>", "<table>"),
@@ -318,6 +320,8 @@ const INDIRECT_SINKS: Record<string, string> = {
   "document.write called through .call": `document.write.call(document, ${IFRAME_MARKUP})`,
   "location.replace called through .call": "location.replace.call(location, 'javascript:alert(1)')",
   "setAttribute arguments spread from an array": `b.setAttribute(...['onclick', ${IFRAME_HANDLER}]); b.click()`,
+  "setAttribute arguments after an empty spread": `b.setAttribute(...[], 'onclick', ${IFRAME_HANDLER}); b.click()`,
+  "a setAttribute name spread with a trailing comma": `b.setAttribute(...['onclick',], ${IFRAME_HANDLER}); b.click()`,
   "insertAdjacentHTML markup spread after a position": `document.body.insertAdjacentHTML(...['beforeend'], ${IFRAME_MARKUP})`,
   "a DOMParser type spread from an array": `document.body.append(...new DOMParser().parseFromString(...[${IFRAME_MARKUP}, 'text/html']).body.childNodes)`,
   "a DOMParser type spread from an array with a trailing comma": `document.body.append(...new DOMParser().parseFromString(...[${IFRAME_MARKUP}, 'text/html',]).body.childNodes)`,

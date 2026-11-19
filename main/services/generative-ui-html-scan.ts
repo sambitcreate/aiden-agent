@@ -706,7 +706,10 @@ interface CallFrame {
   spread?: boolean;
   /** For `Object.assign(target, ...)`: what the attribute node `target` reads does with a `value` key. */
   assignTo?: SinkKind;
-  /** The plain string value of each argument that is a single literal. */
+  /**
+   * The plain string value of each of the first `LITERAL_ARGUMENTS`
+   * arguments that is a single literal (only those name what a call does).
+   */
   literals: (string | undefined)[];
   /** For a `parseFromString(` call: how DOMParser reads its first argument (see `parseFromStringType`). */
   parseAs?: ParseAs;
@@ -736,6 +739,9 @@ const isLiteral = (token: JsToken | undefined): token is JsToken => token?.kind 
 const isDot = (token: JsToken | undefined) => token?.kind === "punct" && (token.text === "." || token.text === "?.");
 const isPunct = (token: JsToken | undefined, text: string) => token?.kind === "punct" && token.text === text;
 const isName = (token: JsToken | undefined, text: string) => token?.kind === "name" && token.text === text;
+
+/** How many leading arguments' literal values a call frame keeps: a sink is named by its first or second. */
+const LITERAL_ARGUMENTS = 2;
 
 const rootFrame = (): CallFrame => ({ call: false, start: 0, argument: 0, literals: [], root: true });
 const copyFrames = (stack: readonly CallFrame[]): CallFrame[] => stack.map((frame) => ({ ...frame, literals: [...frame.literals] }));
@@ -1238,7 +1244,9 @@ function scanJsTokens(
         else if (frame.spread === true) {
           stack.pop();
           const call = stack[stack.length - 1]!;
-          call.argument = frame.argument;
+          // The array's last element is the call's current argument; an
+          // empty array adds none, and a trailing comma ends no element.
+          call.argument = isPunct(previous, "[") || isPunct(previous, ",") ? frame.argument - 1 : frame.argument;
           call.literals = frame.literals;
           call.deferred ??= frame.deferred;
         } else {
@@ -1276,7 +1284,7 @@ function scanJsTokens(
 
     if (frame.call && (isPunct(previous, "(") || isPunct(previous, ",") || (frame.spread === true && isPunct(previous, "[")))) {
       const argument = argumentOf(frame);
-      if (argument >= 0 && chainEnd === index && (token.kind === "string" || !token.substituted)) frame.literals[argument] = token.value;
+      if (argument >= 0 && argument < LITERAL_ARGUMENTS && chainEnd === index && (token.kind === "string" || !token.substituted)) frame.literals[argument] = token.value;
       if (frame.callee === "replace" && argument === 0 && frame.receiver !== "location" && isUnsafeUrl(url)) frame.deferred = url;
     }
     // A tagged template is a call of its tag with the template's text, which
