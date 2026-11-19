@@ -175,7 +175,7 @@ const components: Components = {
     const isBlock = !!match || text.includes("\n");
     if (isBlock) {
       const open = (props as { "data-open-fence"?: string })["data-open-fence"] === "true";
-      return <CodeBlock code={text} lang={match?.[1]} plain={open} />;
+      return <CodeBlock code={text} lang={match?.[1]} plain={open} previewable />;
     }
     return (
       <code className="rounded-md bg-well px-1.5 py-0.5 font-mono text-[0.9em]">{children}</code>
