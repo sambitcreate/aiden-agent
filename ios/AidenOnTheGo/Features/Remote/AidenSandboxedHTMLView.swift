@@ -321,7 +321,7 @@ final class AidenSandboxedHTMLCoordinator: NSObject, WKNavigationDelegate, WKUID
             // first load could reach the network.
             webView.configuration.userContentController.add(rules)
             self.html = html
-            self.recovery.documentDidLoad()
+            self.recovery.newDocument()
             self.offerGate.documentDidLoad()
             self.load(in: webView)
         }
@@ -432,8 +432,9 @@ final class AidenSandboxedHTMLCoordinator: NSObject, WKNavigationDelegate, WKUID
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        // Redraw once after the content process is reclaimed; a page that
-        // keeps killing it fails instead of reloading forever.
+        // Redraw whenever the content process is reclaimed; a page that
+        // kills it again right after the reload fails instead of reloading
+        // forever.
         guard html != nil else { return }
         switch recovery.processDidTerminate() {
         case .reload:

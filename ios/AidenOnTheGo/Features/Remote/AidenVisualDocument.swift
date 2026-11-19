@@ -137,11 +137,6 @@ struct AidenWebContentRecovery: Equatable, Sendable {
     mutating func newDocument() {
         lastReloadAt = nil
     }
-
-    @available(*, deprecated, renamed: "newDocument()")
-    mutating func documentDidLoad() {
-        newDocument()
-    }
 }
 
 /// How the viewer got its page.
