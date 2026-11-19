@@ -9,6 +9,7 @@ import { Toaster } from "./ui";
 import { KeepVisualChatContext } from "../lib/visual-menu-actions";
 import { DesignModeControlsContext, noteDesignCanvasView, type DesignModeControls, type DesignModeSource } from "../lib/design-mode";
 import type { AgentToolStep, GenerationTimeline } from "../shared/generation-timeline";
+import { mapRemoteMessage } from "../lib/hosts/remote-chat-mapper";
 
 afterEach(() => cleanup());
 
@@ -275,6 +276,42 @@ test("a streaming native draft is inert in its row and the presented visual repl
   view.rerender(list(true));
   assert.equal(view.container.querySelector('[data-aiden-ui="draft-call-ui"]'), null);
   assert.ok(view.container.querySelector('[data-aiden-ui="ui-board"]'));
+});
+
+test("a remote chat draws another computer's native visual as its text, after its tool row, with nothing to press inside", () => {
+  const intro = "Before the board.";
+  const step = { ...toolStep("tool-1", "call-1", "render_ui", intro.length), status: "completed" as const, finishedAt: 2 };
+  const message = mapRemoteMessage({
+    id: "m-1", role: "assistant", text: `${intro} After the board.`, createdAt: new Date(1).toISOString(),
+    timeline: { version: 3, generationId: "g", status: "completed", startedAt: 1, finishedAt: 3, steps: [step] },
+    visuals: [{ id: "ui-remote", kind: "ui", title: "Revenue", toolCallId: "call-1", fallbackText: "By month (bar chart, 2 points)\nmonth: Jan · revenue: $1,200.00\n<Button label=\"Approve\" />" }],
+  });
+  assert.ok(message);
+  const view = render(
+    <MessageList
+      chatId="chat-remote"
+      messages={[message]}
+      storedImageActions={false}
+      streamingText={null}
+      streamingReasoning={null}
+      timeline={null}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error={null}
+    />,
+  );
+  const block = view.container.querySelector('[data-aiden-ui="ui-remote"]');
+  assert.ok(block, "the visual is drawn");
+  const html = view.container.innerHTML;
+  assert.ok(html.indexOf("render_ui") < html.indexOf('data-aiden-ui="ui-remote"') && html.indexOf('data-aiden-ui="ui-remote"') < html.indexOf("After the board."));
+  // Each line is its own paragraph, markup in the text included, and there is nothing to act on inside it.
+  assert.deepEqual([...block.querySelectorAll("p")].map((line) => line.textContent), [
+    "By month (bar chart, 2 points)", "month: Jan · revenue: $1,200.00", "<Button label=\"Approve\" />",
+  ]);
+  assert.equal(view.queryByRole("button", { name: "Approve" }), null);
+  assert.ok(view.getByRole("button", { name: "Copy Revenue as text" }));
 });
 
 function savedList(message: Record<string, unknown>, wrap: (list: React.ReactElement) => React.ReactElement = (list) => list) {

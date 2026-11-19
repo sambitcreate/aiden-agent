@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { projectAidenRemoteChatMessagesWindow } from "../../../main/services/aiden-remote-chats";
+import { compileAum } from "../../shared/aiden-ui/compile";
+import type { AidenUiNodeV1, ChatUiVisualV1 } from "../../shared/aiden-ui/types";
 import type { Chat, ChatMessage } from "../types";
 import {
   emptyRemoteTranscript,
@@ -106,6 +108,69 @@ test("a host message survives projection and mapping with what the transcript ca
   // HTML artifact frames resolve local media, so remote artifacts are not rendered.
   assert.equal(window.messages[1]?.htmlArtifacts, undefined);
   assert.deepEqual(window.messages[2]?.providerFailure, original[2]?.providerFailure);
+});
+
+function drawnLines(node: AidenUiNodeV1): string[] {
+  if (node.t === "#text") return [node.s ?? ""];
+  const own = (node.c ?? []).flatMap(drawnLines);
+  return node.t === "Text" ? [own.join("")] : own;
+}
+
+function components(node: AidenUiNodeV1): string[] {
+  return [node.t, ...(node.c ?? []).flatMap(components)];
+}
+
+test("another computer's native visual shows on this Mac as the text its phones see, where its tool call ran", () => {
+  const markup = `<Visual title="Revenue"><Data name="months">[{"month":"Jan","revenue":1200},{"month":"Feb","revenue":1500}]</Data><Chart kind="bar" data={$months} x="month" y="revenue" format="currency" label="By month" /><Button label="Approve" onClick={send("approve")} /><Checklist items={[{"label":"Ship","done":true}]} /></Visual>`;
+  const compiled = compileAum(markup, { fallback: { chartTables: true, plainTables: true } });
+  assert.ok(compiled.tree);
+  const hostVisual: ChatUiVisualV1 = {
+    version: 1, kind: "ui", id: "ui-1", toolCallId: "call-1", title: "Revenue", catalogVersion: 1,
+    tree: compiled.tree, ...(compiled.dataJson ? { dataJson: compiled.dataJson } : {}), state: { picked: "Jan" },
+    fallbackText: compiled.fallbackText, layout: "wide",
+  };
+  const [message] = served([{
+    id: "a1", role: "assistant", content: "Here it is.", createdAt: 1, timeline, uiVisuals: [hostVisual],
+  }], { limit: 50 }).messages;
+  assert.equal(message?.uiVisuals?.length, 1);
+  const [visual] = message!.uiVisuals!;
+  assert.equal(visual!.id, "ui-1");
+  assert.equal(visual!.title, "Revenue");
+  assert.equal(visual!.toolCallId, "call-1", "placed where its tool call ran");
+  assert.equal(visual!.layout, "wide");
+  // What is drawn is the host's text, line for line, with the chart's rows written out.
+  assert.deepEqual(drawnLines(visual!.tree), compiled.fallbackText.split("\n").filter((line) => line.trim()));
+  assert.ok(drawnLines(visual!.tree).includes("month: Jan · revenue: $1,200.00"));
+  // Nothing from the host's markup crosses: no controls, data or state to act on.
+  assert.deepEqual([...new Set(components(visual!.tree))].sort(), ["#text", "Text", "Visual"]);
+  assert.equal(visual!.dataJson, undefined);
+  assert.equal(visual!.state, undefined);
+});
+
+test("remote visual text is drawn as words, never as markup, and an HTML, empty or pictured visual adds no text visual", () => {
+  const visuals = [
+    { id: "ui-markup", kind: "ui", title: "Odd", fallbackText: "<Button label=\"Go\" onClick={send(\"rm\")} />\n**bold** [link](https://example.com)" },
+    { id: "ui-empty", kind: "ui", title: "Empty", fallbackText: "   " },
+    { id: "html-1", kind: "html", title: "Chart", fallbackText: "ignored" },
+    { id: "ui-markup", kind: "ui", title: "Duplicate", fallbackText: "again" },
+    { id: "ui-bad id!", kind: "ui", title: "Bad", fallbackText: "text" },
+    // Pictured on the host: its snapshot already shows as an image.
+    { id: "ui-pictured", kind: "ui", title: "Pictured", fallbackText: "text", snapshotAttachmentId: "visual-snapshot_abc" },
+  ];
+  const message = mapRemoteMessage({ id: "a1", role: "assistant", text: "Done", createdAt: new Date(1).toISOString(), visuals });
+  assert.deepEqual(message?.uiVisuals?.map((visual) => visual.id), ["ui-markup"]);
+  const [visual] = message!.uiVisuals!;
+  assert.deepEqual(drawnLines(visual!.tree), ["<Button label=\"Go\" onClick={send(\"rm\")} />", "**bold** [link](https://example.com)"]);
+  assert.deepEqual([...new Set(components(visual!.tree))].sort(), ["#text", "Text", "Visual"]);
+  // A user's message never carries one.
+  assert.equal(mapRemoteMessage({ id: "u1", role: "user", text: "Hi", createdAt: new Date(1).toISOString(), visuals })?.uiVisuals, undefined);
+
+  // However many lines the host sends, the drawn tree stays inside the visual node cap and keeps every word.
+  const many = Array.from({ length: 1_500 }, (_, index) => String(index % 10)).join("\n");
+  const [long] = mapRemoteMessage({ id: "a2", role: "assistant", text: "", createdAt: new Date(1).toISOString(), visuals: [{ id: "ui-long", kind: "ui", title: "Long", fallbackText: many }] })?.uiVisuals ?? [];
+  assert.ok(long);
+  assert.ok(components(long.tree).length <= 2_000);
+  assert.equal(drawnLines(long.tree).join(" ").split(" ").length, 1_500);
 });
 
 test("rows the transcript cannot render are skipped and malformed pages are rejected", () => {

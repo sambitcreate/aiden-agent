@@ -65,12 +65,12 @@ const publicIds = (raw) => ({ raw_ui: "call-1", raw_html: "call-2" })[raw];
 
 const chartMarkup = `<Visual title="Revenue"><Data name="months">[{"month":"Jan","revenue":1200},{"month":"Feb","revenue":1500}]</Data><Chart kind="bar" data={$months} x="month" y="revenue" format="currency" label="By month" /><Checklist items={[{"label":"Ship","done":true},{"label":"Review"}]} /></Visual>`;
 
-test("a native visual reaches a phone as plain text with each chart row as labelled values, and Aiden is told a paired Mac draws it", async (t) => {
+test("a native visual reaches a phone as plain text with each chart row as labelled values, and Aiden is told phones and paired Macs see that text", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "aiden-server-visuals-")); t.after(() => rmSync(dir, { recursive: true, force: true }));
   const visuals = api.createServerVisualCollector();
   const text = await run(tools(dir, { visuals }).render_ui, "raw_ui", { title: "Revenue", markup: chartMarkup, layout: "wide" });
-  assert.match(text, /^Shown as text: a phone shows "Revenue" as the text below, not as a drawn visual/u);
-  assert.match(text, /a Mac paired to this server draws the visual itself/u);
+  assert.match(text, /^Shown as text: phones and Macs paired to this server show "Revenue" as the text below, not as a drawn visual/u);
+  assert.doesNotMatch(text, /draws the visual/u);
   // Phones draw the text as-is in a proportional font, so each row names its own values, with no pipes or padding.
   assert.match(text, /^month: Jan · revenue: \$1,200\.00\nmonth: Feb · revenue: \$1,500\.00$/mu);
   assert.doesNotMatch(text, /\|/u);

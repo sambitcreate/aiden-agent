@@ -1,6 +1,8 @@
 import type { Attachment, Chat, ChatMessage } from "../types";
 import { parseChatInputSource } from "../../shared/chat-input-source";
 import type { ChatImagePlacementV1 } from "../../shared/chat-artifacts";
+import { AIDEN_UI_CATALOG_VERSION, AIDEN_UI_LIMITS, type AidenUiNodeV1, type ChatUiVisualV1 } from "../../shared/aiden-ui/types";
+import { parseChatUiVisualV1 } from "../../shared/aiden-ui/visual";
 import { isToolStep, parseGenerationTimeline, type GenerationTimeline } from "../../shared/generation-timeline";
 import {
   parseProviderFailureV1,
@@ -80,6 +82,46 @@ function mapOutcome(value: unknown): ProviderFailureV1 | undefined {
   });
 }
 
+/** Lines drawn for one remote visual; anything past them joins the last line, so the tree stays inside the node cap. */
+const MAX_REMOTE_VISUAL_LINES = 400;
+
+/**
+ * A native visual from the host as the text it projects. The host sends no
+ * markup, so this Mac draws the fallback text phones show: one plain
+ * paragraph per line (never Markdown or markup, since the text is the host's),
+ * placed where the visual's tool call ran.
+ */
+function mapRemoteTextVisual(value: unknown): ChatUiVisualV1 | null {
+  const input = record(value);
+  // A visual the host pictured already shows as that picture among the message's images.
+  if (input?.kind !== "ui" || input.snapshotAttachmentId !== undefined) return null;
+  const fallbackText = text(input.fallbackText)?.slice(0, AIDEN_UI_LIMITS.fallbackChars).trim();
+  if (!fallbackText) return null;
+  const lines = fallbackText.split("\n").map((line) => line.trim()).filter(Boolean);
+  const shown = lines.length > MAX_REMOTE_VISUAL_LINES
+    ? [...lines.slice(0, MAX_REMOTE_VISUAL_LINES - 1), lines.slice(MAX_REMOTE_VISUAL_LINES - 1).join(" ")]
+    : lines;
+  const title = text(input.title) ?? "Visual";
+  const tree: AidenUiNodeV1 = {
+    t: "Visual",
+    k: "0",
+    p: { title: { op: "lit", v: title } },
+    c: shown.map((line, index) => ({ t: "Text", k: `0.${index}`, c: [{ t: "#text", k: `0.${index}.0`, s: line }] })),
+  };
+  const toolCallId = text(input.toolCallId);
+  return parseChatUiVisualV1({
+    version: 1,
+    kind: "ui",
+    id: input.id,
+    ...(toolCallId && /^call-[1-9][0-9]{0,8}$/u.test(toolCallId) ? { toolCallId } : {}),
+    title,
+    catalogVersion: AIDEN_UI_CATALOG_VERSION,
+    tree,
+    fallbackText,
+    ...(input.layout === "wide" ? { layout: "wide" } : {}),
+  }) ?? null;
+}
+
 /** Maps one projected message; returns null for a row the transcript cannot show. */
 export function mapRemoteMessage(value: unknown): ChatMessage | null {
   const input = record(value);
@@ -116,6 +158,17 @@ export function mapRemoteMessage(value: unknown): ChatMessage | null {
   if (role === "assistant") {
     const timeline = parseGenerationTimeline(input.timeline, content.length, reasoning?.length ?? 0);
     if (timeline) message.timeline = withoutHostLocalRecaps(timeline);
+    if (Array.isArray(input.visuals)) {
+      const visuals: ChatUiVisualV1[] = [];
+      const seen = new Set<string>();
+      for (const value of input.visuals.slice(0, AIDEN_UI_LIMITS.perChat)) {
+        const visual = mapRemoteTextVisual(value);
+        if (!visual || seen.has(visual.id)) continue;
+        seen.add(visual.id);
+        visuals.push(visual);
+      }
+      if (visuals.length > 0) message.uiVisuals = visuals;
+    }
   }
   return message;
 }

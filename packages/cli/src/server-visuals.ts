@@ -403,11 +403,11 @@ export function htmlVisualResultText(title: string, outcome: HtmlVisualOutcome, 
 
 export type UiVisualOutcome = "text" | "full" | "failed";
 
-/** The tool result for render_ui: the text a phone shows in its place (a paired Mac draws it), or that it shows nothing. */
+/** The tool result for render_ui: the text phones and paired Macs show in its place, or that it shows nothing. */
 export function uiVisualResultText(title: string, fallbackText: string, outcome: UiVisualOutcome, repairs: readonly string[]): string {
   const name = JSON.stringify(title);
   const head = outcome === "text"
-    ? `Shown as text: a phone shows ${name} as the text below, not as a drawn visual (charts appear as plain tables); a Mac paired to this server draws the visual itself.`
+    ? `Shown as text: phones and Macs paired to this server show ${name} as the text below, not as a drawn visual (charts appear as rows of values), so nothing in it can be tapped or changed.`
     : `Not shown: the person cannot see ${name}, because ${outcome === "full" ? "this reply or chat already has as many visuals as it can hold" : "Aiden could not store it"}. Give the key facts in your reply as text or a Markdown table. Its text would have been:`;
   return [head, "", fallbackText, ...(repairs.length ? ["", "Repairs:", ...repairs] : [])].join("\n");
 }
