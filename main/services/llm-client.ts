@@ -315,13 +315,11 @@ import {
 import { formatPromptCacheMissLog, withPromptCacheTelemetry } from "./pi-cache-telemetry.js";
 import { chatSideCallPrefixes, withSideCallPrefixLedger } from "./side-call-prefix.js";
 import { generationEmergencyUserError } from "./generation-emergency-outcome.js";
-import { buildGeminiWorkspaceSnapshot, GeminiContextCache } from "./gemini-context-cache.js";
 import { attachClaimCheck } from "../../renderer/shared/claim-check.js";
 import {
   MAX_ATTACHMENT_INLINE_BYTES,
   MAX_ATTACHMENTS_PER_MESSAGE,
 } from "../../renderer/shared/attachment-contract.js";
-import { listWorkspaceFiles } from "./workspace-files.js";
 import { assertManagedWorktreeAdmission } from "./managed-worktree-admission.js";
 import { assertWorkspaceFolderPresent, restoreNoWorkspaceFolder } from "./workspace-folder-presence.js";
 import { OPENAI_CODEX_PROVIDER_ID } from "./codex-provider.js";
@@ -808,9 +806,6 @@ function startOwedTurn(plan: OwedTurnPlan<OwedTurnContext, GenerationCancellatio
     },
   );
 }
-const geminiContextCache = new GeminiContextCache({
-  onWarning: (message, error) => logger.warn("pi", message, error),
-});
 
 /**
  * Work that holds the chat's turn. A cancelled subagent that is still draining
@@ -2736,28 +2731,6 @@ async function prepareGeneration(
     },
     deferred: () => (canvasToolsEntered ? heldCanvasTools : []),
   };
-  let googleWorkspaceSnapshot: string | undefined;
-  if (
-    params.providerId === GOOGLE_PROVIDER_ID &&
-    workspace?.id &&
-    folderPath &&
-    permission !== "none" &&
-    (!botContext || botContext.admission.authority.files.botHome)
-  ) {
-    try {
-      googleWorkspaceSnapshot = buildGeminiWorkspaceSnapshot(
-        await listWorkspaceFiles(folderPath, signal),
-        git,
-      );
-    } catch (error) {
-      if (signal.aborted) throw error;
-      logger.warn(
-        "pi",
-        `Could not prepare Gemini workspace context for ${workspace.id}; continuing without a cache.`,
-        error,
-      );
-    }
-  }
   return {
     runtime: { ...runtime, model },
     agentsInstructions,
@@ -2790,7 +2763,6 @@ async function prepareGeneration(
     thinkingLevel,
     computerUse,
     formFill,
-    googleWorkspaceSnapshot,
     skillSnapshot,
     workspaceId: workspace?.id,
     /** The folder is the hidden one behind a No workspace chat. */
@@ -3191,7 +3163,6 @@ export const llmClient = {
       thinkingLevel,
       computerUse,
       formFill,
-      googleWorkspaceSnapshot,
       skillSnapshot: setupSkillSnapshot,
       workspaceId,
       noWorkspace,
@@ -4548,18 +4519,6 @@ export const llmClient = {
         ...agentRuntimeOptions,
         streamFn: requestStream,
         convertToLlm,
-        ...(params.providerId === GOOGLE_PROVIDER_ID &&
-        runtime.apiKey &&
-        workspaceId &&
-        googleWorkspaceSnapshot
-          ? {
-              onPayload: geminiContextCache.onPayload({
-                apiKey: runtime.apiKey,
-                workspaceId,
-                workspaceSnapshot: googleWorkspaceSnapshot,
-              }),
-            }
-          : {}),
         ...(harnessProvider
           ? {}
           : {
@@ -6657,7 +6616,6 @@ export const llmClient = {
       timeoutMessage: "Aiden could not stop this workspace before changing its access.",
       timeoutMs: WORKSPACE_CANCEL_SETTLEMENT_GRACE_MS,
     });
-    await geminiContextCache.invalidateWorkspace(workspaceId);
   },
 
   abortAll(): void {
@@ -6694,7 +6652,6 @@ export const llmClient = {
         () => [...active.values()].map((entry) => entry.completion),
         deadline,
       ));
-    await geminiContextCache.shutdown();
     return activeSettled && parentStateCleared;
   },
 };

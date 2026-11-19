@@ -128,7 +128,6 @@
         "main/services/external-editors.test.ts",
         "main/services/foundation-models-connection-core.test.ts",
         "main/services/foundation-models-connection.test.ts",
-        "main/services/gemini-context-cache.test.ts",
         "main/services/gemini-live-transcription-core.test.ts",
         "main/services/generation-bound-connection-cache.test.ts",
         "main/services/generation-context.test.ts",

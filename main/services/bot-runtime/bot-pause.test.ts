@@ -636,7 +636,6 @@ async function legacyChatHost() {
     "./chat-workspace-mutation-gate.js": { ChatWorkspaceMutationGate: UnusedService },
     "./chat-turn-admission.js": { ChatTurnAdmission: class { isAdmitted() { return false; } } },
     "./generation-delta-coalescer.js": { GenerationDeltaCoalescer: UnusedService },
-    "./gemini-context-cache.js": { GeminiContextCache: UnusedService },
     "./chat-run-input-admission.js": {
       createChatRunInputAdmission: (ports: { active: Map<string, LegacyGenerationEntry> }) => {
         active = ports.active;

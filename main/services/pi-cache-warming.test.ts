@@ -348,7 +348,6 @@ async function cancellationHost() {
     "./chat-workspace-mutation-gate.js": { ChatWorkspaceMutationGate: UnusedService },
     "./chat-turn-admission.js": { ChatTurnAdmission: UnusedService },
     "./generation-delta-coalescer.js": { GenerationDeltaCoalescer: UnusedService },
-    "./gemini-context-cache.js": { GeminiContextCache: UnusedService },
     "./chat-run-input-admission.js": { createChatRunInputAdmission: (ports: { active: Map<string, Entry> }) => { active = ports.active; return {}; } },
     "./chat-owed-turns.js": await import("./chat-owed-turns.js"),
     "./chat-owed-turn-prompts.js": await import("./chat-owed-turn-prompts.js"),

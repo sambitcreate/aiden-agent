@@ -18,7 +18,8 @@
 // wrote, so the harness keeps exactly what llm-client would keep.
 //
 // Nothing here dispatches a request: the adapter's `onPayload` captures the
-// payload and aborts before `fetch`, and `fetch` itself refuses.
+// payload and aborts before `fetch`, and `fetch` itself refuses. The Google
+// adapter takes no custom `fetch`, so while it renders the global one refuses.
 
 import { createHash } from "node:crypto";
 import type { AgentContext, AgentMessage, AgentState, AgentTool, StreamFn } from "@earendil-works/pi-agent-core";
@@ -32,6 +33,7 @@ import {
   type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
+import { googleGenerativeAIApi } from "@earendil-works/pi-ai/api/google-generative-ai.lazy";
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
 import { createFauxCore, type FauxResponseStep } from "@earendil-works/pi-ai/providers/faux";
 import type { AgentsInstructionOptions } from "./agents-instructions.js";
@@ -63,7 +65,7 @@ import { createPiSessionPort, type PiSessionPort } from "./pi-session-port.js";
 import { InMemorySessionRepo } from "./pi-session-repository-port.js";
 import { createPiTurnContextPreparation } from "./pi-turn-context.js";
 
-export type PromptPrefixWire = "anthropic-messages" | "openai-responses";
+export type PromptPrefixWire = "anthropic-messages" | "openai-responses" | "google-generative-ai";
 export type PromptWireSegmentKind = "tools" | "system" | "messages";
 
 export interface PromptWireSegment {
@@ -234,14 +236,27 @@ function segment(kind: PromptWireSegmentKind, value: unknown): PromptWireSegment
   return { kind, hash: hash(withoutCacheMarkers(withTextBlockContent(value))) };
 }
 
+/** A Google payload's `config`, which carries its system instruction and tools. */
+function googleConfig(payload: Record<string, unknown>): Record<string, unknown> | undefined {
+  const config = payload.config;
+  return Array.isArray(payload.contents) && config && typeof config === "object" && !Array.isArray(config)
+    ? config as Record<string, unknown>
+    : undefined;
+}
+
 /** Cut a rendered payload into the segments a provider caches in order: tools, system, messages. */
 export function promptWireSegments(payload: Record<string, unknown>): PromptWireSegment[] {
   const segments: PromptWireSegment[] = [];
-  if (Array.isArray(payload.tools) && payload.tools.length) segments.push(segment("tools", payload.tools));
+  const google = googleConfig(payload);
+  const tools = google ? google.tools : payload.tools;
+  if (Array.isArray(tools) && tools.length) segments.push(segment("tools", tools));
   if (typeof payload.instructions === "string") segments.push(segment("system", payload.instructions));
+  if (google?.systemInstruction !== undefined) segments.push(segment("system", google.systemInstruction));
   if (Array.isArray(payload.system)) for (const block of payload.system) segments.push(segment("system", block));
   else if (typeof payload.system === "string") segments.push(segment("system", payload.system));
-  const items = Array.isArray(payload.messages) ? payload.messages : Array.isArray(payload.input) ? payload.input : [];
+  const items = Array.isArray(payload.messages)
+    ? payload.messages
+    : Array.isArray(payload.input) ? payload.input : Array.isArray(payload.contents) ? payload.contents : [];
   for (const item of items as Record<string, unknown>[]) {
     if (item?.type === "additional_tools") segments.push(segment("tools", item));
     else if (item?.role === "system" || item?.role === "developer") segments.push(segment("system", item));
@@ -274,7 +289,17 @@ export type PromptRenderOptions = Pick<
   "reasoning" | "thinkingBudgets" | "maxTokens" | "toolChoice" | "cacheRetention" | "temperature" | "sessionId"
 >;
 
-const PROMPT_FIELDS = new Set(["tools", "system", "instructions", "messages", "input"]);
+const PROMPT_FIELDS = new Set(["tools", "system", "instructions", "messages", "input", "contents"]);
+
+/** The payload's fields other than its prompt; a Google `config` keeps its own settings. */
+function payloadSettings(payload: Record<string, unknown>): Record<string, unknown> {
+  const settings = Object.fromEntries(Object.entries(payload).filter(([key]) => !PROMPT_FIELDS.has(key)));
+  const google = googleConfig(payload);
+  if (google) {
+    settings.config = Object.fromEntries(Object.entries(google).filter(([key]) => key !== "systemInstruction" && key !== "tools"));
+  }
+  return settings;
+}
 
 function cacheMarkersIn(value: unknown, into: unknown[] = []): unknown[] {
   if (Array.isArray(value)) for (const entry of value) cacheMarkersIn(entry, into);
@@ -320,7 +345,9 @@ export function createPromptRequestRecorder(
 ): PromptRequestRecorder {
   const wireApi = options.wire ?? "anthropic-messages";
   const midConversationSystem = options.midConversationSystem ?? false;
-  const streams: ProviderStreams = wireApi === "openai-responses" ? openAIResponsesApi() : anthropicMessagesApi();
+  const streams: ProviderStreams = wireApi === "openai-responses"
+    ? openAIResponsesApi()
+    : wireApi === "google-generative-ai" ? googleGenerativeAIApi() : anthropicMessagesApi();
   const renderModel = {
     ...options.model,
     api: wireApi,
@@ -334,21 +361,29 @@ export function createPromptRequestRecorder(
   async function render(context: PromptProviderContext, request?: PromptRenderOptions): Promise<Record<string, unknown>> {
     let payload: Record<string, unknown> | undefined;
     const model = request?.reasoning ? ({ ...renderModel, reasoning: true } as Model<Api>) : renderModel;
-    await streams.streamSimple(model, context, {
-      ...(request ? pickRenderOptions(request) : {}),
-      apiKey: "offline-noncredential",
-      cacheRetention: request?.cacheRetention ?? "short",
-      maxRetries: 0,
-      env: {},
-      onPayload: (value: unknown) => {
-        payload = structuredClone(value) as Record<string, unknown>;
-        throw new Error("Prompt prefix harness captured the payload before dispatch.");
-      },
-      fetch: async () => {
-        networkCalls += 1;
-        throw new Error("Prompt prefix harness never dispatches a request.");
-      },
-    } as Parameters<ProviderStreams["streamSimple"]>[2]).result();
+    const refuse: typeof globalThis.fetch = async () => {
+      networkCalls += 1;
+      throw new Error("Prompt prefix harness never dispatches a request.");
+    };
+    // The Google adapter rejects a custom fetch, so its client would use the global one.
+    const globalFetch = wireApi === "google-generative-ai" ? globalThis.fetch : undefined;
+    if (globalFetch) globalThis.fetch = refuse;
+    try {
+      await streams.streamSimple(model, context, {
+        ...(request ? pickRenderOptions(request) : {}),
+        apiKey: "offline-noncredential",
+        cacheRetention: request?.cacheRetention ?? "short",
+        maxRetries: 0,
+        env: {},
+        onPayload: (value: unknown) => {
+          payload = structuredClone(value) as Record<string, unknown>;
+          throw new Error("Prompt prefix harness captured the payload before dispatch.");
+        },
+        ...(globalFetch ? {} : { fetch: refuse }),
+      } as Parameters<ProviderStreams["streamSimple"]>[2]).result();
+    } finally {
+      if (globalFetch && globalThis.fetch === refuse) globalThis.fetch = globalFetch;
+    }
     if (!payload) throw new Error(`The ${wireApi} adapter did not render a payload.`);
     return payload;
   }
@@ -358,7 +393,7 @@ export function createPromptRequestRecorder(
       const payload = await render(context, request);
       const rendered = JSON.stringify(payload);
       return {
-        settings: Object.fromEntries(Object.entries(payload).filter(([key]) => !PROMPT_FIELDS.has(key))),
+        settings: payloadSettings(payload),
         cacheMarkers: cacheMarkersIn(payload),
         ...at,
         fingerprint: fingerprintPromptPrefix({ messages: context.messages, model: options.model, cacheRetention: "short" }),

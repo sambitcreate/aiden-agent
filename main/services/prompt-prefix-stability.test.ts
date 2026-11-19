@@ -218,6 +218,9 @@ const wires: { wire: PromptPrefixWire; midConversationSystem: boolean; label: st
   { wire: "anthropic-messages", midConversationSystem: false, label: "Anthropic Messages" },
   { wire: "anthropic-messages", midConversationSystem: true, label: "Anthropic Messages with in-place system messages" },
   { wire: "openai-responses", midConversationSystem: true, label: "OpenAI Responses with in-place system messages" },
+  // Gemini folds every system message into `systemInstruction` and relies on
+  // its implicit prefix cache; Aiden creates no explicit cache for it.
+  { wire: "google-generative-ai", midConversationSystem: false, label: "Google Generative AI" },
 ];
 
 /**
@@ -412,6 +415,36 @@ describe("prompt prefix stability: already stable", () => {
     for (let index = 1; index < requests.length; index += 1) {
       assert.deepEqual(comparePromptRequests(requests[index - 1]!, requests[index]!), {}, `step ${index + 1}`);
     }
+  });
+
+  test("a Gemini chat sends its system instruction and tools inline, and every request extends the one before it", async () => {
+    // Aiden creates no explicit Gemini cache: each request carries the whole
+    // prefix and Gemini's implicit cache reads it. That only pays if the
+    // prefix holds still, across a tool loop and into the next turn.
+    const harness = createPromptPrefixHarness({ wire: "google-generative-ai" });
+    const assembly = await workspaceChat();
+    const one = await harness.turn({
+      prompt: "Read both files.",
+      assembly,
+      responses: [
+        fauxAssistantMessage(fauxToolCall("list_files", {}), { stopReason: "toolUse" }),
+        fauxAssistantMessage(fauxToolCall("read_file", { path: "a.ts" }), { stopReason: "toolUse" }),
+        fauxAssistantMessage("Done."),
+      ],
+    });
+    const two = await harness.turn({ prompt: "Now summarize them.", assembly, responses: reply("Two small files.") });
+    const requests = [...one, ...two];
+    assert.equal(requests.length, 4);
+    for (let index = 1; index < requests.length; index += 1) {
+      assert.deepEqual(comparePromptRequests(requests[index - 1]!, requests[index]!), {}, `request ${index + 1}`);
+    }
+    for (const request of requests) {
+      const config = request.settings.config as Record<string, unknown>;
+      assert.equal(config.cachedContent, undefined, "no request names a cached content");
+      assert.deepEqual(request.wire.slice(0, 2).map((segment) => segment.kind), ["tools", "system"], "the prefix is sent inline");
+      assert.ok(request.carries("list_files"), "the tool declarations reach the request");
+    }
+    assert.equal(harness.networkCalls, 0, "rendering made no request, so no cache was created");
   });
 
   test("a tool loaded in one turn is declared from the start of the next", async () => {
