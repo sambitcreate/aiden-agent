@@ -517,6 +517,24 @@ test("in a workspace that is a folder of a larger repository, git reaches no fil
   // Everyday file and revision values still work.
   const logged = await runResolved(resolve("git log --format=%s {{rev}} -- {{file}}", ["HEAD", "f"]), ws);
   assert.deepEqual({ stdout: logged.stdout, exitCode: logged.exitCode }, { stdout: "one\n", exitCode: 0 });
+
+  // A revision value that names no revision is never read as a file: git falls back to files for
+  // `show`, `log` and `reset` when nothing has that name, and `sub/../../secret/s` reaches past the workspace.
+  fs.mkdirSync(path.join(ws, "sub"));
+  git(["add", "secret/s"]);
+  const outside = "sub/../../secret/s";
+  for (const command of ["git reset {{rev}}", "git reset -q {{rev}}", "git show {{rev}}", "git log -p {{rev}}", "git cherry-pick {{rev}}", "git revert --no-edit {{rev}}"]) {
+    const ran = await runResolved(resolve(command, [outside]), ws);
+    assert.notEqual(ran.exitCode, 0, `${command} with ${outside}`);
+    assert.doesNotMatch(ran.stdout, /TOPSECRET|EDITED/u, `${command} with ${outside}`);
+  }
+  assert.equal(git(["diff", "--cached", "--name-only"]), "secret/s\n", "the file staged outside stays staged");
+  // A real revision still resets, and a file after it is read from the workspace.
+  fs.writeFileSync(path.join(ws, "f"), "changed\n");
+  git(["add", "ws/f"]);
+  const reset = await runResolved(resolve("git reset {{rev}} f", ["HEAD"]), ws);
+  assert.equal(reset.exitCode, 0, reset.stderr);
+  assert.equal(git(["diff", "--cached", "--name-only"]), "secret/s\n");
 });
 
 test("a branch value for git checkout never discards a file's uncommitted edits", async (t) => {

@@ -45,10 +45,11 @@ export interface Slot {
    */
   blob?: boolean;
   /**
-   * A branch git reads as files when no branch has that name (`git checkout
-   * {{branch}}` with a file name would discard its edits). The checked plan
-   * adds `--` after it when the template has none, so git reads it as a
-   * branch only.
+   * A branch or revision git reads as files when nothing has that name
+   * (`git checkout {{branch}}` with a file name would discard its edits, and
+   * `git reset {{rev}}` with `sub/../../x` would unstage a file outside the
+   * workspace). The checked plan adds `--` after it when the template has
+   * none, so git reads it as a revision only.
    */
   refOnly?: boolean;
   /**
@@ -108,6 +109,7 @@ const RO: Slot = { rule: "ref", refOnly: true };
 const RR: Slot = { rule: "ref", remote: true };
 const STASH: Slot = { rule: "ref", stash: true };
 const V: Slot = { rule: "rev" };
+const VO: Slot = { rule: "rev", refOnly: true };
 const P: Slot = { rule: "path" };
 const G: Slot = { rule: "target" };
 
@@ -229,7 +231,7 @@ const PROGRAM_SPECS: Readonly<Record<string, SlotSpec>> = {
 // git, by subcommand.
 
 const refs = (forms = "branch or tag names") => ({ operand: () => R, operandForms: forms });
-const revs = (forms: string) => ({ operand: () => V, operandForms: forms });
+const revs = (forms: string) => ({ operand: () => VO, operandForms: forms });
 const LOG_LONG = [
   "oneline", "graph", "all", "decorate", "no-decorate", "stat", "shortstat", "numstat", "name-only", "name-status", "patch", "no-patch", "no-merges",
   "merges", "first-parent", "reverse", "follow", "abbrev-commit", "date-order", "topo-order", "author-date-order", "no-color", "raw", "full-history",
@@ -260,7 +262,7 @@ const logLike = (name: string): SlotSpec => ({
   long: LOG_LONG,
   values: LOG_VALUES,
   digits: true,
-  operand: (_index, afterDashes) => (afterDashes ? P : V),
+  operand: (_index, afterDashes) => (afterDashes ? P : VO),
   operandForms: "revisions, and files in the workspace after --",
 });
 
@@ -404,7 +406,7 @@ const GIT_SPECS: Readonly<Record<string, SlotSpec>> = {
     name: "git reset",
     flags: "q",
     long: ["soft", "mixed", "hard", "keep", "merge", "quiet"],
-    operand: (index, afterDashes) => (index === 0 && !afterDashes ? V : P),
+    operand: (index, afterDashes) => (index === 0 && !afterDashes ? VO : P),
     operandForms: "a commit first, then files in the workspace",
   },
   tag: {
