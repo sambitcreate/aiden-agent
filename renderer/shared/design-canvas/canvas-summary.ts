@@ -252,10 +252,13 @@ export function canvasPromptLine(doc: DesignCanvas): string {
 export const CANVAS_STATUS_SECTION = "design-canvas-status";
 
 /**
- * Adds the canvas status to the conversation as a section patch, only when it
- * differs from the last status the transcript already holds. It stays out of
- * the system prompt, so the prompt (and the provider's prompt cache) does not
- * change from turn to turn; a turn where the counts are the same adds nothing.
+ * Adds the canvas status to the conversation as a system section patch, only
+ * when it differs from the last status the transcript already holds, so a
+ * turn where the counts are the same adds nothing. A model that takes system
+ * messages mid-conversation reads the note where it sits, and the prompt
+ * before it (and the provider's prompt cache) holds. Any other model has the
+ * newest note folded into its leading system prompt, so for it a changed
+ * count changes the system prompt once, on the turn it changed.
  */
 export function withCanvasStatusNote<C extends { messages: readonly unknown[] }>(context: C, line: string, now: number): C {
   const note = `Design canvas when this was noted: ${line}`;

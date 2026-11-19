@@ -21,8 +21,10 @@ import {
   designPdfLayout,
 } from "../../../renderer/shared/design-canvas/frame-export.js";
 import type { DesignFrameRenderRequest } from "../../handlers/design-canvas.js";
+import { boundedUnicodePrefix } from "../../../renderer/shared/unicode-prefix.js";
 import {
   DESIGN_INSPECT_MAX_MESSAGES,
+  DESIGN_INSPECT_PROBE_STRING_CHARS,
   designInspectPictureWindow,
   designInspectProbeScript,
   type DesignConsoleEntry,
@@ -125,10 +127,12 @@ export async function inspectDesignFrame(request: DesignInspectRequest): Promise
   window.webContents.on("console-message", (details) => {
     if (messages.length >= DESIGN_INSPECT_MAX_MESSAGES) return;
     messages.push({
-      message: String(details.message ?? ""),
+      message: boundedUnicodePrefix(String(details.message ?? ""), DESIGN_INSPECT_PROBE_STRING_CHARS),
       level: String(details.level ?? ""),
       ...(typeof details.lineNumber === "number" ? { lineNumber: details.lineNumber } : {}),
-      ...(typeof details.sourceId === "string" && details.sourceId ? { sourceId: details.sourceId } : {}),
+      ...(typeof details.sourceId === "string" && details.sourceId
+        ? { sourceId: boundedUnicodePrefix(details.sourceId, DESIGN_INSPECT_PROBE_STRING_CHARS) }
+        : {}),
     });
   });
   return withHiddenWindow(
@@ -169,8 +173,14 @@ export async function inspectDesignFrame(request: DesignInspectRequest): Promise
   );
 }
 
+/** Up to 50 of the strings the page handed back, each cut short: the page chose them. */
 function strings(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string").slice(0, 50) : [];
+  return Array.isArray(value)
+    ? value
+        .filter((entry): entry is string => typeof entry === "string")
+        .slice(0, 50)
+        .map((entry) => boundedUnicodePrefix(entry, DESIGN_INSPECT_PROBE_STRING_CHARS))
+    : [];
 }
 
 /** A JPEG of one part of the page, scaled by `scale`, or null when nothing could be captured. */

@@ -1,12 +1,22 @@
 import { formatCheckReport } from "../check-report.js";
+import { DESIGN_INSPECT_PAGE_DATA_LINE } from "./inspect.js";
 
 /**
  * After Aiden writes a design page, the page is drawn offline (text report
  * only, no picture) and what was found goes to the conversation as a note
  * before its next request, so a script error or a missing file is fixed in
- * the same turn without Aiden having to ask. The note is a section patch on
- * the transcript, as the canvas status note is: the system prompt never
- * changes, so its cache holds, and the note is journaled where it sits.
+ * the same turn without Aiden having to ask.
+ *
+ * The note is a system section patch on the transcript, as the canvas status
+ * note is, journaled where it sits (the harness's `durableSections`) and kept
+ * in place by compaction. A model that takes system messages mid-conversation
+ * reads it there, so the prefix before it, and its cache, hold. Any other
+ * model has every system message folded into the leading system prompt, the
+ * newest report replacing the last under the same section name, so for it a
+ * new report changes the system prompt and the next request is read without
+ * the cache. What the page chose (messages, addresses, names) is cut short and
+ * quoted in each finding, and the note says it is data, since it is read with
+ * system authority.
  */
 
 /** The transcript section that carries the report on pages Aiden just wrote. */
@@ -41,6 +51,7 @@ export function designInspectNoteText(reports: readonly WrittenPageReport[]): st
   }
   const left = reports.length - shown.length;
   if (left > 0) lines.push(`${left} more ${left === 1 ? "page was" : "pages were"} written; call canvas_inspect to check ${left === 1 ? "it" : "them"}.`);
+  if (shown.some((report) => report.findings.length > 0)) lines.push(DESIGN_INSPECT_PAGE_DATA_LINE);
   return lines.join("\n");
 }
 
