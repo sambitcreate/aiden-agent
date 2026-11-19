@@ -997,7 +997,9 @@ function scanJsTokens(
       return;
     }
     const handler = findJsSink(body, depth + 1);
-    if (handler.url !== undefined || handler.embed !== undefined || handler.limit !== undefined) note({ url: excerpt });
+    // A handler too complex to read is refused as that, not as a URL it may not send.
+    if (handler.limit !== undefined) note({ limit: handler.limit });
+    else if (handler.url !== undefined || handler.embed !== undefined) note({ url: excerpt });
   };
 
   // XML a page takes nodes from: only an element in the XHTML, SVG or

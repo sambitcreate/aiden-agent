@@ -724,6 +724,7 @@ test("a sink nested past the depth the check reads again is refused, streamed in
     }
   }
   assert.throws(() => validateGenerativeUiHtml(NESTED_LAYERS.innerHTML(4)), /too complex to check/u);
+  assert.throws(() => validateGenerativeUiHtml(NESTED_LAYERS.setAttribute(4)), /too complex to check/u);
 });
 
 test("a refused visual's error quotes the markup that was refused", () => {
