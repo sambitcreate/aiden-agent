@@ -49,9 +49,16 @@ test("console errors become script errors with their file and line, and blocked 
   assert.deepEqual(
     readDesignConsoleMessage({
       level: "error",
-      message: "Refused to load the font 'https://fonts.gstatic.com/s/inter.woff2' because it violates the following Content Security Policy directive: \"font-src aiden-design: data:\".",
+      message: "Loading the font 'https://fonts.gstatic.com/s/inter.woff2' violates the following Content Security Policy directive: \"font-src aiden-design: data:\". The action has been blocked.",
     }),
     { kind: "load", url: "https://fonts.gstatic.com/s/inter.woff2" },
+  );
+  assert.deepEqual(
+    readDesignConsoleMessage({
+      level: "error",
+      message: "Refused to apply style from 'aiden-design://grant-1/design/missing.css' because its MIME type ('text/plain') is not a supported stylesheet MIME type, and strict MIME checking is enabled.",
+    }),
+    { kind: "load", url: "aiden-design://grant-1/design/missing.css" },
   );
   assert.deepEqual(
     readDesignConsoleMessage({ level: "error", message: "Failed to load resource: net::ERR_FILE_NOT_FOUND", sourceId: "aiden-design://grant-1/design/img/hero.png" }),
@@ -84,7 +91,13 @@ test("a page with a script error, a network font, a missing image and sideways o
       console: [
         { level: "error", message: "Uncaught TypeError: Cannot read properties of null (reading 'append')", lineNumber: 12, sourceId: `${PAGE}?aiden-dark=1` },
         { level: "error", message: "Uncaught TypeError: Cannot read properties of null (reading 'append')", lineNumber: 12, sourceId: `${PAGE}?aiden-dark=1` },
-        { level: "error", message: "Refused to load the stylesheet 'https://fonts.googleapis.com/css2?family=Inter' because it violates…" },
+        {
+          level: "error",
+          message:
+            "Loading the stylesheet 'https://fonts.googleapis.com/css2?family=Inter' violates the following Content Security Policy directive: \"style-src aiden-design: 'unsafe-inline'\". Note that 'style-src-elem' was not explicitly set, so 'style-src' is used as a fallback. The action has been blocked.",
+          lineNumber: 2,
+          sourceId: PAGE,
+        },
         { level: "error", message: "Failed to load resource: the server responded with a status of 404 ()", sourceId: "aiden-design://grant-1/design/img/hero%20shot.png" },
       ],
       brokenImages: ["aiden-design://grant-1/design/img/hero%20shot.png"],
@@ -98,6 +111,39 @@ test("a page with a script error, a network font, a missing image and sideways o
   assert.match(findings[2]!, /^"design\/img\/hero shot\.png" did not load: there is no such file in the workspace/u);
   assert.match(findings[3]!, /font "Inter" did not load/u);
   assert.match(findings[4]!, /1460px wide at its 1280px design width, so it scrolls sideways.*"div\.pricing-table" reaches past the right edge/u);
+});
+
+test("every load the page's policy blocks is one load finding with the network advice, never a script error", () => {
+  // What Electron 43's console says for each kind of blocked request.
+  const csp = (what: string, url: string, directive: string) =>
+    `${what} '${url}' violates the following Content Security Policy directive: "${directive}". The action has been blocked.`;
+  const findings = designInspectFindings(
+    quiet({
+      console: [
+        { level: "error", message: csp("Loading the script", "https://cdn.example/chart.js", "script-src aiden-design: 'unsafe-inline'"), sourceId: PAGE },
+        { level: "error", message: csp("Loading the image", "https://img.example/hero.png", "img-src aiden-design: data: blob:"), lineNumber: 12, sourceId: PAGE },
+        { level: "error", message: csp("Connecting to", "https://api.example/prices", "connect-src 'none'"), lineNumber: 9, sourceId: PAGE },
+        {
+          level: "error",
+          message: "Fetch API cannot load https://api.example/prices. Refused to connect because it violates the document's Content Security Policy.",
+          lineNumber: 9,
+          sourceId: PAGE,
+        },
+        { level: "error", message: csp("Connecting to", "wss://live.example/", "connect-src 'none'"), lineNumber: 9, sourceId: PAGE },
+      ],
+      brokenImages: ["https://img.example/hero.png"],
+    }),
+    context,
+  );
+  assert.deepEqual(
+    findings.map((finding) => /^"([^"]+)"/u.exec(finding)?.[1]),
+    ["https://cdn.example/chart.js", "https://img.example/hero.png", "https://api.example/prices", "wss://live.example/"],
+    findings.join("\n"),
+  );
+  for (const finding of findings) assert.doesNotMatch(finding, /script failed/u, finding);
+  assert.match(findings[0]!, /did not load: design pages load nothing from the network\. Save the file in the workspace/u);
+  assert.match(findings[2]!, /could not be reached: design pages connect to nothing on the network\. Save the data the page needs in the workspace/u);
+  assert.match(findings[3]!, /could not be reached/u);
 });
 
 test("content past the right edge of a page that hides sideways overflow is reported as cut off, not as scrolling", () => {

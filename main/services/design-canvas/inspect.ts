@@ -96,7 +96,7 @@ export type DesignInspectResult = {
 /** What one console message says went wrong, or null when it is not a problem. */
 export type DesignConsoleProblem =
   | { kind: "script"; message: string; line?: number; source?: string }
-  | { kind: "load"; url: string };
+  | { kind: "load"; url: string; connect?: true };
 
 function clip(text: string, max = MAX_MESSAGE_CHARS): string {
   return clippedUnicode(text.replace(/\s+/gu, " ").trim(), max);
@@ -115,10 +115,18 @@ export function readDesignConsoleMessage(entry: DesignConsoleEntry): DesignConso
   if (/^Failed to load resource\b/u.test(message)) {
     return entry.sourceId ? { kind: "load", url: entry.sourceId } : null;
   }
-  // The scheme's Content Security Policy: "Refused to load the font 'https://…' because it violates…".
+  // The scheme's Content Security Policy, as Electron 43 words it: "Loading the
+  // font 'https://…' violates the following Content Security Policy
+  // directive…", "Connecting to 'wss://…' violates…", and for a fetch also
+  // "Fetch API cannot load https://…. Refused to connect…".
+  const blocked = /^(Loading the [^']+|Connecting to|Framing) '([^']+)' violates the following Content Security Policy/u.exec(message);
+  if (blocked) return blockedLoad(blocked[2]!, blocked[1] === "Connecting to");
+  const fetched = /^Fetch API cannot load (\S+?)\.(?:\s|$)/u.exec(message)?.[1];
+  if (fetched) return blockedLoad(fetched, true);
+  // Older wording, and a stylesheet served with the wrong type: "Refused to apply style from '…' because…".
   if (/^Refused to /u.test(message)) {
     const quoted = /'([^']+)'/u.exec(message)?.[1];
-    return quoted && /^[a-z][a-z0-9+.-]*:/iu.test(quoted) ? { kind: "load", url: quoted } : null;
+    return quoted ? blockedLoad(quoted, /^Refused to connect\b/u.test(message)) : null;
   }
   return {
     kind: "script",
@@ -126,6 +134,12 @@ export function readDesignConsoleMessage(entry: DesignConsoleEntry): DesignConso
     ...(typeof entry.lineNumber === "number" && entry.lineNumber > 0 ? { line: entry.lineNumber } : {}),
     ...(entry.sourceId ? { source: entry.sourceId } : {}),
   };
+}
+
+/** A load the page's policy refused, or null when what it names is not an address. */
+function blockedLoad(url: string, connect: boolean): DesignConsoleProblem | null {
+  if (!/^[a-z][a-z0-9+.-]*:/iu.test(url)) return null;
+  return connect ? { kind: "load", url, connect: true } : { kind: "load", url };
 }
 
 /**
@@ -170,13 +184,17 @@ export type DesignInspectContext = {
  */
 export function designInspectFindings(probe: DesignInspectProbe, context: DesignInspectContext): string[] {
   const findings: string[] = [];
+  // One finding per address: a blocked fetch is reported twice, and a blocked
+  // image is also a broken one.
   const failed = new Set<string>();
+  const connections = new Set<string>();
   const scripts = new Set<string>();
   for (const entry of probe.console.slice(0, DESIGN_INSPECT_MAX_MESSAGES)) {
     const problem = readDesignConsoleMessage(entry);
     if (!problem) continue;
     if (problem.kind === "load") {
       failed.add(problem.url);
+      if (problem.connect) connections.add(problem.url);
       continue;
     }
     const where = problem.source ? JSON.stringify(designAddressName(problem.source)) : "";
@@ -195,6 +213,10 @@ export function designInspectFindings(probe: DesignInspectProbe, context: Design
       inlineFailed = true;
     } else if (isWorkspaceAddress(address)) {
       findings.push(`${JSON.stringify(designAddressName(address))} did not load: there is no such file in the workspace. Check the relative path from ${context.path}.`);
+    } else if (connections.has(address)) {
+      findings.push(
+        `${JSON.stringify(designAddressName(address))} could not be reached: design pages connect to nothing on the network. Save the data the page needs in the workspace and fetch it by a relative path, or put it in the page.`,
+      );
     } else {
       findings.push(
         `${JSON.stringify(designAddressName(address))} did not load: design pages load nothing from the network. Save the file in the workspace (or inline it as a data: URL) and link it by a relative path.`,
