@@ -175,15 +175,12 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
       imageInput: async (botId) => imageInputs.get(botId) ?? false,
       memorySection: async (botId, offer) => renderBotMemorySection(await memory.snapshot(botId), offer),
       currentTools: async (bot) => {
-        // Declared from settings and the roster only, so every ingress sees
-        // one list; the Bot-message chain limit is refused per call.
-        const available = (await (ports.messagingEnabled?.() ?? Promise.resolve(true)))
-          ? (await ports.botStore.list()).map((peer) => ({
-            id: peer.id, name: peer.name, purpose: peer.description ?? "",
-            acceptsMessages: peer.acceptsBotMessages !== false,
-            sendsMessages: peer.messagesOtherBots !== false,
-          })) : [];
-        const offer = available.find((item) => item.id === bot.id)?.sendsMessages && available.some((item) => item.id !== bot.id && item.acceptsMessages);
+        // Declared from the messaging switch and this Bot's own setting (the
+        // Bot was just loaded for this turn), so every ingress sees one list
+        // without reading the other Bots. Which peers accept messages is read
+        // when the Bot calls `list` or sends; the Bot-message chain limit and
+        // peer turns are refused per call.
+        const offer = bot.messagesOtherBots !== false && await (ports.messagingEnabled?.() ?? Promise.resolve(true));
         return [
           ...(await currentTools(bot.id)).map((tool) => ({
             tool: { ...tool, execute: async () => { throw new Error("A durable Bot tool requires its calling conversation."); } },
