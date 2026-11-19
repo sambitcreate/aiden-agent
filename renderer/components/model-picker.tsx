@@ -52,7 +52,7 @@ import {
 import { useModelPadPreferences } from "../lib/model-pad-preferences";
 import { recordRecentModel } from "../shared/model-pad-preferences";
 import type { ModelInfo, Provider } from "../lib/types";
-import { Check, Grid2x2Check, Grid2x2Plus, Pin, SlidersHorizontal } from "lucide-react";
+import { Check, Ellipsis, Grid2x2Check, Grid2x2Plus, Pin, SlidersHorizontal } from "lucide-react";
 import { ModelPadLattice } from "./model-pad-lattice";
 import { ProviderIcon } from "./provider-icon";
 import type { HiddenModelsByProvider } from "../shared/model-visibility";
@@ -60,6 +60,10 @@ import { providerDeploymentLabel } from "../shared/provider-deployment";
 import { rankMatches, type MatchRange } from "../lib/text-match";
 import { resultCountMessage, useDebouncedAnnouncement } from "../lib/use-debounced-announcement";
 import { MatchText } from "./match-text";
+import { limitRows, showMoreLabel, useListLimit } from "../lib/list-limit";
+import { ariaKeyShortcut, matchesAccelerator, prettyAccelerator } from "../shared/keybindings";
+import { isComposingKey } from "../lib/dismiss-key";
+import { revealInList } from "../lib/reveal-in-list";
 
 interface ModelPickerProps {
   providers: Provider[];
@@ -211,46 +215,66 @@ function EmptyModelPad({
   );
 }
 
+/** Pins or unpins the highlighted List row. */
+const PIN_SHORTCUT = "Command+Shift+P";
+/** Adds the highlighted List row to the Pad, or takes it off. */
+const PAD_SHORTCUT = "Command+Shift+A";
+/** Model rows the List renders before a Show more row. */
+const MODEL_LIST_PAGE = 100;
+const SHOW_MORE_MODELS = "show-more-models";
+
 /**
- * A secondary action inside a cmdk list row (Pin, Pad toggle). It never chooses
- * the row: pointer presses don't reach cmdk's selection, and Enter is kept from
- * the command root so the button's native activation runs instead.
+ * A secondary action inside a cmdk list row (Pin, Pad toggle), for the mouse.
+ * An option can't hold a focusable control, so it isn't one: keyboard and
+ * screen reader users get the row's shortcut, named in its description. A
+ * press never chooses the row.
  */
 function ModelRowAction({
   label,
+  shortcut,
   active,
   onToggle,
   children,
 }: {
   label: string;
+  shortcut: string;
   /** Pinned or on the Pad: the action stays visible instead of appearing on hover. */
   active: boolean;
   onToggle: () => void;
   children: React.ReactNode;
 }) {
   return (
-    <button
-      type="button"
-      aria-label={label}
+    <span
+      aria-hidden="true"
+      title={`${label} (${prettyAccelerator(shortcut)})`}
       onMouseDown={(event) => {
         event.preventDefault();
         event.stopPropagation();
-      }}
-      onKeyDown={(event) => {
-        if (event.key === "Enter") event.stopPropagation();
       }}
       onClick={(event) => {
         event.stopPropagation();
         onToggle();
       }}
       className={cn(
-        "shrink-0 rounded-full p-0.5 text-tertiary outline-none transition-[background-color,box-shadow,color,opacity] duration-150 ease-out hover:bg-list-hover hover:text-secondary active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none",
-        active ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+        "shrink-0 rounded-full p-0.5 text-tertiary transition-[background-color,color,opacity] duration-150 ease-out hover:bg-list-hover hover:text-secondary active:bg-list-selection",
+        active
+          ? "opacity-100"
+          : "opacity-0 group-hover:opacity-100 group-data-[selected=true]:opacity-100",
       )}
     >
       {children}
-    </button>
+    </span>
   );
+}
+
+/** What a row's description says about its Pin and Pad state and shortcuts. */
+function rowActionsDescription(isPinned: boolean, isOnPad: boolean): string {
+  const pin = prettyAccelerator(PIN_SHORTCUT);
+  const pad = prettyAccelerator(PAD_SHORTCUT);
+  return [
+    `${isPinned ? "Pinned" : "Not pinned"}, ${isOnPad ? "on your Pad" : "not on your Pad"}`,
+    `${pin} ${isPinned ? "unpins it" : "pins it"}, ${pad} ${isOnPad ? "removes it from" : "adds it to"} your Pad`,
+  ].join(". ");
 }
 
 const NO_RANGES: MatchRange[] = [];
@@ -275,14 +299,15 @@ function ModelListRow({
   isOnPad: boolean;
   onChoose: (entry: ModelEntry) => void;
   onPreview: (value: string) => void;
-  onTogglePin: (value: string) => void;
-  onTogglePad: (value: string) => void;
+  onTogglePin: (value: string) => unknown;
+  onTogglePad: (value: string) => unknown;
 }) {
   const descriptionId = `model-description-${entry.value.replace(/[^a-zA-Z0-9_-]/gu, "-")}`;
   return (
     <CommandItem
       value={entry.value}
       aria-describedby={descriptionId}
+      aria-keyshortcuts={[ariaKeyShortcut(PIN_SHORTCUT), ariaKeyShortcut(PAD_SHORTCUT)].join(" ")}
       onSelect={() => onChoose(entry)}
       onMouseEnter={() => onPreview(entry.value)}
       className="group gap-2"
@@ -306,19 +331,22 @@ function ModelListRow({
       {entry.format ? (
         <span className="shrink-0 text-small text-tertiary">{entry.format}</span>
       ) : null}
-      <span id={descriptionId} className="sr-only">
-        {describeModel(entry)}
+      {/* Read through aria-describedby only, so the option's name stays the model's. */}
+      <span id={descriptionId} className="sr-only" aria-hidden="true">
+        {`${describeModel(entry)}. ${rowActionsDescription(isPinned, isOnPad)}.`}
       </span>
       {isActive ? <Check className="size-4 shrink-0 text-accent-text" /> : null}
       <ModelRowAction
-        label={isPinned ? `Unpin ${entry.label}` : `Pin ${entry.label}`}
+        label={isPinned ? "Unpin" : "Pin"}
+        shortcut={PIN_SHORTCUT}
         active={isPinned}
         onToggle={() => onTogglePin(entry.value)}
       >
         <Pin className={cn("size-3.5", isPinned && "fill-current text-accent-text")} />
       </ModelRowAction>
       <ModelRowAction
-        label={isOnPad ? `Remove ${entry.label} from Pad` : `Add ${entry.label} to Pad`}
+        label={isOnPad ? "Remove from Pad" : "Add to Pad"}
+        shortcut={PAD_SHORTCUT}
         active={isOnPad}
         onToggle={() => onTogglePad(entry.value)}
       >
@@ -628,16 +656,20 @@ export function ModelPicker({
     "No chat models are available. Open Settings → Providers to discover models for a connection.";
 
   const togglePin = React.useCallback(
-    (value: string) => {
+    /** Resolves to whether the model is now pinned, or null when saving failed. */
+    (value: string): Promise<boolean | null> =>
       // Selection stays usable if saving fails; the pin reverts and says why.
-      void saveModelPadPreferences(({ pinnedModels }) => ({
+      saveModelPadPreferences(({ pinnedModels }) => ({
         pinnedModels: pinnedModels.includes(value)
           ? pinnedModels.filter((entry) => entry !== value)
           : [...pinnedModels, value],
-      })).catch((error: unknown) => {
-        toast.error(error instanceof Error ? error.message : "Couldn’t update pinned models.");
-      });
-    },
+      })).then(
+        (saved) => Boolean(saved.pinnedModels?.includes(value)),
+        (error: unknown) => {
+          toast.error(error instanceof Error ? error.message : "Couldn’t update pinned models.");
+          return null;
+        },
+      ),
     [saveModelPadPreferences],
   );
 
@@ -654,11 +686,12 @@ export function ModelPicker({
   );
 
   const toggleOnPad = React.useCallback(
-    (value: string) => {
+    /** Resolves to whether the model is now on the Pad, or null when saving failed. */
+    (value: string): Promise<boolean | null> => {
       const visibleValues = entries.map((entry) => entry.value);
       const label = entries.find((entry) => entry.value === value)?.label ?? value;
       let removed: ModelPadPlacement | undefined;
-      void saveModelPadPreferences(({ placements }) => {
+      return saveModelPadPreferences(({ placements }) => {
         removed = undefined;
         if (!placements[value]) {
           return { modelPadPlacements: addModelPadPlacement(placements, visibleValues, value) };
@@ -670,14 +703,16 @@ export function ModelPicker({
         () => {
           // Adding stays quiet; a removal can be undone from its toast.
           const placement = removed;
-          if (!placement) return;
+          if (!placement) return true;
           toast(`Removed ${label} from your Pad`, {
             id: REMOVE_FROM_PAD_TOAST_ID,
             action: { label: "Undo", onClick: () => restoreOnPad(value, placement) },
           });
+          return false;
         },
         (error: unknown) => {
           toast.error(error instanceof Error ? error.message : "Couldn’t update your Pad.");
+          return null;
         },
       );
     },
@@ -759,6 +794,65 @@ export function ModelPicker({
     resultCountMessage(listSections.leading.length, search),
     500,
   );
+  // Pin and Pad changes made with a row's shortcut, said politely.
+  const [actionAnnouncement, setActionAnnouncement] = React.useState("");
+  const listLimit = useListLimit(MODEL_LIST_PAGE, `${open}:${view}:${search}`);
+  // The current and the highlighted model stay mounted past the cap (in their
+  // place), so cmdk can select them and Enter can choose them.
+  const listPage = limitRows(
+    [listSections.leading, listSections.recent, listSections.rest],
+    listLimit.limit,
+    (entry) => entry.value === selectedValue || entry.value === previewValue,
+  );
+  const [shownLeading, shownRecent, shownRest] = listPage.sections;
+  const showMoreModels =
+    listPage.hidden > 0 ? showMoreLabel(listPage.hidden, MODEL_LIST_PAGE) : null;
+  const announceTimerRef = React.useRef<number | null>(null);
+  React.useEffect(
+    () => () => {
+      if (announceTimerRef.current !== null) window.clearTimeout(announceTimerRef.current);
+    },
+    [],
+  );
+  const openRef = React.useRef(open);
+  openRef.current = open;
+  const announceAction = (message: string) => {
+    // A save that settles after the picker closed has nobody to tell.
+    if (!openRef.current) return;
+    // Cleared first, so the same words said twice are announced twice.
+    setActionAnnouncement("");
+    if (announceTimerRef.current !== null) window.clearTimeout(announceTimerRef.current);
+    announceTimerRef.current = window.setTimeout(() => setActionAnnouncement(message), 100);
+  };
+  // A pin or unpin from the keyboard moves the highlighted row; keep it in view.
+  const revealAfterPinRef = React.useRef(false);
+  React.useLayoutEffect(() => {
+    if (!revealAfterPinRef.current) return;
+    revealAfterPinRef.current = false;
+    const list = contentRef.current?.querySelector<HTMLElement>("[cmdk-list]");
+    const row = list?.querySelector<HTMLElement>('[cmdk-item][aria-selected="true"]');
+    if (row) revealInList(row, list);
+  }, [pinned]);
+  const handleRowShortcut = (event: React.KeyboardEvent) => {
+    const pin = matchesAccelerator(event, PIN_SHORTCUT);
+    if (!pin && !matchesAccelerator(event, PAD_SHORTCUT)) return;
+    event.preventDefault();
+    if (event.repeat || isComposingKey(event)) return;
+    const entry = listPage.sections.flat().find((row) => row.value === previewValue);
+    if (!entry) return;
+    if (pin) {
+      revealAfterPinRef.current = true;
+      void togglePin(entry.value).then((nowPinned) => {
+        if (nowPinned === null) revealAfterPinRef.current = false;
+        else announceAction(`${nowPinned ? "Pinned" : "Unpinned"} ${entry.label}`);
+      });
+      return;
+    }
+    // A removal says so in its toast.
+    void toggleOnPad(entry.value).then((onPad) => {
+      if (onPad) announceAction(`Added ${entry.label} to your Pad`);
+    });
+  };
   const renderListRow = (entry: ModelEntry) => (
     <ModelListRow
       key={entry.value}
@@ -780,6 +874,8 @@ export function ModelPicker({
       // Cleared on open rather than close, so the list keeps its filter while the
       // popover animates out.
       setSearch("");
+      if (announceTimerRef.current !== null) window.clearTimeout(announceTimerRef.current);
+      setActionAnnouncement("");
       setView(hasPadModels ? "pad" : "list");
       setPreviewValue(selectedValue || positioned[0]?.value);
     } else {
@@ -1021,6 +1117,7 @@ export function ModelPicker({
               onValueChange={setPreviewValue}
               onKeyDown={(event) => {
                 if (event.key !== "Escape") event.stopPropagation();
+                handleRowShortcut(event);
               }}
             >
               <CommandInput
@@ -1032,16 +1129,40 @@ export function ModelPicker({
               />
               <CommandList>
                 <CommandEmpty>No models found.</CommandEmpty>
-                {listSections.leading.map(renderListRow)}
-                {listSections.recent.length ? (
-                  <CommandGroup heading="Recent">
-                    {listSections.recent.map(renderListRow)}
-                  </CommandGroup>
+                {shownLeading.map(renderListRow)}
+                {shownRecent.length ? (
+                  <CommandGroup heading="Recent">{shownRecent.map(renderListRow)}</CommandGroup>
                 ) : null}
-                {listSections.rest.map(renderListRow)}
+                {shownRest.map(renderListRow)}
+                {showMoreModels || listLimit.grown ? (
+                  <CommandItem
+                    value={SHOW_MORE_MODELS}
+                    aria-label={showMoreModels?.label}
+                    disabled={!showMoreModels}
+                    hidden={!showMoreModels}
+                    onSelect={() => {
+                      // The first model revealed takes this row's place, so the
+                      // keyboard stays where it was.
+                      if (listPage.next) setPreviewValue(listPage.next.value);
+                      listLimit.showMore();
+                    }}
+                    className="gap-2"
+                  >
+                    <Ellipsis className="size-4 text-tertiary" />
+                    <span className="min-w-0 flex-1 truncate text-small-strong">
+                      {showMoreModels?.title}
+                    </span>
+                    <span className="shrink-0 text-small text-tertiary">
+                      {showMoreModels?.detail}
+                    </span>
+                  </CommandItem>
+                ) : null}
               </CommandList>
               <div className="sr-only" aria-live="polite" aria-atomic="true">
                 {listAnnouncement}
+              </div>
+              <div className="sr-only" aria-live="polite" aria-atomic="true">
+                {actionAnnouncement}
               </div>
             </Command>
           </section>

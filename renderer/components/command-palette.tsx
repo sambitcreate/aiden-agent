@@ -9,6 +9,7 @@ import {
   ChevronRight,
   Clock3,
   CircleAlert,
+  Ellipsis,
   Folder,
   FolderDown,
   FolderPlus,
@@ -104,9 +105,13 @@ import {
   type PaletteResult,
 } from "../lib/command-palette-results";
 import { resultCountMessage, useDebouncedAnnouncement } from "../lib/use-debounced-announcement";
+import { limitRows, showMoreLabel, useListLimit } from "../lib/list-limit";
 import { MatchText } from "./match-text";
 
 const NO_PROVIDERS: Provider[] = [];
+/** Chat rows the palette renders before a Show more row. */
+const CHAT_RESULTS_PAGE = 50;
+const SHOWN_ALL_CHATS = paletteResult("show-more-chats", "", [], { disabled: true });
 
 const MODE_LABELS: Record<CommandPaletteMode, string> = {
   root: "Commands",
@@ -352,7 +357,12 @@ export function AppCommandPalette({
   const visible = (result: PaletteResult) => rankPaletteResults([{ result }], query)[0] ?? null;
   const shownRoot = palette.mode === "root" ? rankPaletteResults(rootRows, query) : [];
   const shownBots = React.useMemo(() => rankPaletteResults(botResults, query), [botResults, query]);
-  const shownChats = React.useMemo(() => rankPaletteResults(chatResults, query), [chatResults, query]);
+  const matchedChats = React.useMemo(() => rankPaletteResults(chatResults, query), [chatResults, query]);
+  const chatLimit = useListLimit(CHAT_RESULTS_PAGE, `${palette.open}:${palette.mode}:${query}`);
+  const chatPage = limitRows([matchedChats], chatLimit.limit);
+  const shownChats = chatPage.sections[0];
+  const showMoreChats = chatPage.hidden > 0 ? showMoreLabel(chatPage.hidden, CHAT_RESULTS_PAGE) : null;
+  const showMoreChatsResult = showMoreChats ? paletteResult("show-more-chats", showMoreChats.title) : null;
   const shownModels = React.useMemo(() => rankPaletteResults(modelRows, query), [modelRows, query]);
   const shownProviders = React.useMemo(
     () => rankPaletteResults(providerResults, query),
@@ -377,6 +387,7 @@ export function AppCommandPalette({
       ...results([shownNewChat]),
       ...(chats.isError ? [chatRetryResult] : []),
       ...results(shownChats),
+      ...(showMoreChatsResult ? [showMoreChatsResult] : []),
     ],
     newChatIn: pathIntake.pathQuery
       ? pathRowResult ? [pathRowResult] : []
@@ -394,7 +405,12 @@ export function AppCommandPalette({
   const [announcement] = useDebouncedAnnouncement(
     palette.mode === "newChatIn" && pathIntake.pathQuery
       ? ""
-      : resultCountMessage(currentResults.filter((result) => !result.forceMount).length, query),
+      : resultCountMessage(
+          currentResults.filter((result) => !result.forceMount).length +
+            // The Show more row stands for the chats it leaves out.
+            (palette.mode === "chats" && showMoreChatsResult ? chatPage.hidden - 1 : 0),
+          query,
+        ),
     500,
   );
   React.useLayoutEffect(() => {
@@ -896,6 +912,25 @@ export function AppCommandPalette({
                       <ItemDetail>{new Date(chat.updatedAt).toLocaleDateString()}</ItemDetail>
                     </PaletteResultItem>
                   ))}
+                  {showMoreChats || chatLimit.grown ? (
+                    // Stays mounted, hidden, once every chat is shown (see useListLimit).
+                    <PaletteResultItem
+                      result={showMoreChatsResult ?? SHOWN_ALL_CHATS}
+                      hidden={!showMoreChats}
+                      aria-label={showMoreChats?.label}
+                      onSelect={() => {
+                        // Keep the keyboard where it was: the first chat revealed
+                        // takes this row's place.
+                        if (chatPage.next) setActiveResult(chatPage.next.result.identity);
+                        chatLimit.showMore();
+                      }}
+                      className="min-h-11 px-3"
+                    >
+                      <Ellipsis className="size-4 shrink-0 text-secondary" />
+                      <span className="min-w-0 flex-1 truncate">{showMoreChats?.title}</span>
+                      <ItemDetail>{showMoreChats?.detail}</ItemDetail>
+                    </PaletteResultItem>
+                  ) : null}
                 </>
               ) : null}
 

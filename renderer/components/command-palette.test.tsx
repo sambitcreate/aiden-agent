@@ -97,3 +97,38 @@ test("the result count is announced once typing pauses", async () => {
   });
   assert.equal(region.textContent, "2 results");
 });
+
+test("a long chat list shows a page of chats and a Show more row that reveals the rest", async () => {
+  const many = Array.from({ length: 70 }, (_, index) =>
+    chat(`c${index}`, `Chat ${String(index).padStart(2, "0")}`, november - index),
+  );
+  const input = await openChatSearch(many);
+  const selected = () => document.querySelector("[cmdk-item][aria-selected='true']")?.textContent ?? "";
+
+  // New chat, the 50 newest chats, then Show more.
+  await waitFor(() => assert.equal(optionNames().length, 52));
+  assert.equal(screen.getAllByRole("option")[51].getAttribute("aria-label"), "Show 20 more, 20 not shown");
+  assert.ok(!screen.queryByText("Chat 50"));
+
+  fireEvent.keyDown(input, { key: "End" });
+  await waitFor(() => assert.match(selected(), /^Show 20 more/u));
+  fireEvent.keyDown(input, { key: "Enter" });
+
+  // Every chat is reachable, and the first one revealed takes Show more's place.
+  await waitFor(() => assert.equal(optionNames().length, 71));
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  assert.match(selected(), /^Chat 50/u);
+  assert.ok(input.isConnected, "Show more keeps the palette open");
+
+  // A new query starts from one page again, and the count names every match
+  // (New chat matches too).
+  fireEvent.change(input, { target: { value: "chat" } });
+  await waitFor(() => assert.equal(optionNames().length, 52));
+  assert.match(optionNames()[51], /^Show 20 more/u);
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 550));
+  });
+  assert.equal(document.querySelector("[cmdk-root] [aria-live='polite']")?.textContent, "71 results");
+});

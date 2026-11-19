@@ -333,6 +333,30 @@ Pickers and palettes match with `renderer/lib/text-match.ts`, not cmdk's filter
   `renderer/lib/reveal-in-list.ts`, never `scrollIntoView`, which can scroll
   the page or the dialog around the list.
 
+### Long lists
+
+cmdk registers every mounted item and walks them all on each arrow key, so a
+list that can reach hundreds of rows (the model picker's List, the palette's
+chats) renders one page and a **Show N more** row, through
+`renderer/lib/list-limit.ts`.
+
+- Rank everything, then cap what renders: `limitRows(sections, limit, keep)`
+  keeps sections (Pinned, Recent, the rest) in order, and `keep` holds a later
+  row in its place (the model picker keeps the current and the highlighted
+  model, so cmdk can select it and Enter chooses it). `useListLimit(page,
+  resetKey)` goes back to one page whenever the query, mode or opening
+  changes, including back to an earlier key.
+- Show more is an ordinary option, so arrows, Enter and a click reach it and a
+  screen reader counts it. Its name is `showMoreLabel(...).label` ("Show 50
+  more, 950 not shown"). Pressing it selects the first row it revealed, in
+  its place, and keeps the list open. Keep it mounted, hidden and disabled,
+  after the last page (`grown`), or cmdk jumps to the first row.
+- The live count names every match, not just the rendered page.
+- An option holds no focusable control (axe `nested-interactive`). A row's
+  secondary actions are `aria-hidden` mouse targets with a `title`, and the
+  keyboard gets a shortcut on the highlighted row, named in its description
+  and `aria-keyshortcuts` (the model picker: ⇧⌘P pins, ⇧⌘A adds to the Pad).
+
 ## Accessibility gate
 
 `tests/e2e/accessibility.spec.ts` opens Aiden's core surfaces (the chat window and composer, the model picker, the command palette, a confirm dialog, Settings) and runs axe with the WCAG 2.x A and AA tags through `auditAccessibility` in `tests/e2e/axe-gate.ts`. Each surface also gets one small `toMatchAriaSnapshot`. To add a surface, open it in a new `test.step`, call `auditAccessibility(page, { surface, include })` with its root selector, and snapshot only its stable structure: roles, names and states, with no model lists, dates or platform shortcut text. Fix violations in the component. When a fix is out of scope, add an `AXE_EXCLUSIONS` entry keyed by surface, rule id and target selector, with a reason. An entry that stops matching fails the gate until it is deleted, so the list only shrinks.

@@ -90,6 +90,7 @@ work while Aiden is in the background.
 | `⌘⌫` | Deny, under the same conditions |
 | `/` | Slash commands in the message box |
 | `@` | Mention a file or folder of the chat's workspace: `↑` / `↓` choose, `↩` or `⇥` adds it as a chip, `Esc` closes; `⌫` at the start of the text removes the last chip |
+| `⇧⌘P` / `⇧⌘A` | In the model picker's List, pin the highlighted model or add it to your Pad (again to undo). The row's pin and Pad icons do the same with the mouse |
 | `⇧⌘L` | Design mode on / off for this chat (`/design` and `/design off` do the same; gone while `AIDEN_DESIGN_MODE=0` turns design mode off). `Esc` never leaves design mode |
 
 On the design canvas (with the canvas focused, not a note or an entered
@@ -146,11 +147,11 @@ During an Aiden Live session the open chat's approval can also be answered by
 voice: say allow or deny (Settings → Voice & Speech → Aiden Live → Answer approvals by voice).
 Voice allow is allow once, the same as `⌘↩`.
 
-In the Browser panel, `⌘.` starts page markup instead of stopping the reply,
 In Quick View, a card's grip (**Move** at its right edge) reorders it:
 `Space` or `↩` picks the card up, `↑` / `↓`, `Home` and `End` move it, `Space`
 or `↩` drops it where it is, and `Esc` (or moving focus away) puts it back.
 
+In the Browser panel, `⌘.` starts page markup instead of stopping the reply,
 but only while focus is inside the browser.
 
 ## Keyboard list and menu bar

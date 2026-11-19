@@ -25,14 +25,6 @@ export type AxeExclusion = {
 };
 
 export const AXE_EXCLUSIONS: readonly AxeExclusion[] = Object.freeze([
-  {
-    surface: "model picker",
-    rule: "nested-interactive",
-    target: /^#radix-_r_[0-9a-z]+_$/u,
-    reason:
-      "Model picker list rows nest the Pin and Add to Pad buttons inside the cmdk option. " +
-      "Moving them out of the option is a row restructure in renderer/components/model-picker.tsx, which another unit is editing.",
-  },
 ]);
 
 export type AxeAuditOptions = {

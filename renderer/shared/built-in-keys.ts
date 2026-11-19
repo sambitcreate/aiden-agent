@@ -121,6 +121,13 @@ export const BUILT_IN_KEYS: readonly BuiltInKey[] = [
     section: "In a chat",
   },
   {
+    id: "model-row-actions",
+    title: "Pin / add to Pad",
+    description: "On the highlighted model in the model picker's List; pressed again, unpins it or takes it off the Pad.",
+    keys: ["Command+Shift+P", "Command+Shift+A"],
+    section: "In a chat",
+  },
+  {
     id: "canvas-tools",
     title: "Select / Hand tool",
     description: "On the design canvas, with the canvas focused.",

@@ -5,6 +5,7 @@ import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-libra
 import { installBotTestIpc } from "../main/bots/test-dom";
 import { mountWithBotRouter } from "../main/bots/test-providers";
 import { modelOptionId } from "../lib/model-picker-data";
+import { detectedKeyboardPlatform } from "../shared/keybindings";
 import type { AppSettings, Provider } from "../lib/types";
 import type { ModelPaceSummary } from "../shared/model-pace";
 import { ModelPicker } from "./model-picker";
@@ -274,15 +275,47 @@ async function openList(server: ReturnType<typeof settingsServer>, options = {})
   return screen.findByLabelText("Filter chat models");
 }
 
-test("list rows say whether each model is on the Pad", async () => {
+/** The List option that names `label`. */
+function modelOption(label: string): HTMLElement {
+  const option = screen
+    .getAllByRole("option")
+    .find((candidate) => candidate.textContent?.includes(label));
+  assert.ok(option, `an option for ${label}`);
+  return option;
+}
+
+/** A row's mouse-only Pin or Pad action, by what pressing it does ("Pin", "Add to Pad"…). */
+function rowAction(label: string, action: string): HTMLElement {
+  return within(modelOption(label)).getByTitle(new RegExp(`^${action} \\(`, "u"));
+}
+
+function rowDescription(label: string): string {
+  const id = modelOption(label).getAttribute("aria-describedby");
+  return (id && document.getElementById(id)?.textContent) || "";
+}
+
+/** The platform's Command+Shift+<letter> on the List's filter. */
+function pressRowShortcut(filter: HTMLElement, letter: "P" | "A") {
+  const primary = detectedKeyboardPlatform() === "darwin" ? { metaKey: true } : { ctrlKey: true };
+  fireEvent.keyDown(filter, { key: letter, code: `Key${letter}`, shiftKey: true, ...primary });
+}
+
+test("list rows say whether each model is pinned and on the Pad, with no control inside the option", async () => {
   const server = settingsServer(placedSettings);
   await openList(server);
 
-  // The action names say what each button will do; no toggle state is announced.
-  assert.ok(screen.getByRole("button", { name: "Remove Placed One from Pad" }));
-  assert.ok(screen.getByRole("button", { name: "Remove Placed Two from Pad" }));
-  assert.ok(screen.getByRole("button", { name: "Add Current Model to Pad" }));
-  assert.ok(screen.getByRole("button", { name: "Pin Placed One" }));
+  assert.match(rowDescription("Placed One"), /Not pinned, on your Pad\..*pins it, .* removes it from your Pad/u);
+  assert.match(rowDescription("Current Model"), /Not pinned, not on your Pad\..*adds it to your Pad/u);
+  assert.ok(rowAction("Placed One", "Remove from Pad"));
+  assert.ok(rowAction("Current Model", "Add to Pad"));
+  assert.ok(rowAction("Placed One", "Pin"));
+  // An option can't contain a focusable control (axe nested-interactive), and
+  // its name is the model, not the actions' labels.
+  for (const option of screen.getAllByRole("option")) {
+    assert.equal(option.querySelectorAll("button, a[href], input, [tabindex]").length, 0);
+    assert.ok(option.getAttribute("aria-keyshortcuts"));
+  }
+  assert.equal(screen.queryAllByRole("button", { name: /^(Pin|Unpin) |(to|from) Pad$/u }).length, 0);
 });
 
 test("adding a model from its list row places it on the Pad without choosing it", async () => {
@@ -292,12 +325,10 @@ test("adding a model from its list row places it on the Pad without choosing it"
     onChange: (providerId: string, model: string) => changes.push(`${providerId}::${model}`),
   });
 
-  fireEvent.mouseDown(screen.getByRole("button", { name: "Add Current Model to Pad" }));
-  fireEvent.click(screen.getByRole("button", { name: "Add Current Model to Pad" }));
+  fireEvent.mouseDown(rowAction("Current Model", "Add to Pad"));
+  fireEvent.click(rowAction("Current Model", "Add to Pad"));
 
-  await waitFor(() =>
-    assert.ok(screen.getByRole("button", { name: "Remove Current Model from Pad" })),
-  );
+  await waitFor(() => assert.ok(rowAction("Current Model", "Remove from Pad")));
   const writes = savedPlacements(server);
   assert.equal(writes.length, 1);
   const saved = writes[0] ?? {};
@@ -320,9 +351,9 @@ test("removing a model from its list row takes it off the Pad and keeps the othe
   const server = settingsServer(placedSettings);
   await openList(server);
 
-  fireEvent.click(screen.getByRole("button", { name: "Remove Placed Two from Pad" }));
+  fireEvent.click(rowAction("Placed Two", "Remove from Pad"));
 
-  await waitFor(() => assert.ok(screen.getByRole("button", { name: "Add Placed Two to Pad" })));
+  await waitFor(() => assert.ok(rowAction("Placed Two", "Add to Pad")));
   const writes = savedPlacements(server);
   assert.equal(writes.length, 1);
   assert.deepEqual(writes[0], {
@@ -334,12 +365,12 @@ test("a list-row removal says so and Undo puts the model back where it was", asy
   const server = settingsServer(placedSettings);
   await openList(server);
 
-  fireEvent.click(screen.getByRole("button", { name: "Remove Placed Two from Pad" }));
+  fireEvent.click(rowAction("Placed Two", "Remove from Pad"));
 
   await screen.findByText("Removed Placed Two from your Pad");
   fireEvent.click(await screen.findByRole("button", { name: "Undo" }));
 
-  await waitFor(() => assert.ok(screen.getByRole("button", { name: "Remove Placed Two from Pad" })));
+  await waitFor(() => assert.ok(rowAction("Placed Two", "Remove from Pad")));
   assert.deepEqual(server.current().modelPadPlacements, placedSettings.modelPadPlacements);
 });
 
@@ -347,11 +378,9 @@ test("adding a model from its list row shows no toast", async () => {
   const server = settingsServer(placedSettings);
   await openList(server);
 
-  fireEvent.click(screen.getByRole("button", { name: "Add Current Model to Pad" }));
+  fireEvent.click(rowAction("Current Model", "Add to Pad"));
 
-  await waitFor(() =>
-    assert.ok(screen.getByRole("button", { name: "Remove Current Model from Pad" })),
-  );
+  await waitFor(() => assert.ok(rowAction("Current Model", "Remove from Pad")));
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
@@ -362,10 +391,10 @@ test("a failed Pad toggle says why and leaves the row unchanged", async () => {
   const server = settingsServer(placedSettings, { failWrites: true });
   await openList(server);
 
-  fireEvent.click(screen.getByRole("button", { name: "Add Current Model to Pad" }));
+  fireEvent.click(rowAction("Current Model", "Add to Pad"));
 
   await screen.findByText(/disk full/u);
-  await waitFor(() => assert.ok(screen.getByRole("button", { name: "Add Current Model to Pad" })));
+  await waitFor(() => assert.ok(rowAction("Current Model", "Add to Pad")));
 });
 
 test("a Pad with models offers Customize Model Pad, which opens Model Pad settings", async () => {
@@ -404,25 +433,24 @@ test("Customize Model Pad explains why settings are unavailable and stays put", 
   assert.ok(screen.getByRole("listbox", { name: /Model pad/u }));
 });
 
-// Keyboard users activate a row action with Enter; native button activation then
-// clicks it. The command list must not treat that Enter as choosing the row.
-function pressEnter(button: HTMLElement) {
-  button.focus();
-  const notPrevented = fireEvent.keyDown(button, { key: "Enter" });
-  assert.ok(notPrevented, "Enter reaches the button's own activation");
-  fireEvent.click(button);
+function actionAnnouncement(): string {
+  const regions = [...document.querySelectorAll("[cmdk-root] [aria-live='polite']")];
+  return regions.map((region) => region.textContent ?? "").join("|");
 }
 
-test("Enter on a row's Pad toggle edits the Pad and keeps the list open", async () => {
+test("the Pad shortcut on the highlighted row edits the Pad and keeps the list open", async () => {
   const server = settingsServer(placedSettings);
   const changes: string[] = [];
   const search = await openList(server, {
     onChange: (providerId: string, model: string) => changes.push(`${providerId}::${model}`),
   });
 
-  pressEnter(screen.getByRole("button", { name: "Remove Placed Two from Pad" }));
+  // The list opens on the current model; one up is Placed Two.
+  fireEvent.keyDown(search, { key: "ArrowUp" });
+  await waitFor(() => assert.equal(modelOption("Placed Two").getAttribute("aria-selected"), "true"));
+  pressRowShortcut(search, "A");
 
-  await waitFor(() => assert.ok(screen.getByRole("button", { name: "Add Placed Two to Pad" })));
+  await waitFor(() => assert.match(rowDescription("Placed Two"), /not on your Pad/u));
   assert.deepEqual(savedPlacements(server), [
     { "acme::placed-one": placedSettings.modelPadPlacements?.["acme::placed-one"] },
   ]);
@@ -430,16 +458,20 @@ test("Enter on a row's Pad toggle edits the Pad and keeps the list open", async 
   assert.ok(search.isConnected, "the list stayed open");
 });
 
-test("Enter on a row's Pin pins the model and keeps the list open", async () => {
+test("the Pin shortcut pins the highlighted row, says so, and keeps the list open", async () => {
   const server = settingsServer(placedSettings);
   const changes: string[] = [];
   const search = await openList(server, {
     onChange: (providerId: string, model: string) => changes.push(`${providerId}::${model}`),
   });
 
-  pressEnter(screen.getByRole("button", { name: "Pin Placed Two" }));
+  fireEvent.keyDown(search, { key: "ArrowUp" });
+  await waitFor(() => assert.equal(modelOption("Placed Two").getAttribute("aria-selected"), "true"));
+  pressRowShortcut(search, "P");
 
-  await waitFor(() => assert.ok(screen.getByRole("button", { name: "Unpin Placed Two" })));
+  await waitFor(() => assert.match(rowDescription("Placed Two"), /^.*\. Pinned, on your Pad/u));
+  // Said once the save has gone through.
+  await waitFor(() => assert.match(actionAnnouncement(), /Pinned Placed Two/u));
   const writes = server.calls.filter((call) => call.channel === "settings:set");
   assert.deepEqual(
     writes.map((call) => (call.args[0] as AppSettings).pinnedModels),
@@ -447,6 +479,80 @@ test("Enter on a row's Pin pins the model and keeps the list open", async () => 
   );
   assert.deepEqual(changes, []);
   assert.ok(search.isConnected, "the list stayed open");
+});
+
+test("a long List shows a page of models and a Show more row that reveals the rest", async () => {
+  const many: Provider = {
+    ...provider,
+    models: Array.from({ length: 130 }, (_, index) => `bulk-${String(index).padStart(3, "0")}`),
+  };
+  const server = settingsServer({});
+  await mountPicker(server, { providers: [many] });
+  const search = await screen.findByLabelText("Filter chat models");
+  const options = () => screen.getAllByRole("option");
+
+  // 100 models and the Show more row.
+  await waitFor(() => assert.equal(options().length, 101));
+  assert.equal(options()[100].getAttribute("aria-label"), "Show 30 more, 30 not shown");
+
+  // Keyboard: End reaches Show more, Enter reveals the rest and selects the
+  // first model it revealed, in Show more's place.
+  fireEvent.keyDown(search, { key: "End" });
+  await waitFor(() => assert.equal(options()[100].getAttribute("aria-selected"), "true"));
+  fireEvent.keyDown(search, { key: "Enter" });
+  await waitFor(() => assert.equal(options().length, 130));
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  assert.equal(options()[100].getAttribute("aria-selected"), "true");
+  assert.match(options()[100].textContent ?? "", /bulk.?100/iu);
+  assert.ok(search.isConnected, "Show more doesn't choose a model or close the picker");
+
+  // A new query starts from one page again; the count names every match.
+  fireEvent.change(search, { target: { value: "bulk" } });
+  await waitFor(() => assert.equal(options().length, 101));
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 550));
+  });
+  assert.match(actionAnnouncement(), /130 results/u);
+
+  // Back to the empty filter, and closing and reopening, start from one page too.
+  fireEvent.change(search, { target: { value: "" } });
+  await waitFor(() => assert.equal(options().length, 101));
+  fireEvent.keyDown(search, { key: "End" });
+  fireEvent.keyDown(search, { key: "Enter" });
+  await waitFor(() => assert.equal(options().length, 130));
+  fireEvent.keyDown(search, { key: "Escape" });
+  await waitFor(() => assert.ok(!search.isConnected));
+  fireEvent.click(screen.getByRole("button", { name: /Choose a model/u }));
+  await screen.findByLabelText("Filter chat models");
+  await waitFor(() => assert.equal(options().length, 101));
+});
+
+test("the current model stays listed, selected and choosable when it falls past the first page", async () => {
+  const many: Provider = {
+    ...provider,
+    models: [
+      ...Array.from({ length: 130 }, (_, index) => `bulk-${String(index).padStart(3, "0")}`),
+      "current-model",
+    ],
+  };
+  const server = settingsServer({});
+  await mountPicker(server, { providers: [many] });
+  const search = await screen.findByLabelText("Filter chat models");
+  const options = () => screen.getAllByRole("option");
+
+  // 100 models, then the current one in its place, then Show more for the other 30.
+  await waitFor(() => assert.equal(options().length, 102));
+  const current = options()[100];
+  assert.match(current.textContent ?? "", /Current Model/u);
+  assert.equal(current.getAttribute("aria-selected"), "true");
+  assert.equal(options()[101].getAttribute("aria-label"), "Show 30 more, 30 not shown");
+
+  // Enter chooses it, which records it as the most recent model and closes the picker.
+  fireEvent.keyDown(search, { key: "Enter" });
+  await waitFor(() => assert.ok(!search.isConnected, "choosing closes the picker"));
+  await waitFor(() => assert.deepEqual(savedRecents(server), [["acme::current-model"]]));
 });
 
 test("Customize Model Pad is available from the List while the Pad has models", async () => {
@@ -465,8 +571,8 @@ test("a current model removed from the Pad in the List is offered again on the P
   });
   await openList(server);
 
-  fireEvent.click(screen.getByRole("button", { name: "Remove Current Model from Pad" }));
-  await waitFor(() => assert.ok(screen.getByRole("button", { name: "Add Current Model to Pad" })));
+  fireEvent.click(rowAction("Current Model", "Remove from Pad"));
+  await waitFor(() => assert.ok(rowAction("Current Model", "Add to Pad")));
   fireEvent.click(screen.getByRole("tab", { name: "Personal Model Pad" }));
 
   const pad = await screen.findByRole("listbox", { name: /Model pad/u });
