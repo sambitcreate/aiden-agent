@@ -19,7 +19,7 @@ The audit (Opus, Carbon v2 and Neon, scored 2026-11-18) found 33 distinct causes
 - **Two-turn prefix test.** The new harness passes for a workspace chat, a Bot chat and an `aiden serve` chat. It sends two turns with no user-visible state change, captures both provider payloads, and checks that the second payload's tools and system and the first payload's messages are a byte-identical prefix of the second.
 - **Cache miss attribution.** Every request with a lower `cacheRead` than expected logs one `detectCacheMiss()` reason with a source label (`tools`, `system:<section>`, `messages`, `model`, `ttl`, `retention`). The fixtures in phase 0 have zero unexplained misses after phase 8.
 - **Measured hit rate.** On the recorded replay sessions (`npm run pi:upgrade:evaluate`, the replay gate), the cache-read share of input tokens on turn 2 and later is at least 90% for Anthropic direct, Bedrock and OpenAI Responses. The phase 0 baseline is recorded in the PR description so the gain is a measured number, not a claim.
-  - Compaction counts toward this only for chats with no approved memory fact. Memory is on by default, and any approved fact sends the summary through the isolated request (phase 5), so the cached summary and the background summary currently reach only chats with no approved facts. Most chats of a person who uses memory therefore still compact cold. The open question is deferred to phase 6.
+  - Compaction counts toward this only for chats with no approved memory fact. Memory is on by default, and any approved fact sends the summary through the isolated request (phase 5), so the cached summary and the background summary currently reach only chats with no approved facts. Most chats of a person who uses memory therefore still compact cold. Phase 6 accepted this limit: the facts stay in the system head, because a summarize view without them would no longer be a byte prefix and would lose the cache anyway.
 - **Visible figure.** The context panel shows the cache percentage, including 0%.
 
 ## Shape of the PR
@@ -421,7 +421,7 @@ The code differed from the plan in these ways:
 - **The local engine (pi-vcc)** makes no model call, so it has no request to move. It still goes through the final memory filter.
 - **Overflow recovery** keeps Pi's isolated request: the prefix it would continue is the one that no longer fits.
 - **One request per summary.** A split turn is one cached request, where Pi's isolated path can send two. The cached summary sees the whole conversation, the retained tail included, and is told those messages stay.
-- **Chats with memory facts summarize isolated.** The plan put every threshold and manual compaction on the cached prefix. A chat whose prefix states a fact, or which has an approved fact, keeps Pi's isolated, scrubbed request, because a paraphrased fact cannot be filtered out of a summary. Those chats get no cached summary and no background summary. Memory is on by default, so today both reach only chats with no approved facts; the open question is deferred to phase 6.
+- **Chats with memory facts summarize isolated.** The plan put every threshold and manual compaction on the cached prefix. A chat whose prefix states a fact, or which has an approved fact, keeps Pi's isolated, scrubbed request, because a paraphrased fact cannot be filtered out of a summary. Those chats get no cached summary and no background summary. Memory is on by default, so today both reach only chats with no approved facts. Phase 6 accepted this limit (see its As built).
 - **The keep budget for a background summary.** `start` is `fraction` of the trigger (80% by default). A background summary is stored only when both hold:
   - The kept tail (its retained messages plus everything appended since, by Pi's estimate, with system messages priced for models that keep them) is at most `keepRecentTokens` plus the smaller of `keepRecentTokens` and `trigger - start`. So a 1M window keeps at most twice `keepRecentTokens`, not the roughly 217k that `keepRecentTokens + (trigger - start)` would allow.
   - The summary, the kept tail and the request's fixed overhead come to less than `start`. The overhead (system prompt and tools) is measured when the summary starts: the provider's count for the summarized prefix minus Pi's estimate of its messages. So the compacted chat lands below the point where the next background summary would start, and a small window never compacts again at once.
@@ -462,7 +462,7 @@ Tests: `compaction-cached-prefix.test.ts` (in `test:compaction` and the CI regis
   - The allowlist lives beside the provider capabilities, not in UI code.
   - The setting follows the settings design system and its existing grouped card.
 
-- **Deferred from phase 5.** Compaction reaches the cache only in chats with no approved memory fact, and memory is on by default. Decide whether to move approved facts out of the summarize view of the cached prefix (so the summarizer is never shown one while the prefix stays byte-stable), or to accept the limit and record it. Owner: phase 6.
+- **Deferred from phase 5.** Compaction reaches the cache only in chats with no approved memory fact, and memory is on by default. Decided in phase 6: accept the limit (see As built).
 
 **Settings and docs**
 
@@ -477,6 +477,43 @@ Tests: `compaction-cached-prefix.test.ts` (in `test:compaction` and the CI regis
   - It never starts for an unattended chat.
 - CLI test: `aiden serve` with warming on starts the warmer, and with it off does not.
 - Settings test: the long option appears only for allowlisted providers, and choosing it reaches the request options.
+
+**As built**
+
+- **Real TTLs.** `PiCacheWarmer` reads `promptCacheTtlMs(model, retention)` for the resolved model and the retention the request asked for (short, long or none) and refreshes on Pi's schedule ahead of expiry (`getCacheWarmingDelayMs`). It refuses only what Pi cannot replay, so a model with a documented lifetime and no `promptCache` entry is warmed. `promptCacheTtlMs` gained the retention argument: "none" is 0, and "long" is the declared long lifetime or the hour of the allowlisted providers, falling back to the short one where Anthropic's compat refuses the long TTL.
+- **Warmer lifetime.** The warmer no longer ends with the agent or in `finally`:
+  - A reply that is saved and shown in a window that still has the chat settles into an idle phase (`settleReplyCacheWarmer`): Pi's 15% continuation odds and 30-minute horizon, at most `IDLE_WARM_LIMIT` (3) refreshes, then it stops.
+  - A stopped, failed or detached reply, a closed window, or a reply from another window ends it. The chat pane calls `chats:releaseCacheWarming` when it moves away from the chat, and only the window that showed the chat can release its warmer. Each chat keeps one warmer (`adoptChatCacheWarmer`).
+  - Every chat write (a new message, a model switch, a compaction) stops it at the next refresh, through the summary revision fence.
+  - Unattended chats never create one (`canWarmForegroundChat`).
+- **`aiden serve`.** `daemonSettingsManager` follows the profile's `cacheWarmingEnabled` in aiden.json, the switch the desktop saves. On, an attended chat turn warms while the reply streams ("streaming"); off, or for a Bot, Telegram or scheduled run, Pi never sends a refresh. Pi's settings.json `cacheWarming`, and Pi's "idle" default, are ignored. The streaming fallback is gone. `packages/cli/README.md` documents the switch.
+- **Long retention.** Settings → Context & Limits → Prompt cache gains **Keep chat caches for an hour** (`longPromptCacheRetention`, off by default, carried in portable config). The allowlist is `renderer/shared/prompt-cache-retention.ts` (Anthropic and Amazon Bedrock), with `supportsLongPromptCacheRetention` for the models Pi sends a long TTL for (Claude on Anthropic Messages, and the Claude 4.5 and later models on Bedrock). The switch is unavailable, with a reason, until an allowlisted provider is set up.
+  - `withLongPromptCacheRetention` is the outermost stream wrapper on foreground workspace chats only, so the countdown, miss telemetry, side-call ledger and warmer all see "long". Bots, automations, agent harnesses and Remote-only turns keep their own retention.
+  - Side calls continue a long parent at "short" (they read its entry and write only their own tokens), and one-off calls stay at "none", so long retention never reaches btw, the advisor or other one-offs.
+  - The warmer warms at the long TTL when long is chosen.
+- **Memory and compaction (from phase 5).** Accept the limit. The facts stay in the system head. A summarize view without them would no longer be a byte prefix and would lose the cache anyway. Moving facts out of only the summarize view changes the bytes the summary request sends, so it would miss the parent's cache entry, which is the reason to continue the prefix at all; moving them out of the head for every request is phase 1's per-request memory section question, not a compaction one. Chats with an approved fact keep phase 5's isolated, scrubbed summary.
+- **CLI workspace chats (from phase 3).** No frozen-state change is needed. The server's system prompt is Pi's own, plus a Bot's instructions for a Bot turn, and it states neither the branch nor the permission mode. Hook context already travels on its own message (phase 3).
+- **No-TTL continuation (from phase 4).** A side call refuses to continue a parent whose prefix is older than its TTL, and a model with no documented lifetime keeps the ledger's own bound. Covered by `side-call-prefix.test.ts`, with no change in this phase.
+
+The code differed from the plan in these ways:
+
+- **An hour-long cache is never idle-warmed.** Its refresh would fall at 54 minutes, past Pi's 30-minute idle horizon, so a settled chat at long retention relies on the hour itself. It is still warmed while a long reply streams.
+- **A title write stops the idle warmer.** Title generation writes the chat, so the summary revision fence stops the idle phase at its first refresh after the first reply. The same holds for any other chat write. Accepted: a fence that ignored some writes could warm a prefix that no longer exists.
+- **A background summary can waste idle warms.** A precomputed compaction summary (phase 5) is not applied until the trigger, so the warmer may refresh a prefix the compaction later replaces. The idle limit caps the cost at three refreshes. Accepted.
+- **`aiden serve` warms only while streaming,** never idle, and reads the setting once per session, so a change reaches the next turn. Long retention is desktop-only; the server keeps Pi's default retention. Owner: phase 8, with the server's provider routing.
+- **`aiden serve` has no side-call ledger and no compaction coordinator.** Its advisor and side calls stay isolated, and its compactions keep Pi's isolated request without the cached prefix or the final memory filter. The server runs Pi's own AgentSession compaction, so adopting the coordinator means replacing it rather than wrapping a stream, and a background summary needs an attended notion the server does not have yet beyond the warming flag above. Owner: phase 8 (`aiden serve` parity, measured on the replay gate).
+- **Fork summaries stay isolated.** `fork-summary-service.ts` summarizes the branch up to the fork point, while the ledger holds the chat's latest request, so the tail match fails unless the fork is at the newest message; it also resolves its own runtime. Accepted.
+- **Child agents stay isolated.** A child runs its own session whose stream the ledger does not wrap (the ledger holds only foreground chats), so there is no recorded parent prefix to continue. Owner: phase 8, if the replay shows child compactions matter.
+- **The replay gate** still builds the coordinator without a prefix or background summaries, so it records the isolated path. A cached-prefix case lands with the phase 8 replay evaluation. Owner: phase 8.
+- **No Remote contract change.** The setting is desktop-local and no Aiden Remote payload changed, so the iOS and Android clients need no update. No onboarding change.
+
+Tests:
+- `pi-cache-warming.test.ts` (fake clock): the period follows the lifetime for each retention; the idle phase stops after its limit, on release by the window that showed the chat, and on a chat write; another window cannot release it; an unattended chat never creates one.
+- `prompt-cache-lifetimes.test.ts`: long and none lifetimes, the compat refusal, and the wrapper asking for "long" only on allowlisted models and never overriding a retention a request names.
+- `side-call-prefix.test.ts`: a side call after a long parent sends "short" and reads the parent's entry within the hour.
+- `generation-context.test.ts`, `config-store-core.test.ts`: the setting reaches the request options and survives a save.
+- `limits-settings.test.tsx`: the switch appears available only for an allowlisted provider, paused while the cache is off, and unavailable with its reason otherwise.
+- `packages/cli/tests/daemon-turns.test.mjs`: a long reply on `aiden serve` sends a one-token refresh only when the profile turns warming on, and never for a scheduled run or with the setting missing, off or malformed.
 
 ## Phase 7: screenshot trimming in batches, retire the Gemini explicit cache
 

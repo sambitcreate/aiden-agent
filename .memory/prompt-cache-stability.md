@@ -88,3 +88,12 @@ Plan: `docs/plans/prompt-cache-hit-rate.md` (one PR, phases 0-8).
 - Test chat rescaled: BRIEF x36 in first prompt, KEEP_RECENT 24, default trigger 550 fraction 0.5 (contexts ~532/546/556). Faux usage counts the system prompt, so a long `systemPrompt` raises overhead.
 - `factPhrase` strips only sentence-final `. ! ? , ; :` (and the ideographic full stop), keeping symbols: "Uses C#" no longer removes "uses C for firmware"; "Plays in F#" keeps "F#m".
 - Known limit: memory on by default + any approved fact -> isolated summary, so cached/background summaries reach only fact-free chats. Open question deferred to phase 6 in the plan.
+
+## Phase 6 (2026-11-19)
+
+- Commits: 3b3418cbb real TTLs + idle settle; ba44d2e01 attended reply keeps warm (`chats:releaseCacheWarming`, chat-pane release on move-away); 0588ce2ef long retention; e43644fad serve warming; then docs.
+- Warmer: `promptCacheTtlMs(model, retention)` (none 0; long = declared long or LONG_PROMPT_CACHE_TTL_MS for allowlisted, short fallback when anthropic compat `supportsLongCacheRetention: false`). Idle phase via `settleReplyCacheWarmer`: Pi 15% odds, 30-min horizon, `IDLE_WARM_LIMIT` 3; one warmer per chat (`adoptChatCacheWarmer`), release only by the showing window (`releaseChatCacheWarmer(chatId, documentId)`); summaryRevision fence stops it on any chat write (title write stops idle at first refresh, accepted).
+- Long retention: `renderer/shared/prompt-cache-retention.ts` allowlist (anthropic, amazon-bedrock) + `supportsLongPromptCacheRetention`; `withLongPromptCacheRetention` outermost on foreground workspace chats; side calls "short", one-offs "none". 1h never idle-warms (refresh at 54 min > 30-min horizon).
+- Serve: `daemonSettingsManager(cwd, agentDir, {attended})` -> "streaming" only when aiden.json `cacheWarmingEnabled === true` and attended (!botAdmission && !telegram/scheduled); settings.json cacheWarming ignored; read once per session. No long retention on serve.
+- Decisions: memory limit ACCEPTED (facts stay in head; a fact-free summarize view is not a byte prefix). CLI workspace chats: no frozen-state change needed. Deviations owned by phase 8: serve ledger + compaction coordinator, serve long retention, child-agent cached compaction, replay-gate cached-prefix case. Fork summaries isolated, accepted (branch point != ledger tail).
+- No Remote contract change; no onboarding change.
