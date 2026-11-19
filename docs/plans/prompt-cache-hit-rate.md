@@ -1,6 +1,6 @@
 # Prompt cache hit rate: keep the cached prefix byte-stable
 
-Status: In progress (2026-11-19): phases 0, 1, 2, 3, 4, 5, 6 and 7 implemented, and phase 8's wire and routing half (8a). Delivered as one PR with one stacked commit series per phase, branch `feat/prompt-cache-stability`, cut from `main` at f2fd27640.
+Status: Implemented, in review (2026-11-19): phases 0 to 8 (8a and 8b) implemented. Delivered as one PR with one stacked commit series per phase, branch `feat/prompt-cache-stability`, cut from `main` at f2fd27640.
 
 ## Goal
 
