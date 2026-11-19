@@ -138,6 +138,7 @@ struct AidenActivityStepLine: View {
     @Environment(\.openURL) private var openURL
     let step: AidenAgentStep
     let shimmer: Bool
+    @State private var lineHeight: CGFloat = 0
 
     private var fileLink: URL? {
         opensWorkspaceFileLinks ? step.producedFile?.workspaceLink : nil
@@ -148,9 +149,12 @@ struct AidenActivityStepLine: View {
             Button {
                 openURL(fileLink)
             } label: {
+                // The line keeps its natural height so the feed's rhythm holds;
+                // only the tap area reaches above and below it to 44 points.
                 AidenActivityStepLineContent(step: step, shimmer: shimmer)
-                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                    .contentShape(Rectangle())
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { lineHeight = $0 }
+                    .contentShape(AidenVerticalOutsetRectangle(outset: max(0, (44 - lineHeight) / 2)))
             }
             .buttonStyle(AidenActivityFileLinkButtonStyle())
             .accessibilityHint("Opens the file")
@@ -158,6 +162,16 @@ struct AidenActivityStepLine: View {
         } else {
             AidenActivityStepLineContent(step: step, shimmer: shimmer)
         }
+    }
+}
+
+/// The view's bounds grown by `outset` above and below, so a short line can
+/// take a full-size tap without taking up the space.
+private struct AidenVerticalOutsetRectangle: Shape {
+    var outset: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        Path(rect.insetBy(dx: 0, dy: -outset))
     }
 }
 
