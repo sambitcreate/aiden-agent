@@ -153,7 +153,7 @@ test("a same-title redraw the host does not show is not reported as drawn, and l
   assert.match(presented[1]!.fallbackText, /three/u);
 });
 
-test("render_ui edits refuse an old that matches twice once line breaks read alike, or that cuts a line break or emoji in two", async () => {
+test("render_ui edits refuse an old that matches twice once line breaks read alike, that ends inside a CRLF, or that cuts an emoji in two", async () => {
   const { instance, presented } = tool();
   await instance.execute("first", {
     title: "Mixed",
@@ -162,11 +162,12 @@ test("render_ui edits refuse an old that matches twice once line breaks read ali
   // The exact LF text appears once, but the CRLF pair above it reads the same.
   await assert.rejects(
     instance.execute("twice", { title: "Mixed", edits: [{ old: "<Text>a</Text>\n<Text>b</Text>", new: "<Text>c</Text>" }] }),
-    /edits\[0\] old "<Text>a<\/Text> <Text>b<\/Text>" was found 2 times with its line breaks and the markup's read alike; add surrounding text/u,
+    /edits\[0\] old "<Text>a<\/Text>\\n<Text>b<\/Text>" was found 2 times with its line breaks and the markup's read alike; add surrounding text/u,
   );
+  // A lone \r at the end could mean the \r alone or the whole CRLF, so it is not guessed.
   await assert.rejects(
-    instance.execute("crlf", { title: "Mixed", edits: [{ old: "\n<Text>b</Text>\n<Text>a", new: "" }] }),
-    /edits\[0\] old "<Text>b<\/Text> <Text>a" starts or ends between the \\r and \\n of a line break in the markup; include the whole line break/u,
+    instance.execute("crlf", { title: "Mixed", edits: [{ old: "<Text>a</Text>\r", new: "" }] }),
+    /edits\[0\] old "<Text>a<\/Text>\\r" ends between the \\r and \\n of a line break in the markup; include the whole line break/u,
   );
   await assert.rejects(
     instance.execute("emoji", { title: "Mixed", edits: [{ old: "\uDE00y", new: "!" }] }),
@@ -182,6 +183,19 @@ test("render_ui edits refuse an old that matches twice once line breaks read ali
     ],
   });
   assert.match(presented[1]!.visual.fallbackText, /a[^]*b[^]*c[^]*b[^]*x!/u);
+});
+
+test("a render_ui edit whose old starts with LF takes a CRLF line break whole, to change or remove the line after it", async () => {
+  const { instance, presented } = tool();
+  await instance.execute("first", {
+    title: "Windows",
+    markup: "<Visual>\r\n  <Text>alpha</Text>\r\n  <Text>beta</Text>\r\n  <Text>gamma</Text>\r\n</Visual>",
+  });
+  await instance.execute("change", { title: "Windows", edits: [{ old: "\n  <Text>beta</Text>", new: "\n  <Text>b2</Text>" }] });
+  assert.match(presented[1]!.visual.fallbackText, /alpha[^]*b2[^]*gamma/u);
+  await instance.execute("remove", { title: "Windows", edits: [{ old: "\n  <Text>b2</Text>", new: "" }] });
+  assert.match(presented[2]!.visual.fallbackText, /alpha[^]*gamma/u);
+  assert.doesNotMatch(presented[2]!.visual.fallbackText, /b2|beta/u);
 });
 
 test("per-response and per-chat caps hold", async () => {

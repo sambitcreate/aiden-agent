@@ -865,15 +865,22 @@ test("edits written with LF line breaks apply to a page saved with CRLF ones, wh
   // Read alike, line breaks still have to match one place only.
   await assert.rejects(
     call("e2", { operation: "update", id: "art1", edits: [{ old: "</Button>\n", new: "</Button>\n\n" }] }),
-    /edits\[0\] old "<\/Button>" was found 2 times/u,
+    /edits\[0\] old "<\/Button>\\n" was found 2 times/u,
   );
-  // An old that stops between a CRLF's two characters would leave half a line break behind.
-  const saved = (await store.get("ws1", "art1"))!.artifact.markup;
+  // An old that starts with LF takes the CRLF before it whole, to change the line after it or remove it.
+  const saved = (await store.get("ws1", "art1"))!.artifact.markup!;
+  await call("e3", { operation: "update", id: "art1", edits: [{ old: "\n  <Text>Merge when green</Text>", new: "\n  <Text>Merge when checks pass</Text>" }] });
+  const changed = saved.replace("<Text>Merge when green</Text>", "<Text>Merge when checks pass</Text>");
+  assert.equal((await store.get("ws1", "art1"))!.artifact.markup, changed);
+  await call("e4", { operation: "update", id: "art1", edits: [{ old: "\n  <Text>Merge when checks pass</Text>", new: "" }] });
+  assert.equal((await store.get("ws1", "art1"))!.artifact.markup, changed.replace("\r\n  <Text>Merge when checks pass</Text>", ""));
+  // An old ending in a lone \r before a CRLF's \n could mean the \r alone or the whole line break, so it is refused.
+  const before = (await store.get("ws1", "art1"))!.artifact.markup;
   await assert.rejects(
-    call("e3", { operation: "update", id: "art1", edits: [{ old: "waiting</Text>\r", new: "done</Text>" }] }),
-    /edits\[0\] old "waiting<\/Text>" starts or ends between the \\r and \\n of a line break in the markup; include the whole line break in old[^]*Nothing was changed/u,
+    call("e5", { operation: "update", id: "art1", edits: [{ old: "waiting</Text>\r", new: "done</Text>" }] }),
+    /edits\[0\] old "waiting<\/Text>\\r" ends between the \\r and \\n of a line break in the markup; include the whole line break in old[^]*Nothing was changed/u,
   );
-  assert.equal((await store.get("ws1", "art1"))!.artifact.markup, saved);
+  assert.equal((await store.get("ws1", "art1"))!.artifact.markup, before);
 });
 
 test("edits apply to the markup another chat saved while this one prepared its save, and a miss there saves nothing", async (t) => {
