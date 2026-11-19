@@ -334,6 +334,7 @@
         "main/services/design-canvas/watch.test.ts",
         "main/services/design-canvas/canvas-tools.test.ts",
         "main/services/design-canvas/inspect.test.ts",
+        "main/services/design-canvas/zoom-gate.test.ts",
         "main/services/design-canvas/frame-navigation.test.ts",
         "main/services/design-canvas/text-write.test.ts",
         "main/services/close-guard-prompt.test.ts",

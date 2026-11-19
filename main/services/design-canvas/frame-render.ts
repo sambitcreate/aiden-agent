@@ -15,6 +15,7 @@
 import { BrowserWindow } from "../../platform.js";
 import { markAuxiliaryWindow } from "../../windows/auxiliary-windows.js";
 import { designOfflineSession } from "./offline-session.js";
+import { createDesignZoomGate } from "./zoom-gate.js";
 import {
   DESIGN_EXPORT_MAX_HEIGHT,
   DESIGN_EXPORT_PNG_SCALE,
@@ -46,6 +47,9 @@ const HEIGHT_SCRIPT =
 
 type HiddenWindow = InstanceType<typeof BrowserWindow>;
 
+/** Keeps a 2× PNG window from zooming a 1× window that shows the same address (zoom-gate.ts). */
+const zoomGate = createDesignZoomGate();
+
 /** A fresh hidden, sandboxed window, in the offline session, that may load one page and go nowhere else. */
 async function openHiddenWindow(width: number, zoom: number): Promise<{ window: HiddenWindow; markLoaded(): void }> {
   const offline = designOfflineSession();
@@ -75,6 +79,11 @@ async function openHiddenWindow(width: number, zoom: number): Promise<{ window: 
   // WebRTC may use only TCP through the session's proxy, which goes nowhere.
   contents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
   contents.setWindowOpenHandler(() => ({ action: "deny" }));
+  // Chromium keeps the last zoom used on a host and starts the next window
+  // there at that zoom, whatever its own zoomFactor says, so a frame inspected
+  // after its PNG export would lay out at half its width. Each window sets
+  // its own zoom as its page commits.
+  contents.on("did-navigate", () => contents.setZoomFactor(zoom));
   // Only the page itself loads; it may not navigate away or frame anything else in.
   let loaded = false;
   contents.on("will-navigate", (event) => event.preventDefault());
@@ -107,8 +116,13 @@ async function withHiddenWindow<T>(window: HiddenWindow, work: () => Promise<T>,
 
 export async function renderDesignFrame(request: DesignFrameRenderRequest): Promise<Uint8Array> {
   const zoom = request.format === "png" ? DESIGN_EXPORT_PNG_SCALE : 1;
-  const { window, markLoaded } = await openHiddenWindow(request.width, zoom);
-  return withHiddenWindow(window, () => draw(window, request, markLoaded));
+  const leave = await zoomGate.enter(zoom);
+  try {
+    const { window, markLoaded } = await openHiddenWindow(request.width, zoom);
+    return await withHiddenWindow(window, () => draw(window, request, markLoaded));
+  } finally {
+    leave();
+  }
 }
 
 const measureHeight = async (window: HiddenWindow): Promise<number> => {
@@ -122,6 +136,15 @@ const measureHeight = async (window: HiddenWindow): Promise<number> => {
  * `picture`, a JPEG of part of it sized for a model to read.
  */
 export async function inspectDesignFrame(request: DesignInspectRequest): Promise<DesignInspectProbe> {
+  const leave = await zoomGate.enter(1, request.signal);
+  try {
+    return await inspectInWindow(request);
+  } finally {
+    leave();
+  }
+}
+
+async function inspectInWindow(request: DesignInspectRequest): Promise<DesignInspectProbe> {
   const { window, markLoaded } = await openHiddenWindow(request.width, 1);
   const messages: DesignConsoleEntry[] = [];
   window.webContents.on("console-message", (details) => {
