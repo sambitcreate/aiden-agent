@@ -1977,11 +1977,13 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               const words = look.words?.trim();
               boxes.push({ ref, kind, title: title ?? (words ? words.split("\n")[0]!.slice(0, DESIGN_CANVAS_LIMITS.titleChars) : kind), look, x: at.x, y: at.y, w, h });
             });
-            // A connector's ends that name a ref must name a box of this call.
+            // A connector's ends that name a ref must name a box of this call,
+            // spelled the way the box's own ref is once its spaces are trimmed.
+            const endRef = (end: Record<string, unknown>) => (end.ref === undefined ? undefined : String(end.ref).trim());
             const boxRefs = new Set(boxes.flatMap((box) => (box.ref ? [box.ref] : [])));
             for (const line of lines) {
               for (const end of [line.from, line.to]) {
-                if (end.ref !== undefined && !boxRefs.has(String(end.ref))) {
+                if (end.ref !== undefined && !boxRefs.has(endRef(end)!)) {
                   throw new CanvasToolError(`items[${line.index}] names ref ${JSON.stringify(end.ref)}, which is no box of this call.`);
                 }
               }
@@ -2066,7 +2068,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               }
               const endIn = (end: Record<string, unknown>, field: string): DesignConnectorEnd => {
                 if (end.ref !== undefined) {
-                  return endOf(next, { frameId: ids.get(String(end.ref)), ...(end.side !== undefined ? { side: end.side } : {}) }, field, pageId);
+                  return endOf(next, { frameId: ids.get(endRef(end)!), ...(end.side !== undefined ? { side: end.side } : {}) }, field, pageId);
                 }
                 if (end.frameId !== undefined && end.frameId !== null && end.frameId !== "") return endOf(next, end, field, pageId);
                 const ex = optionalNumber(end.x, `${field}.x`);

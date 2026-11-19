@@ -1177,7 +1177,7 @@ test("canvas_build draws boxes and the arrows between them in one call, and refs
       { ref: "form", kind: "shape", text: "Fill in the form", fill: "yellow" },
       { ref: "done", kind: "shape", text: "Done", fill: "green" },
       { kind: "connector", from: { ref: "start" }, to: { ref: "form" } },
-      { ref: "last", kind: "connector", from: { ref: "form" }, to: { ref: "done" }, arrow: "both" },
+      { ref: "last", kind: "connector", from: { ref: "form " }, to: { ref: " done" }, arrow: "both" },
       { kind: "connector", from: { ref: "done" }, to: { frameId: "design/home.html" }, color: "red" },
     ],
   });
@@ -1197,7 +1197,7 @@ test("canvas_build draws boxes and the arrows between them in one call, and refs
   assert.ok(start!.y === form!.y && form!.y === done!.y);
   assert.ok(start!.y >= page.frame.box.y + page.frame.box.h + 64);
   const last = byId.get(built.ids.last)!;
-  assert.deepEqual(last.ends!.map((end) => end.frameId), [form!.id, done!.id]);
+  assert.deepEqual(last.ends!.map((end) => end.frameId), [form!.id, done!.id], "an end's ref is read without the spaces around it, as a box's is");
   assert.equal(last.arrow, "both");
   const toPage = built.unnamed.map((id: string) => byId.get(id)!).find((frame: { color?: string }) => frame.color === "red")!;
   assert.deepEqual(toPage.ends!.map((end: { frameId?: string }) => end.frameId), [done!.id, page.frame.id], "an arrow can join a frame already on the canvas");
