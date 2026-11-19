@@ -56,6 +56,7 @@ import {
 } from "../shared/design-canvas/tweaks";
 import { postToDesignPage } from "../shared/design-canvas/bridge-messages";
 import { useDesignDrawing, type DesignDrawTool } from "./design-drawing";
+import { DesignExpandButton } from "./design-expand";
 import { DesignPresentBar, DesignPresentButton, presentationKey, type DesignPresentation } from "./design-present";
 import {
   DESIGN_PANEL_TABS,
@@ -1201,13 +1202,19 @@ function LoadedDesignCanvas({
             resolveKey={resolveKey}
             presenting={presentation !== null}
             actions={
-              <>
+              <div
+                role="toolbar"
+                aria-label="Canvas view"
+                className="glass-surface flex items-center gap-0.5 rounded-button p-1 shadow-control"
+              >
                 <DesignPresentButton onPresent={() => present(null)} />
+                <div aria-hidden className="mx-1 h-4 w-px shrink-0 bg-separator" />
+                <DesignExpandButton />
                 <DesignPanelButton
                   open={panel.open}
                   onToggle={() => setPanel((current) => ({ ...current, open: !current.open }))}
                 />
-              </>
+              </div>
             }
             overlay={
               presentation ? (

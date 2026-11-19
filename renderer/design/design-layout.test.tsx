@@ -605,3 +605,114 @@ test("⌘⇧L is left alone while the flag is off or the chat is a Bot's", async
   }
   assert.deepEqual(savedDesignModes, []);
 });
+
+/** ⌘⇧\ as a US keyboard reports it (Shift turns the key into "|"); true when Aiden took it. */
+function pressExpandShortcut(): boolean {
+  const event = new KeyboardEvent("keydown", {
+    key: "|",
+    code: "Backslash",
+    metaKey: true,
+    shiftKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  document.body.dispatchEvent(event);
+  return event.defaultPrevented;
+}
+
+test("Expand collapses the sidebar so the chat and canvas fill the window, and Minimize brings it back", async () => {
+  await act(async () => {
+    render(<Shell chatId="design-chat" />);
+  });
+  const expand = await screen.findByRole("button", { name: "Expand canvas" });
+  assert.equal(expand.getAttribute("aria-pressed"), null, "the label says what a press does, so no pressed state");
+  await act(async () => {
+    fireEvent.click(expand);
+  });
+  await waitFor(() => assert.equal(localStorage.getItem(SIDEBAR_COLLAPSED_KEY), "1"));
+  assert.equal(layoutState(), "split", "the chat stays on the left of the canvas");
+  assert.equal(widenCalls, 0, "a window wide enough to split is left alone");
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Minimize canvas" }));
+  });
+  await waitFor(() => assert.equal(localStorage.getItem(SIDEBAR_COLLAPSED_KEY), "0"));
+  assert.ok(screen.getByRole("button", { name: "Expand canvas" }));
+});
+
+test("design mode left expanded starts expanded on the person's next entry and gives the sidebar back on exit", async () => {
+  await act(async () => {
+    render(<Shell chatId="design-chat" />);
+  });
+  await act(async () => {
+    fireEvent.click(await screen.findByRole("button", { name: "Expand canvas" }));
+  });
+  await waitFor(() => assert.equal(localStorage.getItem(SIDEBAR_COLLAPSED_KEY), "1"));
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Design mode" }));
+  });
+  await waitFor(() => assert.equal(layoutState(), "off"));
+  assert.equal(localStorage.getItem(SIDEBAR_COLLAPSED_KEY), "0", "leaving design mode reopens the sidebar");
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Design mode" }));
+  });
+  await waitFor(() => assert.equal(localStorage.getItem(SIDEBAR_COLLAPSED_KEY), "1"));
+  assert.ok(await screen.findByRole("button", { name: "Minimize canvas" }));
+
+  // Minimize is remembered too: the next entry on this wide window keeps the sidebar.
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Minimize canvas" }));
+  });
+  await waitFor(() => assert.equal(localStorage.getItem(SIDEBAR_COLLAPSED_KEY), "0"));
+  for (let press = 0; press < 2; press += 1) {
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Design mode" }));
+    });
+    await waitFor(() => assert.equal(layoutState() === "off", press === 0));
+  }
+  await act(async () => undefined);
+  assert.equal(localStorage.getItem(SIDEBAR_COLLAPSED_KEY), "0");
+});
+
+test("a narrow window, where the sidebar slides over the canvas, offers no Expand", async () => {
+  containerWidth = 600;
+  setWindowWidth(600);
+  await act(async () => {
+    render(<Shell chatId="design-chat" />);
+  });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("radio", { name: "Canvas" }));
+  });
+  await waitFor(() => screen.getByRole("region", { name: "Design canvas" }));
+  assert.ok(screen.getByRole("button", { name: /side panel/ }), "the canvas's other actions show");
+  assert.equal(screen.queryByRole("button", { name: /^(Expand|Minimize) canvas$/ }), null);
+  assert.equal(pressExpandShortcut(), false, "and the shortcut passes through");
+});
+
+test("⌘⇧\\ expands and minimizes in design mode and is left alone outside it", async () => {
+  const view = render(<Shell chatId="plain-chat" />);
+  await act(async () => undefined);
+  let taken = true;
+  await act(async () => {
+    taken = pressExpandShortcut();
+  });
+  assert.equal(taken, false, "outside design mode the key passes through");
+  assert.equal(localStorage.getItem(SIDEBAR_COLLAPSED_KEY), null);
+  view.unmount();
+
+  await act(async () => {
+    render(<Shell chatId="design-chat" />);
+  });
+  await screen.findByRole("button", { name: "Expand canvas" });
+  await act(async () => {
+    taken = pressExpandShortcut();
+  });
+  assert.equal(taken, true);
+  await waitFor(() => assert.equal(localStorage.getItem(SIDEBAR_COLLAPSED_KEY), "1"));
+  await act(async () => {
+    pressExpandShortcut();
+  });
+  await waitFor(() => assert.equal(localStorage.getItem(SIDEBAR_COLLAPSED_KEY), "0"));
+});

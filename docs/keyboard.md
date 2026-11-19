@@ -75,6 +75,7 @@ work while Aiden is in the background.
 | `⌘⌫` | Deny, under the same conditions |
 | `/` | Slash commands in the message box |
 | `⇧⌘L` | Design mode on / off for this chat (`/design` and `/design off` do the same; gone while `AIDEN_DESIGN_MODE=0` turns design mode off). `Esc` never leaves design mode |
+| `⇧⌘\` | In design mode, expand the canvas (the sidebar folds away and the chat stays on the left) or minimize it again; the same as the **Expand canvas** / **Minimize canvas** button beside Present. Not offered in a window too narrow to keep the sidebar beside the chat |
 
 On the design canvas (with the canvas focused, not a note or an entered
 page): `⌘Z` / `⇧⌘Z` undo and redo, `⌘D` duplicates the selection, `⌫` or

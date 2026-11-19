@@ -164,7 +164,7 @@ function StudioCanvasInner<N extends Node, E extends Edge>({
         </div>
       ) : (
         <div
-          className="@container pointer-events-none absolute inset-x-3 top-3 flex items-start gap-2"
+          className="@container pointer-events-none absolute inset-x-3 top-2 flex items-start gap-2"
           style={trailingClearance ? { right: trailingClearance } : undefined}
         >
           <div className="pointer-events-auto min-w-0">{toolbar}</div>

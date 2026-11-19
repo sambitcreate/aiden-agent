@@ -20,6 +20,7 @@ import {
 
 const PRIMARY_MODIFIER = process.platform === "darwin" ? "Meta" : "Control";
 const DESIGN_SHORTCUT = `${PRIMARY_MODIFIER}+Shift+L`;
+const EXPAND_SHORTCUT = `${PRIMARY_MODIFIER}+Shift+Backslash`;
 const DESIGN_CHAT = "Design chat for the landing page";
 const NOTES_CHAT = "Notes chat about something else";
 
@@ -264,6 +265,15 @@ async function expectCanvasChrome(page: Page): Promise<void> {
   expect(apart((await tools.boundingBox())!, (await zoom.boundingBox())!)).toBe(
     true,
   );
+  // The canvas's buttons are the chat top bar's size, not a larger set of their own.
+  const barButton = (await designToggle(page).boundingBox())!;
+  for (const button of [
+    tools.getByRole("button").first(),
+    zoom.getByRole("button", { name: "Zoom in" }),
+  ]) {
+    const box = (await button.boundingBox())!;
+    expect(Math.abs(box.height - barButton.height)).toBeLessThanOrEqual(0.5);
+  }
 }
 
 const composerFooter = (page: Page) =>
@@ -344,6 +354,45 @@ test("design mode puts the chat beside a canvas, stays with its chat and gives t
   await expectCanvasChrome(page);
   await expectComposerFooterClear(composerFooter(page));
   await capture(page, "1440-design-on");
+
+  // Expand hides the sidebar so the chat (on the left) and the canvas fill the window,
+  // and Minimize brings it back. Focus stays on the button as its label swaps.
+  await designCanvas(page)
+    .getByRole("button", { name: "Expand canvas" })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Show sidebar" }),
+  ).toBeVisible();
+  const expandedColumn = await settledBox(
+    page.locator('[data-design-mode="true"]'),
+  );
+  expect(expandedColumn.x).toBeLessThanOrEqual(1);
+  await expect(designLayout(page)).toHaveAttribute(
+    "data-design-layout",
+    "split",
+  );
+  const minimize = designCanvas(page).getByRole("button", {
+    name: "Minimize canvas",
+  });
+  await expect(minimize).toBeFocused();
+  await expectCanvasChrome(page);
+  await capture(page, "1440-design-expanded");
+  await minimize.click();
+  await expect(
+    page.getByRole("button", { name: "Hide sidebar" }),
+  ).toBeVisible();
+  await expect(
+    designCanvas(page).getByRole("button", { name: "Expand canvas" }),
+  ).toBeFocused();
+
+  // ⇧⌘\ does the same from the message box.
+  await page.locator("textarea").first().focus();
+  await page.keyboard.press(EXPAND_SHORTCUT);
+  await expect(minimize).toBeVisible();
+  await page.keyboard.press(EXPAND_SHORTCUT);
+  await expect(
+    page.getByRole("button", { name: "Hide sidebar" }),
+  ).toBeVisible();
 
   // Escape belongs to whatever has focus; it never leaves design mode.
   await page.locator("textarea").first().focus();
@@ -510,6 +559,10 @@ test("design mode fits narrow windows: split beside the sidebar, stacked below 6
     "data-design-layout",
     "split",
   );
+  // Hiding the sidebar by hand is the expanded layout, so the canvas offers Minimize.
+  await expect(
+    designCanvas(page).getByRole("button", { name: "Minimize canvas" }),
+  ).toBeVisible();
   await expectCanvasChrome(page);
   await capture(page, "1000-split-sidebar-collapsed");
 

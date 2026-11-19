@@ -38,6 +38,7 @@ export const COMMAND_IDS = [
   "environment.toggle",
   "quick-view.toggle",
   "design.toggle",
+  "design.expand",
   "subagents.toggleTray",
   "file.save",
   "navigate.back",
@@ -382,6 +383,22 @@ export const COMMANDS = [
     category: "Tools",
     keywords: ["design", "canvas", "layout", "mockup"],
     defaultBinding: "Command+Shift+L",
+    scope: "app",
+    global: false,
+    allowInEditable: true,
+    requiresCapability: "designMode",
+    paletteWhenAvailable: true,
+    showInPalette: true,
+    showInSettings: true,
+  }),
+  command({
+    id: "design.expand",
+    title: "Expand design canvas",
+    description: "Collapse the sidebar so the chat and canvas fill the window, or bring the sidebar back.",
+    category: "Tools",
+    keywords: ["design", "canvas", "expand", "minimize", "maximize", "full", "sidebar"],
+    // Figma's "minimize UI" chord. Claimed only while design mode is on.
+    defaultBinding: "Command+Shift+\\",
     scope: "app",
     global: false,
     allowInEditable: true,
@@ -1230,6 +1247,7 @@ const INTRODUCED_DEFAULT_COMMANDS: readonly CommandId[] = [
   "shortcuts.show",
   "workspace.settings",
   "design.toggle",
+  "design.expand",
 ];
 
 function yieldIntroducedDefaults(next: KeybindingOverridesV1): void {
