@@ -63,6 +63,8 @@ export interface WorkspaceArtifactRevisionV1 {
   visual: ChatUiVisualV1;
   /** The markup this version was compiled from; absent for versions saved before it was kept. */
   markup?: string;
+  /** Set when the markup was dropped to keep a file within its size; see `WorkspaceArtifactV1`. */
+  markupDropped?: true;
   initialState?: Record<string, unknown>;
   sources: WorkspaceArtifactSourceV1[];
   actions: WorkspaceArtifactActionV1[];
@@ -106,6 +108,7 @@ function parseRevision(workspaceId: string, artifactId: string, value: unknown):
     ...(value.description !== undefined ? { description: value.description } : {}),
     visual: value.visual,
     ...(value.markup !== undefined ? { markup: value.markup } : {}),
+    ...(value.markupDropped !== undefined ? { markupDropped: value.markupDropped } : {}),
     ...(value.initialState !== undefined ? { initialState: value.initialState } : {}),
     sources: value.sources,
     actions: value.actions,
@@ -125,11 +128,51 @@ function historyEntryOf(artifact: WorkspaceArtifactV1, savedAt: number): Workspa
     ...(artifact.description ? { description: artifact.description } : {}),
     visual: artifact.visual,
     ...(artifact.markup !== undefined ? { markup: artifact.markup } : {}),
+    ...(artifact.markupDropped ? { markupDropped: true as const } : {}),
     ...(artifact.initialState ? { initialState: artifact.initialState } : {}),
     sources: artifact.sources,
     actions: artifact.actions,
     refresh: artifact.refresh,
   };
+}
+
+const jsonBytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value), "utf8");
+
+/**
+ * Drops the markup of `entries`, in the order given, until `size` (the
+ * file's compact JSON plus its trailing newline) fits `maxBytes`. Each one
+ * keeps its page and is marked `markupDropped`. Returns the size left.
+ */
+function dropMarkupToFit(entries: Iterable<{ markup?: string; markupDropped?: true }>, size: number, maxBytes: number): number {
+  for (const entry of entries) {
+    if (size <= maxBytes) break;
+    if (entry.markup === undefined) continue;
+    const before = jsonBytes(entry);
+    delete entry.markup;
+    entry.markupDropped = true;
+    size -= before - jsonBytes(entry);
+  }
+  return size;
+}
+
+/**
+ * Keeps a workspace's pages within `maxBytes` by dropping markup, never a
+ * page: other pages' first, least recently changed first, and `keepId`'s
+ * (the page being saved) only when nothing else is left. Markup too large to
+ * fit even then goes first, so other pages keep theirs. A file that is still
+ * too large fails its write, as before.
+ */
+function fitPagesToBudget(draft: WorkspaceArtifactsDocument, keepId: string, maxBytes: number): void {
+  const size = jsonBytes(draft) + 1;
+  if (size <= maxBytes) return;
+  const others = draft.artifacts
+    .filter((artifact) => artifact.markup !== undefined && artifact.id !== keepId)
+    .sort((a, b) => a.updatedAt - b.updatedAt);
+  const saved = draft.artifacts.find((artifact) => artifact.id === keepId && artifact.markup !== undefined);
+  // What dropping every other page's markup would save, near enough to decide the order.
+  const othersMarkup = others.reduce((total, artifact) => total + jsonBytes(artifact.markup), 0);
+  const order = saved ? (size - othersMarkup > maxBytes ? [saved, ...others] : [...others, saved]) : others;
+  dropMarkupToFit(order, size, maxBytes);
 }
 
 export function normalizeWorkspaceArtifactHistoryDocument(workspaceId: string) {
@@ -150,14 +193,22 @@ export function normalizeWorkspaceArtifactHistoryDocument(workspaceId: string) {
 }
 
 /**
- * Drops the oldest earlier versions, across pages, until the document fits
- * `maxBytes`, so recording history never fails a write for its size.
+ * Fits the history document to `maxBytes`, so recording history never fails
+ * a write for its size: first by dropping earlier versions' markup, oldest
+ * first, then by dropping the oldest versions, across pages.
  */
 function trimHistoryToFit(draft: WorkspaceArtifactHistoryDocument, maxBytes: number): void {
-  const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value), "utf8");
+  const bytes = jsonBytes;
   // Measured once; each removal subtracts exactly what it takes out of the
   // compact JSON. The +1 is the trailing newline the store writes.
   let size = bytes(draft) + 1;
+  if (size <= maxBytes) return;
+  // Markup goes before any version does, oldest first: an earlier version
+  // without its markup can still be restored, and then sent whole to change.
+  const byAge = Object.values(draft.revisions)
+    .flat()
+    .sort((a, b) => a.savedAt - b.savedAt);
+  size = dropMarkupToFit(byAge, size, maxBytes);
   while (size > maxBytes) {
     let oldest: { id: string; savedAt: number } | undefined;
     for (const [id, entries] of Object.entries(draft.revisions)) {
@@ -243,6 +294,8 @@ export interface WorkspaceArtifactContent {
    * and edited. Left out, the page keeps none.
    */
   markup?: string;
+  /** Without `markup`: the version this content comes from had its markup dropped for size. */
+  markupDropped?: true;
   /** The state the markup declared; `saveState` never changes it. */
   initialState?: Record<string, unknown>;
   sources: WorkspaceArtifactSourceV1[];
@@ -341,8 +394,10 @@ export interface WorkspaceArtifactStoreOptions {
   root?: () => string;
   now?: () => number;
   newId?: () => string;
-  /** Size cap of one workspace's history file; the oldest versions go first. */
+  /** Size cap of one workspace's history file; the oldest versions' markup goes first, then the versions. */
   historyMaxBytes?: number;
+  /** Size cap of one workspace's pages file; the least recently changed pages' markup goes first. */
+  artifactsMaxBytes?: number;
   /**
    * Reports a failure to record an earlier version. The page itself is saved
    * by then, so the update still succeeds.
@@ -382,6 +437,7 @@ export class WorkspaceArtifactStore {
   private readonly now: () => number;
   private readonly newId: () => string;
   private readonly historyMaxBytes: number;
+  private readonly artifactsMaxBytes: number;
   private readonly onHistoryError: (error: unknown) => void;
 
   constructor(private readonly options: WorkspaceArtifactStoreOptions = {}) {
@@ -393,6 +449,7 @@ export class WorkspaceArtifactStore {
     this.now = options.now ?? Date.now;
     this.newId = options.newId ?? randomUUID;
     this.historyMaxBytes = options.historyMaxBytes ?? HISTORY_MAX_BYTES;
+    this.artifactsMaxBytes = options.artifactsMaxBytes ?? ARTIFACTS_MAX_BYTES;
     // The Electron binding (main.ts) logs it; stores built without one (tests) ignore it.
     this.onHistoryError = options.onHistoryError ?? (() => undefined);
   }
@@ -402,7 +459,7 @@ export class WorkspaceArtifactStore {
     let store = this.artifactStores.get(id);
     if (!store) {
       store = new DataStore<WorkspaceArtifactsDocument>(`${id}.json`, emptyArtifacts(), this.root, {
-        maxBytes: ARTIFACTS_MAX_BYTES,
+        maxBytes: this.artifactsMaxBytes,
         fileMode: 0o600,
         compact: true,
         normalize: normalizeWorkspaceArtifactsDocument(id),
@@ -558,6 +615,7 @@ export class WorkspaceArtifactStore {
         ...(entry.description ? { description: entry.description } : {}),
         visual: entry.visual,
         ...(entry.markup !== undefined ? { markup: entry.markup } : {}),
+        ...(entry.markupDropped ? { markupDropped: true as const } : {}),
         ...(entry.initialState ? { initialState: entry.initialState } : {}),
         sources: entry.sources,
         actions: entry.actions,
@@ -655,6 +713,7 @@ export class WorkspaceArtifactStore {
         ...(content.description ? { description: content.description } : {}),
         visual: { ...content.visual, id, title },
         ...(content.markup !== undefined ? { markup: content.markup } : {}),
+        ...(content.markup === undefined && content.markupDropped ? { markupDropped: true as const } : {}),
         ...(content.initialState ? { initialState: content.initialState } : {}),
         sources: content.sources,
         actions: content.actions,
@@ -671,7 +730,8 @@ export class WorkspaceArtifactStore {
       const checked = parseWorkspaceArtifactV1(artifact);
       if (!checked) throw new Error("The artifact could not be saved because its page is too large or invalid.");
       draft.artifacts.push(checked);
-      return checked;
+      fitPagesToBudget(draft, id, this.artifactsMaxBytes);
+      return structuredClone(checked);
     });
   }
 
@@ -738,7 +798,9 @@ export class WorkspaceArtifactStore {
         // source to edit, without a version of its own.
         if (content.markup !== undefined && content.markup.length <= WORKSPACE_ARTIFACT_LIMITS.markupChars) {
           previous.markup = content.markup;
+          delete previous.markupDropped;
         }
+        fitPagesToBudget(draft, id, this.artifactsMaxBytes);
         return { saved: structuredClone(previous), replaced: undefined };
       }
       const next: WorkspaceArtifactV1 = {
@@ -748,6 +810,7 @@ export class WorkspaceArtifactStore {
         ...(content.description ? { description: content.description } : {}),
         visual: { ...content.visual, id, title: content.title },
         ...(content.markup !== undefined ? { markup: content.markup } : {}),
+        ...(content.markup === undefined && content.markupDropped ? { markupDropped: true as const } : {}),
         ...(content.initialState ? { initialState: content.initialState } : {}),
         sources: content.sources,
         actions: content.actions,
@@ -761,12 +824,13 @@ export class WorkspaceArtifactStore {
       const checked = parseWorkspaceArtifactV1(next);
       if (!checked) throw new Error("The artifact could not be saved because its page is too large or invalid.");
       draft.artifacts[index] = checked;
+      fitPagesToBudget(draft, id, this.artifactsMaxBytes);
       // A version this turn already saved is not an undo step of its own.
       const folded =
         options.fold !== undefined &&
         options.fold.revision === previous.revision &&
         options.fold.title === previous.visual.title;
-      return { saved: checked, replaced: folded ? undefined : structuredClone(previous) };
+      return { saved: structuredClone(checked), replaced: folded ? undefined : structuredClone(previous) };
     });
     if (replaced) await this.recordRevision(workspaceId, pages, replaced);
     return saved;
@@ -784,6 +848,7 @@ export class WorkspaceArtifactStore {
       }
       artifact.visual = { ...artifact.visual, title: trimmed };
       artifact.updatedAt = this.now();
+      fitPagesToBudget(draft, id, this.artifactsMaxBytes);
       return artifact;
     });
   }
@@ -814,6 +879,7 @@ export class WorkspaceArtifactStore {
       const next = parseWorkspaceArtifactV1({ ...artifact, visual: { ...artifact.visual, state } });
       if (!next) throw new Error("The artifact's state is too large or uses a reserved key name.");
       artifact.visual = next.visual;
+      fitPagesToBudget(draft, id, this.artifactsMaxBytes);
     });
   }
 

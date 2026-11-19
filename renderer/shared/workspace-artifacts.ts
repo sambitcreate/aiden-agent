@@ -52,10 +52,11 @@ export const WORKSPACE_ARTIFACT_LIMITS = {
   /** Earlier versions kept per page; the oldest is dropped first. */
   history: 5,
   /**
-   * Page markup kept with a version so the model can read and edit it; a
-   * longer page saves without it and is sent whole to change.
+   * Page markup a save takes, and keeps with the version so the model can read
+   * and edit it. The two are one limit, so every page saved whole keeps its
+   * markup unless the workspace's files run out of room for it.
    */
-  markupChars: 128_000,
+  markupChars: 400_000,
 } as const;
 
 export type WorkspaceArtifactParse = "json" | "lines" | "text";
@@ -99,10 +100,17 @@ export interface WorkspaceArtifactV1 {
   /**
    * The Aiden UI Markup `visual` was compiled from, kept in main only so the
    * model can read the page and edit it (`get`, `edits`). Absent for pages
-   * saved before it was kept, imported pages and markup longer than
-   * `markupChars`. Never sent to the renderer, and never exported.
+   * saved before it was kept, imported pages, and pages whose markup was
+   * dropped to keep the workspace's files within their size (`markupDropped`).
+   * Never sent to the renderer, and never exported.
    */
   markup?: string;
+  /**
+   * Set when this version's markup was dropped, oldest first, so the
+   * workspace's saved pages or their history stay within their file's size.
+   * Only ever set without `markup`.
+   */
+  markupDropped?: true;
   /**
    * The state the markup declared (`<Visual state={{…}}>`), kept apart from
    * `visual.state`, which the person's own choices overwrite. Export writes
@@ -474,6 +482,7 @@ export function parseWorkspaceArtifactV1(value: unknown): WorkspaceArtifactV1 | 
     typeof value.markup === "string" && value.markup.length > 0 && value.markup.length <= WORKSPACE_ARTIFACT_LIMITS.markupChars
       ? value.markup
       : undefined;
+  const markupDropped = markup === undefined && value.markupDropped === true;
   const revision = value.revision;
   const createdAt = finiteTime(value.createdAt);
   const updatedAt = finiteTime(value.updatedAt);
@@ -490,6 +499,7 @@ export function parseWorkspaceArtifactV1(value: unknown): WorkspaceArtifactV1 | 
     ...(description ? { description } : {}),
     visual,
     ...(markup !== undefined ? { markup } : {}),
+    ...(markupDropped ? { markupDropped: true as const } : {}),
     ...(initialState ? { initialState } : {}),
     sources,
     actions,

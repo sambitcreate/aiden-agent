@@ -43,13 +43,20 @@ import {
 
 export { WORKSPACE_ARTIFACT_TOOL_NAME };
 
-const MAX_MARKUP_CHARS = 400_000;
+const MAX_MARKUP_CHARS = WORKSPACE_ARTIFACT_LIMITS.markupChars;
+const MARKUP_LIMIT = `${MAX_MARKUP_CHARS.toLocaleString("en-US")}-character limit`;
 const MAX_REPORTED_DIAGNOSTICS = 12;
 
 type Operation = "create" | "update" | "list" | "get" | "check" | "delete" | "run" | "restore";
 
 /** Why `get` has no markup to show, and what to do instead. */
-const MARKUP_NOT_KEPT = `Aiden did not keep this version's markup: it was saved before Aiden kept page markup, imported from a file, or longer than ${WORKSPACE_ARTIFACT_LIMITS.markupChars.toLocaleString("en-US")} characters. To change the page, send the whole markup in an update.`;
+const MARKUP_NOT_KEPT = "Aiden did not keep this version's markup: it was saved before Aiden kept page markup, or imported from a file. To change the page, send the whole markup in an update.";
+/** The same, for a version whose markup was dropped to keep the workspace's files within their size. */
+const MARKUP_DROPPED = "Aiden dropped this version's markup to keep this workspace's saved pages within their storage limit (the least recently changed pages' markup goes first); the page itself is unchanged. To change the page, send the whole markup in an update.";
+
+function noMarkupReason(page: Pick<WorkspaceArtifactV1, "markupDropped">): string {
+  return page.markupDropped ? MARKUP_DROPPED : MARKUP_NOT_KEPT;
+}
 
 interface ArtifactToolInput {
   operation?: unknown;
@@ -181,7 +188,7 @@ function describeDiagnostics(diagnostics: readonly AidenUiDiagnostic[]): string 
 
 function compilePage(markup: unknown, layout: unknown, title: string): { visual: ChatUiVisualV1; diagnostics: AidenUiDiagnostic[] } {
   if (typeof markup !== "string" || !markup.trim()) throw new Error("markup is required: Aiden UI Markup starting with <Visual title=\"…\">.");
-  if (markup.length > MAX_MARKUP_CHARS) throw new Error(`markup is ${markup.length.toLocaleString("en-US")} characters, over the ${MAX_MARKUP_CHARS.toLocaleString("en-US")}-character limit: split the page or drop repeated content, and send edits rather than the whole page when changing it.`);
+  if (markup.length > MAX_MARKUP_CHARS) throw new Error(`markup is ${markup.length.toLocaleString("en-US")} characters, over the ${MARKUP_LIMIT}: split the page or drop repeated content. To change a saved page, send edits rather than the whole markup.`);
   if (layout !== undefined && layout !== "column" && layout !== "wide") throw new Error('layout must be "column" or "wide".');
   const compiled = compileAum(markup, { artifactActions: true });
   if (!compiled.tree) throw new Error(`The markup produced no page.${describeDiagnostics(compiled.diagnostics)}`);
@@ -257,6 +264,8 @@ function rebasedContent(
     else delete next.initialState;
     if (current.markup !== undefined) next.markup = current.markup;
     else delete next.markup;
+    if (current.markupDropped && current.markup === undefined) next.markupDropped = true;
+    else delete next.markupDropped;
   } else if (input.layout === undefined) {
     // New markup keeps the layout the page has now.
     const { layout: _compiledLayout, ...rest } = content.visual;
@@ -270,14 +279,18 @@ function rebasedContent(
  * the rest of a save reads it as a call that sent the whole edited markup.
  * Any edit that misses throws, and nothing is saved.
  */
-function withEdits(input: ArtifactToolInput, markup: string | undefined, hasPage: boolean): ArtifactToolInput {
+function withEdits(input: ArtifactToolInput, page: Pick<WorkspaceArtifactV1, "markup" | "markupDropped"> | undefined): ArtifactToolInput {
   if (input.edits === undefined) return input;
   if (input.markup !== undefined) throw new Error("Send either markup or edits, not both.");
-  if (!hasPage) throw new Error("edits change a saved page: give its id, or send the whole markup to create one.");
+  if (!page) throw new Error("edits change a saved page: give its id, or send the whole markup to create one.");
   const edits = parseMarkupEdits(input.edits);
-  if (markup === undefined) throw new Error(MARKUP_NOT_KEPT);
+  if (page.markup === undefined) throw new Error(noMarkupReason(page));
   const { edits: _edits, ...rest } = input;
-  return { ...rest, markup: applyMarkupEdits(markup, edits, "Read the page's markup again with get, then retry.") };
+  const markup = applyMarkupEdits(page.markup, edits, "Read the page's markup again with get, then retry.");
+  if (markup.length > MAX_MARKUP_CHARS) {
+    throw new Error(`The edits make the markup ${markup.length.toLocaleString("en-US")} characters, over the ${MARKUP_LIMIT}: make them remove more than they add, or split the page or drop repeated content. Nothing was saved.`);
+  }
+  return { ...rest, markup };
 }
 
 /** Reads `baseVersion`: the revision the call's change was prepared from, if it names one. */
@@ -364,11 +377,6 @@ async function baseVersionRefusal(
   return `The artifact ${name} changed since revision ${baseVersion}, in another chat or by the person: it is now revision ${current.revision}.${what} ${again}`;
 }
 
-/** The markup to keep with a version: none when it is longer than a version keeps. */
-function keptMarkup(markup: unknown): string | undefined {
-  return typeof markup === "string" && markup.length <= WORKSPACE_ARTIFACT_LIMITS.markupChars ? markup : undefined;
-}
-
 /** Every value the model may have changed, or the stored one where it said nothing. */
 function contentFor(input: ArtifactToolInput, previous: WorkspaceArtifactV1 | undefined): {
   content: WorkspaceArtifactContent;
@@ -383,15 +391,18 @@ function contentFor(input: ArtifactToolInput, previous: WorkspaceArtifactV1 | un
   let initialState: Record<string, unknown> | undefined;
   let diagnostics: AidenUiDiagnostic[] = [];
   let markup: string | undefined;
+  let markupDropped = false;
   if (input.markup === undefined && previous) {
     initialState = previous.initialState;
     visual = keptPage(input, previous);
     markup = previous.markup;
+    markupDropped = previous.markupDropped === true;
   } else {
     ({ visual, diagnostics } = compilePage(input.markup, input.layout ?? previous?.visual.layout, title));
-    // A fresh compile's state is what the markup declared.
+    // A fresh compile's state is what the markup declared; compilePage
+    // refused markup longer than a version keeps.
     initialState = visual.state;
-    markup = keptMarkup(input.markup);
+    markup = input.markup as string;
   }
   return {
     content: {
@@ -399,6 +410,7 @@ function contentFor(input: ArtifactToolInput, previous: WorkspaceArtifactV1 | un
       ...(description ? { description } : {}),
       visual,
       ...(markup !== undefined ? { markup } : {}),
+      ...(markup === undefined && markupDropped ? { markupDropped: true as const } : {}),
       ...(initialState ? { initialState } : {}),
       sources,
       actions,
@@ -426,7 +438,7 @@ function checkTarget(
   options: Pick<WorkspaceArtifactToolOptions, "permission" | "hasFolder">,
 ): CheckTarget {
   let target: CheckTarget;
-  input = withEdits(input, previous?.markup, previous !== undefined);
+  input = withEdits(input, previous);
   if (previous || input.markup !== undefined) {
     const { content, diagnostics } = contentFor(previous ? input : { ...input, title: input.title ?? "Check" }, previous);
     target = { sources: content.sources, page: content, diagnostics };
@@ -625,7 +637,7 @@ function assertSaveValid(
   if (previous && baseVersion !== undefined && baseVersion > previous.revision) {
     throw new Error("baseVersion is ahead of the page.");
   }
-  const { content } = contentFor(withEdits(input, previous?.markup, previous !== undefined), previous);
+  const { content } = contentFor(withEdits(input, previous), previous);
   assertSourcesRunnable(content, options);
 }
 
@@ -713,7 +725,7 @@ function describePage(view: WorkspaceArtifactView, input: ArtifactToolInput): st
     }
   }
   if (artifact.markup === undefined) {
-    lines.push(MARKUP_NOT_KEPT);
+    lines.push(noMarkupReason(artifact));
   } else {
     const { start, end } = markupSlice(input, artifact.markup);
     const whole = start === 0 && end === artifact.markup.length;
@@ -1043,7 +1055,7 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
         const renamedSince = earlier !== undefined && previous !== undefined && previous.visual.title !== earlier.title;
         // Repeating the name this turn's save gave keeps a rename made since.
         const requested = renamedSince && input.title === earlier.title ? { ...input, title: undefined } : input;
-        const effective = withEdits(requested, previous?.markup, previous !== undefined);
+        const effective = withEdits(requested, previous);
         const built = contentFor(effective, previous);
         const { content } = built;
         let { diagnostics } = built;
@@ -1073,7 +1085,7 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
                   }
                   // Another chat changed the markup since it was read: the edits
                   // apply to the markup saved now, or the save fails with the miss.
-                  const redone = withEdits(requested, current.markup, true);
+                  const redone = withEdits(requested, current);
                   const rebuilt = contentFor(redone, current);
                   diagnostics = rebuilt.diagnostics;
                   return rebasedContent(redone, rebuilt.content, current);

@@ -85,7 +85,7 @@ function asImportToken(value: unknown): string {
 
 /** The page as the renderer sees it: the markup it was compiled from stays in main, for the model. */
 function shown(artifact: WorkspaceArtifactV1): WorkspaceArtifactV1 {
-  const { markup: _markup, ...page } = artifact;
+  const { markup: _markup, markupDropped: _markupDropped, ...page } = artifact;
   return page;
 }
 

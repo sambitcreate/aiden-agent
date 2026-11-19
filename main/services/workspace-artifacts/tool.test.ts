@@ -212,7 +212,15 @@ test("under Ask, a save that would fail shows no card and fails with its reason,
     [{ operation: "update", id: "art1", sources: wider, edits: [{ old: "not in the page", new: "x" }] }, /was not found/u],
     [{ operation: "update", id: "art1", sources: wider, baseVersion: 9 }, /has no revision 9/u],
     [{ operation: "update", id: "art1", sources: wider, refresh: { intervalSeconds: 5 } }, /intervalSeconds/u],
-    [{ operation: "update", id: "art1", sources: wider, markup: `${PAGE}${" ".repeat(400_001)}` }, /over the 400,000-character limit/u],
+    [
+      { operation: "update", id: "art1", sources: wider, markup: `${PAGE}${" ".repeat(400_001)}` },
+      /markup is 400,\d{3} characters, over the 400,000-character limit[^\n]*send edits rather than the whole markup/u,
+    ],
+    // Edits that grow the page past the limit are told to shrink, not to send edits.
+    [
+      { operation: "update", id: "art1", sources: wider, edits: [{ old: "Merge</Button>", new: `Merge${" ".repeat(400_001)}</Button>` }] },
+      /^Error: (?![\s\S]*send edits)The edits make the markup 400,\d{3} characters, over the 400,000-character limit: make them remove more than they add/u,
+    ],
   ];
   for (const [args, reason] of doomed) {
     assert.equal((await workspaceArtifactCallApproval(args, options)).required, false, JSON.stringify(args));
@@ -587,6 +595,30 @@ test("get says plainly when a version's markup was not kept, and an undo brings 
   nextTurn();
   await call("r1", { operation: "restore", id: "art1", revision: 1 });
   assert.ok((await call("g2", { operation: "get", id: "art1" })).endsWith(PAGE));
+});
+
+test("a page whose markup was dropped for room says so in get and edits, and whole markup brings it back", async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifact-tool-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  let ids = 0;
+  let clock = 1_000;
+  const filler = (word: string) => `<Text>${`${word} `.repeat(1_500)}</Text>`;
+  const big = (word: string) => PAGE.replace("</Visual>", `${filler(word)}\n</Visual>`);
+  // Room for three pages but only two of their markups (each page is about 17 KB, 6 KB of it markup).
+  const store = new WorkspaceArtifactStore({ root: () => dir, newId: () => `art${++ids}`, now: () => (clock += 1), artifactsMaxBytes: 48_000 });
+  const { call } = await harness(t, { permission: "full", store });
+  await call("c1", { operation: "create", title: "First", markup: big("one") });
+  await call("c2", { operation: "create", title: "Second", markup: big("two") });
+  await call("c3", { operation: "create", title: "Third", markup: big("six") });
+  const dropped = /Aiden dropped this version's markup to keep this workspace's saved pages within their storage limit[^\n]*send the whole markup in an update/u;
+  assert.match(await call("g1", { operation: "get", id: "art1" }), dropped);
+  assert.ok((await call("g3", { operation: "get", id: "art3" })).endsWith(big("six")));
+  await assert.rejects(call("e1", { operation: "update", id: "art1", edits: [{ old: "Merge", new: "Land" }] }), dropped);
+  // A change that leaves the markup alone keeps saying why it is missing.
+  await call("u1", { operation: "update", id: "art1", description: "Still the first page" });
+  assert.match(await call("g1b", { operation: "get", id: "art1" }), dropped);
+  await call("u2", { operation: "update", id: "art1", markup: PAGE });
+  assert.ok((await call("g1c", { operation: "get", id: "art1" })).endsWith(PAGE));
 });
 
 test("check runs a page's sources once and draws the page against them without saving anything", async (t) => {

@@ -506,6 +506,79 @@ test("history that would outgrow its file drops the oldest versions instead of f
   assert.equal((await store.get("ws1", first.id))!.artifact.revision, 5);
 });
 
+test("history that would outgrow its file drops older versions' markup before any version, and a restore says so", async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifacts-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  let clock = 1_000;
+  const errors: unknown[] = [];
+  const make = () =>
+    new WorkspaceArtifactStore({
+      root: () => dir,
+      now: () => (clock += 1),
+      newId: () => "art1",
+      historyMaxBytes: 9_000,
+      onHistoryError: (error) => errors.push(error),
+    });
+  const store = make();
+  const markup = (version: number) => `<Visual title="Open PRs">${`v${version} `.repeat(600)}</Visual>`;
+  await store.create("ws1", content({ visual: heading("v1"), markup: markup(1) }));
+  for (let version = 2; version <= 6; version += 1) {
+    await store.replace("ws1", "art1", content({ visual: heading(`v${version}`), markup: markup(version) }));
+  }
+  assert.deepEqual(errors, []);
+  assert.ok((await fs.stat(path.join(dir, "ws1.history.json"))).size <= 9_000);
+  const reopened = make();
+  // All five earlier versions are still there to restore; only the oldest lost their markup.
+  assert.deepEqual(await reopened.earlierRevisions("ws1"), { art1: [5, 4, 3, 2, 1] });
+  const oldest = (await reopened.revision("ws1", "art1", 1))!;
+  assert.equal(oldest.markup, undefined);
+  assert.equal(oldest.markupDropped, true);
+  assert.equal((await reopened.revision("ws1", "art1", 5))!.markup, markup(5));
+  assert.equal((await reopened.get("ws1", "art1"))!.artifact.markup, markup(6));
+  // Restoring a version without its markup brings the page back and says why the markup is missing.
+  const restored = await reopened.restore("ws1", "art1", 1);
+  assert.equal(restored.visual.fallbackText, heading("v1").fallbackText);
+  assert.equal(restored.markup, undefined);
+  assert.equal(restored.markupDropped, true);
+});
+
+test("pages that would outgrow their file drop the least recently changed pages' markup, the saved page's last", async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifacts-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  let clock = 1_000;
+  let ids = 0;
+  const make = () =>
+    new WorkspaceArtifactStore({ root: () => dir, now: () => (clock += 1), newId: () => `art${++ids}`, artifactsMaxBytes: 12_000 });
+  const store = make();
+  const markup = (word: string) => `<Visual title="x">${`${word} `.repeat(1_000)}</Visual>`;
+  await store.create("ws1", content({ title: "A", markup: markup("aaa") }));
+  await store.create("ws1", content({ title: "B", markup: markup("bbb") }));
+  // A changed since B, so B is now the least recently changed page.
+  await store.replace("ws1", "art1", content({ title: "A", visual: heading("a2"), markup: markup("aa2") }));
+  await store.create("ws1", content({ title: "C", markup: markup("ccc") }));
+  assert.ok((await fs.stat(path.join(dir, "ws1.json"))).size <= 12_000);
+  const pages = new Map((await make().list("ws1")).map((view) => [view.artifact.visual.title, view.artifact]));
+  assert.equal(pages.size, 3);
+  assert.equal(pages.get("B")!.markup, undefined);
+  assert.equal(pages.get("B")!.markupDropped, true);
+  assert.equal(pages.get("A")!.markup, markup("aa2"));
+  assert.equal(pages.get("C")!.markup, markup("ccc"));
+  // Markup that could not fit even without the others' goes alone; the page still saves.
+  const huge = await store.create("ws1", content({ title: "D", markup: markup("d".repeat(12)) }));
+  assert.equal(huge.markup, undefined);
+  assert.equal(huge.markupDropped, true);
+  const after = new Map((await make().list("ws1")).map((view) => [view.artifact.visual.title, view.artifact.markup]));
+  assert.equal(after.get("A"), markup("aa2"));
+  assert.equal(after.get("C"), markup("ccc"));
+  // Saving B's markup again (here, its unchanged page) keeps it once there is room.
+  await store.delete("ws1", huge.id);
+  await store.delete("ws1", "art3");
+  const resaved = await store.replace("ws1", "art2", content({ title: "B", markup: markup("bbb") }));
+  assert.equal(resaved.revision, 1);
+  assert.equal(resaved.markup, markup("bbb"));
+  assert.equal(resaved.markupDropped, undefined);
+});
+
 test("a history write that fails is reported, and the update still succeeds", async (t) => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifacts-"));
   t.after(() => fs.rm(dir, { recursive: true, force: true }));
