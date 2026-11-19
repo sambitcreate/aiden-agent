@@ -55,11 +55,16 @@ export class DesignCanvasStore {
     return this.serialize(chatId, () => this.read(chatId));
   }
 
-  /** Stores `doc` as `baseRevision + 1` only if `baseRevision` is still the stored revision. */
+  /**
+   * Stores `doc` as `baseRevision + 1` only if `baseRevision` is still the
+   * stored revision. `undone` names pages the person's undo took off, which
+   * are not remembered as removed, so Aiden writing one again shows it again.
+   */
   async save(
     chatId: string,
     doc: DesignCanvas,
     baseRevision: number,
+    options: { undone?: readonly string[] } = {},
   ): Promise<DesignCanvasSaveResult> {
     assertDesignCanvasChatId(chatId);
     if (!Number.isSafeInteger(baseRevision) || baseRevision < 0) {
@@ -77,8 +82,9 @@ export class DesignCanvasStore {
       const current = await this.read(chatId);
       if (current.revision !== baseRevision) return { ok: false, reason: "conflict", doc: current };
       const revision = baseRevision + 1;
-      // A save comes from the person's canvas: a page they took off is remembered.
-      const doc = withRemovedPagePaths(current, { ...parsed.doc, revision }, true);
+      // A save comes from the person's canvas: a page they took off is remembered,
+      // unless it was their undo that took it off.
+      const doc = withRemovedPagePaths(current, { ...parsed.doc, revision }, true, new Set(options.undone ?? []));
       // The pages remembered as taken off count too: what is written must read back.
       if (this.tooLarge(doc)) return tooLarge();
       await this.write(chatId, doc);

@@ -444,7 +444,8 @@ export function parseDesignCanvas(value: unknown): DesignCanvasParseResult {
   };
 }
 
-function shownPagePaths(doc: Pick<DesignCanvas, "frames">): Set<string> {
+/** The workspace pages the frames of `doc` show. */
+export function shownPagePaths(doc: Pick<DesignCanvas, "frames">): Set<string> {
   return new Set(doc.frames.flatMap((frame) => (frame.kind === "file" && frame.path ? [frame.path] : [])));
 }
 
@@ -453,10 +454,16 @@ function shownPagePaths(doc: Pick<DesignCanvas, "frames">): Set<string> {
  * is the store's alone, so whatever `after` says is ignored: it starts from
  * `before`'s. With `byPerson`, a page every frame of which is gone joins it;
  * any page a frame of `after` shows leaves it, whoever added that frame.
+ * A page in `undone` (one the person's undo took off) is not noted as removed.
  */
-export function withRemovedPagePaths<T extends DesignCanvas>(before: DesignCanvas, after: T, byPerson: boolean): T {
+export function withRemovedPagePaths<T extends DesignCanvas>(
+  before: DesignCanvas,
+  after: T,
+  byPerson: boolean,
+  undone: ReadonlySet<string> = new Set(),
+): T {
   const shown = shownPagePaths(after);
-  const gone = byPerson ? [...shownPagePaths(before)].filter((entry) => !shown.has(entry)) : [];
+  const gone = byPerson ? [...shownPagePaths(before)].filter((entry) => !shown.has(entry) && !undone.has(entry)) : [];
   const kept = (before.removedPagePaths ?? []).filter((entry) => !shown.has(entry) && !gone.includes(entry));
   const removedPagePaths = [...kept, ...gone].slice(-DESIGN_CANVAS_LIMITS.removedPagePaths);
   const { removedPagePaths: _ignored, ...rest } = after;

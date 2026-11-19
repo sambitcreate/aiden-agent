@@ -295,6 +295,31 @@ test("undo and redo step through recorded edits, and unrecorded edits fold into 
   assert.equal(xOf(saves()[0]!.args[1] as DesignCanvas, "a"), 30);
 });
 
+test("a save says which pages an undo took off, so the store does not remember them as the person's removals", async () => {
+  await mount();
+  const page: DesignFrame = { id: "p", kind: "file", title: "q.html", path: "design/q.html", x: 0, y: 400, w: 640, h: 436, designWidth: 1280, pageId: "page-1", createdBy: "aiden" };
+  const dropPage = (doc: DesignCanvas): DesignCanvas => ({ ...doc, frames: doc.frames.filter((frame) => frame.id !== "p") });
+  const undoneOf = (index: number) => (saves()[index]!.args[3] as { undone?: string[] } | undefined)?.undone;
+  await act(async () => controller.change((doc) => ({ ...doc, frames: [...doc.frames, page] })));
+  await tick(800);
+  assert.equal(undoneOf(0), undefined);
+
+  await act(async () => controller.undo());
+  await tick(800);
+  assert.deepEqual(undoneOf(1), ["design/q.html"], "the undo took the page off");
+
+  await act(async () => controller.redo());
+  await tick(800);
+  // Within one save: an undo takes the page off, a redo puts it back, then the person deletes it.
+  await act(async () => controller.undo());
+  await act(async () => controller.redo());
+  await act(async () => controller.change(dropPage));
+  await tick(800);
+  assert.equal(saves().length, 4);
+  assert.deepEqual(ids(saves()[3]!.args[1] as DesignCanvas), ["a"]);
+  assert.equal(undoneOf(3), undefined, "deleting the page is the person's removal");
+});
+
 test("an undo waiting to save does not take back a frame another window added", async () => {
   await mount();
   await act(async () => controller.change(addNote("b")));

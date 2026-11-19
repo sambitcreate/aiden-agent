@@ -195,6 +195,19 @@ test("a page the person takes off the canvas is not put back when Aiden writes i
   const { removedPagePaths: _list, ...withoutList } = cleared;
   await store.save("chat-1", { ...withoutList, frames: [...cleared.frames, { ...again.frames.find((frame) => frame.id === "again")!, id: "mine", createdBy: "person" }] }, cleared.revision);
   assert.equal((await store.get("chat-1")).removedPagePaths, undefined);
+
+  // The person undoing the reply that placed about.html takes it off, but that is no removal of theirs:
+  // the next write puts it back.
+  const placed = await store.get("chat-1");
+  const undoneSave = await store.save(
+    "chat-1",
+    { ...placed, frames: placed.frames.filter((frame) => frame.path !== "design/about.html") },
+    placed.revision,
+    { undone: ["design/about.html"] },
+  );
+  assert.equal(undoneSave.ok, true);
+  assert.equal((await store.get("chat-1")).removedPagePaths, undefined);
+  assert.equal((await place(["design/about.html"])).length, 1);
 });
 
 test("after each command, the design/ pages it made or changed are found, and nothing else", async (t) => {

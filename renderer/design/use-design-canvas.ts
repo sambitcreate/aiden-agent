@@ -29,7 +29,7 @@
 import * as React from "react";
 import { designCanvasApi } from "../lib/ipc";
 import { registerLifecycleFlush, setRendererLifecycleGuard } from "../lib/lifecycle-guard";
-import type { DesignCanvas } from "../shared/design-canvas/schema";
+import { shownPagePaths, type DesignCanvas } from "../shared/design-canvas/schema";
 import {
   carryUnrecorded,
   changesBetween,
@@ -85,6 +85,22 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
   let inFlight: Promise<void> | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let history = EMPTY_HISTORY;
+  /**
+   * Pages an undo took off the canvas. The save says so, and the store does not
+   * remember them as removed by the person, so Aiden writing one again shows it.
+   * A later edit or redo that takes a page off makes it the person's removal again.
+   */
+  const undonePages = new Set<string>();
+  /** Tracks the pages `edit` takes off: `undone` notes them, any other edit forgets them. */
+  const notePagesTakenOff = (before: DesignCanvas | null, undone: boolean) => {
+    if (!before || !local || local === before) return;
+    const shown = shownPagePaths(local);
+    for (const page of shownPagePaths(before)) {
+      if (shown.has(page)) continue;
+      if (undone) undonePages.add(page);
+      else undonePages.delete(page);
+    }
+  };
   let failed = false;
   /** The canvas closed; the session lives on only while it holds edits it could not save. */
   let closed = false;
@@ -206,12 +222,15 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
     const batch = unsent;
     const doc = local;
     const base = server.revision;
+    const shown = shownPagePaths(doc);
+    const undone = [...undonePages].filter((page) => !shown.has(page));
     unsent = [];
     let retryNow = false;
     const attempt = (async () => {
       try {
-        const result = await designCanvasApi.saveDesignCanvas(chatId, doc, base);
+        const result = await designCanvasApi.saveDesignCanvas(chatId, doc, base, ...(undone.length > 0 ? [{ undone }] : []));
         if (result.ok) {
+          for (const page of undone) undonePages.delete(page);
           server = { ...doc, revision: result.revision };
           if (local === doc) local = server;
           failed = false;
@@ -337,18 +356,23 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
     change(mutate, recordHistory) {
       const before = local;
       apply(mutate, recordHistory && before ? () => record(history, before) : null);
+      notePagesTakenOff(before, false);
     },
     undo() {
       if (!local) return;
+      const before = local;
       const step = undo(history, local);
       if (!step) return;
       apply(changesBetween(local, step.doc), () => step.history);
+      notePagesTakenOff(before, true);
     },
     redo() {
       if (!local) return;
+      const before = local;
       const step = redo(history, local);
       if (!step) return;
       apply(changesBetween(local, step.doc), () => step.history);
+      notePagesTakenOff(before, false);
     },
     flush,
     dispose() {

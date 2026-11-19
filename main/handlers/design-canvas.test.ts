@@ -175,6 +175,28 @@ test("a successful save broadcasts the new revision and get reads it back", asyn
   );
 });
 
+test("a page a save takes off is remembered as removed, unless the save says the person's undo took it off", async (t) => {
+  const { invoke } = await fixture(t);
+  const page = (path: string) => ({
+    id: path,
+    kind: "file" as const,
+    title: path,
+    path,
+    x: 0,
+    y: 0,
+    w: 640,
+    h: 436,
+    designWidth: 1280 as const,
+    pageId: "page-1",
+    createdBy: "aiden" as const,
+  });
+  await invoke("designCanvas:save", "chat-1", { ...note, frames: [...note.frames, page("design/a.html"), page("design/b.html")] }, 0);
+  await invoke("designCanvas:save", "chat-1", { ...note, frames: [...note.frames, page("design/b.html")] }, 1, { undone: ["design/a.html"] });
+  assert.equal(((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).removedPagePaths, undefined);
+  await invoke("designCanvas:save", "chat-1", note, 2);
+  assert.deepEqual(((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).removedPagePaths, ["design/b.html"]);
+});
+
 test("a conflicting or invalid save broadcasts nothing", async (t) => {
   const { invoke, broadcasts } = await fixture(t);
   await invoke("designCanvas:save", "chat-1", note, 0);
@@ -198,6 +220,9 @@ test("malformed parameters are rejected before the store is used", async (t) => 
   await assert.rejects(invoke("designCanvas:save", "chat-1", note, 1.5));
   await assert.rejects(invoke("designCanvas:save", "chat-1", note, "0"));
   await assert.rejects(invoke("designCanvas:save", undefined, note, 0));
+  await assert.rejects(invoke("designCanvas:save", "chat-1", note, 0, { undone: "design/a.html" }), /save options/u);
+  await assert.rejects(invoke("designCanvas:save", "chat-1", note, 0, { undone: ["../outside.html"] }), /save options/u);
+  await assert.rejects(invoke("designCanvas:save", "chat-1", note, 0, { undone: [42] }), /save options/u);
   assert.deepEqual(await fs.readdir(root), []);
   assert.deepEqual(broadcasts, []);
 });

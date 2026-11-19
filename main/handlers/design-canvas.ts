@@ -5,6 +5,7 @@
 import path from "node:path";
 import * as fs from "node:fs/promises";
 import {
+  DESIGN_CANVAS_LIMITS,
   isDesignRelativePath,
   type DesignCanvas,
   type DesignPaper,
@@ -155,6 +156,21 @@ export const DESIGN_CAPTURE_MAX_SIDE = 1024;
 export const DESIGN_CANVAS_UPDATED_CHANNEL = "designCanvas:updated";
 const UNAVAILABLE = "Design mode is not available.";
 
+/** The pages a save says the person's undo took off; anything malformed is refused. */
+function saveUndone(options: unknown): string[] {
+  if (options === undefined || options === null) return [];
+  const undone = typeof options === "object" && !Array.isArray(options) ? (options as { undone?: unknown }).undone : null;
+  if (undone === undefined) return [];
+  if (
+    !Array.isArray(undone) ||
+    undone.length > DESIGN_CANVAS_LIMITS.frames ||
+    !undone.every((entry) => typeof entry === "string" && isDesignRelativePath(entry))
+  ) {
+    throw new Error("Invalid canvas save options.");
+  }
+  return undone as string[];
+}
+
 export function registerDesignCanvasHandlers<Event>(deps: {
   enabled: () => boolean;
   handle(channel: string, handler: (event: Event, ...args: unknown[]) => unknown): void;
@@ -203,7 +219,7 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     return deps.store.get(chat.id);
   });
 
-  deps.handle("designCanvas:save", async (_event, chatId, doc, baseRevision) => {
+  deps.handle("designCanvas:save", async (_event, chatId, doc, baseRevision, options) => {
     if (
       typeof baseRevision !== "number" ||
       !Number.isSafeInteger(baseRevision) ||
@@ -211,8 +227,9 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     ) {
       throw new Error("Invalid canvas revision.");
     }
+    const undone = saveUndone(options);
     const chat = await requireChat(chatId);
-    const result = await deps.store.save(chat.id, doc as DesignCanvas, baseRevision);
+    const result = await deps.store.save(chat.id, doc as DesignCanvas, baseRevision, { undone });
     if (result.ok) deps.broadcast({ chatId: chat.id, revision: result.revision });
     return result;
   });

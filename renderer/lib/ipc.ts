@@ -2532,8 +2532,11 @@ export const designCanvasApi = {
       theme,
     ),
   /** Compare-and-swap: lands only if `baseRevision` is still the stored revision. */
-  saveDesignCanvas: (chatId: string, doc: DesignCanvas, baseRevision: number) =>
-    invoke<DesignCanvasSaveResult>("designCanvas:save", chatId, doc, baseRevision),
+  /** `undone` names pages the person's undo took off, which are not remembered as removed. */
+  saveDesignCanvas: (chatId: string, doc: DesignCanvas, baseRevision: number, options?: { undone?: string[] }) =>
+    options === undefined
+      ? invoke<DesignCanvasSaveResult>("designCanvas:save", chatId, doc, baseRevision)
+      : invoke<DesignCanvasSaveResult>("designCanvas:save", chatId, doc, baseRevision, options),
   /** `aidenTurn` names the reply that made the change, when Aiden made it. */
   onDesignCanvasUpdated: (handler: (update: { chatId: string; revision: number; aidenTurn?: string }) => void) =>
     onNotification<{ chatId: string; revision: number; aidenTurn?: string }>("designCanvas:updated", handler),
