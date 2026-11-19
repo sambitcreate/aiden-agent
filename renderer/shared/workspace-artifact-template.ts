@@ -21,6 +21,8 @@
  * Pure and Electron-free, like `workspace-artifacts.ts`, which uses it.
  */
 
+import { ghSlotSpec, gitSlotSpec, jqSlot, locateSlot, programSlotSpec, type Slot, type SlotLookup } from "./workspace-artifact-slots.js";
+
 export const WORKSPACE_ARTIFACT_PLACEHOLDER = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/gu;
 const PLACEHOLDER_AT = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/uy;
 const PLACEHOLDER_TEST = /\{\{\s*[A-Za-z_][A-Za-z0-9_]*\s*\}\}/u;
@@ -49,12 +51,8 @@ type TemplatePart = { text: string } | TemplateParam;
 
 interface TemplateParam {
   param: string;
-  /** The word names a file the program reads, so it must stay inside the workspace. */
-  file?: boolean;
-  /** git reads the value as a branch or refspec (git push origin {{branch}}). */
-  ref?: boolean;
-  /** It comes after a literal `--`, so a value starting with "-" is not read as an option. */
-  afterDashes?: boolean;
+  /** The slot it sits in, from the program's table; set when the template is checked. */
+  slot?: Slot;
 }
 
 interface TemplateWord {
@@ -74,7 +72,8 @@ interface TemplateStep {
 }
 
 export interface WorkspaceArtifactTemplateProblem {
-  kind: "syntax" | "misplaced" | "program";
+  /** `slot`: the program's table has no slot for page data where it sits. */
+  kind: "syntax" | "misplaced" | "program" | "slot";
   reason: string;
 }
 
@@ -399,105 +398,13 @@ function writesOption(word: string | undefined, valued: string, set: OptionSet):
 }
 
 /**
- * Short letters that take a value, by program, so a cluster is read to its
- * real end (`git commit -mF x` is a message "F"). git's are by subcommand.
- */
-const VALUED_LETTERS: Record<string, string> = {
-  sort: "koStT", uniq: "fsw", head: "nc", tail: "nc", cut: "bcdf", grep: "ABCDdefm", rg: "ABCEefgjMmrTt", jq: "L", basename: "s", date: "dfr",
-};
-const GIT_VALUED_LETTERS: Record<string, string> = {
-  commit: "mFCct", merge: "msXF", pull: "sXoj", push: "o", fetch: "oj", rebase: "xsX", tag: "mFu", stash: "m", switch: "cC", checkout: "bB", worktree: "bB",
-  config: "f", log: "n", show: "n", grep: "efABC", "cherry-pick": "mX", revert: "mX",
-};
-/**
- * Long options that take the next word, where telling an option's value
- * from an operand matters (which operand is a file, a pattern or a remote).
- * One left out only makes the checks stricter: its value is then read as an
- * operand.
- */
-const VALUED_LONG: Record<string, readonly string[]> = {
-  sort: ["key", "field-separator", "buffer-size", "parallel", "temporary-directory", "output", "compress-program", "files0-from", "random-source"],
-  uniq: ["skip-fields", "skip-chars", "check-chars"],
-  head: ["lines", "bytes"],
-  tail: ["lines", "bytes", "pid", "sleep-interval", "max-unchanged-stats"],
-  cut: ["bytes", "characters", "delimiter", "fields", "output-delimiter"],
-  grep: ["regexp", "file", "max-count", "after-context", "before-context", "context", "label", "include", "exclude", "exclude-from", "exclude-dir"],
-  rg: [
-    "regexp", "file", "glob", "iglob", "type", "type-not", "type-add", "type-clear", "max-count", "after-context", "before-context", "context",
-    "max-depth", "max-filesize", "path-separator", "pre", "pre-glob", "replace", "sort", "sortr", "threads", "encoding", "engine", "ignore-file",
-    "colors", "context-separator", "field-context-separator", "field-match-separator", "max-columns", "dfa-size-limit", "regex-size-limit", "hostname-bin",
-  ],
-  wc: ["files0-from"],
-  date: ["date", "file", "reference"],
-};
-const GIT_VALUED_LONG: Record<string, readonly string[]> = {
-  push: ["push-option", "repo", "receive-pack", "exec"],
-  fetch: ["depth", "deepen", "shallow-since", "shallow-exclude", "upload-pack", "jobs", "negotiation-tip", "server-option", "refmap", "filter", "recurse-submodules-default"],
-  pull: ["depth", "deepen", "shallow-since", "shallow-exclude", "upload-pack", "jobs", "negotiation-tip", "server-option", "refmap", "filter", "strategy", "strategy-option"],
-  grep: ["regexp", "file", "max-count", "after-context", "before-context", "context", "max-depth", "threads"],
-};
-
-/**
- * Options whose value names a program, code or configuration to start, by
- * program, and long options that do in any program (`--exec`, `--config`).
+ * Options whose value names a program to run for every file read; a template
+ * that uses them takes no page data at all.
  */
 const PROGRAM_OPTIONS: Record<string, OptionSet> = {
   sort: { long: ["compress-program"] },
   rg: { long: ["pre", "hostname-bin"] },
 };
-const ANY_PROGRAM_LONG: OptionSet = {
-  long: ["exec", "eval", "command", "config", "upload-pack", "receive-pack", "use-compress-program", "compress-program", "rsh", "rsync-path", "proxy-command"],
-};
-/** Words that mark a long option as naming a program by name (`--sendmail-cmd`, `--shell`). */
-const PROGRAM_OPTION_WORD = /^(?:[a-z]*cmd|[a-z]*command|program|prog|exec|execdir|execute|shell|pager|editor|askpass|hooks?|eval|rsh|script|interpreter|wrapper|config|helper)$/u;
-/** git's, by subcommand; `*` applies to every subcommand. A merge strategy runs the program git-merge-<strategy>. */
-const GIT_PROGRAM_OPTIONS: Record<string, OptionSet> = {
-  "*": { long: ["upload-pack", "receive-pack", "exec", "config", "config-env", "exec-path"] },
-  merge: { short: "s", long: ["strategy"] },
-  pull: { short: "s", long: ["strategy"] },
-  rebase: { short: "xs", long: ["exec", "strategy"] },
-  "cherry-pick": { long: ["strategy"] },
-  revert: { long: ["strategy"] },
-};
-/** Options whose value names a file the program writes, or reads and posts. */
-const FILE_OPTIONS: Record<string, OptionSet> = {
-  sort: { short: "oT", long: ["output", "temporary-directory"] },
-  gh: { short: "F", long: ["body-file", "recover"], exact: true },
-};
-const GIT_FILE_OPTIONS: Record<string, OptionSet> = {
-  config: { short: "f", long: ["file", "blob"] },
-};
-/** git options whose value is a file git reads into a commit, tag or the list of paths: any file, a secret included. */
-const GIT_READ_FILE_OPTIONS: Record<string, OptionSet> = {
-  "*": { long: ["pathspec-from-file"] },
-  commit: { short: "Ft", long: ["file", "template"] },
-  tag: { short: "F", long: ["file"] },
-  merge: { short: "F", long: ["file"] },
-};
-/** Options whose value is a file the program reads, so the value must stay inside the workspace. */
-const READ_FILE_OPTIONS: Record<string, OptionSet> = {
-  grep: { short: "f", long: ["file", "exclude-from"] },
-  rg: { short: "f", long: ["file", "ignore-file"] },
-  "git grep": { short: "f", long: ["file"] },
-  sort: { long: ["files0-from", "random-source"] },
-  wc: { long: ["files0-from"] },
-  date: { short: "fr", long: ["file", "reference"] },
-};
-/** Programs whose operands are files they read (grep's and rg's after the pattern). */
-const FILE_OPERAND_PROGRAMS = new Set(["ls", "cat", "head", "tail", "wc", "sort", "uniq", "cut", "grep", "rg"]);
-/** The options that give grep or rg its pattern, so that every operand is a file. */
-const PATTERN_OPTIONS: OptionSet = { short: "ef", long: ["regexp", "file"] };
-
-/** Whether a long option's own name says it takes a program or code (`--sendmail-cmd`, `--shell`). */
-function namesAProgram(option: WrittenOption): boolean {
-  return option.long !== undefined && option.long.split("-").some((part) => PROGRAM_OPTION_WORD.test(part));
-}
-
-/** A long option that names the file a program writes (`--output`, `--out`). */
-function namesAnOutputFile(option: WrittenOption): boolean {
-  const name = option.long;
-  return name !== undefined && name.length > 0 && (name.startsWith("output") || "output".startsWith(name));
-}
 
 /**
  * `git config` keys a text value may set: none of them names a program,
@@ -516,42 +423,13 @@ function gitConfigKey(after: readonly (string | undefined)[]): { key: string | u
   for (let index = 0; index < after.length; index += 1) {
     const arg = after[index];
     if (arg !== undefined && arg.startsWith("-")) {
-      const option = optionBefore(arg, GIT_VALUED_LETTERS.config!);
+      const option = optionBefore(arg, "f");
       if (option && isOneOf(option, GIT_CONFIG_VALUED)) index += 1;
     } else if (arg === undefined || !GIT_CONFIG_VERBS.has(arg)) return { key: arg, index };
   }
   return undefined;
 }
 
-/**
- * Which operand the word at `at` is, reading `args` from `from` the way the
- * program would: past options and the values of those that take the next
- * word, and every word after a literal `--`. Undefined when the word is an
- * option's value.
- */
-function operandIndex(args: readonly (string | undefined)[], from: number, at: number, valued: string, valuedLong: readonly string[]): number | undefined {
-  let operands = 0;
-  let ended = false;
-  for (let index = from; index <= at; index += 1) {
-    const arg = args[index];
-    if (!ended && arg === "--") {
-      ended = true;
-      continue;
-    }
-    if (ended || arg === undefined || arg === "-" || !arg.startsWith("-")) {
-      if (index === at) return operands;
-      operands += 1;
-      continue;
-    }
-    const option = optionBefore(arg, valued);
-    const takes = option && (option.short !== undefined ? valued.includes(option.short) : valuedLong.some((full) => full.startsWith(option.long!)));
-    if (takes) {
-      if (index + 1 === at) return undefined;
-      index += 1;
-    }
-  }
-  return undefined;
-}
 
 /** git's subcommand and where it is, past the global options a page may use. */
 function gitSubcommand(args: readonly (string | undefined)[]): { name: string | undefined; index: number } {
@@ -594,7 +472,7 @@ function commandProblem(command: TemplateCommand): WorkspaceArtifactTemplateProb
     }
     if (after.some((arg) => writesOption(arg, "", { long: ["no-index"] }))) return program_(`git ${sub} --no-index, which reads files outside the repository`);
     if (sub === "config") {
-      if (after.some((arg) => arg === "edit" || writesOption(arg, GIT_VALUED_LETTERS.config!, { short: "e", long: ["edit"] }))) {
+      if (after.some((arg) => arg === "edit" || writesOption(arg, "f", { short: "e", long: ["edit"] }))) {
         return program_("git config edit, which opens an editor");
       }
       const key = gitConfigKey(after)?.key;
@@ -614,89 +492,42 @@ function commandProblem(command: TemplateCommand): WorkspaceArtifactTemplateProb
   }
   // These run a program for every file they read, so a template that uses them takes no page data.
   const starts = PROGRAM_OPTIONS[program];
-  const written = starts && args.find((arg) => writesOption(arg, VALUED_LETTERS[program] ?? "", starts));
+  const written = starts && args.find((arg) => writesOption(arg, "", starts));
   if (written) return program_(`${program} ${written}, which runs a program`);
   return undefined;
 }
 
-/** Where a placeholder sits: refused there, or what its value must be on each run. */
-interface PlaceholderRules {
-  problem?: string;
-  file?: boolean;
-  ref?: boolean;
-}
-
 /**
- * Whether the placeholder word at `at` among the command's arguments sits
- * where its value would name a program, code, a file to write or read from
- * anywhere, or a remote to connect to; and, where it may sit, what its value
- * must be (a file inside the workspace, a plain branch name).
+ * The slot the placeholder word at `at` among the command's arguments sits
+ * in, from the program's table (`workspace-artifact-slots.ts`), or where it
+ * sits when the table has no slot there, with the forms it does take.
  */
-function placeholderRules(program: string, args: readonly (string | undefined)[], at: number, word: TemplateWord): PlaceholderRules {
-  const git = program === "git" ? gitSubcommand(args) : undefined;
-  const sub = git && at > git.index ? git.name : undefined;
-  const valued = (sub === undefined ? VALUED_LETTERS[program] : GIT_VALUED_LETTERS[sub]) ?? "";
-  const written = args[at - 1];
-  const option = optionBefore(written, valued);
-  const refuse = (problem: string): PlaceholderRules => ({ problem });
-  if (option) {
-    // A value that names a file to write or post could overwrite a hook or send a local secret.
-    if (namesAnOutputFile(option) || (program !== "gh" && isOneOf(option, FILE_OPTIONS[program]))) return refuse(`the file ${program} ${written} writes`);
-    if (program === "gh" && isOneOf(option, FILE_OPTIONS.gh)) return refuse(`the file gh ${written} reads and posts`);
-    if (sub !== undefined && isOneOf(option, GIT_FILE_OPTIONS[sub])) return refuse(`the file git ${sub} ${written} writes`);
-    if (sub !== undefined && (isOneOf(option, GIT_READ_FILE_OPTIONS[sub]) || isOneOf(option, GIT_READ_FILE_OPTIONS["*"]))) {
-      return refuse(`the file git ${sub} ${written} reads`);
-    }
-    if (isOneOf(option, PROGRAM_OPTIONS[program]) || isOneOf(option, ANY_PROGRAM_LONG) || namesAProgram(option)) {
-      return refuse(`the program or code ${program} ${written} names`);
-    }
-    if (sub !== undefined && (isOneOf(option, GIT_PROGRAM_OPTIONS[sub]) || isOneOf(option, GIT_PROGRAM_OPTIONS["*"]))) {
-      return refuse(`the program git ${sub} ${written} names`);
-    }
+function placeholderSlot(program: string, args: readonly (string | undefined)[], at: number, word: TemplateWord): SlotLookup {
+  if (program === "jq") return jqSlot(args, at);
+  if (program === "gh") {
+    const [group, verb] = args;
+    const alone = ARGUMENT_GH_COMMANDS.includes(group!);
+    const spec = ghSlotSpec(alone ? group! : `${group!} ${verb!}`)!;
+    return locateSlot(spec, args, alone ? 1 : 2, at);
   }
-  if (program === "jq") {
-    // A filter can read any file (input, $__loc__, @sh) and the operands are files; page data goes in as a variable.
-    const flag = args[at - 2];
-    if (!((flag === "--arg" || flag === "--argjson") && written !== undefined && !written.startsWith("-"))) {
-      return refuse("a jq filter or file (pass page data as --arg name {{x}} and read it as $name)");
+  if (program === "git") {
+    const git = gitSubcommand(args);
+    const sub = git.name!;
+    if (sub === "config") {
+      const found = gitConfigKey(args.slice(git.index + 1));
+      const value = found && found.key !== undefined ? found.index + git.index + 2 : undefined;
+      if (value !== at) return { problem: "as a git config key, option or option value. git config takes page data only as the value right after a key written literally (git config user.name {{name}})." };
+      if (!SAFE_GIT_CONFIG_KEY.test(found!.key!)) return { problem: `as a value for git config ${found!.key!}, which git may run or read as configuration.` };
+      return { slot: { rule: "text" } };
     }
-    return {};
-  }
-  if (sub === "config") {
-    const found = gitConfigKey(args.slice(git!.index + 1));
-    if (found === undefined || found.index + git!.index + 1 === at) return refuse("a git config key or option");
-    if (!SAFE_GIT_CONFIG_KEY.test(found.key!)) return refuse(`a value for git config ${found.key}, which git may run or read as configuration`);
-    return {};
-  }
-  if (sub === "worktree") {
-    // `git worktree add` creates a folder at its path; only the new branch's name may come from the page.
-    if (!(option && isOneOf(option, { short: "bB" }))) return refuse("the path or commit git worktree uses (write it literally; a {{param}} may follow -b or -B)");
-    return {};
-  }
-  if (sub === "push" || sub === "fetch" || sub === "pull") {
-    const from = git!.index + 1;
-    const operand = operandIndex(args, from, at, valued, GIT_VALUED_LONG[sub]!);
-    if (option && isOneOf(option, { long: ["repo"] })) return refuse(`the remote git ${sub} connects to`);
-    if (operand === undefined) return {};
-    const everyOperandIsARemote = sub !== "push" && args.slice(from).some((arg) => writesOption(arg, valued, { long: ["multiple", "all"] }));
-    // The remote can be a URL or path, and some transports (ext::) run a command.
-    if (operand === 0 || everyOperandIsARemote) return refuse(`the remote git ${sub} connects to (write the remote, such as origin, literally)`);
+    const found = locateSlot(gitSlotSpec(sub)!, args, git.index + 1, at);
     const head = word.parts[0]!;
-    if ("text" in head && head.text.startsWith(":")) return refuse(`joined after :, where git ${sub} deletes the branch it names`);
-    return { ref: true };
+    if ("slot" in found && (sub === "push" || sub === "fetch" || sub === "pull") && "text" in head && head.text.startsWith(":")) {
+      return { problem: `joined after :, where git ${sub} deletes the branch it names` };
+    }
+    return found;
   }
-  if (sub === "diff") return { file: true };
-  const kind = sub === "grep" ? "git grep" : sub === undefined ? program : undefined;
-  if (kind === undefined) return {};
-  if (option && isOneOf(option, READ_FILE_OPTIONS[kind])) return { file: true };
-  if (!FILE_OPERAND_PROGRAMS.has(kind) && kind !== "git grep") return {};
-  const from = git ? git.index + 1 : 0;
-  const operand = operandIndex(args, from, at, valued, (git ? GIT_VALUED_LONG.grep : VALUED_LONG[kind]) ?? []);
-  if (operand === undefined) return {};
-  if (kind === "uniq" && operand >= 1) return refuse("the file uniq writes");
-  const searches = kind === "grep" || kind === "rg" || kind === "git grep";
-  if (searches && operand === 0 && !args.slice(from).some((arg) => writesOption(arg, valued, PATTERN_OPTIONS))) return {};
-  return { file: true };
+  return locateSlot(programSlotSpec(program)!, args, 0, at);
 }
 
 /** Whether a word with a placeholder is one the value may be part of: alone, or joined only to plain text. */
@@ -729,11 +560,10 @@ export function checkWorkspaceArtifactTemplate(template: string): { ok: true; st
         const word = command.words[at + 1]!;
         const joined = joinedProblem(word);
         if (joined) return { ok: false, problem: { kind: "misplaced", reason: joined } };
-        const rules = placeholderRules(program, args, at, word);
-        if (rules.problem) return { ok: false, problem: { kind: "misplaced", reason: rules.problem } };
-        const afterDashes = args.slice(0, at).includes("--");
+        const found = placeholderSlot(program, args, at, word);
+        if ("problem" in found) return { ok: false, problem: { kind: "slot", reason: found.problem } };
         for (const part of word.parts) {
-          if ("param" in part) Object.assign(part, { file: rules.file, ref: rules.ref, afterDashes });
+          if ("param" in part) part.slot = found.slot;
         }
       }
     }
@@ -760,31 +590,34 @@ function staysInside(path: string): boolean {
 
 /**
  * Why a value may not fill its placeholder where the template puts it, or
- * undefined when every value fits: one that starts with "-" (read as an
- * option) unless it comes after a literal `--`; a branch or refspec git
- * would read as a force, a delete or a mapping; a file outside the workspace.
+ * undefined when every value fits its slot's rule. A word that would start
+ * with "-" is read as an option, so only a slot the program always takes as
+ * an option's value (`git commit -m {{msg}}`) may hold one.
  */
 export function workspaceArtifactValueProblem(steps: readonly TemplateStep[], value: (name: string) => string): string | undefined {
   for (const step of steps) {
     for (const command of step.pipeline) {
       for (const word of command.words) {
-        let file = false;
-        for (const part of word.parts) {
-          if (!("param" in part)) continue;
+        const params = word.parts.filter((part): part is TemplateParam => "param" in part);
+        if (!params.length) continue;
+        const name = params[0]!.param;
+        const filled = word.parts.map((part) => ("text" in part ? part.text : value(part.param))).join("");
+        const slot = params[0]!.slot ?? { rule: "text" };
+        if (filled.startsWith("-") && !(word.parts.length === 1 && slot.dash)) {
+          return `${name} cannot start with "-" there: the program would read it as an option. Pass such a value as an option's value (git commit -m {{msg}}, grep -e {{pattern}}, gh pr create --body {{body}}), or leave the "-" out.`;
+        }
+        for (const part of params) {
           const text = value(part.param);
-          if (text.startsWith("-") && !part.afterDashes) {
-            return `${part.param} cannot start with "-": the program would read it as an option. Only a value placed after a literal -- in the command may.`;
-          }
-          if (part.ref && (/^[-+:]/u.test(text) || text.includes(":"))) {
+          const rule = part.slot?.rule ?? "text";
+          if (rule === "number" && !/^\d+$/u.test(text)) return `${part.param} must be a whole number there.`;
+          if (rule === "ref" && (/^[-+:]/u.test(text) || text.includes(":"))) {
             return `${part.param} cannot start with -, + or : or contain :, since git reads it as a branch or refspec there (+ forces a push, : deletes or renames a branch).`;
           }
-          file ||= part.file === true;
+          if (rule === "target" && (/^[-+]/u.test(text) || /[:@]/u.test(text))) {
+            return `${part.param} must be a number or a branch-like name there: no leading - or +, and no :, @ or ://, which gh reads as another repository or a URL.`;
+          }
         }
-        if (file) {
-          const filled = word.parts.map((part) => ("text" in part ? part.text : value(part.param))).join("");
-          const param = word.parts.find((part): part is TemplateParam => "param" in part)!.param;
-          if (!staysInside(filled)) return `${param} must name a file inside the workspace: no absolute path, ~, or .. that leads out of it.`;
-        }
+        if (slot.rule === "path" && !staysInside(filled)) return `${name} must name a file inside the workspace: no absolute path, ~, or .. that leads out of it.`;
       }
     }
   }

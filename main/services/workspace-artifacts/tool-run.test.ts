@@ -181,7 +181,7 @@ test("an action saved before a rule tightened is listed as turned off, and neith
 
   const listed = JSON.parse(await call("l1", { operation: "list" })) as { actions: { name: string; disabled?: string }[] }[];
   assert.equal(listed[0]!.actions[0]!.name, "note");
-  assert.match(listed[0]!.actions[0]!.disabled ?? "", /^Turned off; run refuses it until you update the page's actions: .*the program or code git --upload-p names/u);
+  assert.match(listed[0]!.actions[0]!.disabled ?? "", /^Turned off; run refuses it until you update the page's actions: .*page data may not be passed to git fetch with --upload-p, an option Aiden does not check/u);
   await assert.rejects(call("c1", RUN), /Add a note is turned off: its command no longer passes Aiden's checks/u);
   await assert.rejects(pressButton(["./x.sh"]), /turned off/u);
   assert.deepEqual(runs, []);

@@ -331,6 +331,7 @@ function actionPlacementProblem(template: string): string | undefined {
   if (kind === "misplaced") {
     return `each {{param}} must be its own unquoted word, not ${reason}. Write gh pr comment {{number}} --body {{body}}; plain text may be joined on, as in git show HEAD:{{file}}.`;
   }
+  if (kind === "slot") return `page data may not be passed ${reason}`;
   if (kind === "syntax") return `a command with {{params}} runs without a shell, so it may not use ${reason}. ${TEMPLATE_GRAMMAR}`;
   return `page data may not be passed to a command that uses ${reason}. In a command with {{params}}, every command (piped or chained) must start with one of: ${WORKSPACE_ARTIFACT_ARGUMENT_PROGRAMS}, written as a plain word. A command without {{params}} is not limited this way (it runs in a shell, exactly as saved), so write a fixed command instead, or ask the person.`;
 }

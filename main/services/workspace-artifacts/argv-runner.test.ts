@@ -314,7 +314,13 @@ test("no template the parser accepts lets a text value run code", async () => {
       }
       accepted += 1;
       for (const value of values) {
-        await runResolved(resolveWorkspaceArtifactCommand(action, [value]), dir, {
+        let resolved: ReturnType<typeof resolveWorkspaceArtifactCommand>;
+        try {
+          resolved = resolveWorkspaceArtifactCommand(action, [value]);
+        } catch {
+          continue; // A value its slot refuses never runs.
+        }
+        await runResolved(resolved, dir, {
           GIT_TERMINAL_PROMPT: "0",
           GIT_EDITOR: "true",
           FILTER_BRANCH_SQUELCH_WARNING: "1",
@@ -375,6 +381,14 @@ test("everyday git and gh actions with page data still save and run with the con
       await run("gh issue comment {{n}} --body {{body}}", [number("n"), text("body")], [7, "Looks good; $(id)"]),
       "[issue][comment][7][--body][Looks good; $(id)]",
     );
+    // A value that starts with "-" reaches the program as the option's value, not as an option.
+    assert.equal(await run("gh pr create --title {{t}} --body {{b}}", [text("t"), text("b")], ["--web", "- item"]), "[pr][create][--title][--web][--body][- item]");
+    assert.equal(await run("grep -c -e {{q}} notes.txt || true", [text("q")], ["-v"]), "0\n");
+    git(["config", "user.email", "a@example.com"]);
+    git(["config", "user.name", "a"]);
+    await run("git commit -q --allow-empty -m {{m}}", [text("m")], ["--amend"]);
+    assert.equal(git(["log", "-1", "--format=%s"]).trim(), "--amend");
+    assert.equal(git(["rev-list", "--count", "HEAD"]).trim(), "2");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

@@ -406,6 +406,37 @@ test("a placeholder cannot be run as a command or hidden from the check", () => 
     "git config user.name foo -zf {{x}}",
     "git config set user.name foo --fil {{x}}",
     "rg --pr cat {{x}}",
+    // Each program, git subcommand and gh verb lists the slots page data may
+    // fill; every other position, and any option the table does not know, is refused.
+    "git fetch --refmap {{x}} origin",
+    "git pull --refmap {{x}} origin main",
+    "git fetch origin main --unknown-option {{x}}",
+    "git blame --contents {{x}} notes.txt",
+    "git blame -S {{x}} notes.txt",
+    "git blame --ignore-revs-file {{x}} notes.txt",
+    "git ls-files --exclude-from {{x}}",
+    "git ls-files -X {{x}}",
+    "git log -O {{x}}",
+    "git diff -O {{x}}",
+    "jq -R -L --arg . {{x}}",
+    "jq -n --arg --arg . {{x}}",
+    "jq -n --rawfile v {{x}} .",
+    "jq -n --slurpfile v {{x}} .",
+    "jq -f {{x}}",
+    "jq --args -n '$ARGS' {{x}}",
+    "jq -n --jsonargs '$ARGS' {{x}}",
+    "jq . {{x}}",
+    "git stash {{x}}",
+    "git stash {{x}} -m note",
+    "gh pr view 1 --jq {{x}}",
+    "gh pr list -q {{x}}",
+    "gh pr view 1 --template {{x}}",
+    "gh pr list -R {{x}}",
+    "gh pr view --repo {{x}}",
+    "gh pr create --template {{x}}",
+    "gh pr list --search -- {{x}}",
+    "gh pr list -- {{x}}",
+    "gh pr view 1 {{x}}",
   ];
   for (const command of refused) assert.throws(() => parseWorkspaceArtifactActions(actions(command)), PLACEMENT_REFUSED, command);
   // Text is fine as a plain argument, between the operators the grammar has.
@@ -458,6 +489,14 @@ test("a placeholder cannot be run as a command or hidden from the check", () => 
     "jq -r --arg name {{x}} '.[] | select(.name == $name)' notes.json | sort | uniq -c",
     "git push origin {{x}}",
     "git diff HEAD -- {{x}}",
+    "git stash push -m {{x}}",
+    "git stash -m {{x}}",
+    "git blame -L {{x}} notes.txt",
+    "git grep -e {{x}}",
+    "gh pr view {{x}} --json title",
+    "gh pr list --search {{x}} --limit 5",
+    "gh pr list --base {{x}}",
+    "jq -n --argjson n {{x}} '$n + 1'",
   ]) {
     assert.equal(parseWorkspaceArtifactActions(actions(command)).length, 1, command);
   }
@@ -594,9 +633,21 @@ test("where a value lands decides what it may be: no option, no refspec, no file
     assert.equal(resolved.kind, "argv");
     return resolved as Extract<typeof resolved, { kind: "argv" }>;
   };
-  // A leading dash is read as an option, except after a literal --.
-  assert.throws(() => run("git log -1 {{x}}", "--output=/tmp/x"), /x cannot start with "-": the program would read it as an option\. Only a value placed after a literal --/u);
-  assert.deepEqual(run("grep -F -- {{x}} notes.txt", "-v").steps[0]!.pipeline[0]!.argv, ["grep", "-F", "--", "-v", "notes.txt"]);
+  // A leading dash is read as an option, except as the separate-word value of
+  // an option the program always takes as its value.
+  assert.throws(() => run("git log -1 {{x}}", "--output=/tmp/x"), /x cannot start with "-" there: the program would read it as an option\. Pass such a value as an option's value/u);
+  // Not even after --: gh ignores it, and git grep -e -- or rg -e -- spend it as the pattern.
+  for (const [command, value] of [
+    ["grep -F -- {{x}} notes.txt", "-v"],
+    ["git grep -e -- {{x}}", "-Otouch /tmp/x"],
+    ["rg -e -- {{x}}", "--pre=rm"],
+    ["git commit -m -- {{x}}", "--amend"],
+  ]) {
+    assert.throws(() => run(command!, value!), /cannot start with "-"|may not be passed/u, command);
+  }
+  assert.deepEqual(run("grep -F -e {{x}} notes.txt", "-v").steps[0]!.pipeline[0]!.argv, ["grep", "-F", "-e", "-v", "notes.txt"]);
+  assert.deepEqual(run("git commit -m {{x}}", "--amend").steps[0]!.pipeline[0]!.argv, ["git", "commit", "-m", "--amend"]);
+  assert.deepEqual(run("gh pr list --search {{x}}", "-label:bug").steps[0]!.pipeline[0]!.argv, ["gh", "pr", "list", "--search", "-label:bug"]);
   // A branch git pushes, fetches or pulls: + forces it, a leading : deletes it, a : maps it elsewhere.
   for (const value of ["+main", ":main", "main:other", "-main"]) {
     assert.throws(() => run("git push origin {{x}}", value), /x cannot start with|x cannot start with -, \+ or :/u, value);
@@ -622,6 +673,13 @@ test("where a value lands decides what it may be: no option, no refspec, no file
   assert.deepEqual(run("cat notes/{{x}}.md", "a/../b").steps[0]!.pipeline[0]!.argv, ["cat", "notes/a/../b.md"]);
   // A grep pattern is not a file.
   assert.deepEqual(run("grep -F {{x}} notes.txt", "/etc/hosts").steps[0]!.pipeline[0]!.argv, ["grep", "-F", "/etc/hosts", "notes.txt"]);
+  // A gh number or branch cannot point at another repository or a URL; a count is a whole number.
+  for (const value of ["https://example.com/o/r/pull/1", "other:branch", "me@host", "-1"]) {
+    assert.throws(() => run("gh pr view {{x}}", value), /x must be a number or a branch-like name there|cannot start with "-"/u, value);
+  }
+  assert.deepEqual(run("gh pr view {{x}}", "feature/x").steps[0]!.pipeline[0]!.argv, ["gh", "pr", "view", "feature/x"]);
+  assert.throws(() => run("gh release list --limit {{x}}", "5 or more"), /x must be a whole number there/u);
+  assert.deepEqual(run("gh release list --limit {{x}}", 5, "number").steps[0]!.pipeline[0]!.argv, ["gh", "release", "list", "--limit", "5"]);
   // Where nothing is read as a path or ref, text is just text.
   assert.deepEqual(run("git commit -m {{x}}", "fix: a/../b:c").steps[0]!.pipeline[0]!.argv, ["git", "commit", "-m", "fix: a/../b:c"]);
 });
