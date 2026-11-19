@@ -10,6 +10,7 @@ import { DESIGN_BRIDGE_SOURCE } from "./bridge-source.js";
 import { DesignGrantRegistry } from "./grants.js";
 import {
   DESIGN_OFFLINE_SANDBOX_POLICY,
+  GENERATIVE_UI_OFFLINE_SANDBOX_POLICY,
   designOfflineMissingFile,
   designOfflineRequestAllowed,
   withDesignOfflineSandbox,
@@ -89,6 +90,21 @@ test("each response in the hidden window keeps its own policy, body and status a
   }
   // A refusal stays a refusal.
   assert.equal(withDesignOfflineSandbox(original).status, status);
+});
+
+test("a generative UI preview in the hidden window runs its scripts without an origin, so previews share no storage", () => {
+  const sandboxed = withDesignOfflineSandbox(
+    new Response("<p>hi</p>", { headers: { "content-security-policy": "default-src 'none'" } }),
+    GENERATIVE_UI_OFFLINE_SANDBOX_POLICY,
+  );
+  const policies = sandboxed.headers.get("content-security-policy")!.split(/,\s*/u);
+  assert.equal(policies.length, 2);
+  const tokens = policies[1]!.split(/\s+/u);
+  assert.equal(tokens[0], "sandbox");
+  assert.ok(tokens.includes("allow-scripts"));
+  for (const token of ["allow-same-origin", "allow-modals", "allow-popups", "allow-forms", "allow-top-navigation", "allow-downloads"]) {
+    assert.equal(tokens.includes(token), false, token);
+  }
 });
 
 const CSP =

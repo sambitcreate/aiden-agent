@@ -34,6 +34,15 @@ export const DESIGN_OFFLINE_PROXY = {
  */
 export const DESIGN_OFFLINE_SANDBOX_POLICY = "sandbox allow-scripts allow-same-origin";
 
+/**
+ * The same for a generative UI preview, without its origin. Every preview is
+ * served from `aiden-genui://preview`, so with its origin kept one chat's
+ * visual could read what another stored in localStorage or IndexedDB. Like
+ * the chat's own `sandbox="allow-scripts"` frame, each preview gets an opaque
+ * origin and no storage to share.
+ */
+export const GENERATIVE_UI_OFFLINE_SANDBOX_POLICY = "sandbox allow-scripts";
+
 const ALLOWED_SCHEMES = new Set([`${DESIGN_SCHEME}:`, `${GENERATIVE_UI_PROTOCOL_SCHEME}:`, "data:", "about:"]);
 
 /** Whether the window may make this request: only Aiden's own local schemes, inline data and blobs made from them. */
@@ -52,10 +61,10 @@ export function designOfflineRequestAllowed(url: string): boolean {
   return ALLOWED_SCHEMES.has(parsed.protocol);
 }
 
-/** The same response with the offline sandbox policy added beside its own. */
-export function withDesignOfflineSandbox(response: Response): Response {
+/** The same response with an offline sandbox policy (the design one unless named) added beside its own. */
+export function withDesignOfflineSandbox(response: Response, policy: string = DESIGN_OFFLINE_SANDBOX_POLICY): Response {
   const headers = new Headers(response.headers);
-  headers.append("content-security-policy", DESIGN_OFFLINE_SANDBOX_POLICY);
+  headers.append("content-security-policy", policy);
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 

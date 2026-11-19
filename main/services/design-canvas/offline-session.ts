@@ -11,6 +11,7 @@ import { designGrants } from "./main.js";
 import {
   DESIGN_OFFLINE_PARTITION,
   DESIGN_OFFLINE_PROXY,
+  GENERATIVE_UI_OFFLINE_SANDBOX_POLICY,
   designOfflineMissingFile,
   designOfflineRequestAllowed,
   withDesignOfflineSandbox,
@@ -47,7 +48,7 @@ export function designOfflineSession(): { session: Session; ready: Promise<void>
   const design = designProtocolHandler({ grants: designGrants });
   target.protocol.handle(DESIGN_SCHEME, async (request) => withDesignOfflineSandbox(await design(request)));
   target.protocol.handle(GENERATIVE_UI_PROTOCOL_SCHEME, async (request) =>
-    withDesignOfflineSandbox(await generativeUiProtocolResponse(request)),
+    withDesignOfflineSandbox(await generativeUiProtocolResponse(request), GENERATIVE_UI_OFFLINE_SANDBOX_POLICY),
   );
   target.webRequest.onBeforeRequest((details, callback) => callback({ cancel: !designOfflineRequestAllowed(details.url) }));
   target.webRequest.onCompleted((details) => {
