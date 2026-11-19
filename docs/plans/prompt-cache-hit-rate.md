@@ -680,7 +680,7 @@ This replaces phase 6's accepted limits that `aiden serve` warms only while stre
 **Final review fixes (2026-11-19)**
 
 - **Warming and memory facts.** See phase 6's As built (warmer lifetime) and 8b's idle warming: every refresh re-checks the stated memory facts and fails closed.
-- **Desktop compaction breakpoints.** `createPiCompactionModels` sent a summary for a registry model through the registry's own `streamSimple`, which carries no breakpoints, so a cached summary wrote one unsplit system block instead of reading the turn's split head. That stream is now wrapped in `withPromptCacheBreakpoints` too. The cached summary replays the turn's `sessionId`, so it gets the turn's split; Pi's isolated summary sends none and is unchanged. `aiden serve` already applied them through `agent.onPayload`.
+- **Desktop compaction breakpoints.** `createPiCompactionModels` sent a summary for a registry model through the registry's own `streamSimple`, which carries no breakpoints, so a cached summary wrote one unsplit system block instead of reading the turn's split head. That stream is now wrapped in `withPromptCacheBreakpoints` too. The cached summary replays the turn's `sessionId`, so it gets the turn's split. Pi's isolated summary is unchanged: it is sent at `cacheRetention: "none"`, so there is no `cache_control` to extend; its system text is Pi's summarization prompt, not the chat's head; and it carries no tools, so no Bedrock tools cachePoint is added. `aiden serve` already applied them through `agent.onPayload`.
 - **Quit.** `llmClient.abortAll()` (and so `shutdown()`) now stops every cache warmer, since a settled chat's idle warmer belongs to no generation that quitting cancels.
 
 ## Cross-cutting requirements
