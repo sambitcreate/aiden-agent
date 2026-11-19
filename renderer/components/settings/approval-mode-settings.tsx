@@ -23,6 +23,7 @@ import { isUsable } from "../../lib/model-picker-data";
 import { queryKeys, useProviders, useSettings } from "../../lib/queries";
 import type { AppSettings } from "../../lib/types";
 import { prefersReducedMotion } from "../../lib/appearance-runtime";
+import { glideIntoView } from "../../lib/scroll-into-view";
 import { botMessagingEnabled } from "../../shared/bot-messages";
 import { botRoutinesGoAhead } from "../../shared/bot-rules";
 import { useAppCapabilities } from "../../lib/app-capabilities";
@@ -99,8 +100,8 @@ export function ApprovalModeSettings({ children }: { /** The rules page, under t
   // note (settings), Auto's row (providers) and the rules list.
   const settled = childrenSettled && !settings.isLoading && !providers.isLoading;
   React.useEffect(() => {
-    if (scrollRequest === null || !settled) return;
-    messagingRow.current?.scrollIntoView({ block: "center", behavior: prefersReducedMotion() ? "auto" : "smooth" });
+    if (scrollRequest === null || !settled || !messagingRow.current) return;
+    return glideIntoView(messagingRow.current, { animate: !prefersReducedMotion() });
   }, [scrollRequest, settled]);
 
   const choose = (next: ApprovalMode) => {
