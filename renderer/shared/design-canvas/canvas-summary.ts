@@ -13,8 +13,9 @@ import { activeDesignPage, isDesignContainer, type DesignCanvas, type DesignFram
 export const DESIGN_REFERENCE_VIEW = { w: 1200, h: 800 } as const;
 
 /**
- * At most this many frames are listed one by one, those in view first and
- * then those outside it; the rest are counted. A page holds at most 400.
+ * At most this many frames are listed one by one per answer, those in view
+ * first and then those outside it; the rest are counted, and `offset` reads
+ * the next ones. A page holds at most 400.
  */
 export const CANVAS_READ_FRAME_LIMIT = 200;
 /** A note's or text item's words are cut to this many characters when it is outside the view. */
@@ -73,11 +74,17 @@ export type CanvasReadAnswer = {
   outsideView: { groupId: string; title: string; frames: number }[];
   /** The frames outside the view one by one, within what is left of `CANVAS_READ_FRAME_LIMIT`. */
   outsideFrames: CanvasFrameSummary[];
-  /** Frames in view past `CANVAS_READ_FRAME_LIMIT`, left out. */
+  /** Frames in view left out of this answer: past `CANVAS_READ_FRAME_LIMIT`, or before `offset`. */
   omitted: number;
   /** Frames outside the view left out of `outsideFrames`. */
   outsideOmitted: number;
-  /** The page's open and sent comments, newest first; present when there are any. */
+  /** Where this answer's list starts in the page's frames (those in view first); present when not 0. */
+  offset?: number;
+  /** The `offset` that reads the frames after this answer's; present only when there are more. */
+  nextOffset?: number;
+  /** Says how many frames this answer lists and how to read the rest; present when it lists fewer than all. */
+  more?: string;
+  /** The page's open and sent comments, newest first; present when there are any, on the answer from offset 0. */
   comments?: Record<string, unknown>[];
 };
 
@@ -151,7 +158,7 @@ function endSummary(end: NonNullable<DesignFrame["ends"]>[number]): { x: number;
  */
 export function describeCanvas(
   doc: DesignCanvas,
-  options: { pageId?: string; view?: CanvasView } = {},
+  options: { pageId?: string; view?: CanvasView; offset?: number } = {},
 ): CanvasReadAnswer {
   const page = doc.pages.find((entry) => entry.id === options.pageId) ?? activeDesignPage(doc);
   const view = options.view ?? canvasView(doc, DESIGN_REFERENCE_VIEW, page.id);
@@ -159,8 +166,21 @@ export function describeCanvas(
   const comments = openCommentCounts(doc);
   const visible = frames.filter((frame) => overlaps(frame, view));
   const elsewhere = frames.filter((frame) => !overlaps(frame, view));
-  const listedInView = visible.slice(0, CANVAS_READ_FRAME_LIMIT);
-  const listedOutside = elsewhere.slice(0, Math.max(0, CANVAS_READ_FRAME_LIMIT - listedInView.length));
+  // The frames in view come first, then the rest; offset skips that many.
+  const start = Math.min(Math.max(0, Math.floor(options.offset ?? 0)), frames.length);
+  const end = Math.min(frames.length, start + CANVAS_READ_FRAME_LIMIT);
+  const listedInView = visible.slice(Math.min(start, visible.length), Math.min(end, visible.length));
+  const listedOutside = elsewhere.slice(Math.max(0, start - visible.length), Math.max(0, end - visible.length));
+  const paging =
+    start === 0 && end === frames.length
+      ? {}
+      : {
+          ...(start > 0 ? { offset: start } : {}),
+          ...(end < frames.length ? { nextOffset: end } : {}),
+          more: `Listed frames ${end > start ? `${start + 1}–${end}` : "none"} of ${frames.length} on this page (those in view first).${
+            end < frames.length ? ` Pass offset: ${end} to read the next ones.` : ""
+          }`,
+        };
   const outside = new Map<string, { groupId: string; title: string; frames: number }>();
   const titles = new Map(frames.filter((frame) => isDesignContainer(frame.kind)).map((frame) => [frame.id, frame.title]));
   for (const frame of frames) {
@@ -196,7 +216,8 @@ export function describeCanvas(
     }),
     omitted: visible.length - listedInView.length,
     outsideOmitted: elsewhere.length - listedOutside.length,
-    ...commentsOn(doc, page.id),
+    ...paging,
+    ...(start === 0 ? commentsOn(doc, page.id) : {}),
   };
 }
 

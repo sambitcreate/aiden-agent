@@ -35,6 +35,40 @@ test("a crowded view lists the first frames and says how many it left out", () =
   assert.equal(answer.inView.length, CANVAS_READ_FRAME_LIMIT);
   assert.equal(answer.omitted, 5);
   assert.equal(answer.frameCount, CANVAS_READ_FRAME_LIMIT + 5);
+  assert.equal(answer.nextOffset, CANVAS_READ_FRAME_LIMIT);
+  assert.match(answer.more!, new RegExp(`frames 1–${CANVAS_READ_FRAME_LIMIT} of ${CANVAS_READ_FRAME_LIMIT + 5}.*Pass offset: ${CANVAS_READ_FRAME_LIMIT}`, "u"));
+});
+
+test("offset reads the frames after an earlier answer's, those in view first, until every frame was listed once", () => {
+  const view = { x: 0, y: 0, w: 2000, h: 2000 };
+  const inView = Array.from({ length: CANVAS_READ_FRAME_LIMIT + 10 }, (_, index) => note(`v${index}`, index, index));
+  const outside = Array.from({ length: 30 }, (_, index) => note(`o${index}`, 9000 + index * 300, 9000));
+  const doc = canvas([...outside, ...inView], {
+    comments: [{ id: "c1", frameId: "v0", x: 1, y: 1, note: "tighten", state: "open", pageId: "page-1", anchorState: "anchored", createdAt: "2026-11-05T00:00:00Z" }],
+  });
+  const seen: string[] = [];
+  let offset: number | undefined = 0;
+  let answers = 0;
+  while (offset !== undefined) {
+    const answer = describeCanvas(doc, { view, offset });
+    seen.push(...answer.inView.map((frame) => frame.id), ...answer.outsideFrames.map((frame) => frame.id));
+    assert.ok(answer.inView.length + answer.outsideFrames.length <= CANVAS_READ_FRAME_LIMIT);
+    assert.equal(answer.comments !== undefined, offset === 0, "comments come with the first answer only");
+    offset = answer.nextOffset;
+    answers += 1;
+  }
+  assert.equal(answers, 2);
+  assert.deepEqual(seen, [...inView, ...outside].map((frame) => frame.id), "each frame once, in view first");
+  const last = describeCanvas(doc, { view, offset: CANVAS_READ_FRAME_LIMIT });
+  assert.equal(last.offset, CANVAS_READ_FRAME_LIMIT);
+  assert.equal(last.nextOffset, undefined);
+  assert.equal(last.inView.length, 10, "the frames in view past the first answer");
+  assert.match(last.more!, new RegExp(`frames ${CANVAS_READ_FRAME_LIMIT + 1}–${CANVAS_READ_FRAME_LIMIT + 40} of ${CANVAS_READ_FRAME_LIMIT + 40}`, "u"));
+  assert.doesNotMatch(last.more!, /Pass offset/u);
+  assert.equal(describeCanvas(doc, { view, offset: 10_000 }).inView.length, 0, "an offset past the end lists nothing");
+  const small = describeCanvas(canvas([note("a", 0, 0)]), { view });
+  assert.equal(small.more, undefined, "a page listed in full says nothing about paging");
+  assert.equal(small.nextOffset, undefined);
 });
 
 test("comments on removed frames and resolved comments do not count against a frame", () => {

@@ -316,6 +316,15 @@ test("canvas_read lists what is in view, the page's waiting comments, and counts
     "frames outside the view are listed with ids and boxes so they can be moved, grouped or shown",
   );
   assert.equal(answer.outsideOmitted, 0);
+  assert.equal(answer.more, undefined, "a page read whole says nothing about paging");
+
+  const later = await call("canvas_read", { offset: 1 });
+  assert.deepEqual(later.inView, [], "offset skips the frame in view");
+  assert.deepEqual(later.outsideFrames.map((frame: { id: string }) => frame.id), ["far-group", "far-note"]);
+  assert.equal(later.offset, 1);
+  assert.equal(later.nextOffset, undefined);
+  assert.equal(later.comments, undefined, "comments come with the first answer only");
+  assert.equal((await call("canvas_read", { offset: -1 })).status, "error");
 });
 
 test("a turn makes at most its canvas call budget, and a chat that left design mode gets none", async (t) => {
