@@ -496,6 +496,10 @@ test("in a workspace that is a folder of a larger repository, git reaches no fil
   for (const [command, value, problem] of refused) {
     assert.throws(() => resolve(command, [value]), problem, `${command} with ${value}`);
   }
+  // `:/` a template writes itself is a file named `:/`, not the repository root, so these touch nothing outside.
+  for (const command of ["git checkout -- :/ {{file}}", "git add :/ {{file}}"]) {
+    await runResolved(resolve(command, ["f"]), ws);
+  }
   assert.equal(fs.readFileSync(path.join(dir, "secret", "s"), "utf8"), "EDITED OUTSIDE\n", "the edit outside was not reverted");
   assert.equal(git(["diff", "--cached", "--name-only"]), "", "nothing outside was staged");
 
