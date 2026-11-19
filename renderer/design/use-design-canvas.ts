@@ -15,15 +15,17 @@
 // quitting, closing or reloading tries them once more and then asks the person
 // before discarding them, as it does for the Files editor and Create Images.
 //
-// Undo and redo are saved as the frames they change, not as whole canvases,
-// and taking in another writer's canvas clears the history, so neither can
-// take back what was changed elsewhere.
+// Undo and redo are saved as the frames they change, not as whole canvases.
+// Taking in another writer's canvas keeps the history: Aiden's canvas changes
+// from one reply become one undo step (the person's own edit in between
+// starts a new one), and any other writer's change is carried into every
+// kept step, so undo never takes back what was changed elsewhere.
 
 import * as React from "react";
 import { designCanvasApi } from "../lib/ipc";
 import { registerLifecycleFlush, setRendererLifecycleGuard } from "../lib/lifecycle-guard";
 import type { DesignCanvas } from "../shared/design-canvas/schema";
-import { changesBetween, record, redo, undo, type CanvasHistory } from "./canvas-history-core";
+import { changesBetween, keepUnchanged, record, redo, takeIn, undo, type CanvasHistory } from "./canvas-history-core";
 
 export const DESIGN_CANVAS_SAVE_DELAY_MS = 800;
 /** How long a closed canvas waits before each further try at edits it could not save. */
@@ -76,6 +78,28 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
   const guardKey = Symbol(chatId);
   /** The newest revision another writer announced. */
   let announced = 0;
+  /** The Aiden reply each announced revision came from. */
+  const aidenRevisions = new Map<number, string>();
+  /** The one Aiden reply that made every revision after `from` up to `to`, if one did. */
+  const aidenTurnBetween = (from: number, to: number): string | undefined => {
+    if (to <= from || to - from > 1_000) return undefined;
+    const turn = aidenRevisions.get(to);
+    for (let revision = from + 1; revision < to; revision += 1) {
+      if (aidenRevisions.get(revision) !== turn) return undefined;
+    }
+    return turn;
+  };
+  /** Moves the stored canvas on to `stored`, keeping the history. Returns the canvas to build on. */
+  const takeInStored = (stored: DesignCanvas, before: DesignCanvas): DesignCanvas => {
+    const from = server!;
+    const to = keepUnchanged(from, stored);
+    history = takeIn(history, { before, from, to, aidenTurn: aidenTurnBetween(from.revision, to.revision) });
+    for (const revision of aidenRevisions.keys()) {
+      if (revision <= to.revision) aidenRevisions.delete(revision);
+    }
+    server = to;
+    return to;
+  };
 
   const reportGuard = () => {
     const before = guardStates.get(guardKey);
@@ -125,8 +149,7 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
           if (local === doc) local = server;
           failed = false;
         } else if (result.reason === "conflict") {
-          server = result.doc;
-          history = EMPTY_HISTORY;
+          takeInStored(result.doc, local ?? doc);
           unsent = [...batch, ...unsent];
           local = replay(server, unsent);
           // Conflicted again straight after a replay: keep the edits on the newest canvas,
@@ -172,10 +195,7 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
       (fetched) => {
         if (disposed || !server || fetched.revision <= server.revision) return;
         if (unsent.length > 0 || inFlight) return;
-        server = fetched;
-        local = fetched;
-        // Undo must not take back what was changed elsewhere.
-        history = EMPTY_HISTORY;
+        local = takeInStored(fetched, local ?? server);
         emit();
         if (announced > fetched.revision) refetch();
       },
@@ -207,6 +227,9 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
   const unsubscribe = designCanvasApi.onDesignCanvasUpdated((update) => {
     if (update.chatId !== chatId) return;
     announced = Math.max(announced, update.revision);
+    if (typeof update.aidenTurn === "string" && (!server || update.revision > server.revision)) {
+      aidenRevisions.set(update.revision, update.aidenTurn);
+    }
     if (!server || update.revision <= server.revision) return;
     // A pending edit saves first: its conflict brings the newer canvas with it,
     // and a save already on its way fetches it when it lands.

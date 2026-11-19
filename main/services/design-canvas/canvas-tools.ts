@@ -678,6 +678,75 @@ export function readingOrder<T extends { x: number; y: number; w: number; h: num
   return bands.flatMap((band) => band.members.sort((a, b) => along(a) - along(b)));
 }
 
+type FrameBox = { x: number; y: number; w: number; h: number };
+const boxOf = (frame: DesignFrame): FrameBox => ({ x: frame.x, y: frame.y, w: frame.w, h: frame.h });
+const boxKey = (frame: DesignFrame) => `${frame.x},${frame.y},${frame.w},${frame.h}`;
+
+/**
+ * Keeps the person's own moves when Aiden's change is about to undo them. A
+ * frame this change alters whose box is no longer the one Aiden last saw
+ * (`seen`) was moved or resized by the person since; it is reported with its
+ * box now, and when the change would move or resize it too, it keeps the
+ * person's box (groups and connectors excepted: they follow their frames).
+ * Groups holding a frame that kept its box are fitted to it again.
+ */
+function keepPersonsMoves(
+  before: DesignCanvas,
+  after: DesignCanvas,
+  seen: ReadonlyMap<string, string>,
+): { doc: DesignCanvas; changed: { id: string; title: string; box: FrameBox }[]; kept: Set<string> } {
+  const earlier = new Map(before.frames.map((frame) => [frame.id, frame]));
+  const changed: { id: string; title: string; box: FrameBox }[] = [];
+  const kept = new Set<string>();
+  const refit: (string | undefined)[] = [];
+  const frames = after.frames.map((frame) => {
+    const was = earlier.get(frame.id);
+    const saw = seen.get(frame.id);
+    if (!was || saw === undefined || saw === boxKey(was)) return frame;
+    if (JSON.stringify(was) === JSON.stringify(frame)) return frame;
+    changed.push({ id: frame.id, title: was.title, box: boxOf(was) });
+    if (boxKey(frame) === boxKey(was) || frame.kind === "group" || frame.kind === "connector") return frame;
+    kept.add(frame.id);
+    refit.push(frame.groupId, was.groupId);
+    return { ...frame, ...boxOf(was) };
+  });
+  if (kept.size === 0) return { doc: after, changed, kept };
+  return { doc: refitGroups(syncConnectors({ ...after, frames }), refit), changed, kept };
+}
+
+/**
+ * The answer of a change, with the frames it touched that the person changed
+ * since Aiden last looked: their boxes now, and which kept the person's box.
+ */
+function withCoEditReport<T>(value: T, report: ReturnType<typeof keepPersonsMoves> | undefined, saved: DesignCanvas): T {
+  if (!report || report.changed.length === 0 || !value || typeof value !== "object" || Array.isArray(value)) return value;
+  const now = new Map(saved.frames.map((frame) => [frame.id, frame]));
+  const answer = value as Record<string, unknown>;
+  // A listed box of a frame that kept the person's box is the stored one.
+  const frames = Array.isArray(answer.frames)
+    ? answer.frames.map((entry: unknown) => {
+        if (!entry || typeof entry !== "object") return entry;
+        const listed = entry as { id?: unknown; box?: unknown };
+        const frame = typeof listed.id === "string" && report.kept.has(listed.id) ? now.get(listed.id) : undefined;
+        return frame && listed.box ? { ...listed, box: boxOf(frame) } : entry;
+      })
+    : undefined;
+  const kept = [...report.kept];
+  return {
+    ...answer,
+    ...(frames ? { frames } : {}),
+    changedSinceRead: report.changed.map((entry) => {
+      const frame = now.get(entry.id);
+      return frame ? { ...entry, box: boxOf(frame) } : entry;
+    }),
+    ...(kept.length > 0 ? { keptPersonsBox: kept } : {}),
+    coEdit:
+      kept.length > 0
+        ? "The person moved or resized these frames since you last read them, so they keep the person's place and size; the rest of the change landed. Work from the boxes here, and ask before moving them again."
+        : "The person moved or resized these frames since you last read them; the boxes here are where they are now.",
+  } as T;
+}
+
 export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[] {
   const newId = deps.newId ?? randomUUID;
   let calls = 0;
@@ -710,16 +779,42 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
     }
   };
 
-  /** Applies a change and tells open canvases about it. `change` throws to refuse. */
+  /**
+   * Each frame's box as Aiden last saw it this turn: listed by canvas_read or
+   * left by one of its own changes. A box that differs now is the person's
+   * move (or another window's) since then.
+   */
+  const seen = new Map<string, string>();
+  const remember = (frames: readonly DesignFrame[]) => {
+    for (const frame of frames) seen.set(frame.id, boxKey(frame));
+  };
+
+  /**
+   * Applies a change and tells open canvases about it. `change` throws to
+   * refuse. A frame the person moved since Aiden last saw it keeps the
+   * person's box, and the answer says so with its box now.
+   */
   const edit = async <T>(change: (doc: DesignCanvas) => { doc: DesignCanvas; value: T }): Promise<T> => {
     let value: T | undefined;
+    let report: ReturnType<typeof keepPersonsMoves> | undefined;
+    let touched = new Set<string>();
     const saved = await deps.store.update(deps.chatId, (doc) => {
       const next = change(doc);
+      report = keepPersonsMoves(doc, next.doc, seen);
+      const earlier = new Map(doc.frames.map((frame) => [frame.id, JSON.stringify(frame)]));
+      touched = new Set(
+        report.doc.frames.filter((frame) => earlier.get(frame.id) !== JSON.stringify(frame)).map((frame) => frame.id),
+      );
       value = next.value;
-      return next.doc;
+      return report.doc;
     });
     deps.broadcast({ chatId: deps.chatId, revision: saved.revision });
-    return value as T;
+    remember(saved.frames.filter((frame) => touched.has(frame.id)));
+    for (const entry of report?.changed ?? []) {
+      const now = saved.frames.find((frame) => frame.id === entry.id);
+      if (now) seen.set(entry.id, boxKey(now));
+    }
+    return withCoEditReport(value as T, report, saved);
   };
 
   const frameIn = (doc: DesignCanvas, id: unknown): DesignFrame => {
@@ -771,6 +866,8 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               pageId = read.pageId;
             }
             const answer = describeCanvas(doc, { pageId, ...(cursor ? { cursor } : {}) });
+            const listed = new Set([...answer.inView, ...answer.outsideFrames].map((frame) => frame.id));
+            remember(doc.frames.filter((frame) => listed.has(frame.id)));
             if (p.snapshot !== true) return answer;
             const unavailable = (snapshotReason: string) => ({ ...answer, snapshot: "unavailable", snapshotReason });
             if (deps.seesImages === false) {

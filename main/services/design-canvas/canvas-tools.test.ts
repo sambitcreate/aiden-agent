@@ -1023,6 +1023,56 @@ test("canvas_arrange lays frames out in a group that fits itself around them, an
   assert.deepEqual([out.frames[0].box.x, out.frames[0].box.y], [5000, 0]);
 });
 
+test("a frame the person moved since Aiden last looked keeps the person's place, and the answer says where it is", async (t) => {
+  const { store, call } = await setup(t);
+  const a = await call("canvas_place_frame", { kind: "note", title: "A", x: 0, y: 0 });
+  const b = await call("canvas_place_frame", { kind: "note", title: "B", x: 600, y: 0 });
+  await call("canvas_read");
+  // The person drags A and resizes B in the canvas while Aiden works.
+  await store.update("chat-1", (doc) => ({
+    ...doc,
+    frames: doc.frames.map((frame) =>
+      frame.id === a.frame.id ? { ...frame, x: 300, y: 900 } : frame.id === b.frame.id ? { ...frame, w: 500 } : frame,
+    ),
+  }));
+
+  // Aiden's move of A from its stale read does not undo the drag.
+  const moved = await call("canvas_update_frame", { id: a.frame.id, x: 50, y: 50 });
+  assert.equal(moved.status, "updated");
+  assert.deepEqual(moved.keptPersonsBox, [a.frame.id]);
+  assert.deepEqual(moved.changedSinceRead.map((entry: { id: string; box: unknown }) => [entry.id, entry.box]), [
+    [a.frame.id, { x: 300, y: 900, w: a.frame.box.w, h: a.frame.box.h }],
+  ]);
+  const stored = (await store.get("chat-1")).frames.find((frame) => frame.id === a.frame.id)!;
+  assert.deepEqual([stored.x, stored.y], [300, 900]);
+
+  // A change that does not move B lands, and says B's size is now the person's.
+  const renamed = await call("canvas_update_frame", { id: b.frame.id, title: "B, wider" });
+  assert.equal(renamed.keptPersonsBox, undefined);
+  assert.equal(renamed.changedSinceRead[0].box.w, 500);
+  assert.equal((await store.get("chat-1")).frames.find((frame) => frame.id === b.frame.id)!.title, "B, wider");
+
+  // Having been told where A is now, Aiden may move it.
+  const again = await call("canvas_update_frame", { id: a.frame.id, x: 50, y: 50 });
+  assert.equal(again.changedSinceRead, undefined);
+  const after = (await store.get("chat-1")).frames.find((frame) => frame.id === a.frame.id)!;
+  assert.deepEqual([after.x, after.y], [50, 50]);
+
+  // An arrange keeps a frame the person dragged after the read and lays out the rest.
+  await call("canvas_read");
+  await store.update("chat-1", (doc) => ({
+    ...doc,
+    frames: doc.frames.map((frame) => (frame.id === b.frame.id ? { ...frame, x: 4000, y: 4000 } : frame)),
+  }));
+  const arranged = await call("canvas_arrange", { frameIds: [a.frame.id, b.frame.id], layout: "row", x: 0, y: 2000, focus: false });
+  assert.deepEqual(arranged.keptPersonsBox, [b.frame.id]);
+  const listed = arranged.frames.find((entry: { id: string }) => entry.id === b.frame.id);
+  assert.deepEqual([listed.box.x, listed.box.y], [4000, 4000]);
+  const laid = await store.get("chat-1");
+  assert.deepEqual([laid.frames.find((frame) => frame.id === a.frame.id)!.x, laid.frames.find((frame) => frame.id === a.frame.id)!.y], [0, 2000]);
+  assert.deepEqual([laid.frames.find((frame) => frame.id === b.frame.id)!.x, laid.frames.find((frame) => frame.id === b.frame.id)!.y], [4000, 4000]);
+});
+
 test("canvas_arrange with no frame list keeps the order frames read in on the canvas, not the order they were added", async (t) => {
   const { call } = await setup(t);
   // Added out of order: the second row first, then the first row right to left, then a heading above it all.

@@ -6,6 +6,12 @@ import type { DesignCanvas } from "../shared/design-canvas/schema";
 export interface CanvasHistory {
   past: DesignCanvas[];
   future: DesignCanvas[];
+  /**
+   * The Aiden reply whose canvas changes the newest undo step holds, while
+   * that reply's later changes still join it. Any edit, undo or redo of the
+   * person's own ends it.
+   */
+  aidenTurn?: string;
 }
 
 export const CANVAS_HISTORY_LIMIT = 100;
@@ -36,6 +42,49 @@ export function redo(
   const [doc, ...future] = history.future;
   if (!doc) return null;
   return { doc, history: { past: [...history.past, current], future } };
+}
+
+/**
+ * Takes in a canvas another writer saved (`from` was the stored canvas this
+ * history was built on, `to` the newer one; `before` is what was on screen).
+ * Aiden's changes from one reply, `aidenTurn`, become one undo step back to
+ * `before`, or join the step its earlier changes made while the person has
+ * not edited since. Anything else (another window, or a change we cannot
+ * tell is Aiden's) is not undoable here, so every kept step takes it in and
+ * undo never takes it back. Pass `to` through `keepUnchanged` first.
+ */
+export function takeIn(
+  history: CanvasHistory,
+  change: { before: DesignCanvas; from: DesignCanvas; to: DesignCanvas; aidenTurn?: string },
+  limit: number = CANVAS_HISTORY_LIMIT,
+): CanvasHistory {
+  if (change.aidenTurn === undefined) {
+    const carry = changesBetween(change.from, change.to);
+    const kept: CanvasHistory = { past: history.past.map(carry), future: history.future.map(carry) };
+    return history.aidenTurn === undefined ? kept : { ...kept, aidenTurn: history.aidenTurn };
+  }
+  // Undoing the reply's step takes its changes away, so older steps never hold them.
+  if (history.past.length > 0 && history.aidenTurn === change.aidenTurn) {
+    // The step already goes back to before this reply's first change.
+    return { past: history.past, future: [], aidenTurn: change.aidenTurn };
+  }
+  return { ...record(history, change.before, limit), aidenTurn: change.aidenTurn };
+}
+
+/**
+ * `to` with each frame and comment that is the same as in `from` replaced by
+ * `from`'s own, so `changesBetween` and the canvas see only what changed. A
+ * canvas fetched from main is all new objects even where nothing changed.
+ */
+export function keepUnchanged(from: DesignCanvas, to: DesignCanvas): DesignCanvas {
+  const reuse = <T extends { id: string }>(was: readonly T[], now: T[]): T[] => {
+    const earlier = new Map(was.map((item) => [item.id, item]));
+    return now.map((item) => {
+      const same = earlier.get(item.id);
+      return same && JSON.stringify(same) === JSON.stringify(item) ? same : item;
+    });
+  };
+  return { ...to, frames: reuse(from.frames, to.frames), comments: reuse(from.comments, to.comments) };
 }
 
 /**

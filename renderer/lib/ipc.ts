@@ -2534,8 +2534,9 @@ export const designCanvasApi = {
   /** Compare-and-swap: lands only if `baseRevision` is still the stored revision. */
   saveDesignCanvas: (chatId: string, doc: DesignCanvas, baseRevision: number) =>
     invoke<DesignCanvasSaveResult>("designCanvas:save", chatId, doc, baseRevision),
-  onDesignCanvasUpdated: (handler: (update: { chatId: string; revision: number }) => void) =>
-    onNotification<{ chatId: string; revision: number }>("designCanvas:updated", handler),
+  /** `aidenTurn` names the reply that made the change, when Aiden made it. */
+  onDesignCanvasUpdated: (handler: (update: { chatId: string; revision: number; aidenTurn?: string }) => void) =>
+    onNotification<{ chatId: string; revision: number; aidenTurn?: string }>("designCanvas:updated", handler),
   /** The chat's `aiden-design://<grant>/` host for framing its workspace files. */
   getDesignCanvasGrant: (chatId: string) =>
     invoke<{ grant: string } | { error: "unavailable" }>("designCanvas:grant", chatId),

@@ -36,8 +36,12 @@ import {
 } from "../services/design-canvas/store.js";
 import type { ChatMeta } from "../services/types.js";
 
-/** Broadcast on `designCanvas:updated` after a save or an Aiden edit lands. */
-export type DesignCanvasUpdated = { chatId: string; revision: number };
+/**
+ * Broadcast on `designCanvas:updated` after a save or an Aiden edit lands.
+ * `aidenTurn` names the reply whose change it was, so an open canvas can
+ * undo all of one reply's canvas changes as one step.
+ */
+export type DesignCanvasUpdated = { chatId: string; revision: number; aidenTurn?: string };
 
 /** The chat fields the canvas handlers decide on. */
 export type DesignCanvasChat = Pick<

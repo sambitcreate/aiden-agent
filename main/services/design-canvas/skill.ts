@@ -15,6 +15,7 @@ export const AIDEN_DESIGN_SKILL = Object.freeze({
     "",
     "Start from what is there:",
     "- Call canvas_read for the frames and open comments, then read design/tokens.css and the screens already in design/ before writing anything new.",
+    "- The person can move frames while you work. When an answer lists changedSinceRead, those frames moved since you last looked: work from the boxes it gives, and if keptPersonsBox names a frame, it stayed where the person put it, so ask before moving it again.",
     "- Look for the person's design system in the workspace: CSS variables or a theme file in their app, a tailwind config, tokens JSON, a DESIGN.md or style guide, their logo and fonts. Use its colours, type, spacing and radii, copied into design/tokens.css, rather than inventing new ones. Leave the person's own files as they are unless they ask; when there is no design system, pick a small set of tokens and say which.",
     "- When the request leaves the screen's purpose or audience unclear, ask one short question; otherwise say what you assumed and start.",
     "",

@@ -558,7 +558,7 @@ import {
 } from "./design-canvas/inspect-note.js";
 import { designUrl } from "../../renderer/shared/design-canvas/url.js";
 import { frameShowingDesignPage } from "../../renderer/shared/design-canvas/schema.js";
-import { DESIGN_CANVAS_UPDATED_CHANNEL } from "../handlers/design-canvas.js";
+import { DESIGN_CANVAS_UPDATED_CHANNEL, type DesignCanvasUpdated } from "../handlers/design-canvas.js";
 
 subagentRuntimeRegistry.setHealthMetrics(subagentHealthMetrics);
 subagentRuntimeRegistry.setLimits({
@@ -2522,6 +2522,13 @@ async function prepareGeneration(
       },
     }).filter((tool) => !options.excludeToolNames?.has(tool.name)));
   }
+  /**
+   * Announces a canvas change this reply made, named by the reply, so an open
+   * canvas undoes all of one reply's canvas changes as one step.
+   */
+  const aidenCanvasTurn = randomUUID();
+  const announceCanvasChange = (update: { chatId: string; revision: number }) =>
+    ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, { ...update, aidenTurn: aidenCanvasTurn } satisfies DesignCanvasUpdated);
   /** Set while this turn may use the canvas: puts its committed visuals there. */
   let placeCanvasArtifacts: ((artifacts: readonly CanvasArtifact[]) => Promise<void>) | undefined;
   /**
@@ -2542,7 +2549,7 @@ async function prepareGeneration(
       chatId: params.chatId,
       workspaceRoot: canvasRoot,
       store: designCanvasStore,
-      broadcast: (update) => ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, update),
+      broadcast: announceCanvasChange,
       focus: (frameIds) => {
         if (!browserOwner.isDestroyed()) browserOwner.send("designCanvas:focus", { chatId: params.chatId, frameIds });
       },
@@ -2576,7 +2583,7 @@ async function prepareGeneration(
           chatId: params.chatId,
           artifacts,
           store: designCanvasStore,
-          broadcast: (update) => ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, update),
+          broadcast: announceCanvasChange,
           newId: randomUUID,
         });
       };
@@ -2675,7 +2682,7 @@ async function prepareGeneration(
           paths: [relativePath],
           shouldSave: canSaveWrittenPage,
           store: designCanvasStore,
-          broadcast: (update) => ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, update),
+          broadcast: announceCanvasChange,
           newId: randomUUID,
           onRemoved: () => {
             leftOff = true;
