@@ -619,9 +619,11 @@ export function resolveWorkspaceArtifactCommand(
     }
     if (typeof raw !== "string" && typeof raw !== "number") invalid(`${action.label} needs text for ${param.name}.`);
     const text = String(raw);
-    if (text.length > WORKSPACE_ARTIFACT_LIMITS.argumentChars || hasControlCharacter(text, false)) {
-      invalid(`${action.label}: ${param.name} is too long or contains control characters.`);
+    if (text.length > WORKSPACE_ARTIFACT_LIMITS.argumentChars) {
+      invalid(`${action.label}: ${param.name} is longer than ${WORKSPACE_ARTIFACT_LIMITS.argumentChars} characters.`);
     }
+    // A value is one argument and never reaches a shell, so a line break or tab (a commit message body, a comment) is plain text.
+    if (hasControlCharacter(text, true)) invalid(`${action.label}: ${param.name} contains a control character.`);
     return text;
   });
   if (!workspaceArtifactTemplateHasParams(action.command)) return { kind: "shell", command: action.command, preview: action.command };

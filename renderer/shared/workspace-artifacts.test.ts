@@ -92,7 +92,7 @@ const merge: WorkspaceArtifactActionV1 = {
 };
 
 test("filled-in values reach the program as single literal arguments, and the preview reads the same to a shell", () => {
-  const hostile = [`$(touch /tmp/aiden-pwned)`, `'; echo hi; '`, "a  b c", `"$HOME"`, "`id`", "plain", "x\"y"];
+  const hostile = [`$(touch /tmp/aiden-pwned)`, `'; echo hi; '`, "a  b c", `"$HOME"`, "`id`", "plain", "x\"y", "subject\n\nbody; echo hi", "a\tb"];
   for (const value of hostile) {
     const resolved = resolveWorkspaceArtifactCommand(merge, [value, 3]);
     assert.deepEqual(argvOf(resolved), [["printf", "%s|%s", value, "3"]], value);
@@ -646,7 +646,9 @@ test("a placeholder cannot be run as a command or hidden from the check", () => 
 test("filled-in values are checked against their declared types", () => {
   assert.throws(() => resolveWorkspaceArtifactCommand(merge, ["x", "not a number"]), /number/u);
   assert.throws(() => resolveWorkspaceArtifactCommand(merge, [{ nested: true }, 1]), /text/u);
-  assert.throws(() => resolveWorkspaceArtifactCommand(merge, ["a\u0000b", 1]), /control/u);
+  assert.throws(() => resolveWorkspaceArtifactCommand(merge, ["a\u0000b", 1]), /Comment: who contains a control character/u);
+  assert.throws(() => resolveWorkspaceArtifactCommand(merge, ["a\rb", 1]), /contains a control character/u);
+  assert.throws(() => resolveWorkspaceArtifactCommand(merge, ["a\u001bb", 1]), /contains a control character/u);
   assert.throws(() => resolveWorkspaceArtifactCommand(merge, ["a\u202eb", 1]), /control/u);
   assert.throws(() => resolveWorkspaceArtifactCommand(merge, ["--upload-pack=x", 1]), /cannot start with "-"/u);
   assert.throws(() => resolveWorkspaceArtifactCommand(merge, ["a", 1, "extra"]), /takes 2/u);
