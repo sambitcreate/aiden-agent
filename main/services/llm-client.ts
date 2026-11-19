@@ -302,8 +302,7 @@ import {
   createGenerationContextTransform,
   modelRetainsSystemUpdates,
 } from "./generation-context.js";
-import { promptCacheTtlMs, withLongPromptCacheRetention } from "./prompt-cache-lifetimes.js";
-import { chatPromptCacheRetention } from "../../renderer/shared/prompt-cache-retention.js";
+import { chatTurnPromptCache, promptCacheTtlMs } from "./prompt-cache-lifetimes.js";
 import { chatPromptCacheTelemetry, chatPromptGenerationStopped, chatPromptPrefixCompacted } from "./chat-prompt-cache-state.js";
 import { chatCompactionPrecomputes, precomputeWithinSpendingLimit } from "./compaction-precompute.js";
 import {
@@ -4486,14 +4485,14 @@ export const llmClient = {
               },
             }),
           );
-      // An hour-long cache is the person's choice for their own chats. Bot
-      // runs, automations and agent harnesses keep the default lifetime, and
-      // side calls ask for the default themselves.
-      const keepsLongPromptCache = longPromptCacheRetention && !harnessProvider && !preparedBotContext &&
-        (options.usageSource === undefined || options.usageSource === "chat") &&
-        authoritativeMode !== "assistant-automation";
-      const requestStream = keepsLongPromptCache ? withLongPromptCacheRetention(observedStream) : observedStream;
-      const promptCacheRetention = keepsLongPromptCache ? chatPromptCacheRetention({ longPromptCacheRetention }, model) : "short";
+      const { streamFn: requestStream, retention: promptCacheRetention } = chatTurnPromptCache({
+        longPromptCacheRetention,
+        agentHarness: Boolean(harnessProvider),
+        bot: Boolean(preparedBotContext),
+        usageSource: options.usageSource,
+        mode: authoritativeMode,
+        ownerKind: owner.kind,
+      }, observedStream, model);
       rememberPromptCacheRetention(params.chatId, { provider: model.provider, model: model.id, retention: promptCacheRetention });
       const promptCacheTtl = promptCacheTtlMs(model, promptCacheRetention);
       candidate = new PiAgentRuntimeHarness({

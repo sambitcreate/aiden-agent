@@ -1,6 +1,6 @@
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import type { Api, CacheRetention, Model } from "@earendil-works/pi-ai";
-import { LONG_PROMPT_CACHE_TTL_MS, supportsLongPromptCacheRetention } from "../../renderer/shared/prompt-cache-retention.js";
+import { chatPromptCacheRetention, LONG_PROMPT_CACHE_TTL_MS, supportsLongPromptCacheRetention } from "../../renderer/shared/prompt-cache-retention.js";
 
 type PromptCacheModel = Pick<Model<Api>, "provider" | "id" | "api" | "promptCache"> & {
   name?: string;
@@ -120,4 +120,48 @@ export function withLongPromptCacheRetention(streamFn: StreamFn): StreamFn {
     options?.cacheRetention === undefined && supportsLongPromptCacheRetention(model)
       ? streamFn(model, context, { ...options, cacheRetention: "long" })
       : streamFn(model, context, options);
+}
+
+/** What decides whether a chat turn may keep its cache for an hour. */
+export interface ChatTurnCacheScope {
+  /** The person's "Keep chat caches for an hour" setting. */
+  longPromptCacheRetention: boolean;
+  /** The turn runs on an agent harness (ACP) rather than a Pi provider. */
+  agentHarness: boolean;
+  /** The turn speaks as a Bot. */
+  bot: boolean;
+  /** The request source the turn's usage is recorded under; undefined is a plain chat. */
+  usageSource?: string;
+  /** The chat mode the turn runs in. */
+  mode?: string;
+  /** Who started the turn: a paired device's turn is "remote". */
+  ownerKind?: "remote";
+}
+
+/**
+ * Whether a turn's requests may ask for an hour-long cache. It is the
+ * person's choice for chats they attend on this desktop: Bot runs,
+ * automations, subagents, agent harnesses and turns a paired device starts
+ * keep the default lifetime, and side calls and compaction name their own
+ * retention, which the wrapper keeps.
+ */
+export function keepsLongPromptCache(turn: ChatTurnCacheScope): boolean {
+  return turn.longPromptCacheRetention && !turn.agentHarness && !turn.bot &&
+    (turn.usageSource === undefined || turn.usageSource === "chat") &&
+    turn.mode !== "assistant-automation" && turn.ownerKind !== "remote";
+}
+
+/**
+ * The stream a chat turn's requests go through, and the retention its main
+ * requests use on `model`: "long" only for a turn that keeps the hour and a
+ * model Pi sends one for.
+ */
+export function chatTurnPromptCache(
+  turn: ChatTurnCacheScope,
+  streamFn: StreamFn,
+  model: PromptCacheModel,
+): { streamFn: StreamFn; retention: "short" | "long" } {
+  return keepsLongPromptCache(turn)
+    ? { streamFn: withLongPromptCacheRetention(streamFn), retention: chatPromptCacheRetention({ longPromptCacheRetention: true }, model) }
+    : { streamFn, retention: "short" };
 }

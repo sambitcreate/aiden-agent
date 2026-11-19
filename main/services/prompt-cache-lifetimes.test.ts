@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { normalizeContext, type Api, type Model } from "@earendil-works/pi-ai";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
-import { promptCacheTtlMs, withLongPromptCacheRetention } from "./prompt-cache-lifetimes.js";
+import { chatTurnPromptCache, promptCacheTtlMs, withLongPromptCacheRetention, type ChatTurnCacheScope } from "./prompt-cache-lifetimes.js";
 
 const require = createRequire(import.meta.url);
 const catalogDir = join(dirname(require.resolve("@earendil-works/pi-ai/package.json")), "dist/providers/data");
@@ -111,4 +111,49 @@ test("a chat request asks for the hour only on a model that keeps one, and an ex
   await stream(catalogModel("anthropic", "claude-opus-5") as never, context, { cacheRetention: "none" });
   await stream(catalogModel("anthropic", "claude-opus-5") as never, context, { cacheRetention: "short" });
   assert.deepEqual(seen, ["long", "long", undefined, undefined, undefined, "none", "short"]);
+});
+
+/** The retention each request of a turn reaches the provider with, beside the one the turn records. */
+async function turnRetentions(turn: Partial<ChatTurnCacheScope>, model: Model<Api>) {
+  const seen: Array<string | undefined> = [];
+  const provider = ((_model, _context, options) => {
+    seen.push(options?.cacheRetention);
+    return undefined as never;
+  }) as StreamFn;
+  const { streamFn, retention } = chatTurnPromptCache({ longPromptCacheRetention: true, agentHarness: false, bot: false, ...turn }, provider, model);
+  const context = normalizeContext({ messages: [] });
+  await streamFn(model as never, context, {});
+  // A side call or compaction names its own retention on the turn's stream.
+  await streamFn(model as never, context, { cacheRetention: "short" });
+  await streamFn(model as never, context, { cacheRetention: "none" });
+  return { reply: seen[0], sideCall: seen[1], oneOff: seen[2], recorded: retention };
+}
+
+test("an attended workspace chat on Anthropic or Bedrock keeps the hour, and its side calls do not", async () => {
+  const hour = { reply: "long", sideCall: "short", oneOff: "none", recorded: "long" };
+  assert.deepEqual(await turnRetentions({}, catalogModel("anthropic", "claude-opus-5")), hour);
+  assert.deepEqual(await turnRetentions({ usageSource: "chat", mode: "workspace" }, catalogModel("anthropic", "claude-opus-5")), hour);
+  assert.deepEqual(await turnRetentions({}, catalogModel("amazon-bedrock", "us.anthropic.claude-sonnet-4-5-20250929-v1:0")), hour);
+});
+
+test("every other turn keeps the default cache lifetime", async () => {
+  const anthropic = catalogModel("anthropic", "claude-opus-5");
+  const short = { reply: undefined, sideCall: "short", oneOff: "none", recorded: "short" };
+  const turns: Array<[string, Partial<ChatTurnCacheScope>, Model<Api>]> = [
+    ["the setting is off", { longPromptCacheRetention: false }, anthropic],
+    ["an agent harness", { agentHarness: true }, anthropic],
+    ["a Bot", { bot: true }, anthropic],
+    ["an automation", { mode: "assistant-automation" }, anthropic],
+    ["a scheduled run", { usageSource: "scheduled" }, anthropic],
+    ["a subagent", { usageSource: "subagent" }, anthropic],
+    ["a compaction", { usageSource: "compaction" }, anthropic],
+    ["a Telegram turn", { usageSource: "telegram" }, anthropic],
+    ["a paired device's turn", { ownerKind: "remote", usageSource: "chat" }, anthropic],
+    ["OpenRouter routing to Anthropic", {}, catalogModel("openrouter", "anthropic/claude-opus-4.5")],
+    ["a custom endpoint", {}, { provider: "custom-proxy", id: "claude-opus-5", api: "anthropic-messages" } as Model<Api>],
+    ["Bedrock before Claude 4.5", {}, catalogModel("amazon-bedrock", "us.anthropic.claude-sonnet-4-20250514-v1:0")],
+  ];
+  for (const [label, turn, model] of turns) {
+    assert.deepEqual(await turnRetentions(turn, model), short, label);
+  }
 });
