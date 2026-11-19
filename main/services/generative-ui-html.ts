@@ -25,7 +25,7 @@ import {
   MAX_GUEST_PROMPT_CHARS,
 } from "../../renderer/shared/generative-ui-bridge.js";
 import { generativeUiKitCss } from "./generative-ui-kit.js";
-import { HtmlScanner, type HtmlFindings } from "./generative-ui-html-scan.js";
+import { HtmlScanner, XML_DECLARATIONS_LIMIT, XML_HTML_TEXT_LIMIT, type HtmlFindings } from "./generative-ui-html-scan.js";
 
 // The admission check (generative-ui-html-scan.ts) reads the HTML the way a
 // browser does and refuses only what would load or run something; the
@@ -35,6 +35,15 @@ const MAX_QUOTED_MATCH_CHARS = 60;
 function quoteMatch(text: string): string {
   const flat = text.replace(/\s+/gu, " ").trim();
   return JSON.stringify(flat.length > MAX_QUOTED_MATCH_CHARS ? `${flat.slice(0, MAX_QUOTED_MATCH_CHARS - 1)}…` : flat);
+}
+
+/** What to change for a visual refused as too complex to check. */
+function limitAdvice(limit: string): string {
+  if (limit === XML_DECLARATIONS_LIMIT) return "Remove the DOCTYPE internal subset and the <!ENTITY> and <!ATTLIST> declarations from the XML the script parses.";
+  if (limit === XML_HTML_TEXT_LIMIT) {
+    return "Give those elements text only (no child elements, comments or CDATA sections holding < or &), build them with document.createElement, or parse the markup as text/html.";
+  }
+  return "Simplify the markup.";
 }
 
 export interface GenerativeUiThemeTokens {
@@ -436,7 +445,7 @@ function check(html: string): { fragment: string } {
   }
   const { embed, url, limit } = findings;
   if (limit !== undefined) {
-    throw new Error(`Artifact HTML is too complex to check: ${limit}. Simplify the markup.`);
+    throw new Error(`Artifact HTML is too complex to check: ${limit}. ${limitAdvice(limit)}`);
   }
   if (embed !== undefined) {
     throw new Error(

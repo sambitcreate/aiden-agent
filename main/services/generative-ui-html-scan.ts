@@ -645,18 +645,77 @@ const HTML_CALLS: Readonly<Record<string, number | "any">> = {
   parseHTMLUnsafe: 0,
 };
 /**
- * The types DOMParser's `parseFromString` parses as HTML; the XML types and
- * any other value (which makes it throw) are read by `parseFromStringSink`.
+ * The types DOMParser's `parseFromString` parses as HTML and as XML; any
+ * other value makes it throw (see `parseFromStringType`).
  */
-const DOM_PARSER_HTML_TYPES: ReadonlySet<string> = new Set(["text/html", "application/xhtml+xml", "image/svg+xml"]);
-const DOM_PARSER_XML_TYPES: ReadonlySet<string> = new Set(["text/xml", "application/xml"]);
+const DOM_PARSER_HTML_TYPES: ReadonlySet<string> = new Set(["text/html"]);
+const DOM_PARSER_XML_TYPES: ReadonlySet<string> = new Set(["application/xhtml+xml", "image/svg+xml", "text/xml", "application/xml"]);
 /** How far ahead a `parseFromString(` call's type argument is looked for; past it the type counts as computed. */
 const PARSE_TYPE_LOOKAHEAD = 4_096;
 /**
  * XML that names the XHTML, SVG or MathML namespace, or spells a namespace
  * with a character reference.
  */
-const XML_MARKUP_NAMESPACE = /www\.w3\.org\/(?:1999\/xhtml|2000\/svg|1998\/Math\/MathML)|xmlns(?::[\w.-]+)?\s*=\s*(?:"[^"&]*&|'[^'&]*&)/iu;
+const XML_MARKUP_NAMESPACE = /www\.w3\.org\/(?:1999\/xhtml|2000\/svg|1998\/Math\/MathML)|xmlns(?::[^\s=:]+)?\s*=\s*(?:"[^"&]*&|'[^'&]*&)/iu;
+/**
+ * A DOCTYPE with an internal subset, an attribute-list or an entity
+ * declaration: XML that can give an element a namespace by default, or
+ * spell markup through an entity, without writing it where it is used.
+ */
+const XML_DECLARATIONS = /<!DOCTYPE[^<>[]*\[|<!ATTLIST|<!ENTITY/iu;
+/**
+ * A start tag (any prefix) of an element whose content HTML reads as text,
+ * where XML reads markup in it.
+ */
+const XML_HTML_TEXT_ELEMENTS = /<(?:[^\s/>:<]+:)?(style|script|textarea|title|xmp|iframe|noembed|noframes|noscript|plaintext)(?=[\s/>])/giu;
+/** An element's namespace prefix in a start or end tag (`<x:iframe>`, `</é:img>`). */
+const XML_ELEMENT_PREFIX = /<(\/?)[^\s/>:<]+:/gu;
+/**
+ * A prefixed attribute whose local name is a URL attribute (`q:href` bound
+ * to the XLink namespace is an SVG link, as `xlink:href` is).
+ */
+const XML_PREFIXED_URL_ATTRIBUTE = /\s[^\s=/>:"'<]+:(?:href|src|action|formaction|data)\s*=\s*("[^"]*"|'[^']*')/giu;
+/** Refused: XML a script parses that declares a DOCTYPE internal subset, entities or attribute lists. */
+export const XML_DECLARATIONS_LIMIT = "a script parses XML with a DOCTYPE internal subset, an <!ENTITY> or an <!ATTLIST> declaration";
+/** Refused: namespaced XML a script parses that HTML would read part of as text. */
+export const XML_HTML_TEXT_LIMIT =
+  "a script parses XML that names the XHTML, SVG or MathML namespace, so it is checked as HTML, and HTML would read part of it as text where XML reads markup: a <style>, <script>, <textarea>, <title>, <xmp>, <iframe>, <noembed>, <noframes> or <noscript> that is self-closed or holds markup (or, in <style> and <script>, a character reference), a <plaintext>, or a CDATA section that holds < or &";
+
+/**
+ * Namespaced XML as text HTML reads the same way, or undefined where HTML
+ * would read part of it as text: a CDATA section is replaced by its text
+ * when that text holds no `<` or `&`, and each element whose content HTML
+ * reads as text must hold only text up to its end tag (no `&` in a style or
+ * script, where HTML would not decode it). XML has no `<` in an attribute
+ * value, so the next `<` after a start tag begins its content's first
+ * markup. Each step searches forward from the last, so this is linear.
+ */
+function xmlAsHtml(markup: string): string | undefined {
+  let text = "";
+  let at = 0;
+  for (let start = markup.indexOf("<![CDATA[", at); start !== -1; start = markup.indexOf("<![CDATA[", at)) {
+    const end = markup.indexOf("]]>", start + 9);
+    if (end === -1) return undefined;
+    const content = markup.slice(start + 9, end);
+    if (/[<&]/u.test(content)) return undefined;
+    text += markup.slice(at, start) + content;
+    at = end + 3;
+  }
+  text += markup.slice(at);
+  for (const match of text.matchAll(XML_HTML_TEXT_ELEMENTS)) {
+    const name = match[1]!.toLowerCase();
+    if (name === "plaintext") return undefined;
+    const close = text.indexOf(">", match.index);
+    const next = text.indexOf("<", match.index + 1);
+    if (close === -1 || (next !== -1 && next < close) || text[close - 1] === "/") return undefined;
+    const end = text.indexOf("<", close);
+    if (end === -1) return undefined;
+    const endTag = /^<\/(?:[^\s/>:<]+:)?([^\s/>:<]+)[\s>]/u.exec(text.slice(end, end + 256));
+    if (endTag?.[1]!.toLowerCase() !== name) return undefined;
+    if ((name === "style" || name === "script") && text.slice(close, end).includes("&")) return undefined;
+  }
+  return text;
+}
 /** An attribute node's properties that set its value. */
 const ATTRIBUTE_NODE_VALUES: ReadonlySet<string> = new Set(["value", "nodeValue", "textContent"]);
 /** Assignment operators whose right side is the value written. */
@@ -864,14 +923,17 @@ function calleeBefore(tokens: readonly JsToken[], at: number, hops = 0): Callee 
   return named;
 }
 
-/** How DOMParser reads a `parseFromString` call's markup: as HTML, as XML, or not at all (it throws). */
-type ParseAs = "html" | "xml" | "none";
+/**
+ * How DOMParser reads a `parseFromString` call's markup: as HTML, as XML,
+ * as either (the type is computed) or not at all (it throws).
+ */
+type ParseAs = "html" | "xml" | "any" | "none";
 
 /**
  * How the `parseFromString(` call whose `(` is at `open` reads its first
  * argument, from its second: a literal type picks HTML, XML or neither (no
  * type, or one DOMParser does not know, throws); a computed one, or one not
- * found within `PARSE_TYPE_LOOKAHEAD` tokens, may be text/html.
+ * found within `PARSE_TYPE_LOOKAHEAD` tokens, may be either.
  */
 function parseFromStringType(tokens: readonly JsToken[], open: number, skip = 0): ParseAs {
   let depth = 0;
@@ -881,7 +943,7 @@ function parseFromStringType(tokens: readonly JsToken[], open: number, skip = 0)
     const token = tokens[index]!;
     if (token.kind !== "punct") continue;
     // A spread argument can supply the type from any position, so its type is unknown.
-    if (token.text === "..." && depth === 0) return "html";
+    if (token.text === "..." && depth === 0) return "any";
     if (token.text === "(" || token.text === "[" || token.text === "{" || token.text === "${") depth += 1;
     else if (token.text === ")" || token.text === "]" || token.text === "}") {
       if (depth === 0) return "none";
@@ -894,12 +956,12 @@ function parseFromStringType(tokens: readonly JsToken[], open: number, skip = 0)
       const type = tokens[index + 1];
       if (isPunct(type, ")")) return "none";
       const after = tokens[index + 2];
-      if (!isLiteral(type) || type.substituted === true || !(isPunct(after, ")") || isPunct(after, ","))) return "html";
+      if (!isLiteral(type) || type.substituted === true || !(isPunct(after, ")") || isPunct(after, ","))) return "any";
       const value = type.value ?? "";
       return DOM_PARSER_HTML_TYPES.has(value) ? "html" : DOM_PARSER_XML_TYPES.has(value) ? "xml" : "none";
     }
   }
-  return "html";
+  return "any";
 }
 
 /** A call frame's current argument, counted among the callee's own (-1 for `.call`'s `this`). */
@@ -925,8 +987,9 @@ function argumentSinks(frame: Pick<CallFrame, "callee" | "receiver" | "start" | 
   if (callee === "execCommand" && argument === 2 && frame.literals[0]?.toLowerCase() === "inserthtml") return { html: start };
   // DOMParser's document is not in the page, but its nodes are moved into it.
   if (callee === "parseFromString" && argument === 0) {
-    const as = frame.parseAs ?? "html";
-    return as === "none" ? undefined : { [as]: start };
+    const as = frame.parseAs ?? "any";
+    if (as === "none") return undefined;
+    return as === "any" ? { html: start, xml: start } : { [as]: start };
   }
   if (Object.prototype.hasOwnProperty.call(HTML_CALLS, callee)) {
     const at = HTML_CALLS[callee];
@@ -1147,14 +1210,32 @@ function scanJsTokens(
     else if (handler.url !== undefined || handler.embed !== undefined) note({ url: excerpt });
   };
 
-  // XML a page takes nodes from: only an element in the XHTML, SVG or
-  // MathML namespace is one the page runs or loads, so XML that declares
-  // none (an RSS feed, a config file) is safe. XML that declares one is read
-  // as HTML with its element prefixes dropped (`<x:iframe>` is an iframe);
-  // XML that declares entities, which can spell any of that, is refused.
+  // XML a page takes nodes from (DOMParser's XML, XHTML and SVG types):
+  // only an element in the XHTML, SVG or MathML namespace is one the page
+  // runs or loads, so XML that names none (an RSS feed, a config file) is
+  // safe. XML that names one is read as HTML with its element prefixes
+  // dropped (`<x:iframe>` is an iframe), and each prefixed URL attribute
+  // (`q:href`) is read as well. XML with declarations that can supply a
+  // namespace or spell markup unseen is refused, and so is namespaced XML
+  // whose content HTML would read as text where XML reads elements
+  // (`xmlAsHtml`).
   const checkXml = (markup: string) => {
-    if (/<!ENTITY/iu.test(markup)) note({ limit: "a script parses XML that declares entities" });
-    else if (XML_MARKUP_NAMESPACE.test(markup)) checkMarkup(markup.replace(/<(\/?)[A-Za-z_][\w.-]*:/gu, "<$1"));
+    if (XML_DECLARATIONS.test(markup)) {
+      note({ limit: XML_DECLARATIONS_LIMIT });
+      return;
+    }
+    if (!XML_MARKUP_NAMESPACE.test(markup)) return;
+    const html = xmlAsHtml(markup);
+    if (html === undefined) {
+      note({ limit: XML_HTML_TEXT_LIMIT });
+      return;
+    }
+    checkMarkup(html.replace(XML_ELEMENT_PREFIX, "<$1"));
+    // Read apart from their elements, so a prefixed attribute and an
+    // unprefixed one with the same local name do not hide each other.
+    let links = "";
+    for (const match of markup.matchAll(XML_PREFIXED_URL_ATTRIBUTE)) links += `<a href=${match[1]}></a>`;
+    checkMarkup(links);
   };
 
   /**
@@ -1302,7 +1383,7 @@ function scanJsTokens(
       if (named !== undefined || previous.kind !== "name") {
         // A tag gets the template's strings first and its substitutions after,
         // so a tagged `parseFromString` is given a type only by a substitution.
-        if (named !== undefined) tag = argumentSinks({ ...named, argument: 0, literals: [], parseAs: token.substituted === true ? "html" : "none" });
+        if (named !== undefined) tag = argumentSinks({ ...named, argument: 0, literals: [], parseAs: token.substituted === true ? "any" : "none" });
         if (!token.substituted && chainEnd === index) raw = code.slice(token.start + 1, token.end - 1);
       }
     }

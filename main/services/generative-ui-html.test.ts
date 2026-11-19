@@ -136,6 +136,9 @@ test("streaming a visual up to the size cap in small chunks takes linear time an
   assert.equal(streamed.shown.includes("javascript:"), false);
 });
 
+const XML_SHAPE_START = `<script>new DOMParser().parseFromString('<svg xmlns="http://www.w3.org/2000/svg">`;
+const XML_SHAPE_END = `</svg>', 'image/svg+xml')</script>`;
+
 test("checking, wrapping or streaming a visual up to the size cap takes linear time, whatever its shape", () => {
   const cap = 512 * 1024 - 64;
   const fill = (size: number, unit: string, before = "", after = "") =>
@@ -158,6 +161,11 @@ test("checking, wrapping or streaming a visual up to the size cap takes linear t
     scriptStrings: (size) => fill(size, "x.innerHTML='<p>';", "<script>", "</script>"),
     // Arrays spread into a call after many literal arguments.
     spreadsAfterLiterals: (size) => fill(size, "...[", `<script>f(${"'a',".repeat(Math.floor(size / 8))}`, "</script>"),
+    // Namespaced XML a script parses, read as HTML element by element.
+    xmlTextElements: (size) => fill(size, "<style>a</style><x:title>t</x:title>", XML_SHAPE_START, XML_SHAPE_END),
+    xmlCdataSections: (size) => fill(size, "<![CDATA[a]]>", XML_SHAPE_START, XML_SHAPE_END),
+    xmlPrefixedLinks: (size) => fill(size, '<a q:href="#a"/>', XML_SHAPE_START, XML_SHAPE_END),
+    xmlUnclosedTextElements: (size) => fill(size, "<style ", XML_SHAPE_START, XML_SHAPE_END),
     cssUrls: (size) => fill(size, "url(a)", "<style>", "</style>"),
     noscriptBlocks: (size) => fill(size, "<noscript><p>x</p></noscript>"),
     contentMovedOutOfTables: (size) => fill(size, "a<i></i>", "<table>"),
@@ -298,6 +306,42 @@ const DEEP_NESTED_SINKS = Object.fromEntries(
 // DOMParser document whose nodes the page takes, and an attribute node.
 const IFRAME_MARKUP = JSON.stringify("<iframe src=https://e.test></iframe>");
 const IFRAME_HANDLER = JSON.stringify(IFRAME_SINK);
+// XML documents DOMParser builds whose nodes the page takes, by type: each
+// holds an element the page loads or runs that an HTML reading of the same
+// text, or a reading of the prefixes as written, would not see.
+const XHTML_NS = "http://www.w3.org/1999/xhtml";
+const XML_ERROR_IMG = `<img src="x" onerror="location='javascript:alert(1)'"/>`;
+const XML_DOCUMENTS: Record<string, [xml: string, type: string]> = {
+  "XML whose DOCTYPE gives an element the XHTML namespace by default": [
+    `<!DOCTYPE r [<!ATTLIST img xmlns CDATA #FIXED "http:&#47;&#47;www.w3.org&#47;1999&#47;xhtml">]><r>${XML_ERROR_IMG}</r>`,
+    "application/xml",
+  ],
+  "XML whose DOCTYPE gives the root the XHTML namespace by default": [
+    `<!DOCTYPE r [<!ATTLIST r xmlns CDATA #FIXED "http:&#47;&#47;www.w3.org&#47;1999&#47;xhtml">]><r>${XML_ERROR_IMG}</r>`,
+    "text/xml",
+  ],
+  "XML whose elements take the XHTML namespace through a non-ASCII prefix": [`<r xmlns:é="${XHTML_NS}"><é:img src="x" onerror="location='javascript:alert(1)'"/></r>`, "text/xml"],
+  "XHTML whose empty <xmp/> HTML would read the following elements as text in": [`<r xmlns="${XHTML_NS}"><xmp/>${XML_ERROR_IMG}</r>`, "text/xml"],
+  "an XHTML document whose empty <xmp/> HTML would read the following elements as text in": [`<r xmlns="${XHTML_NS}"><xmp/>${XML_ERROR_IMG}</r>`, "application/xhtml+xml"],
+  "XHTML whose <style> holds an element": [`<r xmlns="${XHTML_NS}"><style>${XML_ERROR_IMG}</style></r>`, "text/xml"],
+  "XHTML whose <textarea> holds an element": [`<r xmlns="${XHTML_NS}"><textarea>${XML_ERROR_IMG}</textarea></r>`, "text/xml"],
+  "XHTML whose <script> holds an element": [`<r xmlns="${XHTML_NS}"><script>${XML_ERROR_IMG}</script></r>`, "text/xml"],
+  "XHTML whose prefixed <title> holds an element": [`<h:r xmlns:h="${XHTML_NS}"><h:title><h:img src="x" onerror="location='javascript:alert(1)'"/></h:title></h:r>`, "text/xml"],
+  "XHTML whose CDATA section HTML would read as the start of a comment": [`<r xmlns="${XHTML_NS}"><![CDATA[ > <!-- ]]>${XML_ERROR_IMG}</r>`, "application/xhtml+xml"],
+  "an SVG document whose foreignObject holds an empty XHTML <xmp/>": [
+    `<svg xmlns="http://www.w3.org/2000/svg"><foreignObject><xmp xmlns="${XHTML_NS}"/><img xmlns="${XHTML_NS}" src="x" onerror="location='javascript:alert(1)'"/></foreignObject></svg>`,
+    "image/svg+xml",
+  ],
+  "an SVG link whose href takes the XLink namespace through another prefix": [
+    `<svg xmlns="http://www.w3.org/2000/svg" xmlns:q="http://www.w3.org/1999/xlink"><a q:href="javascript:alert(1)"><text y="9">go</text></a></svg>`,
+    "image/svg+xml",
+  ],
+  "an SVG link whose prefixed href follows an unprefixed one": [
+    `<svg xmlns="http://www.w3.org/2000/svg" xmlns:q="http://www.w3.org/1999/xlink"><a href="#top" q:href="javascript:alert(1)"><text y="9">go</text></a></svg>`,
+    "image/svg+xml",
+  ],
+};
+const parsedXml = (xml: string, type: string) => `document.body.append(new DOMParser().parseFromString(${JSON.stringify(xml)}, '${type}').documentElement)`;
 const literalSink = (js: string) => `<p>x</p><button id=b onclick="void 0">Go</button><a id=a>x</a><script>${js}</script>`;
 // Sinks reached through a split string, a wrapped callee or a shifted argument.
 const INDIRECT_SINKS: Record<string, string> = {
@@ -374,6 +418,7 @@ const LITERAL_SINKS: Record<string, string> = {
   // XML elements in the XHTML namespace are HTML ones once the page takes them.
   "XML whose prefixed elements are in the XHTML namespace": `document.body.append(new DOMParser().parseFromString('<r xmlns:h="http://www.w3.org/1999/xhtml"><h:iframe src="https://e.test"/></r>', 'text/xml').documentElement)`,
   "XML that declares entities": `document.body.append(new DOMParser().parseFromString('<!DOCTYPE r [<!ENTITY e "x">]><r>&e;</r>', 'application/xml').documentElement)`,
+  ...Object.fromEntries(Object.entries(XML_DOCUMENTS).map(([name, [xml, type]]) => [name, parsedXml(xml, type)])),
   "an onclick attribute node's value": `b.attributes.onclick.value = ${IFRAME_HANDLER}; b.click()`,
   "an onclick attribute node's textContent": `b.attributes.onclick.textContent = ${IFRAME_HANDLER}; b.click()`,
   "an onclick attribute node's nodeValue": `b.attributes['onclick'].nodeValue = ${IFRAME_HANDLER}; b.click()`,
@@ -596,7 +641,13 @@ const ADMITTED_MARKUP: Record<string, string> = {
         `const atom = new DOMParser().parseFromString(\`<feed xmlns="http://www.w3.org/2005/Atom"><link href="https://example.com/"/><entry><title>\${title}</title></entry></feed>\`, 'application/xml')`,
         `const config = new DOMParser().parseFromString('<config><script src="https://e.test/x.js"/><iframe src="https://e.test"/></config>', "text/xml")`,
         `const none = new DOMParser().parseFromString('<iframe src="https://e.test"></iframe>', 'text/plain')`,
-        "label.textContent = rss.querySelector('item title').textContent + atom.title + config.documentElement.childElementCount",
+        // XHTML and SVG types parse XML too: without a namespace these are plain XML elements.
+        `const page = new DOMParser().parseFromString('<page><title>Notes</title><iframe src="https://e.test"/></page>', 'application/xhtml+xml')`,
+        // An SVG icon's <title> and <style> hold only text, which HTML reads as XML does.
+        `const icon = new DOMParser().parseFromString('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><title>Close &amp; exit</title><style><![CDATA[ .a > path { fill: currentColor } ]]></style><path class="a" d="M4 12h16"/><a href="#top"><circle r="2"/></a></svg>', 'image/svg+xml')`,
+        `const doc = new DOMParser().parseFromString('<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml"><body><p>Hi</p></body></html>', 'application/xhtml+xml')`,
+        "label.textContent = rss.querySelector('item title').textContent + atom.title + config.documentElement.childElementCount + page.title",
+        "document.body.append(icon.documentElement, doc.body.firstChild)",
       ].join("\n"),
     ),
   // A handler past the depth cap with no string in it has nothing to write.
@@ -714,6 +765,14 @@ test("html admission refuses exactly what a browser's parse of the markup would 
   }
   // The corpus exercises both verdicts.
   assert.ok(refused > 20 && refused < ORACLE_CONTAINERS.length * ORACLE_PAYLOADS.length - 20);
+});
+
+test("html admission names the XML a script parses that it cannot read as the browser does, and what to change", () => {
+  const declared = literalSink(parsedXml(`<!DOCTYPE r [<!ENTITY e "<img src=x>">]><r>&e;</r>`, "text/xml"));
+  assert.throws(() => validateGenerativeUiHtml(declared), /DOCTYPE internal subset, an <!ENTITY> or an <!ATTLIST> declaration\. Remove the DOCTYPE internal subset/u);
+  const cdata = literalSink(parsedXml(`<r xmlns="${XHTML_NS}"><![CDATA[ <x> ]]></r>`, "image/svg+xml"));
+  assert.throws(() => validateGenerativeUiHtml(cdata), /names the XHTML, SVG or MathML namespace, so it is checked as HTML.*Give those elements text only/u);
+  for (const html of [declared, cdata]) assert.equal(isGenerativeUiDraftAcceptable(html), false);
 });
 
 test("html admission refuses markup nested or attributed past what a visual needs, finished or streaming", () => {
