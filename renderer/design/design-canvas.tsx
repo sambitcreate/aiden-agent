@@ -48,7 +48,12 @@ import { usePageTextEdits } from "./page-text-edits";
 import { designFrameSnapshots } from "./frame-snapshots";
 import { DesignTweaksFloat, type DesignTweakOps } from "./design-tweaks-panel";
 import { showDesignTweakVersions, shrinkDesignPicture, takeDesignTweakVersionPicture } from "./tweak-versions";
-import { tweaksAfterBake, tweaksAfterBakeUndo, tweaksTakenBackDuringBake } from "../shared/design-canvas/tweaks";
+import {
+  tweaksAfterBake,
+  tweaksAfterBakeUndo,
+  tweaksAfterTakenBackBake,
+  tweaksTakenBackDuringBake,
+} from "../shared/design-canvas/tweaks";
 import { postToDesignPage } from "../shared/design-canvas/bridge-messages";
 import { useDesignDrawing, type DesignDrawTool } from "./design-drawing";
 import { DesignPresentBar, DesignPresentButton, presentationKey, type DesignPresentation } from "./design-present";
@@ -990,6 +995,13 @@ function LoadedDesignCanvas({
             toast("The values changed while they were being written, so the page's file was left as it was.");
             return;
           }
+          // Another write landed first, so the file keeps the new defaults;
+          // the frame keeps what the person set by pinning the old ones.
+          const now = latestDoc.current.frames.find((entry) => entry.id === frameId);
+          update(frameId, { tweaks: tweaksAfterTakenBackBake(now?.tweaks, values, result.written, result.previous) }, { record: true });
+          reloadPaths([path]);
+          toast("The values changed while they were being written. The page's file has the new defaults, and this frame keeps what you set.");
+          return;
         }
         // The frame lets go of what the file now says, keeping words the file
         // couldn't take and anything changed while the file was written.

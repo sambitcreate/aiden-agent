@@ -145,7 +145,7 @@ export type DesignCanvasEditTextResult = { ok: true } | { ok: false; reason: Des
  * and `undoId` names this Make default, so its Undo can't undo a later one.
  */
 export type DesignCanvasBakeTweaksResult =
-  | { ok: true; written: Record<string, string>; kept: string[]; undoId: string }
+  | { ok: true; written: Record<string, string>; previous: Record<string, string>; kept: string[]; undoId: string }
   | { ok: false; reason: DesignCanvasFileRewriteFailure };
 
 /** What the hidden export window draws: a page at its width, as a picture or a PDF. */
@@ -518,7 +518,13 @@ export function registerDesignCanvasHandlers<Event>(deps: {
       const tweaks = parseDesignTweakValues(values);
       if (values !== undefined && values !== null && !tweaks) throw new Error("Invalid tweak values.");
       let before = "";
-      const result = await rewriteFrameFile<{ ok: true; source: string; written: Record<string, string>; kept: string[] }>(
+      const result = await rewriteFrameFile<{
+        ok: true;
+        source: string;
+        written: Record<string, string>;
+        previous: Record<string, string>;
+        kept: string[];
+      }>(
         chatId,
         frameId,
         (source) => {
@@ -533,7 +539,7 @@ export function registerDesignCanvasHandlers<Event>(deps: {
       tweakDefaultsUndo.delete(key);
       tweakDefaultsUndo.set(key, { id: undoId, before, after: digest(result.source) });
       while (tweakDefaultsUndo.size > TWEAK_UNDO_LIMIT) tweakDefaultsUndo.delete(tweakDefaultsUndo.keys().next().value as string);
-      return { ok: true, written: result.written, kept: result.kept, undoId };
+      return { ok: true, written: result.written, previous: result.previous, kept: result.kept, undoId };
     },
   );
 

@@ -284,27 +284,78 @@ function readDesignTweakList(value: unknown): { control: DesignTweakControl; ind
 /** Where an element sits in a page's markup: its opening tag and, when it has one, its body. */
 type FoundElement = { start: number; tagEnd: number; tag: string; bodyEnd: number; end: number };
 
+/** Elements whose body is text, not markup: tags inside them aren't elements. */
+const RAW_TEXT = new Set(["script", "style", "textarea", "title"]);
+
+type OpeningTag = { name: string; start: number; tagEnd: number; tag: string };
+
 /**
- * The first `<name ...>` element whose opening tag passes `accept`, found
- * in one pass with no backtracking (a page full of unclosed tags stays
- * quick). `closed` elements also need their `</name>`.
+ * Where an opening tag ends: its `>`, past any `>` inside a quoted value.
+ * -1 when it never ends. One pass, no backtracking.
  */
-function findElement(html: string, name: string, accept: (tag: string) => boolean, closed: boolean): FoundElement | null {
-  const open = new RegExp(`<${name}(?=[\\s/>])`, "giu");
-  for (let match = open.exec(html); match; match = open.exec(html)) {
-    const tagEnd = html.indexOf(">", match.index);
-    if (tagEnd === -1) return null;
-    const tag = html.slice(match.index, tagEnd + 1);
-    open.lastIndex = tagEnd + 1;
-    if (!accept(tag)) continue;
-    if (!closed) return { start: match.index, tagEnd: tagEnd + 1, tag, bodyEnd: tagEnd + 1, end: tagEnd + 1 };
-    const close = new RegExp(`</${name}\\s*>`, "giu");
-    close.lastIndex = tagEnd + 1;
-    const ending = close.exec(html);
-    if (!ending) return null;
-    return { start: match.index, tagEnd: tagEnd + 1, tag, bodyEnd: ending.index, end: ending.index + ending[0].length };
+function openingTagEnd(html: string, from: number): number {
+  let quote: string | null = null;
+  let afterEquals = false;
+  for (let index = from; index < html.length; index += 1) {
+    const char = html[index]!;
+    if (quote !== null) {
+      if (char === quote) quote = null;
+    } else if ((char === '"' || char === "'") && afterEquals) {
+      quote = char;
+    } else if (char === ">") {
+      return index + 1;
+    }
+    if (quote === null && !/\s/u.test(char)) afterEquals = char === "=";
   }
-  return null;
+  return -1;
+}
+
+/**
+ * Each real opening tag in a page, in order: never one inside a comment or
+ * in the body of a script, style, textarea or title. The visitor returns
+ * true to stop. Linear, so a page full of unclosed tags stays quick.
+ */
+function eachOpeningTag(html: string, visit: (tag: OpeningTag) => boolean | void): void {
+  const opening = /<!--|<([a-z][a-z0-9-]*)(?=[\s/>])/giu;
+  for (let match = opening.exec(html); match; match = opening.exec(html)) {
+    if (match[1] === undefined) {
+      const close = html.indexOf("-->", match.index + 4);
+      if (close === -1) return;
+      opening.lastIndex = close + 3;
+      continue;
+    }
+    const tagEnd = openingTagEnd(html, match.index + match[0].length);
+    if (tagEnd === -1) return;
+    const name = match[1].toLowerCase();
+    if (visit({ name, start: match.index, tagEnd, tag: html.slice(match.index, tagEnd) })) return;
+    opening.lastIndex = tagEnd;
+    if (RAW_TEXT.has(name)) {
+      const close = new RegExp(`</${name}\\s*>`, "giu");
+      close.lastIndex = tagEnd;
+      const ending = close.exec(html);
+      if (!ending) return;
+      opening.lastIndex = ending.index + ending[0].length;
+    }
+  }
+}
+
+/** The first `<name ...>` element whose opening tag passes `accept`. `closed` elements also need their `</name>`. */
+function findElement(html: string, name: string, accept: (tag: string) => boolean, closed: boolean): FoundElement | null {
+  let found: FoundElement | null = null;
+  eachOpeningTag(html, (opening) => {
+    if (opening.name !== name || !accept(opening.tag)) return false;
+    const { start, tagEnd, tag } = opening;
+    if (!closed) {
+      found = { start, tagEnd, tag, bodyEnd: tagEnd, end: tagEnd };
+      return true;
+    }
+    const close = new RegExp(`</${name}\\s*>`, "giu");
+    close.lastIndex = tagEnd;
+    const ending = close.exec(html);
+    if (ending) found = { start, tagEnd, tag, bodyEnd: ending.index, end: ending.index + ending[0].length };
+    return true;
+  });
+  return found;
 }
 
 const DECLARATION_TYPE = /\stype\s*=\s*["']?application\/aiden-tweaks(?=["'\s/>])/iu;
@@ -482,6 +533,8 @@ export type DesignTweakBake =
       source: string;
       /** What the file now starts with for each declared target it took: these leave the frame. */
       written: DesignTweakValues;
+      /** What the file started with before, for the same targets. */
+      previous: DesignTweakValues;
       /** Text targets whose words couldn't be placed in the page; the file left them as they were. */
       kept: string[];
     }
@@ -489,11 +542,19 @@ export type DesignTweakBake =
 
 const TWEAK_STYLE_ATTR = /\sdata-aiden-tweaks(?=[\s=/>])/iu;
 
-/** Sets or adds one attribute on an opening tag. Values are already safe (no quotes). */
+/**
+ * Sets or adds one attribute on an opening tag. Values are already safe (no
+ * quotes). The tag's attributes are read one by one, so a name is never
+ * matched inside another attribute's name or value.
+ */
 function withAttribute(tag: string, name: string, value: string): string {
-  // The name ends where an attribute name ends, so data-theme never matches data-theme-mode.
-  const existing = new RegExp(`(\\s${name})(?=[\\s=/>])(\\s*=\\s*(?:"[^"]*"|'[^']*'|[^\\s>]+))?`, "iu");
-  if (existing.test(tag)) return tag.replace(existing, (_match, attribute: string) => `${attribute}="${value}"`);
+  const attribute = /\s+([^\s"'>/=]+)(\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?/uy;
+  attribute.lastIndex = tag.search(/[\s/>]/u);
+  for (let match = attribute.exec(tag); match; match = attribute.exec(tag)) {
+    if (match[1]!.toLowerCase() !== name) continue;
+    const at = match.index + match[0].indexOf(match[1]!);
+    return `${tag.slice(0, at)}${name}="${value}"${tag.slice(match.index + match[0].length)}`;
+  }
   return tag.replace(/\s*\/?>$/u, (end) => ` ${name}="${value}"${end.trim()}`);
 }
 
@@ -541,27 +602,26 @@ function scriptSafeJson(value: unknown): string {
 function fillMarkedText(source: string, attr: string, after: string): string | null {
   const name = attr.slice("data-".length);
   const marker = new RegExp(`\\sdata-aiden-text\\s*=\\s*(["']?)${name}\\1(?=[\\s/>])`, "iu");
-  const opening = /<([a-z][a-z0-9-]*)(?=[\s/>])/giu;
   let next = "";
   let from = 0;
   let filled = 0;
-  for (let match = opening.exec(source); match; match = opening.exec(source)) {
-    const tagEnd = source.indexOf(">", match.index);
-    if (tagEnd === -1) break;
-    opening.lastIndex = tagEnd + 1;
-    if (!marker.test(source.slice(match.index, tagEnd + 1))) continue;
-    const bodyEnd = source.indexOf("<", tagEnd + 1);
-    if (bodyEnd === -1 || !source.slice(bodyEnd, bodyEnd + match[1]!.length + 2).toLowerCase().startsWith(`</${match[1]!.toLowerCase()}`)) {
-      return null;
+  let markup = false;
+  eachOpeningTag(source, (opening) => {
+    if (!marker.test(opening.tag)) return false;
+    const bodyEnd = source.indexOf("<", opening.tagEnd);
+    if (bodyEnd === -1 || !source.slice(bodyEnd, bodyEnd + opening.name.length + 2).toLowerCase().startsWith(`</${opening.name}`)) {
+      markup = true;
+      return true;
     }
-    const words = source.slice(tagEnd + 1, bodyEnd);
+    const words = source.slice(opening.tagEnd, bodyEnd);
     const lead = /^\s*/u.exec(words)![0];
     const trail = words.length > lead.length ? /\s*$/u.exec(words)![0] : "";
-    next += source.slice(from, tagEnd + 1) + lead + escapeDesignText(after) + trail;
+    next += source.slice(from, opening.tagEnd) + lead + escapeDesignText(after) + trail;
     from = bodyEnd;
     filled += 1;
-  }
-  return filled > 0 ? next + source.slice(from) : null;
+    return false;
+  });
+  return !markup && filled > 0 ? next + source.slice(from) : null;
 }
 
 /**
@@ -582,6 +642,7 @@ export function bakeDesignTweakDefaults(source: string, values: DesignTweakValue
   const vars: Record<string, string> = {};
   const attrs: Record<string, string> = {};
   const written: DesignTweakValues = {};
+  const previous: DesignTweakValues = {};
   const kept: string[] = [];
   const texts: { raw: Record<string, unknown>; before: string; after: string; attr: string }[] = [];
   for (const { control, index } of readDesignTweakList(json)) {
@@ -590,6 +651,7 @@ export function bakeDesignTweakDefaults(source: string, values: DesignTweakValue
     const formatted = formatDesignTweakTargets(control, value);
     Object.assign(written, formatted);
     const defaults = formatDesignTweakTargets(control, designTweakDefault(control));
+    Object.assign(previous, defaults);
     const differing = Object.keys(formatted).filter((name) => formatted[name] !== defaults[name]);
     if (differing.length === 0) continue;
     const raw = list[index] as Record<string, unknown>;
@@ -624,6 +686,7 @@ export function bakeDesignTweakDefaults(source: string, values: DesignTweakValue
       kept.push(text.attr);
       delete attrs[text.attr];
       delete written[text.attr];
+      delete previous[text.attr];
       continue;
     }
     next = placed;
@@ -651,7 +714,7 @@ export function bakeDesignTweakDefaults(source: string, values: DesignTweakValue
       next = `${next.slice(0, at)}${at > 0 ? "\n" : ""}${tag}\n${next.slice(at)}`;
     }
   }
-  return { ok: true, source: next, written, kept };
+  return { ok: true, source: next, written, previous, kept };
 }
 
 // ---- Shuffle and hand-off --------------------------------------------------
@@ -790,6 +853,25 @@ export function tweaksTakenBackDuringBake(
   written: DesignTweakValues,
 ): boolean {
   return Object.keys(written).some((name) => submitted[name] !== undefined && current?.[name] === undefined);
+}
+
+/**
+ * A frame's values after a Make default whose taken-back values couldn't be
+ * undone in the file (another write landed first): what the file now says
+ * leaves the frame as usual, and each value the person took back is pinned
+ * to what the file said before, so the page still looks as they left it.
+ */
+export function tweaksAfterTakenBackBake(
+  current: DesignTweakValues | undefined,
+  submitted: DesignTweakValues,
+  written: DesignTweakValues,
+  previous: DesignTweakValues,
+): DesignTweakValues | undefined {
+  const next: DesignTweakValues = { ...tweaksAfterBake(current, written) };
+  for (const name of Object.keys(written)) {
+    if (submitted[name] !== undefined && current?.[name] === undefined && previous[name] !== undefined) next[name] = previous[name];
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
 }
 
 /** A frame's values once that Make default is undone: what it showed then, under any change made since. */

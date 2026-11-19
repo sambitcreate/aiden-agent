@@ -15,6 +15,7 @@ import {
   showsDesignTweakVersion,
   tweaksAfterBake,
   tweaksAfterBakeUndo,
+  tweaksAfterTakenBackBake,
   tweaksTakenBackDuringBake,
   extractDesignTweakControls,
   parseDesignTweakValues,
@@ -372,6 +373,22 @@ test("make default edits the control that was read, and only its own managed blo
   assert.equal((baked.source.match(/<style data-aiden-tweaks>/gu) ?? []).length, 1);
 });
 
+test("make default leaves examples in comments and scripts alone, and reads quoted > in a tag", () => {
+  const page = RICH.replace('<html lang="en">', '<html lang="en" data-x="old > value">').replace(
+    '<h1 data-aiden-text="headline">Make room</h1>',
+    '<!-- <p data-aiden-text="headline">Make room</p> --><script>const s = "<i data-aiden-text=\'headline\'>Make room</i>";</script><h1>Make room</h1>',
+  );
+  const controls = extractDesignTweakControls(page);
+  let values = withDesignTweak(undefined, byId(controls, "headline"), "Plan less");
+  values = withDesignTweak(values, byId(controls, "density"), "compact");
+  const baked = bakeDesignTweakDefaults(page, values);
+  assert.ok(baked.ok);
+  assert.ok(baked.source.includes('<!-- <p data-aiden-text="headline">Make room</p> -->'), "the comment is left as it was");
+  assert.ok(baked.source.includes("<i data-aiden-text='headline'>Make room</i>"), "the script is left as it was");
+  assert.ok(baked.source.includes("<h1>Plan less</h1>"), "the page's real words change");
+  assert.match(baked.source, /<html lang="en" data-x="old > value" data-density="compact" data-headline="Plan less">/u);
+});
+
 test("a page full of unclosed tags is read quickly", () => {
   const flood = `${RICH}${"<script ".repeat(16_000)}${"<style ".repeat(16_000)}${"<html ".repeat(16_000)}`;
   const started = performance.now();
@@ -416,6 +433,19 @@ test("after Make default a frame lets go of only what the file now says", () => 
   const submitted = { "--radius": "14px", "data-headline": "Pick a slot" };
   assert.deepEqual(tweaksAfterBakeUndo(undefined, submitted), submitted);
   assert.deepEqual(tweaksAfterBakeUndo({ "--radius": "18px" }, submitted), { ...submitted, "--radius": "18px" });
+});
+
+test("when a taken-back value can't be undone in the file, the frame pins what the file said before", () => {
+  const submitted = { "--radius": "14px", "data-density": "compact" };
+  const written = { "--radius": "14px", "data-density": "compact", "--accent": "#2f6fed" };
+  const previous = { "--radius": "8px", "data-density": "cozy", "--accent": "#2f6fed" };
+  // Reset while it was written: the page should still show the old corners and density.
+  assert.deepEqual(tweaksAfterTakenBackBake(undefined, submitted, written, previous), { "--radius": "8px", "data-density": "cozy" });
+  // Density moved on to another value, corners taken back: each keeps what the person set.
+  assert.deepEqual(tweaksAfterTakenBackBake({ "data-density": "airy" }, submitted, written, previous), {
+    "data-density": "airy",
+    "--radius": "8px",
+  });
 });
 
 test("a value taken back while Make default writes it calls that Make default off", () => {
