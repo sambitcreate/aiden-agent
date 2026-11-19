@@ -145,9 +145,10 @@ export function readDesignConsoleMessage(entry: DesignConsoleEntry): DesignConso
   }
   // The scheme's Content Security Policy, as Electron 43 words it: "Loading the
   // font 'https://…' violates the following Content Security Policy
-  // directive…", "Connecting to 'wss://…' violates…", and for a fetch also
-  // "Fetch API cannot load https://…. Refused to connect…".
-  const blocked = /^(Loading the [^']+|Connecting to|Framing) '([^']+)' violates the following Content Security Policy/u.exec(message);
+  // directive…", "Connecting to 'wss://…' violates…", for a fetch also
+  // "Fetch API cannot load https://…. Refused to connect…", and for a
+  // <link rel=prefetch> "Fetching content from 'https://…' violates…".
+  const blocked = /^(Loading the [^']+|Connecting to|Fetching content from|Framing) '([^']+)' violates the following Content Security Policy/u.exec(message);
   if (blocked) return blockedLoad(blocked[2]!, blocked[1] === "Connecting to");
   const fetched = /^Fetch API cannot load (\S+?)\.(?:\s|$)/u.exec(message)?.[1];
   if (fetched) return blockedLoad(fetched, true);

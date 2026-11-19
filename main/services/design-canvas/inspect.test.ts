@@ -179,6 +179,8 @@ test("every load the page's policy blocks is one load finding with the network a
           sourceId: PAGE,
         },
         { level: "error", message: csp("Connecting to", "wss://live.example/", "connect-src 'none'"), lineNumber: 9, sourceId: PAGE },
+        // A <link rel=prefetch> the policy refuses.
+        { level: "error", message: csp("Fetching content from", "https://next.example/page", "default-src 'none'"), lineNumber: 1, sourceId: PAGE },
         // connect-src is 'none', so a fetch of a workspace file is refused too.
         { level: "error", message: csp("Connecting to", "aiden-design://grant-1/design/prices.json", "connect-src 'none'"), lineNumber: 10, sourceId: PAGE },
       ],
@@ -188,12 +190,14 @@ test("every load the page's policy blocks is one load finding with the network a
   );
   assert.deepEqual(
     findings.map((finding) => /^"([^"]+)"/u.exec(finding)?.[1]),
-    ["https://cdn.example/chart.js", "https://img.example/hero.png", "https://api.example/prices", "wss://live.example/", "design/prices.json"],
+    ["https://cdn.example/chart.js", "https://img.example/hero.png", "https://api.example/prices", "wss://live.example/", "https://next.example/page", "design/prices.json"],
     findings.join("\n"),
   );
   for (const finding of findings) assert.doesNotMatch(finding, /script failed/u, finding);
-  assert.match(findings[0]!, /did not load: design pages load nothing from the network\. Save the file in the workspace/u);
-  for (const connection of findings.slice(2)) {
+  for (const load of [findings[0]!, findings[4]!]) {
+    assert.match(load, /did not load: design pages load nothing from the network\. Save the file in the workspace/u, load);
+  }
+  for (const connection of [findings[2]!, findings[3]!, findings[5]!]) {
     assert.match(connection, /could not be reached: design pages connect to nothing, the workspace included/u, connection);
     assert.match(connection, /Put the data the page needs in the page, or in a workspace script/u, connection);
     assert.doesNotMatch(connection, /no such file|fetch it by a relative path/u, connection);
