@@ -2,6 +2,7 @@ import * as React from "react";
 import { ArrowUpRight, ChevronDown, GripVertical, PanelRightOpen } from "lucide-react";
 import { useCollapsibleBody } from "../lib/use-collapsible-body";
 import { dragTargetIndex, type QuickViewSectionId } from "../lib/quick-view-layout";
+import type { ReorderHandleProps } from "../lib/reorder-draft";
 import { cn } from "../lib/ui-utils";
 
 export interface QuickViewSectionProps {
@@ -15,9 +16,10 @@ export interface QuickViewSectionProps {
   onToggle: () => void;
   /** Position among visible sections. */
   index: number;
-  /** Number of visible sections. */
-  count: number;
+  /** A pointer drag dropped the card at `toIndex`. */
   onMove: (id: QuickViewSectionId, toIndex: number) => void;
+  /** The grip's keyboard reordering, from the parent's `useReorderDraft`. */
+  gripProps?: ReorderHandleProps;
   /** Visible sibling cards' rects at drag start, in visible order; supplied by the parent. */
   measureSiblings: () => DOMRect[];
   /** Tier 3 header button, left of the grip: Open in sidebar (`PanelRightOpen`) or open-external (`ArrowUpRight`). */
@@ -48,8 +50,8 @@ export function QuickViewSection({
   collapsed,
   onToggle,
   index,
-  count,
   onMove,
+  gripProps,
   measureSiblings,
   headerAction,
   onDragPreview,
@@ -140,14 +142,6 @@ export function QuickViewSection({
     endDrag(null);
   };
 
-  const onGripKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
-    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
-    event.preventDefault();
-    const to = event.key === "ArrowUp" ? index - 1 : index + 1;
-    if (to < 0 || to >= count) return;
-    onMove(id, to);
-  };
-
   const HeaderActionIcon = headerAction?.kind === "external" ? ArrowUpRight : PanelRightOpen;
 
   return (
@@ -214,10 +208,13 @@ export function QuickViewSection({
         <button
           type="button"
           aria-label={`Move ${title}`}
-          aria-keyshortcuts="ArrowUp ArrowDown"
-          title="Drag to reorder"
-          onKeyDown={onGripKeyDown}
-          onPointerDown={onGripPointerDown}
+          aria-keyshortcuts="Space ArrowUp ArrowDown Home End Escape"
+          title="Drag, or press Space and the arrow keys, to reorder"
+          {...gripProps}
+          onPointerDown={(event) => {
+            gripProps?.onPointerDown();
+            onGripPointerDown(event);
+          }}
           onPointerMove={onGripPointerMove}
           onPointerUp={onGripPointerUp}
           onPointerCancel={onGripPointerCancel}
@@ -228,6 +225,7 @@ export function QuickViewSection({
             "grid h-7 w-5 shrink-0 cursor-grab touch-none place-items-center rounded-control text-tertiary",
             "opacity-0 transition-[opacity,background-color] hover:bg-list-hover group-hover/qv:opacity-100 focus-visible:opacity-100",
             "group-data-dragging/qv:cursor-grabbing group-data-dragging/qv:opacity-100",
+            "data-reorder-held:bg-list-selection data-reorder-held:opacity-100",
           )}
         >
           <GripVertical aria-hidden="true" className="size-3.5" />
@@ -251,17 +249,5 @@ export function QuickViewSection({
         </div>
       </div>
     </section>
-  );
-}
-
-/**
- * Polite status for card moves. The parent renders one of these outside its keyed card list,
- * so reordering never re-inserts the live region and the message is not lost.
- */
-export function QuickViewMoveStatus({ message }: { message: string }): React.JSX.Element {
-  return (
-    <div role="status" className="sr-only">
-      {message}
-    </div>
   );
 }

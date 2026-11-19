@@ -54,18 +54,32 @@ test.describe("Quick View cards", () => {
     // no subagents yet, so Context and Subagents stay out.
     await expect.poll(order).toEqual(["environment", "changes"]);
 
-    // Keyboard: the grip moves its card, keeps focus, and announces the new position.
+    // Keyboard: Space picks the card up, the arrows move it with focus on the grip, Enter drops
+    // it, and Escape puts a held card back.
     const grip = quickView.getByRole("button", { name: "Move Changes" });
-    const moved = quickView.getByRole("status").filter({ hasText: "moved to position" });
+    const status = quickView.getByRole("status").filter({ hasText: "position" });
     await grip.focus();
+    await page.keyboard.press("Space");
+    await expect(status).toHaveText("Picked up Changes, position 2 of 2.");
     await page.keyboard.press("ArrowUp");
     await expect.poll(order).toEqual(["changes", "environment"]);
     await expect(grip).toBeFocused();
-    await expect(moved).toHaveText("Changes moved to position 1 of 2");
-    await page.keyboard.press("ArrowDown");
+    await expect(status).toHaveText("Changes, position 1 of 2.");
+    await page.keyboard.press("Escape");
     await expect.poll(order).toEqual(["environment", "changes"]);
     await expect(grip).toBeFocused();
-    await expect(moved).toHaveText("Changes moved to position 2 of 2");
+    await expect(status).toHaveText("Moved Changes back to position 2 of 2.");
+    await expect(quickView).toBeVisible();
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("ArrowUp");
+    await page.keyboard.press("Enter");
+    await expect.poll(order).toEqual(["changes", "environment"]);
+    await expect(grip).toBeFocused();
+    await expect(status).toHaveText("Dropped Changes at position 1 of 2.");
+    await page.keyboard.press("Space");
+    await page.keyboard.press("End");
+    await page.keyboard.press("Space");
+    await expect.poll(order).toEqual(["environment", "changes"]);
 
     // Pointer: drag Changes above Environment.
     const environmentCard = quickView.locator('[data-quick-view-section="environment"]');

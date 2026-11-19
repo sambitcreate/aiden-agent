@@ -1056,6 +1056,25 @@ test("the side panel edits the selected item, lists the page's layers to hide, l
   const heroRow = layers.locator("[data-layer-id]").filter({ hasText: "hero.html" });
   await layers.locator("[data-layer-id]").filter({ hasText: "Launch plan" }).dragTo(heroRow, { targetPosition: { x: 60, y: 4 } });
   await expect.poll(rows).toEqual(["Launch plan", "hero.html", "Frame", "Rectangle"]);
+  // The grip: Space picks the note up, ↓ moves it in a draft, Escape puts it back, and Enter drops a move.
+  const noteGrip = layers.getByRole("button", { name: "Move Launch plan" });
+  await noteGrip.focus();
+  await page.keyboard.press("Space");
+  await page.keyboard.press("ArrowDown");
+  await expect.poll(rows).toEqual(["hero.html", "Launch plan", "Frame", "Rectangle"]);
+  await page.keyboard.press("Escape");
+  await expect.poll(rows).toEqual(["Launch plan", "hero.html", "Frame", "Rectangle"]);
+  await expect(noteGrip).toBeFocused();
+  await expect(panel).toBeVisible();
+  await page.keyboard.press("Space");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  await expect.poll(async () => (await savedFrames(userDataDir)).map((entry) => entry.kind).slice(0, 2)).toEqual(["note", "file"]);
+  await expect(noteGrip).toBeFocused();
+  await page.keyboard.press("Space");
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Space");
+  await expect.poll(rows).toEqual(["Launch plan", "hero.html", "Frame", "Rectangle"]);
 
   // Hide takes a page off the canvas until Show; it stays in the list.
   await layers.getByRole("button", { name: "Hide hero.html" }).click();

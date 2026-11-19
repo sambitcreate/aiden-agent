@@ -86,7 +86,9 @@ element's parent; in the comment box `↩` saves and `Esc` closes; `Esc` again
 leaves the tool), `F2` renames the selected frame (as does a double-click on
 its title; `↩` keeps the name, `Esc` cancels), `M` shows the minimap and
 `I` shows or hides the side panel (in its Layers list, `F2` renames a row and
-`⌥↑` / `⌥↓` bring the item forward or send it back).
+`⌥↑` / `⌥↓` bring the item forward or send it back; on a row's grip, `Space`
+picks the item up, `↑` / `↓`, `Home` and `End` move it, `Space` or `↩` drops
+it and `Esc` puts it back).
 The drawing tools: `T` text, `F` an artboard, `R` a rectangle, `O` an oval,
 `L` a line, `⇧L` an arrow, `P` the pencil and `⇧P` the pen (hold `⇧` while
 dragging for a square box or a 45° line; `↩`, `Esc` or a double-click
@@ -142,6 +144,10 @@ the ones you can change. `⌘/` also works from the message box.
 
 The menu bar has **View** (sidebar, terminal, Environment, the Focus commands),
 **Go** (back, forward, previous and next chat, Search chats, Bots, Scheduled,
+In Quick View, a card's grip (**Move** at its right edge) reorders it:
+`Space` or `↩` picks the card up, `↑` / `↓`, `Home` and `End` move it, `Space`
+or `↩` drops it where it is, and `Esc` (or moving focus away) puts it back.
+
 Profile), **Chat** (model, attach, find, stop and the open chat's actions) and
 **Help → Keyboard Shortcuts**, next to File, Edit and Window. Each item shows
 its current key, and items that can't run right now (no chat open, nothing to

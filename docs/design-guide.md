@@ -358,6 +358,30 @@ contains none of it. `renderer/component-sink/component-sink.test.tsx` fails
 when one of those four modules exports a component that no case's `data-sink`
 names. Add a case for a new primitive, or a reason in the test's `NOT_IN_SINK`.
 
+## Reordering
+
+A list people can reorder uses `renderer/lib/reorder-draft.ts` (Quick View's
+cards, the design side panel's Layers).
+
+- Keyboard: each item has a grip button (`Move <name>`). Space or Enter picks
+  the item up, ArrowUp and ArrowDown (Left and Right in a horizontal list,
+  swapped right to left) and Home and End move it in a draft, and Space or
+  Enter drops it. Escape, or focus leaving the grip, puts it back where it was.
+  `useReorderDraft` keeps the order in the draft and calls `onCommit` once per
+  drop that changed it, so one drop is one save and one undo step. Lay the list
+  out with `arrangeByDraft` while an item is held. Focus stays on the moved
+  item's grip.
+- Every step is announced through one `ReorderAnnouncer` (an assertive live
+  region) rendered outside the keyed items: "Picked up X, position 2 of 7.",
+  "X, position 3 of 7.", "Dropped X at position 3 of 7.", "Moved X back to
+  position 2 of 7."
+- Pointer: `usePointerReorder` starts a drag only after 3px of travel, marks
+  the landing spot in the list (no browser drag ghost), scrolls the list within
+  48px of its edges (up to 18px a frame), cancels on Escape and commits once on
+  release. Quick View keeps its own grip drag, which slides the other cards.
+- A documented shortcut that already moves an item at once (Layers' `⌥↑` and
+  `⌥↓`) stays as an alias.
+
 ## Enforced rules
 
 `npm run check:aiden-rules` (`scripts/check-aiden-rules.mjs`) checks the rules a

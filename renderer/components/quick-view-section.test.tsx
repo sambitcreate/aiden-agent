@@ -32,7 +32,6 @@ function Harness({
       collapsed={collapsed}
       onToggle={() => setCollapsed((value) => !value)}
       index={index}
-      count={3}
       onMove={onMove as never}
       onDragPreview={onDragPreview}
       measureSiblings={measureSiblings}
@@ -69,17 +68,6 @@ test("the Open in sidebar button opens the tool without collapsing the card", ()
   fireEvent.click(screen.getByRole("button", { name: "Open Changes in sidebar" }));
   assert.deepEqual(calls, [["sidebar", -1]]);
   assert.equal(screen.getByRole("button", { name: /^Changes/ }).getAttribute("aria-expanded"), "true");
-});
-
-test("the grip moves the section with arrow keys and stops at the ends", () => {
-  const moves: unknown[] = [];
-  const { rerender } = render(<Harness index={1} onMove={(id, to) => moves.push([id, to])} />);
-  const grip = screen.getByRole("button", { name: "Move Changes" });
-  fireEvent.keyDown(grip, { key: "ArrowUp" });
-  fireEvent.keyDown(grip, { key: "ArrowDown" });
-  rerender(<Harness index={0} onMove={(id, to) => moves.push([id, to])} />);
-  fireEvent.keyDown(screen.getByRole("button", { name: "Move Changes" }), { key: "ArrowUp" });
-  assert.deepEqual(moves, [["changes", 0], ["changes", 2]]);
 });
 
 test("dragging the grip past the next card's midpoint drops it there and clears the preview", () => {

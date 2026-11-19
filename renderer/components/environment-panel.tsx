@@ -36,7 +36,7 @@ import {
 } from "./environment-overview";
 import { ContextBreakdown, contextApproaching } from "./context-breakdown";
 import { ContextPips, contextPercentLabel } from "./context-tiles";
-import { QuickViewMoveStatus, QuickViewSection, type QuickViewSectionProps } from "./quick-view-section";
+import { QuickViewSection, type QuickViewSectionProps } from "./quick-view-section";
 import { subagentRunTranscriptTarget } from "./subagent-chips";
 import { SubagentStatusGroups } from "./subagent-status-groups";
 import {
@@ -117,6 +117,7 @@ import {
 import { deviceWorkspace, useFloatingDevice } from "../lib/device-workspace-store";
 import { prefersReducedMotion } from "../lib/appearance-runtime";
 import { useLayer } from "../lib/layer-stack";
+import { arrangeByDraft, ReorderAnnouncer, reorderMessage, useReorderDraft } from "../lib/reorder-draft";
 import {
   DeviceTabContextMenu,
   DeviceTabRenameInput,
@@ -1724,6 +1725,11 @@ interface QuickViewDragPreview {
   offset: number;
 }
 
+/** A Quick View card's reorder grip. */
+function gripOf(id: QuickViewSectionId): HTMLElement | null {
+  return document.querySelector<HTMLElement>(`[data-quick-view-section="${id}"] [aria-label^="Move "]`);
+}
+
 /**
  * Quick View's cards for a workspace with a readable folder. Environment always shows; the
  * others appear once they have something to say, and every card starts collapsed.
@@ -1733,7 +1739,6 @@ export function QuickViewCards({ workspace, live }: { workspace: Workspace; live
   const chatId = panel.activeChat.chatId ?? undefined;
   const [layout, setLayout] = React.useState(readQuickViewLayout);
   const [dragPreview, setDragPreview] = React.useState<QuickViewDragPreview | null>(null);
-  const [announcement, setAnnouncement] = React.useState("");
   const [changesDialogOpen, setChangesDialogOpen] = React.useState(false);
   const [entering, setEntering] = React.useState<ReadonlySet<QuickViewSectionId>>(() => new Set());
   const [changesWasShown, setChangesWasShown] = React.useState(false);
@@ -1786,9 +1791,7 @@ export function QuickViewCards({ workspace, live }: { workspace: Workspace; live
     const id = focusGripRef.current;
     if (!id) return;
     focusGripRef.current = null;
-    document
-      .querySelector<HTMLElement>(`[data-quick-view-section="${id}"] [aria-label^="Move "]`)
-      ?.focus();
+    gripOf(id)?.focus();
   }, [layout.order]);
 
   const commitLayout = (next: QuickViewLayout) => {
@@ -1796,13 +1799,23 @@ export function QuickViewCards({ workspace, live }: { workspace: Workspace; live
     writeQuickViewLayout(next);
   };
 
+  const reorder = useReorderDraft({
+    groupOf: () => visible,
+    label: (id) => QUICK_VIEW_SECTION_TITLES[id as QuickViewSectionId],
+    handle: (id) => gripOf(id as QuickViewSectionId),
+    onCommit: (order, id) =>
+      commitLayout(moveSection(layout, id as QuickViewSectionId, order.indexOf(id), visible)),
+  });
+  const shown = arrangeByDraft(visible, (id) => id, reorder.draft);
+
+  /** A pointer drag dropped a card. */
   const onMove = (id: QuickViewSectionId, toIndex: number) => {
     const card = cardRefs.current.get(id);
     // Reordering moves the card's DOM node, which drops focus; put it back on the grip.
     if (card?.contains(document.activeElement)) focusGripRef.current = id;
     commitLayout(moveSection(layout, id, toIndex, visible));
     const position = Math.max(0, Math.min(visible.length - 1, toIndex)) + 1;
-    setAnnouncement(`${QUICK_VIEW_SECTION_TITLES[id]} moved to position ${position} of ${visible.length}`);
+    reorder.setAnnouncement(reorderMessage("drop", QUICK_VIEW_SECTION_TITLES[id], position, visible.length));
   };
 
   const onDragPreview = (id: QuickViewSectionId, to: number | null) => {
@@ -1907,7 +1920,7 @@ export function QuickViewCards({ workspace, live }: { workspace: Workspace; live
 
   return (
     <>
-      {visible.map((id, index) => {
+      {shown.map((id, index) => {
         const shift = siblingShift(index);
         return (
           <div
@@ -1938,8 +1951,8 @@ export function QuickViewCards({ workspace, live }: { workspace: Workspace; live
               collapsed={!layout.expanded[id]}
               onToggle={() => commitLayout(toggleSectionExpanded(layout, id))}
               index={index}
-              count={visible.length}
               onMove={onMove}
+              gripProps={reorder.handleProps(id)}
               measureSiblings={measureSiblings}
               onDragPreview={onDragPreview}
               {...sections[id]}
@@ -1947,7 +1960,7 @@ export function QuickViewCards({ workspace, live }: { workspace: Workspace; live
           </div>
         );
       })}
-      <QuickViewMoveStatus message={announcement} />
+      <ReorderAnnouncer message={reorder.announcement} />
     </>
   );
 }

@@ -10,6 +10,7 @@ import {
   EyeOff,
   File,
   Frame,
+  GripVertical,
   Group,
   Image as ImageIcon,
   Lock,
@@ -41,6 +42,7 @@ import {
   DESIGN_CANVAS_LIMITS,
   DESIGN_COLORS,
   DESIGN_WIDTHS,
+  isDesignContainer,
   isDesignLine,
   isDesignPrintable,
   type DesignCanvas,
@@ -59,6 +61,7 @@ import { designLayers, type DesignLayer, type DesignLayerPlace } from "./layers-
 import { designColorVar, designFillVar, DESIGN_COLOR_NAMES } from "./nodes/draw-style";
 import { DESIGN_DEFAULT_WIDTH, type DesignFramePatch } from "./nodes/design-node-context";
 import { isEscapeKey } from "../lib/dismiss-key";
+import { arrangeByDraft, ReorderAnnouncer, scrollParentOf, usePointerReorder, useReorderDraft } from "../lib/reorder-draft";
 
 export type DesignPanelTab = "properties" | "layers" | "code" | "tweaks";
 
@@ -530,12 +533,54 @@ function GuideField({
 
 // ---- Layers ---------------------------------------------------------------
 
+/** Each layer's siblings, the rows it trades places with, in list order. */
+function layerGroups(layers: readonly DesignLayer[]): Map<string, string[]> {
+  const groups = new Map<string, string[]>();
+  const visit = (list: readonly DesignLayer[]) => {
+    for (const container of [false, true]) {
+      const ids = list.filter((layer) => isDesignContainer(layer.frame.kind) === container).map((layer) => layer.frame.id);
+      for (const id of ids) groups.set(id, ids);
+    }
+    for (const layer of list) visit(layer.children);
+  };
+  visit(layers);
+  return groups;
+}
+
 function LayersTab({ doc, selection, onSelect, update, reorder, step }: DesignSidePanelProps) {
   const layers = React.useMemo(() => designLayers(doc), [doc]);
+  const groups = React.useMemo(() => layerGroups(layers), [layers]);
   const [renaming, setRenaming] = React.useState<string | null>(null);
-  const [drop, setDrop] = React.useState<{ id: string; place: DesignLayerPlace } | null>(null);
-  const dragged = React.useRef<string | null>(null);
+  const listRef = React.useRef<HTMLUListElement>(null);
+  const rowsById = () =>
+    new Map([...(listRef.current?.querySelectorAll<HTMLElement>("[data-layer-id]") ?? [])].map((row) => [row.dataset.layerId, row]));
+  const keyboard = useReorderDraft({
+    groupOf: (id) => groups.get(id) ?? [],
+    label: (id) => {
+      const frame = doc.frames.find((entry) => entry.id === id);
+      return frame ? designItemName(frame) : id;
+    },
+    handle: (id) => rowsById().get(id)?.querySelector<HTMLElement>("[data-layer-grip]"),
+    // One drop is one reorder, so one undo step: behind the row now above it, or in front of the one below.
+    onCommit: (order, id) => {
+      const at = order.indexOf(id);
+      if (at > 0) reorder(id, order[at - 1]!, "below");
+      else if (order[1]) reorder(id, order[1], "above");
+    },
+  });
+  const pointer = usePointerReorder({
+    targets: (id) => {
+      const rows = rowsById();
+      return (groups.get(id) ?? []).flatMap((target) => {
+        const element = rows.get(target);
+        return element ? [{ id: target, element }] : [];
+      });
+    },
+    onDrop: (id, target) => reorder(id, target.id, target.place === "before" ? "above" : "below"),
+    scroller: () => scrollParentOf(listRef.current),
+  });
   if (layers.length === 0) return <PanelNote>Nothing on this page yet.</PanelNote>;
+  const drop = pointer.drag?.over ?? null;
 
   const row = (layer: DesignLayer, depth: number): React.ReactNode => {
     const { frame } = layer;
@@ -546,34 +591,13 @@ function LayersTab({ doc, selection, onSelect, update, reorder, step }: DesignSi
       <li key={frame.id}>
         <div
           data-layer-id={frame.id}
-          draggable={renaming !== frame.id}
-          onDragStart={(event) => {
-            dragged.current = frame.id;
-            event.dataTransfer.effectAllowed = "move";
-            event.dataTransfer.setData("text/plain", frame.id);
-          }}
-          onDragEnd={() => {
-            dragged.current = null;
-            setDrop(null);
-          }}
-          onDragOver={(event) => {
-            if (!dragged.current || dragged.current === frame.id) return;
-            event.preventDefault();
-            const rect = event.currentTarget.getBoundingClientRect();
-            const place: DesignLayerPlace = event.clientY < rect.top + rect.height / 2 ? "above" : "below";
-            setDrop((current) => (current?.id === frame.id && current.place === place ? current : { id: frame.id, place }));
-          }}
-          onDragLeave={() => setDrop((current) => (current?.id === frame.id ? null : current))}
-          onDrop={(event) => {
-            event.preventDefault();
-            const id = dragged.current;
-            const place = drop?.id === frame.id ? drop.place : "above";
-            dragged.current = null;
-            setDrop(null);
-            if (id && id !== frame.id) reorder(id, frame.id, place);
+          data-dragging={pointer.drag?.id === frame.id ? "" : undefined}
+          onPointerDown={(event) => {
+            if (renaming === frame.id || (event.target as Element).closest("input")) return;
+            pointer.onPointerDown(frame.id, event);
           }}
           className={cn(
-            "group/layer relative flex h-8 items-center gap-1 rounded-control pr-1 text-regular",
+            "group/layer relative flex h-8 items-center gap-1 rounded-control pr-1 text-regular data-dragging:opacity-50",
             active ? "bg-list-selection" : "hover:bg-list-hover",
             frame.hidden && "text-secondary",
           )}
@@ -582,7 +606,7 @@ function LayersTab({ doc, selection, onSelect, update, reorder, step }: DesignSi
           {drop?.id === frame.id ? (
             <span
               aria-hidden
-              className={cn("pointer-events-none absolute inset-x-1 h-0.5 rounded-full bg-fill-accent", drop.place === "above" ? "top-0" : "bottom-0")}
+              className={cn("pointer-events-none absolute inset-x-1 h-0.5 rounded-full bg-fill-accent", drop.place === "before" ? "top-0" : "bottom-0")}
             />
           ) : null}
           <Icon aria-hidden className="size-4 shrink-0 text-secondary" />
@@ -648,18 +672,38 @@ function LayersTab({ doc, selection, onSelect, update, reorder, step }: DesignSi
           >
             {frame.locked ? <Lock aria-hidden /> : <LockOpen aria-hidden />}
           </Button>
+          <Button
+            iconOnly
+            size="small"
+            variant="transparent"
+            data-layer-grip
+            aria-label={`Move ${name}`}
+            aria-keyshortcuts="Space ArrowUp ArrowDown Home End Escape"
+            title="Drag, or press Space and the arrow keys, to reorder"
+            className="cursor-grab opacity-0 group-hover/layer:opacity-100 focus-visible:opacity-100 data-reorder-held:bg-list-selection data-reorder-held:opacity-100"
+            {...keyboard.handleProps(frame.id)}
+          >
+            <GripVertical aria-hidden />
+          </Button>
         </div>
-        {layer.children.length > 0 ? <ul aria-label={`In ${name}`}>{layer.children.map((child) => row(child, depth + 1))}</ul> : null}
+        {layer.children.length > 0 ? (
+          <ul aria-label={`In ${name}`}>{arrangeByDraft(layer.children, byFrame, keyboard.draft).map((child) => row(child, depth + 1))}</ul>
+        ) : null}
       </li>
     );
   };
 
   return (
-    <ul aria-label="Layers" className="flex flex-col py-1">
-      {layers.map((layer) => row(layer, 0))}
-    </ul>
+    <>
+      <ul ref={listRef} aria-label="Layers" className="flex flex-col py-1 select-none">
+        {arrangeByDraft(layers, byFrame, keyboard.draft).map((layer) => row(layer, 0))}
+      </ul>
+      <ReorderAnnouncer message={keyboard.announcement} />
+    </>
   );
 }
+
+const byFrame = (layer: DesignLayer) => layer.frame.id;
 
 function LayerNameInput({ name, onDone }: { name: string; onDone(title: string | null): void }) {
   const [draft, setDraft] = React.useState(name);

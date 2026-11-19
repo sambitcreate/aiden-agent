@@ -12,6 +12,7 @@ import {
 } from "./environment-panel";
 import type { ChatContextDetails } from "./chat-context-panel";
 import type { Workspace } from "../lib/types";
+import { parseQuickViewLayout, QUICK_VIEW_LAYOUT_STORAGE_KEY } from "../lib/quick-view-layout";
 import type { ChatContextPressureV1 } from "../shared/context-pressure";
 import type { SubagentRunView } from "../lib/subagent-view-state";
 
@@ -175,4 +176,63 @@ test("when the focused card goes away, focus moves to the first remaining card",
     const environmentHeader = screen.getByRole("button", { name: /^Environment/u, expanded: false });
     assert.equal(document.activeElement === environmentHeader, true);
   });
+});
+
+test("the grip picks a card up with Space, moves it with the arrows and Home, and drops it", () => {
+  renderCards({ pressure: PRESSURE, runs: [RUN] });
+  assert.deepEqual(cardTitles(), ["Environment", "Context", "Subagents"]);
+  const grip = () => screen.getByRole("button", { name: "Move Subagents" });
+  const status = () => screen.getByRole("status").textContent;
+  act(() => grip().focus());
+  fireEvent.keyDown(grip(), { key: "ArrowUp" });
+  assert.deepEqual(cardTitles(), ["Environment", "Context", "Subagents"], "arrows do nothing until the card is picked up");
+
+  fireEvent.keyDown(grip(), { key: " " });
+  assert.equal(status(), "Picked up Subagents, position 3 of 3.");
+  fireEvent.keyDown(grip(), { key: "ArrowUp" });
+  assert.deepEqual(cardTitles(), ["Environment", "Subagents", "Context"]);
+  assert.equal(status(), "Subagents, position 2 of 3.");
+  assert.equal(document.activeElement, grip(), "focus stays on the moved card's grip");
+  fireEvent.keyDown(grip(), { key: "Home" });
+  assert.deepEqual(cardTitles(), ["Subagents", "Environment", "Context"]);
+  // Nothing is saved while the card is held.
+  const saved = () => parseQuickViewLayout(window.localStorage.getItem(QUICK_VIEW_LAYOUT_STORAGE_KEY)).order.filter((id) => id !== "changes");
+  assert.deepEqual(saved(), ["environment", "context", "subagents"]);
+
+  fireEvent.keyDown(grip(), { key: "Enter" });
+  assert.equal(status(), "Dropped Subagents at position 1 of 3.");
+  assert.deepEqual(cardTitles(), ["Subagents", "Environment", "Context"]);
+  assert.equal(document.activeElement, grip());
+  assert.deepEqual(saved(), ["subagents", "environment", "context"]);
+});
+
+test("Escape puts a held card back where it was and keeps focus on its grip", () => {
+  renderCards({ pressure: PRESSURE, runs: [RUN] });
+  const grip = () => screen.getByRole("button", { name: "Move Environment" });
+  act(() => grip().focus());
+  fireEvent.keyDown(grip(), { key: "Enter" });
+  fireEvent.keyDown(grip(), { key: "End" });
+  assert.deepEqual(cardTitles(), ["Context", "Subagents", "Environment"]);
+  fireEvent.keyDown(grip(), { key: "Escape" });
+  assert.deepEqual(cardTitles(), ["Environment", "Context", "Subagents"]);
+  assert.equal(screen.getByRole("status").textContent, "Moved Environment back to position 1 of 3.");
+  assert.equal(document.activeElement, grip());
+  // Released: the arrows no longer move it.
+  fireEvent.keyDown(grip(), { key: "ArrowDown" });
+  assert.deepEqual(cardTitles(), ["Environment", "Context", "Subagents"]);
+});
+
+test("pressing a held card's grip puts the card back before a pointer drag starts", () => {
+  renderCards({ pressure: PRESSURE, runs: [RUN] });
+  const grip = () => screen.getByRole("button", { name: "Move Subagents" });
+  act(() => grip().focus());
+  fireEvent.keyDown(grip(), { key: " " });
+  fireEvent.keyDown(grip(), { key: "ArrowUp" });
+  assert.deepEqual(cardTitles(), ["Environment", "Subagents", "Context"]);
+  fireEvent.pointerDown(grip(), { button: 0, pointerId: 1, clientY: 0 });
+  assert.deepEqual(cardTitles(), ["Environment", "Context", "Subagents"]);
+  fireEvent.pointerUp(grip(), { pointerId: 1, clientY: 0 });
+  // Released: the arrows no longer move it.
+  fireEvent.keyDown(grip(), { key: "ArrowUp" });
+  assert.deepEqual(cardTitles(), ["Environment", "Context", "Subagents"]);
 });

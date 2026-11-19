@@ -181,7 +181,7 @@ export const BUILT_IN_KEYS: readonly BuiltInKey[] = [
   {
     id: "canvas-side-panel",
     title: "Show / hide the side panel",
-    description: "Properties, Layers and Code. In Layers, Option+Up and Option+Down reorder; F2 renames.",
+    description: "Properties, Layers and Code. In Layers, Option+Up and Option+Down reorder, or Space on a row's grip picks it up; F2 renames.",
     keys: ["I"],
     section: "Design canvas",
     requiresCapability: "designMode",
