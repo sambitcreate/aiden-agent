@@ -89,13 +89,22 @@ test("a canvas with pages describes one page at a time and lists them all", () =
 
 test("Aiden reads which pages the person shows dark or tweaked, and which items they hid", () => {
   const view = { x: 0, y: 0, w: 2000, h: 2000 };
-  const page = note("page", 0, 0, { kind: "file", path: "design/a.html", text: undefined, dark: true, tweaks: { "--accent": "#ff0055" } });
+  const page = note("page", 0, 0, { kind: "file", path: "design/a.html", text: undefined, dark: true, tweaks: { "--accent": "#ff0055" },
+    tweakVersions: [{ id: "v-2", name: "V2", tweaks: { "data-density": "compact" } }, { id: "v-3", name: "Night", dark: true }] });
   const answer = describeCanvas(canvas([page, note("gone", 300, 0, { hidden: true }), note("plain", 600, 0)]), { view });
   const byId = new Map(answer.inView.map((frame) => [frame.id, frame]));
   assert.equal(byId.get("page")!.dark, true);
   assert.deepEqual(byId.get("page")!.tweaks, { "--accent": "#ff0055" });
+  // Versions read by name, so Aiden can talk about "V2" the way the person does.
+  assert.deepEqual(byId.get("page")!.tweakVersions, [
+    { name: "V2", tweaks: { "data-density": "compact" } },
+    { name: "Night", dark: true },
+  ]);
   assert.equal(byId.get("gone")!.hidden, true);
-  assert.deepEqual([byId.get("plain")!.dark, byId.get("plain")!.tweaks, byId.get("plain")!.hidden], [undefined, undefined, undefined]);
+  assert.deepEqual(
+    [byId.get("plain")!.dark, byId.get("plain")!.tweaks, byId.get("plain")!.tweakVersions, byId.get("plain")!.hidden],
+    [undefined, undefined, undefined, undefined],
+  );
 });
 
 test("frames outside the view are listed one by one with their boxes, within the shared frame budget", () => {
