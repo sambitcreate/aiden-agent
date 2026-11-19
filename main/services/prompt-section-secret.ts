@@ -7,7 +7,7 @@
 // The key is never sent anywhere; only values derived from it reach a prompt.
 
 import { createHmac, randomBytes } from "node:crypto";
-import { chmodSync, closeSync, linkSync, lstatSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, linkSync, lstatSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 
 export const PROMPT_SECTION_KEY_FILE = "prompt-section-key";
@@ -49,75 +49,96 @@ function removeQuietly(file: string): void {
   }
 }
 
-/** How long a key writer may hold the lock before others treat it as abandoned. */
-const LOCK_STALE_MS = 10_000;
-/** How long a process waits for another's lock before using a key for this run only. */
-const LOCK_WAIT_MS = 2_000;
-
 function pause(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 /**
- * Runs `replace` while holding `<file>.lock`, created exclusively, so only one
- * process at a time can replace the key file; each replacement reads the file
- * again first. A lock left behind by a process that died is broken once it is
- * older than LOCK_STALE_MS. Undefined when the lock stays held past
- * LOCK_WAIT_MS.
+ * How many places a key may be stored: the key file, then numbered spares
+ * beside it for when the ones before are damaged.
  */
-function withKeyLock(file: string, replace: () => Buffer | undefined): Buffer | undefined {
-  const lock = `${file}.lock`;
-  const deadline = Date.now() + LOCK_WAIT_MS;
+const KEY_SLOTS = 8;
+
+function keySlot(dir: string, index: number): string {
+  return path.join(dir, index === 0 ? PROMPT_SECTION_KEY_FILE : `${PROMPT_SECTION_KEY_FILE}.${index}`);
+}
+
+/** How long a slot still being written by its creator is waited for. */
+const SLOT_WRITE_WAIT_MS = 1_000;
+
+/**
+ * The key stored at `slot`. A slot whose creator is still writing it (only on
+ * a volume without hard links, where it is created empty and then written in
+ * one small write) is waited for; a slot damaged earlier is not.
+ */
+function settledKey(slot: string): Buffer | undefined {
+  const deadline = Date.now() + SLOT_WRITE_WAIT_MS;
   for (;;) {
+    const key = readKey(slot);
+    if (key) return key;
     try {
-      closeSync(openSync(lock, "wx", 0o600));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code !== "EEXIST") throw error;
-      try {
-        if (Date.now() - lstatSync(lock).mtimeMs > LOCK_STALE_MS) removeQuietly(lock);
-      } catch {
-        // Released meanwhile.
-      }
-      if (Date.now() > deadline) return undefined;
-      pause(20);
-      continue;
+      const info = lstatSync(slot);
+      const beingWritten = info.isFile() && info.size < 65 && Date.now() - info.mtimeMs < SLOT_WRITE_WAIT_MS;
+      if (!beingWritten || Date.now() > deadline) return undefined;
+    } catch {
+      return undefined;
     }
-    try {
-      return replace();
-    } finally {
-      removeQuietly(lock);
-    }
+    pause(20);
   }
 }
 
 /**
- * Publishes `key` at `file` only if no key is there yet. The file appears
- * whole (a hard link to, or a rename of, a finished temp file), so a
- * concurrent reader never sees it empty. Returns the key that ends up stored:
- * ours, or the one a concurrent creator published first.
+ * Creates `slot` holding `key` only if nothing is there yet. Undefined when
+ * something already is; the caller then reads it.
  */
-function publishKey(file: string, key: Buffer): Buffer | undefined {
-  const temp = writeTemp(file, key);
+function createSlot(slot: string, key: Buffer): Buffer | undefined {
+  const temp = writeTemp(slot, key);
   try {
-    linkSync(temp, file);
+    linkSync(temp, slot);
     return key;
   } catch (error) {
     const code = (error as NodeJS.ErrnoException)?.code;
-    if (code !== "EEXIST" && code !== "EPERM" && code !== "ENOTSUP" && code !== "ENOSYS") throw error;
-    // A key is already there, or this volume has no hard links. Unless a
-    // valid key is stored, move the finished file into place in one step
-    // under the lock, so two processes never each publish their own: the
-    // second reads the first one's key. rename replaces a damaged file or a
-    // symlink itself rather than writing through it.
-    return readKey(file) ?? withKeyLock(file, () => {
-      const stored = readKey(file);
-      if (stored) return stored;
-      renameSync(temp, file);
-      return readKey(file);
-    });
+    if (code === "EEXIST") return undefined;
+    if (code !== "EPERM" && code !== "ENOTSUP" && code !== "ENOSYS") throw error;
   } finally {
     removeQuietly(temp);
   }
+  // No hard links on this volume: create the slot exclusively and write it.
+  try {
+    writeFileSync(slot, `${key.toString("hex")}\n`, { mode: 0o600, flag: "wx" });
+    return key;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "EEXIST") return undefined;
+    throw error;
+  }
+}
+
+/**
+ * The device key in `dir`. Every slot is created exclusively and never
+ * replaced, so processes racing to create one all read the winner's key, and
+ * a damaged slot (or a symlink, which is never followed or written through)
+ * is skipped, the same way by every process, for the next one. Nothing waits
+ * on another process's lock, so a slow process cannot leave two keys. A
+ * damaged key file is left in place rather than replaced: replacing it is
+ * what let two processes each publish their own.
+ */
+function storedOrCreatedKey(dir: string, fresh: Buffer): Buffer | undefined {
+  for (let index = 0; index < KEY_SLOTS; index += 1) {
+    const slot = keySlot(dir, index);
+    const stored = readKey(slot);
+    if (stored) return stored;
+    let exists = true;
+    try {
+      lstatSync(slot);
+    } catch {
+      exists = false;
+    }
+    if (!exists && createSlot(slot, fresh)) return fresh;
+    // Damaged, or another process created it first: read what it holds.
+    const settled = settledKey(slot);
+    if (settled) return settled;
+  }
+  return undefined;
 }
 
 /**
@@ -131,24 +152,21 @@ function publishKey(file: string, key: Buffer): Buffer | undefined {
 export function promptSectionDeviceKey(dir: string): Buffer {
   const hit = cached.get(dir);
   if (hit) return hit;
-  const file = path.join(dir, PROMPT_SECTION_KEY_FILE);
-  let key = readKey(file);
+  const fresh = randomBytes(32);
+  let key: Buffer | undefined;
+  try {
+    key = storedOrCreatedKey(dir, fresh);
+  } catch {
+    key = undefined;
+  }
   if (!key) {
-    const fresh = randomBytes(32);
-    try {
-      key = publishKey(file, fresh);
-    } catch {
-      key = undefined;
+    if (!fallbackLogged) {
+      fallbackLogged = true;
+      // This module stays Electron-free (the CLI and the harness use it), so it
+      // reports through Node's warning channel rather than the app logger.
+      process.emitWarning("The app data folder could not store the prompt section key; using a key for this run only.", "PromptSectionKeyWarning");
     }
-    if (!key) {
-      if (!fallbackLogged) {
-        fallbackLogged = true;
-        // This module stays Electron-free (the CLI and the harness use it), so it
-        // reports through Node's warning channel rather than the app logger.
-        process.emitWarning("The app data folder could not store the prompt section key; using a key for this run only.", "PromptSectionKeyWarning");
-      }
-      key = fresh;
-    }
+    key = fresh;
   }
   cached.set(dir, key);
   return key;
