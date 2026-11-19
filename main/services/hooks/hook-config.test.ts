@@ -192,4 +192,19 @@ test("tool names and inputs translate between Aiden and Claude spellings", () =>
     old_string: "a",
     new_string: "c",
   });
+
+  // generate_image keeps its own name, and its savePath is the file a Write hook sees.
+  assert.equal(claudeToolName("generate_image"), "generate_image");
+  const image = { prompt: "a hero", savePath: "design/hero.png" };
+  assert.deepEqual(claudeToolInput(image), { ...image, file_path: "design/hero.png" });
+  assert.deepEqual(claudeToolInput({ prompt: "a hero" }), { prompt: "a hero" });
+  assert.deepEqual(aidenToolInput("generate_image", { ...image, file_path: "design/hero-2.png" }, image), {
+    prompt: "a hero",
+    savePath: "design/hero-2.png",
+  });
+  // A hook that rewrites savePath itself keeps its own value.
+  assert.deepEqual(aidenToolInput("generate_image", { prompt: "a hero", savePath: "art/x.png", file_path: "design/hero.png" }, image), {
+    prompt: "a hero",
+    savePath: "art/x.png",
+  });
 });

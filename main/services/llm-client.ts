@@ -117,7 +117,13 @@ import {
 } from "./bot-runtime-authority-main.js";
 import type { BotRuntimeAuthorityAdmission } from "./bot-runtime-authority.js";
 import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
-import { workspaceAutoWouldJudge, workspaceRuleHost, workspaceToolApproval } from "./approval-gate/workspace-tool-approval.js";
+import {
+  fileWriteRuleTool,
+  stricterPageRule,
+  workspaceAutoWouldJudge,
+  workspaceRuleHost,
+  workspaceToolApproval,
+} from "./approval-gate/workspace-tool-approval.js";
 import { pageRuleFor } from "./approval-rules/resolve-main.js";
 import { ApprovalAnalytics, approvalAnalyticsMode, type ApprovalAnalyticsMode } from "./approval-gate/approval-analytics.js";
 import {
@@ -4912,14 +4918,23 @@ export const llmClient = {
                 : browserSelection.initialized ? browserSelection.tabId : (await browserService.getState(workspaceId)).activeTabId ?? undefined;
               return tabId ? browserService.getApprovalTarget(workspaceId, tabId).url : undefined;
             });
-            const pageRule = await pageRuleFor({
+            const pageRuleOwner = {
+              ...(workspaceId ? { workspaceId } : {}),
+              ...(preparedBotContext ? { botId: preparedBotContext.admission.authority.botId } : {}),
+            };
+            const ownPageRule = await pageRuleFor({
               ...(calledMcp
                 ? { connector: { serverId: calledMcp.serverId, tool: calledMcp.toolName } }
                 : { tool: context.toolCall.name }),
               ...(pageHost ? { host: pageHost } : {}),
-              ...(workspaceId ? { workspaceId } : {}),
-              ...(preparedBotContext ? { botId: preparedBotContext.admission.authority.botId } : {}),
+              ...pageRuleOwner,
             });
+            // A call that also writes a workspace file (generate_image with
+            // savePath) answers to write_file's Block or Ask as well.
+            const fileWriteTool = calledMcp ? undefined : fileWriteRuleTool(context.toolCall.name, context.args);
+            const pageRule = fileWriteTool
+              ? stricterPageRule(ownPageRule, await pageRuleFor({ tool: fileWriteTool, ...pageRuleOwner }))
+              : ownPageRule;
             const workspaceGateInput = {
               toolName: context.toolCall.name,
               args: context.args,
