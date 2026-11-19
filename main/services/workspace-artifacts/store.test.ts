@@ -589,6 +589,19 @@ test("canonical policy changes invalidate validated caches before get while tran
   assert.equal((await denied.get("ws1", artifact.id))!.snapshot!.sources.data!.dataJson, undefined);
 });
 
+test("one listing asks the file policy once per file however many pages read it, and asks again on the next listing", async (t) => {
+  const { dir, store } = await openStore(t);
+  const shared = { name: "data", kind: "file" as const, file: "notes.md", parse: "text" as const };
+  await store.create("ws1", content({ title: "One", sources: [shared] }));
+  await store.create("ws1", content({ title: "Two", sources: [shared, { name: "other", kind: "file", file: "todo.md", parse: "text" }] }));
+  const asked: string[] = [];
+  const counting = new WorkspaceArtifactStore({ root: () => dir, fileSourceAllowed: async (_workspace, file) => { asked.push(file); return true; } });
+  assert.equal((await counting.list("ws1")).length, 2);
+  assert.deepEqual([...asked].sort(), ["notes.md", "todo.md"]);
+  await counting.list("ws1");
+  assert.equal(asked.length, 4);
+});
+
 test("no write stores a file source that names a credential path", async (t) => {
   const { store } = await openStore(t);
   const secrets: WorkspaceArtifactSourceV1 = { name: "env", kind: "file", file: ".env", parse: "text" };

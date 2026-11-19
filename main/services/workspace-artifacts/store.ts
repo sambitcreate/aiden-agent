@@ -572,15 +572,26 @@ export class WorkspaceArtifactStore {
       this.artifacts(workspaceId).load(), this.snapshots(workspaceId).load(),
     ]);
     const denied = new Map<string, Set<string>>();
+    // Pages often read the same file, so each file's policy is asked once per listing; a throw keeps the cache.
+    const policy = new Map<string, Promise<boolean | undefined>>();
+    const fileSourceAllowed = this.options.fileSourceAllowed;
+    const allowedByPolicy = (file: string): Promise<boolean | undefined> => {
+      let answer = policy.get(file);
+      if (!answer) {
+        answer = fileSourceAllowed
+          ? Promise.resolve().then(() => fileSourceAllowed(workspaceId, file)).catch(() => undefined)
+          : Promise.resolve(true);
+        policy.set(file, answer);
+      }
+      return answer;
+    };
     for (const artifact of artifacts) {
       const names = new Set<string>();
       for (const source of artifact.sources) {
         if (source.kind !== "file") continue;
         let allowed = !isProtectedCredentialPath(source.file, "file");
-        if (allowed && this.options.fileSourceAllowed) {
-          try { allowed = await this.options.fileSourceAllowed(workspaceId, source.file); }
-          catch { /* Missing or temporarily inaccessible ordinary files retain their validated cache. */ }
-        }
+        // Missing or temporarily inaccessible ordinary files (a throw) retain their validated cache.
+        if (allowed) allowed = (await allowedByPolicy(source.file)) ?? true;
         const snapshot = loaded.snapshots[artifact.id];
         const before = snapshot?.sources[source.name];
         if (before && ((!allowed && (!before.policyDenied || before.dataJson !== undefined)) || snapshot?.filePolicyVersion !== 1)) names.add(source.name);
