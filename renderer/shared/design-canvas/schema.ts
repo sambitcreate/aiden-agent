@@ -8,6 +8,7 @@
 
 import { syncConnectors } from "./connectors.js";
 import { parseDesignTweakValues, type DesignTweakValues } from "./tweaks.js";
+import { clippedUnicode } from "../unicode-prefix.js";
 
 export type DesignFrameKind =
   | "file"
@@ -635,7 +636,7 @@ function parseAnchor(value: unknown): DesignCommentAnchor | undefined {
     const py = finite(value.point[1]);
     if (px !== undefined && py !== undefined) anchor.point = [clampCoord(px), clampCoord(py)];
   }
-  if (typeof value.html === "string" && value.html) anchor.html = value.html.slice(0, DESIGN_CANVAS_LIMITS.anchorHtmlChars);
+  if (typeof value.html === "string" && value.html) anchor.html = clippedUnicode(value.html, DESIGN_CANVAS_LIMITS.anchorHtmlChars, "");
   return anchor;
 }
 

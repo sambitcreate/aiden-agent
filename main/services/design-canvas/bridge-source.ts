@@ -231,7 +231,12 @@ export const DESIGN_BRIDGE_SOURCE = `(() => {
         else strip(inner[index]);
       }
       const html = String(copy.outerHTML || "").replace(/\\s+/g, " ").trim();
-      return html.length > HTML_CHARS ? html.slice(0, HTML_CHARS - 1) + "\\u2026" : html;
+      if (html.length <= HTML_CHARS) return html;
+      // The cut falls before a surrogate pair rather than splitting it.
+      let cut = HTML_CHARS - 1;
+      const high = html.charCodeAt(cut - 1);
+      if (high >= 0xd800 && high <= 0xdbff) cut -= 1;
+      return html.slice(0, cut) + "\\u2026";
     } catch {
       return "";
     }

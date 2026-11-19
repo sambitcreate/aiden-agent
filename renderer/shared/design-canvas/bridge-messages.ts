@@ -3,6 +3,7 @@
 // and bounded before the canvas uses it. See `bridge-source.ts` in main for
 // the other side.
 
+import { clippedUnicode } from "../unicode-prefix.js";
 import type { DesignLocateResult, DesignPageElement } from "./comments.js";
 import { DESIGN_CANVAS_LIMITS, isSourceStamp, type DesignRect } from "./schema.js";
 import type { DesignTweakState } from "./tweaks.js";
@@ -64,15 +65,15 @@ function element(value: unknown): DesignPageElement | null {
   if (!box || typeof raw.selector !== "string" || typeof raw.text !== "string" || typeof raw.tag !== "string") return null;
   if (!/^[a-z][a-z0-9-]*$/u.test(raw.tag) || raw.tag.length > MAX_TAG_CHARS) return null;
   const found: DesignPageElement = {
-    selector: raw.selector.slice(0, MAX_SELECTOR_CHARS),
-    text: raw.text.slice(0, MAX_TEXT_CHARS),
+    selector: clippedUnicode(raw.selector, MAX_SELECTOR_CHARS, ""),
+    text: clippedUnicode(raw.text, MAX_TEXT_CHARS, ""),
     tag: raw.tag,
     rect: box,
   };
   if (typeof raw.sourcePath === "string" && isSourceStamp(raw.sourcePath)) found.sourcePath = raw.sourcePath;
   const commentId = id(raw.commentId);
   if (commentId) found.commentId = commentId;
-  if (typeof raw.html === "string" && raw.html) found.html = raw.html.slice(0, DESIGN_CANVAS_LIMITS.anchorHtmlChars);
+  if (typeof raw.html === "string" && raw.html) found.html = clippedUnicode(raw.html, DESIGN_CANVAS_LIMITS.anchorHtmlChars, "");
   return found;
 }
 

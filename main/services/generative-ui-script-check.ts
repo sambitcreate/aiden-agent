@@ -1,5 +1,6 @@
 import { Script } from "node:vm";
 import { parse, type DefaultTreeAdapterTypes } from "parse5";
+import { clippedUnicode } from "../../renderer/shared/unicode-prefix.js";
 import { formatCheckReport } from "./check-report.js";
 
 /** Scripts past this many are counted as not checked. */
@@ -56,7 +57,7 @@ function errorLine(error: Error, fallback: number): number {
 
 function clip(text: string): string {
   const flat = text.replace(/\s+/gu, " ").trim();
-  return flat.length > MAX_MESSAGE_CHARS ? `${flat.slice(0, MAX_MESSAGE_CHARS - 1)}…` : flat;
+  return clippedUnicode(flat, MAX_MESSAGE_CHARS);
 }
 
 /**

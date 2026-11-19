@@ -95,6 +95,14 @@ test("a pick describes the element under the point: selector, text, tag, nearest
   assert.ok(list.element?.html?.startsWith("<ul><li> An item with words </li>"), "whitespace is collapsed");
   assert.equal(list.element?.html?.length, 1500, "a big element's markup is cut short");
 
+  const emoji = page(`<!doctype html><html><body><ul><li>${"😀".repeat(1000)}</li></ul></body></html>`);
+  emoji.pointAt("ul");
+  emoji.send({ type: "aiden-design:pick-at", requestId: "r6", x: 1, y: 1 });
+  const faces = last(emoji.sent);
+  assert.ok(faces?.type === "picked");
+  assert.ok(faces.element?.html?.endsWith("😀…"), "the cut falls before a pair, not inside it");
+  assert.doesNotMatch(faces.element?.html ?? "", /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u);
+
   view.pointAt(null);
   view.send({ type: "aiden-design:pick-at", requestId: "r4", x: 1, y: 1 });
   const nothing = last(view.sent);

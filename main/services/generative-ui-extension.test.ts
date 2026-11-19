@@ -480,3 +480,16 @@ test("a script error inside an SVG is reported, and nothing the script says runs
   assert.match(text, /Script check: 1 problem found/u);
   assert.equal((globalThis as Record<string, unknown>)[marker], undefined);
 });
+
+test("a long script error is cut short without splitting a character", async () => {
+  const extension = createGenerativeUiExtension({ workspaceRoot: undefined, artifactNamespace: "gen-long-error", onArtifact: () => {} });
+  const tool = extension.tools?.[0];
+  assert.ok(tool);
+  // V8 quotes the identifier, so the message is long and made of characters two code units wide.
+  const result = await tool.execute("call-1", { title: "Long", html: `<script>let a = 1 a${"𝑥".repeat(150)}</script>` });
+  const text = result.content.map((part) => (part.type === "text" ? part.text : "")).join("");
+  const message = /will not run: (.*) \(line 1\)/u.exec(text)?.[1] ?? "";
+  assert.match(message, /^Unexpected identifier 'a𝑥+…$/u);
+  assert.ok(message.length <= 200);
+  assert.doesNotMatch(message, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+});
