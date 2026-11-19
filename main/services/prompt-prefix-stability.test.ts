@@ -20,7 +20,7 @@ import { Harness, MemoryStorage } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
 import { fauxAssistantMessage, fauxToolCall, type FauxResponseFactory } from "@earendil-works/pi-ai/providers/faux";
 import type { BotOpenWorkItem, BotOpenWorkSnapshot } from "../../renderer/shared/bot-open-work.js";
-import { renderBotMemorySection } from "./bot-memory/prompt.js";
+import { renderBotMemorySection, withBotMemoryEdits } from "./bot-memory/prompt.js";
 import { createBotMemoryService } from "./bot-memory/service.js";
 import { createBotMemoryStore } from "./bot-memory/store.js";
 import { botMemoryToolEntry, withBotMemoryIngress } from "./bot-memory/tool.js";
@@ -285,8 +285,11 @@ async function botChat(options: { userMemory: string; openWork?: BotOpenWorkItem
         lessons: "",
       });
     },
-    // Open work as bot-session-main appends it: after the person's input.
-    promptTail: (_botId, offered) => botOpenWorkPromptTail(offered.toolNames, async () => openWork(state.openWork)),
+    // Open work and the person's memory edits as bot-session-main appends them: after the person's input.
+    promptTail: async (botId, offered) => withBotMemoryEdits(
+      await botOpenWorkPromptTail(offered.toolNames, async () => openWork(state.openWork)),
+      memory.takeEdits(botId),
+    ),
     memorySection: async (botId, offer) => renderBotMemorySection(await memory.snapshot(botId), offer),
   };
   const fauxModels = createFauxModels();
@@ -884,7 +887,7 @@ describe("prompt prefix stability: causes fixed by later phases", () => {
     assert.deepEqual(comparePromptRequests(previous, current), {});
   });
 
-  test("a person's Bot memory edit does not change system", { todo: "phase 3: Bot memory as a turn update" }, async () => {
+  test("a person's Bot memory edit does not change system", async () => {
     const chat = await botChat({ userMemory: "Prefers short answers." });
     const { previous, current } = await twoBotTurns(chat, async () => {
       const entry = (await chat.memory.view(bot.id)).user.entries.find(({ text }) => text === "Prefers short answers.")!;

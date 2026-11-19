@@ -30,7 +30,7 @@ import { createBotRuntimeModels } from "../../../main/services/bot-runtime/bot-m
 import { createBotApprovals } from "../../../main/services/bot-runtime/bot-approvals.js";
 import { createBotMemoryService } from "../../../main/services/bot-memory/service.js";
 import { createBotMemoryStore } from "../../../main/services/bot-memory/store.js";
-import { renderBotMemorySection } from "../../../main/services/bot-memory/prompt.js";
+import { renderBotMemorySection, withBotMemoryEdits } from "../../../main/services/bot-memory/prompt.js";
 import { botMemoryToolEntry, withBotMemoryIngress } from "../../../main/services/bot-memory/tool.js";
 import { botRecallToolEntry } from "../../../main/services/bot-memory/recall.js";
 import { botIngressAllowsTool, botIngressRefusal, botTurnAttended } from "../../../main/services/bot-runtime/bot-tool-policy.js";
@@ -174,6 +174,8 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
       systemSections: (bot) => admitted(bot.id, async (lease) => [await ports.instructions(lease), `Working directory: ${lease.authority.workingDirectory}. Use only the offered tools within their granted locations.`]),
       imageInput: async (botId) => imageInputs.get(botId) ?? false,
       memorySection: async (botId, offer) => renderBotMemorySection(await memory.snapshot(botId), offer),
+      // The person's memory edits follow their next input, leaving system cached.
+      promptTail: async (botId) => withBotMemoryEdits("", memory.takeEdits(botId)),
       currentTools: async (bot) => {
         // The desktop's rule (candidate.ts), with the Bot just loaded for this turn.
         const messageBot = await messageBotOffer(bot.id, {

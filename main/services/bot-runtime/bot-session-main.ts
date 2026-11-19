@@ -122,7 +122,7 @@ import { botRunAccess, botFileLocations, createBotToolSources, isConnected, rule
 import { botRunEnded } from "./bot-run-access.js";
 import { botMemory as memory } from "../bot-memory/bot-memory-main.js";
 import { BOT_COMPACTION_FOCUS, createBotCompactionSteering } from "../bot-memory/compaction.js";
-import { renderBotMemorySection } from "../bot-memory/prompt.js";
+import { renderBotMemorySection, withBotMemoryEdits } from "../bot-memory/prompt.js";
 import { renderBotRulesSection } from "../bot-rules/prompt.js";
 import { botRules } from "../bot-rules/store-main.js";
 import { approvalRules } from "../approval-rules/store-main.js";
@@ -711,11 +711,15 @@ const extension: BotExtensionDeps = {
       });
     });
   },
-  // Open work changes between turns, so it follows the person's input rather
-  // than rewriting the system sections (the head of the cached prefix).
-  promptTail: (botId, offered) => botOpenWorkPromptTail(
-    offered.toolNames,
-    async () => (await import("../bot-open-work/service-main.js")).botOpenWork.toolSnapshot(botId),
+  // Open work and the person's memory edits change between turns, so they
+  // follow the person's input rather than rewriting the system sections (the
+  // head of the cached prefix).
+  promptTail: async (botId, offered) => withBotMemoryEdits(
+    await botOpenWorkPromptTail(
+      offered.toolNames,
+      async () => (await import("../bot-open-work/service-main.js")).botOpenWork.toolSnapshot(botId),
+    ),
+    memory.takeEdits(botId),
   ),
   memorySection: async (botId, offer) => renderBotMemorySection(await memory.snapshot(botId), offer),
   currentTools: async (bot, turn) => [

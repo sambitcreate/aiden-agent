@@ -59,3 +59,40 @@ export function renderBotMemorySection(loaded: LoadedBotMemory, offer: { memoryO
   ].join("\n");
   return offer.memoryOffered ? `${snapshot}\n${GUIDANCE}` : snapshot;
 }
+
+/**
+ * A person's edit to saved memory since the session's snapshot, as the text
+ * appended after their next input: what was removed and added, per store.
+ * The snapshot in system stays as it was, so the edit costs no cache
+ * rewrite; this text supersedes it. "" when nothing visible changed.
+ */
+export function renderBotMemoryEdit(previous: LoadedBotMemory, current: LoadedBotMemory): string {
+  const blocks: string[] = [];
+  for (const [target, tag] of TAGS) {
+    const before = previous.readable ? previous.stores[target].texts : [];
+    const after = current.readable ? current.stores[target].texts : [];
+    const kept = new Set(after);
+    const removed = before.filter((text) => !kept.has(text));
+    const added = after.filter((text) => !before.includes(text));
+    if (removed.length === 0 && added.length === 0) continue;
+    const lines = after.length === 0
+      ? ["All entries were removed."]
+      : [
+          ...(removed.length > 0 ? ["Removed:", ...removed.map((text) => `- ${escapePromptText(text)}`)] : []),
+          ...(added.length > 0 ? ["Added:", ...added.map((text) => `- ${escapePromptText(text)}`)] : []),
+        ];
+    blocks.push(`<${tag}>\n${lines.join("\n")}\n</${tag}>`);
+  }
+  if (blocks.length === 0) return "";
+  return [
+    `<bot_memory_update note="${SNAPSHOT_NOTE}">`,
+    "The person edited your saved memory after the snapshot above. These changes replace those entries:",
+    ...blocks,
+    "</bot_memory_update>",
+  ].join("\n");
+}
+
+/** A Bot turn's tail with the person's memory edits (`takeEdits`) after the rest. */
+export function withBotMemoryEdits(tail: string, edits: string): string {
+  return [tail, edits].filter((text) => text.length > 0).join("\n\n");
+}

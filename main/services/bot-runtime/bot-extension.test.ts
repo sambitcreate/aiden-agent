@@ -21,7 +21,7 @@ import {
   type ToolHooks,
 } from "@earendil-works/pi-durable";
 import { createBotApprovals, publicBotApprovalPrompt } from "./bot-approvals.js";
-import { renderBotMemorySection } from "../bot-memory/prompt.js";
+import { renderBotMemorySection, withBotMemoryEdits } from "../bot-memory/prompt.js";
 import { createBotMemoryService, type BotMemoryRuntime } from "../bot-memory/service.js";
 import { createBotMemoryStore } from "../bot-memory/store.js";
 import { botSessionDirectory } from "../bot-routine-notes.js";
@@ -584,6 +584,7 @@ function memoryDeps(memory: BotMemoryRuntime): BotExtensionDeps {
     currentTools: async () => [botMemoryToolEntry("bot-1", memory)],
     turnAllows: withBotMemoryIngress(botIngressAllowsTool),
     memorySection: async (botId, offer) => renderBotMemorySection(await memory.snapshot(botId), offer),
+    promptTail: async (botId) => withBotMemoryEdits("", memory.takeEdits(botId)),
   };
 }
 
@@ -649,12 +650,15 @@ test("(g2) with nothing saved, a routine turn and an attended one get the same g
   }
 });
 
-test("(h) the Bot's own saves keep the memory section byte-identical; a person edit or a new session changes it", async () => {
+test("(h) the memory section stays byte-identical through the Bot's saves and a person's edit, which follows their next input; a new session re-reads it", async () => {
   const { memory, userFile } = memoryProfile();
   writeFileSync(userFile, "Prefers short answers.");
   const sections: string[] = [];
+  /** Each request's text after the system prompt, in order. */
+  const conversations: string[] = [];
   const record = (reply: ReturnType<typeof fauxAssistantMessage>) => (context: { messages: Message[] }) => {
     sections.push(memorySectionOf(context.messages));
+    conversations.push(JSON.stringify(context.messages.filter((message) => message.role === "user")));
     return reply;
   };
   const fauxModels = createFauxModels([
@@ -683,16 +687,21 @@ test("(h) the Bot's own saves keep the memory section byte-identical; a person e
     const entry = (await memory.view("bot-1")).user.entries.find(({ text }) => text === "Prefers short answers.")!;
     assert.equal((await memory.edit({ botId: "bot-1", edit: { kind: "remove", target: "user", entryId: entry.id } })).ok, true);
     await turn("Forget that.");
-    assert.notEqual(sections[3], sections[2], "a person edit takes effect on the next request");
-    assert.ok(!sections[3]!.includes("Prefers short answers.") && sections[3]!.includes("Has a dog."));
+    assert.equal(sections[3], sections[2], "a person edit leaves the cached section alone");
+    const told = conversations[3]!;
+    assert.ok(told.indexOf("<bot_memory_update") > told.indexOf("Forget that."), "the edit follows the person's next input");
+    assert.match(told, /Removed:\\n- Prefers short answers\./u);
+    assert.ok(!/Added:/u.test(told), "the Bot's own save is not reported as the person's edit");
 
     await memory.apply("bot-1", "user", [{ action: "add", content: "Lives in Pune." }]);
     await turn("More.");
     assert.equal(sections[4], sections[3]);
+    assert.equal(conversations[4]!.split("<bot_memory_update").length, 2, "the edit is told once, kept with its input");
 
     memory.beginSession("bot-1");
     await turn("New session.");
     assert.ok(sections[5]!.includes("Lives in Pune."), "a new session re-reads memory");
+    assert.ok(!sections[5]!.includes("Prefers short answers."), "and with it the person's edit");
   } finally {
     await harness.close(ctx);
   }

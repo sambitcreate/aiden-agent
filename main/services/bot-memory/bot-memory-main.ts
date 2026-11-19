@@ -36,6 +36,7 @@ export const botMemory: BotMemoryRuntime = {
   edit: (input) => botMemoryRuntime().edit(input),
   apply: (botId, target, operations, options) => botMemoryRuntime().apply(botId, target, operations, options),
   snapshot: (botId) => botMemoryRuntime().snapshot(botId),
+  takeEdits: (botId) => botMemoryRuntime().takeEdits(botId),
   beginSession: (botId) => botMemoryRuntime().beginSession(botId),
   markStale: (botId) => botMemoryRuntime().markStale(botId),
   forgetBot: (botId) => botMemoryRuntime().forgetBot(botId),

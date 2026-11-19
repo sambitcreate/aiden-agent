@@ -96,7 +96,7 @@ test("clear empties both stores", async () => {
   assert.deepEqual([view.memory.usedChars, view.user.usedChars], [0, 0]);
 });
 
-test("a person's edit refreshes the prompt snapshot; the Bot's own write does not", async () => {
+test("a person's edit keeps the prompt snapshot and is handed to the next input once; the Bot's own write is not", async () => {
   const { memory, get, edit } = await setup();
   const frozen = await memory.snapshot(BOT);
   assert.deepEqual(frozen.stores.user.texts, ["Prefers short answers.", "Lives in Pune."]);
@@ -105,8 +105,24 @@ test("a person's edit refreshes the prompt snapshot; the Bot's own write does no
   assert.deepEqual((await memory.snapshot(BOT)).stores.user.texts, frozen.stores.user.texts, "a tool write keeps the snapshot");
 
   const entry = (await get(BOT)).user.entries.find(({ text }) => text === "Prefers short answers.")!;
+  assert.equal(memory.takeEdits(BOT), "", "the Bot's own write is not the person's edit");
   assert.equal((await edit({ botId: BOT, edit: { kind: "remove", target: "user", entryId: entry.id } })).ok, true);
-  assert.deepEqual((await memory.snapshot(BOT)).stores.user.texts, ["Lives in Pune.", "Has a dog."]);
+  assert.deepEqual((await memory.snapshot(BOT)).stores.user.texts, frozen.stores.user.texts, "the cached snapshot is kept");
+
+  const pune = (await get(BOT)).user.entries.find(({ text }) => text === "Lives in Pune.")!;
+  assert.equal((await edit({ botId: BOT, edit: { kind: "replace", target: "user", entryId: pune.id, text: "Lives in Mumbai." } })).ok, true);
+  const told = memory.takeEdits(BOT);
+  assert.match(told, /^<bot_memory_update /u);
+  assert.match(told, /<about_person>\nRemoved:\n- Prefers short answers\.\n- Lives in Pune\.\nAdded:\n- Lives in Mumbai\.\n<\/about_person>/u, "both edits, as one change from the snapshot");
+  assert.ok(!told.includes("Has a dog."), "the Bot already knows its own write");
+  assert.equal(memory.takeEdits(BOT), "", "an edit is told once");
+
+  memory.beginSession(BOT);
+  assert.deepEqual((await memory.snapshot(BOT)).stores.user.texts, ["Lives in Mumbai.", "Has a dog."], "a new session reads the edit");
+  const dog = (await get(BOT)).user.entries.find(({ text }) => text === "Has a dog.")!;
+  await edit({ botId: BOT, edit: { kind: "remove", target: "user", entryId: dog.id } });
+  memory.beginSession(BOT);
+  assert.equal(memory.takeEdits(BOT), "", "a fresh snapshot already holds a pending edit");
 });
 
 test("a blocked edit is a result with the person-facing message", async () => {
