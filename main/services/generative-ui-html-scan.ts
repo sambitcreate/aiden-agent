@@ -748,9 +748,11 @@ function xmlDoctypeEnd(markup: string, from: number): number {
  * processing instruction or DOCTYPE is kept whole, so a `<!--` in one does not
  * start a comment, and one that holds a `<` or `>` before its XML end is
  * refused, since HTML ends it at that `>` and reads what follows as markup
- * XML reads as part of it. XML has no `<` in an attribute value, so the next
- * `<` after a start tag begins its content's first markup. Each step searches
- * forward from the last, so this is linear.
+ * XML reads as part of it. One that does not end stops the scan: the rest is
+ * kept as text. XML has no `<` in an attribute value, so the next `<` after a
+ * start tag begins its content's first markup. Each step searches forward
+ * from where the last one ended and the scan stops at the first opener with
+ * no end, so this is linear.
  */
 function xmlAsHtml(markup: string): { text: string } | { limit: string } {
   let text = "";
@@ -781,11 +783,9 @@ function xmlAsHtml(markup: string): { text: string } | { limit: string } {
     } else {
       const from = start + match[0].length;
       const end = match[0] === "<?" ? markup.indexOf("?>", from) : xmlDoctypeEnd(markup, from);
-      if (end === -1) {
-        comments = false;
-        opener.lastIndex = from;
-        continue;
-      }
+      // Unterminated: XML rejects the document, and nothing after it is
+      // dropped, so the rest is kept as text to be checked.
+      if (end === -1) break;
       if (/[<>]/u.test(markup.slice(from, end))) return { limit: XML_MARKUP_IN_DECLARATION_LIMIT };
       opener.lastIndex = end + 1;
     }

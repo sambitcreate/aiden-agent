@@ -166,6 +166,8 @@ test("checking, wrapping or streaming a visual up to the size cap takes linear t
     xmlCdataSections: (size) => fill(size, "<![CDATA[a]]>", XML_SHAPE_START, XML_SHAPE_END),
     xmlPrefixedLinks: (size) => fill(size, '<a q:href="#a"/>', XML_SHAPE_START, XML_SHAPE_END),
     xmlUnclosedTextElements: (size) => fill(size, "<style ", XML_SHAPE_START, XML_SHAPE_END),
+    xmlUnterminatedInstructions: (size) => fill(size, "<?", XML_SHAPE_START, XML_SHAPE_END),
+    xmlUnterminatedDoctypes: (size) => fill(size, "<!DOCTYPE x ", XML_SHAPE_START, XML_SHAPE_END),
     // Tags parse5 drops in a <select>, checked as they are read.
     selectContent: (size) => fill(size, '<img src="#" onclick="f(1)"><b x>', "<select>", "</select>"),
     // An <svg> in a <select> is built and read as SVG.
