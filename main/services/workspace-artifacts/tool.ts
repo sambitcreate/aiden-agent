@@ -496,8 +496,8 @@ function commandsCard(
  * Deleting always asks. Under Ask, saving commands the person has not
  * approved for this artifact asks, listing every command verbatim, and every
  * run asks with the exact command, as a button press does.
- * Invalid input, or a run that cannot happen, asks nothing: the call then
- * fails with the reason.
+ * Invalid input, a save that would fail (see `assertSaveValid`), or a run
+ * that cannot happen asks nothing: the call then fails with the reason.
  */
 export async function workspaceArtifactCallApproval(
   args: unknown,
@@ -597,7 +597,36 @@ export async function workspaceArtifactCallApproval(
   const title =
     input.title === undefined && previous ? previous.visual.title : typeof input.title === "string" ? input.title.trim() : "";
   const verb = operation === "create" ? "Create" : "Update";
-  return commandsCard(`${verb} the artifact "${title}"`, sources, actions, previous?.approvedDigest);
+  const card = commandsCard(`${verb} the artifact "${title}"`, sources, actions, previous?.approvedDigest);
+  if (!card.required) return card;
+  try {
+    assertSaveValid(input, operation, previous, options);
+  } catch {
+    // A save that would fail anyway shows no card: the call fails with the reason before anyone is asked.
+    return { required: false };
+  }
+  return card;
+}
+
+/**
+ * Throws what execute would refuse a create or update for, against the page
+ * as saved now: a bad baseVersion, edits that miss, markup that does not
+ * compile or is too long, and values or sources that are not valid here. A
+ * baseVersion behind the page is left to execute, which alone knows whether
+ * only the reply's own earlier saves moved it.
+ */
+function assertSaveValid(
+  input: ArtifactToolInput,
+  operation: Operation,
+  previous: WorkspaceArtifactV1 | undefined,
+  options: Pick<WorkspaceArtifactToolOptions, "permission" | "hasFolder">,
+): void {
+  const baseVersion = baseVersionOf(input, operation);
+  if (previous && baseVersion !== undefined && baseVersion > previous.revision) {
+    throw new Error("baseVersion is ahead of the page.");
+  }
+  const { content } = contentFor(withEdits(input, previous?.markup, previous !== undefined), previous);
+  assertSourcesRunnable(content, options);
 }
 
 /**

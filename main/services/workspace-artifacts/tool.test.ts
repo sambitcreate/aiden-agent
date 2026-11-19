@@ -201,6 +201,33 @@ test("the approval card lists every command, once per new set, and deleting alwa
   assert.equal((await store.list("ws1")).length, 1);
 });
 
+test("under Ask, a save that would fail shows no card and fails with its reason, while a valid one still asks", async (t) => {
+  const { store, call, allow, options } = await harness(t);
+  const create = { operation: "create", title: "Open PRs", markup: PAGE, sources: [PULLS] };
+  await allow("c1", create);
+  await call("c1", create);
+  const wider = [{ ...PULLS, command: "gh pr list --state all --json number,title" }];
+  const doomed: [Record<string, unknown>, RegExp][] = [
+    [{ operation: "create", title: "No page", sources: wider }, /markup is required/u],
+    [{ operation: "update", id: "art1", sources: wider, edits: [{ old: "not in the page", new: "x" }] }, /was not found/u],
+    [{ operation: "update", id: "art1", sources: wider, baseVersion: 9 }, /has no revision 9/u],
+    [{ operation: "update", id: "art1", sources: wider, refresh: { intervalSeconds: 5 } }, /intervalSeconds/u],
+  ];
+  for (const [args, reason] of doomed) {
+    assert.equal((await workspaceArtifactCallApproval(args, options)).required, false, JSON.stringify(args));
+    await assert.rejects(call("doomed", args), reason);
+  }
+  const saved = (await store.get("ws1", "art1"))!.artifact;
+  assert.equal(saved.revision, 1);
+  assert.deepEqual(saved.sources, [PULLS]);
+
+  // The same change made validly still asks before its new command is saved.
+  const valid = { operation: "update", id: "art1", sources: wider, baseVersion: 1, edits: [{ old: "Open PRs", new: "All PRs" }] };
+  const card = await workspaceArtifactCallApproval(valid, options);
+  assert.equal(card.required, true);
+  assert.match(card.summary!, /--state all/u);
+});
+
 test("an unapproved save under Ask records no approval for its commands", async (t) => {
   const { store, call } = await harness(t);
   await call("c1", { operation: "create", title: "Open PRs", markup: PAGE, sources: [PULLS] });
