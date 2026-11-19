@@ -10,7 +10,7 @@
 // - Both empty and the tool offered: the guidance only.
 // - Otherwise the snapshot, then the guidance when the tool is offered.
 
-import type { BotMemoryTarget } from "../../../renderer/shared/bot-memory.js";
+import { BOT_MEMORY_ENTRY_DELIMITER, type BotMemoryTarget } from "../../../renderer/shared/bot-memory.js";
 import { escapePromptText } from "../bot-system-prompt.js";
 import { memoryLimit, prefixWithin, serializeEntries, usedChars } from "./files.js";
 import { BOT_MEMORY_NOTES_ROUTE, BOT_MEMORY_USER_ROUTE } from "./routing.js";
@@ -60,33 +60,62 @@ export function renderBotMemorySection(loaded: LoadedBotMemory, offer: { memoryO
   return offer.memoryOffered ? `${snapshot}\n${GUIDANCE}` : snapshot;
 }
 
+const SECTION_STORE = new RegExp(`<(${TAGS.map(([, tag]) => tag).join("|")}) usage="[^"]*">\\n([\\s\\S]*?)\\n</\\1>`, "gu");
+
+/** The entries a rendered memory section shows, each as its store tag and escaped text. */
+function sectionEntries(section: string): Set<string> {
+  const entries = new Set<string>();
+  for (const [, tag, body] of section.matchAll(SECTION_STORE)) {
+    for (const entry of body!.split(BOT_MEMORY_ENTRY_DELIMITER)) entries.add(`${tag}\0${entry}`);
+  }
+  return entries;
+}
+
 /**
- * A person's edit to saved memory since the session's snapshot, as the text
- * appended after their next input: what was removed and added, per store.
- * The snapshot in system stays as it was, so the edit costs no cache
- * rewrite; this text supersedes it. "" when nothing visible changed.
+ * Whether a memory section an earlier request showed holds an entry the
+ * latest one (`null`: no section) lacks. Someone removed it, so the earlier
+ * section must not be sent again. Additions never make an earlier one stale,
+ * so it keeps its bytes until a removal.
  */
-export function renderBotMemoryEdit(previous: LoadedBotMemory, current: LoadedBotMemory): string {
+export function botMemorySectionRemovedFrom(earlier: string, latest: string | null): boolean {
+  const kept = sectionEntries(latest ?? "");
+  for (const entry of sectionEntries(earlier)) if (!kept.has(entry)) return true;
+  return false;
+}
+
+/** Entries the person removed from each store, counted (never their text). */
+export type BotMemoryRemovals = Partial<Record<BotMemoryTarget, number>>;
+
+/** What was removed between two reads of memory, per store. */
+export function botMemoryRemovals(previous: LoadedBotMemory, current: LoadedBotMemory): BotMemoryRemovals {
+  const removals: BotMemoryRemovals = {};
+  if (!previous.readable) return removals;
+  for (const [target] of TAGS) {
+    const kept = new Set(current.readable ? current.stores[target].texts : []);
+    const count = previous.stores[target].texts.filter((text) => !kept.has(text)).length;
+    if (count > 0) removals[target] = count;
+  }
+  return removals;
+}
+
+/**
+ * The person's removals (a replaced entry counts as removed), for the Bot's
+ * next input after the snapshot was re-read without them: a count per store,
+ * never the removed text, which would otherwise ride along with that input in
+ * every later request. "" when nothing was removed.
+ */
+export function renderBotMemoryRemovals(removals: BotMemoryRemovals): string {
   const blocks: string[] = [];
   for (const [target, tag] of TAGS) {
-    const before = previous.readable ? previous.stores[target].texts : [];
-    const after = current.readable ? current.stores[target].texts : [];
-    const kept = new Set(after);
-    const removed = before.filter((text) => !kept.has(text));
-    const added = after.filter((text) => !before.includes(text));
-    if (removed.length === 0 && added.length === 0) continue;
-    const lines = after.length === 0
-      ? ["All entries were removed."]
-      : [
-          ...(removed.length > 0 ? ["Removed:", ...removed.map((text) => `- ${escapePromptText(text)}`)] : []),
-          ...(added.length > 0 ? ["Added:", ...added.map((text) => `- ${escapePromptText(text)}`)] : []),
-        ];
-    blocks.push(`<${tag}>\n${lines.join("\n")}\n</${tag}>`);
+    const count = removals[target] ?? 0;
+    if (count === 0) continue;
+    const entries = count === 1 ? "1 entry" : `${count} entries`;
+    blocks.push(`<${tag}>\nRemoved ${entries}. They are no longer approved, so do not rely on them or on anything earlier that quoted them.\n</${tag}>`);
   }
   if (blocks.length === 0) return "";
   return [
     `<bot_memory_update note="${SNAPSHOT_NOTE}">`,
-    "The person edited your saved memory after the snapshot above. These changes replace those entries:",
+    "The person edited your saved memory; the snapshot above is current:",
     ...blocks,
     "</bot_memory_update>",
   ].join("\n");

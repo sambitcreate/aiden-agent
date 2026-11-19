@@ -96,33 +96,39 @@ test("clear empties both stores", async () => {
   assert.deepEqual([view.memory.usedChars, view.user.usedChars], [0, 0]);
 });
 
-test("a person's edit keeps the prompt snapshot and is handed to the next input once; the Bot's own write is not", async () => {
+test("a person's edit re-reads the prompt snapshot and names what it removed by count, once; the Bot's own write is not an edit", async () => {
   const { memory, get, edit } = await setup();
   const frozen = await memory.snapshot(BOT);
   assert.deepEqual(frozen.stores.user.texts, ["Prefers short answers.", "Lives in Pune."]);
 
   await memory.apply(BOT, "user", [{ action: "add", content: "Has a dog." }]);
   assert.deepEqual((await memory.snapshot(BOT)).stores.user.texts, frozen.stores.user.texts, "a tool write keeps the snapshot");
+  assert.equal(memory.takeEdits(BOT), "", "the Bot's own write is not the person's edit");
 
   const entry = (await get(BOT)).user.entries.find(({ text }) => text === "Prefers short answers.")!;
-  assert.equal(memory.takeEdits(BOT), "", "the Bot's own write is not the person's edit");
   assert.equal((await edit({ botId: BOT, edit: { kind: "remove", target: "user", entryId: entry.id } })).ok, true);
-  assert.deepEqual((await memory.snapshot(BOT)).stores.user.texts, frozen.stores.user.texts, "the cached snapshot is kept");
-
   const pune = (await get(BOT)).user.entries.find(({ text }) => text === "Lives in Pune.")!;
   assert.equal((await edit({ botId: BOT, edit: { kind: "replace", target: "user", entryId: pune.id, text: "Lives in Mumbai." } })).ok, true);
+  assert.deepEqual(
+    (await memory.snapshot(BOT)).stores.user.texts,
+    ["Lives in Mumbai.", "Has a dog."],
+    "the next prompt no longer shows what the person removed or replaced",
+  );
+
   const told = memory.takeEdits(BOT);
   assert.match(told, /^<bot_memory_update /u);
-  assert.match(told, /<about_person>\nRemoved:\n- Prefers short answers\.\n- Lives in Pune\.\nAdded:\n- Lives in Mumbai\.\n<\/about_person>/u, "both edits, as one change from the snapshot");
-  assert.ok(!told.includes("Has a dog."), "the Bot already knows its own write");
+  assert.match(told, /<about_person>\nRemoved 2 entries\./u, "both edits, as one count");
+  for (const gone of ["Prefers short answers.", "Lives in Pune."]) assert.ok(!told.includes(gone), `${gone} is never quoted`);
+  assert.ok(!told.includes("<notes>"), "an untouched store is not mentioned");
   assert.equal(memory.takeEdits(BOT), "", "an edit is told once");
+});
 
-  memory.beginSession(BOT);
-  assert.deepEqual((await memory.snapshot(BOT)).stores.user.texts, ["Lives in Mumbai.", "Has a dog."], "a new session reads the edit");
-  const dog = (await get(BOT)).user.entries.find(({ text }) => text === "Has a dog.")!;
-  await edit({ botId: BOT, edit: { kind: "remove", target: "user", entryId: dog.id } });
-  memory.beginSession(BOT);
-  assert.equal(memory.takeEdits(BOT), "", "a fresh snapshot already holds a pending edit");
+test("a removal before the Bot read memory in this process has nothing to tell", async () => {
+  const { memory, get, edit } = await setup();
+  const entry = (await get(BOT)).memory.entries[0]!;
+  assert.equal((await edit({ botId: BOT, edit: { kind: "remove", target: "memory", entryId: entry.id } })).ok, true);
+  assert.equal(memory.takeEdits(BOT), "");
+  assert.deepEqual((await memory.snapshot(BOT)).stores.memory.texts, []);
 });
 
 test("a blocked edit is a result with the person-facing message", async () => {

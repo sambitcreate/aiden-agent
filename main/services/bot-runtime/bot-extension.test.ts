@@ -650,7 +650,7 @@ test("(g2) with nothing saved, a routine turn and an attended one get the same g
   }
 });
 
-test("(h) the memory section stays byte-identical through the Bot's saves and a person's edit, which follows their next input; a new session re-reads it", async () => {
+test("(h) the memory section stays byte-identical through the Bot's saves; a person's removal leaves it and every later input, named by count after their next input", async () => {
   const { memory, userFile } = memoryProfile();
   writeFileSync(userFile, "Prefers short answers.");
   const sections: string[] = [];
@@ -684,24 +684,28 @@ test("(h) the memory section stays byte-identical through the Bot's saves and a 
     assert.equal(sections[2], sections[0], "so is the next turn");
     assert.ok(!sections[0]!.includes("Has a dog."));
 
+    assert.ok(sections[2]!.includes("Prefers short answers."));
     const entry = (await memory.view("bot-1")).user.entries.find(({ text }) => text === "Prefers short answers.")!;
     assert.equal((await memory.edit({ botId: "bot-1", edit: { kind: "remove", target: "user", entryId: entry.id } })).ok, true);
     await turn("Forget that.");
-    assert.equal(sections[3], sections[2], "a person edit leaves the cached section alone");
+    assert.ok(!sections[3]!.includes("Prefers short answers."), "the next request's memory section no longer shows it");
+    assert.ok(sections[3]!.includes("Has a dog."), "it is re-read, with the Bot's own save");
     const told = conversations[3]!;
     assert.ok(told.indexOf("<bot_memory_update") > told.indexOf("Forget that."), "the edit follows the person's next input");
-    assert.match(told, /Removed:\\n- Prefers short answers\./u);
-    assert.ok(!/Added:/u.test(told), "the Bot's own save is not reported as the person's edit");
+    assert.match(told, /Removed 1 entry\./u);
+    assert.ok(!told.includes("Prefers short answers."), "the removal is named by count, never quoted");
 
     await memory.apply("bot-1", "user", [{ action: "add", content: "Lives in Pune." }]);
     await turn("More.");
-    assert.equal(sections[4], sections[3]);
+    assert.equal(sections[4], sections[3], "the Bot's own save after it keeps the section");
     assert.equal(conversations[4]!.split("<bot_memory_update").length, 2, "the edit is told once, kept with its input");
 
     memory.beginSession("bot-1");
     await turn("New session.");
     assert.ok(sections[5]!.includes("Lives in Pune."), "a new session re-reads memory");
-    assert.ok(!sections[5]!.includes("Prefers short answers."), "and with it the person's edit");
+    for (const index of [3, 4, 5]) {
+      assert.ok(!sections[index]!.includes("Prefers short answers.") && !conversations[index]!.includes("Prefers short answers."), `request ${index} never carries the removed entry`);
+    }
   } finally {
     await harness.close(ctx);
   }

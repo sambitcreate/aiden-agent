@@ -2,17 +2,18 @@
 // writes and announces a Bot's memory.
 //
 // - `view` / `edit`: the person's Profile → Memory (desktop IPC and Remote).
-//   A person's edit leaves the prompt snapshot (part of the cached system
-//   prompt) as it is; `takeEdits` hands the change to the Bot's next input
-//   as a `<bot_memory_update>`, so "forget that" reaches the next turn
-//   without rewriting system.
+//   A person's edit (a replace or removal, so always a removal of approved
+//   text) is a privacy edit, not a cache one: it marks the snapshot stale so
+//   the next request's system re-reads memory without the old text, and
+//   `takeEdits` names what was removed by count, never by its text (the
+//   tail rides with its input in every later request, so it never quotes
+//   memory).
 // - `apply`: the Bot's own `bot_memory` batches (and the add-only review and
 //   compaction flush). They never mark the snapshot stale: that is the
 //   frozen-snapshot rule, and the tool result already shows the live state.
 // - `snapshot`: the memory the prompt shows, cached per Bot and re-read only
 //   when stale (`beginSession` on every harness open, `markStale` after
-//   compaction or a learning change). A re-read includes every pending
-//   person edit, so it drops them.
+//   compaction, a learning change or a person's edit).
 // - `onChanged`: every successful write, whoever made it.
 
 import type {
@@ -30,7 +31,7 @@ import {
   type BotMemoryStore,
   type LoadedBotMemory,
 } from "./store.js";
-import { renderBotMemoryEdit } from "./prompt.js";
+import { botMemoryRemovals, renderBotMemoryRemovals, type BotMemoryRemovals } from "./prompt.js";
 
 /** What Remote and IPC use (plan Step 0 contract). */
 export interface BotMemoryService {
@@ -50,9 +51,9 @@ export interface BotMemoryRuntime extends BotMemoryService {
   /** What the prompt shows: frozen until the next session open or compaction. */
   snapshot(botId: string): Promise<LoadedBotMemory>;
   /**
-   * The person's edits since the snapshot the prompt shows, rendered for the
-   * Bot's next input (`renderBotMemoryEdit`), each returned once. "" when
-   * there are none, or when no snapshot is in use (the next one reads them).
+   * What the person removed since a snapshot this process showed the Bot,
+   * as counts for the Bot's next input (`renderBotMemoryRemovals`), returned
+   * once. "" when nothing was removed.
    */
   takeEdits(botId: string): string;
   /** A harness opened for this Bot: the next prompt re-reads memory. */
@@ -71,8 +72,8 @@ export function createBotMemoryService(deps: BotMemoryServiceDeps): BotMemoryRun
   const listeners = new Set<(event: BotMemoryChangedEvent) => void>();
   const snapshots = new Map<string, LoadedBotMemory>();
   const stale = new Set<string>();
-  /** Per Bot: the memory the prompt was last told about, and the edits since. */
-  const edits = new Map<string, { from: LoadedBotMemory; to: LoadedBotMemory }>();
+  /** Per Bot: removal counts not yet told to the Bot. */
+  const removals = new Map<string, BotMemoryRemovals>();
 
   function announce(loaded: LoadedBotMemory): void {
     const event: BotMemoryChangedEvent = { botId: loaded.botId, revision: loaded.revision };
@@ -87,12 +88,6 @@ export function createBotMemoryService(deps: BotMemoryServiceDeps): BotMemoryRun
 
   function markStale(botId: string): void {
     stale.add(botId);
-    edits.delete(botId);
-  }
-
-  /** Whether the prompt shows a snapshot an edit now leaves behind. */
-  function snapshotInUse(botId: string): boolean {
-    return snapshots.has(botId) && !stale.has(botId);
   }
 
   return {
@@ -104,9 +99,15 @@ export function createBotMemoryService(deps: BotMemoryServiceDeps): BotMemoryRun
       const outcome = await deps.store.edit(input.botId, input.edit);
       if (!outcome.ok) return { ok: false, code: outcome.code, message: outcome.message, view: memoryView(outcome.loaded) };
       if (outcome.changed) {
-        if (snapshotInUse(input.botId)) {
-          const pending = edits.get(input.botId);
-          edits.set(input.botId, { from: pending?.from ?? outcome.previous ?? outcome.loaded, to: outcome.loaded });
+        const removed = outcome.previous === undefined ? {} : botMemoryRemovals(outcome.previous, outcome.loaded);
+        markStale(input.botId);
+        // A Bot that never read memory in this process has nothing to unlearn.
+        if (snapshots.has(input.botId) && Object.keys(removed).length > 0) {
+          const told = removals.get(input.botId) ?? {};
+          for (const [target, count] of Object.entries(removed) as [BotMemoryTarget, number][]) {
+            told[target] = (told[target] ?? 0) + count;
+          }
+          removals.set(input.botId, told);
         }
         announce(outcome.loaded);
       }
@@ -129,10 +130,11 @@ export function createBotMemoryService(deps: BotMemoryServiceDeps): BotMemoryRun
     },
 
     takeEdits(botId) {
-      const pending = edits.get(botId);
-      edits.delete(botId);
-      return pending === undefined || !snapshotInUse(botId) ? "" : renderBotMemoryEdit(pending.from, pending.to);
+      const removed = removals.get(botId);
+      removals.delete(botId);
+      return removed === undefined ? "" : renderBotMemoryRemovals(removed);
     },
+
 
     beginSession: markStale,
     markStale,
@@ -141,7 +143,7 @@ export function createBotMemoryService(deps: BotMemoryServiceDeps): BotMemoryRun
       deps.store.forgetBot(botId);
       snapshots.delete(botId);
       stale.delete(botId);
-      edits.delete(botId);
+      removals.delete(botId);
     },
 
     onChanged(listener) {

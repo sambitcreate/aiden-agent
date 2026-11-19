@@ -67,7 +67,8 @@ import { createHash, randomUUID } from "node:crypto";
 import type { Context } from "@earendil-works/chord/context";
 import type { JsonValue } from "@earendil-works/chord/json";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Message, SystemMessage } from "@earendil-works/pi-ai";
+import { botMemorySectionRemovedFrom } from "../bot-memory/prompt.js";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { CodemodeSandbox, type CodemodeSandboxBase } from "@earendil-works/pi-codemode";
 import { createCodemodeExtension } from "@earendil-works/pi-durable/codemode";
@@ -132,6 +133,7 @@ import type { HookDispatcher } from "../hooks/hook-types.js";
 export const BOT_EXTENSION_NAME = "aiden-bot";
 /** Section keys, in render order. */
 export const BOT_SECTION_KEYS = ["aiden-base", "aiden-persona", "aiden-authority", "aiden-guidance", "aiden-memory"] as const;
+const MEMORY_SECTION_KEY = "aiden-memory" satisfies (typeof BOT_SECTION_KEYS)[number];
 /** The tool whose offer decides how the memory section reads. */
 const MEMORY_TOOL_NAME = "bot_memory";
 /** Inputs whose `promptTail` this process keeps (see `withPromptTail`). */
@@ -1360,6 +1362,38 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     return hash.digest("hex");
   }
 
+  /**
+   * Earlier system messages without a memory section a later one no longer
+   * shows an entry of. Pi Durable journals each re-read snapshot as a section
+   * patch after the first, and a wire that keeps system messages in place
+   * would otherwise send an entry the person removed in every later request.
+   * The section is dropped whole (the latest carries the current one), which
+   * rewrites that message once; additions alone never do.
+   */
+  function withoutRemovedMemory(messages: readonly Message[]): readonly Message[] {
+    let latest = -1;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index]!;
+      if (message.role === "system" && message.sections !== undefined && MEMORY_SECTION_KEY in message.sections) {
+        latest = index;
+        break;
+      }
+    }
+    if (latest <= 0) return messages;
+    const current = (messages[latest] as SystemMessage).sections![MEMORY_SECTION_KEY] ?? null;
+    let next: Message[] | undefined;
+    for (let index = 0; index < latest; index += 1) {
+      const message = messages[index]!;
+      if (message.role !== "system") continue;
+      const earlier = message.sections?.[MEMORY_SECTION_KEY];
+      if (typeof earlier !== "string" || !botMemorySectionRemovedFrom(earlier, current)) continue;
+      const { [MEMORY_SECTION_KEY]: _dropped, ...sections } = message.sections!;
+      next ??= [...messages];
+      next[index] = { ...message, sections };
+    }
+    return next ?? messages;
+  }
+
   /** Each input with its own `promptTail`, the latest one rendered now if new. */
   async function withPromptTail(messages: readonly Message[]): Promise<readonly Message[]> {
     if (deps.promptTail === undefined) return messages;
@@ -1537,6 +1571,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
         messages = withNewestToolImages(messages, "browser_snapshot", BOT_BROWSER_SNAPSHOT_IMAGES_KEPT);
         messages = withNewestToolImages(messages, BOT_COMPUTER_TOOL_NAME, BOT_COMPUTER_CAPTURE_IMAGES_KEPT, BOT_OLDER_COMPUTER_CAPTURE_NOTE);
         if (deps.imageInput !== undefined && !(await deps.imageInput(botId))) messages = withImageReferences(messages);
+        messages = withoutRemovedMemory(messages);
         messages = await withPromptTail(messages);
         messages = await withSessionContext(messages, api, context);
         const finalOwner = await runOwner(api, context);
@@ -1627,7 +1662,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
       name: BOT_EXTENSION_NAME,
       tools,
       sections: BOT_SECTION_KEYS.map((key, index) =>
-        key === "aiden-memory"
+        key === MEMORY_SECTION_KEY
           ? section(
               key,
               async () => {
