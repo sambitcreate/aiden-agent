@@ -22,10 +22,19 @@ export type DesignCommentTray = {
    */
   block(pictures?: Readonly<Record<string, string>>): string;
   remove(id: string): void;
-  markSent(ids: readonly string[]): void;
+  /**
+   * Marks these comments sent and saves the canvas, before the message that
+   * carries them goes, so Aiden's turn finds them sent rather than still
+   * drafts. Never rejects. `done` is for a send that went (it drops the
+   * comments' pictures); `undo` for one that failed or was cancelled (it puts
+   * them back in the tray, keeping edits made meanwhile).
+   */
+  markSent(ids: readonly string[]): Promise<DesignCommentSend>;
   /** Brings a comment on screen and opens it. */
   open(id: string): void;
 };
+
+export type DesignCommentSend = { done(): void; undo(): void };
 
 export type DesignCommentCrop = { mimeType: "image/png" | "image/jpeg"; data: string };
 

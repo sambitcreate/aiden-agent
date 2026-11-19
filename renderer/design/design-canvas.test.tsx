@@ -12,7 +12,7 @@ import { useComposerTypeFocus } from "../lib/use-composer-type-focus";
 import { emptyDesignCanvas, type DesignCanvas, type DesignFrame } from "../shared/design-canvas/schema";
 import { DesignCanvasRegion } from "./design-canvas-region";
 import { designFrameSnapshots } from "./frame-snapshots";
-import { designCommentTray } from "./comment-tray-store";
+import { designCommentTray, type DesignCommentSend } from "./comment-tray-store";
 import { DESIGN_CANVAS_SAVE_DELAY_MS } from "./use-design-canvas";
 
 // The canvas imports React Flow's CSS, which Node cannot load; tests get an empty module.
@@ -538,11 +538,22 @@ test("the comment tool drops a pin on the canvas, and a saved comment waits in t
   assert.deepEqual(tray?.comments.map((entry) => [entry.label, entry.note]), [["Canvas", "Add a footer here"]]);
   assert.match(tray!.block(), /"note": "Add a footer here"/u);
 
-  act(() => tray!.markSent([comment.id]));
-  // Saved at once, not after the edit debounce, so Aiden's turn finds the comment sent.
-  await waitFor(() => assert.equal(saved()?.comments[0]?.state, "sent"), { timeout: DESIGN_CANVAS_SAVE_DELAY_MS / 2 });
+  let send: DesignCommentSend | undefined;
+  await act(async () => {
+    send = await tray!.markSent([comment.id]);
+  });
+  // Saved before the message goes, not after the edit debounce, so Aiden's turn finds the comment sent.
+  assert.equal(saved()?.comments[0]?.state, "sent", "saved by the time markSent resolves");
   assert.equal(designCommentTray("chat-1"), null, "a sent comment leaves the tray");
   assert.ok(await screen.findByRole("button", { name: "Comment 1 on Canvas, sent to Aiden" }));
+
+  // The send then fails: the comment waits in the tray again.
+  act(() => send!.undo());
+  assert.deepEqual(designCommentTray("chat-1")?.comments.map((entry) => entry.note), ["Add a footer here"]);
+  await waitFor(() => assert.deepEqual([saved()?.comments[0]?.state, saved()?.comments[0]?.queued], ["open", true]), {
+    timeout: DESIGN_CANVAS_SAVE_DELAY_MS / 2,
+  });
+  assert.ok(await screen.findByRole("button", { name: "Comment 1 on Canvas" }));
 });
 
 test("a comment on a frame keeps its spot on the frame; with Send to Aiden off it stays a comment", async () => {

@@ -1014,7 +1014,7 @@ test("queued design comments go with the next send as a text block and their pic
       },
     },
   });
-  const sentIds: string[][] = [];
+  const events: string[] = [];
   const tray = {
     chatId: "design-chat",
     comments: [
@@ -1027,8 +1027,9 @@ test("queued design comments go with the next send as a text block and their pic
     crops: { c1: { mimeType: "image/png", data: "iVBORw0KGgoAAAA=" } },
     remove() {},
     open() {},
-    markSent(ids: string[]) {
-      sentIds.push([...ids]);
+    async markSent(ids: string[]) {
+      events.push(`marked ${ids.join(",")}`);
+      return { done: () => events.push("done"), undo: () => events.push("undo") };
     },
   };
   Object.assign(globalThis, { __composerCommentTray: tray });
@@ -1050,6 +1051,7 @@ test("queued design comments go with the next send as a text block and their pic
             isGenerating={false}
             onStop={() => {}}
             onSend={async (value, attachments) => {
+              events.push("send");
               sends.push({ text: value, attachments });
             }}
           />,
@@ -1076,7 +1078,11 @@ test("queued design comments go with the next send as a text block and their pic
       "a model without images gets the words only",
     );
     assert.equal(sends[1]!.attachments[0]!.text, tray.block({}), "and a block that names no picture");
-    assert.deepEqual(sentIds, [["c1", "c2"], ["c1", "c2"]], "each send marks its comments sent");
+    assert.deepEqual(
+      events,
+      ["marked c1,c2", "send", "done", "marked c1,c2", "send", "done"],
+      "each send marks its comments sent before the message goes, so Aiden's turn finds them sent",
+    );
   } finally {
     await React.act(async () => root.unmount());
     await loaded.cleanup();
@@ -1097,7 +1103,7 @@ test("a failed send leaves design comments in the tray", async () => {
       },
     },
   });
-  const sentIds: string[][] = [];
+  const events: string[] = [];
   Object.assign(globalThis, {
     __composerCommentTray: {
       chatId: "design-chat",
@@ -1105,8 +1111,9 @@ test("a failed send leaves design comments in the tray", async () => {
       block: () => "<attached-design-comments>\n[]\n</attached-design-comments>",
       remove() {},
       open() {},
-      markSent(ids: string[]) {
-        sentIds.push([...ids]);
+      async markSent(ids: string[]) {
+        events.push(`marked ${ids.join(",")}`);
+        return { done: () => events.push("done"), undo: () => events.push("undo") };
       },
     },
   });
@@ -1125,6 +1132,7 @@ test("a failed send leaves design comments in the tray", async () => {
           isGenerating={false}
           onStop={() => {}}
           onSend={async () => {
+            events.push("send");
             throw new Error("offline");
           }}
         />,
@@ -1133,7 +1141,7 @@ test("a failed send leaves design comments in the tray", async () => {
     await React.act(async () => {
       await handlers(button(mounted.container, "Send message")).onClick();
     });
-    assert.deepEqual(sentIds, []);
+    assert.deepEqual(events, ["marked c1", "send", "undo"], "the comments marked sent go back to the tray");
   } finally {
     await React.act(async () => root.unmount());
     await loaded.cleanup();

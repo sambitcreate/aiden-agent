@@ -21,6 +21,7 @@ import {
   replyToComment,
   resolveComment,
   setCommentQueued,
+  unmarkCommentsSent,
   type DesignPageElement,
 } from "./comments.js";
 import { DESIGN_CANVAS_LIMITS, emptyDesignCanvas, parseDesignCanvas, type DesignCanvas } from "./schema.js";
@@ -136,6 +137,26 @@ test("sending moves comments out of the tray; resolving and reopening follow", (
   assert.equal(doc.comments[0]!.state, "open");
   assert.equal(doc.comments[0]!.sentAt, undefined);
   assert.equal(doc.comments[0]!.resolvedAt, undefined);
+});
+
+test("a send that fails puts its comments back in the tray, keeping edits made meanwhile", () => {
+  const sent = markCommentsSent(withHeadingComment(), ["c1"], LATER);
+  const edited = editComment(sent, "c1", { note: "Make it bolder" });
+  const back = unmarkCommentsSent(edited, ["c1"], LATER);
+  assert.deepEqual(
+    queuedComments(back).map((comment) => [comment.id, comment.note, comment.state, comment.sentAt]),
+    [["c1", "Make it bolder", "open", undefined]],
+    "the comment waits in the tray again, with the note as edited",
+  );
+  const LAST = "2026-11-05T10:10:00.000Z";
+  for (const [label, moved] of [
+    ["resolved since", resolveComment(sent, "c1", LAST)],
+    ["sent again since", markCommentsSent(reopenComment(sent, "c1"), ["c1"], LAST)],
+    ["replied to since", replyToComment(sent, "c1", "Done.", LAST)],
+  ] as const) {
+    assert.equal(unmarkCommentsSent(moved, ["c1"], LATER), moved, label);
+  }
+  assert.equal(unmarkCommentsSent(sent, ["other"], LATER), sent, "only the comments named");
 });
 
 test("editing changes the note and marks; deleting removes the comment", () => {

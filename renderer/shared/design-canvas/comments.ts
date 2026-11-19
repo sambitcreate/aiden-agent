@@ -178,6 +178,26 @@ export function markCommentsSent(doc: DesignCanvas, ids: readonly string[], sent
   return changed ? { ...doc, comments } : doc;
 }
 
+/**
+ * Puts comments marked sent at `sentAt` back in the tray, for a send that
+ * failed after they were marked. Only the state changes, so a note or marks
+ * edited meanwhile are kept; a comment that has moved on since (resolved,
+ * reopened, sent again, or replied to by Aiden) is left as it is.
+ */
+export function unmarkCommentsSent(doc: DesignCanvas, ids: readonly string[], sentAt: string): DesignCanvas {
+  const wanted = new Set(ids);
+  let changed = false;
+  const comments = doc.comments.map((comment) => {
+    if (!wanted.has(comment.id) || comment.state !== "sent" || comment.sentAt !== sentAt) return comment;
+    if (comment.reply && comment.reply.at >= sentAt) return comment;
+    changed = true;
+    const next: DesignComment = { ...comment, state: "open", queued: true };
+    delete next.sentAt;
+    return next;
+  });
+  return changed ? { ...doc, comments } : doc;
+}
+
 export function resolveComment(doc: DesignCanvas, id: string, resolvedAt: string): DesignCanvas {
   return updateOne(doc, id, (comment) => {
     if (comment.state === "resolved") return comment;

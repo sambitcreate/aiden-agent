@@ -26,6 +26,7 @@ import {
   elementLabel,
   locateAnchor,
   markCommentsSent,
+  unmarkCommentsSent,
   queuedComments,
   reopenComment,
   resolveComment,
@@ -531,16 +532,24 @@ export function useDesignComments({ chatId, doc, change, flush, flow, wrapper, l
             comments: queued.map((comment) => ({ id: comment.id, label: commentLabel(doc, comment), note: comment.note })),
             block: (pictures) => designCommentsBlock(doc, queued, pictures),
             remove: (id) => change((latest) => setCommentQueued(latest, id, false)),
-            markSent: (ids) => {
+            markSent: async (ids) => {
               for (const id of ids) {
                 const comment = docRef.current.comments.find((entry) => entry.id === id);
                 const frame = comment?.frameId ? docRef.current.frames.find((entry) => entry.id === comment.frameId) : undefined;
                 sentVersions.current.set(id, versionOfRef.current(frame?.path));
               }
-              change((latest) => markCommentsSent(latest, ids, new Date().toISOString()));
-              // Aiden's turn has started: saved now, its canvas_comment finds them sent rather than still drafts.
-              void flush().catch(() => undefined);
-              forgetCommentCrops(chatId, ids);
+              const sentAt = new Date().toISOString();
+              change((latest) => markCommentsSent(latest, ids, sentAt));
+              // Saved before the message goes, so Aiden's canvas_comment finds them sent rather than still drafts.
+              await flush().catch(() => false);
+              return {
+                done: () => forgetCommentCrops(chatId, ids),
+                undo: () => {
+                  for (const id of ids) sentVersions.current.delete(id);
+                  change((latest) => unmarkCommentsSent(latest, ids, sentAt));
+                  void flush().catch(() => undefined);
+                },
+              };
             },
             open: (id) => openRef.current(id),
           },
