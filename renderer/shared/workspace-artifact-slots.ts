@@ -275,7 +275,7 @@ const LOG_VALUES: Record<string, ValueEntry> = {
   "--pretty": null,
   "--date": null,
 };
-const LOG_JOINED = { "--format": "--format=%h", "--pretty": "--pretty=oneline" };
+const LOG_JOINED = { "--format": "a fixed --format=%h", "--pretty": "a fixed --pretty=oneline" };
 const logLike = (name: string): SlotSpec => ({
   name,
   flags: "pcmsuziEFP",
@@ -752,6 +752,14 @@ function valuesOf(spec: SlotSpec): Map<string, CompiledValue> {
     compiledValues.set(spec, map);
   }
   return map;
+}
+
+/**
+ * The form to write for `option` when `spec`'s program takes its value only
+ * joined to it (`-U5`), or undefined for any other option.
+ */
+export function joinedOnlyForm(spec: SlotSpec, option: string): string | undefined {
+  return valuesOf(spec).get(option)?.joined;
 }
 
 type Position =

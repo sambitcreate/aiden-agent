@@ -218,6 +218,40 @@ test("a placeholder must be its own unquoted word, or joined only to plain text"
   }
 });
 
+test("an option that takes its value only joined is refused with advice that saves when followed", () => {
+  const save = (command: string) => {
+    const names = [...new Set([...command.matchAll(/\{\{(\w+)\}\}/gu)].map((match) => match[1]!))];
+    return parseWorkspaceArtifactActions([{ name: "a", label: "A", command, params: names.map((name) => ({ name })) }]);
+  };
+  // Each template keeps a second placeholder, so the followed advice is still checked as a template with page data.
+  for (const [command, written] of [
+    ["git diff -U{{n}} -- {{file}}", "-U{{n}}"],
+    ["git diff --unified={{n}} -- {{file}}", "--unified={{n}}"],
+    ["git diff -U {{n}} -- {{file}}", "-U {{n}}"],
+    ["git log --format={{fmt}} -- {{file}}", "--format={{fmt}}"],
+    ["git log --pretty={{fmt}} -- {{file}}", "--pretty={{fmt}}"],
+    ["git log --format {{fmt}} -- {{file}}", "--format {{fmt}}"],
+    ["git show --pretty={{fmt}} {{rev}}", "--pretty={{fmt}}"],
+    ["git pull -j{{n}} origin {{branch}}", "-j{{n}}"],
+    ["git pull --jobs={{n}} origin {{branch}}", "--jobs={{n}}"],
+    ["grep --context={{n}} -e {{p}} notes.md", "--context={{n}}"],
+    ["grep --context {{n}} -e {{p}} notes.md", "--context {{n}}"],
+  ] as const) {
+    let message = "";
+    try {
+      save(command);
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    assert.ok(message, `${command} was accepted`);
+    assert.doesNotMatch(message, /separate word/u, command);
+    const advice = /Write (?:a fixed )?(.+?)(?:,? or |\.(?: |$))/u.exec(message)?.[1];
+    assert.ok(advice, `${command}: no form to write in ${message}`);
+    const followed = command.replace(written, advice!);
+    assert.equal(save(followed).length, 1, `${command} -> ${followed}`);
+  }
+});
+
 test("a misplaced placeholder is refused with the fix for where it sits", () => {
   const refusal = (command: string, param = "x") => {
     try {

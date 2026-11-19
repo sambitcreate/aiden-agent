@@ -741,8 +741,8 @@ test("an option that takes its value only joined is refused apart from it, and r
     ["git diff -U {{n}} HEAD~1", /-U apart from its value.* Write a fixed -U5 or --unified=5/u],
     ["git diff --unified {{n}} HEAD~1", /--unified apart from its value/u],
     ["git diff -pU 5 {{rev}}", /-U apart from its value/u],
-    ["git log --pretty {{x}}", /Write --pretty=oneline/u],
-    ["git log --format %h {{rev}}", /Write --format=%h/u],
+    ["git log --pretty {{x}}", /Write a fixed --pretty=oneline/u],
+    ["git log --format %h {{rev}}", /Write a fixed --format=%h/u],
     ["git pull -j {{n}} origin", /Write a fixed -j4 or --jobs=4/u],
     ["grep --context {{n}} {{pattern}} notes.md", /Write -C \{\{n\}\}, or a fixed --context=2/u],
   ] as const) {

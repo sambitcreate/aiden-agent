@@ -21,7 +21,7 @@
  * Pure and Electron-free, like `workspace-artifacts.ts`, which uses it.
  */
 
-import { ghSlotSpec, gitSlotSpec, jqSlot, locateSlot, programSlotSpec, revisionsEnd, type Slot, type SlotLookup } from "./workspace-artifact-slots.js";
+import { ghSlotSpec, gitSlotSpec, joinedOnlyForm, jqSlot, locateSlot, programSlotSpec, revisionsEnd, type Slot, type SlotLookup } from "./workspace-artifact-slots.js";
 
 export const WORKSPACE_ARTIFACT_PLACEHOLDER = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/gu;
 const PLACEHOLDER_AT = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/uy;
@@ -587,10 +587,11 @@ function placeholderSlot(program: string, args: readonly (string | undefined)[],
 
 /**
  * Whether a word with a placeholder is one the value may be part of: alone,
- * or joined only to plain text. `program` and `before` (the word before it,
- * undefined when it holds a placeholder) only shape the advice.
+ * or joined only to plain text. `program` and `args` (the command's
+ * arguments, undefined where a word holds a placeholder) only shape the advice.
  */
-function joinedProblem(word: TemplateWord, program: string, before: string | undefined): string | undefined {
+function joinedProblem(word: TemplateWord, program: string, args: readonly (string | undefined)[], at: number): string | undefined {
+  const before = at > 0 ? args[at - 1] : undefined;
   if (word.parts.length === 1) return undefined;
   const name = placeholderIn(word);
   if (word.quoted) return `${name} cannot be joined to quoted text. Join it only to plain unquoted text, as in git show HEAD:${name}, or make it a word of its own.`;
@@ -603,6 +604,13 @@ function joinedProblem(word: TemplateWord, program: string, before: string | und
   }
   if ("text" in head && head.text.startsWith("-")) {
     const option = head.text.split("=")[0]!;
+    // Some options take their value only joined (`-U5`), so written apart the advice would be refused too.
+    const spec = program === "git" ? gitSlotSpec(gitSubcommand(args).name ?? "") : program === "gh" ? undefined : programSlotSpec(program);
+    const lone = /^-[^-]/u.test(option) ? `-${option.slice(-1)}` : option;
+    const fixed = spec && joinedOnlyForm(spec, lone);
+    if (fixed !== undefined) {
+      return `${name} cannot be joined to the option ${lone}: page data cannot fill ${lone}, which takes its value only joined to it. Write ${fixed.replace(/\{\{n\}\}/gu, name)}.`;
+    }
     return `${name} cannot be joined to the option ${option}. Pass it as a separate word: ${option} ${name}.`;
   }
   if (program === "tail" && "text" in head && head.text === "+" && before !== undefined && /^(?:-n|--lines|-c|--bytes)$/u.test(before)) {
@@ -632,7 +640,7 @@ export function checkWorkspaceArtifactTemplate(template: string): { ok: true; st
       for (let at = 0; at < args.length; at += 1) {
         if (args[at] !== undefined) continue;
         const word = command.words[at + 1]!;
-        const joined = joinedProblem(word, program, at > 0 ? args[at - 1] : undefined);
+        const joined = joinedProblem(word, program, args, at);
         if (joined) return { ok: false, problem: { kind: "misplaced", reason: joined } };
         const found = placeholderSlot(program, args, at, word);
         if ("problem" in found) return { ok: false, problem: { kind: "slot", reason: found.problem } };
