@@ -1,4 +1,3 @@
-import { normalizeContext } from "@earendil-works/pi-ai";
 // Optional dictation polish via the user's current chat model. Failures return
 // the original transcript so paste still succeeds.
 
@@ -7,10 +6,9 @@ import { randomUUID } from "node:crypto";
 import { logger } from "../platform.js";
 import { configStore } from "./config-store.js";
 import {
-  buildDictationCleanupUserPrompt,
-  DICTATION_CLEANUP_SYSTEM_PROMPT,
   DICTATION_CLEANUP_TIMEOUT_MS,
   dictationCleanupUsageIsLocal,
+  requestDictationCleanup,
   sanitizeDictationCleanupOutput,
 } from "./dictation-cleanup-core.js";
 import { resolveModelRuntime } from "./model-runtime.js";
@@ -49,31 +47,7 @@ export async function cleanupDictationTranscript(transcript: string): Promise<st
       // gateway's per-request attribution requirement.
       randomUUID(),
     );
-    const result = await runtime.streams
-      .streamSimple(
-        runtime.model,
-        normalizeContext({
-          systemPrompt: DICTATION_CLEANUP_SYSTEM_PROMPT,
-          messages: [
-            {
-              role: "user",
-              content: [{ type: "text", text: buildDictationCleanupUserPrompt(original) }],
-              timestamp: Date.now(),
-            },
-          ],
-        }),
-        {
-          apiKey: runtime.apiKey,
-          headers: runtime.headers,
-          signal: controller.signal,
-          temperature: 0.1,
-          maxTokens: 1_024,
-          timeoutMs: DICTATION_CLEANUP_TIMEOUT_MS,
-          maxRetries: 0,
-          cacheRetention: "none",
-        },
-      )
-      .result();
+    const result = await requestDictationCleanup(runtime, original, controller.signal);
     await usageStore.record(
       assistantUsageRecord({
         message: result,

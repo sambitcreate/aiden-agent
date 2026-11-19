@@ -21,7 +21,7 @@
 // payload and aborts before `fetch`, and `fetch` itself refuses.
 
 import { createHash } from "node:crypto";
-import type { AgentContext, AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
+import type { AgentContext, AgentMessage, AgentTool, StreamFn } from "@earendil-works/pi-agent-core";
 import { createInitialSystemMessage, createModels, toToolDeclaration, type Api, type Model, type ProviderStreams } from "@earendil-works/pi-ai";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
@@ -84,6 +84,11 @@ export interface PromptPrefixHarnessOptions {
    * late tools.
    */
   lateMcp?: { tools(): readonly AgentTool[]; pending(): number };
+  /**
+   * Wraps the stream every request goes through after it is recorded, as
+   * llm-client wraps its provider stream (the side-call prefix ledger).
+   */
+  wrapStream?: (streamFn: StreamFn) => StreamFn;
 }
 
 export type PromptPrefixTurnInput = {
@@ -158,6 +163,10 @@ export interface PromptRequestComparison {
 
 export interface PromptPrefixHarness {
   turn(input: PromptPrefixTurnInput): Promise<RecordedPromptRequest[]>;
+  /** The scripted model every turn runs on. */
+  readonly model: Model<Api>;
+  /** Renders a context the way this harness records its own requests. */
+  record: PromptRequestRecorder["record"];
   readonly requests: readonly RecordedPromptRequest[];
   /** Requests that reached `fetch`; always 0 unless the capture broke. */
   readonly networkCalls: number;
@@ -309,6 +318,8 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
   let turnNumber = 0;
   let runtime: PiAgentRuntimeHarness | undefined;
   let lastPrompt: { id: string; content: string; createdAt: number } | undefined;
+  const scripted: StreamFn = (requestModel, context, streamOptions) => core.streamSimple(requestModel, context, streamOptions);
+  const stream = options.wrapStream ? options.wrapStream(scripted) : scripted;
 
   async function turn(input: PromptPrefixTurnInput): Promise<RecordedPromptRequest[]> {
     turnNumber += 1;
@@ -464,7 +475,7 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
         const request = await recorder.record(context, { turn: thisTurn, step });
         recorded.push(request);
         requests.push(request);
-        return core.streamSimple(requestModel, context, streamOptions);
+        return stream(requestModel, context, streamOptions);
       },
     });
     const message = chatMessageToPiMessage({ id: prompt.id, role: "user", content: prompt.content, createdAt: prompt.createdAt }, model, true);
@@ -479,6 +490,8 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
 
   return {
     turn,
+    model,
+    record: (context, at) => recorder.record(context, at),
     get requests() { return requests; },
     get networkCalls() { return recorder.networkCalls; },
     callableTools: () => runtime?.getCallableTools() ?? [],

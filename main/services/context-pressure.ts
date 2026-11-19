@@ -43,6 +43,7 @@ import { mcpServerOffersTools } from "../../renderer/shared/mcp-exposure.js";
 import { draftUserPiMessage } from "./generation-messages.js";
 import { RecentChatCache } from "./recent-chat-cache.js";
 import { createPromptCacheTelemetry, type PromptCacheTelemetry } from "./pi-cache-telemetry.js";
+import { chatSideCallPrefixes } from "./side-call-prefix.js";
 
 /**
  * Profiles are kept for the chats used most recently. An evicted chat's next
@@ -93,6 +94,7 @@ export function forgetChatContextProfile(chatId: string): void {
   generationProfiles.delete(chatId);
   promptCacheRefreshes.delete(chatId);
   chatPromptCacheTelemetry.forget(chatId);
+  chatSideCallPrefixes.forget(chatId);
   ambientProfiles.delete(chatId);
   journalSnapshots.delete(chatId);
 }

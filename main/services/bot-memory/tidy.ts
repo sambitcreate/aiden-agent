@@ -9,6 +9,7 @@ import type { BotMemoryTarget, BotMemoryView } from "../../../renderer/shared/bo
 import { escapePromptText } from "../bot-system-prompt.js";
 import type { BotMemoryAdmission } from "./review.js";
 import type { BotMemoryOperation } from "./store.js";
+import { oneOffCallOptions } from "../side-call-prefix.js";
 
 export const BOT_MEMORY_TIDY = { usageRatio: 0.8, entries: 56, minIntervalMs: 24 * 3_600_000, maxTokens: 1_536 } as const;
 
@@ -71,7 +72,7 @@ export async function proposeMemoryTidy(
   const answer = await admission.model.models.completeSimple(
     admission.model.model,
     { systemPrompt: TIDY_SYSTEM_PROMPT, messages, tools: [TIDY_TOOL] },
-    { maxTokens: BOT_MEMORY_TIDY.maxTokens, signal },
+    oneOffCallOptions({ maxTokens: BOT_MEMORY_TIDY.maxTokens, signal }),
   );
   const call = answer.content.find((part): part is ToolCall => part.type === "toolCall" && part.name === "tidy_memory");
   if (!call) return undefined;

@@ -6,7 +6,7 @@ import type {
   AgentToolResult,
   AgentToolUpdateCallback,
 } from "@earendil-works/pi-agent-core";
-import { type AssistantMessage } from "@earendil-works/pi-ai";
+import { type AssistantMessage, type Message, type SimpleStreamOptions, type TranscriptContext } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import type {
   AskUserQuestionResponseV1,
@@ -30,6 +30,7 @@ import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import { isNonChatModel } from "../../renderer/shared/model-eligibility.js";
 import type { Provider } from "./types.js";
 import { isAcpHarnessProvider } from "../../renderer/shared/acp-harness.js";
+import { oneOffCallOptions, sideCallContinuation, sideCallModelKey, type SideCallPrefix } from "./side-call-prefix.js";
 
 export const ADVISOR_EXTENSION_ID = "aiden.rpiv.advisor";
 export const ADVISOR_TOOL_NAME = "advisor";
@@ -42,7 +43,15 @@ export const ADVISOR_REVIEWER_SYSTEM_PROMPT =
   "You are a tool-free advisor to another model that is executing the user's task. Read the surviving conversation and executor-tool evidence. Return exactly one concise, directive response: a concrete plan, a correction to the current approach, or a stop signal requiring user input. Never call tools, never address the user, never claim to have performed work, and do not reveal hidden reasoning. Ground guidance in the supplied evidence.";
 
 export const ADVISOR_TRANSFER_NOTICE =
-  "Advisor sends bounded surviving conversation, completed tool evidence, a sanitized tool inventory, and supported images to the selected provider in a separate tool-free request. Aiden never attaches provider credentials and applies best-effort credential redaction, but remaining content may still be sensitive.";
+  "Advisor sends bounded surviving conversation, completed tool evidence, a sanitized tool inventory, and supported images to the selected provider in a separate tool-free request. When the reviewer is the model already running this chat, the review instead continues that model's own request, so the same provider receives the conversation and tool list it already has, and no tool runs. Aiden never attaches provider credentials and applies best-effort credential redaction to a separate request, but remaining content may still be sensitive.";
+
+/**
+ * The review instruction when the reviewer is the executor's own model and the
+ * review continues the executor's request (`sideCallPrefix`). The executor's
+ * tools stay declared so its cached prefix is reused; none of them runs.
+ */
+export const ADVISOR_CONTINUATION_INSTRUCTION =
+  "Advisor review. The model executing this task, in the turns above, asked for a second opinion with the advisor tool, and the task is paused while you give it. Act as a tool-free advisor: review the conversation and tool evidence above and return exactly one concise, directive response: a concrete plan, a correction to the current approach, or a stop signal requiring user input. Do not call any tool, since none runs during this review. Never address the user, never claim to have performed work, and do not reveal hidden reasoning. Ground guidance in the evidence above.";
 
 const ADVISOR_EXECUTOR_GUIDANCE =
   "An advisor tool is available for one optional second opinion during this response. Use it only when stronger judgment would materially reduce risk—for a consequential ambiguity, a non-converging approach, or before an irreversible decision. Never silently choose a reviewer. After a successful consultation, briefly attribute and restate both the material guidance and the Advisor transfer notice in your visible reply; never expose hidden reasoning or dump the raw advisor response.";
@@ -198,6 +207,54 @@ export interface AdvisorExtensionInput {
    * `requestQuestionnaire`, so the cached prefix does not follow the device.
    */
   chooserByTurn?: boolean;
+  /**
+   * The chat's last foreground request while its prompt cache is live. When
+   * the reviewer is the executor's own model and that request's reply holds
+   * this advisor call, the review continues it instead of sending a separate
+   * request.
+   */
+  sideCallPrefix?(): SideCallPrefix | undefined;
+}
+
+/**
+ * The messages a same-model review appends to the executor's request: a
+ * result for each tool call in its reply (none of them runs) and the review
+ * instruction.
+ */
+function advisorContinuationMessages(prefix: SideCallPrefix, toolCallId: string): Message[] {
+  const timestamp = Date.now();
+  const results: Message[] = prefix.response.content.flatMap((part) =>
+    part.type === "toolCall"
+      ? [{
+          role: "toolResult" as const,
+          toolCallId: part.id,
+          toolName: part.name,
+          content: [{
+            type: "text" as const,
+            text: part.id === toolCallId
+              ? "Advisor review requested; the instruction follows."
+              : "Not run: the task is paused for an advisor review.",
+          }],
+          isError: false,
+          timestamp,
+        }]
+      : [],
+  );
+  return [
+    ...results,
+    { role: "user", content: [{ type: "text", text: ADVISOR_CONTINUATION_INSTRUCTION }], timestamp },
+  ];
+}
+
+/** The executor's request this review may continue, if any. */
+function continuableAdvisorPrefix(
+  input: AdvisorExtensionInput,
+  selection: AdvisorSelectionV1,
+  toolCallId: string,
+): SideCallPrefix | undefined {
+  if (selection.providerId !== input.executor.providerId || selection.modelId !== input.executor.modelId) return undefined;
+  const prefix = input.sideCallPrefix?.();
+  return prefix?.response.content.some((part) => part.type === "toolCall" && part.id === toolCallId) ? prefix : undefined;
 }
 
 /** The turn note for a turn that cannot show the Advisor model chooser (`chooserByTurn`). */
@@ -560,6 +617,7 @@ export class AdvisorRuntime {
           );
 
           let runtime: ResolvedModelRuntime;
+          let parentPrefix = continuableAdvisorPrefix(input, selection, toolCallId);
           try {
             if (isAcpHarnessProvider(selection.providerId)) {
               throw new Error("Agent-backed models cannot review another model's work.");
@@ -568,12 +626,15 @@ export class AdvisorRuntime {
               selection.providerId,
               selection.modelId,
               signal,
-              // Advisor dispatch is a one-shot call; a fresh id still satisfies
-              // gateway per-request attribution.
-              randomUUID(),
+              // A review that continues the executor's request uses the chat's
+              // conversation id, as that request did. A separate review is a
+              // one-shot call; a fresh id still satisfies gateway per-request
+              // attribution.
+              parentPrefix?.conversationId ?? randomUUID(),
             );
             assertAdvisorRuntimeSelection(selection, runtime);
             await preflightAdvisorRuntimeAuth(runtime, signal);
+            if (parentPrefix && parentPrefix.modelKey !== sideCallModelKey(runtime.model)) parentPrefix = undefined;
           } catch (error) {
             this.dependencies.reportFailure?.("resolve", error);
             return normalResult(
@@ -582,9 +643,18 @@ export class AdvisorRuntime {
             );
           }
 
-          let projection;
-          try {
-            projection = projectAdvisorContext({
+          let request: { context: TranscriptContext; options: SimpleStreamOptions };
+          if (parentPrefix) {
+            request = sideCallContinuation(parentPrefix, advisorContinuationMessages(parentPrefix, toolCallId), {
+              apiKey: runtime.apiKey,
+              timeoutMs: ADVISOR_TIMEOUT_MS,
+              maxRetries: 0,
+              maxRetryDelayMs: 0,
+              ...(selection.effort ? { reasoning: selection.effort } : {}),
+              ...(runtime.headers ? { headers: runtime.headers } : {}),
+            });
+          } else try {
+            const projection = projectAdvisorContext({
               liveMessages: input.getLiveMessages(toolCallId),
               inflightToolCallId: toolCallId,
               executorTools: input.executorTools,
@@ -592,6 +662,21 @@ export class AdvisorRuntime {
               reviewerSupportsImages: runtime.model.input.includes("image"),
               reviewerSystemPrompt: ADVISOR_REVIEWER_SYSTEM_PROMPT,
             });
+            request = {
+              context: normalizeContext({
+                systemPrompt: ADVISOR_REVIEWER_SYSTEM_PROMPT,
+                messages: projection.messages,
+                tools: [],
+              }),
+              options: oneOffCallOptions({
+                apiKey: runtime.apiKey,
+                timeoutMs: ADVISOR_TIMEOUT_MS,
+                maxRetries: 0,
+                maxRetryDelayMs: 0,
+                ...(selection.effort ? { reasoning: selection.effort } : {}),
+                ...(runtime.headers ? { headers: runtime.headers } : {}),
+              }),
+            };
           } catch (error) {
             this.dependencies.reportFailure?.("context", error);
             return normalResult(
@@ -623,24 +708,7 @@ export class AdvisorRuntime {
             response = await withRequestSignal(signal, async (requestSignal, timedOut) => {
               try {
                 return await runtime.streams
-                  .streamSimple(
-                    runtime.model,
-                    normalizeContext({
-                      systemPrompt: ADVISOR_REVIEWER_SYSTEM_PROMPT,
-                      messages: projection.messages,
-                      tools: [],
-                    }),
-                    {
-                      signal: requestSignal,
-                      apiKey: runtime.apiKey,
-                      cacheRetention: "none",
-                      timeoutMs: ADVISOR_TIMEOUT_MS,
-                      maxRetries: 0,
-                      maxRetryDelayMs: 0,
-                      ...(selection.effort ? { reasoning: selection.effort } : {}),
-                      ...(runtime.headers ? { headers: runtime.headers } : {}),
-                    },
-                  )
+                  .streamSimple(runtime.model, request.context, { ...request.options, signal: requestSignal })
                   .result();
               } catch (error) {
                 failure = abortReason(requestSignal, timedOut());

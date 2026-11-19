@@ -1,9 +1,8 @@
-import { normalizeContext } from "@earendil-works/pi-ai";
 // Background first-turn chat title generation. This is intentionally separate
 // from the interactive Agent: it makes one small, tool-free model request and
 // never delays or fails the user's actual chat turn.
 
-import type { AssistantMessage, ImageContent, TextContent } from "@earendil-works/pi-ai";
+import type { AssistantMessage, TextContent } from "@earendil-works/pi-ai";
 import { ipcMain, logger } from "../platform.js";
 import { chatStore } from "./chat-store.js";
 import {
@@ -19,7 +18,6 @@ import { configStore } from "./config-store.js";
 import { foundationModelsConnection } from "./foundation-models-connection.js";
 import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
 import { isHookBlockedPrompt } from "./hook-blocked-prompt.js";
-import { runtimeSupportsImages } from "./generation-runtime.js";
 import { resolveModelRuntime } from "./model-runtime.js";
 import {
   assistantUsageRecord,
@@ -28,8 +26,8 @@ import {
 } from "./usage-accounting.js";
 import { usageStore } from "./usage-store.js";
 import { isAcpHarnessProvider } from "../../renderer/shared/acp-harness.js";
+import { requestChatTitle, TITLE_TIMEOUT_MS, type ChatTitleFirstMessage } from "./chat-title-request.js";
 
-const TITLE_TIMEOUT_MS = 15_000;
 const inFlight = new Map<string, Promise<void>>();
 const manualRenameInFlight = new Map<string, Promise<ChatTitleRenameResult>>();
 
@@ -81,9 +79,7 @@ function assistantText(content: AssistantMessage["content"]): string {
 
 async function generateWithChatModel(input: {
   chatId: string;
-  firstMessage: Parameters<typeof buildChatTitlePrompt>[0] & {
-    attachments?: import("./types.js").Attachment[];
-  };
+  firstMessage: ChatTitleFirstMessage;
   selection: ChatTitleModelSelection;
   signal: AbortSignal;
 }): Promise<string> {
@@ -93,44 +89,9 @@ async function generateWithChatModel(input: {
     input.signal,
     input.chatId,
   );
-  const promptContent: Array<TextContent | ImageContent> = [
-    {
-      type: "text",
-      text: buildChatTitlePrompt(input.firstMessage),
-    },
-  ];
-  const firstImage = input.firstMessage.attachments?.find(
-    (attachment) => attachment.kind === "image" && attachment.data,
-  );
-  if (runtimeSupportsImages(runtime.model) && firstImage?.data) {
-    promptContent.push({
-      type: "image",
-      data: firstImage.data,
-      mimeType: firstImage.mimeType,
-    });
-  }
-
   let result: AssistantMessage;
   try {
-    result = await runtime.streams
-      .streamSimple(
-        runtime.model,
-        normalizeContext({
-          systemPrompt: "You write short, specific titles for coding conversations.",
-          messages: [{ role: "user", content: promptContent, timestamp: Date.now() }],
-        }),
-        {
-          apiKey: runtime.apiKey,
-          headers: runtime.headers,
-          signal: input.signal,
-          temperature: 0.2,
-          maxTokens: 48,
-          timeoutMs: TITLE_TIMEOUT_MS,
-          maxRetries: 0,
-          cacheRetention: "none",
-        },
-      )
-      .result();
+    result = await requestChatTitle(runtime, input.firstMessage, input.signal);
   } catch (error) {
     await usageStore.record(
       unreportedUsageRecord({

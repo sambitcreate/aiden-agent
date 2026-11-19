@@ -1,6 +1,6 @@
 # Prompt cache hit rate: keep the cached prefix byte-stable
 
-Status: In progress (2026-11-19): phases 0, 1, 2 and 3 implemented. Delivered as one PR with one stacked commit series per phase, branch `feat/prompt-cache-stability`, cut from `main` at f2fd27640.
+Status: In progress (2026-11-19): phases 0, 1, 2, 3 and 4 implemented. Delivered as one PR with one stacked commit series per phase, branch `feat/prompt-cache-stability`, cut from `main` at f2fd27640.
 
 ## Goal
 
@@ -335,6 +335,43 @@ At the end, four Opus high reviewers review the whole PR, and a CI watcher owns 
 
 - Fake-provider test: a btw call made after a parent turn sends a payload whose tools, system and messages prefix are byte-identical to the parent's last request.
 - Fake-provider test: each one-off call sends retention "none". This test covers the real call sites, not a list of names.
+
+**As built (2026-11-19).** `main/services/side-call-prefix.ts` holds the parent prefix and the one-off helper.
+
+- **The ledger.** `withSideCallPrefixLedger` wraps llm-client's stream (inside cache warming) and records each foreground request of a chat in `chatSideCallPrefixes`: a copy of its message list, the options that shape the prefix (session id, reasoning, thinking budgets, retention, temperature, transport, `toolChoice`), a hash of the model without its headers, and the reply. It keeps only the latest request per chat, for at most 8 chats, in memory only. It never keeps credentials, headers or callbacks, logs nothing and persists nothing. A request it cannot replay faithfully clears the chat's entry: retention "none", headers, `onPayload`, `transformHeaders`, sampling parameters, metadata, env, deferred, or a model with sampling parameters. So does a failed or aborted reply. An entry lapses with the provider's documented short-retention lifetime (`promptCacheTtlMs`).
+- **The continuation.** `sideCallContinuation` sends the parent's context (tools, system, messages), then the parent's reply, then the side call's own messages, with the parent's replayable options, `cacheRetention: "short"` (or the parent's own retention) and `disableContinuation: true`. The side call supplies its own key, headers, signal, token cap and timeout. No tool call in the reply is ever executed.
+- **btw** (`rpiv-btw/service-core.ts`) continues the prefix only when it belongs to this chat, the resolved model has the same hash, and the chat's last message is the recorded reply (same Pi timestamp, provider and model), so no later turn, edit or compaction is missing. Its final user message is `btwContinuationPrompt`: a fixed instruction not to continue the task or call a tool, earlier side questions in the thread, then the question. Otherwise, and whenever the continuation fails, errors or answers no text, it falls back to the isolated, tool-free request with its overflow retry.
+- **The advisor** (`advisor-runtime.ts`) continues the prefix only when the selected reviewer is the executor's own provider and model, the recorded reply holds this advisor call, and the resolved runtime has the same model hash. It appends a tool result for every tool call in that reply ("Advisor review requested; the instruction follows." for its own, "Not run: the task is paused for an advisor review." for the others), then `ADVISOR_CONTINUATION_INSTRUCTION`. It resolves the runtime with the chat's conversation id, as the parent did. Any other reviewer gets the isolated projection as before. `ADVISOR_TRANSFER_NOTICE` now says a same-model review continues that model's own request.
+- **One-off calls** go through `oneOffCallOptions()`, which forces `cacheRetention: "none"`. Routed sites:
+  - chat title (`chat-title-request.ts`)
+  - dictation cleanup (`requestDictationCleanup` in `dictation-cleanup-core.ts`)
+  - the approval judge (`approval-judge/model-complete.ts`)
+  - vision analysis (`vision-analysis-tool-core.ts`)
+  - routine reflection
+  - the Bot compaction steered summary
+  - memory tidy
+  - the last round of a memory review
+  - the isolated btw request
+  - the isolated advisor review
+
+  The approval judge, vision, btw and advisor already sent "none" inline; they now use the helper. Not one-offs: Bot model and execution passthroughs, `packages/cli/src/bot-durable.ts`, and `pi-compaction-core.ts` (phase 5).
+- **Phase 3 note decided.** A continuation sends the parent's messages unchanged, to the provider that already received them, for an ephemeral answer that is never stored. No memory fact reaches a permanent summary that way, so no fact is stripped and the shared prefix is the whole parent request. `withoutMemoryFacts` stays specific to the compaction summarizer; phase 5 must still resolve it there.
+
+The code differed from the plan in these ways:
+
+- **Vision analysis** was a one-off the plan did not list; it is routed.
+- **Memory review** sends "none" only on its last round. Its rounds resend the same growing prefix, so each earlier round's cache write is read by the next.
+- **Title and dictation** requests moved into testable helpers (`requestChatTitle`, `requestDictationCleanup`) so the tests call the real request code.
+- **No documented cache lifetime, no continuation.** Without a TTL a warm prefix cannot be told from a cold one, and a cold continuation costs more than the isolated call. Owner: phase 6 (real TTLs).
+- **`aiden serve`** records no ledger, so the CLI advisor and any server side call stay isolated. Owner: phase 6 (`aiden serve` parity).
+- **Compaction forgets the ledger.** Right after a compaction btw and the advisor fall back to the isolated request until the next foreground request. Owner: phase 5.
+- **Agent harness (ACP) chats** have no side calls on the prefix; their stream is not wrapped.
+- **A reasoning override.** An advisor whose effort differs from the parent's shares only tools and system, since the reasoning level changes the request.
+- **Costs of the fallback.** A btw continuation that fails falls back to the isolated request, so one side question can send two requests. A same-model advisor continuation that answers no text fails without a second request, as an isolated review already did.
+- **Tool results are resent.** A btw continuation includes the parent's tool results and thinking, which the provider already holds; the btw plan's "visible prose only" contract now applies to the isolated request only.
+- **Harness.** `createPromptPrefixHarness` gained `wrapStream`, `model` and `record(context)` so a test can wrap the real stream and render a side call's request on the same wire.
+
+Tests: `side-call-prefix.test.ts` (in `test:compaction` and the CI registry) runs a parent turn through the prefix harness with the ledger wrapped in, then a real `BtwService` and a real `AdvisorRuntime` against a capturing provider. The btw request's wire extends the parent's request with its tools first and identical bytes, at "short" retention; a same-model advisor review does the same and runs no executor tool. Without a live prefix, or after a newer chat message, btw sends an isolated request at "none". Ledger cases cover TTL lapse, no TTL, unreplayable options, failed replies, a superseded request, the 8-chat limit and `forget`. Each routed one-off is checked at its real call site: `chat-title-policy.test.ts`, `dictation-cleanup-core.test.ts`, `approval-judge/spend.test.ts`, `vision-analysis-tool.test.ts`, `bot-learning/learning.test.ts` (reflection, tidy), `bot-memory/compaction.test.ts` (steered summary) and `bot-memory/review.test.ts` (last round only).
 
 ## Phase 5: compaction on the cached prefix
 

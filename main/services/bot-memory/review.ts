@@ -49,6 +49,7 @@ import { BOT_MEMORY_TOOL_NAME, createBotMemoryTool, type BotMemoryToolDetails } 
 import { memoryLimit, serializeEntries, usedChars } from "./files.js";
 import { BOT_MEMORY_NOTES_ROUTE, BOT_MEMORY_USER_ROUTE } from "./routing.js";
 import type { BotMemoryRuntime } from "./service.js";
+import { oneOffCallOptions } from "../side-call-prefix.js";
 
 export const BOT_MEMORY_REVIEW_INTERVAL = 10;
 export const BOT_MEMORY_REVIEW_DELAY_MS = 10_000;
@@ -218,7 +219,11 @@ export async function runMemoryReview(run: MemoryReviewRun): Promise<MemoryRevie
       answer = await run.model.models.completeSimple(
         run.model.model,
         { systemPrompt, messages, tools: declarations },
-        { maxTokens: REVIEW_MAX_TOKENS, signal },
+        // Each round resends the earlier rounds, so only the last round, which
+        // no later request reads, skips the cache write.
+        round === run.maxRounds - 1
+          ? oneOffCallOptions({ maxTokens: REVIEW_MAX_TOKENS, signal })
+          : { maxTokens: REVIEW_MAX_TOKENS, signal },
       );
     } catch (error) {
       if (run.authority.signal.aborted) throw lost();

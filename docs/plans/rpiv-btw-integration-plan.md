@@ -11,7 +11,7 @@ Bring the useful interaction model from `rpiv-mono/packages/rpiv-btw` into Aiden
 - `/btw <question>` is available only for an idle ordinary desktop chat with at least one completed assistant response and a selected provider/model.
 - Questions and answers live only in main- and renderer-process memory. They are never appended to `ChatStore`, the Pi compaction journal, exports, copies, or mobile projections.
 - The current provider and model are resolved through Aiden's authoritative runtime path. Provider/model drift before dispatch fails closed and resets the ephemeral thread fingerprint.
-- Context is read-only visible user/assistant prose. Thinking, images, tool calls, tool results, subagent state, and private journal records are excluded.
+- Context is read-only visible user/assistant prose. Thinking, images, tool calls, tool results, subagent state, and private journal records are excluded. Exception (2026-11-19, prompt cache phase 4): while the chat's last foreground request is still in the provider's cache, uses the same model, and its reply is still the chat's latest message, the side question instead continues that request: the same provider receives the tools, system prompt and messages it was already sent, including thinking and tool results, plus the side question. No tool call in that reply runs, and any failure falls back to the visible-prose request.
 - The card streams deltas, supports cancellation, clear, close, and bounded follow-ups, and discloses both its ephemeral behavior and context trimming.
 - A normal foreground send wins. Its admission aborts BTW before claiming the chat turn; a concurrently starting BTW request reserves its slot and then rechecks foreground busy state.
 - Chat deletion waits only a 1.5-second abort grace. A provider that ignores abort is detached from the registry so late events cannot publish or mutate a replacement thread while its hard timeout drains.
@@ -26,7 +26,7 @@ Bring the useful interaction model from `rpiv-mono/packages/rpiv-btw` into Aiden
 
 - `main/services/rpiv-btw/context.ts` derives a newest-first bounded suffix from completed visible `ChatStore` messages, converts only visible prose, compacts against the selected model, and performs one smaller overflow retry.
 - `main/services/rpiv-btw/operation-registry.ts` atomically fences one request per chat and the global limit, with owner-scoped cancellation and settlement.
-- `main/services/rpiv-btw/service-core.ts` owns validation, exact runtime resolution, no-tools streaming, ordered notifications, ephemeral fingerprinted history, lifecycle cancellation, and content-free usage accounting under source `btw`.
+- `main/services/rpiv-btw/service-core.ts` owns validation, exact runtime resolution, no-tools streaming (or a continuation of the parent's cached request; see `docs/plans/prompt-cache-hit-rate.md` phase 4), ordered notifications, ephemeral fingerprinted history, lifecycle cancellation, and content-free usage accounting under source `btw`.
 - `main/services/rpiv-btw/service.ts` binds the core to Aiden's chat, model-runtime, and usage stores.
 - `main/handlers/btw.ts` exposes attended, renderer-document-owned start/cancel/clear IPC. Handler registration is isolated from the existing chat handlers.
 - `llmClient.beginChatTurn`, `cancelChat`, and `abortAll` provide the minimal foreground, deletion, and shutdown hooks.

@@ -95,16 +95,16 @@ const LONG_REPLY = `Got it, Priya. ${"I'll keep Mia's piano and Leo's swimming i
 
 test("crossing the threshold flushes memory, steers the summary and refreshes the snapshot", async () => {
   const { memory, userFile } = memoryProfile();
-  const requests: Array<{ kind: string; system: string; user: string }> = [];
+  const requests: Array<{ kind: string; system: string; user: string; retention?: string }> = [];
   const classify = (messages: Message[]) => {
     const system = systemPromptOf(messages);
     if (system.includes("keep a helper Bot's long-term memory")) return "flush";
     if (system.includes("context summarization assistant")) return "summary";
     return "turn";
   };
-  const step = (reply: (kind: string) => ReturnType<typeof fauxAssistantMessage>) => (context: { messages: Message[] }) => {
+  const step = (reply: (kind: string) => ReturnType<typeof fauxAssistantMessage>) => (context: { messages: Message[] }, options?: { cacheRetention?: string }) => {
     const kind = classify(context.messages);
-    requests.push({ kind, system: systemPromptOf(context.messages), user: lastUserText(context.messages) });
+    requests.push({ kind, system: systemPromptOf(context.messages), user: lastUserText(context.messages), retention: options?.cacheRetention });
     return reply(kind);
   };
   const fauxModels = createFauxModels([
@@ -130,6 +130,7 @@ test("crossing the threshold flushes memory, steers the summary and refreshes th
     );
     assert.match(requests[1]!.user, /Mia has piano on Tuesdays/u, "the flush reads the messages being compacted");
     assert.ok(requests[3]!.user.includes(BOT_COMPACTION_FOCUS), "the summary is steered by the focus");
+    assert.equal(requests[3]!.retention, "none", "nothing reads the steered summary's prompt again");
 
     assert.equal(readFileSync(userFile, "utf8"), "Mia has piano on Tuesdays.");
     const entries = await allEntries(conversation);

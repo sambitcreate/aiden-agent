@@ -10,11 +10,13 @@ import type { UsageRequestRecord } from "../usage-store-core.js";
 import {
   assistantText,
   boundedHistory,
+  btwContinuationPrompt,
   buildBtwContext,
   completedVisibleContext,
   BTW_SYSTEM_PROMPT,
   type BtwHistoryTurn,
 } from "./context.js";
+import { oneOffCallOptions, sideCallContinuation, sideCallModelKey, type SideCallPrefix } from "../side-call-prefix.js";
 import { BtwOperationRegistry } from "./operation-registry.js";
 import { isAcpHarnessProvider } from "../../../renderer/shared/acp-harness.js";
 
@@ -42,6 +44,28 @@ export interface BtwServiceDependencies {
   isChatBusy(chatId: string): boolean;
   recordUsage(record: UsageRequestRecord): Promise<void>;
   registry: BtwOperationRegistry;
+  /**
+   * The chat's last foreground request while its prompt cache is live. A side
+   * question continues it when it still matches the chat and the model.
+   */
+  parentPrefix?(chatId: string): SideCallPrefix | undefined;
+}
+
+type BtwAttempt = { kind: "continuation"; prefix: SideCallPrefix } | { kind: "isolated"; retry: boolean };
+
+/**
+ * The parent prefix a side question may continue: the same model, and a reply
+ * that is still the chat's latest message, so no later turn, edit or
+ * compaction is missing from it.
+ */
+function continuablePrefix(prefix: SideCallPrefix | undefined, chat: Chat, runtime: ResolvedModelRuntime): SideCallPrefix | undefined {
+  if (!prefix || prefix.conversationId !== chat.id || prefix.modelKey !== sideCallModelKey(runtime.model)) return undefined;
+  const last = chat.messages[chat.messages.length - 1];
+  const reply = prefix.response;
+  if (last?.role !== "assistant" || !last.pi) return undefined;
+  return last.pi.timestamp === reply.timestamp && last.pi.provider === reply.provider && last.pi.model === reply.model
+    ? prefix
+    : undefined;
 }
 
 function fingerprint(chat: Pick<Chat, "providerId" | "model">): string | null {
@@ -213,31 +237,51 @@ export class BtwService {
         contextTrimmed: false,
       });
 
+      // A side question on a live parent prefix reads the parent's cache. Any
+      // failure there falls back to the isolated, tool-free request.
+      const prefix = continuablePrefix(this.deps.parentPrefix?.(input.chat.id), latest, runtime);
+      const attempts: BtwAttempt[] = [
+        ...(prefix ? [{ kind: "continuation" as const, prefix }] : []),
+        { kind: "isolated", retry: false },
+        { kind: "isolated", retry: true },
+      ];
+      const maxTokens = Math.min(4_096, runtime.model.maxTokens);
       let response: AssistantMessage | undefined;
-      for (let attempt = 1; attempt <= 2; attempt += 1) {
-        const built = buildBtwContext({
-          branch,
-          history: input.thread.history,
-          question: input.question,
-          model: runtime.model,
-          retry: attempt === 2,
-        });
-        contextTrimmed ||= built.trimmed;
-        let streamed = "";
-        try {
-          const stream = runtime.streams.streamSimple(
-            runtime.model,
-            normalizeContext({ systemPrompt: BTW_SYSTEM_PROMPT, messages: built.messages, tools: [] }),
-            {
+      for (const attempt of attempts) {
+        let request;
+        if (attempt.kind === "continuation") {
+          request = sideCallContinuation(attempt.prefix, [btwContinuationPrompt(input.thread.history, input.question)], {
+            apiKey: runtime.apiKey,
+            headers: runtime.headers,
+            signal: input.controller.signal,
+            maxTokens,
+            maxRetries: 0,
+            timeoutMs: BTW_LIMITS.timeoutMs,
+          });
+        } else {
+          const built = buildBtwContext({
+            branch,
+            history: input.thread.history,
+            question: input.question,
+            model: runtime.model,
+            retry: attempt.retry,
+          });
+          contextTrimmed ||= built.trimmed;
+          request = {
+            context: normalizeContext({ systemPrompt: BTW_SYSTEM_PROMPT, messages: built.messages, tools: [] }),
+            options: oneOffCallOptions({
               apiKey: runtime.apiKey,
               headers: runtime.headers,
               signal: input.controller.signal,
-              maxTokens: Math.min(4_096, runtime.model.maxTokens),
+              maxTokens,
               maxRetries: 0,
               timeoutMs: BTW_LIMITS.timeoutMs,
-              cacheRetention: "none",
-            },
-          );
+            }),
+          };
+        }
+        let streamed = "";
+        try {
+          const stream = runtime.streams.streamSimple(runtime.model, request.context, request.options);
           for await (const event of stream) {
             input.controller.signal.throwIfAborted();
             if (event.type !== "text_delta" || !event.delta) continue;
@@ -267,9 +311,18 @@ export class BtwService {
             local: isLocalModelProvider(runtime.provider),
             status: input.controller.signal.aborted ? "cancelled" : "failed",
           }));
-          throw error;
+          if (attempt.kind !== "continuation" || input.controller.signal.aborted) throw error;
+          response = undefined;
+          publish({ type: "reset" });
+          continue;
         }
-        if (attempt === 1 && isContextOverflow(response, runtime.model.contextWindow)) {
+        if (attempt.kind === "continuation") {
+          if (response.stopReason !== "error" && response.stopReason !== "aborted" && assistantText(response).trim()) break;
+          response = undefined;
+          publish({ type: "reset" });
+          continue;
+        }
+        if (!attempt.retry && isContextOverflow(response, runtime.model.contextWindow)) {
           publish({ type: "reset" });
           continue;
         }

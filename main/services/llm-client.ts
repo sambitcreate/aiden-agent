@@ -311,6 +311,7 @@ import {
   rememberPromptCacheRefresh,
 } from "./context-pressure.js";
 import { formatPromptCacheMissLog, withPromptCacheTelemetry } from "./pi-cache-telemetry.js";
+import { chatSideCallPrefixes, withSideCallPrefixLedger } from "./side-call-prefix.js";
 import { generationEmergencyUserError } from "./generation-emergency-outcome.js";
 import { buildGeminiWorkspaceSnapshot, GeminiContextCache } from "./gemini-context-cache.js";
 import { attachClaimCheck } from "../../renderer/shared/claim-check.js";
@@ -3886,6 +3887,9 @@ export const llmClient = {
         // Whether this turn can show the chooser follows the device that sent
         // it; system says so for both cases and a turn note names this one.
         chooserByTurn: true,
+        // A review by this chat's own model continues its last request, so it
+        // reads the prefix that request cached.
+        sideCallPrefix: () => chatSideCallPrefixes.latest(params.chatId),
         ...advisorChooser,
       });
       const advisorTurnNote = advisorExtension && !advisorChooser.requestQuestionnaire ? ADVISOR_NO_CHOOSER_TURN_NOTE : "";
@@ -4102,7 +4106,11 @@ export const llmClient = {
         if (chatHooks && event.result && !event.aborted) markWorkspaceChatCompacted(params.chatId);
         // Compaction rewrites the prefix on purpose, so, as in Pi's cache
         // stats, the next request is not counted against the old one.
-        if (event.result && !event.aborted) chatPromptCacheTelemetry.reset(params.chatId);
+        if (event.result && !event.aborted) {
+          chatPromptCacheTelemetry.reset(params.chatId);
+          // A side call must not continue the pre-compaction request.
+          chatSideCallPrefixes.forget(params.chatId);
+        }
         logger.info("pi", `Finished ${event.reason} compaction for stream ${streamId}.`, {
           aborted: event.aborted,
           tokensBefore: event.result?.tokensBefore,
@@ -4392,7 +4400,13 @@ export const llmClient = {
         },
         onError: (error) => logger.debug("prompt-cache", `Could not attribute a prompt-cache miss for stream ${streamId}.`, error),
       });
-      const warmedStream = cacheWarmer ? withPiCacheWarming(measuredStream, cacheWarmer) : measuredStream;
+      // btw and the same-model advisor continue the chat's last request, so
+      // they read the cache this request writes. Agent harnesses have no
+      // side calls.
+      const prefixedStream = harnessProvider
+        ? measuredStream
+        : withSideCallPrefixLedger(measuredStream, { ledger: chatSideCallPrefixes, chatKey: params.chatId });
+      const warmedStream = cacheWarmer ? withPiCacheWarming(prefixedStream, cacheWarmer) : prefixedStream;
       // Device-local pace: Pi calls the stream function once per model
       // response, right before the provider request, so the wrapper marks
       // each response's request start (see ModelPaceTimer for what TTFT covers).

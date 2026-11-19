@@ -2,6 +2,7 @@ import { BTW_LIMITS } from "../../../renderer/shared/btw.js";
 import { chatStore } from "../chat-store.js";
 import { resolveModelRuntime } from "../model-runtime.js";
 import { usageStore } from "../usage-store.js";
+import { chatSideCallPrefixes } from "../side-call-prefix.js";
 import { BtwOperationRegistry } from "./operation-registry.js";
 import { BtwService } from "./service-core.js";
 
@@ -15,6 +16,7 @@ export const btwService = new BtwService({
   isChatBusy: (chatId) => isChatBusy(chatId),
   recordUsage: (record) => usageStore.record(record),
   registry: btwOperationRegistry,
+  parentPrefix: (chatId) => chatSideCallPrefixes.latest(chatId),
 });
 
 export function configureBtwChatBusyCheck(check: (chatId: string) => boolean): void {
