@@ -1616,6 +1616,9 @@ export const workspaceArtifactsApi = {
     invoke<WorkspaceArtifactV1>("workspaces:artifacts:importConfirm", workspaceId, token),
   importDiscard: (workspaceId: string, token: string) =>
     invoke<{ discarded: boolean }>("workspaces:artifacts:importDiscard", workspaceId, token),
+  /** Keep in Artifacts: saves a chat's native visual as a page of the chat's workspace. */
+  keepVisual: (chatId: string, messageId: string, visualId: string) =>
+    invoke<WorkspaceArtifactV1>("workspaces:artifacts:keepVisual", chatId, messageId, visualId),
   onChanged: (handler: (event: WorkspaceArtifactsChangedEvent) => void) =>
     onNotification<WorkspaceArtifactsChangedEvent>("workspaces:artifacts-changed", handler),
 };
@@ -2537,6 +2540,13 @@ export const designCanvasApi = {
     options === undefined
       ? invoke<DesignCanvasSaveResult>("designCanvas:save", chatId, doc, baseRevision)
       : invoke<DesignCanvasSaveResult>("designCanvas:save", chatId, doc, baseRevision, options),
+  /** Send to canvas: puts one of the chat's HTML visuals on the page on screen. */
+  placeDesignArtifact: (chatId: string, mediaId: string) =>
+    invoke<{ status: "placed" | "already"; frameId: string } | { error: "missing" | "unsafe" | "full" }>(
+      "designCanvas:placeArtifact",
+      chatId,
+      mediaId,
+    ),
   /** `aidenTurn` names the reply that made the change, when Aiden made it. */
   onDesignCanvasUpdated: (handler: (update: { chatId: string; revision: number; aidenTurn?: string }) => void) =>
     onNotification<{ chatId: string; revision: number; aidenTurn?: string }>("designCanvas:updated", handler),

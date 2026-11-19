@@ -53,7 +53,7 @@ const MAX_REPORTED_DIAGNOSTICS = 12;
 type Operation = "create" | "update" | "list" | "get" | "check" | "delete" | "run" | "restore";
 
 /** Why `get` has no markup to show, and what to do instead. */
-const MARKUP_NOT_KEPT = "Aiden did not keep this version's markup: it was saved before Aiden kept page markup, or imported from a file. To change the page, send the whole markup in an update.";
+const MARKUP_NOT_KEPT = "Aiden did not keep this version's markup: it was saved before Aiden kept page markup, imported from a file, or kept from a visual in a chat. To change the page, send the whole markup in an update.";
 /** The same, for a version whose markup was dropped to keep the workspace's files within their size. */
 const MARKUP_DROPPED = "Aiden dropped this version's markup to keep this workspace's saved pages or their earlier versions within their storage limit; the page itself is unchanged. To change the page, send the whole markup in an update.";
 

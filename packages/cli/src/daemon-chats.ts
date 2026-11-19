@@ -3,6 +3,7 @@ import { createWebSearchInlineExtension } from "./extensions/web-search.ts";
 import { createTodoInlineExtension } from "./extensions/todo.ts";
 import { createAdvisorInlineExtension } from "./extensions/advisor.ts";
 import { createArtifactsExtension } from "./extensions/artifacts.ts";
+import { createServerVisualCollector } from "./server-visuals.ts";
 import { createMcpExtension } from "./mcp.ts";
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 import { visionAttachmentAlias } from "../../../main/services/vision-attachment-reference.js";
@@ -13,7 +14,7 @@ import type { BotRuntimeAuthorityAdmission } from "../../../main/services/bot-ru
 import { assertBotRuntimeProviderSelection } from "../../../main/services/bot-runtime-authority.js";
 import { mkdirSync, realpathSync } from "node:fs";
 import { rm } from "node:fs/promises";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { dirname, basename, join, resolve } from "node:path";
 import { createAgentSession, DefaultResourceLoader, SessionManager, type AgentSession } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
@@ -209,6 +210,10 @@ export function createDaemonChats(agentDir: string) {
       const produced: AssistantMessage[] = [];
       let content = "", separator = false;
       const timeline = new GenerationTimelineProjector(streamId, (value) => send("chat:timeline", { streamId, timeline: value }));
+      // Visuals this turn drew go on its reply in the same write, under an id chosen up front.
+      let visuals = createServerVisualCollector();
+      const replyId = `${Date.now().toString(36)}-${randomBytes(5).toString("hex")}`;
+      const visualFields = () => visuals.messageFields(params.chatId, replyId, (raw) => timeline.publicToolCallId(raw));
       // Extensions open their resources (MCP pool, memory store) before the session exists; a turn that
       // fails before then still runs their shutdown handlers and closers.
       const shutdownHandlers: ((event: { type: "session_shutdown"; reason: "quit" }) => unknown)[] = [];
@@ -216,6 +221,7 @@ export function createDaemonChats(agentDir: string) {
       try {
         const chat = await chatStore.get(params.chatId);
         if (!chat) throw new Error("The chat is unavailable.");
+        visuals = createServerVisualCollector({ existingUiVisuals: chat.messages.reduce((total, message) => total + (message.uiVisuals?.length ?? 0), 0) });
         if (chat.botId) {
           bots?.assertLegacyChatAllowed?.();
           if (!bots || !options.botAudienceId) throw new Error("This chat requires a Bot capability audience.");
@@ -287,7 +293,7 @@ export function createDaemonChats(agentDir: string) {
           createTodoInlineExtension({ latestContext: () => undefined }),
           createMcpExtension(agentDir),
           createAdvisorInlineExtension({ agentDir, latestContext: () => undefined }),
-          createArtifactsExtension(agentDir),
+          createArtifactsExtension(agentDir, { visuals }),
         ];
         if (!botAdmission && workspace.folderPath) {
           const web = await createWebSearchInlineExtension({ agentDir });
@@ -439,7 +445,7 @@ export function createDaemonChats(agentDir: string) {
         if (!last || last.stopReason === "error" || last.stopReason === "aborted") throw new Error(last?.errorMessage ?? "Generation returned no final answer.");
         content ||= produced.map((message) => messageText(message.content)).filter(Boolean).join("\n");
         const finalTimeline = timeline.finish("completed");
-        const updated = await chatStore.appendMessage(params.chatId, { role: "assistant", content, timeline: finalTimeline }, { providerId: model.provider, model: model.id });
+        const updated = await chatStore.appendMessage(params.chatId, { id: replyId, role: "assistant", content, timeline: finalTimeline, ...visualFields() }, { providerId: model.provider, model: model.id });
         entry.persistence = "final_saved";
         send("chat:done", { streamId, content, chat: updated, timeline: finalTimeline }); return true;
       } catch (error) {
@@ -449,7 +455,7 @@ export function createDaemonChats(agentDir: string) {
         const finalTimeline = finished.status !== "completed" ? finished
           : { ...finished, status: cancelled ? "cancelled" as const : "failed" as const, ...(cancelled && entry.cancellationOrigin ? { cancellationOrigin: entry.cancellationOrigin } : {}) };
         if (entry.persistence === "none" && (content || produced.length)) {
-          entry.persistence = await chatStore.appendMessage(params.chatId, { role: "assistant", content, timeline: finalTimeline }).then(() => "partial_saved" as const, () => {
+          entry.persistence = await chatStore.appendMessage(params.chatId, { id: replyId, role: "assistant", content, timeline: finalTimeline, ...visualFields() }).then(() => "partial_saved" as const, () => {
             process.stderr.write("aiden: Could not persist the partial response.\n");
             return "partial_lost" as const;
           });

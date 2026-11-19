@@ -1,9 +1,13 @@
 import "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { cleanup, fireEvent, render } from "@testing-library/react";
+import * as React from "react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { installBotTestIpc } from "../main/bots/test-dom";
 import { MessageList } from "./message-list";
+import { Toaster } from "./ui";
+import { KeepVisualChatContext } from "../lib/visual-menu-actions";
+import { DesignModeControlsContext, type DesignModeControls, type DesignModeSource } from "../lib/design-mode";
 import type { AgentToolStep, GenerationTimeline } from "../shared/generation-timeline";
 
 afterEach(() => cleanup());
@@ -271,4 +275,158 @@ test("a streaming native draft is inert in its row and the presented visual repl
   view.rerender(list(true));
   assert.equal(view.container.querySelector('[data-aiden-ui="draft-call-ui"]'), null);
   assert.ok(view.container.querySelector('[data-aiden-ui="ui-board"]'));
+});
+
+function savedList(message: Record<string, unknown>, wrap: (list: React.ReactElement) => React.ReactElement = (list) => list) {
+  return wrap(
+    <>
+      <MessageList
+        chatId="chat-saved"
+        messages={[{ id: "m-1", role: "assistant", content: "Board.", createdAt: 1, ...message }]}
+        streamingText={null}
+        streamingReasoning={null}
+        timeline={null}
+        liveSubagents={[]}
+        subagentsEnabled={false}
+        onOpenSubagent={() => undefined}
+        agentActivity={null}
+        error={null}
+      />
+      <Toaster />
+    </>,
+  );
+}
+
+async function openVisualMenu(title: string) {
+  fireEvent.pointerDown(screen.getByRole("button", { name: `Actions for ${title}` }), { button: 0, pointerType: "mouse" });
+  await screen.findByRole("menu");
+}
+
+test("a native visual offers Keep in Artifacts from its caption menu only once settled in a chat that can keep it", async () => {
+  const kept: unknown[][] = [];
+  const calls = installBotTestIpc({
+    "workspaces:artifacts:keepVisual": (...args) => {
+      kept.push(args);
+      return { id: "art-1" };
+    },
+  });
+  // Without a workspace to keep it in (a Bot, the Assistant, a remote chat), Copy stays the only action.
+  const plain = render(savedList({ uiVisuals: [NATIVE] }));
+  assert.ok(screen.getByRole("button", { name: "Copy Board as text" }));
+  assert.equal(screen.queryByRole("button", { name: "Actions for Board" }), null);
+  plain.unmount();
+
+  // A visual still streaming has no saved reply to keep it from.
+  const live = render(
+    <KeepVisualChatContext.Provider value="chat-live">
+      <MessageList
+        chatId="chat-live"
+        messages={[]}
+        streamingText="Board."
+        streamingReasoning={null}
+        streamingUiVisuals={[NATIVE]}
+        timeline={{ version: 3, generationId: "g", status: "running", startedAt: 1, steps: [toolStep("tool-1", "call-ui", "render_ui", 0)] }}
+        liveSubagents={[]}
+        subagentsEnabled={false}
+        onOpenSubagent={() => undefined}
+        agentActivity={null}
+        error={null}
+      />
+    </KeepVisualChatContext.Provider>,
+  );
+  assert.ok(screen.getByRole("button", { name: "Copy Board as text" }));
+  live.unmount();
+
+  render(savedList({ uiVisuals: [NATIVE] }, (list) => <KeepVisualChatContext.Provider value="chat-saved">{list}</KeepVisualChatContext.Provider>));
+  assert.equal(screen.queryByRole("button", { name: "Copy Board as text" }), null);
+  await openVisualMenu("Board");
+  assert.ok(screen.getByRole("menuitem", { name: "Copy as text" }), "the visual's own action stays in the menu");
+  fireEvent.click(screen.getByRole("menuitem", { name: "Keep in Artifacts" }));
+  await screen.findByText("Kept in Artifacts.");
+  assert.deepEqual(kept, [["chat-saved", "m-1", "ui-board"]]);
+  assert.equal(calls.filter((call) => call.channel === "workspaces:artifacts:keepVisual").length, 1);
+});
+
+test("a refused keep tells the person why without the IPC wrapper", async () => {
+  installBotTestIpc({
+    "workspaces:artifacts:keepVisual": () => {
+      throw new Error("Error invoking remote method 'workspaces:artifacts:keepVisual': Error: This workspace already has 20 artifacts.");
+    },
+  });
+  render(savedList({ uiVisuals: [NATIVE] }, (list) => <KeepVisualChatContext.Provider value="chat-saved">{list}</KeepVisualChatContext.Provider>));
+  await openVisualMenu("Board");
+  fireEvent.click(screen.getByRole("menuitem", { name: "Keep in Artifacts" }));
+  await screen.findByText("This workspace already has 20 artifacts.");
+});
+
+function designControls(on: boolean, changes: Array<[boolean, DesignModeSource]>): DesignModeControls {
+  return {
+    chatId: "chat-saved",
+    on,
+    set: (enabled, source) => changes.push([enabled, source]),
+    toggle: () => undefined,
+  };
+}
+
+test("an HTML visual offers Send to canvas only where design mode is available, and sending turns design mode on", async () => {
+  const placed: unknown[][] = [];
+  installBotTestIpc({
+    "chats:htmlArtifactSrcdoc": () => new Promise(() => undefined),
+    "designCanvas:placeArtifact": (...args) => {
+      placed.push(args);
+      return { status: "placed", frameId: "frame-1" };
+    },
+  });
+  const plain = render(savedList({ htmlArtifacts: [visual] }));
+  assert.ok(screen.getByRole("button", { name: "Export Chart" }));
+  assert.equal(screen.queryByRole("button", { name: "Actions for Chart" }), null);
+  plain.unmount();
+
+  // Design mode belongs to another chat: this one cannot send there.
+  const other = render(
+    savedList({ htmlArtifacts: [visual] }, (list) => (
+      <DesignModeControlsContext.Provider value={{ ...designControls(false, []), chatId: "chat-other" }}>{list}</DesignModeControlsContext.Provider>
+    )),
+  );
+  assert.ok(screen.getByRole("button", { name: "Export Chart" }));
+  other.unmount();
+
+  const changes: Array<[boolean, DesignModeSource]> = [];
+  render(
+    savedList({ htmlArtifacts: [visual] }, (list) => (
+      <DesignModeControlsContext.Provider value={designControls(false, changes)}>{list}</DesignModeControlsContext.Provider>
+    )),
+  );
+  await openVisualMenu("Chart");
+  assert.ok(screen.getByRole("menuitem", { name: "Export…" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Send to canvas" }));
+  await screen.findByText("Sent to the canvas.");
+  assert.deepEqual(placed, [["chat-saved", "media-live"]]);
+  assert.deepEqual(changes, [[true, "toggle"]]);
+});
+
+test("Send to canvas leaves design mode alone when it is on, and a canvas with no room says so", async () => {
+  let answer: unknown = { status: "already", frameId: "frame-1" };
+  installBotTestIpc({
+    "chats:htmlArtifactSrcdoc": () => new Promise(() => undefined),
+    "designCanvas:placeArtifact": () => answer,
+  });
+  const changes: Array<[boolean, DesignModeSource]> = [];
+  render(
+    savedList({ htmlArtifacts: [visual] }, (list) => (
+      <DesignModeControlsContext.Provider value={designControls(true, changes)}>{list}</DesignModeControlsContext.Provider>
+    )),
+  );
+  await openVisualMenu("Chart");
+  fireEvent.click(screen.getByRole("menuitem", { name: "Send to canvas" }));
+  await screen.findByText("That visual is already on the canvas.");
+
+  answer = { error: "full" };
+  await waitFor(() => assert.equal(screen.queryByRole("menu"), null));
+  await openVisualMenu("Chart");
+  await act(async () => {
+    fireEvent.click(screen.getByRole("menuitem", { name: "Send to canvas" }));
+  });
+  await screen.findByText(/no room for another frame/u);
+  assert.deepEqual(changes, [], "design mode was already on, and a refused send changes nothing");
 });
