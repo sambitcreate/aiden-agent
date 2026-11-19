@@ -14,6 +14,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
+import okhttp3.mockwebserver.Dispatcher
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import sbtbiswas.AidenOnTheGo.auth.InMemoryAidenSecureStore
@@ -190,6 +196,57 @@ class AidenBotGeneratedAvatarTest {
             assertNull(model.errorMessage.value)
             assertTrue(model.hasCandidate)
         } finally {
+            main.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun aPhotoPickedDuringAnUploadKeepsItsStateWhenThatUploadEnds() {
+        val directory = kotlin.io.path.createTempDirectory("avatar-upload-").toFile()
+        val main = java.util.concurrent.Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val server = MockWebServer()
+        val uploadArrived = java.util.concurrent.CountDownLatch(1)
+        val releaseUpload = java.util.concurrent.CountDownLatch(1)
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse =
+                if (request.method == "PUT" && request.requestUrl!!.encodedPath.endsWith("/bots/bot-1/avatar")) {
+                    uploadArrived.countDown()
+                    releaseUpload.await(5, java.util.concurrent.TimeUnit.SECONDS)
+                    MockResponse().setResponseCode(503).setBody(
+                        """{"error":{"code":"internal_error","message":"Upload failed","requestId":"r","retryable":true}}""")
+                } else MockResponse().setResponseCode(404)
+        }
+        server.start()
+        try {
+            val installations = AidenInstallationStore(directory, InMemoryAidenSecureStore())
+            installations.addInstallation(AidenPairingExchange(instanceId = "instance-avatar", deviceId = "device-avatar",
+                endpoint = server.url("/api/aiden/v1").toString(), serverSpkiSha256 = "sha256/test", credential = "synthetic",
+                capabilities = listOf(AidenRemoteCapability.CHAT_READ)), null)
+            val coordinator = AidenRemoteCoordinator(
+                installationStore = installations,
+                storageDir = directory,
+                chatCache = AidenChatCache(directory),
+                scope = CoroutineScope(Dispatchers.Unconfined + Job().apply { cancel() })
+            )
+            coordinator.refreshClient()
+            val model = AidenBotGeneratedAvatarModel(coordinator, normalize = { it })
+            runBlocking(main) {
+                assertTrue(model.setCandidate(byteArrayOf(1)))
+                val upload = launch { model.uploadAvatar("bot-1", "rev-1") { fail("the upload failed") } }
+                withContext(Dispatchers.IO) { assertTrue(uploadArrived.await(5, java.util.concurrent.TimeUnit.SECONDS)) }
+                // A second photo is picked and ready while the first upload is still on the wire.
+                assertTrue(model.setCandidate(byteArrayOf(2)))
+                releaseUpload.countDown()
+                upload.join()
+            }
+            assertEquals("the first upload's failure must not take over the second photo",
+                AidenBotGeneratedAvatarPhase.READY, model.phase.value)
+            assertNull(model.errorMessage.value)
+            assertTrue(model.hasCandidate)
+        } finally {
+            releaseUpload.countDown()
+            server.shutdown()
             main.close()
             directory.deleteRecursively()
         }

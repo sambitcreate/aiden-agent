@@ -165,13 +165,14 @@ class AidenBotGeneratedAvatarModel(
     val hasCandidate: Boolean
         get() = currentCandidateData != null
 
-    private var selection = 0L
+    @Volatile private var selection = 0L
 
     /**
      * Decodes and re-encodes off the main thread; a large source can take hundreds of milliseconds.
      * Call it from one thread (the main thread). A later call supersedes an earlier one that is
      * still normalizing: the earlier call then changes nothing and returns false, so its caller
-     * must not upload. Returns true when this call's candidate is the current one.
+     * must not upload. Returns true when this call's candidate is the current one. An upload that
+     * a later call overtakes still finishes on the Mac, but leaves the later candidate's state alone.
      */
     suspend fun setCandidate(data: ByteArray): Boolean {
         val mine = ++selection
@@ -204,27 +205,38 @@ class AidenBotGeneratedAvatarModel(
         botId: String,
         revision: String,
         onSuccess: (AidenBotDetail) -> Unit
-    ) = withContext(Dispatchers.IO) {
-        val data = currentCandidateData ?: return@withContext
-        val client = coordinator.client.value ?: run {
-            _phase.value = AidenBotGeneratedAvatarPhase.FAILED
-            _errorMessage.value = AidenBotGeneratedAvatarError.Unavailable.messageText
-            return@withContext
-        }
+    ) {
+        val mine = selection
+        val data = currentCandidateData ?: return
+        withContext(Dispatchers.IO) {
+            val client = coordinator.client.value ?: run {
+                _phase.value = AidenBotGeneratedAvatarPhase.FAILED
+                _errorMessage.value = AidenBotGeneratedAvatarError.Unavailable.messageText
+                return@withContext
+            }
 
-        _phase.value = AidenBotGeneratedAvatarPhase.UPLOADING
-        try {
-            val base64Data = Base64.getEncoder().encodeToString(data)
-            val upload = AidenBotAvatarUpload(data = base64Data)
-            val asset = client.putBotAvatar(botId, revision, upload)
-            botCache?.putAvatar(botId, asset.assetRevision, data)
-            val updatedBot = client.bot(botId)
-            _phase.value = AidenBotGeneratedAvatarPhase.IDLE
-            currentCandidateData = null
-            onSuccess(updatedBot)
-        } catch (e: Exception) {
-            _phase.value = AidenBotGeneratedAvatarPhase.FAILED
-            _errorMessage.value = e.message ?: "Avatar upload failed"
+            _phase.value = AidenBotGeneratedAvatarPhase.UPLOADING
+            try {
+                val base64Data = Base64.getEncoder().encodeToString(data)
+                val upload = AidenBotAvatarUpload(data = base64Data)
+                val asset = client.putBotAvatar(botId, revision, upload)
+                botCache?.putAvatar(botId, asset.assetRevision, data)
+                val updatedBot = client.bot(botId)
+                // A pick made during the upload owns the phase and the candidate now.
+                if (mine == selection) {
+                    _phase.value = AidenBotGeneratedAvatarPhase.IDLE
+                    currentCandidateData = null
+                }
+                // The Mac did take this photo, so the page still adopts the Bot it returned.
+                onSuccess(updatedBot)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (mine == selection) {
+                    _phase.value = AidenBotGeneratedAvatarPhase.FAILED
+                    _errorMessage.value = e.message ?: "Avatar upload failed"
+                }
+            }
         }
     }
 
