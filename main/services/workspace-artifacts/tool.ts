@@ -846,7 +846,20 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
     } catch {
       pageCheck = "\nPage check unavailable.";
     }
-    return `${firstRefresh}${pageCheck}`;
+    return `${firstRefresh}${pageCheck}${awaitingApproval(artifact)}`;
+  }
+
+  /**
+   * Under Ask, a page saved without the person allowing its commands in chat
+   * (no card was shown, or the commands changed after it was) cannot run
+   * them: Aiden is told where the person allows them, rather than left to
+   * read a blocked refresh as a failure to fix.
+   */
+  function awaitingApproval(artifact: WorkspaceArtifactV1): string {
+    if (options.permission !== "ask") return "";
+    const digest = workspaceArtifactDigest(artifact.sources, artifact.actions);
+    if (!workspaceArtifactCommandsNeedApproval(artifact.sources, artifact.actions, digest, artifact.approvedDigest)) return "";
+    return "\nIts commands are not allowed yet: they were not on a card the person allowed in chat, so its command sources and buttons wait for the person to allow them in the page's Artifacts tab. Tell the person; saving the page again does not allow them.";
   }
 
   /**
