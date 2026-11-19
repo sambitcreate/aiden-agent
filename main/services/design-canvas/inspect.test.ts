@@ -29,6 +29,7 @@ const PAGE = "aiden-design://grant-1/design/home.html";
 const quiet = (overrides: Partial<DesignInspectProbe> = {}): DesignInspectProbe => ({
   height: 1800,
   scrollWidth: 1280,
+  hidesSideways: false,
   overflowing: [],
   console: [],
   brokenImages: [],
@@ -96,7 +97,14 @@ test("a page with a script error, a network font, a missing image and sideways o
   assert.match(findings[1]!, /^"https:\/\/fonts\.googleapis\.com\/css2" did not load: design pages load nothing from the network/u);
   assert.match(findings[2]!, /^"design\/img\/hero shot\.png" did not load: there is no such file in the workspace/u);
   assert.match(findings[3]!, /font "Inter" did not load/u);
-  assert.match(findings[4]!, /1460px wide at its 1280px design width.*"div\.pricing-table" reaches past the right edge/u);
+  assert.match(findings[4]!, /1460px wide at its 1280px design width, so it scrolls sideways.*"div\.pricing-table" reaches past the right edge/u);
+});
+
+test("content past the right edge of a page that hides sideways overflow is reported as cut off, not as scrolling", () => {
+  const [finding] = designInspectFindings(quiet({ scrollWidth: 1600, hidesSideways: true, overflowing: ["div.wide"] }), context);
+  assert.match(finding!, /1600px wide at its 1280px design width, and the page hides sideways overflow, so what reaches past the right edge is cut off/u);
+  assert.match(finding!, /"div\.wide" reaches past the right edge/u);
+  assert.doesNotMatch(finding!, /scrolls sideways/u);
 });
 
 test("what the page chose is cut short without splitting a character and quoted, so it can't pass for Aiden's own words", () => {
@@ -178,7 +186,21 @@ test("the in-page probe finds the tweak names a page's styles and scripts read, 
 
   const plain = new Window({ url: "aiden-design://grant-1/design/plain.html" });
   plain.document.write("<!doctype html><html><head><style>body { color: #111 }</style></head><body></body></html>");
-  assert.equal((plain.eval(designInspectProbeScript([], 1280)) as { readsTheme: boolean }).readsTheme, false);
+  const plainSeen = plain.eval(designInspectProbeScript([], 1280)) as { readsTheme: boolean; hidesSideways: boolean };
+  assert.equal(plainSeen.readsTheme, false);
+  assert.equal(plainSeen.hidesSideways, false);
+
+  // A name is matched as written, never as a pattern, and one that is not a pattern at all does not stop the probe.
+  const literal = new Window({ url: "aiden-design://grant-1/design/literal.html" });
+  literal.document.write("<!doctype html><html><head><style>.a { color: var(--axb) } [data-q] { gap: 1px }</style></head><body></body></html>");
+  const literalSeen = literal.eval(designInspectProbeScript(["--a.b", "data-q", "data-(", "--x[", "--axb"], 1280)) as { tweaksRead: string[] };
+  assert.deepEqual([...literalSeen.tweaksRead].sort(), ["--axb", "data-q"]);
+
+  for (const css of ["html { overflow-x: hidden }", "body { overflow-x: clip }"]) {
+    const clipped = new Window({ url: "aiden-design://grant-1/design/clipped.html" });
+    clipped.document.write(`<!doctype html><html><head><style>${css}</style></head><body></body></html>`);
+    assert.equal((clipped.eval(designInspectProbeScript([], 1280)) as { hidesSideways: boolean }).hidesSideways, true, css);
+  }
 });
 
 test("inspectDesignPage draws the frame's own look at its design width and reports its controls, picture and findings", async (t) => {

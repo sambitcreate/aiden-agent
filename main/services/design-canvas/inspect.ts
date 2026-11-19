@@ -67,8 +67,10 @@ export type DesignInspectRequest = {
 export type DesignInspectProbe = {
   /** The page's full height in CSS pixels. */
   height: number;
-  /** How wide the page's content is; more than the width means it scrolls sideways. */
+  /** How wide the page's content is; more than the width means it scrolls sideways, or is cut off when `hidesSideways`. */
   scrollWidth: number;
+  /** Whether the root or body hides sideways overflow (`overflow-x: hidden` or `clip`), so what sticks out is cut off rather than scrolled to. */
+  hidesSideways: boolean;
   /** The outermost elements that reach past the right edge, as short selectors. */
   overflowing: string[];
   console: DesignConsoleEntry[];
@@ -205,10 +207,11 @@ export function designInspectFindings(probe: DesignInspectProbe, context: Design
   }
   if (probe.scrollWidth > context.width + 1) {
     const culprits = probe.overflowing.slice(0, DESIGN_INSPECT_MAX_OVERFLOWING).map((culprit) => quoted(culprit));
+    const reach = culprits.length > 0 ? `; ${culprits.join(", ")} reach${culprits.length === 1 ? "es" : ""} past the right edge` : "";
     findings.push(
-      `The page is ${probe.scrollWidth}px wide at its ${context.width}px design width, so it scrolls sideways${
-        culprits.length > 0 ? `; ${culprits.join(", ")} reach${culprits.length === 1 ? "es" : ""} past the right edge` : ""
-      }.`,
+      probe.hidesSideways
+        ? `The page's content is ${probe.scrollWidth}px wide at its ${context.width}px design width, and the page hides sideways overflow, so what reaches past the right edge is cut off where the reader can't scroll to it${reach}.`
+        : `The page is ${probe.scrollWidth}px wide at its ${context.width}px design width, so it scrolls sideways${reach}.`,
     );
   }
   const read = new Set(probe.tweaksRead);
@@ -324,8 +327,9 @@ export function designInspectProbeScript(targets: readonly string[], width: numb
   const targets = ${JSON.stringify(targets)};
   const width = ${JSON.stringify(width)};
   const root = document.documentElement;
-  const out = { scrollWidth: 0, overflowing: [], brokenImages: [], failedFonts: [], tweaksRead: [], readsTheme: false };
+  const out = { scrollWidth: 0, hidesSideways: false, overflowing: [], brokenImages: [], failedFonts: [], tweaksRead: [], readsTheme: false };
   out.scrollWidth = Math.ceil(Math.max(root ? root.scrollWidth : 0, document.body ? document.body.scrollWidth : 0));
+  out.hidesSideways = [root, document.body].some((box) => box && ["hidden", "clip"].includes(getComputedStyle(box).overflowX));
   for (const image of Array.from(document.querySelectorAll("img")).slice(0, 500)) {
     const source = image.currentSrc || image.getAttribute("src") || "";
     if (source && image.complete && image.naturalWidth === 0) out.brokenImages.push(image.currentSrc || image.src);
@@ -377,9 +381,12 @@ export function designInspectProbeScript(targets: readonly string[], width: numb
     scripts += (script.textContent || "") + "\\n";
   }
   const after = "(?![A-Za-z0-9_-])";
-  for (const target of targets) {
-    if (target.startsWith("--")) {
-      if (new RegExp("var\\\\(\\\\s*" + target + after).test(styles) || new RegExp("['\\"\`]" + target + "['\\"\`]").test(scripts)) out.tweaksRead.push(target);
+  // Names are checked before they get here; escaped all the same, so none can change what a pattern means.
+  const literal = (text) => text.replace(/[.*+?^$|()[\\]{}\\\\]/g, "\\\\$&");
+  for (const name of targets) {
+    const target = literal(name);
+    if (name.startsWith("--")) {
+      if (new RegExp("var\\\\(\\\\s*" + target + after).test(styles) || new RegExp("['\\"\`]" + target + "['\\"\`]").test(scripts)) out.tweaksRead.push(name);
     } else {
       const bare = target.slice(5);
       const camel = bare.replace(/-([a-z0-9])/g, (_match, letter) => letter.toUpperCase());
@@ -388,7 +395,7 @@ export function designInspectProbeScript(targets: readonly string[], width: numb
         new RegExp("attr\\\\(\\\\s*" + target + after).test(styles) ||
         new RegExp("['\\"\`\\\\[]\\\\s*" + target + after).test(scripts) ||
         new RegExp("dataset\\\\s*(\\\\.\\\\s*" + camel + "(?![A-Za-z0-9_$])|\\\\[\\\\s*['\\"\`]" + camel + "['\\"\`])").test(scripts)
-      ) out.tweaksRead.push(target);
+      ) out.tweaksRead.push(name);
     }
   }
   out.readsTheme = /\\[\\s*data-theme|light-dark\\(/.test(styles) || /data-theme|dataset\\s*\\.\\s*theme/.test(scripts);

@@ -156,6 +156,7 @@ export async function inspectDesignFrame(request: DesignInspectRequest): Promise
       const probe: DesignInspectProbe = {
         height,
         scrollWidth: Number(seen?.scrollWidth) || 0,
+        hidesSideways: seen?.hidesSideways === true,
         overflowing: strings(seen?.overflowing),
         brokenImages: strings(seen?.brokenImages),
         failedFonts: strings(seen?.failedFonts),
