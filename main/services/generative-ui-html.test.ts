@@ -827,6 +827,22 @@ test("html admission reads the elements a <select> holds as Chromium builds them
       '<select><option><svg><foreignObject><style>p{background:url(javascript:alert(1))}</style></foreignObject></svg></option></select>',
       /found "url\(/u,
     ],
+    // Chromium closes the <svg> at </option> and reads the CDATA opener as a
+    // comment ending at its first >, so the image is built.
+    "an image after an SVG an option's end tag closes": [
+      `<select><option><svg></option><![CDATA[></select>${errorImage}]]></select>`,
+      /<\/option> ends an <svg> or <math> in a <select> that is still open\. Close each <svg> and <math>/u,
+    ],
+    "a script after MathML a <div>'s end tag closes": [
+      `<select><div><math><mi>x</mi></div><script>location&#61;'#';document.body.innerHTML='<iframe></iframe>'</script></select>`,
+      /<\/div> ends an <svg> or <math>/u,
+    ],
+    // Chromium ignores a </select> inside a <foreignObject>, so the <svg>
+    // stays open and its <script> decodes &#39;.
+    "an SVG script after a </select> in a <foreignObject>": [
+      `<select><svg><foreignObject></select></foreignObject><script>x='&#39;';document.body.innerHTML='<iframe></iframe>'</script></svg>`,
+      /<\/select> ends an <svg> or <math>/u,
+    ],
   };
   for (const [name, [html, message]] of Object.entries(refused)) {
     assert.throws(() => validateGenerativeUiHtml(html), message, name);
@@ -845,6 +861,8 @@ test("html admission reads the elements a <select> holds as Chromium builds them
     "<select><option><math><mi>x</mi><mo>=</mo><mn>2</mn></math></option></select>",
     "<template><select><svg><circle r=1></circle></svg></select></template>",
     "<table><tr><td><select><svg><text>t</text></svg><option>a</option></select></td></tr></table>",
+    '<select><option><svg><title>Red</title><rect width="4" height="4"/></svg>Red</option></select>',
+    "<select><option><svg><circle r=1></select><p>after</p>",
     setBySelect(`<select><option>${icon}Red</option></select>`),
   ];
   for (const html of admitted) {
