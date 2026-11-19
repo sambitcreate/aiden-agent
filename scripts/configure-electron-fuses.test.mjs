@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, open, rm, stat } from "node:fs/promises";
+import { chmod, lstat, mkdtemp, mkdir, open, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -13,6 +13,7 @@ import {
   makeSpawnHelpersExecutable,
   packagedElectronExecutable,
   packagedResourcesDirectory,
+  removeSharedWriteAccess,
 } from "./configure-electron-fuses.mjs";
 
 const packageJson = JSON.parse(
@@ -190,5 +191,42 @@ test("makeSpawnHelpersExecutable accepts Linux node-pty without a macOS-only hel
     await assert.doesNotReject(makeSpawnHelpersExecutable(appDir, "linux"));
   } finally {
     await rm(appDir, { recursive: true, force: true });
+  }
+});
+
+test("Linux packages never ship group- or world-writable files", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "aiden-linux-modes-"));
+  try {
+    // Modes as Electron's Linux zip stores them.
+    const binary = path.join(root, "aiden-agent");
+    const pak = path.join(root, "locales", "en-US.pak");
+    const ownFile = path.join(root, "resources", "app.asar");
+    await mkdir(path.dirname(pak), { recursive: true });
+    await mkdir(path.dirname(ownFile), { recursive: true });
+    await writeFile(binary, "elf");
+    await writeFile(pak, "pak");
+    await writeFile(ownFile, "asar");
+    await chmod(binary, 0o777);
+    await chmod(pak, 0o666);
+    await chmod(ownFile, 0o644);
+    await chmod(path.dirname(pak), 0o777);
+    const outside = path.join(root, "..", `${path.basename(root)}-outside`);
+    await writeFile(outside, "outside");
+    await chmod(outside, 0o666);
+    await symlink(outside, path.join(root, "link"));
+    try {
+      await removeSharedWriteAccess(root);
+      const mode = async (file) => (await lstat(file)).mode & 0o7777;
+      assert.equal(await mode(binary), 0o755);
+      assert.equal(await mode(pak), 0o644);
+      assert.equal(await mode(ownFile), 0o644);
+      assert.equal(await mode(path.dirname(pak)), 0o755);
+      // A link is not followed out of the package.
+      assert.equal(await mode(outside), 0o666);
+    } finally {
+      await rm(outside, { force: true });
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });

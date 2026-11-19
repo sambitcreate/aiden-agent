@@ -280,6 +280,22 @@ export async function discoverLinuxPackage(
   return candidates[0];
 }
 
+/** Files a DEB or RPM would install writable by other users (symlinks excluded). */
+export async function findSharedWritableEntries(root) {
+  const found = [];
+  const pending = [root];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    const info = await lstat(current);
+    if (info.isSymbolicLink()) continue;
+    if ((info.mode & 0o022) !== 0) found.push(path.relative(root, current) || ".");
+    if (info.isDirectory()) {
+      for (const entry of await readdir(current)) pending.push(path.join(current, entry));
+    }
+  }
+  return found.sort();
+}
+
 export async function verifyLinuxPackage(appDirectory) {
   const root = path.resolve(appDirectory);
   const executable = path.join(root, "aiden-agent");
@@ -288,6 +304,12 @@ export async function verifyLinuxPackage(appDirectory) {
   await assertRegularFile(executable, { executable: true });
   await assertRegularFile(asar);
   await verifyAidenFuses(executable);
+  const sharedWritable = await findSharedWritableEntries(root);
+  if (sharedWritable.length > 0) {
+    throw new Error(
+      `Linux package files are writable by other users: ${sharedWritable.slice(0, 10).join(", ")}${sharedWritable.length > 10 ? ", …" : ""}`,
+    );
+  }
 
   for (const helper of REQUIRED_HELPERS) {
     await assertRegularFile(path.join(root, "Helpers", helper), {

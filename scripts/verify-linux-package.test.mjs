@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { readFileSync } from "node:fs";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { URL } from "node:url";
 
@@ -8,6 +11,7 @@ import {
   assertGlibcSymbolBaseline,
   assertLinuxBuildConfiguration,
   assertNoMetalSpeechEngine,
+  findSharedWritableEntries,
   isElfMagic,
 } from "./verify-linux-package.mjs";
 
@@ -156,5 +160,21 @@ test("Linux packages leave out the native libraries of the Metal speech engine a
     "/node_modules/@koromix/koffi-linux-x64/linux_x64/koffi.node",
   ]) {
     assert.throws(() => assertNoMetalSpeechEngine([shipped]), /Metal speech engine's native libraries/u, shipped);
+  }
+});
+
+test("Linux package verification names every file other users could write", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "aiden-linux-verify-modes-"));
+  try {
+    await chmod(root, 0o755);
+    await mkdir(path.join(root, "locales"), { mode: 0o755 });
+    await writeFile(path.join(root, "aiden-agent"), "elf", { mode: 0o755 });
+    await writeFile(path.join(root, "locales", "en-US.pak"), "pak", { mode: 0o644 });
+    assert.deepEqual(await findSharedWritableEntries(root), []);
+    await chmod(path.join(root, "aiden-agent"), 0o777);
+    await chmod(path.join(root, "locales", "en-US.pak"), 0o664);
+    assert.deepEqual(await findSharedWritableEntries(root), ["aiden-agent", path.join("locales", "en-US.pak")]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });

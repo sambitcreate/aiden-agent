@@ -1,4 +1,10 @@
 import { appImageIdentity, canUpdateLinuxAppImage, replaceAppImageAtomically, type AppImageIdentity } from "./app-updater-linux.js";
+import {
+  canUpdateLinuxPackage,
+  installLinuxPackageUpdate,
+  type LinuxPackageInstallOutcome,
+  type LinuxPackageKind,
+} from "./app-updater-linux-package.js";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -28,6 +34,7 @@ const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1_000;
 const DOWNLOAD_STALL_TIMEOUT_MS = 2 * 60 * 1_000;
 type ElectronUpdaterModule = typeof import("electron-updater");
 type GuardedAppImageUpdater = InstanceType<ReturnType<typeof defineGuardedAppImageUpdater>>;
+type GuardedPackageUpdater = InstanceType<ReturnType<typeof defineGuardedPackageUpdater>>;
 
 // electron-updater is loaded on first use, not at module evaluation: it is
 // only reachable from start() (after the main window) or a user update action,
@@ -74,13 +81,57 @@ function defineGuardedAppImageUpdater({ AppImageUpdater }: ElectronUpdaterModule
   };
 }
 
+/**
+ * DEB and RPM installs check and download through electron-updater (which
+ * verifies the feed's SHA-512), but never install through it: its Linux
+ * install builds a shell command line for sudo. Aiden installs the package
+ * itself with installLinuxPackageUpdate, only when the person chooses
+ * Update and restart, never on an ordinary quit.
+ */
+function defineGuardedPackageUpdater({ DebUpdater, RpmUpdater }: ElectronUpdaterModule, kind: LinuxPackageKind) {
+  // Both share LinuxUpdater's download path; only the file extension they pick differs.
+  const Base = (kind === "deb" ? DebUpdater : RpmUpdater) as typeof DebUpdater;
+  return class GuardedPackageUpdater extends Base {
+    readonly packageKind = kind;
+
+    protected override doInstall(): boolean {
+      return false;
+    }
+
+    downloadedPackage(): { installer: string; sha512: string } | null {
+      const installer = this.downloadedUpdateHelper?.file;
+      const sha512 = this.downloadedUpdateHelper?.downloadedFileInfo?.sha512;
+      return installer && sha512 ? { installer, sha512 } : null;
+    }
+  };
+}
+
+let linuxPackageEligibility: LinuxPackageKind | null | undefined;
+/** The DEB or RPM install that may update itself; fixed for the life of the process. */
+export function linuxPackageUpdateKind(): LinuxPackageKind | null {
+  if (process.platform !== "linux") return null;
+  linuxPackageEligibility ??= canUpdateLinuxPackage({
+    resourcesPath: process.resourcesPath,
+    executablePath: process.execPath,
+    appImage: process.env.APPIMAGE,
+    uid: process.getuid?.(),
+  });
+  return linuxPackageEligibility;
+}
+
 let loadedAutoUpdater: AppUpdater | null = null;
 let guardedAppImageUpdater: GuardedAppImageUpdater | null = null;
+let guardedPackageUpdater: GuardedPackageUpdater | null = null;
 function updater(): AppUpdater {
   if (loadedAutoUpdater) return loadedAutoUpdater;
   const updaterModule = electronUpdaterModule();
-  // Never let electron-updater select a DEB/RPM installer from package-type.
-  if (process.platform === "linux") {
+  const packageKind = linuxPackageUpdateKind();
+  if (packageKind) {
+    const GuardedUpdater = defineGuardedPackageUpdater(updaterModule, packageKind);
+    guardedPackageUpdater = new GuardedUpdater();
+    loadedAutoUpdater = guardedPackageUpdater;
+  } else if (process.platform === "linux") {
+    // Never let electron-updater select a DEB/RPM installer from package-type.
     const GuardedUpdater = defineGuardedAppImageUpdater(updaterModule);
     guardedAppImageUpdater = new GuardedUpdater();
     loadedAutoUpdater = guardedAppImageUpdater;
@@ -103,7 +154,13 @@ export function supportsAppUpdates(): boolean {
       executablePath: process.execPath,
       uid: process.getuid?.(),
     }),
+    linuxPackageEligible: linuxPackageUpdateKind() !== null,
   });
+}
+
+/** Installing the downloaded update asks for the person's password first (Linux DEB/RPM). */
+export function appUpdateInstallNeedsPassword(): boolean {
+  return linuxPackageUpdateKind() !== null && process.getuid?.() !== 0 && supportsAppUpdates();
 }
 
 function updaterLogger() {
@@ -171,6 +228,8 @@ export class AppUpdateService {
   };
   private started = false;
   private disposed = false;
+  private packageInstall: Promise<LinuxPackageInstallOutcome> | null = null;
+  private installedPackageVersion: string | null = null;
 
   snapshot(): AppUpdateSnapshot {
     return this.controller.snapshot();
@@ -188,8 +247,49 @@ export class AppUpdateService {
     return supportsAppUpdates() && this.snapshot().status === "ready";
   }
 
+  /**
+   * DEB/RPM: install the downloaded package while Aiden is still open, so a
+   * closed password prompt or a failed install leaves Aiden running. Other
+   * installs have nothing to prepare.
+   */
+  async prepareDownloadedUpdateInstall(): Promise<"ready" | "cancelled" | "failed"> {
+    if (!guardedPackageUpdater) return "ready";
+    const snapshot = this.snapshot();
+    if (!this.canInstallDownloadedUpdate() || snapshot.status !== "ready") return "failed";
+    if (this.installedPackageVersion === snapshot.version) return "ready";
+    const downloaded = guardedPackageUpdater.downloadedPackage();
+    if (!downloaded) return "failed";
+    const packageUpdater = guardedPackageUpdater;
+    this.packageInstall ??= installLinuxPackageUpdate({
+      kind: packageUpdater.packageKind,
+      installer: downloaded.installer,
+      sha512: downloaded.sha512,
+      version: snapshot.version,
+      uid: process.getuid?.(),
+      log: (message) => logger.warn("updater", message),
+    }).finally(() => {
+      this.packageInstall = null;
+    });
+    const outcome = await this.packageInstall;
+    if (outcome === "installed") {
+      this.installedPackageVersion = snapshot.version;
+      logger.info("updater", `Installed the Aiden Agent ${snapshot.version} ${packageUpdater.packageKind} package; restarting.`);
+      return "ready";
+    }
+    if (outcome === "cancelled") logger.info("updater", "The update was not installed: the password prompt was closed.");
+    return outcome;
+  }
+
   installDownloadedUpdateAndRestart(): boolean {
     if (!this.canInstallDownloadedUpdate()) return false;
+    if (guardedPackageUpdater) {
+      // The package manager already replaced the files; start the new version.
+      const snapshot = this.snapshot();
+      if (snapshot.status !== "ready" || this.installedPackageVersion !== snapshot.version) return false;
+      app.relaunch();
+      app.quit();
+      return true;
+    }
     try {
       const autoUpdater = updater();
       autoUpdater.autoRunAppAfterInstall = true;
@@ -212,6 +312,8 @@ export class AppUpdateService {
     this.started = true;
     autoUpdater.logger = updaterLogger();
     configureAppUpdater(autoUpdater);
+    // A package install needs the person's password, so it never runs on an ordinary quit.
+    if (guardedPackageUpdater) autoUpdater.autoInstallOnAppQuit = false;
     autoUpdater.on("download-progress", this.downloadProgressHandler);
     autoUpdater.on("update-downloaded", this.updateDownloadedHandler);
 
@@ -229,7 +331,7 @@ export class AppUpdateService {
           type: "info",
           title: "Updates unavailable in this build",
           message: process.platform === "linux"
-            ? "In-app updates require a mounted, writable Aiden Agent AppImage. Update distro packages with your package manager."
+            ? "In-app updates need the Aiden Agent .deb or .rpm package (with pkexec), or a writable Aiden Agent AppImage. Otherwise, update with your package manager."
             : "Automatic updates are available in signed Aiden Agent distribution builds.",
           buttons: ["OK"],
           defaultId: 0,
@@ -240,6 +342,8 @@ export class AppUpdateService {
     }
     if (!this.started) this.start();
     if (!this.started) return { outcome: "unavailable" };
+    // The newer package is already installed; only a restart is left.
+    if (this.installedPackageVersion) return { outcome: "ready" };
     if (this.checkPromise) {
       // A user's "Check for Updates…" joining a background check still gets
       // the result dialog once that shared check settles.
@@ -296,7 +400,9 @@ export class AppUpdateService {
           snapshot.status === "ready"
             ? `Aiden Agent ${snapshot.version} downloaded successfully.`
             : "The Aiden Agent update downloaded successfully.",
-        detail: "Use Update and restart in Aiden, or quit normally to finish installing.",
+        detail: guardedPackageUpdater
+          ? "Use Update and restart in Aiden. Linux asks for your password to install it."
+          : "Use Update and restart in Aiden, or quit normally to finish installing.",
         buttons: ["OK"],
         defaultId: 0,
         noLink: true,
