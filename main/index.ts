@@ -230,6 +230,13 @@ if (process.platform === "linux") {
   app.commandLine.appendSwitch("enable-features", "GlobalShortcutsPortal");
 }
 
+// A page's <link rel="dns-prefetch"> asks the network service to resolve its
+// host directly, ignoring the session's proxy, so a design page drawn in the
+// offline export session could still leak a host name to the system resolver.
+// This Blink setting is process-wide: it stops only those speculative hints,
+// not the resolution a real request makes, and Aiden's own pages use none.
+app.commandLine.appendSwitch("blink-settings", "dnsPrefetchingEnabled=false");
+
 registerCustomSchemes({ studioAssets: studioAssetsEnabled(), designMode: designModeEnabled() });
 
 // Commands behind a flag that is off claim no shortcut, so they never block a

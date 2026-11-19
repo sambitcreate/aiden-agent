@@ -1,5 +1,7 @@
 // Production wiring for the hidden export and inspect window's session. No
 // logic here: what it allows is decided, and tested, in offline-policy.ts.
+// DNS prefetch hints bypass the session's proxy; main/index.ts turns them off
+// for the whole app with a Blink setting before ready.
 
 import { session, type Session } from "electron";
 import { DESIGN_SCHEME } from "../../../renderer/shared/design-canvas/url.js";
