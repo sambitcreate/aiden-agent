@@ -487,7 +487,7 @@ struct AidenWorkspaceFilesView: View {
 
 /// One workspace file. An `.html`/`.htm` file opens on Preview (a sandboxed,
 /// themed page of the draft, so unsaved edits show) with a Source toggle.
-struct AidenWorkspaceFileEditorView: View {
+private struct AidenWorkspaceFileEditorView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.aidenPalette) private var palette
     @Bindable var coordinator: AidenRemoteCoordinator
@@ -505,18 +505,19 @@ struct AidenWorkspaceFileEditorView: View {
     private var isDirty: Bool { model.document.map { $0.content != model.draft } ?? false }
     private var isHTML: Bool { model.document.map { AidenWorkspaceHTMLPreview.isHTML($0.displayPath) } ?? false }
     private var canPreview: Bool { model.document.map(AidenWorkspaceHTMLPreview.canPreview) ?? false }
-    private var showsPreview: Bool { !isEditing && canPreview && mode == .preview }
+    private var showsPreview: Bool { canPreview && mode == .preview }
 
     var body: some View {
         NavigationStack {
             Group {
-                if isEditing {
+                if showsPreview {
+                    AidenWorkspaceHTMLPreviewPane(html: model.draft)
+                } else if isEditing {
                     TextEditor(text: $model.draft)
                         .disabled(!model.canEditDocument || !model.isConnected(coordinator))
+                        .scrollContentBackground(.hidden)
                         .font(.system(.body, design: .monospaced))
                         .padding(.horizontal, 8)
-                } else if showsPreview {
-                    AidenWorkspaceHTMLPreviewPane(html: model.draft)
                 } else {
                     ScrollView([.vertical, .horizontal]) {
                         LazyVStack(alignment: .leading, spacing: 4) {
@@ -528,11 +529,18 @@ struct AidenWorkspaceFileEditorView: View {
                             }
                         }.padding()
                     }
+                    // Short files start at the top, where the page did.
+                    .defaultScrollAnchor(.topLeading)
                     .font(.system(.body, design: .monospaced))
                     .padding(.horizontal, 8)
                 }
             }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(palette.canvas.ignoresSafeArea())
                 .navigationTitle(model.document?.displayPath ?? "File")
+                // The Preview/Source switch takes the title's place, and a
+                // workspace often has several `index.html` files.
+                .navigationSubtitle(isHTML ? (model.document?.displayPath ?? "") : "")
                 .navigationBarTitleDisplayMode(.inline)
                 .safeAreaInset(edge: .top, spacing: 0) {
                     if isHTML && !canPreview {
@@ -578,7 +586,6 @@ struct AidenWorkspaceFileEditorView: View {
                             .pickerStyle(.segmented)
                             .fixedSize()
                             .disabled(!canPreview)
-                            .accessibilityHint(model.document?.displayPath ?? "")
                         }
                     }
                     ToolbarItem(placement: .confirmationAction) {
@@ -609,18 +616,27 @@ struct AidenWorkspaceFileEditorView: View {
         }
     }
 
-    /// Edit shows Source. Choosing Preview while editing leaves Edit and shows
-    /// the draft as a page; the draft and its unsaved changes stay.
+    /// Edit shows Source. Preview while editing shows the draft as a page and
+    /// keeps editing on, so Save stays one tap away.
     private var modeSelection: Binding<AidenWorkspaceHTMLPreview.Mode> {
         Binding(
-            get: { isEditing || !canPreview ? .source : mode },
-            set: { newMode in
-                if newMode == .preview { isEditing = false }
-                mode = newMode
-            }
+            get: { canPreview ? mode : .source },
+            set: { mode = $0 }
         )
     }
 }
+
+#if DEBUG
+/// The editor for the DEBUG workspace fixture; the editor itself stays private.
+struct AidenWorkspaceFileEditorFixtureHost: View {
+    let coordinator: AidenRemoteCoordinator
+    let model: AidenWorkspaceFilesModel
+
+    var body: some View {
+        AidenWorkspaceFileEditorView(coordinator: coordinator, model: model)
+    }
+}
+#endif
 
 /// A workspace page in the sandboxed preview: scripts on, no network, Aiden's
 /// theme underneath the page's own styles. It has no base URL, so relative
@@ -642,7 +658,7 @@ private struct AidenWorkspaceHTMLPreviewPane: View {
     /// new view.
     private struct LoadKey: Hashable {
         let themeCSS: String
-        let html: String
+        let htmlHash: Int
         let reload: Int
     }
 
@@ -707,7 +723,7 @@ private struct AidenWorkspaceHTMLPreviewPane: View {
                 onLinkOffer: { pendingLink = $0 },
                 onFailure: { failed = true }
             )
-            .id(LoadKey(themeCSS: css, html: html, reload: reloadKey))
+            .id(LoadKey(themeCSS: css, htmlHash: html.hashValue, reload: reloadKey))
         }
     }
 }

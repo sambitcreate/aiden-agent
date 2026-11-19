@@ -109,7 +109,8 @@ struct AidenSVGFixtureView: View {
 /// `-AidenWorkspaceHTMLFixture`: the workspace file editor holding a cached
 /// `.html` document with no paired computer, the way an offline document
 /// opens. `-AidenWorkspaceHTMLFixtureRemoteImage` holds a page that names a
-/// remote image instead, which must not load.
+/// remote image instead, which must not load, and
+/// `-AidenWorkspaceHTMLFixtureTruncated` one cut short by the size cap.
 struct AidenWorkspaceHTMLFixtureView: View {
     let coordinator: AidenRemoteCoordinator
     @State private var model: AidenWorkspaceFilesModel
@@ -118,12 +119,15 @@ struct AidenWorkspaceHTMLFixtureView: View {
     static var isRequested: Bool {
         ProcessInfo.processInfo.arguments.contains("-AidenWorkspaceHTMLFixture")
             || ProcessInfo.processInfo.arguments.contains("-AidenWorkspaceHTMLFixtureRemoteImage")
+            || ProcessInfo.processInfo.arguments.contains("-AidenWorkspaceHTMLFixtureTruncated")
     }
 
     init(coordinator: AidenRemoteCoordinator) {
         self.coordinator = coordinator
         AidenSandboxedHTMLCoordinator.touchlessActivationOverride = false
-        let remoteImage = ProcessInfo.processInfo.arguments.contains("-AidenWorkspaceHTMLFixtureRemoteImage")
+        let arguments = ProcessInfo.processInfo.arguments
+        let remoteImage = arguments.contains("-AidenWorkspaceHTMLFixtureRemoteImage")
+        let truncated = arguments.contains("-AidenWorkspaceHTMLFixtureTruncated")
         let model = AidenWorkspaceFilesModel(
             workspace: AidenWorkspace(
                 id: "fixture", name: "Fixture", permission: .ask, hasFolder: true,
@@ -132,10 +136,10 @@ struct AidenWorkspaceHTMLFixtureView: View {
             ),
             owner: AidenRemoteRequestContext(instanceId: "fixture", deviceId: "phone", generation: 1, scope: .owner)
         )
-        let path = remoteImage ? "site/remote.html" : "site/report.html"
+        let path = remoteImage ? "site/remote.html" : truncated ? "site/big.html" : "site/report.html"
         let page = remoteImage ? Self.remoteImagePage : Self.inlinePage
         model.document = AidenWorkspaceFileDocument(
-            id: path, displayPath: path, content: page, version: "1", truncated: false, warning: nil
+            id: path, displayPath: path, content: page, version: "1", truncated: truncated, warning: nil
         )
         model.draft = page
         model.isOfflineDocument = true
@@ -144,7 +148,7 @@ struct AidenWorkspaceHTMLFixtureView: View {
 
     var body: some View {
         Color.clear.sheet(isPresented: $isShowing) {
-            AidenWorkspaceFileEditorView(coordinator: coordinator, model: model)
+            AidenWorkspaceFileEditorFixtureHost(coordinator: coordinator, model: model)
         }
     }
 

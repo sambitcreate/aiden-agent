@@ -347,6 +347,7 @@ const uiTestSources = [
   "AidenShellUITests.swift",
   "AidenBotUXUITests.swift",
   "AidenSandboxedHTMLUITests.swift",
+  "AidenWorkspaceHTMLUITests.swift",
   "AidenStateMatrix.swift",
 ];
 

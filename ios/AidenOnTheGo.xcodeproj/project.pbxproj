@@ -62,6 +62,7 @@
 		A4B240000000000000000003 /* AidenSearchModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4B240000000000000000013 /* AidenSearchModelTests.swift */; };
 		DE30000000000000000000C1 /* AidenShellUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE30000000000000000000C2 /* AidenShellUITests.swift */; };
 		B5C300000000000000000004 /* AidenSandboxedHTMLUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5C300000000000000000014 /* AidenSandboxedHTMLUITests.swift */; };
+		B5C300000000000000000006 /* AidenWorkspaceHTMLUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5C300000000000000000016 /* AidenWorkspaceHTMLUITests.swift */; };
 		B6B000000000000000000010 /* AidenBotUXUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6B100000000000000000010 /* AidenBotUXUITests.swift */; };
 		DE30000000000000000000C3 /* AidenStateMatrix.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE30000000000000000000C4 /* AidenStateMatrix.swift */; };
 		D85700000000000000000001 /* AidenBotAllowedTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D85700000000000000000002 /* AidenBotAllowedTests.swift */; };
@@ -359,6 +360,7 @@
 		A4B240000000000000000013 /* AidenSearchModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenSearchModelTests.swift; sourceTree = "<group>"; };
 		DE30000000000000000000C2 /* AidenShellUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenShellUITests.swift; sourceTree = "<group>"; };
 		B5C300000000000000000014 /* AidenSandboxedHTMLUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenSandboxedHTMLUITests.swift; sourceTree = "<group>"; };
+		B5C300000000000000000016 /* AidenWorkspaceHTMLUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenWorkspaceHTMLUITests.swift; sourceTree = "<group>"; };
 		B6B100000000000000000010 /* AidenBotUXUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotUXUITests.swift; sourceTree = "<group>"; };
 		DE30000000000000000000C4 /* AidenStateMatrix.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenStateMatrix.swift; sourceTree = "<group>"; };
 		DE30000000000000000000C5 /* AidenOnTheGoUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AidenOnTheGoUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -659,6 +661,7 @@
 			children = (
 				DE30000000000000000000C2 /* AidenShellUITests.swift */,
 				B5C300000000000000000014 /* AidenSandboxedHTMLUITests.swift */,
+				B5C300000000000000000016 /* AidenWorkspaceHTMLUITests.swift */,
 				B6B100000000000000000010 /* AidenBotUXUITests.swift */,
 				DE30000000000000000000C4 /* AidenStateMatrix.swift */,
 			);
@@ -1479,6 +1482,7 @@
 			files = (
 				DE30000000000000000000C1 /* AidenShellUITests.swift in Sources */,
 				B5C300000000000000000004 /* AidenSandboxedHTMLUITests.swift in Sources */,
+				B5C300000000000000000006 /* AidenWorkspaceHTMLUITests.swift in Sources */,
 				B6B000000000000000000010 /* AidenBotUXUITests.swift in Sources */,
 				DE30000000000000000000C3 /* AidenStateMatrix.swift in Sources */,
 			);
