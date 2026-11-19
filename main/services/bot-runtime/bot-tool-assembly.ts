@@ -358,8 +358,8 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
       // Ask and "Do it myself" words join the Bot's own rules; Block words refuse.
       const asks = text.filter((rule) => rule.decision === "ask").map(pageTextBotRule);
       const blocks = text.filter((rule) => rule.decision === "block").map(pageTextBotRule);
-      const blocked = action !== undefined && blocks.length > 0
-        ? blocks.find((rule) => classifyBotAction(action, blocks).customRuleIds.has(rule.id)) : undefined;
+      const blockedIds = action !== undefined && blocks.length > 0 ? classifyBotAction(action, blocks).customRuleIds : undefined;
+      const blocked = blockedIds ? blocks.find((rule) => blockedIds.has(rule.id)) : undefined;
       const resolved = resolveApprovalRule(page, await pageSubjectOf(botId, toolName, call.args, action, facts));
       const decision: ApprovalRuleDecision | undefined = blocked ? "block" : resolved?.decision;
       const label = blocked ? blocked.text ?? "" : resolved ? describeApprovalRuleTarget(resolved.rule.target) : "";
