@@ -85,6 +85,14 @@ export interface SlotSpec {
   long?: readonly string[];
   /** Options that take a value, keyed by every spelling (`"-n --max-count"`). */
   values?: Readonly<Record<string, ValueEntry>>;
+  /**
+   * Options from `values` the program takes a value for only when it is
+   * joined to them (`-U5`, `--unified=5`): written alone, the option takes
+   * no value and the next word is an argument of its own, so `git diff -U
+   * {{n}}` would read the value as a revision or file. Keyed like `values`,
+   * with the joined form to write instead.
+   */
+  joined?: Readonly<Record<string, string>>;
   /** `-5` means a count (`head -5`, `git log -1`). */
   digits?: boolean;
   /** The program reads no options: every word is an operand (`echo`, `printf`, `test`). */
@@ -154,11 +162,14 @@ const PROGRAM_SPECS: Readonly<Record<string, SlotSpec>> = {
       "-m --max-count": N,
       "-A --after-context": N,
       "-B --before-context": N,
-      "-C --context": N,
+      "-C": N,
+      "--context": null,
       "--include": T,
       "--exclude": T,
       "--exclude-dir": T,
     },
+    // BSD grep (macOS) reads `--context 5` as the pattern 5; GNU grep takes 5 as the value.
+    joined: { "--context": "-C {{n}}, or a fixed --context=2" },
     ...searchOperands,
   },
   rg: {
@@ -255,11 +266,13 @@ const LOG_VALUES: Record<string, ValueEntry> = {
   "--pretty": null,
   "--date": null,
 };
+const LOG_JOINED = { "--format": "--format=%h", "--pretty": "--pretty=oneline" };
 const logLike = (name: string): SlotSpec => ({
   name,
   flags: "pcmsuziEFP",
   long: LOG_LONG,
   values: LOG_VALUES,
+  joined: LOG_JOINED,
   digits: true,
   operand: (_index, afterDashes) => (afterDashes ? P : VO),
   operandForms: "revisions, and files in the workspace after --",
@@ -322,7 +335,8 @@ const GIT_SPECS: Readonly<Record<string, SlotSpec>> = {
       "ignore-all-space", "ignore-space-change", "text", "minimal", "histogram", "patience", "color", "word-diff", "merge-base", "find-renames",
       "find-copies",
     ],
-    values: { "-O": READS_ANY_FILE, "--output": WRITES_FILE, "-U --unified": N, "--diff-filter": null },
+    values: { "-O": READS_ANY_FILE, "--output": WRITES_FILE, "-U --unified": null, "--diff-filter": null },
+    joined: { "-U --unified": "a fixed -U5 or --unified=5" },
     ...files("revisions or files in the workspace"),
   },
   branch: {
@@ -363,7 +377,8 @@ const GIT_SPECS: Readonly<Record<string, SlotSpec>> = {
       "quiet", "verbose", "rebase", "no-rebase", "ff", "no-ff", "ff-only", "squash", "no-squash", "commit", "no-commit", "autostash", "no-autostash",
       "stat", "no-stat", "all", "prune", "tags", "no-tags", "force", "dry-run", "unshallow",
     ],
-    values: { ...FETCH_VALUES, "-s --strategy": RUNS_PROGRAM, "-X --strategy-option": RUNS_PROGRAM },
+    values: { ...FETCH_VALUES, "-j --jobs": null, "-s --strategy": RUNS_PROGRAM, "-X --strategy-option": RUNS_PROGRAM },
+    joined: { "-j --jobs": "a fixed -j4 or --jobs=4" },
     ...remoteOperands("pull"),
   },
   push: {
@@ -711,6 +726,8 @@ interface CompiledValue {
   entry: ValueEntry;
   /** Every spelling of the option, so `has("-e")` also sees `--regexp`. */
   names: readonly string[];
+  /** The joined form to write, for an option that takes its value only joined. */
+  joined?: string;
 }
 
 const compiledValues = new WeakMap<SlotSpec, Map<string, CompiledValue>>();
@@ -720,7 +737,8 @@ function valuesOf(spec: SlotSpec): Map<string, CompiledValue> {
     map = new Map();
     for (const [key, entry] of Object.entries(spec.values ?? {})) {
       const names = key.split(" ");
-      for (const name of names) map.set(name, { entry, names });
+      const joined = spec.joined?.[key];
+      for (const name of names) map.set(name, { entry, names, joined });
     }
     compiledValues.set(spec, map);
   }
@@ -748,6 +766,12 @@ function walk(spec: SlotSpec, args: Args, from: number): { positions: Map<number
   const unknown = (option: string) => ({
     problem: `to ${spec.name} with ${option}, an option Aiden does not check there (remove it; the rest of the command still works). ${checkedOptions(spec)}`,
   });
+  // An option that takes its value only joined, written alone before an argument the program would read as its own.
+  const apart = (option: string, joined: string) => ({
+    problem: `to ${spec.name} with ${option} apart from its value: ${spec.name} takes ${option}'s value only joined to it and reads the next word as an argument of its own. Write ${joined}`,
+  });
+  const takesNext = (index: number) => index + 1 < args.length;
+  const loneNext = (index: number) => takesNext(index) && (args[index + 1] === undefined || !args[index + 1]!.startsWith("-"));
   let ended = false;
   let operand = 0;
   for (let index = from; index < args.length; index += 1) {
@@ -771,7 +795,9 @@ function walk(spec: SlotSpec, args: Args, from: number): { positions: Map<number
       const valued = values.get(name);
       if (valued) {
         for (const spelling of valued.names) has.add(spelling);
-        if (equals < 0 && index + 1 < args.length) {
+        if (equals < 0 && valued.joined !== undefined) {
+          if (loneNext(index)) return apart(name, valued.joined);
+        } else if (equals < 0 && takesNext(index)) {
           positions.set(index + 1, { kind: "value", option: name, entry: valued.entry });
           index += 1;
         }
@@ -790,7 +816,9 @@ function walk(spec: SlotSpec, args: Args, from: number): { positions: Map<number
       if (valued) {
         for (const spelling of valued.names) has.add(spelling);
         // Last in the word, it takes the next word; otherwise the rest of this one.
-        if (at === letters.length - 1 && index + 1 < args.length) {
+        if (at === letters.length - 1 && valued.joined !== undefined) {
+          if (loneNext(index)) return apart(name, valued.joined);
+        } else if (at === letters.length - 1 && takesNext(index)) {
           positions.set(index + 1, { kind: "value", option: name, entry: valued.entry });
           index += 1;
         }

@@ -641,6 +641,45 @@ test("page data names a branch git branch -v lists by, and creates one only wher
   assert.equal(branches(), "feat-a\nfeat-b\nmain\n");
 });
 
+test("an option that takes its value only joined is refused apart from it, and runs with the value joined", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aiden-artifact-joined-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const git = (args: string[]) => execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", ...args], { cwd: dir, encoding: "utf8" });
+  fs.writeFileSync(path.join(dir, "notes.md"), "one\ntwo\nthree\nfour\nfive\n");
+  git(["init", "-q", "-b", "main"]);
+  git(["add", "."]);
+  git(["commit", "-q", "-m", "one"]);
+  fs.writeFileSync(path.join(dir, "notes.md"), "one\ntwo\nTHREE\nfour\nfive\n");
+  git(["commit", "-q", "-am", "two"]);
+  const action = (command: string) => {
+    const params = [...new Set([...command.matchAll(/\{\{(\w+)\}\}/gu)].map((match) => match[1]!))].map((name) => ({ name }));
+    return parseWorkspaceArtifactActions([{ name: "a", label: "A", command, params }])[0]!;
+  };
+  // git reads `-U 5` as -U with its default and 5 as a revision or file;
+  // BSD grep reads `--context 2` as the pattern 2 and the pattern as a file.
+  for (const [command, advice] of [
+    ["git diff -U {{n}} HEAD~1", /-U apart from its value.* Write a fixed -U5 or --unified=5/u],
+    ["git diff --unified {{n}} HEAD~1", /--unified apart from its value/u],
+    ["git diff -pU 5 {{rev}}", /-U apart from its value/u],
+    ["git log --pretty {{x}}", /Write --pretty=oneline/u],
+    ["git log --format %h {{rev}}", /Write --format=%h/u],
+    ["git pull -j {{n}} origin", /Write a fixed -j4 or --jobs=4/u],
+    ["grep --context {{n}} {{pattern}} notes.md", /Write -C \{\{n\}\}, or a fixed --context=2/u],
+  ] as const) {
+    assert.throws(() => action(command), advice, command);
+  }
+  const joined = await runResolved(resolveWorkspaceArtifactCommand(action("git diff -U1 {{rev}}"), ["HEAD~1"]), dir);
+  assert.equal(joined.exitCode, 0, joined.stderr);
+  assert.match(joined.stdout, /^ two\n-three\n\+THREE\n four$/mu);
+  assert.doesNotMatch(joined.stdout, /^ one$/mu, "one line of context, not git's default three");
+  const spaced = await runResolved(resolveWorkspaceArtifactCommand(action("git diff -U --stat {{rev}}"), ["HEAD~1"]), dir);
+  assert.equal(spaced.exitCode, 0, spaced.stderr);
+  assert.match(spaced.stdout, /notes\.md \| 2 \+-/u);
+  const context = await runResolved(resolveWorkspaceArtifactCommand(action("grep -C {{n}} {{pattern}} notes.md"), ["1", "THREE"]), dir);
+  assert.equal(context.exitCode, 0, context.stderr);
+  assert.equal(context.stdout, "two\nTHREE\nfour\n");
+});
+
 test("git tag points a tag at the revision a value names, never at a file", async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aiden-artifact-tag-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
