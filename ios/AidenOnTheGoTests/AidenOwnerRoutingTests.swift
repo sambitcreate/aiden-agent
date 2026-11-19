@@ -756,8 +756,10 @@ final class AidenOwnerRoutingTests: XCTestCase {
         await store.perform(.done, on: older)
         await store.perform(.delete, on: older)
 
-        // The store's own polls and reads may still land meanwhile; neither action may.
-        let sent = requests("laptop").dropFirst(before).filter { $0.contains("/chats/c1") }
+        // The store's own polls and transcript reads may still land meanwhile;
+        // neither action's write may.
+        let writes: Set = ["POST /chats/c1/triage", "DELETE /chats/c1"]
+        let sent = requests("laptop").dropFirst(before).filter(writes.contains)
         XCTAssertEqual(sent, [], "An action on an older pairing reached the machine")
         XCTAssertEqual(store.homeModel(for: "laptop")?.chats.map(\.id), ["c1"])
         store.stop()
