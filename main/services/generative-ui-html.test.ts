@@ -796,7 +796,22 @@ test("html admission names the XML a script parses that it cannot read as the br
   assert.throws(() => validateGenerativeUiHtml(declared), /DOCTYPE internal subset, an <!ENTITY> or an <!ATTLIST> declaration\. Remove the DOCTYPE internal subset/u);
   const cdata = literalSink(parsedXml(`<r xmlns="${XHTML_NS}"><![CDATA[ <x> ]]></r>`, "image/svg+xml"));
   assert.throws(() => validateGenerativeUiHtml(cdata), /names the XHTML, SVG or MathML namespace, so it is checked as HTML.*Give those elements text only/u);
-  for (const html of [declared, cdata]) assert.equal(isGenerativeUiDraftAcceptable(html), false);
+  // HTML ends a processing instruction or DOCTYPE at its first >, so what
+  // XML reads as the rest of it HTML reads as markup.
+  const instruction = literalSink(parsedXml(`<r xmlns="${XHTML_NS}"><?x > <!-- ?>${XML_ERROR_IMG}<!-- --></r>`, "text/xml"));
+  const doctype = literalSink(parsedXml(`<!DOCTYPE r SYSTEM "a>b<!--"><r xmlns="${XHTML_NS}"><!-- -->${XML_ERROR_IMG}</r>`, "text/xml"));
+  for (const html of [instruction, doctype]) {
+    assert.throws(() => validateGenerativeUiHtml(html), /processing instruction or DOCTYPE holding < or >.*Remove the < and > from the processing instruction or DOCTYPE/u);
+  }
+  for (const html of [declared, cdata, instruction, doctype]) assert.equal(isGenerativeUiDraftAcceptable(html), false);
+  const declarations = literalSink(
+    parsedXml(
+      `<?xml version="1.0"?><?xml-stylesheet href="a.xsl" type="text/xsl"?><!DOCTYPE note SYSTEM "note.dtd"><r xmlns="${XHTML_NS}"><!-- note --><p>Hi</p></r>`,
+      "text/xml",
+    ),
+  );
+  assert.ok(validateGenerativeUiHtml(declarations).byteLength > 0);
+  assert.equal(isGenerativeUiDraftAcceptable(declarations), true);
 });
 
 // parse5 still drops every tag in a <select> but its options, where

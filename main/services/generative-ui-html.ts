@@ -25,7 +25,7 @@ import {
   MAX_GUEST_PROMPT_CHARS,
 } from "../../renderer/shared/generative-ui-bridge.js";
 import { generativeUiKitCss } from "./generative-ui-kit.js";
-import { HtmlScanner, readExcerpt, SELECT_FOREIGN_END_LIMIT, SELECT_RAW_TEXT_LIMIT, XML_DECLARATIONS_LIMIT, XML_HTML_TEXT_LIMIT, type HtmlFindings } from "./generative-ui-html-scan.js";
+import { HtmlScanner, readExcerpt, SELECT_FOREIGN_END_LIMIT, SELECT_RAW_TEXT_LIMIT, XML_DECLARATIONS_LIMIT, XML_HTML_TEXT_LIMIT, XML_MARKUP_IN_DECLARATION_LIMIT, type HtmlFindings } from "./generative-ui-html-scan.js";
 
 // The admission check (generative-ui-html-scan.ts) reads the HTML the way a
 // browser does and refuses only what would load or run something; the
@@ -45,6 +45,7 @@ function limitAdvice(limit: string): string {
   if (limit === XML_HTML_TEXT_LIMIT) {
     return "Give those elements text only (no child elements, comments or CDATA sections holding < or &), build them with document.createElement, or parse the markup as text/html.";
   }
+  if (limit === XML_MARKUP_IN_DECLARATION_LIMIT) return "Remove the < and > from the processing instruction or DOCTYPE in the XML the script parses.";
   if (limit.endsWith(SELECT_RAW_TEXT_LIMIT)) return `Move the ${limit.slice(0, limit.indexOf(">") + 1)} out of the <select>.`;
   if (limit.endsWith(SELECT_FOREIGN_END_LIMIT)) return "Close each <svg> and <math> in a <select> with its own end tag before ending the element around it.";
   return "Simplify the markup.";

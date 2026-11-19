@@ -712,6 +712,10 @@ export const XML_DECLARATIONS_LIMIT = "a script parses XML with a DOCTYPE intern
 export const XML_HTML_TEXT_LIMIT =
   "a script parses XML that names the XHTML, SVG or MathML namespace, so it is checked as HTML, and HTML would read part of it as text where XML reads markup: a <style>, <script>, <textarea>, <title>, <xmp>, <iframe>, <noembed>, <noframes> or <noscript> that is self-closed or holds markup (or, in <style> and <script>, a character reference), a <plaintext>, or a CDATA section that holds < or &";
 
+/** Refused: namespaced XML a script parses with a processing instruction or DOCTYPE that HTML ends earlier than XML. */
+export const XML_MARKUP_IN_DECLARATION_LIMIT =
+  "a script parses XML that names the XHTML, SVG or MathML namespace with a processing instruction or DOCTYPE holding < or >, which HTML ends at that > where XML reads on";
+
 /** What opens an XML comment, CDATA section, processing instruction or DOCTYPE. */
 const XML_MARKUP_OPENER = /<(?:!--|!\[CDATA\[|\?|!DOCTYPE)/gu;
 
@@ -742,11 +746,13 @@ function xmlDoctypeEnd(markup: string, from: number): number {
  * no `--`, so a body XML would reject, and `<!-->` or `<!--->`, which HTML
  * ends at once, stay as text to be checked, as does every later comment. A
  * processing instruction or DOCTYPE is kept whole, so a `<!--` in one does not
- * start a comment. XML has no `<` in an attribute value, so the next `<`
- * after a start tag begins its content's first markup. Each step searches
+ * start a comment, and one that holds a `<` or `>` before its XML end is
+ * refused, since HTML ends it at that `>` and reads what follows as markup
+ * XML reads as part of it. XML has no `<` in an attribute value, so the next
+ * `<` after a start tag begins its content's first markup. Each step searches
  * forward from the last, so this is linear.
  */
-function xmlAsHtml(markup: string): string | undefined {
+function xmlAsHtml(markup: string): { text: string } | { limit: string } {
   let text = "";
   let at = 0;
   let comments = true;
@@ -755,9 +761,9 @@ function xmlAsHtml(markup: string): string | undefined {
     const start = match.index;
     if (match[0] === "<![CDATA[") {
       const end = markup.indexOf("]]>", start + 9);
-      if (end === -1) return undefined;
+      if (end === -1) return { limit: XML_HTML_TEXT_LIMIT };
       const content = markup.slice(start + 9, end);
-      if (/[<&]/u.test(content)) return undefined;
+      if (/[<&]/u.test(content)) return { limit: XML_HTML_TEXT_LIMIT };
       text += markup.slice(at, start) + content;
       at = end + 3;
       opener.lastIndex = at;
@@ -773,25 +779,31 @@ function xmlAsHtml(markup: string): string | undefined {
       at = end + 3;
       opener.lastIndex = at;
     } else {
-      const end = match[0] === "<?" ? markup.indexOf("?>", start + 2) : xmlDoctypeEnd(markup, start + 9);
-      if (end === -1) comments = false;
-      opener.lastIndex = end === -1 ? start + match[0].length : end + 1;
+      const from = start + match[0].length;
+      const end = match[0] === "<?" ? markup.indexOf("?>", from) : xmlDoctypeEnd(markup, from);
+      if (end === -1) {
+        comments = false;
+        opener.lastIndex = from;
+        continue;
+      }
+      if (/[<>]/u.test(markup.slice(from, end))) return { limit: XML_MARKUP_IN_DECLARATION_LIMIT };
+      opener.lastIndex = end + 1;
     }
   }
   text += markup.slice(at);
   for (const match of text.matchAll(XML_HTML_TEXT_ELEMENTS)) {
     const name = match[1]!.toLowerCase();
-    if (name === "plaintext") return undefined;
+    if (name === "plaintext") return { limit: XML_HTML_TEXT_LIMIT };
     const close = text.indexOf(">", match.index);
     const next = text.indexOf("<", match.index + 1);
-    if (close === -1 || (next !== -1 && next < close) || text[close - 1] === "/") return undefined;
+    if (close === -1 || (next !== -1 && next < close) || text[close - 1] === "/") return { limit: XML_HTML_TEXT_LIMIT };
     const end = text.indexOf("<", close);
-    if (end === -1) return undefined;
+    if (end === -1) return { limit: XML_HTML_TEXT_LIMIT };
     const endTag = /^<\/(?:[^\s/>:<]+:)?([^\s/>:<]+)[\s>]/u.exec(text.slice(end, end + 256));
-    if (endTag?.[1]!.toLowerCase() !== name) return undefined;
-    if ((name === "style" || name === "script") && text.slice(close, end).includes("&")) return undefined;
+    if (endTag?.[1]!.toLowerCase() !== name) return { limit: XML_HTML_TEXT_LIMIT };
+    if ((name === "style" || name === "script") && text.slice(close, end).includes("&")) return { limit: XML_HTML_TEXT_LIMIT };
   }
-  return text;
+  return { text };
 }
 /** An attribute node's properties that set its value. */
 const ATTRIBUTE_NODE_VALUES: ReadonlySet<string> = new Set(["value", "nodeValue", "textContent"]);
@@ -1310,11 +1322,11 @@ function scanJsTokens(
     }
     if (!XML_MARKUP_NAMESPACE.test(markup)) return;
     const html = xmlAsHtml(markup);
-    if (html === undefined) {
-      report({ limit: XML_HTML_TEXT_LIMIT });
+    if ("limit" in html) {
+      report({ limit: html.limit });
       return;
     }
-    checkMarkup(html.replace(XML_ELEMENT_PREFIX, "<$1"));
+    checkMarkup(html.text.replace(XML_ELEMENT_PREFIX, "<$1"));
     // Read apart from their elements, so a prefixed attribute and an
     // unprefixed one with the same local name do not hide each other.
     let links = "";
