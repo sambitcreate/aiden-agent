@@ -235,6 +235,8 @@ if (process.platform === "linux") {
 // offline export session could still leak a host name to the system resolver.
 // This Blink setting is process-wide: it stops only those speculative hints,
 // not the resolution a real request makes, and Aiden's own pages use none.
+// Being process-wide, it also turns off DNS prefetch and preconnect hints for
+// sites in the in-app browser, an accepted small cost in page-load speed.
 app.commandLine.appendSwitch("blink-settings", "dnsPrefetchingEnabled=false");
 
 registerCustomSchemes({ studioAssets: studioAssetsEnabled(), designMode: designModeEnabled() });
