@@ -313,7 +313,7 @@ fun AidenBotProfileScreen(
                 if (pick != photoPicks.get() || !avatarModel.hasCandidate) return@withLock
                 val target = bot ?: currentBot
                 var updated: AidenBotDetail? = null
-                avatarModel.uploadAvatar(target.id, aidenBotAvatarExpectedRevision(target)) { updated = it }
+                avatarModel.uploadAvatar(target.id, avatarModel.expectedAvatarRevision(target)) { updated = it }
                 updated?.let { accept(it, confirmed = true) }
             }
         }
@@ -485,7 +485,7 @@ fun AidenBotProfileScreen(
                                 onClick = {
                                     showPhotoMenu = false
                                     scope.launch {
-                                        avatarModel.deleteAvatar(current.id, aidenBotAvatarExpectedRevision(current)) { updated ->
+                                        avatarModel.deleteAvatar(current.id, avatarModel.expectedAvatarRevision(current)) { updated ->
                                             scope.launch { accept(updated, confirmed = true) }
                                         }
                                     }

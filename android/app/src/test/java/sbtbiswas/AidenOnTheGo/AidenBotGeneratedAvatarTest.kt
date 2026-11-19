@@ -251,4 +251,74 @@ class AidenBotGeneratedAvatarTest {
             directory.deleteRecursively()
         }
     }
+
+    @Test
+    fun aPhotoTheMacTookStaysTheBaseForTheNextChangeWhenTheBotCannotBeReRead() {
+        val directory = kotlin.io.path.createTempDirectory("avatar-commit-").toFile()
+        val server = MockWebServer()
+        val uploads = java.util.concurrent.LinkedBlockingQueue<RecordedRequest>()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                val path = request.requestUrl!!.encodedPath
+                return when {
+                    request.method == "PUT" && path.endsWith("/bots/bot-1/avatar") -> {
+                        uploads.add(request)
+                        val next = "avatar_rev_${uploads.size}"
+                        MockResponse().setResponseCode(200).setBody(
+                            """{"assetRevision":"$next","mimeType":"image/png","width":512,"height":512,"byteSize":3}""")
+                    }
+                    request.method == "GET" && path.endsWith("/bots/bot-1") -> MockResponse().setResponseCode(503).setBody(
+                        """{"error":{"code":"internal_error","message":"Busy","requestId":"r","retryable":true}}""")
+                    else -> MockResponse().setResponseCode(404)
+                }
+            }
+        }
+        server.start()
+        try {
+            val installations = AidenInstallationStore(directory, InMemoryAidenSecureStore())
+            installations.addInstallation(AidenPairingExchange(instanceId = "instance-avatar", deviceId = "device-avatar",
+                endpoint = server.url("/api/aiden/v1").toString(), serverSpkiSha256 = "sha256/test", credential = "synthetic",
+                capabilities = listOf(AidenRemoteCapability.CHAT_READ)), null)
+            val coordinator = AidenRemoteCoordinator(
+                installationStore = installations,
+                storageDir = directory,
+                chatCache = AidenChatCache(directory),
+                scope = CoroutineScope(Dispatchers.Unconfined + Job().apply { cancel() })
+            )
+            coordinator.refreshClient()
+            val model = AidenBotGeneratedAvatarModel(coordinator, normalize = { it })
+            // The page still holds the Bot from before either photo: no asset, Bot revision rev-1.
+            val pageBot = sbtbiswas.AidenOnTheGo.models.AidenBotDetail(
+                id = "bot-1", name = "Helper", purpose = "Assists", instructions = "Be concise.",
+                avatar = sbtbiswas.AidenOnTheGo.models.AidenBotAvatarView(
+                    semantic = sbtbiswas.AidenOnTheGo.models.AidenBotSemanticAvatar.Recipe(
+                        sbtbiswas.AidenOnTheGo.models.AidenBotAvatarRecipe(
+                            shape = sbtbiswas.AidenOnTheGo.models.AidenBotAvatarShape.ORB,
+                            color = sbtbiswas.AidenOnTheGo.models.AidenBotAvatarColor.LILAC))),
+                health = sbtbiswas.AidenOnTheGo.models.AidenBotHealth.READY,
+                createdAt = java.time.Instant.EPOCH, updatedAt = java.time.Instant.EPOCH,
+                revision = "rev-1",
+                access = sbtbiswas.AidenOnTheGo.models.AidenBotAccessView(
+                    botId = "bot-1", accessMode = sbtbiswas.AidenOnTheGo.models.AidenBotAccessMode.FULL,
+                    revision = "pol-1", policyEpoch = "epoch-1", summary = "Full access"))
+            runBlocking {
+                assertTrue(model.setCandidate(byteArrayOf(1)))
+                model.uploadAvatar("bot-1", model.expectedAvatarRevision(pageBot)) { fail("the Bot could not be re-read") }
+                assertEquals("the Mac took the photo, so the page does not report a failed upload",
+                    AidenBotGeneratedAvatarPhase.IDLE, model.phase.value)
+                assertNull(model.errorMessage.value)
+
+                assertTrue(model.setCandidate(byteArrayOf(2)))
+                model.uploadAvatar("bot-1", model.expectedAvatarRevision(pageBot)) { fail("the Bot could not be re-read") }
+            }
+            val first = uploads.poll(5, java.util.concurrent.TimeUnit.SECONDS)!!
+            val second = uploads.poll(5, java.util.concurrent.TimeUnit.SECONDS)!!
+            assertEquals("rev-1", first.getHeader("If-Match"))
+            assertEquals("the next photo matches the revision the first one committed",
+                "avatar_rev_1", second.getHeader("If-Match"))
+        } finally {
+            server.shutdown()
+            directory.deleteRecursively()
+        }
+    }
 }

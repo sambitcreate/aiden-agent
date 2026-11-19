@@ -167,6 +167,21 @@ class AidenBotGeneratedAvatarModel(
 
     @Volatile private var selection = 0L
 
+    private data class CommittedAvatar(val botId: String, val replaced: String, val assetRevision: String)
+
+    /** The last photo the Mac took, kept until a refreshed Bot that carries it is seen. */
+    @Volatile private var committed: CommittedAvatar? = null
+
+    /**
+     * The If-Match for the next avatar change. A photo the Mac took whose Bot could not be re-read
+     * still moved the avatar revision on, so a page holding the older Bot sends the committed one.
+     */
+    fun expectedAvatarRevision(bot: AidenBotDetail): String {
+        val known = aidenBotAvatarExpectedRevision(bot)
+        val last = committed ?: return known
+        return if (last.botId == bot.id && last.replaced == known) last.assetRevision else known
+    }
+
     /**
      * Decodes and re-encodes off the main thread; a large source can take hundreds of milliseconds.
      * Call it from one thread (the main thread). A later call supersedes an earlier one that is
@@ -220,15 +235,25 @@ class AidenBotGeneratedAvatarModel(
                 val base64Data = Base64.getEncoder().encodeToString(data)
                 val upload = AidenBotAvatarUpload(data = base64Data)
                 val asset = client.putBotAvatar(botId, revision, upload)
+                committed = CommittedAvatar(botId, revision, asset.assetRevision)
                 botCache?.putAvatar(botId, asset.assetRevision, data)
-                val updatedBot = client.bot(botId)
                 // A pick made during the upload owns the phase and the candidate now.
                 if (mine == selection) {
                     _phase.value = AidenBotGeneratedAvatarPhase.IDLE
                     currentCandidateData = null
                 }
-                // The Mac did take this photo, so the page still adopts the Bot it returned.
-                onSuccess(updatedBot)
+                // The Mac took this photo even if re-reading the Bot fails; the next change then
+                // matches against the committed revision through expectedAvatarRevision.
+                val updatedBot = try {
+                    client.bot(botId)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    null
+                }
+                if (updatedBot != null) {
+                    onSuccess(updatedBot)
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
