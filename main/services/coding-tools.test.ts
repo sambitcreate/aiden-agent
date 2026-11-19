@@ -361,6 +361,41 @@ test("a generated image is written as bytes inside the workspace and never throu
   }
 });
 
+test("a generated image never replaces a file through a link inside the workspace, or lands in a hidden folder through a linked one", async () => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-binary-links-")));
+  try {
+    await fs.mkdir(path.join(root, "src"));
+    await fs.mkdir(path.join(root, ".git", "info"), { recursive: true });
+    await fs.mkdir(path.join(root, "design"));
+    await fs.writeFile(path.join(root, "src", "app.ts"), "export const app = 1;\n");
+    await fs.writeFile(path.join(root, ".git", "info", "exclude"), "# local ignores\n");
+    await fs.symlink(path.join(root, "src", "app.ts"), path.join(root, "design", "hero.png"));
+    await fs.symlink(path.join(root, ".git"), path.join(root, "design", "repo"));
+    await fs.symlink(path.join(root, ".git", "info"), path.join(root, "art"));
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+
+    // The named file is a link to source: refused, whether or not it may replace.
+    await assert.rejects(writeWorkspaceBinaryFile(root, "design/hero.png", bytes), /is a link/u);
+    await assert.rejects(writeWorkspaceBinaryFile(root, "design/hero.png", bytes, { replace: false }), /is a link/u);
+    assert.equal(await fs.readFile(path.join(root, "src", "app.ts"), "utf8"), "export const app = 1;\n");
+    assert.ok((await fs.lstat(path.join(root, "design", "hero.png"))).isSymbolicLink(), "the link itself is left alone");
+
+    // A linked folder that leads into .git: neither a new file nor a replacement lands there.
+    await assert.rejects(writeWorkspaceBinaryFile(root, "design/repo/hero.png", bytes), /hidden folder/u);
+    await assert.rejects(writeWorkspaceBinaryFile(root, "design/repo/info/exclude", bytes), /hidden folder/u);
+    await assert.rejects(writeWorkspaceBinaryFile(root, "art/hero.png", bytes), /hidden folder/u);
+    assert.equal(await fs.readFile(path.join(root, ".git", "info", "exclude"), "utf8"), "# local ignores\n");
+    assert.deepEqual((await fs.readdir(path.join(root, ".git"))).sort(), ["info"]);
+    assert.deepEqual(await fs.readdir(path.join(root, ".git", "info")), ["exclude"]);
+
+    // A real file next to them is still written.
+    assert.equal(await writeWorkspaceBinaryFile(root, "design/hero-2.png", bytes, { replace: false }), "design/hero-2.png");
+    assert.deepEqual(await fs.readFile(path.join(root, "design", "hero-2.png")), bytes);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("a workspace opened inside .claude cannot write its settings file", async () => {
   const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-protected-root-")));
   const root = path.join(parent, ".claude");

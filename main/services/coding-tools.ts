@@ -947,8 +947,12 @@ async function readReplacedFile(
  * write_file's protections: the path stays inside the folder, symlinks out of
  * it and dangling links are refused, Aiden's protected config paths are never
  * written, and an existing file is replaced only if it is an exclusively
- * linked regular file nobody changed meanwhile, and never with `replace: false`. Returns the path relative to
- * the folder, with forward slashes.
+ * linked regular file nobody changed meanwhile, and never with `replace: false`.
+ * Stricter than write_file, since the approval names a picture's path: the
+ * named file must not itself be a link (one to src/app.ts would turn source
+ * into image bytes), and the folder it really lands in, after following any
+ * linked folder, must not be or sit inside a hidden folder such as `.git`.
+ * Returns the path relative to the folder, with forward slashes.
  */
 export async function writeWorkspaceBinaryFile(
   root: string,
@@ -960,6 +964,11 @@ export async function writeWorkspaceBinaryFile(
   const workspace = pinWorkspaceRoot(root);
   const full = await resolveWritableInRoot(workspace, suppliedPath, signal);
   assertAgentMayWriteConfigPath(suppliedPath, full);
+  // The named file itself is never followed. The native writer gets the real
+  // path and refuses a link that appears there later.
+  if (await isSymbolicLink(resolveInRoot(workspace.lexical, suppliedPath))) {
+    throw new Error(`${suppliedPath} is a link, and a generated image is only written to a real file, never through a link.`);
+  }
   const existing = await readReplacedFile(full, suppliedPath, signal);
   // A create-only write never replaces a file; the native writer's "new" mode
   // also refuses one that appears after this check.
@@ -969,6 +978,10 @@ export async function writeWorkspaceBinaryFile(
   throwIfAborted(signal, "File write cancelled.");
   const realRoot = await verifyWorkspaceRoot(workspace, signal);
   const relativePath = path.relative(realRoot, full).split(path.sep).join("/");
+  // A linked folder can lead into .git or .ssh even when the named path has no hidden folder.
+  if (relativePath.split("/").slice(0, -1).some((segment) => segment.startsWith("."))) {
+    throw new Error(`${suppliedPath} leads into a hidden folder (one whose name starts with a dot), where a generated image is never written.`);
+  }
   await commitPinnedWrite({
     ...(options.fileMutatorBinary ? { binary: options.fileMutatorBinary } : {}),
     root: realRoot,
@@ -978,6 +991,15 @@ export async function writeWorkspaceBinaryFile(
     updated: bytes,
   });
   return relativePath;
+}
+
+async function isSymbolicLink(fullPath: string): Promise<boolean> {
+  try {
+    return (await fs.lstat(fullPath)).isSymbolicLink();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 function makeWriteFile(workspace: WorkspaceRootGuard, binary?: string): AgentTool {
