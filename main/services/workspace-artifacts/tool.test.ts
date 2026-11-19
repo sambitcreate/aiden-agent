@@ -395,6 +395,14 @@ test("a revision with commands cannot be restored where the workspace has no fol
   const run = (id: string, args: Record<string, unknown>) => noAccess.execute(id, args as never, undefined);
   await assert.rejects(run("c3", { operation: "restore", id: "art1", revision: 1 }), /no folder access/u);
   assert.equal((await store.get("ws1", "art1"))!.artifact.revision, 2);
+  // Under Ask without a folder, the doomed restore shows no card: the person is not asked to allow
+  // commands that could never run, and the call fails with the reason instead.
+  const noFolder = { ...options, permission: "ask" as const, hasFolder: false };
+  assert.equal((await workspaceArtifactCallApproval({ operation: "restore", id: "art1", revision: 1 }, noFolder)).required, false);
+  await assert.rejects(
+    createWorkspaceArtifactTool(noFolder).execute("c3b", { operation: "restore", id: "art1", revision: 1 } as never, undefined),
+    /no folder access/u,
+  );
   await assert.rejects(run("c4", { operation: "restore", id: "art1", revision: 9 }), /no longer kept/u);
   await assert.rejects(run("c5", { operation: "restore", id: "art1" }), /revision is required/u);
 });

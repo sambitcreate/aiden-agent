@@ -614,6 +614,12 @@ export async function workspaceArtifactCallApproval(
     const view = await options.store.get(options.workspaceId, input.id);
     const entry = view ? await options.store.revision(options.workspaceId, input.id, revision) : undefined;
     if (!view || !entry) return { required: false };
+    try {
+      assertSourcesRunnable(entry, options);
+    } catch {
+      // A restore that would fail anyway shows no card: the call fails with the reason before anyone is asked.
+      return { required: false };
+    }
     return commandsCard(
       `Restore revision ${revision} of the artifact "${view.artifact.visual.title}"`,
       entry.sources,
