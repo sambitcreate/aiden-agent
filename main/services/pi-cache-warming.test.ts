@@ -33,7 +33,7 @@ function usageMessage() {
   return { ...fauxAssistantMessage("ordinary response"), usage: { input: 100_000, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 100_010, cost: { input: 1, output: 0.0003, cacheRead: 0, cacheWrite: 0, total: 1.0003 } } };
 }
 type WarmOutcome = "stop" | "length" | "error" | "aborted";
-function fixture(t: test.TestContext, settings: { documentId?: string } = {}) {
+function fixture(t: test.TestContext, settings: { documentId?: string; withinSpendingLimit?: () => Promise<boolean> } = {}) {
   const clock = new Clock();
   const signal = new AbortController();
   const requests: Array<SimpleStreamOptions | undefined> = [];
@@ -70,7 +70,7 @@ function fixture(t: test.TestContext, settings: { documentId?: string } = {}) {
       return stream;
     } },
   });
-  const warmer = new PiCacheWarmer({ clock, signal: signal.signal, enabled: async () => enabled, isCurrent: () => current, resolveRuntime: async () => { resolutions++; await resolutionBarrier; return runtime(); }, recordUsage: async (message, freshRuntime) => { recorded.push(message); await usageStore.record(assistantUsageRecord({ message, provider: freshRuntime.provider, model: freshRuntime.model, source: "cache-warm" })); }, onCacheRefreshed: (at) => refreshedAt.push(at), ...(settings.documentId ? { documentId: settings.documentId } : {}) });
+  const warmer = new PiCacheWarmer({ clock, signal: signal.signal, enabled: async () => enabled, isCurrent: () => current, resolveRuntime: async () => { resolutions++; await resolutionBarrier; return runtime(); }, recordUsage: async (message, freshRuntime) => { recorded.push(message); await usageStore.record(assistantUsageRecord({ message, provider: freshRuntime.provider, model: freshRuntime.model, source: "cache-warm" })); }, onCacheRefreshed: (at) => refreshedAt.push(at), ...(settings.documentId ? { documentId: settings.documentId } : {}), ...(settings.withinSpendingLimit ? { withinSpendingLimit: settings.withinSpendingLimit } : {}) });
   t.after(() => warmer.dispose());
   const start = (options: SimpleStreamOptions = {}, selected = model) => {
     const context = normalizeContext({ messages: [{ role: "user", content: "in-memory prompt", timestamp: 1 }] });
@@ -516,6 +516,40 @@ test("idle warming stops when the window leaves the chat or the chat changed, be
   stopAllPiCacheWarmers();
   await off.clock.advance(270_000);
   assert.equal(off.requests.length, 0, "turning warming off ends idle warmers too");
+});
+
+test("no refresh is sent once the chat's spending limit refuses, while streaming or idle", async (t) => {
+  for (const phase of ["streaming", "idle"] as const) {
+    // A meter that refuses once the counted warms reach the limit, as the
+    // chat's own spending gate does after its usage settles.
+    let spent = 0;
+    const limit = 0.25;
+    const h = fixture(t, { withinSpendingLimit: async () => spent < limit });
+    const recordedBefore = () => h.recorded.length;
+    h.start();
+    if (phase === "idle") assert.equal(h.warmer.settle({ isCurrent: () => true }), true);
+    spent = 0.2; // the reply itself
+    await h.clock.advance(270_000);
+    assert.equal(h.requests.length, 1, `${phase}: within the limit the first refresh is sent`);
+    spent += 0.1; // that refresh's charge takes the chat past its limit
+    for (let i = 0; i < 6; i++) await h.clock.advance(270_000);
+    assert.equal(h.requests.length, 1, `${phase}: nothing is sent after the limit refuses`);
+    assert.equal(h.resolutions(), 1, `${phase}: credentials are not read for a refused refresh`);
+    assert.equal(recordedBefore(), 1);
+    assert.equal(h.warmer.isDisposed, true, `${phase}: the warmer ends for good`);
+    assert.equal(h.clock.timers.size, 0);
+    // A new request on a refused warmer never arms another refresh.
+    spent = 0;
+    h.start();
+    await h.clock.advance(270_000);
+    assert.equal(h.requests.length, 1, `${phase}: a refused warmer stays ended`);
+  }
+  // A gate that fails to answer refuses too.
+  const failing = fixture(t, { withinSpendingLimit: async () => { throw new Error("store unavailable"); } });
+  failing.start();
+  await failing.clock.advance(270_000);
+  assert.equal(failing.requests.length, 0);
+  assert.equal(failing.resolutions(), 0);
 });
 
 test("settling keeps nothing when the reply left no economical prefix or the cache outlives the idle horizon", async (t) => {

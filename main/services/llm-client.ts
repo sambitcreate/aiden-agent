@@ -4401,6 +4401,9 @@ export const llmClient = {
             spendingMeter.count(message);
             await usageStore.record(assistantUsageRecord({ message, provider: freshRuntime.provider, model: freshRuntime.model, source: "cache-warm" }));
           },
+          // The same gate as compaction precompute: a reply that took the
+          // chat or Bot past its limit leaves nothing more to send.
+          withinSpendingLimit: () => precomputeWithinSpendingLimit(spending, spendingOwner, () => spendingMeter.settled()),
           // A warming read restarts the provider's cache lifetime without a
           // new projection, so the countdown is re-sent from that request.
           onCacheRefreshed: (requestStartedAt) => {

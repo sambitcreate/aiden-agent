@@ -197,6 +197,12 @@ export interface PiCacheWarmerDependencies {
   /** Resolve credentials only when dispatching, never retain them in a timer. */
   resolveRuntime(signal: AbortSignal): Promise<ResolvedModelRuntime>;
   recordUsage(message: AssistantMessage, runtime: ResolvedModelRuntime): Promise<void>;
+  /**
+   * The chat or Bot is still within its spending limit, after the usage
+   * already counted has settled; checked before every refresh. Once it
+   * refuses, the warmer ends for good.
+   */
+  withinSpendingLimit?(): Promise<boolean>;
   /** A refresh read or wrote the cache, restarting its lifetime from dispatch. */
   onCacheRefreshed?(requestStartedAt: number): void;
   clock?: CacheWarmingClock;
@@ -377,6 +383,10 @@ export class PiCacheWarmer {
       // A settled chat that changed since (a new message, a model switch, a
       // compaction) no longer sends this prefix.
       if (run.idle?.stillCurrent && !(await run.idle.stillCurrent())) { this.stopIdle(run); return; }
+      if (!this.current(run)) { this.stopIdle(run); return; }
+      // A refresh is spending like any other request: past the chat's or
+      // Bot's limit none is sent, and none follows once the limit refuses.
+      if (this.deps.withinSpendingLimit && !(await this.deps.withinSpendingLimit())) { this.dispose(); return; }
       if (!this.current(run)) { this.stopIdle(run); return; }
       const runtime = await this.deps.resolveRuntime(run.controller.signal);
       if (!this.current(run) || !(await this.deps.enabled()) || !this.current(run) || modelIdentity(runtime.model) !== run.identity) { this.stopIdle(run); return; }
