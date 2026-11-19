@@ -356,6 +356,8 @@ const ADMITTED_MARKUP: Record<string, string> = {
   "a division inside an if body": '<script>if (x) { y = (a + b) / "2"; }</script>',
   "a regex after a block": '<script>if (ok) { draw(); } /^#/.test(location.hash) && open(); var w = n++ / 2;</script>',
   "a division after a template literal": "<script>var h = `${rows}` / 2; label.textContent = h + ' rows';</script>",
+  "a class with private fields that divides them and checks a brand with in":
+    "<script>class Meter { #count = 3; #max = 8; #brand = true; static is(o) { return #brand in o; } ratio() { return this.#count / this.#max; } }\nconst m = new Meter(); bar.style.width = m.ratio() * 100 + '%'; label.textContent = Meter.is(m) ? `${m.ratio()} / 1` : '';</script>",
   // A hashbang line is a comment, so what it names never runs.
   "a script whose hashbang line names a javascript: URL": "<script>#!/usr/bin/env node location='javascript:void 0'\nlabel.textContent = 'ready';</script>",
   // Read as a regex, `/ 2; … rows /` would be followed by a name (`$`): a syntax
