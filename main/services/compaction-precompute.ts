@@ -29,6 +29,11 @@ export interface CompactionPrecomputeSnapshot {
   readonly modelKey: string;
   /** Hash of the memory fact lines the chat could be told. */
   readonly memoryKey: string;
+  /**
+   * Tokens the request sends besides its messages (system prompt and tools),
+   * as the provider counted them for the prefix the summary continues.
+   */
+  readonly overheadTokens: number;
 }
 
 export interface CompactionPrecomputes {

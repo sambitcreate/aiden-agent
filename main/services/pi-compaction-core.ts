@@ -4,7 +4,7 @@ import { compileVccInWorker } from "./pi-vcc/worker-client.js";
 import { VccError } from "./pi-vcc/errors.js";
 import { writeDiagnosticEvent } from "./diagnostic-journal.js";
 import { type AgentMessage, type ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { DEFAULT_COMPACTION_SETTINGS, CompactionError, calculateContextTokens, compact, createBranchSummaryMessage, estimateContextTokens, estimateTokens, prepareCompaction, shouldCompact, uuidv7, TODO_CONTEXT, withAbortSignal, type CompactionSettings, type CompactionPreparation, type CompactResult } from "./pi-legacy-harness.js";
+import { DEFAULT_COMPACTION_SETTINGS, CompactionError, calculateContextTokens, compact, createBranchSummaryMessage, createCompactionSummaryMessage, estimateContextTokens, estimateTokens, prepareCompaction, shouldCompact, uuidv7, TODO_CONTEXT, withAbortSignal, type CompactionSettings, type CompactionPreparation, type CompactResult } from "./pi-legacy-harness.js";
 import {
   isContextOverflow,
   isRetryableAssistantError,
@@ -637,6 +637,7 @@ export class PiCompactionCoordinator {
       contextLength: messages.length,
       modelKey: prefix.modelKey,
       memoryKey,
+      overheadTokens: this.requestOverheadTokens(prefix),
     };
     precompute.registry.start(precompute.chatKey, snapshot, (signal) => this.cachedSummary(prefix, preparation, signal));
   }
@@ -663,11 +664,29 @@ export class PiCompactionCoordinator {
   }
 
   /**
+   * The prefix request's tokens besides its messages (system prompt and
+   * tools): the provider's count less Pi's estimate of the messages, which
+   * also absorbs that estimate's shortfall. Never below zero.
+   */
+  private requestOverheadTokens(prefix: SideCallPrefix): number {
+    const messages = [...prefix.context.messages, prefix.response];
+    const counted = prefix.response.usage ? calculateContextTokens(prefix.response.usage) : 0;
+    const estimated = estimatedMessageTokens(messages) + retainedTailSystemTokens(messages, {
+      retainsSystemUpdates: modelRetainsSystemUpdates(this.options.model),
+    });
+    return Math.max(0, counted - estimated);
+  }
+
+  /**
    * When compaction is due, takes the chat's finished background summary if
    * the chat has only been appended to since it started. Its summary replaces
-   * the messages it covered, and everything after them joins its kept tail,
-   * which must still fit the keep budget. Anything else, including one still
-   * being written, is dropped without a word: the caller compacts as usual.
+   * the messages it covered, and everything after them joins its kept tail.
+   * It is used only when that tail stays within twice the keep budget (at
+   * most one keep budget of growth) and the compacted request, its summary,
+   * tail and fixed overhead, lands below the share that starts a background
+   * summary, so the chat does not compact again straight away. Anything
+   * else, including one still being written, is dropped without a word: the
+   * caller compacts as usual.
    */
   private async takePrecomputed(
     branch: readonly PiSessionEntry[],
@@ -687,10 +706,16 @@ export class PiCompactionCoordinator {
       ...taken.result.retainedTail,
       ...branch.slice(taken.snapshot.branchIds.length).flatMap(compactionMessageOf),
     ];
-    // The kept tail may grow by what the chat added between the summary's
-    // start and the trigger, and no more.
     const { trigger, start } = this.precomputeThresholds();
-    if (estimatedMessageTokens(retainedTail) > this.settings.keepRecentTokens + (trigger - start)) return undefined;
+    const keep = this.settings.keepRecentTokens;
+    const tailTokens = estimatedMessageTokens(retainedTail) + retainedTailSystemTokens(retainedTail, {
+      retainsSystemUpdates: modelRetainsSystemUpdates(this.options.model),
+    });
+    if (tailTokens > keep + Math.min(keep, Math.max(0, trigger - start))) return undefined;
+    const summaryTokens = estimateTokens(
+      createCompactionSummaryMessage(taken.result.summary, preparation.tokensBefore, Date.now()),
+    );
+    if (taken.snapshot.overheadTokens + summaryTokens + tailTokens >= start) return undefined;
     return { ...taken.result, retainedTail, tokensBefore: preparation.tokensBefore };
   }
 

@@ -353,9 +353,15 @@ function tailTexts(messages: readonly unknown[]): string[] {
 }
 
 describe("a summary written in the background", () => {
-  // The faux chat's context after each turn here is about 63, 77 and 87
-  // tokens. These triggers put the first turn past the share that starts a
-  // summary and say which later turn makes compaction due.
+  // The first turn brings a long brief the summary replaces and a reply the
+  // summary keeps. The faux chat's context after each turn is about 532, 546
+  // and 556 tokens, and the reply alone fills the keep budget. These triggers
+  // put the first turn past the share that starts a summary and say which
+  // later turn makes compaction due.
+  const BRIEF = " The workspace keeps its sources at the top level.".repeat(36);
+  const FIRST_REPLY = "Two: a.ts and b.ts. The first holds the entry point and the second holds the helpers it imports.";
+  const KEEP_RECENT = 24;
+
   interface PrecomputeOptions {
     attended?: () => boolean | Promise<boolean>;
     approved?: { lines: readonly string[] };
@@ -366,6 +372,7 @@ describe("a summary written in the background", () => {
     extra?: CompactionOptions;
     /** Whether to wait for the summary the first turn starts. */
     wait?: boolean;
+    systemPrompt?: string;
   }
 
   async function precomputingChat(options: PrecomputeOptions = {}) {
@@ -379,25 +386,25 @@ describe("a summary written in the background", () => {
       models: summary.models,
       cachedPrefix: chat.cachedPrefix,
       approvedMemoryFacts: async () => approved.lines,
-      settings: { enabled: true, reserveTokens: 128_000 - (options.trigger ?? 80), keepRecentTokens: 5 },
+      settings: { enabled: true, reserveTokens: 128_000 - (options.trigger ?? 550), keepRecentTokens: KEEP_RECENT },
       precompute: { registry, chatKey: CHAT_ID, allowed: options.attended ?? (() => attended.now), fraction: options.fraction ?? 0.5 },
       onEvent: (event) => events.push(event),
       ...options.extra,
     };
     await chat.harness.turn({
-      prompt: "Which files are there?",
-      systemPrompt: "You are Aiden.",
+      prompt: "Which files are there?" + BRIEF,
+      systemPrompt: options.systemPrompt ?? "You are Aiden.",
       tools: [listFiles],
-      responses: [fauxAssistantMessage(fauxToolCall("list_files", {})), fauxAssistantMessage("Two: a.ts and b.ts.")],
+      responses: [fauxAssistantMessage(fauxToolCall("list_files", {})), fauxAssistantMessage(FIRST_REPLY)],
     });
     if (options.wait !== false) await settled(registry);
     return { chat, registry, summary, attended, events };
   }
 
-  const nextTurn = (chat: ReturnType<typeof compactingChat>, prompt = "And which is bigger?") =>
-    chat.harness.turn({ prompt, systemPrompt: "You are Aiden.", tools: [listFiles], responses: [fauxAssistantMessage("b.ts is bigger.")] });
-  const thirdTurn = (chat: ReturnType<typeof compactingChat>) =>
-    chat.harness.turn({ prompt: "Thanks.", systemPrompt: "You are Aiden.", tools: [listFiles], responses: [fauxAssistantMessage("You're welcome.")] });
+  const nextTurn = (chat: ReturnType<typeof compactingChat>, prompt = "And which is bigger?", systemPrompt = "You are Aiden.") =>
+    chat.harness.turn({ prompt, systemPrompt, tools: [listFiles], responses: [fauxAssistantMessage("b.ts is bigger.")] });
+  const thirdTurn = (chat: ReturnType<typeof compactingChat>, systemPrompt = "You are Aiden.") =>
+    chat.harness.turn({ prompt: "Thanks.", systemPrompt, tools: [listFiles], responses: [fauxAssistantMessage("You're welcome.")] });
 
   test("is kept below the trigger and stored, with everything after it, once compaction comes due", async () => {
     const { chat, registry, summary, events } = await precomputingChat();
@@ -417,7 +424,7 @@ describe("a summary written in the background", () => {
     assert.match(entry.summary, /List the workspace files\./u);
     assert.deepEqual(
       tailTexts(entry.retainedTail),
-      ["Two: a.ts and b.ts.", "And which is bigger?", "b.ts is bigger.", "Thanks.", "You're welcome."],
+      [FIRST_REPLY, "And which is bigger?", "b.ts is bigger.", "Thanks.", "You're welcome."],
       "the kept tail is the summary's own tail and every message after it",
     );
     assert.deepEqual(events.map((event) => event.type), ["start", "end"]);
@@ -426,6 +433,8 @@ describe("a summary written in the background", () => {
     const [after] = await chat.harness.turn({ prompt: "Go on.", systemPrompt: "You are Aiden.", tools: [listFiles], responses: [fauxAssistantMessage("Done.")] });
     assert.ok(after!.carries("List the workspace files."), "the next request reads the summary");
     assert.ok(after!.carries("You're welcome."), "and the kept tail");
+    assert.equal(summary.calls.length, 1, "the compacted chat sits below the share that starts another summary");
+    assert.equal((await compactions(chat.harness)).length, 1);
   });
 
   test("a follow-up while it is being written does not abort it", async () => {
@@ -482,18 +491,68 @@ describe("a summary written in the background", () => {
     assert.equal(registry.has(CHAT_ID), false);
   });
 
-  test("that no longer fits the kept tail is dropped without a word, and the chat compacts as usual", async () => {
-    // A summary starts at 80% of the trigger, so its tail may grow by 20%.
-    const { chat, registry, summary, events } = await precomputingChat({ trigger: 70, fraction: 0.8 });
-    assert.equal(summary.calls.length, 1);
-    await nextTurn(chat, "And which is bigger? Compare a.ts and b.ts by size in bytes, line count and the number of exported functions.");
-
+  /** Asserts one compaction ran, wrote a fresh summary and reported no failure. */
+  function assertCompactedAsUsual(summary: { calls: readonly SummaryCall[] }, events: readonly PiCompactionEvent[]): void {
     assert.equal(summary.calls.length, 2, "the due compaction wrote a fresh summary");
-    assert.equal((await compactions(chat.harness)).length, 1);
     assert.deepEqual(events.map((event) => event.type), ["start", "end"], "one compaction, no failure in between");
     const end = events[1] as Extract<PiCompactionEvent, { type: "end" }>;
     assert.equal(end.errorMessage, undefined);
     assert.ok(end.result);
+  }
+
+  test("that would leave the chat at its trigger is dropped without a word, and the chat compacts as usual", async () => {
+    // As on a small window: the background summary is longer than the room
+    // left below the trigger, though its kept tail is short.
+    const LONG_SUMMARY = SUMMARY + "\n" + "- [x] Read the brief about where the workspace keeps its sources.\n".repeat(32);
+    const { chat, registry, summary, events } = await precomputingChat({
+      replies: (index) => (index === 0 ? LONG_SUMMARY : SUMMARY),
+    });
+    assert.equal(summary.calls.length, 1);
+    await nextTurn(chat);
+    await thirdTurn(chat);
+
+    assertCompactedAsUsual(summary, events);
+    const stored = await compactions(chat.harness);
+    assert.equal(stored.length, 1);
+    assert.doesNotMatch(stored[0]!.summary, /Read the brief/u, "the long background summary is not stored");
+    assert.equal(registry.has(CHAT_ID), false);
+
+    await chat.harness.turn({ prompt: "Go on.", systemPrompt: "You are Aiden.", tools: [listFiles], responses: [fauxAssistantMessage("Done.")] });
+    assert.equal((await compactions(chat.harness)).length, 1, "the compacted chat does not compact again straight away");
+  });
+
+  test("whose request would still be past the start once its system prompt and tools are counted is dropped", async () => {
+    // The summary and its tail are short; the system prompt (about 215
+    // tokens) is what the compacted request cannot shed. The context after
+    // each turn is about 747, 761 and 771 tokens.
+    const systemPrompt = "You are Aiden." + " Answer about the workspace in plain words.".repeat(20);
+    const { chat, registry, summary, events } = await precomputingChat({ systemPrompt, trigger: 766, fraction: 0.4 });
+    assert.equal(summary.calls.length, 1);
+    await nextTurn(chat, undefined, systemPrompt);
+    assert.deepEqual(await compactions(chat.harness), []);
+    await thirdTurn(chat, systemPrompt);
+
+    assertCompactedAsUsual(summary, events);
+    assert.equal((await compactions(chat.harness)).length, 1);
+    assert.equal(registry.has(CHAT_ID), false);
+  });
+
+  test("on a window whose trigger is far past the start, a long kept tail is dropped and the chat compacts as usual", async () => {
+    // As on a 1M window: the room between the share that starts a summary
+    // and the trigger (here about 165 tokens) is many times the keep budget.
+    const { chat, registry, summary, events } = await precomputingChat({ fraction: 0.7 });
+    assert.equal(summary.calls.length, 1);
+    const LONG_QUESTION = "And which is bigger? Compare a.ts and b.ts by size in bytes, line count and exported functions.".repeat(5);
+    await nextTurn(chat, LONG_QUESTION);
+
+    assertCompactedAsUsual(summary, events);
+    const [entry] = await compactions(chat.harness);
+    assert.ok(entry);
+    assert.deepEqual(
+      tailTexts(entry.retainedTail),
+      [LONG_QUESTION, "b.ts is bigger."],
+      "the kept tail is cut afresh at the keep budget, not the background summary's tail and everything after it",
+    );
     assert.equal(registry.has(CHAT_ID), false);
   });
 
@@ -545,7 +604,7 @@ describe("a summary written in the background", () => {
 
 describe("the background summary registry", () => {
   const snapshot = (contextKey = "context-1"): CompactionPrecomputeSnapshot => ({
-    branchIds: ["entry-1"], contextKey, contextLength: 1, modelKey: "model-1", memoryKey: "memory-1",
+    branchIds: ["entry-1"], contextKey, contextLength: 1, modelKey: "model-1", memoryKey: "memory-1", overheadTokens: 0,
   });
   const result = (summary: string): CompactResult => ({ summary, tokensBefore: 10, retainedTail: [] } as unknown as CompactResult);
 
