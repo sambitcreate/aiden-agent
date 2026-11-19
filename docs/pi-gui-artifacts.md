@@ -25,7 +25,7 @@ Design and roadmap: [Inline Generative UI](superpowers/specs/2026-10-08-inline-g
    - **Only when I ask**: registered only on `/visualize` turns.
    - **Off**: never registered.
 
-   The extension's system prompt also carries the shared rule for where a visual goes (`main/services/visual-routing.ts`): an answer in the reply is an inline visual, a page to keep is a workspace artifact (`workspace_artifact`, even in design mode), screens to iterate on go on the design canvas (or `design_mode` asks to open it), and pictures come from `generate_image`. It names only the destinations the turn has tools for, and is left out when inline visuals are the only one.
+   The extension's system prompt also carries the shared rule for where a visual goes (`main/services/visual-routing.ts`): an answer in the reply is an inline visual, a page to keep is a workspace artifact (`workspace_artifact`, even in design mode; "even in design mode" is said only when the turn has or is offered the canvas), screens to iterate on go on the design canvas (or `design_mode` asks to open it), and pictures come from `generate_image`. It names only the destinations the turn has tools for, and is left out when inline visuals are the only one.
 
    The mode travels as `GenerationParams.inlineVisuals`. Telegram, Assistant, Bots, scheduled runs, and child agents do not inherit the extension. Reading a workspace `.html` file (`path`) still requires a workspace with file access.
 2. **Tools.**

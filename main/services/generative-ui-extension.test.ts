@@ -256,6 +256,9 @@ test("one rule says where a visual goes, naming only the destinations this turn 
   const chatWithArtifacts = rule(prompt({ workspaceArtifacts: true }));
   assert.match(chatWithArtifacts, /workspace_artifact/u);
   assert.doesNotMatch(chatWithArtifacts, /design canvas|design_mode|generate_image/u);
+  // A turn that cannot use design mode is not told about it at all.
+  assert.doesNotMatch(chatWithArtifacts, /design mode/u);
+  assert.match(rule(prompt({ workspaceArtifacts: true, designModeOffered: true })), /workspace_artifact\), even in design mode/u);
   assert.equal(rule(prompt({ workspaceArtifacts: true, audience: "remote" })), "");
 });
 
