@@ -35,6 +35,7 @@ import { buildSystemPrompt, type ChatSystemPromptPermission } from "./chat-syste
 import { createMemoryExtension } from "./memory-context.js";
 import { fingerprintPromptPrefix } from "./pi-cache-telemetry.js";
 import type { MemoryFact, MemoryScope, MemoryStore } from "./memory-store.js";
+import { markMcpAgentTool } from "./mcp-tool-identity.js";
 import { LOAD_TOOLS_TOOL_NAME } from "./on-demand-tools.js";
 import type { PiAgentRuntimeExtension } from "./pi-agent-runtime-harness.js";
 import {
@@ -145,6 +146,14 @@ async function agentsRoots(contents: string) {
 }
 
 const mcpSection = () => "<mcp_servers>\nlinear: issue tracker tools.\n</mcp_servers>";
+
+/** One MCP server's tool, shaped the way the MCP manager builds it for codemode. */
+function mcpServerTool(serverId: string, label: string, description: string): AgentTool {
+  return markMcpAgentTool(Object.assign(textTool(`${serverId}_search`, `Search ${label}.`), {
+    codemode: true,
+    discovery: Object.freeze({ namespace: `mcp:${serverId.padEnd(24, "0")}`, label, alias: serverId, description }),
+  }), { serverId, toolName: "search" });
+}
 
 const wires: { wire: PromptPrefixWire; midConversationSystem: boolean; label: string }[] = [
   { wire: "anthropic-messages", midConversationSystem: false, label: "Anthropic Messages" },
@@ -396,6 +405,67 @@ describe("prompt prefix stability: already stable", () => {
     }
   });
 
+  for (const { wire, midConversationSystem, label } of wires) {
+    test(`AGENTS.md section is identical across turns (${label})`, async () => {
+      const roots = await agentsRoots("Use tabs for indentation.\n");
+      const { previous, current } = await twoTurns(
+        { wire, midConversationSystem, agentsInstructions: roots },
+        { assembly: await workspaceChat() },
+      );
+      assert.ok(current.carries("Use tabs for indentation."), "the instructions still reach turn 2");
+      assert.deepEqual(comparePromptRequests(previous, current), {});
+    });
+
+    test(`an edited AGENTS.md is the first difference on the next turn (${label})`, async () => {
+      // The oracle for the stable case: a real edit still reaches the model and is named.
+      const roots = await agentsRoots("Use tabs for indentation.\n");
+      const harness = createPromptPrefixHarness({ wire, midConversationSystem, agentsInstructions: roots });
+      const assembly = await workspaceChat();
+      const one = await harness.turn({ prompt: "Summarize the project.", responses: reply("It is a small project."), assembly });
+      await writeFile(path.join(roots.workspaceRoot, "AGENTS.md"), "Use spaces for indentation.\n");
+      const [two] = await harness.turn({ prompt: "Now list the files.", responses: reply("Here they are."), assembly });
+      assert.ok(two!.carries("Use spaces for indentation."));
+      assert.ok(!two!.carries("Use tabs for indentation."));
+      const comparison = comparePromptRequests(lastOf(one), two!);
+      assert.notDeepEqual(comparison, {});
+      assert.equal(comparison.transcript?.source, "system:agents-instructions");
+    });
+  }
+
+  for (const { wire, midConversationSystem, label } of wires) {
+    test(`an MCP server admitted mid-turn joins the section at the next turn (${label})`, async () => {
+      // Discovery that finishes past the admission window lands between two
+      // steps of a turn. The server is callable at once through codemode; the
+      // section keeps the turn-start render until the next user turn.
+      const linear = mcpServerTool("linear", "Linear", "Issue tracker tools.");
+      const notion = mcpServerTool("notion", "Notion", "Workspace notes and pages.");
+      let admitted = false;
+      const waitTool = textTool("wait_for_build", "Wait for the build to finish.");
+      const waitForBuild: AgentTool = { ...waitTool, execute: async (...args) => { admitted = true; return waitTool.execute(...args); } };
+      const harness = createPromptPrefixHarness({ wire, midConversationSystem, lateMcpTools: () => (admitted ? [notion] : []) });
+      const one = await harness.turn({
+        prompt: "Wait for the build, then file an issue.",
+        assembly: await workspaceChat({ tools: [...workspaceTools, codemodeTool, waitForBuild, linear] }),
+        responses: [
+          fauxAssistantMessage(fauxToolCall("wait_for_build", {}), { stopReason: "toolUse" }),
+          fauxAssistantMessage("Filed."),
+        ],
+      });
+      assert.equal(one.length, 2);
+      assert.ok(one[0]!.carries("Issue tracker tools."), "the admitted server is in the section");
+      assert.ok(!one[1]!.carries("Workspace notes and pages."), "the late server waits for the next turn");
+      assert.deepEqual(comparePromptRequests(one[0]!, one[1]!), {});
+      const [two] = await harness.turn({
+        prompt: "Now add a page about it.",
+        assembly: await workspaceChat({ tools: [...workspaceTools, codemodeTool, waitForBuild, linear, notion] }),
+        responses: reply("Added."),
+      });
+      assert.ok(two!.carries("Workspace notes and pages."), "the next turn's section lists the late server");
+      assert.equal(comparePromptRequests(lastOf(one), two!).transcript?.source, "system:mcp-servers");
+      assert.equal(harness.networkCalls, 0);
+    });
+  }
+
   test("the harness names a changed base prompt as the first difference", async () => {
     // The oracle the todo cases rely on: a real change is reported, at the system segment.
     const { previous, current } = await twoTurns(
@@ -410,18 +480,6 @@ describe("prompt prefix stability: already stable", () => {
 });
 
 describe("prompt prefix stability: causes fixed by later phases", () => {
-  for (const { wire, midConversationSystem, label } of wires) {
-    test(`AGENTS.md section is identical across turns (${label})`, { todo: "phase 1: stable nonce, journaled section" }, async () => {
-      const roots = await agentsRoots("Use tabs for indentation.\n");
-      const { previous, current } = await twoTurns(
-        { wire, midConversationSystem, agentsInstructions: roots },
-        { assembly: await workspaceChat() },
-      );
-      assert.ok(current.carries("Use tabs for indentation."), "the instructions still reach turn 2");
-      assert.deepEqual(comparePromptRequests(previous, current), {});
-    });
-  }
-
   test("loading a tool mid-turn leaves the next step's prefix unchanged", { todo: "phase 2: fixed tool list per chat" }, async () => {
     const harness = createPromptPrefixHarness();
     const requests = await harness.turn({

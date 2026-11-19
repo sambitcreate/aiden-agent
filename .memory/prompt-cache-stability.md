@@ -16,3 +16,13 @@ Plan: `docs/plans/prompt-cache-hit-rate.md` (one PR, phases 0-8).
 - `createPromptRequestRecorder` renders any provider context (workspace harness and Bot cases). The in-place test re-fingerprints deep copies to guard the WeakMap hash memo.
 - Gotcha: the Anthropic adapter writes the newest user message as a text block with `cache_control` and older ones as strings; the harness normalizes both before hashing.
 - Not modelled: browser discovery (llm-client generation setup), per-request hook context.
+
+## Phase 1 (2026-11-18)
+
+- AGENTS.md nonce = `agentsInstructionNonce(chatSecret)`: HMAC-SHA256(chatSecret, "agents-instructions"), 128 bits in UUID form. `chatSecret` is required on `createAgentsInstructionRefresher`; llm-client passes `chatPromptSecret(promptSectionDeviceKey(userData), chatId)` from `prompt-section-secret.ts` (device key file `prompt-section-key`, 0600, process-local fallback if unwritable). Not stored in chat metadata on purpose (records reach renderer, phones, exports, forks).
+- Records JSON escapes `</` as `<\/`, so a file cannot close the block even knowing the chat's nonce.
+- No section journaling: a deterministic section patched at turn start is folded into the head, so it is stable on all wires.
+- ACP: `STABLE_AGENTS_NONCE` removed; `hostInstructionsFingerprint` hashes the delivered text. Existing ACP chats with AGENTS.md get one native-session replacement after upgrade.
+- MCP: `<mcp_servers>` used to re-render between steps from `candidate.getCallableTools()` (late discovery included), a mid-turn change. Now `createTurnMcpServersSection` renders once per generation from the turn-start inventory; late servers stay callable via codemode/tool_search and join the section next turn. Harness option `lateMcpTools` models late discovery with the same helper.
+- Stability suite: AGENTS.md case on (3 wires), plus edited-AGENTS oracle and MCP late-admission cases; 7 todos remain (phases 2, 3, 7).
+- Phase 1 does not touch the Bot hoisting finding (Bots don't use the AGENTS refresher); that is phase 3.

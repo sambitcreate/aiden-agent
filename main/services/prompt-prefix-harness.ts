@@ -18,7 +18,7 @@
 // Nothing here dispatches a request: the adapter's `onPayload` captures the
 // payload and aborts before `fetch`, and `fetch` itself refuses.
 
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import type { AgentContext, AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import { createInitialSystemMessage, createModels, toToolDeclaration, type Api, type Model, type ProviderStreams } from "@earendil-works/pi-ai";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
@@ -27,7 +27,7 @@ import { createFauxCore, type FauxResponseStep } from "@earendil-works/pi-ai/pro
 import { createAgentsInstructionRefresher, type AgentsInstructionOptions } from "./agents-instructions.js";
 import type { ChatPromptAssembly } from "./chat-prompt-assembly.js";
 import { createGenerationContextTransform, updateGenerationContextOptions, type GenerationContextOptions } from "./generation-context.js";
-import { createMcpServersSectionRefresher } from "./mcp-server-instructions.js";
+import { createMcpServersSectionRefresher, createTurnMcpServersSection } from "./mcp-server-instructions.js";
 import { diffPromptPrefix, fingerprintPromptPrefix, type PromptPrefixDifference, type PromptPrefixFingerprint } from "./pi-cache-telemetry.js";
 import { PiAgentRuntimeHarness } from "./pi-agent-runtime-harness.js";
 import { convertToLlm } from "./pi-legacy-harness.js";
@@ -48,10 +48,21 @@ export interface PromptPrefixHarnessOptions {
   wire?: PromptPrefixWire;
   /** The model keeps later system messages in place (Pi `supportsMidConvoSystemMessages`). */
   midConversationSystem?: boolean;
-  /** Roots for the real AGENTS.md refresher, created afresh each turn like llm-client does. */
+  /**
+   * Roots for the real AGENTS.md refresher, created afresh each turn like
+   * llm-client does, with one chat secret for the harness's one chat.
+   */
   agentsInstructions?: Pick<AgentsInstructionOptions, "globalRoot" | "workspaceRoot" | "read">;
   /** Renders the `mcp_servers` section; a fresh refresher is created each turn. */
   mcpServersSection?: () => string;
+  /**
+   * MCP tools admitted after the turn started (llm-client's late discovery),
+   * read on every inventory lookup. When set, the `mcp_servers` section is
+   * built from the turn's tools and the runtime's callable inventory with the
+   * same helper llm-client uses, instead of from `mcpServersSection`, and
+   * codemode turns can call the late tools.
+   */
+  lateMcpTools?: () => readonly AgentTool[];
 }
 
 export type PromptPrefixTurnInput = {
@@ -234,6 +245,7 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
   let journal: Promise<PiSessionPort> | undefined;
   const requests: RecordedPromptRequest[] = [];
   let turnNumber = 0;
+  const chatSecret = randomBytes(32);
 
   async function turn(input: PromptPrefixTurnInput): Promise<RecordedPromptRequest[]> {
     turnNumber += 1;
@@ -249,9 +261,18 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
     const tools = "assembly" in input ? input.assembly.toolsFor(history) : input.tools;
     const onDemandTools = "assembly" in input ? input.assembly.onDemandTools : undefined;
     const agentsInstructions = options.agentsInstructions
-      ? await createAgentsInstructionRefresher({ ...options.agentsInstructions, revalidate: async () => {} })
+      ? await createAgentsInstructionRefresher({ ...options.agentsInstructions, chatSecret, revalidate: async () => {} })
       : undefined;
-    const mcpServersSection = options.mcpServersSection ? createMcpServersSectionRefresher(options.mcpServersSection) : undefined;
+    const deferredTools = "assembly" in input ? input.assembly.deferredTools : [];
+    const codemode = tools.some((tool) => tool.name === "codemode");
+    let runtime: PiAgentRuntimeHarness | undefined;
+    const mcpServersSection = options.lateMcpTools
+      // llm-client: the turn's admitted tools until the runtime exists, then its callable inventory.
+      ? createTurnMcpServersSection(
+          () => runtime?.getCallableTools() ?? ("assembly" in input ? input.assembly.contributions.tools : tools),
+          { declared: new Set(tools.map((tool) => tool.name)) },
+        )
+      : options.mcpServersSection ? createMcpServersSectionRefresher(options.mcpServersSection) : undefined;
     const generationOptions: GenerationContextOptions = {
       contextWindow: model.contextWindow,
       systemPrompt,
@@ -277,9 +298,10 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
         updateGenerationContextOptions(generationOptions, prepared);
       }
     }
-    const runtime = new PiAgentRuntimeHarness({
+    runtime = new PiAgentRuntimeHarness({
       convertToLlm,
       initialState: { systemPrompt, thinkingLevel: "off", tools: [...tools], messages: initialMessages, model },
+      ...(options.lateMcpTools ? { deferredTools, ...(codemode ? { lateDeferredTools: options.lateMcpTools } : {}) } : {}),
       transformContext: createGenerationContextTransform(generationOptions),
       prepareNextTurnWithContext: createPiTurnContextPreparation({
         generationOptions,

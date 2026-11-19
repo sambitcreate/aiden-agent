@@ -1,6 +1,6 @@
 # Prompt cache hit rate: keep the cached prefix byte-stable
 
-Status: In progress (2026-11-18): phase 0 implemented. Delivered as one PR with one stacked commit series per phase, branch `feat/prompt-cache-stability`, cut from `main` at f2fd27640.
+Status: In progress (2026-11-18): phases 0 and 1 implemented. Delivered as one PR with one stacked commit series per phase, branch `feat/prompt-cache-stability`, cut from `main` at f2fd27640.
 
 ## Goal
 
@@ -143,6 +143,16 @@ At the end, four Opus high reviewers review the whole PR, and a CI watcher owns 
   - A file containing a guessed nonce still cannot close the section, which is the existing injection oracle extended.
 - In `prompt-prefix-stability.test.ts`, switch on "AGENTS.md section is identical across turns" for all three wires. The MCP case already passes (phase 0).
 - The MCP late-admission test, whatever it finds.
+
+**As built (2026-11-18).** The code differed from the plan in these ways:
+
+- The per-chat secret is derived, not stored: `HMAC-SHA256(deviceKey, chatId)` (`main/services/prompt-section-secret.ts`). The device key is 32 random bytes in `prompt-section-key` in the app's data folder, created once with mode 0600. Chat records reach the renderer, paired phones, exports and forks, so a secret in the chat's metadata would travel with them. A derived secret also covers runs with no journal. If the folder cannot be written, the key is random for the process, so the nonce is stable within a run and changes after a restart.
+- The nonce is `HMAC-SHA256(chatSecret, "agents-instructions")`, cut to 128 bits and written in UUID form, so the block keeps its width. The context estimate draws a random secret of the same shape and never sends it.
+- AGENTS.md records are written with every `</` escaped as `<\/`. They decode to the same strings, and a file cannot spell the closing tag even after its author has seen the nonce in an earlier turn of the same chat.
+- No journaling was needed. Each section is a pure function of its inputs (the files' content, the admitted servers), and the managed run folds a turn-start patch into the head (phase 0). A deterministic nonce is enough to make the AGENTS.md section byte-identical across turns on all three wires.
+- ACP takes the nonce from the same refresher. `STABLE_AGENTS_NONCE` and the nonce normalization are gone; the host-instruction fingerprint now hashes the delivered text as is. An existing ACP chat with AGENTS.md replaces its native session once, on its first turn after the upgrade, because its stored fingerprint was taken over the normalized text.
+- The MCP check found a change in the middle of a turn. llm-client re-rendered `<mcp_servers>` between steps from the runtime's callable inventory, which includes servers whose discovery finished after the admission window. The section is now rendered once per generation, from the servers admitted at turn start (`createTurnMcpServersSection` in `mcp-server-instructions.ts`, shared by llm-client and the harness). A late server is callable at once through codemode and `tool_search`, and joins the section at the next user turn. `mcp-tool-discovery-core.ts` is unchanged.
+- `aiden serve` does not use the AGENTS.md refresher or this MCP section, so it needed no change.
 
 ## Phase 2: a fixed tool list
 

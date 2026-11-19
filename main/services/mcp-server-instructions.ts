@@ -198,6 +198,23 @@ function renderServiceGuidance(servers: readonly ServerEntry[]): string {
 // can open or close the section; Pi joins prompt sections with a blank line.
 const MCP_SERVERS_BLOCK = /(?:^|\n\n)<mcp_servers>\n[\s\S]*?\n<\/mcp_servers>(?=\n\n|$)/gu;
 
+/**
+ * The `mcp_servers` section for one generation, rendered once from the servers
+ * admitted when the turn starts. A server whose discovery finishes later in the
+ * turn (past `MCP_DEFERRED_ADMISSION_WINDOW_MS`) is callable at once through
+ * codemode and tool_search, and joins the section at the next user turn: a
+ * section patch between two requests of one turn would rewrite the cached
+ * system prefix on every wire that hoists system messages into the head.
+ */
+export function createTurnMcpServersSection(
+  inventory: () => readonly PiDiscoverableTool[],
+  options: { declared: ReadonlySet<string> },
+  now?: () => number,
+) {
+  let rendered: string | undefined;
+  return createMcpServersSectionRefresher(() => (rendered ??= renderMcpServersSection(inventory(), options)), now);
+}
+
 /** Remove the `mcp_servers` section (and its separator) from a replayed system prompt. */
 export function withoutMcpServersSection(systemPrompt: string): string {
   return systemPrompt.replace(MCP_SERVERS_BLOCK, "");

@@ -31,9 +31,10 @@ import { approvalJudgeComplete } from "./approval-judge/model-complete.js";
 import type { SpendingOwner } from "./spending-core.js";
 import { createLocalClassifierModels } from "./pi-local-classifier.js";
 import { piResourcesForSkillSnapshot } from "./skill-tools.js";
-import { createMcpServersSectionRefresher, renderMcpServersSection } from "./mcp-server-instructions.js";
+import { createTurnMcpServersSection } from "./mcp-server-instructions.js";
 import { createAgentsInstructionRefresher } from "./agents-instructions.js";
 import { aidenConfigDir } from "./aiden-config-dir.js";
+import { chatPromptSecret, promptSectionDeviceKey } from "./prompt-section-secret.js";
 import { assertCustomModelImageLimit, customModelThinkingLevels, prepareCustomModelToolContext } from "../../renderer/shared/custom-model-options.js";
 import { compactionEngineFrom, configuredCompactionReserveTokens, resolveCompactionModelBudget } from "../../renderer/shared/compaction.js";
 import { createVccRecallTool } from "./pi-vcc/recall.js";
@@ -1371,6 +1372,7 @@ async function prepareGeneration(
   const agentsInstructions = agentsInstructionRoots
     ? await createAgentsInstructionRefresher({
         ...agentsInstructionRoots,
+        chatSecret: chatPromptSecret(promptSectionDeviceKey(app.getPath("userData")), params.chatId),
         onNotices: (notices) => {
           sendGeneration(streamId, "chat:status", { streamId, phase: "agents_instructions_limited", notices });
         },
@@ -3906,13 +3908,15 @@ export const llmClient = {
       };
       const { systemPrompt } = assembly;
       // The MCP servers this turn may use, as a bounded section patched into the
-      // transcript (never the base prompt), from the final admitted inventory,
-      // including servers that finish discovery after the turn started.
+      // transcript (never the base prompt), rendered once from the servers
+      // admitted when the turn starts. A server that finishes discovery later is
+      // callable through codemode and tool_search at once and joins the section
+      // at the next user turn, so the cached system prefix holds for the turn.
       const declaredToolNames = new Set(runtimeTools.map(({ name }) => name));
-      const mcpServersSection = createMcpServersSectionRefresher(() => renderMcpServersSection(
-        candidate?.getCallableTools() ?? modelContributions.tools,
+      const mcpServersSection = createTurnMcpServersSection(
+        () => candidate?.getCallableTools() ?? modelContributions.tools,
         { declared: declaredToolNames },
-      ));
+      );
       // Activity shows MCP tools by their `server/tool` label, not the generated name.
       timeline.setToolLabels((toolName) => mcpToolActivityLabel(candidate?.getCallableTools() ?? modelContributions.tools, toolName));
       const compactionBudget = resolveCompactionModelBudget(compactionModelOverrides, model, compactionEngine);

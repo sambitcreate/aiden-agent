@@ -4410,6 +4410,7 @@ test("AGENTS edits enter only the next logical model request and preserve the to
   const file = join(root, "AGENTS.md");
   await writeFile(file, "INITIAL_GUIDANCE");
   const instructions = await createAgentsInstructionRefresher({
+    chatSecret: Buffer.alloc(32, 3),
     globalRoot: root,
     revalidate: async () => {},
     read: async () => readFile(file, "utf8"),
