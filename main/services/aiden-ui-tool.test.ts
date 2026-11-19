@@ -115,6 +115,37 @@ test("edits redraw a visual drawn earlier in this reply from the markup it was l
   assert.match(presented[3]!.visual.fallbackText, /eins[^]*deux/u);
 });
 
+test("render_ui edits refuse an old that matches twice once line breaks read alike, or that cuts a line break or emoji in two", async () => {
+  const { instance, presented } = tool();
+  await instance.execute("first", {
+    title: "Mixed",
+    markup: "<Visual><Text>a</Text>\r\n<Text>b</Text>\n<Text>a</Text>\n<Text>b</Text>\n<Text>x😀y</Text></Visual>",
+  });
+  // The exact LF text appears once, but the CRLF pair above it reads the same.
+  await assert.rejects(
+    instance.execute("twice", { title: "Mixed", edits: [{ old: "<Text>a</Text>\n<Text>b</Text>", new: "<Text>c</Text>" }] }),
+    /edits\[0\] old "<Text>a<\/Text> <Text>b<\/Text>" was found 2 times with its line breaks and the markup's read alike; add surrounding text/u,
+  );
+  await assert.rejects(
+    instance.execute("crlf", { title: "Mixed", edits: [{ old: "\n<Text>b</Text>\n<Text>a", new: "" }] }),
+    /edits\[0\] old "<Text>b<\/Text> <Text>a" starts or ends between the \\r and \\n of a line break in the markup; include the whole line break/u,
+  );
+  await assert.rejects(
+    instance.execute("emoji", { title: "Mixed", edits: [{ old: "\uDE00y", new: "!" }] }),
+    /edits\[0\] old "\\ude00y" starts or ends inside a character made of two units, such as an emoji in the markup; include the whole character in old/u,
+  );
+  assert.equal(presented.length, 1, "no refused edit was drawn");
+  // Taking in the whole emoji, or enough text to pick one place, works.
+  await instance.execute("ok", {
+    title: "Mixed",
+    edits: [
+      { old: "😀y", new: "!" },
+      { old: "</Text>\n<Text>a</Text>\n", new: "</Text>\n<Text>c</Text>\n" },
+    ],
+  });
+  assert.match(presented[1]!.visual.fallbackText, /a[^]*b[^]*c[^]*b[^]*x!/u);
+});
+
 test("per-response and per-chat caps hold", async () => {
   const { instance } = tool();
   for (let index = 0; index < 8; index += 1) {

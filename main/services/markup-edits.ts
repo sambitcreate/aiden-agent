@@ -69,39 +69,64 @@ const LINE_BREAK = /\r\n|\r|\n/u;
  * read alike (CRLF, CR and LF), and `replacement`'s line breaks take the
  * markup's own there, so a page saved with Windows line endings keeps them.
  */
-function locate(markup: string, old: string, replacement: string): { count: number; start: number; end: number; text: string } {
+function locate(
+  markup: string,
+  old: string,
+  replacement: string,
+): { count: number; alike: boolean; start: number; end: number; text: string } {
   const exact = occurrences(markup, old);
-  if (exact > 0 || !LINE_BREAK.test(markup) || !/[\r\n]/u.test(old)) {
+  const breaks = LINE_BREAK.test(markup) && /[\r\n]/u.test(old);
+  const page = breaks ? lfOnly(markup) : undefined;
+  const wanted = breaks ? lfOnly(old).text : "";
+  const count = page ? occurrences(page.text, wanted) : 0;
+  if (exact > 0 || !page) {
     const start = markup.indexOf(old);
-    return { count: exact, start, end: start + old.length, text: replacement };
+    // An exact match is only one place if no other place matches once line
+    // breaks are read alike, on a page that mixes CRLF and LF.
+    if (exact === 1 && count > 1) return { count, alike: true, start, end: start + old.length, text: replacement };
+    return { count: exact, alike: false, start, end: start + old.length, text: replacement };
   }
-  const page = lfOnly(markup);
-  const wanted = lfOnly(old).text;
-  const count = occurrences(page.text, wanted);
   const at = page.text.indexOf(wanted);
   const start = page.from[at] ?? -1;
   const end = page.from[at + wanted.length] ?? markup.length;
   const eol = (LINE_BREAK.exec(markup.slice(start, end)) ?? LINE_BREAK.exec(markup))?.[0] ?? "\n";
-  return { count, start, end, text: replacement.replace(/\r\n|\r|\n/gu, eol) };
+  return { count, alike: true, start, end, text: replacement.replace(/\r\n|\r|\n/gu, eol) };
+}
+
+/** What `at` cuts in two in `text`: a CRLF line break, a character of two UTF-16 units, or nothing. */
+function splitAt(text: string, at: number): "line break" | "character" | undefined {
+  if (at <= 0 || at >= text.length) return undefined;
+  if (text[at - 1] === "\r" && text[at] === "\n") return "line break";
+  return safeCut(text, at) === at ? undefined : "character";
 }
 
 /**
  * The markup with every edit applied in order, or a throw naming the first
- * edit whose old text is missing or appears more than once, ending with
- * `retry`. On a throw the caller changes nothing. Line breaks match whatever
- * their style (see `locate`).
+ * edit whose old text is missing, appears more than once (counting places
+ * that match only once line breaks are read alike), or starts or ends in the
+ * middle of a CRLF line break or a two-unit character such as an emoji,
+ * ending with `retry`. On a throw the caller changes nothing. Line breaks
+ * match whatever their style (see `locate`).
  */
 export function applyMarkupEdits(markup: string, edits: readonly MarkupEdit[], retry: string): string {
   let next = markup;
   edits.forEach((edit, index) => {
     const found = locate(next, edit.old, edit.new);
+    const after = index > 0 ? " (as the edits before it left it)" : "";
     if (found.count !== 1) {
       const why =
         found.count === 0
           ? "was not found"
-          : `was found ${found.count} times; add surrounding text to old so it matches one place`;
-      const after = index > 0 ? " (as the edits before it left it)" : "";
+          : `was found ${found.count} times${found.alike ? " with its line breaks and the markup's read alike" : ""}; add surrounding text to old so it matches one place`;
       throw new Error(`edits[${index}] old ${excerpt(edit.old)} ${why} in the markup${after}. Nothing was changed. ${retry}`);
+    }
+    const split = splitAt(next, found.start) ?? splitAt(next, found.end);
+    if (split) {
+      const [what, fix] =
+        split === "line break"
+          ? ["between the \\r and \\n of a line break", "include the whole line break in old, or leave it out"]
+          : ["inside a character made of two units, such as an emoji", "include the whole character in old"];
+      throw new Error(`edits[${index}] old ${excerpt(edit.old)} starts or ends ${what} in the markup${after}; ${fix}. Nothing was changed. ${retry}`);
     }
     next = `${next.slice(0, found.start)}${found.text}${next.slice(found.end)}`;
   });

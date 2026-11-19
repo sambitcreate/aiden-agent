@@ -830,6 +830,13 @@ test("edits written with LF line breaks apply to a page saved with CRLF ones, wh
     call("e2", { operation: "update", id: "art1", edits: [{ old: "</Button>\n", new: "</Button>\n\n" }] }),
     /edits\[0\] old "<\/Button>" was found 2 times/u,
   );
+  // An old that stops between a CRLF's two characters would leave half a line break behind.
+  const saved = (await store.get("ws1", "art1"))!.artifact.markup;
+  await assert.rejects(
+    call("e3", { operation: "update", id: "art1", edits: [{ old: "waiting</Text>\r", new: "done</Text>" }] }),
+    /edits\[0\] old "waiting<\/Text>" starts or ends between the \\r and \\n of a line break in the markup; include the whole line break in old[^]*Nothing was changed/u,
+  );
+  assert.equal((await store.get("ws1", "art1"))!.artifact.markup, saved);
 });
 
 test("edits apply to the markup another chat saved while this one prepared its save, and a miss there saves nothing", async (t) => {
