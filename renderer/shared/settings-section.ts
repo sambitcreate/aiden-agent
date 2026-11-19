@@ -350,6 +350,11 @@ export type SettingsCapabilities = {
   hooks: boolean;
   /** Aiden's own MCP server for outside apps (Settings → Connections → Apps using Aiden). */
   mcpServer: boolean;
+  /**
+   * Aiden Live (Voice & Speech → Aiden Live), off when the AIDEN_GEMINI_LIVE flag is.
+   * Callers that don't know it leave it out, and the tab stays.
+   */
+  geminiLive?: boolean;
 };
 
 function isSettingsSectionAvailable(
@@ -361,7 +366,8 @@ function isSettingsSectionAvailable(
     (section !== "simulator" || capabilities.devices) &&
     (section !== "botComputers" || capabilities.botComputers) &&
     (section !== "hooks" || capabilities.hooks) &&
-    (section !== "otherApps" || capabilities.mcpServer)
+    (section !== "otherApps" || capabilities.mcpServer) &&
+    (section !== "geminiLive" || capabilities.geminiLive !== false)
   );
 }
 

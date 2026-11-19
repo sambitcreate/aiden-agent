@@ -75,31 +75,105 @@ function recordScrolls(): { scrolls: ScrollIntoViewOptions[]; restore: () => voi
   return { scrolls, restore: () => { HTMLElement.prototype.scrollIntoView = original; } };
 }
 
-test("opening the links section scrolls the row into view, instantly under Reduce Motion", async () => {
+/** Frames that run only when the test advances time. */
+function manualFrames() {
+  let queue: { id: number; callback: FrameRequestCallback }[] = [];
+  let nextId = 0;
+  let now = 1_000;
+  const request = globalThis.requestAnimationFrame;
+  const cancel = globalThis.cancelAnimationFrame;
+  globalThis.requestAnimationFrame = (callback) => {
+    queue.push({ id: ++nextId, callback });
+    return nextId;
+  };
+  globalThis.cancelAnimationFrame = (id) => {
+    queue = queue.filter((frame) => frame.id !== id);
+  };
+  return {
+    pending: () => queue.length,
+    advance(ms: number) {
+      now += ms;
+      const due = queue;
+      queue = [];
+      for (const frame of due) frame.callback(now);
+    },
+    restore() {
+      globalThis.requestAnimationFrame = request;
+      globalThis.cancelAnimationFrame = cancel;
+    },
+  };
+}
+
+/** Settings' scrollport, where Chromium would center the Links row at `middle`. */
+function scrollport(middle: number): { port: HTMLDivElement; restore: () => void } {
+  const port = document.createElement("div");
+  port.style.overflowY = "auto";
+  document.body.append(port);
+  const original = HTMLElement.prototype.scrollIntoView;
+  HTMLElement.prototype.scrollIntoView = function () {
+    port.scrollTop = middle;
+  };
+  return { port, restore: () => { HTMLElement.prototype.scrollIntoView = original; } };
+}
+
+test("opening the links section glides the row to the middle, or jumps there under Reduce Motion", async () => {
   installBotTestIpc({ "browser:link-preference": () => "ask" });
-  const { scrolls, restore } = recordScrolls();
+  const frames = manualFrames();
+  const { port, restore } = scrollport(600);
+  const anchored = (
+    <SettingsAnchorContext.Provider value={{ section: "links", request: 1 }}>
+      <LinksSettings embedded />
+    </SettingsAnchorContext.Provider>
+  );
   try {
-    render(
-      <SettingsAnchorContext.Provider value={{ section: "links", request: 1 }}>
-        <LinksSettings embedded />
-      </SettingsAnchorContext.Provider>,
-    );
+    render(anchored, { container: port });
     await flush();
-    assert.equal(scrolls.length, 1);
-    assert.equal(scrolls[0]?.behavior, "smooth");
+    assert.equal(port.scrollTop, 0);
+    for (let frame = 0; frame < 10 && frames.pending() > 0; frame += 1) frames.advance(60);
+    assert.equal(port.scrollTop, 600);
     cleanup();
 
+    port.scrollTop = 0;
     document.documentElement.dataset.reduceMotion = "true";
-    render(
-      <SettingsAnchorContext.Provider value={{ section: "links", request: 1 }}>
-        <LinksSettings embedded />
-      </SettingsAnchorContext.Provider>,
-    );
+    render(anchored, { container: port });
     await flush();
-    assert.equal(scrolls[1]?.behavior, "auto");
+    assert.equal(port.scrollTop, 600);
+    assert.equal(frames.pending(), 0);
   } finally {
     delete document.documentElement.dataset.reduceMotion;
+    frames.restore();
     restore();
+    port.remove();
+  }
+});
+
+test("leaving the links spot mid-glide stops the glide where it is", async () => {
+  installBotTestIpc({ "browser:link-preference": () => "ask" });
+  const frames = manualFrames();
+  const { port, restore } = scrollport(600);
+  const page = (anchor: boolean) => (
+    <SettingsAnchorContext.Provider value={anchor ? { section: "links", request: 1 } : null}>
+      <LinksSettings embedded />
+    </SettingsAnchorContext.Provider>
+  );
+  try {
+    const view = render(page(true), { container: port });
+    await flush();
+    frames.advance(16);
+    frames.advance(100);
+    assert.ok(port.scrollTop > 0 && port.scrollTop < 600, "still on its way");
+
+    view.rerender(page(false));
+    await flush();
+    const left = port.scrollTop;
+    frames.advance(60);
+    frames.advance(500);
+    assert.equal(port.scrollTop, left);
+    assert.equal(frames.pending(), 0);
+  } finally {
+    frames.restore();
+    restore();
+    port.remove();
   }
 });
 

@@ -58,10 +58,12 @@ import {
 } from "../lib/workspace-settings-view";
 import type { Workspace, WorkspacePermission } from "../lib/types";
 import { isUsable } from "../lib/model-picker-data";
+import { useAppCapabilities } from "../lib/app-capabilities";
+import { localComputerNoun } from "../shared/computer-noun";
 import {
-  APPROVAL_MODE_HELP,
   APPROVAL_MODE_LABELS,
   APPROVAL_MODES,
+  approvalModeHelp,
   MAC_GRANT_CLASSES,
   MAC_GRANT_LABELS,
   applyWorkspaceApprovalChange,
@@ -291,7 +293,7 @@ function WorkspaceSettingsBody({
         aria-labelledby={`${tabIds}-${tab}-tab`}
         className="settings-responsive min-h-0 min-w-0 flex-1 overflow-y-auto pr-1"
       >
-        {tab === "general" ? <GeneralTab workspace={workspace} /> : null}
+        {tab === "general" ? <GeneralTab workspace={workspace} onClose={onClose} /> : null}
         {tab === "skills" ? <SkillsTab workspace={workspace} onClose={onClose} /> : null}
         {tab === "connectors" ? <ConnectorsTab workspace={workspace} onClose={onClose} /> : null}
       </div>
@@ -318,14 +320,15 @@ export function WorkspaceApprovalFields({
   const choice: WorkspaceModeChoice = policy.customized ? policy.mode : "global";
   const modes = APPROVAL_MODES.filter((mode) => mode !== "auto" || usableModel || policy.mode === "auto");
   const grants = MAC_GRANT_CLASSES.filter((kind) => policy.macGrants.has(kind));
+  const help = approvalModeHelp(policy.mode, localComputerNoun(useAppCapabilities().platform));
   return (
     <>
       <Field
         label="Approvals"
         description={
           policy.customized
-            ? APPROVAL_MODE_HELP[policy.mode]
-            : `Follows Settings → Approvals. ${APPROVAL_MODE_HELP[policy.mode]}`
+            ? help
+            : `Follows Settings → Approvals. ${help}`
         }
       >
         <Select
@@ -367,8 +370,16 @@ export function WorkspaceApprovalFields({
   );
 }
 
-function GeneralTab({ workspace }: { workspace: Workspace }) {
+function GeneralTab({ workspace, onClose }: { workspace: Workspace; onClose: () => void }) {
+  const navigate = useNavigate();
+  const settings = useSettings();
   const patch = useWorkspacePatch(workspace.id);
+  // As in Settings → Memory: with memory off for every chat, this workspace's choice is kept but can't change.
+  const memoryGloballyOff = settings.data?.memoryEnabled === false;
+  const openMemorySettings = () => {
+    onClose();
+    void navigate({ to: "/settings", search: { section: "memory" } });
+  };
   const access = workspace.permission === "none" ? "none" : "work";
   const [name, setName] = React.useState(workspace.name);
   React.useEffect(() => setName(workspace.name), [workspace.name]);
@@ -459,10 +470,24 @@ function GeneralTab({ workspace }: { workspace: Workspace }) {
             Memory
           </span>
         }
-        description="Remember useful facts from this workspace's chats."
+        description={
+          memoryGloballyOff ? (
+            <>
+              Memory is off in Settings. This choice applies when it's back on.
+              <span className="mt-2 block">
+                <Button variant="filled" size="small" onClick={openMemorySettings}>
+                  Open Memory settings
+                </Button>
+              </span>
+            </>
+          ) : (
+            "Remember useful facts from this workspace's chats."
+          )
+        }
       >
         <Switch
           aria-label="Use memory in this workspace"
+          disabled={memoryGloballyOff}
           checked={workspace.memoryEnabled !== false}
           onCheckedChange={(enabled) =>
             void patch({ memoryEnabled: enabled }, "Couldn't change memory for this workspace.")

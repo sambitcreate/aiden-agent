@@ -23,12 +23,20 @@ import type { AssistantLiveSnapshot } from "../../shared/assistant-live";
 import { AidenLiveMark } from "../assistant/aiden-live-mark";
 import { Badge, Button, Callout, Field, FieldSet, Switch, Text, toast } from "../ui";
 
-function StateBadge({ ready, checking = false }: { ready: boolean; checking?: boolean }) {
-  return (
-    <Badge color={checking ? undefined : ready ? "green" : "red"}>
-      {checking ? "Checking…" : ready ? "Ready" : "Needs attention"}
-    </Badge>
-  );
+function StateBadge({
+  ready,
+  checking = false,
+  unknown = false,
+}: {
+  ready: boolean;
+  checking?: boolean;
+  /** The host can't report this state until it's asked, so nothing is known to be wrong. */
+  unknown?: boolean;
+}) {
+  if (checking) return <Badge>Checking…</Badge>;
+  if (ready) return <Badge color="green">Ready</Badge>;
+  if (unknown) return <Badge>Not checked</Badge>;
+  return <Badge color="red">Needs attention</Badge>;
 }
 
 type AidenLiveSwitchPatch = Pick<AppSettings, "aidenLiveEnabled" | "aidenLiveButtonVisible">;
@@ -81,6 +89,8 @@ export function AidenLiveSettings(): React.ReactElement {
   const queryClient = useQueryClient();
   const [saving, setSaving] = React.useState(false);
   const liveEnabled = settings.data?.aidenLiveEnabled !== false;
+  // Main runs scheduled tasks unless the setting is explicitly false.
+  const scheduledTasksOn = settings.data?.scheduledTasksEnabled !== false;
   const saveSwitches = async (patch: AidenLiveSwitchPatch) => {
     if (saving) return;
     setSaving(true);
@@ -171,27 +181,31 @@ export function AidenLiveSettings(): React.ReactElement {
           </Field>
           <Field label="Microphone" description="Used only while a Live session is open.">
             <div className="flex items-center gap-2">
-              <StateBadge ready={microphone === "granted"} checking={microphone === null} />
+              <StateBadge
+                ready={microphone === "granted"}
+                checking={microphone === null}
+                unknown={microphone === "unknown"}
+              />
               <Button size="small" variant="filled" onClick={() => void requestMicrophone()}>
                 <Mic />
                 Allow
               </Button>
             </div>
           </Field>
-          <Field
-            label="Screen and Accessibility"
-            description={computerUse.data?.detail ?? "Checking the signed Computer Use helper."}
-          >
-            <div className="flex items-center gap-2">
-              <StateBadge ready={computerUse.data?.ready === true} checking={computerUse.isLoading} />
-              {capabilities.computerUse ? (
+          {capabilities.computerUse ? (
+            <Field
+              label="Screen and Accessibility"
+              description={computerUse.data?.detail ?? "Checking the signed Computer Use helper."}
+            >
+              <div className="flex items-center gap-2">
+                <StateBadge ready={computerUse.data?.ready === true} checking={computerUse.isLoading} />
                 <Button size="small" variant="filled" onClick={() => go("computerUse")}>
                   <MousePointer2 />
                   Manage
                 </Button>
-              ) : null}
-            </div>
-          </Field>
+              </div>
+            </Field>
+          ) : null}
         </FieldSet>
 
         <LiveAudioSettings />
@@ -207,8 +221,8 @@ export function AidenLiveSettings(): React.ReactElement {
             description="Create or review one-time and recurring work through Aiden’s existing scheduled-task interface."
           >
             <div className="flex items-center gap-2">
-              <Badge color={settings.data?.scheduledTasksEnabled ? "green" : undefined}>
-                {settings.data?.scheduledTasksEnabled ? "Enabled" : "Available"}
+              <Badge color={scheduledTasksOn ? "green" : undefined}>
+                {scheduledTasksOn ? "On" : "Off"}
               </Badge>
               <Button size="small" variant="filled" onClick={() => go("scheduledTasks")}>
                 <Clock3 />
