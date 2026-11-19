@@ -538,7 +538,7 @@ import { chatProgressEvents } from "./chat-progress-events.js";
 import { GenerationDeltaCoalescer } from "./generation-delta-coalescer.js";
 import { randomUUID } from "node:crypto";
 import { designModeEnabled } from "./studio/feature-flags.js";
-import { designCanvasSnapshots, designCanvasStore, designGrants, designModeConsent, recentWrittenPages } from "./design-canvas/main.js";
+import { designCanvasSnapshots, designCanvasStore, designGrants, designModeConsent, designSystemOffers, recentWrittenPages } from "./design-canvas/main.js";
 import {
   createDesignCanvasTools,
   DESIGN_MODE_PROMPT_SECTION,
@@ -2797,11 +2797,29 @@ async function prepareGeneration(
    * the next turn's transcript holds it and an unchanged count adds nothing.
    */
   let canvasStatusNoted = false;
+  // The first time design mode is on in a workspace with no design/tokens.css,
+  // the note also offers a tokens file and a specimen page built from the
+  // workspace's own colours and fonts (see `DesignSystemOffers`): only where
+  // this chat could write them, and Aiden writes them only once the person
+  // says yes in chat.
+  const designSystemOfferable =
+    !botContext && !assistantMode && permission !== "none" && permission !== "read-only" && !options.excludeToolNames?.has("write_file");
+  const canvasStatusLine = async (): Promise<string> => {
+    const line = canvasPromptLine(await designCanvasStore.get(params.chatId), params.designView?.selection);
+    if (!folderPath || !designSystemOfferable) return line;
+    try {
+      const offer = await designSystemOffers.offerFor(folderPath, signal);
+      return offer ? `${line} ${offer}` : line;
+    } catch (error) {
+      if (!signal.aborted) logger.warn("pi", "Could not read the workspace's colours and fonts for a design-system offer.", error);
+      return line;
+    }
+  };
   const withCanvasStatus = async (context: AgentContext): Promise<AgentContext> => {
     if (canvasStatusNoted || !(canvasStatusOffered || canvasToolsEntered)) return context;
     canvasStatusNoted = true;
     try {
-      return withCanvasStatusNote(context, canvasPromptLine(await designCanvasStore.get(params.chatId), params.designView?.selection), Date.now());
+      return withCanvasStatusNote(context, await canvasStatusLine(), Date.now());
     } catch (error) {
       logger.warn("pi", "Could not read the design canvas for its status note.", error);
       return context;
@@ -2846,7 +2864,7 @@ async function prepareGeneration(
       if (canvasStatusNoted || !canvasStatusOffered) return undefined;
       canvasStatusNoted = true;
       try {
-        return canvasPromptLine(await designCanvasStore.get(params.chatId), params.designView?.selection);
+        return await canvasStatusLine();
       } catch (error) {
         logger.warn("pi", "Could not read the design canvas for its status note.", error);
         return undefined;

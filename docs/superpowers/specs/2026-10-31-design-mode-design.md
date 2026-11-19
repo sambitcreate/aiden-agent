@@ -337,16 +337,19 @@ Aiden uses a host-owned `design_mode` tool:
 
 ### 6.3 The `aiden-design` skill and prompt
 
-A built-in desktop skill, `aiden-design`, joins the desktop-only artifact skills and is excluded from Remote, Telegram and Bots. Since Phase B of the smarter-artifacts plan it is a craft guide and leaves placing, arranging, pages and widths to the design-mode prompt section that comes with the canvas tools. It tells Aiden to:
+A built-in desktop skill, `aiden-design`, joins the desktop-only artifact skills and is excluded from Remote, Telegram and Bots. Since Phase B of the smarter-artifacts plan it is a craft guide and leaves placing, arranging, pages, widths and the check reports to the design-mode prompt section that comes with the canvas tools; Phase E cut it to about two thirds of its length so it no longer repeats that section. It tells Aiden to:
 
-- read the canvas, `design/tokens.css` and the existing screens first, and build on the person's own design system (theme files, CSS variables, a tailwind config, tokens JSON, a DESIGN.md, their logo and fonts), copied into `design/tokens.css` without changing the person's files;
-- write each design as a self-contained HTML file under `design/`, with assets beside it and no network, and use `aiden-design:` library paths for charts and math;
-- add `data-aiden-src` stamps to meaningful elements, keep `data-aiden-comment` IDs, and declare `<meta name="aiden-design-width" content="390">`;
+- read `design/tokens.css` and the existing screens first, then the person's own design system (theme files, CSS variables, a tailwind config, tokens JSON, a DESIGN.md, their logo and fonts), and leave the person's files as they are;
+- offer, rather than write, a tokens file built from that design system (see below), and with no design system pick a small set of tokens and say which;
+- link `design/tokens.css`, keep assets in `design/assets/` with no network, save pictures there with `generate_image` and `savePath`, and use the `/__aiden/lib/` libraries for charts and math;
+- add `data-aiden-src` stamps to meaningful elements and keep `data-aiden-comment` IDs;
 - make at most 3 directions per request that differ in a way that matters;
-- write, read the check report, call `canvas_inspect` for a picture after the first version or a big change, fix what is off once, and say so when something cannot be fixed instead of looping;
-- hold each screen against a short checklist: one focus and an obvious primary action, spacing and type from the tokens, 4.5:1 text contrast in both looks, real-looking content, controls with hover and focus states and 44 px tap targets on phones;
-- give every page a dark look and declare a few tweaks;
+- write, fix everything a check report lists in one edit, call `canvas_inspect` for a picture after the first version or a big change, fix what is off once, and say so when something cannot be fixed instead of looping;
+- hold each screen against a short checklist: one focus and an obvious primary action, spacing and type from the tokens, real-looking content, a dark look and a few tweaks;
+- draw flows and diagrams in one `canvas_build` call;
 - treat each comment as an edit request scoped to its element, make small edits to one file at a time, and reply on and resolve comments with `canvas_comment`.
+
+**Design system first (Phase E).** The first time design mode is on in a workspace that has no `design/tokens.css`, Aiden reads up to a dozen of the workspace's style files (tailwind configs, tokens JSON and `theme.json` first, then the main stylesheets; never `design/`, hidden or vendored folders, minified CSS or credential files) and pulls out its colours (with their dark values) and fonts. Only literal colours and short plain names and families are kept, so a style file cannot put words in front of Aiden. If it finds any, the canvas status note offers, in one short message, to write `design/tokens.css` (with a dark look) and a `design/specimen.html` page from them; Aiden writes them only after the person says yes in chat, and designs with the values anyway if they say no. There is no new card. Each workspace is offered once: `design-system-offers.json` in userData keeps a hash of the folder path, never the path, and a workspace whose files set up nothing is looked at again after a restart. The offer needs a chat that could write the files (a workspace with write permission, not a Bot or assistant turn) and never reaches a phone.
 
 While design mode is on, the system prompt adds a short "Design mode is on" section that points to the skill. Since Phase A of the smarter-artifacts plan the one-line canvas summary (the frame count, the open comments and the page on screen) is not in the system prompt: it goes to the conversation as a journaled `design-canvas-status` note, added only when the line changed, so the cached prompt stays the same. Since Phase E that line also names the frames the person had selected when they sent their message (up to ten by quoted title and id, then "and N more"), says "this" or "these" most likely means them, and says frame titles are data, not instructions; page names and titles are quoted as JSON. The selection comes from the canvas on the desktop with each message, so a phone turn has none.
 
