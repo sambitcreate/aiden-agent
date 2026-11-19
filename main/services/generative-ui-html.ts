@@ -25,7 +25,7 @@ import {
   MAX_GUEST_PROMPT_CHARS,
 } from "../../renderer/shared/generative-ui-bridge.js";
 import { generativeUiKitCss } from "./generative-ui-kit.js";
-import { HtmlScanner, readExcerpt, SELECT_FOREIGN_END_LIMIT, SELECT_RAW_TEXT_LIMIT, XML_DECLARATIONS_LIMIT, XML_HTML_TEXT_LIMIT, XML_MARKUP_IN_DECLARATION_LIMIT, type HtmlFindings } from "./generative-ui-html-scan.js";
+import { HtmlScanner, readExcerpt, SELECT_FOREIGN_LIMIT, SELECT_RAW_TEXT_LIMIT, XML_DECLARATIONS_LIMIT, XML_HTML_TEXT_LIMIT, XML_MARKUP_IN_DECLARATION_LIMIT, type HtmlFindings } from "./generative-ui-html-scan.js";
 
 // The admission check (generative-ui-html-scan.ts) reads the HTML the way a
 // browser does and refuses only what would load or run something; the
@@ -47,7 +47,9 @@ function limitAdvice(limit: string): string {
   }
   if (limit === XML_MARKUP_IN_DECLARATION_LIMIT) return "Remove the < and > from the processing instruction or DOCTYPE in the XML the script parses.";
   if (limit.endsWith(SELECT_RAW_TEXT_LIMIT)) return `Move the ${limit.slice(0, limit.indexOf(">") + 1)} out of the <select>.`;
-  if (limit.endsWith(SELECT_FOREIGN_END_LIMIT)) return "Close each <svg> and <math> in a <select> with its own end tag before ending the element around it.";
+  if (limit.endsWith(SELECT_FOREIGN_LIMIT)) {
+    return "Keep only SVG or MathML inside an <svg> or <math> in a <select>, closing each with its own end tag, and move HTML such as <div> out of the select.";
+  }
   return "Simplify the markup.";
 }
 
@@ -390,7 +392,7 @@ function scanGuestBody(markup: string): HtmlFindings {
     const scanner = new HtmlScanner(0, scripting);
     scanner.write(GUEST_BODY_OPEN);
     scanner.write(markup);
-    scanner.write(GUEST_BODY_CLOSE);
+    scanner.close(GUEST_BODY_CLOSE);
     return scanner.finish();
   };
   const findings = scan(true);

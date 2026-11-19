@@ -818,7 +818,9 @@ test("html admission names the XML a script parses that it cannot read as the br
 
 // parse5 still drops every tag in a <select> but its options, where
 // Chromium's customizable <select> builds them, and an <svg>, <math> or
-// <style> there is read as SVG, MathML or CSS, as Chromium reads it.
+// <style> there is read as SVG, MathML or CSS, as Chromium reads it. Inside
+// that SVG or MathML only SVG and MathML tags are admitted, since Chromium
+// reads any other tag there by its in-body rules and parse5 by the select's.
 test("html admission reads the elements a <select> holds as Chromium builds them, written or set by a script, finished or streaming", () => {
   const errorImage = `<img src=x onerror="location='javascript:alert(1)'">`;
   const setBySelect = (html: string) => `<div id="d"></div><script>d.innerHTML = '${html.replace(/'/gu, "\\'")}';</script>`;
@@ -837,28 +839,40 @@ test("html admission reads the elements a <select> holds as Chromium builds them
       /cannot load remote images or scripts/u,
     ],
     "an SVG <set> of href": ['<select><option><svg><a><set attributeName="href" to="javascript:alert(1)"/></a></svg></option></select>', /found "to=/u],
-    "an image in an SVG <foreignObject>": [`<select><option><svg><foreignObject>${errorImage}</foreignObject></svg></option></select>`, /found "onerror=/u],
-    "an image in MathML text": [`<select><option><math><mi>${errorImage}</mi></math></option></select>`, /found "onerror=/u],
+    "an image in an SVG <foreignObject>": [
+      `<select><option><svg><foreignObject>${errorImage}</foreignObject></svg></option></select>`,
+      /<img> inside an <svg> or <math> in a <select> is read differently by the browser and the check\. Keep only SVG or MathML/u,
+    ],
+    "an image in MathML text": [`<select><option><math><mi>${errorImage}</mi></math></option></select>`, /<img> inside an <svg> or <math> in a <select>/u],
     "a style sheet": ['<select><style>p{background:url("javascript:alert(1)")}</style></select>', /found "url\(\\"javascript:alert\(1\)\\"\)"/u],
     "a style sheet in an SVG <foreignObject>": [
       '<select><option><svg><foreignObject><style>p{background:url(javascript:alert(1))}</style></foreignObject></svg></option></select>',
-      /found "url\(/u,
+      /<style> inside an <svg> or <math> in a <select>/u,
     ],
+    // Chromium builds the <div> in the <desc> and leaves the <svg> at </desc>,
+    // so it reads the CDATA opener as a comment ending at its first > and
+    // builds the image; parse5 drops the <div> and reads the CDATA as text.
+    "an image after a <div> in an SVG <desc>": [
+      `<select><svg><desc><div></desc><![CDATA[>${errorImage}]]></svg></select>`,
+      /<div> inside an <svg> or <math> in a <select>/u,
+    ],
+    "an image after HTML that leaves an <svg>": [`<select><svg><b>x</b><![CDATA[>${errorImage}]]></svg></select>`, /<b> inside an <svg> or <math>/u],
+    "an image after a </p> in an <svg>": [`<select><svg></p><![CDATA[>${errorImage}]]></svg></select>`, /<\/p> inside an <svg> or <math>/u],
     // Chromium closes the <svg> at </option> and reads the CDATA opener as a
     // comment ending at its first >, so the image is built.
     "an image after an SVG an option's end tag closes": [
       `<select><option><svg></option><![CDATA[></select>${errorImage}]]></select>`,
-      /<\/option> ends an <svg> or <math> in a <select> that is still open\. Close each <svg> and <math>/u,
+      /<\/option> inside an <svg> or <math> in a <select> is read differently by the browser and the check\. Keep only SVG or MathML inside an <svg> or <math> in a <select>, closing each with its own end tag/u,
     ],
     "a script after MathML a <div>'s end tag closes": [
       `<select><div><math><mi>x</mi></div><script>location&#61;'#';document.body.innerHTML='<iframe></iframe>'</script></select>`,
-      /<\/div> ends an <svg> or <math>/u,
+      /<\/div> inside an <svg> or <math>/u,
     ],
     // Chromium ignores a </select> inside a <foreignObject>, so the <svg>
     // stays open and its <script> decodes &#39;.
     "an SVG script after a </select> in a <foreignObject>": [
       `<select><svg><foreignObject></select></foreignObject><script>x='&#39;';document.body.innerHTML='<iframe></iframe>'</script></svg>`,
-      /<\/select> ends an <svg> or <math>/u,
+      /<\/select> inside an <svg> or <math>/u,
     ],
     // Chromium reads an <xmp>'s content as text up to </xmp>, so the comment
     // opener is text and the frame is built; parse5 drops the <xmp> and reads
@@ -894,6 +908,9 @@ test("html admission reads the elements a <select> holds as Chromium builds them
     "<select><option><svg><circle r=1></select><p>after</p>",
     "<select><option>Notes</option></select><textarea>x</textarea>",
     "<select><template><xmp>x</xmp></template></select>",
+    // An SVG <select> left open: the host's closing markup after the visual
+    // does not refuse what the streamed draft admitted.
+    "<select><svg><select>C",
     setBySelect(`<select><option>${icon}Red</option></select>`),
   ];
   for (const html of admitted) {

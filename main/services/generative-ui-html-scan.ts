@@ -59,7 +59,7 @@
 // Labels ("JavaScript: 41%"), comparisons in scripts ("i<base && i>0") and
 // plain strings pass.
 
-import { Parser, Token, defaultTreeAdapter, html as htmlSpec, type DefaultTreeAdapterMap, type DefaultTreeAdapterTypes, type TreeAdapter } from "parse5";
+import { Parser, Token, defaultTreeAdapter, foreignContent, html as htmlSpec, type DefaultTreeAdapterMap, type DefaultTreeAdapterTypes, type TreeAdapter } from "parse5";
 
 type Element = DefaultTreeAdapterTypes.Element;
 
@@ -87,8 +87,12 @@ export const MAX_HTML_FOSTER_PARENTED = 16_384;
 
 class StructureLimit extends Error {}
 
-/** Refused (after the end tag that does it): an end tag in a <select> that closes an <svg> or <math> it is not part of. */
-export const SELECT_FOREIGN_END_LIMIT = "ends an <svg> or <math> in a <select> that is still open";
+/**
+ * Refused (at the tag): inside an <svg> or <math> in a <select>, a start tag
+ * parse5 does not read as SVG or MathML, or an end tag that does not close an
+ * SVG or MathML element there (or the <select> itself).
+ */
+export const SELECT_FOREIGN_LIMIT = "inside an <svg> or <math> in a <select> is read differently by the browser and the check";
 
 /** Refused (at the start tag): a raw-text or RCDATA element in a <select>, which Chromium reads as text where parse5 reads markup. */
 export const SELECT_RAW_TEXT_LIMIT = "in a <select> has content the browser reads as text and the check reads as markup";
@@ -1685,6 +1689,8 @@ export class HtmlScanner {
   /** <script> and <style> elements whose text has not been checked yet. */
   private readonly rawText = new Set<Element>();
   private finished = false;
+  /** Whether the host's closing markup is being read (see `close`). */
+  private closing = false;
   private elements = 0;
   private fosterParented = 0;
   /** The attributes of start tags already checked as the tokenizer emitted them. */
@@ -1766,6 +1772,9 @@ export class HtmlScanner {
       if (SELECT_RAW_TEXT.has(token.tagName) && modes.select.has(select) && !parser.shouldProcessStartTagTokenInForeignContent(token)) {
         throw new StructureLimit(`<${token.tagName}> ${SELECT_RAW_TEXT_LIMIT}`);
       }
+      if (modes.select.has(select) && this.foreignAboveSelect() && (!parser.shouldProcessStartTagTokenInForeignContent(token) || foreignContent.causesExit(token))) {
+        throw new StructureLimit(`<${token.tagName}> ${SELECT_FOREIGN_LIMIT}`);
+      }
       if (SELECT_BODY_CONTENT.has(token.tagName) && modes.select.has(select) && !parser.shouldProcessStartTagTokenInForeignContent(token)) {
         parser.insertionMode = modes.body;
         onStartTag.call(this.parser, token);
@@ -1776,21 +1785,29 @@ export class HtmlScanner {
       }
       onStartTag.call(this.parser, token);
     };
-    // An end tag in an <svg> or <math> in a <select> that no element of that
-    // subtree matches reaches the <select>'s rules in parse5, which ignore it
-    // and keep the subtree open, where Chromium's in-body rules close it
-    // (`<option><svg></option>`). What follows would then be read as SVG or
-    // MathML (a CDATA section, character references in a <script>) where
-    // Chromium reads HTML, so it is refused. `</select>` closes the subtree
-    // both ways, unless an SVG <foreignObject>, <desc> or <title> or MathML
-    // text holds what is open: Chromium then ignores it and stays in the
-    // subtree, where parse5 closes the <select>, so that is refused too.
+    // Inside an <svg> or <math> in a <select>, Chromium reads tags by its
+    // in-body rules, where parse5 reads only SVG and MathML as foreign content
+    // and hands every other tag to the <select>'s rules, which drop most of
+    // them. An HTML start tag there (or one that leaves foreign content, such
+    // as <div>) is built by Chromium and dropped by parse5, and an end tag
+    // that closes no SVG or MathML element (`<option><svg></option>`) closes
+    // the subtree in Chromium and is ignored by parse5, so what follows could
+    // be read as markup by one and text, CDATA or SVG by the other. Only SVG
+    // and MathML tags are kept, and `</select>` when both close the <select>:
+    // when an SVG <foreignObject>, <desc> or <title> or MathML text holds what
+    // is open, Chromium ignores it and stays in the subtree. The host's own
+    // closing markup after a visual (`close`) is not refused.
     const onEndTag = this.parser.onEndTag;
     if (typeof onEndTag !== "function") throw new Error("parse5 no longer exposes the end-tag hook the HTML check needs.");
     this.parser.onEndTag = (token) => {
-      if (modes.select.has(parser.insertionMode) && !this.endsForeignElement(token.tagName)) {
-        const closes = token.tagName === "select" ? this.parser.openElements.hasInScope(htmlSpec.TAG_ID.SELECT) : !parser.currentNotInHTML;
-        if (!closes) throw new StructureLimit(`</${token.tagName}> ${SELECT_FOREIGN_END_LIMIT}`);
+      if (!this.closing && modes.select.has(parser.insertionMode)) {
+        const { openElements } = this.parser;
+        const tag = token.tagName;
+        const kept = this.foreignAboveSelect()
+          ? (tag !== "p" && tag !== "br" && this.endsForeignElement(tag)) ||
+            (tag === "select" && openElements.hasInScope(htmlSpec.TAG_ID.SELECT) && openElements.hasInSelectScope(htmlSpec.TAG_ID.SELECT))
+          : tag !== "select" || openElements.hasInScope(htmlSpec.TAG_ID.SELECT);
+        if (!kept) throw new StructureLimit(`</${tag}> ${SELECT_FOREIGN_LIMIT}`);
       }
       onEndTag.call(this.parser, token);
     };
@@ -1810,6 +1827,21 @@ export class HtmlScanner {
   write(chunk: string): void {
     if (this.finished || chunk.length === 0) return;
     this.run(() => this.parser.tokenizer.write(chunk, false));
+  }
+
+  /**
+   * Parses the host's own markup after a visual, which ends the body and the
+   * document. Its end tags are read as a browser reads them but not refused
+   * for what the visual left open, so a visual gets the verdict the draft
+   * check (which never sees them) gives it.
+   */
+  close(chunk: string): void {
+    this.closing = true;
+    try {
+      this.write(chunk);
+    } finally {
+      this.closing = false;
+    }
   }
 
   /**
@@ -1912,6 +1944,19 @@ export class HtmlScanner {
       const element = openElements.items[index] as Element;
       if (treeAdapter.getNamespaceURI(element) === htmlSpec.NS.HTML) return false;
       if (treeAdapter.getTagName(element).toLowerCase() === tagName) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Whether an SVG or MathML element is open inside the innermost open
+   * <select>, so the tags read now are in its foreign content.
+   */
+  private foreignAboveSelect(): boolean {
+    const { openElements, treeAdapter } = this.parser;
+    for (let index = openElements.stackTop; index > 0; index -= 1) {
+      if (treeAdapter.getNamespaceURI(openElements.items[index] as Element) !== htmlSpec.NS.HTML) return true;
+      if (openElements.tagIDs[index] === htmlSpec.TAG_ID.SELECT) return false;
     }
     return false;
   }
