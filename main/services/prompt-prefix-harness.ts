@@ -35,6 +35,7 @@ import {
   planChatTurnState,
   turnNoteMessage,
   withHeadChatState,
+  withApprovedMemoryFacts,
   withoutForgottenFactsSession,
   type ChatTurnState,
   type JournaledChatState,
@@ -337,9 +338,14 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
     let resolved: { assembly: ChatPromptAssembly } | { systemPrompt: string; tools: AgentTool[] };
     if ("chatState" in input) {
       const { chatState } = input;
-      const current: ChatTurnState = { branch: chatState.branch, permission: chatState.permission, ...extensionChatState(chatState.extensions) };
+      const branch = await session.getBranch();
+      const current: ChatTurnState = await withApprovedMemoryFacts(
+        { branch: chatState.branch, permission: chatState.permission, ...extensionChatState(chatState.extensions) },
+        branch,
+        chatState.extensions,
+      );
       const plan = planChatTurnState({
-        journaled: journaledChatState(await session.getBranch()),
+        journaled: journaledChatState(branch),
         current,
         prompt: true,
       });

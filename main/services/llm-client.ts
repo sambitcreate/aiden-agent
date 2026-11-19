@@ -435,6 +435,7 @@ import {
   planChatTurnState,
   turnNoteMessage,
   withHeadChatState,
+  withApprovedMemoryFacts,
   withoutForgottenFactsSession,
   type ChatTurnState,
 } from "./chat-frozen-state.js";
@@ -3949,13 +3950,17 @@ export const llmClient = {
       // prefix. A skills-free turn reads a projection, not the journal, so it
       // states the current values and records no head. The approval gate
       // keeps enforcing the current mode, which the update names.
-      const currentChatState: ChatTurnState = {
+      const stateBranch = await piSession.getBranch();
+      // A fact the always-on cap pushed out is still approved, so it is not
+      // a removal: the store is read for it only when the journal states a
+      // fact the block lacks.
+      const currentChatState: ChatTurnState = await withApprovedMemoryFacts({
         branch: git.branch ?? null,
         permission,
         ...extensionChatState(runtimeExtensions),
-      };
+      }, stateBranch, runtimeExtensions);
       const chatStatePlan = planChatTurnState({
-        journaled: skillsEnabledForTurn ? journaledChatState(await piSession.getBranch()) : undefined,
+        journaled: skillsEnabledForTurn ? journaledChatState(stateBranch) : undefined,
         current: currentChatState,
         prompt: generationChat.messages.some((message) => message.role === "user"),
       });

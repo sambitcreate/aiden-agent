@@ -216,10 +216,15 @@ const wires: { wire: PromptPrefixWire; midConversationSystem: boolean; label: st
   { wire: "openai-responses", midConversationSystem: true, label: "OpenAI Responses with in-place system messages" },
 ];
 
-/** A store holding only always-on facts, read through the real memory extension. */
+/**
+ * A store whose active facts are `facts`, newest first, read through the real
+ * memory extension: like the real store, the always-on block holds the newest
+ * six, and the rest stay approved and recallable.
+ */
 function memoryStore(facts: MemoryFact[]): MemoryStore {
   return {
-    alwaysOn: async () => facts,
+    alwaysOn: async () => facts.slice(0, 6),
+    list: async () => facts,
     recall: async () => [],
   } as unknown as MemoryStore;
 }
@@ -1053,6 +1058,9 @@ describe("prompt prefix stability: causes fixed by later phases", () => {
       ["a head fact", [facts.m1, facts.m3], [facts.m1], "Deploys on Fridays."],
       ["a fact an update added", [facts.m1, facts.m2], [facts.m1], "Uses pnpm."],
       ["memory turned off", [facts.m1, facts.m3], [], "Deploys on Fridays."],
+      // A row the store did not normalize (an old import, an edited
+      // database) still renders as one line, so it leaves as a whole.
+      ["a fact stored across lines", [facts.m1, memoryFact("m4", "Deploys on Fridays.\nAsk before the release train.")], [facts.m1], "release train"],
     ] as const) {
       const harness = createPromptPrefixHarness();
       const turn = async (prompt: string, memory: readonly MemoryFact[]) =>
@@ -1066,9 +1074,31 @@ describe("prompt prefix stability: causes fixed by later phases", () => {
       for (const [name, request] of [["the forget turn", forgot!], ["the next turn", later!]] as const) {
         assert.equal(request.carries(forgotten), false, `${label}: ${name} carries the forgotten fact`);
       }
-      assert.match(tailOf(forgot!), /Removed facts, no longer approved, so do not rely on them: [^\n]*\[memory:m[23]\]/u, label);
+      assert.match(tailOf(forgot!), /Removed facts, no longer approved, so do not rely on them: [^\n]*\[memory:m[2-4]\]/u, label);
       assert.deepEqual(comparePromptRequests(forgot!, later!), {}, `${label}: the rebuilt head holds on the next turn`);
     }
+  });
+
+  test("a fact the always-on cap pushes out is not a removal and does not change system", async () => {
+    const harness = createPromptPrefixHarness();
+    const stored: MemoryFact[] = [];
+    const requests: RecordedPromptRequest[] = [];
+    // One new always-on fact per turn; the seventh pushes the first out of the block of six.
+    for (let n = 1; n <= 7; n += 1) {
+      stored.unshift(memoryFact(`m${n}`, `Fact number ${n}.`));
+      requests.push(...await harness.turn({ prompt: `Turn ${n}.`, responses: reply("Done."), ...(await memoryChat([...stored])) }));
+    }
+    for (let index = 1; index < requests.length; index += 1) {
+      assert.deepEqual(comparePromptRequests(requests[index - 1]!, requests[index]!), {}, `request ${index + 1} keeps the prefix`);
+    }
+    const seventh = tailOf(lastOf(requests));
+    assert.match(seventh, /No longer always-on, still approved and found with recall_memory: \[memory:m1\]/u);
+    assert.match(seventh, /Added facts:\n- \[memory:m7\] Fact number 7\./u);
+    assert.doesNotMatch(seventh, /Removed facts|no longer approved/u, "a fact that is still approved is not called removed");
+    // Forgetting the pushed-out fact is a removal: system is rebuilt without it.
+    const [forgot] = await harness.turn({ prompt: "Forget the first.", responses: reply("Done."), ...(await memoryChat(stored.slice(0, -1))) });
+    assert.equal(forgot!.carries("Fact number 1."), false);
+    assert.match(tailOf(forgot!), /Removed facts, no longer approved, so do not rely on them: \[memory:m1\]/u);
   });
 
   test("a retried prompt the journal holds records no head without its state update", async () => {
