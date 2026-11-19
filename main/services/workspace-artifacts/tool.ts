@@ -1124,8 +1124,14 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
           if (artifact.revision === found) {
             // The page already matched that version, so no revision was made and
             // this reply moved the page nowhere: its undo step and the revisions
-            // it went through stay as they were.
-            if (artifact.approvedDigest !== current.artifact.approvedDigest) {
+            // it went through stay as they were. It can still have added the
+            // approval just given, or brought back that revision's markup
+            // spacing as the source to edit, and open tabs hear of either.
+            if (
+              artifact.approvedDigest !== current.artifact.approvedDigest ||
+              artifact.markup !== current.artifact.markup ||
+              artifact.markupDropped !== current.artifact.markupDropped
+            ) {
               options.onChanged({ workspaceId, artifactId: artifact.id, reason: "updated", chatId });
             }
             return text(

@@ -1025,6 +1025,31 @@ test("a restore the page already matches makes no revision, says so with the pag
   );
 });
 
+test("a restore the page already matches still tells open tabs when it brings back that revision's markup spacing", async (t) => {
+  const { store, call, events, nextTurn } = await harness(t, { permission: "full" });
+  await call("c1", { operation: "create", title: "Open PRs", markup: PAGE });
+  nextTurn();
+  await store.replace("ws1", "art1", { ...(await store.get("ws1", "art1"))!.artifact, title: "Open PRs", description: "theirs" } as never);
+  await store.restore("ws1", "art1", 1);
+  // Another chat re-spaces the markup: the same page, so no revision, but a different source to edit.
+  const spaced = `${PAGE}\n\n`;
+  await store.replace("ws1", "art1", { ...(await store.get("ws1", "art1"))!.artifact, title: "Open PRs", markup: spaced } as never);
+  assert.equal((await store.get("ws1", "art1"))!.artifact.markup, spaced);
+  events.length = 0;
+
+  const reply = await call("r1", { operation: "restore", id: "art1", revision: 1 });
+  assert.match(reply, /already matches revision 1/u);
+  const page = (await store.get("ws1", "art1"))!.artifact;
+  assert.equal(page.revision, 3);
+  assert.equal(page.markup, PAGE, "revision 1's markup is the source again");
+  assert.deepEqual(events.map((event) => [event.artifactId, event.reason]), [["art1", "updated"]], "open tabs hear the source changed");
+
+  // A restore that changes nothing at all stays quiet.
+  events.length = 0;
+  await call("r2", { operation: "restore", id: "art1", revision: 1 });
+  assert.deepEqual(events, []);
+});
+
 test("baseVersion is checked again under the store's lock, so a save landing while this one is prepared refuses it", async (t) => {
   const { store, call, nextTurn } = await harness(t, { permission: "full" });
   await call("c1", { operation: "create", title: "Open PRs", markup: PAGE });
