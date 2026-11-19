@@ -486,6 +486,7 @@ Tests: `compaction-cached-prefix.test.ts` (in `test:compaction` and the CI regis
   - A stopped, failed or detached reply, a closed window, or a reply from another window ends it. The chat pane calls `chats:releaseCacheWarming` when it moves away from the chat, and only the window that showed the chat can release its warmer. Each chat keeps one warmer (`adoptChatCacheWarmer`).
   - Every chat write (a new message, a model switch, a compaction) stops it at the next refresh, through the summary revision fence.
   - Unattended chats never create one (`canWarmForegroundChat`).
+  - Every refresh, streaming or idle, first asks the spending gate compaction precompute uses (`precomputeWithinSpendingLimit`, after counted usage settles). Once the chat's or Bot's limit refuses, the warmer ends for good.
 - **`aiden serve`.** `daemonSettingsManager` follows the profile's `cacheWarmingEnabled` in aiden.json, the switch the desktop saves. On, an attended chat turn warms while the reply streams ("streaming"); off, or for a Bot, Telegram or scheduled run, Pi never sends a refresh. Pi's settings.json `cacheWarming`, and Pi's "idle" default, are ignored. The streaming fallback is gone. `packages/cli/README.md` documents the switch.
 - **Long retention.** Settings → Context & Limits gains a **Cache lifetime** group, below the warming group and its footnote, with **Keep chat caches for an hour** (`longPromptCacheRetention`, off by default, carried in portable config). The allowlist is `renderer/shared/prompt-cache-retention.ts` (Anthropic and Amazon Bedrock), with `supportsLongPromptCacheRetention` for the models Pi sends a long TTL for (Claude on Anthropic Messages, and the Claude 4.5 and later models on Bedrock). The switch is unavailable, with a reason, until an allowlisted provider is set up.
   - `chatTurnPromptCache` (`prompt-cache-lifetimes.ts`) decides per turn and puts `withLongPromptCacheRetention` outermost on foreground workspace chats only, so the countdown, miss telemetry, side-call ledger and warmer all see "long". Bots, automations, subagents, agent harnesses and turns a paired device starts keep the default lifetime, and side calls and compaction name their own.
@@ -511,13 +512,14 @@ The code differed from the plan in these ways:
 - **No Remote contract change.** The setting is desktop-local and no Aiden Remote payload changed, so the iOS and Android clients need no update. No onboarding change.
 
 Tests:
-- `pi-cache-warming.test.ts` (fake clock): the period follows the lifetime for each retention; the idle phase stops after its limit, on release by the window that showed the chat, and on a chat write; another window cannot release it; an unattended chat never creates one.
+- `pi-cache-warming.test.ts` (fake clock): the period follows the lifetime for each retention; the idle phase stops after its limit, on release by the window that showed the chat, and on a chat write; another window cannot release it; an unattended chat never creates one; no refresh is sent once the spending limit refuses, while streaming or idle.
 - `prompt-cache-lifetimes.test.ts`: long and none lifetimes, the compat refusal, and the wrapper asking for "long" only on allowlisted models and never overriding a retention a request names.
 - `prompt-cache-lifetimes.test.ts` (`chatTurnPromptCache` fixtures): an attended workspace chat on Anthropic or Bedrock Claude 4.5 and later asks for "long" while its side calls stay "short" or "none"; the setting off, a harness, a Bot, an automation, a scheduled run, a subagent, compaction, Telegram, a paired device's turn, OpenRouter routing to Anthropic, a custom endpoint and an older Bedrock Claude all stay short.
 - `side-call-prefix.test.ts`: a side call after a long parent sends "short" and reads the parent's entry within the hour.
 - `config-store-core.test.ts`: the setting survives a save.
 - `limits-settings.test.tsx`: the switch can be turned on only with an allowlisted provider; left on after that provider is removed it reads as paused and can still be turned off; it and warming save independently; and the warming footnote sits in the warming group, not the hour's.
 - `packages/cli/tests/daemon-turns.test.mjs`: a long reply on `aiden serve` sends a one-token refresh only when the profile turns warming on, and never for a scheduled run or with the setting missing, off or malformed.
+- `packages/cli/tests/daemon-turns.test.mjs` (serve compaction): a fact the chat was told and then forgot reaches neither the summarizer nor the stored summary, and a summary still stating a fact across lines fails the compaction and stores nothing.
 
 ## Phase 7: screenshot trimming in batches, retire the Gemini explicit cache
 

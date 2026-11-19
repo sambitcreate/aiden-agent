@@ -97,3 +97,11 @@ Plan: `docs/plans/prompt-cache-hit-rate.md` (one PR, phases 0-8).
 - Serve: `daemonSettingsManager(cwd, agentDir, {attended})` -> "streaming" only when aiden.json `cacheWarmingEnabled === true` and attended (!botAdmission && !telegram/scheduled); settings.json cacheWarming ignored; read once per session. No long retention on serve.
 - Decisions: memory limit ACCEPTED (facts stay in head; a fact-free summarize view is not a byte prefix). CLI workspace chats: no frozen-state change needed. Deviations owned by phase 8: serve ledger + compaction coordinator, serve long retention, child-agent cached compaction, replay-gate cached-prefix case. Fork summaries isolated, accepted (branch point != ledger tail).
 - No Remote contract change; no onboarding change.
+
+### Phase 6 review round 1 (2026-11-19)
+
+- 20f710f8b: `PiCacheWarmer` deps `withinSpendingLimit` (llm-client passes `precomputeWithinSpendingLimit`); checked before every refresh, refusal disposes the warmer.
+- 383b04925: serve compaction filter. `packages/cli/src/daemon-compaction-memory.ts` `compactWithoutMemoryFacts` runs Pi's `compact()` inside `session_before_compact` with the desktop's `withoutMemoryFacts`/`withoutStatedMemoryFacts`; facts = branch (`memoryFactLinesInBranch`, now exported from chat-frozen-state.ts) + per-chat in-memory `toldFacts` (daemon-chats `memoryFactsTold`, fed by the memory extension, cleared on chat delete) + approved now. Any error -> `{cancel:true}`. A split turn sends two summarizer requests. Accepted limits: toldFacts not persisted (privacy), recalled-then-removed facts not filtered (desktop too).
+- 8dac1b284: `chatTurnPromptCache(scope, stream, model)` + pure `keepsLongPromptCache(scope)` in prompt-cache-lifetimes.ts; excludes setting off, harness, Bot, usageSource other than chat, assistant-automation, `ownerKind: "remote"` (paired device turns).
+- 88321aa55: Settings split: "Prompt cache" (warming + footnote) and "Cache lifetime" (hour switch); copy names Bedrock Claude 4.5+. Bedrock gate is Aiden's `BEDROCK_HOUR_CLAUDE` (Pi 1.5.2 sends 1h for any caching Claude); AWS table (checked 2026-11-19) lists Haiku 4.5, Opus 4.5+, Sonnet 4.5 not listed.
+- b017980cf + later: Phase 8 bullets for serve warming/hour, serve ledger+coordinator, child-agent compaction (only if replay shows >5%), cached-prefix replay case, each with its test.
