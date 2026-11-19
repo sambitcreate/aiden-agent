@@ -395,6 +395,8 @@ export async function syncChatMessagesToPiSession(
   model: Model<Api>,
   _supportsImages: boolean,
   contentOverrides: ReadonlyMap<string, string> = new Map(),
+  /** Host messages journaled right after a visible message, in its transaction (hook context, state update). */
+  followingMessages: ReadonlyMap<string, readonly AgentMessage[]> = new Map(),
 ): Promise<void> {
   const entries = await session.getBranch();
   const synchronized = new Set(
@@ -428,6 +430,9 @@ export async function syncChatMessagesToPiSession(
       // that exact terminal projection instead of duplicating the answer.
       if (!visibleAssistantAlreadyAtTail(tail, message, desired)) {
         await session.appendMessage(desired);
+      }
+      for (const following of followingMessages.get(message.id) ?? []) {
+        await session.appendMessage(following);
       }
       await session.appendCustomEntry(AIDEN_CHAT_MESSAGE_MARKER, {
         chatMessageId: message.id,

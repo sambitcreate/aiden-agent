@@ -70,6 +70,11 @@ export interface PromptPrefixHarnessOptions {
 
 export type PromptPrefixTurnInput = {
   prompt: string;
+  /**
+   * Host messages llm-client journals right after the prompt, built with the
+   * production helper (`hookContextMessage`).
+   */
+  following?: (promptTimestamp: number) => AgentMessage[];
   /** Scripted assistant steps for this turn, in order. */
   responses: FauxResponseStep[];
 } & (
@@ -337,9 +342,11 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
         return core.streamSimple(requestModel, context, streamOptions);
       },
     });
+    const timestamp = Date.now();
     const outcome = await runtime.runManaged({
       kind: "append-and-run",
-      message: { role: "user", content: input.prompt, timestamp: Date.now() },
+      message: { role: "user", content: input.prompt, timestamp },
+      ...(input.following ? { following: input.following(timestamp) } : {}),
     });
     if (outcome.kind !== "completed") throw new Error(`Prompt prefix harness turn ${thisTurn} ended ${outcome.kind}.`);
     return recorded;

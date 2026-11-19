@@ -44,6 +44,7 @@ import { withUsageLimitWait } from "./usage-limit-stream.js";
 import { createPiSessionPort, type PiSessionPort } from "./pi-session-port.js";
 import { migratePiSessionJournal } from "./pi-session-migration.js";
 import { upgradeOldPiV4File } from "./pi-session-v4-upgrade.js";
+import { hookContextMessage } from "./workspace-chat-hooks.js";
 
 const ZERO_COST = {
   input: 0,
@@ -1500,6 +1501,24 @@ test("chat synchronization is idempotent and markers stay out of context", async
     2,
   );
   assert.equal((await session.buildContext()).messages.length, 2);
+});
+
+test("host messages that follow a chat message are journaled right after it, once", async () => {
+  const { model } = compactionFixture();
+  const session = await memorySession();
+  const prompt: ChatMessage = { id: "user-1", role: "user", content: "Hello", createdAt: 10 };
+  const reply: ChatMessage = { id: "assistant-1", role: "assistant", content: "Hi", createdAt: 20 };
+  const hook = hookContextMessage("[Aiden hook] ticket: OPS-12", 10);
+  const following = new Map([["user-1", [hook]]]);
+
+  await syncChatMessagesToPiSession(session, [prompt], model, false, new Map(), following);
+  // A retry of the same turn finds the prompt journaled and adds nothing.
+  await syncChatMessagesToPiSession(session, [prompt], model, false, new Map(), following);
+  await syncChatMessagesToPiSession(session, [prompt, reply], model, false);
+
+  const sent = (await session.buildContext()).messages.map((message) => [message.role, JSON.stringify(message)]);
+  assert.deepEqual(sent.map(([role]) => role), ["user", "custom", "assistant"]);
+  assert.match(sent[1]![1]!, /OPS-12/u);
 });
 
 test("chat synchronization keeps historical images model-neutral", async () => {

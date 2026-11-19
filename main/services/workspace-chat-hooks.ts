@@ -125,14 +125,17 @@ export interface WorkspaceChatHooks {
   /** The harness `onStop` callback: a Stop hook may keep the turn going. */
   onStop(event: PiRuntimeStopEvent): Promise<PiRuntimeStopDecision | undefined>;
   /**
-   * PostToolUse plus per-turn context (UserPromptSubmit and SessionStart),
-   * placed after the current prompt and never saved as the person's words.
-   * PreToolUse context rides on its tool's result, and a hook's stop ends the
-   * turn after the tool batch it came from.
+   * PostToolUse context, plus per-turn context (UserPromptSubmit and
+   * SessionStart) that could not be journaled, placed after the current
+   * prompt and never saved as the person's words. A turn with a new prompt
+   * journals its context instead (`hookContextMessage`), so `turnContext`
+   * answers only a turn without one. PreToolUse context rides on its tool's
+   * result, and a hook's stop ends the turn after the tool batch it came from.
    */
   extension(options: {
     /** The current prompt's timestamp; without one the last user message carries the context. */
     promptTimestamp(): number | undefined;
+    /** Turn context that is not journaled, added to this turn's requests only. */
     turnContext(): string | undefined;
     /** UserPromptSubmit context for the mid-flight input this user message is, on that message only. */
     inputContext?(message: { timestamp: number; text: string }): string | undefined;
@@ -197,6 +200,28 @@ export function hookTurnContextText(parts: readonly (string | undefined)[]): str
   const present = parts.filter((part): part is string => Boolean(part?.trim()));
   if (present.length === 0) return undefined;
   return `[Aiden hook] Context from the person's hooks for this turn:\n\n${present.join("\n\n")}`;
+}
+
+/** The Pi custom type of a turn's hook context, journaled right after the prompt it belongs to. */
+export const HOOK_CONTEXT_CUSTOM_TYPE = "aiden-hook-context";
+
+/**
+ * A turn's hook context as Pi custom-message fields. Both the desktop and the
+ * server save it right after the prompt it belongs to, hidden from the
+ * transcript, so every later request repeats the same history and the
+ * provider's cached prefix holds.
+ */
+export function hookContextCustomMessage(text: string): {
+  customType: typeof HOOK_CONTEXT_CUSTOM_TYPE;
+  content: string;
+  display: false;
+} {
+  return { customType: HOOK_CONTEXT_CUSTOM_TYPE, content: text, display: false };
+}
+
+/** `hookContextCustomMessage` as the journaled message that follows the prompt sent at `timestamp`. */
+export function hookContextMessage(text: string, timestamp: number): AgentMessage {
+  return { role: "custom", ...hookContextCustomMessage(text), timestamp };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

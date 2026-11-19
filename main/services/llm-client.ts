@@ -215,6 +215,7 @@ import {
   preCompactSummaryInstructions,
   runPromptIntakeHooks,
   screenRunInputWithHooks,
+  hookContextMessage,
 } from "./workspace-chat-hooks.js";
 import { chatSurfaceHooks } from "./agent-surface-hooks.js";
 import type { ComputerUseController } from "./computer-use/controller.js";
@@ -3588,6 +3589,8 @@ export const llmClient = {
     let cacheWarmer: PiCacheWarmer | undefined;
     let lastContextPressure: ChatContextPressureV1 | undefined;
     let currentPromptMessage: AgentMessage | undefined;
+    // Host messages journaled right after the current prompt: its hook context.
+    let turnFollowingMessages: AgentMessage[] = [];
     let journalContentOverrides: ReadonlyMap<string, string> = new Map();
     let piJournalHealthy = true;
     let piJournalStopNoted = false;
@@ -3749,7 +3752,10 @@ export const llmClient = {
                       currentPromptMessage && "timestamp" in currentPromptMessage
                         ? currentPromptMessage.timestamp
                         : undefined,
-                    turnContext: () => hookTurnContext,
+                    // A turn with a new prompt journals its context right
+                    // after the prompt (`turnFollowingMessages`); only a turn
+                    // without one adds it to its own requests.
+                    turnContext: () => (currentPromptMessage ? undefined : hookTurnContext),
                     inputContext: hookInputContexts.lookup,
                   }),
                 ]
@@ -4041,8 +4047,9 @@ export const llmClient = {
         ? generationChat.messages.filter((message) => message.id !== currentUser.id)
         : generationChat.messages;
       // SessionStart, then UserPromptSubmit, before the model sees the turn.
-      // Their context rides this turn only (the `aiden.hooks` extension) and
-      // is never saved as the person's words. A SessionStart `continue: false`
+      // Their context is journaled right after the prompt as a hidden host
+      // message (`hookContextMessage`, the server's shape too), so later
+      // requests repeat it, and is never saved as the person's words. A SessionStart `continue: false`
       // or a refused prompt throws here, so the turn ends with no model call.
       // A retried prompt that was blocked before loses its mark, on
       // `currentUser` too, so the journal takes it in order below.
@@ -4136,6 +4143,10 @@ export const llmClient = {
             contentOverrides.get(currentUser.id),
           )
         : undefined;
+      turnFollowingMessages =
+        currentPromptMessage && hookTurnContext
+          ? [hookContextMessage(hookTurnContext, currentPromptMessage.timestamp)]
+          : [];
       // One read of the journal's whole branch gives both the model context
       // and the run's starting taint. Outside content already in the
       // transcript taints the run from the start, including what a compaction
@@ -4394,13 +4405,14 @@ export const llmClient = {
           },
           ...(currentUser
             ? {
-                appendInput: async () => {
+                appendInput: async (_session, _message, following) => {
                   await syncChatMessagesToPiSession(
                     promptJournal,
                     [currentUser],
                     model,
                     supportsImages,
                     contentOverrides,
+                    new Map([[currentUser.id, following]]),
                   );
                 },
               }
@@ -5840,7 +5852,7 @@ export const llmClient = {
         const reasoningLengthBeforeAttempt = reasoning.length;
         const runtimeOutcome = await agent.runManaged(
           currentPromptMessage
-            ? { kind: "append-and-run", message: currentPromptMessage }
+            ? { kind: "append-and-run", message: currentPromptMessage, following: turnFollowingMessages }
             : { kind: "continue-durable-tail" },
           {
             beforeDurableTurn: async (signal) => {

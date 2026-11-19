@@ -33,6 +33,7 @@ import { composeBotSystemSections } from "./bot-system-prompt.js";
 import { assembleChatPrompt, buildWorkspaceChatBasePrompt, type ChatPromptAssembly } from "./chat-prompt-assembly.js";
 import { buildSystemPrompt, type ChatSystemPromptPermission } from "./chat-system-prompt.js";
 import { createMemoryExtension } from "./memory-context.js";
+import { hookContextMessage, hookTurnContextText } from "./workspace-chat-hooks.js";
 import { fingerprintPromptPrefix } from "./pi-cache-telemetry.js";
 import type { MemoryFact, MemoryScope, MemoryStore } from "./memory-store.js";
 import { markMcpAgentTool } from "./mcp-tool-identity.js";
@@ -128,6 +129,13 @@ async function workspaceChat(options: {
 type TurnHead = { assembly: ChatPromptAssembly } | { systemPrompt: string; tools: AgentTool[] };
 
 const lastOf = (requests: readonly RecordedPromptRequest[]) => requests[requests.length - 1]!;
+
+/** The text of each user message a request sends, in order. */
+const userTexts = (request: RecordedPromptRequest) => request.messages
+  .filter((message) => message.role === "user")
+  .map((message) => typeof message.content === "string"
+    ? message.content
+    : message.content.map((part) => (part.type === "text" ? part.text : "")).join(""));
 
 /** Two user turns; returns turn 1's last request and turn 2's first. */
 async function twoTurns(options: PromptPrefixHarnessOptions, first: TurnHead, second: TurnHead = first) {
@@ -327,6 +335,22 @@ describe("prompt prefix stability: already stable", () => {
       );
       assert.deepEqual(comparePromptRequests(previous, current), {});
       assert.ok(current.carries("linear: issue tracker tools."), "the section still reaches turn 2");
+    });
+
+    test(`a turn's hook context is journaled after its prompt and later turns keep it (${label})`, async () => {
+      const context = hookTurnContextText(["ticket: OPS-12"])!;
+      const harness = createPromptPrefixHarness({ wire, midConversationSystem });
+      const assembly = await workspaceChat();
+      const one = await harness.turn({
+        prompt: "Summarize the project.", assembly, responses: reply("It is a small project."),
+        following: (timestamp) => [hookContextMessage(context, timestamp)],
+      });
+      const [two] = await harness.turn({ prompt: "Now list the files.", assembly, responses: reply("Here they are.") });
+      assert.deepEqual(comparePromptRequests(lastOf(one), two!), {});
+      // The prompt, then the hook context as its own user message, then the reply.
+      const texts = userTexts(two!);
+      assert.deepEqual(texts.slice(0, 2), ["Summarize the project.", context]);
+      assert.equal(texts[texts.length - 1], "Now list the files.");
     });
   }
 

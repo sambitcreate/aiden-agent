@@ -833,6 +833,24 @@ test("a stop while a Stop hook runs ends the turn instead of continuing it", pos
   assertSessionReleased(f.daemon, "hook-stop");
 });
 
+test("a prompt hook's context follows its prompt as a separate message, on that turn and every later one", posix, async (t) => {
+  // The same shape the desktop journals (prompt-prefix-stability: "a turn's hook context is journaled after its prompt").
+  const additionalContext = answer({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: "ticket: OPS-12" } });
+  const f = await fixture(t, { hooks: { UserPromptSubmit: commandHook(`grep -q OPS-TRIGGER && ${additionalContext} || true`) } });
+  f.steps.push(reply("First"), reply("Second"));
+  await beginTurn(f, "hook-context", { streamId: "hook-context-1", text: "Check OPS-TRIGGER" });
+  await f.daemon.llmClient.waitForChatIdle("hook-context");
+  await beginTurn(f, "hook-context", { streamId: "hook-context-2", text: "Two", create: false });
+  await f.daemon.llmClient.waitForChatIdle("hook-context");
+  const text = (message) => (typeof message.content === "string" ? message.content : message.content.map((part) => part.text ?? "").join(""));
+  const conversation = (request) => request.messages.filter((message) => message.role !== "system").map((message) => [message.role, text(message)]);
+  const [[, prompt], [role, context]] = conversation(f.requests[0]);
+  assert.equal(prompt, "Check OPS-TRIGGER");
+  assert.equal(role, "user");
+  assert.match(context, /^\[Aiden hook\] Context from the person's hooks for this turn:.*ticket: OPS-12/su);
+  assert.deepEqual(conversation(f.requests[1]), [["user", "Check OPS-TRIGGER"], ["user", context], ["assistant", "First"], ["user", "Two"]]);
+});
+
 test("an Anthropic chat sends its whole conversation on every turn, never a message thread", async (t) => {
   const f = await fixture(t, { anthropic: true });
   f.steps.push(anthropicReply("First"), anthropicReply("Second"));

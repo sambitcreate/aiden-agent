@@ -45,7 +45,7 @@ import { mcpToolActivityLabel } from "../../../main/services/mcp-tool-identity.j
 import { MAX_STOP_HOOK_CONTINUATIONS, botSurfaceHooks, createSurfaceHooks, hookAskText, hookBlockText, hookNoticeLines, hookPostToolAdditions, hookStopContinuation, hookStopMessage, hookToolPayload } from "../../../main/services/agent-surface-hooks.js";
 import { toolCallIdempotencyKey } from "../../../main/services/hooks/hook-config.js";
 import type { HookOutcome } from "../../../main/services/hooks/hook-types.js";
-import { markWorkspaceChatCompacted, runPromptIntakeHooks, workspaceChatHookScopes } from "../../../main/services/workspace-chat-hooks.js";
+import { hookContextCustomMessage, markWorkspaceChatCompacted, runPromptIntakeHooks, workspaceChatHookScopes } from "../../../main/services/workspace-chat-hooks.js";
 import { isProtectedAgentConfigPath, PROTECTED_AGENT_CONFIG_WRITE_MESSAGE } from "../../../main/services/protected-agent-config-paths.js";
 import { cliWorkspaceCodingTools } from "./workspace-coding-tools.ts";
 import { createGenerationWatchdog } from "./generation-watchdog.ts";
@@ -314,9 +314,10 @@ export function createDaemonChats(agentDir: string) {
         const loader = new DefaultResourceLoader({ cwd, agentDir, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true,
           extensionFactories: [...additionalExtensions, { name: "aiden-daemon-authority", factory(pi) {
             pi.on("before_agent_start", async (event) => {
-              // SessionStart and UserPromptSubmit context, once per turn, as host data the chat store never saves.
+              // SessionStart and UserPromptSubmit context, once per turn, as host data the chat store never
+              // saves. Pi journals it after the prompt, in the same shape the desktop journals.
               const context = turnHookContext; turnHookContext = undefined;
-              if (!botAdmission) return context ? { message: { customType: "aiden-hook-context", content: context, display: false } } : undefined;
+              if (!botAdmission) return context ? { message: hookContextCustomMessage(context) } : undefined;
               await assertAuthority();
               const instructions = await bots!.instructions(botAdmission);
               return { systemPrompt: `${event.systemPrompt}\n\n${instructions}` };
