@@ -1064,6 +1064,8 @@ test("a title is one line of visible characters", () => {
 test("output parses as JSON, non-empty lines or text, within the data cap", () => {
   assert.deepEqual(parseWorkspaceArtifactOutput("json", '[{"n":1}]'), { ok: true, dataJson: '[{"n":1}]' });
   assert.deepEqual(parseWorkspaceArtifactOutput("lines", "a\n\n  b  \r\nc\n"), { ok: true, dataJson: '["a","  b","c"]' });
+  // Output written with old Mac line endings (a lone carriage return) is still one entry per line.
+  assert.deepEqual(parseWorkspaceArtifactOutput("lines", "a\rb\r\rc\r"), { ok: true, dataJson: '["a","b","c"]' });
   assert.deepEqual(parseWorkspaceArtifactOutput("text", "hello\n\n"), { ok: true, dataJson: '"hello"' });
   assert.equal(parseWorkspaceArtifactOutput("json", "not json").ok, false);
   const big = parseWorkspaceArtifactOutput("text", "x".repeat(70 * 1024));

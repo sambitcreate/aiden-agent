@@ -792,7 +792,7 @@ export function parseWorkspaceArtifactOutput(
     }
   } else if (mode === "lines") {
     value = text
-      .split(/\r?\n/u)
+      .split(/\r\n|\r|\n/u)
       .map((line) => line.trimEnd())
       .filter((line) => line.trim())
       .slice(0, WORKSPACE_ARTIFACT_LIMITS.lines);
